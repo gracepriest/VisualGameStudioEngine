@@ -52,6 +52,65 @@ public class FormStripLayoutTests
         Kind = "Button", Id = id, Geometry = new PixelGeometry { X = x, Y = y, Width = w, Height = h }
     };
 
+    /// <summary>An item under a host — Task 20's cells/dropdowns fixture shape.</summary>
+    private static FormControl Item(string kind, string id, string? text = null, params FormControl[] children)
+    {
+        var control = new FormControl { Kind = kind, Id = id };
+        if (text != null)
+        {
+            control.Properties["Text"] = text;
+        }
+
+        control.Children.AddRange(children);
+        return control;
+    }
+
+    /// <summary>
+    /// The schematic width rule (Task 20, spec §3/§4): 8px padding either side of 7px/char, with
+    /// <c>&amp;</c> counted as a written character (never stripped as an accelerator marker).
+    /// </summary>
+    private static double CellWidth(string text) => 8 + 7 * text.Length + 8;
+
+    /// <summary>
+    /// The spec §3 document, verbatim: a MenuStrip (mnuFile → mnuOpen, sep1, mnuExit), a ToolStrip
+    /// (tsbOpen), a positioned Button, and a StatusStrip (lblStatus) — the exact fixture shape Task
+    /// 20's contract (commit 24d) is written against.
+    /// </summary>
+    private static (FormDocument Document, FormControl MenuStrip, FormControl ToolStrip, FormControl StatusStrip,
+        FormControl MnuFile, FormControl MnuOpen, FormControl Sep1, FormControl MnuExit,
+        FormControl TsbOpen, FormControl LblStatus) BuildSpec3Document()
+    {
+        var mnuOpen = Item("ToolStripMenuItem", "mnuOpen", "&Open...");
+        var sep1 = Item("ToolStripSeparator", "sep1");
+        var mnuExit = Item("ToolStripMenuItem", "mnuExit", "E&xit");
+        var mnuFile = Item("ToolStripMenuItem", "mnuFile", "&File", mnuOpen, sep1, mnuExit);
+        var menuStrip = Strip("MenuStrip", "menuStrip1");
+        menuStrip.Children.Add(mnuFile);
+
+        var tsbOpen = Item("ToolStripButton", "tsbOpen", "Open");
+        var toolStrip = Strip("ToolStrip", "toolStrip1");
+        toolStrip.Children.Add(tsbOpen);
+
+        var lblStatus = Item("ToolStripStatusLabel", "lblStatus", "Ready");
+        var statusStrip = Strip("StatusStrip", "statusStrip1");
+        statusStrip.Children.Add(lblStatus);
+
+        var btnGo = PositionedButton("btnGo", 16, 80, 75, 23);
+
+        var document = WinFormsDocument(menuStrip, toolStrip, btnGo, statusStrip);
+
+        return (document, menuStrip, toolStrip, statusStrip, mnuFile, mnuOpen, sep1, mnuExit, tsbOpen, lblStatus);
+    }
+
+    /// <summary>The index of the entry that places <paramref name="control"/> with the given role — a
+    /// unique key in every fixture below, since no control here appears twice under the same role.</summary>
+    private static int IndexOfControl(List<FormLayoutEntry> entries, FormControl control, FormLayoutRole role) =>
+        entries.FindIndex(e => ReferenceEquals(e.Control, control) && e.Role == role);
+
+    /// <summary>The index of the Type Here slot hosted by <paramref name="host"/>.</summary>
+    private static int IndexOfSlot(List<FormLayoutEntry> entries, FormControl host) =>
+        entries.FindIndex(e => e.Role == FormLayoutRole.TypeHere && ReferenceEquals(e.Host, host));
+
     // ==================================================================
     // Bands
     // ==================================================================
@@ -287,27 +346,251 @@ public class FormStripLayoutTests
     }
 
     // ==================================================================
-    // Items do not exist on the canvas yet — Task 20 (24d) replaces this test
+    // Task 20 (commit 24d) — cells, dropdowns and Type Here slots in Layout
+    //
+    // ⚠ REPLACES Layout_DoesNotYieldItemsYet (24c): that test's own doc comment said it would be
+    // replaced the day a host's top-level items became FormLayoutRole.Cell entries — this is that day.
     // ==================================================================
 
-    /// <summary>
-    /// ⚠ REPLACED in commit 24d (Task 20): once <c>Cells()</c> lands, a host's top-level items become
-    /// <see cref="FormLayoutRole.Cell"/> entries and this assertion flips to expect them. For 24c the
-    /// model already nests an item under its host's <c>Children</c> (Tasks 12-16 gave the reader,
-    /// writer and clipboard the <c>Place</c> branch), but nothing walks it onto the canvas yet.
-    /// </summary>
     [Test]
-    public void Layout_DoesNotYieldItemsYet()
+    public void Cells_AToolStripsTopLevelItem_UsesTheBandsYAndHeight_NotTheItemsOwnDefaultHeight()
     {
-        var menuStrip = Strip("MenuStrip", "menuStrip1");
-        var item = new FormControl { Kind = "ToolStripMenuItem", Id = "mnuFile" };
-        item.Properties["Text"] = "&File";
-        menuStrip.Children.Add(item);
-        var document = WinFormsDocument(menuStrip);
+        // ⛔⛔ Blocker 5 (2026-09-21 pre-flight): NONE of the four Item rows declares DefaultHeight
+        // (FormControlCatalog.cs :948/:962/:969/:981), so all four inherit the record default 24 —
+        // IDENTICAL to MenuStrip's own band height (24, :909). An implementation that lays a cell at
+        // `item.Definition!.DefaultHeight` instead of reading the BAND's own height, or that lays
+        // every band's cells at y=0, would still pass a MenuStrip-only assertion. ToolStrip's band
+        // height is 25 (:927) — it can never accidentally agree with the inherited 24, so only the
+        // band's OWN Y and Height, taken off the Band entry, can make this pass.
+        var (document, _, _, _, _, _, _, _, tsbOpen, _) = BuildSpec3Document();
 
-        var entries = FormCanvasTransform.Layout(document).ToList();
+        var cell = FormCanvasTransform.Layout(document).Single(e => ReferenceEquals(e.Control, tsbOpen));
 
-        Assert.That(entries.Select(e => e.Control?.Id), Does.Not.Contain("mnuFile"));
+        Assert.Multiple(() =>
+        {
+            Assert.That(cell.Role, Is.EqualTo(FormLayoutRole.Cell));
+            // ToolStrip is the second Top band, stacked below the 24px MenuStrip: Y = 24, not 0.
+            Assert.That(cell.Bounds, Is.EqualTo(new Rect(0, 24, CellWidth("Open"), 25)),
+                "must use the ToolStrip band's own Y (24) and Height (25) — never the item's inherited " +
+                "DefaultHeight (24) and never y=0");
+        });
+    }
+
+    [Test]
+    public void Cells_AStatusStripsTopLevelItem_UsesTheBandsYAndHeight_NotTheItemsOwnDefaultHeight()
+    {
+        // The second discriminating fixture Blocker 5 requires: StatusStrip's band height is 22
+        // (never 24), and it sits at the BOTTOM of the surface (Y = 480 - 22 = 458), not at y=0.
+        var (document, _, _, _, _, _, _, _, _, lblStatus) = BuildSpec3Document();
+
+        var cell = FormCanvasTransform.Layout(document).Single(e => ReferenceEquals(e.Control, lblStatus));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(cell.Role, Is.EqualTo(FormLayoutRole.Cell));
+            Assert.That(cell.Bounds, Is.EqualTo(new Rect(0, SurfaceHeight - 22, CellWidth("Ready"), 22)),
+                "must use the StatusStrip band's own Y (458) and Height (22) — never the item's " +
+                "inherited DefaultHeight (24) and never y=0");
+        });
+    }
+
+    [Test]
+    public void Layout_TheMenuStripItselfSelected_YieldsItsCellAndOneSlot_ButOpensNoDropdown()
+    {
+        var (document, menuStrip, _, _, mnuFile, mnuOpen, sep1, mnuExit, _, _) = BuildSpec3Document();
+
+        var entries = FormCanvasTransform.Layout(document, menuStrip).ToList();
+        var mnuFileCell = entries.Single(e => ReferenceEquals(e.Control, mnuFile));
+        var slots = entries.Where(e => e.Role == FormLayoutRole.TypeHere).ToList();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(mnuFileCell.Role, Is.EqualTo(FormLayoutRole.Cell));
+            Assert.That(mnuFileCell.Bounds, Is.EqualTo(new Rect(0, 0, CellWidth("&File"), 24)),
+                "'&' counts as a written character in the schematic width rule");
+
+            Assert.That(slots, Has.Count.EqualTo(1), "the strip is the only active host — exactly one slot");
+            Assert.That(slots[0].Control, Is.Null);
+            Assert.That(slots[0].Host, Is.EqualTo(menuStrip));
+            Assert.That(slots[0].Bounds,
+                Is.EqualTo(new Rect(mnuFileCell.Bounds.Right, 0, CellWidth("Type Here"), 24)),
+                "the slot sits at the last cell's Right, with the band's own Y and Height");
+
+            Assert.That(entries.Any(e => ReferenceEquals(e.Control, mnuOpen)), Is.False,
+                "selecting the STRIP itself must not open mnuFile's dropdown");
+            Assert.That(entries.Any(e => ReferenceEquals(e.Control, sep1)), Is.False);
+            Assert.That(entries.Any(e => ReferenceEquals(e.Control, mnuExit)), Is.False);
+        });
+    }
+
+    [Test]
+    public void Layout_WithNoSelection_YieldsNoTypeHereEntryAnywhere()
+    {
+        var (document, _, _, _, _, _, _, _, _, _) = BuildSpec3Document();
+
+        var entries = FormCanvasTransform.Layout(document, selected: null).ToList();
+
+        Assert.That(entries.Where(e => e.Role == FormLayoutRole.TypeHere), Is.Empty);
+    }
+
+    [Test]
+    public void Layout_WithAStripSelected_YieldsExactlyOneSlot_AtTheLastCellsRight_HostedByThatStrip()
+    {
+        var (document, _, toolStrip, _, _, _, _, _, tsbOpen, _) = BuildSpec3Document();
+
+        var entries = FormCanvasTransform.Layout(document, toolStrip).ToList();
+        var slots = entries.Where(e => e.Role == FormLayoutRole.TypeHere).ToList();
+        var tsbOpenCell = entries.Single(e => ReferenceEquals(e.Control, tsbOpen));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(slots, Has.Count.EqualTo(1));
+            Assert.That(slots[0].Host, Is.EqualTo(toolStrip));
+            Assert.That(slots[0].Control, Is.Null);
+            Assert.That(slots[0].Bounds,
+                Is.EqualTo(new Rect(tsbOpenCell.Bounds.Right, 24, CellWidth("Type Here"), 25)));
+        });
+    }
+
+    [Test]
+    public void Layout_SelectingANestedItem_ExpandsItsAncestorDropdowns_OutermostFirst_AfterAllBandAndCellEntries()
+    {
+        // mnuOpen has no children of its own, but it IS a host BY ROW (every ToolStripMenuItem lists
+        // Items, regardless of whether it currently has any) — its own dropdown is empty. Per the
+        // Host doc comment on FormLayoutEntry, two KINDS of slot can be visible together: the ACTIVE
+        // STRIP's own band-level slot (menuStrip1 is mnuOpen's root strip via the parent map, so it
+        // counts as active even though mnuOpen — not the strip — is what is selected) and each
+        // expanded ancestor's own dropdown slot (mnuFile's, then mnuOpen's) — three slots total here.
+        var (document, menuStrip, _, _, mnuFile, mnuOpen, sep1, mnuExit, _, _) = BuildSpec3Document();
+
+        var entries = FormCanvasTransform.Layout(document, mnuOpen).ToList();
+
+        var menuStripBandIndex = IndexOfControl(entries, menuStrip, FormLayoutRole.Band);
+        var mnuFileCellIndex = IndexOfControl(entries, mnuFile, FormLayoutRole.Cell);
+        var menuStripSlotIndex = IndexOfSlot(entries, menuStrip);
+        var mnuOpenRowIndex = IndexOfControl(entries, mnuOpen, FormLayoutRole.Cell);
+        var sep1RowIndex = IndexOfControl(entries, sep1, FormLayoutRole.Cell);
+        var mnuExitRowIndex = IndexOfControl(entries, mnuExit, FormLayoutRole.Cell);
+        var mnuFileSlotIndex = IndexOfSlot(entries, mnuFile);
+        var mnuOpenSlotIndex = IndexOfSlot(entries, mnuOpen);
+
+        Assert.Multiple(() =>
+        {
+            // --- existence ---
+            Assert.That(menuStripBandIndex, Is.GreaterThanOrEqualTo(0), "the MenuStrip band must still be present");
+            Assert.That(mnuFileCellIndex, Is.GreaterThanOrEqualTo(0), "mnuFile's own top-level cell must still be present");
+            Assert.That(menuStripSlotIndex, Is.GreaterThanOrEqualTo(0),
+                "menuStrip1 is still the ACTIVE strip (mnuOpen's root) and keeps its own band-level slot");
+            Assert.That(mnuOpenRowIndex, Is.GreaterThanOrEqualTo(0), "mnuFile's dropdown row for mnuOpen");
+            Assert.That(sep1RowIndex, Is.GreaterThanOrEqualTo(0), "mnuFile's dropdown row for sep1");
+            Assert.That(mnuExitRowIndex, Is.GreaterThanOrEqualTo(0), "mnuFile's dropdown row for mnuExit");
+            Assert.That(mnuFileSlotIndex, Is.GreaterThanOrEqualTo(0), "mnuFile's own dropdown slot");
+            Assert.That(mnuOpenSlotIndex, Is.GreaterThanOrEqualTo(0), "mnuOpen's own (empty) dropdown slot");
+
+            // --- ordering: "the dropdown entries come LAST ... after every band/cell entry" ---
+            Assert.That(menuStripBandIndex, Is.LessThan(mnuOpenRowIndex));
+            Assert.That(mnuFileCellIndex, Is.LessThan(mnuOpenRowIndex));
+            Assert.That(menuStripSlotIndex, Is.LessThan(mnuOpenRowIndex),
+                "the active strip's OWN band-level slot is not one of 'the dropdown entries' and must still precede them");
+
+            // --- ordering within the tail: outermost ancestor first, each host's rows before its slot ---
+            Assert.That(mnuOpenRowIndex, Is.LessThan(sep1RowIndex));
+            Assert.That(sep1RowIndex, Is.LessThan(mnuExitRowIndex));
+            Assert.That(mnuExitRowIndex, Is.LessThan(mnuFileSlotIndex));
+            Assert.That(mnuFileSlotIndex, Is.LessThan(mnuOpenSlotIndex));
+
+            // --- geometry: mnuFile's dropdown hangs from (cell.X, cell.Bottom) = (0, 24); its width is
+            // the widest child cell (mnuOpen's, 72), floored at the 80px minimum ---
+            Assert.That(entries[mnuOpenRowIndex].Bounds, Is.EqualTo(new Rect(0, 24, 80, 22)));
+            Assert.That(entries[sep1RowIndex].Bounds, Is.EqualTo(new Rect(0, 46, 80, 6)), "a separator row is 6px");
+            Assert.That(entries[mnuExitRowIndex].Bounds, Is.EqualTo(new Rect(0, 52, 80, 22)));
+            Assert.That(entries[mnuFileSlotIndex].Control, Is.Null);
+            Assert.That(entries[mnuFileSlotIndex].Host, Is.EqualTo(mnuFile));
+            Assert.That(entries[mnuFileSlotIndex].Bounds, Is.EqualTo(new Rect(0, 74, 80, 22)),
+                "below the last row (24+22+6+22=74), same width as the dropdown");
+
+            // --- geometry: mnuOpen's own dropdown hangs from (cell.Right, cell.Y) = (80, 24); it has
+            // no children, so it takes the 80px minimum width, and with no rows its slot sits right at
+            // the dropdown's own origin ---
+            Assert.That(entries[mnuOpenSlotIndex].Control, Is.Null);
+            Assert.That(entries[mnuOpenSlotIndex].Host, Is.EqualTo(mnuOpen));
+            Assert.That(entries[mnuOpenSlotIndex].Bounds, Is.EqualTo(new Rect(80, 24, 80, 22)));
+
+            // --- the menuStrip1 band-level slot itself, unaffected by the deeper selection ---
+            Assert.That(entries[menuStripSlotIndex].Host, Is.EqualTo(menuStrip));
+            Assert.That(entries[menuStripSlotIndex].Bounds,
+                Is.EqualTo(new Rect(entries[mnuFileCellIndex].Bounds.Right, 0, CellWidth("Type Here"), 24)));
+        });
+    }
+
+    [Test]
+    public void TypeHereAt_ReturnsTheHostForAPointInTheSlot_AndNullElsewhere()
+    {
+        var (document, menuStrip, _, _, _, _, _, _, _, _) = BuildSpec3Document();
+
+        // ⚠ An INSTANCE method taking CANVAS points, exactly like its twin HitTest — the two are
+        // called back-to-back on one point in OnPointerPressed, and a sibling that took form space
+        // would make a dropped ToForm invisible at the identity zoom every test here runs at. The
+        // default transform IS identity, so the canvas points below are also the form points the
+        // rects are written in.
+        var transform = new FormCanvasTransform();
+
+        // mnuFile's cell is Rect(0,0,51,24); its slot (menuStrip1 active) is Rect(51,0,79,24).
+        var pointInSlot = new Point(60, 10);
+        var pointInMnuFilesCell = new Point(10, 10);
+        var pointFarOutside = new Point(700, 700);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(transform.TypeHereAt(document, pointInSlot, menuStrip), Is.EqualTo(menuStrip));
+            Assert.That(transform.TypeHereAt(document, pointInMnuFilesCell, menuStrip), Is.Null,
+                "a point in the CELL, not the slot, must not resolve to a host");
+            Assert.That(transform.TypeHereAt(document, pointFarOutside, menuStrip), Is.Null);
+            Assert.That(transform.TypeHereAt(document, pointInSlot, selected: null), Is.Null,
+                "with nothing selected there is no slot for any point to land in");
+        });
+    }
+
+    [Test]
+    public void HitTest_OnADropdownCell_ReturnsTheNestedItem()
+    {
+        var (document, _, _, _, _, mnuOpen, _, mnuExit, _, _) = BuildSpec3Document();
+
+        // mnuExit's dropdown row is Rect(0,52,80,22) once selecting mnuOpen expands mnuFile's
+        // dropdown — a point well inside it, away from any edge.
+        var pointInMnuExitsRow = new Point(10, 60);
+
+        var hit = new FormCanvasTransform().HitTest(document, pointInMnuExitsRow, mnuOpen);
+
+        Assert.That(hit, Is.EqualTo(mnuExit));
+    }
+
+    [Test]
+    public void ControlsIn_StillExcludesEveryStripAndItem_OnceTheirCellsExist()
+    {
+        // ⚠ ControlsIn takes no `selected`, so it only ever sees Layout(document, selected: null) —
+        // the band-level cells (mnuFile, tsbOpen, lblStatus) exist unconditionally under that call and
+        // are this test's real discriminating coverage; mnuOpen/sep1/mnuExit are not laid out at all
+        // without a selection, so their absence here is trivial today — kept as documentation for the
+        // day ControlsIn learns to forward a selection, exactly as ControlsIn_NeverReturnsAStripOrAnItem
+        // (24c) already documents for the pre-Task-20 shape.
+        var (document, menuStrip, toolStrip, statusStrip, mnuFile, mnuOpen, sep1, mnuExit, tsbOpen, lblStatus) =
+            BuildSpec3Document();
+
+        var covered = FormCanvasTransform.ControlsIn(document, new Rect(0, 0, SurfaceWidth, SurfaceHeight));
+        var ids = covered.Select(c => c.Id).ToList();
+
+        Assert.Multiple(() =>
+        {
+            foreach (var excluded in new[]
+                     { menuStrip, toolStrip, statusStrip, mnuFile, mnuOpen, sep1, mnuExit, tsbOpen, lblStatus })
+            {
+                Assert.That(ids, Does.Not.Contain(excluded.Id),
+                    $"{excluded.Id} is a strip or an item — never band-selectable");
+            }
+
+            Assert.That(ids, Does.Contain("btnGo"));
+        });
     }
 
     // ==================================================================

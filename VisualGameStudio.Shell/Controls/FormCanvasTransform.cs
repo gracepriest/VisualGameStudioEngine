@@ -88,10 +88,10 @@ public sealed class FormCanvasTransform
     /// the container origins up, which is the reason this reads Layout rather than the model.</para>
     /// </summary>
     /// <param name="selected">
-    /// The designer's selection, forwarded to <see cref="Layout"/>. Task 20 (commit 24d) makes it
-    /// decide which item cells and Type Here slot exist to be hit; today it changes nothing, and it
-    /// is threaded through now so the hit test cannot go on reading a DIFFERENT picture from the
-    /// one the render pass paints.
+    /// The designer's selection, forwarded to <see cref="Layout"/>, which decides from it which
+    /// dropdowns are open and where the Type Here slot sits (Task 20). Threaded through so the hit
+    /// test cannot read a DIFFERENT picture from the one the render pass paints: a click would
+    /// otherwise select a menu item the canvas is not showing, or miss one it is.
     /// </param>
     public FormControl? HitTest(FormDocument document, Point canvasPoint, FormControl? selected = null)
     {
@@ -112,6 +112,41 @@ public sealed class FormCanvasTransform
         return Layout(document, selected)
             .Where(entry => entry.Control != null && entry.Bounds.Contains(formPoint))
             .Select(entry => entry.Control)
+            .LastOrDefault();
+    }
+
+    /// <summary>
+    /// The host whose Type Here slot is under <paramref name="canvasPoint"/>, or null — the empty
+    /// cell at the end of a strip's or a dropdown's items, which a click turns into an editor.
+    ///
+    /// <para>⛔⛔ <b>The exact twin of <see cref="HitTest"/>, deliberately: same signature shape,
+    /// same coordinate space, same <c>ToForm</c>, same LAST-match rule over the same
+    /// <see cref="Layout"/>.</b> The two are called back-to-back on ONE point in
+    /// <c>OnPointerPressed</c>, and the drift they would otherwise suffer has no symptom. Make this
+    /// one take FORM coordinates while its sibling takes CANVAS coordinates, and any later edit
+    /// that drops the <c>ToForm</c> on one of those two call sites produces a slot lookup that is
+    /// exactly right at 1:1 zoom and wrong at every other zoom — and the headless tests run at
+    /// identity zoom, where <c>ToForm</c> IS the identity function, so nothing here can see it. Two
+    /// lookups over one picture is the defect class this whole type exists to prevent (see its own
+    /// summary); keeping the siblings identical in shape is what stops them drifting apart.</para>
+    ///
+    /// <para>⛔ LAST match, for <see cref="HitTest"/>'s reason: document order is z-order, and a
+    /// nested dropdown's slot is yielded after anything it is painted over.</para>
+    /// </summary>
+    /// <param name="selected">
+    /// The designer's selection, forwarded to <see cref="Layout"/>. A slot exists ONLY for the
+    /// active strip and for the hosts the selection expands, so with nothing selected this always
+    /// returns null — there is no slot for any point to land in.
+    /// </param>
+    public FormControl? TypeHereAt(FormDocument document, Point canvasPoint, FormControl? selected = null)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+
+        var formPoint = ToForm(canvasPoint);
+
+        return Layout(document, selected)
+            .Where(entry => entry.Role == FormLayoutRole.TypeHere && entry.Bounds.Contains(formPoint))
+            .Select(entry => entry.Host)
             .LastOrDefault();
     }
 
@@ -322,10 +357,16 @@ public sealed class FormCanvasTransform
             Math.Max(0, pixel.Height));
     }
 
-    /// <summary>Every control with its FORM-space rectangle, containers before their children.</summary>
+    /// <summary>
+    /// Everything the canvas places, in paint order: every positioned control with its FORM-space
+    /// rectangle (containers before their children), then each strip's band, that strip's item
+    /// CELLS, its Type Here slot when it is active — and finally every open DROPDOWN.
+    /// </summary>
     /// <param name="selected">
-    /// The control the designer has selected. Unused while the canvas yields controls only; Task 20
-    /// (commit 24d) uses it to decide which strip's cells and Type Here slot are visible.
+    /// The control the designer has selected. It decides which chrome is EDITABLE right now: which
+    /// strip is active (so gets a slot), and which hosts are expanded (so paint a dropdown). With
+    /// nothing selected the bands and their cells are still laid out — they are always visible —
+    /// but no slot and no dropdown exist.
     /// </param>
     public static IEnumerable<FormLayoutEntry> Layout(FormDocument document, FormControl? selected = null)
     {
@@ -334,8 +375,8 @@ public sealed class FormCanvasTransform
         // ⚠ Bands LAST, so a band paints over — and out-hit-tests — anything that overlaps it.
         // Document order is z-order everywhere in this class, and chrome is on top of the surface.
         return document.Target == FormTarget.Web
-            ? WebLayout(document)
-            : Layout(document.Controls, new Point(0, 0)).Concat(Bands(document));
+            ? WebLayout(document, selected)
+            : Layout(document.Controls, new Point(0, 0)).Concat(Bands(document, selected));
     }
 
     /// <summary>
@@ -353,11 +394,35 @@ public sealed class FormCanvasTransform
     /// reason). Which edge each one is on is <see cref="FormControl.IsDockedToBottom"/>, shared with
     /// that emitter: two copies of that lookup would let this canvas draw the status band on one
     /// edge while the page puts its <c>&lt;footer&gt;</c> on the other, from ONE document.</para>
+    ///
+    /// <para>⛔⛔ <b>The item CELLS, the Type Here slot and the open dropdowns are yielded from
+    /// INSIDE this walk, and that is the whole reason there is no <c>Cells(document, selected)</c>
+    /// beside it.</b> This loop uniquely owns where each band SITS — the stacking from each edge is
+    /// derived here and nowhere else — and a cell's rectangle is that band's own Y and Height. A
+    /// separate method would have to re-derive the stacking from the same document, which is the
+    /// <see cref="SurfaceSize"/> / <c>Tracks</c>-vs-<c>ParseTracks</c> / <c>DockOf</c> lesson
+    /// arriving a fourth time in this one file. Worse, the drift would be INVISIBLE: every Item row
+    /// in the catalog inherits the record's default <c>DefaultHeight</c> of 24, which is exactly
+    /// MenuStrip's own band height — so a copy that read the item's height instead of the band's
+    /// would be pixel-perfect on a menu bar and silently 1px short on a ToolStrip (25) and 2px tall
+    /// on a StatusStrip (22). Hence the rule below, stated once: a cell takes <c>band.Y</c> and
+    /// <c>band.Height</c> off the entry this same iteration just produced, and NOTHING here ever
+    /// reads an item's own <c>DefaultHeight</c>.</para>
     /// </summary>
-    private static IEnumerable<FormLayoutEntry> Bands(FormDocument document)
+    private static IEnumerable<FormLayoutEntry> Bands(FormDocument document, FormControl? selected)
     {
         var surface = SurfaceSize(document);
         double top = 0, bottom = surface.Height;
+
+        var parents = ParentMap(document);
+        var activeStrip = ActiveStrip(selected, parents);
+        var expanded = ExpansionPath(selected, parents);
+
+        // Where each EXPANDED host was laid out. Filled in as the walk reaches it, never looked up:
+        // the outermost expanded host is a band cell produced by the loop just below, and every
+        // deeper one is a dropdown row produced by the host before it in `expanded`. So the chain
+        // is always populated before it is read, and no rectangle is computed twice.
+        var cellOf = new Dictionary<FormControl, Rect>();
 
         foreach (var strip in document.Controls.Where(c => c.Definition?.Place == FormPlace.Docked))
         {
@@ -376,7 +441,234 @@ public sealed class FormCanvasTransform
             }
 
             yield return new FormLayoutEntry(strip, band, FormLayoutRole.Band);
+
+            // The strip's own items, left to right along the band. ⛔ band.Y and band.Height — see
+            // the method summary; the item's inherited DefaultHeight agrees with a MenuStrip by
+            // coincidence and with nothing else.
+            double x = 0;
+            foreach (var item in strip.Children)
+            {
+                var cell = new Rect(x, band.Y, CellWidth(item), band.Height);
+                x = cell.Right;
+
+                if (expanded.Contains(item))
+                {
+                    cellOf[item] = cell;
+                }
+
+                yield return new FormLayoutEntry(item, cell, FormLayoutRole.Cell);
+            }
+
+            // ⚠ The ACTIVE strip only. A slot on every strip at once would offer three places to
+            // type into with no way to say which one a keystroke meant.
+            if (ReferenceEquals(strip, activeStrip))
+            {
+                yield return new FormLayoutEntry(
+                    null, new Rect(x, band.Y, TypeHereWidth, band.Height), FormLayoutRole.TypeHere, strip);
+            }
         }
+
+        // ⛔ EVERY dropdown entry comes after EVERY band and cell entry, outermost host first.
+        // Document order is z-order here and HitTest takes the LAST match, so a dropdown that hangs
+        // over the band below it must be later in the sequence than that band — otherwise the bar
+        // it drops out of swallows every click on its own open menu.
+        foreach (var host in expanded)
+        {
+            if (!cellOf.TryGetValue(host, out var hostCell))
+            {
+                // The chain is built from the parent map, so a host is missing only if the document
+                // tree and its own strip list disagree. Everything deeper hangs off this one, so
+                // there is nothing further to place.
+                break;
+            }
+
+            // A band cell drops DOWN from its bottom edge; a dropdown row flies out to the RIGHT,
+            // which is what a submenu does. The question is the host's own parent, not its depth.
+            var origin = parents.TryGetValue(host, out var parent) && parent.Definition?.Place == FormPlace.Docked
+                ? new Point(hostCell.X, hostCell.Bottom)
+                : new Point(hostCell.Right, hostCell.Y);
+
+            var width = DropdownWidth(host);
+            var y = origin.Y;
+
+            foreach (var row in host.Children)
+            {
+                var rect = new Rect(origin.X, y, width, RowHeight(row));
+                y = rect.Bottom;
+
+                if (expanded.Contains(row))
+                {
+                    cellOf[row] = rect;
+                }
+
+                yield return new FormLayoutEntry(row, rect, FormLayoutRole.Cell);
+            }
+
+            // A dropdown's slot is as wide as the dropdown, never the Type Here caption's own
+            // width: it is the next ROW of that menu, and a narrower one would tear the edge.
+            yield return new FormLayoutEntry(
+                null, new Rect(origin.X, y, width, ItemRowHeight), FormLayoutRole.TypeHere, host);
+        }
+    }
+
+    // ==================================================================
+    // The schematic metrics — stated ONCE, because the layout and Task 21's drawing must agree
+    // ==================================================================
+
+    /// <summary>The caption a Type Here slot is drawn with, and therefore the text it is sized from.</summary>
+    public const string TypeHereCaption = "Type Here";
+
+    /// <summary>A cell's padding either side of its caption, in FORM units.</summary>
+    private const double CellPadding = 8;
+
+    /// <summary>Nominal width of one character of a cell's caption. The canvas is a schematic, not a
+    /// preview — it does not measure the font it will not be rendered in.</summary>
+    private const double CharWidth = 7;
+
+    /// <summary>One dropdown row.</summary>
+    private const double ItemRowHeight = 22;
+
+    /// <summary>
+    /// A separator's extent along the axis its host lays items out on: 6 units WIDE in a horizontal
+    /// band, 6 units HIGH as a dropdown row. One constant because it is one thing — the thickness
+    /// of a rule — seen from two directions.
+    /// </summary>
+    private const double SeparatorExtent = 6;
+
+    /// <summary>
+    /// A dropdown is never narrower than this, however short its widest item. A menu that hugged
+    /// the word "Cut" would be a tooltip, and its Type Here slot would have no room for a caption.
+    /// </summary>
+    private const double MinDropdownWidth = 80;
+
+    /// <summary>The slot's width in a BAND — derived from the caption, so the two cannot disagree.</summary>
+    private static readonly double TypeHereWidth = CellWidth(TypeHereCaption);
+
+    /// <summary>
+    /// The schematic width of a caption: padding, 7 units a character, padding.
+    ///
+    /// <para>⚠ <c>&amp;</c> is counted as a written character rather than stripped as an
+    /// accelerator marker. The designer shows what the document SAYS — a user who typed
+    /// <c>&amp;File</c> sees <c>&amp;File</c> — and the two rules differ by 7 units, which is a
+    /// visible misalignment of the slot at the end of the bar.</para>
+    /// </summary>
+    private static double CellWidth(string caption) => CellPadding + (CharWidth * caption.Length) + CellPadding;
+
+    /// <summary>An item's own cell width: its caption's, or a separator's fixed thickness.</summary>
+    private static double CellWidth(FormControl item) =>
+        IsSeparator(item) ? SeparatorExtent : CellWidth(CaptionOf(item));
+
+    /// <summary>An item's height as a dropdown ROW.</summary>
+    private static double RowHeight(FormControl item) => IsSeparator(item) ? SeparatorExtent : ItemRowHeight;
+
+    /// <summary>
+    /// ⛔ Asked of the CATALOG, never of the kind's name. A second list of "which kinds are
+    /// separators" spelled as a string comparison is exactly the shape that falls to its default
+    /// the day a row is added — and a separator that measured itself as a caption would push every
+    /// item after it along the bar.
+    /// </summary>
+    private static bool IsSeparator(FormControl item) => item.Definition?.Schematic == FormSchematic.Separator;
+
+    /// <summary>
+    /// What a cell is labelled with — the same rule the canvas draws by (<c>DrawControl</c>): the
+    /// control's own non-empty <c>Text</c>, else its id, because an unlabelled box on a schematic
+    /// is unidentifiable.
+    /// </summary>
+    private static string CaptionOf(FormControl item) =>
+        item.Properties.TryGetValue("Text", out var text) && !string.IsNullOrEmpty(text) ? text : item.Id;
+
+    /// <summary>As wide as its widest item, floored at <see cref="MinDropdownWidth"/>.</summary>
+    private static double DropdownWidth(FormControl host) =>
+        Math.Max(MinDropdownWidth, host.Children.Select(CellWidth).DefaultIfEmpty(0).Max());
+
+    // ==================================================================
+    // Which chrome the selection makes editable
+    // ==================================================================
+
+    /// <summary>
+    /// Each control's parent. The model stores children but not parents, and both questions below
+    /// are "what is above this" — built once per layout rather than re-walked per lookup.
+    /// </summary>
+    private static Dictionary<FormControl, FormControl> ParentMap(FormDocument document)
+    {
+        var parents = new Dictionary<FormControl, FormControl>();
+
+        foreach (var control in document.AllControls())
+        {
+            foreach (var child in control.Children)
+            {
+                parents[child] = control;
+            }
+        }
+
+        return parents;
+    }
+
+    /// <summary>
+    /// The strip a Type Here slot belongs to: the selected strip itself, or the strip the selected
+    /// ITEM lives under, however deeply nested. Null when the selection is a positioned control or
+    /// nothing at all.
+    ///
+    /// <para>⚠ The root strip rather than the immediate host, deliberately: with a submenu item
+    /// selected the bar itself stays typeable, so a user can keep adding top-level menus without
+    /// first clicking back onto the bar.</para>
+    /// </summary>
+    private static FormControl? ActiveStrip(
+        FormControl? selected, IReadOnlyDictionary<FormControl, FormControl> parents)
+    {
+        var current = selected;
+        while (current != null)
+        {
+            if (current.Definition?.Place == FormPlace.Docked)
+            {
+                return current;
+            }
+
+            current = parents.TryGetValue(current, out var parent) ? parent : null;
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// The hosts whose dropdowns are open, OUTERMOST FIRST: every item ancestor of the selection,
+    /// plus the selection itself when it is a host in its own right.
+    ///
+    /// <para>⚠ "A host in its own right" is the catalog's <c>IsHost</c>, not "has children" — every
+    /// <c>ToolStripMenuItem</c> can drop down, so selecting an empty one opens an empty dropdown
+    /// with a slot in it. That empty dropdown IS the feature: it is the only place to type the
+    /// item's first child.</para>
+    ///
+    /// <para>⚠ Empty for a selected STRIP. Selecting the bar makes the bar typeable; it does not
+    /// open the menus on it.</para>
+    /// </summary>
+    private static List<FormControl> ExpansionPath(
+        FormControl? selected, IReadOnlyDictionary<FormControl, FormControl> parents)
+    {
+        var path = new List<FormControl>();
+
+        if (selected?.Definition?.Place != FormPlace.Item)
+        {
+            return path;
+        }
+
+        var current = selected;
+        while (parents.TryGetValue(current, out var parent) && parent.Definition?.Place == FormPlace.Item)
+        {
+            path.Add(parent);
+            current = parent;
+        }
+
+        // Collected innermost-first walking up; the dropdowns open outermost-first, because an
+        // inner one hangs off a row of the outer one that must exist before it can be placed.
+        path.Reverse();
+
+        if (selected.Definition?.IsHost == true)
+        {
+            path.Add(selected);
+        }
+
+        return path;
     }
 
     /// <summary>
@@ -390,7 +682,7 @@ public sealed class FormCanvasTransform
     /// unimplemented pixel escape hatch; for both, there is no cell a point could mean, and drawing
     /// a guess is exactly the preview this canvas must not pretend to be.</para>
     /// </summary>
-    private static IEnumerable<FormLayoutEntry> WebLayout(FormDocument document)
+    private static IEnumerable<FormLayoutEntry> WebLayout(FormDocument document, FormControl? selected)
     {
         if (document.Layout?.Kind == FormLayoutKind.Grid)
         {
@@ -413,7 +705,11 @@ public sealed class FormCanvasTransform
         // occupies no track the user declared. Gating it on the layout kind would make a Flow page's
         // menu bar — which the emitted page certainly has — invisible and unclickable in the
         // designer, from a document the canvas otherwise lays out correctly.
-        foreach (var band in Bands(document))
+        //
+        // ⚠ `selected` goes through unchanged: a page's menu is edited with the same cells, the
+        // same dropdowns and the same Type Here slot as a form's. Dropping it here would make the
+        // designer read-only for web chrome, with the bar still drawn and clicks still landing.
+        foreach (var band in Bands(document, selected))
         {
             yield return band;
         }
@@ -427,7 +723,8 @@ public sealed class FormCanvasTransform
             // ⛔ A Docked strip is yielded by Bands() and by nothing else — never through BoundsOf,
             // which knows only pixel geometry and would drop it silently (or, if one ever acquired
             // geometry, yield it TWICE, once as a Control and once as a Band). Skipping the root
-            // also skips its items, which have no place on the canvas until Task 20 gives them one.
+            // also skips its ITEMS, which carry no pixel geometry either: Bands() places them, as
+            // cells derived from the band's own rectangle, and that is their only route here.
             if (control.Definition?.Place == FormPlace.Docked)
             {
                 continue;
