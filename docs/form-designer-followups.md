@@ -487,7 +487,7 @@ retire the question of whether a row inlines or shares, because either spelling 
 the table LOOK consistent while leaving the same absence of a check, which is the weaker of the two
 outcomes and the one that stops anyone writing the pin.
 
-### 26. ⛔⛔ A web control's `Event` is emitted VERBATIM into `addEventListener` — any wrong spelling is a green build and a dead handler — found 2026-09-21
+### 26. ✅ FIXED — A web control's `Event` was emitted VERBATIM into `addEventListener` — any wrong spelling was a green build and a dead handler — found 2026-09-21, fixed 2026-09-21
 
 `RegionWriter.AppendBinds` (`:825`) writes
 `{control.Id}.addEventListener("{bind.Event}", AddressOf {bind.Handler})` with **no case folding and
@@ -511,13 +511,33 @@ about the same document, and the one that is right is the one that stays quiet.
 **control's** binds are never checked against the row's `WebEvent` at all, so there is no diagnostic
 of any kind on this path.
 
-**Fix shape** (not done here — out of scope for commit 24c, and it affects every web control kind,
-not just the new strip rows): make the emitter canonicalise through the catalog rather than trusting
-the document — resolve `bind.Event` case-insensitively against `definition.DefaultEvent(Web)` and the
-row's known events, emit the CATALOG's spelling, and refuse-and-name an event the row does not
-declare. ⛔ Do not "fix" it by lower-casing `bind.Event` at the emitter: a few real DOM events are
-not all-lowercase (`DOMContentLoaded`), so lower-casing trades a silent dead handler for a different
-silent dead handler. The catalog is the source of truth; the shape of the string is not.
+✅ **FIXED 2026-09-21.** `RegionWriter` now canonicalises through the catalog instead of trusting the
+document: `CanonicalWebEvent` matches `bind.Event` case-insensitively against what the row declares
+and the emitter writes the CATALOG's spelling, so `Event="Click"` emits `addEventListener("click",
+…)`. An event the row does not declare is refused and named — **BL8032** `UnknownWebEvent`, claimed
+from the band allocation in `DesignDiagnostic.cs` (which now says the next claim starts at BL8033) —
+by a new `CheckControlBinds`, which closes the gap that BL8028 covered components only.
+
+⛔ It was NOT fixed by lower-casing `bind.Event`: a few real DOM events are not all-lowercase
+(`DOMContentLoaded`), so lower-casing trades a silent dead handler for a different silent dead
+handler. The catalog is the source of truth; the shape of the string is not.
+
+⚠ **Two consequences, both deliberate.** The refusal is **web-only** — on WinForms a wrong name
+reaches csc as a member (CS1061) and fails loudly, and `MouseEnter` on a Button compiles and runs, so
+refusing there would break working documents to fix a problem that target does not have
+(pinned by `Write_WinForms_StillEmitsTheDocumentsOwnEventSpelling`). And because a row still declares
+exactly ONE web event, BL8032 also refuses a **real** DOM event the row simply does not name
+(`mouseenter` on a Button) — the same edge BL8026 already drops on the retarget route. Widening that
+vocabulary is followup 18's per-kind event table, and `RegionWriter.DeclaredEvents` is the one seam
+it widens: the emitter and the refusal both read it, so they cannot drift apart.
+
+⛔ **Proved by EXECUTION, not by a string assertion** — the whole point of this entry is that every
+string check already agreed the bind was wired.
+`FormBuildEmissionTests.AWrongCaseEventInTheDocument_StillReachesTheHandlerWhenTheBrowserClicks`
+builds a document carrying `Event="Click"` with the real CLI and RUNS the page under node, clicking
+with the real DOM name `"click"`; it asserts the handler actually fires, and it printed only
+`App loaded` — the positive control — against the old emitter. Four mutants run, four killed
+(drop the canonicalisation, drop the refusal, make the match case-sensitive, widen it to WinForms).
 
 ### 27. `FormPlacement.ItemId`'s accelerator regex is DEAD — proven by mutation — found 2026-09-21
 

@@ -115,6 +115,7 @@ public static class RegionWriter
         CheckTargetProperties(filePath, form, diagnostics);
         CheckComponentTargets(filePath, form, diagnostics);
         CheckComponentBinds(filePath, form, diagnostics);
+        CheckControlBinds(filePath, form, diagnostics);
         CheckHandlerOrdering(filePath, index, form, init, diagnostics);
         if (diagnostics.Any(d => !d.IsWarning))
         {
@@ -311,6 +312,98 @@ public static class RegionWriter
                     $"'{definition.DefaultEvent(FormTarget.Web)}' event, so the wiring is not written " +
                     "into the generated code. The document keeps it, and WinForms wires it.",
                     filePath, 0, 0, IsWarning: true));
+            }
+        }
+    }
+
+    /// <summary>
+    /// Every event a catalog row declares on <paramref name="target"/> — the whole vocabulary the
+    /// emitter is allowed to write, and the whole vocabulary <see cref="CheckControlBinds"/> accepts.
+    ///
+    /// <para>⚠ Today a row names exactly ONE event per target (<c>WinFormsEvent</c> /
+    /// <c>WebEvent</c>), so this yields one name. It exists as a SEQUENCE because followup 18's
+    /// per-kind event table — the thing that would let a Button name <c>mouseenter</c> as well as
+    /// <c>click</c> — widens the vocabulary here and nowhere else. Both callers then widen with it,
+    /// which is the point: the emitter and the refusal must never disagree about what a row
+    /// declares.</para>
+    /// </summary>
+    private static IEnumerable<string> DeclaredEvents(FormControlDef definition, FormTarget target)
+    {
+        var declared = definition.DefaultEvent(target);
+        if (!string.IsNullOrEmpty(declared))
+        {
+            yield return declared;
+        }
+    }
+
+    /// <summary>
+    /// The CATALOG's spelling of the web event <paramref name="bind"/> names, matched ignoring case —
+    /// or null when the row does not declare that event at all.
+    ///
+    /// <para>This is the ONE answer to "what does this bind mean on the web", shared by the emitter
+    /// and by <see cref="CheckControlBinds"/>, for the same reason <see cref="IsEmittedBind"/> is
+    /// shared: a bind must not be canonicalised one way while being judged another.</para>
+    /// </summary>
+    private static string? CanonicalWebEvent(FormControlDef definition, FormBind bind) =>
+        DeclaredEvents(definition, FormTarget.Web)
+            .FirstOrDefault(e => string.Equals(e, bind.Event, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// Refuses a CONTROL's web bind on an event its catalog row does not declare (BL8032).
+    ///
+    /// <para>⛔⛔ The gap this closes: <see cref="CheckComponentBinds"/> (BL8028) iterates
+    /// <c>component.Binds</c> only, so a control's binds were never checked against the row's
+    /// <c>WebEvent</c> by anything at all — and the emitter wrote whatever the document said
+    /// straight into <c>addEventListener</c>. A typo (<c>clik</c>), the DOM's own <c>on</c> prefix
+    /// (<c>onclick</c>) and the WinForms spelling (<c>Click</c>) all behaved identically: accepted,
+    /// built, shipped, never called. Refused rather than warned for the reason BL8010 and BL8020
+    /// are — the designer would otherwise report a document clean and then generate code whose
+    /// behaviour silently contradicts it, which is the divergence D9 exists to prevent.</para>
+    ///
+    /// <para>⚠ WinForms is deliberately NOT checked here. There a wrong name reaches csc as a member
+    /// (<c>AddHandler btn.Clik</c> → CS1061), so it fails loudly on its own; and refusing a
+    /// non-default WinForms event would break <c>MouseEnter</c> on a Button, which compiles and runs
+    /// today. This is only for the target where the failure is silent.</para>
+    /// </summary>
+    private static void CheckControlBinds(
+        string filePath, FormDocument form, List<DesignDiagnostic> diagnostics)
+    {
+        if (form.Target != FormTarget.Web)
+        {
+            return;
+        }
+
+        foreach (var control in form.AllControls())
+        {
+            // No row is no truth to check against — that control is already BL8004's finding, and
+            // inventing a vocabulary for a kind the catalog does not know would be worse than quiet.
+            if (control.Definition is not { } definition)
+            {
+                continue;
+            }
+
+            foreach (var bind in control.Binds)
+            {
+                // A reserved data-binding attribute is BL8021's refusal, and a bind with no handler
+                // wires nothing — neither is this check's business.
+                if (bind.UsesReservedDataBinding || string.IsNullOrEmpty(bind.Handler) ||
+                    CanonicalWebEvent(definition, bind) != null)
+                {
+                    continue;
+                }
+
+                var declared = DeclaredEvents(definition, FormTarget.Web).ToList();
+
+                diagnostics.Add(Error(DesignCodes.UnknownWebEvent,
+                    $"'{control.Id}' wires its '{bind.Event}' event to {bind.Handler}, but a web " +
+                    $"{definition.Kind} does not have that event — it has " +
+                    (declared.Count > 0
+                        ? $"{string.Join(" and ", declared.Select(e => $"'{e}'"))}. "
+                        : "no web event at all. ") +
+                    "DOM event names are case-sensitive and addEventListener takes a string, so " +
+                    "emitting this would register a listener that is never called: the build would " +
+                    "succeed, the page would load, and the handler would simply never run.",
+                    filePath, 0));
             }
         }
     }
@@ -822,7 +915,24 @@ public static class RegionWriter
                 // emits `{recv}.add(handler)` unconditionally, so that becomes `el.click.add(H)` →
                 // a runtime TypeError. addEventListener is the only correct form, and AddressOf
                 // (not a lambda) is what produces a bound handler.
-                body.Append($"{inner}{control.Id}.addEventListener(\"{bind.Event}\", AddressOf {bind.Handler})")
+                //
+                // ⛔⛔ The CATALOG's spelling, never the document's. DOM event types are
+                // case-SENSITIVE and addEventListener takes a STRING, so `addEventListener("Click",
+                // …)` registers cleanly and is never called: a green build, a page that loads, and a
+                // dead handler with no diagnostic anywhere. Every check that consults
+                // `IsEmittedBind` compares OrdinalIgnoreCase and therefore AGREES the bind is
+                // wired — only the string that reaches the browser disagreed. `FormBind.Event` is
+                // deliberately left un-normalised in the DOCUMENT (it says so), so the one place
+                // this can be put right is here, where the name leaves for the browser.
+                //
+                // An event the row does not declare never gets this far: `CheckControlBinds`
+                // refuses the write with BL8032 first. The fallback keeps this honest anyway,
+                // because the body is built BEFORE the checks run and thrown away when one refuses.
+                var eventName = control.Definition is { } definition
+                    ? CanonicalWebEvent(definition, bind) ?? bind.Event
+                    : bind.Event;
+
+                body.Append($"{inner}{control.Id}.addEventListener(\"{eventName}\", AddressOf {bind.Handler})")
                     .Append(newline);
             }
             else

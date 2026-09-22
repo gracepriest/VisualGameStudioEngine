@@ -72,9 +72,10 @@ public static class DesignCodes
     //   BL8031          reserved — the spec and plan both name it for ONE thing: the --check
     //                   collision between a user's own top-level name and the dispatch helper.
     //                   BL8018 below is a different finding and takes a different number.
+    //   BL8032          a web <Bind> on an event the control's row does not declare (here)
     //
-    // The ENUMERATED table above is now exhausted: the next claim starts at BL8032. That is not
-    // the band being full — BL8032..BL8999 are simply unclaimed, and "full" would wrongly send the
+    // The ENUMERATED table above is now exhausted: the next claim starts at BL8033. That is not
+    // the band being full — BL8033..BL8999 are simply unclaimed, and "full" would wrongly send the
     // next task looking for another band.
     //
     // Nothing in this band lives in BasicLang.Compiler.ErrorCode as a string; the enum registration
@@ -264,6 +265,31 @@ public static class DesignCodes
     /// csc rejects, from a designer that reported the document clean.</para>
     /// </summary>
     public const string StripMisplaced = "BL8030";
+
+    /// <summary>
+    /// A web <c>&lt;Bind&gt;</c> naming an event the control's catalog row does not declare.
+    ///
+    /// <para>⛔⛔ A REFUSAL, and the reason is that nothing downstream can catch it. The WinForms
+    /// side is falsifiable — <c>AddHandler btn.Clik</c> reaches csc, which rejects the member with
+    /// CS1061 — but <c>addEventListener</c> takes a <b>string</b>, so
+    /// <c>addEventListener("Click", …)</c> registers cleanly, the build prints <i>Compilation
+    /// successful!</i>, and the handler is never called. DOM event types are case-SENSITIVE, so the
+    /// WinForms spelling copied into a <c>.blwebform</c> is a dead handler with no symptom at all.
+    /// A wrong CASE of an event the row does have is canonicalised rather than refused (that is the
+    /// copy-paste case, and the catalog knows what was meant); this names the rest.</para>
+    ///
+    /// <para>⛔ Do not "fix" the underlying defect by lower-casing the document's spelling: a few
+    /// real DOM events are not all-lowercase (<c>DOMContentLoaded</c>), so lower-casing trades one
+    /// silent dead handler for another. The catalog is the source of truth; the shape of the string
+    /// is not.</para>
+    ///
+    /// <para>⚠ The vocabulary is currently one event per kind per target — the row's
+    /// <c>WebEvent</c> — so this also refuses a real DOM event the row simply does not name
+    /// (<c>mouseenter</c> on a Button). That is the same edge <c>BL8026</c> already drops on the
+    /// retarget route, and widening it is followup 18's per-kind event table, which this refusal is
+    /// written to widen with rather than around.</para>
+    /// </summary>
+    public const string UnknownWebEvent = "BL8032";
 
     /// <summary>The form document itself is not well-formed XML, or its root/version is not one we know.</summary>
     public const string MalformedDocument = "BL8008";

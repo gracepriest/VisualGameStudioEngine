@@ -670,4 +670,104 @@ public class FormRegionWriterTests
             Assert.That(result.Text, Does.Contain("        Dim doc As Document"));
         });
     }
+
+    // ==================================================================
+    // Followup 26 — the event name that reaches addEventListener
+    // ==================================================================
+
+    /// <summary>A web form whose one bind names <paramref name="event"/> as its event.</summary>
+    private static FormDocument WebFormBoundTo(string @event)
+    {
+        var form = WebLoginForm();
+        form.Controls[0].Binds[0].Event = @event;
+        return form;
+    }
+
+    private static RegionWriteResult WriteWeb(FormDocument form) =>
+        RegionWriter.Write("LoginForm.bas", ScaffoldedFile(), form, "LoginForm.blwebform");
+
+    /// <summary>
+    /// ⛔⛔ The CATALOG's spelling reaches <c>addEventListener</c>, not the document's.
+    ///
+    /// <para>A <c>.blwebform</c> carrying <c>Event="Click"</c> — the WinForms spelling, which is what
+    /// copying a <c>.blform</c> fixture gives you — used to emit <c>addEventListener("Click", …)</c>.
+    /// DOM event types are case-SENSITIVE and <c>addEventListener</c> takes a STRING, so that
+    /// registers cleanly and is never called: green build, page loads, dead handler, no diagnostic.
+    /// <c>FormBuildEmissionTests</c> proves the handler now actually FIRES; this pins the string.</para>
+    /// </summary>
+    [Test]
+    public void Write_Web_EmitsTheCatalogsEventSpelling_NotTheDocuments()
+    {
+        var result = WriteWeb(WebFormBoundTo("Click"));
+
+        Assert.That(result.Refused, Is.False,
+            "the row HAS this event, only in another case — canonicalise it, do not refuse it: " +
+            string.Join("; ", result.Diagnostics.Select(d => d.Format())));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Text, Does.Contain("""btnLogin.addEventListener("click", AddressOf btnLogin_Click)"""));
+            Assert.That(result.Text, Does.Not.Contain("addEventListener(\"Click"),
+                "the document's spelling must not survive into the page");
+        });
+    }
+
+    /// <summary>
+    /// ⛔ An event the row does not declare is REFUSED and NAMED (BL8032), never emitted.
+    ///
+    /// <para>The three spellings below are indistinguishable to the old emitter and to every check
+    /// that consults <c>IsEmittedBind</c> — all three were accepted, built, shipped and never
+    /// called. Nothing downstream can catch them: <c>addEventListener</c> takes a string, so unlike
+    /// the WinForms side there is no csc CS1061 waiting at the end.</para>
+    /// </summary>
+    [TestCase("clik", TestName = "Write_Web_RefusesAnUnknownEvent_Typo")]
+    [TestCase("onclick", TestName = "Write_Web_RefusesAnUnknownEvent_OnPrefixed")]
+    [TestCase("mouseenter", TestName = "Write_Web_RefusesAnUnknownEvent_NotOnTheRow")]
+    public void Write_Web_RefusesABindOnAnEventTheRowDoesNotDeclare(string spelling)
+    {
+        var source = ScaffoldedFile();
+        var result = WriteWeb(WebFormBoundTo(spelling));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Refused, Is.True, $"'{spelling}' is not an event a web Button has");
+            Assert.That(result.Diagnostics.Select(d => d.Code), Does.Contain(DesignCodes.UnknownWebEvent));
+            Assert.That(result.Diagnostics.Single(d => d.Code == DesignCodes.UnknownWebEvent).Message,
+                Does.Contain(spelling).And.Contain("btnLogin").And.Contain("'click'"),
+                "the finding must name the control, what it said, and what the row actually has");
+
+            // ⛔ A refusal must not have written anything. The whole point of this file is that it
+            // edits a file the user owns.
+            Assert.That(result.Changed, Is.False);
+            Assert.That(result.Text, Is.EqualTo(source));
+        });
+    }
+
+    /// <summary>
+    /// ⚠ The DISTINCTNESS guard: this refusal is web-only and must stay that way.
+    ///
+    /// <para>WinForms fails LOUDLY on its own — <c>AddHandler btn.Clik</c> reaches csc as a member
+    /// and comes back CS1061 — and a non-default WinForms event like <c>MouseEnter</c> compiles and
+    /// runs today. Applying the web rule there would refuse working documents to fix a problem that
+    /// target does not have.</para>
+    /// </summary>
+    [Test]
+    public void Write_WinForms_StillEmitsTheDocumentsOwnEventSpelling()
+    {
+        var form = WinFormsLoginForm();
+        form.Controls[0].Binds[0].Event = "MouseEnter";
+
+        var result = RegionWriter.Write("LoginForm.bas", ScaffoldedFile(), form, "LoginForm.blform");
+
+        Assert.That(result.Refused, Is.False,
+            string.Join("; ", result.Diagnostics.Select(d => d.Format())));
+        Assert.That(result.Text, Does.Contain("AddHandler btnLogin.MouseEnter, AddressOf btnLogin_Click"));
+    }
+
+    /// <summary>The number this finding claimed from the band allocation in <c>DesignDiagnostic.cs</c>.</summary>
+    [Test]
+    public void TheUnknownWebEventRefusal_KeepsTheNumberItClaimed()
+    {
+        Assert.That(DesignCodes.UnknownWebEvent, Is.EqualTo("BL8032"));
+    }
 }

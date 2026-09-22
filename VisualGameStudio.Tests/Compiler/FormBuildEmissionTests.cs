@@ -366,4 +366,136 @@ public class FormBuildEmissionTests
             stdout.Split(BasicLang.Forms.FormDispatch.GeneratedFileName).Length - 1, Is.EqualTo(1),
             "the generated dispatch is compiled exactly once, however many times you build");
     }
+
+    // ==================================================================
+    // Followup 26 — the event name that reaches the browser
+    // ==================================================================
+
+    /// <summary>A form whose one bind names its event in the WINFORMS spelling — the copy-paste case.</summary>
+    private const string WrongCaseEventForm = """
+        <WebForm Name="LoginForm" Version="1">
+          <Layout Kind="Grid" Cols="120px,1fr" Rows="auto" Gap="8px"/>
+          <Controls>
+            <Label  Id="lblUser"  Text="User"    Col="0" Row="0" TabIndex="0"/>
+            <Button Id="btnLogin" Text="Sign in" Col="1" Row="0" TabIndex="1">
+              <Bind Event="Click" Handler="btnLogin_Click"/>
+            </Button>
+          </Controls>
+          <Components/>
+          <Resources/>
+        </WebForm>
+        """;
+
+    /// <summary>
+    /// The code-behind the designer would leave on disk for <paramref name="documentText"/>: the real
+    /// scaffold, the user's one-line handler ABOVE the init region (D8's ordering rule — on the web an
+    /// <c>AddressOf</c> naming a later-declared Sub erases its parameter types), and the real
+    /// <see cref="BasicLang.Forms.RegionWriter"/> filling both regions. Returns what the write reported,
+    /// so a caller can assert on the diagnostics as well as on the page.
+    /// </summary>
+    private IReadOnlyList<BasicLang.Forms.DesignDiagnostic> WriteDesignedCodeBehind(string documentText)
+    {
+        var scaffold = BasicLang.Forms.FormScaffolder.Create("LoginForm", BasicLang.Forms.FormTarget.Web);
+
+        const string anchor = "Public Class LoginForm\n";
+        var handler =
+            "\n    Private Sub btnLogin_Click(e As DomEvent)\n" +
+            "        Console.WriteLine(\"HANDLER FIRED\")\n" +
+            "    End Sub\n";
+
+        // ⚠ A Replace that matched nothing would leave a code-behind with no handler at all, and the
+        // build would then fail for a reason that has nothing to do with what this test asks.
+        Assert.That(scaffold.CodeText, Does.Contain(anchor),
+            "the web scaffold no longer opens with the class declaration this helper inserts after");
+
+        var code = scaffold.CodeText.Replace(anchor, anchor + handler);
+
+        var file = BasicLang.Forms.Serialization.FormDocumentReader.Read(
+            Path.Combine(_dir, "LoginForm.blwebform"), documentText);
+        Assert.That(file.IsRefused, Is.False, "the fixture's own document was refused by the reader");
+
+        var result = BasicLang.Forms.RegionWriter.Write(
+            Path.Combine(_dir, "LoginForm.bas"), code, file.Model, "LoginForm.blwebform");
+
+        if (!result.Refused)
+        {
+            Write("LoginForm.bas", result.Text);
+        }
+
+        return result.Diagnostics;
+    }
+
+    /// <summary>Runs the built page under node, or returns null when node is not on this machine.</summary>
+    private string? RunPage()
+    {
+        try
+        {
+            return FormDesignerAcceptanceTests.RunPageUnderNode(OutputDir);
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// ⛔⛔ Followup 26. The document's event name reached <c>addEventListener</c> VERBATIM, and DOM
+    /// event types are case-SENSITIVE — so a <c>.blwebform</c> carrying <c>Event="Click"</c> (the
+    /// WinForms spelling, which is exactly what copying a <c>.blform</c> fixture gives you) emitted
+    /// <c>addEventListener("Click", …)</c>. That registers cleanly, the build prints
+    /// <i>Compilation successful!</i>, and the handler is simply never called.
+    ///
+    /// <para>⚠ <b>No string assertion can see this defect</b>, which is the whole reason this test is
+    /// here rather than in <c>FormRegionWriterTests</c>. Every check that consults
+    /// <c>RegionWriter.IsEmittedBind</c> compares the event name <c>OrdinalIgnoreCase</c>, so BL8028,
+    /// the BL8013 ordering check and the web component's template wiring all agree that the bind IS
+    /// correctly wired. Only the string that reaches the browser disagrees, so the browser is what has
+    /// to be asked: the page is built by the REAL CLI and RUN, and the harness clicks with the real
+    /// DOM event name <c>"click"</c>. A listener registered under <c>"Click"</c> is not called by it —
+    /// exactly as in a browser.</para>
+    /// </summary>
+    [Test]
+    public void AWrongCaseEventInTheDocument_StillReachesTheHandlerWhenTheBrowserClicks()
+    {
+        WriteProject("Main.bas", "LoginForm.blwebform", "LoginForm.bas");
+        Write("LoginForm.blwebform", WrongCaseEventForm);
+
+        // ⛔ "App loaded" is the POSITIVE CONTROL, and it is what makes a red here readable. Without
+        // it an empty run means either "the handler was registered under a name the click never
+        // matches" — the defect — or "the script never ran at all", and the two are indistinguishable
+        // from an empty string. With it, the two failures say different things.
+        Write("Main.bas",
+            "Sub Main()\n" +
+            "    Console.WriteLine(\"App loaded\")\n" +
+            $"    {BasicLang.Forms.FormAssetEmitter.DispatchCall}\n" +
+            "End Sub\n");
+
+        var diagnostics = WriteDesignedCodeBehind(WrongCaseEventForm);
+        Assert.That(diagnostics.Where(d => !d.IsWarning), Is.Empty,
+            "the document names the Button's own default event, only in the wrong case — it must be "
+            + "canonicalised, not refused: " + string.Join("; ", diagnostics.Select(d => d.Message)));
+
+        var (exit, stdout, stderr) = Build();
+        Assert.That(exit, Is.Zero, $"STDOUT:\n{stdout}\nSTDERR:\n{stderr}");
+
+        var ran = RunPage();
+        if (ran == null)
+        {
+            Assert.Ignore("node is not on PATH, so the emitted page cannot be executed here");
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ran, Does.Not.Contain("ReferenceError"),
+                "the page threw on load — a green build is not a running page");
+            Assert.That(ran, Does.Contain("App loaded"),
+                "the emitted script did not run at all, so this test cannot say anything about the "
+                + "handler. Fix the page before reading the assertion below.");
+            Assert.That(ran, Does.Contain("HANDLER FIRED"),
+                "the browser clicked btnLogin and the handler never ran. The document said "
+                + "Event=\"Click\"; addEventListener is case-SENSITIVE, so a listener registered "
+                + "under \"Click\" is never called by a real click. The emitter must canonicalise "
+                + "the event through the catalog row's WebEvent instead of trusting the document.");
+        });
+    }
 }
