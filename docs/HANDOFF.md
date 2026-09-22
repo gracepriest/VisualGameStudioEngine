@@ -20,9 +20,11 @@ facade (all five tasks of `2026-09-13-blnet-cpp-facade.md`).
 ## 🚀 START HERE — 2026-09-21: Task 24 is three commits in; **24a, 24b and 24c are all DONE, GATED and PUSHED**
 
 **Written for the session that picks this up. Newer than everything below; supersedes it where they
-disagree.** Branch `feat/form-designer` == `origin/feat/form-designer` == **`1efa9c91`**, SHA-verified.
-`origin/master` == **`7ce1200`** (PR #64, MSIL); this branch is **22 behind / 117 ahead**. Whether
-master's game-template float→int break (chip `task_9e0da8ab`) is fixed there is still UNMEASURED.
+disagree.** Branch `feat/form-designer` == `origin/feat/form-designer` == **`392bcb5d`**, SHA-verified
+(`4bc09979` on it is a peer session's gamepad test fix, test file only).
+`origin/master` == **`7ce1200`** (PR #64, MSIL); this branch is **22 behind / 120 ahead**. Master's
+game-template float→int break (chip `task_9e0da8ab`) is **MEASURED 2026-09-21: still broken at
+`7ce1200`, root-caused to a mirrored stdlib table** — see *"Master is NOT healthy"* below.
 Working tree is clean apart from an untracked `csc.dll` in the repo root — ⛔ **never `git add -A`.**
 
 | Commit | What | Gate |
@@ -77,9 +79,10 @@ then Task 28 closeout, then the merge to master.
 
 ## (2026-09-20) commit 24a — Tasks 1–6, COMPLETE AND GATED
 
-`origin/master` moved on 2026-09-20 to **`7ce1200`** (PR #64, MSIL). Whether master's game-template
-float→int break (chip `task_9e0da8ab`) is fixed there is still UNMEASURED — four of the gate's failures
-below are inherited from it.
+`origin/master` moved on 2026-09-20 to **`7ce1200`** (PR #64, MSIL). Master's game-template float→int
+break (chip `task_9e0da8ab`) is **MEASURED 2026-09-21 and STILL BROKEN there** — four of the gate's
+failures below are inherited from it, and they will stay red until master fixes the stdlib table.
+Root cause and the three candidate fixes: *"Master is NOT healthy"* below.
 
 ### ✅ 24a IS DONE — Tasks 1–6 all closed, full suite run, committed
 
@@ -309,7 +312,7 @@ reference counts, never against the checkboxes.
 | **21** retarget | done 2026-09-19 — `FormRetarget`, `design --retarget`, "Retarget Form…"; see its section below |
 | **25** component tray | done 2026-09-19 — Timer/ToolTip/ErrorProvider/BackgroundWorker in `<Components>`, the strip under the canvas, a Timer RUNS on both targets; see its section below |
 | **24** menus | IN FLIGHT 2026-09-20 — spec + plan written and reviewed; commit 24a (the compiler change) in the working tree, uncommitted; see START HERE above |
-| **28** closeout | NOT STARTED (blocked on master's game-template break until measured) |
+| **28** closeout | NOT STARTED — blocked on master's game-template break, now MEASURED and root-caused (2026-09-21); blocked on a DECISION between three fixes, not on a measurement |
 
 ⚠ **24 was called compiler-gated. Measured 2026-09-19: the premise is true (a bare `{mnuFile, sep1}`
 degrades to `Object[]`, CS1503) but the conclusion is false — the designer needs NO compiler change
@@ -413,13 +416,59 @@ all run); plan: `docs/superpowers/plans/2026-09-19-component-tray.md`. Four comm
 Verified 2026-09-18 in a detached worktree at plain `origin/master`, with no designer code present:
 every game template fails to build with `CS1503: cannot convert from 'float' to 'int'`
 (`Build_GameAppTemplate_*`, `CliTemplate("game")`, `Template("game-app")`, plus two `cpp-game`
-siblings). The likely cause is master's own *"Round every narrowing conversion half-to-even"* /
-*"Fold lossless widening casts"* work. It escaped because those tests are all
-`[Category("Integration")]`, which the fast subset skips.
+siblings). It escaped because those tests are all `[Category("Integration")]`, which the fast
+subset skips.
+
+✅ **ROOT-CAUSED 2026-09-21 — still broken at `7ce1200`, and the earlier "likely cause" guess in
+this document was WRONG.** Measured by rebuilding a master-based `BasicLang.exe` and running
+`new game` → `build`: `Main.bas(10,66) CS1503` on args 2 and 3 of `DrawText`, while arg 4 is fine.
+That asymmetry is the whole diagnosis — it is a **three-way contract mismatch and the compiler is
+the odd one out**:
+
+| | x, y |
+|---|---|
+| `framework.h:299` (authoritative) | `int x, int y` |
+| `RaylibWrapper.vb:72` | `x As Integer, y As Integer` |
+| compiler stdlib table | **`Single`, `Single`** |
+
+`fontSize` is declared `Integer` so it stayed `20`; `x`/`y` are declared `Single` so the literals
+were coerced to `10f`, and the wrapper takes `Integer`.
+
+⛔⛔ **It is NOT a regression in the declaration — the declaration is ORIGINAL** (`git log -L` on
+`FrameworkStdLib.cs:38`: unchanged since `435f2501`). What regressed is the BEHAVIOUR, when argument
+coercion began honouring declared stdlib parameter types. **Anyone bisecting "the commit that broke
+the game template" will land on a coercion commit that is probably correct in itself, and may revert
+the wrong thing.** The defect is the table, not the coercion.
+
+⚠ **It is a MIRRORED PAIR — the table is declared TWICE and a fix must change both or they drift:**
+`BasicLang/SemanticAnalyzer.cs:1554-1574` and `BasicLang/StdLib/FrameworkStdLib.cs:35-44`. Fixing one
+leaves the semantic checker and the stdlib disagreeing about the same contract. This belongs on
+`CLAUDE.md`'s "change it once, not per-consumer" list.
+
+⚠ **Five functions are affected, not one** — the template only happens to call `DrawText`:
+`DrawText`, `DrawRectangle`, `DrawLine`, `DrawCircle` (x/y wrong, radius correctly `Single`) and
+`DrawTexture` (`FrameworkStdLib.cs:43` / `SemanticAnalyzer.cs:1572-1574` vs `framework.h:400`
+`int posX, int posY`). `DrawTextureEx` (`FrameworkStdLib.cs:44`, four `Single`s) is UNCHECKED — treat
+as suspect, not clean. C++ is unaffected: `CppCodeGenerator` passes args through raw and C++ narrows
+implicitly. **This is a C#-backend break.**
+
+⭐ **The repo already contains the correct answer beside the wrong one, which settles the "would a fix
+take float positions away?" question:** `DrawRectangleLines` (`:99`) declares all four `Integer` while
+`DrawRectangle` (`:35`) declares all four `Single` — the same geometry, two rows apart, declared
+differently. `DrawCircleLines` (`:100`) declares `Integer, Integer, Single`, matching `framework.h:367`
+exactly, while `DrawCircle` (`:36`) declares three `Single`s. The `*Lines` variants are the correctly
+transcribed twins. **There is no float-facing API to preserve — there is a transcription error that
+four or five rows have and their siblings escaped.**
+
+Three defensible fixes, and the choice is a product decision, not a mechanical one: **(a)** correct the
+table to `Integer`, matching engine and wrapper — minimal, truthful, self-consistent; **(b)** keep a
+`Single`-facing surface and have the C# emitter insert explicit `(int)` casts — note this is a
+forward-looking API *change*, not a preservation, per the `*Lines` evidence above; **(c)** widen engine
+and wrapper to float — largest, touches the native side.
 
 ⛔ **Task 28 cannot honestly claim a clean baseline until this is fixed** — the alternative is
 quietly re-baselining around someone else's regression, which is how a known-bad build becomes the
-new normal.
+new normal. It is now blocked on a DECISION rather than on a measurement.
 
 ### Current gates on this branch
 
