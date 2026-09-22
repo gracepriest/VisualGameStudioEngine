@@ -96,6 +96,15 @@ These are measured, not cautionary. Each one shipped a green build that did the 
 - ⛔ **Every shipping route runs the IR optimizer; the unit-test helper does not.** A fixture
   can be green while the CLI and the IDE both miscompile. Validate codegen through the CLI or
   an optimizer-running helper. **stdout is the only valid oracle.**
+- ⛔⛔ **"Optimized" in a helper name means `AddStandardPasses`, NOT the aggressive pipeline.**
+  `JsTestSupport.CompileOptimized`, `JavaScriptOptimizedExecutionTests.RunOptimized`,
+  `BclE2E.CompileToCppOptimized`, `MsilHarness.CompileToIl` and
+  `ReturnCoercionTests.EmitCSharpForTest` are all standard-only and cannot see an aggressive-only
+  pass at all. For aggressive work use `FourBackends.RunsOnEveryBackendAggressive` and its legs
+  (`JsTestSupport.CompileAggressive`, `BclE2E.CompileToCppAggressive`,
+  `MsilHarness.RunAggressiveExpectingSuccess`, `ReturnCoercionTests.EmitCSharpAggressiveForTest`),
+  all of which go through the one shared definition, `AggressivePipeline.Apply`. The aggressive
+  pipeline **ships**: a Release `.blproj` build and `--optimize` both take it.
 - ⛔ **`IDE/` is a hand-committed xcopy drop and goes stale.** A stale drop has been mistaken
   for a code bug more than once. Deploy with `robocopy <Shell bin> IDE /E` — **never `/MIR`**,
   since the engine DLL and import lib live only there. **`IDE/lib/js/dom-core.bli` is
@@ -227,10 +236,15 @@ compile). **Not fixed. Each is a real shape with a real number, not a guess.**
 
 - ⛔ **`FourBackends.RunsOnEveryBackend` has a HOLE for optimizer work: its JavaScript leg is
   `JsTestSupport.Compile`, the NON-OPTIMIZING path.** For any defect that lives in an
-  `IROptimizer` pass, that leg is green no matter what the optimizer does. Use
-  `JavaScriptOptimizedExecutionTests.RunOptimized` instead. This is a general hole in a shared
-  harness, not specific to one family — any past "all four backends agree" claim about optimizer
-  behaviour was only ever three.
+  `IROptimizer` pass, that leg is green no matter what the optimizer does. This is a general hole
+  in a shared harness, not specific to one family — any past "all four backends agree" claim about
+  optimizer behaviour was only ever three.
+  ⛔ **CORRECTED 2026-09-22 (second optimizer task):** the remedy first written here — "use
+  `JavaScriptOptimizedExecutionTests.RunOptimized` instead" — is only half right.
+  `RunOptimized` is `JsTestSupport.CompileOptimized`, which is `AddStandardPasses`
+  (`JsTestSupport.cs:119-129`). It closes the "no optimizer at all" hole and **would have been
+  green for the entire `InductionVariablePass` defect**, which is aggressive-only. Use it for
+  standard-pass work; for aggressive-pass work use `FourBackends.RunsOnEveryBackendAggressive`.
 - ⛔ **`CSharpBackend.GetOperands` is NOT total in SEVEN node kinds**, pinned by equality in
   `OperandWalkerTotalityTests`: `IRArrayStore` (Array/Index/Value), `IRFieldStore` (Object/Value),
   `IRForEach.Collection`, `IRSwitch.Cases[].Value`, `IRThrow.Exception`, `IRYield.Value`, `IRPhi`,
@@ -242,10 +256,94 @@ compile). **Not fixed. Each is a real shape with a real number, not a guess.**
   `IRVariable.DefaultValue`/`.InitialValue` (declaration data on a leaf, covered by NEITHER walker).
 - ⛔ **`InductionVariablePass` leaves a dangling operand too** — the same omission as CSE and
   Peephole, a third pass, aggressive-only. Pinned as a KNOWN-DEFECT test so contract item 1's scope
-  (`AddStandardPasses`, not the aggressive pipeline) is visible in the suite. See the task list.
+  (`AddStandardPasses`, not the aggressive pipeline) is visible in the suite.
+  ⭐ **RESOLVED 2026-09-22 by REMOVAL** — see the next section. The pin was flipped to the positive
+  form and the battery widened to `AddAggressivePasses()`.
 - ⚠ A peephole mutant that drops the `RemoveAt` does not produce a wrong answer — it makes the
   **compiler hang** (the `do/while(changed)` fixed point never terminates, 100% CPU to timeout).
   A mutation sweep over optimizer passes needs a timeout classification, not just pass/fail.
+
+### ⭐ 2026-09-22 — the aggressive pipeline, and `InductionVariablePass` removed
+
+**Gate added.** `FourBackends.RunsOnEveryBackendAggressive` — the suite's FIRST shared aggressive
+execution harness. One definition of "aggressive", `AggressivePipeline.Apply`, behind four legs:
+`BclE2E.CompileToCppAggressive`, `JsTestSupport.CompileAggressive`,
+`MsilHarness.RunAggressiveExpectingSuccess`, `ReturnCoercionTests.EmitCSharpAggressiveForTest`.
+
+- ⛔ **Why it did not exist before, measured.** NOT ONE leg of `FourBackends.RunsOnEveryBackend` is
+  aggressive. The only aggressive execution anywhere in the suite was two PRIVATE duplicates,
+  `FunctionInliningDisabledTests.RunAggressive` and `AlgebraicSimplificationTests.RunAggressive`,
+  and **both are JavaScript-only** — so C#, C++ and MSIL had ZERO aggressive coverage.
+  `FunctionInliningPass` and `InductionVariablePass` — the two aggressive-only members of the three
+  passes `OptimizationPipeline` now keeps but does not ship — both shipped broken behind that hole.
+  (The third, `ConstantPropagationPass`, was a STANDARD pass.)
+- ⛔⛔ **#114: C++ AND MSIL RUN *ANY* COUNTED `For` LOOP ZERO TIMES UNDER `--optimize`.**
+  `LoopInvariantCodeMotionPass` sinks the loop condition's definition out of the condition block
+  into the loop's own LATCH, because `ControlFlowGraph.IdentifyLoops` hands it a "preheader" that IS
+  the latch. Both goto-emitting backends then read the flag before anything writes it. Measured on
+  `For i = 0 To n : Show(i) : Next` — the counter passed through untouched, so no arithmetic pass
+  has anything to act on — where the emitted C++ is literally
+  `bool t1 = {}; … for0_cond: if (t1) …` with `t1 = i <= n` moved down into `for0_inc`; both print
+  only the line after the loop. C# and JavaScript rebuild the condition from the CFG and are fine.
+  **A four-backend aggressive loop assertion cannot go green until #114 lands.** An aggressive loop
+  fixture is C#+JS only, and must say which backend it excludes and why.
+- ⛔ **#114 breaks JAVASCRIPT too, on a NESTED `For`**: `ReferenceError: t4 is not defined`. LICM
+  sinks the OUTER increment `t4 = i + 1` into the INNER loop's latch, where the emitter declares it
+  `const` inside the inner block, so the outer `i = t4` reads an out-of-scope name. So a nested
+  aggressive loop fixture is **C# only**. Newly visible now that the `_div_` failure stopped masking it.
+- ⚠ The archived `out/opt/S5` verdict from the implementer's characterization disagrees with a
+  fresh run (it shows C++/MSIL printing four lines). A fresh isolated run of both pipelines shows
+  the def output there; treat that one file as clobbered, not as evidence.
+
+**`InductionVariablePass` is commented out of `AddAggressivePasses()`** (`IROptimizer.cs:1715`),
+the third pass that method keeps but does not ship. `InductionVariableDisabledTests` is the record.
+
+- ⭐ **THE STRUCTURAL FACT.** `grep -n "LocalVariables" BasicLang/IROptimizer.cs` finds only
+  COMMENTS. **The optimizer has no facility at all for declaring a variable it mints**, so the
+  usable form of "no pass may reference a variable it has not declared" is the stronger
+  *a pass must not mint a fresh variable name at all*. Both invariants are now in the suite
+  (`OptimizerMintedVariableTests`) and both are backend-free.
+- ⛔ **The undeclared-name invariant is STRICTLY STRONGER than the dangling-operand one.** Measured:
+  `x = i * 3` onto a NAMED local gives **zero** orphaned operands and an undeclared `_div_x`. A
+  fixture built only on contract item 1 is blind to that whole shape.
+- ⛔ **Neither IR invariant can see the collision shape.** A program that already has
+  `Dim _div_x As Integer = 99` compiled CLEANLY and printed 198,204,210,216 for 99,102,105,108 on
+  C# and JS — zero orphans, zero undeclared names, zero minted names, because the name the pass
+  minted is one the USER declared. **Only a value assertion catches it.**
+- ⛔ **A loop that starts at ZERO cannot distinguish "fixed" from "declared but never
+  initialised".** `For i = 1 To 3 : Show(i * 3)` is the discriminator — measured 0,3,6 for 3,6,9,
+  silently, on C# and JS. Any induction-variable fixture needs a non-zero start.
+- ⛔ **`i * 2` tests nothing through the aggressive pipeline.** `AlgebraicSimplificationPass`
+  (pass 9) rewrites `2 * x` → `x + x` before `InductionVariablePass` (pass 12) sees it, so a `* 2`
+  shape was GREEN even with the pass enabled. Use `* 3`. Likewise a `While` loop: the pass bails
+  unless some block is named `.inc`, which only a counted `For` produces.
+- ⛔ **`OptimizerIr.Removed` is ZERO for a counted `For` with a multiply in it, in BOTH
+  pipelines.** Measured: 1 for each of the twelve standard-pass battery shapes under standard AND
+  aggressive; 0 for all five induction-variable loop shapes under standard AND aggressive. No pass
+  removes an instruction from those loops at all — the only aggressive pass that acts on them is
+  LICM, which MOVES instructions between blocks. So a "something was removed" non-vacuity
+  assertion fails on exactly the cases an aggressive battery exists for; do not carry it over.
+- ⛔ **Adding the missing initialisation to the ENTRY block makes the OPTIMIZER run out of
+  memory** — on every shape measured, `--optimize` and the in-process helpers alike. The seed
+  multiply lands inside one of `IdentifyLoops`' four bogus "natural loops" (every one contains
+  `entry`), and the pass re-fires on its own output without bound. A CFG defect, surfacing as a
+  compiler crash.
+- ⚠ **`LoopUnrollingPass` CANNOT FIRE AT ALL** (task #117). Removing it from
+  `AddAggressivePasses` changes nothing — measured as a surviving mutant, and independently:
+  `ModificationCount` is 0 on every shape probed, **including a loop with no call in it and a
+  constant trip count of 10**, which passes every gate `CanUnroll` names. The real blocker is one
+  level down and is the SAME CFG defect as #114: `FindInitialValue` looks for a block in the loop
+  whose predecessor is OUTSIDE the loop — a real preheader — and since every "natural loop"
+  `IdentifyLoops` reports contains `entry`, that never resolves to a block that assigns the counter
+  a constant. `GetConstantTripCount` therefore always returns null. The `IRCall` refusal is a
+  second, shallower gate, not the reason. **So this is DEAD code, not untested code: no shape can
+  exercise it until `IdentifyLoops` is fixed, and a test written for it today would assert
+  nothing.**
+- ⛔⛔ **A CRASHED TEST HOST STILL PRINTS `Passed!`.** `dotnet test` emits
+  `Passed!  - Failed: 0, Passed: 24, Total: 24` for the subset that ran *before* the crash, then
+  `Test Run Aborted.` A mutation classifier that only greps for a `^(Failed|Passed)!` summary
+  calls that a SURVIVING mutant. Grep for `Test Run Aborted` / `Test host process crashed`
+  **first**; "a summary is present" is not "the run completed".
 
 ### Traps this characterization cost us, recorded so nobody pays twice
 

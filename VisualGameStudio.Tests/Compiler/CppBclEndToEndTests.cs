@@ -62,6 +62,32 @@ internal static class BclE2E
     }
 
     /// <summary>
+    /// The same front end through the AGGRESSIVE passes — the C++ leg of
+    /// <c>FourBackends.RunsOnEveryBackendAggressive</c>. <see cref="CompileToCppOptimized"/> runs
+    /// <c>AddStandardPasses</c> only, so it is blind to every aggressive-only pass.
+    ///
+    /// <para>⛔ On a counted <c>For</c> loop this currently emits a program that runs the loop
+    /// ZERO times — issue #114, <c>LoopInvariantCodeMotionPass</c> sinking the loop condition into
+    /// the latch, which the label-and-<c>goto</c> C++ emitter cannot recover from. Measured on
+    /// <c>For i = 0 To n : Show(i) : Next</c>. Do not write a C++ aggressive loop assertion
+    /// expecting the right answer until #114 lands.</para>
+    /// </summary>
+    internal static string CompileToCppAggressive(string source)
+    {
+        var tokens = new Lexer(source).Tokenize();
+        var ast = new Parser(tokens).Parse();
+        var analyzer = new SemanticAnalyzer();
+        Assert.That(analyzer.Analyze(ast), Is.True,
+            string.Join("; ", analyzer.Errors.Select(e => e.Message)));
+        var irModule = new IRBuilder(analyzer).Build(ast, "TestModule");
+
+        VisualGameStudio.Tests.Compiler.AggressivePipeline.Apply(irModule);
+
+        return new CppCodeGenerator(new CppCodeGenOptions { GenerateComments = false })
+            .Generate(irModule);
+    }
+
+    /// <summary>
     /// Compile the generated C++ with a real compiler, run it, return stdout with
     /// line endings normalized. Ignores when no C++ compiler is available.
     /// </summary>

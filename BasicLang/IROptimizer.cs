@@ -1637,7 +1637,82 @@ namespace BasicLang.Compiler.IR.Optimization
             AddPass(new AlgebraicSimplificationPass());
             AddPass(new LoopFusionPass());  // Fuse adjacent loops before unrolling
             AddPass(new LoopUnrollingPass(4));  // 4x unrolling
-            AddPass(new InductionVariablePass());
+
+            // InductionVariablePass DISABLED — third entry in the list this method already keeps
+            // (ConstantPropagationPass above, FunctionInliningPass above that), for the same
+            // reason and on the same terms: it has never produced a correct program for any loop
+            // it actually rewrites, and the aggressive pipeline SHIPS. `ProjectFile()` seeds
+            // Configurations["Release"].OptimizationsEnabled = true (ProjectFile.cs:122-127), and
+            // Program.cs:502 / BuildService.cs:629 pass that straight into
+            // CompilerOptions.OptimizeAggressive, which reaches AddAggressivePasses at
+            // Compiler.cs:292 and Compiler.cs:459. So a Release .blproj build took this pass.
+            //
+            // MEASURED at 67782af on `For i = 0 To n : Show(i * 3) : Next`, compiled AND RUN out
+            // of process on all four backends, both entry points (CLI --optimize and a Release
+            // .blproj through CompileProjectFiles). Emitted C# was:
+            //     t2 = _div_t2 + 3;      // CS0103 on BOTH names
+            //     Show(i * 3);           // ...and the original multiply is still here
+            // C++ "use of undeclared identifier '_div_t2'"/"'t3'"; JavaScript ReferenceError
+            // ("Cannot access '_div_t2' before initialization"); MSIL assembled and threw
+            // InvalidProgramException. No backend was right by luck — unusually, all four fail.
+            //
+            // FIVE defects, not the two that were written down, and the two written-down ones are
+            // not the ones that matter:
+            //  1. The uses are never re-pointed. `block.Instructions[i]` is swapped for an
+            //     IRAssignment while every consumer still holds the removed IRBinaryOp, so the
+            //     derived IV is dead weight and the multiply is re-materialised from the orphan.
+            //     Same omission as CSE and Peephole at 67782af.
+            //  2. The derived IV is never added to IRFunction.LocalVariables. No pass in this file
+            //     has ever written LocalVariables — the optimizer has no facility for declaring a
+            //     variable it mints, and the only two passes that ever wanted one are this and
+            //     FunctionInliningPass.
+            //  3. ⛔ IT IS NEVER INITIALISED. There is no preheader store of `i_init * c`, and
+            //     FindBasicInductionVariables does not even collect the initial value. So the
+            //     first iteration reads garbage. `For i = 1 To n` needs the derived IV to start at
+            //     3; nothing puts it there. THIS is the defect that makes a repair a rewrite,
+            //     because placing the init needs a loop preheader — see below.
+            //  4. The minted name `_div_{binOp.Name}` lives in the USER's namespace, which
+            //     ADR-0001's Contract forbids for exactly this reason. MEASURED: a program with
+            //     `Dim _div_x As Integer = 99` and `x = i * 3` COMPILES CLEANLY and prints
+            //     198/204/210/216 where 99/102/105/108 is correct — a silent wrong answer, today,
+            //     on C# (the reference oracle) and JavaScript. C++ and MSIL print neither the
+            //     right nor the wrong numbers, because the separate LICM defect below stops the
+            //     loop running at all; they are not evidence that this defect is narrow.
+            //     And two multiplies onto one local (`x = i * 3` then
+            //     `x = i * 5`) both mint `_div_x`, so both updates land in the same block;
+            //     JavaScript reports "Identifier '_div_x' has already been declared".
+            //  5. `basicIVs[ivVar.Name]` carries the increment block and the pass DISCARDS it
+            //     (`var (increment, _) = ...`), then re-finds one with
+            //     `loop.FirstOrDefault(b => b.Name.Contains(".inc"))` — any `.inc` block in the
+            //     loop list, which for a nested loop can be the wrong loop's latch. There is also
+            //     no check that the recognised increment is the ONLY definition of `i` in the
+            //     loop: on `For i = 0 To n : Show(i * 3) : i = i + 1 : Next` the correct output is
+            //     0, 6 and a derived IV stepping by 3 gives 0, 3.
+            //
+            // ⛔ WHY REPAIR IS A REWRITE, MEASURED: fixing exactly the two defects that were
+            // written down (1 and 2) does NOT fix the program — `t2` is a TEMP, so replacing the
+            // IRValue that carried the name with an IRAssignment takes its DECLARATION away, and
+            // C# still gave CS0103 on `t2`, JavaScript still threw. It also CONVERTED the
+            // two-multiplies-onto-one-local shape from a loud build failure into a silent wrong
+            // answer: 0,0,8,8,16,16,24,24 where 0,0,3,5,6,10,9,15 is correct, measured on C# and
+            // JavaScript (the two backends whose emitters survive the LICM defect below, so the
+            // two that can show a wrong VALUE at all). A loud failure traded for a quiet one is a
+            // regression.
+            // And defect 3 cannot be fixed inside this pass at all: it needs a preheader, and
+            // ControlFlowGraph.IdentifyLoops — the substrate all four loop passes call — is wrong.
+            // For a five-block function holding ONE loop it reports FOUR natural loops, every one
+            // of them containing `entry`, and one containing the exit block. LICM's
+            // `header.Predecessors.FirstOrDefault(p => !loopSet.Contains(p))` therefore resolves
+            // the "preheader" to the loop's own LATCH (`for0.inc`). Repairing that is shared-
+            // substrate work for the LICM task, not something to smuggle in here, and a pass that
+            // cannot place an initialisation cannot fire correctly even once.
+            //
+            // Nothing is lost by not shipping it. LLVM's loop-strength-reduction, the CLR JIT and
+            // V8 all perform this exact transform, better, downstream of every one of our
+            // backends; and because defect 1 means the multiply was emitted anyway, the pass never
+            // removed a single multiply even when it "succeeded". The class stays in the file, as
+            // FunctionInliningPass does, so a test can add it explicitly.
+            // AddPass(new InductionVariablePass());
         }
         
         public OptimizationResult Run(IRModule module)

@@ -3,11 +3,54 @@ using System.Collections.Immutable;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using BasicLang.Compiler.IR;
+using BasicLang.Compiler.IR.Optimization;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using NUnit.Framework;
 
 namespace VisualGameStudio.Tests.Compiler;
+
+/// <summary>
+/// ⭐ THE ONE DEFINITION OF "AGGRESSIVE" FOR THE WHOLE SUITE.
+///
+/// <para>Every aggressive-pipeline leg — <c>JsTestSupport.CompileAggressive</c>,
+/// <c>BclE2E.CompileToCppAggressive</c>, <c>MsilHarness.CompileToIl(aggressive: true)</c> and
+/// <c>ReturnCoercionTests.EmitCSharpAggressiveForTest</c> — calls THIS method and nothing else,
+/// for the reason CLAUDE.md gives for <c>ModuleResolver</c> / <c>ModuleTypeWalker</c>: shared
+/// substrate is changed once, not per consumer. Four private copies of
+/// <c>new OptimizationPipeline(); AddAggressivePasses(); Run(module)</c> would be four things that
+/// can drift about what the aggressive pipeline IS, which is the whole subject under test.</para>
+///
+/// <para>⛔ WHY IT HAD TO BE ADDED. Before this, the suite had NO shared aggressive execution
+/// helper at all. <c>FourBackends.RunsOnEveryBackend</c> is not aggressive on any of its four
+/// legs (C++ → <c>AddStandardPasses</c>, JavaScript → NO optimizer, MSIL →
+/// <c>AddStandardPasses</c>, C# → <c>AddStandardPasses</c>), and
+/// <c>JsTestSupport.CompileOptimized</c> / <c>JavaScriptOptimizedExecutionTests.RunOptimized</c>
+/// are <c>AddStandardPasses</c> too despite the name. The only aggressive execution in the suite
+/// was two PRIVATE duplicates — <c>FunctionInliningDisabledTests.RunAggressive</c> and
+/// <c>AlgebraicSimplificationTests.RunAggressive</c> — and both are JavaScript-only, so C#, C++
+/// and MSIL had ZERO aggressive coverage. <c>OptimizationPipeline</c> now keeps three passes it
+/// does not ship — <c>ConstantPropagationPass</c>, <c>FunctionInliningPass</c> and
+/// <c>InductionVariablePass</c> — and TWO of the three were aggressive-only, so this hole is where
+/// they shipped broken. (<c>ConstantPropagationPass</c> was a STANDARD pass; it is named here only
+/// to keep the list of disabled passes complete.)</para>
+/// </summary>
+internal static class AggressivePipeline
+{
+    /// <summary>
+    /// Run <c>AddAggressivePasses()</c> over <paramref name="module"/> in place — what
+    /// <c>Compiler.cs:292</c> and <c>Compiler.cs:459</c> do when
+    /// <c>CompilerOptions.OptimizeAggressive</c> is set, which is what the CLI's
+    /// <c>--optimize</c> and a Release <c>.blproj</c> build both request.
+    /// </summary>
+    internal static void Apply(IRModule module)
+    {
+        var pipeline = new OptimizationPipeline();
+        pipeline.AddAggressivePasses();
+        pipeline.Run(module);
+    }
+}
 
 /// <summary>
 /// One program, all four backends compiled AND RUN, in process. The property a fixture asserts
@@ -36,8 +79,50 @@ internal static class FourBackends
         });
     }
 
+    /// <summary>
+    /// ⭐ THE AGGRESSIVE SIBLING of <see cref="RunsOnEveryBackend"/>: one program, all four
+    /// backends compiled AND RUN through <see cref="AggressivePipeline"/>. The shared runner the
+    /// suite did not have; see <see cref="AggressivePipeline"/> for what its absence cost.
+    ///
+    /// <para>⛔ <b>NOT usable for a counted <c>For</c> loop today, on C++ or MSIL.</b> Under
+    /// <c>AddAggressivePasses()</c> <c>LoopInvariantCodeMotionPass</c> sinks the loop condition's
+    /// definition out of the condition block and into the loop's own LATCH, because
+    /// <c>ControlFlowGraph.IdentifyLoops</c> hands it a "preheader" that is the latch. C++ and
+    /// MSIL emit the CFG as labels and <c>goto</c>s, so they read the condition flag before
+    /// anything writes it and run the loop ZERO times; C# and JavaScript rebuild the condition
+    /// from the CFG in their structured-loop emitters and are unaffected. MEASURED on
+    /// <c>For i = 0 To n : Show(i) : Next</c> — the counter is passed through untouched, so no
+    /// arithmetic pass has anything to act on: C++ and MSIL print only the line AFTER the loop,
+    /// and the emitted C++ is
+    /// literally <c>bool t1 = {}; for0_cond: if (t1) …</c> with <c>t1 = i &lt;= n</c> moved down
+    /// into <c>for0_inc</c>. That is issue #114, a separate defect in a separate pass. A loop
+    /// fixture must use the C# and JavaScript legs directly and say so — see
+    /// <c>InductionVariableDisabledTests</c>.</para>
+    ///
+    /// <para>⚠ <c>Assert.Multiple</c> and an in-process Roslyn C# leg with no timeout, exactly as
+    /// <see cref="RunsOnEveryBackend"/>: ONE shape per test.</para>
+    /// </summary>
+    internal static void RunsOnEveryBackendAggressive(string program, string expected)
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(Norm(BclE2E.CompileRun(BclE2E.CompileToCppAggressive(program))), Is.EqualTo(expected), "C++");
+            Assert.That(Norm(RunAggressiveJs(program)), Is.EqualTo(expected), "JavaScript");
+            Assert.That(Norm(Msil.MsilHarness.RunAggressiveExpectingSuccess(program)), Is.EqualTo(expected), "MSIL");
+            Assert.That(Norm(RunEmittedCSharpAggressive(program)), Is.EqualTo(expected), "C#");
+        });
+    }
+
     internal static string RunEmittedCSharp(string program) =>
         RunEmittedCSharpText(ReturnCoercionTests.EmitCSharpForTest(program));
+
+    /// <summary>The C# leg, aggressive. Same in-process Roslyn run, aggressive IR.</summary>
+    internal static string RunEmittedCSharpAggressive(string program) =>
+        RunEmittedCSharpText(ReturnCoercionTests.EmitCSharpAggressiveForTest(program));
+
+    /// <summary>The JavaScript leg, aggressive: aggressive IR, then the shared Node harness.</summary>
+    internal static string RunAggressiveJs(string program) =>
+        JavaScriptExecutionTests.RunNodeScript(JsTestSupport.CompileAggressive(program));
 
     internal static string RunEmittedCSharpText(string csharp)
     {

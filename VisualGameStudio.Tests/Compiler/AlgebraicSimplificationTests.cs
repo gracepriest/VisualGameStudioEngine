@@ -225,16 +225,17 @@ public class AlgebraicSimplificationTests
         });
     }
 
-    private static string Aggressive(string source)
-    {
-        var module = JsTestSupport.BuildModule(source, sourceFilePath: "prog.bas");
-
-        var pipeline = new OptimizationPipeline();
-        pipeline.AddAggressivePasses();
-        pipeline.Run(module);
-
-        return new BasicLang.Compiler.CodeGen.JavaScript.JavaScriptCodeGenerator().Generate(module);
-    }
+    /// <summary>
+    /// ⚠ Was a private copy of "build the module, <c>AddAggressivePasses</c>, run, generate JS",
+    /// identical to <c>FunctionInliningDisabledTests</c>'. Both are now
+    /// <c>JsTestSupport.CompileAggressive</c>, which goes through
+    /// <c>AggressivePipeline.Apply</c> — ONE definition of aggressive for every backend, per the
+    /// <c>ModuleResolver</c>/<c>ModuleTypeWalker</c> rule in CLAUDE.md. Those two copies were the
+    /// ONLY aggressive execution anywhere in the suite, and both were JavaScript-only. See
+    /// <c>AggressivePipeline</c>.
+    /// </summary>
+    private static string Aggressive(string source) =>
+        JsTestSupport.CompileAggressive(source);
 
     private static string RunAggressive(string source) =>
         JavaScriptExecutionTests.RunNodeScript(Aggressive(source));

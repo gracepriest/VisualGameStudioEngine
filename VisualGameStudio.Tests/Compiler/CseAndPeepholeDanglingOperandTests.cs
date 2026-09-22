@@ -1120,24 +1120,138 @@ public class OptimizerDanglingOperandInvariantTests
     }
 
     /// <summary>
-    /// ⚠ PINNED DIVERGENCE, NOT A PASS. The AGGRESSIVE pipeline DOES leave a dangling operand on
-    /// this shape, and it is nothing to do with this change: <c>InductionVariablePass</c>
-    /// (aggressive-only) replaces a binary op and never re-points its consumers — the same
-    /// omission as CSE and the peephole pass, in a third pass that was out of scope here.
+    /// ⭐ THE BATTERY ABOVE, WIDENED TO <c>AddAggressivePasses()</c> — the second half of what
+    /// <see cref="TheAggressivePipelineLeavesNoDanglingOperand_WasAPinnedPreExistingDefect"/>'s
+    /// predecessor asked for. Contract item 1 is now asserted for the aggressive pipeline, not
+    /// only the standard one.
     ///
-    /// <para>Measured end to end at the FIXED optimizer, under <c>--optimize</c>: C# CS0103
-    /// <c>_div_t1</c>, C++ undeclared identifier, JavaScript <c>ReferenceError</c>, MSIL
-    /// <c>InvalidProgramException</c> — all four backends, so it is an IR defect, not a backend
-    /// one.</para>
+    /// <para><b>The first twelve cases are the standard battery, unchanged.</b> ⛔ They are NOT
+    /// the ones with teeth here, and it matters that this is written down: MEASURED with
+    /// <c>InductionVariablePass</c> restored to <c>AddAggressivePasses</c>, ALL TWELVE stay green,
+    /// including <c>Invariant_CseInsideALoop</c> — the only one with a loop — because none of them
+    /// multiplies an induction variable by a constant. Widening the battery alone would have been
+    /// green for the entire defect. The five added <c>AggrInvariant_</c> cases are the ones that
+    /// reach an aggressive-only pass — FOUR of them go red under the defect, and the fifth
+    /// (<c>TwoMultipliesOntoOneNamedLocal</c>) is a labelled CONTROL that stays green because that
+    /// shape orphans nothing at all. Each says what it contributes.</para>
     ///
-    /// <para>It is pinned rather than left silent so that contract item 1's scope is visible in the
-    /// suite: the invariant above holds for <c>AddStandardPasses</c>, which is what the contract
-    /// says, and does NOT yet hold pipeline-wide. When <c>InductionVariablePass</c> is fixed this
-    /// case fails, and the right response is to delete it and widen the battery above to the
-    /// aggressive pipeline.</para>
+    /// <para>⚠ NO NON-VACUITY ASSERTION, deliberately, and the measurement is exact:
+    /// <c>OptimizerIr.Removed</c> counts <b>1</b> for each of the first twelve shapes under BOTH
+    /// pipelines, and <b>0</b> for all five <c>AggrInvariant_</c> loop shapes under BOTH pipelines.
+    /// NOTHING is removed from a counted <c>For</c> with a multiply in it by any pass, standard or
+    /// aggressive — the only aggressive-only pass that acts on those shapes is
+    /// <c>LoopInvariantCodeMotionPass</c>, and it MOVES instructions between blocks rather than
+    /// removing any. A "something was removed" assertion would therefore fail on exactly the five
+    /// cases this test exists for, and for a reason with nothing to do with the property. The
+    /// battery above keeps its check because all twelve of ITS shapes satisfy it. Do not copy it
+    /// down here.</para>
+    ///
+    /// <para>⚠ These are the same twelve source bodies as the battery above rather than a shared
+    /// constant, because NUnit needs them as attribute arguments. If one is edited, edit both — a
+    /// pipeline-specific divergence in the battery itself would be invisible.</para>
     /// </summary>
     [Test]
-    public void TheAggressivePipelineStillLeavesADanglingOperand_PinnedPreExistingDefect()
+    [TestCase("Show(a + 7)\n Show(a + 7)", TestName = "AggrInvariant_CseDuplicateInACallArgument")]
+    [TestCase("Show(a + 7)\n Dim q As Integer = a + 7\n Show(q)", TestName = "AggrInvariant_CseDuplicateOnANamedDestination")]
+    [TestCase("Show(a + 7)\n Dim t0 As Integer = a + 7\n Show(t0)", TestName = "AggrInvariant_CseDuplicateOnATempSpelledName")]
+    [TestCase("Show(a + 0)", TestName = "AggrInvariant_PeepholeAddZero")]
+    [TestCase("Show(a + 0)\n Show(b + 0)", TestName = "AggrInvariant_PeepholeTwoRewritesInOneBlock")]
+    [TestCase("Show(a - a)", TestName = "AggrInvariant_PeepholeSelfSubtraction")]
+    [TestCase("Show(a * 0)", TestName = "AggrInvariant_PeepholeMultiplyByZero")]
+    [TestCase("Show(-(-a))", TestName = "AggrInvariant_PeepholeDoubleNegation")]
+    [TestCase("Dim t0 As Integer = a + 0\n Show(t0)", TestName = "AggrInvariant_PeepholeOnATempSpelledName")]
+    [TestCase("Dim arr(3) As Integer\n Show(a + b)\n arr(0) = a + b\n Show(arr(0))", TestName = "AggrInvariant_CseIntoAnArrayStore")]
+    [TestCase("Show(a + b)\n If (a + b) > 0 Then\n  PrintLine(\"POS\")\n End If", TestName = "AggrInvariant_CseIntoABranchCondition")]
+    [TestCase("Dim i As Integer\n For i = 0 To b\n  Show(a + 7)\n  Show(a + 7)\n Next", TestName = "AggrInvariant_CseInsideALoop")]
+    // ⛔ The five that actually reach an aggressive-only pass. Every one uses `* 3`, never `* 2`:
+    // MEASURED, `AlgebraicSimplificationPass` (aggressive pass 9) rewrites `2 * x` to `x + x`
+    // before `InductionVariablePass` (pass 12) can see it, so a `* 2` case is green even with the
+    // pass restored and proves nothing. `While` is out for the same class of reason — the pass
+    // bails when no block is named `.inc`, which only a counted `For` produces.
+    [TestCase("Dim i As Integer\n For i = 0 To b\n  Show(i * 3)\n Next",
+        TestName = "AggrInvariant_AnInductionVariableTimesAConstant")]
+    [TestCase("Dim i As Integer\n For i = 0 To b\n  Show(3 * i)\n Next",
+        TestName = "AggrInvariant_AConstantTimesAnInductionVariable")]
+    [TestCase("Dim i As Integer\n For i = 1 To b\n  Show(i * 3)\n Next",
+        TestName = "AggrInvariant_AnInductionVariableLoopThatDoesNotStartAtZero")]
+    // ⚠ This one is a CONTROL, not a case with teeth, and it matters that the difference is
+    // written down: with the pass restored this shape leaves ZERO orphaned operands, because the
+    // multiply's destination is a NAMED local that consumers reference by IRVariable rather than
+    // by the instruction's identity. MEASURED — it stays GREEN under the defect while its sibling
+    // `OptimizerMintedVariableTests.Declared_TwoMultipliesOntoOneNamedLocal_WhichLeavesNoOrphanAtAll`
+    // goes red. That asymmetry is the evidence that contract item 2 is strictly stronger than
+    // contract item 1, so this entry is kept to mark the blind spot rather than to guard it.
+    [TestCase("Dim i As Integer\n Dim x As Integer\n For i = 0 To b\n  x = i * 3\n  Show(x)\n  x = i * 5\n  Show(x)\n Next",
+        TestName = "AggrInvariant_TwoMultipliesOntoOneNamedLocal")]
+    [TestCase("Dim i As Integer\n Dim j As Integer\n For i = 0 To 1\n  For j = 0 To 2\n   Show(j * 3)\n  Next\n Next",
+        TestName = "AggrInvariant_AMultiplyOnTheInnerCounterOfANestedLoop")]
+    public void NoAggressivePassLeavesAUsePointingAtAnInstructionItRemoved(string body)
+    {
+        var source = $"""
+            Sub Show(p As Integer)
+             PrintLine("V=" & CStr(p))
+            End Sub
+            Sub Run(a As Integer, b As Integer)
+             {body}
+            End Sub
+            Sub Main()
+             Run(3, 5)
+            End Sub
+            """;
+
+        var module = JsTestSupport.BuildModule(source, sourceFilePath: "prog.bas");
+
+        var pipeline = new OptimizationPipeline();
+        pipeline.AddAggressivePasses();
+        pipeline.Run(module);
+
+        Assert.That(OptimizerIr.DanglingOperandsOf(module), Is.Empty,
+            "a use still points at an instruction an AGGRESSIVE pass removed or replaced. That is "
+            + "contract item 1, widened from AddStandardPasses to the aggressive pipeline: "
+            + "backends key values by object identity, so the orphan is emitted as an identifier "
+            + "nothing declares (C++, MSIL) or re-materialised inline, which duplicates any effect "
+            + "in its operand tree (C#, JavaScript). InductionVariablePass did exactly this and is "
+            + "disabled for it; a pass that swaps an instruction owes the ReplaceUses call the "
+            + "standard passes make.");
+    }
+
+    /// <summary>
+    /// ⭐ WAS A PINNED DIVERGENCE; THE PIN FIRED AND THIS IS ITS POSITIVE COUNTERPART. Contract
+    /// item 1 now holds for the AGGRESSIVE pipeline on this shape too, not only for
+    /// <c>AddStandardPasses</c>.
+    ///
+    /// <para><b>What it used to pin.</b> <c>InductionVariablePass</c> (aggressive-only) replaced
+    /// the <c>i * 3</c> binary op with an <c>IRAssignment</c> and never re-pointed its consumers —
+    /// the same omission as CSE and the peephole pass, in a third pass that was out of scope at
+    /// <c>67782af</c>. Measured under <c>--optimize</c> on this very shape: C# <c>CS0103</c> on
+    /// BOTH <c>_div_t2</c> and <c>t2</c>, C++ "use of undeclared identifier", JavaScript
+    /// <c>ReferenceError</c>, MSIL <c>InvalidProgramException</c> — all four backends, on both
+    /// entry points, so it was an IR defect and not a backend one.</para>
+    ///
+    /// <para><b>What resolved it.</b> The pass is out of <c>AddAggressivePasses</c>. It could not
+    /// be repaired in place: it also never initialises the derived induction variable, and placing
+    /// that initialisation needs a loop preheader that
+    /// <c>ControlFlowGraph.IdentifyLoops</c> cannot supply (measured: FOUR "natural loops" for a
+    /// five-block function holding one loop, every one of them containing <c>entry</c>). Repairing
+    /// only the two defects this test was written about — the dangling uses and the missing
+    /// <c>LocalVariables</c> entry — was measured to leave C# and JavaScript still broken here AND
+    /// to turn two multiplies onto one local from a loud build failure into a SILENT wrong answer.
+    /// The reasoning is recorded at the disabled <c>AddPass</c> line in <c>IROptimizer.cs</c>.</para>
+    ///
+    /// <para>⚠ This assertion is deliberately NOT paired with the battery's non-vacuity check.
+    /// On the aggressive pipeline the only pass that touches this shape is
+    /// <c>LoopInvariantCodeMotionPass</c>, which MOVES instructions between blocks rather than
+    /// removing any, so "something was removed" is false here and would fail for a reason that has
+    /// nothing to do with the property. Do not add it back.</para>
+    ///
+    /// <para>⚠ Still open, and NOT this test's business: under the aggressive pipeline C++ and MSIL
+    /// run this loop ZERO times, because LICM moves the loop condition's definition into the
+    /// loop's own latch. C# and JavaScript print the right four lines because their structured-loop
+    /// emitters rebuild the condition from the CFG. That is a separate defect in a separate pass;
+    /// it produces no dangling operand, so this invariant is blind to it by design.</para>
+    /// </summary>
+    [Test]
+    public void TheAggressivePipelineLeavesNoDanglingOperand_WasAPinnedPreExistingDefect()
     {
         const string source = """
             Sub Show(p As Integer)
@@ -1160,10 +1274,12 @@ public class OptimizerDanglingOperandInvariantTests
         pipeline.AddAggressivePasses();
         pipeline.Run(module);
 
-        Assert.That(OptimizerIr.DanglingOperandsOf(module), Is.Not.Empty,
-            "InductionVariablePass no longer leaves a dangling operand — delete this pinned "
-            + "divergence and widen NoStandardPassLeavesAUsePointingAtAnInstructionItRemoved to "
-            + "AddAggressivePasses()");
+        Assert.That(OptimizerIr.DanglingOperandsOf(module), Is.Empty,
+            "an aggressive-only pass left a use pointing at an instruction it replaced. "
+            + "InductionVariablePass did exactly this and is disabled for it; if it or another "
+            + "loop pass has been re-enabled or added, it owes the same ReplaceUses call the "
+            + "standard passes make — and, if it mints a variable, a LocalVariables entry and a "
+            + "name the user cannot spell.");
     }
 }
 
@@ -1228,6 +1344,109 @@ internal static class OptimizerIr
             }
         }
         return bad.Distinct().ToList();
+    }
+
+    /// <summary>
+    /// ⭐ CONTRACT ITEM 2's census: every <c>IRVariable</c> name that appears in an OPERAND SLOT
+    /// of a reachable instruction but is in none of <c>IRFunction.LocalVariables</c>,
+    /// <c>IRFunction.Parameters</c> or <c>IRModule.GlobalVariables</c>. Reported as
+    /// <c>function::name</c>.
+    ///
+    /// <para><b>Why this, and not the emitted text.</b> A referenced-but-undeclared variable is
+    /// what every backend turns into an identifier nothing declares — C# <c>CS0103</c>, C++ "use
+    /// of undeclared identifier", JavaScript <c>ReferenceError</c>, MSIL
+    /// <c>InvalidProgramException</c>. Catching it here needs no backend, no toolchain and no
+    /// process, and it catches the shape where the destination is a NAMED local rather than a
+    /// temp — which produces NO dangling operand at all, so
+    /// <see cref="DanglingOperandsOf"/> is blind to it. MEASURED: with
+    /// <c>InductionVariablePass</c> in the pipeline, <c>x = i * 3</c> in a counted loop gives
+    /// <c>Main::_div_x</c> here and ZERO orphans.</para>
+    ///
+    /// <para>⚠ NOT VACUOUSLY ZERO ON EVERY PROGRAM, and a caller must know which. Two front-end
+    /// shapes legitimately reference a name declared somewhere this set does not look, and are
+    /// present before any pass runs: a CLASS FIELD read inside a method (measured:
+    /// <c>Value</c>), and a <c>For Each</c> loop variable (measured: <c>x</c>). Callers therefore
+    /// either use a battery free of both — and assert the PRE-optimization census is empty, so the
+    /// post-optimization assertion is the full absolute one — or compare the two censuses as a
+    /// DELTA. Do not "fix" this by widening the declared set to class fields: that would encode
+    /// front-end internals into the check and weaken it.</para>
+    /// </summary>
+    internal static List<string> UndeclaredOperandNames(IRModule module)
+    {
+        var bad = new List<string>();
+        foreach (var f in module.Functions)
+        {
+            if (f.IsExternal) continue;
+            var declared = DeclaredNamesOf(module, f);
+            foreach (var name in OperandVariableNames(f))
+                if (!declared.Contains(name))
+                    bad.Add($"{f.Name}::{name}");
+        }
+        return bad.Distinct().ToList();
+    }
+
+    /// <summary>
+    /// Every variable NAME the module mentions at all, as <c>function::name</c>: operand-slot
+    /// <c>IRVariable</c>s, the destination <c>Name</c> each instruction carries, and the declared
+    /// locals and parameters. The union is deliberate — a pass that mints a name can attach it to
+    /// any of the three, and the question this answers is "is this name NEW".
+    /// </summary>
+    internal static SortedSet<string> AllVariableNames(IRModule module)
+    {
+        var all = new SortedSet<string>(StringComparer.Ordinal);
+        foreach (var f in module.Functions)
+        {
+            if (f.IsExternal) continue;
+            foreach (var n in OperandVariableNames(f)) all.Add($"{f.Name}::{n}");
+            foreach (var b in f.Blocks)
+                foreach (var i in b.Instructions)
+                    if (i is IRValue v && !string.IsNullOrEmpty(v.Name)) all.Add($"{f.Name}::{v.Name}");
+            foreach (var n in DeclaredNamesOf(module, f)) all.Add($"{f.Name}::{n}");
+        }
+        return all;
+    }
+
+    /// <summary>
+    /// <c>LocalVariables</c> ∪ <c>Parameters</c> ∪ module globals — contract item 2's declared set,
+    /// verbatim.
+    /// </summary>
+    private static SortedSet<string> DeclaredNamesOf(IRModule module, IRFunction function)
+    {
+        var declared = new SortedSet<string>(StringComparer.Ordinal);
+        foreach (var v in function.Parameters ?? new List<IRVariable>())
+            if (v?.Name != null) declared.Add(v.Name);
+        foreach (var v in function.LocalVariables ?? new List<IRVariable>())
+            if (v?.Name != null) declared.Add(v.Name);
+        foreach (var name in module.GlobalVariables?.Keys ?? Enumerable.Empty<string>())
+            declared.Add(name);
+        return declared;
+    }
+
+    /// <summary>
+    /// Every <c>IRVariable</c> name reachable from one function's instruction stream, through the
+    /// SAME reflection walk <see cref="DanglingOperandsOf"/> uses — one walker, for the reason its
+    /// docstring gives.
+    /// </summary>
+    private static SortedSet<string> OperandVariableNames(IRFunction function)
+    {
+        var stream = new HashSet<object>(
+            function.Blocks.SelectMany(b => b.Instructions).Cast<object>(),
+            (IEqualityComparer<object>)ReferenceEqualityComparer.Instance);
+        var seen = new HashSet<object>(stream, (IEqualityComparer<object>)ReferenceEqualityComparer.Instance);
+        var work = new Stack<object>(stream);
+        var names = new SortedSet<string>(StringComparer.Ordinal);
+
+        while (work.Count > 0)
+        {
+            var node = work.Pop();
+            foreach (var operand in Operands(node))
+            {
+                if (operand is IRVariable v && !string.IsNullOrEmpty(v.Name)) names.Add(v.Name);
+                if (IsLeaf(operand)) continue;
+                if (seen.Add(operand)) work.Push(operand);
+            }
+        }
+        return names;
     }
 
     /// <summary>
