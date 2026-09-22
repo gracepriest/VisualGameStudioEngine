@@ -32,15 +32,25 @@ namespace BasicLang.Compiler.StdLib.Framework
 
             // ==================== DRAWING ====================
             ["ClearBackground"] = new StdLibFunction { Name = "ClearBackground", Category = StdLibCategory.System, ParameterTypes = new[] { "Integer", "Integer", "Integer" }, ReturnType = "Void" },
-            ["DrawRectangle"] = new StdLibFunction { Name = "DrawRectangle", Category = StdLibCategory.System, ParameterTypes = new[] { "Single", "Single", "Single", "Single", "Integer", "Integer", "Integer", "Integer" }, ReturnType = "Void" },
-            ["DrawCircle"] = new StdLibFunction { Name = "DrawCircle", Category = StdLibCategory.System, ParameterTypes = new[] { "Single", "Single", "Single", "Integer", "Integer", "Integer", "Integer" }, ReturnType = "Void" },
-            ["DrawLine"] = new StdLibFunction { Name = "DrawLine", Category = StdLibCategory.System, ParameterTypes = new[] { "Single", "Single", "Single", "Single", "Integer", "Integer", "Integer", "Integer" }, ReturnType = "Void" },
-            ["DrawText"] = new StdLibFunction { Name = "DrawText", Category = StdLibCategory.System, ParameterTypes = new[] { "String", "Single", "Single", "Integer", "Integer", "Integer", "Integer", "Integer" }, ReturnType = "Void" },
+            // ⛔ POSITIONS ARE Integer, NOT Single — these must match framework.h exactly, and the mirrored copy in
+            // SemanticAnalyzer.RegisterFrameworkStdLib. They were transcribed as Single and that made every game
+            // template fail to build on the C# backend with CS1503 (see the DrawText note below). Only a parameter the
+            // ENGINE declares `float` may be Single here — DrawCircle's radius, and DrawTextureEx's Vector2/rotation/
+            // scale. The `*Lines` variants below were always right; copy from them, not from these.
+            ["DrawRectangle"] = new StdLibFunction { Name = "DrawRectangle", Category = StdLibCategory.System, ParameterTypes = new[] { "Integer", "Integer", "Integer", "Integer", "Integer", "Integer", "Integer", "Integer" }, ReturnType = "Void" },
+            ["DrawCircle"] = new StdLibFunction { Name = "DrawCircle", Category = StdLibCategory.System, ParameterTypes = new[] { "Integer", "Integer", "Single", "Integer", "Integer", "Integer", "Integer" }, ReturnType = "Void" },
+            ["DrawLine"] = new StdLibFunction { Name = "DrawLine", Category = StdLibCategory.System, ParameterTypes = new[] { "Integer", "Integer", "Integer", "Integer", "Integer", "Integer", "Integer", "Integer" }, ReturnType = "Void" },
+            // ⛔ `Single` x/y here emitted `DrawText(name, 10f, 10f, 20, …)` from integer literals against a wrapper
+            // taking Integer — CS1503, every game template, C# backend only (C++ narrows implicitly and hid it).
+            ["DrawText"] = new StdLibFunction { Name = "DrawText", Category = StdLibCategory.System, ParameterTypes = new[] { "String", "Integer", "Integer", "Integer", "Integer", "Integer", "Integer", "Integer" }, ReturnType = "Void" },
 
             // ==================== TEXTURES ====================
             ["LoadTexture"] = new StdLibFunction { Name = "LoadTexture", Category = StdLibCategory.System, ParameterTypes = new[] { "String" }, ReturnType = "Integer" },
             ["UnloadTexture"] = new StdLibFunction { Name = "UnloadTexture", Category = StdLibCategory.System, ParameterTypes = new[] { "Integer" }, ReturnType = "Void" },
-            ["DrawTexture"] = new StdLibFunction { Name = "DrawTexture", Category = StdLibCategory.System, ParameterTypes = new[] { "Integer", "Single", "Single", "Integer", "Integer", "Integer", "Integer" }, ReturnType = "Void" },
+            // ⛔ Integer x/y — `Framework_DrawTexture(Texture2D, int posX, int posY, …)`. DrawTextureEx below is the
+            // contrast that proves the rule: its four Singles are CORRECT, because the engine really does take a
+            // Vector2 position plus float rotation and scale there.
+            ["DrawTexture"] = new StdLibFunction { Name = "DrawTexture", Category = StdLibCategory.System, ParameterTypes = new[] { "Integer", "Integer", "Integer", "Integer", "Integer", "Integer", "Integer" }, ReturnType = "Void" },
             ["DrawTextureEx"] = new StdLibFunction { Name = "DrawTextureEx", Category = StdLibCategory.System, ParameterTypes = new[] { "Integer", "Single", "Single", "Single", "Single", "Integer", "Integer", "Integer", "Integer" }, ReturnType = "Void" },
 
             // ==================== ENTITIES ====================

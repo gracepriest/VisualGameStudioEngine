@@ -1580,17 +1580,22 @@ namespace BasicLang.Compiler.SemanticAnalysis
             // Drawing
             RegisterStdLibFunction("ClearBackground", SymbolKind.Subroutine, _typeManager.VoidType,
                 new[] { ("r", _typeManager.GetType("Integer")), ("g", _typeManager.GetType("Integer")), ("b", _typeManager.GetType("Integer")) });
+            // ⛔ MIRRORED PAIR — this block and BasicLang/StdLib/FrameworkStdLib.cs declare the SAME contract twice.
+            // Change both in the same commit or the checker and the stdlib disagree. Positions are Integer because
+            // framework.h says int; only an engine `float` may be Single (DrawCircle's radius, DrawTextureEx's
+            // Vector2/rotation/scale). Transcribing these as Single is what made every game template fail to build
+            // on the C# backend with CS1503 "cannot convert from 'float' to 'int'".
             RegisterStdLibFunction("DrawRectangle", SymbolKind.Subroutine, _typeManager.VoidType,
-                new[] { ("x", _typeManager.GetType("Single")), ("y", _typeManager.GetType("Single")), ("w", _typeManager.GetType("Single")), ("h", _typeManager.GetType("Single")),
+                new[] { ("x", _typeManager.GetType("Integer")), ("y", _typeManager.GetType("Integer")), ("w", _typeManager.GetType("Integer")), ("h", _typeManager.GetType("Integer")),
                         ("r", _typeManager.GetType("Integer")), ("g", _typeManager.GetType("Integer")), ("b", _typeManager.GetType("Integer")), ("a", _typeManager.GetType("Integer")) });
             RegisterStdLibFunction("DrawCircle", SymbolKind.Subroutine, _typeManager.VoidType,
-                new[] { ("x", _typeManager.GetType("Single")), ("y", _typeManager.GetType("Single")), ("radius", _typeManager.GetType("Single")),
+                new[] { ("x", _typeManager.GetType("Integer")), ("y", _typeManager.GetType("Integer")), ("radius", _typeManager.GetType("Single")),
                         ("r", _typeManager.GetType("Integer")), ("g", _typeManager.GetType("Integer")), ("b", _typeManager.GetType("Integer")), ("a", _typeManager.GetType("Integer")) });
             RegisterStdLibFunction("DrawLine", SymbolKind.Subroutine, _typeManager.VoidType,
-                new[] { ("x1", _typeManager.GetType("Single")), ("y1", _typeManager.GetType("Single")), ("x2", _typeManager.GetType("Single")), ("y2", _typeManager.GetType("Single")),
+                new[] { ("x1", _typeManager.GetType("Integer")), ("y1", _typeManager.GetType("Integer")), ("x2", _typeManager.GetType("Integer")), ("y2", _typeManager.GetType("Integer")),
                         ("r", _typeManager.GetType("Integer")), ("g", _typeManager.GetType("Integer")), ("b", _typeManager.GetType("Integer")), ("a", _typeManager.GetType("Integer")) });
             RegisterStdLibFunction("DrawText", SymbolKind.Subroutine, _typeManager.VoidType,
-                new[] { ("text", _typeManager.GetType("String")), ("x", _typeManager.GetType("Single")), ("y", _typeManager.GetType("Single")), ("fontSize", _typeManager.GetType("Integer")),
+                new[] { ("text", _typeManager.GetType("String")), ("x", _typeManager.GetType("Integer")), ("y", _typeManager.GetType("Integer")), ("fontSize", _typeManager.GetType("Integer")),
                         ("r", _typeManager.GetType("Integer")), ("g", _typeManager.GetType("Integer")), ("b", _typeManager.GetType("Integer")), ("a", _typeManager.GetType("Integer")) });
 
             // Textures
@@ -1599,7 +1604,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
             RegisterStdLibFunction("UnloadTexture", SymbolKind.Subroutine, _typeManager.VoidType,
                 new[] { ("handle", _typeManager.GetType("Integer")) });
             RegisterStdLibFunction("DrawTexture", SymbolKind.Subroutine, _typeManager.VoidType,
-                new[] { ("handle", _typeManager.GetType("Integer")), ("x", _typeManager.GetType("Single")), ("y", _typeManager.GetType("Single")),
+                new[] { ("handle", _typeManager.GetType("Integer")), ("x", _typeManager.GetType("Integer")), ("y", _typeManager.GetType("Integer")),
                         ("r", _typeManager.GetType("Integer")), ("g", _typeManager.GetType("Integer")), ("b", _typeManager.GetType("Integer")), ("a", _typeManager.GetType("Integer")) });
         }
 
