@@ -582,8 +582,28 @@ did not show them — so they arrive WITH master. Reconcile against the 8 BEFORE
 MSVC's `error C2039: 'Doubled': is not a member of 'Box'` — **exactly what the MSVC-only directive does to a
 diagnostic-TEXT pin.** Two others are the tests for #59, which is in master.
 
-⛔⛔ **AND THE `vswhere` STDERR LINE IS NOT HARMLESS NOISE — it CORRUPTS THE LINKER PATH.** One of those six
-prints `'vswhere.exe' is not recognized`. Root cause is already documented in this repo at
+✅ **ALL SIX ARE NOW ITEMISED — and `vswhere` explains NONE of them.** Measured 2026-09-21 by reading all six
+failure messages:
+
+| Rows | Actual cause | Repair |
+|---|---|---|
+| The **four** `_Pinned` rows | **Diagnostic-TEXT pins written for clang/gcc, now receiving MSVC.** Each asserts wording: `AClassUsingALaterClassMember` expects *"incomplete type"*; `AGenericFreeFunction` expects *"unknown type name 'T'"*; `MeAsAnArgumentToAModuleProcedure` expects *"no matching function"*; `APropertyGetter` expects *"no member named"* and **got `error C2039: 'Doubled': is not a member of 'Box'`** — proof the compile RAN and MSVC produced a legitimate diagnostic in Microsoft's words | **The assertions**, not the compiler. Owed to the standing MSVC-only directive; assert diagnostic PRESENCE, never TEXT |
+| `TheCombinedEmission_…` and `TheSplitHeader_…` | **No compiler is invoked at all** — they fail in **3ms / 8ms / 24ms** with *"combined: missing 'class Box'"*, i.e. pure generated-text assertions. These are **#59's own tests disagreeing with #59's emission** | The only two of the six that are a genuine codegen question |
+
+⭐ **The timing is the discriminator and it is free: a row that fails in 3ms never reached a toolchain**, so no
+toolchain-discovery fault can explain it. Reach for the duration before the theory.
+
+⛔ **The `vswhere` hazard below is REAL but is NOT the cause of any of these six** — and this entry originally
+said it was. The string appears 4 times in the run, once inside each `_Pinned` row's CAPTURED COMPILER OUTPUT,
+riding along harmlessly: those rows reach MSVC through `CppToolchain`, not the ILCompiler/AOT targets that do
+the `Split('#')`. ⚠ Kept, corrected rather than deleted, because the original entry asserted one plausible
+cause across a set of failures it had not itemised — **the exact mistake this document calls out two sections
+above**, made again within hours of calling it out. The triage order it proposed was right; the answer came
+back *"not this path"*.
+
+### ⚠ A separate, real hazard: the `vswhere` stderr line CAN corrupt the linker path (just not here)
+
+Root cause documented in this repo at
 `BasicLang/Compiler/CodeGen/Net/NetShimPublisher.cs:46-57`: the ILCompiler targets reach MSVC through
 `findvcvarsall.bat` → VS's `VsDevCmd.bat`, which `pushd`s into the VS Installer directory and invokes a **bare**
 `vswhere.exe`, relying on cmd resolving executables from the CURRENT DIRECTORY. Under a shell that sets
