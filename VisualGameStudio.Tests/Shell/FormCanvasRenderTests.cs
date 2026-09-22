@@ -131,6 +131,49 @@ public class FormCanvasRenderTests
     }
 
     /// <summary>
+    /// Task 25 (pulled up to commit 24d, since it depends only on Tasks 20+21): an Item catalog row
+    /// must change what its host's frame looks like — driven off the CATALOG, never a hand-written
+    /// <c>[TestCase]</c> list, exactly as <see cref="EveryControlKindRendersDistinctly"/> is. Cells are
+    /// laid out for every band UNCONDITIONALLY (Task 20), so no selection is needed to see one.
+    ///
+    /// <para>⚠ Both documents use the SAME shared id for host AND item (<see cref="SharedId"/>) —
+    /// the label rule (<c>Text ?? Id</c>) would otherwise make two frames differ by their TEXT alone
+    /// and this would pass with a blank <c>DrawSchematic</c> arm behind it.</para>
+    /// </summary>
+    [AvaloniaTest]
+    public void EveryItemKind_ChangesItsHostsFrame()
+    {
+        var itemRows = FormControlCatalog.All.Where(d => d.Place == FormPlace.Item).ToList();
+        Assert.That(itemRows, Is.Not.Empty, "the catalog has no Item rows to draw");
+
+        Assert.Multiple(() =>
+        {
+            foreach (var itemDef in itemRows)
+            {
+                // The same host-resolution rule FormCatalogShapes.Canonical uses internally for an
+                // Item row — the first Docked row whose Items accept this kind.
+                var hostDef = FormControlCatalog.All.First(
+                    d => d.Place == FormPlace.Docked && d.Items?.Accepts(itemDef.Kind) == true);
+
+                var withItem = new FormDocument
+                {
+                    Target = FormTarget.WinForms, Name = "T", Width = FormWidth, Height = FormHeight
+                };
+                FormCatalogShapes.Canonical(withItem, itemDef, SharedId, hostId: SharedId);
+
+                var hostAlone = new FormDocument
+                {
+                    Target = FormTarget.WinForms, Name = "T", Width = FormWidth, Height = FormHeight
+                };
+                FormCatalogShapes.Canonical(hostAlone, hostDef, SharedId);
+
+                Assert.That(RenderHash(withItem), Is.Not.EqualTo(RenderHash(hostAlone)),
+                    $"{itemDef.Kind} on {hostDef.Kind} paints IDENTICAL pixels to the host alone");
+            }
+        });
+    }
+
+    /// <summary>
     /// The catalog owns the shape, so a kind cannot be added without choosing one — and the
     /// choice has to actually reach the canvas. Without this, a new row silently inherits
     /// <see cref="FormSchematic.Input"/> and draws as a plain box, which is the defect above

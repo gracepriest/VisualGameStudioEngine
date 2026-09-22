@@ -95,7 +95,7 @@ public class FormCanvasControl : Control
         // Re-draw when what is drawn changes. Without this the canvas keeps showing the previous
         // document after a switch, which reads as "the designer opened the wrong file".
         AffectsRender<FormCanvasControl>(
-            DocumentProperty, SelectedControlProperty, ModelRevisionProperty);
+            DocumentProperty, SelectedControlProperty, ModelRevisionProperty, TypeHereHostProperty);
     }
 
     public FormDocument? Document
@@ -214,6 +214,73 @@ public class FormCanvasControl : Control
     {
         get => GetValue(PasteCommandProperty);
         set => SetValue(PasteCommandProperty, value);
+    }
+
+    /// <summary>
+    /// Task 21 (commit 24d). The host whose Type Here slot is currently being edited: the canvas
+    /// highlights that slot and reports its rectangle through <see cref="TypeHereBounds"/>.
+    ///
+    /// <para>⛔ In <c>AffectsRender</c> because it is an INPUT to drawing — and it is the ONLY thing
+    /// that changes on the real gesture. A slot exists only for the selected strip, so by the time
+    /// the host begins editing it is ALREADY the selection: neither <c>Document</c> nor
+    /// <c>SelectedControl</c> changes, nothing else invalidates, and without this registration no
+    /// render would run — leaving <see cref="TypeHereBounds"/> at its previous value and the overlay
+    /// editor over the wrong rectangle, or over none at all.</para>
+    ///
+    /// <para>⚠ Matched by REFERENCE against a slot entry's <c>Host</c>, never against its
+    /// <c>Control</c> — a slot entry's Control is always null. See the predicate in <c>Render</c>.</para>
+    /// </summary>
+    public static readonly StyledProperty<FormControl?> TypeHereHostProperty =
+        AvaloniaProperty.Register<FormCanvasControl, FormControl?>(nameof(TypeHereHost));
+
+    public FormControl? TypeHereHost
+    {
+        get => GetValue(TypeHereHostProperty);
+        set => SetValue(TypeHereHostProperty, value);
+    }
+
+    /// <summary>
+    /// Task 21 (commit 24d). An OUTPUT, not an input: the CANVAS rectangle of the Type Here slot
+    /// <see cref="TypeHereHost"/> names, written at the end of <c>Render</c> so a bound overlay
+    /// control can be positioned exactly over it, and <c>default</c> when no such slot is on screen.
+    ///
+    /// <para>⛔ Deliberately NOT in <c>AffectsRender</c>: it is written from inside <c>Render</c>,
+    /// and a render-affecting property written there re-enters the render pass that is still
+    /// running.</para>
+    ///
+    /// <para>⚠ Canvas pixels, not form units. The overlay is a sibling of this control in the visual
+    /// tree, so it is positioned in the same space this control is drawn in — a rectangle in form
+    /// units would be right at 1:1 zoom and wrong at every other, which is the class of bug that
+    /// only appears on someone else's monitor.</para>
+    /// </summary>
+    public static readonly StyledProperty<Rect> TypeHereBoundsProperty =
+        AvaloniaProperty.Register<FormCanvasControl, Rect>(nameof(TypeHereBounds));
+
+    public Rect TypeHereBounds
+    {
+        get => GetValue(TypeHereBoundsProperty);
+        set => SetValue(TypeHereBoundsProperty, value);
+    }
+
+    /// <summary>
+    /// Task 21 (commit 24d). Invoked with the HOST when a left press lands on that host's Type Here
+    /// slot — the gesture that turns the slot into an editor.
+    ///
+    /// <para>⛔ A command, for <see cref="DeleteCommand"/>'s reason: answering this opens a text
+    /// editor over the canvas, moves focus and eventually restructures the document. The canvas
+    /// reports which host was pointed at; the host decides what that means.</para>
+    ///
+    /// <para>⚠ The press check that fires it runs BEFORE the handle test in
+    /// <see cref="OnPointerPressed"/> — see the comment at that site for why the ordering is
+    /// load-bearing in two different ways.</para>
+    /// </summary>
+    public static readonly StyledProperty<ICommand?> BeginTypeHereCommandProperty =
+        AvaloniaProperty.Register<FormCanvasControl, ICommand?>(nameof(BeginTypeHereCommand));
+
+    public ICommand? BeginTypeHereCommand
+    {
+        get => GetValue(BeginTypeHereCommandProperty);
+        set => SetValue(BeginTypeHereCommandProperty, value);
     }
 
     protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)
@@ -497,7 +564,11 @@ public class FormCanvasControl : Control
             return;
         }
 
-        var control = _transform.HitTest(document, e.GetPosition(this));
+        // ⚠ The CURRENT selection goes in, exactly as OnPointerPressed's hit test does: a dropdown
+        // exists in the layout only for the selection that opened it, and the first click of the
+        // pair is what opened it. Without it this can never find a nested item and "double-click a
+        // menu item to reach its handler" is dead for everything except a top-level one.
+        var control = _transform.HitTest(document, e.GetPosition(this), SelectedControl);
         if (control == null)
         {
             return;
@@ -582,7 +653,28 @@ public class FormCanvasControl : Control
         // moves the control the user was about to right-click.
         if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
         {
-            SelectedControl = _transform.HitTest(document, point);
+            SelectedControl = _transform.HitTest(document, point, SelectedControl);
+            e.Handled = true;
+            return;
+        }
+
+        // ⛔⛔ The Type Here slot FIRST — ahead of the handle test, the form grips, the ordinary hit
+        // test and the marquee branch. Two separate ways a later check goes wrong, both silent:
+        //
+        // • This is STRICTER than the spec's "before the marquee branch", deliberately. A slot sits
+        //   flush against the right edge of the last cell in its band, so when that cell is the
+        //   SELECTION its right-hand handle straddles the shared edge and reaches HandleReach px
+        //   INTO the slot. A handle test first would swallow a click 1–4 px inside the slot and arm
+        //   a resize on a control that has no geometry to resize — the slot would be unreachable
+        //   along the one edge the user aims at coming off the last menu.
+        // • A late check fails in a way that looks like nothing at all. A BAND slot's rectangle lies
+        //   entirely INSIDE the band, so HitTest resolves the point to the STRIP and the press is
+        //   merely a selection: BeginTypeHereCommand never fires, nothing throws, and the whole
+        //   symptom is that clicking "Type Here" selects the menu bar.
+        var slotHost = _transform.TypeHereAt(document, point, SelectedControl);
+        if (slotHost != null)
+        {
+            BeginTypeHereCommand?.Execute(slotHost);
             e.Handled = true;
             return;
         }
@@ -615,8 +707,13 @@ public class FormCanvasControl : Control
 
         if (handle == FormResizeHandle.None)
         {
-            // The SAME transform the last Render used, so selection cannot disagree with the picture.
-            var hit = _transform.HitTest(document, point);
+            // The SAME transform the last Render used, so selection cannot disagree with the
+            // picture — and the SAME selection, so it cannot disagree with which dropdowns are
+            // open either. Layout yields a dropdown's rows only for the selection that opened it,
+            // so without SelectedControl here a press on a menu the canvas is plainly showing hits
+            // NOTHING, starts a rubber band, and the empty-band release clears the selection
+            // outright: the open menu vanishes as you click on it.
+            var hit = _transform.HitTest(document, point, SelectedControl);
             var extend = e.KeyModifiers.HasFlag(KeyModifiers.Shift) ||
                          e.KeyModifiers.HasFlag(KeyModifiers.Control);
 
@@ -633,6 +730,13 @@ public class FormCanvasControl : Control
             ApplyClickSelection(hit, extend);
         }
 
+        // ⚠ A band, a strip's item and a dropdown row all fall through BOTH branches below with no
+        // guard of their own, and that is measured rather than assumed: their Geometry is null, so
+        // neither `is GridGeometry` nor `is PixelGeometry` matches, no pointer capture is taken and
+        // no drag origin is recorded. HandleUnder says None for the same reason. Pressing a menu
+        // item therefore selects it and nothing else — pinned by
+        // FormStripCanvasTests.PressingMnuFilesCell_SelectsIt_AndArmsNoDrag, because "no drag was
+        // armed" is otherwise indistinguishable from "a drag was armed and moved nothing".
         if (SelectedControl?.Geometry is GridGeometry)
         {
             // A web control has no pixel geometry to rewind to and no handles to grab: the whole
@@ -989,10 +1093,23 @@ public class FormCanvasControl : Control
     /// A control's ABSOLUTE rectangle in form space — its own coordinates plus every container
     /// origin above it. <c>Layout</c> already walks that chain, so this asks it rather than adding
     /// a second accumulation that could drift from the one the canvas draws with.
+    ///
+    /// <para>⛔ It asks under the CURRENT <see cref="SelectedControl"/> — the very picture
+    /// <see cref="Render"/> paints and <c>HitTest</c> resolves against — which is the whole reason
+    /// this stopped being static when Task 20 made <c>Layout</c> selection-dependent. A dropdown's
+    /// rows exist in the layout only for the selection that opens that dropdown, so a call with no
+    /// selection answers "no bounds" for every row of the menu the canvas is currently showing, and
+    /// this one control would be holding two different pictures at once. The visible cost today is
+    /// small and real — the secondary outline of a multi-selected dropdown item would simply not be
+    /// drawn, with nothing failing — and it is the same drift <see cref="FormCanvasTransform"/>
+    /// exists to prevent, so it is not left for a later caller to rediscover.</para>
+    ///
+    /// <para>⚠ Nothing else changes: <c>Layout</c> yields positioned controls first and bands after
+    /// them, so a positioned control's and a band cell's first match are exactly what they were.</para>
     /// </summary>
-    private static Rect? FormBoundsOf(FormDocument document, FormControl control)
+    private Rect? FormBoundsOf(FormDocument document, FormControl control)
     {
-        foreach (var entry in FormCanvasTransform.Layout(document))
+        foreach (var entry in FormCanvasTransform.Layout(document, SelectedControl))
         {
             if (ReferenceEquals(entry.Control, control))
             {
@@ -1119,13 +1236,52 @@ public class FormCanvasControl : Control
 
         DrawSurface(context, document);
 
+        // ⛔⛔ ONE answer to "is this the slot being edited", asked by BOTH the highlight below and
+        // the TypeHereBounds published at the end of this method.
+        //
+        // ⛔ It is the entry's HOST, never its Control — and the plan text spells it both ways in
+        // two consecutive sentences. `Control == TypeHereHost` is a DEFECT: a slot entry is always
+        // (Control: null, Bounds, Role: TypeHere, Host: host), so that comparison is true exactly
+        // when TypeHereHost is NULL. The highlight would appear on every slot while nothing was
+        // being edited and vanish the moment something was — and the bounds, spelled the other way
+        // one sentence later, would disagree with the pixels. One predicate, so they cannot.
+        bool IsEditedSlot(FormLayoutEntry entry) =>
+            TypeHereHost is { } host && ReferenceEquals(entry.Host, host);
+
+        // The canvas rectangle of the slot TypeHereHost names, or default when it names none —
+        // captured here and published at the very END of this method. See the assignment there.
+        var editedSlot = default(Rect);
+
         // ⚠ Containers before their children — Layout guarantees that order, and drawing a
         // container after its children would paint over them.
         foreach (var entry in FormCanvasTransform.Layout(document, SelectedControl))
         {
+            var bounds = _transform.ToCanvas(entry.Bounds);
+
+            if (entry.Role == FormLayoutRole.TypeHere)
+            {
+                var edited = IsEditedSlot(entry);
+                if (edited)
+                {
+                    editedSlot = bounds;
+                }
+
+                DrawTypeHereSlot(context, bounds, edited);
+                continue;
+            }
+
+            // ⛔ Band, Control and Cell alike go through DrawControl, which is the ONE place a
+            // control's shape is decided — and it decides it from the CATALOG ROW
+            // (FormControlCatalog.Find(kind)?.Schematic), never from a switch over control.Kind.
+            //
+            // ⚠ The plan asks for a Cell to call DrawSchematic DIRECTLY with "the item schematic".
+            // Taken literally that needs a second copy of DrawControl's label rule (Text ?? Id) and
+            // its BackColor/ForeColor lookup right here — a second list of the same answers — and
+            // the first thing it costs is the caption: a menu item would draw as an empty cell
+            // where "&File" should be. Same catalog lookup, one copy of it.
             if (entry.Control != null)
             {
-                DrawControl(context, entry.Control, _transform.ToCanvas(entry.Bounds));
+                DrawControl(context, entry.Control, bounds);
             }
         }
 
@@ -1176,6 +1332,16 @@ public class FormCanvasControl : Control
                     centre.X - reach, centre.Y - reach, reach * 2, reach * 2));
             }
         }
+
+        // ⛔ An OUTPUT of the render, written LAST — and TypeHereBoundsProperty is deliberately NOT
+        // in AffectsRender, because writing a render-affecting property from inside Render re-enters
+        // it. It is the rectangle the overlay editor sits on, so it can only be known once the
+        // layout this pass actually drew has been walked.
+        //
+        // ⚠ Written UNCONDITIONALLY, including the `default` case. Clearing TypeHereHost — or
+        // selecting something that makes that slot disappear from the layout altogether — must move
+        // the editor off it, not leave it parked over a rectangle that is no longer on screen.
+        TypeHereBounds = editedSlot;
     }
 
     /// <summary>
@@ -1461,6 +1627,48 @@ public class FormCanvasControl : Control
         // (see DrawSchematic's <returns>); the live canvas has no use for it, and this discard is
         // what keeps the reporting out of the per-control, per-render path.
         _ = DrawSchematic(context, schematic, bounds, label, face, client, ink);
+    }
+
+    /// <summary>
+    /// The empty cell at the end of a strip's or a dropdown's items — VS's "Type Here".
+    ///
+    /// <para>⛔ Drawn HERE rather than through <see cref="DrawSchematic"/>, and that is not an
+    /// oversight. Every schematic is a shape a CATALOG ROW selects; a slot has no control, so no
+    /// row can ever select it, and adding a <c>FormSchematic.TypeHere</c> value for it would put a
+    /// shape into the per-value pin that nothing in the catalog can reach. It is the one thing this
+    /// canvas draws that is not a control.</para>
+    ///
+    /// <para>⛔ The caption is <see cref="FormCanvasTransform.TypeHereCaption"/>, never a literal
+    /// "Type Here" here. The slot's WIDTH is derived from that same constant
+    /// (<c>CellWidth(TypeHereCaption)</c>), so a second spelling would draw a caption the box was
+    /// not sized for — and the drift would show up only as text creeping past the slot's edge.</para>
+    ///
+    /// <para>⚠ Grey and italic, which is what says "not a control yet". The ACTIVE slot — the one
+    /// <see cref="TypeHereHost"/> names — additionally takes the window colour and a solid
+    /// selection-coloured border, because the overlay TextBox is positioned exactly on it and the
+    /// user needs to see WHERE the thing they are typing into is before it appears.</para>
+    /// </summary>
+    private static void DrawTypeHereSlot(DrawingContext context, Rect bounds, bool active)
+    {
+        context.FillRectangle(active ? WindowBrush : SurfaceBrush, bounds);
+        context.DrawRectangle(null, active ? ActiveSlotPen : SlotPen, bounds);
+
+        // The same floor DrawSchematic uses: below it a caption is a smear rather than a word.
+        if (bounds.Width < 12 || bounds.Height < 10)
+        {
+            return;
+        }
+
+        var caption = SlotText();
+
+        // ⚠ Clipped to the slot, like every other caption on this canvas. Text is drawn at a fixed
+        // 12px whatever the zoom, so at a fitted zoom below 1:1 the caption is wider than the box
+        // the layout sized for it and would otherwise run over the cell beside it.
+        using (context.PushClip(bounds))
+        {
+            context.DrawText(caption, new Point(
+                bounds.X + 4, bounds.Y + Math.Max(2, (bounds.Height - caption.Height) / 2)));
+        }
     }
 
     /// <summary>
@@ -2277,6 +2485,20 @@ public class FormCanvasControl : Control
         12,
         brush);
 
+    /// <summary>
+    /// The Type Here caption — the ONE piece of text on this canvas that is not a control's own, so
+    /// the one that is allowed a face of its own. Italic and grey: a slot is a prompt, not a thing
+    /// the document contains, and drawing it in the same ink as a real menu item would claim the
+    /// form has an item called "Type Here".
+    /// </summary>
+    private static FormattedText SlotText() => new(
+        FormCanvasTransform.TypeHereCaption,
+        CultureInfo.CurrentCulture,
+        FlowDirection.LeftToRight,
+        new Typeface(FontFamily.Default, FontStyle.Italic),
+        12,
+        SlotInkBrush);
+
     // ── The classic Win95/98 system palette, which is what a VB6 form designer IS ────────────
     //
     // ⚠ Deliberately NOT theme-aware, and that matches VB6: the thing being designed is a Windows
@@ -2359,6 +2581,25 @@ public class FormCanvasControl : Control
         new SolidColorBrush(Color.FromRgb(0x00, 0x00, 0x80)), 1,
         new DashStyle(new double[] { 2, 2 }, 0));
     private static readonly IPen HandlePen = new Pen(new SolidColorBrush(Color.FromRgb(0x00, 0x00, 0x00)));
+
+    /// <summary>The Type Here caption's ink — grey, so the prompt never reads as a real item.</summary>
+    private static readonly IBrush SlotInkBrush = new SolidColorBrush(Color.FromRgb(0x80, 0x80, 0x80));
+
+    /// <summary>
+    /// An idle Type Here slot's border: dashed and grey, the same "this is not a thing yet"
+    /// vocabulary the rubber band and a secondary selection are drawn in.
+    /// </summary>
+    private static readonly IPen SlotPen = new Pen(
+        new SolidColorBrush(Color.FromRgb(0x80, 0x80, 0x80)), 1,
+        new DashStyle(new double[] { 2, 2 }, 0));
+
+    /// <summary>
+    /// The slot being edited: a SOLID selection-coloured border, so the one slot a keystroke will
+    /// land in is distinguishable at a glance from the other slot that can be visible at the same
+    /// time (a strip's own and an open item's dropdown are both on screen).
+    /// </summary>
+    private static readonly IPen ActiveSlotPen = new Pen(
+        new SolidColorBrush(Color.FromRgb(0x00, 0x00, 0x80)));
 
     /// <summary>Side of a CheckBox tick or RadioButton bullet, before it is clamped to the bounds.</summary>
     private const double GlyphSide = 13;
