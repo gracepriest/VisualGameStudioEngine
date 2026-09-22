@@ -1688,6 +1688,14 @@ namespace BasicLang.Compiler.IR.Optimization
             //     no check that the recognised increment is the ONLY definition of `i` in the
             //     loop: on `For i = 0 To n : Show(i * 3) : i = i + 1 : Next` the correct output is
             //     0, 6 and a derived IV stepping by 3 gives 0, 3.
+            //  6. Even with 1-5 repaired, the pass's OWN minted update (`_div_t2 = _div_t2 + 3`)
+            //     is then seen as loop-invariant by LoopInvariantCodeMotionPass on the next
+            //     fixed-point iteration — both its operands read invariant — and gets moved out.
+            //     MEASURED: running the pass before LICM takes LICM's modification count 4 -> 5;
+            //     in the shipping order an extra `it1 Loop Invariant Code Motion mods=1` appears.
+            //     The derived variable would be frozen across the loop even if everything above
+            //     were fixed. Removing this pass therefore also shrinks the LICM defect's blast
+            //     radius by one hoist per derived IV.
             //
             // ⛔ WHY REPAIR IS A REWRITE, MEASURED: fixing exactly the two defects that were
             // written down (1 and 2) does NOT fix the program — `t2` is a TEMP, so replacing the
