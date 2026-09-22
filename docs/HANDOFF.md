@@ -414,10 +414,18 @@ all run); plan: `docs/superpowers/plans/2026-09-19-component-tray.md`. Four comm
 ### ⛔ Master is NOT healthy — 4 of this branch's failures are inherited
 
 Verified 2026-09-18 in a detached worktree at plain `origin/master`, with no designer code present:
-every game template fails to build with `CS1503: cannot convert from 'float' to 'int'`
+game templates fail to build with `CS1503: cannot convert from 'float' to 'int'`
 (`Build_GameAppTemplate_*`, `CliTemplate("game")`, `Template("game-app")`, plus two `cpp-game`
 siblings). It escaped because those tests are all `[Category("Integration")]`, which the fast
 subset skips.
+
+⛔ **THIS PARAGRAPH OVER-GENERALISED AND IS PARTLY WRONG — see the root-cause block above.** It attributed
+**every** listed row to one `CS1503` without itemising which row produced which error. Measured 2026-09-21:
+the stdlib-table defect accounts for exactly **two** of them (the two `TemplateBuildSweepTests` rows).
+`CS1503` is a **C# compiler** diagnostic and C++ is unaffected, so **`Build_GameAppTemplate_Cpp` cannot be
+failing for this reason** and its cause is still unknown. The row count here (6) also disagrees with the
+failure table's (4). Kept verbatim as the original claim; corrected rather than deleted, because "a
+plausible cause asserted across a set of failures nobody itemised" is the mistake worth being able to see.
 
 ✅ **ROOT-CAUSED 2026-09-21 — still broken at `7ce1200`, and the earlier "likely cause" guess in
 this document was WRONG.** Measured by rebuilding a master-based `BasicLang.exe` and running
@@ -488,9 +496,28 @@ wrapper to float — largest, touches the native side.
 and its own docstring says why** — *"the CLI roster shipped a never-compiling 'game' template precisely
 because only the IDE side was swept"*. It is `[Category("Integration")]`, which is why every fast-subset
 gate sailed past a broken game template for days. **This is the fast-subset lesson again, not a new one**
-(see *"The fast subset is not a gate for codegen work"* below). Strong candidate for being some or all of
-the **4 inherited failures** in this branch's gate — if so, that list shrinks the moment the fix reaches
-master and Task 28's baseline stops being blocked.
+(see *"The fast subset is not a gate for codegen work"* below).
+
+⛔ **It accounts for exactly TWO of the 4 inherited failures — NOT all four.** Measured 2026-09-21 by
+mutating `DrawText` back to `Single` on a clean tree, **rebuilding** (a mutant does not exist until you
+rebuild), and running the sweep: **2 failed / 30 passed / 32 total**, the two being
+`CliTemplate_CreatesProject_ThatCompilerBuilds("game")` and
+`Template_CreatesProject_ThatCompilerBuilds("game-app")`, both with the exact `CS1503` text — right rows,
+right reason, not a timeout and not a different build failure. With the fix in, **32/32**, stderr empty.
+⚠ That 32 is the sweep's total **on master**; this branch may carry more templates, so quote the base.
+The templates only call `DrawText`, so the other four wrong functions add nothing to the sweep — they
+would only bite a user's own game.
+
+⛔⛔ **So `Build_GameAppTemplate_{Cpp,DotNet}` — the other two inherited failures — are NOT explained, and
+one of them CANNOT be this defect at all.** `CS1503` is a **C# compiler diagnostic**, and C++ is unaffected
+here (`CppCodeGenerator` passes args through raw). **`Build_GameAppTemplate_Cpp` therefore cannot be failing
+with CS1503**, whatever the 2026-09-18 note below says. That note generalised *"every game template fails
+with `CS1503`"* from a run it never itemised, and at least one row in it must have a different, still-unknown
+cause. ⚠ Its prose also does not reconcile with the failure table above — it names `Build_GameAppTemplate_*`
+(2) + `CliTemplate("game")` (1) + `Template("game-app")` (1) *"plus two `cpp-game` siblings"* = **6**, while
+the table carries **4** (rows 4–7). Treat both numbers as unverified until someone re-runs and names the rows.
+**Do not record the fix as unblocking Task 28's baseline** — it removes 2 of 4, and the remaining 2 are
+unidentified.
 
 ⛔ **Task 28 cannot honestly claim a clean baseline until this is fixed** — the alternative is
 quietly re-baselining around someone else's regression, which is how a known-bad build becomes the
