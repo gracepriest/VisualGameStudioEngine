@@ -9,7 +9,7 @@ README.
 | Sample | Location | Shows |
 |---|---|---|
 | Pong | `SampleGames/Pong/` | Input, collision, scoring, a complete loop |
-| Space Shooter | `SampleGames/SpaceShooter/` | Entities, spawning, projectiles, audio |
+| Space Shooter | `SampleGames/SpaceShooter/` | `Select Case` state machine, enemy spawning, a projectile, scaled-integer math — source is `Main.bl` (`.bl` is a supported extension) |
 
 ```powershell
 cd SampleGames/Pong
@@ -18,18 +18,29 @@ cd SampleGames/Pong
 
 ## Single-file BasicLang sources
 
-`Samples/` holds the same games plus a platformer as single `.bas` files — useful when
+`Samples/` holds three loose single-file `.bas` programs with no `.blproj` — Pong, Space
+Shooter and a Platformer, shorter and different in source from the `SampleGames/` projects
+of the same name — useful when
 you want to read one program top to bottom rather than navigate a project:
 
 - `Samples/Pong/`
 - `Samples/SpaceShooter/`
 - `Samples/Platformer/`
 
+> [trap] **Only `Samples/Platformer/` uses the BasicLang framework surface.** It calls
+> `GameInit` / `GameShouldClose` / `GameShutdown` and defines its own `KEY_*` constants —
+> the names the compiler actually registers. `Samples/Pong/Main.bas` and
+> `Samples/SpaceShooter/Main.bas` call the raw native exports (`Framework_Initialize`,
+> `Framework_SetFixedStep`, `Framework_BeginDrawing`, …) and Pong also uses undeclared
+> `KEY_*` constants; none of the 134 entries in `BasicLang/StdLib/FrameworkStdLib.cs` is
+> `Framework_`-prefixed, so those two raise `Undefined identifier`. Reach for the Platformer
+> or a `SampleGames/` project when you want something that compiles as-is.
+
 Compile one directly:
 
 ```powershell
-IDE/BasicLang.exe Samples/Pong/pong.bas --target=csharp
-IDE/BasicLang.exe Samples/Pong/pong.bas --target=cpp --show-generated
+IDE/BasicLang.exe Samples/Platformer/Main.bas --target=csharp
+IDE/BasicLang.exe Samples/Platformer/Main.bas --target=cpp --show-generated
 ```
 
 ## VB.NET samples
@@ -39,9 +50,12 @@ IDE/BasicLang.exe Samples/Pong/pong.bas --target=cpp --show-generated
 
 | File | What it is |
 |---|---|
-| `SampleA_FrameworkOnly.vb` | "Catch the Falling Blocks" — window, loop, keyboard input, 2D rendering, pause/resume |
-| the larger game in the project | Engine + wrapper end to end |
-| `FrameworkTests.vb` | Smoke tests over the exported surface |
+| `SampleA_FrameworkOnly.vb` | "Catch the Falling Blocks" — window, loop, keyboard input, 2D rendering, audio, delta time, pause/resume. Reference source only: `Program.vb` has no switch for it |
+| `Game.vb` (+ `Scene.vb`, `GameScenes.vb`, `Paddle.vb`, `ball.vb`, `AI.vb`, `Player.vb`) | The default program — `TestVbDLL.exe` with no args. Starts on `TitleScene`; `GameScenes.vb` holds 30 `Scene` subclasses (Pong title/menu/play/serve/end plus per-system demos). Engine + wrapper end to end |
+| `SampleShapesBatch1.vb` | raylib 5.5 shapes Batch 1 smoke scene — `DrawRectangleRec`/`Pro`, `DrawLineStrip`, `DrawRectangleGradientEx`. Run `TestVbDLL.exe --shapes` |
+| `SampleTextBatch2.vb` | raylib 5.5 text Batch 2 smoke scene — `GetFontDefault`, `DrawTextEx`/`Pro`, `DrawTextCodepoint`, `MeasureTextExV`. Run `TestVbDLL.exe --text` |
+| `SampleTextures3d.vb` | raylib 5.5 textures Batch 3d smoke scene — 8 GL-only texture/image round-trips with self-asserts. Run `TestVbDLL.exe --textures3d` |
+| `FrameworkTests.vb` | 8,067 lines; `RunAllTests` runs 49 per-system / integration / stress suites over the exported surface and prints a pass/fail tally. Run `TestVbDLL.exe --test` (or `-t`) |
 
 ## Native C++ sample
 
@@ -51,14 +65,24 @@ wrapper, not the engine.
 
 ## Scratch projects
 
-`TestGame/`, `TestMultiFile/` and `TestWinForms/` are working projects used during manual
-and integration testing — multi-file import resolution, WinForms output, and general
-build shapes. They are not curated samples, but they are the quickest place to reproduce
+`TestGame/`, `TestMultiFile/` and `TestWinForms/` are scratch fixtures used during manual
+and integration testing. `TestMultiFile/` is the only one with a `.blproj` (multi-file import
+resolution over `Main.bas`/`MathUtils.bas`/`StringUtils.bas`, plus a loose `Simple.bas` and a
+`GameTypes.bh` header outside its ItemGroup); `TestWinForms/` is a single `.bas` exercising
+`Using System.Windows.Forms` .NET interop; and `TestGame/FeatureTest.bas` is an IDE
+editor-feature fixture. They are not curated samples, but they are the quickest place to reproduce
 a project-shape bug.
 
 ## Templates as samples
 
-Every template is a working program. Generating one is often faster than reading a sample:
+Most of the eleven built-in templates are a working program — `game`, `console`, `web`,
+`webapi`, `test`, `cpp-console`, `cpp-game`. Generating one is often faster than reading a
+sample:
+
+> [note] Four are not runnable programs: `empty` emits only a `.blproj` with no source file,
+> `sln` only a `.blsln` stub, and `classlib` / `cpp-library` build a library
+> (`OutputType=Library`). `basiclang new` also picks up custom templates from disk — any
+> directory holding a `template.json`.
 
 ```powershell
 IDE/BasicLang.exe new --list

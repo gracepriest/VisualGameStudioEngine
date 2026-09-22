@@ -3,14 +3,15 @@ lede: Every top-level directory, what it is, and how big it actually is.
 ---
 ## In the solution
 
-`VisualGameStudioEngine.sln` groups projects under three solution folders — Compiler,
-GameEngine, and Games — plus the IDE projects at the root.
+`VisualGameStudioEngine.sln` groups projects under four solution folders — Compiler,
+IDE, GameEngine, and Games. The Games folder is declared but currently holds no
+projects.
 
 ### Compiler
 
 | Project | Lang | Lines | Role |
 |---|---|---|---|
-| `BasicLang/` | C# | ~124K | The compiler. Also the LSP server (`--lsp`) and debug adapter (`--debug-adapter`) |
+| `BasicLang/` | C# | ~131K | The compiler. Also the LSP server (`--lsp`) and debug adapter (`--debug-adapter`) |
 
 ### IDE
 
@@ -20,7 +21,7 @@ GameEngine, and Games — plus the IDE projects at the root.
 | `VisualGameStudio.Editor/` | C# | ~19K | Avalonia code editor control — highlighting, folding, completion, multi-cursor |
 | `VisualGameStudio.ProjectSystem/` | C# | ~46K | Service implementations: projects, build, LSP client, debugging, git, extensions |
 | `VisualGameStudio.Shell/` | C# | ~71K | The IDE application — **the build and run target** |
-| `VisualGameStudio.Tests/` | C# | ~119K | NUnit suite, 435 test files |
+| `VisualGameStudio.Tests/` | C# | ~136K | NUnit suite, 474 test files |
 | `BasicLang.VisualStudio/` | C# (VSIX) | ~2K | VS 2022 CPS extension |
 
 ### GameEngine
@@ -55,7 +56,7 @@ BasicLang/
 ├─ *.cs                 pipeline stages and backends at the root
 ├─ Compiler/CodeGen/    C++ and .NET code-generation support
 │   ├─ CPlusPlus/
-│   └─ Net/             NetShimGenerator, NetProxyEmitter
+│   └─ Net/             NetShimGenerator, NetProxyEmitter, blnet C++ facade, shim cache/publisher
 ├─ Debugger/            managed debug adapter, CorDebug wrappers, source mapping
 ├─ LSP/                 language server and one handler per feature
 ├─ Net/                 .NET surface discovery, type resolution, marshalling
@@ -69,22 +70,22 @@ The ten largest compiler files, which is a fair proxy for where the complexity l
 
 | File | Lines |
 |---|---|
-| `SemanticAnalyzer.cs` | 8,571 |
-| `Parser.cs` | 5,216 |
-| `CppCodeGenerator.cs` | 5,186 |
+| `SemanticAnalyzer.cs` | 9,618 |
+| `CppCodeGenerator.cs` | 5,446 |
+| `IRBuilder.cs` | 5,428 |
+| `MSILBackend.cs` | 5,356 |
+| `Parser.cs` | 5,251 |
 | `Debugger/NetDebugAdapter.cs` | 4,962 |
-| `IRBuilder.cs` | 4,509 |
-| `CSharpBackend.cs` | 4,208 |
+| `CSharpBackend.cs` | 4,289 |
 | `Program.cs` | 4,099 |
 | `LSP/CompletionService.cs` | 3,529 |
-| `JavaScriptBackend.cs` | 3,098 |
-| `IROptimizer.cs` | 3,028 |
+| `JavaScriptBackend.cs` | 3,426 |
 
 ## Inside the IDE
 
 ```text
 VisualGameStudio.Core/
-├─ Abstractions/Services/   44 service interfaces — the IDE's contract surface
+├─ Abstractions/Services/   42 service interfaces — the IDE's contract surface
 ├─ Abstractions/ViewModels/
 ├─ DAP/                     Debug Adapter Protocol types
 ├─ Models/                  project, solution, diagnostic, build result
@@ -127,4 +128,5 @@ shared file is a recurring source of divergence:
 | `docs/superpowers/specs/` | Design specs and rationale, dated |
 | `docs/articles/` | Guides: engine, language, IDE, debugging, coverage |
 | `docs/comparisons/` `docs/research/` | VS Code parity scorecards and research notes |
+| `docs/*.md` | Reference docs at the docs root: `API.md`, `API_REFERENCE.md`, `BasicLang-Reference.md`, `UserGuide.md`, `GETTING_STARTED.md`, `IDE-Extensions.md`, `vs-extension-notes.md`, plus the `debug-*-comparison.md` parity notes and the docfx site scaffolding (`docfx.json`, `toc.yml`, `index.md`) |
 | `docs/wiki/` | This site |

@@ -18,8 +18,21 @@ lede: Short, and load-bearing. Every item here shipped a green build that did th
   crashes that look nothing like markup errors.
 - **`VisualGameStudio.Shell` is the IDE.** `VisualGameStudio.Editor` is a library.
 - **The native engine and the VSIX need VS 2022 MSBuild**, not `dotnet build`.
+- **The MSIL tests need `ilasm`.** The round-trip harness assembles real `.il` and runs it.
+  Windows ships one in-box at `%WINDIR%\Microsoft.NET\Framework64\v4.0.30319`; elsewhere
+  restore `runtime.<rid>.Microsoft.NETCore.ILAsm`, or point `BASICLANG_ILASM` at a build. A
+  machine with none gets `Assert.Ignore` — **a skipped MSIL suite is not a passing one.**
 
 ## Codegen
+
+> [trap] **On MSIL, never assert on emitted IL text alone.** MSIL is verified through a
+> round-trip harness (`VisualGameStudio.Tests/Msil/MsilHarness.cs`: source → `.il` → `ilasm` →
+> a real process → stdout). The defect that motivated it was a `Select Case` that assembled,
+> ran, and answered `Case Else` for every input — IL's `switch` is *index*-based while the
+> parser routes case values into `IRSwitch.PatternCases`, which the old emitter never read (it
+> read only `IRSwitch.Cases`). A text assertion would have had to already know `beq` was
+> missing to catch it. That one is fixed — `Select Case` now lowers to an ordered comparison
+> chain — but **stdout is the only valid oracle here too.**
 
 > [trap] **A missing switch arm does not fail — it silently builds C#.** Four separate
 > backend-dispatch maps have defaulted to C#. The most recent,
@@ -44,6 +57,18 @@ lede: Short, and load-bearing. Every item here shipped a green build that did th
   (`CompileProjectFiles`); a fix verified only through the test helper can still break via
   the IDE or the CLI.
 
+> [trap] **`FunctionInliningPass` is disabled — do not re-enable it.** It never once inlined a
+> function correctly, and it **miscompiles silently**. Measured on
+> `Function F(p As Integer) As Integer : Return p * 2` called as `F(6)`: six of seven call
+> shapes fail at run time, and the seventh only survives because `IsInlineable` refuses it for
+> block count. Five separate defects — inlined locals never reach the caller's
+> `LocalVariables` (emitted undeclared), definitions renamed by `tempCounter` while uses are
+> renamed by `prefix + name`, `RemapValue` leaving nested operand trees untouched,
+> `InlineCallsInBlock` never calling `ReplaceUses` (so the original call still happens), and a
+> `depth` that is never incremented. The class stays in `IROptimizer.cs` because
+> `CloneAndRemap` is the only clone path an `IRCall` can reach; the `AddPass` line is commented
+> out. **Repairing it is a rewrite, not a patch.**
+
 ## Shared source
 
 Some source backs more than one consumer. **Change it once, not per consumer:**
@@ -60,6 +85,10 @@ Some source backs more than one consumer. **Change it once, not per consumer:**
 > **`IDE/lib/js/dom-core.bli` is load-bearing**: the deployed compiler auto-includes it for
 > every JavaScript build, and without it the typed DOM does not resolve. Verify a refresh
 > against the deployed files (`IDE/BasicLang.exe new --list`), never against timestamps.
+> **It is stale right now:** last refreshed at `fbb3694` (2026-09-14), with 103 commits on
+> master since — the MSIL overhaul, the Module / `Shared` / Optional / access fixes and the
+> optimizer changes are none of them in `IDE/`. Re-measure with
+> `git log -1 -- IDE/BasicLang.dll`, never by eye.
 
 ## Reading test results
 
@@ -75,7 +104,8 @@ Some source backs more than one consumer. **Change it once, not per consumer:**
 ## The engine boundary
 
 - **Every `__declspec(dllexport)` in `framework.h` needs a matching `<DllImport>` in
-  `RaylibWrapper.vb`** — `extern "C"`, `__cdecl`, `LPStr` string marshaling. The export
+  `RaylibWrapper.vb`** — `extern "C"`, `LPStr` string marshaling, and `Cdecl` on the
+  managed side (the header declares no calling convention). The export
   count is in the thousands and drifts: **grep to confirm, never trust a cached number.**
 
 ## Diagnostics
@@ -85,7 +115,11 @@ Some source backs more than one consumer. **Change it once, not per consumer:**
   prevents.
 - A backend that cannot express something must produce a diagnostic, **never
   plausible-looking wrong code**. That is what `CppCapabilityChecker` and
-  `JsCapabilityChecker` are for.
+  `JsCapabilityChecker` are for. **MSIL has no checker file** — it refuses inline, at the point
+  of emission (collections outside the recorded `CollectionMembers` surface; type, tuple and
+  binding patterns in `Select Case`; exception members outside its recorded table). Dropping
+  one instead reproduces the original silent-`Case Else` failure exactly: it assembles, runs,
+  and answers wrong with no diagnostic.
 
 ## Documentation discipline
 
@@ -100,5 +134,13 @@ Per-area guides exist for subagents and are worth reading before working in an a
 
 ## Scope decisions already made
 
-- **MSIL and LLVM are out of scope.** Do not test, fix, or file bugs on them.
+- **LLVM is out of scope.** Do not test, fix, or file bugs on it — it builds, and that is the
+  whole promise. `LLVMBackend.cs` has not changed in the 123 commits since this page was
+  written.
+- **MSIL is a <span class="pill ok">Maintained</span> target as of 2026-09-15.** The old
+  "MSIL/LLVM are not maintained" policy now covers **LLVM only**. MSIL ships alongside C#, C++
+  and JavaScript — a language or lowering change lands on **four** backends, not three.
+  `MSILBackend.cs` went from 2,136 lines to 5,356 over that span, and
+  `VisualGameStudio.Tests/Msil/` holds 127 `[Test]` methods plus 18 `[TestCase]` rows across
+  five fixtures and a harness.
 - **COM interop is ruled out.**

@@ -14,7 +14,11 @@ A CPS (Common Project System) extension modelled on RemObjects Elements. Source:
 - A full project system through CPS, with `.blproj` support.
 - LSP-based IntelliSense — it launches `BasicLang.exe --lsp`.
 - A TextMate grammar for highlighting.
-- A **BasicLang** menu: Build · Run · Change Backend · Restart Server.
+- A **BasicLang** submenu under **Tools**: Build · Run · Change Backend · Restart Server
+  (Build is bound to `Ctrl+Shift+Alt+B`). *Change Backend* is informational only — it shows a
+  message box listing the four backends and points you at Tools > Options > BasicLang > Compiler.
+- Two editor context-menu commands: Go to Definition and Find All References (deliberately
+  left unbound — editor-scoped F12/Shift+F12 would hijack VS's own commands).
 - General and Compiler options pages.
 - 4 project templates and 3 item templates.
 
@@ -22,6 +26,9 @@ A CPS (Common Project System) extension modelled on RemObjects Elements. Source:
 
 - A CPS debug launch provider — the debug APIs are not public.
 - A bundled `BasicLang.exe` in the SDK `tools/` folder.
+- A way to select the JavaScript backend. `CompilerBackend` offers only CSharp / MSIL / LLVM /
+  CPlusPlus, and Build always passes one of those as `--target`, while the CLI takes
+  `--target=csharp|cpp|javascript|llvm|msil` — five targets, four exposed.
 
 **Building it**
 
@@ -32,10 +39,13 @@ A CPS (Common Project System) extension modelled on RemObjects Elements. Source:
 
 # SDK NuGet package
 dotnet pack BasicLang.VisualStudio/src/BasicLang.SDK -c Release
+
+# or both in one step — packs the SDK, restores, then finds MSBuild via vswhere
+BasicLang.VisualStudio/build.ps1 -Configuration Release
 ```
 
 The build uses a manual pkgdef (`GeneratePkgDefFile=false`) plus custom MSBuild targets
-(`CreateTemplateZips`, `AddTemplatesToVsix`), because VSSDK template processing does not
+(`CreateTemplateZips`, `AddTemplateZipsToVsix`, and `InjectTemplateZipsAsOpcParts` after packaging), because VSSDK template processing does not
 work with SDK-style projects.
 
 ### Gotchas that cost real time
@@ -56,6 +66,14 @@ work with SDK-style projects.
 > automatic. Ship `BasicLang.ProjectTemplates.vstman` / `BasicLang.ItemTemplates.vstman`
 > and register them in the pkgdef. Inside a `.vstman`, `TemplateFileName` references the
 > `.vstemplate` **inside** the zip, not the `.zip` name.
+
+> [trap] **VsixUtil drops the template zips out of the finished VSIX.** VSSDK 17.9's
+> `VsixUtil.exe` silently discards `*.zip` under `ProjectTemplates/` / `ItemTemplates/` even
+> when they are emitted as `VSIXSourceItem`/`Content` with `IncludeInVSIX` and listed in
+> `files.json`. The `InjectTemplateZipsAsOpcParts` target re-adds them **after**
+> `CreateVsixContainer` by running `BuildSystem/InjectTemplateZips.ps1`, which uses
+> `System.IO.Packaging` (not raw zip appending) so `[Content_Types].xml` and `manifest.json`
+> stay consistent and the installer actually installs the zips.
 
 > [trap] **Template `<ProjectType>` is `VisualBasic`, not `BasicLang`.** VS ignores unknown
 > project-type values in the New Project dialog, so templates categorize under Visual Basic.
@@ -81,7 +99,8 @@ Not in the `.sln`. TypeScript, packaged as a `.vsix`.
 
 ```text
 vscode-basiclang/
-├─ src/extension.ts                  LSP client activation
+├─ package.json                      manifest: language, grammar, snippets, commands, debugger, tasks
+├─ src/extension.ts                  LSP client + debug-adapter factory + build/run (425 lines)
 ├─ syntaxes/basiclang.tmLanguage.json  TextMate grammar
 ├─ snippets/basiclang.json           snippets
 ├─ language-configuration.json       brackets, comments, auto-closing
@@ -90,8 +109,16 @@ vscode-basiclang/
 ```
 
 It registers the BasicLang language, contributes the grammar and snippets, and starts
-`BasicLang.exe --lsp` as its server. Configuration points at the compiler path and the
-default backend. Recognised extensions: `.bas`, `.mod`, `.cls`, plus `.blproj`.
+`BasicLang.exe --lsp` as its server. One setting, `basiclang.languageServerPath`, points at
+`BasicLang.exe`; the rest are `enableSemanticHighlighting`, `enableInlayHints`,
+`enableCodeLens`, `format.tabSize` and `format.insertSpaces` — there is **no** backend
+setting. Recognised extensions: `.bl`, `.bas`, `.cls`, `.mod`, `.bli`, plus `.blproj`.
+
+It also ships debugging, which the VS 2022 extension does not: `contributes.debuggers`
+registers type `basiclang` with a launch configuration (`program`, `stopOnEntry`, `args`,
+`cwd`) and breakpoints for the language, and `registerDebugAdapterDescriptorFactory` runs
+`BasicLang.exe --debug-adapter`. Four commands (`restartServer`, `showOutput`, `build`,
+`run`), two `basiclang` problem matchers and a `basiclang` task type round it out.
 
 Documentation: `docs/IDE-Extensions.md`.
 
@@ -104,7 +131,8 @@ from the repo. Old documentation still references it. The current VS extension i
 ## Automated maintenance agents
 
 Four Claude Agent SDK applications (Python) maintain these areas, each with its own
-`CLAUDE.md` and a set of profiles and MCP tools:
+`CLAUDE.md`, a set of `--profile` task profiles and an in-process MCP tool server — 28
+profiles and 23 tools between them:
 
 | Agent | Scope |
 |---|---|

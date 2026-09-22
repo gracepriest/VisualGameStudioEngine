@@ -8,6 +8,7 @@ lede: Prerequisites, the build order that works, and a game loop you can run tod
 | .NET 8.0 SDK | Everything managed — compiler, IDE, tests |
 | Visual Studio 2022 | Required to build the native engine DLL via MSBuild (auto-discovered through `vswhere`) |
 | A C++ toolchain | clang/LLVM, gcc, or MSVC — only if you compile BasicLang to native |
+| `ilasm` / `llc` | Only for the MSIL and LLVM backends — both stop at generated `.il` / `.ll` and you assemble or compile them yourself. Windows already ships `ilasm.exe` under `%WINDIR%\Microsoft.NET\Framework64\v4.0.30319` |
 | Windows | The engine DLL and the managed debugger are Windows-first; the IDE shell itself is Avalonia |
 
 If your C++ toolchain is not on `PATH`, pin it in the IDE under **Settings → C++**.
@@ -51,7 +52,7 @@ The native engine builds separately, through VS 2022 MSBuild on
 ```powershell
 IDE/BasicLang.exe new game -n MyGame
 cd MyGame
-IDE/BasicLang.exe run
+../IDE/BasicLang.exe run
 ```
 
 Templates available from the CLI include `console`, `game`, `web` (JavaScript/browser),
@@ -68,9 +69,9 @@ Framework_SetTargetFPS(60)
 Framework_InitAudio()
 
 While Not Framework_ShouldClose()
-    Framework_Update()
-    Framework_Camera_Update()
-    Framework_Ecs_UpdateVelocities()
+    Dim dt As Single = Framework_GetDeltaTime()
+    Framework_Camera_Update(dt)
+    Framework_Ecs_UpdateVelocities(dt)
 
     Framework_BeginDrawing()
     Framework_ClearBackground(30, 30, 50, 255)
@@ -81,7 +82,7 @@ While Not Framework_ShouldClose()
     Framework_EndDrawing()
 
     Framework_UpdateAllMusic()
-    Framework_Audio_Update()
+    Framework_Audio_Update(dt)
 End While
 
 Framework_CloseAudio()
@@ -91,6 +92,13 @@ Framework_Shutdown()
 Order matters. `Framework_Initialize` must come before any resource load;
 `Framework_InitAudio` before any sound call; camera mode must be closed before UI is
 drawn in screen space; audio and music update once per frame after drawing.
+
+> [trap] There are two frame shapes and they do not mix. The loop above is **manual** mode:
+> you call `Framework_BeginDrawing`/`Framework_EndDrawing` and `Framework_UpdateAllMusic`
+> yourself. **Callback** mode is `Framework_SetDrawCallback(AddressOf OnDraw)` plus a loop
+> whose entire body is `Framework_Update()` — that one call already does `BeginDrawing` →
+> your callback → `EndDrawing` → `Framework_UpdateAllMusic`. Calling `Framework_Update`
+> inside a manual loop draws and updates music twice per frame.
 
 ## Adding an entity
 
@@ -103,9 +111,9 @@ Framework_Ecs_SetName(player, "Player")
 Framework_Ecs_SetTag(player, "player")
 Framework_Ecs_AddTransform2D(player, 400, 300, 0, 1, 1)
 Framework_Ecs_AddVelocity2D(player, 0, 0)
-Framework_Ecs_AddBoxCollider2D(player, -20, -20, 40, 40)
-Framework_Ecs_AddSprite2D(player)
-Framework_Ecs_SetSpriteTexture(player, texHandle)
+Framework_Ecs_AddBoxCollider2D(player, -20, -20, 40, 40, False)   ' last arg: isTrigger
+' entity, texture, src rect (0,0,0,0 = whole texture), tint RGBA, layer
+Framework_Ecs_AddSprite2D(player, texHandle, 0, 0, 0, 0, 255, 255, 255, 255, 0)
 Framework_Ecs_SetEnabled(player, True)
 
 Dim weapon As Integer = Framework_Ecs_CreateEntity()
@@ -120,9 +128,9 @@ See [ECS](#/engine-ecs) for the component set and the built-in systems.
 
 ## Running with the IDE
 
-1. **File → New Project**, pick a backend (BasicLang C#, BasicLang C++, JavaScript/web).
+1. **File → New Project**, pick a language and backend. BasicLang offers **C# (.NET)**, **MSIL**, **Native C++**, **JavaScript (Web)** and **LLVM**; a plain C++ project offers **LLVM (clang++)**, **GCC (g++)** or **MSVC**.
 2. Edit; IntelliSense comes up once the language server starts — watch the Output panel.
-3. `Ctrl+B` builds. `F5` runs with debugging, `Ctrl+F5` without.
+3. `Ctrl+Shift+B` builds. `F5` runs with debugging, `Ctrl+F5` without.
 4. `F9` toggles a breakpoint; the gutter distinguishes bound from unbound ones.
 
 For a native project, F5 launches `lldb-dap` and your `.bas` breakpoints still bind —
@@ -132,7 +140,7 @@ the C++ backend emits `#line` directives that map generated C++ back to BasicLan
 
 | Symptom | First thing to check |
 |---|---|
-| No IntelliSense | Output panel for LSP errors; **Tools → Restart Language Server** |
+| No IntelliSense | Output panel for LSP errors; the server auto-restarts up to 3 times, then stops — re-launch it from the command palette (`Ctrl+Shift+P` → **Start Language Server**) |
 | C++ build fails with a missing compiler | **Settings → C++** — is a bad path pinned? |
 | Native debug never binds breakpoints | Was the build a Debug build with `#line` emission? |
 | Engine function missing from VB.NET | The [wrapper invariant](#/engine-binding) — the `DllImport` may not exist |

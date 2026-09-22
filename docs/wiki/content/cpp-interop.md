@@ -49,6 +49,10 @@ End Sub
 - `::`-qualified types are opaque foreign types: value semantics, `.` member access, no
   BasicLang member checking.
 - `(Of ...)` becomes `<...>`; a trailing `::segment` after the generic scope is preserved.
+- An inline `cpp{ ... }` block passes statements through verbatim. Like the other two forms
+  it is C++-backend-only: a `cpp{}` block on C#, LLVM, MSIL or JavaScript is a refusal, not a
+  no-op — it used to be silently dropped, which is a do-nothing program from a build that
+  reported success.
 
 ## Reference vs value, at a glance
 
@@ -71,7 +75,7 @@ build. The IDE opens, edits, builds and debugs both. Supporting machinery lives 
 
 | File | Role |
 |---|---|
-| `CppProjectBuilder.cs` | Drives the native build (~1,760 lines) |
+| `CppProjectBuilder.cs` | Drives the native build (~1,770 lines) |
 | `CppToolchain.cs` | Detects and selects clang / gcc / MSVC |
 | `CompileCommandsWriter.cs` | Emits `compile_commands.json` so clangd can do IntelliSense |
 | `CppDiagnosticsParser.cs` | Parses compiler output into IDE diagnostics |
@@ -90,6 +94,15 @@ backend for when your toolchain is not on `PATH`.
 > design decision, recorded in
 > `docs/superpowers/specs/2026-07-21-cpp-per-backend-toolchain-overrides-design.md`.
 
+> [trap] Every native project built with clang / gcc links `-pthread` — **unconditionally**,
+> not only when .NET is on. It is there for the .NET-enabled case: the generated
+> `blnet_runtime.hpp` guards its callback and invocation-queue tables with `std::mutex` /
+> `std::lock_guard` / `std::atomic`. Leaving it out is invisible on Linux — since glibc 2.34
+> the pthread symbols live in libc, so the same project links clean with no flag — and fatal
+> on MinGW, which routes them through winpthreads and does not put that on the link line by
+> default (measured: a wall of `undefined reference to pthread_mutex_init` from every
+> translation unit). MSVC needs nothing; its standard library threading is built in.
+
 `CppToolchainOverrides.cs`, `CppToolchainProbeService.cs` and `ToolchainPathValidator.cs`
 in the IDE's ProjectSystem implement the probe and validation.
 
@@ -98,8 +111,53 @@ in the IDE's ProjectSystem implement the probe and validation.
 The C++ backend can reach .NET types through a generated shim — `NetShimGenerator.cs`
 and `NetProxyEmitter.cs` under `BasicLang/Compiler/CodeGen/Net/`, fed by the type
 discovery in `BasicLang/Net/`. `CppCodeGenerator.NetCalls.cs` emits the call sites. This
-is the P2a workstream; see [.NET interop](#/net-interop) and
-[Known gaps](#/roadmap) for its current state.
+is the P2a workstream, and it is <span class="pill ok">Complete</span> — the P2a-2 plan
+recorded "Genuinely open work: NONE" on 2026-09-14. See [.NET interop](#/net-interop)
+for which BCL types are measured usable.
+
+### The facade — write ordinary C++, not mangled slots
+
+The proxy header `blnet_proxies.g.hpp` names every slot under a §7.3 mangled identifier
+(declaring type + member + static-ness + generic arity + per-parameter ref-kind, plus a
+SHA-256 signature hash) because the export lives in a flat symbol namespace with no
+overloading. Correct, but a terrible — and *fragile* — authoring surface: the hash moves
+whenever the signature does.
+
+So `NetProxyEmitter.Facade.cs` emits a second header, `blnet_facade.g.hpp`, rendering the
+same slots as ordinary C++ under `BasicLang::netfx`:
+
+```cpp
+#include "blnet_facade.g.hpp"     // always emitted, never auto-included
+using namespace BasicLang::netfx;
+
+System::Console::WriteLine("hello");
+auto r = System::Text::RegularExpressions::Regex("^\\d+$");
+bool ok = r.IsMatch("123");
+```
+
+| Decision | Shape |
+|---|---|
+| Root namespace | `BasicLang::netfx` — never a bare `namespace System`, which would collide with a user type in a header they cannot edit |
+| One type | one `struct`, namespaces mirroring the .NET namespace |
+| Static / instance members | `static` member functions / ordinary member functions |
+| Constructors | real C++ constructors; `T(adopt_handle, h)` is the separate handle-adopting form |
+| Properties | `get_X()` / `set_X()`, never `operator=` |
+| Handle-typed parameter | the wrapper type when it has a handle, raw `NetRef` otherwise |
+
+> [note] The facade is a **second rendering of the same `SlotPlan` list** the proxy emitter
+> already computes, not an independent walk of the surface — so it cannot disagree with the
+> proxy table about a signature. Only *coverage* can drift, which `NetFacadeCoverageDriftTests`
+> pins over a real framework surface as a set identity plus a coverage floor.
+
+> [trap] `set_X()` is usually **absent**, and that is upstream of the facade. A `<NetProxy>`
+> declared type draws only property READ slots; a setter descriptor is synthesized only where
+> some BasicLang code in the project actually writes the member. Measured over `System.Console`
+> and `Regex`: zero `set_` slots. The facade can only render slots that exist.
+
+> [trap] Two slots that render to the *same* C++ signature are **both** omitted, with a
+> `BL6027` warning naming them — §8.3 maps every handle-represented type onto one wire form,
+> so `F(Regex)` and `F(Uri)` collide. Never silently picked: the mangled slots stay callable as
+> the escape hatch. `BL6027` is always a warning, never an error.
 
 ## Capability failures
 

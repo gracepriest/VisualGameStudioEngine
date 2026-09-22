@@ -6,7 +6,8 @@ mode, reusing the same parser and semantic analyzer, which is why an IntelliSens
 usually a compiler bug.
 
 ```powershell
-IDE/BasicLang.exe --lsp        # speaks LSP over stdio
+IDE/BasicLang.exe --lsp                  # speaks LSP over stdio (alias: --language-server)
+IDE/BasicLang.exe --lsp --lsp-simple     # minimal fallback server (SimpleLspServer)
 ```
 
 Three clients drive it: the Visual Game Studio IDE, the VS 2022 extension, and the
@@ -19,7 +20,7 @@ VS Code extension.
 | File | Feature |
 |---|---|
 | `BasicLangLanguageServer.cs` | Server host, capabilities, lifecycle |
-| `SimpleLspServer.cs` | Minimal transport/dispatch layer |
+| `SimpleLspServer.cs` | Standalone fallback server behind `--lsp-simple` (completion/hover/definition/diagnostics only); the real handlers reuse its `FindSymbolInScope` / `FormatSymbolSignature` helpers |
 | `DocumentManager.cs` | Open-document store and version tracking |
 | `TextDocumentSyncHandler.cs` | `didOpen` / `didChange` / `didClose` |
 | `WorkspaceManager.cs`, `LspProjectContext.cs` | Workspace and project resolution |
@@ -48,15 +49,26 @@ VS Code extension.
 
 ## Shared resolution
 
-`ModuleResolver.cs` backs **both** the compiler and the LSP. Import and namespace
-resolution behaviour must therefore change in one place — fixing it "for the LSP" in a
-copy is how the two drift apart and an editor starts disagreeing with the build.
+`ModuleResolver.cs` is the one place the `.cls` `Option Public` rule lives: the compiler resolves
+modules and namespaces through it (`ResolveModule` / `ResolveNamespace`), and the LSP calls its
+static `HasOptionPublicDirective` from `ImplicitContainer.cs`, so an implicit class is public in the
+editor exactly when it is public in the build.
+
+> [trap] Project-wide import resolution is **not** shared. `LspProjectContext.cs` runs its own
+> top-directory-only scan and hand-mirrors the compiler's rule that `Import X` may resolve into a
+> subdirectory named `X` (`AddSourceSubdirectories`), marking those imports indeterminate instead of
+> unresolved. A resolution rule changed in `ModuleResolver.cs` has to be carried into that mirror, or
+> the editor starts disagreeing with the build.
 
 ## C++ IntelliSense
 
-C++ files are served by **clangd**, not by this server. The IDE generates a
-`compile_commands.json` (`BasicLang/ProjectSystem/CompileCommandsWriter.cs`) so clangd
-knows the flags for every translation unit, then routes completion, hover, diagnostics
+C++ files are served by **clangd**, not by this server. Before anything has been built, the IDE
+emits both artefacts clangd needs — the generated `obj/gen` headers for the project's BasicLang
+sources and `obj/compile_commands.json` — through
+`VisualGameStudio.ProjectSystem/Services/IntelliSenseEmissionService.cs` →
+`BasicLang/ProjectSystem/IntelliSenseEmitter.cs` (the database itself is written by
+`CompileCommandsWriter.cs`), so clangd
+knows the flags for every translation unit, then routes completion, hover, diagnostics, go to definition
 and semantic highlighting through it. clangd is downloaded on demand by
 `ClangdInstaller.cs` / located by `ClangdLocator.cs`.
 
@@ -68,10 +80,13 @@ its own, it just registers a second language server.
 In the IDE, `LanguageService.cs` and `LanguageServiceRegistry.cs`
 (`VisualGameStudio.ProjectSystem/Services/`) own the client, with `LspFrameWriter.cs`
 handling the wire framing and `RestartPolicy.cs` deciding what happens when a server
-dies. **Tools → Restart Language Server** is the manual escape hatch.
+dies. There is no manual restart in the IDE: recovery is the bounded auto-restart — 3 attempts at 1s/2s/4s backoff, the budget refunded only after a connection survives 60s (`RestartPolicy.MaxAttempts` / `RestartPolicy.StabilityWindow`), after which the Output pane says to restart the IDE. `StatusBarViewModel.RestartLspCommand` exists but raises an event nothing subscribes to, so the live status bar shows each server's state without a clickable restart. A manual **Restart Language Server** command exists only in the other clients — the VS 2022 extension (**BasicLang → Restart Language Server**) and the VS Code extension.
 
-`RegenOnSaveCoordinator.cs` re-emits the artefacts IntelliSense depends on when relevant
-files are saved, so completions do not go stale mid-edit.
+`RegenOnSaveCoordinator.cs` keeps the **C++** side fresh: a saved `.bas`/`.mod`/`.cls` under the open
+project — or an external edit of its `.blproj` — goes through a trailing-edge debounce into
+`IIntelliSenseEmissionService.RequestEmit`, regenerating `obj/gen` and `obj/compile_commands.json`.
+Without it clangd keeps resolving against the last build's generated headers. A `.cpp` save needs
+nothing: clangd re-parses that file on `didChange`.
 
 ## Feature parity notes
 
