@@ -1374,6 +1374,161 @@ partly wrong, and three of the nine pins were vacuous at first:**
 
 # Commit 24d — the editing surface (spec §6)
 
+## ⛔⛔ PRE-FLIGHT CORRECTIONS (2026-09-21, measured — READ BEFORE TASK 20)
+
+A read-only 9-agent recon verified every anchor in Tasks 20–25 against the tree at `392bcb5d` and
+adversarially hunted this repo's measured defect classes. **The tasks below are left verbatim as written
+evidence; where they disagree with this block, THIS BLOCK WINS.** Six blocker-class defects were found in a
+plan that had already had three review passes — four of them ship a GREEN BUILD WITH A DEAD FEATURE.
+
+### The anchors have drifted — 21 of them. Re-locate, never trust a cited line.
+
+The plan was written 2026-09-20; 24a/24b/24c have landed since. Corrected:
+
+| Cited | Actual |
+|---|---|
+| `FormCanvasControl.cs` styled block `:34-215` | registrations `:36-199`, accessors to `:217`, first non-property member `:219`; `AffectsRender` static ctor `:93-99` |
+| `OnPointerPressed` `:563-632` | **`:565-675`** — the cited end is 43 lines short and lands *inside* the marquee branch |
+| `Render` `:1085-1160` | **`:1087-1179`**; the Layout loop is `:1124-1130` |
+| HitTest call sites `:498`, `:583`, `:617` | **`:500`, `:585`, `:619`** (each 2 low) |
+| `CodeEditorDocumentView.axaml:223-235` | the `FormCanvasControl` element is **`:224-235`**; `:223` is its containing Grid |
+| `CodeEditorDocumentViewModel.cs:864` Selection.Changed | **`:875`** (`:864` is `_eventAggregator = …`). It IS expression-bodied — that half confirmed |
+| `Layout :320-376`, `HitTest :89-126`, `ContainerAt :259-294`, `ControlsIn :143-162` | `:330-339`, `:96-116`, `:255-300`, `:133-158`; `Bands` is `:357-380` |
+| "**Create** `VisualGameStudio.Tests/Compiler/FormStripEditorTests.cs`" | ⛔⛔ **IT ALREADY EXISTS** (24c, 89 lines, 2 tests). **EDIT it. A subagent using Write on an untracked test file has already destroyed four tests once in this feature.** |
+| `FormStripCanvasTests.cs` | genuinely NOT FOUND — new work |
+| `Cells(...)`, `TypeHereAt(...)` | NOT FOUND — Task 20 creates both; Task 21 will not compile without them |
+
+⚠ Task 20 declares `Cells`/`TypeHereAt` as **static** but Task 21's snippet calls `_transform.TypeHereAt(...)`
+on an instance. Pick one and make both sites agree.
+
+### BLOCKER 1 — `[ObservableProperty]` applies to ONE field, and the whole feature is bound through the other two
+
+`[ObservableProperty] bool _isActive; FormControl? _host; string _text = "";` is **three** field declarations;
+the attribute binds `_isActive` alone. `Host` and `Text` then raise no notification, and Task 24 binds exactly
+those three (`TypeHereHost`, `Host`, `Text` TwoWay). They bind once at attach and never update: the slot
+highlight never moves, the editor never re-focuses, "type a whole menu in one run" is dead.
+**Nothing in 24d can see it** — Task 22 sets the control's own properties, Task 23 reads `vm.StripEditor.Host`
+directly, Task 24 parses XML text. `IsActive` works, so the overlay appears and looks wired.
+⛔ Worse, measured: `TypeHereBounds` is written only inside `Render`, and `Render` runs only on an
+`AffectsRender` change. On the real gesture **the host is ALREADY the selection** (a slot is yielded only for
+the selected strip), so `SelectInDesigner(host)` is a no-op on both stores (`FormSelection.cs:53-56`) and
+`TypeHereHost` is the only thing that changes. No notification → no render → `TypeHereBounds` stays `default`
+→ and since the plan forces `MinWidth`/`MinHeight` to 0, the shipped editor is a **0×0 focused TextBox**.
+**FIX:** `[ObservableProperty]` on all three fields. **Add a test that subscribes to
+`StripEditor.PropertyChanged`** and requires a raise for `Host` on Begin and `Text` on Commit. A binding defect
+needs a notification assertion; nothing else sees it.
+
+### BLOCKER 2 — nothing executes the three new commands, and this repo has NO compiled bindings
+
+⭐ **Measured:** `CodeEditorDocumentView.axaml:13` has `x:DataType`, but `AvaloniaUseCompiledBindingsByDefault`
+appears **nowhere in the repo** and there is no `Directory.Build.props`. Every `{Binding …}` there is a
+**reflection** binding — it binds successfully to nothing. Task 23's tests call the METHODS
+(`vm.BeginTypeHere(...)`); Task 24's gate compares attribute STRINGS. So if the toolkit generates no command —
+the exact `AddNewFormCommand` failure, where a doc comment between the attribute and its method made it bind to
+the next declaration — build green, VM tests green, AXAML gate green, menu impossible to create.
+⛔ **The plan's stated justification for public methods is FALSE:** it cites "`PlaceControl` is the precedent",
+but `PlaceControl` (`:655`) carries **no** `[RelayCommand]` — the one at `:652` belongs to `CommitGeometry`
+(`:653`). **All 15 `[RelayCommand]`s in that file are on PRIVATE methods.** There is no precedent for the shape.
+**FIX:** (a) Task 23 drives at least one full cycle through the GENERATED members —
+`vm.BeginTypeHereCommand.Execute(strip)`, `CommitTypeHereCommand.Execute("&File")`,
+`CancelTypeHereCommand.Execute(null)`; (b) the Task 24 gate reflects every `{Binding *Command}` name it parses
+against `typeof(CodeEditorDocumentViewModel)` and asserts a non-null `ICommand` property — data-driven off the
+XML so it covers future bindings too; (c) keep every attribute physically adjacent to its method.
+
+### BLOCKER 3 — `PasteControls`' Item branch adds the control to TWO lists
+
+The snippet puts `continue` only in the `else`. It is inserted into a loop whose last statement is the
+**unconditional** `(… ? Components : Controls).Add(control);` at `:461`. The success path falls through and one
+`FormControl` reference lands in both `host.Children` and `document.Controls`. It compiles; the plan's own Step 1
+assertion passes. Then `AllControls()` (`FormDocument.cs:95`) yields it twice → the writer emits it twice,
+`RenumberTabIndexes` walks it twice, and `ListContaining` returns `Controls` first, so **the next Delete removes
+the wrong copy**.
+⚠ Compounding: `Selection.SetRange(added)` with an EMPTY `added` *clears* the selection
+(`FormSelection.cs:96-110`), contradicting the same step's "the selection unchanged" and — with the new
+leave-rule — cancelling the editor on a refused paste.
+**FIX:** one `if / else if / else` chain whose final `else` is the existing `:461` line, and
+`if (added.Count == 0) return;` before the renumber/`SetRange`/write. Assert
+`AllControls().Count(c => ReferenceEquals(c, pasted)) == 1`.
+
+### BLOCKER 4 — the overlay is born VISIBLE
+
+Avalonia's `IsVisible` defaults **true**, `IsActive` defaults **false**, and setting a styled property to the
+value it already holds raises no notification — so the Task 24 binding resolving to `false` fires nothing and
+`OnPropertyChanged` never runs at startup. An empty focusable TextBox sits permanently over the design surface
+at (0,0). Step 1's only hidden-state assertion reaches `false` by first setting `true`, exercising the one edge
+the shipping path never takes.
+⛔ And if an implementer gives the overlay a `Background`, it swallows every canvas click — the natural thing to
+do, because `FormCanvasControl.cs:1091-1096` teaches the opposite rule (it fills the viewport with
+`Brushes.Transparent` precisely *in order to be* hit-testable).
+**FIX:** `IsVisible = false; IsHitTestVisible = false;` in the CONSTRUCTOR too; leave `Background` null. Assert
+both on a freshly constructed editor **before** any activation — that assertion fails against the plan's own
+snippet, which is the point.
+
+### BLOCKER 5 — Task 20's cell assertions are tautological, and the one fixture that would catch it agrees by accident
+
+Step 1 asserts only `Role == Cell`, `Bounds.X == 0` and the width. `Bounds.X == 0` is also a default `Rect`'s X.
+⭐ **Measured:** no Item row declares `DefaultHeight` (`FormControlCatalog.cs:948/:962/:969/:981`), so all four
+inherit the record default **24** (`:508`) — **identical to MenuStrip's band height 24** (`:909`), but ToolStrip
+is **25** (`:927`) and StatusStrip is **22** (`:941`). An implementer who writes `item.Definition!.DefaultHeight`
+instead of the band's height, or lays every band's cells at `y = 0`, passes every Step 1 assertion on a MenuStrip
+fixture. Task 25's render pin is a DISTINCTNESS hash and cannot see a wrong-but-unique drawing.
+**FIX:** assert the FULL rect of one cell in a **ToolStrip** band and one in a **StatusStrip** band — the two
+heights the inherited 24 cannot fake. Implement by taking `band.Y`/`band.Height` off the Band entry the same loop
+just produced (`FormCanvasTransform.cs:370/:374`), never by re-reading any `DefaultHeight`.
+
+### BLOCKER 6 — `Cells` as specified forces a second copy of the band stacking
+
+`Bands()` (`:357-380`) uniquely owns where a band sits. A separate `Cells(document, selected)` must re-derive it.
+This is the `SurfaceSize` / `Tracks`-vs-`ParseTracks` / `DockOf` lesson arriving a fourth time, and Blocker 5 is
+exactly what makes the drift invisible.
+**FIX:** yield cells from **inside** `Bands()`, so the band rect is computed once.
+
+### ORDERING — corrected
+
+`20 → 21 → 22 → 23 → 24`, **with Task 25's render pin pulled UP to immediately after Task 21.** It depends only
+on 20+21, and leaving it at the end means the commit's only drawing code goes ungated across three tasks.
+
+### INDIVISIBILITY — 24d is NOT 24c, and the honest reason matters
+
+⭐ **24d modifies NOTHING under `BasicLang/Forms/`** — no catalog row, no reader, no writer, no emitter. No
+document ever changes shape, so **no partial state can corrupt a saved form.** 24c's Task 12 caused measured data
+loss (852 vs 880 bytes); 24d has no equivalent, and no gate is red by construction between tasks.
+It therefore **can** honestly split, at **A = 20+21+22+25's pin** (the surface) / **B = 23+24** (the wiring).
+**Recommendation: still ONE commit — but say why honestly.** Not "it would corrupt otherwise" (false), but
+"the split costs a second full gate to isolate a tree nobody will run". If broken for review size, break at A/B
+and state in the message that the intermediate tree has a dead slot.
+
+### SEAMS THE TASKS NEVER MENTION
+
+- ⛔ **`BringToFront`/`SendToBack` become reachable for items in 24d and reorder a shipped menu.**
+  `FormDocument.MoveWithin` (`:193-213`) resolves siblings via `ListContaining`, so it reorders `host.Children` —
+  which IS the `Items.Add` emission order 24c pinned with `InDocumentOrder`. Spec `:377` promises it; nothing
+  tests it. First gesture that can silently reorder a menu.
+- **`CutControls` (`:395-415`) for an item is untested** and writes the grid directly at `:413` — the second
+  standing violation of the one-selection-store rule (`:466` is the other, and Task 23 edits that one).
+- **A `Bottom`-docked host's dropdown has no rule.** Dock is `{Top,Bottom}` (`:905`, `:922`); Task 20's rule is
+  one-directional, so a bottom-docked strip's rows land below the form — and `Render` has **no `PushClip`**, so
+  they paint outside the form and are hit-testable there. Undecided in plan AND spec.
+- **Delete/Escape while the editor is open is untested.** `OnKeyDown` reaches `Key.Delete` → `DeleteCommand` at
+  `:406-416` whenever the canvas has focus. Spec `:339` names this as the reason the editor must focus on EVERY
+  Begin. (Arrow-nudge is safe: the geometry switch's `default: changed = false` at `:461-463`.)
+- ⛔ **`FormTrayViewTests.cs:87-91` contains a copied `Assert.Ignore`** — a gate that cannot find its file reports
+  SUCCESS. Make it a hard fail before copying that fixture's shape into `FormStripCanvasTests`.
+- ⚠ **Edit hazard:** `OnDesignModelRevisionChanged` (`:885`) is expression-bodied `=> Tray.Rebuild(DesignDocument);`.
+  Converting it to a block for the cancel hook must KEEP the Rebuild, or the component tray empties on every edit
+  (caught only by `FormTrayTests.PlacingAComponent_ShowsItInTheTray…`).
+
+### ✅ CONFIRMED SOUND — do not re-litigate
+
+- **The commit does not self-cancel.** `WriteDesignerEditBack` sets `_designFileText` inside the
+  `_applyingDesignerEdit` guard (`:708`) and `OnTextChanged` skips cache invalidation while it is set (`:911`), so
+  `DesignFile` returns the SAME `FormFile` and the same `FormControl` references and `IsInside`'s `ReferenceEquals`
+  walk succeeds. Had the cache dropped, the editor would cancel itself on every Enter. No report had checked this.
+- **Geometry-less controls are already handled** by `FormArrange.Apply` (`:54`, `:66`) and `AddIntrinsicRows`
+  (`FormPropertyGridViewModel.cs:139-173`). Spec `:151`/`:152` hold as written.
+
+---
+
 ### Task 20: Cells, dropdowns and Type Here slots in `Layout`
 
 **Files:** `FormCanvasTransform.cs`; Tests: `FormStripLayoutTests`.
