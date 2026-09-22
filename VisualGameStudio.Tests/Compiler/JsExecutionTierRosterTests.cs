@@ -73,6 +73,15 @@ public class JsExecutionTierRosterTests
         // their cases. Found only when the predicate was widened for ExternClassExecutionTests.
         typeof(BooleanOperatorExecutionTests),
         typeof(MemberCasingExecutionTests),
+
+        // The CSE invalidation / key-encoding fixtures. Their JavaScript leg is
+        // JavaScriptOptimizedExecutionTests.RunOptimized — the STANDARD-pipeline runner, which is
+        // the right one for CSE (a standard pass) and which spawns Node like any other row here.
+        // ⚠ They are four-backend fixtures, so Node is one leg of four rather than the whole test;
+        // they still belong in this roster, because if the tier stops running they stop proving
+        // the JavaScript half of what they claim.
+        typeof(CseInvalidationExecutionTests),
+        typeof(CseKeyInjectivityExecutionTests),
     };
 
     /// <summary>
@@ -120,7 +129,7 @@ public class JsExecutionTierRosterTests
 
     [Test]
     public void RosterIsPinned()
-        => Assert.That(ExecutionTier, Has.Length.EqualTo(31),
+        => Assert.That(ExecutionTier, Has.Length.EqualTo(33),
             "The execution-tier roster changed. That is fine — update the number — but it must " +
             "be a deliberate edit, not a silent shrink.");
 

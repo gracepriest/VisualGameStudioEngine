@@ -1018,7 +1018,17 @@ public class CseAndPeepholeIrIdentityTests
         string[] Forbidden(Type t) => t.GetMethods(Declared)
             .Select(m => m.Name)
             .Where(n => n is "ReplaceAllUses" or "ReplaceUses" or "ReplaceUsesIn"
-                     or "IsNamedVariable" or "IsTempDestination")
+                     or "IsNamedVariable" or "IsTempDestination"
+                     // ⛔ `CollectNames` — the operand-name walker. CSE's invalidation needs the
+                     // set of names an expression READS, which is exactly what
+                     // CopyPropagationPass already walked for. It was hoisted to
+                     // OptimizationPass rather than copied into CSE, for the same reason as the
+                     // two above and the same reason CLAUDE.md gives for ModuleResolver /
+                     // ModuleTypeWalker: a walker with a missing arm under-reports the read set,
+                     // and an under-reported read set is a merge across a redefinition — the
+                     // defect this file's CSE half is about. Two copies is two things that can
+                     // drift about what "reads" means.
+                     or "CollectNames")
             .Distinct().ToArray();
 
         var shared = typeof(OptimizationPass).GetMethods(Declared).Select(m => m.Name).ToArray();
@@ -1034,6 +1044,10 @@ public class CseAndPeepholeIrIdentityTests
                 "the SHARED walker must still exist under this name, or the pins above are vacuous");
             Assert.That(shared, Does.Contain("IsTempDestination"),
                 "and so must the shared temp-name test");
+            Assert.That(shared, Does.Contain("CollectNames"),
+                "and so must the shared operand-NAME walker, which CSE's invalidation reads its "
+                + "kill set from — without this line the CSE pin above is satisfied by deleting "
+                + "the method from both classes");
         });
     }
 

@@ -243,6 +243,47 @@ time and are `[Category("Integration")]`; the other 57 are in the fast subset). 
 promoted fixtures — `InductionVariableDisabledTests` and `CseAndPeepholeDanglingOperandTests`,
 another 38 tests, ~53 s — before claiming the loop work is gated.
 
+⭐ **CSE invalidation + key-encoding gate (2026-09-22, Linux container, branch
+`claude/jolly-pasteur-l4mpzs`).**
+
+| Run | Result |
+|---|---|
+| Full suite, CSE fix + its fixtures | **195 failed / 6670 passed / 203 skipped of 7068**, no abort marker, 14m21s |
+
+The delta against the ADR-0003 + CSE-fix baseline (195 / 6639 / 203 / 7037) is **+31 total,
++31 passed, +0 failed** — exactly the 31 new tests. Failing names compared **BY NAME**: 170
+distinct methods, **IDENTICAL SET** to the baseline; zero newly failing, zero silently fixed.
+Anchored `^  Failed ` count (195) equals the summary-reported total (195), so the log is not
+truncated and the name list IS the failure set.
+
+⛔ **The first run of this gate found one real new failure** —
+`JsExecutionTierRosterTests.RosterCoversEveryJavaScriptIntegrationFixture` — because a
+four-backend fixture's JavaScript leg spawns Node and both fixtures had to be added to that
+roster. See the entry on it below. The numbers above are the run AFTER that fix.
+
+Run this fixture whenever `CommonSubexpressionEliminationPass`, `OptimizationPass.CollectNames` or
+`ExpressionKey` changes — it is the only thing in the suite that can see either defect:
+
+```
+dotnet test VisualGameStudio.Tests/VisualGameStudio.Tests.csproj -c Release --no-build \
+  --filter "FullyQualifiedName~CseInvalidation|FullyQualifiedName~CseKey|FullyQualifiedName~CseSampleCorpus"
+```
+
+**31 tests, ~40 s.** Nine are `[Category("Integration")]` (the four-backend execution rows); the
+other 22 are structural or unit and run in the fast subset.
+
+⭐ **MEASURED over a 12-mutant sweep: all 12 are killed from the FAST SUBSET ALONE** — the
+structural `Decision_*` battery plus the two unit fixtures cover every one, and four mutants
+(M7 default arm, M9 result type, M10 operation, M12 case-folding) are killable ONLY there, because
+no reachable program distinguishes them by value. ⛔ **That is not a reason to gate on the fast
+subset.** The structural rows pin what the pass DECIDES; only the nine Integration rows prove the
+programs it emits are right, and a merge decision can be correct while the lowering is not. Run
+both.
+
+⛔ **Add `CseAndPeepholeDanglingOperandTests` to any run of the above** — it carries the
+`CollectNames` shared-walker pin (`NeitherPassCarriesItsOwnOperandWalkerOrTempNameTest`), and
+without it a repair that gives CSE a private operand-name walker passes everything else.
+
 ---
 
 ## Open work
@@ -501,6 +542,160 @@ structural and the value fixture cannot drift about what a shape is.
   the loss is real. D2's terms for re-registering: one pass at a time, each behind its own commit,
   and only once (a) the `IsValueInvariant` class of defect is closed for it and (b) a differential
   harness runs the 13 shapes across four backends comparing VALUES.
+
+### ⭐ 2026-09-22 — the CSE invalidation + key-encoding fix, and what its fixtures could NOT cover
+
+**⛔⛔ THE GENERAL LESSON, and the reason this section is long: the ORACLE CAN BE THE LEG THAT
+PROVES NOTHING.** ADR-0001 records that the C# backend inlines aggressively. This family is where
+that stops being a footnote. Measured per leg, at the defective tree and at the fixed tree:
+
+| Assertion family | C++ | JavaScript | MSIL | C# | Why |
+|---|---|---|---|---|---|
+| **Redefinition** (merge across a write to an operand) | ✅ kills | ✅ kills | ✅ kills | ⛔ **proves nothing** | C# re-emits the binop's expression TEXT (`b = p + q;`) instead of honouring the `IRAssignment` the merge wrote, so it printed the CORRECT answer with the defect fully present |
+| **ByRef** redefinition | ✅ kills | ⛔ **refuses** (BL7002) | ✅ kills | ⛔ proves nothing | JS has no reference parameters and rejects the program outright |
+| **Key injectivity** (two UNRELATED expressions merged) | ✅ kills | ✅ kills | ✅ kills | ⭐ **kills** | the merged expressions differ in TEXT, so inlining faithfully reproduces the WRONG one |
+| **Case-insensitive** redefinition | ⛔ **will not compile** | ⛔ **same wrong number, different cause** | ✅ kills | ⛔ proves nothing | see the case-folding entry below |
+| **"the merge that must STILL happen"** | ⛔ | ⛔ | ⛔ | ⛔ | over-killing produces NO wrong answer on ANY backend — it silently deletes the optimization. Structural only: `ModificationCount` from a SINGLE `pass.Run` |
+
+⚠ **`ModificationCount` after `OptimizationPipeline.Run` is ALWAYS 0** — the pipeline iterates to a
+fixed point, so the last run of every pass is by definition the one that changed nothing. A
+structural count must come from a bare `pass.Run(module)`.
+
+⭐ **C#'s inlining rescues a bad merge ONLY when the two expressions are textually identical.** It
+is not general immunity, and the key-injectivity row above is the proof.
+
+#### ⛔ A LIVE WRONG ANSWER ON ALL FOUR BACKENDS THAT IS **NOT** CSE AND IS **NOT** FIXED
+
+A lambda capturing a local **by reference**, with `CopyPropagationPass` + `ConstantFoldingPass`
+folding the expression on both sides of a call that writes the captured variable:
+
+```basic
+Sub Main()
+ Dim n As Integer = 1
+ Dim q As Integer = 2
+ Dim bump = Sub() n = n + 100
+ Dim a As Integer = n + q
+ bump()
+ Dim b As Integer = n + q      ' should be 103, prints 3
+End Sub
+```
+
+Measured on this branch: **C#, C++ and JavaScript all print `a=3 b=3`** where `b` should be 103.
+(MSIL does not even build it — "Reference to undefined class 'Action'".)
+
+⚠ **TWO INDEPENDENT ROUTES, both measured, and the CSE fix closes NEITHER:**
+
+1. **It is not CSE's to fix.** Re-run with CSE REMOVED from the pipeline (ConstantFolding +
+   CopyPropagation + DeadCodeElimination + StrengthReduction + Peephole only): still `a=3 b=3`.
+   `CopyPropagation` and `ConstantFolding` fold the expression on both sides of `bump()` on their
+   own, so repairing CSE cannot help.
+2. ⛔ **But CSE DOES also merge here — 1 merge, measured** — so it is a second route to the same
+   wrong answer, and the repair in this change does NOT close it. `ReadsCallVisible` cannot: a
+   local captured by reference has `IsGlobal=false` and is indistinguishable from any other local
+   at that point. (An earlier draft of this entry said "CSE is not involved". That is wrong, and
+   the count is where it was caught.)
+
+**Closing it needs a capture set on `IRFunction`, which both the folding passes and
+`ReadsCallVisible` would consult. It needs its own task.**
+
+#### ⛔ `Samples/*` DO NOT COMPILE — and the "11 merges in shipping code" number rests on that
+
+Measured through the CLI at this commit:
+
+- `Samples/Platformer/Main.bas` — **2 SEMANTIC errors** (line 276, "cannot convert from 'Double' to
+  'Single'", twice). The PARSE is clean, so its IR is faithful; `TILE_SIZE` really is
+  `IsGlobal=true, IsConst=true` and its 6 merges really do depend on the `Const` exemption.
+- `Samples/SpaceShooter/Main.bas` — **PARSE errors**: `Const SCREEN_WIDTH = 800` has no `As`
+  clause. The parser records the error and synchronizes past the whole `Const` block, so those
+  identifiers reach the IR as `IsGlobal=false, IsConst=false` — measured. **SpaceShooter's 5 merges
+  read plain locals and say NOTHING about the `Const` exemption**, contrary to how the 11 were
+  described.
+- `Samples/Pong/Main.bas` — parse errors too, and then **`IRBuilder` THROWS** on it ("the
+  module-level variable 'ballVY' has an initializer that cannot be computed at compile time"). It
+  has no CSE count at all. "The repo's sample programs" is **two** programs, not three.
+
+⚠ The counts 6 and 5 are real properties of the IR, but of IR built by **ignoring the front end's
+verdict** — which is exactly what `JsTestSupport.BuildModule` refuses to do, on purpose.
+`CseSampleCorpusTests` pins both the counts AND the current front-end verdict, so fixing a sample
+fails loudly and forces a re-measure instead of drifting. **The robust form of that contract item
+is `CseInvalidationDecisionTests`' `ConstGlobalAcrossACall` / `ParametersAcrossACall` rows** — a
+self-contained program that compiles. Prefer those.
+
+#### ⛔ The C++ and JavaScript backends DO NOT CASE-FOLD IDENTIFIERS
+
+BasicLang is case-insensitive; the front end accepts `P = Seed(100)` as a write to `p` and the IR
+records `IRCall("P")` alongside `IRVariable("p")`. Measured on that program:
+
+- **C++** emits `P = Seed(100);` against a declared `p` → `error: use of undeclared identifier 'P'`.
+- **JavaScript** emits a **separate** `P` and prints `b=4`, leaving `p` untouched.
+- MSIL and C# print `b=106`, correctly.
+
+Both are live pre-existing backend defects, neither is CSE's, and neither has a fixture. ⚠ The JS
+one is the nastier: `b=4` is the SAME wrong number CSE's defect produced, so a case-differing shape
+cannot attribute a JS failure to either cause. That is why
+`Decision_CaseDifferingRedefinition_DoesNotMerge` is asserted **structurally only**.
+
+#### ⛔ A TRAP THE MUTATION SWEEP CAUGHT: `p = p + 10` does NOT test kill-ORDERING
+
+The CSE repair orders its invalidation step **use → record → kill**, and the shape everyone
+(including the change's own plan) believed pinned that order is the self-redefinition
+`a = p + q` / `p = p + 10` / `b = p + q`. **MEASURED with a kill-before-lookup mutant applied: that
+program still merges nothing and still prints the right answer on all four backends.** Killing
+first does leave the self-redefining binop's own stale record alive — but nothing in the block ever
+LOOKS THAT RECORD UP, so the staleness is unobservable.
+
+The shape that actually distinguishes the two orders needs the record to be **re-used**:
+
+```basic
+Dim a As Integer = p + q
+p = p + 10          ' records Add|p|const_10 against a value computed from the OLD p
+Dim c As Integer = p + 10   ' ← matches that record. Must be 21, not 11.
+```
+
+Mutant applied: 1 merge instead of 0, and C++/JavaScript/MSIL print `c=11`. (C# prints 21 —
+vacuous, as everywhere in this family.) Both shapes are kept in the fixture, and the weaker one's
+docstring says in so many words that it does not test the ordering, so the next author does not
+re-derive the wrong conclusion. **General form: "the instruction is stale" is not the property —
+"a stale record is later MATCHED" is. A staleness no lookup reaches is invisible to every oracle.**
+
+#### ⚠ A four-backend fixture whose JS leg spawns Node MUST be added to the JS execution-tier roster
+
+`JsExecutionTierRosterTests.RosterCoversEveryJavaScriptIntegrationFixture` discovers any
+`[Category("Integration")]` fixture in the `VisualGameStudio.Tests.Compiler` namespace whose name
+ends `ExecutionTests` (or starts `JavaScript`/`Js`) and fails if it is not in the explicit roster.
+**A four-backend fixture trips this**, because one of its four legs is Node — and that is correct:
+if the tier stops running, the fixture stops proving its JavaScript claim. Registering it means
+two edits, and the second is easy to miss:
+
+1. add `typeof(YourFixture)` to `ExecutionTier`, and
+2. bump the literal in `RosterIsPinned` (31 → 33 here).
+
+⛔ Do **not** reach for the `NotJavaScriptExecution` deny-list to silence it — that list is only
+for fixtures that genuinely never call into Node. Caught here by the first full-suite run, as the
+single new failure against the 170-name baseline.
+
+#### Unresolved survey findings carried forward
+
+- ⚠ **`ConstantFoldingPass:571` and `WideningCastFoldingPass.cs:415` call `ReplaceUses`
+  BLOCK-scoped** where three other passes are function-scoped — the exact narrowing `67782af`
+  widened for CSE. **No reaching program was found**, so this is a suspicion, not a defect.
+  ⛔ `WideningCastFoldingPass` runs from `IRBuilder.cs:1165` — **outside the pipeline, on every
+  build regardless of flags** — so if it is reachable it is reachable everywhere.
+- `DeadCodeEliminationPass`'s instruction-removal arm is **effectively dead**: its guard is
+  `!v.Name.StartsWith("_tmp")` and temps are spelled `t0`/`t1`. Relates to existing **#118**.
+- ⚠ **Two arms of the CSE repair are unreachable from any BasicLang program**, and are pinned by
+  direct unit assertions in `CseKeyEncodingUnitTests` rather than by a program, because no program
+  can express them:
+  - the **result type in the key** — within one basic block a name denotes one variable, so
+    operation plus operand names already determines the result type, and `Dim d As Double = p + q`
+    lowers to an *Integer* `IRBinaryOp` plus an `IRCast` rather than a Double one;
+  - the **conservative `default:` arm of `ReadsCallVisible`** — every non-variable operand lowers to
+    its own instruction carrying a FRESHLY MINTED temp name (`IRFieldAccess("t1")` vs
+    `IRFieldAccess("t3")` for two reads of `c.V`), so an entry recorded through that arm can never
+    be matched by a second lookup and the arm can never change a decision.
+
+  Both pins are DEFENSIVE. They are recorded here so the next author knows they are not covered by
+  any end-to-end shape and does not go looking for one.
 
 ### ⛔ Two measurement traps from this work, recorded so nobody pays twice
 
