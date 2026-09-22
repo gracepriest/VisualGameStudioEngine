@@ -563,6 +563,41 @@ never be `CS1503`, but the answer is not "unrelated": it is a second float defec
 quietly re-baselining around someone else's regression, which is how a known-bad build becomes the
 new normal. It is now blocked on a DECISION rather than on a measurement.
 
+### ⛔⛔ BEFORE MERGING MASTER: you lose 3 inherited failures and may GAIN 6
+
+`origin/master` moved to **`9e76128e`** (PR #66, squash) on 2026-09-21. **It FIXES the float→int game-template
+break**, so 3 of this branch's 4 inherited template failures should go green on merge. The 4th (the C++
+integral-float-literal defect, chip `task_0283d04b`) is still unfixed.
+
+⛔ **But master's Integration tier carries SIX failing rows that are in NOBODY's baseline list**, measured on
+pristine `7ce1200` with no feature commits present (6 failed / 0 passed / 6 total):
+`AClassUsingALaterClassMember_IsAnOrderingGapOnCpp_Pinned` · `AGenericFreeFunction_IsAGapOnCpp_EvenFromMain_Pinned` ·
+`APropertyGetter_IsNotAMemberOnCpp_Pinned` · `MeAsAnArgumentToAModuleProcedure_IsAGapOnCpp_Pinned` ·
+`TheCombinedEmission_DeclaresPrototypesAndGlobalsBeforeTheClasses_AndDefinesGlobalsAfter` ·
+`TheSplitHeader_DeclaresPrototypesAndGlobalsBeforeTheClasses_AndDefinesGlobalsInlineAfter`.
+**None of them is in this branch's 8-row baseline**, and the 24a full suite (10 failures, all accounted for)
+did not show them — so they arrive WITH master. Reconcile against the 8 BEFORE the merge, not inside a
+2h29m gate. ⚠ *"Master was full-suite green"* (the `f54416b` row below) is 20+ commits stale and no longer true.
+⚠ `APropertyGetter_IsNotAMemberOnCpp_Pinned` pins the clang/gcc wording *"no member named"* and now receives
+MSVC's `error C2039: 'Doubled': is not a member of 'Box'` — **exactly what the MSVC-only directive does to a
+diagnostic-TEXT pin.** Two others are the tests for #59, which is in master.
+
+⛔⛔ **AND THE `vswhere` STDERR LINE IS NOT HARMLESS NOISE — it CORRUPTS THE LINKER PATH.** One of those six
+prints `'vswhere.exe' is not recognized`. Root cause is already documented in this repo at
+`BasicLang/Compiler/CodeGen/Net/NetShimPublisher.cs:46-57`: the ILCompiler targets reach MSVC through
+`findvcvarsall.bat` → VS's `VsDevCmd.bat`, which `pushd`s into the VS Installer directory and invokes a **bare**
+`vswhere.exe`, relying on cmd resolving executables from the CURRENT DIRECTORY. Under a shell that sets
+`NoDefaultCurrentDirectoryInExePath` (hardened environments do) that probe fails, and **`Exec`'s
+`ConsoleToMSBuild` captures the error text, which the targets then `Split('#')` into the linker path,
+corrupting `CppLinker`.**
+⭐ **MEASURED on this machine 2026-09-21: `vswhere.exe` is NOT on PATH, though it exists at
+`C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe`** — i.e. the precondition holds here.
+Every IN-REPO caller uses the full path (`BasicLang.VisualStudio/build.ps1:37`, both agent scripts); the bare
+invocation is Microsoft's own batch file. **The mitigation — appending the Installer dir to the child PATH —
+exists ONLY in `NetShimPublisher`.** If a failing row reaches MSVC through `CppProjectBuilder`/`CppToolchain`
+instead, it does not have that protection. **Check which path those six take before diagnosing them as codegen
+bugs** — "fix it in the compiler" would be the wrong repair for a PATH-resolution fault.
+
 ### Current gates on this branch
 
 | Gate | Result |
