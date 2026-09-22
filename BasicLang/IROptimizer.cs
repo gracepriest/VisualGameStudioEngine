@@ -90,6 +90,37 @@ namespace BasicLang.Compiler.IR.Optimization
                 ReplaceUsesIn(inst, oldValue, newValue);
         }
 
+        /// <summary>
+        /// True when <paramref name="name"/> is an SSA temp minted by
+        /// <see cref="IRFunction.GetNextTempName"/> (<c>t0</c>, <c>t1</c>, …) or one of the
+        /// historical <c>_tmp</c>/<c>_t0</c> spellings, rather than a name the USER wrote.
+        ///
+        /// <para><b>Why a pass that rewrites a value needs this.</b> The two destinations behave
+        /// oppositely when a rewrite replaces an <see cref="IRValue"/> with an
+        /// <see cref="IRAssignment"/>. A user-named destination is a declared local, so the
+        /// assignment must STAY and consumers are re-pointed at its target. A temp is declared
+        /// ONLY because some <c>IRValue</c> instruction in the block carries that name — an
+        /// <c>IRAssignment</c> is not an <c>IRValue</c>, so swapping one in DELETES the
+        /// declaration while leaving the write behind. MEASURED on <c>Show(a + 0)</c>, whose
+        /// peephole rewrite emitted <c>t0 = a;</c> against an undeclared <c>t0</c>: CS0103 on C#,
+        /// "use of undeclared identifier" on C++, ReferenceError on JavaScript. For a temp the
+        /// definition must therefore be REMOVED and its consumers forwarded to the value itself.</para>
+        ///
+        /// <para>⚠ <see cref="ConstantFoldingPass"/> keeps its own copy of this test deliberately;
+        /// see the note there. It is not a second implementation of this one — it answers
+        /// differently for a user variable spelled <c>T5</c>, and reconciling the two is a
+        /// behaviour change that has to be measured on its own rather than smuggled into a fix
+        /// for something else.</para>
+        /// </summary>
+        protected static bool IsTempDestination(string name)
+        {
+            if (string.IsNullOrEmpty(name)) return true;
+            if (name.StartsWith("_tmp", StringComparison.OrdinalIgnoreCase)) return true;
+            if (name.StartsWith("_t", StringComparison.OrdinalIgnoreCase) && name.Length > 2 && char.IsDigit(name[2])) return true;
+            if (name.Length >= 2 && name[0] == 't' && char.IsDigit(name[1])) return true;
+            return false;
+        }
+
         private static void ReplaceInList(List<IRValue> operands, IRValue oldValue, IRValue newValue)
         {
             if (operands == null) return;
@@ -198,6 +229,18 @@ namespace BasicLang.Compiler.IR.Optimization
                     break;
                 case IRTupleElement tupleElement:
                     if (ReferenceEquals(tupleElement.Tuple, oldValue)) tupleElement.Tuple = newValue;
+                    break;
+                case IRPhi phi:
+                    // The only operand-bearing node this walk was missing. Nothing in the
+                    // pipeline BUILDS an IRPhi today (IRBuilder emits none, and no pass
+                    // introduces one), so no program measured here reaches this arm — it is
+                    // here because a walker that is total except for one node kind gives a
+                    // WRONG answer the day that kind appears, not an absent feature. The
+                    // operand list is a value tuple, so it is rewritten by index.
+                    if (phi.Operands != null)
+                        for (int i = 0; i < phi.Operands.Count; i++)
+                            if (ReferenceEquals(phi.Operands[i].Value, oldValue))
+                                phi.Operands[i] = (newValue, phi.Operands[i].Block);
                     break;
             }
         }
@@ -427,6 +470,15 @@ namespace BasicLang.Compiler.IR.Optimization
 
         /// <summary>
         /// Check if a name represents a real variable (not a temp)
+        ///
+        /// <para>⚠ DELIBERATELY NOT <see cref="OptimizationPass.IsTempDestination"/>, which CSE and
+        /// the peephole pass share. This copy's <c>t</c> test is case-INSENSITIVE, so it calls a
+        /// user variable spelled <c>T5</c> a temp and folds away the assignment to it; the shared
+        /// one does not. Only <c>t{N}</c> is ever minted by
+        /// <see cref="IRFunction.GetNextTempName"/>, so the two agree on everything the compiler
+        /// itself produces and the difference is reachable only from user source. Reconciling them
+        /// is a behaviour change to constant folding that has to be measured on its own, not
+        /// carried along by a fix to a different pass.</para>
         /// </summary>
         private bool IsNamedVariable(string name)
         {
@@ -1173,14 +1225,14 @@ namespace BasicLang.Compiler.IR.Optimization
                 
                 foreach (var block in function.Blocks)
                 {
-                    EliminateCommonSubexpressions(block);
+                    EliminateCommonSubexpressions(function, block);
                 }
             }
-            
+
             return ModificationCount > 0;
         }
-        
-        private void EliminateCommonSubexpressions(BasicBlock block)
+
+        private void EliminateCommonSubexpressions(IRFunction function, BasicBlock block)
         {
             var expressions = new Dictionary<string, IRValue>();
 
@@ -1199,17 +1251,34 @@ namespace BasicLang.Compiler.IR.Optimization
 
                         // If the current instruction is a named destination (actual variable, not a temp),
                         // we should NOT remove it. Instead, convert to an assignment.
-                        if (IsNamedVariable(binaryOp.Name))
+                        //
+                        // ⚠ `NamedAfterVariable` is the second half of that question and was missing
+                        // here too, for the same reason and with the same consequence as in
+                        // PeepholeOptimizationPass.ApplyRewrite: the name test is a test on SPELLING,
+                        // and a user variable spelled `t0` was therefore treated as a temp and its
+                        // write REMOVED. MEASURED on a member named `t0` assigned a duplicated
+                        // expression — the field kept its old value on all four backends. This is a
+                        // PRE-EXISTING defect of the pass, not one introduced by pointing it at the
+                        // shared walker; it is fixed here because it is the same predicate on the
+                        // same line and leaving it would mean shipping a known silent miscompile.
+                        if (!IsTempDestination(binaryOp.Name) || binaryOp.NamedAfterVariable)
                         {
                             // Convert to assignment: target = existingResult
-                            var targetVar = new IRVariable(binaryOp.Name, binaryOp.Type);
+                            var targetVar = InheritIdentity(new IRVariable(binaryOp.Name, binaryOp.Type), binaryOp);
                             block.Instructions[i] = new IRAssignment(targetVar, replacement);
+                            // The binop OBJECT is gone from the stream even though its name lives on
+                            // in targetVar, so its consumers are re-pointed here too. They would
+                            // currently resolve by NAME COINCIDENCE — a declared user variable spelled
+                            // the same — which is precisely the accident AlgebraicSimplificationPass
+                            // documents at its own ReplaceUses call and which fails the moment a
+                            // backend keys a temp by object identity instead.
+                            ReplaceUses(function.Blocks.SelectMany(b => b.Instructions), binaryOp, targetVar);
                             ReportModification();
                         }
                         else
                         {
                             // Temp variable - safe to remove and replace uses
-                            ReplaceAllUses(block, binaryOp, replacement);
+                            ReplaceUses(function.Blocks.SelectMany(b => b.Instructions), binaryOp, replacement);
                             block.Instructions.RemoveAt(i);
                             i--;
                             ReportModification();
@@ -1223,46 +1292,32 @@ namespace BasicLang.Compiler.IR.Optimization
             }
         }
 
-        // Check if a name represents a real variable (not a temp)
-        private bool IsNamedVariable(string name)
-        {
-            if (string.IsNullOrEmpty(name)) return false;
-            // Temp names typically start with _tmp, _t, or are like "t0", "t1", etc.
-            if (name.StartsWith("_tmp", StringComparison.OrdinalIgnoreCase)) return false;
-            if (name.StartsWith("_t", StringComparison.OrdinalIgnoreCase) && name.Length > 2 && char.IsDigit(name[2])) return false;
-            // Also check for temp patterns like "t0", "t1"
-            if (name.Length >= 2 && name[0] == 't' && char.IsDigit(name[1])) return false;
-            return true;
-        }
-        
-        private void ReplaceAllUses(BasicBlock block, IRValue oldValue, IRValue newValue)
-        {
-            foreach (var inst in block.Instructions)
-            {
-                if (inst is IRBinaryOp binaryOp)
-                {
-                    if (ReferenceEquals(binaryOp.Left, oldValue))
-                        binaryOp.Left = newValue;
-                    if (ReferenceEquals(binaryOp.Right, oldValue))
-                        binaryOp.Right = newValue;
-                }
-                else if (inst is IRUnaryOp unaryOp)
-                {
-                    if (ReferenceEquals(unaryOp.Operand, oldValue))
-                        unaryOp.Operand = newValue;
-                }
-                else if (inst is IRStore store)
-                {
-                    if (ReferenceEquals(store.Value, oldValue))
-                        store.Value = newValue;
-                }
-                else if (inst is IRAssignment assignment)
-                {
-                    if (ReferenceEquals(assignment.Value, oldValue))
-                        assignment.Value = newValue;
-                }
-            }
-        }
+        // ⛔ A PRIVATE FOUR-ARM `ReplaceAllUses` USED TO LIVE HERE, and a private copy of the
+        // temp-name test beside it. Both are gone: the base class already owns one TOTAL operand
+        // walker (OptimizationPass.ReplaceUses) and one temp-name test (IsTempDestination), and
+        // ConstantFoldingPass was pointed at the walker for exactly this reason. Two incomplete
+        // walkers in one file is the ModuleResolver/ModuleTypeWalker rule in CLAUDE.md being
+        // broken — the shared logic changes once, not per consumer.
+        //
+        // The copy rewrote IRBinaryOp.Left/Right, IRUnaryOp.Operand, IRStore.Value and
+        // IRAssignment.Value — FOUR of the twenty-six consumer kinds. Every other kind kept
+        // pointing at the instruction removed on the line below, and the backends then rendered
+        // an identifier that is never declared. MEASURED on this four-line program, with NO
+        // optimizer flag (CSE is in AddStandardPasses):
+        //     Sub Run(a As Integer)
+        //      Show(a + 7)
+        //      Show(a + 7)   ' merged; this argument kept the REMOVED node
+        //     End Sub
+        // C++ emitted `t0 = a + 7; Show(t0); Show(t1);` and refused to compile ("use of
+        // undeclared identifier 't1'"); MSIL assembled and threw InvalidProgramException at run
+        // time. C# and JavaScript were RIGHT BY LUCK — both re-materialise the orphan's
+        // expression text inline (`Show(a + 7)`), which happens to be correct here and is the
+        // same inline-always policy ADR-0001 constrains for the opposite reason.
+        //
+        // Missing arms confirmed live by measurement, one program each: IRCall.Arguments,
+        // IRReturn.Value, IRCompare.Left/Right, IRCast.Value, IRNewObject.Arguments and
+        // IRInstanceMethodCall.Arguments. IRStore.Value was covered, which is why `arr(0) = a + b`
+        // was green and looked like evidence the defect was narrow.
     }
     
     /// <summary>
@@ -2084,14 +2139,74 @@ namespace BasicLang.Compiler.IR.Optimization
 
                 foreach (var block in function.Blocks)
                 {
-                    OptimizeBlock(block);
+                    OptimizeBlock(function, block);
                 }
             }
 
             return ModificationCount > 0;
         }
 
-        private void OptimizeBlock(BasicBlock block)
+        /// <summary>
+        /// Installs <paramref name="replacement"/> in place of <paramref name="original"/> and
+        /// re-points every consumer, which is the half this pass used to omit entirely.
+        ///
+        /// <para>Returns true when the instruction was REMOVED rather than swapped, so the caller
+        /// can step its index back.</para>
+        ///
+        /// <para>Two cases, and they behave oppositely — see <see cref="IsTempDestination"/>:</para>
+        /// <list type="bullet">
+        /// <item>A USER-NAMED destination is a declared local. The assignment stays, and consumers
+        /// are re-pointed at its target, matching what StrengthReductionPass and
+        /// AlgebraicSimplificationPass already do.</item>
+        /// <item>A TEMP destination is declared only because an <c>IRValue</c> carried its name.
+        /// Swapping in an <c>IRAssignment</c> takes the declaration away and leaves the write, so
+        /// the definition is dropped and consumers are forwarded to the VALUE. The discarded
+        /// operand's own defining instruction stays in the block, so a call on the side that an
+        /// arm like <c>x * 0 -&gt; 0</c> discards is still evaluated.</item>
+        /// </list>
+        ///
+        /// <para>Scoped to the whole FUNCTION, not this block, for the reason the other two passes
+        /// state: a use may live in a later block.</para>
+        /// </summary>
+        private bool ApplyRewrite(IRFunction function, BasicBlock block, int index, IRValue original, IRInstruction replacement)
+        {
+            var stream = function.Blocks.SelectMany(b => b.Instructions);
+
+            // ⛔ BOTH conjuncts, and the second is not belt-and-braces — it is a MEASURED
+            // miscompile. `IsTempDestination` is a test on the SPELLING of the name, and a user
+            // may spell a variable `t0`; CSharpFieldAssignmentTests already has a fixture for a
+            // MEMBER named `t0`. On the name test alone, `t0 = n + 0` inside
+            // `Class Timer : Public t0 As Integer` dropped the field write and emitted an EMPTY
+            // method body — `Set1(5)` then printed 0 instead of 5, silently, on ALL FOUR backends.
+            // `NamedAfterVariable` is the flag IRBuilder sets when it actually renames a value
+            // after a variable, which is what the backends themselves consult to decide a value
+            // IS a store; a genuine SSA temp never carries it. Keeping the assignment when EITHER
+            // test says "real variable" costs only a missed rewrite; dropping it costs the write.
+            if (replacement is IRAssignment assignment
+                && IsTempDestination(original.Name)
+                && !original.NamedAfterVariable)
+            {
+                ReplaceUses(stream, original, assignment.Value);
+                block.Instructions.RemoveAt(index);
+                ReportModification();
+                return true;
+            }
+
+            if (replacement is IRAssignment named)
+                InheritIdentity(named.Target, original);
+            else if (replacement is IRValue value)
+                InheritIdentity(value, original);
+
+            var definition = replacement is IRAssignment a ? (IRValue)a.Target : replacement as IRValue;
+            if (definition != null)
+                ReplaceUses(stream, original, definition);
+
+            block.Instructions[index] = replacement;
+            ReportModification();
+            return false;
+        }
+
+        private void OptimizeBlock(IRFunction function, BasicBlock block)
         {
             bool changed;
             do
@@ -2108,9 +2223,24 @@ namespace BasicLang.Compiler.IR.Optimization
                         var replacement = OptimizeBinaryOp(binOp);
                         if (replacement != null && replacement != inst)
                         {
-                            block.Instructions[i] = replacement;
+                            // ⛔ THE MISSING HALF, and this pass is in AddStandardPasses — it runs
+                            // with NO flag. It swapped the instruction and never re-pointed the
+                            // CONSUMERS, which the base class's ReplaceUses doc says a pass doing so
+                            // MUST; StrengthReductionPass and AlgebraicSimplificationPass both call
+                            // it, and only this one did not. Worse than an orphan alone: every arm
+                            // here returns an IRAssignment, which is NOT an IRValue, so a temp
+                            // destination also loses its DECLARATION.
+                            //
+                            // MEASURED on `Show(a + 0)` — six lines, no flags — where C# emitted
+                            //     t0 = a;            // CS0103: 't0' does not exist
+                            //     Show(a + 0);       // orphan re-materialised the whole expression
+                            // C++ gave "use of undeclared identifier 't0'" and JavaScript threw
+                            // ReferenceError. MSIL was right BY LUCK (it declares locals from its
+                            // own slot table, not from the IRValue stream). `Show(Tag() * 0)` broke
+                            // the same way AND called Tag() twice, because the orphan re-rendered
+                            // its operand tree.
+                            if (ApplyRewrite(function, block, i, binOp, replacement)) i--;
                             changed = true;
-                            ReportModification();
                         }
                     }
 
@@ -2129,6 +2259,9 @@ namespace BasicLang.Compiler.IR.Optimization
                     }
 
                     // Pattern: Double negation --x -> x
+                    // Same missing half as the binary arm above, and just as live: MEASURED on
+                    // `Show(-(-a))`, which gave CS0103 't1' on C#, "use of undeclared identifier
+                    // 't1'" on C++ and a ReferenceError on JavaScript.
                     if (inst is IRUnaryOp unary && unary.Operation == UnaryOpKind.Neg)
                     {
                         if (unary.Operand is IRUnaryOp innerUnary && innerUnary.Operation == UnaryOpKind.Neg)
@@ -2136,13 +2269,13 @@ namespace BasicLang.Compiler.IR.Optimization
                             var newAssign = new IRAssignment(
                                 new IRVariable(unary.Name, unary.Type),
                                 innerUnary.Operand);
-                            block.Instructions[i] = newAssign;
+                            if (ApplyRewrite(function, block, i, unary, newAssign)) i--;
                             changed = true;
-                            ReportModification();
                         }
                     }
 
                     // Pattern: Boolean not not -> identity
+                    // MEASURED on `ShowB(Not (Not a))`: the same three failures.
                     if (inst is IRUnaryOp notOp && notOp.Operation == UnaryOpKind.Not)
                     {
                         if (notOp.Operand is IRUnaryOp innerNot && innerNot.Operation == UnaryOpKind.Not)
@@ -2150,9 +2283,8 @@ namespace BasicLang.Compiler.IR.Optimization
                             var newAssign = new IRAssignment(
                                 new IRVariable(notOp.Name, notOp.Type),
                                 innerNot.Operand);
-                            block.Instructions[i] = newAssign;
+                            if (ApplyRewrite(function, block, i, notOp, newAssign)) i--;
                             changed = true;
-                            ReportModification();
                         }
                     }
                 }

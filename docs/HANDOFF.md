@@ -223,6 +223,30 @@ compile). **Not fixed. Each is a real shape with a real number, not a guess.**
   including one with no locals at all. Auto-properties work. This caps the property-accessor
   fixtures at THREE backends, not four.
 
+### ⭐ 2026-09-22 — found while fixing the optimizer's dangling-operand defects
+
+- ⛔ **`FourBackends.RunsOnEveryBackend` has a HOLE for optimizer work: its JavaScript leg is
+  `JsTestSupport.Compile`, the NON-OPTIMIZING path.** For any defect that lives in an
+  `IROptimizer` pass, that leg is green no matter what the optimizer does. Use
+  `JavaScriptOptimizedExecutionTests.RunOptimized` instead. This is a general hole in a shared
+  harness, not specific to one family — any past "all four backends agree" claim about optimizer
+  behaviour was only ever three.
+- ⛔ **`CSharpBackend.GetOperands` is NOT total in SEVEN node kinds**, pinned by equality in
+  `OperandWalkerTotalityTests`: `IRArrayStore` (Array/Index/Value), `IRFieldStore` (Object/Value),
+  `IRForEach.Collection`, `IRSwitch.Cases[].Value`, `IRThrow.Exception`, `IRYield.Value`, `IRPhi`,
+  plus `IRVariable.DefaultValue`/`.InitialValue`. Only `IRForEach.Collection` was previously
+  written down (ADR-0001's brief). **Each is a silently-zero use count — an ADR-0001 E1 hazard.**
+  The test pins the gap SET, so closing one member fails the test and forces the list to shrink.
+- `OptimizationPass.ReplaceUsesIn` is total except three slots, all named in that test:
+  `IRAssignment.Target` (a definition, deliberately excluded) and
+  `IRVariable.DefaultValue`/`.InitialValue` (declaration data on a leaf, covered by NEITHER walker).
+- ⛔ **`InductionVariablePass` leaves a dangling operand too** — the same omission as CSE and
+  Peephole, a third pass, aggressive-only. Pinned as a KNOWN-DEFECT test so contract item 1's scope
+  (`AddStandardPasses`, not the aggressive pipeline) is visible in the suite. See the task list.
+- ⚠ A peephole mutant that drops the `RemoveAt` does not produce a wrong answer — it makes the
+  **compiler hang** (the `do/while(changed)` fixed point never terminates, 100% CPU to timeout).
+  A mutation sweep over optimizer passes needs a timeout classification, not just pass/fail.
+
 ### Traps this characterization cost us, recorded so nobody pays twice
 
 - ⛔ **Constant folding silently destroys control shapes.** `l(0) = x + 1` folds to `l[0] = 5;` and
