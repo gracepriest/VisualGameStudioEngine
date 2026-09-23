@@ -1173,14 +1173,14 @@ namespace BasicLang.Compiler.IR.Optimization
                 
                 foreach (var block in function.Blocks)
                 {
-                    EliminateCommonSubexpressions(block);
+                    EliminateCommonSubexpressions(function, block);
                 }
             }
-            
+
             return ModificationCount > 0;
         }
-        
-        private void EliminateCommonSubexpressions(BasicBlock block)
+
+        private void EliminateCommonSubexpressions(IRFunction function, BasicBlock block)
         {
             var expressions = new Dictionary<string, IRValue>();
 
@@ -1208,8 +1208,15 @@ namespace BasicLang.Compiler.IR.Optimization
                         }
                         else
                         {
-                            // Temp variable - safe to remove and replace uses
-                            ReplaceAllUses(block, binaryOp, replacement);
+                            // Temp variable - safe to remove and replace uses.
+                            // ⛔ Through the base ReplaceUses, over the whole FUNCTION. This pass
+                            // had its own copy that knew only binary/unary ops, stores and
+                            // assignments, so a duplicate consumed by a compare, a call argument or
+                            // a Return kept the REMOVED node and rendered an undeclared temp.
+                            // MEASURED on master: `ShowI(n + 1)` then `If n + 1 = 5` / `Return n + 1`
+                            // emitted `t2 = t4 == 5;` and `return t5;` on C++ (JavaScript survived
+                            // only by re-rendering the expression inline).
+                            ReplaceUses(function.Blocks.SelectMany(b => b.Instructions), binaryOp, replacement);
                             block.Instructions.RemoveAt(i);
                             i--;
                             ReportModification();
@@ -1233,35 +1240,6 @@ namespace BasicLang.Compiler.IR.Optimization
             // Also check for temp patterns like "t0", "t1"
             if (name.Length >= 2 && name[0] == 't' && char.IsDigit(name[1])) return false;
             return true;
-        }
-        
-        private void ReplaceAllUses(BasicBlock block, IRValue oldValue, IRValue newValue)
-        {
-            foreach (var inst in block.Instructions)
-            {
-                if (inst is IRBinaryOp binaryOp)
-                {
-                    if (ReferenceEquals(binaryOp.Left, oldValue))
-                        binaryOp.Left = newValue;
-                    if (ReferenceEquals(binaryOp.Right, oldValue))
-                        binaryOp.Right = newValue;
-                }
-                else if (inst is IRUnaryOp unaryOp)
-                {
-                    if (ReferenceEquals(unaryOp.Operand, oldValue))
-                        unaryOp.Operand = newValue;
-                }
-                else if (inst is IRStore store)
-                {
-                    if (ReferenceEquals(store.Value, oldValue))
-                        store.Value = newValue;
-                }
-                else if (inst is IRAssignment assignment)
-                {
-                    if (ReferenceEquals(assignment.Value, oldValue))
-                        assignment.Value = newValue;
-                }
-            }
         }
     }
     
@@ -2090,14 +2068,57 @@ namespace BasicLang.Compiler.IR.Optimization
 
                 foreach (var block in function.Blocks)
                 {
-                    OptimizeBlock(block);
+                    OptimizeBlock(function, block);
                 }
             }
 
             return ModificationCount > 0;
         }
 
-        private void OptimizeBlock(BasicBlock block)
+        /// <summary>
+        /// Installs <paramref name="replacement"/> (a fold of the value <paramref name="original"/>,
+        /// which is <c>block.Instructions[i]</c>) and re-points every consumer. Returns true when the
+        /// instruction was REMOVED, so the caller can step its index back.
+        ///
+        /// <para>⛔ THE MISSING HALF, the same one <see cref="AlgebraicSimplificationPass"/> and
+        /// <see cref="StrengthReductionPass"/> already had to fix: this pass swapped the instruction
+        /// for an <see cref="IRAssignment"/> to <c>original.Name</c> and never re-pointed the
+        /// consumers. For a named local (<c>Dim r = n - n</c>) that was survivable — the variable is
+        /// declared and the consumer reads it by name. For a TEMP it was not: no backend declares
+        /// an assignment's target temp, and the orphaned consumer still held the discarded node.
+        /// MEASURED on <c>Show(n - n)</c> (Integer) under the standard pipeline:</para>
+        /// <code>
+        ///   C++:  t0 = 0;  Show(t8);        // both undeclared — does not compile
+        ///   C#:   t0 = 0;  Show(n - n);     // CS0103, and the consumer re-renders the original
+        ///   JS:   t0 = 0;  Show(...)        // ReferenceError in an ES module
+        /// </code>
+        /// <para>The re-render was a second defect hidden behind the first: <c>Show(P() * 0)</c>
+        /// ran P TWICE on C# and JavaScript (once as the call's own statement, once inside the
+        /// resurrected <c>P() * 0</c>).</para>
+        ///
+        /// <para>So a temp is not assigned at all: its consumers receive the folded value itself and
+        /// the instruction goes. Nothing is lost by dropping it — every operand is a separate
+        /// instruction that still executes (<c>P()</c> above stays as its own statement), and the
+        /// fold only discards the arithmetic. A named value keeps its assignment, and its consumers
+        /// are re-pointed at the variable being written.</para>
+        /// </summary>
+        private bool InstallFold(IRFunction function, BasicBlock block, int i, IRValue original, IRAssignment replacement)
+        {
+            var allInstructions = function.Blocks.SelectMany(b => b.Instructions);
+
+            if (original.NamedAfterVariable)
+            {
+                block.Instructions[i] = replacement;
+                ReplaceUses(allInstructions, original, replacement.Target);
+                return false;
+            }
+
+            block.Instructions.RemoveAt(i);
+            ReplaceUses(allInstructions, original, replacement.Value);
+            return true;
+        }
+
+        private void OptimizeBlock(IRFunction function, BasicBlock block)
         {
             bool changed;
             do
@@ -2114,9 +2135,14 @@ namespace BasicLang.Compiler.IR.Optimization
                         var replacement = OptimizeBinaryOp(binOp);
                         if (replacement != null && replacement != inst)
                         {
-                            block.Instructions[i] = replacement;
                             changed = true;
                             ReportModification();
+                            if (replacement is IRAssignment folded)
+                            {
+                                if (InstallFold(function, block, i, binOp, folded)) i--;
+                                continue;
+                            }
+                            block.Instructions[i] = replacement;
                         }
                     }
 
@@ -2142,9 +2168,10 @@ namespace BasicLang.Compiler.IR.Optimization
                             var newAssign = new IRAssignment(
                                 new IRVariable(unary.Name, unary.Type),
                                 innerUnary.Operand);
-                            block.Instructions[i] = newAssign;
                             changed = true;
                             ReportModification();
+                            if (InstallFold(function, block, i, unary, newAssign)) i--;
+                            continue;
                         }
                     }
 
@@ -2156,9 +2183,10 @@ namespace BasicLang.Compiler.IR.Optimization
                             var newAssign = new IRAssignment(
                                 new IRVariable(notOp.Name, notOp.Type),
                                 innerNot.Operand);
-                            block.Instructions[i] = newAssign;
                             changed = true;
                             ReportModification();
+                            if (InstallFold(function, block, i, notOp, newAssign)) i--;
+                            continue;
                         }
                     }
                 }
