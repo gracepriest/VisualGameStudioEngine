@@ -1469,7 +1469,13 @@ namespace BasicLang.Compiler.IR.Optimization
         private IRBinaryOp TryReduceBinary(IRBinaryOp op)
         {
             // Multiplication by power of 2 Ã¢â€ â€™ shift
-            if (op.Operation == BinaryOpKind.Mul)
+            // ⛔ INTEGRAL RESULT ONLY. The check below looks at the CONSTANT's CLR type, never the
+            // product's, and a BasicLang `2` or `1` is an int literal even when the other operand
+            // is Double — so `x * 2` on a Double became `x << 1`. MEASURED: C# rejects it
+            // (CS0019, `<<` on double), so any program multiplying a floating value by an integer
+            // literal power of two failed to build under the optimizer. `x * 1` went the same way
+            // (`x << 0`) before PeepholeOptimizationPass could fold it.
+            if (op.Operation == BinaryOpKind.Mul && op.Type?.IsIntegral() == true)
             {
                 if (op.Right is IRConstant constant && constant.Value is int power)
                 {
@@ -2183,8 +2189,26 @@ namespace BasicLang.Compiler.IR.Optimization
 
         private IRInstruction OptimizeBinaryOp(IRBinaryOp binOp)
         {
+            // ⛔ FOUR OF THE IDENTITIES BELOW ARE INTEGER-ONLY, and are gated on this. In IEEE 754
+            // they are false, and the fold miscompiled SILENTLY on every backend, because the
+            // optimizer is shared. MEASURED (C# and C++ agreed on every wrong answer):
+            //   x - x   x = +Inf or NaN   ->  NaN     the fold gave 0
+            //   x * 0   x = +Inf or NaN   ->  NaN     the fold gave 0
+            //   x * 0   x = -5            ->  -0      the fold gave +0 (1/r: -Inf vs +Inf)
+            //   x + 0   x = -0            ->  +0      the fold gave x, i.e. -0
+            //   x / x   x = 0, Inf, NaN   ->  NaN     the fold gave 1
+            // (Single `b - b` with b = 1.0E+30F * 1.0E+30F = +Inf also printed 0, not NaN.)
+            // `x - (+0)`, `x * 1` and `x / 1` ARE exact in IEEE 754 for every x, so they stay
+            // ungated; only a NEGATIVE-zero subtrahend is refused, since `x - (-0)` is `x + 0`.
+            //
+            // Gated on the RESULT type: any floating operand promotes the result to floating,
+            // and Integer `/` is typed Double by the builder (its operands arrive as IRCasts,
+            // so `n / n` never reached the `x / x` arm anyway). Decimal is excluded too — it
+            // keeps a scale (`1.50D - 1.50D` is `0.00`) and throws on `0 / 0`.
+            bool integral = binOp.Type?.IsIntegral() == true;
+
             // x + 0 -> x
-            if (binOp.Operation == BinaryOpKind.Add)
+            if (binOp.Operation == BinaryOpKind.Add && integral)
             {
                 if (IsZero(binOp.Right))
                     return new IRAssignment(new IRVariable(binOp.Name, binOp.Type), binOp.Left);
@@ -2193,7 +2217,8 @@ namespace BasicLang.Compiler.IR.Optimization
             }
 
             // x - 0 -> x
-            if (binOp.Operation == BinaryOpKind.Sub && IsZero(binOp.Right))
+            if (binOp.Operation == BinaryOpKind.Sub && IsZero(binOp.Right)
+                && (integral || !IsNegativeZero(binOp.Right)))
             {
                 return new IRAssignment(new IRVariable(binOp.Name, binOp.Type), binOp.Left);
             }
@@ -2208,7 +2233,7 @@ namespace BasicLang.Compiler.IR.Optimization
             }
 
             // x * 0 -> 0
-            if (binOp.Operation == BinaryOpKind.Mul)
+            if (binOp.Operation == BinaryOpKind.Mul && integral)
             {
                 if (IsZero(binOp.Right) || IsZero(binOp.Left))
                     return new IRAssignment(
@@ -2223,7 +2248,7 @@ namespace BasicLang.Compiler.IR.Optimization
             }
 
             // x - x -> 0
-            if (binOp.Operation == BinaryOpKind.Sub &&
+            if (binOp.Operation == BinaryOpKind.Sub && integral &&
                 binOp.Left is IRVariable left &&
                 binOp.Right is IRVariable right &&
                 left.Name == right.Name)
@@ -2233,8 +2258,8 @@ namespace BasicLang.Compiler.IR.Optimization
                     new IRConstant(0, binOp.Type));
             }
 
-            // x / x -> 1 (when x != 0)
-            if (binOp.Operation == BinaryOpKind.Div &&
+            // x / x -> 1 (integral only; the x != 0 precondition is still NOT checked)
+            if (binOp.Operation == BinaryOpKind.Div && integral &&
                 binOp.Left is IRVariable divLeft &&
                 binOp.Right is IRVariable divRight &&
                 divLeft.Name == divRight.Name)
@@ -2300,6 +2325,11 @@ namespace BasicLang.Compiler.IR.Optimization
             }
             return false;
         }
+
+        private static bool IsNegativeZero(IRValue value) =>
+            value is IRConstant c
+            && ((c.Value is double d && d == 0.0 && double.IsNegative(d))
+                || (c.Value is float f && f == 0.0f && float.IsNegative(f)));
 
         private bool IsOne(IRValue value)
         {
