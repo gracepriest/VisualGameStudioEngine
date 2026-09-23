@@ -3297,6 +3297,18 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             }
         }
 
+        /// <summary>
+        /// Every <see cref="IRValue"/> an instruction READS — the use-count walker behind
+        /// <see cref="AnalyzeUseCounts"/>.
+        ///
+        /// <para>⛔ TOTAL OVER IR NODE KINDS, and the default arm THROWS (ADR-0001). A missing arm
+        /// is not an absent feature: it is a silently-zero use count, and a zero-use call is
+        /// emitted as a statement by <see cref="ShouldEmitInstruction"/> AND inlined again by the
+        /// consumer that reads it. Measured before the arms below existed: <c>b.V = Tag()</c>
+        /// (IRFieldStore) and <c>Throw MakeEx()</c> (IRThrow) each called their function TWICE on
+        /// the reference backend, and a <c>For Each</c> over a call had the same shape waiting
+        /// behind its CS0103. A new node kind must get an arm here, even an empty one.</para>
+        /// </summary>
         private IEnumerable<IRValue> GetOperands(IRInstruction instr)
         {
             switch (instr)
@@ -3341,7 +3353,15 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 case IRConditionalBranch br:
                     return new[] { br.Condition };
                 case IRSwitch sw:
-                    return new[] { sw.Value };
+                {
+                    var switchOps = new List<IRValue> { sw.Value };
+                    if (sw.Cases != null)
+                        switchOps.AddRange(sw.Cases.Select(c => c.CaseValue));
+                    if (sw.PatternCases != null)
+                        foreach (var patternCase in sw.PatternCases)
+                            AddPatternOperands(patternCase, switchOps);
+                    return switchOps;
+                }
                 case IRGetElementPtr gep:
                     var ops = new List<IRValue> { gep.BasePointer };
                     ops.AddRange(gep.Indices);
@@ -3352,8 +3372,68 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                     return new[] { tupleElem.Tuple };
                 case IRAwait awaited:
                     return awaited.Expression != null ? new[] { awaited.Expression } : Array.Empty<IRValue>();
-                default:
+                case IRArrayStore arrayStore:
+                    return new[] { arrayStore.Array, arrayStore.Index, arrayStore.Value };
+                case IRFieldStore fieldStore:
+                    return new[] { fieldStore.Object, fieldStore.Value };
+                case IRForEach forEach:
+                    return new[] { forEach.Collection };
+                case IRThrow throwInst:
+                    return throwInst.Exception != null ? new[] { throwInst.Exception } : Array.Empty<IRValue>();
+                case IRYield yieldInst:
+                    return yieldInst.Value != null ? new[] { yieldInst.Value } : Array.Empty<IRValue>();
+
+                // Kinds that read no IRValue. Listed, not defaulted, so the default can throw.
+                // ⚠ IRVariable.DefaultValue / InitialValue are DECLARATION data (a parameter's
+                // optional default, a module-scope initializer), evaluated outside every function
+                // body — excluded exactly as OptimizationPass.ReplaceUses excludes them.
+                case IRConstant:
+                case IRVariable:
+                case IRAlloca:
+                case IRArrayAlloc:
+                case IRBranch:
+                case IRLabel:
+                case IRComment:
+                case IRInlineCode:
+                case IRTryCatch:
                     return Array.Empty<IRValue>();
+
+                default:
+                    throw new InvalidOperationException(
+                        $"CSharpBackend.GetOperands has no arm for IR node kind '{instr?.GetType().Name ?? "null"}'. "
+                        + "Every kind needs one (ADR-0001): a missing arm is a silently-zero use count, which "
+                        + "makes a call both a statement and an inlined expression — evaluated twice.");
+            }
+        }
+
+        /// <summary>The values a Select Case pattern reads — mirrors OptimizationPass.ReplaceUsesInPattern.</summary>
+        private static void AddPatternOperands(IRPatternCase patternCase, List<IRValue> operands)
+        {
+            if (patternCase == null) return;
+            if (patternCase.WhenGuard != null) operands.Add(patternCase.WhenGuard);
+
+            switch (patternCase)
+            {
+                case IRRangePatternCase range:
+                    operands.Add(range.LowerBound);
+                    operands.Add(range.UpperBound);
+                    break;
+                case IRComparisonPatternCase comparison:
+                    operands.Add(comparison.CompareValue);
+                    break;
+                case IRConstantPatternCase constant:
+                    operands.Add(constant.Value);
+                    break;
+                case IROrPatternCase or:
+                    if (or.Alternatives != null)
+                        foreach (var alternative in or.Alternatives)
+                            AddPatternOperands(alternative, operands);
+                    break;
+                case IRTuplePatternCase tuple:
+                    if (tuple.Elements != null)
+                        foreach (var element in tuple.Elements)
+                            AddPatternOperands(element, operands);
+                    break;
             }
         }
 

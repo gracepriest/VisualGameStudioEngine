@@ -80,23 +80,26 @@ public class OperandWalkerTotalityTests
     }
 
     /// <summary>
-    /// ⚠ PINNED DIVERGENCE: where the C# backend's <c>GetOperands</c> is NOT total today.
+    /// ⭐ PROMOTED — renamed from <c>TheCSharpBackendsOperandWalkerIsNotYetTotal_PinnedAdr0001Obligation</c>,
+    /// which is no longer true. ADR-0001's Contract item 1 ("<c>GetOperands</c> must be total over
+    /// IR node kinds; its default case must ASSERT, not return empty") is now DISCHARGED:
+    /// <c>GetOperands</c> gained arms for <c>IRArrayStore</c> (Array/Index/Value),
+    /// <c>IRFieldStore</c> (Object/Value), <c>IRForEach.Collection</c>, <c>IRSwitch.Cases[].Value</c>
+    /// (plus <c>PatternCases</c>, recursed via <c>AddPatternOperands</c> — not visible to this
+    /// reflection census, since <c>PatternCases</c> is not an <c>IRValue</c>-typed slot; see
+    /// <see cref="TheOptimizersWalkerRecursesIntoPatternCases"/>), <c>IRThrow.Exception</c> and
+    /// <c>IRYield.Value</c>, and every remaining node kind is listed with an EMPTY arm so the
+    /// switch's default case can throw instead of silently returning zero uses.
     ///
-    /// <para>ADR-0001's Contract requires it to be total with an asserting default; that work is an
-    /// OPEN OBLIGATION of that ADR and is not this change. The gap is pinned exactly so the
-    /// asymmetry is visible and cannot grow silently — every entry below is a node kind whose
-    /// operands count as ZERO uses, which is how a producing call gets emitted as a discarded
-    /// statement.</para>
-    ///
-    /// <para>⚠ <c>IRForEach.Collection</c> is the one ADR-0001's brief already names
-    /// ("<c>GetOperands</c> … is a 17-case switch with <b>no <c>IRForEach</c> case</b>"). The
-    /// other five node kinds are found by this fixture and were not previously written down.</para>
-    ///
-    /// <para>⚠ Shortening this list is PROGRESS. When a gap is closed, delete its entry — the test
-    /// failing is the notification that the ADR obligation moved.</para>
+    /// <para>Mirrors <see cref="TheOptimizersOperandWalkerIsTotal_ExceptForThreeNamedSlots"/>: an
+    /// EQUALITY assertion, not a subset, against exactly the two deliberately-excluded slots —
+    /// <c>IRVariable.DefaultValue</c> / <c>.InitialValue</c>, declaration data hanging off a leaf
+    /// value rather than an operand in the instruction stream, excluded for the identical reason
+    /// the optimizer's walker excludes them (see that test's own docstring). A NEW gap here is a
+    /// NEW silently-zero use count (ADR-0001 E1); this test failing is the notification.</para>
     /// </summary>
     [Test]
-    public void TheCSharpBackendsOperandWalkerIsNotYetTotal_PinnedAdr0001Obligation()
+    public void TheCSharpBackendsOperandWalkerIsTotal_ExceptForTwoNamedSlots()
     {
         var census = Census();
 
@@ -104,20 +107,12 @@ public class OperandWalkerTotalityTests
             "a slot could not be probed at all, so this fixture is NOT checking it");
         Assert.That(census.GetOperandsMisses.OrderBy(s => s).ToArray(), Is.EqualTo(new[]
         {
-            "IRArrayStore.Array",
-            "IRArrayStore.Index",
-            "IRArrayStore.Value",
-            "IRFieldStore.Object",
-            "IRFieldStore.Value",
-            "IRForEach.Collection",
-            "IRSwitch.Cases[0].Value",
-            "IRThrow.Exception",
             "IRVariable.DefaultValue",
             "IRVariable.InitialValue",
-            "IRYield.Value",
         }), "CSharpBackend.GetOperands' coverage changed. A NEW entry is a new silently-zero use "
-          + "count (ADR-0001 E1); a REMOVED entry is that ADR obligation being discharged — delete "
-          + "it from this list.");
+          + "count (ADR-0001 E1) — the default arm should have thrown for it, not GetOperands "
+          + "returning empty; a REMOVED entry (down to nothing) means even the two deliberate "
+          + "exclusions above have gained real coverage and this test should be revisited.");
     }
 
     /// <summary>
