@@ -6614,3 +6614,4 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         private void Unindent() => _indentLevel = Math.Max(0, _indentLevel - 1);
     }
 }
+
