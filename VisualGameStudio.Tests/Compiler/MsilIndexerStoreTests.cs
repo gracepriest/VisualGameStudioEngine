@@ -371,9 +371,15 @@ public class MsilIndexerStoreTests
     // is the oracle for all three.
     // ========================================================================================
 
+    /// <summary>
+    /// ⭐ PROMOTED: this shape used to fail to COMPILE on C# (<c>CS0103</c>, an undeclared
+    /// indexer-store temp — <c>Visit(IRIndexerStore)</c> now calls <c>EmitExpression</c> directly
+    /// on each operand instead of the invalid <c>GetValueName</c>). Now asserted against C# too,
+    /// via <c>MsilAgreesWithCSharp</c>.
+    /// </summary>
     [Test]
     public void ReadModifyWrite_OneListElementAssignedFromAnother()
-        => MsilMatchesJs(
+        => MsilAgreesWithCSharp(
             "Sub Main()\n" +
             " Dim l As New List(Of Integer)()\n" +
             " l.Add(5)\n" +
@@ -383,9 +389,10 @@ public class MsilIndexerStoreTests
             "End Sub",
             "9,9");
 
+    /// <summary>⭐ PROMOTED — see <see cref="ReadModifyWrite_OneListElementAssignedFromAnother"/>.</summary>
     [Test]
     public void ReadModifyWrite_ListElementMultipliedInPlaceThroughAVariableIndex()
-        => MsilMatchesJs(
+        => MsilAgreesWithCSharp(
             "Sub Main()\n" +
             " Dim l As New List(Of Integer)()\n" +
             " l.Add(2)\n" +
@@ -396,9 +403,10 @@ public class MsilIndexerStoreTests
             "End Sub",
             "2,30");
 
+    /// <summary>⭐ PROMOTED — see <see cref="ReadModifyWrite_OneListElementAssignedFromAnother"/>.</summary>
     [Test]
     public void ReadModifyWrite_DictionaryValueIncrementedInPlace()
-        => MsilMatchesJs(
+        => MsilAgreesWithCSharp(
             "Sub Main()\n" +
             " Dim d As New Dictionary(Of String, Integer)()\n" +
             " d.Add(\"a\", 5)\n" +

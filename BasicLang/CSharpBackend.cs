@@ -3068,6 +3068,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
         private string EmitExpression(IRValue value) => EmitExpression(value, new HashSet<IRValue>(), false);
 
+
         /// <summary>
         /// Emit an expression, optionally wrapping in parentheses if it's a compound expression used as a sub-expression.
         /// </summary>
@@ -3926,9 +3927,9 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
         public void Visit(IRArrayStore arrayStore)
         {
-            var arrayName = GetValueName(arrayStore.Array);
-            var indexVal = arrayStore.Index is IRConstant c ? c.Value.ToString() : GetValueName(arrayStore.Index);
-            var valueVal = arrayStore.Value is IRConstant vc ? EmitConstant(vc) : GetValueName(arrayStore.Value);
+            var arrayName = EmitExpression(arrayStore.Array);
+            var indexVal = arrayStore.Index is IRConstant c ? c.Value.ToString() : EmitExpression(arrayStore.Index);
+            var valueVal = arrayStore.Value is IRConstant vc ? EmitConstant(vc) : EmitExpression(arrayStore.Value);
             WriteLine($"{arrayName}[{indexVal}] = {valueVal};");
         }
 
@@ -3936,10 +3937,21 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         {
             // In C#, both List<T> and Dictionary<K,V> writes are `collection[index] = value`
             // (Dictionary's indexer setter inserts-or-updates), so a single form is faithful.
-            var collection = GetValueName(indexerStore.Collection);
+            //
+            // ⛔ EmitExpression, never GetValueName, for every operand here and in the IRArrayStore,
+            // IRYield and IRForEach visitors (ADR-0001 E2): GetValueName is valid only for a value
+            // already declared as a local, and an inlined temp has no declaration — `l(i) = l(i) * 10`,
+            // `For Each n In Make()`, `Yield Tag()` and `{Tag(), 2}` all emitted a bare `tN` (CS0103).
+            // Inlining is sound only because GetOperands counts these operands; without its arms the
+            // call was ALSO emitted as a statement and ran twice. A value named after a declared
+            // variable is re-emitted as its expression, exactly as every other consumer (a call
+            // argument, an IRStore) does; honouring the name instead made these four sites read a
+            // variable that CSE had merged onto and the program had since REASSIGNED (measured:
+            // `a = p + q` / `a = Seed(0)` / `l(0) = p + q` stored 0, not 3 — a CSE defect).
+            var collection = EmitExpression(indexerStore.Collection);
             var indices = string.Join(", ", indexerStore.Indices.Select(i =>
-                i is IRConstant ic ? EmitConstant(ic) : GetValueName(i)));
-            var value = indexerStore.Value is IRConstant vc ? EmitConstant(vc) : GetValueName(indexerStore.Value);
+                i is IRConstant ic ? EmitConstant(ic) : EmitExpression(i)));
+            var value = indexerStore.Value is IRConstant vc ? EmitConstant(vc) : EmitExpression(indexerStore.Value);
             WriteLine($"{collection}[{indices}] = {value};");
         }
 
@@ -3966,7 +3978,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             }
             else
             {
-                var valueVal = yieldInst.Value is IRConstant c ? EmitConstant(c) : GetValueName(yieldInst.Value);
+                var valueVal = yieldInst.Value is IRConstant c ? EmitConstant(c) : EmitExpression(yieldInst.Value);
                 WriteLine($"yield return {valueVal};");
             }
         }
@@ -4174,7 +4186,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         {
             var elemType = MapType(forEach.ElementType);
             var varName = SanitizeName(forEach.VariableName);
-            var collectionExpr = GetValueName(forEach.Collection);
+            var collectionExpr = EmitExpression(forEach.Collection);
 
             WriteLine($"foreach ({elemType} {varName} in {collectionExpr})");
             WriteLine("{");
