@@ -838,13 +838,18 @@ public class CseKeyEncodingUnitTests
 /// must SURVIVE the fix. Over-killing is invisible by value, so this is a COUNT from a single
 /// <c>pass.Run</c>.
 ///
-/// <para>⛔⛔ READ THIS BEFORE TRUSTING THE NUMBERS. <b>None of the three sample programs compiles
+/// <para>⛔⛔ READ THIS BEFORE TRUSTING THE NUMBERS. <b>Not all of the sample programs compile
 /// today.</b> Measured through the CLI at this commit:</para>
 /// <list type="bullet">
-/// <item><c>Samples/Platformer/Main.bas</c> — 2 SEMANTIC errors (line 276, "cannot convert from
-/// 'Double' to 'Single'" twice). The parse is clean, so its IR is faithful; in particular
-/// <c>TILE_SIZE</c> really is <c>IsGlobal=true, IsConst=true</c> and its merges really do depend on
-/// the <c>Const</c> exemption.</item>
+/// <item><c>Samples/Platformer/Main.bas</c> — PARSE and SEMANTIC ANALYSIS are both clean. The old
+/// 2 SEMANTIC errors at line 276 ("cannot convert from 'Double' to 'Single'") were FIXED on master
+/// by #66, "make the game template build again" (9e76128), which touched
+/// <c>BasicLang/SemanticAnalyzer.cs</c> and <c>StdLib/FrameworkStdLib.cs</c>. Its IR is faithful; in
+/// particular <c>TILE_SIZE</c> really is <c>IsGlobal=true, IsConst=true</c> and its merges really do
+/// depend on the <c>Const</c> exemption. Re-measured through the CLI: it now compiles end to end on
+/// the C#, C++, and LLVM backends (JavaScript and MSIL still fail there, but on unrelated,
+/// pre-existing gaps — an undeclared <c>GameInit</c> lowering and 2D-array MSIL support,
+/// respectively, not this fixture's concern).</item>
 /// <item><c>Samples/SpaceShooter/Main.bas</c> — PARSE errors:
 /// <c>Const SCREEN_WIDTH = 800</c> has no <c>As</c> clause. The parser records the error and
 /// synchronizes past the whole <c>Const</c> block, so those identifiers reach the IR as
@@ -884,7 +889,7 @@ public class CseSampleCorpusTests
 
     /// <param name="parseClean">Whether the PARSER accepts the sample today.</param>
     /// <param name="analyzeClean">Whether the SEMANTIC ANALYZER accepts it today.</param>
-    [TestCase("Platformer", 6, true, false, TestName = "Corpus_Platformer_Makes6Merges")]
+    [TestCase("Platformer", 6, true, true, TestName = "Corpus_Platformer_Makes6Merges")]
     [TestCase("SpaceShooter", 5, false, false, TestName = "Corpus_SpaceShooter_Makes5Merges")]
     public void SampleGameMergesSurviveTheFixTest(string sample, int expectedMerges, bool parseClean, bool analyzeClean)
     {
