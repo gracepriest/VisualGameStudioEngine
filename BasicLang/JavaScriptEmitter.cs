@@ -87,7 +87,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             if (sourceMapJson != null)
             {
                 var mapPath = Path.Combine(outputDirectory, mapFileName);
-                File.WriteAllText(mapPath, sourceMapJson);
+                ReplaceFile(mapPath, sourceMapJson);
                 written.Add(mapPath);
 
                 if (script.Length > 0 && !script.EndsWith("\n", StringComparison.Ordinal))
@@ -99,7 +99,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             }
 
             var scriptPath = Path.Combine(outputDirectory, scriptFileName);
-            File.WriteAllText(scriptPath, script);
+            ReplaceFile(scriptPath, script);
             written.Add(scriptPath);
 
             // ⛔ NEVER overwrite the harness. The single-file CLI route writes its output
@@ -119,6 +119,39 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             WriteModulePackageJson(jsImports, outputDirectory, written);
 
             return written;
+        }
+
+        /// <summary>
+        /// Replaces build output by writing a sibling temp file and renaming it over the target,
+        /// never by truncating the target in place.
+        ///
+        /// <para><b>Why not <c>File.WriteAllText</c>.</b> On Windows, truncating a file that
+        /// another process has memory-mapped fails with ERROR_USER_MAPPED_FILE (1224) — and a
+        /// real-time scanner or the indexer maps a freshly closed file as a matter of course, so
+        /// a rebuild over a script that was just written can die on it. A rename does not
+        /// truncate the old file; it only swaps which file the name points at. The temp file
+        /// sits in the SAME directory because a rename is only a rename within one volume.</para>
+        ///
+        /// <para>Only for files that are always replaced (the script and its map). The harness
+        /// and <c>package.json</c> are created only when absent, so they never overwrite
+        /// anything.</para>
+        /// </summary>
+        private static void ReplaceFile(string path, string contents)
+        {
+            var directory = Path.GetDirectoryName(Path.GetFullPath(path)) ?? ".";
+            var temp = Path.Combine(directory,
+                "." + Path.GetFileName(path) + "." + Path.GetRandomFileName() + ".tmp");
+            try
+            {
+                File.WriteAllText(temp, contents);
+                File.Move(temp, path, overwrite: true);
+            }
+            catch
+            {
+                try { if (File.Exists(temp)) File.Delete(temp); }
+                catch { /* the original failure is the one worth reporting */ }
+                throw;
+            }
         }
 
         /// <summary>

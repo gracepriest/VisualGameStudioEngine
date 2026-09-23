@@ -1,4 +1,6 @@
 using System.IO;
+using System.IO.MemoryMappedFiles;
+using System.Linq;
 using BasicLang.Compiler.CodeGen.JavaScript;
 using NUnit.Framework;
 
@@ -74,6 +76,50 @@ public class JavaScriptEmitterTests
         File.WriteAllText(Path.Combine(_dir, "app.js"), "stale");
 
         JavaScriptEmitter.Emit(_dir, "app.js", "fresh");
+
+        Assert.That(Read("app.js"), Is.EqualTo("fresh"));
+    }
+
+    /// <summary>
+    /// The script and map are replaced through a sibling temp file and a rename. The temp file
+    /// must not outlive the build — it would be served as part of the site.
+    /// </summary>
+    [Test]
+    public void Emit_ReplacingOutput_LeavesNoTempFileBehind()
+    {
+        File.WriteAllText(Path.Combine(_dir, "app.js"), "stale");
+        File.WriteAllText(Path.Combine(_dir, "app.js.map"), "stale");
+
+        JavaScriptEmitter.Emit(_dir, "app.js", "fresh", sourceMapJson: "{\"version\":3}");
+
+        Assert.That(Directory.GetFiles(_dir).Select(f => Path.GetFileName(f)),
+            Is.EquivalentTo(new[] { "app.js", "app.js.map", "index.html" }));
+    }
+
+    /// <summary>
+    /// THE Windows failure. A real-time scanner or the indexer maps a freshly written file;
+    /// overwriting it in place then dies with ERROR_USER_MAPPED_FILE (1224). This holds a
+    /// mapped view the way such a process would — opened with every share flag, since a
+    /// scanner must not block the writer — and the rebuild must still replace the script.
+    /// Windows only: nothing else refuses to truncate a mapped file, so it cannot fail there.
+    /// </summary>
+    [Test]
+    public void Emit_ReplacesAScriptThatAnotherHandleHasMapped()
+    {
+        if (!System.OperatingSystem.IsWindows())
+            Assert.Ignore("Only Windows refuses to truncate a mapped file — this cannot fail elsewhere");
+
+        var script = Path.Combine(_dir, "app.js");
+        File.WriteAllText(script, "stale");
+
+        using (var stream = new FileStream(script, FileMode.Open, FileAccess.Read,
+                   FileShare.ReadWrite | FileShare.Delete))
+        using (var map = MemoryMappedFile.CreateFromFile(stream, null, 0,
+                   MemoryMappedFileAccess.Read, HandleInheritability.None, leaveOpen: true))
+        using (map.CreateViewAccessor(0, 0, MemoryMappedFileAccess.Read))
+        {
+            JavaScriptEmitter.Emit(_dir, "app.js", "fresh");
+        }
 
         Assert.That(Read("app.js"), Is.EqualTo("fresh"));
     }
