@@ -1469,7 +1469,17 @@ namespace BasicLang.Compiler.IR.Optimization
         private IRBinaryOp TryReduceBinary(IRBinaryOp op)
         {
             // Multiplication by power of 2 Ã¢â€ â€™ shift
-            if (op.Operation == BinaryOpKind.Mul)
+            // INTEGRAL OPERANDS ONLY. The guard used to test just the constant, so any
+            // `x * 2^k` with an Integer literal matched whatever x was. MEASURED on
+            // `Const Half As Double = 2.5` / `CStr(Half * 2)`: C# emitted `Half << 1` (CS0019),
+            // C++ `Half << 1` (ill-formed on a double), and JavaScript `(Half << 1)`, which
+            // COMPILES and prints 4 — `<<` truncates its operand to int32 first. Single, a
+            // non-Const Double local and Decimal all matched the same way. Both the operand and
+            // the result must be integral: the result type alone is not enough if a front end
+            // ever widens, and the operand alone is not enough if the product is promoted.
+            if (op.Operation == BinaryOpKind.Mul
+                && op.Type != null && op.Type.IsIntegral()
+                && op.Left.Type != null && op.Left.Type.IsIntegral())
             {
                 if (op.Right is IRConstant constant && constant.Value is int power)
                 {
