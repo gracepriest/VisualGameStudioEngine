@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Text;
 using BasicLang.Compiler.IR;
@@ -357,7 +358,9 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // because the always-spliced P1 BCL runtime bodies (bl_bcltypes/bl_decimal,
             // see below) need them — the spliced consts are include-free by contract
             // (CppBclRuntimeTests pins that), so the generator owns their std headers.
-            var includes = new HashSet<string> { "iostream", "vector", "string", "cstdint", "cmath", "algorithm", "cstdlib", "ctime", "functional", "cstdio", "cstring", "ostream", "stdexcept" };
+            // "limits": a NaN/Infinity Single or Double constant has no C++ literal spelling and
+            // renders as std::numeric_limits<T>::… (CppFloatLiteral / CppDoubleLiteral).
+            var includes = new HashSet<string> { "iostream", "vector", "string", "cstdint", "cmath", "algorithm", "cstdlib", "ctime", "functional", "cstdio", "cstring", "ostream", "stdexcept", "limits" };
             if (hasIterators)
             {
                 includes.Add("coroutine");
@@ -542,7 +545,11 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             {
                 var member = irEnum.Members[i];
                 var comma = i < irEnum.Members.Count - 1 ? "," : "";
-                var value = member.Value != null ? $" = {member.Value}" : "";
+                // Invariant: under a culture whose NegativeSign is U+2212 (sv-SE, nb-NO, …) a bare
+                // interpolation emitted `Back = −1`, which is not C++. See CppFloatLiteral.
+                var value = member.Value != null
+                    ? $" = {Convert.ToString(member.Value, CultureInfo.InvariantCulture)}"
+                    : "";
                 WriteLine($"{SanitizeName(member.Name)}{value}{comma}");
             }
 
@@ -5344,10 +5351,13 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 return b ? "true" : "false";
 
             if (constant.Value is float f)
-                return $"{f}f";
+                return CppFloatLiteral(f);
+
+            if (constant.Value is double d)
+                return CppDoubleLiteral(d);
 
             if (constant.Value is long l)
-                return $"{l}LL";
+                return l.ToString(CultureInfo.InvariantCulture) + "LL";
 
             // P1 Decimal literal: emit the exact .NET bit pattern
             // through the engine, never a lossy double literal. GetBits: [0..2] = 96-bit
@@ -5367,8 +5377,71 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 return $"BasicLang::Decimal::FromParts({lo}u, {mid}u, {hi}u, {(neg ? "true" : "false")}, {scale})";
             }
 
-            return constant.Value.ToString();
+            // What still reaches here is integral (Integer, Short, Byte, …). Invariant because
+            // a NEGATIVE one is culture-sensitive: sv-SE's NegativeSign is U+2212, which emitted
+            // `int32_t n = −7;` — not a C++ token. (.NET writes ASCII digits in every culture;
+            // the sign is the only part that varies for an integer.)
+            return Convert.ToString(constant.Value, CultureInfo.InvariantCulture);
         }
+
+        /// <summary>
+        /// A <c>Single</c> constant as C++ source: a valid <c>float</c> literal, culture-invariant,
+        /// that parses back to the SAME float (sign of zero included), or a
+        /// <c>std::numeric_limits&lt;float&gt;</c> expression for NaN and ±Infinity.
+        ///
+        /// <para>⛔ This replaced <c>$"{f}f"</c>, measured wrong four ways:
+        /// (1) an INTEGRAL value dropped its point — <c>= 400</c>, <c>= 0</c> and <c>= 5.0</c> all
+        /// emitted <c>400f</c>/<c>0f</c>/<c>5f</c>, which C# accepts and C++ rejects (MSVC C3688,
+        /// "invalid literal suffix 'f'"): the suffix needs a '.' or an exponent in front of it, and
+        /// the game template's own <c>Public X As Single = 400</c> hit it;
+        /// (2) CurrentCulture — de-DE emitted <c>2,5f</c>, sv-SE <c>−3,75f</c> with a U+2212 minus;
+        /// (3) <c>-0.0</c> emitted <c>-0f</c>; (4) NaN and ∞ emitted <c>NaNf</c> and <c>∞f</c>.</para>
+        ///
+        /// <para>"R" is the shortest string that round-trips (.NET Core 3.0+), so no precision is
+        /// added or lost; ".0" is appended only when that string has neither a point nor an
+        /// exponent. <c>-0.0f</c> is unary minus on <c>0.0f</c>, which C++ evaluates to −0.0.</para>
+        ///
+        /// <para>⚠ NaN has no literal, and <c>quiet_NaN()</c> is POSITIVE where .NET's folded NaN
+        /// (∞ − ∞ on x64) has its sign bit set. No BasicLang operation on this backend can observe a
+        /// NaN's sign or payload, so this is not chased. The <c>std::numeric_limits</c> spellings
+        /// need <c>&lt;limits&gt;</c>, which both header emitters now include unconditionally.
+        /// ⚠ MSVC's STL reaches it transitively through the other std headers (measured), so a
+        /// compile-and-run test cannot tell whether the explicit include is there — only the
+        /// emitted text can.</para>
+        /// </summary>
+        internal static string CppFloatLiteral(float value)
+        {
+            if (float.IsNaN(value)) return "std::numeric_limits<float>::quiet_NaN()";
+            if (float.IsPositiveInfinity(value)) return "std::numeric_limits<float>::infinity()";
+            if (float.IsNegativeInfinity(value)) return "-std::numeric_limits<float>::infinity()";
+            return WithFloatingPoint(value.ToString("R", CultureInfo.InvariantCulture)) + "f";
+        }
+
+        /// <summary>
+        /// A <c>Double</c> constant as C++ source — the <see cref="CppFloatLiteral"/> rules, with
+        /// no suffix. ⛔ There was NO Double arm before: a Double fell through to a bare
+        /// CurrentCulture <c>ToString()</c>, and two of the results COMPILED WRONG rather than
+        /// failing. On de-DE, <c>V = 2.5</c> emitted <c>V = 2,5;</c> — the comma operator — so the
+        /// build succeeded and V held 2. And <c>-0.0</c> emitted <c>-0</c>, integer negation of 0,
+        /// i.e. +0.0: <c>1 / NZ</c> printed inf instead of -inf. Both measured end to end under
+        /// MSVC. An integral value emitted the INT literal <c>400</c>; ∞ emitted a bare <c>∞</c>.
+        /// </summary>
+        internal static string CppDoubleLiteral(double value)
+        {
+            if (double.IsNaN(value)) return "std::numeric_limits<double>::quiet_NaN()";
+            if (double.IsPositiveInfinity(value)) return "std::numeric_limits<double>::infinity()";
+            if (double.IsNegativeInfinity(value)) return "-std::numeric_limits<double>::infinity()";
+            return WithFloatingPoint(value.ToString("R", CultureInfo.InvariantCulture));
+        }
+
+        /// <summary>
+        /// Makes an invariant "R" rendering a C++ FLOATING literal: "400" and "-0" gain ".0";
+        /// "2.5", "1E+20" and "1.5E-05" are already floating and pass through unchanged.
+        /// </summary>
+        private static string WithFloatingPoint(string roundTrip) =>
+            roundTrip.IndexOfAny(FloatingLiteralMarks) >= 0 ? roundTrip : roundTrip + ".0";
+
+        private static readonly char[] FloatingLiteralMarks = { '.', 'E', 'e' };
 
         protected new string EscapeString(string str)
         {
