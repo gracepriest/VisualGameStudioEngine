@@ -9,6 +9,13 @@
   ADR. The architect answers only from the brief, so the brief is the entire
   basis of this ruling and an audit needs it.
 
+**Amended by [ADR-0004](0004-family-111-rulings.md)** — fills the `IsReplicable`
+whitelist's silent cases (locals, globals, ByRef, value stability), adds
+Invariant S and the IR-verifier obligation, sets the temp-namespace contract
+(reserve, don't rename) including the `ICodeGenerator.cs:203` bullet, orders the
+`AlgebraicSimplification` gate after backend materialisation and MSIL coercion,
+and carves a fenced exception for the D1 C++/MSIL interface-accessor batch.
+
 ## Question
 
 Should the C# backend keep inlining IR temps into expressions unconditionally,

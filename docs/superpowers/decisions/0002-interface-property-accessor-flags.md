@@ -8,6 +8,11 @@
 - **Brief:** [`0001-brief.md`](0001-brief.md) §Q2 — same consultation as
   ADR-0001, preserved in full beside these ADRs.
 
+**Amended by [ADR-0004](0004-family-111-rulings.md)** — batches this flag fix
+with the C++/MSIL accessor defects it exposes, ordered so the accessor-signature
+fixes land first and every commit stays green; interface-typed access stays out
+of scope.
+
 ## Question
 
 `IRBuilder.cs:1689-1697` builds `IRInterfaceProperty` and sets
