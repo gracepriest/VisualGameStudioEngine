@@ -73,6 +73,10 @@ public class JsExecutionTierRosterTests
         // their cases. Found only when the predicate was widened for ExternClassExecutionTests.
         typeof(BooleanOperatorExecutionTests),
         typeof(MemberCasingExecutionTests),
+
+        // Cross-backend (C#/C++/JS); its JS leg runs under Node via
+        // JavaScriptOptimizedExecutionTests.RunOptimized.
+        typeof(NegativeCaseLabelExecutionTests),
     };
 
     /// <summary>
@@ -120,7 +124,7 @@ public class JsExecutionTierRosterTests
 
     [Test]
     public void RosterIsPinned()
-        => Assert.That(ExecutionTier, Has.Length.EqualTo(31),
+        => Assert.That(ExecutionTier, Has.Length.EqualTo(32),
             "The execution-tier roster changed. That is fine — update the number — but it must " +
             "be a deliberate edit, not a silent shrink.");
 

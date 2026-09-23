@@ -4451,6 +4451,15 @@ namespace BasicLang.Compiler.IR
             node.Operand.Accept(this);
             var operand = _expressionResult;
 
+            // Unary '+' is the identity on a numeric operand (the analyzer has already checked
+            // it is numeric and typed the node as the operand's type) — there is no IR op for it,
+            // so the operand IS the result. `Case +7`, `x = +y`.
+            if (node.Operator == "+")
+            {
+                _expressionResult = operand;
+                return;
+            }
+
             var resultType = _semanticAnalyzer.GetNodeType(node);
             var opKind = MapUnaryOperator(node.Operator);
 
