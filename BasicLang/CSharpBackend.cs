@@ -749,7 +749,11 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             {
                 var member = irEnum.Members[i];
                 var comma = i < irEnum.Members.Count - 1 ? "," : "";
-                var value = member.Value != null ? $" = {member.Value}" : "";
+                // Invariant: IRBuilder stores a Long, and a NEGATIVE one under sv-SE rendered
+                // `Back = −1` (U+2212 minus) — CS1056.
+                var value = member.Value != null
+                    ? " = " + Convert.ToString(member.Value, CultureInfo.InvariantCulture)
+                    : "";
                 WriteLine($"{SanitizeName(member.Name)}{value}{comma}");
             }
 
@@ -900,20 +904,13 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         /// </summary>
         private string FormatDefaultValue(IRValue value)
         {
+            // One literal renderer for defaults and expressions. ⛔ This had its own copy with no
+            // Single arm: `Optional x As Single = 2.5f` emitted `float x = 2.5` — CS1750 (a double
+            // default for a float parameter) in EVERY culture — and every number went through
+            // CurrentCulture ToString(). It also left String defaults unescaped and Char defaults
+            // unquoted; EmitConstant handles both.
             if (value is IRConstant constant)
-            {
-                if (constant.Value is string s)
-                    return $"\"{s}\"";
-                if (constant.Value is bool b)
-                    return b ? "true" : "false";
-                if (constant.Value is null)
-                    return "null";
-                // Same m-suffix rule as EmitConstant, should a Decimal default
-                // parameter value ever reach here.
-                if (constant.Value is decimal dm)
-                    return dm.ToString(CultureInfo.InvariantCulture) + "m";
-                return constant.Value.ToString();
-            }
+                return EmitConstant(constant);
             return "default";
         }
 
@@ -3958,7 +3955,10 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 return b ? "true" : "false";
 
             if (constant.Value is float f)
-                return $"{f}f";
+                return CSharpFloatLiteral(f);
+
+            if (constant.Value is double d)
+                return CSharpDoubleLiteral(d);
 
             // System.Decimal constant (spec 6.1: a literal converted from its
             // source text in a Decimal context) — the m suffix keeps the C#
@@ -3967,8 +3967,60 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             if (constant.Value is decimal dm)
                 return dm.ToString(CultureInfo.InvariantCulture) + "m";
 
-            return constant.Value.ToString();
+            // What still reaches here is integral (Integer, Long, Short, Byte, …). Invariant
+            // because a NEGATIVE one is culture-sensitive: sv-SE's NegativeSign is U+2212, which
+            // emitted `public int NegI = −7;` — CS1056, not a C# token.
+            return Convert.ToString(constant.Value, CultureInfo.InvariantCulture);
         }
+
+        /// <summary>
+        /// A <c>Single</c> constant as C# source: a valid <c>float</c> literal, culture-invariant,
+        /// that parses back to the SAME float, or a <c>float.*</c> constant for NaN and ±Infinity.
+        ///
+        /// <para>⛔ This replaced <c>$"{f}f"</c>, which used CurrentCulture: de-DE emitted
+        /// <c>2,5f</c> (in an argument list that is TWO arguments), sv-SE <c>−3,75f</c> with a U+2212
+        /// minus, and NaN / ∞ emitted <c>NaNf</c> / <c>∞f</c> (CS1056). Unlike C++, an integral
+        /// value needs no point — <c>400f</c> is a valid C# literal — so none is added.</para>
+        ///
+        /// <para>"R" is the shortest string that round-trips (.NET Core 3.0+). <c>-0f</c> is unary
+        /// minus on <c>0f</c>, which C# folds to −0.0f (measured: <c>1 / NZS</c> is −∞).
+        /// <c>float.NaN</c> etc. are <c>const</c> fields, so the rendering stays a constant
+        /// expression — legal as an optional-parameter default, a <c>const</c> and a case label.</para>
+        /// </summary>
+        internal static string CSharpFloatLiteral(float value)
+        {
+            if (float.IsNaN(value)) return "float.NaN";
+            if (float.IsPositiveInfinity(value)) return "float.PositiveInfinity";
+            if (float.IsNegativeInfinity(value)) return "float.NegativeInfinity";
+            return value.ToString("R", CultureInfo.InvariantCulture) + "f";
+        }
+
+        /// <summary>
+        /// A <c>Double</c> constant as C# source — the <see cref="CSharpFloatLiteral"/> rules with no
+        /// suffix, plus ".0" when the round-trip string has neither a point nor an exponent.
+        ///
+        /// <para>⛔ There was NO Double arm before: a Double fell through to a bare CurrentCulture
+        /// <c>ToString()</c>. On de-DE <c>Math.Log(8.2)</c> emitted <c>Math.Log(8,2)</c> — the
+        /// two-argument overload, log base 2 of 8 — so the build SUCCEEDED and printed 3 instead of
+        /// 2.104 (measured end to end). An INTEGRAL value emitted an int literal, which C# types as
+        /// <c>int</c> where the literal's own type matters: <c>Dim o As Object = 400.0</c> boxed an
+        /// Int32, and <c>Math.Max(400.0, t)</c> bound <c>Max(int, int)</c>. <c>-0.0</c> emitted
+        /// <c>-0</c>, integer negation, i.e. +0.0; ∞ and NaN emitted <c>∞</c> / <c>NaN</c>.</para>
+        ///
+        /// <para>".0" rather than a <c>d</c> suffix keeps every finite value that already had a
+        /// point byte-identical to the old en-US output; <c>-0.0</c> is unary minus on <c>0.0</c>,
+        /// which C# folds to −0.0.</para>
+        /// </summary>
+        internal static string CSharpDoubleLiteral(double value)
+        {
+            if (double.IsNaN(value)) return "double.NaN";
+            if (double.IsPositiveInfinity(value)) return "double.PositiveInfinity";
+            if (double.IsNegativeInfinity(value)) return "double.NegativeInfinity";
+            var roundTrip = value.ToString("R", CultureInfo.InvariantCulture);
+            return roundTrip.IndexOfAny(DoubleLiteralMarks) >= 0 ? roundTrip : roundTrip + ".0";
+        }
+
+        private static readonly char[] DoubleLiteralMarks = { '.', 'E', 'e' };
 
         /// <summary>
         /// Generate C# where clauses for generic type parameter constraints
