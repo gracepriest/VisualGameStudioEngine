@@ -70,6 +70,19 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         /// </summary>
         private HashSet<BasicBlock> _forEachEndBlocks;
 
+        /// <summary>
+        /// Loop-variable renames in force while a <c>For Each</c> body is being emitted: BasicLang
+        /// name → the C# name its <c>foreach</c> declared. See <see cref="Visit(IRForEach)"/>.
+        /// </summary>
+        private readonly Dictionary<string, string> _forEachRenames = new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>The <c>For Each</c> variables whose bodies are open, outermost first (BasicLang names).</summary>
+        private readonly List<string> _openForEachVariables = new();
+
+        /// <summary>Fresh loop-variable names already issued in <see cref="_forEachNamesOwner"/>'s body.</summary>
+        private readonly HashSet<string> _issuedForEachNames = new(StringComparer.OrdinalIgnoreCase);
+        private IRFunction _forEachNamesOwner;
+
         /// <summary>How many C# <c>switch</c> statements are open around the text being written.</summary>
         private int _switchDepth;
 
@@ -3013,6 +3026,12 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             if (value is IRConstant constant)
                 return EmitConstant(constant);
 
+            // Inside a For Each body whose variable had to be renamed, that name means the LOOP
+            // variable — checked before both caches, which map it to the outer local.
+            if (_forEachRenames.Count > 0 && value is IRVariable loopRead && loopRead.Name != null
+                && _forEachRenames.TryGetValue(loopRead.Name, out var loopName))
+                return loopName;
+
             if (_valueNames.TryGetValue(value, out var name))
                 return name;
 
@@ -4186,7 +4205,26 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         {
             var elemType = MapType(forEach.ElementType);
             var varName = SanitizeName(forEach.VariableName);
+            // Evaluated BEFORE the rename below: the collection is read in the enclosing scope,
+            // where the name still has its outer meaning.
             var collectionExpr = EmitExpression(forEach.Collection);
+
+            // ⛔ THE LOOP VARIABLE MAY NOT REUSE AN OUTER NAME. BasicLang scopes a For Each variable
+            // to its body and lets it shadow a local, a parameter or an enclosing loop's variable;
+            // C# refuses that (CS0136). And BasicLang is case-INSENSITIVE where C# is not, so a
+            // local `N` beside `For Each n` compiled — and the body read the OUTER `N` through the
+            // case-insensitive name map: a silent wrong answer (68 where 43 was right, measured).
+            // A colliding variable gets a fresh name for its body only.
+            var hadOuterRename = false;
+            string outerRename = null;
+            var renamed = forEach.VariableName != null && ForEachVariableCollides(forEach.VariableName);
+            if (renamed)
+            {
+                hadOuterRename = _forEachRenames.TryGetValue(forEach.VariableName, out outerRename);
+                varName = FreshForEachVariableName(varName);
+                _forEachRenames[forEach.VariableName] = varName;
+            }
+            _openForEachVariables.Add(forEach.VariableName ?? string.Empty);
 
             WriteLine($"foreach ({elemType} {varName} in {collectionExpr})");
             WriteLine("{");
@@ -4233,6 +4271,14 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             Unindent();
             WriteLine("}");
 
+            // The body is closed: the name resolves back to whatever it meant outside it.
+            _openForEachVariables.RemoveAt(_openForEachVariables.Count - 1);
+            if (renamed)
+            {
+                if (hadOuterRename) _forEachRenames[forEach.VariableName] = outerRename;
+                else _forEachRenames.Remove(forEach.VariableName);
+            }
+
             _loopSwitchDepths.Pop();
             if (registeredEnd) _forEachEndBlocks.Remove(forEach.EndBlock);
             EmitLoopExitLabelIfNeeded(forEach.EndBlock);
@@ -4248,6 +4294,55 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                     HandleConditionalBranch(endCond);
                 else if (endTerminator is IRBranch endBranch)
                     HandleUnconditionalBranch(endBranch);
+            }
+        }
+
+        /// <summary>
+        /// Whether a <c>For Each</c> variable's name is already taken in the C# method body it lands
+        /// in: a local or parameter of the function (compared case-insensitively, as BasicLang
+        /// does), or the variable of a <c>For Each</c> whose body is still open. A module global or
+        /// a class member is NOT a collision — a C# local may shadow a field.
+        /// </summary>
+        private bool ForEachVariableCollides(string name)
+        {
+            if (_openForEachVariables.Contains(name, StringComparer.OrdinalIgnoreCase)) return true;
+            if (_currentFunction == null) return false;
+            return _currentFunction.LocalVariables.Any(v => string.Equals(v.Name, name, StringComparison.OrdinalIgnoreCase))
+                || _currentFunction.Parameters.Any(p => string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase));
+        }
+
+        /// <summary>
+        /// <c>{name}_{k}</c> for the smallest k not already a name in this body — a local,
+        /// parameter, global, class member, open loop variable, or an earlier fresh name —
+        /// all compared case-insensitively. A user may spell <c>n_1</c> too; that is why the
+        /// candidate is checked rather than assumed free.
+        ///
+        /// <para>Locals, parameters and globals come from <see cref="_declaredIdentifiers"/>
+        /// (case-insensitive, filled from the same function whenever <see cref="_currentFunction"/>
+        /// is set). An active rename is always an earlier fresh name of this same body, so
+        /// <see cref="_issuedForEachNames"/> covers it.</para>
+        /// </summary>
+        private string FreshForEachVariableName(string baseName)
+        {
+            if (!ReferenceEquals(_forEachNamesOwner, _currentFunction))
+            {
+                _issuedForEachNames.Clear();
+                _forEachNamesOwner = _currentFunction;
+            }
+
+            bool Taken(string candidate) =>
+                _declaredIdentifiers.Contains(candidate)
+                || _currentClassMemberNames.Contains(candidate)
+                || _issuedForEachNames.Contains(candidate)
+                || _openForEachVariables.Contains(candidate, StringComparer.OrdinalIgnoreCase);
+
+            var trimmed = baseName.TrimStart('@');
+            for (var k = 1; ; k++)
+            {
+                var candidate = $"{trimmed}_{k}";
+                if (Taken(candidate)) continue;
+                _issuedForEachNames.Add(candidate);
+                return candidate;
             }
         }
 

@@ -903,13 +903,14 @@ public class MsilForEachTests
     /// <summary>
     /// ⛔ The collection is a CALL'S RESULT, not a local — a distinct emission path for
     /// <c>forEach.Collection</c> (a temporary rather than a named variable). Correct (MSIL): 7
-    /// (3+4). ⛔ C# MEASURED: does not compile at all — CS0103, an undefined temp <c>t0</c> — so
-    /// this case cannot run the <c>MsilAgreesWithCSharp</c>/<c>MsilMatchesCppAndJs</c> shared
-    /// helper at all; the C# leg is not invoked here.
+    /// (3+4). ⭐ PROMOTED: C# used to fail to compile this shape at all (CS0103, an undefined
+    /// temp <c>t0</c>) — <c>Visit(IRForEach)</c> now calls <c>EmitExpression</c> directly on
+    /// <c>forEach.Collection</c> instead of the invalid <c>GetValueName</c>, so this now runs the
+    /// ordinary <c>MsilAgreesWithCSharp</c> helper and asserts C# too.
     /// </summary>
     [Test]
     public void CollectionIsACallsResult()
-        => MsilMatchesCppAndJs(
+        => MsilAgreesWithCSharp(
             "Function Make() As List(Of Integer)\n" +
             " Dim l As New List(Of Integer)()\n" +
             " l.Add(3)\n" +
@@ -940,18 +941,15 @@ public class MsilForEachTests
     /// <c>_localIndices["n"]</c> rebinding in <c>EmitForEachBody</c> is saved and restored around
     /// the body rather than assigned outright.
     ///
-    /// <para>⚠ Asserted against JavaScript, not C#: measured, the C# backend does not COMPILE
-    /// this shape at all — it emits <c>foreach (int n in l)</c> literally inside the same method
-    /// scope as the pre-existing <c>int n</c>, and C# itself refuses that
-    /// (<c>CS0136: a local ... named 'n' cannot be declared in this scope</c>). That is a
-    /// separate, pre-existing C#-backend defect (the emitted <c>foreach</c> reuses the SOURCE
-    /// name verbatim rather than a scope-safe one), not this family's, and not fixed or asserted
-    /// against here.</para>
+    /// <para>⭐ PROMOTED: C# used to REFUSE TO COMPILE this shape — it emitted
+    /// <c>foreach (int n in l)</c> literally inside the same method scope as the pre-existing
+    /// <c>int n</c>, and C# refused that (<c>CS0136</c>). The <c>ForEachVariableCollides</c> /
+    /// <c>FreshForEachVariableName</c> rename now gives the loop variable a fresh scope-safe name
+    /// for its body and restores the outer meaning afterward, so C# is asserted here too.</para>
     /// </summary>
     [Test]
     public void LoopVariableName_ResolvesBackToItsOuterMeaning_AfterTheLoop()
-    {
-        const string program =
+        => MsilAgreesWithCSharp(
             "Sub Main()\n" +
             " Dim n As Integer = 99\n" +
             " Dim l As New List(Of Integer)()\n" +
@@ -961,13 +959,8 @@ public class MsilForEachTests
             " For Each n In l\n" +
             " Next\n" +
             " PrintLine(CStr(n))\n" +
-            "End Sub";
-        Assert.Multiple(() =>
-        {
-            Assert.That(FourBackends.Norm(JavaScriptExecutionTests.RunJs(program)), Is.EqualTo("99"), "JavaScript");
-            Assert.That(FourBackends.Norm(MsilHarness.RunExpectingSuccess(program)), Is.EqualTo("99"), "MSIL");
-        });
-    }
+            "End Sub",
+            "99");
 
     /// <summary>
     /// ⛔ THE test above does not discriminate a binding that is never withdrawn. It shadows a
