@@ -375,11 +375,14 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // cstdio/cstring/ostream: needed by the always-spliced P1 BCL runtime bodies
             // (bl_bcltypes/bl_decimal below) — the spliced consts are include-free by contract,
             // so the generator owns their std headers (combined-mode counterpart: GenerateHeader).
+            // "limits": NaN/Infinity Single/Double constants render as std::numeric_limits<T>::…
+            // (CppFloatLiteral / CppDoubleLiteral) — same reason as the combined emission.
             var includes = new HashSet<string>
             {
                 "iostream", "vector", "string", "cstdint", "cmath", "algorithm", "cstdlib",
                 "ctime", "functional", "coroutine", "exception", "iterator",
-                "unordered_map", "unordered_set", "stdexcept", "cstdio", "cstring", "ostream"
+                "unordered_map", "unordered_set", "stdexcept", "cstdio", "cstring", "ostream",
+                "limits"
             };
             foreach (var inc in _headerIncludes)
             {
