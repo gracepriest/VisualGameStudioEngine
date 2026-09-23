@@ -132,18 +132,25 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// truncate the old file; it only swaps which file the name points at. The temp file
         /// sits in the SAME directory because a rename is only a rename within one volume.</para>
         ///
-        /// <para>Only for files that are always replaced (the script and its map). The harness
-        /// and <c>package.json</c> are created only when absent, so they never overwrite
-        /// anything.</para>
+        /// <para>Only for files that are always replaced (the script, its map and copied
+        /// <c>#JsImport</c> modules). The harness and <c>package.json</c> are created only when
+        /// absent, so they never overwrite anything.</para>
         /// </summary>
-        private static void ReplaceFile(string path, string contents)
+        private static void ReplaceFile(string path, string contents) =>
+            ReplaceFile(path, temp => File.WriteAllText(temp, contents));
+
+        /// <summary>
+        /// <see cref="ReplaceFile(string, string)"/> for content that is not a string in hand —
+        /// <paramref name="fillTemp"/> creates the temp file (e.g. by copying into it).
+        /// </summary>
+        private static void ReplaceFile(string path, Action<string> fillTemp)
         {
             var directory = Path.GetDirectoryName(Path.GetFullPath(path)) ?? ".";
             var temp = Path.Combine(directory,
                 "." + Path.GetFileName(path) + "." + Path.GetRandomFileName() + ".tmp");
             try
             {
-                File.WriteAllText(temp, contents);
+                fillTemp(temp);
                 File.Move(temp, path, overwrite: true);
             }
             catch
@@ -243,7 +250,9 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 var destinationDir = Path.GetDirectoryName(destination);
                 if (!string.IsNullOrEmpty(destinationDir)) Directory.CreateDirectory(destinationDir);
 
-                File.Copy(source, destination, overwrite: true);
+                // Through a temp file and a rename, like the script: a rebuild replaces the copy
+                // from the last build, which a scanner may still have mapped. See ReplaceFile.
+                ReplaceFile(destination, temp => File.Copy(source, temp));
                 written.Add(destination);
             }
         }

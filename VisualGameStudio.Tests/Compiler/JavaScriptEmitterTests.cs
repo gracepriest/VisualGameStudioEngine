@@ -125,6 +125,65 @@ public class JavaScriptEmitterTests
     }
 
     /// <summary>
+    /// A project-route layout for the #JsImport copy: the module lives in a source directory,
+    /// the build writes to <c>_dir/out</c>, and a previous build's copy of the module is
+    /// already there. Returns (source dir, output dir, imports).
+    /// </summary>
+    private (string src, string outDir, System.Collections.Generic.IReadOnlyList<BasicLang.Compiler.IR.JsImportDirective> imports)
+        RebuildWithAnImportedModule()
+    {
+        var src = Path.Combine(_dir, "src");
+        var outDir = Path.Combine(_dir, "out");
+        Directory.CreateDirectory(Path.Combine(src, "lib"));
+        Directory.CreateDirectory(Path.Combine(outDir, "lib"));
+        File.WriteAllText(Path.Combine(src, "lib", "helper.js"), "export const v = 'fresh';");
+        File.WriteAllText(Path.Combine(outDir, "lib", "helper.js"), "export const v = 'stale';");
+
+        var imports = JsTestSupport.BuildModule(
+            "#JsImport \"./lib/helper.js\"\nSub Main()\nEnd Sub", runPreprocessor: true).JsImports;
+        return (src, outDir, imports);
+    }
+
+    /// <summary>The copied module is replaced through a temp file too; none may survive.</summary>
+    [Test]
+    public void Emit_ReplacingAnImportedModule_LeavesNoTempFileBehind()
+    {
+        var (src, outDir, imports) = RebuildWithAnImportedModule();
+
+        JavaScriptEmitter.Emit(outDir, "app.js", "fresh", jsImports: imports, importBaseDirectory: src);
+
+        Assert.That(File.ReadAllText(Path.Combine(outDir, "lib", "helper.js")),
+            Is.EqualTo("export const v = 'fresh';"));
+        Assert.That(Directory.GetFiles(Path.Combine(outDir, "lib")).Select(f => Path.GetFileName(f)),
+            Is.EquivalentTo(new[] { "helper.js" }));
+    }
+
+    /// <summary>
+    /// The copied module is build output a rebuild replaces, exactly like the script — so a
+    /// scanner holding the last build's copy mapped must not fail the rebuild either.
+    /// </summary>
+    [Test]
+    public void Emit_ReplacesAnImportedModuleThatAnotherHandleHasMapped()
+    {
+        if (!System.OperatingSystem.IsWindows())
+            Assert.Ignore("Only Windows refuses to truncate a mapped file — this cannot fail elsewhere");
+
+        var (src, outDir, imports) = RebuildWithAnImportedModule();
+        var copy = Path.Combine(outDir, "lib", "helper.js");
+
+        using (var stream = new FileStream(copy, FileMode.Open, FileAccess.Read,
+                   FileShare.ReadWrite | FileShare.Delete))
+        using (var map = MemoryMappedFile.CreateFromFile(stream, null, 0,
+                   MemoryMappedFileAccess.Read, HandleInheritability.None, leaveOpen: true))
+        using (map.CreateViewAccessor(0, 0, MemoryMappedFileAccess.Read))
+        {
+            JavaScriptEmitter.Emit(outDir, "app.js", "fresh", jsImports: imports, importBaseDirectory: src);
+        }
+
+        Assert.That(File.ReadAllText(copy), Is.EqualTo("export const v = 'fresh';"));
+    }
+
+    /// <summary>
     /// The project route names its output after the assembly, so the harness cannot hardcode
     /// "app.js" — a MyGame.blproj emits MyGame.js and the page must load THAT.
     /// </summary>
