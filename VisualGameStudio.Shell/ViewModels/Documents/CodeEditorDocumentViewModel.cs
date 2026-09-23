@@ -311,6 +311,109 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
     public ViewModels.Designer.FormSelection Selection { get; } = new();
 
     /// <summary>
+    /// "Type Here" (Task 23, spec §6): which strip/item host is being typed into, and what has been
+    /// typed so far. Bound by the overlay editor (Task 22) and the canvas's slot highlight (Task 21).
+    /// </summary>
+    public ViewModels.Designer.FormStripEditorViewModel StripEditor { get; } = new();
+
+    // ⚠ The three Type Here commands are the ONLY public [RelayCommand] methods in this file — there
+    // is no precedent (the plan's "PlaceControl is the precedent" is false: PlaceControl carries no
+    // [RelayCommand]; every other one here is on a private method). Public because the tests call
+    // the methods directly and the Shell grants the tests no internals access; the generated
+    // *Command properties are what the view binds (24d pre-flight BLOCKER 2).
+    // ⛔⛔ Keep each [RelayCommand] PHYSICALLY ADJACENT to its own method — doc comment ABOVE the
+    // attribute, never between. An attribute binds to the next DECLARATION and a doc comment is
+    // trivia: that is how AddNewFormCommand was never generated while a SaveProjectOrReportCommand
+    // nothing binds was.
+
+    /// <summary>
+    /// Opens the Type Here editor on <paramref name="host"/> — a strip, or an item that holds items.
+    /// Selects the host first, because the slot exists only on the selected strip/item's path.
+    /// </summary>
+    [RelayCommand]
+    public void BeginTypeHere(BasicLang.Forms.FormControl? host)
+    {
+        if (host?.Definition?.Items == null)
+        {
+            return;
+        }
+
+        SelectInDesigner(host);
+        StripEditor.Host = host;
+        StripEditor.Text = "";
+        StripEditor.IsActive = true;
+    }
+
+    /// <summary>
+    /// Appends what was typed to the editor's host: <c>-</c> is a separator, anything else the
+    /// host's default item kind. Selects the new item and stays open on the SAME host, so a whole
+    /// menu is typed in one run. A refusal (a separator on a StatusStrip) is reported, never placed.
+    /// </summary>
+    [RelayCommand]
+    public void CommitTypeHere(string? text)
+    {
+        var host = StripEditor.Host;
+        var file = DesignFile;
+        if (host == null || file == null || string.IsNullOrWhiteSpace(text))
+        {
+            return;
+        }
+
+        var rule = host.Definition?.Items;
+        if (rule == null)
+        {
+            return;
+        }
+
+        var typed = text.Trim();
+        var kind = typed == "-" ? "ToolStripSeparator" : rule.Kinds[0];
+        var result = ViewModels.Designer.FormPlacement.PlaceItem(file.Model, host, kind, typed);
+        if (result.Control == null)
+        {
+            ReportPlacementRefusal(result.Refusal ?? "the item could not be placed.");
+            return;
+        }
+
+        WriteDesignerEditBack();
+
+        // ⚠ Selecting the new item runs the leave-rule; it is inside the host, so the editor stays.
+        // The host is re-asserted after, in case a later rule ever changes that.
+        SelectInDesigner(result.Control);
+        StripEditor.Host = host;
+        StripEditor.Text = "";
+        StripEditor.IsActive = true;
+    }
+
+    /// <summary>Closes the Type Here editor without placing anything.</summary>
+    [RelayCommand]
+    public void CancelTypeHere()
+    {
+        StripEditor.IsActive = false;
+        StripEditor.Host = null;
+        StripEditor.Text = "";
+    }
+
+    /// <summary>
+    /// Whether <paramref name="control"/> is <paramref name="host"/> or lies inside it — the Type
+    /// Here editor's "leave" test. A null control (an emptied selection) is inside nothing.
+    /// </summary>
+    private static bool IsInside(
+        BasicLang.Forms.FormDocument document,
+        BasicLang.Forms.FormControl? control,
+        BasicLang.Forms.FormControl host)
+    {
+        for (var c = control; c != null; c = ViewModels.Designer.FormGeometryEdit.ParentOf(document, c))
+        {
+            if (ReferenceEquals(c, host))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
     /// The designer's copy buffer.
     ///
     /// <para>⚠ Static, so copy in one open form and paste into another works — which is most of the
@@ -448,21 +551,68 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
             return;
         }
 
+        // ⚠ Only what actually landed. A refused item is not in the document, so selecting it would
+        // select a ghost.
+        var added = new List<BasicLang.Forms.FormControl>();
+        var host = Selection.Primary;
+
         foreach (var control in pasted)
         {
-            if (control.Geometry is BasicLang.Forms.PixelGeometry pixel)
+            // ⛔⛔ ONE if / else-if / else chain, so exactly ONE list receives each control (24d
+            // pre-flight BLOCKER 3). A guard-and-continue whose success path fell through to the
+            // unconditional add at the bottom put an item in its host's Children AND in
+            // document.Controls: AllControls() then yields it twice, the writer emits it twice,
+            // and the next Delete removes the wrong copy — green build, no diagnostic.
+            // ⛔ By the ROW, never by where the copy came from.
+            var place = control.Definition?.Place;
+            if (place == BasicLang.Forms.FormPlace.Item)
             {
-                pixel.X += 8;
-                pixel.Y += 8;
+                // An item has no place of its own: it goes into the selected host, if that host's
+                // rule takes this kind, and nowhere else.
+                if (host?.Definition?.Items?.Accepts(control.Kind) == true)
+                {
+                    host.Children.Add(control);
+                    added.Add(control);
+                }
+                else
+                {
+                    ReportPlacementRefusal(host == null
+                        ? $"'{control.Kind}' is an item; select the menu or strip to paste it into."
+                        : $"'{host.Id}' ({host.Kind}) does not hold a {control.Kind}; select the menu " +
+                          "or strip to paste it into.");
+                }
             }
+            else if (place == BasicLang.Forms.FormPlace.Docked)
+            {
+                // A strip docks to an edge: no geometry to offset and no tab stop.
+                file.Model.Controls.Add(control);
+                added.Add(control);
+            }
+            else
+            {
+                if (control.Geometry is BasicLang.Forms.PixelGeometry pixel)
+                {
+                    pixel.X += 8;
+                    pixel.Y += 8;
+                }
 
-            // ⛔ By the ROW, never by where the copy came from: a component pasted among the
-            // controls would be drawn nowhere, emitted with Controls.Add, and refused on reload.
-            (control.Definition?.IsComponent == true ? file.Model.Components : file.Model.Controls).Add(control);
+                // A component pasted among the controls would be drawn nowhere, emitted with
+                // Controls.Add, and refused on reload.
+                (control.Definition?.IsComponent == true ? file.Model.Components : file.Model.Controls).Add(control);
+                added.Add(control);
+            }
+        }
+
+        // ⛔ Before the renumber, SetRange and write: SetRange with an EMPTY list CLEARS the
+        // selection (measured), which would contradict "a refused paste changes nothing" and — via
+        // the leave-rule — cancel an open Type Here editor. Nothing landed, so nothing is written.
+        if (added.Count == 0)
+        {
+            return;
         }
 
         file.Model.RenumberTabIndexes();
-        Selection.SetRange(pasted);
+        Selection.SetRange(added);
         PropertyGrid.SelectedControl = Selection.Primary;
         WriteDesignerEditBack();
     }
@@ -872,7 +1022,20 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
         // TwoWay binding, which a tray click never touches and a headless test never has. The tray's
         // Delete passes the grid's control, so the grid must never lag the selection (see
         // SelectInDesigner for the sequence that deleted the wrong component).
-        Selection.Changed += (_, _) => PropertyGrid.SelectedControl = Selection.Primary;
+        Selection.Changed += (_, _) =>
+        {
+            PropertyGrid.SelectedControl = Selection.Primary;
+
+            // The Type Here leave-rule: selecting anything outside the editor's host — including
+            // nothing, which is what every delete leaves — closes the editor. Selecting the host's
+            // own items (the one just committed) does not.
+            var model = DesignFile?.Model;
+            if (StripEditor.IsActive && StripEditor.Host is { } host && model != null &&
+                !IsInside(model, Selection.Primary, host))
+            {
+                CancelTypeHere();
+            }
+        };
     }
 
     /// <summary>The component tray under the canvas (Task 25): a view of <c>DesignDocument.Components</c>.</summary>
@@ -881,8 +1044,21 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
     /// <summary>
     /// The tray follows the DOCUMENT: every designer edit bumps the revision, and an undo re-parses
     /// and bumps it too, so the strip can never show a component the file no longer has.
+    ///
+    /// <para>⚠ The Type Here editor follows it too: an undo RE-PARSES the model, so the editor's host
+    /// is then a reference into a document that no longer exists, and typing into it would edit
+    /// nothing the file contains. Same id is not enough — it must be the same object.</para>
     /// </summary>
-    partial void OnDesignModelRevisionChanged(int value) => Tray.Rebuild(DesignDocument);
+    partial void OnDesignModelRevisionChanged(int value)
+    {
+        Tray.Rebuild(DesignDocument);
+
+        if (StripEditor.Host is { } host &&
+            !ReferenceEquals(DesignDocument?.FindById(host.Id), host))
+        {
+            CancelTypeHere();
+        }
+    }
 
     public IBookmarkService? BookmarkService => _bookmarkService;
 

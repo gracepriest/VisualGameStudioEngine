@@ -259,6 +259,8 @@ public static class FormGeometryEdit
         return ((int)surface.Width, (int)surface.Height);
     }
 
-    private static FormControl? ParentOf(FormDocument document, FormControl control) =>
+    /// <summary>The control whose <c>Children</c> holds <paramref name="control"/>, or null for a root.
+    /// Internal for the Type Here leave-rule (<c>CodeEditorDocumentViewModel.IsInside</c>).</summary>
+    internal static FormControl? ParentOf(FormDocument document, FormControl control) =>
         document.AllControls().FirstOrDefault(c => c.Children.Contains(control));
 }
