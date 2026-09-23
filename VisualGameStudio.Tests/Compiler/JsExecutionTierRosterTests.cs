@@ -82,6 +82,10 @@ public class JsExecutionTierRosterTests
         // the JavaScript half of what they claim.
         typeof(CseInvalidationExecutionTests),
         typeof(CseKeyInjectivityExecutionTests),
+
+        // Cross-backend (C#/C++/JS); its JS leg runs under Node via
+        // JavaScriptOptimizedExecutionTests.RunOptimized.
+        typeof(NegativeCaseLabelExecutionTests),
     };
 
     /// <summary>
@@ -129,7 +133,7 @@ public class JsExecutionTierRosterTests
 
     [Test]
     public void RosterIsPinned()
-        => Assert.That(ExecutionTier, Has.Length.EqualTo(33),
+        => Assert.That(ExecutionTier, Has.Length.EqualTo(34),
             "The execution-tier roster changed. That is fine — update the number — but it must " +
             "be a deliberate edit, not a silent shrink.");
 
