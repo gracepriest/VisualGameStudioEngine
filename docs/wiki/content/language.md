@@ -23,6 +23,11 @@ still works but warns).
 
 Number literal prefixes: hex `&H1F`, octal `&O17`, binary `&B1010`.
 
+String literals follow VB: a backslash is an ordinary character, so `"C:\temp\new"` is
+the eleven characters it shows. The only escape is a doubled quote, `"say ""hi"""`. In an
+interpolated string, `{{` and `}}` are literal braces. For control characters use
+`vbCrLf`, `vbNewLine`, `vbCr`, `vbLf` or `vbTab`, which work on every backend.
+
 ## Declarations
 
 ```vb

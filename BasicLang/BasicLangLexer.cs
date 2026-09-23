@@ -925,32 +925,14 @@ namespace BasicLang.Compiler
                     break; // closing quote
                 }
 
-                if (Peek() == '\\')
+                // A backslash is an ordinary character, as in VB: "C:\temp\new" is
+                // eleven characters, not a tab and a newline. "" is the only escape.
+                if (Peek() == '\n')
                 {
-                    Advance(); // Consume backslash
-                    if (!IsAtEnd())
-                    {
-                        char escaped = Advance();
-                        switch (escaped)
-                        {
-                            case 'n': sb.Append('\n'); break;
-                            case 'r': sb.Append('\r'); break;
-                            case 't': sb.Append('\t'); break;
-                            case '\\': sb.Append('\\'); break;
-                            case '"': sb.Append('"'); break;
-                            default: sb.Append(escaped); break;
-                        }
-                    }
+                    _line++;
+                    _column = 0;
                 }
-                else
-                {
-                    if (Peek() == '\n')
-                    {
-                        _line++;
-                        _column = 0;
-                    }
-                    sb.Append(Advance());
-                }
+                sb.Append(Advance());
             }
 
             if (IsAtEnd())
@@ -983,29 +965,26 @@ namespace BasicLang.Compiler
 
         private void ScanInterpolatedString(int startLine, int startColumn)
         {
-            // Stores the raw content of the interpolated string including {expressions}
+            // Stores the raw content of the interpolated string including {expressions}.
+            // VB escapes only: "" is a literal quote (resolved here), and {{ / }} are literal
+            // braces (kept doubled so ParseInterpolatedString can tell them from a hole).
+            // A backslash is an ordinary character.
             StringBuilder sb = new StringBuilder();
 
-            while (!IsAtEnd() && Peek() != '"')
+            while (!IsAtEnd())
             {
-                if (Peek() == '\\')
+                if (Peek() == '"')
                 {
-                    Advance(); // Consume backslash
-                    if (!IsAtEnd())
-                    {
-                        char escaped = Advance();
-                        switch (escaped)
-                        {
-                            case 'n': sb.Append('\n'); break;
-                            case 'r': sb.Append('\r'); break;
-                            case 't': sb.Append('\t'); break;
-                            case '\\': sb.Append('\\'); break;
-                            case '"': sb.Append('"'); break;
-                            case '{': sb.Append('{'); break;
-                            case '}': sb.Append('}'); break;
-                            default: sb.Append(escaped); break;
-                        }
-                    }
+                    if (PeekNext() != '"')
+                        break; // closing quote
+                    Advance();
+                    Advance();
+                    sb.Append('"');
+                }
+                else if ((Peek() == '{' && PeekNext() == '{') || (Peek() == '}' && PeekNext() == '}'))
+                {
+                    sb.Append(Advance());
+                    sb.Append(Advance());
                 }
                 else if (Peek() == '{')
                 {

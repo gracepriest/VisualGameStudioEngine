@@ -8671,6 +8671,18 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 symbol = crossModule;
             }
 
+            // VB's control-character constants (vbCrLf, vbTab, ...). Backslash is not an escape
+            // in a string literal, so these are how source spells a newline or tab. Only when
+            // nothing user-declared has the name: a user's vbTab shadows the built-in.
+            // Cleared first so a re-analysis that now finds a user symbol is not overruled.
+            node.BuiltinConstantValue = null;
+            if (symbol == null && VbStringConstants.TryGetValue(node.Name, out var vbConstant))
+            {
+                node.BuiltinConstantValue = vbConstant;
+                SetNodeType(node, _typeManager.StringType);
+                return;
+            }
+
             if (symbol == null)
             {
                 // Check if this could be a .NET static class (e.g., Console, Math, File)
@@ -8701,6 +8713,23 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 SetNodeType(node, symbol.Type);
             }
         }
+
+        /// <summary>
+        /// VB's Microsoft.VisualBasic.Constants string members, by (case-insensitive) name.
+        /// The IR builder lowers each to a plain string constant, so every backend gets it.
+        /// ⚠ Only characters every backend's string escaper handles (\r \n \t). vbNullChar is
+        /// deliberately absent: the C++ backend's strings are built from const char*, so an
+        /// embedded NUL would silently truncate.
+        /// </summary>
+        internal static readonly IReadOnlyDictionary<string, string> VbStringConstants =
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["vbCrLf"] = "\r\n",
+                ["vbNewLine"] = "\r\n",
+                ["vbCr"] = "\r",
+                ["vbLf"] = "\n",
+                ["vbTab"] = "\t",
+            };
 
         /// <summary>
         /// The member of the class currently being analyzed — its own, or an inherited one —

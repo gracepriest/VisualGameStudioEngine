@@ -4592,6 +4592,13 @@ namespace BasicLang.Compiler.IR
                 return;
             }
 
+            // vbCrLf, vbTab, ... (see SemanticAnalyzer.VbStringConstants).
+            if (node.BuiltinConstantValue != null)
+            {
+                _expressionResult = new IRConstant(node.BuiltinConstantValue, _semanticAnalyzer.GetNodeType(node));
+                return;
+            }
+
             // A variable or constant of a Module in this unit, resolved by the analyzer (its own
             // module's by lexical scope, another module's by the cross-module fallback). Bound
             // to the real global, whatever the declaration order.

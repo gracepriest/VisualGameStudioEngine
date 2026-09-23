@@ -1529,6 +1529,13 @@ namespace BasicLang.Compiler.AST
         /// </summary>
         public bool IsForeignQualified { get; set; }
 
+        /// <summary>
+        /// Set by the semantic analyzer when <see cref="Name"/> is a VB control-character
+        /// constant (vbCrLf, vbTab, ...) that nothing user-declared shadows; the IR builder
+        /// lowers the reference to this string constant.
+        /// </summary>
+        public string BuiltinConstantValue { get; set; }
+
         public IdentifierExpressionNode(int line, int column) : base(line, column) { }
 
         public override void Accept(IASTVisitor visitor) => visitor.Visit(this);

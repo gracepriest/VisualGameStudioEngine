@@ -4521,7 +4521,14 @@ namespace BasicLang.Compiler
 
             while (i < content.Length)
             {
-                if (content[i] == '{')
+                // {{ and }} are literal braces (the lexer keeps them doubled for us).
+                if ((content[i] == '{' || content[i] == '}')
+                    && i + 1 < content.Length && content[i + 1] == content[i])
+                {
+                    currentText.Append(content[i]);
+                    i += 2;
+                }
+                else if (content[i] == '{')
                 {
                     // Save any accumulated text
                     if (currentText.Length > 0)

@@ -219,14 +219,11 @@ namespace BasicLang.Compiler.LSP
                 }
                 else if (c == '"')
                 {
-                    // Skip string literals
+                    // Skip string literals. A backslash is an ordinary character; a
+                    // doubled "" reads as two adjacent strings, which skips the same.
                     i++;
                     while (i < line.Length && line[i] != '"')
-                    {
-                        if (line[i] == '\\' && i + 1 < line.Length)
-                            i++;
                         i++;
-                    }
                 }
 
                 i++;

@@ -82,10 +82,6 @@
           "end": "\"",
           "patterns": [
             {
-              "name": "constant.character.escape.basiclang",
-              "match": "\\\\."
-            },
-            {
               "name": "constant.character.escape.double-quote.basiclang",
               "match": "\"\""
             }
@@ -98,7 +94,7 @@
           "patterns": [
             {
               "name": "constant.character.escape.basiclang",
-              "match": "\\\\."
+              "match": "\"\"|\\{\\{|\\}\\}"
             },
             {
               "name": "meta.interpolation.basiclang",
