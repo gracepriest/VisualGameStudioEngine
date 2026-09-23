@@ -222,6 +222,7 @@
 
         <Grid Grid.Column="1" RowDefinitions="*,Auto">
           <designer:FormCanvasControl Grid.Row="0"
+                                      x:Name="DesignCanvas"
                                       Document="{Binding DesignDocument}"
                                       ModelRevision="{Binding DesignModelRevision}"
                                       DropCommand="{Binding PlaceDroppedControlCommand}"
@@ -232,7 +233,25 @@
                                       CopyCommand="{Binding CopyControlsCommand}"
                                       CutCommand="{Binding CutControlsCommand}"
                                       PasteCommand="{Binding PasteControlsCommand}"
+                                      TypeHereHost="{Binding StripEditor.Host}"
+                                      BeginTypeHereCommand="{Binding BeginTypeHereCommand}"
                                       SelectedControl="{Binding PropertyGrid.SelectedControl, Mode=TwoWay}"/>
+
+          <!-- Task 24 (24d): the Type Here editor — an in-place TextBox over the menu/tool/status strip
+               slot being typed into. Same cell as the canvas and AFTER it, so it paints above.
+               ⛔ It is born hidden and has NO Background: while active it covers this whole cell, and a
+               Panel with a Background would swallow every click meant for the canvas beneath it.
+               ⛔ Every {Binding} here is a REFLECTION binding (this repo has no compiled bindings), so a
+               path to a command the toolkit never generated binds to NOTHING with no build error.
+               FormStripViewTests resolves each path against the view model by reflection. -->
+          <designer:FormTypeHereEditor Grid.Row="0"
+                                       x:Name="TypeHereEditor"
+                                       IsActive="{Binding StripEditor.IsActive}"
+                                       Host="{Binding StripEditor.Host}"
+                                       Text="{Binding StripEditor.Text, Mode=TwoWay}"
+                                       SlotBounds="{Binding #DesignCanvas.TypeHereBounds}"
+                                       CommitCommand="{Binding CommitTypeHereCommand}"
+                                       CancelCommand="{Binding CancelTypeHereCommand}"/>
 
           <!-- Task 25: the component tray — VS's strip under the surface for the things that are
                part of the form but have no position on it. Click selects (through the shared
