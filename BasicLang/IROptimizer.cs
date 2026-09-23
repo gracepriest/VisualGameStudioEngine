@@ -2217,8 +2217,12 @@ namespace BasicLang.Compiler.IR.Optimization
                     return new IRAssignment(new IRVariable(binOp.Name, binOp.Type), binOp.Right);
             }
 
-            // x * 0 -> 0
-            if (binOp.Operation == BinaryOpKind.Mul)
+            // x * 0 -> 0. INTEGRAL ONLY — in IEEE 754 it is not the identity three ways, all
+            // MEASURED on the JavaScript backend before this guard: Infinity * 0 is NaN (the rule
+            // gave 0), NaN * 0 is NaN, and -5.0 * 0 is -0.0 (the rule gave +0.0, so `1.0 / e`
+            // printed Infinity instead of -Infinity). Decimal is excluded too: .NET keeps the
+            // scale, so 1.5D * 0 prints "0.0", not "0".
+            if (binOp.Operation == BinaryOpKind.Mul && IsIntegralArithmetic(binOp))
             {
                 if (IsZero(binOp.Right) || IsZero(binOp.Left))
                     return new IRAssignment(
@@ -2232,8 +2236,9 @@ namespace BasicLang.Compiler.IR.Optimization
                 return new IRAssignment(new IRVariable(binOp.Name, binOp.Type), binOp.Left);
             }
 
-            // x - x -> 0
-            if (binOp.Operation == BinaryOpKind.Sub &&
+            // x - x -> 0. INTEGRAL ONLY, for the same reason: Infinity - Infinity and NaN - NaN
+            // are NaN. MEASURED: `Dim a As Double = inf - inf` compiled to `a = 0`.
+            if (binOp.Operation == BinaryOpKind.Sub && IsIntegralArithmetic(binOp) &&
                 binOp.Left is IRVariable left &&
                 binOp.Right is IRVariable right &&
                 left.Name == right.Name)
@@ -2243,16 +2248,10 @@ namespace BasicLang.Compiler.IR.Optimization
                     new IRConstant(0, binOp.Type));
             }
 
-            // x / x -> 1 (when x != 0)
-            if (binOp.Operation == BinaryOpKind.Div &&
-                binOp.Left is IRVariable divLeft &&
-                binOp.Right is IRVariable divRight &&
-                divLeft.Name == divRight.Name)
-            {
-                return new IRAssignment(
-                    new IRVariable(binOp.Name, binOp.Type),
-                    new IRConstant(1, binOp.Type));
-            }
+            // `x / x -> 1` REMOVED — unsound for EVERY type, and its "(when x != 0)" was never
+            // checked. A float 0, Infinity or NaN gives NaN (MEASURED: `r = x / x` compiled to
+            // `r = 1`, so DivSelf(0.0) returned 1); an integral 0 throws DivideByZeroException.
+            // No type restriction rescues it, and nobody writes the shape on purpose.
 
             // x And True -> x, x And False -> False
             if (binOp.Operation == BinaryOpKind.And)
@@ -2298,6 +2297,16 @@ namespace BasicLang.Compiler.IR.Optimization
 
             return binOp;
         }
+
+        /// <summary>
+        /// True when the op and both operands are integral, so the ring identities (x - x = 0,
+        /// x * 0 = 0) hold. A null type counts as NOT integral: refusing costs one missed fold,
+        /// guessing wrong produces a wrong answer. The same test StrengthReductionPass applies.
+        /// </summary>
+        private static bool IsIntegralArithmetic(IRBinaryOp binOp) =>
+            binOp.Type != null && binOp.Type.IsIntegral()
+            && binOp.Left?.Type != null && binOp.Left.Type.IsIntegral()
+            && binOp.Right?.Type != null && binOp.Right.Type.IsIntegral();
 
         private bool IsZero(IRValue value)
         {
