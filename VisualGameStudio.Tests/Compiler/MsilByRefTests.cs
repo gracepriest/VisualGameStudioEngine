@@ -403,18 +403,23 @@ public class MsilByRefTests
             """, "42");
 
     /// <summary>
-    /// ⭐ A ByRef parameter on a <c>Shared</c> METHOD. ⚠ ORACLE IS C++ ONLY: the analyzer records
-    /// NO by-ref marker for a <c>Type.SharedMethod</c> call, so the C# backend emits raw CS1620
-    /// ("argument must be passed with the 'ref' keyword") — a defect of its own, not this
-    /// family's, and not asserted here. This shape is precisely what proves the DECLARATION, not
-    /// the call site, must key whether an argument is loaded by address on MSIL: keying on
-    /// <c>IRCall.ByRefArguments</c> instead would spell the signature <c>(int32&amp;)</c> from the
-    /// declaration while loading the argument as a value from the call site — an invalid program.
+    /// ⭐ A ByRef parameter on a <c>Shared</c> METHOD. ⭐ PROMOTED — renamed from
+    /// <c>ByRefOnASharedMethod_OracleIsCppOnly</c>, which is no longer true: the analyzer used to
+    /// record NO by-ref marker for a <c>Type.SharedMethod</c> call (only <c>NetRefKind</c>, the
+    /// .NET-interop marshalling list, was consulted), so the C# backend emitted raw CS1620
+    /// ("argument must be passed with the 'ref' keyword") and, worse, the OPTIMIZER trusted the
+    /// false by-value claim and kept the caller's pre-call value live across the call — a SILENT
+    /// wrong answer on C++ and MSIL (see <see cref="ByRefOnASharedMethod_TheOptimizerKeepsNoFactsAcrossTheCall"/>).
+    /// <c>IRBuilder</c> now also reads the user callee's OWN declared parameters
+    /// (<c>staticCalleeSymbol.Parameters[..].IsByRef</c>), so all three .NET-observable backends
+    /// agree. This shape is precisely what proves the DECLARATION, not the call site, must key
+    /// whether an argument is loaded by address on MSIL: keying on <c>IRCall.ByRefArguments</c>
+    /// instead would spell the signature <c>(int32&amp;)</c> from the declaration while loading
+    /// the argument as a value from the call site — an invalid program.
     /// </summary>
     [Test]
-    public void ByRefOnASharedMethod_OracleIsCppOnly()
-    {
-        const string program = """
+    public void ByRefOnASharedMethod()
+        => AgreesOnThreeBackends("""
             Class Util
              Public Shared Sub Bump(ByRef n As Integer)
               n = n + 1
@@ -425,15 +430,65 @@ public class MsilByRefTests
              Util.Bump(v)
              PrintLine(CStr(v))
             End Sub
+            """, "42");
+
+    /// <summary>
+    /// ⭐ S6b — THE SHAPE THAT PROVES THE OPTIMIZER KEEPS NO FACTS ACROSS THE CALL, not just that
+    /// the call writes back correctly. <c>a</c> is computed from <c>v</c> BEFORE
+    /// <c>Util.Bump(v)</c>, <c>b</c> AFTER. ⛔ MEASURED, at the defect: <c>a=42 b=42</c> on C++
+    /// and MSIL — <c>ConstantPropagationPass</c> (or an equivalent copy-forward) trusted the false
+    /// "no ByRef here" claim from <c>IRBuilder</c> and propagated <c>v</c>'s PRE-CALL value
+    /// (41, so <c>v+1=42</c>) into the read of <c>b</c> too, silently dropping the call's
+    /// write-back from the second computation. Correct is <c>a=42 b=43</c> — the two reads must
+    /// differ. Run through BOTH the standard pipeline (<see cref="AgreesOnThreeBackends"/>, via
+    /// <c>FourBackends.RunEmittedCSharp</c> / <c>BclE2E.CompileToCppOptimized</c> /
+    /// <c>MsilHarness.RunExpectingSuccess</c>, all standard-pass) and the aggressive one, since
+    /// either pipeline could re-introduce the same false fact through a different pass.
+    /// </summary>
+    [Test]
+    public void ByRefOnASharedMethod_TheOptimizerKeepsNoFactsAcrossTheCall()
+        => AgreesOnThreeBackends("""
+            Class Util
+             Public Shared Sub Bump(ByRef n As Integer)
+              n = n + 1
+             End Sub
+            End Class
+            Sub Main()
+             Dim v As Integer = 41
+             Dim a As Integer = v + 1
+             Util.Bump(v)
+             Dim b As Integer = v + 1
+             PrintLine("a=" & CStr(a) & " b=" & CStr(b))
+            End Sub
+            """, "a=42 b=43");
+
+    /// <summary>The aggressive-pipeline sibling of the test above — same shape, same reasoning:
+    /// a different pass could re-introduce the same false fact under <c>--optimize</c>.</summary>
+    [Test]
+    public void ByRefOnASharedMethod_TheOptimizerKeepsNoFactsAcrossTheCall_Aggressive()
+    {
+        const string program = """
+            Class Util
+             Public Shared Sub Bump(ByRef n As Integer)
+              n = n + 1
+             End Sub
+            End Class
+            Sub Main()
+             Dim v As Integer = 41
+             Dim a As Integer = v + 1
+             Util.Bump(v)
+             Dim b As Integer = v + 1
+             PrintLine("a=" & CStr(a) & " b=" & CStr(b))
+            End Sub
             """;
+        const string expected = "a=42 b=43";
         Assert.Multiple(() =>
         {
-            Assert.That(Norm(BclE2E.CompileRun(BclE2E.CompileToCppOptimized(program))), Is.EqualTo("42"), "C++");
-            Assert.That(Norm(MsilHarness.RunExpectingSuccess(program)), Is.EqualTo("42"), "MSIL");
+            Assert.That(Norm(BclE2E.CompileRun(BclE2E.CompileToCppAggressive(program))), Is.EqualTo(expected), "C++");
+            Assert.That(Norm(FourBackends.RunEmittedCSharpAggressive(program)), Is.EqualTo(expected), "C#");
+            Assert.That(Norm(MsilHarness.RunAggressiveExpectingSuccess(program)), Is.EqualTo(expected), "MSIL");
             Assert.That(() => JavaScriptExecutionTests.RunJs(program),
                 Throws.Exception.With.Message.Contains("ByRef"), "JavaScript refuses ByRef by design");
-            // ⚠ C# is NOT asserted: it emits CS1620 for a ByRef argument to a Shared-method call,
-            // a pre-existing front-end/C#-backend gap, not this family's.
         });
     }
 

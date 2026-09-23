@@ -5051,7 +5051,21 @@ namespace BasicLang.Compiler.IR
                         var refKind = parameters != null && call.Arguments.Count - 1 < parameters.Count
                             ? parameters[call.Arguments.Count - 1].RefKind
                             : BasicLang.Net.NetRefKind.None;
-                        call.ByRefArguments.Add(refKind != BasicLang.Net.NetRefKind.None);
+
+                        // ⛔ A USER `Shared` method's ByRef came from NOWHERE on this arm: only the
+                        // .NET descriptor above was consulted, so `Util.Bump(v)` against
+                        // `Shared Sub Bump(ByRef n)` was IR claiming a by-value call. The C# backend
+                        // dropped the `ref` (CS1620), and — worse — the optimizer trusted the claim
+                        // and kept `v + 1` across the call: C++ and MSIL printed b=42 where 43 is
+                        // right, measured on BOTH pipelines. Read from the declaration exactly as
+                        // the instance arm below does. `NetArgumentRefKinds` stays None for a user
+                        // callee: it is the .NET marshalling list, and a VB ByRef records nothing
+                        // there (CSharpBackend then spells it `ref`, VB's only form).
+                        var userParameters = call.ResolvedNetTarget == null ? staticCalleeSymbol?.Parameters : null;
+                        var userByRef = userParameters != null && call.Arguments.Count - 1 < userParameters.Count
+                            && userParameters[call.Arguments.Count - 1].IsByRef;
+
+                        call.ByRefArguments.Add(refKind != BasicLang.Net.NetRefKind.None || userByRef);
                         call.NetArgumentRefKinds.Add(refKind);
                     }
 
