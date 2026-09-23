@@ -200,6 +200,40 @@ suites). The 5th failure in the `6139386` run was a
 fails only when the Native tier runs alongside it). The fast subset shows the two
 `SearchSnippets` ones.
 
+⛔ **A GAMEPAD PLUGGED INTO THE BUILD MACHINE TURNS A NATIVE ROW RED — and nothing in the repo
+changed.** Diagnosed 2026-09-20/21, root cause measured, fixed in the test; recorded here because
+the symptom is maximally misleading: a deterministic new failure, unchanged DLL, unchanged test
+file, on a branch mid-feature. `RaylibCoreC11RecordingTests.Automation_recording_cycle_marshals_…`
+asserted a flat `count == 0` ("no synthetic input → nothing recorded"). raylib's
+`RecordAutomationEvent` runs from `EndDrawing` and records one `INPUT_GAMEPAD_AXIS_MOTION`
+(type 13) **per non-trigger axis per frame for every connected pad, with every stick dead centre
+and nobody touching it**. An Xbox-compatible pad arrived on this machine at **2026-09-20 21:13**
+(`Get-PnpDevice` / `DEVPKEY_Device_LastArrivalDate` on `VID_045E&PID_028E` — that timestamp is what
+dated the regression) and the row went `Expected: 0, But was: 8`.
+**8 = (3 frames − 1) × 4 stick axes**: the pad's 2 triggers rest at `-1.0` and do not clear raylib's
+record threshold, its 4 stick axes read `0.0` and do; and the FIRST frame records nothing because
+GLFW only raises its joystick-connect callback inside `PollInputEvents()`, which `EndDrawing` calls
+*after* it records.
+⚠ **That ordering is a trap for anyone writing such a precondition check**: straight out of
+`InitWindow`, raylib still answers `IsGamepadAvailable(0) == false` with the pad plugged in. Probe
+it only AFTER frames have been pumped, or you will assert the very thing that is wrong.
+⭐ Proven, not inferred: a standalone console probe containing **zero repo code**, P/Invoking the
+shipped `VisualGameStudioEngine.dll`, reproduced `count == 8` with the test's exact call sequence
+and dumped all 8 events as `INPUT_GAMEPAD_AXIS_MOTION` on `gamepad 0` axes 0-3 — which is what
+ruled out the concurrent compiler work by measurement rather than by inspection. The fix was then
+mutation-checked: restoring the old `Is.EqualTo(0u)` puts the row back to `But was: 8` inside the
+real test host, so the new assertion is discriminating and not vacuous.
+⭐⭐ **CONTROLLED FALSIFICATION — the cause was removed and the symptom went with it.** The pad was
+later unplugged, and the SAME code was re-measured: the device-free branch is taken and `count` is
+**0**. Attached → `count == 8`; unplugged → `count == 0`. Both directions measured on this machine,
+so this is a controlled experiment, not a mechanism that merely fits the number 8. (The mutation was
+run on the device-free branch too — forcing it to demand `> 0` goes red with `But was: 0`, so that
+branch is discriminating as well.)
+The engine is blameless — `Framework_LoadAutomationEventList` and friends are one-line
+passthroughs at `VisualGameStudioEngine/framework.cpp:2148-2153`. **Do not baseline this row**; if
+it is ever red again, re-read the reason, because the empty-run claim is now made only when the run
+is genuinely device-free.
+
 ✅ **`ee3c086` is WINDOWS-GATED (2026-09-14).** The four failures are exactly the baseline four
 named above — so everything a Linux container structurally cannot exercise ran and passed, which
 is most of what matters for this branch: the **22 §12.5 blnet integration rows** needing the
@@ -211,6 +245,24 @@ taken WITHOUT those rows; this run is the one that covers them.
 prints nothing at normal verbosity, so "absent from the failure list" is not by itself evidence it
 ran; the two rows the claim rests on were measured, not inferred. The run's 2 skips are unrelated
 (`Build_CppLanguageProject_NoToolchain_…`, `ReleasePins_MatchTheRunbookOnceFilled`).
+
+⛔ **RUNNING THE SUITE FROM A WORKTREE REDS 18 `Raylib*ParityTests` ROWS, AND IT IS AN ARTEFACT.**
+`packages/` is a NuGet restore directory that is **gitignored and does not travel with a worktree or
+a fresh clone**, and those rows read `packages\raylib.5.5.0\build\native\include\raylib.h` to compare
+the real raylib header against `framework.h`. Without it they throw
+`DirectoryNotFoundException` — `Every_*_export_is_bound_3_ways`,
+`Every_core_C*_export_has_a_matching_wrapper_import`, `TextFormat_is_intentionally_left_unbound`.
+**Measured 2026-09-21** in a `.claude/worktrees/` worktree, **on a MASTER-based branch whose fast
+subset totals 5109** (⚠ quote the base with the number — a feature branch has its own total, e.g.
+`feat/form-designer` at 24c is **5978**; an unqualified total under this heading reads as the
+expected count and makes a perfectly good run look like it has ~869 phantom tests): fast subset
+**5088 passed / 20 failed / 1 skipped of 5109** = 18 of these + the 2 standing `SearchSnippets`.
+⭐ The TOTAL is identical across both runs (5088+20+1 and 5106+2+1), which is itself the proof that
+these 18 are plain `[Test]` methods rather than `TestCaseSource` generators — a throwing source
+would collapse N cases into one erroring row and MOVE the total. So the gap is base, not coverage.
+Fix by copying the package in
+(`robocopy <main checkout>\packages\raylib.5.5.0 <worktree>\packages\raylib.5.5.0 /E`), then re-run —
+do NOT read those 18 as a regression, and do not baseline them either.
 
 ⛔ **The fast subset is not a gate for codegen work** — execution tests are
 `[Category("Integration")]`. Four fixes once gated green on it, then the first full run found
