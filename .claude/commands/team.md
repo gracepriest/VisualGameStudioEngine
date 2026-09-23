@@ -1,5 +1,5 @@
 ---
-description: Run a task through the mixed-model team (Fable architect / Opus implementer / Sonnet tests / Haiku briefs)
+description: Run a task through the mixed-model team (Fable architect / Opus 5.5 implementer / Sonnet tests / Haiku briefs)
 argument-hint: <the task to work on>
 ---
 
@@ -12,8 +12,16 @@ Use the mixed-model team in `.claude/agents/` for this work.
   written brief. Never hand it a raw question.
 - **brief** (Haiku) — context broker. Reads the repo and compresses it into a
   brief for the architect.
-- **implementer** (Opus) — task-level planning and all production code.
+- **implementer** (Opus 5.5) — task-level planning and all production code.
 - **test-writer** (Sonnet) — NUnit suite, specs, and ADR transcription.
+
+Each role's model is pinned in its `.claude/agents/*.md` frontmatter. **Do not
+pass `model` when dispatching a role** — a per-invocation `model` outranks the
+frontmatter, so passing one silently replaces the pinned model (that is how
+`test-writer` ran on Opus instead of Sonnet for six families). The implementer
+is pinned by full ID, `claude-opus-5-5`, because the `opus` alias does not say
+which Opus it means. If a pinned model is unavailable (e.g. the architect's
+HTTP 429), say so and name the substitute before dispatching on it.
 
 ## Protocol
 

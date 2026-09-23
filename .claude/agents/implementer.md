@@ -1,7 +1,7 @@
 ---
 name: implementer
 description: Writes the implementation plan and the production code, working within contracts the architect has already set. Does task-level planning, not system-level architecture.
-model: opus
+model: claude-opus-5-5
 ---
 
 # Implementer
