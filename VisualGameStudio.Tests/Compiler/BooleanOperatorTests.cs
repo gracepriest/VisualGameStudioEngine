@@ -184,23 +184,24 @@ public class BooleanOperatorExecutionTests
         => Assert.That(Run(
             "Console.WriteLine(True And True)\nConsole.WriteLine(True And False)\n" +
             "Console.WriteLine(False And True)\nConsole.WriteLine(False And False)"),
-            Is.EqualTo("true\nfalse\nfalse\nfalse"));
+            Is.EqualTo("True\nFalse\nFalse\nFalse"));
 
     [Test]
     public void Or_TruthTable()
         => Assert.That(Run(
             "Console.WriteLine(True Or True)\nConsole.WriteLine(True Or False)\n" +
             "Console.WriteLine(False Or True)\nConsole.WriteLine(False Or False)"),
-            Is.EqualTo("true\ntrue\ntrue\nfalse"));
+            Is.EqualTo("True\nTrue\nTrue\nFalse"));
 
     /// <summary>
     /// THE point of using <c>&amp;&amp;</c> over <c>&amp;</c>: a Boolean result must print as a
-    /// boolean. JavaScript's <c>&amp;</c> coerces to int32, so this would read 1/0.
+    /// boolean. JavaScript's <c>&amp;</c> coerces to int32, so this would read 1/0. (And it
+    /// prints .NET's <c>True</c>, not JS's <c>true</c>: see JavaScriptBooleanTextTests.)
     /// </summary>
     [Test]
     public void BooleanResult_PrintsAsBooleanNotAsNumber()
         => Assert.That(Run("Dim a As Boolean = True\nDim b As Boolean = True\nConsole.WriteLine(a And b)"),
-            Is.EqualTo("true"));
+            Is.EqualTo("True"));
 
     /// <summary>The condition that started this: an everyday compound guard.</summary>
     [Test]
@@ -222,7 +223,7 @@ public class BooleanOperatorExecutionTests
     [Test]
     public void Not_Executes()
         => Assert.That(Run("Dim a As Boolean = False\nConsole.WriteLine(Not a)"),
-            Is.EqualTo("true"));
+            Is.EqualTo("True"));
 
     /// <summary>Mixed casing, end to end — VB is a case-insensitive language.</summary>
     [Test]
@@ -230,11 +231,11 @@ public class BooleanOperatorExecutionTests
         => Assert.That(Run(
             "Dim a As Boolean = True\nDim b As Boolean = False\n" +
             "Console.WriteLine(a and b)\nConsole.WriteLine(a or b)\nConsole.WriteLine(not b)"),
-            Is.EqualTo("false\ntrue\ntrue"));
+            Is.EqualTo("False\nTrue\nTrue"));
 
     /// <summary>Chained operators must associate left and respect And-binds-tighter-than-Or.</summary>
     [Test]
     public void PrecedenceAndBindsTighterThanOr()
         => Assert.That(Run("Console.WriteLine(True Or False And False)"),
-            Is.EqualTo("true"), "must parse as True Or (False And False)");
+            Is.EqualTo("True"), "must parse as True Or (False And False)");
 }

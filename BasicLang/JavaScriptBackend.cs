@@ -276,6 +276,88 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// <summary>The emitted name of the half-to-even rounding helper CInt lowers to.</summary>
         private const string CIntHelperName = "__blCInt";
 
+        /// <summary>The emitted name of the runtime value-to-text helper (see <see cref="TextOf"/>).</summary>
+        private const string TextHelperName = "__blStr";
+
+        private bool _textHelperEmitted;
+
+        /// <summary>
+        /// THE one place a value becomes text on this backend, mirroring the C++ backend's
+        /// <c>StringifyForText</c>: <c>&amp;</c>, interpolation (which lowers to the same Concat),
+        /// <c>CStr</c>, <c>Console.Write</c>/<c>WriteLine</c> and a primitive's <c>.ToString()</c>.
+        ///
+        /// <para>⛔ A Boolean is <c>True</c>/<c>False</c>, as .NET and the C# and C++ backends print
+        /// it. JavaScript's own conversion gives lowercase <c>true</c>, and every one of those
+        /// sites used it: <c>"b=" &amp; flag</c> printed <c>b=true</c>.</para>
+        ///
+        /// <para>A value typed Object may hold a Boolean that nothing here can see, so it goes
+        /// through <see cref="TextHelperName"/>, a runtime check emitted in the prelude. Everything
+        /// else keeps the conversion it had: <paramref name="mustBeString"/> false leaves it to
+        /// JS's <c>+</c> / <c>console.log</c>, true wraps it in <c>String(...)</c>.</para>
+        /// </summary>
+        private string TextOf(IRValue value, string rendered, bool mustBeString)
+        {
+            if (IsBooleanValue(value))
+            {
+                if (value is IRConstant { Value: bool constant })
+                    return constant ? "\"True\"" : "\"False\"";
+                return $"({rendered} ? \"True\" : \"False\")";
+            }
+
+            if (NeedsRuntimeTextCheck(value))
+            {
+                // Scanned into the prelude by UsesTextHelper with this same predicate; a miss
+                // would be "__blStr is not defined" at run time, so refuse it here instead.
+                if (!_textHelperEmitted)
+                    throw new InvalidOperationException(
+                        $"JavaScript backend: {TextHelperName} is needed but UsesTextHelper did not see it.");
+                return $"{TextHelperName}({rendered})";
+            }
+
+            return mustBeString ? $"String({rendered})" : rendered;
+        }
+
+        private static bool IsBooleanValue(IRValue value) =>
+            string.Equals(value?.Type?.Name, "Boolean", StringComparison.OrdinalIgnoreCase);
+
+        private static bool IsPrimitiveTextType(IRValue value) =>
+            (value?.Type?.Name?.ToLowerInvariant()) switch
+            {
+                "boolean" or "string" or "byte" or "sbyte" or "short" or "ushort"
+                    or "integer" or "uinteger" or "single" or "double" => true,
+                _ => false,
+            };
+
+        private static bool NeedsRuntimeTextCheck(IRValue value) =>
+            string.Equals(value?.Type?.Name, "Object", StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>The single-argument calls TextOf lowers (see TryTextCall).</summary>
+        private static bool IsTextCall(string name, int argCount) =>
+            argCount == 1 && (string.Equals(name, "CStr", StringComparison.OrdinalIgnoreCase) ||
+                              name == "Console.WriteLine" || name == "Console.Write");
+
+        /// <summary>
+        /// Whether any TextOf site will need <see cref="TextHelperName"/>. ⛔ SCANNED for the same
+        /// reason as <see cref="UsesRoundingHelper"/>: the prelude is written before any body.
+        /// </summary>
+        private static bool UsesTextHelper(IRModule module)
+        {
+            foreach (var function in module?.Functions ?? Enumerable.Empty<IRFunction>())
+                foreach (var block in function.Blocks ?? Enumerable.Empty<BasicBlock>())
+                    foreach (var instruction in block.Instructions ?? Enumerable.Empty<IRInstruction>())
+                        switch (instruction)
+                        {
+                            case IRBinaryOp { Operation: BinaryOpKind.Concat } op
+                                when NeedsRuntimeTextCheck(op.Left) || NeedsRuntimeTextCheck(op.Right):
+                                return true;
+                            case IRCall call when IsTextCall(call.FunctionName, call.Arguments?.Count ?? 0)
+                                && NeedsRuntimeTextCheck(call.Arguments[0]):
+                                return true;
+                        }
+
+            return false;
+        }
+
 
         /// <summary>
         /// The half-to-even rounding CInt means, which JavaScript has no built-in for.
@@ -294,6 +376,18 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// </param>
         private void EmitConversionPrelude(IRModule module)
         {
+            _textHelperEmitted = UsesTextHelper(module);
+            if (_textHelperEmitted)
+            {
+                // Only for a value typed Object, whose runtime type is unknown here: see TextOf.
+                Line($"function {TextHelperName}(x) {{");
+                _indentLevel++;
+                Line("return typeof x === \"boolean\" ? (x ? \"True\" : \"False\") : String(x);");
+                _indentLevel--;
+                Line("}");
+                Line();
+            }
+
             if (!UsesRoundingHelper(module)) return;
 
             Line($"function {CIntHelperName}(x) {{");
@@ -966,7 +1060,8 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
                 // String concatenation is its own kind, so `+` here is never numeric addition
                 // in disguise.
-                case BinaryOpKind.Concat: return $"({l} + {r})";
+                case BinaryOpKind.Concat:
+                    return $"({TextOf(op.Left, l, mustBeString: false)} + {TextOf(op.Right, r, mustBeString: false)})";
 
                 case BinaryOpKind.Eq: return $"({l} === {r})";
                 case BinaryOpKind.Ne: return $"({l} !== {r})";
@@ -2476,6 +2571,9 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             // something that exists nowhere in JavaScript. They also cannot be expressed as a
             // renamed callee, since `Len(s)` becomes the MEMBER expression `s.length`, so they
             // are rendered whole here.
+            if (TryTextCall(call, rendered, out var text))
+                return text;
+
             if (TryStringBuiltin(call.FunctionName, rendered, out var builtin))
                 return builtin;
 
@@ -2483,6 +2581,34 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 return stdlib;
 
             return $"{CallTarget(call.FunctionName)}({string.Join(", ", rendered)})";
+        }
+
+        /// <summary>
+        /// <c>CStr(x)</c>, <c>Console.WriteLine(x)</c> and <c>Console.Write(x)</c>, through
+        /// <see cref="TextOf"/>. <c>Console.Write</c> needs a real string: Node's
+        /// <c>process.stdout.write</c> THROWS on a number or a Boolean (ERR_INVALID_ARG_TYPE),
+        /// where <c>console.log</c> accepts anything.
+        /// </summary>
+        private bool TryTextCall(IRCall call, List<string> rendered, out string result)
+        {
+            result = null;
+            var name = call.FunctionName;
+            if (!IsTextCall(name, rendered.Count)) return false;
+
+            var arg = call.Arguments[0];
+            switch (name)
+            {
+                case "Console.WriteLine":
+                    result = $"console.log({TextOf(arg, rendered[0], mustBeString: false)})";
+                    return true;
+                case "Console.Write":
+                    result = $"process.stdout.write({TextOf(arg, rendered[0], mustBeString: true)})";
+                    return true;
+                default: // CStr — unless the program declares its own, which must win.
+                    if (_userFunctionNames.Contains(name)) return false;
+                    result = TextOf(arg, rendered[0], mustBeString: true);
+                    return true;
+            }
         }
 
         public void Visit(IRReturn ret) =>
@@ -2863,6 +2989,13 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 var raw = methodIsForeign ? foreignMethod : mc.MethodName;
                 return $"{receiver}.{raw}({string.Join(", ", args)})";
             }
+
+            // `x.ToString()` on a primitive emitted `x.ToString()`, and a JS boolean, number or
+            // string has no such method: a TypeError at run time. (A class's own ToString is
+            // untouched: its receiver is not one of these types.)
+            if (args.Count == 0 && string.Equals(mc.MethodName, "ToString", StringComparison.OrdinalIgnoreCase)
+                && IsPrimitiveTextType(mc.Object))
+                return TextOf(mc.Object, receiver, mustBeString: true);
 
             var kind = ReceiverKind(mc.Object);
 
