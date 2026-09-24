@@ -122,6 +122,30 @@ namespace BasicLang.Compiler.IR.Optimization
         }
 
         /// <summary>
+        /// Whether a call can write the variable a value instruction's DESTINATION names, without
+        /// the write appearing in the caller — the destination's half of CSE's
+        /// <c>ReadsCallVisible</c> (ADR-0005 D2: the destination is guarded like a read). The
+        /// instruction carries only the NAME, so the answer comes from the function's own
+        /// declarations: a by-value parameter or a declared non-global local is private to the
+        /// frame; a module variable, a class member or a <c>ByRef</c> parameter is storage a
+        /// callee can reach. An undeclared non-temp name is treated as reachable — over-killing
+        /// only costs a merge.
+        /// </summary>
+        protected static bool IsCallVisibleDestination(string name, IRFunction function)
+        {
+            if (string.IsNullOrEmpty(name) || function == null) return false;
+            if (function.Parameters != null)
+                foreach (var parameter in function.Parameters)
+                    if (string.Equals(parameter.Name, name, StringComparison.OrdinalIgnoreCase))
+                        return parameter.IsByRef;
+            if (function.LocalVariables != null)
+                foreach (var local in function.LocalVariables)
+                    if (string.Equals(local.Name, name, StringComparison.OrdinalIgnoreCase))
+                        return local.IsGlobal && !local.IsConst;
+            return !IsTempDestination(name);
+        }
+
+        /// <summary>
         /// Gathers every variable name read anywhere in <paramref name="value"/>'s operand tree,
         /// plus the value's own destination name (the IRBuilder names result values after their
         /// assignment target, so a renamed temp IS a definition). Mirrors CopyPropagationPass's
@@ -1315,7 +1339,7 @@ namespace BasicLang.Compiler.IR.Optimization
                     }
                     else
                     {
-                        expressions[key] = Candidate.For(binaryOp);
+                        expressions[key] = Candidate.For(binaryOp, function);
                     }
                 }
 
@@ -1339,25 +1363,45 @@ namespace BasicLang.Compiler.IR.Optimization
 
         /// <summary>
         /// One recorded candidate: the defining instruction, every variable name its operand tree
-        /// READS, and whether any of those reads is storage a CALL can write behind our back.
+        /// READS, its own DESTINATION name, and whether any of those reads is storage a CALL can
+        /// write behind our back.
+        ///
+        /// <para>⛔ THE DESTINATION IS GUARDED TOO (ADR-0005 D2, Invariant S′). A merge re-points
+        /// a later duplicate's consumers at THIS instruction, and a backend that materialises it
+        /// (C++, JavaScript, MSIL) reads it back by its destination NAME. So the value is stale
+        /// the moment that name is written, exactly as it is when an operand is written. MEASURED
+        /// on <c>Dim a = p + q : a = Seed(0) : l(0) = p + q</c> at HEAD: C++, JavaScript and MSIL
+        /// printed <c>0,0</c> where <c>3,0</c> is correct; C# printed the right answer only
+        /// because it re-emits <c>p + q</c> as text.</para>
+        ///
+        /// <para>The destination is killed by the SAME vocabulary as the operands — assignment
+        /// target, store address, rename, ByRef argument — with one exception: the defining
+        /// instruction itself carries the destination name (it is a rename), and must not kill
+        /// its own record through it. It still kills through its OPERANDS, which is what keeps
+        /// the self-redefining <c>p = p + 10</c> record dead (see the use → record → kill note in
+        /// <see cref="EliminateCommonSubexpressions"/>).</para>
         /// </summary>
         private sealed class Candidate
         {
             public IRBinaryOp Value;
             public List<string> Reads;
+            public string Destination;
             public bool ReadsCallVisibleStorage;
 
-            public static Candidate For(IRBinaryOp op)
+            public static Candidate For(IRBinaryOp op, IRFunction function)
             {
                 var reads = new List<string>();
                 CollectNames(op.Left, reads);
                 CollectNames(op.Right, reads);
+                var destination = string.IsNullOrEmpty(op.Name) ? null : op.Name;
                 return new Candidate
                 {
                     Value = op,
                     Reads = reads,
+                    Destination = destination,
                     ReadsCallVisibleStorage =
                         ReadsCallVisible(op.Left) || ReadsCallVisible(op.Right)
+                        || IsCallVisibleDestination(destination, function)
                 };
             }
         }
@@ -1481,8 +1525,16 @@ namespace BasicLang.Compiler.IR.Optimization
                 bool dead = isCall && entry.Value.ReadsCallVisibleStorage;
                 if (!dead && killed != null)
                 {
+                    // The defining instruction renames its own destination; that is the value
+                    // being BORN, not a write that makes it stale (see Candidate).
+                    string destination = ReferenceEquals(entry.Value.Value, inst) ? null : entry.Value.Destination;
                     foreach (var name in killed)
                     {
+                        if (destination != null && string.Equals(destination, name, StringComparison.OrdinalIgnoreCase))
+                        {
+                            dead = true;
+                            break;
+                        }
                         foreach (var read in entry.Value.Reads)
                         {
                             if (string.Equals(read, name, StringComparison.OrdinalIgnoreCase))

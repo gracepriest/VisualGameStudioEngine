@@ -86,6 +86,19 @@ public class JsExecutionTierRosterTests
         // Cross-backend (C#/C++/JS); its JS leg runs under Node via
         // JavaScriptOptimizedExecutionTests.RunOptimized.
         typeof(NegativeCaseLabelExecutionTests),
+
+        // ADR-0005 D2 — CSE guards a shared value's own destination, not only its operands.
+        // CseDestinationInvalidationExecutionTests / DestinationInvalidation_D4_ByRefExecutionTests
+        // are four-backend fixtures (FourBackends.RunsOnEveryBackend[Aggressive]); their JS legs
+        // run under JavaScriptExecutionTests.RunJs / FourBackends.RunAggressiveJs like any other
+        // row here. CseDestinationKnownGapsTask133Tests (task #133's known-wrong pins) is NOT
+        // caught by the widened name match below — it neither starts with "JavaScript"/"Js" nor
+        // ends with "ExecutionTests" — but its A1/A6 pins DO spawn Node
+        // (FourBackends.RunAggressiveJs), so it belongs here for the same reason
+        // BooleanOperatorExecutionTests/MemberCasingExecutionTests do (see their own note above).
+        typeof(CseDestinationInvalidationExecutionTests),
+        typeof(DestinationInvalidation_D4_ByRefExecutionTests),
+        typeof(CseDestinationKnownGapsTask133Tests),
     };
 
     /// <summary>
@@ -133,7 +146,7 @@ public class JsExecutionTierRosterTests
 
     [Test]
     public void RosterIsPinned()
-        => Assert.That(ExecutionTier, Has.Length.EqualTo(34),
+        => Assert.That(ExecutionTier, Has.Length.EqualTo(37),
             "The execution-tier roster changed. That is fine — update the number — but it must " +
             "be a deliberate edit, not a silent shrink.");
 

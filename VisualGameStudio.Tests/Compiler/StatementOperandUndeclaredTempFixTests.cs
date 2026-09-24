@@ -363,24 +363,28 @@ public class StatementOperandUndeclaredTempFixTests
     // recomputes `p + q` from its operands at each of the two sites rather than trusting a name a
     // COMMON-SUBEXPRESSION-ELIMINATION merge may have made stale.
     //
-    // ⚠ C++, JavaScript (through EITHER optimizing pipeline) and MSIL are NOT fixed by this —
-    // measured wrong (`0,0`) on all three, because THEIR OWN store-operand codegen still reads the
-    // CSE-merged, since-reassigned temp by name. This is task #125,
-    // CommonSubexpressionEliminationPass merging two structurally-identical pure expressions
-    // (`p + q`) without accounting for an intervening reassignment of the variable one of them
-    // feeds — an optimizer defect, not this family's, and NOT fixed here. Pinned as KNOWN-WRONG
-    // below so the pin flips LOUDLY (a test starts FAILING, not silently passing) the day #125 is
-    // fixed — see LoopPassesDisabledTests / InductionVariableDisabledTests for this repo's existing
-    // "still broken, pinned" convention.
-    //
-    // ⭐ STILL PINNED, AND WHY, per ADR-0001 Obligations / ADR-0004 D2's later fix to CSE's
-    // candidate gate ("CSE may only merge instructions it would call replicable"): that gate
-    // closes #125 only for a binop with a NON-replicable operand (see
-    // Family111MaterialisationBehaviourTests' G6/G7, whose shared operand is a non-Const global or
-    // a ByRef parameter — those ARE promoted). C4's shared operands, `p` and `q`, are both plain
-    // LOCALS — unconditionally replicable — so the gate does not apply here at all and CSE still
-    // merges `p + q` exactly as before. #125 remains open for this shape; the three pins below are
-    // MEASURED UNCHANGED on this tree and stay pinned.
+    // ⭐⭐ RESOLVED 2026-09-24 by ADR-0005 D2 (amending ADR-0004 D2's Invariant S to S′). C++,
+    // JavaScript (through EITHER optimizing pipeline) and MSIL used to be WRONG here (`0,0`)
+    // because CSE's merge tracked only what an expression's operand tree READ, never the shared
+    // value's own DESTINATION — so a write to `a` (the surviving instruction's name) after the
+    // merge was invisible to the pass, and every backend that materialises the value and reads it
+    // back BY NAME saw the stale, reassigned `a` instead of a recomputed `p + q`. ADR-0001
+    // Obligations / ADR-0004 D2's later "CSE may only merge a replicable operand" gate did NOT
+    // close this for C4 specifically — `p` and `q` are both plain LOCALS, unconditionally
+    // replicable, so that gate never applied here (contrast Family111MaterialisationBehaviourTests'
+    // G6/G7, whose shared operand is a non-Const global / ByRef parameter, where the gate DOES
+    // apply). ADR-0005 D2 widens the invariant instead: `Candidate` now records its own
+    // `Destination` alongside `Reads`, and `Invalidate` kills an entry when ITS destination is
+    // written — the same kill vocabulary already used for operands (assignment target, store
+    // address, rename, ByRef argument), with the defining instruction exempted from killing its
+    // own just-recorded entry through that destination (it still kills through its OPERANDS,
+    // which is what keeps a self-redefining `p = p + 10` record dead). MEASURED on this tree: all
+    // four backends now print `3,0` on every entry point, both pipelines — the three
+    // "_PinnedForTask125" pins below are RENAMED to their fixed names and now assert the CORRECT
+    // value, per this repo's convention of flipping a pin loudly rather than deleting it quietly
+    // (see LoopPassesDisabledTests / InductionVariableDisabledTests for the same convention run
+    // the other way). CseDestinationInvalidationTests.cs carries the broader four-backend +
+    // both-entry-point coverage this flip alone does not.
     // ====================================================================================
 
     private const string C4 =
@@ -447,54 +451,50 @@ public class StatementOperandUndeclaredTempFixTests
     }
 
     /// <summary>
-    /// ⛔ PINNED WRONG — task #125, <c>CommonSubexpressionEliminationPass</c>. C++ merges
-    /// `p + q` at `Dim a` and at `l(0) = p + q` onto one shared value, and its OWN store-operand
-    /// codegen reads that merged value back by name — after `a` was reassigned to `Seed(0)`'s
-    /// result. MEASURED: <c>0,0</c>, not the correct <c>3,0</c>. Not this family's to fix; if
-    /// someone fixes #125 this test goes RED — that is progress, not a regression: update or
-    /// delete the pin, per this repo's "still broken, pinned" convention
-    /// (see <c>LoopPassesDisabledTests</c> / <c>InductionVariableDisabledTests</c>).
+    /// ⭐ FIXED 2026-09-24 — was PINNED WRONG for task #125, <c>CommonSubexpressionEliminationPass</c>;
+    /// renamed from <c>CppStillReadsTheCseMergedVariable_PinnedForTask125</c> now that it is.
+    /// C++ used to merge `p + q` at `Dim a` and at `l(0) = p + q` onto one shared value, and its OWN
+    /// store-operand codegen read that merged value back by name — after `a` was reassigned to
+    /// `Seed(0)`'s result — MEASURED <c>0,0</c> at HEAD. ADR-0005 D2 widens CSE's invalidation to
+    /// guard the shared value's own DESTINATION, not only its operands (see the C4 comment block
+    /// above); MEASURED on this tree: <c>3,0</c>, the correct value.
     ///
-    /// <para>⭐ STILL PINNED after CSE's candidate gate (ADR-0001 Obligations / ADR-0004 D2): the
-    /// gate excludes a binop only when an OPERAND is non-replicable. `p` and `q` here are both
-    /// LOCALS, unconditionally replicable, so this merge is not affected and #125 stays open for
-    /// this shape — contrast <c>Family111MaterialisationBehaviourTests</c>' G6/G7, whose shared
-    /// operand is a non-Const global / ByRef parameter, where the gate DOES close #125.</para>
+    /// <para>⚠ The candidate gate ADR-0001 Obligations / ADR-0004 D2 added (excluding a binop with
+    /// a non-replicable operand) is NOT why this flipped — `p`/`q` are both replicable locals, so
+    /// that gate never applied to C4 at all (contrast <c>Family111MaterialisationBehaviourTests</c>'
+    /// G6/G7, which the gate DID fix, before ADR-0005 D2 existed). This is ADR-0005 D2's own fix,
+    /// on a shape the gate could never reach.</para>
     /// </summary>
     [Test]
-    public void CppStillReadsTheCseMergedVariable_PinnedForTask125()
-        => Assert.That(FourBackends.Norm(BclE2E.CompileRun(BclE2E.CompileToCppOptimized(C4))), Is.EqualTo("seed\nseed\nseed\n0,0"),
-            "if this changed, task #125 (CommonSubexpressionEliminationPass merging p+q across a "
-            + "reassignment) may be fixed — update or delete this pin, do not just widen it");
+    public void CppNoLongerReadsTheCseMergedVariable_Task125FixedByAdr0005D2()
+        => Assert.That(FourBackends.Norm(BclE2E.CompileRun(BclE2E.CompileToCppOptimized(C4))), Is.EqualTo(C4Correct),
+            "ADR-0005 D2 (CSE guards a shared value's own destination) must keep `l(0) = p + q` "
+            + "from reading `a`'s merged, since-reassigned value; if this regressed to '0,0', the "
+            + "destination guard was weakened or removed — update or delete this pin, do not just "
+            + "widen it");
 
-    /// <summary>⛔ PINNED WRONG — task #125, same mechanism as C++. JavaScript ONLY under an
-    /// OPTIMIZING pipeline (CSE is a standard pass); the plain, non-optimizing
-    /// <c>JavaScriptExecutionTests.RunJs</c> leg runs no CSE at all and prints the correct `3,0`
-    /// by having nothing to merge — that is NOT evidence #125 is fixed on JS, it is evidence this
-    /// one leg never exercises the optimizer.
-    ///
-    /// <para>⭐ STILL PINNED after CSE's candidate gate (ADR-0001/ADR-0004 D2) — same reasoning as
-    /// the C++ pin above: `p`/`q` are both replicable locals, so the gate does not apply and the
-    /// merge (and #125) is unchanged here.</para>
+    /// <summary>⭐ FIXED 2026-09-24 — same mechanism as the C++ pin above, renamed from
+    /// <c>JavaScriptOptimizedStillReadsTheCseMergedVariable_PinnedForTask125</c>. JavaScript ONLY
+    /// under an OPTIMIZING pipeline (CSE is a standard pass); the plain, non-optimizing
+    /// <c>JavaScriptExecutionTests.RunJs</c> leg runs no CSE at all and was never evidence either
+    /// way. MEASURED on this tree: <c>3,0</c>.
     /// </summary>
     [Test]
-    public void JavaScriptOptimizedStillReadsTheCseMergedVariable_PinnedForTask125()
-        => Assert.That(FourBackends.Norm(JavaScriptOptimizedExecutionTests.RunOptimized(C4)), Is.EqualTo("seed\nseed\nseed\n0,0"),
-            "if this changed, task #125 may be fixed on the JS backend's optimizing path — update "
-            + "or delete this pin, do not just widen it");
+    public void JavaScriptOptimizedNoLongerReadsTheCseMergedVariable_Task125FixedByAdr0005D2()
+        => Assert.That(FourBackends.Norm(JavaScriptOptimizedExecutionTests.RunOptimized(C4)), Is.EqualTo(C4Correct),
+            "ADR-0005 D2 — same reasoning as the C++ pin above; if this regressed to '0,0', the "
+            + "destination guard was weakened or removed on the JS backend's optimizing path");
 
-    /// <summary>⛔ PINNED WRONG — task #125, same mechanism. MSIL runs its optimizer by default in
-    /// both entry points this suite uses (docs/HANDOFF.md), so no separate "optimized" leg is
-    /// needed to observe it.
-    ///
-    /// <para>⭐ STILL PINNED after CSE's candidate gate (ADR-0001/ADR-0004 D2) — same reasoning as
-    /// the C++ pin above.</para>
+    /// <summary>⭐ FIXED 2026-09-24 — same mechanism, renamed from
+    /// <c>MsilStillReadsTheCseMergedVariable_PinnedForTask125</c>. MSIL runs its optimizer by
+    /// default in both entry points this suite uses (docs/HANDOFF.md), so no separate "optimized"
+    /// leg is needed to observe it. MEASURED on this tree: <c>3,0</c>.
     /// </summary>
     [Test]
-    public void MsilStillReadsTheCseMergedVariable_PinnedForTask125()
-        => Assert.That(FourBackends.Norm(MsilHarness.RunExpectingSuccess(C4)), Is.EqualTo("seed\nseed\nseed\n0,0"),
-            "if this changed, task #125 may be fixed on MSIL — update or delete this pin, do not "
-            + "just widen it");
+    public void MsilNoLongerReadsTheCseMergedVariable_Task125FixedByAdr0005D2()
+        => Assert.That(FourBackends.Norm(MsilHarness.RunExpectingSuccess(C4)), Is.EqualTo(C4Correct),
+            "ADR-0005 D2 — same reasoning as the C++ pin above; if this regressed to '0,0', the "
+            + "destination guard was weakened or removed on MSIL");
 
     // ⚠ C6 (adds `Console.WriteLine(p + q)` before the final print, and stores a LITERAL `0` at
     // l(0) instead of `p + q`) was considered and NOT added: it does not touch any of the four
