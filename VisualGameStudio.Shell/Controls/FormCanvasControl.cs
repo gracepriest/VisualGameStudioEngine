@@ -324,9 +324,40 @@ public class FormCanvasControl : Control
         set => SetValue(EditingItemProperty, value);
     }
 
+    /// <summary>
+    /// The item the user's PREVIOUS primary press on this canvas landed on and left as the sole
+    /// selection — the only thing that arms VS's "click again to rename" (owner's report,
+    /// 2026-09-24: "not able to edit an existing item at all").
+    ///
+    /// <para>⛔⛔ <c>ReferenceEquals(hit, SelectedControl)</c> alone is NOT the rule. A Type Here
+    /// commit selects the item it just created, through the view model's one selection store and
+    /// the TwoWay <c>SelectedControl</c> binding, before the user has clicked it at all — so the
+    /// user's FIRST physical click on it looked like a second one, opened the rename silently, and
+    /// the user's next click closed it again. Selection that arrives by ANY route other than a
+    /// press here (Type Here commit, property grid, undo, tray, keyboard, a document switch) must
+    /// never arm a rename, so <see cref="OnPropertyChanged"/> disarms on every
+    /// <see cref="SelectedControl"/> change that <see cref="OnPointerPressed"/> did not make, and
+    /// every press consumes the armed state before deciding anything.</para>
+    ///
+    /// <para>F2 does not read this: it is an explicit request, not an inference from clicks.</para>
+    /// </summary>
+    private FormControl? _renameArmedFor;
+
+    /// <summary>True only while <see cref="OnPointerPressed"/> itself is changing the selection, so
+    /// that change — and only that change — does not disarm <see cref="_renameArmedFor"/>.</summary>
+    private bool _pressIsSelecting;
+
     protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)
     {
         base.OnPropertyChanged(change);
+
+        // See _renameArmedFor: a selection this canvas's own press did not make never arms a rename.
+        if ((change.Property == SelectedControlProperty && !_pressIsSelecting) ||
+            change.Property == DocumentProperty ||
+            change.Property == SelectionProperty)
+        {
+            _renameArmedFor = null;
+        }
 
         if (change.Property != SelectionProperty)
         {
@@ -384,6 +415,55 @@ public class FormCanvasControl : Control
         // undo stack, so the text would rewind correctly and the canvas would keep drawing the
         // control where it used to be.
         Focusable = true;
+
+        // ⛔⛔ F2 is a KEY BINDING on this control, not an OnKeyDown arm — measured against
+        // Avalonia 11.3.13's KeyboardDevice.ProcessRawEvent: on KeyDown it walks the KeyBindings of
+        // the focused element and then every VISUAL ANCESTOR up to the window, nearest first, and
+        // only THEN raises KeyDownEvent — already Handled if any binding's command ran. So
+        // MainWindow's own <KeyBinding Gesture="F2" Command="{Binding NextBookmarkCommand}"/> ran
+        // and consumed F2 before this control's OnKeyDown (or even a Tunnel handler, which could
+        // only observe a key the window had already acted on) ever saw it. A binding on the focused
+        // element itself is the one thing tried before the window's. Its CanExecute is the whole
+        // "does the designer want this F2" test: false leaves the key unhandled, so the walk goes
+        // on to the window and F2 is Next Bookmark again. SolutionExplorerView coexists with the
+        // same window binding the same way.
+        KeyBindings.Add(new KeyBinding
+        {
+            Gesture = new KeyGesture(Key.F2),
+            Command = new RenameOnF2Command(this)
+        });
+    }
+
+    /// <summary>
+    /// F2's command: rename the selected item in place, the keyboard half of VS's rename gesture —
+    /// the second click's equivalent.
+    ///
+    /// <para>⛔ <see cref="CanExecute"/> must be exactly "F2 would open a rename", never looser:
+    /// <see cref="KeyBinding.TryHandle"/> marks the key Handled whenever it is true, and a handled
+    /// F2 never reaches the window's Next Bookmark binding.</para>
+    /// </summary>
+    private sealed class RenameOnF2Command : ICommand
+    {
+        private readonly FormCanvasControl _canvas;
+
+        public RenameOnF2Command(FormCanvasControl canvas) => _canvas = canvas;
+
+        // KeyBinding asks CanExecute at the moment of the key press, so there is nothing to raise.
+        public event EventHandler? CanExecuteChanged { add { } remove { } }
+
+        public bool CanExecute(object? parameter) =>
+            _canvas.Document != null &&
+            _canvas.SelectedControl is { } control &&
+            FormCanvasTransform.IsRenamableItem(control) &&
+            _canvas.EditItemCommand?.CanExecute(control) == true;
+
+        public void Execute(object? parameter)
+        {
+            if (CanExecute(parameter))
+            {
+                _canvas.OfferRename(_canvas.SelectedControl!);
+            }
+        }
     }
 
     /// <summary>
@@ -511,15 +591,11 @@ public class FormCanvasControl : Control
             return;
         }
 
-        // F2 is the keyboard half of VS's rename gesture — the second click's equivalent. Only an
-        // item the catalog calls renamable; on anything else the key is left unhandled.
+        // ⛔ F2 is NOT handled here — see RenameOnF2Command and the KeyBinding in the constructor.
+        // A window-level F2 binding runs before OnKeyDown, so an arm here was dead in the IDE. An
+        // F2 that reaches this point is one the designer declined; leave it unhandled.
         if (e.Key == Key.F2)
         {
-            if (FormCanvasTransform.IsRenamableItem(control) && OfferRename(control))
-            {
-                e.Handled = true;
-            }
-
             return;
         }
 
@@ -628,6 +704,10 @@ public class FormCanvasControl : Control
         }
 
         SelectedControl = control;
+
+        // A double-click is its own gesture, not a selecting press: the click after it starts
+        // afresh rather than reading as the "second click" of a rename.
+        _renameArmedFor = null;
 
         // ⛔ The FIRST press of this pair landed on an already-selected item and offered a rename
         // (OfferRename). A double-click opens the handler and must not leave that edit open behind
@@ -741,6 +821,12 @@ public class FormCanvasControl : Control
         // route rather than the hidden editor's.
         Focus();
 
+        // ⛔ Every press CONSUMES the rename arming — a right press, a Type Here press, a handle or
+        // grip press, a background press. Only the ordinary item press below re-arms it, so "the
+        // PREVIOUS press landed on this item" is literally what the second-click test reads.
+        var renameArmedFor = _renameArmedFor;
+        _renameArmedFor = null;
+
         // ⚠ Left button only. Arming a drag on a right-click means the context menu gesture also
         // moves the control the user was about to right-click.
         if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
@@ -823,16 +909,38 @@ public class FormCanvasControl : Control
             // selection. Decided BEFORE ApplyClickSelection, which is what makes the first click's
             // target the selection. ClickCount == 1 is what keeps it apart from a double-click —
             // see OfferRename.
+            // ⛔⛔ AND the user's PREVIOUS press must have landed on this same item (renameArmedFor).
+            // Being selected is not enough: a Type Here commit selects the new item before any
+            // click, and without this the first click on it opened a rename — see _renameArmedFor.
             var secondClick = !extend && e.ClickCount == 1 && hit != null &&
+                              ReferenceEquals(hit, renameArmedFor) &&
                               ReferenceEquals(hit, SelectedControl) &&
                               (Selection == null || Selection.Controls.Count <= 1) &&
                               FormCanvasTransform.IsRenamableItem(hit);
 
-            ApplyClickSelection(hit, extend);
+            _pressIsSelecting = true;
+            try
+            {
+                ApplyClickSelection(hit, extend);
+            }
+            finally
+            {
+                _pressIsSelecting = false;
+            }
 
             if (secondClick)
             {
                 OfferRename(hit!);
+            }
+
+            // Arm the NEXT press: this one landed on an item and left it as the sole selection.
+            // Checked AFTER OfferRename, so a view model that moved the selection in answer to it
+            // (which disarms through OnPropertyChanged) is read as it now stands.
+            if (!extend && hit != null &&
+                ReferenceEquals(hit, SelectedControl) &&
+                (Selection == null || Selection.Controls.Count <= 1))
+            {
+                _renameArmedFor = hit;
             }
         }
 

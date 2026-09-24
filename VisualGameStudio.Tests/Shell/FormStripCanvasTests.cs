@@ -99,6 +99,14 @@ public class FormStripCanvasTests
             Click(at);
             Click(at);
         }
+
+        /// <summary>Same offset (+8px, X) the implementer's probe used to make a second click a
+        /// GENUINELY SEPARATE single click rather than the second half of a double-click. Measured:
+        /// two <see cref="Click"/> calls at the identical point with no time advance between them
+        /// arrive with ClickCount=2 — the headless pointer pipeline has no virtual clock to advance
+        /// past instead, so the two presses must differ in POSITION. Small enough to stay inside the
+        /// same cell, so the hit test still resolves to the same control.</summary>
+        public Point OffsetWithinCell(Point at) => at + new Point(8, 0);
     }
 
     /// <summary>
@@ -479,9 +487,15 @@ public class FormStripCanvasTests
     }
 
     /// <summary>
-    /// ⛔⛔ THE CORE GESTURE. A separate single click — not a double-click — on a cell that is
-    /// ALREADY the selection. Pre-implementation this is red because <c>OnPointerPressed</c> has
-    /// no "already selected, ordinary click" branch that fires <c>EditItemCommand</c> at all.
+    /// ⛔⛔ THE CORE GESTURE. A REAL click selects the item, then a SEPARATE real click (offset
+    /// within the same cell — see <see cref="Rig.OffsetWithinCell"/> — so the headless pointer
+    /// pipeline does not read the pair as a double-click) must fire <c>EditItemCommand</c>. Selection
+    /// arriving through a click is what arms the rename in the real production rule
+    /// (<c>FormCanvasControl._renameArmedFor</c>) — setting <c>Selection</c> in code, as this test
+    /// used to, never arms it and would pass even if the FIRST click after a code-driven selection
+    /// wrongly opened a rename (the owner's actual bug). See
+    /// <see cref="PressingAnAlreadySelectedItemsCell_SelectedInCode_OneClickDoesNotBeginEditing"/>
+    /// for that negative case, pinned separately.
     /// </summary>
     [AvaloniaTest]
     public void PressingAnAlreadySelectedItemsCell_ASecondTime_BeginsEditingIt()
@@ -489,16 +503,92 @@ public class FormStripCanvasTests
         var rig = Surface();
         var edit = new Recorder();
         rig.Canvas.EditItemCommand = edit;
-        rig.Selection.Set(rig.MnuFile);
 
         var at = rig.CentreOfEntry(rig.MnuFile, FormLayoutRole.Cell);
+
+        // First click: a REAL press that selects the item.
         rig.Click(at);
+        Assert.That(rig.Selection.Primary, Is.SameAs(rig.MnuFile),
+            "precondition: the first click must select the item before the second click can be tested");
+
+        // Second click: a SEPARATE press, offset within the same cell so it is not read as a
+        // double-click.
+        rig.Click(rig.OffsetWithinCell(at));
 
         Assert.Multiple(() =>
         {
             Assert.That(edit.Executions, Is.EqualTo(1));
             Assert.That(edit.LastParameter, Is.SameAs(rig.MnuFile));
         });
+    }
+
+    /// <summary>
+    /// OWNER'S ACTUAL BUG, pinned in this isolated rig: selection arriving by a NON-click route
+    /// (property grid, Type Here commit, undo, tray, a document switch — simulated here with
+    /// <c>Selection.Set</c> directly) must never arm a rename, so the user's very next click —
+    /// their FIRST physical click on the item — must only confirm the selection, not open editing.
+    /// Before the <c>_renameArmedFor</c> fix this failed: <c>ReferenceEquals(hit, SelectedControl)</c>
+    /// alone could not distinguish "already selected because of a click" from "already selected
+    /// because something else set it".
+    /// </summary>
+    [AvaloniaTest]
+    public void PressingAnAlreadySelectedItemsCell_SelectedInCode_OneClickDoesNotBeginEditing()
+    {
+        var rig = Surface();
+        var edit = new Recorder();
+        rig.Canvas.EditItemCommand = edit;
+        rig.Selection.Set(rig.MnuFile);
+        rig.Canvas.SelectedControl = rig.MnuFile;
+
+        var at = rig.CentreOfEntry(rig.MnuFile, FormLayoutRole.Cell);
+        rig.Click(at);
+
+        Assert.That(edit.Executions, Is.Zero,
+            "a click on an item selected by a NON-click route must only confirm the selection, not " +
+            "begin editing — this is the owner's report ('can't edit at all' was actually 'the first " +
+            "click after a Type-Here commit silently opened a rename')");
+    }
+
+    /// <summary>
+    /// A STALE ARM, not merely a MISSING one. The item WAS genuinely clicked once — arming it — but
+    /// the selection then moved away to another item and back again, both moves by a NON-click route
+    /// (property grid, undo, a document switch — simulated here with <c>Selection.Set</c>). Because
+    /// the item was clicked before, a naive "was this item ever the target of a real click" check
+    /// would still consider it armed; the actual rule (<c>OnPropertyChanged</c> clearing
+    /// <c>_renameArmedFor</c> on every <c>SelectedControl</c> change <c>OnPointerPressed</c> did not
+    /// itself make) must disarm it on the trip through B, so the user's next click on A — their
+    /// FIRST physical click since that trip — only confirms the selection.
+    /// </summary>
+    [AvaloniaTest]
+    public void SelectionMovedAwayAndBackByNonClickRoutes_ThenClickingTheOriginalItemOnce_DoesNotBeginEditing()
+    {
+        var rig = Surface();
+        var edit = new Recorder();
+        rig.Canvas.EditItemCommand = edit;
+
+        var at = rig.CentreOfEntry(rig.MnuFile, FormLayoutRole.Cell);
+
+        // A genuine click on A arms it.
+        rig.Click(at);
+        Assert.That(rig.Selection.Primary, Is.SameAs(rig.MnuFile),
+            "precondition: the click must select A before the selection is moved away from it");
+
+        // Selection moves A -> B -> A, both by NON-click routes.
+        rig.Selection.Set(rig.MnuOpen);
+        rig.Canvas.SelectedControl = rig.MnuOpen;
+        rig.Selection.Set(rig.MnuFile);
+        rig.Canvas.SelectedControl = rig.MnuFile;
+
+        // The user's first click on A since that round trip must only confirm the selection. Offset
+        // within the cell (see Rig.OffsetWithinCell) so this genuinely separate click — following the
+        // FIRST click at the same point with no time advance between them — is not itself read as a
+        // double-click of that first press, which would fail on ClickCount alone and mask what this
+        // test is actually proving.
+        rig.Click(rig.OffsetWithinCell(at));
+
+        Assert.That(edit.Executions, Is.Zero,
+            "a stale arm from a click BEFORE the selection moved away and back must not fire a rename " +
+            "on the next click — only a click immediately preceding this one may arm it");
     }
 
     /// <summary>F2 is the keyboard equivalent of the second click. Catches: OnKeyDown having no
