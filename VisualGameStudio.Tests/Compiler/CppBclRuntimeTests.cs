@@ -618,7 +618,7 @@ int main() {
     auto f = std::make_shared<StringBuilder>();
     f->Append(false);
     printf(""false=%d\n"", f->ToString() == ""False"");
-    /* Append(double) is .NET's v.ToString() (verified .NET: 1.5 / 0.30000000000000004) */
+    /* Append(double) is .NET's shortest round-trip text, as CStr and `&` are (FormatDouble) */
     auto dbl = std::make_shared<StringBuilder>();
     dbl->Append(1.5)->Append(0.1 + 0.2);
     printf(""dbl=%d\n"", dbl->ToString() == ""1.50.30000000000000004"");

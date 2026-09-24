@@ -49,10 +49,10 @@ public class MsilByRefTests
     /// <summary>
     /// C#, C++ and MSIL run and agree; JavaScript refuses the declaration by design.
     ///
-    /// <para><paramref name="cppExpected"/> is an escape hatch for a C++-only spelling. No case
-    /// uses it now: C++ once printed <c>CStr(Double)</c> with six decimal places
-    /// (<c>3.500000</c>), and now prints what .NET prints through <c>BasicLang::FormatDouble</c>.
-    /// Omit it and all three backends are held to the SAME string.</para>
+    /// <para><paramref name="cppExpected"/> is an escape hatch for a C++-only spelling. It was
+    /// used for <c>CStr(Double)</c>, which printed six decimals on C++ (<c>42.500000</c>) until
+    /// C++ got .NET's formatter (CppDoubleFormattingTests); no case needs it now. Omit it and
+    /// all three backends are held to the SAME string.</para>
     /// </summary>
     private static void AgreesOnThreeBackends(string program, string expected, string cppExpected = null)
     {
@@ -119,7 +119,8 @@ public class MsilByRefTests
             End Sub
             """, "9000000000000");
 
-    /// <summary>A ByRef Double read back and written through its indirect.</summary>
+    /// <summary>A ByRef Double — all three backends print 42.5 (C++ printed 42.500000 before it got
+    /// .NET's formatter).</summary>
     [Test]
     public void ByRefDouble_UsesTheR8IndirectSuffix()
         => AgreesOnThreeBackends("""

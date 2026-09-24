@@ -50,9 +50,9 @@ public class ModuleScopeInitializerTests
     /// MSIL <c>.cctor</c> comment warns about — and exactly what C++ does, see
     /// <see cref="ACppGlobalInitializer_IsStillDropped"/>.
     ///
-    /// <para>⛔ THREE backends here, not four. C++ carries these too, and is asserted in
-    /// <see cref="AModuleScopeInitializer_ReachesTheCppProgram"/> (it once formatted a Double
-    /// as <c>3.500000</c>, which is why it has its own list).</para>
+    /// <para>⛔ THREE backends here, not four. C++ carries these too and is asserted in
+    /// <see cref="AModuleScopeInitializer_ReachesTheCppProgram"/> — historically because it
+    /// formatted a Double as <c>3.500000</c>; it prints <c>3.5</c> now, as .NET does.</para>
     /// </summary>
     [Test]
     [Category("Integration")]
@@ -86,8 +86,10 @@ public class ModuleScopeInitializerTests
     /// was never the folding path.
     ///
     /// <para>⚠ Separate from the shared list above because C++ used to FORMAT a Double
-    /// differently (<c>CStr(3.5)</c> was <c>3.500000</c>). It now prints .NET's <c>3.5</c>
-    /// (CppFloatFormattingTests); a lost initializer would print <c>0</c>.</para>
+    /// differently (<c>CStr(3.5)</c> was <c>3.500000</c>). It prints <c>3.5</c> now, as C# and
+    /// MSIL do (CppDoubleFormattingTests). Still an exact string, never trimmed: a test that
+    /// normalised the digits would also pass if the initializer were lost and the global read
+    /// 0.</para>
     /// </summary>
     [Test]
     [Category("Integration")]

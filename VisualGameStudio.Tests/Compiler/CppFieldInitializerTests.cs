@@ -67,7 +67,8 @@ public class CppFieldInitializerTests
             End Module
             """);
 
-        Assert.That(BclE2E.CompileRun(cpp), Is.EqualTo("5,hi,2.5,1.5,True\n"));
+        Assert.That(BclE2E.CompileRun(cpp), Is.EqualTo("5,hi,2.5,1.5,True\n"),
+            "True is C++'s own CStr(Boolean) spelling, as it is .NET's");
     }
 
     /// <summary>
@@ -282,8 +283,13 @@ public class CppFieldInitializerTests
             End Module
             """);
 
-        Assert.That(BclE2E.CompileRun(cpp), Is.EqualTo("-Infinity,-Infinity\n"),
-            "both halves, Double then Single, must be negative");
+        var output = BclE2E.CompileRun(cpp);
+        Assert.Multiple(() =>
+        {
+            // .NET's spelling since C++ got its formatter (was printf's -inf / inf).
+            Assert.That(output, Does.StartWith("-Infinity,"), output);
+            Assert.That(output, Does.Not.Contain(",Infinity"), "the Single half must be negative too:\n" + output);
+        });
     }
 
     /// <summary>
@@ -350,8 +356,8 @@ public class CppFieldInitializerTests
     }
 
     /// <summary>
-    /// ⛔ The de-DE end-to-end headline: before the fix this printed <c>2</c>, not <c>2.5</c>
-    /// (then spelled <c>2.000000</c>/<c>2.500000</c>) — <c>V = 2,5;</c> is the COMMA OPERATOR in C++ (evaluate <c>2</c>, discard
+    /// ⛔ The de-DE end-to-end headline: before the fix this printed <c>2</c> (then spelled
+    /// <c>2.000000</c>), not <c>2.5</c> — <c>V = 2,5;</c> is the COMMA OPERATOR in C++ (evaluate <c>2</c>, discard
     /// it, keep the enclosing expression's value), so the program BUILT and silently held the
     /// wrong number. Generation happens under de-DE (<c>[SetCulture]</c> covers the whole
     /// pipeline, matching what a de-DE machine's own CurrentCulture would have done before this

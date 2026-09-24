@@ -36,6 +36,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <ctime>
 #include <functional>
@@ -167,62 +168,61 @@ inline int16_t dto_validate_offset(int64_t offsetTicks) {
     return (int16_t)(offsetTicks / 600000000LL);
 }
 
-/* .NET Core 3.0+ Double/Single.ToString() (invariant culture): the SHORTEST digits that round-trip
-   (std::to_chars), laid out like .NET's ""G"" formatting. Scientific notation is used when the
-   decimal point would sit more than maxDigits (17 Double / 9 Single, the round-trip precisions)
-   places right of the first digit, or more than 3 places left of it. The exponent is E+XX / E-XX,
-   at least two digits. -0 keeps its sign, and NaN / Infinity use the invariant spellings. */
-template <typename T>
-inline std::string format_net_float(T value, int maxDigits) {
-    if (std::isnan(value)) return ""NaN"";
-    if (std::isinf(value)) return value < 0 ? ""-Infinity"" : ""Infinity"";
-    if (value == 0) return std::signbit(value) ? ""-0"" : ""0"";
-
-    char buf[64];
-    const auto res = std::to_chars(buf, buf + sizeof buf, value, std::chars_format::scientific);
-    const char* p = buf;
-    const char* end = res.ptr;
-    std::string out;
-    if (*p == '-') { out += '-'; ++p; }
-
-    std::string digits;                      /* mantissa digits without the point: 1.2345e+17 -> 12345 */
-    while (p < end && *p != 'e') { if (*p != '.') digits += *p; ++p; }
-    while (digits.size() > 1 && digits.back() == '0') digits.pop_back();
-
-    int exp10 = 0;                           /* after 'e': sign then digits */
-    bool expNeg = false;
-    if (p < end) ++p;
-    if (p < end && (*p == '+' || *p == '-')) { expNeg = *p == '-'; ++p; }
-    while (p < end) { exp10 = exp10 * 10 + (*p - '0'); ++p; }
-    if (expNeg) exp10 = -exp10;
-
-    const int scale = exp10 + 1;             /* digits sit left of the point: value = 0.digits * 10^scale */
-    const int count = (int)digits.size();
-    if (scale > maxDigits || scale < -3) {
-        out += digits[0];
-        if (count > 1) { out += '.'; out.append(digits, 1, std::string::npos); }
-        out += 'E';
-        out += exp10 < 0 ? '-' : '+';
-        const int mag = exp10 < 0 ? -exp10 : exp10;
-        if (mag < 10) out += '0';
-        out += std::to_string(mag);
-    } else if (scale > 0) {
-        if (count <= scale) { out += digits; out.append((size_t)(scale - count), '0'); }
-        else { out.append(digits, 0, (size_t)scale); out += '.'; out.append(digits, (size_t)scale, std::string::npos); }
-    } else {
-        out += ""0."";
-        out.append((size_t)(-scale), '0');
-        out += digits;
+/* Shared tail of FormatDouble/FormatSingle: `sci` is std::to_chars scientific output
+   (shortest round-trip digits, e.g. -5.1e+00, 1e+20, 5e-324); `sciAt` is the decimal
+   exponent from which .NET switches to E-notation (17 for Double, 9 for Single). */
+inline std::string format_shortest(const char* sci, int sciAt) {
+    std::string sign, digits;
+    const char* p = sci;
+    if (*p == '-') { sign = ""-""; ++p; }
+    for (; *p && *p != 'e'; ++p)
+        if (*p != '.') digits += *p;
+    int exp = 0;
+    if (*p == 'e') exp = std::atoi(p + 1);
+    const int n = (int)digits.size();
+    if (exp >= sciAt || exp < -4) {
+        std::string out = sign + digits.substr(0, 1);
+        if (n > 1) out += ""."" + digits.substr(1);
+        const int a = exp < 0 ? -exp : exp;
+        out += exp < 0 ? ""E-"" : ""E+"";
+        if (a < 10) out += '0';
+        return out + std::to_string(a);
     }
-    return out;
+    if (exp < 0) return sign + ""0."" + std::string((size_t)(-exp - 1), '0') + digits;
+    if (n <= exp + 1) return sign + digits + std::string((size_t)(exp + 1 - n), '0');
+    return sign + digits.substr(0, (size_t)exp + 1) + ""."" + digits.substr((size_t)exp + 1);
 }
 
 } /* namespace bcl_detail */
 
-/* The one Double/Single -> text conversion the C++ backend emits: Console.WriteLine, &, interpolation,
-   CStr, CType(x, String) and x.ToString() all go through these, so they cannot disagree. */
-inline std::string FormatDouble(double value) { return bcl_detail::format_net_float(value, 17); }
-inline std::string FormatSingle(float value) { return bcl_detail::format_net_float(value, 9); }
+/* ---- Single/Double -> text: .NET's invariant Double.ToString()/Single.ToString(), which
+   CStr, `&`, CType(x, String), x.ToString() and Console.WriteLine all use. The SHORTEST
+   digits that round-trip (std::to_chars), in fixed notation unless the decimal exponent is
+   >= 17 (Double) / >= 9 (Single) or <= -5, then d.dddE+XX with at least two exponent digits.
+   Thresholds measured against .NET 8: 1E+16 prints 10000000000000000 and 1E+17 prints
+   1E+17; 0.0001 prints 0.0001 and 9.9E-05 prints 9.9E-05; Single 999999900 vs 1E+09.
+   -0 keeps its sign (.NET Core 3.0+), and NaN/Infinity/-Infinity are the invariant names.
+   std::to_string, used before, is printf %f: 2.5 -> 2.500000, 1/3 -> 0.333333, and
+   5E-07 -> 0.000000, a value lost outright. ---- */
+inline std::string FormatDouble(double v) {
+    if (std::isnan(v)) return ""NaN"";
+    if (std::isinf(v)) return v > 0 ? ""Infinity"" : ""-Infinity"";
+    if (v == 0) return std::signbit(v) ? ""-0"" : ""0"";
+    char buf[64];
+    auto r = std::to_chars(buf, buf + sizeof(buf) - 1, v, std::chars_format::scientific);
+    *r.ptr = '\0';
+    return bcl_detail::format_shortest(buf, 17);
+}
+
+inline std::string FormatSingle(float v) {
+    if (std::isnan(v)) return ""NaN"";
+    if (std::isinf(v)) return v > 0 ? ""Infinity"" : ""-Infinity"";
+    if (v == 0) return std::signbit(v) ? ""-0"" : ""0"";
+    char buf[64];
+    auto r = std::to_chars(buf, buf + sizeof(buf) - 1, v, std::chars_format::scientific);
+    *r.ptr = '\0';
+    return bcl_detail::format_shortest(buf, 9);
+}
 
 /* ReDim a[n] / ReDim a(upperBound): the array resized to n elements (the generator has already
    turned an upper bound into a count). Plain ReDim is n fresh default elements; Preserve keeps the
@@ -920,7 +920,7 @@ inline std::string DateTimeOffset::ToString() const {
 /* ================= StringBuilder bodies ================= */
 
 inline std::shared_ptr<StringBuilder> StringBuilder::Append(double v) {
-    buf_ += FormatDouble(v);     /* .NET's Append(double) is v.ToString(): 1.5, not std::to_string's 1.500000 */
+    buf_ += FormatDouble(v);   /* .NET's Append(1.5) is 1.5 — the same formatter as CStr and `&` */
     return shared_from_this();
 }
 

@@ -68,8 +68,8 @@ public class CppFloatFormattingTests
     [Test]
     public void TheFormatterLivesInTheAlwaysSplicedRuntime()
     {
-        Assert.That(CppBclRuntime.BclBody, Does.Contain("inline std::string FormatDouble(double value)"));
-        Assert.That(CppBclRuntime.BclBody, Does.Contain("inline std::string FormatSingle(float value)"));
+        Assert.That(CppBclRuntime.BclBody, Does.Contain("inline std::string FormatDouble(double v)"));
+        Assert.That(CppBclRuntime.BclBody, Does.Contain("inline std::string FormatSingle(float v)"));
         Assert.That(CppBclRuntime.BclIncludes, Does.Contain("#include <charconv>"));
     }
 

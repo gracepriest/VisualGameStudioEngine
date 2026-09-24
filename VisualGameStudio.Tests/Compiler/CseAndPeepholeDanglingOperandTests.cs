@@ -137,8 +137,9 @@ public class CseAndPeepholeDanglingOperandTests
     /// <summary>
     /// ⛔ <c>IRCast.Value</c>.
     ///
-    /// <para>C++ once printed <c>D=3.000000</c> here (a <c>CStr(Double)</c> formatting
-    /// difference unrelated to this fix); it now prints <c>D=3</c> like the other three.</para>
+    /// <para>C++ used to print <c>D=3.000000</c> here, a <c>CStr(Double)</c> formatting difference
+    /// pinned per-backend so the day it changed this case would say so. It changed: C++ now
+    /// formats as .NET does (CppDoubleFormattingTests), so all four backends agree.</para>
     /// </summary>
     [Test]
     public void ADuplicateBinaryOp_ConsumedByACast_IsRePointedNotOrphaned()
