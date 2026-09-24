@@ -749,7 +749,11 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             {
                 var member = irEnum.Members[i];
                 var comma = i < irEnum.Members.Count - 1 ? "," : "";
-                var value = member.Value != null ? $" = {member.Value}" : "";
+                // Invariant: IRBuilder stores a Long, and a NEGATIVE one under sv-SE rendered
+                // `Back = −1` (U+2212 minus) — CS1056.
+                var value = member.Value != null
+                    ? " = " + Convert.ToString(member.Value, CultureInfo.InvariantCulture)
+                    : "";
                 WriteLine($"{SanitizeName(member.Name)}{value}{comma}");
             }
 
@@ -925,24 +929,14 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         /// </summary>
         private string FormatDefaultValue(IRValue value)
         {
+            // One literal renderer for defaults and expressions. ⛔ This kept its own copy of the
+            // rules and drifted: it had no Char arm (`Optional c As Char = "a"c` emitted
+            // `char c = a` — CS0103 in EVERY culture), left String defaults unescaped (a default
+            // containing a quote emitted `"a"b"` — CS1003/CS1010), had no Single arm until
+            // CSharpFloatingLiteral was bolted on, and fell back to CurrentCulture ToString()
+            // (sv-SE `int n = −5`, U+2212 — CS1056). EmitConstant handles all of them.
             if (value is IRConstant constant)
-            {
-                if (constant.Value is string s)
-                    return $"\"{s}\"";
-                if (constant.Value is bool b)
-                    return b ? "true" : "false";
-                if (constant.Value is null)
-                    return "null";
-                // Same m-suffix rule as EmitConstant, should a Decimal default
-                // parameter value ever reach here.
-                if (constant.Value is decimal dm)
-                    return dm.ToString(CultureInfo.InvariantCulture) + "m";
-                // `Optional k As Single = 2.5F` emitted `float k = 2.5` (CS1750: a double
-                // default for a float parameter), and a Double default was CurrentCulture.
-                if (constant.Value is float or double)
-                    return CSharpFloatingLiteral(constant.Value);
-                return constant.Value.ToString();
-            }
+                return EmitConstant(constant);
             return "default";
         }
 
@@ -4045,7 +4039,10 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             if (constant.Value is decimal dm)
                 return dm.ToString(CultureInfo.InvariantCulture) + "m";
 
-            return constant.Value.ToString();
+            // What still reaches here is integral (Integer, Long, Short, Byte, …). Invariant
+            // because a NEGATIVE one is culture-sensitive: sv-SE's NegativeSign is U+2212, which
+            // emitted `public int NegI = −7;` — CS1056, not a C# token.
+            return Convert.ToString(constant.Value, CultureInfo.InvariantCulture);
         }
 
         /// <summary>

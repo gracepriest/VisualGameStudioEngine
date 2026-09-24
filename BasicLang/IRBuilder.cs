@@ -1002,7 +1002,12 @@ namespace BasicLang.Compiler.IR
                     localConst.IsConst = true;
                     PushVariableVersion(node.Name, localConst);
                     _currentFunction.LocalVariables.Add(localConst);
-                    EmitInstruction(new IRAssignment(localConst, value));
+                    // Coerced like a local Dim's initializer. Without it `Const L As Single = 0.5`
+                    // stored the Double literal as-is and C# emitted `L = 0.5;` into a float
+                    // local — CS0664. (Unreachable before the SemanticAnalyzer accepted a Double
+                    // literal for a Single constant; module scope already narrowed via
+                    // BuildModuleScopeInitializer.)
+                    EmitInstruction(new IRAssignment(localConst, CoerceToDeclaredType(value, typeInfo)));
                     return;
                 }
 
