@@ -31,6 +31,7 @@ public class SettingsServicePersistenceTests
         catch { /* ignore cleanup errors */ }
     }
 
+    [Platform(Include = "Win", Reason = "needs Windows' mandatory file locking (FileShare.None) to hold the destination")]
     [Test]
     public async Task SaveScopeAsync_StagesFullContentInTempFile_DestinationUntouchedUntilAtomicSwap()
     {
@@ -78,6 +79,7 @@ public class SettingsServicePersistenceTests
         Assert.That(finalContent, Does.Contain("42"));
     }
 
+    [Platform(Include = "Win", Reason = "needs Windows' mandatory file locking (FileShare.None) to hold the destination")]
     [Test]
     public async Task SetRawJsonAsync_AlsoWritesAtomically_ThroughTheSameTempFileMechanism()
     {

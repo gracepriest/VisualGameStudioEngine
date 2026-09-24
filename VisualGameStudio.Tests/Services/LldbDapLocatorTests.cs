@@ -146,6 +146,7 @@ public class LldbDapLocatorTests
         }
     }
 
+    [Platform(Include = "Win", Reason = "pins the Windows lldb-dap.exe install layouts")]
     [Test]
     public void ToolsProbe_ProbesBinThenRootExeLayouts()
     {
@@ -193,6 +194,7 @@ public class LldbDapLocatorTests
             "winlibs is the one lldb-only entry, appended last (the sweep is a last resort)");
     }
 
+    [Platform(Include = "Win", Reason = "pins the Windows lldb-dap.exe install layouts")]
     [Test]
     public void KnownDirs_NeverSpawnAnything()
     {

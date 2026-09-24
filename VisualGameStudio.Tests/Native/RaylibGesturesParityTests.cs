@@ -50,7 +50,7 @@ public class RaylibGesturesParityTests
                 Assert.That(wrapper.Contains($"Framework_{name}("), Is.True, $"RaylibWrapper.vb missing import Framework_{name}");
             }
 
-            var raylibHeader = File.ReadAllText(Path.Combine(root, "packages", "raylib.5.5.0", "build", "native", "include", "raylib.h"));
+            var raylibHeader = RaylibHeader.Read(root);
             var range = ExtractRlapiRange(raylibHeader, "SetGesturesEnabled(", "GetGesturePinchAngle(");
             Assert.That(range, Is.EquivalentTo(Names),
                 "raylib's SetGesturesEnabled..GetGesturePinchAngle range must be exactly the 8 rgestures names");

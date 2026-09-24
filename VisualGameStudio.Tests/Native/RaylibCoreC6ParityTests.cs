@@ -62,7 +62,6 @@ public class RaylibCoreC6ParityTests
         var root = RepoRoot();
         var header = File.ReadAllText(Path.Combine(root, "VisualGameStudioEngine", "framework.h"));
         var wrapper = File.ReadAllText(Path.Combine(root, "RaylibWrapper", "RaylibWrapper.vb"));
-        var raylibHeader = File.ReadAllText(Path.Combine(root, "packages", "raylib.5.5.0", "build", "native", "include", "raylib.h"));
 
         Assert.Multiple(() =>
         {
@@ -71,6 +70,9 @@ public class RaylibCoreC6ParityTests
                 Assert.That(header.Contains($"Framework_{name}("), Is.True, $"framework.h missing export Framework_{name}");
                 Assert.That(wrapper.Contains($"Framework_{name}("), Is.True, $"RaylibWrapper.vb missing import Framework_{name}");
             }
+
+            // Read AFTER the parity loop above so it still runs when raylib.h is not restored.
+            var raylibHeader = RaylibHeader.Read(root);
 
             // (a) Completeness over the timing/frame/random/misc range: {13 non-input} ∪ {6 already-bound} == raylib's
             // "// Timing-related functions".."MemFree" range EXACTLY. Fails if a raylib fn there is bound by neither set.

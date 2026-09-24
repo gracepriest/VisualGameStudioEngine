@@ -13,6 +13,7 @@ namespace VisualGameStudio.Tests.Compiler;
 [TestFixture]
 public class CppToolchainCompilerDirectoryTests
 {
+    [Platform(Include = "Win", Reason = "uses Windows drive-rooted compiler paths (C:/winlibs/…)")]
     [Test]
     public void Explicit_rooted_compiler_path_resolves_to_its_own_directory()
     {
@@ -23,6 +24,7 @@ public class CppToolchainCompilerDirectoryTests
         Assert.That(tc!.ResolveCompilerDirectory(), Is.EqualTo(binDir));
     }
 
+    [Platform(Include = "Win", Reason = "uses Windows drive-rooted compiler paths (C:/winlibs/…)")]
     [Test]
     public void Explicit_clang_rooted_path_resolves_to_its_own_directory()
     {

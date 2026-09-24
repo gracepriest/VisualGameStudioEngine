@@ -542,6 +542,16 @@ public class NetShimPhaseTests
     private static CppToolchain FakeToolchain() =>
         CppToolchain.FromExplicit("llvm", Path.Combine(Path.GetTempPath(), "no-such-clang++.exe"));
 
+    /// <summary>
+    /// The by-id twin of <see cref="FakeToolchain"/>. A BasicLang native project ALWAYS resolves
+    /// "msvc" through <c>resolveById</c> (ProjectFile.EffectiveCppToolchain) and never calls
+    /// <c>resolveToolchain</c>, so without this the fake above was never used: EmitCore probed the
+    /// real machine for MSVC and failed BL6015 anywhere it is not installed — the fixture stopped
+    /// being toolchain-free. MSVC-kind, i.e. what a Windows machine with MSVC resolves.
+    /// </summary>
+    private static CppToolchain FakeMsvc(string _) =>
+        CppToolchain.FromExplicit("msvc", Path.Combine(Path.GetTempPath(), "fake-vcvars64.bat"))!;
+
     private (CppProjectBuildResult Result, CppEmitOutcome Outcome) Emit(
         string itemGroupXml, IReadOnlyDictionary<string, string> files, bool forIntelliSense = false)
     {
@@ -554,7 +564,7 @@ public class NetShimPhaseTests
         // whether phase 5 runs at all, so switching it off would make every one of them vacuous.
         var outcome = CppProjectBuilder.EmitCore(
             ProjectFile.Load(projectPath), "Release", result,
-            resolveToolchain: FakeToolchain, forIntelliSense: forIntelliSense);
+            resolveToolchain: FakeToolchain, forIntelliSense: forIntelliSense, resolveById: FakeMsvc);
         return (result, outcome);
     }
 

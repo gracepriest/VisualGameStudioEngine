@@ -70,8 +70,8 @@ public class RaylibCoreC2ParityTests
             // after GetWindowHandle up to "// Cursor-related functions") must be covered EXACTLY by QueryNames ∪
             // AlreadyBound. Not a tautology — it reads the real function list and fails if a raylib window-query fn is
             // neither newly bound (QueryNames) nor already bound (AlreadyBound), i.e. it catches a forgotten function.
-            var raylibHeader = Path.Combine(root, "packages", "raylib.5.5.0", "build", "native", "include", "raylib.h");
-            var query = ExtractWindowQueryNames(File.ReadAllText(raylibHeader)).ToHashSet();
+            var raylibHeader = RaylibHeader.Read(root);
+            var query = ExtractWindowQueryNames(raylibHeader).ToHashSet();
             var covered = QueryNames.Concat(AlreadyBound).ToHashSet();
             Assert.That(query, Is.EquivalentTo(covered),
                 "QueryNames ∪ AlreadyBound must exactly cover raylib's window-query range GetScreenWidth..DisableEventWaiting");
