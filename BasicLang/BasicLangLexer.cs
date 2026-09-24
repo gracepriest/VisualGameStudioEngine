@@ -1057,32 +1057,27 @@ namespace BasicLang.Compiler
                 sb.Append(Advance());
             }
             
-            // Check for decimal point (Single or Double)
-            if (!IsAtEnd() && Peek() == '.' && _position + 1 < _source.Length && IsDigit(_source[_position + 1]))
+            // Check for decimal point (Single or Double) — or an exponent with none (`1E40`, `2E-3`),
+            // which is a floating literal too. ⛔ The exponent used to be read ONLY after a '.', so
+            // `1E40` lexed as the Integer 1 followed by an identifier `E40`: at module scope that
+            // was "Unexpected token at top level: 'E40'", but inside a procedure the parser dropped
+            // the stray identifier and `Dim x As Double = 1E40` compiled with x = 1 — silently, on
+            // every backend (`2E3` was 2). MEASURED on master fd67f57.
+            bool hasFraction = !IsAtEnd() && Peek() == '.' && _position + 1 < _source.Length && IsDigit(_source[_position + 1]);
+            if (hasFraction || ExponentFollows())
             {
-                sb.Append(Advance()); // Consume '.'
-                
-                while (!IsAtEnd() && IsDigit(Peek()))
+                if (hasFraction)
                 {
-                    sb.Append(Advance());
-                }
-                
-                // Check for exponent
-                if (!IsAtEnd() && (Peek() == 'e' || Peek() == 'E'))
-                {
-                    sb.Append(Advance()); // Consume 'e' or 'E'
-                    
-                    if (!IsAtEnd() && (Peek() == '+' || Peek() == '-'))
-                    {
-                        sb.Append(Advance());
-                    }
-                    
+                    sb.Append(Advance()); // Consume '.'
+
                     while (!IsAtEnd() && IsDigit(Peek()))
                     {
                         sb.Append(Advance());
                     }
                 }
-                
+
+                ScanExponent(sb);
+
                 // Check for type suffix
                 if (!IsAtEnd() && (Peek() == 'f' || Peek() == 'F'))
                 {
@@ -1134,6 +1129,32 @@ namespace BasicLang.Compiler
             }
         }
         
+        /// <summary>
+        /// True when the next characters are an exponent part: <c>e</c>/<c>E</c>, an optional sign,
+        /// then at least one digit. Only then is the <c>E</c> part of the number — <c>1E</c> or
+        /// <c>1Else</c> leave it to the next token, and <c>1.5E</c> no longer reaches
+        /// <c>double.Parse</c> with no exponent digits (a FormatException before).
+        /// </summary>
+        private bool ExponentFollows()
+        {
+            if (IsAtEnd() || (Peek() != 'e' && Peek() != 'E')) return false;
+            int i = _position + 1;
+            if (i < _source.Length && (_source[i] == '+' || _source[i] == '-')) i++;
+            return i < _source.Length && IsDigit(_source[i]);
+        }
+
+        /// <summary>Appends an exponent part to <paramref name="sb"/> if <see cref="ExponentFollows"/>.</summary>
+        private void ScanExponent(StringBuilder sb)
+        {
+            if (!ExponentFollows()) return;
+
+            sb.Append(Advance()); // 'e' or 'E'
+            if (Peek() == '+' || Peek() == '-')
+                sb.Append(Advance());
+            while (!IsAtEnd() && IsDigit(Peek()))
+                sb.Append(Advance());
+        }
+
         private void ScanPrefixedNumber(int startLine, int startColumn)
         {
             char prefix = Advance(); // Consume H, O, or B

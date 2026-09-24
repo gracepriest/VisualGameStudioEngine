@@ -32,8 +32,11 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         private const string Includes = @"/* bl_bcltypes.hpp — native BCL value types (P1). Header-only C++20.
    SOURCE OF TRUTH: BasicLang CppBclRuntime.cs — do not edit the emitted copy. */
 #pragma once
+#include <charconv>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <ctime>
 #include <functional>
@@ -164,7 +167,61 @@ inline int16_t dto_validate_offset(int64_t offsetTicks) {
     return (int16_t)(offsetTicks / 600000000LL);
 }
 
+/* Shared tail of FormatDouble/FormatSingle: `sci` is std::to_chars scientific output
+   (shortest round-trip digits, e.g. -5.1e+00, 1e+20, 5e-324); `sciAt` is the decimal
+   exponent from which .NET switches to E-notation (17 for Double, 9 for Single). */
+inline std::string format_shortest(const char* sci, int sciAt) {
+    std::string sign, digits;
+    const char* p = sci;
+    if (*p == '-') { sign = ""-""; ++p; }
+    for (; *p && *p != 'e'; ++p)
+        if (*p != '.') digits += *p;
+    int exp = 0;
+    if (*p == 'e') exp = std::atoi(p + 1);
+    const int n = (int)digits.size();
+    if (exp >= sciAt || exp < -4) {
+        std::string out = sign + digits.substr(0, 1);
+        if (n > 1) out += ""."" + digits.substr(1);
+        const int a = exp < 0 ? -exp : exp;
+        out += exp < 0 ? ""E-"" : ""E+"";
+        if (a < 10) out += '0';
+        return out + std::to_string(a);
+    }
+    if (exp < 0) return sign + ""0."" + std::string((size_t)(-exp - 1), '0') + digits;
+    if (n <= exp + 1) return sign + digits + std::string((size_t)(exp + 1 - n), '0');
+    return sign + digits.substr(0, (size_t)exp + 1) + ""."" + digits.substr((size_t)exp + 1);
+}
+
 } /* namespace bcl_detail */
+
+/* ---- Single/Double -> text: .NET's invariant Double.ToString()/Single.ToString(), which
+   CStr, `&`, CType(x, String), x.ToString() and Console.WriteLine all use. The SHORTEST
+   digits that round-trip (std::to_chars), in fixed notation unless the decimal exponent is
+   >= 17 (Double) / >= 9 (Single) or <= -5, then d.dddE+XX with at least two exponent digits.
+   Thresholds measured against .NET 8: 1E+16 prints 10000000000000000 and 1E+17 prints
+   1E+17; 0.0001 prints 0.0001 and 9.9E-05 prints 9.9E-05; Single 999999900 vs 1E+09.
+   -0 keeps its sign (.NET Core 3.0+), and NaN/Infinity/-Infinity are the invariant names.
+   std::to_string, used before, is printf %f: 2.5 -> 2.500000, 1/3 -> 0.333333, and
+   5E-07 -> 0.000000, a value lost outright. ---- */
+inline std::string FormatDouble(double v) {
+    if (std::isnan(v)) return ""NaN"";
+    if (std::isinf(v)) return v > 0 ? ""Infinity"" : ""-Infinity"";
+    if (v == 0) return std::signbit(v) ? ""-0"" : ""0"";
+    char buf[64];
+    auto r = std::to_chars(buf, buf + sizeof(buf) - 1, v, std::chars_format::scientific);
+    *r.ptr = '\0';
+    return bcl_detail::format_shortest(buf, 17);
+}
+
+inline std::string FormatSingle(float v) {
+    if (std::isnan(v)) return ""NaN"";
+    if (std::isinf(v)) return v > 0 ? ""Infinity"" : ""-Infinity"";
+    if (v == 0) return std::signbit(v) ? ""-0"" : ""0"";
+    char buf[64];
+    auto r = std::to_chars(buf, buf + sizeof(buf) - 1, v, std::chars_format::scientific);
+    *r.ptr = '\0';
+    return bcl_detail::format_shortest(buf, 9);
+}
 
 /* ---- TimeSpan: one int64 ticks (100ns). Spec §3. ---- */
 struct TimeSpan {
@@ -849,7 +906,7 @@ inline std::string DateTimeOffset::ToString() const {
 /* ================= StringBuilder bodies ================= */
 
 inline std::shared_ptr<StringBuilder> StringBuilder::Append(double v) {
-    buf_ += std::to_string(v);   /* the backend's existing double->string style (CppCodeGenerator) */
+    buf_ += FormatDouble(v);   /* .NET's Append(1.5) is 1.5 — the same formatter as CStr and `&` */
     return shared_from_this();
 }
 

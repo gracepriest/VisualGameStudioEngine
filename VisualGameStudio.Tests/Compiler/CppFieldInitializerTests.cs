@@ -36,10 +36,9 @@ namespace VisualGameStudio.Tests.Compiler;
 /// <item>A <c>Structure</c> field initializer does not PARSE at all.</item>
 /// </list>
 ///
-/// <para>⚠ Two differences from JavaScript in the headline output are NOT this fix's and stay:
-/// <c>CStr(Double)</c> prints <c>2.500000</c> on C++ and <c>CStr(Boolean)</c> prints <c>True</c>,
-/// both long-recorded formatting divergences. The tests assert C++'s own spelling rather than
-/// normalising it away.</para>
+/// <para>⚠ <c>CStr(Boolean)</c> prints <c>True</c> on C++ against JavaScript's <c>true</c>, a
+/// long-recorded divergence not this fix's. (<c>CStr(Double)</c> printed <c>2.500000</c> here
+/// until C++ got .NET's formatter — CppDoubleFormattingTests; it now prints <c>2.5</c>.)</para>
 /// </summary>
 [TestFixture]
 [Category("Integration")]
@@ -69,9 +68,8 @@ public class CppFieldInitializerTests
             End Module
             """);
 
-        Assert.That(BclE2E.CompileRun(cpp), Is.EqualTo("5,hi,2.500000,1.500000,True\n"),
-            "2.500000 and True are C++'s own CStr spellings — a separate, pre-existing "
-            + "divergence from JavaScript's 2.5 and true, deliberately not normalised here");
+        Assert.That(BclE2E.CompileRun(cpp), Is.EqualTo("5,hi,2.5,1.5,True\n"),
+            "True is C++'s own CStr(Boolean) spelling, as it is .NET's");
     }
 
     /// <summary>
@@ -256,7 +254,7 @@ public class CppFieldInitializerTests
             End Module
             """);
 
-        Assert.That(BclE2E.CompileRun(cpp), Is.EqualTo("400.000000,0.000000\n"));
+        Assert.That(BclE2E.CompileRun(cpp), Is.EqualTo("400,0\n"));
     }
 
     /// <summary>
@@ -288,8 +286,9 @@ public class CppFieldInitializerTests
         var output = BclE2E.CompileRun(cpp);
         Assert.Multiple(() =>
         {
-            Assert.That(output, Does.Contain("-inf"), output);
-            Assert.That(output, Does.Not.Contain(",inf"), "the Single half must be negative too:\n" + output);
+            // .NET's spelling since C++ got its formatter (was printf's -inf / inf).
+            Assert.That(output, Does.StartWith("-Infinity,"), output);
+            Assert.That(output, Does.Not.Contain(",Infinity"), "the Single half must be negative too:\n" + output);
         });
     }
 
@@ -357,8 +356,8 @@ public class CppFieldInitializerTests
     }
 
     /// <summary>
-    /// ⛔ The de-DE end-to-end headline: before the fix this printed <c>2.000000</c>, not
-    /// <c>2.500000</c> — <c>V = 2,5;</c> is the COMMA OPERATOR in C++ (evaluate <c>2</c>, discard
+    /// ⛔ The de-DE end-to-end headline: before the fix this printed <c>2</c> (then spelled
+    /// <c>2.000000</c>), not <c>2.5</c> — <c>V = 2,5;</c> is the COMMA OPERATOR in C++ (evaluate <c>2</c>, discard
     /// it, keep the enclosing expression's value), so the program BUILT and silently held the
     /// wrong number. Generation happens under de-DE (<c>[SetCulture]</c> covers the whole
     /// pipeline, matching what a de-DE machine's own CurrentCulture would have done before this
@@ -385,6 +384,6 @@ public class CppFieldInitializerTests
             End Module
             """);
 
-        Assert.That(BclE2E.CompileRun(cpp), Is.EqualTo("2.500000\n"));
+        Assert.That(BclE2E.CompileRun(cpp), Is.EqualTo("2.5\n"));
     }
 }

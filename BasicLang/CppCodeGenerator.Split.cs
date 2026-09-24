@@ -385,7 +385,9 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 "iostream", "vector", "string", "cstdint", "cmath", "algorithm", "cstdlib",
                 "ctime", "functional", "coroutine", "exception", "iterator",
                 "unordered_map", "unordered_set", "stdexcept", "cstdio", "cstring", "ostream",
-                "limits"
+                "limits",
+                // BasicLang::FormatDouble/FormatSingle (the spliced BCL body) use std::to_chars.
+                "charconv"
             };
             foreach (var inc in _headerIncludes)
             {

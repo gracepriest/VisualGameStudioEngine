@@ -361,7 +361,8 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // (CppBclRuntimeTests pins that), so the generator owns their std headers.
             // "limits": a NaN/Infinity Single or Double constant has no C++ literal spelling and
             // renders as std::numeric_limits<T>::… (CppFloatLiteral / CppDoubleLiteral).
-            var includes = new HashSet<string> { "iostream", "vector", "string", "cstdint", "cmath", "algorithm", "cstdlib", "ctime", "functional", "cstdio", "cstring", "ostream", "stdexcept", "limits" };
+            // "charconv": BasicLang::FormatDouble/FormatSingle (the spliced BCL body) use std::to_chars.
+            var includes = new HashSet<string> { "iostream", "vector", "string", "cstdint", "cmath", "algorithm", "cstdlib", "ctime", "functional", "cstdio", "cstring", "ostream", "stdexcept", "limits", "charconv" };
             if (hasIterators)
             {
                 includes.Add("coroutine");
@@ -2506,13 +2507,13 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         /// ill-formed — a helper written with one uniform <c>std::string(...)</c> wrap compiles
         /// for every type except the one that most needs it.</para>
         ///
-        /// <para>⛔ <c>Single</c>/<c>Double</c> are DELIBERATELY ABSENT. <c>std::to_string</c> is
-        /// <c>%f</c> with six decimals — it renders 2.5 as "2.500000" and 1.0/3 as "0.333333",
-        /// wrong for every finite value. Adding it here would trade a loud compile error for a
-        /// silently wrong string, which is the worse failure. The correct lowering is a
-        /// shortest-round-trip formatter (<c>std::to_chars</c> plus fix-ups for .NET's
-        /// exponential thresholds, "NaN" and "∞"); until that exists, floating concat and
-        /// <c>CStr(Double)</c> keep failing at the C++ compiler.</para>
+        /// <para><c>Single</c>/<c>Double</c> go through <c>BasicLang::FormatSingle</c> /
+        /// <c>FormatDouble</c> (CppBclRuntime): the shortest round-trip digits with .NET's
+        /// E-notation thresholds, "NaN" and "Infinity". ⛔ NEVER <c>std::to_string</c>, which
+        /// is <c>%f</c> — 2.5 became "2.500000", 1.0/3 "0.333333", 5E-07 "0.000000". Until the
+        /// formatter existed these types were left out on purpose, so floating concat and
+        /// <c>CType(x, String)</c> failed to compile rather than print a wrong string — but
+        /// <c>CStr</c> fell back to <c>to_string</c> and printed the wrong string anyway.</para>
         /// </summary>
         private static string StringifyForText(IRValue value, string rendered)
         {
@@ -2540,6 +2541,8 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 "byte" or "sbyte" or "ubyte" or "short" or "ushort"
                     or "integer" or "uinteger" or "long" or "ulong"
                     => $"std::to_string({rendered})",
+                "single" => $"BasicLang::FormatSingle({rendered})",
+                "double" => $"BasicLang::FormatDouble({rendered})",
                 _ => null,
             };
         }
@@ -3199,9 +3202,15 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
 
             var typeName = argument.Type?.Name;
             if (typeName == null) return rendered;
-            return typeName.ToLowerInvariant() is "byte" or "sbyte" or "ubyte"
-                ? $"static_cast<int32_t>({rendered})"
-                : rendered;
+            // Single/Double: `cout << d` is %g with six significant digits — 1.0/3 printed
+            // 0.333333 and 1E+20 printed 1e+20 where .NET prints 0.3333333333333333 and 1E+20.
+            return typeName.ToLowerInvariant() switch
+            {
+                "byte" or "sbyte" or "ubyte" => $"static_cast<int32_t>({rendered})",
+                "single" => $"BasicLang::FormatSingle({rendered})",
+                "double" => $"BasicLang::FormatDouble({rendered})",
+                _ => rendered,
+            };
         }
 
         /// <summary>
@@ -4210,8 +4219,8 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // nothing refuses it first). Routed through the one shared stringifier, which also
             // makes CType(b, String) agree with CStr(b) and with `&` by construction.
             //
-            // Single/Double deliberately still fall through to the error — see
-            // StringifyForText's note on why a wrong string is worse than a build break.
+            // Single/Double now render through BasicLang::FormatSingle/FormatDouble — see
+            // StringifyForText. Anything it still declines falls through to the error below.
             if (string.Equals(cast.Type?.Name, "String", StringComparison.OrdinalIgnoreCase))
             {
                 var asText = StringifyForText(cast.Value, value);
@@ -4584,9 +4593,12 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 case "long":
                 case "short":
                 case "byte":
-                case "single":
-                case "double":
                     return $"std::to_string({obj})";
+                // Not std::to_string (%f, six decimals) — see StringifyForText.
+                case "single":
+                    return $"BasicLang::FormatSingle({obj})";
+                case "double":
+                    return $"BasicLang::FormatDouble({obj})";
                 case "boolean":
                     return $"std::string({obj} ? \"True\" : \"False\")";
                 case "string":
