@@ -4202,7 +4202,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
         /// <summary>
         /// The rendered divisor of <paramref name="bin"/>, made NON-CONSTANT to Roslyn when it is a
-        /// constant zero of an integral or Decimal type.
+        /// constant zero of an integral or Decimal type, or a constant -1 of a signed integral type.
         ///
         /// <para>⛔ A constant over a constant zero is CS0020 ("Division by constant zero") — a
         /// COMPILE error, where .NET/VB throws DivideByZeroException at RUN time and a Try can
@@ -4218,15 +4218,21 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         /// (int, long, decimal, byte...) with no type name to spell, and has no side effect. It is
         /// only ever reached on a path that throws, so its allocation costs nothing that matters.
         /// Floating divisors are left alone: `5.0 / 0.0` is legal C# (Infinity), as in .NET.</para>
+        ///
+        /// <para>⛔ A constant -1 is the SAME trap: a constant signed minimum over it is CS0220 ("The
+        /// operation overflows at compile time in checked mode"), where .NET throws
+        /// OverflowException at run time. MEASURED: `(-2147483647 - 1) \ -1` emitted
+        /// `-2147483648 / -1` and did not build. A variable over -1 is unaffected either way; the
+        /// rewrite only costs a -1 divisor, which nobody writes in a hot loop.</para>
         /// </summary>
         private static string EmitDivisor(IRBinaryOp bin, string renderedRight)
         {
             if (bin.Operation is not (BinaryOpKind.Div or BinaryOpKind.IntDiv or BinaryOpKind.Mod))
                 return renderedRight;
-            return IsNonFloatingConstantZero(bin.Right) ? $"new[] {{ {renderedRight} }}[0]" : renderedRight;
+            return IsConstantDivisorTrap(bin.Right) ? $"new[] {{ {renderedRight} }}[0]" : renderedRight;
         }
 
-        private static bool IsNonFloatingConstantZero(IRValue value)
+        private static bool IsConstantDivisorTrap(IRValue value)
         {
             // The OUTERMOST type decides: `(double)(0)` is a floating divisor even though the
             // constant inside it is an int.
@@ -4239,7 +4245,9 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             return constant.Value switch
             {
                 double or float => value.Type != null && !value.Type.IsFloatingPoint() && Convert.ToDouble(constant.Value) == 0.0,
-                int or long or short or byte or sbyte or ushort or uint or ulong or decimal
+                int or long or short or sbyte
+                    => Convert.ToDecimal(constant.Value) is 0m or -1m,
+                byte or ushort or uint or ulong or decimal
                     => Convert.ToDecimal(constant.Value) == 0m,
                 _ => false
             };

@@ -363,6 +363,16 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// <c>Math.trunc(7 / 0)</c> = Infinity and <c>7 Mod 0</c> was NaN — stored in an
         /// Integer, printed, and never caught. Functions rather than inline ternaries because
         /// JavaScript has no throw expression and each operand must be evaluated exactly once.
+        ///
+        /// <para>⛔ The Integer minimum over -1 is the other trapping case: .NET throws
+        /// OverflowException for both <c>\</c> and Mod. MEASURED before: <c>\</c> returned
+        /// 2147483648 — out of Integer range, stored anyway — and Mod returned 0.</para>
+        ///
+        /// <para>⛔ <c>| 0</c> on every result, because JavaScript has a NEGATIVE ZERO and .NET
+        /// integers do not. MEASURED: <c>MinValue Mod 2</c> and <c>-7 Mod -1</c> printed "-0"
+        /// where .NET prints 0 (and <c>Math.trunc(-1 / 5)</c> is -0 too). After the overflow
+        /// check every quotient and remainder is in int32 range, so <c>| 0</c> changes nothing
+        /// else.</para>
         /// </summary>
         private void EmitCheckedDivisionPrelude(IRModule module)
         {
@@ -371,13 +381,15 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             Line($"function {IntDivHelperName}(a, b) {{");
             _indentLevel++;
             Line("if (b === 0) throw new DivideByZeroException(\"Attempted to divide by zero.\");");
-            Line("return Math.trunc(a / b);");
+            Line("if (b === -1 && a === -2147483648) throw new OverflowException(\"Arithmetic operation resulted in an overflow.\");");
+            Line("return Math.trunc(a / b) | 0;");
             _indentLevel--;
             Line("}");
             Line($"function {IntModHelperName}(a, b) {{");
             _indentLevel++;
             Line("if (b === 0) throw new DivideByZeroException(\"Attempted to divide by zero.\");");
-            Line("return a % b;");
+            Line("if (b === -1 && a === -2147483648) throw new OverflowException(\"Arithmetic operation resulted in an overflow.\");");
+            Line("return (a % b) | 0;");
             _indentLevel--;
             Line("}");
             Line();
@@ -386,7 +398,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         private void EmitExceptionPrelude(IRModule module)
         {
             var required = JsExceptionTypes.CollectRequired(module,
-                UsesCheckedDivision(module) ? new[] { "DivideByZeroException" } : null);
+                UsesCheckedDivision(module) ? new[] { "DivideByZeroException", "OverflowException" } : null);
             if (required.Count == 0) return;
 
             foreach (var name in required)

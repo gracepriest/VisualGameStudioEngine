@@ -5423,8 +5423,17 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             if (constant.Value is double d)
                 return CppDoubleLiteral(d);
 
+            // ⛔ C++ HAS NO NEGATIVE LITERALS: `-2147483648` is `-(2147483648)`, and 2147483648 does
+            // not fit int, so the expression is typed `long` — the minimum Integer silently became
+            // a 64-bit value. MEASURED: `BasicLang::CheckedDiv(-2147483648, -1)` saw an int64
+            // dividend, found no overflow, and wrapped 2147483648 back into the Integer, where .NET
+            // throws OverflowException. `9223372036854775808LL` fits NO signed type (a hard error).
+            // Each minimum is spelled as (min + 1) - 1, which keeps its own type.
             if (constant.Value is long l)
-                return l.ToString(CultureInfo.InvariantCulture) + "LL";
+                return l == long.MinValue ? "(-9223372036854775807LL - 1)" : l.ToString(CultureInfo.InvariantCulture) + "LL";
+
+            if (constant.Value is int i32 && i32 == int.MinValue)
+                return "(-2147483647 - 1)";
 
             // P1 Decimal literal: emit the exact .NET bit pattern
             // through the engine, never a lossy double literal. GetBits: [0..2] = 96-bit

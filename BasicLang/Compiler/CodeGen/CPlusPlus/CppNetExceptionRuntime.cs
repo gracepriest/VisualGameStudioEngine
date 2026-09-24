@@ -83,15 +83,33 @@ private:
 constexpr const char* DivideByZeroChain =
     ""System.DivideByZeroException;System.ArithmeticException;System.SystemException;System.Exception"";
 
+/* The one other trapping case: a SIGNED minimum divided by -1. The true quotient does not fit
+   (INT_MIN / -1 is UB, and SIGFPE on x86 exactly like a zero divisor); .NET throws
+   OverflowException for both `\` and Mod. Checked in the PROMOTED type R, so an int32 minimum
+   over an int64 -1 is correctly not an overflow. The minimum is 1 << (bits - 1), well-defined
+   for signed types since C++20. Must match CppExceptionTypes' OverflowException entry. */
+constexpr const char* OverflowChain =
+    ""System.OverflowException;System.ArithmeticException;System.SystemException;System.Exception"";
+
+template <typename R, typename A, typename B>
+inline void CheckDivisionOperands(A a, B b) {
+    if (b == 0) throw NetException(DivideByZeroChain, ""Attempted to divide by zero."");
+    if constexpr (static_cast<R>(-1) < static_cast<R>(0)) {
+        constexpr R minValue = static_cast<R>(static_cast<R>(1) << (sizeof(R) * 8 - 1));
+        if (static_cast<R>(b) == static_cast<R>(-1) && static_cast<R>(a) == minValue)
+            throw NetException(OverflowChain, ""Arithmetic operation resulted in an overflow."");
+    }
+}
+
 template <typename A, typename B>
 inline auto CheckedDiv(A a, B b) -> decltype(a / b) {
-    if (b == 0) throw NetException(DivideByZeroChain, ""Attempted to divide by zero."");
+    CheckDivisionOperands<decltype(a / b)>(a, b);
     return a / b;
 }
 
 template <typename A, typename B>
 inline auto CheckedMod(A a, B b) -> decltype(a % b) {
-    if (b == 0) throw NetException(DivideByZeroChain, ""Attempted to divide by zero."");
+    CheckDivisionOperands<decltype(a % b)>(a, b);
     return a % b;
 }
 
