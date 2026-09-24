@@ -265,13 +265,22 @@ public class Family111MaterialisationBehaviourTests
     // G6, G7 — step9b's comment-only correction to ComputeMaterialisedTemps's named-after-
     // variable exclusion. C4 (StatementOperandUndeclaredTempFixTests) does NOT exercise this
     // exclusion: its shared `p + q` has two LOCAL operands, both unconditionally replicable, so
-    // it is never a materialisation candidate regardless of the exclusion. G6/G7 instead give
-    // the shared binop a NON-replicable operand (a non-Const global; a ByRef parameter) so it
-    // IS a candidate, and the exclusion is what keeps C# right where C++/JS/MSIL are wrong
-    // (task #125 — CSE merges `g + q` at `Dim a` and at `l(0)`/`l(1)` without accounting for the
-    // intervening `a = z`, then each backend's OWN store-operand codegen reads the merged,
-    // stale-named value back). Asserted as LITERAL output, never cross-backend agreement — same
-    // convention as C4's pins in StatementOperandUndeclaredTempFixTests.
+    // it is never a materialisation candidate regardless of the exclusion, and CSE still merges
+    // it (ADR-0001/ADR-0004 D2's gate only excludes NON-replicable operands). G6/G7 instead give
+    // the shared binop a NON-replicable operand (a non-Const global; a ByRef parameter).
+    //
+    // ⭐ UPDATED — CSE's own candidate gate (ADR-0001 Obligations / ADR-0004 D2: "CSE may only
+    // merge instructions it would call replicable") now excludes `g + q` / `n + q` from being a
+    // merge candidate AT ALL, so task #125 (a backend's store-operand codegen reading a merged,
+    // stale-named value after an intervening reassignment) no longer reproduces on THIS shape on
+    // ANY backend — the G6/G7 "_PinnedForTask125" tests below are promoted accordingly. The
+    // named-after-variable exclusion in ComputeMaterialisedTemps this comment used to credit is
+    // now redundant for these two shapes specifically (nothing reaches it — there is no merge to
+    // materialise), but it is still what would keep C# right if the CSE gate were ever weakened,
+    // so the standard-pipeline G6_GlobalOperand_* / G7_ByRefOperand_* tests below are kept as
+    // their own, independent check. #125 remains OPEN in general — see
+    // StatementOperandUndeclaredTempFixTests' C4 pins, whose operands are both replicable locals.
+    // Asserted as LITERAL output, never cross-backend agreement — same convention as C4's pins.
     // ====================================================================================
 
     private const string G6 =
@@ -322,26 +331,33 @@ public class Family111MaterialisationBehaviourTests
             "C#, CompileProjectFiles (Release .blproj) — same reasoning, same kill.");
 
     /// <summary>
-    /// ⛔ PINNED WRONG — task #125, same mechanism as C4's C++/JS/MSIL pins. Not this family's
-    /// to fix; if #125 is fixed these three go RED — that is progress, update or delete the pin.
+    /// ⭐ PROMOTED — CSE's candidate gate (ADR-0001 Obligations / ADR-0004 D2: CSE may only merge
+    /// a binop it would call replicable) now excludes <c>g + q</c> from being a merge candidate at
+    /// all, because <c>g</c> is a non-<c>Const</c> global. With nothing merged, C++'s own
+    /// store-operand codegen reads each <c>l(0)</c>/<c>l(1)</c> occurrence of <c>g + q</c>
+    /// recomputed, not a stale shared value — task #125 is fixed FOR THIS NON-REPLICABLE-OPERAND
+    /// SHAPE on C++ (not in general: <c>StatementOperandUndeclaredTempFixTests</c>'s C4 pins stay
+    /// RED for the same task #125, because C4's shared operands are both locals, which ARE
+    /// replicable, so CSE still merges that one).
     /// </summary>
     [Test]
-    public void G6_Cpp_StillReadsTheCseMergedVariable_PinnedForTask125()
-        => Assert.That(FourBackends.Norm(BclE2E.CompileRun(BclE2E.CompileToCppAggressive(G6))), Is.EqualTo(G6Wrong),
-            "if this changed, task #125 (CSE merging g+q across a's reassignment) may be fixed on "
-            + "C++ — update or delete this pin, do not just widen it");
+    public void G6_Cpp_NoLongerReadsACseMergedVariable_Task125FixedForNonReplicableOperands()
+        => Assert.That(FourBackends.Norm(BclE2E.CompileRun(BclE2E.CompileToCppAggressive(G6))), Is.EqualTo(G6Correct),
+            "CSE's candidate gate (ADR-0001/ADR-0004 D2) must keep `g + q` — g a non-Const global "
+            + "— from ever being merged; if this regressed to '0,0,0', the gate was weakened or "
+            + "removed");
 
     [Test]
-    public void G6_JavaScript_StillReadsTheCseMergedVariable_PinnedForTask125()
-        => Assert.That(FourBackends.Norm(FourBackends.RunAggressiveJs(G6)), Is.EqualTo(G6Wrong),
-            "if this changed, task #125 may be fixed on JavaScript's optimizing path — update or "
-            + "delete this pin, do not just widen it");
+    public void G6_JavaScript_NoLongerReadsACseMergedVariable_Task125FixedForNonReplicableOperands()
+        => Assert.That(FourBackends.Norm(FourBackends.RunAggressiveJs(G6)), Is.EqualTo(G6Correct),
+            "same reasoning as the C++ leg — if this regressed to '0,0,0', the gate was weakened "
+            + "or removed");
 
     [Test]
-    public void G6_Msil_StillReadsTheCseMergedVariable_PinnedForTask125()
-        => Assert.That(FourBackends.Norm(MsilHarness.RunAggressiveExpectingSuccess(G6)), Is.EqualTo(G6Wrong),
-            "if this changed, task #125 may be fixed on MSIL — update or delete this pin, do not "
-            + "just widen it");
+    public void G6_Msil_NoLongerReadsACseMergedVariable_Task125FixedForNonReplicableOperands()
+        => Assert.That(FourBackends.Norm(MsilHarness.RunAggressiveExpectingSuccess(G6)), Is.EqualTo(G6Correct),
+            "same reasoning as the C++ leg — if this regressed to '0,0,0', the gate was weakened "
+            + "or removed");
 
     // ------------------------------------------------------------------------------------
     // G7 — the identical shape, but the shared binop's non-replicable operand is a ByRef
@@ -391,17 +407,24 @@ public class Family111MaterialisationBehaviourTests
         => Assert.That(RunThroughEntryPoint(G7, asProject: true), Is.EqualTo(G7Correct),
             "C#, CompileProjectFiles (Release .blproj) — same reasoning, same kill.");
 
+    /// <summary>
+    /// ⭐ PROMOTED — same reasoning as <see cref="G6_Cpp_NoLongerReadsACseMergedVariable_Task125FixedForNonReplicableOperands"/>,
+    /// but the non-replicable operand is a ByRef parameter (<c>n</c>) instead of a global. CSE's
+    /// candidate gate excludes <c>n + q</c> from ever being merged, so C++ recomputes it at each
+    /// store. Task #125 stays open in general (C4's local-only operands still merge).
+    /// </summary>
     [Test]
-    public void G7_Cpp_StillReadsTheCseMergedVariable_PinnedForTask125()
-        => Assert.That(FourBackends.Norm(BclE2E.CompileRun(BclE2E.CompileToCppAggressive(G7))), Is.EqualTo(G7Wrong),
-            "if this changed, task #125 may be fixed on C++ — update or delete this pin, do not "
-            + "just widen it");
+    public void G7_Cpp_NoLongerReadsACseMergedVariable_Task125FixedForNonReplicableOperands()
+        => Assert.That(FourBackends.Norm(BclE2E.CompileRun(BclE2E.CompileToCppAggressive(G7))), Is.EqualTo(G7Correct),
+            "CSE's candidate gate (ADR-0001/ADR-0004 D2) must keep `n + q` — n a ByRef parameter — "
+            + "from ever being merged; if this regressed to '0,0,0', the gate was weakened or "
+            + "removed");
 
     [Test]
-    public void G7_Msil_StillReadsTheCseMergedVariable_PinnedForTask125()
-        => Assert.That(FourBackends.Norm(MsilHarness.RunAggressiveExpectingSuccess(G7)), Is.EqualTo(G7Wrong),
-            "if this changed, task #125 may be fixed on MSIL — update or delete this pin, do not "
-            + "just widen it");
+    public void G7_Msil_NoLongerReadsACseMergedVariable_Task125FixedForNonReplicableOperands()
+        => Assert.That(FourBackends.Norm(MsilHarness.RunAggressiveExpectingSuccess(G7)), Is.EqualTo(G7Correct),
+            "same reasoning as the C++ leg — if this regressed to '0,0,0', the gate was weakened "
+            + "or removed");
 
     /// <summary>
     /// ⛔ JavaScript refuses ByRef outright — BL7002, structural (JS has no reference parameters

@@ -217,6 +217,44 @@ internal static class CseShapes
         """;
 
     /// <summary>
+    /// ⭐ ADR-0001 Obligations / ADR-0004 D2 — CSE's CANDIDATE GATE, isolated from the
+    /// invalidation machinery above. Unlike <see cref="MutableGlobalAcrossACall"/> there is NO
+    /// intervening call or write of any kind between the two <c>Counter + q</c> occurrences — if
+    /// the pass looked only at redefinitions, this shape would merge. It must not: <c>Counter</c>
+    /// is a non-<c>Const</c> global, never replicable, so the binop is not a merge CANDIDATE at
+    /// all and there is nothing for an invalidation step to have to catch. This is the direct,
+    /// program-independent counterpart to <c>CseSampleCorpusTests</c>' SpaceShooter
+    /// <c>playerY + 30</c> measurement.
+    /// </summary>
+    internal const string NonConstGlobalOperandNoIntervivingWrite = Seeder + """
+        Sub Main()
+         Dim q As Integer = Seed(2)
+         Dim a As Integer = Counter + q
+         Dim b As Integer = Counter + q
+         PrintLine("a=" & CStr(a))
+         PrintLine("b=" & CStr(b))
+        End Sub
+        """;
+
+    /// <summary>
+    /// The CONTROL for <see cref="NonConstGlobalOperandNoIntervivingWrite"/> — the identical shape
+    /// with both operands REPLICABLE locals instead of one non-Const global. This is what makes
+    /// the row above non-vacuous: without it, "0 merges" could just as easily mean the pass merges
+    /// nothing at all. (This is the same program as <see cref="NoRedefinition"/> below, kept as
+    /// its own named constant so the two rows read as a matched pair in the test table.)
+    /// </summary>
+    internal const string LocalOperandsNoInterveningWrite = Seeder + """
+        Sub Main()
+         Dim p As Integer = Seed(1)
+         Dim q As Integer = Seed(2)
+         Dim a As Integer = p + q
+         Dim b As Integer = p + q
+         PrintLine("a=" & CStr(a))
+         PrintLine("b=" & CStr(b))
+        End Sub
+        """;
+
+    /// <summary>
     /// The ByRef argument: <c>Bump(p)</c> writes <c>p</c> through a reference parameter. There is
     /// no <c>IRAssignment</c> and no rename for that write in this block.
     /// <para>⛔ JavaScript cannot run this shape at all — BL7002.</para>
@@ -591,8 +629,12 @@ public class CseInvalidationDecisionTests
     [TestCase(nameof(CseShapes.UnaryOperand), 0, TestName = "Decision_UnaryIsNotACandidate")]
     [TestCase(nameof(CseShapes.CompareOperand), 0, TestName = "Decision_CompareIsNotACandidate")]
     [TestCase(nameof(CseShapes.FieldReads), 0, TestName = "Decision_FieldReadsMintFreshTempsAndNeverKeyAlike")]
+    [TestCase(nameof(CseShapes.NonConstGlobalOperandNoIntervivingWrite), 0,
+        TestName = "Decision_NonConstGlobalOperand_IsNeverACandidate_EvenWithNoInterveningWrite")]
     // ---- ⭐ MUST STILL MERGE — the rows that make every row above non-vacuous --------------
     [TestCase(nameof(CseShapes.NoRedefinition), 1, TestName = "Decision_NoRedefinition_STILL_MERGES")]
+    [TestCase(nameof(CseShapes.LocalOperandsNoInterveningWrite), 1,
+        TestName = "Decision_LocalOperands_STILL_MERGE_TheControlForTheGlobalOperandRowAbove")]
     [TestCase(nameof(CseShapes.ConstGlobalAcrossACall), 1, TestName = "Decision_ConstGlobalAcrossACall_STILL_MERGES")]
     [TestCase(nameof(CseShapes.ParametersAcrossACall), 1, TestName = "Decision_ParametersAcrossACall_STILL_MERGES")]
     [TestCase(nameof(CseShapes.RedefinitionBeforeBothUses), 1, TestName = "Decision_RedefinitionBeforeBothUses_STILL_MERGES")]
@@ -889,8 +931,22 @@ public class CseSampleCorpusTests
 
     /// <param name="parseClean">Whether the PARSER accepts the sample today.</param>
     /// <param name="analyzeClean">Whether the SEMANTIC ANALYZER accepts it today.</param>
+    ///
+    /// <remarks>
+    /// ⭐ SpaceShooter: 5 → 4, ADR-0001 Obligations / ADR-0004 D2 — CSE's candidate gate now
+    /// excludes any binop it would not call replicable, and one of SpaceShooter's five merges was
+    /// exactly that: <c>playerX + 15, playerY, playerX, playerY + 30, playerX + 30, playerY + 30</c>
+    /// (<c>Main.bas</c>'s <c>Framework_DrawTriangle</c> call, two textually-identical occurrences
+    /// of <c>playerY + 30</c>) reads <c>playerY</c>, a module-level <c>Dim</c> — a non-<c>Const</c>
+    /// global, never replicable — so the two occurrences are no longer a candidate at all and CSE
+    /// gives up that one merge. This is a value-correct optimization LOSS, not a behaviour change:
+    /// every backend still recomputes <c>playerY + 30</c> at each occurrence and gets the same
+    /// answer either way, it just does the addition twice instead of once. Platformer's count is
+    /// unaffected — measured, its merges all read <c>Const</c> globals (<c>TILE_SIZE</c>) or plain
+    /// locals, both replicable — and is asserted unchanged for that reason, not by accident.
+    /// </remarks>
     [TestCase("Platformer", 6, true, true, TestName = "Corpus_Platformer_Makes6Merges")]
-    [TestCase("SpaceShooter", 5, false, false, TestName = "Corpus_SpaceShooter_Makes5Merges")]
+    [TestCase("SpaceShooter", 4, false, false, TestName = "Corpus_SpaceShooter_Makes4Merges")]
     public void SampleGameMergesSurviveTheFixTest(string sample, int expectedMerges, bool parseClean, bool analyzeClean)
     {
         var path = FindRepoFile("Samples", sample, "Main.bas");

@@ -372,6 +372,15 @@ public class StatementOperandUndeclaredTempFixTests
     // below so the pin flips LOUDLY (a test starts FAILING, not silently passing) the day #125 is
     // fixed — see LoopPassesDisabledTests / InductionVariableDisabledTests for this repo's existing
     // "still broken, pinned" convention.
+    //
+    // ⭐ STILL PINNED, AND WHY, per ADR-0001 Obligations / ADR-0004 D2's later fix to CSE's
+    // candidate gate ("CSE may only merge instructions it would call replicable"): that gate
+    // closes #125 only for a binop with a NON-replicable operand (see
+    // Family111MaterialisationBehaviourTests' G6/G7, whose shared operand is a non-Const global or
+    // a ByRef parameter — those ARE promoted). C4's shared operands, `p` and `q`, are both plain
+    // LOCALS — unconditionally replicable — so the gate does not apply here at all and CSE still
+    // merges `p + q` exactly as before. #125 remains open for this shape; the three pins below are
+    // MEASURED UNCHANGED on this tree and stay pinned.
     // ====================================================================================
 
     private const string C4 =
@@ -445,6 +454,12 @@ public class StatementOperandUndeclaredTempFixTests
     /// someone fixes #125 this test goes RED — that is progress, not a regression: update or
     /// delete the pin, per this repo's "still broken, pinned" convention
     /// (see <c>LoopPassesDisabledTests</c> / <c>InductionVariableDisabledTests</c>).
+    ///
+    /// <para>⭐ STILL PINNED after CSE's candidate gate (ADR-0001 Obligations / ADR-0004 D2): the
+    /// gate excludes a binop only when an OPERAND is non-replicable. `p` and `q` here are both
+    /// LOCALS, unconditionally replicable, so this merge is not affected and #125 stays open for
+    /// this shape — contrast <c>Family111MaterialisationBehaviourTests</c>' G6/G7, whose shared
+    /// operand is a non-Const global / ByRef parameter, where the gate DOES close #125.</para>
     /// </summary>
     [Test]
     public void CppStillReadsTheCseMergedVariable_PinnedForTask125()
@@ -456,7 +471,12 @@ public class StatementOperandUndeclaredTempFixTests
     /// OPTIMIZING pipeline (CSE is a standard pass); the plain, non-optimizing
     /// <c>JavaScriptExecutionTests.RunJs</c> leg runs no CSE at all and prints the correct `3,0`
     /// by having nothing to merge — that is NOT evidence #125 is fixed on JS, it is evidence this
-    /// one leg never exercises the optimizer.</summary>
+    /// one leg never exercises the optimizer.
+    ///
+    /// <para>⭐ STILL PINNED after CSE's candidate gate (ADR-0001/ADR-0004 D2) — same reasoning as
+    /// the C++ pin above: `p`/`q` are both replicable locals, so the gate does not apply and the
+    /// merge (and #125) is unchanged here.</para>
+    /// </summary>
     [Test]
     public void JavaScriptOptimizedStillReadsTheCseMergedVariable_PinnedForTask125()
         => Assert.That(FourBackends.Norm(JavaScriptOptimizedExecutionTests.RunOptimized(C4)), Is.EqualTo("seed\nseed\nseed\n0,0"),
@@ -465,7 +485,11 @@ public class StatementOperandUndeclaredTempFixTests
 
     /// <summary>⛔ PINNED WRONG — task #125, same mechanism. MSIL runs its optimizer by default in
     /// both entry points this suite uses (docs/HANDOFF.md), so no separate "optimized" leg is
-    /// needed to observe it.</summary>
+    /// needed to observe it.
+    ///
+    /// <para>⭐ STILL PINNED after CSE's candidate gate (ADR-0001/ADR-0004 D2) — same reasoning as
+    /// the C++ pin above.</para>
+    /// </summary>
     [Test]
     public void MsilStillReadsTheCseMergedVariable_PinnedForTask125()
         => Assert.That(FourBackends.Norm(MsilHarness.RunExpectingSuccess(C4)), Is.EqualTo("seed\nseed\nseed\n0,0"),

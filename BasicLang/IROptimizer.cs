@@ -1262,7 +1262,14 @@ namespace BasicLang.Compiler.IR.Optimization
             {
                 var inst = block.Instructions[i];
 
-                if (inst is IRBinaryOp binaryOp)
+                // ⛔ Only a REPLICABLE binop is a candidate (ADR-0001 Obligations, defence in depth):
+                // merging two evaluations of a value that is not replicable deletes one of them,
+                // which no backend can repair. The same predicate the C# backend and
+                // AlgebraicSimplificationPass use — not ReadsCallVisible, which answers a different
+                // question (when to KILL an entry) and must stay separate (ADR-0004 D2). A
+                // non-replicable binop is neither recorded nor merged; the invalidation step below
+                // still runs for it.
+                if (inst is IRBinaryOp binaryOp && IRReplicability.IsReplicable(binaryOp))
                 {
                     var key = ExpressionKey(binaryOp);
 
