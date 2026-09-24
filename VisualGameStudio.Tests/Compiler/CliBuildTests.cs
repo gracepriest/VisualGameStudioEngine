@@ -73,9 +73,7 @@ public class CliBuildTests
 </BasicLangProject>
 ");
 
-        var cliPath = Path.Combine(AppContext.BaseDirectory, "BasicLang.exe");
-        Assert.That(File.Exists(cliPath), Is.True,
-            "BasicLang.exe not deployed next to the tests — project reference output changed?");
+        var cliPath = CliTestHarness.CliPath();
 
         using var process = new Process
         {
@@ -98,8 +96,9 @@ public class CliBuildTests
         Assert.That(process.ExitCode, Is.EqualTo(0),
             $"CLI build failed for a hostile project name.\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}");
 
-        var exePath = Directory.GetFiles(projectDir, name + ".exe", SearchOption.AllDirectories);
+        var appName = CliTestHarness.AppHostName(name);
+        var exePath = Directory.GetFiles(projectDir, appName, SearchOption.AllDirectories);
         Assert.That(exePath, Is.Not.Empty,
-            $"CLI build claimed success but produced no {name}.exe.\nSTDOUT:\n{stdout}");
+            $"CLI build claimed success but produced no {appName}.\nSTDOUT:\n{stdout}");
     }
 }

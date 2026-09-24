@@ -599,7 +599,11 @@ namespace BasicLang.Compiler.Driver
                 }
 
                 var outputPath = Path.Combine(outputDir, outputFileName + extension);
-                File.WriteAllText(outputPath, generatedCode);
+                // ⛔ Not for JavaScript: JavaScriptEmitter.Emit below writes the script, with its
+                // sourceMappingURL. Writing it here as well was a second write of the same file
+                // milliseconds apart — see the single-file route in CompileFile.
+                if (!IsJavaScriptTarget(backend))
+                    File.WriteAllText(outputPath, generatedCode);
 
                 // JavaScript has NO build step — the emitted files ARE the deliverable, so the
                 // site is completed here and the csproj/`dotnet build` path below is skipped.
@@ -1157,31 +1161,27 @@ namespace BasicLang.Compiler.Driver
                 if (result.CombinedIR != null)
                 {
                     string outputCode = GenerateCode(result.CombinedIR, targetBackend, out var generator);
-                    string actualOutputPath;
+                    string actualOutputPath = !string.IsNullOrEmpty(outputPath)
+                        ? outputPath
+                        : Path.Combine(Path.GetDirectoryName(filePath) ?? ".",
+                            Path.GetFileNameWithoutExtension(filePath) + GetOutputExtension(targetBackend));
 
-                    if (!string.IsNullOrEmpty(outputPath))
+                    // ⛔ A web target's script is written by JavaScriptEmitter.Emit ALONE. Writing
+                    // it here too wrote the same .js twice within milliseconds — the first copy
+                    // without its sourceMappingURL — and on Windows the second write died with
+                    // ERROR_USER_MAPPED_FILE whenever something (a real-time scanner, the indexer)
+                    // had mapped the freshly closed first copy in between.
+                    if (!IsJavaScriptTarget(targetBackend))
                     {
-                        File.WriteAllText(outputPath, outputCode);
-                        Console.WriteLine($"  Output written to: {outputPath}");
-                        actualOutputPath = outputPath;
+                        File.WriteAllText(actualOutputPath, outputCode);
+                        Console.WriteLine($"  Output written to: {actualOutputPath}");
                     }
                     else
                     {
-                        // Default output path
-                        var baseName = Path.GetFileNameWithoutExtension(filePath);
-                        var ext = GetOutputExtension(targetBackend);
-                        var defaultOutputPath = Path.Combine(Path.GetDirectoryName(filePath) ?? ".", baseName + ext);
-                        File.WriteAllText(defaultOutputPath, outputCode);
-                        Console.WriteLine($"  Output written to: {defaultOutputPath}");
-                        actualOutputPath = defaultOutputPath;
-                    }
-
-                    // A web target needs a page to load the script from. Emitted BESIDE the
-                    // .js wherever that landed — including next to the source file, which is
-                    // exactly why JavaScriptEmitter refuses to overwrite an existing
-                    // index.html: that is where a hand-authored one lives.
-                    if (IsJavaScriptTarget(targetBackend))
-                    {
+                        // A web target needs a page to load the script from. Emitted BESIDE the
+                        // .js wherever that landed — including next to the source file, which is
+                        // exactly why JavaScriptEmitter refuses to overwrite an existing
+                        // index.html: that is where a hand-authored one lives.
                         var siteDir = Path.GetDirectoryName(Path.GetFullPath(actualOutputPath)) ?? ".";
                         var scriptName = Path.GetFileName(actualOutputPath);
                         var hadHarness = File.Exists(Path.Combine(siteDir, JavaScriptEmitter.HarnessName));
@@ -1195,6 +1195,7 @@ namespace BasicLang.Compiler.Driver
                             jsImports: result.CombinedIR?.JsImports,
                             importBaseDirectory: Path.GetDirectoryName(Path.GetFullPath(filePath)),
                             warn: m => Console.Error.WriteLine($"  Warning: {m}"));
+                        Console.WriteLine($"  Output written to: {actualOutputPath}");
 
                         if (!hadHarness)
                             Console.WriteLine($"  Harness written to: {Path.Combine(siteDir, JavaScriptEmitter.HarnessName)}");

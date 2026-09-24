@@ -1447,13 +1447,17 @@ namespace BasicLang.Compiler.IR.Optimization
         private IRBinaryOp TryReduceBinary(IRBinaryOp op)
         {
             // Multiplication by power of 2 Ã¢â€ â€™ shift
-            // ⛔ INTEGRAL RESULT ONLY. The check below looks at the CONSTANT's CLR type, never the
-            // product's, and a BasicLang `2` or `1` is an int literal even when the other operand
-            // is Double — so `x * 2` on a Double became `x << 1`. MEASURED: C# rejects it
-            // (CS0019, `<<` on double), so any program multiplying a floating value by an integer
-            // literal power of two failed to build under the optimizer. `x * 1` went the same way
-            // (`x << 0`) before PeepholeOptimizationPass could fold it.
-            if (op.Operation == BinaryOpKind.Mul && op.Type?.IsIntegral() == true)
+            // INTEGRAL OPERANDS ONLY. The guard used to test just the constant, so any
+            // `x * 2^k` with an Integer literal matched whatever x was. MEASURED on
+            // `Const Half As Double = 2.5` / `CStr(Half * 2)`: C# emitted `Half << 1` (CS0019),
+            // C++ `Half << 1` (ill-formed on a double), and JavaScript `(Half << 1)`, which
+            // COMPILES and prints 4 — `<<` truncates its operand to int32 first. Single, a
+            // non-Const Double local and Decimal all matched the same way. Both the operand and
+            // the result must be integral: the result type alone is not enough if a front end
+            // ever widens, and the operand alone is not enough if the product is promoted.
+            if (op.Operation == BinaryOpKind.Mul
+                && op.Type != null && op.Type.IsIntegral()
+                && op.Left.Type != null && op.Left.Type.IsIntegral())
             {
                 if (op.Right is IRConstant constant && constant.Value is int power)
                 {
@@ -2217,22 +2221,15 @@ namespace BasicLang.Compiler.IR.Optimization
 
         private IRInstruction OptimizeBinaryOp(IRBinaryOp binOp)
         {
-            // ⛔ THREE OF THE IDENTITIES BELOW ARE INTEGER-ONLY, and are gated on this (a fourth,
-            // `x / x`, was removed outright — see its tombstone further down). In IEEE 754
-            // they are false, and the fold miscompiled SILENTLY on every backend, because the
-            // optimizer is shared. MEASURED (C# and C++ agreed on every wrong answer):
-            //   x - x   x = +Inf or NaN   ->  NaN     the fold gave 0
-            //   x * 0   x = +Inf or NaN   ->  NaN     the fold gave 0
-            //   x * 0   x = -5            ->  -0      the fold gave +0 (1/r: -Inf vs +Inf)
+            // ⛔ `x + 0`, `x * 0` and `x - x` are INTEGER-ONLY (IsIntegralArithmetic); `x / x` is
+            // gone entirely (tombstone below). In IEEE 754 they are false, and each fold
+            // miscompiled SILENTLY on every backend, because the optimizer is shared. MEASURED
+            // (C# and C++ agreed on every wrong answer):
             //   x + 0   x = -0            ->  +0      the fold gave x, i.e. -0
-            //   x / x   x = 0, Inf, NaN   ->  NaN     the fold gave 1
-            // (Single `b - b` with b = 1.0E+30F * 1.0E+30F = +Inf also printed 0, not NaN.)
+            //   x - x, x * 0, x / x: see their own arms.
             // `x - (+0)`, `x * 1` and `x / 1` ARE exact in IEEE 754 for every x, so they stay
             // ungated; only a NEGATIVE-zero subtrahend is refused, since `x - (-0)` is `x + 0`.
-            //
-            // Gated on the RESULT type: any floating operand promotes the result to floating.
-            // Decimal is excluded too — it keeps a scale (`1.50D - 1.50D` is `0.00`).
-            bool integral = binOp.Type?.IsIntegral() == true;
+            bool integral = IsIntegralArithmetic(binOp);
 
             // x + 0 -> x
             if (binOp.Operation == BinaryOpKind.Add && integral)
@@ -2259,8 +2256,12 @@ namespace BasicLang.Compiler.IR.Optimization
                     return new IRAssignment(new IRVariable(binOp.Name, binOp.Type), binOp.Right);
             }
 
-            // x * 0 -> 0
-            if (binOp.Operation == BinaryOpKind.Mul && integral)
+            // x * 0 -> 0. INTEGRAL ONLY — in IEEE 754 it is not the identity three ways, all
+            // MEASURED on the JavaScript backend before this guard: Infinity * 0 is NaN (the rule
+            // gave 0), NaN * 0 is NaN, and -5.0 * 0 is -0.0 (the rule gave +0.0, so `1.0 / e`
+            // printed Infinity instead of -Infinity). Decimal is excluded too: .NET keeps the
+            // scale, so 1.5D * 0 prints "0.0", not "0".
+            if (binOp.Operation == BinaryOpKind.Mul && IsIntegralArithmetic(binOp))
             {
                 if (IsZero(binOp.Right) || IsZero(binOp.Left))
                     return new IRAssignment(
@@ -2274,8 +2275,9 @@ namespace BasicLang.Compiler.IR.Optimization
                 return new IRAssignment(new IRVariable(binOp.Name, binOp.Type), binOp.Left);
             }
 
-            // x - x -> 0
-            if (binOp.Operation == BinaryOpKind.Sub && integral &&
+            // x - x -> 0. INTEGRAL ONLY, for the same reason: Infinity - Infinity and NaN - NaN
+            // are NaN. MEASURED: `Dim a As Double = inf - inf` compiled to `a = 0`.
+            if (binOp.Operation == BinaryOpKind.Sub && IsIntegralArithmetic(binOp) &&
                 binOp.Left is IRVariable left &&
                 binOp.Right is IRVariable right &&
                 left.Name == right.Name)
@@ -2285,16 +2287,10 @@ namespace BasicLang.Compiler.IR.Optimization
                     new IRConstant(0, binOp.Type));
             }
 
-            // `x / x -> 1` REMOVED. Its comment said "when x != 0" and the code never checked it,
-            // and the IR carries no range analysis that could: at x = 0 an integer division
-            // THROWS (DivideByZeroException), and the fold replaced the throw with a silent 1.
-            // A float x / x is NaN at 0, ±Inf and NaN. There is no type it was sound for.
-            //
-            // Nothing a program can write loses a fold. MEASURED: an Integer `n / n` is a DOUBLE
-            // division (the builder types `/` Double and wraps both operands in IRCasts, so the
-            // arm never matched), `n \ n` is BinaryOpKind.IntDiv (never matched either), and the
-            // Double case was already refused above. The same call as the `(a * b) / b` arm
-            // removed from AlgebraicSimplificationPass.
+            // `x / x -> 1` REMOVED — unsound for EVERY type, and its "(when x != 0)" was never
+            // checked. A float 0, Infinity or NaN gives NaN (MEASURED: `r = x / x` compiled to
+            // `r = 1`, so DivSelf(0.0) returned 1); an integral 0 throws DivideByZeroException.
+            // No type restriction rescues it, and nobody writes the shape on purpose.
 
             // x And True -> x, x And False -> False
             if (binOp.Operation == BinaryOpKind.And)
@@ -2340,6 +2336,16 @@ namespace BasicLang.Compiler.IR.Optimization
 
             return binOp;
         }
+
+        /// <summary>
+        /// True when the op and both operands are integral, so the ring identities (x - x = 0,
+        /// x * 0 = 0) hold. A null type counts as NOT integral: refusing costs one missed fold,
+        /// guessing wrong produces a wrong answer. The same test StrengthReductionPass applies.
+        /// </summary>
+        private static bool IsIntegralArithmetic(IRBinaryOp binOp) =>
+            binOp.Type != null && binOp.Type.IsIntegral()
+            && binOp.Left?.Type != null && binOp.Left.Type.IsIntegral()
+            && binOp.Right?.Type != null && binOp.Right.Type.IsIntegral();
 
         private bool IsZero(IRValue value)
         {

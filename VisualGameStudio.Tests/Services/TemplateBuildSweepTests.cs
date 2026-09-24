@@ -29,7 +29,8 @@ public class TemplateBuildSweepTests
         var repoRoot = Path.GetFullPath(Path.Combine(dir, "..", "..", "..", ".."));
         foreach (var config in new[] { "Release", "Debug" })
         {
-            var candidate = Path.Combine(repoRoot, "BasicLang", "bin", config, "net8.0", "BasicLang.exe");
+            var candidate = Path.Combine(repoRoot, "BasicLang", "bin", config, "net8.0",
+                VisualGameStudio.Tests.Compiler.CliTestHarness.AppHostName("BasicLang"));
             if (File.Exists(candidate))
                 return candidate;
         }
@@ -71,6 +72,11 @@ public class TemplateBuildSweepTests
         var compiler = FindCompiler();
         if (compiler == null)
             Assert.Inconclusive("BasicLang.exe not built; run 'dotnet build BasicLang -c Release' first.");
+        // WinForms/WPF build against Microsoft.NET.Sdk.WindowsDesktop, which only the
+        // Windows .NET SDK ships — elsewhere the build fails with MSB4019 before any
+        // BasicLang output is involved.
+        if ((templateId == "winforms-app" || templateId == "wpf-app") && !OperatingSystem.IsWindows())
+            Assert.Ignore($"'{templateId}' needs the Windows Desktop SDK (Windows only)");
 
         var template = ProjectTemplates.All.Single(t => t.Id == templateId);
         var name = "Sweep" + string.Concat(templateId.Split('-').Select(
@@ -108,9 +114,8 @@ public class TemplateBuildSweepTests
             Assert.Inconclusive("BasicLang.exe not built; run 'dotnet build BasicLang -c Release' first.");
         if (BasicLang.Compiler.ProjectSystem.CppToolchain.Find() == null)
             Assert.Ignore("No C++ toolchain available (clang++/g++/MSVC)");
-        if (templateId == "cpp-game-app" &&
-            BasicLang.Compiler.ProjectSystem.EngineDeployment.LocateImportLib() == null)
-            Assert.Ignore("VisualGameStudioEngine.lib not found (engine not built)");
+        if (templateId == "cpp-game-app")
+            IgnoreUnlessEngineImportLibUsable();
 
         var template = ProjectTemplates.All.Single(t => t.Id == templateId);
         var name = "Sweep" + string.Concat(templateId.Split('-').Select(
@@ -505,9 +510,8 @@ public class TemplateBuildSweepTests
             Assert.Inconclusive("BasicLang.exe not built; run 'dotnet build BasicLang -c Release' first.");
         if (BasicLang.Compiler.ProjectSystem.CppToolchain.Find() == null)
             Assert.Ignore("No C++ toolchain available (clang++/g++/MSVC)");
-        if (shortName == "cpp-game" &&
-            BasicLang.Compiler.ProjectSystem.EngineDeployment.LocateImportLib() == null)
-            Assert.Ignore("VisualGameStudioEngine.lib not found (engine not built)");
+        if (shortName == "cpp-game")
+            IgnoreUnlessEngineImportLibUsable();
 
         var name = "SweepCli" + string.Concat(shortName.Split('-').Select(
             p => char.ToUpperInvariant(p[0]) + p.Substring(1)));
@@ -517,6 +521,20 @@ public class TemplateBuildSweepTests
         var (exitCode, output) = RunCompilerBuild(compiler, projectFile);
         Assert.That(exitCode, Is.EqualTo(0),
             $"CLI '{shortName}' template project failed to build.\n--- compiler output ---\n{output}");
+    }
+
+    /// <summary>
+    /// The game templates link the engine's MSVC import library
+    /// (VisualGameStudioEngine.lib), which only links on Windows. Off Windows the test
+    /// process can still find a copy (one is deployed into the test output folder),
+    /// but the CLI cannot use it, so the build fails with BL6009 — skip rather than fail.
+    /// </summary>
+    private static void IgnoreUnlessEngineImportLibUsable()
+    {
+        if (!OperatingSystem.IsWindows())
+            Assert.Ignore("VisualGameStudioEngine.lib is an MSVC import library (Windows only)");
+        if (BasicLang.Compiler.ProjectSystem.EngineDeployment.LocateImportLib() == null)
+            Assert.Ignore("VisualGameStudioEngine.lib not found (engine not built)");
     }
 
     private static (int ExitCode, string Output) RunCompilerBuild(string compiler, string projectFile)
