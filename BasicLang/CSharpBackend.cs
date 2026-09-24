@@ -2172,20 +2172,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             _processedBlocks.Add(defaultBlock);
             Indent();
             EmitBlockInstructions(defaultBlock);
-
-            var defaultTerminator = defaultBlock.Instructions.LastOrDefault();
-            if (defaultTerminator is IRReturn)
-            {
-                // Return already emitted
-            }
-            else if (defaultTerminator is IRBranch defaultExit && TryEmitLoopExit(defaultExit))
-            {
-                // `Case Else` holding an Exit For: the goto already leaves both constructs.
-            }
-            else
-            {
-                WriteLine("break;");
-            }
+            EmitCaseTerminator(defaultBlock);
             Unindent();
 
             _switchDepth--;
@@ -2364,37 +2351,41 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             // Emit the case body with indentation
             Indent();
             EmitBlockInstructions(block);
+            EmitCaseTerminator(block);
+            Unindent();
+        }
 
-            // Check if block ends with a return (no break needed)
+        /// <summary>
+        /// The terminator of a case section's first block — a <c>Case</c> or the <c>Case Else</c> —
+        /// followed by the <c>break;</c> that closes the section.
+        ///
+        /// <para>⛔ The conditional-branch and IRSwitch arms were missing, so a case body holding an
+        /// <c>If</c> or a nested <c>Select</c> became a bare <c>break;</c>: the If, and every
+        /// statement after it in that case, was DROPPED with a green build. MEASURED: a
+        /// <c>Case 1</c> of <c>If m = 1 … Else … End If</c> then a WriteLine compiled to
+        /// <c>case 1: break;</c>. The If's own merge block carries the rest of the body and ends
+        /// with the branch to the switch's end, which emits nothing.</para>
+        /// </summary>
+        private void EmitCaseTerminator(BasicBlock block)
+        {
             var terminator = block.Instructions.LastOrDefault();
             if (terminator is IRReturn)
-            {
-                // Return already emitted
-            }
-            else if (terminator is IRBranch loopExit && TryEmitLoopExit(loopExit))
-            {
-                // ⛔ An `Exit For` written inside a `Select Case` arm. TryEmitLoopExit spells it
-                // as a `goto` precisely because a `break` here would leave the SWITCH; adding
-                // the usual trailing `break;` after it would be unreachable code (CS0162).
-            }
-            else if (terminator is IRBranch br && br.Target.Name.Contains("switch.end"))
-            {
-                // Jump to switch end - emit break
-                WriteLine("break;");
-            }
-            else if (terminator is IRBranch branch)
-            {
-                // Process the branch target (might have more code)
-                HandleUnconditionalBranch(branch);
-                WriteLine("break;");
-            }
-            else
-            {
-                // Default: add break
-                WriteLine("break;");
-            }
+                return; // Return already emitted
 
-            Unindent();
+            // ⛔ An `Exit For` written inside a `Select Case` arm. TryEmitLoopExit spells it as a
+            // `goto` precisely because a `break` here would leave the SWITCH; adding the usual
+            // trailing `break;` after it would be unreachable code (CS0162).
+            if (terminator is IRBranch loopExit && TryEmitLoopExit(loopExit))
+                return;
+
+            if (terminator is IRConditionalBranch cond)
+                HandleConditionalBranch(cond);
+            else if (terminator is IRSwitch switchInst)
+                HandleSwitchStatement(switchInst);
+            else if (terminator is IRBranch branch)
+                HandleUnconditionalBranch(branch); // a branch to the switch's end emits nothing
+
+            WriteLine("break;");
         }
 
         private bool IsLoopHeader(BasicBlock trueBlock, BasicBlock falseBlock,
