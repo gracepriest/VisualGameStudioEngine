@@ -91,6 +91,25 @@ namespace BasicLang.Compiler.CodeGen
         protected readonly Dictionary<string, string> _typeMap;
         protected ITypeMapper _typeMapper;
 
+        /// <summary>
+        /// Temp-shaped names the PROGRAM owns (<see cref="IRTempNames.UserOwned"/>), which
+        /// <see cref="NextTempName"/> must never hand out. A generator sets this at the start of
+        /// each Generate; empty (the default, and almost every program) changes nothing.
+        /// </summary>
+        protected HashSet<string> _userTempShapedNames = new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// The next <c>t{N}</c> temp name that is not a user name. ⛔ A bare counter emitted a
+        /// temp called <c>t1</c> into a C++ function that already declares the user's local
+        /// <c>t1</c> — "redeclaration of 'int32_t t1'" (MEASURED on master 883fb1d).
+        /// </summary>
+        protected string NextTempName()
+        {
+            string name;
+            do { name = $"t{_tempCounter++}"; } while (_userTempShapedNames.Contains(name));
+            return name;
+        }
+
         public abstract string BackendName { get; }
         public abstract TargetPlatform Target { get; }
         public ITypeMapper TypeMapper => _typeMapper;
@@ -200,8 +219,8 @@ namespace BasicLang.Compiler.CodeGen
             if (value is IRVariable variable)
                 name = SanitizeName(variable.Name);
             else
-                name = $"t{_tempCounter++}";
-            
+                name = NextTempName();
+
             _valueNames[value] = name;
             return name;
         }

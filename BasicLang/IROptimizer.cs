@@ -368,7 +368,7 @@ namespace BasicLang.Compiler.IR.Optimization
                         ReplaceAllReferences(block, binaryOp, folded);
 
                         // If this was a named variable (not a temp), preserve assignment
-                        if (IsNamedVariable(binaryOp.Name))
+                        if (IsNamedVariable(binaryOp))
                         {
                             var targetVar = new IRVariable(binaryOp.Name, binaryOp.Type);
                             block.Instructions[i] = new IRAssignment(targetVar, folded);
@@ -389,7 +389,7 @@ namespace BasicLang.Compiler.IR.Optimization
                         ReplaceAllReferences(block, unaryOp, folded);
 
                         // If this was a named variable (not a temp), preserve assignment
-                        if (IsNamedVariable(unaryOp.Name))
+                        if (IsNamedVariable(unaryOp))
                         {
                             var targetVar = new IRVariable(unaryOp.Name, unaryOp.Type);
                             block.Instructions[i] = new IRAssignment(targetVar, folded);
@@ -410,7 +410,7 @@ namespace BasicLang.Compiler.IR.Optimization
                         ReplaceAllReferences(block, compare, folded);
 
                         // If this was a named variable (not a temp), preserve assignment
-                        if (IsNamedVariable(compare.Name))
+                        if (IsNamedVariable(compare))
                         {
                             var targetVar = new IRVariable(compare.Name, compare.Type);
                             block.Instructions[i] = new IRAssignment(targetVar, folded);
@@ -424,6 +424,18 @@ namespace BasicLang.Compiler.IR.Optimization
                 }
             }
         }
+
+        /// <summary>
+        /// Whether <paramref name="value"/> is a STORE into a user variable, which folding must
+        /// keep as an assignment rather than delete. The IRBuilder's flag is authoritative; the
+        /// name-shape guess below is only the fallback for values that carry no flag.
+        ///
+        /// <para>⛔ The guess alone treated a user variable named like a temp as a temp: with
+        /// <c>Dim t3 As Integer = 6 \ 2</c> the store folded away and t3 stayed 0. MEASURED on
+        /// master 883fb1d. See IRBuilder.SeparateTempsFromUserNames.</para>
+        /// </summary>
+        private bool IsNamedVariable(IRValue value) =>
+            value.NamedAfterVariable || IsNamedVariable(value.Name);
 
         /// <summary>
         /// Check if a name represents a real variable (not a temp)
@@ -1199,7 +1211,7 @@ namespace BasicLang.Compiler.IR.Optimization
 
                         // If the current instruction is a named destination (actual variable, not a temp),
                         // we should NOT remove it. Instead, convert to an assignment.
-                        if (IsNamedVariable(binaryOp.Name))
+                        if (IsNamedVariable(binaryOp))
                         {
                             // Convert to assignment: target = existingResult
                             var targetVar = new IRVariable(binaryOp.Name, binaryOp.Type);
@@ -1222,6 +1234,12 @@ namespace BasicLang.Compiler.IR.Optimization
                 }
             }
         }
+
+        // A store into a user variable must survive as an assignment. The flag is authoritative;
+        // the name-shape guess is the fallback. ⛔ The guess alone merged `Dim t2 = n + 1` into
+        // an earlier `Dim t1 = n + 1` and DELETED the store to t2 (MEASURED on master 883fb1d).
+        private bool IsNamedVariable(IRValue value) =>
+            value.NamedAfterVariable || IsNamedVariable(value.Name);
 
         // Check if a name represents a real variable (not a temp)
         private bool IsNamedVariable(string name)
