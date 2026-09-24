@@ -977,6 +977,16 @@ public class NetSurfaceCollectorTests
     private static CppToolchain FakeToolchain() =>
         CppToolchain.FromExplicit("llvm", Path.Combine(Path.GetTempPath(), "no-such-clang++.exe"));
 
+    /// <summary>
+    /// The by-id twin of <see cref="FakeToolchain"/>. A BasicLang native project ALWAYS resolves
+    /// "msvc" through <c>resolveById</c> (ProjectFile.EffectiveCppToolchain) and never calls
+    /// <c>resolveToolchain</c>, so without this the fake above was never used: EmitCore probed the
+    /// real machine for MSVC and failed BL6015 anywhere it is not installed — the fixture stopped
+    /// being toolchain-free. MSVC-kind, i.e. what a Windows machine with MSVC resolves.
+    /// </summary>
+    private static CppToolchain FakeMsvc(string _) =>
+        CppToolchain.FromExplicit("msvc", Path.Combine(Path.GetTempPath(), "fake-vcvars64.bat"))!;
+
     private (CppProjectBuildResult Result, CppEmitOutcome Outcome) Emit(
         IReadOnlyDictionary<string, string> files, string outputType, string itemGroupXml)
     {
@@ -985,6 +995,7 @@ public class NetSurfaceCollectorTests
         var outcome = CppProjectBuilder.EmitCore(
             ProjectFile.Load(projectPath), "Release", result,
             resolveToolchain: FakeToolchain, forIntelliSense: false,
+            resolveById: FakeMsvc,
             // Phase 5 OFF (P2a-2 Task 7b): this fixture's toolchain is resolvable-but-fake, so
             // without the seam every <NetProxy> test here would spawn a real ~27 s `dotnet publish`
             // in the FAST subset. What the collector produced is what is under test; whether it

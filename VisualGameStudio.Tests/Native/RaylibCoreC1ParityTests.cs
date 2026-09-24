@@ -71,8 +71,8 @@ public class RaylibCoreC1ParityTests
             // (InitWindow .. GetWindowHandle) must be covered EXACTLY by WindowNames ∪ AlreadyBound. This is not a
             // tautology — it reads the real function list and fails if a raylib window-control fn is neither newly
             // bound (WindowNames) nor already bound (AlreadyBound), i.e. it catches a forgotten 25th function.
-            var raylibHeader = Path.Combine(root, "packages", "raylib.5.5.0", "build", "native", "include", "raylib.h");
-            var control = ExtractWindowControlNames(File.ReadAllText(raylibHeader)).ToHashSet();
+            var raylibHeader = RaylibHeader.Read(root);
+            var control = ExtractWindowControlNames(raylibHeader).ToHashSet();
             var covered = WindowNames.Concat(AlreadyBound).ToHashSet();
             Assert.That(control, Is.EquivalentTo(covered),
                 "WindowNames ∪ AlreadyBound must exactly cover raylib's window-control range InitWindow..GetWindowHandle");

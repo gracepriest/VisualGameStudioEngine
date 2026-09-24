@@ -22,6 +22,7 @@ public class BasicLangProjectTests
         Assert.That(project.Configurations, Is.Empty);
     }
 
+    [Platform(Include = "Win", Reason = "feeds Windows paths (C:\\Projects\\…) into the host OS's Path APIs")]
     [Test]
     public void ProjectDirectory_ExtractsDirectoryFromFilePath()
     {
@@ -104,6 +105,7 @@ public class BasicLangProjectTests
         Assert.That(sourceFiles, Is.Empty);
     }
 
+    [Platform(Include = "Win", Reason = "feeds Windows paths (C:\\Projects\\…) into the host OS's Path APIs")]
     [Test]
     public void GetMainFile_FindsProgramBas()
     {
@@ -119,6 +121,7 @@ public class BasicLangProjectTests
         Assert.That(mainFile, Is.EqualTo(@"C:\Projects\Test\Program.bas"));
     }
 
+    [Platform(Include = "Win", Reason = "feeds Windows paths (C:\\Projects\\…) into the host OS's Path APIs")]
     [Test]
     public void GetMainFile_FindsMainBas()
     {

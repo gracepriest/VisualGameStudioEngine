@@ -119,6 +119,7 @@ public class CppToolchainArgsTests
         Assert.That(args, Does.Not.Contain("/Zi"), "no debug flag when DebugSymbols=false");
     }
 
+    [Platform(Include = "Win", Reason = "feeds Windows paths (C:\\proj\\…) into the host OS's Path APIs")]
     [Test]
     public void FindDuplicateBasename_DetectsCollisionAcrossDirectories()
     {

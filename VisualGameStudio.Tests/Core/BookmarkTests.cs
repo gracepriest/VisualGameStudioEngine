@@ -50,6 +50,7 @@ public class BookmarkTests
         Assert.That(bookmark.CreatedAt, Is.EqualTo(time));
     }
 
+    [Platform(Include = "Win", Reason = "feeds Windows paths (C:\\…) into the host OS's Path APIs")]
     [Test]
     public void FileName_ExtractsFileNameFromPath()
     {
@@ -120,6 +121,7 @@ public class BookmarkTests
         Assert.That(bookmark.DisplayText, Is.EqualTo("   "));
     }
 
+    [Platform(Include = "Win", Reason = "feeds Windows paths (C:\\…) into the host OS's Path APIs")]
     [Test]
     public void AllProperties_CanBeSetTogether()
     {

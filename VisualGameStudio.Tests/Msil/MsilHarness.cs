@@ -154,20 +154,7 @@ internal static class MsilHarness
                 + "v4.0.30319; elsewhere restore runtime.<rid>.Microsoft.NETCore.ILAsm, or point "
                 + "BASICLANG_ILASM at a build.";
 
-            // NUnit 4 keeps the "am I inside Assert.Multiple" level internal, so ask Assert.Ignore:
-            // outside a block it throws IgnoreException (let it go); inside one it throws a plain
-            // Exception refusing to run, which is the case handled below.
-            try
-            {
-                Assert.Ignore(message);
-            }
-            catch (Exception ex) when (ex is not IgnoreException)
-            {
-                var result = NUnit.Framework.Internal.TestExecutionContext.CurrentContext.CurrentResult;
-                if (result.PendingFailures > 0)
-                    throw new MultipleAssertException(result);
-                throw new IgnoreException(message);
-            }
+            TestSkip.IgnoreEvenInsideMultiple(message);
         }
         return IlasmPath.Value;
     }

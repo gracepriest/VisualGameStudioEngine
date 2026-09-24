@@ -63,7 +63,7 @@ public class RaylibModelsCollisionParityTests
 
             // GetRayCollisionMesh landed in the mesh sub-batch (it needs the Mesh struct); its 3-way binding is verified by
             // RaylibModelsMeshParityTests. Here we only confirm raylib's full collision range is accounted for.
-            var raylibHeader = File.ReadAllText(Path.Combine(root, "packages", "raylib.5.5.0", "build", "native", "include", "raylib.h"));
+            var raylibHeader = RaylibHeader.Read(root);
             var range = ExtractRlapiRange(raylibHeader, "CheckCollisionSpheres(", "GetRayCollisionQuad(");
             Assert.That(range, Is.EquivalentTo(AllRaylibCollision),
                 "raylib's CheckCollisionSpheres..GetRayCollisionQuad range must be exactly the 7 bound + the deferred GetRayCollisionMesh");

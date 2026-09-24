@@ -345,6 +345,7 @@ public class BookmarkModelTests
         Assert.That(bookmark.CreatedAt, Is.Not.EqualTo(default(DateTime)));
     }
 
+    [Platform(Include = "Win", Reason = "feeds Windows paths (C:\\…) into the host OS's Path APIs")]
     [Test]
     public void Bookmark_FileName_ReturnsFileNameFromPath()
     {

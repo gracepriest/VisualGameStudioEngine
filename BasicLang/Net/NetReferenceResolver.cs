@@ -275,7 +275,9 @@ namespace BasicLang.Net
                     continue;
                 }
 
-                var hint = reference.HintPath;
+                // Converted here too, not only at ProjectFile.Load: a project built in memory (the
+                // IDE's, and this resolver's own tests) never passes through the loader.
+                var hint = Compiler.ProjectSystem.ProjectFile.ToLocalPath(reference.HintPath);
                 var candidate = TryGetFullPath(Path.IsPathRooted(hint) ? hint : Path.Combine(projectDir, hint));
                 if (candidate != null && File.Exists(candidate))
                 {

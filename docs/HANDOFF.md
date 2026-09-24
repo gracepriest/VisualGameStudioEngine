@@ -42,20 +42,46 @@ the `MapTypeName`→`SanitizeName` mutation: a route that never answers `NetRef`
 be `NetRef`" assertion trivially true. Six more were needed, and the test's own failure message
 named the right one.
 
-### The Linux picture, for cloud sessions
+### The Linux picture, for cloud sessions — ✅ BOTH TIERS GREEN (2026-09-24, master `87939e7`)
 
-The same suite on a Linux container reports **5454 passed / 173 failed / 203 skipped of 5830** —
-all 173 environmental, none a real defect. 82 are `BasicLang.exe not deployed` (no `.exe` suffix
-off Windows), ~60 are hardcoded `C:\` / PATHEXT / MSVC-vcvars assertions, 22 are Blnet
-integration rows needing the ILC/AOT shim publish (`Cross-OS native compilation is not
-supported` — win-x64 only), 6 are native-engine `DllNotFound`.
+Measured in a Linux cloud container (no MSVC, no `ilasm`, no native engine DLL, no `packages/`),
+.NET SDK 8.0.131, g++/clang++ and Node 22 installed:
 
-⚠ **Two things follow.** Those 22 rows are exactly §12.5's integration set, **including
-`EveryProxyTableSlotResolvesInThePublishedShim`** — so a Linux run cannot speak for them, and
-anything touching the shim needs a Windows pass. And the TOTALS differ, 5826 vs 5830: four tests
-exist on one platform and not the other (a differing total, not a skip). Nobody has chased which
-four; if a count ever fails to reconcile, start there.
+| Tier | Passed | Failed | Skipped |
+|---|---|---|---|
+| Fast subset (`TestCategory!=Integration`) | 5284 | **0** | 93 |
+| Integration (`TestCategory=Integration`) | 973 | **0** | 586 |
 
+It started this session at 90 fast / 267 Integration failures. What got it to zero (PRs #68–#82):
+
+- **Real Linux/macOS product bugs, fixed** — none change Windows behavior:
+  - `.blproj`/`.blsln` paths are stored with BACKSLASHES. `ProjectFile.ToLocalPath` converts them
+    at load in both loaders (CLI `ProjectFile`, IDE `ProjectSerializer`), plus
+    `NetReferenceResolver`, `EngineDeployment.IsWrapperReference`, `ProjectItem`, and solution
+    resolution. Before: the CLI **silently dropped subfolder sources from the build**, HintPaths
+    failed BL6021, Windows-authored solutions could not find their projects.
+  - IDE `BuildService`: `bin\Debug` output path (MSB1009), `<Name>.exe`-only executable lookup,
+    and the WinExe→WinForms fallback that also caught Avalonia apps (MSB4019).
+  - `GetSourceFiles` returned file-system order (alphabetical on NTFS, arbitrary on Linux), which
+    decides declaration order in generated C++ headers; it now walks in Windows' order everywhere.
+- **Windows-only requirements now SKIP instead of failing**, each with a stated reason:
+  MSVC (`Native/NativeBuildSkip.RequireMsvcForBasicLangNative` — a BasicLang native build ALWAYS
+  uses MSVC, so "any C++ compiler" is the wrong gate), the engine `.lib`/DLL, `ilasm`, `dbgshim.dll`,
+  the Windows Desktop SDK, `IDE/VisualGameStudio.exe`, and the NuGet-restored `raylib.h`
+  (`Native/RaylibHeader.Read`). 44 tests that feed Windows-only input (`C:\` roots, PATHEXT,
+  Windows file-name rules/locking) are `[Platform(Include = "Win")]`.
+
+⚠ **What a Linux run still cannot speak for.** Every skip above is coverage that only a Windows
+run provides — the §12.5 blnet shim rows (`EveryProxyTableSlotResolvesInThePublishedShim` among
+them), all MSVC builds, the MSIL round trips, the native engine tiers, the raylib cross-checks. A
+green Linux run is necessary, not sufficient: **anything touching the shim, the C++ build or the
+engine still needs a Windows pass.** ⚠ The adapter leaves `[Platform]`-excluded tests OUT of the
+totals (they are not counted as skipped), so Linux and Windows totals differ by design.
+
+⛔ **Two NUnit traps found on the way, both now handled by `TestSkip.IgnoreEvenInsideMultiple`:**
+`Assert.Ignore` inside an `Assert.Multiple` block FAILS the test ("may not be used in a multiple
+assertion block") — ~220 MSIL rows failed that way on machines without `ilasm`; and a `finally`
+that calls into a DLL that never loaded throws again and turns a skip into a failure.
 
 ---
 
@@ -131,6 +157,11 @@ These are measured, not cautionary. Each one shipped a green build that did the 
   `C++ compile timed out after 240s` is a load artifact. Measured: one such test "failed" after
   8m49s in a full run and passed alone in 34s. **Re-run in isolation before investigating; only
   an assertion failure is evidence.**
+- ⛔ **Paths read from `.blproj`/`.blsln` are MSBuild-style (`Source\Main.bas`).** Off Windows a
+  backslash is a file-name character, so a raw `Path.Combine(dir, include)` names ONE file
+  called `Source\Main.bas` — the CLI once dropped such sources from the build without an error.
+  Go through `ProjectFile.ToLocalPath` (already applied at load by both loaders); a new consumer
+  of a stored path that bypasses the loader must call it too.
 - ⛔ **Windows/PowerShell:** never round-trip repo files through `Get-Content`/`Set-Content`
   (it corrupts the BOM-less UTF-8 files here). Write commit messages to a file and use
   `git commit -F`. PowerShell 5.1 reports a native command's stderr as failure, so **verify a
@@ -162,6 +193,10 @@ suites). The 5th failure in the `6139386` run was a
 `Cli_Build_CppProject_ProjectReference_Warns…`, and `NonEx_variants…` (which passes alone and
 fails only when the Native tier runs alongside it). The fast subset shows the two
 `SearchSnippets` ones.
+⚠ **2026-09-24:** `Cli_Build_CppProject_ProjectReference_Warns…` was STALE, not flaky — BL6021
+for a `<ProjectReference>` was promoted to an error at the P2a-2 flip. It is now
+`Cli_Build_CppProject_ProjectReference_FailsWithBL6021` (#81) and should pass, so the Windows
+baseline should be **three**. Not yet re-measured on Windows.
 
 ⛔ **A GAMEPAD PLUGGED INTO THE BUILD MACHINE TURNS A NATIVE ROW RED — and nothing in the repo
 changed.** Diagnosed 2026-09-20/21, root cause measured, fixed in the test; recorded here because
@@ -226,6 +261,11 @@ would collapse N cases into one erroring row and MOVE the total. So the gap is b
 Fix by copying the package in
 (`robocopy <main checkout>\packages\raylib.5.5.0 <worktree>\packages\raylib.5.5.0 /E`), then re-run —
 do NOT read those 18 as a regression, and do not baseline them either.
+✅ **2026-09-24 (#82):** these rows no longer FAIL without `packages/` — they read the header
+through `Native/RaylibHeader.Read`, which SKIPS once the framework.h ⇄ RaylibWrapper.vb parity
+checks in the same test have passed (a parity failure still fails). So a worktree/clone without
+`packages/` now shows them as skipped, and the raylib cross-check simply did not run — copy the
+package in when that cross-check matters.
 
 ⛔ **The fast subset is not a gate for codegen work** — execution tests are
 `[Category("Integration")]`. Four fixes once gated green on it, then the first full run found

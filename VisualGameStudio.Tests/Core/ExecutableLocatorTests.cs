@@ -131,6 +131,7 @@ public class ExecutableLocatorTests
     //  FindIn — the search
     // ──────────────────────────────────────────────────────────────────
 
+    [Platform(Include = "Win", Reason = "pins Windows PATH/PATHEXT executable lookup with Windows paths")]
     [Test]
     public void FindIn_BareName_FindsTheExeOnWindows()
     {
@@ -149,6 +150,7 @@ public class ExecutableLocatorTests
         Assert.That(found, Is.EqualTo(@"C:\tools\llvm\clangd.EXE"));
     }
 
+    [Platform(Include = "Win", Reason = "pins Windows PATH/PATHEXT executable lookup with Windows paths")]
     [Test]
     public void FindIn_ExtensionlessShimBesideTheExe_TheExeWins()
     {
@@ -180,6 +182,7 @@ public class ExecutableLocatorTests
             Is.EqualTo(expected));
     }
 
+    [Platform(Include = "Win", Reason = "pins Windows PATH/PATHEXT executable lookup with Windows paths")]
     [Test]
     public void FindIn_EarlierPathDirectoryWins_EvenAgainstAHigherPriorityExtensionLater()
     {
@@ -195,6 +198,7 @@ public class ExecutableLocatorTests
         Assert.That(found, Is.EqualTo(@"C:\first\clangd.CMD"));
     }
 
+    [Platform(Include = "Win", Reason = "pins Windows PATH/PATHEXT executable lookup with Windows paths")]
     [Test]
     public void FindIn_WithinOneDirectory_PathExtOrderDecides()
     {
@@ -234,6 +238,7 @@ public class ExecutableLocatorTests
             "a blank name must not resolve to the directory itself");
     }
 
+    [Platform(Include = "Win", Reason = "pins Windows PATH/PATHEXT executable lookup with Windows paths")]
     [Test]
     public void FindIn_TrimsPathEntries_AndSkipsEmptyOnes()
     {
@@ -266,6 +271,7 @@ public class ExecutableLocatorTests
         Assert.That(found, Is.EqualTo(expected));
     }
 
+    [Platform(Include = "Win", Reason = "pins Windows PATH/PATHEXT executable lookup with Windows paths")]
     [Test]
     public void FindIn_AnInvalidPathEntry_DoesNotThrow_AndTheSearchContinues()
     {
@@ -285,6 +291,7 @@ public class ExecutableLocatorTests
     //  FindInDirectories — the explicit-directory-list search (no PATH)
     // ──────────────────────────────────────────────────────────────────
 
+    [Platform(Include = "Win", Reason = "pins Windows PATH/PATHEXT executable lookup with Windows paths")]
     [Test]
     public void FindInDirectories_ProbesEachDirInOrder_WithCandidateNames()
     {
@@ -334,6 +341,7 @@ public class ExecutableLocatorTests
         Assert.That(found, Is.EqualTo(Path.GetFullPath(relativeHit)));
     }
 
+    [Platform(Include = "Win", Reason = "pins Windows PATH/PATHEXT executable lookup with Windows paths")]
     [Test]
     public void FindInDirectories_SkipsDirsThatThrow()
     {
@@ -394,6 +402,7 @@ public class ExecutableLocatorTests
         }
     }
 
+    [Platform(Include = "Win", Reason = "pins Windows PATH/PATHEXT executable lookup with Windows paths")]
     [Test]
     [NonParallelizable] // mutates the process-wide PATH and working directory
     public void Find_RelativePathEntry_StillYieldsAnAbsolutePath()

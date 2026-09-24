@@ -15,6 +15,7 @@ public class NewSolutionViewModelTests
         Assert.That(vm.CanConfirm, Is.False);
     }
 
+    [Platform(Include = "Win", Reason = "pins Windows file-name rules and path separators")]
     [Test]
     public void Invalid_filename_chars_block_confirm()
     {
@@ -23,6 +24,7 @@ public class NewSolutionViewModelTests
         Assert.That(vm.ErrorMessage, Is.Not.Empty);
     }
 
+    [Platform(Include = "Win", Reason = "pins Windows file-name rules and path separators")]
     [Test]
     public void SolutionFilePreview_composes_path()
     {

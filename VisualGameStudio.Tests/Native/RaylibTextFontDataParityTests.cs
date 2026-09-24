@@ -51,7 +51,7 @@ public class RaylibTextFontDataParityTests
                 Assert.That(wrapper.Contains($"Framework_{name}("), Is.True, $"RaylibWrapper.vb missing import Framework_{name}");
             }
 
-            var raylibHeader = File.ReadAllText(Path.Combine(root, "packages", "raylib.5.5.0", "build", "native", "include", "raylib.h"));
+            var raylibHeader = RaylibHeader.Read(root);
             var range = ExtractRlapiRange(raylibHeader, "LoadFontData(", "UnloadFontData(");
             Assert.That(range, Is.EquivalentTo(FontDataNames), "raylib's LoadFontData..UnloadFontData range must be exactly these 3 font-data fns");
         });
@@ -61,7 +61,7 @@ public class RaylibTextFontDataParityTests
     public void TextFormat_is_intentionally_left_unbound()
     {
         var root = RepoRoot();
-        var raylibHeader = File.ReadAllText(Path.Combine(root, "packages", "raylib.5.5.0", "build", "native", "include", "raylib.h"));
+        var raylibHeader = RaylibHeader.Read(root);
         var header = File.ReadAllText(Path.Combine(root, "VisualGameStudioEngine", "framework.h"));
 
         Assert.Multiple(() =>
