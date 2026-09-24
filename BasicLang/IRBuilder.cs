@@ -4539,24 +4539,19 @@ namespace BasicLang.Compiler.IR
                 }
                 else if (part is ExpressionNode expr)
                 {
-                    // Expression part - evaluate and convert to string
+                    // A hole lowers exactly as `&` would: the value goes straight into a Concat
+                    // and each backend turns it into text there, the one place it already
+                    // knows how (CppCodeGenerator.StringifyForText, C#'s and JS's `+`).
+                    // ⛔ Not a call to "ToString": no backend defines a free function of that
+                    // name, so every non-String hole used to fail to build, on all of them.
                     expr.Accept(this);
-                    var exprValue = _expressionResult;
+                    partValue = _expressionResult;
 
-                    // If not already a string, convert to string
-                    var exprType = _semanticAnalyzer.GetNodeType(expr);
-                    if (exprType?.Name != "String")
-                    {
-                        var tempName = _currentFunction.GetNextTempName();
-                        var toStringCall = new IRCall(tempName, "ToString", stringType);
-                        toStringCall.Arguments.Add(exprValue);
-                        EmitInstruction(toStringCall);
-                        partValue = toStringCall;
-                    }
-                    else
-                    {
-                        partValue = exprValue;
-                    }
+                    // A Concat needs a String on its LEFT: `&` guarantees one (the analyzer
+                    // requires a string operand), and for `{a}{b}` with two Integers C# and
+                    // JS would otherwise ADD them. So a leading hole starts from "".
+                    if (result == null && _semanticAnalyzer.GetNodeType(expr)?.Name != "String")
+                        result = new IRConstant("", stringType);
                 }
                 else
                 {
