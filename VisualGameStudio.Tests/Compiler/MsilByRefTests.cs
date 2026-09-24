@@ -49,14 +49,10 @@ public class MsilByRefTests
     /// <summary>
     /// C#, C++ and MSIL run and agree; JavaScript refuses the declaration by design.
     ///
-    /// <para><paramref name="cppExpected"/> is an escape hatch for the PRE-EXISTING,
-    /// unrelated-to-ByRef C++ <c>CStr(Double)</c> divergence: the C++ backend's stringifier
-    /// deliberately excludes Single/Double (<c>CppCodeGenerator.StringifyForText</c>) and a bare
-    /// <c>CStr(d)</c> falls to a raw <c>to_string</c> call, which always emits SIX decimal
-    /// places — measured true for a plain, non-ByRef, no-function local too (<c>Dim d As Double
-    /// = 3.5</c> prints <c>3.500000</c> on C++), and already pinned elsewhere
-    /// (<c>ModuleScopeInitializerTests</c>'s <c>Cpp_Double_FormattingPinned</c> case). Omit it and
-    /// all three backends are held to the SAME string, as for every non-Double shape here.</para>
+    /// <para><paramref name="cppExpected"/> is an escape hatch for a C++-only spelling. No case
+    /// uses it now: C++ once printed <c>CStr(Double)</c> with six decimal places
+    /// (<c>3.500000</c>), and now prints what .NET prints through <c>BasicLang::FormatDouble</c>.
+    /// Omit it and all three backends are held to the SAME string.</para>
     /// </summary>
     private static void AgreesOnThreeBackends(string program, string expected, string cppExpected = null)
     {
@@ -123,8 +119,7 @@ public class MsilByRefTests
             End Sub
             """, "9000000000000");
 
-    /// <summary>⚠ C++ prints <c>42.500000</c> here, not <c>42.5</c> — the pre-existing,
-    /// unrelated <c>CStr(Double)</c> divergence <see cref="AgreesOnThreeBackends"/> documents.</summary>
+    /// <summary>A ByRef Double read back and written through its indirect.</summary>
     [Test]
     public void ByRefDouble_UsesTheR8IndirectSuffix()
         => AgreesOnThreeBackends("""
@@ -136,7 +131,7 @@ public class MsilByRefTests
              Bump(v)
              PrintLine(CStr(v))
             End Sub
-            """, "42.5", cppExpected: "42.500000");
+            """, "42.5");
 
     [Test]
     public void ByRefBoolean_UsesTheI1IndirectSuffix()
@@ -343,8 +338,6 @@ public class MsilByRefTests
     /// distinct either way. A temporary AFTER them does: an <c>ilasm</c> "Local var slot 1: type
     /// conflict" if the pre-pass and the store scratch disagree about how many slots the ByRef
     /// writes already claimed. The <c>PrintLine(CStr(...))</c> calls are what allocate the temp.
-    /// ⚠ C++ prints the Double leg as <c>41.500000</c>, the same pre-existing, unrelated
-    /// <c>CStr(Double)</c> divergence the Double type test above pins.
     /// </summary>
     [Test]
     public void TwoWrittenByRefParametersPlusATemporary_DoNotCollideOnALocalsSlot()
@@ -362,7 +355,7 @@ public class MsilByRefTests
              PrintLine(CStr(x))
              PrintLine(CStr(y))
             End Sub
-            """, "2\n41.5\n2\n41.5", cppExpected: "2\n41.500000\n2\n41.500000");
+            """, "2\n41.5\n2\n41.5");
 
     /// <summary>⭐ A ByRef parameter used as a counted <c>For</c> INDUCTION VARIABLE inside the
     /// callee — both defects at once: the loop write needs the parameter STORE arm (defect A),

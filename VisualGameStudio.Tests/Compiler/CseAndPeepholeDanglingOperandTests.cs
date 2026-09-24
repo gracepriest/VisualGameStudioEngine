@@ -53,11 +53,10 @@ namespace VisualGameStudio.Tests.Compiler;
 /// docstring names the leg that actually detects the defect, because a fixture that asserted only
 /// the green legs would be a test that cannot fail.</para>
 ///
-/// <para>⚠ Two cross-backend splits appear below and are NOT regressions. They were confirmed
-/// against a control program (<c>ShowB(True)</c> / <c>ShowD(CDbl(3))</c>) that no pass touches:
-/// C++ renders <c>CStr(Double)</c> as <c>3.000000</c>, and JavaScript renders <c>CStr(Boolean)</c>
-/// in lower case. They are pinned as explicit per-backend expectations rather than normalised
-/// away.</para>
+/// <para>⚠ Cross-backend splits were once pinned here as explicit per-backend expectations:
+/// C++ rendered <c>CStr(Double)</c> as <c>3.000000</c> and JavaScript rendered
+/// <c>CStr(Boolean)</c> in lower case. Both now print what .NET prints (C++ through
+/// <c>BasicLang::FormatDouble</c>), so every backend is held to the same string.</para>
 /// </summary>
 [TestFixture]
 [Category("Integration")]   // compiles and runs C++, spawns node, assembles and runs IL
@@ -138,11 +137,8 @@ public class CseAndPeepholeDanglingOperandTests
     /// <summary>
     /// ⛔ <c>IRCast.Value</c>.
     ///
-    /// <para>⚠ C++ prints <c>D=3.000000</c> where the other three print <c>D=3</c>. That is a
-    /// PRE-EXISTING <c>CStr(Double)</c> formatting difference, not this fix: it reproduces on a
-    /// control program with no optimizable expression in it at all. It is pinned per-backend
-    /// rather than normalised, so that the day C++ changes its double formatting this case says
-    /// so.</para>
+    /// <para>C++ once printed <c>D=3.000000</c> here (a <c>CStr(Double)</c> formatting
+    /// difference unrelated to this fix); it now prints <c>D=3</c> like the other three.</para>
     /// </summary>
     [Test]
     public void ADuplicateBinaryOp_ConsumedByACast_IsRePointedNotOrphaned()
@@ -160,7 +156,7 @@ public class CseAndPeepholeDanglingOperandTests
             Sub Main()
              Run(1, 2)
             End Sub
-            """, "V=3\nD=3", cppExpected: "V=3\nD=3.000000");
+            """, "V=3\nD=3");
 
     /// <summary>⛔ <c>IRNewObject.Arguments</c> — the duplicate is a constructor argument.</summary>
     [Test]
