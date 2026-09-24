@@ -119,8 +119,7 @@ public class BuildServicePipelineTests
         // CppProjectBuilder as Language=Cpp, landing a native exe in bin/<config>/
         // (no TFM subfolder). The old single-TU IDE path (GeneratedFileName=.cpp,
         // a .cpp left in OutputPath, no-toolchain "source-only success") is deleted.
-        if (BasicLang.Compiler.ProjectSystem.CppToolchain.Find() == null)
-            Assert.Ignore("No C++ toolchain available (clang++/g++/MSVC)");
+        VisualGameStudio.Tests.Native.NativeBuildSkip.RequireMsvcForBasicLangNative();
 
         var project = await CreateTemplateProjectAsync("console-app", SolutionTypes.Native, "PipelineNative");
         Assert.That(project.TargetBackend, Is.EqualTo(TargetBackend.Cpp),
@@ -156,8 +155,7 @@ public class BuildServicePipelineTests
     {
         // Regression: "Build Succeeded" for Cpp used to stop at the .cpp and
         // Run then failed with "No executable found after build".
-        if (BasicLang.Compiler.ProjectSystem.CppToolchain.Find() == null)
-            Assert.Ignore("No C++ toolchain available (clang++/g++/MSVC) — cannot verify native builds");
+        VisualGameStudio.Tests.Native.NativeBuildSkip.RequireMsvcForBasicLangNative();
 
         var project = await CreateTemplateProjectAsync("console-app", SolutionTypes.Native, "PipelineCppRun");
 
@@ -195,8 +193,7 @@ public class BuildServicePipelineTests
         // The game template calls Framework_* engine exports — the C++ build
         // must link VisualGameStudioEngine.lib and deploy the DLL next to the
         // exe. (Not executed: it opens a game window.)
-        if (BasicLang.Compiler.ProjectSystem.CppToolchain.Find() == null)
-            Assert.Ignore("No C++ toolchain available (clang++/g++/MSVC) — cannot verify native builds");
+        VisualGameStudio.Tests.Native.NativeBuildSkip.RequireMsvcForBasicLangNative();
 
         var project = await CreateTemplateProjectAsync("game-app", SolutionTypes.DotNet, "PipelineCppGame");
         project.TargetBackend = TargetBackend.Cpp;
@@ -238,6 +235,11 @@ public class BuildServicePipelineTests
     [Test]
     public async Task Build_WinFormsTemplate_DotNet_Builds()
     {
+        // WinForms builds against Microsoft.NET.Sdk.WindowsDesktop, which only the Windows .NET
+        // SDK ships (MSB4019 elsewhere) — same skip as the template sweep's winforms/wpf rows.
+        if (!OperatingSystem.IsWindows())
+            Assert.Ignore("winforms-app needs the Windows Desktop SDK (Windows only)");
+
         var project = await CreateTemplateProjectAsync("winforms-app", SolutionTypes.DotNet, "PipelineWinForms");
 
         var (result, output) = await BuildAsync(project);
@@ -471,8 +473,7 @@ End Sub
         // that #includes a GENERATED shim (Logic.g.h) and a .bas providing the
         // function — impossible on the old single-TU IDE path, which only ever
         // emitted one combined .cpp.
-        if (BasicLang.Compiler.ProjectSystem.CppToolchain.Find() == null)
-            Assert.Ignore("No C++ toolchain available (clang++/g++/MSVC)");
+        VisualGameStudio.Tests.Native.NativeBuildSkip.RequireMsvcForBasicLangNative();
 
         var dir = Path.Combine(_rootDir, "MixedIde");
         Directory.CreateDirectory(dir);
@@ -553,8 +554,7 @@ End Sub
         // A pure-.bas project on the C++ backend (no <Language>Cpp>, no user .cpp):
         // it must converge on bin/<config>/<name>.exe via CppProjectBuilder, NOT the
         // old transpile path (a .cpp dropped into config.OutputPath).
-        if (BasicLang.Compiler.ProjectSystem.CppToolchain.Find() == null)
-            Assert.Ignore("No C++ toolchain available (clang++/g++/MSVC)");
+        VisualGameStudio.Tests.Native.NativeBuildSkip.RequireMsvcForBasicLangNative();
 
         var dir = Path.Combine(_rootDir, "PureBlIde");
         Directory.CreateDirectory(dir);

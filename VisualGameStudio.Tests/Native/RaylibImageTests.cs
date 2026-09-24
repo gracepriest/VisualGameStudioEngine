@@ -65,6 +65,16 @@ public class RaylibImageTests
         catch (EntryPointNotFoundException) { Assert.Ignore($"{DLL} predates Image Batch 3b exports; refresh IDE\\ first."); throw; }
     }
 
+    /// <summary>
+    /// For <c>finally</c> blocks. An image that never loaded (its <c>data</c> is null) needs no
+    /// unload — and when Guard skipped the test because the DLL cannot load, calling into it here
+    /// would throw DllNotFoundException again and turn the skip into a failure.
+    /// </summary>
+    private static void UnloadIfLoaded(RImage image)
+    {
+        if (image.data != IntPtr.Zero) Framework_UnloadImage(image);
+    }
+
     private static void AssertColor(RColor c, byte r, byte g, byte b, byte a)
         => Assert.That((c.r, c.g, c.b, c.a), Is.EqualTo(((byte)r, (byte)g, (byte)b, (byte)a)));
 
@@ -257,10 +267,10 @@ public class RaylibImageTests
         }
         finally
         {
-            Framework_UnloadImage(img2);
-            Framework_UnloadImage(fromMem);
-            Framework_UnloadImage(anim);
-            Framework_UnloadImage(animM);
+            UnloadIfLoaded(img2);
+            UnloadIfLoaded(fromMem);
+            UnloadIfLoaded(anim);
+            UnloadIfLoaded(animM);
             if (File.Exists(tmpPng)) File.Delete(tmpPng);
         }
     }
@@ -283,7 +293,7 @@ public class RaylibImageTests
         }
         finally
         {
-            Framework_UnloadImage(img);
+            UnloadIfLoaded(img);
             if (File.Exists(tmpRaw)) File.Delete(tmpRaw);
         }
     }
