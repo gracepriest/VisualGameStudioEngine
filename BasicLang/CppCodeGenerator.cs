@@ -1117,15 +1117,16 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 WriteLine($"virtual {returnType} {methodName}({paramList}) = 0;");
             }
 
-            // Generate property getter/setter declarations
+            // Generate property getter/setter declarations. The signature comes from the SAME
+            // helper the implementing class uses (PropertyAccessorSignature) — see its comment
+            // for why two spellings of one accessor cannot be allowed.
             foreach (var prop in irInterface.Properties)
             {
-                var propType = MapType(prop.Type);
                 var propName = SanitizeName(prop.Name);
                 if (prop.HasGetter)
-                    WriteLine($"virtual {propType} get_{propName}() = 0;");
+                    WriteLine($"virtual {PropertyAccessorSignature(prop.Type, propName, isStatic: false, getter: true)} = 0;");
                 if (prop.HasSetter)
-                    WriteLine($"virtual void set_{propName}({propType} value) = 0;");
+                    WriteLine($"virtual {PropertyAccessorSignature(prop.Type, propName, isStatic: false, getter: false)} = 0;");
             }
 
             Unindent();
@@ -1299,6 +1300,13 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 GenerateProperty(irClass, prop);
             }
 
+            // Interface accessors this class takes on through its own Implements list but
+            // inherits the implementation of — see GenerateInheritedAccessorForwarder.
+            foreach (var inherited in InterfaceImplementationLookup.InheritedInterfaceAccessors(_module, irClass))
+            {
+                GenerateInheritedAccessorForwarder(irClass, inherited);
+            }
+
             // Generate simple inline getters/setters for private fields with public access pattern
             GenerateSimplePropertyAccessors(irClass);
 
@@ -1448,19 +1456,83 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             }
         }
 
+        /// <summary>
+        /// The declarator of a property accessor — <c>const std::string&amp; get_Slot() const</c> /
+        /// <c>void set_Slot(const std::string&amp; value)</c> — with no <c>virtual</c>, no
+        /// <c>= 0</c>/<c>override</c>, and no body. The ONE place this spelling is decided: the
+        /// interface declaration and the implementing class both come through here, differing
+        /// only in what they wrap around it (ADR-0004 D1).
+        ///
+        /// <para>⛔ TWO SPELLINGS OF ONE ACCESSOR IS A CLASS THAT CANNOT BE CONSTRUCTED. The
+        /// interface used to declare <c>virtual std::string get_Slot() = 0</c> while the class
+        /// defined <c>const std::string&amp; get_Slot() const</c>. Those are different functions
+        /// in C++ — the return type and the <c>const</c> both matter — so the class did not
+        /// override, stayed abstract, and <c>std::make_shared&lt;Holder&gt;()</c> failed inside
+        /// <c>construct_at</c>. Measured with an interface property that carried an (empty) Get
+        /// block, the one shape whose interface accessor was emitted at all.</para>
+        ///
+        /// <para>Strings and class-kinded types pass and return by <c>const&amp;</c>; a non-static
+        /// getter is <c>const</c>. <paramref name="isStatic"/> adds the <c>static</c> prefix and
+        /// drops the <c>const</c>, since a static member function has no object to promise not
+        /// to change.</para>
+        /// </summary>
+        private string PropertyAccessorSignature(TypeInfo type, string propName, bool isStatic, bool getter)
+        {
+            var propType = MapType(type);
+            var staticMod = isStatic ? "static " : "";
+            var byConstRef = propType == "std::string" || (type != null && type.Kind == TypeKind.Class);
+            var passType = byConstRef ? $"const {propType}&" : propType;
+
+            return getter
+                ? $"{staticMod}{passType} get_{propName}(){(isStatic ? "" : " const")}"
+                : $"{staticMod}void set_{propName}({passType} value)";
+        }
+
+        /// <summary>
+        /// <c>" override"</c> when this class's getter (or setter) fills a slot an implemented
+        /// interface declares, else empty. Spelling the override out turns a signature drift
+        /// between <see cref="PropertyAccessorSignature"/>'s two call sites into a compile error
+        /// at the accessor, instead of a class that silently stays abstract. A Shared property
+        /// can never fill an interface slot.
+        /// </summary>
+        private string InterfaceAccessorOverride(IRClass irClass, IRProperty prop, bool getter) =>
+            !prop.IsStatic && InterfaceImplementationLookup.ImplementsInterfaceAccessor(_module, irClass, prop.Name, getter)
+                ? " override"
+                : "";
+
+        /// <summary>
+        /// A forwarding override for an interface accessor whose implementation this class
+        /// INHERITS: <c>Holder : BaseHolder, IHolder</c> with <c>Slot</c> declared only on
+        /// <c>BaseHolder</c>.
+        ///
+        /// <para>⛔ THE INHERITED MEMBER DOES NOT OVERRIDE. <c>BaseHolder::get_Slot</c> and
+        /// <c>IHolder::get_Slot</c> sit in unrelated bases, so C++ leaves the interface's pure
+        /// virtual unimplemented, <c>Holder</c> stays abstract, and <c>make_shared&lt;Holder&gt;</c>
+        /// fails inside <c>construct_at</c> — measured once the interface declared its accessors.
+        /// The forwarder is spelled by <see cref="PropertyAccessorSignature"/> from the
+        /// INTERFACE's type, so it matches the pure virtual it overrides by construction, and
+        /// calls the base accessor qualified, which is also what keeps a later unqualified
+        /// <c>get_Slot</c> in this class from being ambiguous between the two bases.</para>
+        /// </summary>
+        private void GenerateInheritedAccessorForwarder(IRClass irClass, InterfaceImplementationLookup.InheritedAccessor inherited)
+        {
+            var declared = SanitizeName(inherited.InterfaceProperty.Name);
+            var target = $"{SanitizeName(irClass.BaseClass)}::{(inherited.Getter ? "get_" : "set_")}{SanitizeName(inherited.InheritedProperty.Name)}";
+            var signature = PropertyAccessorSignature(inherited.InterfaceProperty.Type, declared, isStatic: false, getter: inherited.Getter);
+
+            WriteLine(inherited.Getter
+                ? $"{signature} override {{ return {target}(); }}"
+                : $"{signature} override {{ {target}(value); }}");
+        }
+
         private void GenerateProperty(IRClass irClass, IRProperty prop)
         {
             var propType = MapType(prop.Type);
             var propName = SanitizeName(prop.Name);
-            var staticMod = prop.IsStatic ? "static " : "";
-
-            // Determine if getter should be const (non-static, read-only access)
-            var constQualifier = (!prop.IsStatic) ? " const" : "";
-
-            // Use const reference for return type if it's a string or class type
-            var returnType = propType;
-            if (propType == "std::string" || (prop.Type != null && prop.Type.Kind == TypeKind.Class))
-                returnType = $"const {propType}&";
+            var getterSignature = PropertyAccessorSignature(prop.Type, propName, prop.IsStatic, getter: true)
+                + InterfaceAccessorOverride(irClass, prop, getter: true);
+            var setterSignature = PropertyAccessorSignature(prop.Type, propName, prop.IsStatic, getter: false)
+                + InterfaceAccessorOverride(irClass, prop, getter: false);
 
             // AUTO-PROPERTY: both accessors null. C++ has no property syntax, so emit a real
             // data member plus inline accessors.
@@ -1479,14 +1551,9 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 var memberMod = prop.IsStatic ? "inline static " : "";
                 WriteLine($"{memberMod}{propType} {propName} = {GetDefaultValue(prop.Type)};");
                 if (!prop.IsWriteOnly)
-                    WriteLine($"{staticMod}{returnType} get_{propName}(){constQualifier} {{ return {propName}; }}");
+                    WriteLine($"{getterSignature} {{ return {propName}; }}");
                 if (!prop.IsReadOnly)
-                {
-                    var autoParamType = propType;
-                    if (propType == "std::string" || (prop.Type != null && prop.Type.Kind == TypeKind.Class))
-                        autoParamType = $"const {propType}&";
-                    WriteLine($"{staticMod}void set_{propName}({autoParamType} value) {{ {propName} = value; }}");
-                }
+                    WriteLine($"{setterSignature} {{ {propName} = value; }}");
                 WriteLine();
                 return;
             }
@@ -1494,7 +1561,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // Getter - returns const reference for complex types, const method for non-static
             if (prop.Getter != null && !prop.IsWriteOnly)
             {
-                WriteLine($"{staticMod}{returnType} get_{propName}(){constQualifier}");
+                WriteLine(getterSignature);
                 WriteLine("{");
                 Indent();
 
@@ -1514,11 +1581,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // Setter - takes const reference for complex types
             if (prop.Setter != null && !prop.IsReadOnly)
             {
-                var paramType = propType;
-                if (propType == "std::string" || (prop.Type != null && prop.Type.Kind == TypeKind.Class))
-                    paramType = $"const {propType}&";
-
-                WriteLine($"{staticMod}void set_{propName}({paramType} value)");
+                WriteLine(setterSignature);
                 WriteLine("{");
                 Indent();
 
