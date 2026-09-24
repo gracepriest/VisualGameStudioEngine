@@ -140,6 +140,15 @@ These are measured, not cautionary. Each one shipped a green build that did the 
   all of which go through the one shared definition, `AggressivePipeline.Apply`. The aggressive
   pipeline **ships**: a Release `.blproj` build and `--optimize` both take it. ✅ Since ADR-0003
   those legs are safe for LOOPS on all four backends (they were not — see #114 below).
+  ⛔ **EXCEPT A C++ `.blproj` — it runs the STANDARD pipeline whatever its `<Optimize>` says**
+  (measured 2026-09-24). `CppProjectBuilder.cs:532-536` builds its `CompilerOptions` without
+  `OptimizeAggressive`, so `Compiler.cs:458-461` takes `AddStandardPasses()`; the project's
+  `<Optimize>` reaches only the native compiler flag. C#, JavaScript and MSIL projects go through
+  `Program.cs:502`, which honours it. So **a C++ `.blproj` test leg cannot see an aggressive-only
+  defect** — the LICM miscompile fixed on 2026-09-24 printed 6 under CLI `--optimize` and 12 from
+  the same program's C++ `.blproj`. Use `BclE2E.CompileToCppAggressive` or the CLI for such work.
+  Whether a C++ Release build SHOULD take the aggressive pipeline is an open decision, not a bug to
+  fix silently: changing it changes shipped C++ output.
 - ⛔⛔ **A PROPERTY WITH NO CONSUMER CANNOT BE TESTED FROM A BACKEND.** `ControlFlowGraph.NaturalLoops`
   is read by nothing in the shipping compiler since ADR-0003 unregistered all three loop passes, so
   reverting the back-edge fix changes ZERO of 104 end-to-end cells. The same shape recurs whenever a
@@ -203,6 +212,20 @@ These are measured, not cautionary. Each one shipped a green build that did the 
   MUTANT'S. A `dotnet run --no-build` straight afterwards runs that mutant — measured
   2026-09-21, it produced a phantom `InvalidProgramException` from a clean tree and cost real
   time. **Always `dotnet build` after a sweep, before any `--no-build` run.**
+- ⛔ **`dotnet test --no-incremental` runs NOTHING** — `dotnet test` rejects the switch
+  (MSB1001) and the "run" is an argument error that is easy to misread as a finished suite.
+  Build first (`dotnet build … --no-incremental`), then `dotnet test … --no-build`.
+- ⛔ **A bare `git reset` during a merge throws the merge away.** It clears `MERGE_HEAD` along
+  with the index, so the next commit is a one-parent commit that silently drops the other side's
+  ancestry. (Measured 2026-09-24, after a `git add -N .` meant only to make untracked files show in
+  a diff.) Recover with `git rev-parse <other side> > .git/MERGE_HEAD` and re-stage, then
+  prove the tree byte-identical to the pre-reset snapshot before committing.
+- ⛔ **Never `git checkout -- <file>` a production file to revert a mutant** while the tree
+  carries uncommitted work: it restores HEAD, not your work. Snapshot (md5 + a patch) first and
+  revert the mutation with a precise edit.
+- ⚠ **`ModificationCount` read after `OptimizationPipeline.Run` is always 0** — the fixed point
+  ends on a round that changed nothing. To pin what a pass did, run the pass bare
+  (`new XPass().Run(module)`) and read it then.
 
 ---
 

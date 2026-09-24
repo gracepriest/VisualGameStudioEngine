@@ -1769,7 +1769,7 @@ namespace BasicLang.Compiler.IR.Optimization
             var preheader = outside[0];
             if (preheader.Successors.Count != 1 || preheader.Successors[0] != header) return;
 
-            var written = VariablesWrittenIn(loop);
+            var written = VariablesWrittenIn(loop, cfg.Function);
 
             // Fixed point, recorded in DISCOVERY order: an instruction joins only after all of its
             // loop-defined operands have, so this list is already in dependency order.
@@ -1812,24 +1812,46 @@ namespace BasicLang.Compiler.IR.Optimization
         }
 
         /// <summary>
-        /// Names of the variables anything in the loop may write: assignment targets, values
-        /// renamed to a variable they store into, and variables passed ByRef.
+        /// Names of the variables anything in the loop may write — the one shared kill
+        /// vocabulary (<see cref="OptimizationPass.NamesWrittenBy"/>: assignment targets, store
+        /// addresses, renamed values, ByRef arguments of free AND instance calls) plus its call
+        /// arm: when the loop contains a call, every variable the loop reads that a callee can
+        /// reach (<see cref="OptimizationPass.IsCallVisibleDestination"/>: a module variable, a
+        /// class member, a ByRef parameter) counts as written.
+        ///
+        /// <para>⛔ This used to be a private, narrower copy of that vocabulary, and each gap was
+        /// a silent wrong answer under <c>--optimize</c>, MEASURED at 15b12e8 (both print 6 where
+        /// 12 is correct):</para>
+        /// <list type="bullet">
+        /// <item>it read ByRef arguments of <see cref="IRCall"/> only, so <c>b.Bump(x)</c> — an
+        /// <see cref="IRInstanceMethodCall"/> — left <c>x * 2</c> "invariant" and it was hoisted
+        /// (C++ and MSIL);</item>
+        /// <item>it treated only <c>IsGlobal</c> as call-visible, and a class field read bare
+        /// inside a method is not <c>IsGlobal</c>, so <c>K * 2</c> was hoisted out of a loop
+        /// whose <c>Inc()</c> call bumps <c>K</c> (C++, JavaScript and MSIL).</item>
+        /// </list>
+        /// <para>The vocabulary's own documented gaps still apply here — notably a local captured
+        /// by reference and written inside a lambda, which needs a capture set (#122).</para>
         /// </summary>
-        private static HashSet<string> VariablesWrittenIn(List<BasicBlock> loop)
+        private static HashSet<string> VariablesWrittenIn(List<BasicBlock> loop, IRFunction function)
         {
             var written = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            bool loopCalls = false;
             foreach (var inst in loop.SelectMany(b => b.Instructions))
             {
-                if (inst is IRAssignment { Target: IRVariable target })
-                    written.Add(target.Name);
-                if (inst is IRValue { NamedAfterVariable: true } store && store.Name != null)
-                    written.Add(store.Name);
-                if (inst is IRCall call && call.ByRefArguments != null)
-                {
-                    for (int i = 0; i < call.Arguments.Count && i < call.ByRefArguments.Count; i++)
-                        if (call.ByRefArguments[i] && call.Arguments[i] is IRVariable byRef)
-                            written.Add(byRef.Name);
-                }
+                var names = NamesWrittenBy(inst, out bool isCall);
+                if (names != null)
+                    foreach (var name in names) written.Add(name);
+                loopCalls |= isCall;
+            }
+
+            if (loopCalls)
+            {
+                foreach (var inst in loop.SelectMany(b => b.Instructions))
+                    foreach (var used in UsesOf(inst))
+                        if (used is IRVariable variable && variable.Name != null
+                            && IsCallVisibleDestination(variable.Name, function))
+                            written.Add(variable.Name);
             }
             return written;
         }

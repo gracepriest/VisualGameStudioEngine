@@ -161,9 +161,14 @@ superseded it and on what terms.
       old `IsValueInvariant`, but the written-set this rewrite computes still misses
       instance-method ByRef writes and call-visible class fields (probes L1 and L3: silent wrong
       answers under `--optimize` on the C++, JavaScript and MSIL backends, present on master
-      too; a follow-up commit on this branch fixes both by giving LICM the shared kill
-      vocabulary the rest of the optimizer uses). A lambda-captured local (probe L5) stays
-      wrong pending a capture set (task #122).
+      too). **Fixed on this branch** by the commit that adds `LicmKillVocabularyTests`:
+      `VariablesWrittenIn` now takes its names from the shared `NamesWrittenBy` (the vocabulary
+      CSE and `IRVerifier` use), and a loop containing a call also counts every variable it
+      reads that `IsCallVisibleDestination` reports as reachable by a callee. Measured on
+      4 backends × 3 entry points: 8 cells wrong→right, 0 right→wrong; a truly invariant
+      product (L6) still hoists. A lambda-captured local (probe L5) stays wrong pending a
+      capture set (task #122), and a C++ Release `.blproj` runs the STANDARD pipeline, so it
+      never ran LICM at all (task #134).
     - (b) `CfgLoopShapesAggressiveTests` (13 shapes, four backends) passes with LICM on; master's
       own run tests cover JavaScript, C++ and C#, not MSIL.
 - **D4 (delete `IsReducible`) — reversed.** Restored, with master's orientation fix, because

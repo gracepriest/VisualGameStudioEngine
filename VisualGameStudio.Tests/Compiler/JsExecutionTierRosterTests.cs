@@ -99,6 +99,21 @@ public class JsExecutionTierRosterTests
         typeof(CseDestinationInvalidationExecutionTests),
         typeof(DestinationInvalidation_D4_ByRefExecutionTests),
         typeof(CseDestinationKnownGapsTask133Tests),
+
+        // LICM's shared kill vocabulary (IROptimizer.cs, LoopInvariantCodeMotionPass; see
+        // docs/superpowers/decisions/0003-cfg-loop-representation.md's Amendment section).
+        // LicmKillVocabularyControlExecutionTests and LicmKillVocabularyExecutionTests both end
+        // in "ExecutionTests" and would be caught by the widened name match below on their own;
+        // listed explicitly anyway for the same reason every row above is. Their JS legs spawn
+        // Node via FourBackends.RunsOnEveryBackendAggressive / RunAggressiveJs / the CLI
+        // --optimize entry point's JavaScriptCodeGenerator + JavaScriptExecutionTests.RunNodeScript.
+        typeof(LicmKillVocabularyControlExecutionTests),
+        typeof(LicmKillVocabularyExecutionTests),
+        // LicmKillVocabularyKnownGapsTask122Tests is NOT caught by the widened name match below —
+        // it neither starts with "JavaScript"/"Js" nor ends with "ExecutionTests" — same reason
+        // CseDestinationKnownGapsTask133Tests needed a manual entry above. Its JavaScript pin
+        // (task #122) DOES spawn Node (FourBackends.RunAggressiveJs), so it belongs here.
+        typeof(LicmKillVocabularyKnownGapsTask122Tests),
     };
 
     /// <summary>
@@ -146,7 +161,7 @@ public class JsExecutionTierRosterTests
 
     [Test]
     public void RosterIsPinned()
-        => Assert.That(ExecutionTier, Has.Length.EqualTo(37),
+        => Assert.That(ExecutionTier, Has.Length.EqualTo(40),
             "The execution-tier roster changed. That is fine — update the number — but it must " +
             "be a deliberate edit, not a silent shrink.");
 
