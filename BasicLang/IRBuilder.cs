@@ -4226,13 +4226,27 @@ namespace BasicLang.Compiler.IR
                 // Widening the OPERANDS is the same fix, and the same reasoning, as
                 // WidenDivisionOperand in Visit(BinaryExpressionNode) — a Double-typed result
                 // over two Integer operands still divides as integers on the C-family backends.
-                // `\=` (IntDiv) is excluded there and is excluded here: it must keep truncating.
+                // `\=` (IntDiv) is excluded from that widening here as it is there.
                 var resultType = currentValue.Type;
                 if (op == BinaryOpKind.Div)
                 {
                     resultType = new TypeInfo("Double", TypeKind.Primitive);
                     currentValue = WidenDivisionOperand(currentValue, resultType);
                     value = WidenDivisionOperand(value, resultType);
+                }
+                else if (op == BinaryOpKind.IntDiv)
+                {
+                    // ADR-0005 D1, the same conversion as binary `\` — so that NO IntDiv leaves
+                    // IRBuilder with a floating operand, whichever site built it. A converted
+                    // divide is Long, as the analyzer types `a \ b`; the store coercion below
+                    // then narrows or widens it to the target. (⚠ Unreachable from source
+                    // today: the lexer has no `\=` token, so `d \= 2` is a parse error.)
+                    var convertedLeft = ConvertIntegerDivisionOperand(currentValue);
+                    var convertedRight = ConvertIntegerDivisionOperand(value);
+                    if (!ReferenceEquals(convertedLeft, currentValue) || !ReferenceEquals(convertedRight, value))
+                        resultType = new TypeInfo("Long", TypeKind.Primitive);
+                    currentValue = convertedLeft;
+                    value = convertedRight;
                 }
 
                 var tempName = _currentFunction.GetNextTempName();
@@ -4605,11 +4619,35 @@ namespace BasicLang.Compiler.IR
                 // IRPrettyPrinter and CppCapabilityChecker, so one insertion here moves every
                 // consumer at once instead of repeating the coercion per backend.
                 //
-                // IntDiv is deliberately excluded — `\` must keep truncating.
+                // IntDiv is deliberately excluded from this WIDENING — `\` is the integer
+                // operator, and its floating operands go the other way (next block).
                 if (opKind == BinaryOpKind.Div && resultType != null && resultType.IsFloatingPoint())
                 {
                     left = WidenDivisionOperand(left, resultType);
                     right = WidenDivisionOperand(right, resultType);
+                }
+
+                // ⛔ ADR-0005 D1: a FLOATING operand of `\` is converted to Long, rounding half
+                // to even, BEFORE the divide — VB.NET's rule, and the one the analyzer already
+                // states by typing the result Long. See ConvertIntegerDivisionOperand.
+                if (opKind == BinaryOpKind.IntDiv)
+                {
+                    var convertedLeft = ConvertIntegerDivisionOperand(left);
+                    var convertedRight = ConvertIntegerDivisionOperand(right);
+
+                    // ⚠ A `When` guard is never analyzed (SemanticAnalyzer.Visit(CaseClauseNode)
+                    // skips node.Patterns), so its `\` arrives untyped while its variable operands
+                    // still carry their declared types — the conversion fires, the result type
+                    // does not. Give a converted divide the type the analyzer gives it everywhere
+                    // else: Long. MSIL's operand coercion reads it — measured on `When y \ n`
+                    // (Integer n), without it the guard emitted `conv.i8; ldloc n; div`, an
+                    // int64/int32 mix ECMA-335 does not allow and the x64 JIT merely tolerates.
+                    if (resultType == null
+                        && (!ReferenceEquals(convertedLeft, left) || !ReferenceEquals(convertedRight, right)))
+                        resultType = new TypeInfo("Long", TypeKind.Primitive);
+
+                    left = convertedLeft;
+                    right = convertedRight;
                 }
 
                 result = new IRBinaryOp(tempName, opKind, left, right, resultType);
@@ -4633,6 +4671,45 @@ namespace BasicLang.Compiler.IR
             var castName = _currentFunction.GetNextTempName();
             var cast = new IRCast(castName, operand, sourceType, targetType,
                                   DetermineCastKind(sourceType, targetType));
+            EmitInstruction(cast);
+            return cast;
+        }
+
+        /// <summary>
+        /// Converts a FLOATING (Single/Double) operand of <c>\</c> to Long, rounding half to
+        /// even; any other operand is returned unchanged. ADR-0005 D1: <c>7.5 \ 2</c> is
+        /// <c>CLng(7.5) \ 2</c> = 4, <c>-7.5 \ 2</c> = -4, <c>8.5 \ 2</c> = 4 (8.5 → 8), and the
+        /// integral divide then truncates toward zero (<c>-7 \ 2</c> = -3).
+        ///
+        /// <para>⛔ ONE conversion, here, so that after <c>IRBuilder</c> NO <c>IntDiv</c> has a
+        /// floating operand and no backend implements the rule itself. Measured before it, one
+        /// program printed three answers: <c>7.5 \ 2</c> was 4 on MSIL (its ADR-0004 D4 operand
+        /// coercion already converted), 3 on C++ and JavaScript (they divided in floating point
+        /// and truncated the quotient) and 3.75 on C# (plain <c>/</c>, no truncation at
+        /// all).</para>
+        ///
+        /// <para>⚠ An <see cref="IRCast"/>, the node every implicit numeric narrowing lowers to
+        /// (<see cref="CoerceToDeclaredType"/>), NOT the <c>IRCall</c> that a written
+        /// <c>CLng(x)</c> lowers to. The rounding is the same on every backend — each renders a
+        /// floating→integral IRCast half-to-even (<c>Convert.ToInt64</c>,
+        /// <c>std::nearbyint</c>, the <c>__blCInt</c> helper, <c>Math::Round</c> + <c>conv.i8</c>)
+        /// — but the JavaScript backend deliberately has no <c>CLng</c> lowering (BL7003), so an
+        /// IRCall would have turned a wrong answer into a refused build there.</para>
+        ///
+        /// <para>⛔ A CONSTANT operand is still wrapped, never folded to a Long literal as
+        /// <see cref="CoerceToDeclaredType"/> would: the JavaScript renderer refuses every
+        /// <c>long</c> constant (BL7003), so <c>7.5 \ 2</c> would stop compiling there.</para>
+        /// </summary>
+        private IRValue ConvertIntegerDivisionOperand(IRValue operand)
+        {
+            var sourceType = operand?.Type;
+            if (sourceType == null || !sourceType.IsFloatingPoint())
+                return operand;
+
+            var longType = new TypeInfo("Long", TypeKind.Primitive);
+            var castName = _currentFunction.GetNextTempName();
+            var cast = new IRCast(castName, operand, sourceType, longType,
+                                  DetermineCastKind(sourceType, longType));
             EmitInstruction(cast);
             return cast;
         }

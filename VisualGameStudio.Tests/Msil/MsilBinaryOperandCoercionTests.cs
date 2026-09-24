@@ -23,15 +23,20 @@ namespace VisualGameStudio.Tests.Msil;
 /// the optimizer instead of the backend. This mirrors the measurement corpus this fixture is
 /// built from (<c>scratchpad/f111/mix/X**{A,Q,R}.bas</c>, <c>scratchpad/f111/frac/F*.bas</c>).</para>
 ///
-/// <para><b>What is deliberately NOT pinned.</b> <c>\</c> (IntDiv) with a floating operand is an
-/// OPEN QUESTION (task #127): MSIL rounds the float operand VB-style (round-half-to-even) before
-/// the integer <c>div</c>, C++ and JavaScript truncate, and C#'s <c>\</c> is float division
-/// entirely — four backends, three different answers, and nobody has ruled which is "right".
-/// <see cref="FloatingIntDiv_NoLongerCrashes_ValueIsOpenQuestion_Task127"/> pins only that these
-/// shapes no longer throw <c>InvalidProgramException</c> (measured before this fix), never a
-/// value. Likewise this file does not pin C#'s own <c>\</c> defect (float division, not IntDiv),
-/// C++'s <c>CStr</c>/<c>fmod</c>/<c>Decimal</c> gaps, or JavaScript's absent float32 — those are
-/// each a different backend's own defect, out of scope for an MSIL coercion fix.</para>
+/// <para><b>Task #127 is RESOLVED by ADR-0005 D1.</b> <c>\</c> (IntDiv) with a floating operand
+/// used to be an open question — MSIL rounded the float operand VB-style (round-half-to-even)
+/// before the integer <c>div</c> while C++ and JavaScript truncated and C#'s <c>\</c> was float
+/// division entirely, four backends, three different answers, nobody having ruled which is
+/// "right". D1 rules VB.NET semantics (round-half-to-even, the same rule MSIL already had) and
+/// <c>IRBuilder</c> now inserts ONE conversion so every backend agrees.
+/// <see cref="FloatingIntDiv_RoundsHalfToEven_BeforeTruncatingIntegerDivide"/> — formerly
+/// <c>FloatingIntDiv_NoLongerCrashes_ValueIsOpenQuestion_Task127</c>, which pinned only that these
+/// shapes no longer threw <c>InvalidProgramException</c> (measured before the D4 fix) — now pins
+/// the VALUE. Cross-backend agreement is <c>FloatingIntegerDivisionTests</c>' job, not this
+/// file's; this file stays scoped to MSIL. Likewise this file does not pin C#'s own <c>\</c>
+/// defect (float division, not IntDiv), C++'s <c>CStr</c>/<c>fmod</c>/<c>Decimal</c> gaps, or
+/// JavaScript's absent float32 — those are each a different backend's own defect, out of scope
+/// for an MSIL coercion fix.</para>
 /// </summary>
 [TestFixture]
 [Category("Integration")]
@@ -322,27 +327,32 @@ public class MsilBinaryOperandCoercionTests
     }
 
     // ====================================================================================
-    // ⛔ OPEN QUESTION (task #127) — `\` with a floating operand. Pin "does not crash" only.
+    // ADR-0005 D1 RESOLVED task #127: `\` with a floating operand is VB.NET semantics — each
+    // floating operand converts to Long, rounding half-to-even, before the integral divide
+    // truncates toward zero. VALUE PINS, not just "does not crash".
     // ====================================================================================
 
     /// <summary>
-    /// Before this fix these threw <c>InvalidProgramException</c> for at least some shapes (an
-    /// unconverted int32/float64 pair feeding an integer <c>div</c> opcode is exactly the
-    /// "undefined in IL" case the class doc describes). After this fix they run to completion.
-    /// The PRINTED VALUE is deliberately not asserted — VB-style rounding (MSIL), truncation
-    /// (C++/JavaScript) and float division (C#) disagree, and task #127 is still open on which
-    /// is correct. If this ever needs a value pinned, resolve #127 first.
+    /// Was <c>FloatingIntDiv_NoLongerCrashes_ValueIsOpenQuestion_Task127</c>, pinning only that
+    /// these shapes ran (before ADR-0005 D1, MSIL/C++/JavaScript/C# disagreed on the VALUE — see
+    /// <c>ConversionRoundingTests</c>/<c>FloatingIntegerDivisionTests</c> for the cross-backend
+    /// measurement). D1 answers the open question: VB.NET semantics, rounding half-to-even.
+    /// Values verified directly against this harness before pinning:
+    /// <c>7.5 \ 2</c> = 4 (no rounding needed); <c>6.5 \ 2</c> = 3 (6.5 rounds to 6, the nearest
+    /// EVEN integer — away-from-zero would give 7 \ 2 = 3 too, so <c>Round_TwoPointFive</c> below
+    /// is the one that actually separates the rules); <c>7 \ 2.5</c> = 3 (2.5 rounds to 2, the
+    /// nearest even integer — away-from-zero would round to 3 and still answer 7 \ 3 = 2, so this
+    /// IS the case that would catch AwayFromZero); <c>2.5 \ 2</c> (Single) = 1 (2.5f rounds to 2,
+    /// same half-to-even rule, verified on the narrower operand kind too).
     /// </summary>
-    [TestCase("Double", "7.5", "Integer", "2", TestName = "FloatingIntDiv_NoLongerCrashes_DoubleByInteger")]
-    [TestCase("Double", "6.5", "Integer", "2", TestName = "FloatingIntDiv_NoLongerCrashes_DoubleByInteger_HalfToEven")]
-    [TestCase("Integer", "7", "Double", "2.5", TestName = "FloatingIntDiv_NoLongerCrashes_IntegerByDouble")]
-    [TestCase("Single", "2.5", "Integer", "2", TestName = "FloatingIntDiv_NoLongerCrashes_SingleByInteger")]
-    public void FloatingIntDiv_NoLongerCrashes_ValueIsOpenQuestion_Task127(
-        string typeA, string litA, string typeB, string litB)
+    [TestCase("Double", "7.5", "Integer", "2", "4", TestName = "FloatingIntDiv_DoubleByInteger_RoundsHalfToEven")]
+    [TestCase("Double", "6.5", "Integer", "2", "3", TestName = "FloatingIntDiv_DoubleByInteger_HalfToEven_SixPointFiveRoundsToSix")]
+    [TestCase("Integer", "7", "Double", "2.5", "3", TestName = "FloatingIntDiv_IntegerByDouble_HalfToEven")]
+    [TestCase("Single", "2.5", "Integer", "2", "1", TestName = "FloatingIntDiv_SingleByInteger_HalfToEven")]
+    public void FloatingIntDiv_RoundsHalfToEven_BeforeTruncatingIntegerDivide(
+        string typeA, string litA, string typeB, string litB, string expected)
     {
-        var result = Run(IntDivProgram(typeA, litA, typeB, litB));
-        Assert.That(result.Outcome, Is.EqualTo(MsilOutcome.Ran), result.Report);
-        // Deliberately no assertion on result.Output — see the method doc.
+        Assert.That(RunExpectingSuccess(IntDivProgram(typeA, litA, typeB, litB)), Is.EqualTo(expected + "\n"));
     }
 
     // ====================================================================================

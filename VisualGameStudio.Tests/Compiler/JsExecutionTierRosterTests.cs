@@ -114,6 +114,15 @@ public class JsExecutionTierRosterTests
         // CseDestinationKnownGapsTask133Tests needed a manual entry above. Its JavaScript pin
         // (task #122) DOES spawn Node (FourBackends.RunAggressiveJs), so it belongs here.
         typeof(LicmKillVocabularyKnownGapsTask122Tests),
+
+        // ADR-0005 D1 — `\` with a floating operand. Named "...ExecutionTests", so the widened
+        // match below WOULD catch it on its own; listed explicitly anyway, matching every row
+        // above. Its JS legs run through FourBackends.RunsOnEveryBackend[Aggressive] (contract
+        // values, the When-guard SC6/SC7 value pins) and JavaScriptExecutionTests.RunJs directly
+        // (the Z0/Z1/Z2 divide-by-zero pins) — all spawn Node.
+        // FloatingIntegerDivisionStructuralTests is NOT here: it is pure front-end/codegen-text,
+        // spawns nothing, and carries no [Category("Integration")] on purpose.
+        typeof(FloatingIntegerDivisionExecutionTests),
     };
 
     /// <summary>
@@ -161,7 +170,7 @@ public class JsExecutionTierRosterTests
 
     [Test]
     public void RosterIsPinned()
-        => Assert.That(ExecutionTier, Has.Length.EqualTo(40),
+        => Assert.That(ExecutionTier, Has.Length.EqualTo(41),
             "The execution-tier roster changed. That is fine — update the number — but it must " +
             "be a deliberate edit, not a silent shrink.");
 
