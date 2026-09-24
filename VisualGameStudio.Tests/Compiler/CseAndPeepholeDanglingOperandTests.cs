@@ -138,11 +138,9 @@ public class CseAndPeepholeDanglingOperandTests
     /// <summary>
     /// ⛔ <c>IRCast.Value</c>.
     ///
-    /// <para>⚠ C++ prints <c>D=3.000000</c> where the other three print <c>D=3</c>. That is a
-    /// PRE-EXISTING <c>CStr(Double)</c> formatting difference, not this fix: it reproduces on a
-    /// control program with no optimizable expression in it at all. It is pinned per-backend
-    /// rather than normalised, so that the day C++ changes its double formatting this case says
-    /// so.</para>
+    /// <para>C++ used to print <c>D=3.000000</c> here, a <c>CStr(Double)</c> formatting difference
+    /// pinned per-backend so the day it changed this case would say so. It changed: C++ now
+    /// formats as .NET does (CppDoubleFormattingTests), so all four backends agree.</para>
     /// </summary>
     [Test]
     public void ADuplicateBinaryOp_ConsumedByACast_IsRePointedNotOrphaned()
@@ -160,7 +158,7 @@ public class CseAndPeepholeDanglingOperandTests
             Sub Main()
              Run(1, 2)
             End Sub
-            """, "V=3\nD=3", cppExpected: "V=3\nD=3.000000");
+            """, "V=3\nD=3");
 
     /// <summary>⛔ <c>IRNewObject.Arguments</c> — the duplicate is a constructor argument.</summary>
     [Test]
