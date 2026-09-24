@@ -114,13 +114,11 @@ public class InductionVariableDisabledTests
 [NonParallelizable] // the C# leg redirects Console.Out
 public class InductionVariableDisabledRunTests
 {
-    // "inside If" is left out of the RUN tests on purpose: with this pass gone it no longer
-    // introduces `_div_`, but LoopInvariantCodeMotionPass still breaks it under --optimize — it
-    // moves the loop's `i + 1` into the If branch ("ReferenceError: t5 is not defined"). That is
-    // a separate defect, measured by skipping each aggressive pass in turn: only skipping LICM
-    // makes it print 120. Running it here would pin LICM's bug, not this pass's.
+    // "inside If" used to be left out here: LoopInvariantCodeMotionPass moved its `i + 1` into
+    // the If branch ("ReferenceError: t5 is not defined"). Fixed with that pass (see
+    // LoopInvariantCodeMotionTests), so every shape runs.
     private static System.Collections.Generic.IEnumerable<(string Name, string Body, string Expected)> Runnable() =>
-        InductionVariableDisabledTests.Loops.Where(l => l.Name != "inside If");
+        InductionVariableDisabledTests.Loops;
 
     private static System.Collections.Generic.IEnumerable<TestCaseData> Cases() =>
         Runnable().Select(l => new TestCaseData(l.Body, l.Expected).SetArgDisplayNames(l.Name));
