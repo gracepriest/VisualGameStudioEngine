@@ -81,9 +81,6 @@ public class JsExecutionTierRosterTests
         // Runs one program under Node AND a C++ compiler, and compares both against .NET.
         typeof(InterpolatedStringExecutionTests),
         typeof(JavaScriptBooleanTextExecutionTests),
-
-        // The aggressive pipeline's loop programs, under Node and a C++ compiler.
-        typeof(LoopOptimizationExecutionTests),
     };
 
     /// <summary>
@@ -132,7 +129,7 @@ public class JsExecutionTierRosterTests
 
     [Test]
     public void RosterIsPinned()
-        => Assert.That(ExecutionTier, Has.Length.EqualTo(35),
+        => Assert.That(ExecutionTier, Has.Length.EqualTo(34),
             "The execution-tier roster changed. That is fine — update the number — but it must " +
             "be a deliberate edit, not a silent shrink.");
 

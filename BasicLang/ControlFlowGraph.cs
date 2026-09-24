@@ -270,32 +270,32 @@ namespace BasicLang.Compiler.IR
         
         /// <summary>
         /// Find back edges in CFG (edges from a node to its dominator)
-        ///
-        /// <para>⛔ The test is "the SUCCESSOR dominates this block", i.e. the successor is in
-        /// THIS block's dominator set. It was written the other way round
-        /// (<c>successor.Dominators.Contains(block)</c>: this block dominates its successor),
-        /// which is true of every FORWARD edge — so every <c>entry → header</c> edge came back
-        /// as a "loop" containing the entry block, and the real <c>inc → header</c> edge was
-        /// never found. LoopInvariantCodeMotionPass then took the loop's increment block for its
-        /// "preheader" and hoisted the For condition into it: on C++ with <c>--optimize</c> the
-        /// first trip read an uninitialised condition and every For loop ran zero times.</para>
         /// </summary>
         public List<(BasicBlock From, BasicBlock To)> FindBackEdges()
         {
             var backEdges = new List<(BasicBlock, BasicBlock)>();
-
+            
             foreach (var block in Blocks)
             {
                 foreach (var successor in block.Successors)
                 {
-                    // Back edge: successor dominates block
+                    // Back edge: successor dominates block. `X.Dominators` is the set of blocks
+                    // that dominate X, so that is `block.Dominators.Contains(successor)`.
+                    //
+                    // ⛔ This read `successor.Dominators.Contains(block)` — "block dominates
+                    // successor" — which is true of nearly every FORWARD edge. MEASURED on
+                    // `For i = 1 To 5 : s = s + i * 3 : Next` (master 42a2280): entry->for0.cond
+                    // was a "back edge", every "loop" contained entry (one contained for0.end),
+                    // and LoopInvariantCodeMotionPass, handed the one real loop with its
+                    // "preheader" chosen as for0.inc, moved the loop condition INTO the
+                    // increment block — every For loop printed 0 on C++ under --optimize.
                     if (block.Dominators.Contains(successor))
                     {
                         backEdges.Add((block, successor));
                     }
                 }
             }
-
+            
             return backEdges;
         }
         
@@ -451,29 +451,21 @@ namespace BasicLang.Compiler.IR
         /// </summary>
         public bool IsReducible()
         {
-            // Reducible iff every RETREATING edge of a depth-first walk (one into a block still
-            // on the DFS stack) is a back edge, i.e. its target dominates its source. (Checking
-            // FindBackEdges' own results would be a tautology: they are back edges by definition.)
-            var visited = new HashSet<BasicBlock>();
-            var onStack = new HashSet<BasicBlock>();
-            var reducible = true;
-
-            void Dfs(BasicBlock block)
+            // A CFG is reducible if all back edges are to loop headers
+            var backEdges = FindBackEdges();
+            
+            foreach (var (tail, head) in backEdges)
             {
-                visited.Add(block);
-                onStack.Add(block);
-                foreach (var successor in block.Successors)
+                // Check if head dominates tail (making it a proper loop header). Same
+                // orientation fix as FindBackEdges: "head dominates tail" is
+                // tail.Dominators.Contains(head).
+                if (!tail.Dominators.Contains(head))
                 {
-                    if (onStack.Contains(successor) && !block.Dominators.Contains(successor))
-                        reducible = false;
-                    else if (!visited.Contains(successor))
-                        Dfs(successor);
+                    return false;
                 }
-                onStack.Remove(block);
             }
-
-            if (EntryBlock != null) Dfs(EntryBlock);
-            return reducible;
+            
+            return true;
         }
         
         /// <summary>

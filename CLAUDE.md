@@ -58,6 +58,14 @@ IDE/BasicLang.exe --debug-adapter                                              #
 The native C++ engine builds via VS 2022 MSBuild on `VisualGameStudioEngine.vcxproj`
 (x64/Release), auto-discovered through vswhere.
 
+**On Linux (a cloud session):** both commands above are expected to run with **zero failures**
+(install a .NET 8 SDK first; g++/clang++ and Node cover the C++/JS execution tiers). Windows-only
+requirements — MSVC, `ilasm`, the native engine DLL/`.lib`, `dbgshim.dll`, the Windows Desktop
+SDK, the NuGet-restored `packages/raylib.5.5.0` — make their tests **skip**, not fail. So a green
+Linux run is necessary but not sufficient: anything touching the .NET shim, MSVC builds, MSIL or
+the engine still needs a Windows run. Current measured numbers are in `docs/HANDOFF.md`. A new
+Linux failure is a regression or a missing skip — never baseline it.
+
 ## Working conventions — READ THIS, these prevent real mistakes
 
 - **PowerShell is the primary shell.** Use the dedicated tools (Read/Edit/Write/
@@ -76,6 +84,17 @@ The native C++ engine builds via VS 2022 MSBuild on `VisualGameStudioEngine.vcxp
 - **Some resolver source is shared across consumers — change it once, not per-consumer.**
   `ModuleResolver.cs` backs both the compiler and the LSP; `ModuleTypeWalker.cs` is shared
   across the compiler and the C++ backend / capability checkers.
+- **Paths read from `.blproj`/`.blsln` are MSBuild-style (`Source\Main.bas`).** Off Windows a
+  backslash is a file-name character, so never `Path.Combine` a stored path raw — go through
+  `ProjectFile.ToLocalPath` (both project loaders already apply it at load). Likewise the built
+  program is `<Name>.exe` only on Windows.
+- **A test that needs a Windows-only prerequisite must SKIP without it, not fail.** Use the
+  existing gates: `Native/NativeBuildSkip` (a BasicLang native build ALWAYS uses MSVC — "any C++
+  compiler" is the wrong gate), `NativeEngineSkip.DllNotFound` (the reason for a `DllNotFoundException`
+  skip — every engine call, `finally` cleanup included, must go through the fixture's guard), and
+  `[Platform(Include = "Win")]` for Windows-only input (`C:\` paths, PATHEXT, file locking).
+  Inside `Assert.Multiple`, `Assert.Ignore` FAILS the test — use
+  `TestSkip.IgnoreEvenInsideMultiple`.
 
 ## Compiler layout (`BasicLang/`)
 
