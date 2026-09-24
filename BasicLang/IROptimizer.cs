@@ -122,34 +122,111 @@ namespace BasicLang.Compiler.IR.Optimization
         }
 
         /// <summary>
-        /// Whether a call can write the variable a value instruction's DESTINATION names, without
-        /// the write appearing in the caller — the destination's half of CSE's
-        /// <c>ReadsCallVisible</c> (ADR-0005 D2: the destination is guarded like a read). The
-        /// instruction carries only the NAME, so the answer comes from the function's own
-        /// declarations: a by-value parameter or a declared non-global local is private to the
-        /// frame; a module variable, a class member or a <c>ByRef</c> parameter is storage a
-        /// callee can reach. An undeclared non-temp name is treated as reachable — over-killing
-        /// only costs a merge.
+        /// ⭐ THE CALL-VISIBILITY RULE (ADR-0006 D3): whether a CALL can write
+        /// <paramref name="variable"/> without the write appearing in <paramref name="function"/>.
+        /// ONE predicate, the DECLARATIONS rule — true unless the variable is <c>Const</c>, a
+        /// by-value parameter of <paramref name="function"/>, or a declared local of it.
+        /// Everything else — a module variable, a class member read bare, a <c>ByRef</c>
+        /// parameter, and any name the function does not declare — is storage a callee can reach.
+        ///
+        /// <para>⭐ ONE RULE, EVERY CONSUMER. CSE's <c>ReadsCallVisible</c> (operands) and
+        /// <see cref="IsCallVisibleDestination"/> (destinations), LICM's read check in
+        /// <c>VariablesWrittenIn</c>, and <see cref="IRVerifier"/>'s call arm (all of
+        /// <c>Guard(v)</c>) delegate here. Before D3 the operand side used a FLAG rule,
+        /// <c>(IsGlobal &amp;&amp; !IsConst) || IsByRef</c>, whose polarity is wrong: a variable
+        /// with no flag set was private, and a class field read bare inside a method lowers to an
+        /// <see cref="IRVariable"/> with no flag set. MEASURED (Q3, the DEFAULT pipeline):
+        /// <c>K = Seed(1) : a = K + q : Inc() : l(0) = K + q</c> with <c>Inc</c> bumping the field
+        /// <c>K</c> printed <c>3,3</c> on C++, JavaScript and MSIL where <c>13,3</c> is correct —
+        /// CSE merged across the call, because the destination half asked the declarations and
+        /// the operand half asked the flags. Unknown now means VISIBLE, the only safe default for
+        /// a kill vocabulary: a missing declaration only loses a merge.</para>
+        ///
+        /// <para>The flags a node carries are consulted only in the SAFE direction. <c>Const</c>
+        /// is immutable. <c>IsGlobal</c> / <c>IsByRef</c> mean this node is not a frame-private
+        /// declaration even if a local of the same NAME exists (a local shadowing a module
+        /// variable), so they can only ADD visibility. A missing flag never removes it.</para>
+        ///
+        /// <para>⛔ NOT a replicability test, and <see cref="IRReplicability.IsReplicable"/> must
+        /// NOT delegate here (ADR-0004 D2): "can a call change this?" (kill) is not "may this be
+        /// evaluated twice?" (replicate).</para>
         /// </summary>
-        protected internal static bool IsCallVisibleDestination(string name, IRFunction function)
+        protected internal static bool IsCallVisible(IRVariable variable, IRFunction function)
         {
-            if (string.IsNullOrEmpty(name) || function == null) return false;
-            if (function.Parameters != null)
+            if (variable == null) return false;
+            if (variable.IsConst) return false;
+            if (variable.IsGlobal || variable.IsByRef) return true;
+            // An IRVariable with no name is not a declaration of anything — unknown, so visible.
+            if (string.IsNullOrEmpty(variable.Name)) return true;
+            return IsCallVisible(variable.Name, function);
+        }
+
+        /// <summary>
+        /// <see cref="IsCallVisible(IRVariable, IRFunction)"/> for a variable known only by NAME —
+        /// a value's named destination, which carries no <see cref="IRVariable"/> flags. The
+        /// declarations half of the rule, and the ONE place it is written.
+        /// </summary>
+        protected internal static bool IsCallVisible(string name, IRFunction function)
+        {
+            if (string.IsNullOrEmpty(name)) return false;
+            if (function?.Parameters != null)
                 foreach (var parameter in function.Parameters)
                     if (string.Equals(parameter.Name, name, StringComparison.OrdinalIgnoreCase))
                         return parameter.IsByRef;
-            if (function.LocalVariables != null)
+            // ⚠ ADR-0006 D1's interim closure rule ("in a function that contains a lambda, every
+            // local is call-visible") belongs in THIS method and nowhere else: every consumer
+            // reaches the declarations through here.
+            if (function?.LocalVariables != null)
                 foreach (var local in function.LocalVariables)
                     if (string.Equals(local.Name, name, StringComparison.OrdinalIgnoreCase))
                         return local.IsGlobal && !local.IsConst;
-            return !IsTempDestination(name);
+            // Undeclared: a class member read bare, a module variable, or a name whose
+            // declaration IRFunction does not carry. The last only costs a merge or a hoist.
+            // ⚠ IRBuilder leaves three locals out of LocalVariables: a For Each loop variable
+            // (MEASURED: `For Each x … a = x + q : Console.WriteLine(a) : l.Add(x + q)` loses the
+            // merge it made before D3), a Catch variable and the With carrier (both objects, so
+            // never an operand of a CSE candidate).
+            return true;
         }
+
+        /// <summary>
+        /// The variable a value instruction's DESTINATION names, or null when it names none: an
+        /// anonymous SSA temp, and two kinds whose name is NOT a variable — an
+        /// <see cref="IRAlloca"/> (its name spells a STORAGE SLOT, <c>V_addr</c>, whose address
+        /// no later write to <c>V</c> moves) and an <see cref="IRConstant"/> left in a block by
+        /// <see cref="ConstantFoldingPass"/> (every backend emits its VALUE, never reads it back
+        /// by name). Each of those two was a MEASURED false hit in the verifier before it was
+        /// excluded (four <c>V_addr</c>/<c>N_addr</c> across a call over the fast subset; one
+        /// <c>const_there,</c> in <c>AssignmentCoercionTests.ANonNumericStore_IsLeftAlone</c>).
+        ///
+        /// <para>A temp-SHAPED name is still a variable when the value is
+        /// <see cref="IRValue.NamedAfterVariable"/> — the same two disjuncts CSE's own merge arm
+        /// tests — because <c>IRBuilder.SeparateTempsFromUserNames</c> renames the compiler's
+        /// temp, never the user's variable, so a renamed value spelled <c>t1</c> IS the user's
+        /// <c>t1</c>.</para>
+        /// </summary>
+        protected internal static string NamedDestination(IRValue value)
+        {
+            if (value == null || string.IsNullOrEmpty(value.Name)) return null;
+            if (value is IRAlloca || value is IRConstant) return null;
+            if (value.NamedAfterVariable || !IsTempDestination(value.Name)) return value.Name;
+            return null;
+        }
+
+        /// <summary>
+        /// Whether a call can write the variable <paramref name="value"/>'s DESTINATION names —
+        /// the destination's half of the call-visibility question (ADR-0005 D2: the destination
+        /// is guarded like a read). A destination that names no variable
+        /// (<see cref="NamedDestination"/>) cannot be written by anyone; one that does is answered
+        /// by the one rule, <see cref="IsCallVisible(string, IRFunction)"/> (ADR-0006 D3).
+        /// </summary>
+        protected internal static bool IsCallVisibleDestination(IRValue value, IRFunction function)
+            => NamedDestination(value) is string name && IsCallVisible(name, function);
 
         /// <summary>
         /// THE KILL VOCABULARY: every variable name <paramref name="inst"/> may WRITE, and whether
         /// it is a call (which additionally writes any storage a callee can reach — see
-        /// <c>CommonSubexpressionEliminationPass.ReadsCallVisible</c>). Null when it writes no
-        /// name.
+        /// <see cref="IsCallVisible(IRVariable, IRFunction)"/>). Null when it writes no name.
         ///
         /// <para>⭐ SHARED, and the sharing is the point (ADR-0005 D2): CSE's
         /// <c>Invalidate</c> kills on exactly these writes, and <see cref="IRVerifier"/>'s
@@ -1522,9 +1599,11 @@ namespace BasicLang.Compiler.IR.Optimization
                     Value = op,
                     Reads = reads,
                     Destination = destination,
+                    // ⭐ ONE rule for both halves (ADR-0006 D3): operands and destination are
+                    // asked the same question of the same declarations.
                     ReadsCallVisibleStorage =
-                        ReadsCallVisible(op.Left) || ReadsCallVisible(op.Right)
-                        || IsCallVisibleDestination(destination, function)
+                        ReadsCallVisible(op.Left, function) || ReadsCallVisible(op.Right, function)
+                        || IsCallVisibleDestination(op, function)
                 };
             }
         }
@@ -1637,28 +1716,41 @@ namespace BasicLang.Compiler.IR.Optimization
 
         /// <summary>
         /// Whether an operand reads storage that a CALL can write without that write appearing in
-        /// this block: a mutable global, or anything whose shape this walk does not recognise.
+        /// this block. A variable is answered by the one call-visibility rule,
+        /// <see cref="OptimizationPass.IsCallVisible(IRVariable, IRFunction)"/> (ADR-0006 D3); a
+        /// pure operator by its operands; anything else is assumed call-visible.
         ///
         /// <para>⛔ MEASURED. <c>a = Counter + q</c>, <c>z = Seed(100)</c>, <c>b = Counter + q</c>
         /// has NO syntactic redefinition of <c>Counter</c> anywhere in <c>Main</c> — the write
         /// happens inside <c>Seed</c> — and C++, JavaScript and MSIL all printed <c>b=4</c> where
         /// 104 is correct. Name-based invalidation over the block alone cannot see it.</para>
         ///
-        /// <para>⚠ A <c>Const</c> global is exempt, and that exemption is what keeps the pass
-        /// worth having: MEASURED, all 11 merges CSE makes across the repo's sample games read
-        /// locals and <c>Const</c> globals (<c>TILE_SIZE</c>, <c>px</c>, <c>py</c>) with
-        /// <c>DrawLine</c>/<c>DrawRectangle</c> calls interleaved. Killing on every call
-        /// unconditionally would take all 11.</para>
+        /// <para>⛔ MEASURED, and the reason the variable arm no longer reads FLAGS (Q3, ADR-0006
+        /// D3): a class field read bare inside a method is an <see cref="IRVariable"/> with
+        /// <c>IsGlobal</c> and <c>IsByRef</c> both false, so the old flag rule called it private
+        /// and <c>K = Seed(1) : a = K + q : Inc() : l(0) = K + q</c> printed <c>3,3</c> for
+        /// <c>13,3</c> on C++, JavaScript and MSIL, in the default pipeline.</para>
+        ///
+        /// <para>⚠ A <c>Const</c> is exempt, and that exemption is what keeps the pass worth
+        /// having: Platformer's pinned merges read <c>TILE_SIZE</c> (a <c>Const</c> global) and
+        /// the declared locals <c>px</c>/<c>py</c> with <c>DrawLine</c>/<c>DrawRectangle</c> calls
+        /// interleaved. Killing on every call unconditionally would take them all.</para>
+        ///
+        /// <para>A NAMED operand instruction (a value renamed to a variable, which a backend reads
+        /// back by that name — see <see cref="OptimizationPass.NamedDestination"/>) is asked the
+        /// same question of its name, exactly as <see cref="IRVerifier"/> puts that name in
+        /// <c>Guard(v)</c>; its operands are still walked, as before.</para>
         ///
         /// <para>⚠ NOT closed by this predicate: a local captured BY REFERENCE by a lambda that a
-        /// call then invokes. Such a local has IsGlobal false and is indistinguishable here. That
+        /// call then invokes. Such a local is a declared local and is indistinguishable here. That
         /// hazard is live TODAY and is NOT CSE's alone — measured on
         /// <c>Dim bump = Sub() n = n + 100</c>, CopyPropagation plus ConstantFolding already fold
         /// <c>n + q</c> to a constant on BOTH sides of <c>bump()</c>, so ALL FOUR backends
-        /// (C# included) print the stale answer with CSE out of the picture. Closing it needs a
-        /// capture set on IRFunction, which is a separate change.</para>
+        /// (C# included) print the stale answer with CSE out of the picture. ADR-0006 D1's
+        /// interim closure rule is to close it, as one addition to
+        /// <see cref="OptimizationPass.IsCallVisible(string, IRFunction)"/>.</para>
         /// </summary>
-        private static bool ReadsCallVisible(IRValue value)
+        private static bool ReadsCallVisible(IRValue value, IRFunction function)
         {
             switch (value)
             {
@@ -1666,15 +1758,22 @@ namespace BasicLang.Compiler.IR.Optimization
                 case IRConstant:
                     return false;
                 case IRVariable variable:
-                    return (variable.IsGlobal && !variable.IsConst) || variable.IsByRef;
+                    return IsCallVisible(variable, function);
+            }
+
+            if (NamedDestination(value) is string named && IsCallVisible(named, function))
+                return true;
+
+            switch (value)
+            {
                 case IRBinaryOp binary:
-                    return ReadsCallVisible(binary.Left) || ReadsCallVisible(binary.Right);
+                    return ReadsCallVisible(binary.Left, function) || ReadsCallVisible(binary.Right, function);
                 case IRUnaryOp unary:
-                    return ReadsCallVisible(unary.Operand);
+                    return ReadsCallVisible(unary.Operand, function);
                 case IRCompare compare:
-                    return ReadsCallVisible(compare.Left) || ReadsCallVisible(compare.Right);
+                    return ReadsCallVisible(compare.Left, function) || ReadsCallVisible(compare.Right, function);
                 case IRCast cast:
-                    return ReadsCallVisible(cast.Value);
+                    return ReadsCallVisible(cast.Value, function);
                 default:
                     // Calls, field/indexer loads, allocations, and anything not enumerated: a
                     // call may change what they read. Over-killing costs optimization; keeping a
@@ -1816,8 +1915,9 @@ namespace BasicLang.Compiler.IR.Optimization
         /// vocabulary (<see cref="OptimizationPass.NamesWrittenBy"/>: assignment targets, store
         /// addresses, renamed values, ByRef arguments of free AND instance calls) plus its call
         /// arm: when the loop contains a call, every variable the loop reads that a callee can
-        /// reach (<see cref="OptimizationPass.IsCallVisibleDestination"/>: a module variable, a
-        /// class member, a ByRef parameter) counts as written.
+        /// reach (<see cref="OptimizationPass.IsCallVisible(IRVariable, IRFunction)"/>, the one
+        /// call-visibility rule of ADR-0006 D3: anything but a <c>Const</c>, a by-value parameter
+        /// or a declared local) counts as written.
         ///
         /// <para>⛔ This used to be a private, narrower copy of that vocabulary, and each gap was
         /// a silent wrong answer under <c>--optimize</c>, MEASURED at 15b12e8 (both print 6 where
@@ -1850,7 +1950,7 @@ namespace BasicLang.Compiler.IR.Optimization
                 foreach (var inst in loop.SelectMany(b => b.Instructions))
                     foreach (var used in UsesOf(inst))
                         if (used is IRVariable variable && variable.Name != null
-                            && IsCallVisibleDestination(variable.Name, function))
+                            && IsCallVisible(variable, function))
                             written.Add(variable.Name);
             }
             return written;

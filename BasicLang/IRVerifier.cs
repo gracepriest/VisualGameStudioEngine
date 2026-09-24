@@ -65,10 +65,14 @@ namespace BasicLang.Compiler.IR.Optimization
     ///
     /// <para><b>"Assigned"</b> is <see cref="OptimizationPass.NamesWrittenBy"/> — the one kill
     /// vocabulary CSE's <c>Invalidate</c> also uses, so the verifier and the pass cannot
-    /// disagree about what a write is — plus its call arm: a call writes a destination a callee
-    /// can reach (<see cref="OptimizationPass.IsCallVisibleDestination"/>), exactly as CSE kills
-    /// on it. A write form missing from that vocabulary is invisible to BOTH; see the gap list
-    /// on <c>NamesWrittenBy</c>.</para>
+    /// disagree about what a write is — plus its call arm: a call writes EVERY name in
+    /// <c>Guard(v)</c> a callee can reach, operand or destination alike
+    /// (<see cref="OptimizationPass.IsCallVisible(IRVariable, IRFunction)"/>, the one
+    /// call-visibility rule, ADR-0006 D3), exactly as CSE kills on it. Before D3 this arm
+    /// checked the destination only, so a merge across a call that writes a class field read
+    /// bare as an OPERAND (Q3: <c>a = K + q : Inc() : l(0) = K + q</c>) was certified. A write
+    /// form missing from the vocabulary is invisible to BOTH; see the gap list on
+    /// <c>NamesWrittenBy</c>.</para>
     ///
     /// <para>⚠ <b>"Use count" for a value with a named destination counts the destination as
     /// a reader.</b> A merge re-points a duplicate's consumers at the surviving instruction, and
@@ -256,16 +260,24 @@ namespace BasicLang.Compiler.IR.Optimization
                 if (value is not IRInstruction valueInst || !definitions.TryGetValue(valueInst, out var def))
                     continue;
 
-                string destination = NamedDestination(value);
+                string destination = OptimizationPass.NamedDestination(value);
                 bool shared = useSites.Count > 1 || (destination != null && useSites.Count >= 1);
                 if (!shared) continue;
 
-                var guard = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
-                if (IsPureOperator(value)) CollectOperandGuard(value, guard, isRoot: true);
-                if (destination != null) guard[destination] = true;
+                var guard = new Dictionary<string, GuardName>(StringComparer.OrdinalIgnoreCase);
+                if (IsPureOperator(value)) CollectOperandGuard(value, guard, function, isRoot: true);
+                if (destination != null)
+                    guard[destination] = new GuardName(true,
+                        OptimizationPass.IsCallVisible(destination, function)
+                        || (guard.TryGetValue(destination, out var asOperand) && asOperand.CallVisible));
                 if (guard.Count == 0) continue;
-                bool destinationCallVisible = destination != null
-                    && OptimizationPass.IsCallVisibleDestination(destination, function);
+
+                // The call arm's candidates, destination first so a report names it when it is
+                // one (the pre-D3 arm checked only the destination).
+                string callHit = destination != null && guard[destination].CallVisible ? destination : null;
+                if (callHit == null)
+                    foreach (var (name, entry) in guard)
+                        if (entry.CallVisible) { callHit = name; break; }
 
                 foreach (var use in useSites)
                 {
@@ -281,7 +293,7 @@ namespace BasicLang.Compiler.IR.Optimization
                         if (names != null)
                             foreach (var name in names)
                                 if (guard.ContainsKey(name)) { hit = name; break; }
-                        if (hit == null && isCall && destinationCallVisible) hit = destination;
+                        if (hit == null && isCall) hit = callHit;
                         if (hit == null) continue;
 
                         found = new InvariantViolation
@@ -290,7 +302,7 @@ namespace BasicLang.Compiler.IR.Optimization
                             Value = value,
                             UseCount = useSites.Count,
                             Variable = hit,
-                            IsDestination = guard[hit],
+                            IsDestination = guard[hit].IsDestination,
                             Writer = writer,
                             DefinitionBlock = def.Block.Name,
                             WriterBlock = block.Name,
@@ -307,32 +319,30 @@ namespace BasicLang.Compiler.IR.Optimization
             }
         }
 
-        /// <summary>
-        /// The destination a backend reads the value back through, or null for an anonymous
-        /// temp — the same test CSE's named-destination arm applies.
-        /// </summary>
-        private static string NamedDestination(IRValue value)
-        {
-            if (string.IsNullOrEmpty(value.Name)) return null;
-            // Two instruction kinds carry a name that is NOT a variable, and each was a false hit
-            // when treated as one (measured over the suite at HEAD's passes):
-            //  * IRAlloca — the name spells a STORAGE SLOT (`V_addr` for an array local); its
-            //    uses read the slot's address, which no later write to `V` moves. Four hits
-            //    over the fast subset, all `V_addr`/`N_addr` across a call.
-            //  * IRConstant — a literal left in the block by ConstantFoldingPass
-            //    (`const_there,` for a folded `s & ","`); every backend emits its VALUE, never
-            //    reads it back by name, so nothing can make it stale. One hit, in
-            //    AssignmentCoercionTests.ANonNumericStore_IsLeftAlone.
-            if (value is IRAlloca || value is IRConstant) return null;
-            if (value.NamedAfterVariable || !OptimizationPass.IsTempDestination(value.Name)) return value.Name;
-            return null;
-        }
+        // The destination a backend reads the value back through is
+        // OptimizationPass.NamedDestination — shared with CSE, which asks the same "does this
+        // destination name a variable?" before asking whether a call can write it. It carries the
+        // two measured exclusions (IRAlloca, IRConstant) this file used to keep privately.
 
         private static bool IsPureOperator(IRValue value) =>
             value is IRBinaryOp || value is IRUnaryOp || value is IRCompare || value is IRCast;
 
-        /// <summary>The operand half of Guard(v); the bool records "is the destination" (false here).</summary>
-        private static void CollectOperandGuard(IRValue value, Dictionary<string, bool> guard, bool isRoot)
+        /// <summary>One name in Guard(v): whether it is v's own destination, and whether a call
+        /// can write it (<see cref="OptimizationPass.IsCallVisible(IRVariable, IRFunction)"/>).</summary>
+        private readonly record struct GuardName(bool IsDestination, bool CallVisible);
+
+        private static void AddOperandGuard(Dictionary<string, GuardName> guard, string name, bool callVisible)
+        {
+            // The same name reached twice (`p + p`, or a variable and a renamed value spelled
+            // alike) is ONE guarded variable; it is call-visible if either route says so.
+            guard[name] = guard.TryGetValue(name, out var existing)
+                ? existing with { CallVisible = existing.CallVisible || callVisible }
+                : new GuardName(false, callVisible);
+        }
+
+        /// <summary>The operand half of Guard(v) (<see cref="GuardName.IsDestination"/> false here).</summary>
+        private static void CollectOperandGuard(IRValue value, Dictionary<string, GuardName> guard,
+            IRFunction function, bool isRoot)
         {
             switch (value)
             {
@@ -340,19 +350,18 @@ namespace BasicLang.Compiler.IR.Optimization
                 case IRConstant:
                     return;
                 case IRVariable variable:
-                    if (!string.IsNullOrEmpty(variable.Name) && IRReplicability.IsReplicable(variable)
-                        && !guard.ContainsKey(variable.Name))
-                        guard[variable.Name] = false;
+                    if (!string.IsNullOrEmpty(variable.Name) && IRReplicability.IsReplicable(variable))
+                        AddOperandGuard(guard, variable.Name, OptimizationPass.IsCallVisible(variable, function));
                     return;
             }
 
             if (!isRoot)
             {
                 if (!IRReplicability.IsReplicable(value)) return; // evaluated once, read back by name
-                var named = NamedDestination(value);
+                var named = OptimizationPass.NamedDestination(value);
                 if (named != null)
                 {
-                    if (!guard.ContainsKey(named)) guard[named] = false;
+                    AddOperandGuard(guard, named, OptimizationPass.IsCallVisible(named, function));
                     return;
                 }
             }
@@ -360,18 +369,18 @@ namespace BasicLang.Compiler.IR.Optimization
             switch (value)
             {
                 case IRBinaryOp binary:
-                    CollectOperandGuard(binary.Left, guard, false);
-                    CollectOperandGuard(binary.Right, guard, false);
+                    CollectOperandGuard(binary.Left, guard, function, false);
+                    CollectOperandGuard(binary.Right, guard, function, false);
                     break;
                 case IRUnaryOp unary:
-                    CollectOperandGuard(unary.Operand, guard, false);
+                    CollectOperandGuard(unary.Operand, guard, function, false);
                     break;
                 case IRCompare compare:
-                    CollectOperandGuard(compare.Left, guard, false);
-                    CollectOperandGuard(compare.Right, guard, false);
+                    CollectOperandGuard(compare.Left, guard, function, false);
+                    CollectOperandGuard(compare.Right, guard, function, false);
                     break;
                 case IRCast cast:
-                    CollectOperandGuard(cast.Value, guard, false);
+                    CollectOperandGuard(cast.Value, guard, function, false);
                     break;
             }
         }

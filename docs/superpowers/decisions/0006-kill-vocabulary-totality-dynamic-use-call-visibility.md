@@ -237,6 +237,35 @@ and a call's "assigned" is widened to span all of `Guard(v)` by D3.
 ADR-0005 carries a one-line "Amended by ADR-0006" callout under its
 title, the way ADR-0004 carries "Amended by ADR-0005".
 
+## Implementation note (D3)
+
+- The corpus pin deviation: `Corpus_SpaceShooter_Makes4Merges` is now
+  `Corpus_SpaceShooter_Makes0Merges` (4 → 0). The 4 merges read
+  `SCREEN_WIDTH` / `SCREEN_HEIGHT`, whose `Const X = 800` declarations (no
+  `As` clause) the parser drops, so the names reach the IR undeclared
+  (`IsGlobal=false, IsConst=false`) and are visible under the declarations
+  rule. SpaceShooter does not build (7 parse errors) and a well-formed copy
+  with typed `Const`s makes 0 merges at this same base too — its `/` casts
+  both operands to `Double` through fresh temps, so the shape was never a
+  merge candidate once typed. D3's Revisit clause ("a merge a sample game
+  measurably depends on") is therefore not met. DECIDED by the orchestrator,
+  recorded here, not by the architect.
+- The ASSUMPTION "`IRFunction`'s declared-locals set is complete" does not
+  hold: `IRBuilder` omits a `For Each` loop variable, a `Catch` variable and
+  the `With` carrier from `LocalVariables`. MEASURED to cost one merge on one
+  probe (a `For Each` variable read across a call, still printing the
+  correct answer either way); zero hits in the suite. Tracked on task #121.
+- Three implementer choices beyond the ruling's own wording, each only
+  ADDING kills or checks, never removing one: a NAMED-OPERAND arm in
+  `ReadsCallVisible`, needed so CSE and the widened verifier arm agree — it
+  fixed Q3n (`Dim a = (p + q) * 2` reading a renamed, undeclared `K`), wrong
+  on all four backends, C# included, before it existed; temp-SPELLED names
+  are no longer exempt from `NamedDestination` — a user field spelled `t1`
+  is still a variable; `IsCallVisibleDestination` now takes the value, not a
+  bare name.
+- Measured across the whole suite: of 138 CSE merges and LICM hoists, 134
+  survive the fix; the 4 lost are exactly SpaceShooter's.
+
 ## The three settled points
 
 1. ADR-0005 D2's Revisit clause is replaced (see D1's Revisit). The

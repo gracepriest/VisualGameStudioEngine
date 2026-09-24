@@ -831,46 +831,72 @@ public class CseKeyEncodingUnitTests
     }
 
     /// <summary>
-    /// ⚠ THE CONSERVATIVE <c>default:</c> ARM of <c>ReadsCallVisible</c>. Anything whose shape the
-    /// walk does not enumerate — a field load, an allocation, a nested call used directly as a
-    /// binop operand — must count as storage a CALL can write, because over-killing costs
-    /// optimization while keeping a stale entry MISCOMPILES.
+    /// ⚠ ADR-0006 D3 retired the flag rule (<c>(IsGlobal &amp;&amp; !IsConst) || IsByRef</c>) that
+    /// this test used to pin and replaced it with the DECLARATIONS rule,
+    /// <c>OptimizationPass.IsCallVisible</c>: visible unless the variable is <c>Const</c>, a
+    /// by-value parameter of the function, or a declared local of it. <c>ReadsCallVisible</c> is
+    /// now <c>(IRValue, IRFunction)</c> — its variable arm delegates there — so every case below
+    /// needs an <see cref="IRFunction"/> whose <c>Parameters</c>/<c>LocalVariables</c> carry the
+    /// declarations the rule reads. What was pinned as "an unenumerated operand shape defaults to
+    /// call-visible" (the <c>default:</c> arm) is UNCHANGED by D3 and stays pinned below alongside
+    /// the new declarations-rule cases.
     ///
-    /// <para>⚠ MEASURED: no program can currently reach this arm in a way that changes a decision.
-    /// Every non-variable operand lowers to its own instruction carrying a FRESHLY MINTED temp name
-    /// (<c>IRFieldAccess("t1")</c> and <c>IRFieldAccess("t3")</c> for two reads of <c>c.V</c>), so
-    /// an entry recorded through this arm can never be matched by a second lookup and is never
-    /// substituted. <see cref="CseShapes.FieldReads"/> is that measurement as a program, pinned at
-    /// 0 merges. The arm is asserted here rather than through a program for that reason — it is
-    /// the polarity that matters, and flipping it is invisible from outside.</para>
+    /// <para>⚠ MEASURED: no program can currently reach the <c>default:</c> arm in a way that
+    /// changes a decision. Every non-variable operand lowers to its own instruction carrying a
+    /// FRESHLY MINTED temp name (<c>IRFieldAccess("t1")</c> and <c>IRFieldAccess("t3")</c> for two
+    /// reads of <c>c.V</c>), so an entry recorded through this arm can never be matched by a
+    /// second lookup and is never substituted. <see cref="CseShapes.FieldReads"/> is that
+    /// measurement as a program, pinned at 0 merges. The arm is asserted here rather than through
+    /// a program for that reason — it is the polarity that matters, and flipping it is invisible
+    /// from outside.</para>
     /// </summary>
     [Test]
     public void UnrecognisedOperandShapesAreTreatedAsCallVisibleTest()
     {
         var readsCallVisible = Private("ReadsCallVisible");
-        bool Reads(IRValue v) => (bool)readsCallVisible.Invoke(null, new object[] { v })!;
+        bool Reads(IRValue v, IRFunction f) => (bool)readsCallVisible.Invoke(null, new object[] { v, f })!;
+
+        // A function that declares: a by-value parameter "p", a ByRef parameter "k", a declared
+        // local "a", a declared Const local "cl", and a declared local "g" that ITSELF carries
+        // IsGlobal=true (a local shadowing a module variable of the same name — the flags on the
+        // declaration, not the name, decide visibility there; see IsCallVisible's own remarks).
+        var function = new IRFunction("F", IntType);
+        function.Parameters.Add(new IRVariable("p", IntType) { IsParameter = true });
+        function.Parameters.Add(new IRVariable("k", IntType) { IsParameter = true, IsByRef = true });
+        function.LocalVariables.Add(new IRVariable("a", IntType));
+        function.LocalVariables.Add(new IRVariable("cl", IntType) { IsConst = true });
+        function.LocalVariables.Add(new IRVariable("g", IntType) { IsGlobal = true });
 
         Assert.Multiple(() =>
         {
-            Assert.That(Reads(new IRFieldAccess("t1", V("c"), "V", IntType)), Is.True,
+            // ---- the default arm, unchanged by D3 ----
+            Assert.That(Reads(new IRFieldAccess("t1", V("c"), "V", IntType), function), Is.True,
                 "an unenumerated operand shape (here a field load) must be treated as storage a "
-                + "call can write — the conservative default");
+                + "call can write — the conservative default, unchanged by D3");
+            Assert.That(Reads(new IRConstant(7, IntType), function), Is.False, "a literal is not call-visible");
+            Assert.That(Reads(null, function), Is.False, "a missing operand is not call-visible");
 
-            Assert.That(Reads(new IRVariable("g", IntType) { IsGlobal = true }), Is.True,
-                "a MUTABLE global is call-visible");
-            Assert.That(Reads(new IRVariable("k", IntType) { IsByRef = true }), Is.True,
-                "a ByRef operand is call-visible");
+            // ---- the declarations rule, by NAME, exercised through the function's own decls ----
+            Assert.That(Reads(new IRVariable("a", IntType), function), Is.False,
+                "a declared local is private");
+            Assert.That(Reads(new IRVariable("undeclared", IntType), function), Is.True,
+                "an undeclared plain variable — no matching parameter or local — defaults to "
+                + "VISIBLE, the safe default for a kill vocabulary");
+            Assert.That(Reads(new IRVariable("p", IntType), function), Is.False,
+                "a by-value parameter is private");
+            Assert.That(Reads(new IRVariable("k", IntType), function), Is.True,
+                "a ByRef parameter is visible");
+            Assert.That(Reads(new IRVariable("g", IntType), function), Is.True,
+                "a global with a same-named local declared is visible — IsGlobal on the "
+                + "DECLARATION can only ADD visibility, never remove it");
 
-            // ⛔ THE EXEMPTION THAT KEEPS THE PASS WORTH HAVING. Drop it and every merge reading a
-            // Const global dies at the next call, silently. CseInvalidationDecisionTests'
-            // ConstGlobalAcrossACall row is the same property as a program.
-            Assert.That(Reads(new IRVariable("TILE", IntType) { IsGlobal = true, IsConst = true }), Is.False,
-                "a Const global is EXEMPT — a call cannot change it, and killing on it would take "
+            // ---- Const, by FLAG — Const wins regardless of Global/local, and is checked before
+            // either, so this is also exercised without needing a matching declaration. ----
+            Assert.That(Reads(new IRVariable("TILE", IntType) { IsGlobal = true, IsConst = true }, function), Is.False,
+                "a Const GLOBAL is EXEMPT — a call cannot change it, and killing on it would take "
                 + "every merge the repo's sample games make");
-
-            Assert.That(Reads(V("local")), Is.False, "a plain local is not call-visible");
-            Assert.That(Reads(new IRConstant(7, IntType)), Is.False, "a literal is not call-visible");
-            Assert.That(Reads(null), Is.False, "a missing operand is not call-visible");
+            Assert.That(Reads(new IRVariable("cl", IntType) { IsConst = true }, function), Is.False,
+                "a Const LOCAL is exempt too — Const wins over any other flag");
         });
     }
 }
@@ -895,8 +921,10 @@ public class CseKeyEncodingUnitTests
 /// <item><c>Samples/SpaceShooter/Main.bas</c> — PARSE errors:
 /// <c>Const SCREEN_WIDTH = 800</c> has no <c>As</c> clause. The parser records the error and
 /// synchronizes past the whole <c>Const</c> block, so those identifiers reach the IR as
-/// <c>IsGlobal=false, IsConst=false</c> — MEASURED. SpaceShooter's 5 merges therefore read plain
-/// locals and say NOTHING about the <c>Const</c> exemption.</item>
+/// <c>IsGlobal=false, IsConst=false</c> — MEASURED. Under ADR-0006 D3 an undeclared name like
+/// this defaults to call-visible (see <c>SampleGameMergesSurviveTheFixTest</c>'s remarks), so
+/// SpaceShooter now makes 0 merges; its former merges read these plain, undeclared-looking names
+/// and said NOTHING about the <c>Const</c> exemption even when there were some.</item>
 /// <item><c>Samples/Pong/Main.bas</c> has NO ROW HERE AT ALL: it does not reach the IR. With the
 /// parse damage above, <c>IRBuilder</c> THROWS on it — "the module-level variable 'ballVY' has an
 /// initializer that cannot be computed at compile time". There is no CSE count to pin. "The repo's
@@ -933,20 +961,38 @@ public class CseSampleCorpusTests
     /// <param name="analyzeClean">Whether the SEMANTIC ANALYZER accepts it today.</param>
     ///
     /// <remarks>
-    /// ⭐ SpaceShooter: 5 → 4, ADR-0001 Obligations / ADR-0004 D2 — CSE's candidate gate now
-    /// excludes any binop it would not call replicable, and one of SpaceShooter's five merges was
-    /// exactly that: <c>playerX + 15, playerY, playerX, playerY + 30, playerX + 30, playerY + 30</c>
-    /// (<c>Main.bas</c>'s <c>Framework_DrawTriangle</c> call, two textually-identical occurrences
-    /// of <c>playerY + 30</c>) reads <c>playerY</c>, a module-level <c>Dim</c> — a non-<c>Const</c>
-    /// global, never replicable — so the two occurrences are no longer a candidate at all and CSE
-    /// gives up that one merge. This is a value-correct optimization LOSS, not a behaviour change:
-    /// every backend still recomputes <c>playerY + 30</c> at each occurrence and gets the same
-    /// answer either way, it just does the addition twice instead of once. Platformer's count is
-    /// unaffected — measured, its merges all read <c>Const</c> globals (<c>TILE_SIZE</c>) or plain
-    /// locals, both replicable — and is asserted unchanged for that reason, not by accident.
+    /// ⭐ SpaceShooter: 5 → 4 (ADR-0001 Obligations / ADR-0004 D2, see 8b17c47) → <b>4 → 0 under
+    /// ADR-0006 D3</b>, a deviation from D3's own Contract ("the corpus pins as they stand ... are
+    /// preserved") DECIDED BY THE ORCHESTRATOR, recorded here rather than by the architect — see
+    /// the ADR-0006 implementation note.
+    ///
+    /// <para>MEASURED, both sides, against the same <c>Samples/SpaceShooter/Main.bas</c> (which
+    /// does not build — 7 PARSE errors, <c>Const SCREEN_WIDTH = 800</c> has no <c>As</c> clause,
+    /// and the parser synchronizes past the whole <c>Const</c> block): before D3 the remaining 4
+    /// merges all read <c>SCREEN_WIDTH</c> / <c>SCREEN_HEIGHT</c> as <c>IRVariable(IsGlobal=false,
+    /// IsConst=false)</c> — undeclared names the OLD flag rule scored PRIVATE (no flag set). D3's
+    /// declarations rule defaults an undeclared name to VISIBLE (the safe default for a kill
+    /// vocabulary), so the same 4 reads are now call-visible and CSE kills them at the intervening
+    /// call. <c>Corpus/ir</c>'s IR is built PAST the parse error (this fixture's whole point, see
+    /// the class docstring), so these 4 merges only ever existed in IR a real build never
+    /// produces.</para>
+    ///
+    /// <para>D3's Revisit clause — "the declarations rule loses a merge a sample game measurably
+    /// depends on" — is NOT met: SpaceShooter does not build, so nothing depends on these merges
+    /// today, and a well-formed copy with typed <c>Const SCREEN_WIDTH As Integer = 800</c>
+    /// declarations (<c>adr6/corpus/SpaceShooterTyped.bas</c> in the implementer's evidence) makes
+    /// 0 merges at THIS SAME BASE too — its <c>/</c> casts both operands to <c>Double</c> through
+    /// fresh temps, so the shape was never a merge candidate once the <c>Const</c>s are typed. The
+    /// 4 were an artifact of the parse-error path, not a real optimization SpaceShooter ever had.
+    /// </para>
+    ///
+    /// <para>Platformer's count is unaffected by D3 — measured, its merges all read <c>Const</c>
+    /// globals (<c>TILE_SIZE</c>) or plain declared locals (<c>px</c>/<c>py</c>), both call-private
+    /// under the declarations rule exactly as they were private under the old flag rule — and is
+    /// asserted unchanged for that reason, not by accident.</para>
     /// </remarks>
     [TestCase("Platformer", 6, true, true, TestName = "Corpus_Platformer_Makes6Merges")]
-    [TestCase("SpaceShooter", 4, false, false, TestName = "Corpus_SpaceShooter_Makes4Merges")]
+    [TestCase("SpaceShooter", 0, false, false, TestName = "Corpus_SpaceShooter_Makes0Merges")]
     public void SampleGameMergesSurviveTheFixTest(string sample, int expectedMerges, bool parseClean, bool analyzeClean)
     {
         var path = FindRepoFile("Samples", sample, "Main.bas");

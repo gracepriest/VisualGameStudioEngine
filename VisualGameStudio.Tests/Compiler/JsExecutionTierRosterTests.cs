@@ -123,6 +123,19 @@ public class JsExecutionTierRosterTests
         // FloatingIntegerDivisionStructuralTests is NOT here: it is pure front-end/codegen-text,
         // spawns nothing, and carries no [Category("Integration")] on purpose.
         typeof(FloatingIntegerDivisionExecutionTests),
+
+        // ADR-0006 D3 — the one call-visibility rule (OptimizationPass.IsCallVisible). Named
+        // "...ExecutionTests", so the widened match below WOULD catch both on its own; listed
+        // explicitly anyway, matching every row above. CallVisibilityQ3ExecutionTests' JS legs run
+        // through FourBackends.RunsOnEveryBackend[Aggressive] (Q3/Q3m); CallVisibilityQ3n
+        // ExecutionTests' C#/C++/MSIL row spawns no Node, but its known-gap pin
+        // (Q3n_JavaScript_KnownGap_ReferenceErrorOnMeK) does, via a local Node runner — it belongs
+        // here for the same reason CseDestinationKnownGapsTask133Tests and
+        // LicmKillVocabularyKnownGapsTask122Tests do (see their own notes above).
+        // CallVisibilityHandBuiltIRTests and CallVisibilityDecisionTests are NOT here: pure
+        // in-process IR/front-end fixtures, spawn nothing, carry no [Category("Integration")].
+        typeof(CallVisibilityQ3ExecutionTests),
+        typeof(CallVisibilityQ3nExecutionTests),
     };
 
     /// <summary>
@@ -170,7 +183,7 @@ public class JsExecutionTierRosterTests
 
     [Test]
     public void RosterIsPinned()
-        => Assert.That(ExecutionTier, Has.Length.EqualTo(41),
+        => Assert.That(ExecutionTier, Has.Length.EqualTo(43),
             "The execution-tier roster changed. That is fine — update the number — but it must " +
             "be a deliberate edit, not a silent shrink.");
 
