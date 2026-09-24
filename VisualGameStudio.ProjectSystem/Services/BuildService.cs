@@ -743,7 +743,12 @@ public class BuildService : IBuildService
             result.OutputPath = outputDir;
 
             var generatedFilePath = Path.Combine(outputDir, result.GeneratedFileName);
-            await File.WriteAllTextAsync(generatedFilePath, generatedCode, cancellationToken);
+            // ⛔ Not for JavaScript: EmitJavaScriptSite below writes the script, with its
+            // sourceMappingURL. Writing it here as well wrote the same .js twice milliseconds
+            // apart, and on Windows the second write fails (ERROR_USER_MAPPED_FILE) whenever a
+            // scanner or indexer has mapped the freshly closed first copy in between.
+            if (backend != "javascript")
+                await File.WriteAllTextAsync(generatedFilePath, generatedCode, cancellationToken);
             _outputService.WriteLine($"Generated: {generatedFilePath}", OutputCategory.Build);
 
             // ---------- Other non-.NET backends stop at source ----------
