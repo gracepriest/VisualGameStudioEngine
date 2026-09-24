@@ -5675,6 +5675,16 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                     EmitInlineValue(unaryOp.Operand);
                     WriteLine($"    {_typeMapper.MapUnaryOperator(unaryOp.Operation)}");
                     return;
+
+                // A numeric cast rebuilt in place: the operand, then the same conversion
+                // Visit(IRCast) emits. Nothing put a cast in a guard until IRBuilder began
+                // converting a floating operand of `\` (ADR-0005 D1) — `When y \ 2 = 4` on a
+                // Double `y` was refused below. Only numeric kinds this backend's coercion knows
+                // (i4/i8/r4/r8 on both sides); any other cast is still refused, not guessed at.
+                case IRCast cast when NumericKind(cast.Value?.Type) != null && NumericKind(cast.Type) != null:
+                    EmitInlineValue(cast.Value);
+                    EmitCastConversion(cast);
+                    return;
             }
 
             // A leaf that IS already in a slot (a value computed before the Select Case and
@@ -5773,7 +5783,27 @@ namespace BasicLang.Compiler.CodeGen.MSIL
         public override void Visit(IRCast cast)
         {
             EmitLoadValue(cast.Value);
+            EmitCastConversion(cast);
 
+            // Store to temp
+            if (!string.IsNullOrEmpty(cast.Name) && _declaredIdentifiers.Contains(cast.Name))
+            {
+                EmitStoreLocal(cast.Name);
+            }
+            else if (_tempIndices.ContainsKey(cast))
+            {
+                var tempIdx = GetTempIndex(cast);
+                EmitStloc(tempIdx);
+            }
+        }
+
+        /// <summary>
+        /// The conversion opcodes of <paramref name="cast"/>, applied to the value already on top
+        /// of the stack. Shared by <see cref="Visit(IRCast)"/> and <see cref="EmitInlineValue"/>
+        /// so a cast in a <c>When</c> guard converts exactly as the same cast in a statement.
+        /// </summary>
+        private void EmitCastConversion(IRCast cast)
+        {
             var targetType = cast.Type?.Name?.ToLower() ?? "";
 
             // ⛔ A FLOATING -> INTEGRAL narrowing ROUNDS HALF-TO-EVEN before the conv, because
@@ -5818,17 +5848,6 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 default:
                     WriteLine($"    // WARNING: Unknown cast to {targetType}");
                     break;
-            }
-
-            // Store to temp
-            if (!string.IsNullOrEmpty(cast.Name) && _declaredIdentifiers.Contains(cast.Name))
-            {
-                EmitStoreLocal(cast.Name);
-            }
-            else if (_tempIndices.ContainsKey(cast))
-            {
-                var tempIdx = GetTempIndex(cast);
-                EmitStloc(tempIdx);
             }
         }
 

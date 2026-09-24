@@ -3895,6 +3895,14 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                     return $"({RenderInline(cmp.Left)} {MapCompareOperator(cmp.Comparison)} {RenderInline(cmp.Right)})";
                 case IRUnaryOp u:
                     return $"({MapUnaryOperator(u.Operation)}{RenderInline(u.Operand)})";
+                // ⛔ Without this arm a numeric cast in a guard renders by NAME — an undeclared
+                // temp, because the guard's instructions never entered a block. Nothing put one
+                // there until IRBuilder began converting a floating operand of `\` (ADR-0005 D1);
+                // since then `When y \ 2 = 4` on a Double `y` needs this arm to compile at all.
+                // Decimal and String casts keep the old fallback: their statement forms route
+                // through the engine, not a static_cast.
+                case IRCast c when IsPlainNumericCast(c):
+                    return $"({StaticCastText(c, RenderInline(c.Value))})";
                 default:
                     return GetValueName(v);
             }
@@ -4056,6 +4064,18 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 }
             }
 
+            WriteLine($"{result} = {StaticCastText(cast, value)};");
+        }
+
+        /// <summary>
+        /// The C++ expression text of the plain <c>static_cast</c> tail of
+        /// <see cref="Visit(IRCast)"/> — every cast its Decimal and String arms did not claim —
+        /// with <paramref name="value"/> as the operand text. Shared with
+        /// <see cref="RenderInline"/> so a cast in a <c>When</c> guard means what the same cast
+        /// means in a statement.
+        /// </summary>
+        private string StaticCastText(IRCast cast, string value)
+        {
             var targetType = MapType(cast.Type);
 
             // ⛔ A FLOATING -> INTEGRAL narrowing ROUNDS HALF-TO-EVEN, because a bare static_cast
@@ -4065,12 +4085,20 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // mode is ToEven and matches Convert.ToInt32; std::round would NOT, it is
             // AwayFromZero and answers 9 for 8.5.
             if (IsFloatingTypeName(cast.Value?.Type?.Name) && IsIntegralTypeName(cast.Type?.Name))
-            {
-                WriteLine($"{result} = static_cast<{targetType}>(std::nearbyint({value}));");
-                return;
-            }
+                return $"static_cast<{targetType}>(std::nearbyint({value}))";
 
-            WriteLine($"{result} = static_cast<{targetType}>({value});");
+            return $"static_cast<{targetType}>({value})";
+        }
+
+        /// <summary>
+        /// A cast between two numeric primitives that are not Decimal — exactly the casts
+        /// <see cref="Visit(IRCast)"/> renders with <see cref="StaticCastText"/> alone, so
+        /// rendering one inline cannot disagree with its statement form.
+        /// </summary>
+        private static bool IsPlainNumericCast(IRCast cast)
+        {
+            static bool Plain(string name) => IsIntegralTypeName(name) || IsFloatingTypeName(name);
+            return Plain(cast.Value?.Type?.Name) && Plain(cast.Type?.Name);
         }
 
         /// <summary>A floating source, i.e. one a narrowing has something to round from.</summary>

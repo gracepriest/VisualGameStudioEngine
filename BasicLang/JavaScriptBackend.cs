@@ -262,16 +262,50 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                     foreach (var instruction in block.Instructions ?? Enumerable.Empty<IRInstruction>())
                         switch (instruction)
                         {
-                            case IRCall call when string.Equals(
-                                call.FunctionName, "CInt", StringComparison.OrdinalIgnoreCase):
+                            case IRCall call when IsCIntCall(call):
                                 return true;
-                            case IRCast cast when cast.SourceType?.IsFloatingPoint() == true
-                                && cast.Type?.IsIntegral() == true:
+                            case IRCast cast when IsRoundingCast(cast):
+                                return true;
+                            case IRSwitch sw when sw.PatternCases?.Any(GuardUsesRoundingHelper) == true:
                                 return true;
                         }
 
             return false;
         }
+
+        private static bool IsCIntCall(IRCall call) =>
+            string.Equals(call.FunctionName, "CInt", StringComparison.OrdinalIgnoreCase);
+
+        private static bool IsRoundingCast(IRCast cast) =>
+            cast.SourceType?.IsFloatingPoint() == true && cast.Type?.IsIntegral() == true;
+
+        /// <summary>
+        /// A <c>When</c> guard is built with emission SUPPRESSED, so its nodes are in no block and
+        /// the block walk above cannot see a rounding cast inside one — yet
+        /// <see cref="ExprInline"/> renders that cast as a call to the helper. Missed, the build
+        /// succeeded and Node died with "__blCInt is not defined". Reachable since IRBuilder
+        /// converts a floating operand of <c>\</c> (ADR-0005 D1): <c>When y \ 2 = 4</c>.
+        /// </summary>
+        private static bool GuardUsesRoundingHelper(IRPatternCase pattern) =>
+            pattern != null
+            && (TreeUsesRoundingHelper(pattern.WhenGuard)
+                || pattern switch
+                {
+                    IROrPatternCase or => or.Alternatives?.Any(GuardUsesRoundingHelper) == true,
+                    IRTuplePatternCase tuple => tuple.Elements?.Any(GuardUsesRoundingHelper) == true,
+                    _ => false,
+                });
+
+        /// <summary>The node kinds <see cref="ExprInline"/> rebuilds in place, walked for a rounding cast.</summary>
+        private static bool TreeUsesRoundingHelper(IRValue value) => value switch
+        {
+            IRCast cast => IsRoundingCast(cast) || TreeUsesRoundingHelper(cast.Value),
+            IRCall call => IsCIntCall(call) || call.Arguments.Any(TreeUsesRoundingHelper),
+            IRBinaryOp binary => TreeUsesRoundingHelper(binary.Left) || TreeUsesRoundingHelper(binary.Right),
+            IRCompare compare => TreeUsesRoundingHelper(compare.Left) || TreeUsesRoundingHelper(compare.Right),
+            IRUnaryOp unary => TreeUsesRoundingHelper(unary.Operand),
+            _ => false,
+        };
 
         /// <summary>The emitted name of the half-to-even rounding helper CInt lowers to.</summary>
         private const string CIntHelperName = "__blCInt";
