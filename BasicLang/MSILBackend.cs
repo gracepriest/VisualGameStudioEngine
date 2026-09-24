@@ -3968,9 +3968,12 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 return;
             }
 
-            // Load operands onto stack
+            // Load operands onto stack, each converted to the type the operation computes in.
+            var operandKind = BinaryOperandKind(binaryOp);
             EmitLoadValue(binaryOp.Left);
+            EmitNumericCoercion(binaryOp.Left, operandKind);
             EmitLoadValue(binaryOp.Right);
+            EmitNumericCoercion(binaryOp.Right, operandKind);
 
             // Emit operation
             var op = _typeMapper.MapBinaryOperator(binaryOp.Operation);
@@ -4012,8 +4015,11 @@ namespace BasicLang.Compiler.CodeGen.MSIL
 
         public override void Visit(IRCompare compare)
         {
+            var operandKind = WiderNumericKind(compare.Left, compare.Right);
             EmitLoadValue(compare.Left);
+            EmitNumericCoercion(compare.Left, operandKind);
             EmitLoadValue(compare.Right);
+            EmitNumericCoercion(compare.Right, operandKind);
 
             EmitCompareOpcodes(compare.Comparison);
 
@@ -4328,6 +4334,112 @@ namespace BasicLang.Compiler.CodeGen.MSIL
         /// emitter and <see cref="IsVoidStdLibArm"/> so the two cannot disagree about which arm
         /// ran — a disagreement there is exactly the stack underflow described above.
         /// </summary>
+        /// <summary>
+        /// The IL evaluation-stack numeric kind of a BasicLang type — <c>i4</c>, <c>i8</c>, <c>r4</c>,
+        /// <c>r8</c> — or null for anything this coercion does not handle (Decimal, unsigned,
+        /// Char, String, Boolean, Object, a user type). Byte and Short live as int32 on the stack.
+        /// </summary>
+        private static string NumericKind(TypeInfo type) => type?.Name switch
+        {
+            "Byte" or "Short" or "Integer" => "i4",
+            "Long" => "i8",
+            "Single" => "r4",
+            "Double" => "r8",
+            _ => null,
+        };
+
+        private static int NumericRank(string kind) => kind switch
+        {
+            "i4" => 0,
+            "i8" => 1,
+            "r4" => 2,
+            "r8" => 3,
+            _ => -1,
+        };
+
+        /// <summary>The wider of two operands' numeric kinds, or null unless BOTH are numeric.</summary>
+        private static string WiderNumericKind(IRValue left, IRValue right)
+        {
+            var l = NumericKind(left?.Type);
+            var r = NumericKind(right?.Type);
+            if (l == null || r == null) return null;
+            return NumericRank(l) >= NumericRank(r) ? l : r;
+        }
+
+        /// <summary>
+        /// The numeric kind a binary operation COMPUTES in, which both operands must be converted
+        /// to before the opcode (ADR-0004 D4).
+        ///
+        /// <para>⛔ WITHOUT THIS, IL arithmetic ran on whatever the operands happened to be.
+        /// <c>add</c>/<c>mul</c>/<c>rem</c> over an int32 and a float64 is not a conversion in IL —
+        /// it is undefined, and .NET Core does not verify: <c>2 * &lt;Double call&gt;</c> printed
+        /// <c>1E-323</c>, Integer + Double printed 4.4E-323, Single + Integer 32775, and several
+        /// mixes were InvalidProgramException. The IR only inserts casts for <c>/</c>; every other
+        /// mix reached this backend raw. The arithmetic ops convert to the IR's RESULT type — so
+        /// <c>\</c>, whose result is integral, converts floating operands DOWN (rounding half to
+        /// even, as the IRCast narrowing does) before an integer <c>div</c>. A comparison, whose
+        /// result is Boolean, converts to the wider operand. Shifts are excluded (the count stays
+        /// int32 whatever the shifted type is), and so are the logical ops and concatenation.</para>
+        /// </summary>
+        private static string BinaryOperandKind(IRBinaryOp binaryOp)
+        {
+            switch (binaryOp.Operation)
+            {
+                case BinaryOpKind.Add:
+                case BinaryOpKind.Sub:
+                case BinaryOpKind.Mul:
+                case BinaryOpKind.Div:
+                case BinaryOpKind.Mod:
+                case BinaryOpKind.IntDiv:
+                case BinaryOpKind.BitwiseAnd:
+                case BinaryOpKind.BitwiseOr:
+                case BinaryOpKind.Xor:
+                    return NumericKind(binaryOp.Type);
+                case BinaryOpKind.Eq:
+                case BinaryOpKind.Ne:
+                case BinaryOpKind.Lt:
+                case BinaryOpKind.Le:
+                case BinaryOpKind.Gt:
+                case BinaryOpKind.Ge:
+                    return WiderNumericKind(binaryOp.Left, binaryOp.Right);
+                default:
+                    return null;
+            }
+        }
+
+        /// <summary>
+        /// Converts the value on top of the stack — <paramref name="operand"/>, just loaded — to
+        /// <paramref name="targetKind"/>. Nothing when either side is not a handled numeric or the
+        /// kinds already agree, so an operand the IR already cast (e.g. the Double casts it puts
+        /// around <c>/</c>) is never converted twice. Floating → integral rounds half to even
+        /// first, exactly as <see cref="Visit(IRCast)"/> does, because <c>conv.i*</c> truncates.
+        /// </summary>
+        private void EmitNumericCoercion(IRValue operand, string targetKind)
+        {
+            var sourceKind = NumericKind(operand?.Type);
+            if (targetKind == null || sourceKind == null || sourceKind == targetKind) return;
+
+            var sourceIsFloating = sourceKind is "r4" or "r8";
+            switch (targetKind)
+            {
+                case "r8":
+                    WriteLine("    conv.r8");
+                    break;
+                case "r4":
+                    WriteLine("    conv.r4");
+                    break;
+                case "i8":
+                case "i4":
+                    if (sourceIsFloating)
+                    {
+                        WriteLine("    conv.r8");
+                        WriteLine("    call float64 [mscorlib]System.Math::Round(float64)");
+                    }
+                    WriteLine(targetKind == "i8" ? "    conv.i8" : "    conv.i4");
+                    break;
+            }
+        }
+
         /// <summary>A floating source, i.e. one a narrowing has something to round from.</summary>
         private static bool IsFloatingType(TypeInfo type) => type?.Name switch
         {
@@ -5488,18 +5600,28 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                     return;
 
                 case IRBinaryOp binaryOp:
+                {
+                    var operandKind = BinaryOperandKind(binaryOp);
                     EmitInlineValue(binaryOp.Left);
+                    EmitNumericCoercion(binaryOp.Left, operandKind);
                     EmitInlineValue(binaryOp.Right);
+                    EmitNumericCoercion(binaryOp.Right, operandKind);
                     WriteLine($"    {_typeMapper.MapBinaryOperator(binaryOp.Operation)}");
                     _currentStack--;
                     return;
+                }
 
                 case IRCompare compare:
+                {
+                    var compareKind = WiderNumericKind(compare.Left, compare.Right);
                     EmitInlineValue(compare.Left);
+                    EmitNumericCoercion(compare.Left, compareKind);
                     EmitInlineValue(compare.Right);
+                    EmitNumericCoercion(compare.Right, compareKind);
                     EmitCompareOpcodes(compare.Comparison);
                     _currentStack--;
                     return;
+                }
 
                 case IRUnaryOp unaryOp:
                     EmitInlineValue(unaryOp.Operand);
