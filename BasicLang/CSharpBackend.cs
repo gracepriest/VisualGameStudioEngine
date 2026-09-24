@@ -805,6 +805,31 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         }
 
         /// <summary>
+        /// An iterator's C# return type. BasicLang accepts both VB's own spelling,
+        /// <c>Iterator Function F() As IEnumerable(Of Integer)</c>, and the element-type shorthand
+        /// <c>As Integer</c>; only the shorthand is wrapped, as WrapAsyncReturnType leaves a
+        /// declared Task alone. ⛔ Wrapping unconditionally turned VB's spelling into
+        /// <c>IEnumerable&lt;IEnumerable&lt;int&gt;&gt;</c>, and every <c>Yield</c> in it failed with CS0029.
+        /// </summary>
+        private static string WrapIteratorReturnType(string returnType)
+        {
+            if (returnType == "void")
+                return returnType;
+
+            var bare = returnType.StartsWith("System.Collections.Generic.", StringComparison.Ordinal)
+                ? returnType.Substring("System.Collections.Generic.".Length)
+                : returnType.StartsWith("System.Collections.", StringComparison.Ordinal)
+                    ? returnType.Substring("System.Collections.".Length)
+                    : returnType;
+            if (bare is "IEnumerable" or "IEnumerator"
+                || bare.StartsWith("IEnumerable<", StringComparison.Ordinal)
+                || bare.StartsWith("IEnumerator<", StringComparison.Ordinal))
+                return returnType;
+
+            return $"IEnumerable<{returnType}>";
+        }
+
+        /// <summary>
         /// Map BasicLang access modifiers to C# access modifiers
         /// </summary>
         private string MapAccessModifier(AST.AccessModifier access)
@@ -1554,9 +1579,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             }
             else if (function.IsIterator)
             {
-                // Wrap return type in IEnumerable<T>
-                if (returnType != "void")
-                    actualReturnType = $"IEnumerable<{returnType}>";
+                actualReturnType = WrapIteratorReturnType(returnType);
             }
 
             // Generate constraint clauses for generic type parameters
