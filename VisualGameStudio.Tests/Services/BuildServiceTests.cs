@@ -74,6 +74,21 @@ public class BuildServiceTests
         _service.BuildCancelled += (s, e) => { };
         Assert.Pass();
     }
+
+    /// <summary>
+    /// OutputPath is stored MSBuild-style ("bin\Debug"). On Linux/macOS a raw Path.Combine kept
+    /// the backslash as a file-name character, so every IDE build wrote into a directory literally
+    /// named "bin\Debug" and then could not find its own generated .csproj (MSB1009).
+    /// </summary>
+    [Test]
+    public void ResolveOutputDirectory_UsesThePlatformSeparator()
+    {
+        var projectDir = Path.Combine(Path.GetTempPath(), "proj");
+
+        var resolved = BuildService.ResolveOutputDirectory(projectDir, @"bin\Debug");
+
+        Assert.That(resolved, Is.EqualTo(Path.Combine(projectDir, "bin", "Debug")));
+    }
 }
 
 [TestFixture]
