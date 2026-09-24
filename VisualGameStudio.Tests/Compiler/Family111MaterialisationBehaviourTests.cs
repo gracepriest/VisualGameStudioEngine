@@ -489,26 +489,28 @@ public class Family111MaterialisationBehaviourTests
             + "changed, update or delete the pin, do not just widen it");
 
     /// <summary>
-    /// ⛔ PINNED WRONG — T2: the user declares a local ALSO named <c>t0</c>, colliding with the
-    /// IR's own temp-naming scheme (<c>t0</c>, <c>t1</c>, …), which is what the materialised
-    /// call's temp is also named. <c>ComputeMaterialisedTemps</c>/<c>DeclareLocals</c> declare
-    /// BOTH under the same identifier, so the materialised temp's assignment aliases the user's
-    /// variable.
+    /// T2 — the user declares a local ALSO named <c>t0</c>, colliding with the IR's own
+    /// temp-naming scheme (<c>t0</c>, <c>t1</c>, …), which is what the materialised call's temp
+    /// used to be named too, before master's 2d84743 ("Keep compiler temps from sharing a name
+    /// with the user's t1, t2, ..."). <c>IRBuilder.SeparateTempsFromUserNames</c> now reserves the
+    /// user's declared names before lowering and <c>CodeGeneratorBase.NextTempName</c> skips any
+    /// name already in that reserved set, so the materialised temp and the user's <c>t0</c> can no
+    /// longer collide.
     ///
-    /// <para>MEASURED, on all three entry points: <c>tag</c> prints THREE times (not once — E1 is
-    /// violated, not merely a wrong final value), <c>r</c> is <c>6</c> (right, by construction of
-    /// the doubling), and the user's own <c>t0</c> prints <c>3</c> instead of the <c>5</c> it was
-    /// assigned — the user's variable and the compiler's temp are, after the collision, the SAME
-    /// C# local.</para>
-    ///
-    /// <para>⭐ <b>Fixed by:</b> task #126, ADR-0004 D3 — <c>IRFunction.ReservedNames</c> populated
-    /// from the AST before lowering, so <c>GetNextTempName()</c> never mints a name the function
-    /// already declares. Not fixed here: D3 is a zero-churn reservation, out of this family's
-    /// scope (materialisation + <c>IsReplicable</c> + the <c>2*x</c> gate).</para>
+    /// <para>MEASURED on all four backends (standard and aggressive pipelines), the CLI single-file
+    /// entry point and the Release <c>.blproj</c> project-build entry point: <c>tag</c> prints
+    /// exactly once, <c>r</c> is <c>6</c>, and the user's own <c>t0</c> correctly prints <c>5</c> —
+    /// this was PINNED WRONG (<c>tag</c> ×3, <c>t0</c> read back as <c>3</c>) before that fix; task
+    /// #126 / ADR-0004 D3's temp reservation is now shipped.</para>
     /// </summary>
+    /// <summary>The same T2 shape under the STANDARD pipeline (no <c>2*x → x+x</c> rewrite, no
+    /// materialisation candidate at all) — included because the collision task #126 fixed
+    /// (<c>GetNextTempName</c> minting a name the user already declared) is not gated on any
+    /// optimizer pass; CSE alone can mint a colliding temp name on the standard pipeline too.
+    /// MEASURED correct on all four backends.</summary>
     [Test]
-    public void T2_UserLocalNamedT0CollidesWithTheIRsTempNamespace_PinnedWrong_UnitHelperEntryPoint()
-        => Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharpAggressive(
+    public void T2_UserLocalNamedT0NoLongerCollidesWithTheIRsTempNamespace_StandardPipeline()
+        => FourBackends.RunsOnEveryBackend(
             "Function Tag() As Integer\n" +
             " Console.WriteLine(\"tag\")\n" +
             " Return 3\n" +
@@ -518,15 +520,28 @@ public class Family111MaterialisationBehaviourTests
             " Dim r As Integer = 2 * Tag()\n" +
             " Console.WriteLine(r)\n" +
             " Console.WriteLine(t0)\n" +
-            "End Sub")),
-            Is.EqualTo("tag\ntag\ntag\n6\n3"),
-            "if this changed (correct is tag once, then 6, then 5), task #126 / ADR-0004 D3's temp "
-            + "reservation may be shipped — update or delete this pin, do not just widen it");
+            "End Sub",
+            "tag\n6\n5");
 
     [Test]
-    [TestCase(false, TestName = "TheCliSingleFileEntryPoint_T2_PinnedWrong")]
-    [TestCase(true, TestName = "TheProjectBuildEntryPoint_T2_PinnedWrong")]
-    public void BothCompilerEntryPoints_T2_PinnedWrong(bool asProject)
+    public void T2_UserLocalNamedT0NoLongerCollidesWithTheIRsTempNamespace_UnitHelperEntryPoint()
+        => FourBackends.RunsOnEveryBackendAggressive(
+            "Function Tag() As Integer\n" +
+            " Console.WriteLine(\"tag\")\n" +
+            " Return 3\n" +
+            "End Function\n\n" +
+            "Sub Main()\n" +
+            " Dim t0 As Integer = 5\n" +
+            " Dim r As Integer = 2 * Tag()\n" +
+            " Console.WriteLine(r)\n" +
+            " Console.WriteLine(t0)\n" +
+            "End Sub",
+            "tag\n6\n5");
+
+    [Test]
+    [TestCase(false, TestName = "TheCliSingleFileEntryPoint_T2")]
+    [TestCase(true, TestName = "TheProjectBuildEntryPoint_T2")]
+    public void BothCompilerEntryPoints_T2(bool asProject)
         => Assert.That(RunThroughEntryPoint(
             "Function Tag() As Integer\n" +
             " Console.WriteLine(\"tag\")\n" +
@@ -538,10 +553,9 @@ public class Family111MaterialisationBehaviourTests
             " Console.WriteLine(r)\n" +
             " Console.WriteLine(t0)\n" +
             "End Sub", asProject),
-            Is.EqualTo("tag\ntag\ntag\n6\n3"),
+            Is.EqualTo("tag\n6\n5"),
             (asProject ? "CompileProjectFiles" : "CompileFile")
-            + " — measured on this entry point too; if this changed, update or delete the pin, "
-            + "do not just widen it");
+            + " — measured correct on this entry point too, per master's 2d84743.");
 
     // ====================================================================================
     // Helpers.

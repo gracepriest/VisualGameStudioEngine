@@ -951,6 +951,10 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 // parameter value ever reach here.
                 if (constant.Value is decimal dm)
                     return dm.ToString(CultureInfo.InvariantCulture) + "m";
+                // `Optional k As Single = 2.5F` emitted `float k = 2.5` (CS1750: a double
+                // default for a float parameter), and a Double default was CurrentCulture.
+                if (constant.Value is float or double)
+                    return CSharpFloatingLiteral(constant.Value);
                 return constant.Value.ToString();
             }
             return "default";
@@ -4497,8 +4501,8 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             if (constant.Value is bool b)
                 return b ? "true" : "false";
 
-            if (constant.Value is float f)
-                return $"{f}f";
+            if (constant.Value is float or double)
+                return CSharpFloatingLiteral(constant.Value);
 
             // System.Decimal constant (spec 6.1: a literal converted from its
             // source text in a Decimal context) — the m suffix keeps the C#
@@ -4509,6 +4513,49 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
             return constant.Value.ToString();
         }
+
+        /// <summary>
+        /// A <c>Single</c> or <c>Double</c> constant as C# source: a FLOATING literal,
+        /// culture-invariant, that parses back to the same value (sign of zero included), or the
+        /// <c>float.</c>/<c>double.</c> named constant for NaN and ±Infinity. The C# twin of
+        /// <c>CppCodeGenerator.CppDoubleLiteral</c>.
+        ///
+        /// <para>⛔ A Double used to fall through to a bare CurrentCulture <c>ToString()</c>, and a
+        /// Single to <c>$"{f}f"</c>. MEASURED through the CLI:
+        /// (1) an integral Double lost its point, so the constant became an INT literal —
+        /// <c>1.0 / 0.0</c>, which constant folding leaves alone, emitted <c>1 / 0</c>: CS0020,
+        /// integer division by constant zero;
+        /// (2) de-DE emitted <c>h = 2,5;</c> and a parameter default <c>double r = 0,25</c> —
+        /// neither compiles;
+        /// (3) <c>-0.0</c> would emit <c>-0</c>, an int, i.e. +0.0;
+        /// (4) NaN and ∞ would emit <c>NaN</c> and <c>∞</c>, which are not C#.</para>
+        ///
+        /// <para>"R" is the shortest round-tripping string; ".0" is appended only when it has
+        /// neither a point nor an exponent ("1E+20" is already a C# double literal). A Single keeps
+        /// its <c>f</c> suffix. <c>-0.0</c> is unary minus on the constant <c>0.0</c>, which C#
+        /// folds to −0.0.</para>
+        /// </summary>
+        internal static string CSharpFloatingLiteral(object value)
+        {
+            if (value is float f)
+            {
+                if (float.IsNaN(f)) return "float.NaN";
+                if (float.IsPositiveInfinity(f)) return "float.PositiveInfinity";
+                if (float.IsNegativeInfinity(f)) return "float.NegativeInfinity";
+                return WithFloatingPoint(f.ToString("R", CultureInfo.InvariantCulture)) + "f";
+            }
+
+            var d = (double)value;
+            if (double.IsNaN(d)) return "double.NaN";
+            if (double.IsPositiveInfinity(d)) return "double.PositiveInfinity";
+            if (double.IsNegativeInfinity(d)) return "double.NegativeInfinity";
+            return WithFloatingPoint(d.ToString("R", CultureInfo.InvariantCulture));
+        }
+
+        private static string WithFloatingPoint(string roundTrip) =>
+            roundTrip.IndexOfAny(FloatingLiteralMarks) >= 0 ? roundTrip : roundTrip + ".0";
+
+        private static readonly char[] FloatingLiteralMarks = { '.', 'E', 'e' };
 
         /// <summary>
         /// Generate C# where clauses for generic type parameter constraints

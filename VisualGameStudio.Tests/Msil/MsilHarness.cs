@@ -135,15 +135,39 @@ internal static class MsilHarness
         return null;
     }
 
-    /// <summary>The assembler, or an Ignore for a machine that has none.</summary>
+    /// <summary>
+    /// The assembler, or an Ignore for a machine that has none.
+    ///
+    /// <para>⛔ Most MSIL legs run INSIDE a cross-backend <c>Assert.Multiple</c>, where NUnit
+    /// refuses <c>Assert.Ignore</c> outright ("Assert.Ignore may not be used in a multiple
+    /// assertion block") — so on a machine without ilasm every such test FAILED instead of being
+    /// skipped. Inside a block the skip is therefore raised as a bare <c>IgnoreException</c>,
+    /// which NUnit records as Ignored. It must not hide a real failure from a leg that already
+    /// ran in the same block: if one is pending, those failures are thrown instead.</para>
+    /// </summary>
     internal static string RequireIlasm()
     {
         if (IlasmPath.Value == null)
         {
-            Assert.Ignore(
+            const string message =
                 "No ilasm found. Windows ships one at %WINDIR%\\Microsoft.NET\\Framework64\\"
                 + "v4.0.30319; elsewhere restore runtime.<rid>.Microsoft.NETCore.ILAsm, or point "
-                + "BASICLANG_ILASM at a build.");
+                + "BASICLANG_ILASM at a build.";
+
+            // NUnit 4 keeps the "am I inside Assert.Multiple" level internal, so ask Assert.Ignore:
+            // outside a block it throws IgnoreException (let it go); inside one it throws a plain
+            // Exception refusing to run, which is the case handled below.
+            try
+            {
+                Assert.Ignore(message);
+            }
+            catch (Exception ex) when (ex is not IgnoreException)
+            {
+                var result = NUnit.Framework.Internal.TestExecutionContext.CurrentContext.CurrentResult;
+                if (result.PendingFailures > 0)
+                    throw new MultipleAssertException(result);
+                throw new IgnoreException(message);
+            }
         }
         return IlasmPath.Value;
     }

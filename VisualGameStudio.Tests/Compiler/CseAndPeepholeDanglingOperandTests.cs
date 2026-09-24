@@ -509,7 +509,7 @@ public class CseAndPeepholeDanglingOperandTests
     /// <para>It is kept because the shape must go on working and because a reader comparing it
     /// with the member case can see exactly why one detects the defect and the other cannot. The
     /// gate itself is pinned where a name cannot stand in for the storage location: by
-    /// <see cref="AMemberSpelledLikeATemp_KeepsItsCseRewrittenWrite_CppExcluded"/> end to end, and
+    /// <see cref="AMemberSpelledLikeATemp_KeepsItsCseRewrittenWrite"/> end to end, and
     /// backend-independently by
     /// <c>CseAndPeepholeIrIdentityTests.TheCseMerge_KeepsARealVariableAndRemovesATemp</c>.</para>
     /// </summary>
@@ -530,26 +530,22 @@ public class CseAndPeepholeDanglingOperandTests
             """, "V=10\nV=10");
 
     /// <summary>
-    /// ⛔ A class MEMBER spelled <c>t0</c> assigned a duplicated expression, through CSE — and
+    /// A class MEMBER spelled <c>t0</c> assigned a duplicated expression, through CSE — and
     /// unlike the peephole pair above this one is a LIVE HEAD DEFECT, not a guard on the fix.
     /// Measured at HEAD 39b3f7e: <c>T0=0</c> on ALL FOUR backends, silently, because CSE's own
     /// copy of the spelling test classified the member as a temp and removed its write outright.
     /// The fix repairs it because it is the same predicate on the same line.
     ///
-    /// <para>⚠ <b>THREE BACKENDS, NOT FOUR. C++ is EXCLUDED and prints <c>T0=0</c> here BY A
-    /// SEPARATE, PRE-EXISTING DEFECT</b> — a shadowing bug in <c>CppCodeGenerator</c> where the
-    /// method's local <c>s</c> and the field <c>t0</c> collide in the emitted scope. It is
-    /// measured at the fixed optimizer, not at HEAD, so it is not this change and not a
-    /// regression; it lives in <c>CppCodeGenerator.cs</c>, which is outside the pass this fixture
-    /// pins. The sibling case above (<see cref="ALocalSpelledLikeATemp_KeepsItsCseRewrittenWrite"/>)
-    /// covers the same optimizer gate on a LOCAL and asserts all four backends, so C++ is not
-    /// unasserted for this defect — only for this one shape.</para>
-    ///
-    /// <para>⚠ The C++ value is pinned at <c>T0=0</c> rather than skipped, so the day that
-    /// shadowing bug is fixed this case fails and says so.</para>
+    /// <para>⭐ ALL FOUR BACKENDS, including C++. C++'s local <c>S=10\nT0=0</c> reading was a
+    /// SEPARATE, pre-existing shadowing bug in <c>CppCodeGenerator</c> where the method's local
+    /// <c>s</c> and the field <c>t0</c> collided in the emitted scope by sharing the compiler's
+    /// temp-name namespace — the same class of collision master's 2d84743 ("Keep compiler temps
+    /// from sharing a name with the user's t1, t2, ...") fixed for Family #111's T2. That fix also
+    /// resolves this shape: <c>t0</c> and the emitted <c>s</c>/temp no longer collide, so C++ now
+    /// prints the same <c>S=10\nT0=10</c> as the other three backends.</para>
     /// </summary>
     [Test]
-    public void AMemberSpelledLikeATemp_KeepsItsCseRewrittenWrite_CppExcluded()
+    public void AMemberSpelledLikeATemp_KeepsItsCseRewrittenWrite()
         => OnFourBackends("""
             Class Timer
              Public t0 As Integer
@@ -564,7 +560,7 @@ public class CseAndPeepholeDanglingOperandTests
              x.Set1(3)
              PrintLine("T0=" & CStr(x.t0))
             End Sub
-            """, "S=10\nT0=10", cppExpected: "S=10\nT0=0");
+            """, "S=10\nT0=10");
 
     // ====================================================================================
     // Both entry points.
