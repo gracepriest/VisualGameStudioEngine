@@ -13,6 +13,8 @@ with the C++/MSIL accessor defects it exposes, ordered so the accessor-signature
 fixes land first and every commit stays green; interface-typed access stays out
 of scope.
 
+**Amended by [ADR-0005](0005-integer-division-cse-destination-interface-property-type.md)** — interface property TYPE resolves through the analyzer's type lookup for plain named types, not the class-kinded stand-in.
+
 ## Question
 
 `IRBuilder.cs:1689-1697` builds `IRInterfaceProperty` and sets

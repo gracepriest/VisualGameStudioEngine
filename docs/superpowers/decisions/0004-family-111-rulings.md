@@ -1,5 +1,7 @@
 # ADR 0004: family #111 rulings — interface accessor batching, IsReplicable whitelist, temp namespace, and the AlgebraicSimplification gate
 
+**Amended by [ADR-0005](0005-integer-division-cse-destination-interface-property-type.md)** — Invariant S widened to the named destination (S').
+
 - **Date:** 2026-09-23
 - **Status:** Accepted
 - **Decided by:** architect role, dispatched on its pinned model (the `fable` alias in
@@ -128,6 +130,17 @@ The verifier fires and the fix would require pass reordering.
 
 ADR-0001 (fills the silent cases; adds Invariant S and the verifier obligation). CSE
 and `AlgebraicSimplificationPass` own S for what they create.
+
+## Implementation note (D3)
+
+D3 was implemented on master by `2d84743` ("Keep compiler temps from sharing a
+name with the user's t1, t2, ..."), merged into this branch in `8a42796`. It
+used a module-level reserved set, `IRTempNames.UserOwned`, consumed by
+`IRBuilder.SeparateTempsFromUserNames` and `CodeGeneratorBase.NextTempName`,
+rather than the ruling's `IRFunction.ReservedNames` / `IRVariable.IsTemp`
+flag. Measured: T1 and T2 are correct on all four backends. D3's contract
+(temps never share a user's name; existing output byte-identical when
+nothing collides) is met; its mechanism differs.
 
 ## D3: Temp namespace — C# uniquifier now, or IR rename now?
 
