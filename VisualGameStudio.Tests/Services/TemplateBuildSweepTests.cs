@@ -29,7 +29,8 @@ public class TemplateBuildSweepTests
         var repoRoot = Path.GetFullPath(Path.Combine(dir, "..", "..", "..", ".."));
         foreach (var config in new[] { "Release", "Debug" })
         {
-            var candidate = Path.Combine(repoRoot, "BasicLang", "bin", config, "net8.0", "BasicLang.exe");
+            var candidate = Path.Combine(repoRoot, "BasicLang", "bin", config, "net8.0",
+                VisualGameStudio.Tests.Compiler.CliTestHarness.AppHostName("BasicLang"));
             if (File.Exists(candidate))
                 return candidate;
         }
