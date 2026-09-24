@@ -178,6 +178,18 @@ public class LoopInvariantCodeMotionTests
             Assert.That(cfg.NaturalLoops, Has.Count.EqualTo(1));
             Assert.That(cfg.NaturalLoops[0].Select(b => b.Name),
                 Is.EquivalentTo(new[] { "for0.cond", "for0.body", "for0.inc" }));
+            // NOTE (test/docs pass, 2026-09-24): this assertion is now vacuous and kept only as
+            // a smoke check that IsReducible() still runs. After the back-edge orientation fix,
+            // IsReducible() can never return false: it walks exactly the edges FindBackEdges()
+            // just returned and re-checks tail.Dominators.Contains(head) — the identical
+            // predicate FindBackEdges() already required to admit each edge in the first place
+            // (see ControlFlowGraph.cs, both methods). So every edge it loops over already
+            // satisfies the condition it is testing, and the loop body's `return false` is
+            // unreachable from any input. This was not true before the fix: the old, inverted
+            // FindBackEdges() predicate and the old IsReducible() check were NOT the same
+            // condition, so IsReducible() could disagree with what FindBackEdges() had just
+            // produced. See ADR-0003's Amendment: D4 (delete IsReducible) was reversed and it was
+            // restored with this orientation fix specifically because this test calls it.
             Assert.That(cfg.IsReducible(), Is.True);
         });
     }

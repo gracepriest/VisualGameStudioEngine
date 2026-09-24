@@ -46,22 +46,19 @@ public class JavaScriptMethodLambdaTests
     /// The mirror: the same shape on the C# backend, which EMITTED the broken binding rather
     /// than refusing it. This is the leg that proves the fix is in the IR.
     ///
-    /// <para>Only the AddAll half: <c>For Each d In items.Select(…)</c> inside a class method
-    /// hits a separate, pre-existing C# backend defect (the Select result is emitted as a bare
-    /// statement and the foreach reads an unbound <c>t0</c> — CS0103), which is not what this
-    /// test is about.</para>
+    /// <para>⭐ PROMOTED: the FULL <see cref="Program"/> now runs on C#, not only the
+    /// <c>AddAll</c> half. <c>For Each d In items.Select(…)</c> inside a class method used to hit
+    /// a separate, pre-existing C# backend defect — the <c>Select</c> result is a temp, not a
+    /// declared local, and <c>Visit(IRForEach)</c> read it with <c>GetValueName</c>, which is only
+    /// valid for a value already materialised as a declared local, so the emitted <c>foreach</c>
+    /// read an unbound <c>t0</c> (CS0103). <c>Visit(IRForEach)</c> now calls <c>EmitExpression</c>
+    /// directly on <c>forEach.Collection</c> instead, which closes it, so this test now exercises
+    /// both halves and asserts the SAME <see cref="Expected"/> the JavaScript leg does.</para>
     /// </summary>
     [Test]
     public void LambdaInsideAMethod_TheMethodKeepsItsOwnBody_CSharp()
-        => Assert.That(CliTestHarness.CompileRunCSharp(
-                "Class Counter\nPublic Total As Integer\n" +
-                "Public Sub AddAll(items As List(Of Integer))\n" +
-                "items.ForEach(Sub(x As Integer) Total = Total + x)\nConsole.WriteLine(\"added\")\nEnd Sub\n" +
-                "End Class\n" +
-                "Sub Main()\nDim c As New Counter()\nDim xs As New List(Of Integer)()\n" +
-                "xs.Add(1)\nxs.Add(2)\nxs.Add(3)\n" +
-                "c.AddAll(xs)\nConsole.WriteLine(c.Total)\nEnd Sub").Replace("\r\n", "\n").Trim(),
-            Is.EqualTo("added\n6"));
+        => Assert.That(CliTestHarness.CompileRunCSharp(Program).Replace("\r\n", "\n").Trim(),
+            Is.EqualTo(Expected));
 
     [Test]
     public void LambdaInsideAConstructor_TheConstructorKeepsItsOwnBody()

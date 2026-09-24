@@ -5585,6 +5585,35 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 }
             }
 
+            // An interface property's type goes through the SAME resolver, and is recorded the
+            // SAME way, as a class property's (Visit(PropertyNode)) — so the IR builder reads it
+            // with GetNodeType on both paths and the two cannot disagree (ADR-0005 D3: a parallel
+            // resolver is forbidden). Nothing else of Visit(PropertyNode) applies: an interface
+            // property has no accessor bodies to analyse and declares no symbol here.
+            //
+            // ⛔ BEFORE THIS NOTHING RESOLVED THEM, and the IR builder invented a class-kinded
+            // type from the bare NAME — so `Integer` was a class, a typo'd type name compiled,
+            // and on C++ an interface accessor passed a class-kinded type by const& while the
+            // implementing class passed it by value.
+            foreach (var prop in node.Properties)
+            {
+                TypeInfo propertyType;
+                if (prop.PropertyType != null)
+                {
+                    propertyType = ResolveTypeReference(prop.PropertyType);
+                    if (propertyType == null)
+                    {
+                        Error($"Unknown property type '{prop.PropertyType.Name}'", prop.Line, prop.Column);
+                        propertyType = _typeManager.ObjectType;
+                    }
+                }
+                else
+                {
+                    propertyType = _typeManager.ObjectType;
+                }
+                SetNodeType(prop, propertyType);
+            }
+
             ExitScope();
         }
 
@@ -6095,9 +6124,18 @@ namespace BasicLang.Compiler.SemanticAnalysis
             else
             {
                 node.Value.Accept(this);
+                // Same two rules as a Dim initializer (see Visit(VariableDeclarationNode)), which
+                // this site used to skip: `Const X As Single = 2.5` and `Const D As Decimal = 2.5`
+                // were rejected ("Constant value type 'Double' is not compatible with declared type
+                // 'Single'") while `Dim x As Single = 2.5` compiled — so a Single constant needed
+                // an F suffix that no Dim did. Spec 6.1 makes the initializer a Decimal context,
+                // and a numeric literal may initialise any numeric type (VB constant conversion);
+                // CheckConstantFitsNumericTarget below still rejects a value that does not fit.
+                TryRetypeLiteralToDecimal(node.Value, constType);
                 var valueType = GetNodeType(node.Value);
 
-                if (!constType.IsAssignableFrom(valueType))
+                if (!constType.IsAssignableFrom(valueType)
+                    && !IsNumericLiteralAssignable(node.Value, constType, valueType))
                 {
                     Error($"Constant value type '{valueType}' is not compatible with declared type '{constType}'",
                           node.Line, node.Column);
@@ -8296,6 +8334,10 @@ namespace BasicLang.Compiler.SemanticAnalysis
                         // correctly Double, keeping the old rejection would turn that
                         // expression — which compiles today — into a hard error. This
                         // relaxation is REQUIRED BY the `/` change, not optional cleanup.
+                        //
+                        // This arm only TYPES the result; the rounding itself is inserted
+                        // once, in IRBuilder.ConvertIntegerDivisionOperand (ADR-0005 D1), so
+                        // no backend ever sees a floating operand of `\`.
                         resultType = _typeManager.LongType;
                     }
                     else

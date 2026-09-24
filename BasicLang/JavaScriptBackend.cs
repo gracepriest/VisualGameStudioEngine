@@ -263,16 +263,50 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                     foreach (var instruction in block.Instructions ?? Enumerable.Empty<IRInstruction>())
                         switch (instruction)
                         {
-                            case IRCall call when string.Equals(
-                                call.FunctionName, "CInt", StringComparison.OrdinalIgnoreCase):
+                            case IRCall call when IsCIntCall(call):
                                 return true;
-                            case IRCast cast when cast.SourceType?.IsFloatingPoint() == true
-                                && cast.Type?.IsIntegral() == true:
+                            case IRCast cast when IsRoundingCast(cast):
+                                return true;
+                            case IRSwitch sw when sw.PatternCases?.Any(GuardUsesRoundingHelper) == true:
                                 return true;
                         }
 
             return false;
         }
+
+        private static bool IsCIntCall(IRCall call) =>
+            string.Equals(call.FunctionName, "CInt", StringComparison.OrdinalIgnoreCase);
+
+        private static bool IsRoundingCast(IRCast cast) =>
+            cast.SourceType?.IsFloatingPoint() == true && cast.Type?.IsIntegral() == true;
+
+        /// <summary>
+        /// A <c>When</c> guard is built with emission SUPPRESSED, so its nodes are in no block and
+        /// the block walk above cannot see a rounding cast inside one — yet
+        /// <see cref="ExprInline"/> renders that cast as a call to the helper. Missed, the build
+        /// succeeded and Node died with "__blCInt is not defined". Reachable since IRBuilder
+        /// converts a floating operand of <c>\</c> (ADR-0005 D1): <c>When y \ 2 = 4</c>.
+        /// </summary>
+        private static bool GuardUsesRoundingHelper(IRPatternCase pattern) =>
+            pattern != null
+            && (TreeUsesRoundingHelper(pattern.WhenGuard)
+                || pattern switch
+                {
+                    IROrPatternCase or => or.Alternatives?.Any(GuardUsesRoundingHelper) == true,
+                    IRTuplePatternCase tuple => tuple.Elements?.Any(GuardUsesRoundingHelper) == true,
+                    _ => false,
+                });
+
+        /// <summary>The node kinds <see cref="ExprInline"/> rebuilds in place, walked for a rounding cast.</summary>
+        private static bool TreeUsesRoundingHelper(IRValue value) => value switch
+        {
+            IRCast cast => IsRoundingCast(cast) || TreeUsesRoundingHelper(cast.Value),
+            IRCall call => IsCIntCall(call) || call.Arguments.Any(TreeUsesRoundingHelper),
+            IRBinaryOp binary => TreeUsesRoundingHelper(binary.Left) || TreeUsesRoundingHelper(binary.Right),
+            IRCompare compare => TreeUsesRoundingHelper(compare.Left) || TreeUsesRoundingHelper(compare.Right),
+            IRUnaryOp unary => TreeUsesRoundingHelper(unary.Operand),
+            _ => false,
+        };
 
         /// <summary>The emitted name of the half-to-even rounding helper CInt lowers to.</summary>
         private const string CIntHelperName = "__blCInt";
@@ -1044,8 +1078,15 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 // BasicLang `\`. JS has NO integer-division operator — `/` is always floating
                 // point — and .NET truncates TOWARD ZERO. Math.floor is the tempting wrong
                 // answer: it agrees for positives and gives -4 where .NET gives -3.
+                //
+                // ⚠ Both operands are INTEGRAL here: IRBuilder converts a floating operand to
+                // Long, half to even, before the divide (ADR-0005 D1). Before that, this trunc
+                // was applied to the float QUOTIENT and 7.5 \ 2 printed 3, not VB's 4. It is not
+                // dead now — it is the integer division itself: without it 7 \ 2 is 3.5.
+                //
                 // An Integer-family `\` goes through the checked helper, which throws
-                // DivideByZeroException on a zero divisor (EmitCheckedDivisionPrelude).
+                // DivideByZeroException on a zero divisor and OverflowException for the minimum
+                // over -1 (EmitCheckedDivisionPrelude).
                 case BinaryOpKind.IntDiv:
                     return IsCheckedDivision(op) ? $"{IntDivHelperName}({l}, {r})" : $"Math.trunc({l} / {r})";
 
@@ -2623,14 +2664,23 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// that decision has since been made: the whole narrowing surface rounds, so
         /// <c>7 / 2</c> into an Integer is <b>4</b> on all four backends, not 3. VB rounds it.</para>
         ///
+        /// <para>⚠ A floating→<c>Long</c> cast DOES reach this backend, although no declared
+        /// position may be Long: IRBuilder inserts one on each floating operand of <c>\</c>
+        /// (ADR-0005 D1). It takes the floating arm above like any other narrowing — the helper
+        /// rounds without an int32 wrap, and the value never leaves an expression.</para>
+        ///
         /// <para>⛔ Integral→integral is NOT handled, and a <c>| 0</c> arm for it was written here
         /// and then removed as unreachable speculation. Measured: <c>Long</c> never reaches this
-        /// backend at all (<c>JsCapabilityChecker</c> rejects it with BL7003 — a JS number is
-        /// exact only to 2^53), and <c>Function … As Short</c> returning an Integer produces NO
+        /// backend in a DECLARED position (<c>JsCapabilityChecker</c> rejects it with BL7003 — a
+        /// JS number is exact only to 2^53), and <c>Function … As Short</c> returning an Integer produces NO
         /// cast, because the analyzer already types the expression <c>Short</c>. With no shape
         /// that reaches it, the arm could not be tested, so it keeps throwing — this file's
         /// <c>NotYet()</c> exists to refuse exactly that trade. (A Short return not being wrapped
-        /// to 16 bits is a real defect, but it is the analyzer's, and it is not this seam's.)</para>
+        /// to 16 bits is a real defect, but it is the analyzer's, and it is not this seam's.)
+        /// ⚠ That premise has one known exception, measured 2026-09-24 and refused identically
+        /// before and after ADR-0005 D1: the analyzer types <c>x \ y</c> with a floating operand
+        /// Long, so <c>Dim i As Integer = 7.5 \ 2</c> (or returning it As Integer) narrows
+        /// Long→Integer here and is refused. Deciding that arm is its own change.</para>
         /// </summary>
         private bool TryNumericCast(IRCast cast, out string rendered)
         {

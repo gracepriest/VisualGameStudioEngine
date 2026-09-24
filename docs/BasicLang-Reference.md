@@ -83,6 +83,19 @@ Dim f = 10 Mod 3  ' Modulo:         1
 Dim g = 2 ^ 3     ' Power:          8
 ```
 
+`\` is integer division and follows VB.NET on every backend: the quotient truncates
+toward zero (`-7 \ 2` is `-3`, not `-4`), and a `Single` or `Double` operand is first
+converted to `Long` with round-half-to-even — exactly `CLng` — so the result is a `Long`:
+
+```vb
+Console.WriteLine(7.5 \ 2)   ' 4   (7.5 -> 8, then 8 \ 2)
+Console.WriteLine(7 \ 2.5)   ' 3   (2.5 -> 2, then 7 \ 2)
+Console.WriteLine(8.5 \ 2)   ' 4   (8.5 -> 8: halves round to even)
+Console.WriteLine(-7.5 \ 2)  ' -4  (-7.5 -> -8)
+```
+
+Because the conversion happens first, `7 \ 0.4` divides by zero exactly as `7 \ 0` does.
+
 ### Comparison
 
 ```vb

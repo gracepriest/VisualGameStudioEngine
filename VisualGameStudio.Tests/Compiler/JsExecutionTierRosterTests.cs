@@ -74,9 +74,68 @@ public class JsExecutionTierRosterTests
         typeof(BooleanOperatorExecutionTests),
         typeof(MemberCasingExecutionTests),
 
+        // The CSE invalidation / key-encoding fixtures. Their JavaScript leg is
+        // JavaScriptOptimizedExecutionTests.RunOptimized — the STANDARD-pipeline runner, which is
+        // the right one for CSE (a standard pass) and which spawns Node like any other row here.
+        // ⚠ They are four-backend fixtures, so Node is one leg of four rather than the whole test;
+        // they still belong in this roster, because if the tier stops running they stop proving
+        // the JavaScript half of what they claim.
+        typeof(CseInvalidationExecutionTests),
+        typeof(CseKeyInjectivityExecutionTests),
+
         // Cross-backend (C#/C++/JS); its JS leg runs under Node via
         // JavaScriptOptimizedExecutionTests.RunOptimized.
         typeof(NegativeCaseLabelExecutionTests),
+
+        // ADR-0005 D2 — CSE guards a shared value's own destination, not only its operands.
+        // CseDestinationInvalidationExecutionTests / DestinationInvalidation_D4_ByRefExecutionTests
+        // are four-backend fixtures (FourBackends.RunsOnEveryBackend[Aggressive]); their JS legs
+        // run under JavaScriptExecutionTests.RunJs / FourBackends.RunAggressiveJs like any other
+        // row here. CseDestinationKnownGapsTask133Tests (task #133's known-wrong pins) is NOT
+        // caught by the widened name match below — it neither starts with "JavaScript"/"Js" nor
+        // ends with "ExecutionTests" — but its A1/A6 pins DO spawn Node
+        // (FourBackends.RunAggressiveJs), so it belongs here for the same reason
+        // BooleanOperatorExecutionTests/MemberCasingExecutionTests do (see their own note above).
+        typeof(CseDestinationInvalidationExecutionTests),
+        typeof(DestinationInvalidation_D4_ByRefExecutionTests),
+        typeof(CseDestinationKnownGapsTask133Tests),
+
+        // LICM's shared kill vocabulary (IROptimizer.cs, LoopInvariantCodeMotionPass; see
+        // docs/superpowers/decisions/0003-cfg-loop-representation.md's Amendment section).
+        // LicmKillVocabularyControlExecutionTests and LicmKillVocabularyExecutionTests both end
+        // in "ExecutionTests" and would be caught by the widened name match below on their own;
+        // listed explicitly anyway for the same reason every row above is. Their JS legs spawn
+        // Node via FourBackends.RunsOnEveryBackendAggressive / RunAggressiveJs / the CLI
+        // --optimize entry point's JavaScriptCodeGenerator + JavaScriptExecutionTests.RunNodeScript.
+        typeof(LicmKillVocabularyControlExecutionTests),
+        typeof(LicmKillVocabularyExecutionTests),
+        // LicmKillVocabularyKnownGapsTask122Tests is NOT caught by the widened name match below —
+        // it neither starts with "JavaScript"/"Js" nor ends with "ExecutionTests" — same reason
+        // CseDestinationKnownGapsTask133Tests needed a manual entry above. Its JavaScript pin
+        // (task #122) DOES spawn Node (FourBackends.RunAggressiveJs), so it belongs here.
+        typeof(LicmKillVocabularyKnownGapsTask122Tests),
+
+        // ADR-0005 D1 — `\` with a floating operand. Named "...ExecutionTests", so the widened
+        // match below WOULD catch it on its own; listed explicitly anyway, matching every row
+        // above. Its JS legs run through FourBackends.RunsOnEveryBackend[Aggressive] (contract
+        // values, the When-guard SC6/SC7 value pins) and JavaScriptExecutionTests.RunJs directly
+        // (the Z0/Z1/Z2 divide-by-zero pins) — all spawn Node.
+        // FloatingIntegerDivisionStructuralTests is NOT here: it is pure front-end/codegen-text,
+        // spawns nothing, and carries no [Category("Integration")] on purpose.
+        typeof(FloatingIntegerDivisionExecutionTests),
+
+        // ADR-0006 D3 — the one call-visibility rule (OptimizationPass.IsCallVisible). Named
+        // "...ExecutionTests", so the widened match below WOULD catch both on its own; listed
+        // explicitly anyway, matching every row above. CallVisibilityQ3ExecutionTests' JS legs run
+        // through FourBackends.RunsOnEveryBackend[Aggressive] (Q3/Q3m); CallVisibilityQ3n
+        // ExecutionTests' C#/C++/MSIL row spawns no Node, but its known-gap pin
+        // (Q3n_JavaScript_KnownGap_ReferenceErrorOnMeK) does, via a local Node runner — it belongs
+        // here for the same reason CseDestinationKnownGapsTask133Tests and
+        // LicmKillVocabularyKnownGapsTask122Tests do (see their own notes above).
+        // CallVisibilityHandBuiltIRTests and CallVisibilityDecisionTests are NOT here: pure
+        // in-process IR/front-end fixtures, spawn nothing, carry no [Category("Integration")].
+        typeof(CallVisibilityQ3ExecutionTests),
+        typeof(CallVisibilityQ3nExecutionTests),
     };
 
     /// <summary>
@@ -124,7 +183,7 @@ public class JsExecutionTierRosterTests
 
     [Test]
     public void RosterIsPinned()
-        => Assert.That(ExecutionTier, Has.Length.EqualTo(32),
+        => Assert.That(ExecutionTier, Has.Length.EqualTo(43),
             "The execution-tier roster changed. That is fine — update the number — but it must " +
             "be a deliberate edit, not a silent shrink.");
 

@@ -87,7 +87,15 @@ that calls into a DLL that never loaded throws again and turns a skip into a fai
 
 ## Where things stand
 
-Most recent work — a **JavaScript project type in the IDE**. The compiler could already emit a
+⭐ **Newest (2026-09-22, branch `claude/jolly-pasteur-l4mpzs`, NOT yet on master): ADR-0003 —
+the CFG loop representation.** `ControlFlowGraph.FindBackEdges` had its dominance test inverted;
+the repair ships with all three loop passes unregistered from `AddAggressivePasses()`. **#114 is
+closed** (C++ and MSIL no longer run counted loops zero times under `--optimize`). ⛔ The fix is
+invisible to every backend value assertion — read the section **"2026-09-22 — ADR-0003"** under
+*Open work* before touching `ControlFlowGraph.cs` or the pass registration; the decision itself is
+`docs/superpowers/decisions/0003-cfg-loop-representation.md`.
+
+Before that — a **JavaScript project type in the IDE**. The compiler could already emit a
 web site, the build service could build one, and F5 could preview one, but the New Project
 wizard had no way to *create* one. Shipped:
 
@@ -122,6 +130,31 @@ These are measured, not cautionary. Each one shipped a green build that did the 
 - ⛔ **Every shipping route runs the IR optimizer; the unit-test helper does not.** A fixture
   can be green while the CLI and the IDE both miscompile. Validate codegen through the CLI or
   an optimizer-running helper. **stdout is the only valid oracle.**
+- ⛔⛔ **"Optimized" in a helper name means `AddStandardPasses`, NOT the aggressive pipeline.**
+  `JsTestSupport.CompileOptimized`, `JavaScriptOptimizedExecutionTests.RunOptimized`,
+  `BclE2E.CompileToCppOptimized`, `MsilHarness.CompileToIl` and
+  `ReturnCoercionTests.EmitCSharpForTest` are all standard-only and cannot see an aggressive-only
+  pass at all. For aggressive work use `FourBackends.RunsOnEveryBackendAggressive` and its legs
+  (`JsTestSupport.CompileAggressive`, `BclE2E.CompileToCppAggressive`,
+  `MsilHarness.RunAggressiveExpectingSuccess`, `ReturnCoercionTests.EmitCSharpAggressiveForTest`),
+  all of which go through the one shared definition, `AggressivePipeline.Apply`. The aggressive
+  pipeline **ships**: a Release `.blproj` build and `--optimize` both take it. ✅ Since ADR-0003
+  those legs are safe for LOOPS on all four backends (they were not — see #114 below).
+  ⛔ **EXCEPT A C++ `.blproj` — it runs the STANDARD pipeline whatever its `<Optimize>` says**
+  (measured 2026-09-24). `CppProjectBuilder.cs:532-536` builds its `CompilerOptions` without
+  `OptimizeAggressive`, so `Compiler.cs:458-461` takes `AddStandardPasses()`; the project's
+  `<Optimize>` reaches only the native compiler flag. C#, JavaScript and MSIL projects go through
+  `Program.cs:502`, which honours it. So **a C++ `.blproj` test leg cannot see an aggressive-only
+  defect** — the LICM miscompile fixed on 2026-09-24 printed 6 under CLI `--optimize` and 12 from
+  the same program's C++ `.blproj`. Use `BclE2E.CompileToCppAggressive` or the CLI for such work.
+  Whether a C++ Release build SHOULD take the aggressive pipeline is an open decision, not a bug to
+  fix silently: changing it changes shipped C++ output.
+- ⛔⛔ **A PROPERTY WITH NO CONSUMER CANNOT BE TESTED FROM A BACKEND.** `ControlFlowGraph.NaturalLoops`
+  is read by nothing in the shipping compiler since ADR-0003 unregistered all three loop passes, so
+  reverting the back-edge fix changes ZERO of 104 end-to-end cells. The same shape recurs whenever a
+  decision disables every consumer of the thing it repairs: **assert directly on the analysis, and
+  assert the PASS LIST, not the emitted output.** `CfgNaturalLoopTests` and
+  `LoopPassesDisabledTests` are the worked examples.
 - ⛔ **`IDE/` is a hand-committed xcopy drop and goes stale.** A stale drop has been mistaken
   for a code bug more than once. Deploy with `robocopy <Shell bin> IDE /E` — **never `/MIR`**,
   since the engine DLL and import lib live only there. **`IDE/lib/js/dom-core.bli` is
@@ -166,6 +199,33 @@ These are measured, not cautionary. Each one shipped a green build that did the 
   (it corrupts the BOM-less UTF-8 files here). Write commit messages to a file and use
   `git commit -F`. PowerShell 5.1 reports a native command's stderr as failure, so **verify a
   push by comparing SHAs, never by exit code**.
+- ⛔ **`MsilHarness.Run` is a `GenerateFailed` oracle for CODEGEN refusals ONLY** — a
+  `ForeignFeatureException` out of `MSILCodeGenerator`. It is **not** one for a parse or
+  semantic error. `MsilHarness.CompileToIl` asserts `Assert.That(analyzer.Analyze(ast),
+  Is.True)` internally, and NUnit 4 records that assertion failure against the CURRENT test
+  even when the calling code catches the exception — so a fixture that expects a front-end
+  rejection fails while appearing to assert the opposite. Assert front-end rejections against
+  `Parser.Errors` / `SemanticAnalyzer.Errors` directly. (Found by test-writer, 2026-09-21,
+  writing the String-property refusal cases.)
+- ⚠ **A mutation sweep restores the SOURCE but does not rebuild.** `sweep.sh` ends with
+  `mut.py restore`, which rewrites the `.cs` file; the last binary on disk is still the LAST
+  MUTANT'S. A `dotnet run --no-build` straight afterwards runs that mutant — measured
+  2026-09-21, it produced a phantom `InvalidProgramException` from a clean tree and cost real
+  time. **Always `dotnet build` after a sweep, before any `--no-build` run.**
+- ⛔ **`dotnet test --no-incremental` runs NOTHING** — `dotnet test` rejects the switch
+  (MSB1001) and the "run" is an argument error that is easy to misread as a finished suite.
+  Build first (`dotnet build … --no-incremental`), then `dotnet test … --no-build`.
+- ⛔ **A bare `git reset` during a merge throws the merge away.** It clears `MERGE_HEAD` along
+  with the index, so the next commit is a one-parent commit that silently drops the other side's
+  ancestry. (Measured 2026-09-24, after a `git add -N .` meant only to make untracked files show in
+  a diff.) Recover with `git rev-parse <other side> > .git/MERGE_HEAD` and re-stage, then
+  prove the tree byte-identical to the pre-reset snapshot before committing.
+- ⛔ **Never `git checkout -- <file>` a production file to revert a mutant** while the tree
+  carries uncommitted work: it restores HEAD, not your work. Snapshot (md5 + a patch) first and
+  revert the mutation with a precise edit.
+- ⚠ **`ModificationCount` read after `OptimizationPipeline.Run` is always 0** — the fixed point
+  ends on a round that changed nothing. To pin what a pass did, run the pass bare
+  (`new XPass().Run(module)`) and read it then.
 
 ---
 
@@ -271,9 +331,524 @@ package in when that cross-check matters.
 `[Category("Integration")]`. Four fixes once gated green on it, then the first full run found
 17 failures and two real regressions already pushed.
 
+⭐ **ADR-0003 full-suite gate (2026-09-22, Linux container, branch `claude/jolly-pasteur-l4mpzs`,
+fixtures in place).**
+
+| Run | Result |
+|---|---|
+| Full suite, ADR-0003 implementation only | **195 failed / 6569 passed / 203 skipped of 6967**, no abort marker |
+| Full suite, + this change's fixtures | **195 failed / 6639 passed / 203 skipped of 7037**, no abort marker, 13m59s |
+
+The delta is **+70 total, +70 passed, +0 failed** — exactly the 70 new tests. Failing names
+compared **BY NAME**: 170 distinct methods, **IDENTICAL SET** to the pre-change baseline; zero
+newly failing, zero silently fixed. Anchored `^  Failed ` line count (195) equals the
+summary-reported total (195), so the log is not truncated. ⚠ 13m59s on this container; the
+Windows figure in the table above is much larger — do not use this number to gate a Windows run.
+
+Run these three fixtures whenever `ControlFlowGraph.cs` or `IROptimizer.cs`'s pass registration
+changes — they are the only thing in the suite that can see either:
+
+```
+dotnet test VisualGameStudio.Tests/VisualGameStudio.Tests.csproj -c Release --no-build \
+  --filter "FullyQualifiedName~CfgNaturalLoopTests|FullyQualifiedName~LoopPassesDisabledTests|FullyQualifiedName~CfgLoopShapesAggressiveTests"
+```
+
+**70 tests, ~34 s** (the 13 four-backend `CfgLoopShapesAggressiveTests` rows are the whole of the
+time and are `[Category("Integration")]`; the other 57 are in the fast subset). Add the two
+promoted fixtures — `InductionVariableDisabledTests` and `CseAndPeepholeDanglingOperandTests`,
+another 38 tests, ~53 s — before claiming the loop work is gated.
+
+⭐ **CSE invalidation + key-encoding gate (2026-09-22, Linux container, branch
+`claude/jolly-pasteur-l4mpzs`).**
+
+| Run | Result |
+|---|---|
+| Full suite, CSE fix + its fixtures | **195 failed / 6670 passed / 203 skipped of 7068**, no abort marker, 14m21s |
+
+The delta against the ADR-0003 + CSE-fix baseline (195 / 6639 / 203 / 7037) is **+31 total,
++31 passed, +0 failed** — exactly the 31 new tests. Failing names compared **BY NAME**: 170
+distinct methods, **IDENTICAL SET** to the baseline; zero newly failing, zero silently fixed.
+Anchored `^  Failed ` count (195) equals the summary-reported total (195), so the log is not
+truncated and the name list IS the failure set.
+
+⛔ **The first run of this gate found one real new failure** —
+`JsExecutionTierRosterTests.RosterCoversEveryJavaScriptIntegrationFixture` — because a
+four-backend fixture's JavaScript leg spawns Node and both fixtures had to be added to that
+roster. See the entry on it below. The numbers above are the run AFTER that fix.
+
+Run this fixture whenever `CommonSubexpressionEliminationPass`, `OptimizationPass.CollectNames` or
+`ExpressionKey` changes — it is the only thing in the suite that can see either defect:
+
+```
+dotnet test VisualGameStudio.Tests/VisualGameStudio.Tests.csproj -c Release --no-build \
+  --filter "FullyQualifiedName~CseInvalidation|FullyQualifiedName~CseKey|FullyQualifiedName~CseSampleCorpus"
+```
+
+**31 tests, ~40 s.** Nine are `[Category("Integration")]` (the four-backend execution rows); the
+other 22 are structural or unit and run in the fast subset.
+
+⭐ **MEASURED over a 12-mutant sweep: all 12 are killed from the FAST SUBSET ALONE** — the
+structural `Decision_*` battery plus the two unit fixtures cover every one, and four mutants
+(M7 default arm, M9 result type, M10 operation, M12 case-folding) are killable ONLY there, because
+no reachable program distinguishes them by value. ⛔ **That is not a reason to gate on the fast
+subset.** The structural rows pin what the pass DECIDES; only the nine Integration rows prove the
+programs it emits are right, and a merge decision can be correct while the lowering is not. Run
+both.
+
+⛔ **Add `CseAndPeepholeDanglingOperandTests` to any run of the above** — it carries the
+`CollectNames` shared-walker pin (`NeitherPassCarriesItsOwnOperandWalkerOrTempNameTest`), and
+without it a repair that gives CSE a private operand-name walker passes everything else.
+
 ---
 
 ## Open work
+
+### ⭐ 2026-09-21 — defects measured on all four backends during the C# `CS0103` characterization
+
+Measured at `a36262c` via an out-of-process four-backend emit/compile/run loop (60 shapes, one per
+compile). **Not fixed. Each is a real shape with a real number, not a guess.**
+
+- ⛔ **NEW, JavaScript, SILENT WRONG ANSWER.** A `For Each` variable whose name collides with a
+  **class field** of the same name: JS emits `for (const n of l) { s = s + this.n; }` — the body
+  reads the FIELD, not the loop variable. **JS prints 0 where C#, C++ and MSIL all print 7.** C# is
+  correct here. Nobody had listed this; it was found by characterizing outward from a C# defect.
+- ⛔ **NEW, C#: an iterator's return type is emitted doubled** — `IEnumerable<IEnumerable<int>>` →
+  `CS0029`/`CS0266`. Distinct from the temp family, and it will block a clean promotion of the
+  `Yield` shape below.
+- **C#, a third `GetValueName`-on-a-use site nobody had listed:** `IRYield.Value`
+  (`CSharpBackend.cs:3889`) emits `yield return t0;` → `CS0103`. Same mechanism as
+  `IRForEach.Collection` (`:4097`) and `IRIndexerStore` (`:3859/:3861/:3862`). Governed by ADR-0001.
+- **Broken on ALL FOUR backends (front-end level, do NOT sweep into a backend family):**
+  `b.Items(0) = 5` — an indexer store through a field receiver is parsed as a method call. C#
+  `CS0103` + `CS1955`; C++ `does not provide a call operator`; JS `TypeError: b.Items is not a
+  function`; MSIL `MissingMethodException`.
+- **NOT C#-only, contrary to a note we shipped:** a computed `MyBase.New` argument
+  (`MyBase.New(New Tag())`, `MyBase.New(x + 1)`) fails on C# **and C++** identically
+  (`use of undeclared identifier 't0'`); JS and MSIL refuse it by design. `MsilClassTypeTests.cs:218`
+  blamed this on the C# backend alone — corrected in place.
+- **C++ cannot compile ANY property with an explicit `Get`/`Set` accessor** (`no member named …`),
+  including one with no locals at all. Auto-properties work. This caps the property-accessor
+  fixtures at THREE backends, not four.
+
+### ⭐ 2026-09-22 — found while fixing the optimizer's dangling-operand defects
+
+- ⛔ **`FourBackends.RunsOnEveryBackend` has a HOLE for optimizer work: its JavaScript leg is
+  `JsTestSupport.Compile`, the NON-OPTIMIZING path.** For any defect that lives in an
+  `IROptimizer` pass, that leg is green no matter what the optimizer does. This is a general hole
+  in a shared harness, not specific to one family — any past "all four backends agree" claim about
+  optimizer behaviour was only ever three.
+  ⛔ **CORRECTED 2026-09-22 (second optimizer task):** the remedy first written here — "use
+  `JavaScriptOptimizedExecutionTests.RunOptimized` instead" — is only half right.
+  `RunOptimized` is `JsTestSupport.CompileOptimized`, which is `AddStandardPasses`
+  (`JsTestSupport.cs:119-129`). It closes the "no optimizer at all" hole and **would have been
+  green for the entire `InductionVariablePass` defect**, which is aggressive-only. Use it for
+  standard-pass work; for aggressive-pass work use `FourBackends.RunsOnEveryBackendAggressive`.
+- ⛔ **`CSharpBackend.GetOperands` is NOT total in SEVEN node kinds**, pinned by equality in
+  `OperandWalkerTotalityTests`: `IRArrayStore` (Array/Index/Value), `IRFieldStore` (Object/Value),
+  `IRForEach.Collection`, `IRSwitch.Cases[].Value`, `IRThrow.Exception`, `IRYield.Value`, `IRPhi`,
+  plus `IRVariable.DefaultValue`/`.InitialValue`. Only `IRForEach.Collection` was previously
+  written down (ADR-0001's brief). **Each is a silently-zero use count — an ADR-0001 E1 hazard.**
+  The test pins the gap SET, so closing one member fails the test and forces the list to shrink.
+- `OptimizationPass.ReplaceUsesIn` is total except three slots, all named in that test:
+  `IRAssignment.Target` (a definition, deliberately excluded) and
+  `IRVariable.DefaultValue`/`.InitialValue` (declaration data on a leaf, covered by NEITHER walker).
+- ⛔ **`InductionVariablePass` leaves a dangling operand too** — the same omission as CSE and
+  Peephole, a third pass, aggressive-only. Pinned as a KNOWN-DEFECT test so contract item 1's scope
+  (`AddStandardPasses`, not the aggressive pipeline) is visible in the suite.
+  ⭐ **RESOLVED 2026-09-22 by REMOVAL** — see the next section. The pin was flipped to the positive
+  form and the battery widened to `AddAggressivePasses()`.
+- ⚠ A peephole mutant that drops the `RemoveAt` does not produce a wrong answer — it makes the
+  **compiler hang** (the `do/while(changed)` fixed point never terminates, 100% CPU to timeout).
+  A mutation sweep over optimizer passes needs a timeout classification, not just pass/fail.
+
+### ⭐ 2026-09-22 — the aggressive pipeline, and `InductionVariablePass` removed
+
+**Gate added.** `FourBackends.RunsOnEveryBackendAggressive` — the suite's FIRST shared aggressive
+execution harness. One definition of "aggressive", `AggressivePipeline.Apply`, behind four legs:
+`BclE2E.CompileToCppAggressive`, `JsTestSupport.CompileAggressive`,
+`MsilHarness.RunAggressiveExpectingSuccess`, `ReturnCoercionTests.EmitCSharpAggressiveForTest`.
+
+- ⛔ **Why it did not exist before, measured.** NOT ONE leg of `FourBackends.RunsOnEveryBackend` is
+  aggressive. The only aggressive execution anywhere in the suite was two PRIVATE duplicates,
+  `FunctionInliningDisabledTests.RunAggressive` and `AlgebraicSimplificationTests.RunAggressive`,
+  and **both are JavaScript-only** — so C#, C++ and MSIL had ZERO aggressive coverage.
+  `FunctionInliningPass` and `InductionVariablePass` — the two aggressive-only members of the three
+  passes `OptimizationPipeline` now keeps but does not ship — both shipped broken behind that hole.
+  (The third, `ConstantPropagationPass`, was a STANDARD pass.)
+- ✅ **#114 — CLOSED 2026-09-22 by ADR-0003. Read the next section before acting on the two
+  bullets below; they describe the state BEFORE that change and are kept only because the
+  mechanism is worth knowing.** A four-backend aggressive loop assertion now goes green: measured
+  104/104 cells across 13 shapes × 4 backends × both pipelines.
+- ~~⛔⛔ **#114: C++ AND MSIL RUN *ANY* COUNTED `For` LOOP ZERO TIMES UNDER `--optimize`.**~~
+  `LoopInvariantCodeMotionPass` sank the loop condition's definition out of the condition block
+  into the loop's own LATCH, because `ControlFlowGraph.IdentifyLoops` handed it a "preheader" that
+  WAS the latch. Both goto-emitting backends then read the flag before anything wrote it. Measured on
+  `For i = 0 To n : Show(i) : Next` — the counter passed through untouched, so no arithmetic pass
+  has anything to act on — where the emitted C++ was literally
+  `bool t1 = {}; … for0_cond: if (t1) …` with `t1 = i <= n` moved down into `for0_inc`; both printed
+  only the line after the loop. C# and JavaScript rebuild the condition from the CFG and were fine.
+- ~~⛔ **#114 breaks JAVASCRIPT too, on a NESTED `For`**~~: `ReferenceError: t4 is not defined`. LICM
+  sank the OUTER increment `t4 = i + 1` into the INNER loop's latch, where the emitter declares it
+  `const` inside the inner block, so the outer `i = t4` read an out-of-scope name. Newly visible
+  once the `_div_` failure stopped masking it; gone with LICM.
+- ⭐ **Two shapes beyond what the #114 brief had measured were ALSO zero-iteration on C++ and MSIL
+  at baseline: `While` (`A04_while`) and `Do While` (`A05_do`).** The original characterization
+  listed the counted-`For` family; a full 13-shape sweep found the two pre-test loop forms failing
+  the same way, for the same reason. Both are correct now and both are in the committed corpus.
+- ⚠ The archived `out/opt/S5` verdict from the implementer's characterization disagrees with a
+  fresh run (it shows C++/MSIL printing four lines). A fresh isolated run of both pipelines shows
+  the def output there; treat that one file as clobbered, not as evidence.
+
+**`InductionVariablePass` is commented out of `AddAggressivePasses()`** (`IROptimizer.cs:1715`),
+the third pass that method keeps but does not ship. `InductionVariableDisabledTests` is the record.
+
+- ⭐ **THE STRUCTURAL FACT.** `grep -n "LocalVariables" BasicLang/IROptimizer.cs` finds only
+  COMMENTS. **The optimizer has no facility at all for declaring a variable it mints**, so the
+  usable form of "no pass may reference a variable it has not declared" is the stronger
+  *a pass must not mint a fresh variable name at all*. Both invariants are now in the suite
+  (`OptimizerMintedVariableTests`) and both are backend-free.
+- ⛔ **The undeclared-name invariant is STRICTLY STRONGER than the dangling-operand one.** Measured:
+  `x = i * 3` onto a NAMED local gives **zero** orphaned operands and an undeclared `_div_x`. A
+  fixture built only on contract item 1 is blind to that whole shape.
+- ⛔ **Neither IR invariant can see the collision shape.** A program that already has
+  `Dim _div_x As Integer = 99` compiled CLEANLY and printed 198,204,210,216 for 99,102,105,108 on
+  C# and JS — zero orphans, zero undeclared names, zero minted names, because the name the pass
+  minted is one the USER declared. **Only a value assertion catches it.**
+- ⛔ **A loop that starts at ZERO cannot distinguish "fixed" from "declared but never
+  initialised".** `For i = 1 To 3 : Show(i * 3)` is the discriminator — measured 0,3,6 for 3,6,9,
+  silently, on C# and JS. Any induction-variable fixture needs a non-zero start.
+- ⛔ **`i * 2` tests nothing through the aggressive pipeline.** `AlgebraicSimplificationPass`
+  (pass 9) rewrites `2 * x` → `x + x` before `InductionVariablePass` (pass 12) sees it, so a `* 2`
+  shape was GREEN even with the pass enabled. Use `* 3`. Likewise a `While` loop: the pass bails
+  unless some block is named `.inc`, which only a counted `For` produces.
+- ⛔ **`OptimizerIr.Removed` is ZERO for a counted `For` with a multiply in it, in BOTH
+  pipelines.** Measured: 1 for each of the twelve standard-pass battery shapes under standard AND
+  aggressive; 0 for all five induction-variable loop shapes under standard AND aggressive. So a
+  "something was removed" non-vacuity assertion fails on exactly the cases an aggressive battery
+  exists for; do not carry it over. ⚠ The ZERO still holds; its stated REASON no longer does. It
+  used to be "the only aggressive pass that acts on them is LICM, which MOVES instructions rather
+  than removing any". Since ADR-0003 all three loop passes are unregistered, so **no**
+  aggressive-only pass acts on those shapes at all.
+- ⛔ **Adding the missing initialisation to the ENTRY block makes the OPTIMIZER run out of
+  memory** — on every shape measured, `--optimize` and the in-process helpers alike. The seed
+  multiply lands inside one of `IdentifyLoops`' four bogus "natural loops" (every one contains
+  `entry`), and the pass re-fires on its own output without bound. A CFG defect, surfacing as a
+  compiler crash.
+- ⚠ **`LoopUnrollingPass` COULD NOT FIRE AT ALL** (task #117) — and ADR-0003 is exactly the change
+  that would have turned it on. Before it: `ModificationCount` was 0 on every shape probed,
+  **including a loop with no call in it and a constant trip count of 10**, which passes every gate
+  `CanUnroll` names. The blocker was one level down and was the SAME CFG defect as #114:
+  `FindInitialValue` looks for a block in the loop whose predecessor is OUTSIDE the loop — a real
+  preheader — and since every "natural loop" `IdentifyLoops` reported contained `entry`, that never
+  resolved to a block assigning the counter a constant, so `GetConstantTripCount` always returned
+  null. The `IRCall` refusal is a second, shallower gate, not the reason. ⛔ **With the back-edge
+  predicate repaired it FIRES, and it is broken when it fires** — which is why ADR-0003 unregisters
+  it rather than leaving it alone. Measured on a counted call-free loop over literal bounds, one
+  direct `Run`: 8 undeclared minted names (`_u0_acc`, `_u0_i`, …) and a dangling operand; under a
+  pipeline that re-runs it over its own output the prefixes compound to `_u0__u0_i` and all four
+  backends reject the result. Pinned in `LoopPassesDisabledTests`.
+- ⛔⛔ **A CRASHED TEST HOST STILL PRINTS `Passed!`.** `dotnet test` emits
+  `Passed!  - Failed: 0, Passed: 24, Total: 24` for the subset that ran *before* the crash, then
+  `Test Run Aborted.` A mutation classifier that only greps for a `^(Failed|Passed)!` summary
+  calls that a SURVIVING mutant. Grep for `Test Run Aborted` / `Test host process crashed`
+  **first**; "a summary is present" is not "the run completed".
+
+### ⭐ 2026-09-22 — ADR-0003: the CFG loop representation, and all three loop passes unregistered
+
+⚠ **AMENDED 2026-09-24 — LICM IS BACK.** Everything below this line describes the ADR as
+originally decided, and much of it is now stale in one specific way: master's `e063faf` (PR #85,
+owner-approved) rewrote `LoopInvariantCodeMotionPass` and re-registered it in
+`AddAggressivePasses`; this branch adopted that in its merge of `15e4e63`. Every claim below that
+"LICM is unregistered" / "no aggressive pass touches a loop" / "re-registering LICM is invisible
+by value" describes the PRE-amendment state, not the current one. `LoopUnrollingPass` and
+`LoopFusionPass` are still unregistered, unaffected by this. **Read
+`docs/superpowers/decisions/0003-cfg-loop-representation.md`'s Amendment section for the current
+facts** — including that the rewritten LICM is not fully closed either (probes L1/L3/L5 in the
+follow-up work) — before relying on anything in this section as a present-tense claim. The one
+test-list change: `LoopPassesDisabledTests.TheThreeLoopPassesAreAbsentFromBothPipelines_…` (cited
+several times below) is renamed
+`LicmIsInAggressiveOnly_UnrollingAndFusionAreAbsentFromBothPipelines_AndTheClassesStillExist` and
+now asserts LICM present in `AddAggressivePasses`, absent from `AddStandardPasses`.
+
+**Read `docs/superpowers/decisions/0003-cfg-loop-representation.md` first.** One-line summary:
+`ControlFlowGraph.FindBackEdges` had its dominance test the wrong way round — it asked whether the
+TAIL dominates the HEAD, which is the defining property of a FORWARD edge — and the repair ships
+together with unregistering `LoopInvariantCodeMotionPass`, `LoopUnrollingPass` and `LoopFusionPass`
+from `AddAggressivePasses()` and with an `IsValueInvariant` fix. `IsReducible`, the dead CFG
+surface (`DominatorTree`, `PostDominatorTree`, `ComputeDominanceFrontier`, `ComputeBlockDepths`)
+and `IRPipelineDemo.cs` are deleted. **#114 is closed by it.**
+
+**Gate added.** Three new fixtures, all built on ONE shared 13-shape corpus, `CfgLoopShapes`
+(in `VisualGameStudio.Tests/Compiler/CfgNaturalLoopTests.cs`) — each shape carries its source, its
+expected `Main` block names, its expected natural-loop sets AND its expected stdout, so the
+structural and the value fixture cannot drift about what a shape is.
+
+| Fixture | Asserts | Category |
+|---|---|---|
+| `CfgNaturalLoopTests` | INV-1 (loop sets, the back-edge biconditional against an INDEPENDENT dominator recompute, no `entry` in a loop, no loop holding its own head's `.end`) and INV-4 | fast subset |
+| `LoopPassesDisabledTests` | INV-2 (the pass LIST), the `IsValueInvariant` repair with LICM added explicitly, "still broken" pins for unrolling and fusion, and both shipping entry points by value | fast subset |
+| `CfgLoopShapesAggressiveTests` | INV-3 — 13 shapes × 4 backends × both pipelines, by VALUE | `Integration` (~34 s) |
+
+- ⛔⛔ **THE CORE FIX IS INVISIBLE TO EVERY VALUE ORACLE IN THE SUITE, AND THAT IS THE MOST
+  IMPORTANT THING ON THIS PAGE.** Measured by reverting the one-token predicate fix and re-running
+  everything: **0 of 52 aggressive shape-cells and 0 of 44 probe-cells differ; all 104 end-to-end
+  cells stay byte-identical and stay CORRECT.** Re-measured independently against the committed
+  fixtures: the revert takes **41 of 108** rows red — and **every one of them is a structural
+  `CfgNaturalLoopTests` row**; not one of the 13 four-backend value rows notices. Because all
+  three loop passes are unregistered, **nothing in the shipping compiler reads
+  `ControlFlowGraph.NaturalLoops`** — so the fix could be silently reverted forever behind a green
+  suite. The guard is a DIRECT `ControlFlowGraph` assertion on the reported loop sets, and nothing
+  else can do it. **If you touch `ControlFlowGraph`, that fixture is your only oracle.**
+- ⛔⛔ **RE-REGISTERING LICM IS ALSO INVISIBLE BY VALUE.** Measured: 0/52 and 0/44 cells differ,
+  because the `IsValueInvariant` repair makes LICM **inert** — with locals reading non-invariant it
+  can hoist nothing. (Non-vacuity confirmed: the same harness does report a modification when
+  another pass genuinely fires.) Re-measured against the committed fixtures: re-registering LICM
+  takes **exactly ONE** row red, the **pass-list** assertion
+  (`LoopPassesDisabledTests.TheThreeLoopPassesAreAbsentFromBothPipelines_…`) — the precedent being
+  `InductionVariableDisabledTests`. `LoopFusionPass` and `LoopUnrollingPass` re-registered DO change
+  output, so those two also go red by value (5 and 9 rows), `LoopFusionPass` **silently on C#** with
+  `29,37` where `29,29` is correct — caught by the two entry-point rows, not by a build failure.
+- ⛔ **`IsValueInvariant` reverted is PROVABLY INERT against every shipping route**: the method is
+  private to LICM and no pipeline registers LICM. It is only observable by a test that ADDS LICM
+  explicitly — `LoopPassesDisabledTests.LicmAddedExplicitly_…`, which asserts a single `pass.Run`
+  reports no modification AND that the program still prints the right value. ⚠ **A single-mutant
+  sweep reports the revert and the re-registration as TWO independent survivors; together they
+  reproduce #114 exactly.** `TheAggressivePipelineWithLicmAddedBack_StillPrintsTheCorrectValue` is
+  the test for the pair.
+- ⚠⚠ **`pass.ModificationCount` after `OptimizationPipeline.Run` is ALWAYS ZERO and asserting it
+  there is VACUOUS — this one nearly shipped as a real guard.** `Run` iterates to a fixed point
+  (max 10 by default), so the last iteration of any converging pass reports 0 no matter what it
+  did. Use a single `pass.Run(module)` — its bool return and `ModificationCount` are both
+  meaningful there — or `OptimizationResult.TotalModifications`. The same constructor argument is
+  also the lever that keeps a non-converging pass from hanging a test: see the termination bullet
+  below.
+- ⛔ **The `.end` check must be anchored to the LOOP HEAD.** The obvious spelling — "no loop
+  contains any block named `*.end`" — **fails four CORRECT shapes**: a nested loop's inner
+  `for1.end` legitimately sits inside the outer loop's body, and so do `if0.end` and `try0.end`.
+  The property that holds is that the loop headed at `for0.cond` must not contain `for0.end`.
+- ⛔ **`OK` from a backend is not `correct`.** The baseline verdict census counted 49 "OK" cells
+  that included the silently-wrong `65` (where 29 is correct, on C#, the reference oracle) and
+  every zero-iteration run that exited 0. **Assert VALUES.**
+- **Shape notes, measured.** `A13` (two sibling loops, SAME LITERAL bound) is the one that shows a
+  silent wrong value — and `LoopFusionPass` only fires on literal bounds: on the same two loops
+  over a CALL-valued bound `GetLoopBounds` returns null and it does not fire at all. `A12` (counted,
+  call-free, literal bounds) is the one that shows unrolling damage. `A01` is NOT a usable
+  discriminator for the `IsValueInvariant` revert through LICM ALONE — LICM modifies it and it
+  still prints the right answer; it IS a good one through the full aggressive pipeline plus LICM.
+- ⛔⛔ **A MUTANT THAT DOES NOT TERMINATE TURNS FOUR RED ROWS INTO AN ABORTED RUN. Build the test
+  so the defect FAILS rather than HANGS.** Measured, `IsValueInvariant` reverted: **the aggressive
+  pipeline plus LICM does not converge** — LICM re-hoists its own output round after round, so
+  `OptimizationPipeline`'s fixed-point loop just keeps going. One shape took 31 s; another never
+  terminated (killed at 200 s); inside a full fixture run the test host reached **5.9 GB and
+  crashed**, and the summary read `Failed: 4 … Total: 106` of 108 plus `Test Run Aborted`.
+  Changing which SHAPE was used did not fix it — the hazard is the fixed point, not the program.
+  **The remedy is `new OptimizationPipeline(maxIterations: 1)`**: one round is already enough to
+  expose the defect (one hoist out of a loop is already the wrong answer) and is bounded by
+  construction. With it, the same cases go red in ~250 ms. ⚠ Separately, `A04_while`/`A05_do` run
+  the host out of memory through LICM **alone** with the repair reverted, so they are excluded from
+  the LICM-alone case too. ⚠ The crash is not a substitute for a failing assertion: the run that
+  aborts is the run whose result you cannot read.
+- ⭐ **SIX PROMOTIONS, re-measured, and they are promotions rather than re-baselining** — the #116
+  fixtures EXCLUDED the damaged backends instead of pinning damaged output, so there was no
+  expectation to change, only legs to add. `FourBackends.RunsOnEveryBackendAggressive`,
+  `BclE2E.CompileToCppAggressive` and `MsilHarness.CompileToIl(aggressive:)` no longer carry the
+  "runs the loop ZERO times" caveat; `InductionVariableDisabledTests.BothPipelinesAgree` went from
+  C#+JS to all four backends (feeding 9 cases); the nested-loop case lost its `_CSharpOnly`
+  restriction (the JavaScript `t4` failure is gone); and the shared-runner smoke case no longer has
+  to avoid loops.
+- ⚠ **Two follow-on dead-code facts, DELIBERATELY NOT ACTED ON — recorded, not fixed.** They are a
+  separate decision and ADR-0003 does not cover them.
+  - `IRPrettyPrinter.CFGPrinter` (`:307`) and `IRPrettyPrinter.DotGraphPrinter` (`:360`) had
+    `IRPipelineDemo.cs` as their ONLY consumer. That file is deleted, so both are now dead.
+  - `BasicBlock.DominanceFrontier` (`IRNodes.cs:1276`) is never populated now that
+    `ComputeDominanceFrontier` is gone, so `IRPrettyPrinter.cs:333–335` prints a permanently
+    empty set.
+- ⚠ **`InductionVariablePass` stays disabled and this change does NOT re-enable it.** The CFG
+  substrate it blamed is repaired, but that was one of its six defects; the preheader it needs is
+  still not synthesised anywhere (ADR-0003 declines to build one) and defects 1, 2, 4, 5 and 6 are
+  untouched. ADR-0003's Obligations section says so explicitly.
+- ⚠ **Release builds lose all loop optimization, permanently, until ADR-0003 D2's revisit condition
+  is met.** No measured performance regression — only LICM ever fired and it fired wrongly — but
+  the loss is real. D2's terms for re-registering: one pass at a time, each behind its own commit,
+  and only once (a) the `IsValueInvariant` class of defect is closed for it and (b) a differential
+  harness runs the 13 shapes across four backends comparing VALUES.
+
+### ⭐ 2026-09-22 — the CSE invalidation + key-encoding fix, and what its fixtures could NOT cover
+
+**⛔⛔ THE GENERAL LESSON, and the reason this section is long: the ORACLE CAN BE THE LEG THAT
+PROVES NOTHING.** ADR-0001 records that the C# backend inlines aggressively. This family is where
+that stops being a footnote. Measured per leg, at the defective tree and at the fixed tree:
+
+| Assertion family | C++ | JavaScript | MSIL | C# | Why |
+|---|---|---|---|---|---|
+| **Redefinition** (merge across a write to an operand) | ✅ kills | ✅ kills | ✅ kills | ⛔ **proves nothing** | C# re-emits the binop's expression TEXT (`b = p + q;`) instead of honouring the `IRAssignment` the merge wrote, so it printed the CORRECT answer with the defect fully present |
+| **ByRef** redefinition | ✅ kills | ⛔ **refuses** (BL7002) | ✅ kills | ⛔ proves nothing | JS has no reference parameters and rejects the program outright |
+| **Key injectivity** (two UNRELATED expressions merged) | ✅ kills | ✅ kills | ✅ kills | ⭐ **kills** | the merged expressions differ in TEXT, so inlining faithfully reproduces the WRONG one |
+| **Case-insensitive** redefinition | ⛔ **will not compile** | ⛔ **same wrong number, different cause** | ✅ kills | ⛔ proves nothing | see the case-folding entry below |
+| **"the merge that must STILL happen"** | ⛔ | ⛔ | ⛔ | ⛔ | over-killing produces NO wrong answer on ANY backend — it silently deletes the optimization. Structural only: `ModificationCount` from a SINGLE `pass.Run` |
+
+⚠ **`ModificationCount` after `OptimizationPipeline.Run` is ALWAYS 0** — the pipeline iterates to a
+fixed point, so the last run of every pass is by definition the one that changed nothing. A
+structural count must come from a bare `pass.Run(module)`.
+
+⭐ **C#'s inlining rescues a bad merge ONLY when the two expressions are textually identical.** It
+is not general immunity, and the key-injectivity row above is the proof.
+
+#### ⛔ A LIVE WRONG ANSWER ON ALL FOUR BACKENDS THAT IS **NOT** CSE AND IS **NOT** FIXED
+
+A lambda capturing a local **by reference**, with `CopyPropagationPass` + `ConstantFoldingPass`
+folding the expression on both sides of a call that writes the captured variable:
+
+```basic
+Sub Main()
+ Dim n As Integer = 1
+ Dim q As Integer = 2
+ Dim bump = Sub() n = n + 100
+ Dim a As Integer = n + q
+ bump()
+ Dim b As Integer = n + q      ' should be 103, prints 3
+End Sub
+```
+
+Measured on this branch: **C#, C++ and JavaScript all print `a=3 b=3`** where `b` should be 103.
+(MSIL does not even build it — "Reference to undefined class 'Action'".)
+
+⚠ **TWO INDEPENDENT ROUTES, both measured, and the CSE fix closes NEITHER:**
+
+1. **It is not CSE's to fix.** Re-run with CSE REMOVED from the pipeline (ConstantFolding +
+   CopyPropagation + DeadCodeElimination + StrengthReduction + Peephole only): still `a=3 b=3`.
+   `CopyPropagation` and `ConstantFolding` fold the expression on both sides of `bump()` on their
+   own, so repairing CSE cannot help.
+2. ⛔ **But CSE DOES also merge here — 1 merge, measured** — so it is a second route to the same
+   wrong answer, and the repair in this change does NOT close it. `ReadsCallVisible` cannot: a
+   local captured by reference has `IsGlobal=false` and is indistinguishable from any other local
+   at that point. (An earlier draft of this entry said "CSE is not involved". That is wrong, and
+   the count is where it was caught.)
+
+**Closing it needs a capture set on `IRFunction`, which both the folding passes and
+`ReadsCallVisible` would consult. It needs its own task.**
+
+#### ⛔ `Samples/*` DO NOT COMPILE — and the "11 merges in shipping code" number rests on that
+
+Measured through the CLI at this commit:
+
+- `Samples/Platformer/Main.bas` — **2 SEMANTIC errors** (line 276, "cannot convert from 'Double' to
+  'Single'", twice). The PARSE is clean, so its IR is faithful; `TILE_SIZE` really is
+  `IsGlobal=true, IsConst=true` and its 6 merges really do depend on the `Const` exemption.
+- `Samples/SpaceShooter/Main.bas` — **PARSE errors**: `Const SCREEN_WIDTH = 800` has no `As`
+  clause. The parser records the error and synchronizes past the whole `Const` block, so those
+  identifiers reach the IR as `IsGlobal=false, IsConst=false` — measured. **SpaceShooter's 5 merges
+  read plain locals and say NOTHING about the `Const` exemption**, contrary to how the 11 were
+  described.
+- `Samples/Pong/Main.bas` — parse errors too, and then **`IRBuilder` THROWS** on it ("the
+  module-level variable 'ballVY' has an initializer that cannot be computed at compile time"). It
+  has no CSE count at all. "The repo's sample programs" is **two** programs, not three.
+
+⚠ The counts 6 and 5 are real properties of the IR, but of IR built by **ignoring the front end's
+verdict** — which is exactly what `JsTestSupport.BuildModule` refuses to do, on purpose.
+`CseSampleCorpusTests` pins both the counts AND the current front-end verdict, so fixing a sample
+fails loudly and forces a re-measure instead of drifting. **The robust form of that contract item
+is `CseInvalidationDecisionTests`' `ConstGlobalAcrossACall` / `ParametersAcrossACall` rows** — a
+self-contained program that compiles. Prefer those.
+
+#### ⛔ The C++ and JavaScript backends DO NOT CASE-FOLD IDENTIFIERS
+
+BasicLang is case-insensitive; the front end accepts `P = Seed(100)` as a write to `p` and the IR
+records `IRCall("P")` alongside `IRVariable("p")`. Measured on that program:
+
+- **C++** emits `P = Seed(100);` against a declared `p` → `error: use of undeclared identifier 'P'`.
+- **JavaScript** emits a **separate** `P` and prints `b=4`, leaving `p` untouched.
+- MSIL and C# print `b=106`, correctly.
+
+Both are live pre-existing backend defects, neither is CSE's, and neither has a fixture. ⚠ The JS
+one is the nastier: `b=4` is the SAME wrong number CSE's defect produced, so a case-differing shape
+cannot attribute a JS failure to either cause. That is why
+`Decision_CaseDifferingRedefinition_DoesNotMerge` is asserted **structurally only**.
+
+#### ⛔ A TRAP THE MUTATION SWEEP CAUGHT: `p = p + 10` does NOT test kill-ORDERING
+
+The CSE repair orders its invalidation step **use → record → kill**, and the shape everyone
+(including the change's own plan) believed pinned that order is the self-redefinition
+`a = p + q` / `p = p + 10` / `b = p + q`. **MEASURED with a kill-before-lookup mutant applied: that
+program still merges nothing and still prints the right answer on all four backends.** Killing
+first does leave the self-redefining binop's own stale record alive — but nothing in the block ever
+LOOKS THAT RECORD UP, so the staleness is unobservable.
+
+The shape that actually distinguishes the two orders needs the record to be **re-used**:
+
+```basic
+Dim a As Integer = p + q
+p = p + 10          ' records Add|p|const_10 against a value computed from the OLD p
+Dim c As Integer = p + 10   ' ← matches that record. Must be 21, not 11.
+```
+
+Mutant applied: 1 merge instead of 0, and C++/JavaScript/MSIL print `c=11`. (C# prints 21 —
+vacuous, as everywhere in this family.) Both shapes are kept in the fixture, and the weaker one's
+docstring says in so many words that it does not test the ordering, so the next author does not
+re-derive the wrong conclusion. **General form: "the instruction is stale" is not the property —
+"a stale record is later MATCHED" is. A staleness no lookup reaches is invisible to every oracle.**
+
+#### ⚠ A four-backend fixture whose JS leg spawns Node MUST be added to the JS execution-tier roster
+
+`JsExecutionTierRosterTests.RosterCoversEveryJavaScriptIntegrationFixture` discovers any
+`[Category("Integration")]` fixture in the `VisualGameStudio.Tests.Compiler` namespace whose name
+ends `ExecutionTests` (or starts `JavaScript`/`Js`) and fails if it is not in the explicit roster.
+**A four-backend fixture trips this**, because one of its four legs is Node — and that is correct:
+if the tier stops running, the fixture stops proving its JavaScript claim. Registering it means
+two edits, and the second is easy to miss:
+
+1. add `typeof(YourFixture)` to `ExecutionTier`, and
+2. bump the literal in `RosterIsPinned` (31 → 33 here).
+
+⛔ Do **not** reach for the `NotJavaScriptExecution` deny-list to silence it — that list is only
+for fixtures that genuinely never call into Node. Caught here by the first full-suite run, as the
+single new failure against the 170-name baseline.
+
+#### Unresolved survey findings carried forward
+
+- ⚠ **`ConstantFoldingPass:571` and `WideningCastFoldingPass.cs:415` call `ReplaceUses`
+  BLOCK-scoped** where three other passes are function-scoped — the exact narrowing `67782af`
+  widened for CSE. **No reaching program was found**, so this is a suspicion, not a defect.
+  ⛔ `WideningCastFoldingPass` runs from `IRBuilder.cs:1165` — **outside the pipeline, on every
+  build regardless of flags** — so if it is reachable it is reachable everywhere.
+- `DeadCodeEliminationPass`'s instruction-removal arm is **effectively dead**: its guard is
+  `!v.Name.StartsWith("_tmp")` and temps are spelled `t0`/`t1`. Relates to existing **#118**.
+- ⚠ **Two arms of the CSE repair are unreachable from any BasicLang program**, and are pinned by
+  direct unit assertions in `CseKeyEncodingUnitTests` rather than by a program, because no program
+  can express them:
+  - the **result type in the key** — within one basic block a name denotes one variable, so
+    operation plus operand names already determines the result type, and `Dim d As Double = p + q`
+    lowers to an *Integer* `IRBinaryOp` plus an `IRCast` rather than a Double one;
+  - the **conservative `default:` arm of `ReadsCallVisible`** — every non-variable operand lowers to
+    its own instruction carrying a FRESHLY MINTED temp name (`IRFieldAccess("t1")` vs
+    `IRFieldAccess("t3")` for two reads of `c.V`), so an entry recorded through that arm can never
+    be matched by a second lookup and the arm can never change a decision.
+
+  Both pins are DEFENSIVE. They are recorded here so the next author knows they are not covered by
+  any end-to-end shape and does not go looking for one.
+
+### ⛔ Two measurement traps from this work, recorded so nobody pays twice
+
+- ⛔⛔ **`cp -p` preserves mtime, so `dotnet build` keeps the PREVIOUS DLL** and a run you believe
+  is a baseline is silently the last mutant's. Restore a mutated source with a plain `cp` (or
+  `shutil.copyfile`), **`touch` it, and build `--no-incremental`.** This is the same family as the
+  existing "a mutation sweep restores the SOURCE but does not rebuild" trap above, and it bites
+  even when you *did* remember to rebuild.
+- ⛔⛔ **The harness's background-completion notification fires when the LAUNCHER shell exits, not
+  when the `nohup`'d child finishes.** Gate every sweep read on an explicit sentinel line written
+  into the log by the script itself; never on the notification.
+
+### Traps this characterization cost us, recorded so nobody pays twice
+
+- ⛔ **Constant folding silently destroys control shapes.** `l(0) = x + 1` folds to `l[0] = 5;` and
+  looks like a PASSING control proving the defect is narrow. It proves nothing. Route any operand
+  you need preserved through a parameter or a call. The honest twin `l(0) = p + 1` fails.
+- ⛔ **A predicate stated from whichever cases are in the fixture will be wrong.** The indexer-store
+  claim has now been wrong TWICE — first "any write inside a `For Each`", then "read-modify-write".
+  Measured: any ONE of Collection / Index / Value being a temp fails on its own, with no read-back
+  anywhere (`l(Zero()) = 5` is `CS0103`). Strip the shape until it stops failing, then report THAT.
+- Line numbers in a prior report drifted 10–30 lines. Re-locate by symbol, never trust a cited line.
+
 
 - ~~**P2a-2 (.NET classes in native projects)**~~ — **DONE and merged (`77e415b`).** Kept here
   only as a pointer: plan `docs/superpowers/plans/2026-08-02-p2a2-dotnet-native-flip.md`, spec
@@ -536,12 +1111,25 @@ package in when that cross-check matters.
   `ParamArray xs As Integer()` are both syntax errors), so a guard clause for it was written and
   then removed — untestable, and redundant anyway since an array-typed parameter is already
   rejected by the Integer/Long/Single/Double restriction.
-  ⚠ **Still failing for unrelated reasons, all pre-existing**: MSIL fails any ByRef call with
-  InvalidProgramException. **The C++ half of this note is now STALE and is corrected here**: a
-  `Shared` method on a user class emitted an undeclared identifier on C++, and both that and the
-  JavaScript equivalent were FIXED 2026-09-19 (see the JS Shared-method entry and the C++
-  `Shared`-access entry). Fixing them did NOT move this row — it still fails, on MSIL, which is
-  why the row's name is unchanged in the by-name suite comparison.
+  ⚠ **STALE, corrected 2026-09-21: MSIL ByRef is FIXED.** This used to read "still failing for
+  unrelated reasons, all pre-existing: MSIL fails any ByRef call with InvalidProgramException".
+  Two separate defects lived behind that: `MSILCodeGenerator.EmitStoreLocal` had NO `starg` arm
+  at all, so writing to ANY parameter — ByRef or not — fell off the end of the
+  local/field/property/static-field ladder and left a value on the stack for `ret` to reject
+  (`Sub Bump(n As Integer) : n = n + 1`, no ByRef anywhere, threw the same
+  `InvalidProgramException`); ByRef's own half needed `&` in the signature, `ldind`/`stind`, and
+  an ADDRESS at the call site for whichever argument kinds have one (a local, a caller's ByVal or
+  ByRef parameter, an instance/`Shared` field, a module global, an array element — a literal, an
+  expression or a property is refused, loudly, not silently passed by value). Both are fixed;
+  `MsilByRefTests` and `MsilParameterWriteTests` cover them, and the two rows this note used to
+  pin — `ModuleProcedureCallTests.ByRef_ThroughAQualifiedCall_IsMarked` and
+  `CountedForVariableTests.CountedFor_OverAParameter_RunsOnEveryBackend_IncludingMsil` — now run
+  MSIL with the rest instead of pinning it. ⛔ **Still open, a SEPARATE shared front-end gap, not
+  this fix's**: a ByRef parameter on a CONSTRUCTOR loses its marker in
+  `IRBuilder.Visit(ConstructorNode)` (`IRBuilder.cs:1885`), which never copies `IsByRef` for a
+  ctor parameter unlike every other parameter site in that file — MSIL and C++ both print 41/42
+  instead of 42/42 for it, identically, pinned in
+  `MsilByRefTests.ConstructorByRefParameter_IsAPinnedSharedFrontEndGap_NotThisFamilys`.
   ⚠ **Omitted `Optional` arguments are filled at the CALL as of 2026-09-16** —
   `IRBuilder.AppendOmittedOptionalArguments`, at the same three arms the argument coercion uses.
   ⛔ **One backend of four was right, and it was right by accident.** C# emits the default into the
@@ -1492,13 +2080,28 @@ package in when that cross-check matters.
   ("Cannot return type 'Object'"); once it resolved, it ran on JavaScript, MSIL and C#, while C++
   emitted the class BEFORE the free-function prototypes — `'Twice' was not declared`. An
   emission-order gap; the call text was right. Also pre-existing and untouched: a class declared INSIDE a Module block
-  (`Helpers.Box`) is broken on all four; MSIL fails any ByRef call (InvalidProgramException) and
-  JavaScript refuses ByRef by design (BL7002) — the qualified-ByRef case asserts both as they are.
+  (`Helpers.Box`) is broken on all four.
+  ⚠ **STALE, corrected 2026-09-21**: this used to read "MSIL fails any ByRef call
+  (InvalidProgramException) … the qualified-ByRef case asserts both as they are". **MSIL ByRef
+  is FIXED** (see the ByRef entry below): `ByRef_ThroughAQualifiedCall_IsMarked`'s MSIL leg now
+  asserts `"5"` with C++ and C# instead of pinning a failure. JavaScript still refuses ByRef by
+  design (BL7002) and that leg is unchanged.
   ⚠ **`FourBackends` is the shared harness now** (`Norm`, `RunsOnEveryBackend`,
   `RunEmittedCSharp`, `RunEmittedCSharpText`) — `ModuleMemberAccessTests` and this fixture both
   use it; the multi-file case runs the COMBINED IR through all four generators and executes
   three of them (MSIL's IL is asserted by text: two `call int32 'Combined'::'Twice'`, no
   `HelpersTwice`, no `System.Object::'Twice'`).
+  ⛔⛔ **`FourBackends.RunEmittedCSharp` HAS NO TIMEOUT.** It is in-process Roslyn: emit to memory,
+  `Assembly.Load`, invoke the entry point. A program that loops forever HANGS THE TEST HOST —
+  there is no failure, no name, no output, just a run that never ends. ⚠ **Any shape whose
+  failure mode is a non-terminating loop must be asserted on the emitted TEXT
+  (`ReturnCoercionTests.EmitCSharpForTest`), not through this harness**, and run on JS / C++ /
+  MSIL, whose harnesses all time out. Measured 2026-09-21: `For i = 1 To 4 / t = t + 1 / Exit For
+  / Next` and `Exit Sub` in the same position both hang at f20435d. `CSharpLoopExitTests` marks
+  every such case.
+  ⚠ **One shape per test, and one shape per C++ COMPILE.** A characterization probe that compiled
+  five different programs in one test reported the FIRST program's compile error for all five —
+  `BclE2E.CompileToCppOptimized`/`CompileRun` reuse one temp directory within a test.
   ⛔ **THIRTEEN MUTATIONS, THIRTEEN KILLS — TWO SURVIVED THE FIRST SWEEP, and one was WRONGLY
   REMOVED before the full suite caught it.** (1) The member-body exemption in `CombineIRModules`'
   collision lookup survived a method-vs-method test, because a class method from the SECOND
@@ -1727,8 +2330,10 @@ package in when that cross-check matters.
   between them (CS0246 `Box` from the Module's `Main`, CS0103 the file class from `App`); the
   other three run it, and the qualified spelling is pinned on the text. A property getter as a
   member on C++, an inherited method on MSIL (MissingMethod), `Func` on MSIL, a class-returning
-  callee on MSIL (ilasm syntax error), ByRef on JavaScript/MSIL — each case runs on the
-  backends without that gap and names it. `Public Total As Integer` at file scope (no `Dim`)
+  callee on MSIL (ilasm syntax error), ByRef on JavaScript — each case runs on the
+  backends without that gap and names it. (⚠ **corrected 2026-09-21**: this row used to read
+  "ByRef on JavaScript/MSIL". MSIL ByRef is fixed — see the ByRef entry below — so only the
+  JavaScript refusal remains.) `Public Total As Integer` at file scope (no `Dim`)
   does not parse.
   ⛔ **SEVENTEEN MUTATIONS, SIXTEEN KILLS, ONE SURVIVOR REMOVED** (164 kills in all on the
   final code; per-mutant counts in the commit message). Every kill set is discriminating: no
@@ -1949,8 +2554,8 @@ package in when that cross-check matters.
   feature starts working.
   ⛔ **Still out of scope on MSIL, each measured and each a different family**: `For Each` over a
   collection (the loop variable is never declared, the enumerator overwrites the list's own local,
-  and the body is emitted TWICE — `List(Of String)` fails identically), and `Dim x(n)` bounds
-  (C# throws IndexOutOfRange on the same program).
+  and the body is emitted TWICE — `List(Of String)` fails identically) — **FIXED 2026-09-20, see
+  the entry below** — and `Dim x(n)` bounds (C# throws IndexOutOfRange on the same program).
   ⭐ **`ABaseTypedParameter_IsAPreExistingMsilGap_Pinned` WENT RED**, which is what it was written
   for — MSIL now runs a base-typed parameter. Promoted to three backends, pin deleted.
   **Full suite in place: 195 / 6222 / 203 / 6620 against the 195 / 6190 / 203 / 6588 baseline at
@@ -1960,6 +2565,672 @@ package in when that cross-check matters.
   baseline strips parameterized arguments, so a raw `sort -u` reads 195 distinct names against
   its 170 and looks like 25 regressions. It is 3 bare names versus their 28 parameterized forms.
   Normalize, then compare.
+
+  ⚠ **`For Each` RUNS ON MSIL as of 2026-09-20** — `MsilForEachTests` (40 cases),
+  `MSILBackend.cs`: `AllocateForEachLocals`, `EmitForEachBody`, `Visit(IRForEach)`,
+  `EmitRegionAwareBranch`, `IsIterationBranch`,
+  `_foreachSlots`/`_foreachContinueLabels`/`_consumedBlocks`. Before: `InvalidProgramException`.
+  ⛔ **FOUR DEFECTS IN ONE CONSTRUCT, NOT ONE.**
+  - **(A)** the enumerator local came from `_localCounter++`, unrelated to `_localIndices`, so it
+    **overwrote the collection's own slot** — the same counter defect the catch-variable and
+    indexer sites already record.
+  - **(B)** the loop variable got **no `.locals` slot at all** — `IRBuilder` deliberately keeps it
+    out of `IRFunction.LocalVariables` ("the foreach statement declares it"), which is right for
+    the three text-emitting backends and leaves IL with no storage. Emitted
+    `// WARNING: Unknown local 'n'` and an `add` with ONE operand.
+  - **(C)** the body was **emitted TWICE** — `ControlFlowGraph.Build` wires `IRForEach.BodyBlock`
+    in as a CFG successor and `GenerateBasicBlock` walks successors. ⚠ **It is the same bug
+    Try/Catch had (~line 219), and `Visit(IRTryCatch)`'s `_visitedBlocks` fix is necessary but
+    NOT sufficient** — `EmitRegionBody` collects its block list UP FRONT, so a `For Each` inside
+    a `Try` needs both `_visitedBlocks` and `_consumedBlocks`.
+  - **(D)** ⛔ **`Exit For` ran as `Continue For`** — `IRBuilder` gives a loop's break and continue
+    targets ONE block and `IRBranch.IsLoopExit` is the only discriminator; C++ and JS have read it
+    since task_4cc381f1, MSIL never did. Measured on `{1,2,3,4}` exiting at 3: total **7** instead
+    of **3**, **from a program that ran clean**. A wrong answer, not a crash.
+  ⛔ **THE C# BACKEND WAS WRONG ON FOUR OF THESE SHAPES** — `Exit For` in a `For Each` (correct 3,
+  C# **10** — `Exit For` was a **no-op on C#**); nested (60 vs 200); inside a `Try` (3 vs 10); as
+  the last statement (1 vs 2) — so those four asserted against C++/JS instead of C#.
+  ⭐ **FIXED (C#-backend Exit/Right batch, 2026-09-21) and all four PROMOTED to
+  `MsilAgreesWithCSharp`.** Re-measured: 3 / 60 / 3 / 1 on C#. `Exit Sub` was a no-op on C# too and
+  is fixed in the same batch. The one shape still not promotable is `For Each n In Make()` — MSIL
+  gives 7, **C# does not compile** (`CS0103 't0'`).
+  ⭐ **What the mutation sweep taught, worth recording as method.**
+  - **`a1`/`a2` killed DISJOINT sets summing to exactly 40, and so did `c2`/`c3`.** Mutated as one
+    site each, the 34-kill arm would have masked the 4-kill arm and the nested arm would have
+    masked the Try arm. Line-anchored splitting was load-bearing — the same lesson this file
+    already records for splitting a ternary.
+  - **`d6` killed by infinite loop** — every shape hit the harness's 30s timeout; that one mutant
+    took 17m21s.
+  - ⛔ **A mistyped `.locals` slot is INVISIBLE TO A ROUND TRIP.**
+    `a3-loopvar-type-from-collection` (the loop variable typed from the COLLECTION, not the
+    element) **assembles and prints the correct answer** — .NET Core does not verify IL for
+    fully-trusted code. Not cosmetic: **a reference-typed slot is a GC ROOT**, so the collector
+    traces it as an object pointer while it holds a raw integer. Latent, not absent. The FOURTH
+    property in this backend invisible at run time (the file already records the Select Case
+    default branch, the variable-less `Catch`'s `pop`, and the wrong overload); the remedy is the
+    same — an IL-TEXT pin via `MsilHarness.CompileToIl`.
+  - ⚠ **A test can prove its own name and still not discriminate.**
+    `ExitFor_InANestedForEach_LeavesOnlyTheInnerLoop` with inner `{5,10,15}` exiting at 15 totals
+    60 under BOTH exit and continue — nothing after the exit point for them to diverge on.
+    `{5,10,15,20}` makes them diverge (60 vs 140) and took the two `IsLoopExit` mutants
+    (`d3`/`d4`) from 3 kills of the fixture's 4 `Exit For` tests to 4. Found only because those
+    two mutants each killed 3 of 4 instead of all 4.
+  - **`e2-name-binding-never-withdrawn` needed a DIFFERENT shape than the obvious one.** Shadowing
+    a real LOCAL only exercises `EmitForEachBody`'s restore-to-prior-index arm; the
+    withdraw-with-no-prior-binding arm needs a name with no local meaning but a MODULE-level one,
+    so the read after the loop is satisfied only by falling through `_localIndices` to
+    `_moduleGlobals` — which happens only if the binding was genuinely removed. Measured:
+    `ldloc.1` (the stale loop slot) instead of `ldsfld int32 'Combined'::'n'`, printing the loop's
+    last element (2) instead of the module global (7).
+  ⚠ **TWO MUTANTS SURVIVE AND THE CODE IS KEPT, both unreachable by measurement.**
+  - **`d2`** — the iteration redirect in `Visit(IRConditionalBranch)`. Measured over 9 body
+    shapes: the redirect fires 13×, a `brtrue` targets a `For Each` continuation ZERO times,
+    because `IRBuilder` always gives an `If` a dedicated merge block and it is the merge block
+    that carries the edge. Kept: it is the structural sibling of the reachable
+    `LeavesRegion(trueTarget)` arm below it, and deleting it plants a silent wrong answer the day
+    anything threads `if0end`'s sole `br` into the condbr.
+  - **`d7`** — the fall-out branch for an unterminated body block. It IS reached (only when a
+    block ends with a nested `For Each` or a `Try`) but in both measured cases the structured
+    visitor has already emitted an unconditional transfer, so what it writes is unreachable.
+    Kept: that deadness is a property of the OTHER visitors, which nothing at this site can
+    check; if it lapses, control falls into `loopExit:` and the loop ends after one iteration.
+  ⚠ **Not fixed, out of family, each measured — added to the open list:**
+  - **MSIL: `For i = 1 To n` with NO explicit `As Type` throws `InvalidProgramException`
+    completely on its own**, no `For Each` involved. Root cause confirmed at source:
+    `IRBuilder.Visit(ForLoopNode)` (`IRBuilder.cs:3155-3166`) adds the induction variable to
+    `LocalVariables` ONLY inside `if (!string.IsNullOrEmpty(node.VariableType))` — the
+    inline-declaration arm — so the inferred form never gets a slot.
+    ⛔ **CORRECTED 2026-09-21 — BOTH HALVES OF THE NEXT SENTENCE WERE WRONG, see the counted-`For`
+    entry below.** It read "that is defect (B) of this family, on the `IRFor` node". There is no
+    `IRFor` node (a counted `For` lowers to ordinary blocks), and it was never MSIL-only: the one
+    omission broke **all four** backends. Left here with its correction rather than deleted,
+    because the wrong reading is what the next session would otherwise re-derive.
+  - **C# backend: a property `Get` accessor emits NO local declarations AT ALL** (`CS0103`).
+    ⛔ **CORRECTED 2026-09-21** — this read "never hoists locals declared inside a loop". The loop
+    is irrelevant: measured at f20435d and again after the C#-backend Exit/Right batch, a `Get`
+    whose whole body is `Dim sum As Integer = 5` / `Return sum + 1`, with no loop anywhere, is the
+    same `CS0103`, while a `Get` that declares nothing (`Return 6`) compiles and prints correctly.
+    `CSharpBackend.GenerateProperty` is the site.
+  - **C# backend: an emitted `foreach` reuses the source loop-variable name even when it collides
+    with an outer local** (`CS0136`).
+  - `For Each` over a `Dictionary` — front-end (C# `CS0030` too), not MSIL's.
+  - Two same-named `For Each` loops of DIFFERENT element types — the IR variable in the second
+    body carries the FIRST loop's type. Shared-IR/analyzer defect; only MSIL can observe it
+    because the text-emitting backends re-resolve the identifier. Deliberately not papered over
+    in the backend.
+  ⭐ **The top of the remaining MSIL worklist, so the next session starts here** — **FIXED
+  2026-09-21, see the `IRIndexerStore` entry below**: **`l(0) = 42` on
+  a List writes NOTHING and runs clean, printing the OLD value** — `MSILBackend` never overrides
+  `Visit(IRIndexerStore)` and `ICodeGenerator`'s is a `virtual { }` no-op, the same hazard that
+  lost `IRThrow`. `a(i) = v` is fine (`IRArrayStore` IS overridden) — only the collection indexer
+  path is silent.
+  **18 of 20 mutants killed, 2 kept as unreachable-with-recorded-reason, 0 build breaks.** The
+  two new tests each killed exactly one mutant — the one written for it, no collateral.
+  **Full suite in place: 195 / 6262 / 203 / 6660 against the master `7ce1200` baseline
+  195 / 6222 / 203 / 6620** — +40 passed, +40 total, +0 failed; 195 reported = 195 anchored
+  lines, 170 normalized failing names, `diff` clean; nothing new, nothing newly passing.
+  Filtered `FullyQualifiedName~Msil` reference: `Failed: 0, Passed: 228`.
+
+  ⚠ **INDEXED COLLECTION WRITES RUN ON MSIL as of 2026-09-21** — `MsilIndexerStoreTests`
+  (18 cases), `MSILBackend.cs`: `Visit(IRIndexerStore)`. Before: `l(0) = 42` on a
+  `List(Of Integer)` and `d("k") = 9` on a `Dictionary` **RAN CLEAN AND PRINTED THE OLD VALUE**.
+  ⛔ **THE OVERRIDE DID NOT EXIST.** `CodeGeneratorBase.Visit(IRIndexerStore)`
+  (`ICodeGenerator.cs:172`) is a `virtual { }`, so every indexed write emitted **nothing at
+  all** — not the call, not the indices, not even the evaluation of the value. The emitted IL
+  for `l.Add(1); l.Add(2); l(0) = 42` contained no `set_Item` and no `ldc.i4 42`; it went
+  straight from the second `Add` to the `get_Item` of the read. A clean run with a wrong
+  answer, which is the worst failure mode this backend has. On a `Dictionary` the dropped
+  write surfaced later and louder: `KeyNotFoundException` on the next read of that key.
+  `a(i) = v` was never affected — an array write is `IRArrayStore`, which is `abstract`.
+  ⭐ **THE ENUMERATION, worth more than the fix.** This is the THIRD instruction lost to a base
+  no-op (`IRThrow` was the identical shape — see the `Try`/`Catch` entry above, "the one that hid
+  the rest"; and `JavaScriptBackend.cs:29` names the hazard by name), so the whole surface was
+  counted rather than guessed:
+  - `CodeGeneratorBase` declares **35 `abstract` `Visit` methods** (`ICodeGenerator.cs:128-162`)
+    and **exactly TWO `virtual { }` ones** — `Visit(IRThrow)` (165) and `Visit(IRIndexerStore)`
+    (172). 35 + 2 = 37 = the whole `IIRVisitor` surface (`IRNodes.cs:37-80`). **Every other
+    visitor is `abstract`, so the compiler makes forgetting it impossible** — no third
+    instruction can be lost this way until someone adds another `virtual { }`.
+  - ⚠ **`IIRVisitor` itself carries the same two as DEFAULT INTERFACE METHODS** (`IRNodes.cs:75`
+    and `:80`, both `{ }`). Two copies of the hazard, the same two nodes. A new node added with
+    a default body is silently optional for every backend at once; add it `abstract`/undefaulted
+    instead and the compiler names each backend that has not handled it.
+  - MSIL overrode all 35 abstract + `IRThrow` (5025) and was missing **only** this one.
+  - **Per backend, measured:** C++ overrides both (`CppCodeGenerator.cs:5015`, `:5149`); C# and
+    JavaScript implement `IIRVisitor` DIRECTLY rather than deriving from `CodeGeneratorBase`,
+    and both wrote the pair anyway (`CSharpBackend.cs:3466`/`:3663`,
+    `JavaScriptBackend.cs:3312`/`:3409`); MSIL had `IRThrow` only, now has both.
+  - ⛔ **`LLVMBackend` overrides NEITHER** — it derives from `CodeGeneratorBase`, so it inherits
+    both no-ops and silently drops every `Throw` *and* every indexed collection write today.
+    Same defect class, unfixed, never swept. On the open list below.
+  - Not the same class: four empty `Visit(...) { }` bodies (`IRFunction`, `BasicBlock`,
+    `IRConstant`, `IRVariable`) are deliberate — C++ (2294-2297), C# (3195-3198, as plain
+    `public void`) and LLVM (1301-1304) all carry the identical four, because those nodes are
+    driven or consumed by their parents. `Visit(IRAwait)`/`Visit(IRYield)` emit only a warning
+    comment: degraded, but visible in the IL.
+  **The lowering is operand order and one table lookup.** `set_Item` is an ordinary instance
+  call, so IL wants receiver, then every index, then the value, and the signature comes from the
+  RECEIVER's own type through `CollectionMembers` — `List`1<T>::set_Item(int32, !0)` indexes by
+  an integer and takes a generic element, `Dictionary`2<K,V>::set_Item(!0, !1)` takes both from
+  the instantiation. Spelling either as the other assembles and then dies at run time, which is
+  why neither is inferred. The table already carried both rows; only the override was missing.
+  **Insert-or-update falls out, it is not special-cased** — `Dictionary::set_Item` adds an absent
+  key, which is what .NET means by `d(k) = v` and what C#, C++ and JS all do; `Add` would throw.
+  ⭐ **A SURVIVOR CAUGHT A DEAD FIELD IN THE FIX ITSELF.** The emission first spelled the method
+  name literally (`::set_Item(...)`) beside a table lookup, leaving `CollectionMember.Il` unread
+  on that path. `i8-dict-row-calls-add` — Dictionary's row rewritten to call `Add`, which throws
+  `ArgumentException` on an existing key instead of updating it — **SURVIVED the entire
+  fixture**, because nothing consulted the field. Now `::{collSig.Il}(...)`; the mutant kills 3
+  tests. ⚠ **The READ path (`Visit(IRIndexerAccess)`) still spells `get_Item` literally** — both
+  rows happen to agree so it emits the same text today, but it carries the identical latent
+  hazard. Left alone deliberately, to keep this diff to one family.
+  ⚠ **ONE MUTANT SURVIVES AND THE CODE IS KEPT.** `i10-fallback-dropped` — the non-collection
+  `IList`1` fallback. Measured one probe per way into it: `IList(Of T)`/`IReadOnlyList(Of T)` as
+  a parameter or a field are **semantic errors** and never reach IR; a `.NET`-handle write takes
+  the primary path; the only shape that reaches the arm is `Dim l As New List()` (no generic
+  argument), and **ilasm already refuses that whole file** — `Reference to undefined class
+  'List'` — because the receiver's own `.locals` entry is a bare `List`. Reachable, but by no
+  program that can run. Kept because it is the exact mirror of the fallback the READ path has
+  shipped with; dropping it on the write side alone would make one indexer's two halves
+  disagree about which type they call on.
+  ⚠ **DELIBERATELY NOT MUTATED:** `_currentStack -= 2 + Indices.Count`. `_currentStack` is
+  **write-only across the whole backend** — filtered for non-mutating uses, `grep` returns
+  exactly one line, the field declaration at `MSILBackend.cs:50`. `.maxstack` comes from a
+  DIFFERENT field, `_maxStack = Math.Max(8, _localIndices.Count + _tempIndices.Count + 4)`
+  (`MSILBackend.cs:1347`), which never reads `_currentStack`. A mutant there cannot change one
+  byte of IL. The line stays for consistency with every other visitor — and ⚠ **`_currentStack`
+  being dead means no visitor's stack arithmetic is checked by anything**; do not trust it as a
+  verification mechanism.
+  ⛔ **C# CANNOT BE THE ORACLE for a read-modify-write through an indexer** — `l(0) = l(1)`,
+  `l(i) = l(i) * 10`, `d("a") = d("a") + 1`, and **any** indexer write inside a `For Each` body
+  all give `CS0103: The name 'tN' does not exist in the current context`. Those cases assert
+  against JavaScript or C++. Also `List(Of Boolean)` does not compile on **C++**
+  (`std::vector<bool>`'s bit-reference will not bind to the generated `T&`). Both on the open
+  list below.
+  ⚠ **Writing a List while enumerating it now throws `InvalidOperationException: Collection was
+  modified` on MSIL, matching C#** — correct .NET behaviour that the dropped write used to hide
+  (it ran clean and printed stale values). JavaScript legitimately diverges, so that shape is
+  not a four-backend pin.
+  **10 of 11 mutants killed, 1 kept as unreachable-with-recorded-reason, 0 build breaks**
+  (`i0` 18, `i1` 17, `i2` 17, `i3` 17, `i4` 16, `i5` 18, `i6` 18, `i7` 4, `i8` 4, `i9` 15;
+  `i10-fallback-dropped` survives, declared above). Every mutant is LINE-anchored with a
+  per-mutant assertion that the expected text is on that line, so a shifted line fails the run
+  instead of silently mutating nothing.
+
+  ⚠ **`For i = 1 To n` WITH NO EXPLICIT `As Type` RUNS as of 2026-09-21** —
+  `CountedForVariableTests` (19 cases), `IRBuilder.cs`: `Visit(ForLoopNode)`,
+  `ResolvesToExistingStorage`. **SHARED IR, read by all five backends.**
+  ⛔ **IT WAS NEVER MSIL-ONLY.** The previous entry above filed this as "defect (B) of the
+  `For Each` family, on the `IRFor` node". That framing was wrong in two ways: there is **no
+  `IRFor` node** (a counted `For` lowers to ordinary blocks plus `IRAssignment`/`IRCompare`),
+  and the omission broke **all four backends**, because every one of them writes its
+  declarations from `IRFunction.LocalVariables`. One omission, four symptoms, all measured
+  compiled-and-run:
+  - **C#** — `CS0103: The name 'i' does not exist in the current context` (×5)
+  - **C++** — `error: use of undeclared identifier 'i'` at `i = 1;`
+  - **JavaScript** — `ReferenceError: i is not defined` at `i = 1;`
+  - **MSIL** — `InvalidProgramException` (`// WARNING: Unknown local 'i'` in the IL)
+  The registration lived INSIDE the `if (!string.IsNullOrEmpty(node.VariableType))` arm, so
+  `For i As Integer = 1 To n` worked and the ordinary VB spelling did not. The ONE inferred-form
+  shape that worked anywhere was `Dim i As Integer = 100` followed by `For i = 1 To 3` — the
+  discriminator, because the name already had storage.
+  ⚠ **NOT the `For Each` situation.** There `IRBuilder` deliberately withholds the element
+  variable because `foreach`/`for(:)` declares it in the target language. A counted `For` has no
+  such construct; each backend emits a bare assignment.
+  ⛔ **WE INTRODUCED A REGRESSION HERE AND CAUGHT IT BEFORE COMMIT. READ THIS BEFORE TOUCHING
+  THE GUARD.** The first fix put BOTH spellings behind one storage-resolving guard and then —
+  on the strength of an overlap mutant — deleted the guard's module-global arms as "provably
+  redundant". Measured on three builds, all four backends:
+
+  | shape | PRE-FIX `23666d6` | REGRESSED | NOW |
+  |---|---|---|---|
+  | module global, loop in a DIFFERENT `Sub` | **`4`** | **`0`** | **`4`** |
+  | module global, read back in BOTH `Sub`s | **`4 / 4`** | **`4 / 0`** | **`4 / 4`** |
+  | module global assigned before the loop | **`4`** | **`0`** | **`4`** |
+  | module global, loop in the SAME `Sub` | `4` | `4` | `4` |
+  | class FIELD (control) | `4` | `4` | `4` |
+  | **explicit** `For g As Integer`, other `Sub` | `0` | `0` | `0` |
+
+  `_variableVersions` only holds a version for a name in the function that has already touched
+  it — not in every function that can reach a module global through `_moduleGlobals`. So `Bump`
+  saw "no storage", registered a local, and every backend's declaration of that local shadowed
+  the global for the rest of `Bump`. A plain non-loop `g = 5` from another `Sub` was unaffected;
+  it was specific to the counted-`For` registration path.
+  ⭐ **WHY THE PROBE COULD NOT SEE IT, and the rule that came out.** The probe that "proved" the
+  arms redundant put the loop and the read-back in the **same function** — where the spurious
+  shadowing local happens to hold the right value when the loop ends, so the read returns `4`
+  and the shadowing is invisible. Only a read from a **different** function observes it. The
+  overlap mutant therefore ran against a fixture in which **no shape COULD kill those arms**:
+  **a mutant no shape can kill is UNTESTED, not redundant.** The question is whether a shape
+  exists that would observe the difference, not whether the current fixture contains one. Found
+  by test-writer reading the code, not by any run.
+  ⚠ **THE TWO SPELLINGS ARE DIFFERENT STATEMENTS AND MUST NOT SHARE A GUARD.**
+  `For i As Integer = 1 To 3` **declares** `i` — it introduces a loop-scoped variable that
+  SHADOWS a same-named field or module global, which is VB's rule and what all four backends
+  already did (measured `0`, correctly). `For i = 1 To 3` declares nothing and drives whatever
+  `i` already denotes (measured `4`). ⛔ **Fixing only the global arm would have flipped the
+  explicit form from `0` to `4` — a new regression in the opposite direction, and every test
+  would still have passed.** The fix is two changes: restore the asymmetry (explicit always
+  declares, with its own self-dedupe; inferred resolves first), and restore the module-global
+  arm keyed `ModuleGlobalKey(_currentModuleName ?? _module?.Name, name)` **exactly as
+  `GetOrCreateVariable` keys it** (`IRBuilder.cs:479`) — the guard and that resolver must agree
+  about what a bare name denotes.
+  ⚠ **`f13-explicit-shares-inferred-guard` — which collapses the two arms back into one guard,
+  i.e. reproduces the regression — SURVIVED all 18 of the other tests.** Measured twice: against
+  the 18-test fixture it survived outright; with
+  `ExplicitlyTypedCountedFor_OverAModuleGlobalsName_DeclaresAShadow_NotThePair` added it fails
+  exactly that one test and nothing else. That test exists solely to kill it. **Do not remove it**
+  — without it the two arms can be collapsed again and every test still passes.
+  ⚠ **The guard's arms are deliberately NOT minimal.** `f9` (module-global) and `f10`
+  (bare-global) each survive ALONE because the other covers them; disabling both
+  (`f15-no-global-arms-at-all`) kills `InferredCountedFor_OverAModuleGlobal_...` on all three
+  of its legs with `But was: "0"` — **the regression's exact signature**. ⛔ Note what that
+  means: while the pin still asserted the regressed `0`, `f15` SURVIVED, i.e. the mutation
+  that REPRODUCES the regression was blessed by a green fixture. The flip to `4` is what makes
+  the pair killable at all. The two arms mirror the two lookups `GetOrCreateVariable` performs
+  in order and are kept as a pair. Same story one arm up: `f5` (declared-local) survives alone,
+  `f7` (live-SSA-version) kills 1 alone, and `f11` (BOTH off) kills 3 — the extra two,
+  `CountedFor_OverAnExistingLocal_KeepsOneSlot` and `TwoInferredLoopsSharingAName_DoNotDoubleRegister`,
+  die only when neither arm is present. **Each survivor is half of a load-bearing pair, proved by
+  the pair-mutant, not asserted.** Do not "simplify" any of them away on the strength of a single
+  green mutant — that is precisely the reasoning that produced the regression above.
+  ⛔ **`Exit For` in an `If … End If` is NOT a no-op on a counted `For`** — measured `6` on C#,
+  C++, JS and MSIL alike. ⛔ **CORRECTED 2026-09-21 — this used to say "`Exit For` is NOT a no-op
+  on a counted `For`" without qualification, and that was too broad.** The `If` shape worked; the
+  SAME `Exit For` written as the body's LAST statement made the emitted C# **loop forever** (the
+  `break` was dropped and the loop's `.inc` block is unreachable, so the optimizer deletes it),
+  and inside a `Select Case` arm it totalled **7** instead of 3 (a C# `break` leaves the SWITCH).
+  Both fixed in the C#-backend Exit/Right batch and pinned in `CSharpLoopExitTests`.
+  ⚠ **A counted loop in a property `Get` accessor still does not compile on C#** — but NOT
+  because of the loop: `GenerateProperty` emits no local declarations at all (see the corrected
+  open-list entry above). MSIL and JS both give the right answer, so that shape is pinned against
+  them.
+  ⚠ **Pre-existing, pinned, NOT ours:** `For i = 1 To n` where `i` is a **PARAMETER** throws
+  `InvalidProgramException` on MSIL. Verified identical against the pre-change build; C# and
+  JavaScript both give the right answer, so that case asserts against those two.
+  ⚠ **Not fixed, out of these two families, each measured compiled-and-run — added to the open
+  list:**
+  - ⛔ **`LLVMBackend` overrides NEITHER base no-op visitor** — not `Visit(IRThrow)`, not
+    `Visit(IRIndexerStore)`. It silently drops every `Throw` and every indexed collection write
+    today, the same clean-run-wrong-answer failure mode MSIL had. Never swept; LLVM is still
+    out of scope, so this is filed, not fixed.
+  - **`g.Items(0) = 42` — an indexer write through a member access — is broken on ALL FOUR
+    backends**, not just MSIL: it never reaches `IRIndexerStore`. Front end, upstream of every
+    emitter. `Dim l = g.Items` then `l(0) = 42` works everywhere, which is the discriminator.
+  - **MSIL: `For i = 1 To n` where `i` is a PARAMETER throws `InvalidProgramException`.**
+    Pre-existing — verified identical against the pre-change build — and pinned in
+    `CountedForVariableTests` against C# and JavaScript, which both answer correctly.
+  - **C# backend: a READ-MODIFY-WRITE through an indexer fails** with
+    `CS0103: The name 'tN' does not exist in the current context` — `l(0) = l(1)`,
+    `l(i) = l(i) * 10`, `d("a") = d("a") + 1`. C# is not a valid oracle for those three shapes;
+    they assert against JavaScript.
+    ⛔ **CORRECTED 2026-09-21 — this read "ANY indexer write inside a `For Each` body fails", and
+    that was an over-generalization from the read-modify-write cases.** The loop is incidental:
+    measured at f20435d and again after the C#-backend Exit/Right batch, a plain `l(0) = n` inside
+    a `For Each` over a DIFFERENT collection compiles and prints **8** on C#, while `l(0) = l(1)`
+    with no loop anywhere is `CS0103`. `MsilIndexerStoreTests.Write_InsideAForEach_OverADifferentCollection`
+    has been promoted to `MsilAgreesWithCSharp` accordingly.
+  - **C++ backend: `List(Of Boolean)` does not compile** — `std::vector<bool>`'s proxy
+    bit-reference will not bind to the `T&` the generated code takes. Element-type-specific;
+    `List(Of Integer)` / `String` / a user class are all fine.
+  - **Parser: `Public Items As New List(Of Integer)()` does not parse as a FIELD declaration.**
+    The inline collection initializer is accepted on a `Dim` inside a method but not on a class
+    member; the field has to be declared and then assigned in the constructor.
+  - **`Catch ex As System.Exception` fails on JavaScript and MSIL** while the bare
+    `Catch ex As Exception` works on both. The dotted BCL spelling is not resolved on the catch
+    clause path.
+  **10 of 13 mutants killed, 3 survive ALONE and each is killed by its pair-mutant, 0 build
+  breaks** — `f1` 14, `f2` 14, `f3` 5, `f4` 17, `f13` 1 (all three legs), `f14` 2, `f7` 1,
+  `f8` 1, `f15` 1 (all three legs), `f11` 3; survivors `f5`, `f9`, `f10`. ⚠ **A sweep script
+  that classifies a mutant by `grep "error CS"` is WRONG here** — a fixture with a C#-backend
+  leg prints `error CS…` inside the TEST OUTPUT whenever a mutant correctly breaks the EMITTED
+  C#, and that heuristic reported four genuine kills as build breaks. A real test-project build
+  failure emits no run-summary line at all, so test for the ABSENCE of `^(Failed|Passed)!`.
+  **Full suite in place for BOTH families: 195 / 6299 / 203 / 6697 against the `23666d6`
+  baseline 195 / 6262 / 203 / 6660** — +37 passed, +37 total, +0 failed, +0 skipped, which is
+  exactly the two new fixtures (18 + 19) and nothing else. 195 reported = 195 anchored
+  `^  Failed ` lines; 170 normalized failing names, `diff` against the baseline list clean —
+  nothing new, nothing newly passing.
+
+  ⚠ **THE VB STRING INTRINSICS RUN ON MSIL as of 2026-09-21** — `MsilStringIntrinsicTests`
+  (54 cases), `MSILBackend.cs`: `TryEmitStdLibCall` arms at `4456-4553`, `_stdLibResultSpec`
+  (`4192-4211`, consumed `3735-3742`), `RequireChrArgument`/`RequireAscArgument`
+  (`4213-4281`). Before: `Mid`, `Left`, `Right`, `UCase`, `LCase`, `Trim`, `Replace`, `InStr`,
+  `Chr` and `Asc` each died at RUN time with e.g.
+  `MissingMethodException: Method not found: 'System.String MsilProbe.Mid(System.String, Int32, Int32)'`
+  — **naming the MODULE class**. They fell out of `TryEmitStdLibCall`'s switch, and
+  `Visit(IRCall)` then reached the emit-a-call-on-the-current-class default
+  (`MSILBackend.cs:3799`, `call {ret} {_moduleName ?? "Program"}::{name}(...)`): the phantom
+  self-call already recorded for `Console.WriteLine`. **ilasm accepts a MemberRef with no
+  definition**, so every one of them assembled cleanly and failed only when run.
+  ⭐ **`Len` WORKED, and that was the discriminator** — it has a `case "len"` arm emitting
+  `callvirt instance int32 [mscorlib]System.String::get_Length()`. The mechanism existed and
+  the table was incomplete, so the ten new arms copy it exactly rather than inventing a second
+  path. `BasicLang/StdLib/MSILStdLib.cs` is NOT that path (see below).
+  ⛔ **THE SEMANTIC FINDING, worth more than the arms. THERE IS NO SINGLE "BasicLang
+  semantics" FOR THESE FUNCTIONS.** Measured on all four backends, compiled and run, before
+  writing one line of emitter:
+  - The **C# backend's emissions are raw BCL with NO clamping** — `EmitMid` is
+    `str.Substring(start - 1, length)`, `EmitLeft` is `str.Substring(0, length)`
+    (`BasicLang/StdLib/CSharpStdLib.cs:352-364`) — so C# **THROWS** where real VB clamps:
+    `Mid("abcdef",5,10)`, `Mid("abc",5,2)`, `Mid("",1,1)`, `Mid("abc",0,2)`,
+    `Left("abcdef",10)`, `Left("",1)`, `Left("abc",-1)`, `Right("abcdef",10)`, `Right("",1)`
+    are all `ArgumentOutOfRangeException`; `Replace("banana","","o")` is `ArgumentException`;
+    `Asc("")` is `IndexOutOfRangeException`.
+  - **JavaScript CLAMPS** every one of them (`[ef]`, `[]`, `[]`, `[c]`, `[abcdef]`, `[]`, `[]`,
+    `[abcdef]`, `[]`, `[boaonoaonoa]`, `NaN`).
+  - ⚠ **`BasicLang.Runtime.BasicLangRuntime.Mid`/`Left`/`Right` DO clamp — and are DEAD CODE
+    that no backend calls.** `BasicLangRuntime.cs:19-65`. Do not read it as the specification;
+    grep for a caller before believing any of it.
+  So the choice was never "VB or not"; it was "match the other .NET backend, or invent a third
+  answer for MSIL alone". **MSIL now emits the IL the C# backend's output compiles to,
+  instruction for instruction, including the throwing inputs — same exception type, same
+  parameter name** — on the precedent the `cint` arm already set in this file (C# and MSIL
+  diverged on `CInt(7.5)`; MSIL was changed to match C#).
+  ⛔ **THE CLAMPING QUESTION IS A FIVE-BACKEND SEMANTIC AND IS DELIBERATELY LEFT UNDECIDED.**
+  Nothing here settles it. Changing to clamping later touches five backends and every pinned
+  shape; that is an architect's call, not an emitter's. ⛔ Do **not** "fix" one intrinsic into
+  clamping on its own — a clamp on MSIL alone turns an exception the two .NET backends agree
+  on into a silent different answer on one of them, which is strictly worse than the gap.
+  ⭐ **`Chr` AND `Asc` ARE ABSENT FROM `SemanticAnalyzer.RegisterStdLibFunctions`**
+  (`SemanticAnalyzer.cs:1130-1210` has rows for the other nine and none for these two). Two
+  consequences, both load-bearing:
+  - Their results are typed **Object**, so `Asc`'s `int32` lands in an `object` slot. Bridged
+    with `_stdLibResultSpec` + the existing `NeedsBoxingInto`, exactly as the .NET-static arm
+    does. The spec is RESET at the top of every `TryEmitStdLibCall` — without the reset it
+    leaks into the next call and boxes a `string` as an `Int32`.
+  - ⛔ **Their ARGUMENTS are type-checked by nothing.** Measured on the CLI with the arms in
+    and the guards out: **`Chr("x")` ran clean and printed `Ԙ`**; **`Chr(Asc("A"))` printed
+    `鍀`** (the argument arrives boxed, and `conv.u2` narrows the box pointer); **`Asc(5)`**
+    emitted `ldc.i4.5; ldc.i4.0; callvirt String::get_Chars` and died with
+    NullReferenceException. **Shipping the arms unguarded would have converted a LOUD FAILURE
+    (MissingMethodException) into a SILENT WRONG ANSWER** — a regression dressed as a feature,
+    and the worst failure mode this backend has. `RequireChrArgument`/`RequireAscArgument`
+    refuse them with a named diagnostic. ⚠ `Asc` still accepts an **Object**-typed argument and
+    must: `Asc(Chr(66))` answers `66`, because the `callvirt` dispatches on the real string.
+  ⚠ **`Right` uses `dup`, and that WAS a deliberate divergence from the C# backend.**
+  `CSharpStdLib.EmitRight` interpolated `{str}` twice, so the receiver EXPRESSION was evaluated
+  twice: measured on `Right(Tag(), 2)` where `Tag` prints, **C# printed `tag` TWICE** while
+  JavaScript, C++ and MSIL printed it once. ⭐ **FIXED (C#-backend Exit/Right batch, 2026-09-21)** —
+  `EmitRight` now emits `({str})[^({length})..]`, one evaluation, and
+  `MsilStringIntrinsicTests.RightWithAnEffectfulReceiver_IsEvaluatedOnce` has been promoted to
+  `MsilAgreesWithCSharp`. There are now NO deliberate divergences in that fixture.
+  ⚠ **`BasicLang/StdLib/MSILStdLib.cs` IS DEAD CODE.** `MSILStdLibProvider` is registered in
+  `StdLibRegistry.cs:36` and **referenced by nothing** — `MSILBackend.cs` has zero hits for it.
+  It is also wrong where it is most tempting to reuse: its `EmitMid` emits
+  `"ldc.i4.1\nsub\n…Substring(int32,int32)"`, which with `(str, start, length)` on the stack
+  subtracts 1 from the **LENGTH**, not the start; `EmitRight` is a comment saying it "needs
+  stack manipulation". Two tables claiming to be the MSIL stdlib is exactly the drift hazard
+  `CollectionMembers`/`ExceptionMembers` are narrow to avoid. Delete it or wire it — do not
+  quietly copy from it. On the open list.
+  ⚠ **C++ IS NOT A USABLE ORACLE for this family outside `Replace`.** `CppCodeGenerator.cs:3180-3186`
+  calls `.substr`/`.find` directly on `{args[0]}`, so a **string-literal receiver** is a bare
+  `const char*` with no such member and the program does not compile at all. `Replace` goes
+  through a lambda taking `string` and does compile.
+  ⚠ **`Mid` has no two-argument form** — registered with exactly three parameters, so
+  `Mid(s, 3)` is `Function 'Mid' expects 3 argument(s), got 2` on every backend and never
+  reaches an emitter. Pinned as the refusal.
+  ⚠ **`Right(s, n)` with n = half the string length is a DEGENERATE shape** — with a
+  6-character string, a correct `Right(s, 3)` and a `Substring(3)` that forgot the length
+  subtraction both answer `def`. Use `n = 2`. Cost a mutant that should have died.
+  **27 of 27 mutants killed against the committed fixture, 0 survivors, 0 build breaks.**
+  ⭐ **`g1-chr-no-conv` SURVIVED the first sweep and is UNTESTED, not equivalent.** Dropping
+  the `conv.u2` in front of `call string Char::ToString(char)` changes nothing for any INTEGER
+  argument — on the CLR stack `char` IS `int32`, so the call verifies and the ABI truncates
+  either way; `Chr(65)`, `Chr(65601)`, `Chr(0)`, `Chr(931)` and `Chr(-191)` are all identical
+  with and without it. It is what makes the call legal IL for a **non-integer** argument, which
+  nothing upstream rejects: `ChrOfADouble_NeedsTheNarrowingConversion` (`Dim d As Double = 65.0`
+  then `Chr(d)`) answers `[A]` and gives **InvalidProgramException** under the mutant. That one
+  test is the only thing in 54 that kills it — **do not remove it**, and note the rule it
+  illustrates again: *a mutant no shape can kill is UNTESTED, not redundant; the question is
+  whether a shape EXISTS.* `Len(Chr(-1))` is not that shape — the FRONT END rejects it
+  (`cannot convert from 'Object' to 'String'`), because `Chr` is typed Object and `Len` takes
+  String.
+
+  ⚠ **`s.Length` RUNS ON MSIL as of 2026-09-21** — `MsilStringPropertyTests` (21 cases),
+  `MSILBackend.cs`: `StringMembers` (`2566-2582`), `TryStringMember` (`2584-2610`), and the arm
+  in `Visit(IRFieldAccess)` (`5619-5643`). Before: `s.Length` on a String emitted
+  `ldfld int32 [mscorlib]System.String::'Length'` — a .NET **PROPERTY** read lowered to a field
+  load — which assembled (ilasm does not resolve member references) and died with
+  `MissingFieldException: Field not found: 'System.String.Length'`. Now
+  `callvirt instance int32 [mscorlib]System.String::get_Length()`.
+  ⭐ **THE METHOD PATH BESIDE IT WAS NEVER BROKEN, and that is what made this hard to see.**
+  `s.ToUpper()` and `s.Substring(1, 3)` both ran before and after — `Visit(IRInstanceMethodCall)`
+  renders the receiver through `IlReceiverToken` and emits a real `callvirt`. Only a member
+  reaching `Visit(IRFieldAccess)` was broken, and `Length` is String's only property, so the
+  break was total for the one member everybody uses and invisible everywhere else.
+  ⭐ **`List.Count` and `Dictionary.Count` SHARE THE SITE; `Array.Length` IS A DIFFERENT PATH
+  ENTIRELY.** Measured, all correct before and after: Count reaches `TryCollectionMember` two
+  arms above the `ldfld` and emits `callvirt … List`1<int32>::get_Count()`; **`a.Length` is the
+  dedicated `ldlen` + `conv.i4` opcode pair**, not an accessor call at all. They are CONTROLS in
+  the fixture, not siblings — and they are what kills `s5-receiver-test-removed`, the mutant
+  where the String arm claims every receiver. `HashSet.Count` is unobservable: `h.Add(1)` is
+  refused first by `TryCollectionMember`.
+  ⛔ **An unrecorded String member is REFUSED, not emitted as an `ldfld`, and that is stronger
+  than the `CollectionMembers`/`ExceptionMembers` convention on purpose:** `System.String` has
+  **no public instance fields at all**, so a field load on a string receiver cannot be right
+  whatever it names. Verified this breaks nothing that worked — on the parent tree `s.Foo`,
+  `s.Chars`, `s.Empty`, `s.ToUpper` (no parentheses) and `s.Trim` (no parentheses) all gave
+  `MissingFieldException` at RUN time; they now give a named `GenerateFailed`. ⚠ A
+  parenthesis-free String METHOD name reaches this arm too, so the refusal fires for it.
+  ⛔ **THE INTERFACE-PROPERTY READ IS STILL BROKEN and was deliberately NOT widened to.**
+  `h.Slot` on an `IHolder` still gives `MissingFieldException: Field not found: 'IHolder.Slot'`:
+  `TryResolveProperty` (`MSILBackend.cs:3104`) resolves only through `TryFindClass`, so an
+  interface receiver misses every arm. **It needs an interface-property resolver alongside the
+  existing `DeclaredInterfaceMethod` — a different lookup, not a table row**, which is why the
+  String fix does not reach it. ⚠ **C# cannot be its oracle either**: it emits an accessor-less
+  interface property and does not compile (**CS0548** + CS0200). JavaScript answers `5`. On the
+  open list.
+  **9 of 10 mutants killed against the committed fixture; 1 survivor, declared EQUIVALENT.**
+  `s7-unknown-member-falls-through` survived the scratch sweep and dies against the committed
+  fixture on all five refusal shapes — it was UNTESTED, not dead. ⚠ **`s8-call-not-callvirt`
+  SURVIVES and the `callvirt` is KEPT.** Unlike `g1` above the candidate space here is CLOSED,
+  not merely unexplored: `System.String` is sealed and `get_Length` is not virtual (nothing for
+  `callvirt` to find), ilasm accepts both, and the only receiver value where the two opcodes'
+  definitions differ — null — was measured under both and gives **byte-identical**
+  `NullReferenceException`. Kept because every other accessor emission in this file spells it
+  `callvirt` (`EmitPropertyGet`, the collection-member arm, the exception-member arm) and
+  `callvirt`'s null check is guaranteed by the CLI spec where `call`'s fault is a JIT
+  implementation detail. **Do not "simplify" it to `call`.**
+  ⚠ **Not fixed, out of these two families, each measured compiled-and-run — added to the open
+  list:**
+  - ⭐ **FIXED 2026-09-21 (C#-backend Exit/Right batch): `Right` EVALUATED ITS RECEIVER TWICE.**
+    `EmitRight` interpolated `{str}` twice and parenthesized neither operand, so besides the
+    double evaluation `Right(Ab() & "cdef", 2)` did not COMPILE (`CS0019`) and
+    `Right("abcdef", Len(Ab()) + 1)` printed `[f]` instead of `[def]`. Now
+    `({str})[^({length})..]`; pinned in `CSharpRightReceiverTests`. ⚠ A folded receiver
+    (`Right("ab" & "cdef", 2)`) cannot see any of this — the optimizer collapses it to a literal.
+  - ⛔ **C# backend: an interface property emits an accessor-less property** —
+    `CS0548: 'IHolder.Slot': property or indexer must have at least one accessor`, plus CS0200.
+    The program does not compile, so C# is not a valid oracle for any interface-property shape.
+  - **C# backend: `Dim s As String` with no initializer then `s.Length` prints `0`** — the local
+    is initialised to `""`. MSIL gives `NullReferenceException`; every other backend agrees with
+    MSIL that the local is null.
+  - **C++ backend: `Mid`/`Left`/`Right`/`InStr` with a STRING-LITERAL receiver do not compile** —
+    `.substr`/`.find` called on a bare `const char*` (`CppCodeGenerator.cs:3180-3186`).
+    `Replace` is fine; it goes through a lambda taking `string`.
+  - ⛔ **C++ backend: `Replace(s, "", "o")` HANGS** — measured **exit 137, killed**. The replace
+    lambda's `pos += to.length()` never escapes an empty needle. C# throws `ArgumentException`
+    and JavaScript returns a string; C++ loops forever.
+  - **JavaScript backend: `s.ToUpper()` — a .NET method on a String — is
+    `TypeError: s.ToUpper is not a function`.** The `.NET`-method-on-a-primitive path is not
+    lowered; the `UCase(s)` intrinsic spelling works.
+  - ⛔ **Front end: `Chr` and `Asc` are not registered in
+    `SemanticAnalyzer.RegisterStdLibFunctions`** — results typed `Object` and arguments
+    unchecked, **on all five backends**. Registering them is the proper fix for both the boxing
+    bridge and the argument guards added here; it changes what C#, C++, JavaScript and LLVM
+    emit, so it was not done from a backend.
+  - ⚠ **`BasicLang/StdLib/MSILStdLib.cs` is dead code** registered in `StdLibRegistry.cs:36`
+    and referenced by nothing, with a wrong `EmitMid`. Delete or wire.
+  - **MSIL: an INTERFACE property read is still `MissingFieldException`**, needing an
+    interface-property resolver rather than a table row (above).
+  **Full suite in place for BOTH families: 195 / 6374 / 203 / 6772 against the `2608272`
+  baseline 195 / 6299 / 203 / 6697** — +75 passed, +75 total, +0 failed, +0 skipped, which is
+  exactly the two new fixtures (54 + 21) and nothing else. 195 reported = 195 anchored
+  `^  Failed ` lines; 170 normalized failing names, `diff` against the baseline list clean.
+  Filtered `FullyQualifiedName~Msil` reference: `Failed: 0, Passed: 322`; the two new fixtures
+  alone `Failed: 0, Passed: 75`. **Both entry points exercised** — `MsilHarness` (optimizer on)
+  and the CLI (`--target=msil` → ilasm → `dotnet`), which funnel through
+  `MSILCodeGenerator.Generate(irModule)` at `Program.cs:1317` and `Program.cs:4017`.
+
+  ⚠ **ByRef RUNS ON MSIL as of 2026-09-21 — and so does writing ANY parameter** —
+  `MsilByRefTests` (28 cases) and `MsilParameterWriteTests` (7 cases). `MSILBackend.cs`:
+  `_byRefParams` / `_byRefStoreScratch` (`202-212`), `RegisterByRefParameters` (`1816`),
+  `AllocateByRefStoreScratch` (`1833`), `ParamSpec` (`1874`) and the five sites that spell a
+  signature through it (`331`, `1413`, `1585`, `2293`, `3419`), the `ldind` on a ByRef read
+  (`2948-2951`), `ByRefTarget` / `TryResolveByRefTarget` / `EmitByRefTarget` (`3014-3157`),
+  `EmitByRefArgument` + `RequireByRefSpec` (`3159-3234`), `EmitCallArguments` (`3236-3260`,
+  called from all three call arms — `3410`, `4259`, `5824`), the parameter arm of
+  `EmitStoreLocal` (`3635-3690`) and `EmitStarg` (`3790`).
+  ⭐ **THE WORKLIST ROW NAMED THE SYMPTOM, NOT THE DEFECT, AND THAT COST THE WHOLE
+  DIAGNOSIS.** "Any ByRef call → InvalidProgramException" is true and is not what was broken.
+  `EmitStoreLocal` had **no `starg` arm at all** and never consulted `_paramIndices`: it walked
+  locals → instance fields → properties → `Shared` fields → module globals and fell off the
+  end, so a store to ANY parameter emitted `// WARNING: Cannot store to 'n'` and left the
+  computed value on the evaluation stack for `ret` to reject. **The minimal discriminator has
+  no ByRef and no loop in it**: `Sub Bump(n As Integer) : n = n + 1 : PrintLine(CStr(n))` threw
+  the same `InvalidProgramException`. A parameter that is only READ always worked, ByRef or not
+  — `Sub Show(ByRef n As Integer) : PrintLine(CStr(n))` printed `41` before the fix. **Only a
+  WRITE failed**, which is why two families that looked unrelated are one.
+  ⭐ **`For <parameter> = 1 To n` WAS THE SAME DEFECT** — `CountedForVariableTests`'
+  `CountedFor_OverAParameter_…MsilIsAPinnedPreexistingGap` and `ModuleProcedureCallTests`'
+  `ByRef_ThroughAQualifiedCall_IsMarked` were BOTH pinning it from different directions, and
+  both are now promoted (to `"4"` on every backend, and to `"5"` on MSIL). The identical
+  `// WARNING: Cannot store to 'n'` marker appeared in both families' IL — twice in the counted
+  `For` (loop init and loop increment), once in `n = n + 1`. Adding the parameter arm closes
+  the whole `MsilParameterWriteTests` group on its own; ByRef's own half is a **second,
+  separable** defect that is not even reachable until stores can be emitted.
+  ⛔ **THE STORE MUST WALK THE LADDER THE LOAD WALKS, IN THE SAME ORDER.** `EmitLoadLocal`
+  resolves a parameter immediately after a local, so the new arm goes there too — putting it
+  below the field/global arms (where it naturally wants to go) makes `N = N + 1` READ the
+  argument and WRITE the module global. Pinned from both sides by
+  `AByValParameter_ShadowsAModuleGlobal_ForTheStoreAsWellAsTheLoad` and its instance-field
+  twin, which every backend answers `6 / 100`.
+  ⚠ **ByRef's own half**: `&` in the signature, `ldind.<w>` to read, `stind.<w>` to write
+  (`GetIndirectSuffix`, the same table `IRLoad` already used), and the **ADDRESS** at the call
+  site. `stind` wants the address UNDER the value and this backend arrives with the value on
+  the stack, so a ByRef parameter that is WRITTEN gets a scratch slot and the park-and-re-push
+  `_fieldStoreScratch` already existed for — IL has no swap. A ByRef parameter that is only
+  read gets no slot, so such a program emits not a byte more than before.
+  ⛔ **THE ADDRESS IS A DIFFERENT OPCODE PER ARGUMENT KIND, and one of them is a trap.** A
+  local → `ldloca`; the caller's own ByVal parameter → `ldarga`; an instance field → `ldarg.0`
+  + `ldflda`; a `Shared` field or module global → `ldsflda`; an array element → the `ldelema`
+  pointer the IR **already parks in a temp** beside the load (`a(0)` lowers to
+  `IRGetElementPtr` → `stloc int32&` then `IRLoad` → `ldind.i4`; passing the loaded copy
+  instead compiles, runs, and writes into the temporary). ⛔ **A ByRef parameter passed ON to
+  another ByRef call is a bare `ldarg`, NOT `ldarga`** — the slot already holds the caller's
+  pointer, and `ldarga` hands the callee a pointer to THIS frame's argument slot: it
+  **assembles, runs, and writes one level short**, leaving the original variable untouched.
+  That is the silent-wrong-answer mutant of this family; `CallersByRefParameterArgument_
+  StaysABareLdarg_NestedOnce` and its recursive twin are the only two shapes that catch it.
+  ⚠ **WHAT HAS NO ADDRESS IS REFUSED, LOUDLY, NOT PASSED BY VALUE** — a literal, an
+  expression's temporary, and a property (both spellings: `h.X` arrives as a temp from
+  `callvirt get_X()`, a bare in-class `X` as a name that resolves to an accessor call, and they
+  reach two different arms). The alternative in every case ASSEMBLES AND RUNS and quietly drops
+  the write-back, which is strictly worse than not compiling. A TYPE MISMATCH is refused for
+  the same reason: a managed pointer cannot be converted, so `ByRef n As Double` given an
+  Integer would mean writing the callee's change into a temporary of the parameter's type —
+  C# rejects that program too (**CS1503**), and so does C++.
+  ⚠ **⭐ THE ONE WORTH AN ADR: REAL VB PERMITS `Bump(41)`**, by creating a temporary and
+  throwing the write away. This sides with the C# backend, which refuses it (**CS1510**),
+  against C++, which accepts it (`Bump(41)` runs, `Bump(v + 1)` prints `41`). Reversing the
+  decision means implementing copy-in/copy-out — which is also exactly what a PROPERTY argument
+  would need — so it is one decision, not four. `docs/superpowers/decisions/` is still empty
+  apart from the template and the architect role has never run, so this was decided from the
+  backend and is recorded here rather than resolved.
+  ⛔ **THE DECLARATION DECIDES WHICH ARGUMENT BECOMES AN ADDRESS — NOT `IRCall.ByRefArguments`,
+  and the difference is measurable.** `EmitCallArguments` reads the same list `DeclaredParamList`
+  spells the signature from, with the same "is there one at all" test. Keying it on the IR's
+  call-site marker instead looks equivalent and is not: for `Util.Bump(v)` against a
+  `Public Shared Sub Bump(ByRef n As Integer)` the front end records **no** by-ref marker, so
+  the signature came out `(int32&)` from the declaration while the argument came out an `int32`
+  from the call site — an invalid program. One source for both halves is the only arrangement
+  in which they cannot drift.
+  ⛔ **`Optional ByRef` is no longer "no `&` at all" on MSIL** (the note further down this file
+  is corrected in place): the declaration now emits `void 'Bump'(int32& 'n')` and
+  `Bump(v)` with a supplied argument RUNS and prints `42`. **`Bump()` with the argument OMITTED
+  is a named refusal** — `AppendOmittedOptionalArguments` fills a LITERAL, and a literal has no
+  address. That is the correct answer for the shape, not a gap: the fill cannot manufacture
+  caller storage. The DECLARATION side still needs fixing on C# (`ref int n = 5`, CS1741).
+  ⛔ **NOT FIXED — A SHARED FRONT-END GAP, AND A SILENT WRONG ANSWER ON TWO BACKENDS TODAY.**
+  A ByRef parameter on a **CONSTRUCTOR** never reaches any backend:
+  `IRBuilder.Visit(ConstructorNode)` (`IRBuilder.cs:1885`) builds each ctor parameter as
+  `new IRVariable(param.Name, paramType) { IsParameter = true }` and **never copies
+  `IsByRef`**, unlike every other parameter site in that file (`711`, `790`, `1637`, `1816`,
+  `1862`, `2850`). Measured: `Public Sub New(ByRef n As Integer)` emits
+  `instance void .ctor(int32 'n')` on MSIL and `H(int32_t n)` on C++, and BOTH print `41 / 42`
+  where `42 / 42` is correct. Deliberately not fixed from a backend — it moves C#, C++,
+  JavaScript and LLVM together. Pinned as the shared gap it is in
+  `MsilByRefTests.ConstructorByRefParameter_IsAPinnedSharedFrontEndGap_NotThisFamilys`.
+  **28 of 31 mutants killed against the committed fixtures, 0 build breaks; three survivors,
+  each resolved rather than accepted.** (31 of 31 against the implementer's own kill probe;
+  probe counts do not carry over, which is why the re-sweep is the number that matters.)
+  ⭐ **`c2-one-scratch-slot-for-every-parameter` took FIVE candidate shapes to kill, and two
+  ByRef parameters is not one of them.** Giving every ByRef parameter the same scratch NAME
+  leaves the emitted IL byte-identical apart from a duplicated name in `.locals init` — the
+  indices still come out distinct, because the overwrite does not advance `_localIndices.Count`.
+  What breaks is the accounting for whatever is allocated NEXT: a plain swap, Integer+Double
+  and Integer+String all pass, and it takes two written ByRef parameters **plus a TEMPORARY in
+  the same method** for `AllocateTemporaries` to hand a temp the same index —
+  `ilasm: Local var slot 1: type conflict`. `TwoWrittenByRefParametersPlusATemporary_
+  DoNotCollideOnALocalsSlot` is the only test in 35 that kills it; **do not remove it**.
+  ⭐ **`ByRefLong_UsesTheI8IndirectSuffix`'s ARITHMETIC IS DELIBERATELY BOUNDARY-CROSSING — do
+  not "simplify" it back to `n = n + 1`.** ⛔ **It reads `Dim v As Long = 9000000` /
+  `n = n * 1000000` / `9000000000000` because that is the ONLY thing in the fixture that pins
+  the `stind` WIDTH deterministically.** Hardcoding the write suffix to `i4` originally read as
+  a mutation SURVIVOR, and both halves of why are traps worth keeping written down. A small
+  increment on a `ByRef Long` never touches the high word, so a truncating `stind.i4` writes
+  the right answer anyway — the old `41 + 1` version never once killed the mutant. And
+  `ByRefString_…`, the only other test that catches it, kills by truncating an OBJECT
+  REFERENCE to four bytes, which succeeds or not depending on where the GC happened to put the
+  new string: measured **15 kills in 17 runs**, with the clean passes including one across the
+  whole 35-test fixture — which is exactly what made the mutant read as a survivor. With the
+  boundary-crossing arithmetic in place the mutant now dies **4 runs out of 4** on the full
+  fixture, `Long` firing every time and `String` in 3 of those 4 — i.e. the `Long` case is the
+  one carrying the decision and the `String` case is a bonus that cannot be relied on. Same
+  lesson as `Right(s, n)` with n = half the length, one entry above: *a shape that cannot tell
+  the wrong answer from the right one is not coverage* — and a shape that only usually can is
+  not either.
+  ⭐ **`c3-scratch-typed-as-the-pointer` SURVIVED and the candidate space is NOT closed** —
+  declaring the scratch slot `int32&` instead of `int32` assembles and runs. Eight shapes were
+  measured against it (Integer, Long, Double written twice, Boolean, String, String under
+  400-iteration allocation pressure, a class reference reseated 500 times under pressure, and
+  mixed-width pairs); none distinguish it, because the JIT round-trips the slot regardless.
+  Unlike the `call`/`callvirt` equivalence one entry above, this is **UNTESTED, not
+  equivalent**: `.locals init` is what tells the **GC** how to trace a slot, and a byref-typed
+  slot holding a non-pointer is a reporting hazard the runtime is not obliged to tolerate. The
+  value type is kept, and the failure to find a shape is recorded rather than argued away.
+  ⭐ **`d4-constructor-signature-no-amp` SURVIVED and is DEAD, with direct evidence** — not
+  inferred from the survival. A probe asserting `instance void .ctor(int32& 'n')` in the
+  emitted IL FAILS, because `IRBuilder` never marks a ctor parameter ByRef (above), so
+  `ParamSpec` at that site can never see one. The line is kept: it is a fail-safe that costs
+  nothing and becomes correct the moment the IR is fixed.
+  ⚠ **`Single` ByRef is NOT covered by the committed fixture.** It works — measured through
+  the CLI, `void 'Bump'(float32& 'n')` with `ldind.r4`/`stind.r4`, printing `42.5` — but no
+  test pins it, so `GetIndirectSuffix`'s `r4` arm is unexercised. A fixture case needs
+  `CSng(...)` on both sides: `Dim v As Single = 41.0` with `n = n + 1.5` is refused by the
+  SEMANTIC ANALYZER (Double into Single) and the C++ backend emits an invalid literal `41f`,
+  two unrelated pre-existing bugs that have nothing to do with ByRef.
+  ⚠ **Not fixed, out of this family, measured compiled-and-run — added to the open list:**
+  - ⛔ **C# backend: a `Shared` ByRef method is CALLED WITHOUT `ref`.** `Util.Bump(v)` against
+    `Public Shared Sub Bump(ByRef n As Integer)` emits the parameter correctly
+    (`public static void Bump(ref int n)`) and then calls it without the keyword —
+    **CS1620: Argument 1 must be passed with the 'ref' keyword**, a hard build failure. C++ and
+    MSIL both run it and print `42`, so `ByRefOnASharedMethod_OracleIsCppOnly` drops the C#
+    leg and says why. Same root as the missing `IRCall.ByRefArguments` marker for a
+    `Type.SharedMethod(x)` call.
+  - ⛔ **Front end: `IRBuilder.Visit(ConstructorNode)` drops `IsByRef`** (`IRBuilder.cs:1885`)
+    — the constructor gap above, a silent wrong answer on C++ and MSIL alike.
+  **Full suite in place: 195 / 6409 / 203 / 6807 against the `aea5b8d` baseline
+  195 / 6374 / 203 / 6772** — +35 passed, +35 total, **+0 failed**, +0 skipped, which is exactly
+  the two new fixtures (28 + 7) and nothing else. The two promoted pins are **flipped, not
+  added**: they passed before (asserting the gap) and pass now (asserting the fix), so they
+  move no count. 195 reported = 195 anchored `^  Failed ` lines; 170 normalized failing names,
+  `diff` against the baseline list CLEAN. **Both entry points exercised** — `MsilHarness`
+  (optimizer on) and the CLI (`--target=msil` → ilasm → `dotnet`), the latter on one program
+  covering a local, a nested ByRef, a module global, an array element, a ByRef `Function` and a
+  counted `For` over a parameter: `42 43 42 11 41 40 4`.
+
   ⚠ **Narrowing shapes are refused by the SEMANTIC ANALYZER, before any of this** —
   `Public N As Single = 1.5 + 1.0` is "Cannot assign value of type 'Double' to variable of type
   'Single'", before and after. Not a folding gap.
@@ -1975,6 +3246,13 @@ package in when that cross-check matters.
   emits no `&` at all and the CLR rejects the program, and C++ trades "too few arguments" for
   "cannot bind non-const lvalue reference … to an rvalue". The DECLARATION side has to be fixed
   first. Pinned.
+  ⚠ **The MSIL half is STALE as of 2026-09-21 — re-measured, and it is no longer "no `&` at
+  all".** The declaration emits `void 'Bump'(int32& 'n')` and `Bump(v)` with a SUPPLIED
+  argument runs and prints `42`. Only the OMITTED call is refused, by name
+  (`a literal has no address`), because `AppendOmittedOptionalArguments` fills a literal and a
+  literal has no caller storage to point at — the right answer for the shape rather than a gap.
+  C#, C++ and JavaScript are unchanged, so `Optional ByRef` is still broken overall and the
+  DECLARATION side is still what has to be fixed first.
   ⚠ **A cross-file call reaches only C# today**, so that one test is structural rather than a run:
   JS refuses it ("no lowering for 'Helpers.Greet'") and MSIL emits
   `call void Combined::HelpersGreet(int32, object)` against a method declared
