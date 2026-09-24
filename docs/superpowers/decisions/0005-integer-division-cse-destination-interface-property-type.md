@@ -1,5 +1,7 @@
 # ADR 0005: integer division with floating operands, CSE's destination boundary, and interface property type resolution
 
+**Amended by [ADR-0006](0006-kill-vocabulary-totality-dynamic-use-call-visibility.md)** — D2's Revisit clause replaced, S′'s use count and region made dynamic, and call-write coverage unified to one predicate.
+
 - **Date:** 2026-09-24
 - **Status:** Accepted
 - **Decided by:** the architect role, dispatched on its pinned model with no
