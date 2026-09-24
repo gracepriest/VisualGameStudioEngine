@@ -343,16 +343,20 @@ namespace BasicLang.Compiler.IR.Optimization
             foreach (var function in module.Functions)
             {
                 if (function.IsExternal) continue;
-                
+
+                _function = function;
                 foreach (var block in function.Blocks)
                 {
                     FoldBlock(block);
                 }
+                _function = null;
             }
-            
+
             return ModificationCount > 0;
         }
-        
+
+        private IRFunction _function;
+
         private void FoldBlock(BasicBlock block)
         {
             for (int i = 0; i < block.Instructions.Count; i++)
@@ -450,18 +454,25 @@ namespace BasicLang.Compiler.IR.Optimization
         }
 
         /// <summary>
-        /// Replace all references to oldValue with newValue in the block.
+        /// Replace all references to oldValue with newValue in the whole FUNCTION.
         ///
         /// <para>Delegates to <see cref="OptimizationPass.ReplaceUses"/> — one implementation
         /// for every pass that swaps an instruction, per the repo rule that shared resolver
-        /// logic changes once rather than per consumer. The block scope is unchanged from the
-        /// hand-rolled version this replaced; what widened is NODE coverage, which previously
-        /// stopped at eight consumer kinds and silently missed field stores, indexer accesses,
-        /// array stores, casts, throws and instance-call receivers.</para>
+        /// logic changes once rather than per consumer.</para>
+        ///
+        /// <para>⛔ This used to re-point only the folded instruction's own BLOCK, so a consumer in
+        /// another block kept the discarded node and rendered an undeclared temp. It surfaced once
+        /// LoopInvariantCodeMotionPass started hoisting correctly: `s = s + x * y` in a loop, with
+        /// x = 6 and y = 7, hoisted `t4 = x * y` into the preheader, folded it to 42 there, and
+        /// left the body's `s = s + t4` — C++: "'t4' was not declared". Same scope as
+        /// StrengthReductionPass and AlgebraicSimplificationPass use, for the same reason.</para>
         /// </summary>
         private void ReplaceAllReferences(BasicBlock block, IRValue oldValue, IRValue newValue)
         {
-            ReplaceUses(block.Instructions, oldValue, newValue);
+            var scope = _function != null
+                ? _function.Blocks.SelectMany(b => b.Instructions)
+                : block.Instructions;
+            ReplaceUses(scope, oldValue, newValue);
         }
 
         private IRConstant TryFoldBinary(IRBinaryOp op)
@@ -1312,114 +1323,144 @@ namespace BasicLang.Compiler.IR.Optimization
             return ModificationCount > 0;
         }
         
+        // ⛔ REWRITTEN. The previous version got all three of its decisions wrong, MEASURED on
+        // master 42a2280 with --optimize (every For loop printed 0 on C++; a loop with an If, or a
+        // nested loop, threw "ReferenceError: t5 is not defined" on JavaScript):
+        //  - WHICH values are invariant: an IRVariable that was neither a parameter nor a global
+        //    fell through to the IRInstruction arm, where its null ParentBlock is "outside the
+        //    loop" — so EVERY local counted as invariant, the loop counter included, and `i + 1`
+        //    and `i <= 5` were hoisted. (A parameter was also assumed invariant, though VB lets a
+        //    ByVal parameter be reassigned inside the loop.)
+        //  - WHERE they go: the "preheader" was any outside predecessor of the first block with
+        //    one, over loops that ControlFlowGraph.FindBackEdges had itself got wrong (fixed there)
+        //    — the loop condition landed in for0.inc.
+        //  - IN WHAT ORDER: a backwards sweep over blocks in arbitrary order, so a hoisted value
+        //    could land after the hoisted value that reads it.
         private void HoistInvariants(List<BasicBlock> loop, ControlFlowGraph cfg)
         {
             var loopSet = new HashSet<BasicBlock>(loop);
-            var header = loop.FirstOrDefault(b => b.Predecessors.Any(p => !loopSet.Contains(p)));
-            
+
+            // The header is the loop block that dominates every other one.
+            var header = loop.FirstOrDefault(h => loop.All(b => b.Dominators.Contains(h)));
             if (header == null) return;
-            
-            // Find preheader (block before loop header)
-            var preheader = header.Predecessors.FirstOrDefault(p => !loopSet.Contains(p));
-            if (preheader == null) return;
-            
+
+            // A real preheader or nothing: the header's ONLY outside predecessor, which in turn
+            // branches ONLY to the header — so code placed there runs exactly once, on every
+            // path into the loop and on no path that skips it.
+            var outside = header.Predecessors.Where(p => !loopSet.Contains(p)).ToList();
+            if (outside.Count != 1) return;
+            var preheader = outside[0];
+            if (preheader.Successors.Count != 1 || preheader.Successors[0] != header) return;
+
+            var written = VariablesWrittenIn(loop);
+
+            // Fixed point, recorded in DISCOVERY order: an instruction joins only after all of its
+            // loop-defined operands have, so this list is already in dependency order.
             var invariants = new HashSet<IRInstruction>();
-            
-            // Find loop-invariant instructions
+            var order = new List<IRInstruction>();
             bool changed = true;
             while (changed)
             {
                 changed = false;
-                
                 foreach (var block in loop)
                 {
                     foreach (var inst in block.Instructions)
                     {
-                        if (IsLoopInvariant(inst, loopSet, invariants))
+                        if (!invariants.Contains(inst) && IsLoopInvariant(inst, loopSet, invariants, written))
                         {
-                            if (invariants.Add(inst))
-                            {
-                                changed = true;
-                            }
+                            invariants.Add(inst);
+                            order.Add(inst);
+                            changed = true;
                         }
                     }
                 }
             }
-            
-            // Move invariants to preheader
-            foreach (var block in loop)
+
+            if (order.Count == 0) return;
+
+            int insertPos = preheader.Instructions.Count;
+            if (insertPos > 0 && preheader.Instructions[insertPos - 1] is IRBranch)
+                insertPos--;
+
+            foreach (var inst in order)
             {
-                for (int i = block.Instructions.Count - 1; i >= 0; i--)
+                // Removed from whichever loop block actually holds it — not via ParentBlock,
+                // which nothing guarantees is current.
+                foreach (var block in loop)
+                    if (block.Instructions.Remove(inst)) break;
+                preheader.Instructions.Insert(insertPos++, inst);
+                inst.ParentBlock = preheader;
+                ReportModification();
+            }
+        }
+
+        /// <summary>
+        /// Names of the variables anything in the loop may write: assignment targets, values
+        /// renamed to a variable they store into, and variables passed ByRef.
+        /// </summary>
+        private static HashSet<string> VariablesWrittenIn(List<BasicBlock> loop)
+        {
+            var written = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var inst in loop.SelectMany(b => b.Instructions))
+            {
+                if (inst is IRAssignment { Target: IRVariable target })
+                    written.Add(target.Name);
+                if (inst is IRValue { NamedAfterVariable: true } store && store.Name != null)
+                    written.Add(store.Name);
+                if (inst is IRCall call && call.ByRefArguments != null)
                 {
-                    var inst = block.Instructions[i];
-                    
-                    if (invariants.Contains(inst))
-                    {
-                        block.Instructions.RemoveAt(i);
-                        
-                        // Insert before preheader's terminator
-                        int insertPos = preheader.Instructions.Count;
-                        if (insertPos > 0 && preheader.Instructions[insertPos - 1] is IRBranch)
-                            insertPos--;
-                        
-                        preheader.Instructions.Insert(insertPos, inst);
-                        ReportModification();
-                    }
+                    for (int i = 0; i < call.Arguments.Count && i < call.ByRefArguments.Count; i++)
+                        if (call.ByRefArguments[i] && call.Arguments[i] is IRVariable byRef)
+                            written.Add(byRef.Name);
                 }
             }
+            return written;
         }
-        
-        private bool IsLoopInvariant(IRInstruction inst, HashSet<BasicBlock> loop, HashSet<IRInstruction> knownInvariants)
+
+        private static bool IsLoopInvariant(IRInstruction inst, HashSet<BasicBlock> loop,
+            HashSet<IRInstruction> knownInvariants, HashSet<string> written)
         {
-            // Terminators and side-effect instructions are not invariant
-            if (inst is IRBranch || inst is IRConditionalBranch || inst is IRReturn ||
-                inst is IRStore || inst is IRCall)
+            // Only pure, NON-TRAPPING computations move. A store into a user variable never does
+            // (hoisting it would perform it even when the loop runs zero times). Division and
+            // modulo can throw (integer divide by zero), and hoisting would raise that exception
+            // on a path — a skipped If, a zero-trip loop — where the program never divides.
+            if (inst is IRValue { NamedAfterVariable: true }) return false;
+
+            switch (inst)
             {
-                return false;
-            }
-            
-            // Check if all operands are invariant
-            if (inst is IRBinaryOp binaryOp)
-            {
-                return IsValueInvariant(binaryOp.Left, loop, knownInvariants) &&
-                       IsValueInvariant(binaryOp.Right, loop, knownInvariants);
-            }
-            else if (inst is IRUnaryOp unaryOp)
-            {
-                return IsValueInvariant(unaryOp.Operand, loop, knownInvariants);
-            }
-            else if (inst is IRCompare compare)
-            {
-                return IsValueInvariant(compare.Left, loop, knownInvariants) &&
-                       IsValueInvariant(compare.Right, loop, knownInvariants);
-            }
-            
-            return false;
-        }
-        
-        private bool IsValueInvariant(IRValue value, HashSet<BasicBlock> loop, HashSet<IRInstruction> knownInvariants)
-        {
-            if (value is IRConstant)
-                return true;
-            
-            if (value is IRVariable variable)
-            {
-                // Parameter variables are invariant
-                if (variable.IsParameter)
-                    return true;
-                
-                // Global variables could change
-                if (variable.IsGlobal)
+                case IRBinaryOp binaryOp:
+                    if (binaryOp.Operation is BinaryOpKind.Div or BinaryOpKind.Mod or BinaryOpKind.IntDiv)
+                        return false;
+                    return IsValueInvariant(binaryOp.Left, loop, knownInvariants, written) &&
+                           IsValueInvariant(binaryOp.Right, loop, knownInvariants, written);
+                case IRUnaryOp unaryOp:
+                    return IsValueInvariant(unaryOp.Operand, loop, knownInvariants, written);
+                case IRCompare compare:
+                    return IsValueInvariant(compare.Left, loop, knownInvariants, written) &&
+                           IsValueInvariant(compare.Right, loop, knownInvariants, written);
+                default:
                     return false;
             }
-            
-            // Check if the defining instruction is a known invariant
-            if (value is IRInstruction inst)
+        }
+
+        private static bool IsValueInvariant(IRValue value, HashSet<BasicBlock> loop,
+            HashSet<IRInstruction> knownInvariants, HashSet<string> written)
+        {
+            switch (value)
             {
-                return !loop.Contains(inst.ParentBlock) || knownInvariants.Contains(inst);
+                case IRConstant:
+                    return true;
+                case IRVariable variable:
+                    // A global can change behind any call; anything else is invariant exactly
+                    // when nothing in the loop writes it (a ByVal parameter included).
+                    return !variable.IsGlobal && variable.Name != null && !written.Contains(variable.Name);
+                case IRInstruction inst:
+                    if (knownInvariants.Contains(inst)) return true;
+                    // Computed once, before the loop. An unknown block is treated as inside.
+                    return inst.ParentBlock != null && !loop.Contains(inst.ParentBlock);
+                default:
+                    return false;
             }
-            
-            return false;
         }
     }
     
@@ -1608,8 +1649,34 @@ namespace BasicLang.Compiler.IR.Optimization
 
             AddPass(new TailCallOptimizationPass());
             AddPass(new AlgebraicSimplificationPass());
-            AddPass(new LoopFusionPass());  // Fuse adjacent loops before unrolling
-            AddPass(new LoopUnrollingPass(4));  // 4x unrolling
+
+            // LoopFusionPass and LoopUnrollingPass DISABLED — the same arrangement as
+            // FunctionInliningPass and InductionVariablePass: the classes stay (pinned by
+            // LoopPassesDisabledTests), nothing ships them.
+            //
+            // WHY NOW: until ControlFlowGraph.FindBackEdges was fixed, every "loop" handed to these
+            // passes was garbage (it contained the entry block), and they mostly did nothing with
+            // it. Correct loops made them LIVE. MEASURED with --optimize on 13 loop programs (10
+            // single loops, 3 pairs of adjacent loops); with both passes out of the pipeline, all
+            // 13 print the right answer on JavaScript and C++:
+            //  - LoopUnrollingPass broke 9 of the 10 single loops: "ReferenceError: _u3_i is not
+            //    defined" on JavaScript, "'_u3_i' was not declared" on C++. Read from the code: it
+            //    renames EVERY local in the cloned body (the user's own `s` and `i` become _u0_s,
+            //    _u0_i, never declared), never checks the trip count divides by the factor (a
+            //    5-trip loop unrolled 4x tests its condition only every 4th iteration), turns
+            //    stores into user variables into fresh temps, never re-points operands at the
+            //    clones, and finds blocks by NAME (".cond", ".inc").
+            //  - LoopFusionPass broke the one shape it exists for — two adjacent independent loops
+            //    with the same bounds (C++: "label 'for0_inc' used but not defined"). It moves
+            //    loop 2's increment block along with its body (it excludes only ".cond"/".latch"
+            //    by NAME), appends to whichever loop-1 block is listed last — possibly after that
+            //    block's own branch — and never maps loop 2's variable onto loop 1's. On master,
+            //    before the CFG fix, the same programs were already WRONG, silently (JavaScript
+            //    printed 2020, 30 and 18 for 1020, 40 and 48).
+            // A sound version of either is a rewrite, and neither buys anything here: clang, the
+            // CLR JIT and V8 all unroll and fuse downstream, where it is legal.
+            // AddPass(new LoopFusionPass());
+            // AddPass(new LoopUnrollingPass(4));
 
             // InductionVariablePass DISABLED — same call, for the same reason, as FunctionInliningPass
             // above: every loop it rewrites is broken, and it stays in the file (pinned by

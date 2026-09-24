@@ -279,8 +279,17 @@ namespace BasicLang.Compiler.IR
             {
                 foreach (var successor in block.Successors)
                 {
-                    // Back edge: successor dominates block
-                    if (successor.Dominators.Contains(block))
+                    // Back edge: successor dominates block. `X.Dominators` is the set of blocks
+                    // that dominate X, so that is `block.Dominators.Contains(successor)`.
+                    //
+                    // ⛔ This read `successor.Dominators.Contains(block)` — "block dominates
+                    // successor" — which is true of nearly every FORWARD edge. MEASURED on
+                    // `For i = 1 To 5 : s = s + i * 3 : Next` (master 42a2280): entry->for0.cond
+                    // was a "back edge", every "loop" contained entry (one contained for0.end),
+                    // and LoopInvariantCodeMotionPass, handed the one real loop with its
+                    // "preheader" chosen as for0.inc, moved the loop condition INTO the
+                    // increment block — every For loop printed 0 on C++ under --optimize.
+                    if (block.Dominators.Contains(successor))
                     {
                         backEdges.Add((block, successor));
                     }
@@ -447,8 +456,10 @@ namespace BasicLang.Compiler.IR
             
             foreach (var (tail, head) in backEdges)
             {
-                // Check if head dominates tail (making it a proper loop header)
-                if (!head.Dominators.Contains(tail))
+                // Check if head dominates tail (making it a proper loop header). Same
+                // orientation fix as FindBackEdges: "head dominates tail" is
+                // tail.Dominators.Contains(head).
+                if (!tail.Dominators.Contains(head))
                 {
                     return false;
                 }
