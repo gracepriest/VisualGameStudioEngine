@@ -242,12 +242,14 @@ public class FormCanvasControl : Control
 
     /// <summary>
     /// Task 21 (commit 24d). An OUTPUT, not an input: the CANVAS rectangle of the Type Here slot
-    /// <see cref="TypeHereHost"/> names, written at the end of <c>Render</c> so a bound overlay
-    /// control can be positioned exactly over it, and <c>default</c> when no such slot is on screen.
+    /// <see cref="TypeHereHost"/> names, so a bound overlay control can be positioned exactly over
+    /// it, and <c>default</c> when no such slot is on screen. Correct after every render; normally
+    /// already correct before one, because each input republishes it as it changes.
     ///
-    /// <para>⛔ Deliberately NOT in <c>AffectsRender</c>: it is written from inside <c>Render</c>,
-    /// and a render-affecting property written there re-enters the render pass that is still
-    /// running.</para>
+    /// <para>⛔⛔ Never CHANGED from inside <c>Render</c> — its subscriber lays out a TextBox, and a
+    /// layout invalidation during the render pass throws inside the binding, where it is swallowed
+    /// (the owner's "typed NOT in the Type Here"). See <c>PublishTypeHereBoundsFromRender</c>. And
+    /// deliberately NOT in <c>AffectsRender</c>: it is an output of the same walk Render does.</para>
     ///
     /// <para>⚠ Canvas pixels, not form units. The overlay is a sibling of this control in the visual
     /// tree, so it is positioned in the same space this control is drawn in — a rectangle in form
@@ -357,6 +359,18 @@ public class FormCanvasControl : Control
             change.Property == SelectionProperty)
         {
             _renameArmedFor = null;
+        }
+
+        // Every input to TypeHereBounds — the AffectsRender list above plus the size Fit reads —
+        // republishes it HERE, outside the render pass. See PublishTypeHereBoundsFromRender.
+        if (change.Property == DocumentProperty ||
+            change.Property == SelectedControlProperty ||
+            change.Property == ModelRevisionProperty ||
+            change.Property == TypeHereHostProperty ||
+            change.Property == EditingItemProperty ||
+            change.Property == BoundsProperty)
+        {
+            RefreshTypeHereBounds();
         }
 
         if (change.Property != SelectionProperty)
@@ -928,15 +942,19 @@ public class FormCanvasControl : Control
                 _pressIsSelecting = false;
             }
 
-            if (secondClick)
-            {
-                OfferRename(hit!);
-            }
+            var renameOffered = secondClick && OfferRename(hit!);
 
             // Arm the NEXT press: this one landed on an item and left it as the sole selection.
             // Checked AFTER OfferRename, so a view model that moved the selection in answer to it
             // (which disarms through OnPropertyChanged) is read as it now stands.
-            if (!extend && hit != null &&
+            // ⛔⛔ But NOT when this press OPENED a rename — like a double-click, a rename is its own
+            // gesture and the click after it starts afresh. Armed, the first click after committing
+            // a rename re-opened the rename box at once over the (still selected) item, the user's
+            // intended second click then landed IN that box and dropped the caret mid-caption,
+            // un-selecting the pre-filled text: "&Save" renamed to "&Sa&SaveAgainve". Invisible until
+            // the overlay actually sat over the cell (see PublishTypeHereBoundsFromRender); pinned
+            // by FormDesignerRealViewTests.RenamingTheSameItemTwiceThenADifferentItem_ViaSecondClick.
+            if (!renameOffered && !extend && hit != null &&
                 ReferenceEquals(hit, SelectedControl) &&
                 (Selection == null || Selection.Controls.Count <= 1))
             {
@@ -1464,9 +1482,10 @@ public class FormCanvasControl : Control
         // item itself, which hosts its own open dropdown's slot — matching on it would highlight
         // that slot and publish ITS rectangle, parking the overlay a row below the caption being
         // edited.
+        // The predicate itself lives in EditedRectOf, shared with ComputeTypeHereBounds — the
+        // eager, outside-the-render copy of this same walk. See PublishTypeHereBoundsFromRender.
         var renaming = EditingItem;
-        bool IsEditedSlot(FormLayoutEntry entry) =>
-            renaming == null && TypeHereHost is { } host && ReferenceEquals(entry.Host, host);
+        var typeHereHost = TypeHereHost;
 
         // The canvas rectangle of the slot TypeHereHost names, or default when it names none —
         // captured here and published at the very END of this method. See the assignment there.
@@ -1477,14 +1496,15 @@ public class FormCanvasControl : Control
         foreach (var entry in FormCanvasTransform.Layout(document, SelectedControl))
         {
             var bounds = _transform.ToCanvas(entry.Bounds);
+            var editedRect = EditedRectOf(entry, bounds, typeHereHost, renaming, _transform.Zoom);
+            if (editedRect is { } rect)
+            {
+                editedSlot = rect;
+            }
 
             if (entry.Role == FormLayoutRole.TypeHere)
             {
-                var edited = IsEditedSlot(entry);
-                if (edited)
-                {
-                    editedSlot = bounds;
-                }
+                var edited = editedRect != null;
 
                 var slotCaption = DrawTypeHereSlot(context, bounds, edited, entry.Host, _transform.Zoom);
                 _captionLog?.Add(new CaptionRecord(null, entry.Host, bounds, FormCanvasTransform.TypeHereCaption, slotCaption));
@@ -1504,14 +1524,6 @@ public class FormCanvasControl : Control
             {
                 var drawn = DrawControl(context, entry.Control, bounds);
                 _captionLog?.Add(new CaptionRecord(entry.Control, null, bounds, CaptionForTest(entry.Control), drawn));
-
-                // The rename's rectangle: the item's OWN cell, at the height the overlay recovers
-                // its zoom from (FormCanvasTransform.EditBoxBounds states why it is not the bare cell).
-                if (renaming != null && entry.Role == FormLayoutRole.Cell &&
-                    ReferenceEquals(entry.Control, renaming))
-                {
-                    editedSlot = FormCanvasTransform.EditBoxBounds(renaming, bounds, _transform.Zoom);
-                }
             }
         }
 
@@ -1563,15 +1575,127 @@ public class FormCanvasControl : Control
             }
         }
 
-        // ⛔ An OUTPUT of the render, written LAST — and TypeHereBoundsProperty is deliberately NOT
-        // in AffectsRender, because writing a render-affecting property from inside Render re-enters
-        // it. It is the rectangle the overlay editor sits on, so it can only be known once the
-        // layout this pass actually drew has been walked.
-        //
-        // ⚠ Written UNCONDITIONALLY, including the `default` case. Clearing TypeHereHost — or
+        // ⚠ Published UNCONDITIONALLY, including the `default` case. Clearing TypeHereHost — or
         // selecting something that makes that slot disappear from the layout altogether — must move
         // the editor off it, not leave it parked over a rectangle that is no longer on screen.
-        TypeHereBounds = editedSlot;
+        // ⛔⛔ But never WRITTEN from here when it changes — see PublishTypeHereBoundsFromRender.
+        PublishTypeHereBoundsFromRender(editedSlot);
+    }
+
+    /// <summary>
+    /// The rectangle <paramref name="entry"/> contributes to <see cref="TypeHereBounds"/>, or null.
+    /// The ONE predicate for "is this what the overlay sits on", asked by Render (for the slot
+    /// highlight and the published rectangle) and by <see cref="ComputeTypeHereBounds"/>.
+    ///
+    /// <para>⛔ A slot matches by its HOST, never its Control (always null on a slot) — see the
+    /// comment in <c>Render</c>. And while an item is being RENAMED no slot matches at all: the
+    /// rectangle is the item's OWN cell, at the height the overlay recovers its zoom from
+    /// (<see cref="FormCanvasTransform.EditBoxBounds"/> states why it is not the bare cell).</para>
+    /// </summary>
+    private static Rect? EditedRectOf(
+        FormLayoutEntry entry, Rect canvasBounds, FormControl? typeHereHost, FormControl? renaming, double zoom)
+    {
+        if (entry.Role == FormLayoutRole.TypeHere)
+        {
+            return renaming == null && typeHereHost is { } host && ReferenceEquals(entry.Host, host)
+                ? canvasBounds
+                : null;
+        }
+
+        if (renaming != null && entry.Control != null && entry.Role == FormLayoutRole.Cell &&
+            ReferenceEquals(entry.Control, renaming))
+        {
+            return FormCanvasTransform.EditBoxBounds(renaming, canvasBounds, zoom);
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// What <c>Render</c> will publish as <see cref="TypeHereBounds"/> for the canvas as it stands
+    /// now — the same Fit, the same Layout and the same <see cref="EditedRectOf"/> — or null when
+    /// Render would publish nothing (no document, the schematic probe) or there is no size to fit
+    /// into yet.
+    /// </summary>
+    private Rect? ComputeTypeHereBounds()
+    {
+        if (_schematicOverride != null || Document is not { } document ||
+            Bounds.Width <= 0 || Bounds.Height <= 0)
+        {
+            return null;
+        }
+
+        var transform = Fit(document, Bounds.Size);
+        var renaming = EditingItem;
+        var typeHereHost = TypeHereHost;
+        var result = default(Rect);
+        foreach (var entry in FormCanvasTransform.Layout(document, SelectedControl))
+        {
+            if (EditedRectOf(entry, transform.ToCanvas(entry.Bounds), typeHereHost, renaming, transform.Zoom) is { } rect)
+            {
+                result = rect;
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>The newest value of <see cref="TypeHereBounds"/>, from whichever path computed it last.</summary>
+    private Rect _latestTypeHereBounds;
+
+    /// <summary>True while a deferred <see cref="TypeHereBounds"/> write is queued (at most one).</summary>
+    private bool _typeHereBoundsWritePosted;
+
+    /// <summary>
+    /// The EAGER path: recomputes and writes <see cref="TypeHereBounds"/> the moment an input to it
+    /// changes, OUTSIDE any render pass — so by the time Render runs, the value it computes is the
+    /// value already published and its own publish is a no-op. See
+    /// <see cref="PublishTypeHereBoundsFromRender"/> for why this must exist.
+    /// </summary>
+    private void RefreshTypeHereBounds()
+    {
+        if (ComputeTypeHereBounds() is { } bounds)
+        {
+            _latestTypeHereBounds = bounds;
+            TypeHereBounds = bounds;
+        }
+    }
+
+    /// <summary>
+    /// Render's publish of <see cref="TypeHereBounds"/>.
+    ///
+    /// <para>⛔⛔ OWNER'S REPORT (2026-09-24): "the text was typed NOT in the Type Here". The overlay
+    /// TextBox sat at its default spot (editor-local 0,0, auto size) in the running IDE while
+    /// <c>TypeHereBounds</c> held the right rectangle. MEASURED cause: <c>TypeHereBounds</c> used to
+    /// be WRITTEN here, inside Render; the <c>SlotBounds</c> binding delivers it synchronously, so
+    /// <see cref="FormTypeHereEditor"/> set the box's Padding/FontSize/Canvas.Left/Width — every one
+    /// of them AffectsMeasure/Arrange — DURING THE RENDER PASS, and Avalonia throws
+    /// <c>InvalidOperationException: Visual was invalidated during the render pass</c>
+    /// (<c>CompositingRenderer.AddDirty</c>). The binding pipeline SWALLOWS it: no crash, no log a
+    /// user sees, and the positioning never runs. Keeping <c>TypeHereBounds</c> out of
+    /// <c>AffectsRender</c> only stopped THIS control re-entering; it never protected the subscriber.</para>
+    ///
+    /// <para>So no change is ever raised from inside Render. The eager path
+    /// (<see cref="RefreshTypeHereBounds"/>, driven from <see cref="OnPropertyChanged"/> for every
+    /// input — including <c>Bounds</c>) normally has the value right already, and then this is a
+    /// no-op. When it is not (a render invalidated without a property change, e.g. a drag moving
+    /// the strip in place), the write is POSTED to run after the render pass instead — one frame
+    /// late, never dropped, never inside the render.</para>
+    /// </summary>
+    private void PublishTypeHereBoundsFromRender(Rect bounds)
+    {
+        _latestTypeHereBounds = bounds;
+        if (bounds == TypeHereBounds || _typeHereBoundsWritePosted)
+        {
+            return;
+        }
+
+        _typeHereBoundsWritePosted = true;
+        Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+        {
+            _typeHereBoundsWritePosted = false;
+            TypeHereBounds = _latestTypeHereBounds;
+        });
     }
 
     /// <summary>

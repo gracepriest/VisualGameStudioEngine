@@ -1,5 +1,6 @@
 using System;
 using System.Linq;
+using System.Reflection;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Headless;
@@ -79,11 +80,52 @@ public class FormDesignerRealViewTests
             return fit.ToCanvas(entry.Bounds).Center;
         }
 
+        /// <summary>Canvas-space FULL RECTANGLE of the Type Here slot hosted by <paramref name="host"/>
+        /// — the same computation <see cref="CentreOfSlot"/> uses, but the whole rect rather than just
+        /// its centre, so a caller can compare it against the overlay's own rect rather than just a
+        /// point inside both.</summary>
+        public Rect SlotCanvasRect(FormControl host)
+        {
+            var fit = FormCanvasControl.Fit(Doc, Canvas.Bounds.Size);
+            var entry = FormCanvasTransform.Layout(Doc, Canvas.SelectedControl)
+                .Single(e => e.Role == FormLayoutRole.TypeHere && ReferenceEquals(e.Host, host));
+            return fit.ToCanvas(entry.Bounds);
+        }
+
         /// <summary>Translates a point in the CANVAS's own local space into WINDOW space, the
         /// coordinate frame <c>Window.MouseDown</c>/<c>MouseUp</c> actually dispatch in.</summary>
         public Point ToWindow(Point canvasLocalPoint) =>
             Canvas.TranslatePoint(canvasLocalPoint, Window)
             ?? throw new InvalidOperationException("the canvas is not in the window's visual tree — cannot translate a point");
+
+        /// <summary>Translates a RECTANGLE in the canvas's own local space into WINDOW space (top-left
+        /// translated; width/height are already canvas pixels, so they carry over unchanged).</summary>
+        public Rect ToWindowRect(Rect canvasLocalRect)
+        {
+            var topLeft = ToWindow(canvasLocalRect.TopLeft);
+            return new Rect(topLeft, canvasLocalRect.Size);
+        }
+
+        /// <summary>The overlay TextBox's own rectangle, translated into WINDOW space — the frame
+        /// dispatched input and <see cref="SlotCanvasRect"/> both live in.</summary>
+        public Rect OverlayWindowRect()
+        {
+            var box = Box(TypeHereEditor);
+            var topLeft = box.TranslatePoint(new Point(0, 0), Window)
+                ?? throw new InvalidOperationException("the overlay box is not in the window's visual tree");
+            return new Rect(topLeft, box.Bounds.Size);
+        }
+
+        private static readonly System.Reflection.FieldInfo RenameArmedForField =
+            typeof(FormCanvasControl).GetField("_renameArmedFor", BindingFlags.NonPublic | BindingFlags.Instance)
+            ?? throw new InvalidOperationException("FormCanvasControl._renameArmedFor not found by reflection — field renamed?");
+
+        private static readonly System.Reflection.FieldInfo PressIsSelectingField =
+            typeof(FormCanvasControl).GetField("_pressIsSelecting", BindingFlags.NonPublic | BindingFlags.Instance)
+            ?? throw new InvalidOperationException("FormCanvasControl._pressIsSelecting not found by reflection — field renamed?");
+
+        public FormControl? RenameArmedFor => (FormControl?)RenameArmedForField.GetValue(Canvas);
+        public bool PressIsSelecting => (bool)PressIsSelectingField.GetValue(Canvas)!;
 
         public void Click(Point canvasLocalPoint)
         {
@@ -152,12 +194,42 @@ public class FormDesignerRealViewTests
         var host = rig.Vm.StripEditor.Host is BasicLang.Forms.FormControl fc ? fc.Id : (rig.Vm.StripEditor.Host?.ToString() ?? "null");
         var selPrimary = rig.Vm.Selection.Primary?.Id ?? "null";
         var canvasSelected = rig.Canvas.SelectedControl?.Id ?? "null";
+        var editingItem = rig.Canvas.EditingItem?.Id ?? "null";
+        var renameArmedFor = rig.RenameArmedFor?.Id ?? "null";
         var trace = $"[{label}] Focused={focusedDesc}; TypeHereBox.IsFocused={boxFocused}; " +
-                    $"StripEditor.IsActive={rig.Vm.StripEditor.IsActive}; EditTarget={editTarget}; Host={host}; " +
+                    $"StripEditor.IsActive={rig.Vm.StripEditor.IsActive}; StripEditor.Text=\"{rig.Vm.StripEditor.Text}\"; " +
+                    $"EditTarget={editTarget}; Host={host}; " +
                     $"Selection.Primary={selPrimary}; Canvas.SelectedControl={canvasSelected}; " +
-                    $"TypeHereEditor.IsVisible={rig.TypeHereEditor.IsVisible}";
+                    $"Canvas.EditingItem={editingItem}; " +
+                    $"TypeHereEditor.IsVisible={rig.TypeHereEditor.IsVisible}; " +
+                    $"TypeHereEditor.IsHitTestVisible={rig.TypeHereEditor.IsHitTestVisible}; " +
+                    $"TypeHereBox.IsFocused={boxFocused}; " +
+                    $"Canvas._renameArmedFor={renameArmedFor}; Canvas._pressIsSelecting={rig.PressIsSelecting}";
         TestContext.WriteLine(trace);
         return trace;
+    }
+
+    /// <summary>Asserts the overlay TextBox's WINDOW rect equals the CURRENT Type Here slot's window
+    /// rect for <paramref name="host"/>, within 1px on each edge, recording both rects and every
+    /// diagnostic field on failure. Used by the position-across-a-run repro (task step A).</summary>
+    private static void AssertOverlayOnSlot(Rig rig, FormControl host, string label)
+    {
+        var expected = rig.ToWindowRect(rig.SlotCanvasRect(host));
+        var actual = rig.OverlayWindowRect();
+        var trace = FocusTrace(rig, label);
+        var detail = $"[{label}] expected(TypeHereBounds->window)={expected}; actual(overlay box->window)={actual}; " +
+                     $"canvas.TypeHereBounds={rig.Canvas.TypeHereBounds}; editor.SlotBounds={rig.TypeHereEditor.SlotBounds}; " +
+                     $"StripEditor.Host={(rig.Vm.StripEditor.Host as FormControl)?.Id ?? "null"}; " +
+                     $"Canvas.SelectedControl={rig.Canvas.SelectedControl?.Id ?? "null"}; " + trace;
+        TestContext.WriteLine(detail);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(actual.X, Is.EqualTo(expected.X).Within(1), "overlay X != slot X. " + detail);
+            Assert.That(actual.Y, Is.EqualTo(expected.Y).Within(1), "overlay Y != slot Y. " + detail);
+            Assert.That(actual.Width, Is.EqualTo(expected.Width).Within(1), "overlay Width != slot Width. " + detail);
+            Assert.That(actual.Height, Is.EqualTo(expected.Height).Within(1), "overlay Height != slot Height. " + detail);
+        });
     }
 
     // ==================================================================
@@ -551,6 +623,191 @@ public class FormDesignerRealViewTests
                 "with the canvas out of the focused element's ancestor chain, the window's own F2 " +
                 "binding must be the one (and only) thing that runs. " + afterF2);
         });
+    }
+
+    // ==================================================================
+    // TASK A: OWNER'S REPORT #1 — "Allows me to add a new item but the text was typed NOT IN the
+    // Type Here". The overlay TextBox receives the keystrokes but is not positioned over the slot the
+    // canvas is drawing. Types four top-level items in one run, then opens &File's own dropdown slot
+    // and types two more — checking the overlay's WINDOW rect against the CURRENT TypeHere slot's
+    // window rect after every single commit, plus once more after a window resize.
+    // ==================================================================
+
+    [AvaloniaTest]
+    public void OverlayStaysOnTheTypeHereSlot_AcrossAWholeRunAndIntoADropdown()
+    {
+        var rig = Open();
+        var strip = rig.MenuStrip();
+
+        // Step 0: select the strip, then click its Type Here slot to begin the run.
+        rig.Click(rig.CentreOfEntry(strip, FormLayoutRole.Band));
+        rig.Click(rig.CentreOfSlot(strip));
+        AssertOverlayOnSlot(rig, strip, "run start: overlay over the strip's empty slot");
+
+        foreach (var text in new[] { "&File", "&Edit", "&View", "&Help" })
+        {
+            rig.Window.KeyTextInput(text);
+            Dispatcher.UIThread.RunJobs();
+            rig.Window.KeyPress(Key.Enter, RawInputModifiers.None);
+            Dispatcher.UIThread.RunJobs();
+
+            using (rig.Window.CaptureRenderedFrame()) { } // pump a real render pass, as the IDE would
+
+            AssertOverlayOnSlot(rig, strip, $"after committing \"{text}\"");
+        }
+
+        Assert.That(strip.Children, Has.Count.EqualTo(4),
+            "precondition for the dropdown half: all four top-level items must exist. " +
+            FocusTrace(rig, "before opening &File's dropdown"));
+        var fileItem = strip.Children.Single(c => c.Properties.GetValueOrDefault("Text") == "&File");
+
+        // Close the strip's own run first (Escape), select &File, then click ITS Type Here slot —
+        // the same real gesture the owner used to add a submenu item.
+        rig.Window.KeyPress(Key.Escape, RawInputModifiers.None);
+        Dispatcher.UIThread.RunJobs();
+
+        rig.Click(rig.CentreOfEntry(fileItem, FormLayoutRole.Cell));
+        var afterSelectFile = FocusTrace(rig, "after selecting &File (to open its dropdown)");
+        Assert.That(rig.Canvas.SelectedControl, Is.SameAs(fileItem),
+            "precondition: &File must be selected so its dropdown (and Type Here slot) is on screen. " +
+            afterSelectFile);
+
+        rig.Click(rig.CentreOfSlot(fileItem));
+        AssertOverlayOnSlot(rig, fileItem, "&File dropdown: overlay over its empty slot");
+
+        foreach (var text in new[] { "&Open...", "E&xit" })
+        {
+            rig.Window.KeyTextInput(text);
+            Dispatcher.UIThread.RunJobs();
+            rig.Window.KeyPress(Key.Enter, RawInputModifiers.None);
+            Dispatcher.UIThread.RunJobs();
+
+            using (rig.Window.CaptureRenderedFrame()) { }
+
+            AssertOverlayOnSlot(rig, fileItem, $"&File dropdown: after committing \"{text}\"");
+        }
+
+        // Repeat one step after a resize — 1280x800 -> 1000x700 — to catch a TypeHereBounds that is
+        // only recomputed on SOME renders (stale on a resize that doesn't otherwise touch selection).
+        rig.Window.Width = 1280;
+        rig.Window.Height = 800;
+        rig.Window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+        AssertOverlayOnSlot(rig, fileItem, "&File dropdown: after growing the window to 1280x800");
+
+        rig.Window.Width = 1000;
+        rig.Window.Height = 700;
+        rig.Window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+        AssertOverlayOnSlot(rig, fileItem, "&File dropdown: after shrinking the window back to 1000x700");
+    }
+
+    // ==================================================================
+    // TASK B: OWNER'S REPORT #2 — "Allows me to rename once, then could not rename anything again".
+    // Renames item 1, renames item 1 AGAIN, then item 2 — via the second-click gesture, then repeats
+    // the same three steps via F2 — with the full diagnostic trace (StripEditor, EditingItem, overlay
+    // IsVisible/IsHitTestVisible/IsFocused, focused element, and the canvas's private
+    // _renameArmedFor/_pressIsSelecting) captured at every click/keypress.
+    // ==================================================================
+
+    [AvaloniaTest]
+    public void RenamingTheSameItemTwiceThenADifferentItem_ViaSecondClick_AlwaysRenames()
+    {
+        var rig = Open();
+        var strip = rig.MenuStrip();
+
+        rig.Vm.BeginTypeHere(strip);
+        rig.Vm.CommitTypeHere("&File");
+        rig.Vm.CommitTypeHere("&Edit");
+        rig.Vm.CommitTypeHere("&View");
+        Dispatcher.UIThread.RunJobs();
+        var item1 = strip.Children[0];
+        var item2 = strip.Children[1];
+
+        RenameViaSecondClick(rig, item1, "&Save", "rename #1 on item1 (&File -> &Save)");
+        RenameViaSecondClick(rig, item1, "&SaveAgain", "rename #2 on item1 (&Save -> &SaveAgain), SAME item");
+        RenameViaSecondClick(rig, item2, "&EditRenamed", "rename #3 on item2 (&Edit -> &EditRenamed)");
+    }
+
+    [AvaloniaTest]
+    public void RenamingTheSameItemTwiceThenADifferentItem_ViaF2_AlwaysRenames()
+    {
+        var rig = Open();
+        var strip = rig.MenuStrip();
+
+        rig.Vm.BeginTypeHere(strip);
+        rig.Vm.CommitTypeHere("&File");
+        rig.Vm.CommitTypeHere("&Edit");
+        rig.Vm.CommitTypeHere("&View");
+        Dispatcher.UIThread.RunJobs();
+        var item1 = strip.Children[0];
+        var item2 = strip.Children[1];
+
+        RenameViaF2(rig, item1, "&Save", "F2 rename #1 on item1 (&File -> &Save)");
+        RenameViaF2(rig, item1, "&SaveAgain", "F2 rename #2 on item1 (&Save -> &SaveAgain), SAME item");
+        RenameViaF2(rig, item2, "&EditRenamed", "F2 rename #3 on item2 (&Edit -> &EditRenamed)");
+    }
+
+    /// <summary>Select (click), separate second click (offset within the cell), type, Enter — the
+    /// owner's exact gesture — with a full trace at every step and a render pumped between the two
+    /// clicks, as the real app would draw between them.</summary>
+    private static void RenameViaSecondClick(Rig rig, FormControl item, string newText, string label)
+    {
+        TestContext.WriteLine($"===== {label} =====");
+
+        rig.Click(rig.CentreOfEntry(item, FormLayoutRole.Cell));
+        var afterSelect = FocusTrace(rig, $"{label}: after select-click");
+        using (rig.Window.CaptureRenderedFrame()) { }
+
+        rig.Click(rig.OffsetWithinCell(rig.CentreOfEntry(item, FormLayoutRole.Cell)));
+        var afterSecondClick = FocusTrace(rig, $"{label}: after second click");
+
+        Assert.That(rig.Vm.StripEditor.IsActive, Is.True,
+            $"{label}: second click must begin editing. select-click trace: {afterSelect}; " +
+            $"second-click trace: {afterSecondClick}");
+        Assert.That(rig.Vm.StripEditor.EditTarget, Is.SameAs(item),
+            $"{label}: must be editing THIS item. " + afterSecondClick);
+
+        rig.Window.KeyTextInput(newText);
+        Dispatcher.UIThread.RunJobs();
+        var afterTyping = FocusTrace(rig, $"{label}: after typing \"{newText}\"");
+
+        rig.Window.KeyPress(Key.Enter, RawInputModifiers.None);
+        Dispatcher.UIThread.RunJobs();
+        var afterEnter = FocusTrace(rig, $"{label}: after Enter");
+
+        Assert.That(item.Properties.GetValueOrDefault("Text"), Is.EqualTo(newText),
+            $"{label}: item must be renamed. typing trace: {afterTyping}; commit trace: {afterEnter}");
+    }
+
+    /// <summary>Click to select, F2, type, Enter — with a full trace at every step.</summary>
+    private static void RenameViaF2(Rig rig, FormControl item, string newText, string label)
+    {
+        TestContext.WriteLine($"===== {label} =====");
+
+        rig.Click(rig.CentreOfEntry(item, FormLayoutRole.Cell));
+        var afterSelect = FocusTrace(rig, $"{label}: after select-click");
+        using (rig.Window.CaptureRenderedFrame()) { }
+
+        rig.Window.KeyPress(Key.F2, RawInputModifiers.None);
+        Dispatcher.UIThread.RunJobs();
+        var afterF2 = FocusTrace(rig, $"{label}: after F2");
+
+        Assert.That(rig.Vm.StripEditor.IsActive, Is.True,
+            $"{label}: F2 must begin editing. select-click trace: {afterSelect}; F2 trace: {afterF2}");
+        Assert.That(rig.Vm.StripEditor.EditTarget, Is.SameAs(item),
+            $"{label}: must be editing THIS item. " + afterF2);
+
+        rig.Window.KeyTextInput(newText);
+        Dispatcher.UIThread.RunJobs();
+        var afterTyping = FocusTrace(rig, $"{label}: after typing \"{newText}\"");
+
+        rig.Window.KeyPress(Key.Enter, RawInputModifiers.None);
+        Dispatcher.UIThread.RunJobs();
+        var afterEnter = FocusTrace(rig, $"{label}: after Enter");
+
+        Assert.That(item.Properties.GetValueOrDefault("Text"), Is.EqualTo(newText),
+            $"{label}: item must be renamed. typing trace: {afterTyping}; commit trace: {afterEnter}");
     }
 
     private sealed class RecorderCommand : System.Windows.Input.ICommand
