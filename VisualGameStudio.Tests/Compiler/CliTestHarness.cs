@@ -15,11 +15,19 @@ namespace VisualGameStudio.Tests.Compiler;
 /// </summary>
 internal static class CliTestHarness
 {
+    /// <summary>
+    /// The file name of a .NET apphost on this OS: <c>BasicLang.exe</c> on Windows, plain
+    /// <c>BasicLang</c> on Linux/macOS (the SDK emits no extension there).
+    /// </summary>
+    public static string AppHostName(string name)
+        => OperatingSystem.IsWindows() ? name + ".exe" : name;
+
     public static string CliPath()
     {
-        var cliPath = Path.Combine(AppContext.BaseDirectory, "BasicLang.exe");
+        var cliName = AppHostName("BasicLang");
+        var cliPath = Path.Combine(AppContext.BaseDirectory, cliName);
         Assert.That(File.Exists(cliPath), Is.True,
-            "BasicLang.exe not deployed next to the tests — project reference output changed?");
+            $"{cliName} not deployed next to the tests — project reference output changed?");
         return cliPath;
     }
 
@@ -131,9 +139,10 @@ internal static class CliTestHarness
             Assert.That(buildExit, Is.EqualTo(0),
                 $"CLI C# build failed.\nSTDOUT:\n{buildOut}\nSTDERR:\n{buildErr}");
 
-            var exes = Directory.GetFiles(projectDir, "App.exe", SearchOption.AllDirectories);
+            var appName = AppHostName("App");
+            var exes = Directory.GetFiles(projectDir, appName, SearchOption.AllDirectories);
             Assert.That(exes, Is.Not.Empty,
-                $"CLI build claimed success but produced no App.exe.\nSTDOUT:\n{buildOut}");
+                $"CLI build claimed success but produced no {appName}.\nSTDOUT:\n{buildOut}");
 
             var (runExit, runOut, runErr) = RunProcess(
                 exes[0], Array.Empty<string>(), Path.GetDirectoryName(exes[0])!, timeoutMs: 60_000,
