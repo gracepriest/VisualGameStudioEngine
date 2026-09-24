@@ -130,6 +130,33 @@ public class FloatingPointIdentityFoldTests
             Is.EqualTo(!folds), $"x - ({zero:R}) folded={!folds}, expected folded={folds}");
     }
 
+    /// <summary>
+    /// <c>x / x</c> is not 1 at <c>x = 0</c> for ANY type: an integer division throws
+    /// (DivideByZeroException) and a float one is NaN. The arm never checked <c>x != 0</c>, so it
+    /// is gone. Hand-built IR because no source shape reaches an integral <c>Div</c> of one
+    /// variable by itself (Integer <c>/</c> is a Double division over casts; <c>\</c> is IntDiv):
+    /// this pins the pass itself, against a builder path that starts producing one.
+    /// </summary>
+    [TestCase("Integer")]
+    [TestCase("Long")]
+    public void IntegralDivideBySelf_IsNotFoldedToOne(string type)
+    {
+        var t = new TypeInfo(type, TypeKind.Primitive);
+        var module = new IRModule("FoldProbe");
+        var f = module.CreateFunction("F", t);
+        var x = new IRVariable("x", t);
+        f.Parameters.Add(x);
+        var block = f.CreateBlock("entry");
+        var div = new IRBinaryOp("r", BinaryOpKind.Div, x, x, t) { NamedAfterVariable = true };
+        block.AddInstruction(div);
+        block.AddInstruction(new IRReturn(div));
+
+        new PeepholeOptimizationPass().Run(module);
+
+        Assert.That(block.Instructions.OfType<IRBinaryOp>().Any(o => o.Operation == BinaryOpKind.Div),
+            Is.True, $"{type} x / x was folded; at x = 0 it must throw, not yield 1");
+    }
+
     [TestCase("Double", "x * 2")]
     [TestCase("Double", "x * 8")]
     [TestCase("Single", "x * 4")]

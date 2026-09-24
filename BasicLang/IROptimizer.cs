@@ -2217,7 +2217,8 @@ namespace BasicLang.Compiler.IR.Optimization
 
         private IRInstruction OptimizeBinaryOp(IRBinaryOp binOp)
         {
-            // ⛔ FOUR OF THE IDENTITIES BELOW ARE INTEGER-ONLY, and are gated on this. In IEEE 754
+            // ⛔ THREE OF THE IDENTITIES BELOW ARE INTEGER-ONLY, and are gated on this (a fourth,
+            // `x / x`, was removed outright — see its tombstone further down). In IEEE 754
             // they are false, and the fold miscompiled SILENTLY on every backend, because the
             // optimizer is shared. MEASURED (C# and C++ agreed on every wrong answer):
             //   x - x   x = +Inf or NaN   ->  NaN     the fold gave 0
@@ -2229,10 +2230,8 @@ namespace BasicLang.Compiler.IR.Optimization
             // `x - (+0)`, `x * 1` and `x / 1` ARE exact in IEEE 754 for every x, so they stay
             // ungated; only a NEGATIVE-zero subtrahend is refused, since `x - (-0)` is `x + 0`.
             //
-            // Gated on the RESULT type: any floating operand promotes the result to floating,
-            // and Integer `/` is typed Double by the builder (its operands arrive as IRCasts,
-            // so `n / n` never reached the `x / x` arm anyway). Decimal is excluded too — it
-            // keeps a scale (`1.50D - 1.50D` is `0.00`) and throws on `0 / 0`.
+            // Gated on the RESULT type: any floating operand promotes the result to floating.
+            // Decimal is excluded too — it keeps a scale (`1.50D - 1.50D` is `0.00`).
             bool integral = binOp.Type?.IsIntegral() == true;
 
             // x + 0 -> x
@@ -2286,16 +2285,16 @@ namespace BasicLang.Compiler.IR.Optimization
                     new IRConstant(0, binOp.Type));
             }
 
-            // x / x -> 1 (integral only; the x != 0 precondition is still NOT checked)
-            if (binOp.Operation == BinaryOpKind.Div && integral &&
-                binOp.Left is IRVariable divLeft &&
-                binOp.Right is IRVariable divRight &&
-                divLeft.Name == divRight.Name)
-            {
-                return new IRAssignment(
-                    new IRVariable(binOp.Name, binOp.Type),
-                    new IRConstant(1, binOp.Type));
-            }
+            // `x / x -> 1` REMOVED. Its comment said "when x != 0" and the code never checked it,
+            // and the IR carries no range analysis that could: at x = 0 an integer division
+            // THROWS (DivideByZeroException), and the fold replaced the throw with a silent 1.
+            // A float x / x is NaN at 0, ±Inf and NaN. There is no type it was sound for.
+            //
+            // Nothing a program can write loses a fold. MEASURED: an Integer `n / n` is a DOUBLE
+            // division (the builder types `/` Double and wraps both operands in IRCasts, so the
+            // arm never matched), `n \ n` is BinaryOpKind.IntDiv (never matched either), and the
+            // Double case was already refused above. The same call as the `(a * b) / b` arm
+            // removed from AlgebraicSimplificationPass.
 
             // x And True -> x, x And False -> False
             if (binOp.Operation == BinaryOpKind.And)
