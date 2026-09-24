@@ -2050,6 +2050,34 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             WriteLine($"({string.Join(", ", varNames)}) = {tupleExpr};");
         }
 
+        /// <summary>
+        /// Emits the structured statement a nested block's terminator opens: an <c>If</c> or loop
+        /// (IRConditionalBranch) or a <c>Select Case</c> (IRSwitch). Returns false for anything
+        /// else — an IRBranch in particular, which each caller handles its own way (loop exits,
+        /// merge targets).
+        ///
+        /// <para>⛔ EmitBlockInstructions skips every control-flow instruction, so a terminator
+        /// nobody dispatches is silently DROPPED together with everything reachable only through
+        /// it. The sites below used to hand-roll this dispatch without the IRSwitch arm (and the
+        /// Case/Finally bodies without either): measured, a <c>Select Case</c> after any
+        /// <c>If</c>, loop or <c>Try</c> vanished with the rest of the method, and so did one
+        /// inside an If, Else, Try or Catch body, or an If inside a Case or a Finally.</para>
+        /// </summary>
+        private bool EmitNestedTerminator(IRInstruction terminator)
+        {
+            switch (terminator)
+            {
+                case IRConditionalBranch cond:
+                    HandleConditionalBranch(cond);
+                    return true;
+                case IRSwitch nested:
+                    HandleSwitchStatement(nested);
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
         private void HandleConditionalBranch(IRConditionalBranch condBranch)
         {
             var condition = EmitExpression(condBranch.Condition);
@@ -2182,24 +2210,9 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             // Emit default case
             var defaultBlock = switchInst.DefaultTarget;
             WriteLine("default:");
-            _processedBlocks.Add(defaultBlock);
-            Indent();
-            EmitBlockInstructions(defaultBlock);
-
-            var defaultTerminator = defaultBlock.Instructions.LastOrDefault();
-            if (defaultTerminator is IRReturn)
-            {
-                // Return already emitted
-            }
-            else if (defaultTerminator is IRBranch defaultExit && TryEmitLoopExit(defaultExit))
-            {
-                // `Case Else` holding an Exit For: the goto already leaves both constructs.
-            }
-            else
-            {
-                WriteLine("break;");
-            }
-            Unindent();
+            // The same body rules as a Case arm: a `Case Else` holding an If, a nested Select or
+            // an Exit For is emitted exactly as a Case holding one.
+            EmitCaseBody(defaultBlock);
 
             _switchDepth--;
             Unindent();
@@ -2383,6 +2396,12 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             if (terminator is IRReturn)
             {
                 // Return already emitted
+            }
+            else if (EmitNestedTerminator(terminator))
+            {
+                // An If or Select as the arm's last statement; its merge continuation runs to
+                // the switch end, so the arm still needs its break.
+                WriteLine("break;");
             }
             else if (terminator is IRBranch loopExit && TryEmitLoopExit(loopExit))
             {
@@ -2587,9 +2606,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
                 // Handle end block's terminator
                 var endTerminator = endBlock.Instructions.LastOrDefault();
-                if (endTerminator is IRConditionalBranch endCond)
-                    HandleConditionalBranch(endCond);
-                else if (endTerminator is IRBranch endBranch)
+                if (!EmitNestedTerminator(endTerminator) && endTerminator is IRBranch endBranch)
                     HandleUnconditionalBranch(endBranch);
             }
         }
@@ -2664,9 +2681,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
             // Handle then block's terminator (might have nested control flow, return, or break)
             var thenTerminator = thenBlock.Instructions.LastOrDefault();
-            if (thenTerminator is IRConditionalBranch thenCond)
-                HandleConditionalBranch(thenCond);
-            else if (thenTerminator is IRBranch thenBranch)
+            if (!EmitNestedTerminator(thenTerminator) && thenTerminator is IRBranch thenBranch)
             {
                 if (!TryEmitLoopExit(thenBranch) && !_processedBlocks.Contains(thenBranch.Target))
                     HandleUnconditionalBranch(thenBranch);
@@ -2683,9 +2698,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
             // Handle else block's terminator
             var elseTerminator = elseBlock.Instructions.LastOrDefault();
-            if (elseTerminator is IRConditionalBranch elseCond)
-                HandleConditionalBranch(elseCond);
-            else if (elseTerminator is IRBranch elseBranch)
+            if (!EmitNestedTerminator(elseTerminator) && elseTerminator is IRBranch elseBranch)
             {
                 if (!TryEmitLoopExit(elseBranch) && !_processedBlocks.Contains(elseBranch.Target))
                     HandleUnconditionalBranch(elseBranch);
@@ -2701,9 +2714,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 EmitBlockInstructions(mergeBlock);
 
                 var mergeTerminator = mergeBlock.Instructions.LastOrDefault();
-                if (mergeTerminator is IRConditionalBranch mergeCond)
-                    HandleConditionalBranch(mergeCond);
-                else if (mergeTerminator is IRBranch mergeBranch)
+                if (!EmitNestedTerminator(mergeTerminator) && mergeTerminator is IRBranch mergeBranch)
                     HandleUnconditionalBranch(mergeBranch);
             }
         }
@@ -2719,9 +2730,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
             // Handle then block's terminator
             var thenTerminator = thenBlock.Instructions.LastOrDefault();
-            if (thenTerminator is IRConditionalBranch thenCond)
-                HandleConditionalBranch(thenCond);
-            else if (thenTerminator is IRBranch thenBranch)
+            if (!EmitNestedTerminator(thenTerminator) && thenTerminator is IRBranch thenBranch)
             {
                 // Check if this is a break (branch to loop end)
                 if (!TryEmitLoopExit(thenBranch) && !_processedBlocks.Contains(thenBranch.Target))
@@ -2738,9 +2747,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 EmitBlockInstructions(mergeBlock);
 
                 var mergeTerminator = mergeBlock.Instructions.LastOrDefault();
-                if (mergeTerminator is IRConditionalBranch mergeCond)
-                    HandleConditionalBranch(mergeCond);
-                else if (mergeTerminator is IRBranch mergeBranch)
+                if (!EmitNestedTerminator(mergeTerminator) && mergeTerminator is IRBranch mergeBranch)
                     HandleUnconditionalBranch(mergeBranch);
             }
         }
@@ -4295,11 +4302,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
             // Handle try block's terminator (may have nested control flow)
             var tryTerminator = tryCatch.TryBlock.Instructions.LastOrDefault();
-            if (tryTerminator is IRConditionalBranch tryCond)
-            {
-                HandleConditionalBranch(tryCond);
-            }
-            else if (tryTerminator is IRBranch tryBranch)
+            if (!EmitNestedTerminator(tryTerminator) && tryTerminator is IRBranch tryBranch)
             {
                 // An `Exit For` as the last statement of a Try body targets the LOOP's end, not
                 // the Try's, so the two guards below would drop it. C# allows both `break` and
@@ -4332,11 +4335,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
                 // Handle catch block's terminator
                 var catchTerminator = catchClause.Block.Instructions.LastOrDefault();
-                if (catchTerminator is IRConditionalBranch catchCond)
-                {
-                    HandleConditionalBranch(catchCond);
-                }
-                else if (catchTerminator is IRBranch catchBranch)
+                if (!EmitNestedTerminator(catchTerminator) && catchTerminator is IRBranch catchBranch)
                 {
                     if (!TryEmitLoopExit(catchBranch) &&
                         catchBranch.Target != tryCatch.EndBlock &&
@@ -4359,6 +4358,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
                 _processedBlocks.Add(tryCatch.FinallyBlock);
                 EmitBlockInstructions(tryCatch.FinallyBlock);
+                EmitNestedTerminator(tryCatch.FinallyBlock.Instructions.LastOrDefault());
 
                 Unindent();
                 WriteLine("}");
@@ -4371,9 +4371,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 EmitBlockInstructions(tryCatch.EndBlock);
 
                 var endTerminator = tryCatch.EndBlock.Instructions.LastOrDefault();
-                if (endTerminator is IRConditionalBranch endCond)
-                    HandleConditionalBranch(endCond);
-                else if (endTerminator is IRBranch endBranch)
+                if (!EmitNestedTerminator(endTerminator) && endTerminator is IRBranch endBranch)
                     HandleUnconditionalBranch(endBranch);
             }
         }
@@ -4467,9 +4465,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 EmitBlockInstructions(forEach.EndBlock);
 
                 var endTerminator = forEach.EndBlock.Instructions.LastOrDefault();
-                if (endTerminator is IRConditionalBranch endCond)
-                    HandleConditionalBranch(endCond);
-                else if (endTerminator is IRBranch endBranch)
+                if (!EmitNestedTerminator(endTerminator) && endTerminator is IRBranch endBranch)
                     HandleUnconditionalBranch(endBranch);
             }
         }

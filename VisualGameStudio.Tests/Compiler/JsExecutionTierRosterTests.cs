@@ -176,6 +176,7 @@ public class JsExecutionTierRosterTests
         // Builds and runs the C# backend's output through the CLI and dotnet — no Node.
         "CSharpFieldAssignmentExecutionTests",
         "CSharpInlinedOperandExecutionTests",
+        "CSharpNestedTerminatorExecutionTests",
     };
 
     /// <summary>Counts NUnit cases: a [TestCase]-driven method contributes one per attribute.</summary>
