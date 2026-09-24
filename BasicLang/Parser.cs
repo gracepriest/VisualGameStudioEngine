@@ -2455,6 +2455,16 @@ namespace BasicLang.Compiler
                 return dimensions;
             }
 
+            // The two spellings mean different things, and this is the one place both pass:
+            //  - `Dim a[n]` (BasicLang's preferred form) declares n ELEMENTS, C-style.
+            //  - `Dim a(n)` (kept so older BASIC programs run) declares UPPER BOUND n, as VB does:
+            //    n + 1 elements, indices 0..n.
+            // Everything downstream reads a dimension as an element COUNT, so the paren form is
+            // turned into one here. Both spellings used to mean n elements, contradicting
+            // language.md's `Dim nums(9) As Integer ' 10 elements`: C# threw
+            // IndexOutOfRangeException on `a(9) = x` and C++ wrote past the end.
+            var upperBounds = closeToken == TokenType.RightParen;
+
             do
             {
                 // An empty slot inside the list keeps that dimension unspecified while still
@@ -2462,11 +2472,41 @@ namespace BasicLang.Compiler
                 if (Check(TokenType.Comma) || Check(closeToken))
                     dimensions.Add(null);
                 else
-                    dimensions.Add(ParseExpression());
+                {
+                    var dimension = ParseExpression();
+                    dimensions.Add(upperBounds ? UpperBoundToCount(dimension) : dimension);
+                }
             } while (Match(TokenType.Comma));
 
             Consume(closeToken, $"Expected '{closeStr}'");
             return dimensions;
+        }
+
+        /// <summary>
+        /// An upper bound as an element count: a literal is folded (<c>(9)</c> is 10), so every
+        /// consumer that wants a constant size still gets one; anything else becomes
+        /// <c>bound + 1</c>.
+        /// </summary>
+        private static ExpressionNode UpperBoundToCount(ExpressionNode bound)
+        {
+            if (bound is LiteralExpressionNode { LiteralType: TokenType.IntegerLiteral } literal
+                && literal.Value is int n && n < int.MaxValue)
+            {
+                return new LiteralExpressionNode(literal.Line, literal.Column)
+                {
+                    Value = n + 1,
+                    LiteralType = TokenType.IntegerLiteral,
+                    Text = (n + 1).ToString(System.Globalization.CultureInfo.InvariantCulture),
+                };
+            }
+
+            var one = new LiteralExpressionNode(bound.Line, bound.Column)
+            {
+                Value = 1,
+                LiteralType = TokenType.IntegerLiteral,
+                Text = "1",
+            };
+            return new BinaryExpressionNode(bound.Line, bound.Column) { Left = bound, Operator = "+", Right = one };
         }
 
         /// <summary>
@@ -4268,9 +4308,15 @@ namespace BasicLang.Compiler
                     var arrayAccess = new ArrayAccessExpressionNode(expr.Line, expr.Column);
                     arrayAccess.Array = expr;
 
+                    // A comma list inside the brackets, as the paren form takes: `grid[2, 3]` must
+                    // index what `Dim grid[3, 4]` declared (it failed "Expected ']' but found
+                    // Comma"). Chained `a[i][j]` still adds one index per bracket pair.
                     do
                     {
-                        arrayAccess.Indices.Add(ParseExpression());
+                        do
+                        {
+                            arrayAccess.Indices.Add(ParseExpression());
+                        } while (Match(TokenType.Comma));
                         Consume(TokenType.RightBracket, "Expected ']'");
                     } while (Match(TokenType.LeftBracket));
 
