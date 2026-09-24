@@ -95,7 +95,8 @@ public class FormCanvasControl : Control
         // Re-draw when what is drawn changes. Without this the canvas keeps showing the previous
         // document after a switch, which reads as "the designer opened the wrong file".
         AffectsRender<FormCanvasControl>(
-            DocumentProperty, SelectedControlProperty, ModelRevisionProperty, TypeHereHostProperty);
+            DocumentProperty, SelectedControlProperty, ModelRevisionProperty, TypeHereHostProperty,
+            EditingItemProperty);
     }
 
     public FormDocument? Document
@@ -281,6 +282,46 @@ public class FormCanvasControl : Control
     {
         get => GetValue(BeginTypeHereCommandProperty);
         set => SetValue(BeginTypeHereCommandProperty, value);
+    }
+
+    /// <summary>
+    /// "Can't edit a menu item once it is entered" (owner's report, 2026-09-23). Invoked with an
+    /// EXISTING item when the user's rename gesture lands on it — a SECOND single click on a cell
+    /// that is already the selection, or F2 with an item selected — as opposed to
+    /// <see cref="BeginTypeHereCommand"/>, which is the Type Here SLOT's "create a new item" press.
+    /// Offered only for an item <see cref="FormCanvasTransform.IsRenamableItem"/> accepts (never a
+    /// separator). See <see cref="OfferRename"/> for how it stays apart from a double-click.
+    /// </summary>
+    public static readonly StyledProperty<ICommand?> EditItemCommandProperty =
+        AvaloniaProperty.Register<FormCanvasControl, ICommand?>(nameof(EditItemCommand));
+
+    public ICommand? EditItemCommand
+    {
+        get => GetValue(EditItemCommandProperty);
+        set => SetValue(EditItemCommandProperty, value);
+    }
+
+    /// <summary>
+    /// The item currently being RENAMED in place (bound to <c>StripEditor.EditTarget</c>), or null.
+    ///
+    /// <para>An INPUT to drawing (in <c>AffectsRender</c>): while it is set, <see cref="TypeHereBounds"/>
+    /// publishes the ITEM's OWN cell (<see cref="FormCanvasTransform.EditBoxBounds"/>) and no Type
+    /// Here slot is highlighted — in rename mode <see cref="TypeHereHost"/> is the item too, and its
+    /// open dropdown's slot is hosted by it.</para>
+    ///
+    /// <para>⚠ TwoWay BY DEFAULT, like a selection: the canvas writes it when it offers a rename and
+    /// CLEARS it when the second press of a double-click arrives, and the view model's
+    /// <c>OnEditTargetChanged</c> closes the editor on that withdrawal. The AXAML binding carries no
+    /// <c>Mode</c>, so the mode lives here.</para>
+    /// </summary>
+    public static readonly StyledProperty<FormControl?> EditingItemProperty =
+        AvaloniaProperty.Register<FormCanvasControl, FormControl?>(
+            nameof(EditingItem), defaultBindingMode: Avalonia.Data.BindingMode.TwoWay);
+
+    public FormControl? EditingItem
+    {
+        get => GetValue(EditingItemProperty);
+        set => SetValue(EditingItemProperty, value);
     }
 
     protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)
@@ -470,6 +511,18 @@ public class FormCanvasControl : Control
             return;
         }
 
+        // F2 is the keyboard half of VS's rename gesture — the second click's equivalent. Only an
+        // item the catalog calls renamable; on anything else the key is left unhandled.
+        if (e.Key == Key.F2)
+        {
+            if (FormCanvasTransform.IsRenamableItem(control) && OfferRename(control))
+            {
+                e.Handled = true;
+            }
+
+            return;
+        }
+
         if (e.Key == Key.Delete)
         {
             var command = DeleteCommand;
@@ -576,6 +629,16 @@ public class FormCanvasControl : Control
 
         SelectedControl = control;
 
+        // ⛔ The FIRST press of this pair landed on an already-selected item and offered a rename
+        // (OfferRename). A double-click opens the handler and must not leave that edit open behind
+        // it, so the rename is WITHDRAWN here — through the TwoWay binding, whose view-model side
+        // closes the editor. (When the overlay has already covered the cell, the second press lands
+        // on IT instead; FormTypeHereEditor forwards the double-click for the same reason.)
+        if (EditingItem != null)
+        {
+            EditingItem = null;
+        }
+
         var command = ActivateControlCommand;
         if (command?.CanExecute(control) == true)
         {
@@ -583,6 +646,35 @@ public class FormCanvasControl : Control
         }
 
         e.Handled = true;
+    }
+
+    /// <summary>
+    /// Offers an in-place rename of <paramref name="item"/>: marks it <see cref="EditingItem"/> and
+    /// runs <see cref="EditItemCommand"/>. Returns whether the command ran.
+    ///
+    /// <para>⛔ Keeping this apart from a DOUBLE-click: the rename is offered on the FIRST press of a
+    /// pair (<c>ClickCount == 1</c> on an already-selected item) — immediately, not after a
+    /// double-click-time delay, because a delay makes the gesture feel dead and cannot be driven by a
+    /// synchronous test. The SECOND press of a double-click has <c>ClickCount == 2</c>, never offers
+    /// a rename, and <c>OnCanvasDoubleTapped</c> WITHDRAWS the one the first press offered before it
+    /// opens the handler. So a double-click always ends with the handler open and no edit.</para>
+    ///
+    /// <para>⚠ EditingItem is written BEFORE the command runs, through its TwoWay binding: the view
+    /// model's <c>BeginEditItem</c> then finds its target already named, and withdraws it if it
+    /// refuses. The canvas asks <see cref="FormCanvasTransform.IsRenamableItem"/> first, the same
+    /// question the view model asks, so a refusal is not expected.</para>
+    /// </summary>
+    private bool OfferRename(FormControl item)
+    {
+        var command = EditItemCommand;
+        if (command?.CanExecute(item) != true)
+        {
+            return false;
+        }
+
+        EditingItem = item;
+        command.Execute(item);
+        return true;
     }
 
     /// <summary>
@@ -727,7 +819,21 @@ public class FormCanvasControl : Control
                 return;
             }
 
+            // VS's rename gesture: a SECOND single click on the item that is already the whole
+            // selection. Decided BEFORE ApplyClickSelection, which is what makes the first click's
+            // target the selection. ClickCount == 1 is what keeps it apart from a double-click —
+            // see OfferRename.
+            var secondClick = !extend && e.ClickCount == 1 && hit != null &&
+                              ReferenceEquals(hit, SelectedControl) &&
+                              (Selection == null || Selection.Controls.Count <= 1) &&
+                              FormCanvasTransform.IsRenamableItem(hit);
+
             ApplyClickSelection(hit, extend);
+
+            if (secondClick)
+            {
+                OfferRename(hit!);
+            }
         }
 
         // ⚠ A band, a strip's item and a dropdown row all fall through BOTH branches below with no
@@ -1245,8 +1351,14 @@ public class FormCanvasControl : Control
         // when TypeHereHost is NULL. The highlight would appear on every slot while nothing was
         // being edited and vanish the moment something was — and the bounds, spelled the other way
         // one sentence later, would disagree with the pixels. One predicate, so they cannot.
+        //
+        // ⛔ While an item is being RENAMED there is no edited slot at all: TypeHereHost is then the
+        // item itself, which hosts its own open dropdown's slot — matching on it would highlight
+        // that slot and publish ITS rectangle, parking the overlay a row below the caption being
+        // edited.
+        var renaming = EditingItem;
         bool IsEditedSlot(FormLayoutEntry entry) =>
-            TypeHereHost is { } host && ReferenceEquals(entry.Host, host);
+            renaming == null && TypeHereHost is { } host && ReferenceEquals(entry.Host, host);
 
         // The canvas rectangle of the slot TypeHereHost names, or default when it names none —
         // captured here and published at the very END of this method. See the assignment there.
@@ -1284,6 +1396,14 @@ public class FormCanvasControl : Control
             {
                 var drawn = DrawControl(context, entry.Control, bounds);
                 _captionLog?.Add(new CaptionRecord(entry.Control, null, bounds, CaptionForTest(entry.Control), drawn));
+
+                // The rename's rectangle: the item's OWN cell, at the height the overlay recovers
+                // its zoom from (FormCanvasTransform.EditBoxBounds states why it is not the bare cell).
+                if (renaming != null && entry.Role == FormLayoutRole.Cell &&
+                    ReferenceEquals(entry.Control, renaming))
+                {
+                    editedSlot = FormCanvasTransform.EditBoxBounds(renaming, bounds, _transform.Zoom);
+                }
             }
         }
 

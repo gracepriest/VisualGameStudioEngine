@@ -448,4 +448,154 @@ public class FormStripCanvasTests
                 "though each still differs from the un-hosted frame (where the inversion highlights EVERY slot)");
         });
     }
+
+    // ==================================================================
+    // "Can't edit a menu item once it is entered" (owner's report, 2026-09-23) — the canvas
+    // half: a SECOND single click on an already-selected item's cell, or F2 with an item
+    // selected, must fire EditItemCommand with that item; a double-click must still open the
+    // handler and never leave an edit open. Contract: FormCanvasControl.EditItemCommand (new
+    // bindable command, stubbed with NO behaviour wired into OnPointerPressed/OnKeyDown yet) and
+    // FormCanvasControl.EditingItem (new styled property, bound to StripEditor.EditTarget,
+    // consumed by nothing yet). Every test below is measured red against those stubs.
+    // ==================================================================
+
+    /// <summary>Catches: EditItemCommand firing on the FIRST click of an unselected item — VS
+    /// only opens an in-place rename on an ALREADY-selected item.</summary>
+    [AvaloniaTest]
+    public void PressingAnUnselectedItemsCell_SelectsIt_ButDoesNotBeginEditing()
+    {
+        var rig = Surface();
+        var edit = new Recorder();
+        rig.Canvas.EditItemCommand = edit;
+
+        var at = rig.CentreOfEntry(rig.MnuFile, FormLayoutRole.Cell);
+        rig.Click(at);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(rig.Selection.Primary, Is.SameAs(rig.MnuFile));
+            Assert.That(edit.Executions, Is.Zero, "the FIRST click only selects — VS's rename gesture needs a SECOND one");
+        });
+    }
+
+    /// <summary>
+    /// ⛔⛔ THE CORE GESTURE. A separate single click — not a double-click — on a cell that is
+    /// ALREADY the selection. Pre-implementation this is red because <c>OnPointerPressed</c> has
+    /// no "already selected, ordinary click" branch that fires <c>EditItemCommand</c> at all.
+    /// </summary>
+    [AvaloniaTest]
+    public void PressingAnAlreadySelectedItemsCell_ASecondTime_BeginsEditingIt()
+    {
+        var rig = Surface();
+        var edit = new Recorder();
+        rig.Canvas.EditItemCommand = edit;
+        rig.Selection.Set(rig.MnuFile);
+
+        var at = rig.CentreOfEntry(rig.MnuFile, FormLayoutRole.Cell);
+        rig.Click(at);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(edit.Executions, Is.EqualTo(1));
+            Assert.That(edit.LastParameter, Is.SameAs(rig.MnuFile));
+        });
+    }
+
+    /// <summary>F2 is the keyboard equivalent of the second click. Catches: OnKeyDown having no
+    /// F2 arm at all.</summary>
+    [AvaloniaTest]
+    public void F2_WithAnItemSelected_BeginsEditingIt()
+    {
+        var rig = Surface();
+        var edit = new Recorder();
+        rig.Canvas.EditItemCommand = edit;
+        rig.Selection.Set(rig.MnuFile);
+        rig.Canvas.SelectedControl = rig.MnuFile;
+
+        rig.Window.KeyPress(Key.F2, RawInputModifiers.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(edit.Executions, Is.EqualTo(1));
+            Assert.That(edit.LastParameter, Is.SameAs(rig.MnuFile));
+        });
+    }
+
+    /// <summary>A separator has no Text: catches EditItemCommand firing for a kind that cannot
+    /// be renamed at all — F2 half.</summary>
+    [AvaloniaTest]
+    public void F2_WithASeparatorSelected_DoesNothing()
+    {
+        var rig = Surface();
+        var edit = new Recorder();
+        rig.Canvas.EditItemCommand = edit;
+        rig.Selection.Set(rig.Sep1);
+        rig.Canvas.SelectedControl = rig.Sep1;
+
+        rig.Window.KeyPress(Key.F2, RawInputModifiers.None);
+
+        Assert.That(edit.Executions, Is.Zero);
+    }
+
+    /// <summary>F2 with nothing selected must not throw and must not fire.</summary>
+    [AvaloniaTest]
+    public void F2_WithNothingSelected_DoesNothing()
+    {
+        var rig = Surface();
+        var edit = new Recorder();
+        rig.Canvas.EditItemCommand = edit;
+
+        Assert.DoesNotThrow(() => rig.Window.KeyPress(Key.F2, RawInputModifiers.None));
+        Assert.That(edit.Executions, Is.Zero);
+    }
+
+    /// <summary>
+    /// A double-click is two presses; the FIRST of the pair lands on an already-selected item
+    /// exactly like <see cref="PressingAnAlreadySelectedItemsCell_ASecondTime_BeginsEditingIt"/>'s
+    /// precondition. VS's rule: a double-click always opens the handler and never leaves a rename
+    /// box open behind it. Catches an implementation that fires EditItemCommand on the first
+    /// press of the pair and never closes it once the double-tap gesture completes.
+    /// </summary>
+    [AvaloniaTest]
+    public void DoubleClickingAnAlreadySelectedItem_OpensItsHandler_AndLeavesNoEditItemActive()
+    {
+        var rig = Surface();
+        var edit = new Recorder();
+        var opened = new Recorder();
+        rig.Canvas.EditItemCommand = edit;
+        rig.Canvas.ActivateControlCommand = opened;
+        rig.Selection.Set(rig.MnuFile);
+
+        var at = rig.CentreOfEntry(rig.MnuFile, FormLayoutRole.Cell);
+        rig.DoubleClick(at);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(opened.Executions, Is.EqualTo(1), "the double-click gesture must still open the handler");
+            Assert.That(opened.LastParameter, Is.SameAs(rig.MnuFile));
+            Assert.That(rig.Canvas.EditingItem, Is.Null,
+                "a double-click must leave no rename in progress — EditingItem must not be left set");
+        });
+    }
+
+    /// <summary>
+    /// While editing an item, <c>TypeHereBounds</c> must equal that item's OWN cell — never a
+    /// Type Here slot's rectangle, which is what an implementation that just reuses the existing
+    /// slot-highlight code path (matching on <c>TypeHereHost</c> alone) would produce.
+    /// </summary>
+    [AvaloniaTest]
+    public void TypeHereBounds_WhileEditingAnItem_EqualsTheItemsOwnCell_NotATypeHereSlot()
+    {
+        var rig = Surface();
+        rig.Selection.Set(rig.MnuFile);
+        rig.Canvas.EditingItem = rig.MnuFile;
+
+        ForceRender(rig.Window);
+
+        var expectedCell = rig.CentreOfEntry(rig.MnuFile, FormLayoutRole.Cell);
+        var actualCentre = rig.Canvas.TypeHereBounds.Center;
+
+        Assert.That(actualCentre, Is.EqualTo(expectedCell),
+            "editing mnuFile must publish ITS OWN cell's bounds, not menuStrip1's Type Here slot");
+    }
 }

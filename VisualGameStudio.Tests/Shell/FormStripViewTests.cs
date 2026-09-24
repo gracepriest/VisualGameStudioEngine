@@ -75,6 +75,22 @@ public class FormStripViewTests
         });
     }
 
+    /// <summary>
+    /// "Can't edit a menu item once it is entered" (owner's report, 2026-09-23): the second-click
+    /// / F2 rename gesture needs the canvas wired to <c>BeginEditItemCommand</c> and
+    /// <c>StripEditor.EditTarget</c>, exactly the way <see cref="Canvas_HasName_AndTheTwoNewBindings"/>
+    /// pins the Type Here wiring. Red today — the AXAML carries neither attribute yet.
+    /// </summary>
+    [Test]
+    public void Canvas_HasTheEditItemBindings_ForTheSecondClickF2RenameGesture()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That((string?)_canvas.Attribute("EditItemCommand"), Is.EqualTo("{Binding BeginEditItemCommand}"));
+            Assert.That((string?)_canvas.Attribute("EditingItem"), Is.EqualTo("{Binding StripEditor.EditTarget}"));
+        });
+    }
+
     [Test]
     public void Editor_IsInTheSameGridCell_AfterTheCanvasInDocumentOrder()
     {

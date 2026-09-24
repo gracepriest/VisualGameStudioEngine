@@ -69,8 +69,76 @@ public class FormTypeHereEditor : Canvas
         _box[!!TextBox.TextProperty] = this[!!TextProperty];
 
         _box.KeyDown += OnBoxKeyDown;
+        _box.TextInput += (_, _) => _pristine = false;
+
+        // TUNNEL, so it runs before the TextBox's own press handling (which would take a
+        // double-click as "select a word"). See OnBoxPressed.
+        _box.AddHandler(PointerPressedEvent, OnBoxPressed, Avalonia.Interactivity.RoutingStrategies.Tunnel);
 
         Children.Add(_box);
+    }
+
+    /// <summary>
+    /// The item being RENAMED (bound to <c>StripEditor.EditTarget</c>), or null in the CREATE flow.
+    /// Read only by <see cref="OnBoxPressed"/>, and to select the pre-filled caption on open.
+    /// </summary>
+    public static readonly StyledProperty<object?> EditTargetProperty =
+        AvaloniaProperty.Register<FormTypeHereEditor, object?>(nameof(EditTarget));
+
+    public object? EditTarget
+    {
+        get => GetValue(EditTargetProperty);
+        set => SetValue(EditTargetProperty, value);
+    }
+
+    /// <summary>What a double-click on an item does on the canvas: open its handler (bound to <c>ActivateControlCommand</c>).</summary>
+    public static readonly StyledProperty<ICommand?> ActivateCommandProperty =
+        AvaloniaProperty.Register<FormTypeHereEditor, ICommand?>(nameof(ActivateCommand));
+
+    public ICommand? ActivateCommand
+    {
+        get => GetValue(ActivateCommandProperty);
+        set => SetValue(ActivateCommandProperty, value);
+    }
+
+    /// <summary>
+    /// True from the moment the box opens until the user does anything in it. A double-click whose
+    /// second press is the box's FIRST input is the double-click that opened it.
+    /// </summary>
+    private bool _pristine;
+
+    /// <summary>
+    /// ⛔ The second half of a DOUBLE-click on an already-selected item. The canvas offers the rename
+    /// on the FIRST press (see <c>FormCanvasControl.OfferRename</c>); by the time the second press
+    /// arrives this box has been laid over that item's cell, so the press lands HERE and the canvas
+    /// never sees it — and without this, double-clicking a selected menu item would select a word in
+    /// the rename box instead of opening the handler, with an edit left open. So: a ClickCount-2 press
+    /// that is the box's very first input, during a RENAME, cancels the rename and opens the handler.
+    /// A double-click inside a box the user has already typed or clicked in is left to the TextBox.
+    /// </summary>
+    private void OnBoxPressed(object? sender, PointerPressedEventArgs e)
+    {
+        var item = EditTarget;
+        var forward = e.ClickCount >= 2 && _pristine && item != null;
+        _pristine = false;
+        if (!forward)
+        {
+            return;
+        }
+
+        var cancel = CancelCommand;
+        if (cancel?.CanExecute(null) == true)
+        {
+            cancel.Execute(null);
+        }
+
+        var activate = ActivateCommand;
+        if (activate?.CanExecute(item) == true)
+        {
+            activate.Execute(item);
+        }
+
+        e.Handled = true;
     }
 
     public static readonly StyledProperty<bool> IsActiveProperty =
@@ -154,6 +222,8 @@ public class FormTypeHereEditor : Canvas
 
             if (active)
             {
+                _pristine = true;
+
                 // POSTED, not called: the canvas's Focus() runs in the same press handler that
                 // fired Begin, and a direct call here would be overwritten by it. The posted call
                 // runs after that handler returns. It re-checks IsActive because a Begin and a
@@ -163,6 +233,13 @@ public class FormTypeHereEditor : Canvas
                     if (IsActive)
                     {
                         _box.Focus();
+
+                        // A rename opens pre-filled with the caption; VS selects it, so typing
+                        // replaces it and an arrow key keeps it.
+                        if (EditTarget != null)
+                        {
+                            _box.SelectAll();
+                        }
                     }
                 });
             }
@@ -204,6 +281,8 @@ public class FormTypeHereEditor : Canvas
     /// </summary>
     private void OnBoxKeyDown(object? sender, KeyEventArgs e)
     {
+        _pristine = false;
+
         switch (e.Key)
         {
             case Key.Enter:

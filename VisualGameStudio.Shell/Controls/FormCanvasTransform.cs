@@ -612,7 +612,13 @@ public sealed class FormCanvasTransform
     /// </summary>
     public static (double Inset, double FontSize) SlotCaption(FormControl? host, double zoom)
     {
-        var kind = TypeHereItemKind(host);
+        // ⚠ An ITEM that holds no items (a ToolStripButton, a status label) has no slot of its own,
+        // so the only way it is the overlay's host is as the item being RENAMED in place
+        // (CodeEditorDocumentViewModel.BeginEditItem) — and then the caption the text becomes is
+        // its OWN. An item that does hold items (a menu item) answers with its default child kind,
+        // which the catalog makes its own kind, so a rename and a new dropdown entry agree.
+        var kind = TypeHereItemKind(host)
+                   ?? (host?.Definition?.Place == FormPlace.Item ? host.Kind : null);
         var schematic = kind == null
             ? FormSchematic.MenuItem
             : FormControlCatalog.Find(kind)?.Schematic ?? FormSchematic.MenuItem;
@@ -620,10 +626,47 @@ public sealed class FormCanvasTransform
     }
 
     /// <summary>
+    /// Whether <paramref name="control"/> can be RENAMED in place (second click / F2): a strip ITEM
+    /// whose catalog row declares a <c>Text</c> property. Asked of the CATALOG, never of a kind name,
+    /// so a separator (no Text) is refused and a Button (Text, but not an item) never opens the strip
+    /// editor. The canvas's gestures and <c>BeginEditItem</c> both ask this one function, so the
+    /// canvas never offers an edit the view model would refuse.
+    /// </summary>
+    public static bool IsRenamableItem(FormControl? control) =>
+        control?.Definition is { Place: FormPlace.Item } row && row.Property("Text") != null;
+
+    /// <summary>
+    /// The canvas rectangle the overlay sits on while <paramref name="item"/> is being RENAMED, given
+    /// its cell's canvas rectangle: that cell, re-centred vertically to
+    /// <see cref="TypeHereSlotHeight"/>(<paramref name="item"/>) × <paramref name="zoom"/>.
+    ///
+    /// <para>⛔ Why not the bare cell: the overlay recovers the zoom from its rectangle's height
+    /// (<see cref="SlotCaption(FormControl?, Rect)"/>) and knows only the item — which carries no
+    /// reference to its parent, so it cannot know whether its cell is a BAND cell (the strip's
+    /// height: 24 menu, 25 tool, 22 status) or a dropdown ROW (22). Publishing the cell at the
+    /// height this one function states for the item keeps ONE answer for "how tall is the thing the
+    /// overlay sits on, in form units", instead of a second copy that would have to find the strip.
+    /// A dropdown row is already that height and comes back unchanged; a band cell loses a unit or
+    /// two top and bottom, and keeps its left edge, width and centre.</para>
+    /// </summary>
+    public static Rect EditBoxBounds(FormControl item, Rect cellCanvasBounds, double zoom)
+    {
+        var height = TypeHereSlotHeight(item) * zoom;
+        if (height == cellCanvasBounds.Height)
+        {
+            return cellCanvasBounds;
+        }
+
+        var centreY = cellCanvasBounds.Center.Y;
+        return new Rect(cellCanvasBounds.X, centreY - (height / 2), cellCanvasBounds.Width, height);
+    }
+
+    /// <summary>
     /// <see cref="SlotCaption(FormControl?, double)"/> for a slot the overlay only knows by its canvas
     /// rectangle. The zoom is recovered from the slot's height, which <see cref="Bands"/> lays out
     /// as <see cref="TypeHereSlotHeight"/> × zoom — so the overlay needs no second binding to the
     /// canvas's zoom, and cannot hold a stale one. No host, or an empty rectangle, answers at 1:1.
+    /// A rename's rectangle obeys the same rule by construction (<see cref="EditBoxBounds"/>).
     /// </summary>
     public static (double Inset, double FontSize) SlotCaption(FormControl? host, Rect slotCanvasBounds)
     {

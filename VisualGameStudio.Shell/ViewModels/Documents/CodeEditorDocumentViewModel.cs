@@ -352,6 +352,15 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
     [RelayCommand]
     public void CommitTypeHere(string? text)
     {
+        // ⛔ A RENAME is decided first and never falls through: in rename mode Host is the item
+        // itself, and an item usually accepts children, so the create path below would nest a NEW
+        // item under the one being renamed.
+        if (StripEditor.EditTarget is { } target)
+        {
+            CommitRename(target, text);
+            return;
+        }
+
         var host = StripEditor.Host;
         var file = DesignFile;
         if (host == null || file == null || string.IsNullOrWhiteSpace(text))
@@ -392,9 +401,75 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
     [RelayCommand]
     public void CancelTypeHere()
     {
+        // ⚠ IsActive first: EditTarget's change hook closes an editor whose target is withdrawn,
+        // and with IsActive already false it has nothing left to do.
         StripEditor.IsActive = false;
         StripEditor.Host = null;
         StripEditor.Text = "";
+        StripEditor.EditTarget = null;
+    }
+
+    /// <summary>
+    /// "Can't edit a menu item once it is entered" (owner's report, 2026-09-23; spec §6 follow-up).
+    /// VS's second-click / F2 gesture: opens the SAME Type Here editor on an EXISTING item's OWN
+    /// cell, pre-filled with its current Text, so committing RENAMES it in place instead of
+    /// appending a new one — unlike <see cref="BeginTypeHere"/>, which opens a fresh slot at the
+    /// end of a host's items.
+    ///
+    /// <para>Sets <c>EditTarget</c> AND <c>Host</c> to <paramref name="item"/>: the overlay takes
+    /// its caption inset from its Host, and a rename's caption is the item's own. Any open Type Here
+    /// session is closed first; then no editor opens unless the CATALOG says the item is a strip item
+    /// with a Text property
+    /// (<c>FormCanvasTransform.IsRenamableItem</c>, the same question the canvas asks before it
+    /// offers the gesture): a separator is not renamable.</para>
+    /// </summary>
+    [RelayCommand]
+    public void BeginEditItem(BasicLang.Forms.FormControl? item)
+    {
+        // ⚠ A rename request ENDS whatever Type Here session is open — a create run on the item's
+        // host, or a rename of something else — whether or not it can open one of its own. That
+        // also withdraws the target the canvas wrote into its TwoWay EditingItem just before running
+        // this command, so a refusal below can never leave a later Enter renaming an item nobody
+        // opened an editor on.
+        CancelTypeHere();
+
+        if (item == null || DesignFile == null ||
+            !VisualGameStudio.Shell.Controls.FormCanvasTransform.IsRenamableItem(item))
+        {
+            return;
+        }
+
+        // Keeps the selection on the item (a no-op when it already is — the gesture's precondition).
+        SelectInDesigner(item);
+        StripEditor.EditTarget = item;
+        StripEditor.Host = item;
+        StripEditor.Text = item.Properties.GetValueOrDefault("Text") ?? "";
+        StripEditor.IsActive = true;
+    }
+
+    /// <summary>
+    /// The rename half of <see cref="CommitTypeHere"/>: writes the item's Text through the normal
+    /// write-back (so Undo restores it), keeps its Id — and so every event binding keyed on it —
+    /// keeps it selected, and closes the editor. VS closes a rename on Enter; only the CREATE flow
+    /// stays open for the next item. Whitespace is a cancel, never an empty caption.
+    /// </summary>
+    private void CommitRename(BasicLang.Forms.FormControl target, string? text)
+    {
+        if (DesignFile == null || string.IsNullOrWhiteSpace(text))
+        {
+            CancelTypeHere();
+            return;
+        }
+
+        var typed = text.Trim();
+        if (!string.Equals(target.Properties.GetValueOrDefault("Text"), typed, StringComparison.Ordinal))
+        {
+            target.Properties["Text"] = typed;
+            WriteDesignerEditBack();
+        }
+
+        SelectInDesigner(target);
+        CancelTypeHere();
     }
 
     /// <summary>
@@ -1032,12 +1107,18 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
 
             // The Type Here leave-rule: selecting anything outside the editor's host — including
             // nothing, which is what every delete leaves — closes the editor. Selecting the host's
-            // own items (the one just committed) does not.
+            // own items (the one just committed) does not. ⚠ For a RENAME, "inside" is the item
+            // ITSELF: selecting one of its dropdown children is leaving the caption being edited.
             var model = DesignFile?.Model;
-            if (StripEditor.IsActive && StripEditor.Host is { } host && model != null &&
-                !IsInside(model, Selection.Primary, host))
+            if (StripEditor.IsActive && StripEditor.Host is { } host && model != null)
             {
-                CancelTypeHere();
+                var stays = StripEditor.EditTarget is { } target
+                    ? ReferenceEquals(Selection.Primary, target)
+                    : IsInside(model, Selection.Primary, host);
+                if (!stays)
+                {
+                    CancelTypeHere();
+                }
             }
         };
     }
@@ -1057,8 +1138,12 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
     {
         Tray.Rebuild(DesignDocument);
 
-        if (StripEditor.Host is { } host &&
-            !ReferenceEquals(DesignDocument?.FindById(host.Id), host))
+        // ⚠ A rename's target is asked too: it is normally the Host as well, but EditTarget is the
+        // one the commit writes to, so it is the one that must never outlive its document.
+        bool Stale(BasicLang.Forms.FormControl? c) =>
+            c != null && !ReferenceEquals(DesignDocument?.FindById(c.Id), c);
+
+        if (Stale(StripEditor.Host) || Stale(StripEditor.EditTarget))
         {
             CancelTypeHere();
         }

@@ -459,6 +459,103 @@ public class FormMenuEditorDefectsTests
     }
 
     // ==================================================================
+    // C.3 — "Can't edit a menu item once it is entered" (owner's report, 2026-09-23): the
+    // overlay must line up with the LIVE caption of the item being RENAMED, not just a newly
+    // typed one. Contract: FormCanvasControl.EditingItem (new styled property, stubbed — not
+    // yet consumed by Render), so TypeHereBounds stays default while editing and every case
+    // below is measured red at its very first assertion.
+    // ==================================================================
+
+    private static IEnumerable<TestCaseData> EditItemAlignmentCases()
+    {
+        Func<(FormDocument Doc, FormControl Host, FormControl Item)> menuStrip = () =>
+        {
+            var fx = BuildFixture();
+            return (fx.Doc, fx.MenuStrip, fx.MnuOpen);
+        };
+        Func<(FormDocument Doc, FormControl Host, FormControl Item)> toolStrip = () =>
+        {
+            var fx = BuildToolStripFixture();
+            return (fx.Doc, fx.Strip, fx.Item);
+        };
+
+        yield return new TestCaseData(menuStrip, 1280.0)
+            .SetName("OverlayAlignment_WhileEditingAnExistingItem_MenuStripItem_AtZoomNearOne");
+        yield return new TestCaseData(menuStrip, 380.0)
+            .SetName("OverlayAlignment_WhileEditingAnExistingItem_MenuStripItem_AtZoomNearHalf");
+        yield return new TestCaseData(toolStrip, 1280.0)
+            .SetName("OverlayAlignment_WhileEditingAnExistingItem_ToolStripButton_AtZoomNearOne");
+        yield return new TestCaseData(toolStrip, 380.0)
+            .SetName("OverlayAlignment_WhileEditingAnExistingItem_ToolStripButton_AtZoomNearHalf");
+    }
+
+    /// <summary>
+    /// While RENAMING an existing item (F2 / second click — not the Type Here create flow), the
+    /// overlay must sit exactly on that item's OWN cell, at the ORIGIN AND FONT SIZE its caption
+    /// is actually drawn at right now — read from the LIVE render
+    /// (<see cref="FormCanvasControl.RenderDocumentForTest"/>) of this exact document and
+    /// viewport, never a hand-computed expectation. Fails today at the very first assertion:
+    /// <c>EditingItem</c> is a property stub Render does not read yet, so
+    /// <c>TypeHereBounds</c> never leaves <c>default(Rect)</c>.
+    /// </summary>
+    [TestCaseSource(nameof(EditItemAlignmentCases))]
+    [AvaloniaTest]
+    public void OverlayAlignment_WhileEditingAnExistingItem_MatchesItsLiveRenderedCaption(
+        Func<(FormDocument Doc, FormControl Host, FormControl Item)> buildFixture, double windowWidth)
+    {
+        var (doc, host, item) = buildFixture();
+        var windowHeight = Math.Max(200, windowWidth * 0.7);
+
+        var canvas = new FormCanvasControl
+        {
+            Document = doc, SelectedControl = host, EditingItem = item
+        };
+        var editor = new FormTypeHereEditor();
+
+        var grid = new Grid();
+        grid.Children.Add(canvas);
+        grid.Children.Add(editor);
+
+        var window = new Window { Width = windowWidth, Height = windowHeight, Content = grid };
+        window.Show();
+        using (window.CaptureRenderedFrame()) { }
+
+        var slotBounds = canvas.TypeHereBounds;
+        Assert.That(slotBounds, Is.Not.EqualTo(default(Rect)),
+            "editing an item must populate TypeHereBounds with THAT ITEM'S OWN cell — EditingItem " +
+            "is a stub Render does not consume yet, so this is red today");
+
+        // The item's OWN kind decides its inset (a ToolStripButton and a MenuItem differ), so the
+        // overlay must be hosted by the ITEM being renamed — never its container, which is what
+        // the create-flow's Host means.
+        editor.SlotBounds = slotBounds;
+        editor.Host = item;
+        editor.IsActive = true;
+        window.UpdateLayout();
+        using (window.CaptureRenderedFrame()) { }
+
+        var box = (TextBox)editor.Children[0];
+        var presenter = box.GetVisualDescendants().OfType<TextPresenter>().FirstOrDefault();
+        Assert.That(presenter, Is.Not.Null, "the TextBox template must have realised its TextPresenter by now");
+
+        var presenterOrigin = presenter!.TranslatePoint(new Point(0, 0), canvas);
+        Assert.That(presenterOrigin, Is.Not.Null, "the presenter must be positioned inside the canvas's visual tree");
+
+        var frame = FormCanvasControl.RenderDocumentForTest(doc, selected: host, typeHereHost: null, canvas.Bounds.Size);
+        var itemCaption = frame.Captions.SingleOrDefault(c => c.Control == item);
+        Assert.That(itemCaption?.Drawn, Is.Not.Null, "the item being edited must draw a caption in the live render");
+
+        var expectedX = slotBounds.X + (itemCaption!.Drawn!.Origin.X - itemCaption.Bounds.X);
+        Assert.That(presenterOrigin!.Value.X, Is.EqualTo(expectedX).Within(1.0),
+            $"overlay text starts at x={presenterOrigin.Value.X:F1}, but the item's own live caption " +
+            $"draws at x={expectedX:F1}");
+
+        Assert.That(box.FontSize, Is.EqualTo(itemCaption.Drawn.FontSize).Within(0.01),
+            $"overlay font size {box.FontSize:F2} must match the item's own live-rendered caption " +
+            $"font size {itemCaption.Drawn.FontSize:F2}");
+    }
+
+    // ==================================================================
     // D — render-level: the accelerator mark itself must not be drawn
     // ==================================================================
 

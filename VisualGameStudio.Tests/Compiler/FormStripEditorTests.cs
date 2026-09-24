@@ -506,4 +506,246 @@ public class FormStripEditorTests
             Assert.That(vm.DesignModelRevision, Is.EqualTo(revisionBefore), "nothing was written");
         });
     }
+
+    // ======================================================================================
+    // "Can't edit a menu item once it is entered" — VS's second-click / F2 gesture (owner's
+    // report, 2026-09-23). BeginEditItem opens the SAME StripEditor/overlay on an EXISTING
+    // item's own cell, pre-filled with its current Text; committing renames it in place and
+    // closes the editor (unlike BeginTypeHere/CommitTypeHere, which append a NEW item and stay
+    // open). Contract: FormStripEditorViewModel.EditTarget is non-null only in this mode; today
+    // BeginEditItem is a NO-OP STUB (see CodeEditorDocumentViewModel.BeginEditItem) so every
+    // test below is measured red against that stub, not against a compile failure.
+    // ======================================================================================
+
+    /// <summary>Catches: BeginEditItem not activating the editor, not seeding Text from the
+    /// item's current caption, or not keeping the item itself selected (VS never changes the
+    /// selection to start a rename).</summary>
+    [Test]
+    public void BeginEditItem_OnAnExistingItem_ActivatesTheEditor_SeededWithItsText_AndKeepsItSelected()
+    {
+        var vm = Open(MenuStripDoc);
+        var strip = MenuStrip(vm);
+        vm.BeginTypeHere(strip);
+        vm.CommitTypeHere("&Open...");
+        var open = strip.Children.Single();
+        vm.Selection.Set(open);
+
+        vm.BeginEditItem(open);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(vm.StripEditor.IsActive, Is.True);
+            Assert.That(vm.StripEditor.EditTarget, Is.SameAs(open),
+                "EditTarget distinguishes 'renaming an existing item' from BeginTypeHere's " +
+                "'appending a new one' — today's stub never sets it");
+            Assert.That(vm.StripEditor.Text, Is.EqualTo("&Open..."),
+                "the editor must be pre-filled with the item's CURRENT Text, not started empty " +
+                "the way a new Type Here slot is");
+            Assert.That(vm.Selection.Primary, Is.SameAs(open),
+                "a rename must not change what is selected");
+        });
+    }
+
+    /// <summary>Catches: BeginEditItem not checking that the target actually HAS a Text
+    /// property — a separator has none, and the spec says F2/second-click on one does nothing.</summary>
+    [Test]
+    public void BeginEditItem_OnASeparator_DoesNothing()
+    {
+        var vm = Open(MenuStripDoc);
+        var strip = MenuStrip(vm);
+        vm.BeginTypeHere(strip);
+        vm.CommitTypeHere("&File");
+        var file = strip.Children.Single();
+        vm.BeginTypeHere(file);
+        vm.CommitTypeHere("-");
+        var separator = file.Children.Single();
+        vm.Selection.Set(separator);
+
+        vm.BeginEditItem(separator);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(vm.StripEditor.IsActive, Is.False);
+            Assert.That(vm.StripEditor.EditTarget, Is.Null);
+        });
+    }
+
+    /// <summary>Catches: commit not writing item.Properties["Text"], changing its Id/bindings,
+    /// losing the selection, leaving the editor open (unlike the create flow), or not reaching
+    /// the document text at all (so Undo could not restore it).</summary>
+    [Test]
+    public void CommitAfterBeginEditItem_RenamesTheItemInPlace_KeepsIdAndSelection_ClosesTheEditor_AndIsUndoable()
+    {
+        var vm = Open(MenuStripDoc);
+        var strip = MenuStrip(vm);
+        vm.BeginTypeHere(strip);
+        vm.CommitTypeHere("&Save");
+        var item = strip.Children.Single();
+        var originalId = item.Id;
+        vm.Selection.Set(item);
+        vm.BeginEditItem(item);
+
+        vm.CommitTypeHere("&Save As...");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(item.Properties.GetValueOrDefault("Text"), Is.EqualTo("&Save As..."));
+            Assert.That(item.Id, Is.EqualTo(originalId), "a rename must never touch the Id — event bindings key on it");
+            Assert.That(vm.Selection.Primary, Is.SameAs(item), "still selected after the rename");
+            Assert.That(vm.StripEditor.IsActive, Is.False,
+                "a rename CLOSES the editor — unlike CommitTypeHere's create flow, which stays open");
+            Assert.That(vm.Text, Does.Contain("Save As"), "reached the document — undoable");
+        });
+
+        vm.UndoDesignerEditCommand.Execute(null);
+        Assert.That(MenuStrip(vm).Children.Single().Properties.GetValueOrDefault("Text"),
+            Is.EqualTo("&Save"), "undo must restore the PRE-rename text");
+    }
+
+    /// <summary>
+    /// Catches: Escape (CancelTypeHere) not clearing EditTarget, or leaving the item's Text
+    /// changed from whatever was typed before cancelling.
+    ///
+    /// <para>⚠ State is set DIRECTLY on <c>StripEditor</c>, exactly like
+    /// <c>CancelTypeHere_DeactivatesTheEditor</c> above: <c>BeginEditItem</c> is still a no-op
+    /// stub, so routing through it would make "IsActive ends False" pass because it never became
+    /// True — proving nothing about Cancel. Pre-seeding makes every assertion depend on Cancel
+    /// actually running.</para>
+    /// </summary>
+    [Test]
+    public void EscapeAfterBeginEditItem_LeavesTheItemsTextUnchanged_AndClearsEditTarget()
+    {
+        var vm = Open(MenuStripDoc);
+        var strip = MenuStrip(vm);
+        vm.BeginTypeHere(strip);
+        vm.CommitTypeHere("&Save");
+        var item = strip.Children.Single();
+        vm.Selection.Set(item);
+        vm.StripEditor.IsActive = true;
+        vm.StripEditor.Host = item;
+        vm.StripEditor.EditTarget = item;
+        vm.StripEditor.Text = "garbage the user typed and then abandoned";
+
+        vm.CancelTypeHere();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(item.Properties.GetValueOrDefault("Text"), Is.EqualTo("&Save"), "unchanged");
+            Assert.That(vm.StripEditor.IsActive, Is.False);
+            Assert.That(vm.StripEditor.EditTarget, Is.Null,
+                "CancelTypeHere as written clears IsActive/Host/Text only — EditTarget is a NEW " +
+                "field it does not yet know about, so an edit-in-progress reads as cancelled but " +
+                "still names its target");
+        });
+    }
+
+    /// <summary>
+    /// A whitespace-only commit must be treated as a cancel (spec: "treat as cancel") — and must
+    /// especially never fall through to CommitTypeHere's CREATE path, which would otherwise nest a
+    /// new child item under the one being renamed (an item usually accepts children too — see
+    /// <c>BeginOnAnItem_ThenCommitThreeTimes...</c> above, which nests into exactly this kind of
+    /// host). The shared whitespace guard already short-circuits before that branch, so this
+    /// passes today as a genuine (not stub-dependent) regression pin for reusing CommitTypeHere in
+    /// edit mode.
+    /// </summary>
+    [Test]
+    public void CommittingWhitespaceAfterBeginEditItem_ChangesNothing_AndNestsNoChildItem()
+    {
+        var vm = Open(MenuStripDoc);
+        var strip = MenuStrip(vm);
+        vm.BeginTypeHere(strip);
+        vm.CommitTypeHere("&Save");
+        var item = strip.Children.Single();
+        vm.Selection.Set(item);
+        vm.StripEditor.IsActive = true;
+        vm.StripEditor.Host = item;
+        vm.StripEditor.EditTarget = item;
+
+        vm.CommitTypeHere("   ");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(item.Properties.GetValueOrDefault("Text"), Is.EqualTo("&Save"));
+            Assert.That(item.Children, Is.Empty,
+                "a whitespace commit must never create a nested item under the one being renamed");
+        });
+    }
+
+    /// <summary>
+    /// The leave-rule applies to a rename too: selecting anything other than the item being
+    /// edited must cancel it. Catches: the Selection.Changed handler's IsInside check not covering
+    /// a rename, or CancelTypeHere leaving EditTarget set once the leave-rule fires it.
+    ///
+    /// <para>⚠ Pre-seeded directly, for
+    /// <see cref="EscapeAfterBeginEditItem_LeavesTheItemsTextUnchanged_AndClearsEditTarget"/>'s
+    /// reason.</para>
+    /// </summary>
+    [Test]
+    public void SelectingAnotherControl_WhileEditingAnItemsText_CancelsTheEdit()
+    {
+        var vm = Open(MenuStripDoc);
+        var strip = MenuStrip(vm);
+        vm.BeginTypeHere(strip);
+        vm.CommitTypeHere("&Save");
+        var item = strip.Children.Single();
+        var button = Button(vm);
+        vm.Selection.Set(item);
+        vm.StripEditor.IsActive = true;
+        vm.StripEditor.Host = item;
+        vm.StripEditor.EditTarget = item;
+
+        vm.Selection.Set(button);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(vm.StripEditor.IsActive, Is.False);
+            Assert.That(vm.StripEditor.EditTarget, Is.Null,
+                "the same EditTarget-not-cleared gap as the Escape case, reached through the leave-rule instead");
+        });
+    }
+
+    /// <summary>⛔⛔ BLOCKER-1-shaped pin for the NEW property: <c>EditTarget</c> must be its own
+    /// <c>[ObservableProperty]</c> declaration, not folded onto an existing field's line, or a
+    /// view bound to it would read once at attach and never update (the shipped Host/Text/IsActive
+    /// defect, recurring for a fourth field).</summary>
+    [Test]
+    public void StripEditor_RaisesPropertyChanged_ForEditTarget_OnBeginEditItem()
+    {
+        var vm = Open(MenuStripDoc);
+        var strip = MenuStrip(vm);
+        vm.BeginTypeHere(strip);
+        vm.CommitTypeHere("&Save");
+        var item = strip.Children.Single();
+        vm.Selection.Set(item);
+        var raised = new List<string?>();
+        vm.StripEditor.PropertyChanged += (_, e) => raised.Add(e.PropertyName);
+
+        vm.BeginEditItem(item);
+
+        Assert.That(raised, Does.Contain(nameof(vm.StripEditor.EditTarget)),
+            "EditTarget must be an [ObservableProperty] — a plain property raises nothing");
+    }
+
+    /// <summary>Proves the GENERATED command drives the same outcome as the method — the
+    /// AddNewFormCommand failure mode (an attribute bound to the wrong declaration compiles
+    /// clean and generates nothing reachable).</summary>
+    [Test]
+    public void TheGeneratedBeginEditItemCommand_DrivesTheSameOutcomeAsTheMethod()
+    {
+        var vm = Open(MenuStripDoc);
+        var strip = MenuStrip(vm);
+        vm.BeginTypeHere(strip);
+        vm.CommitTypeHere("&Save");
+        var item = strip.Children.Single();
+        vm.Selection.Set(item);
+
+        Assert.That(vm.BeginEditItemCommand, Is.Not.Null);
+        vm.BeginEditItemCommand.Execute(item);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(vm.StripEditor.IsActive, Is.True);
+            Assert.That(vm.StripEditor.EditTarget, Is.SameAs(item));
+        });
+    }
 }

@@ -235,6 +235,8 @@
                                       PasteCommand="{Binding PasteControlsCommand}"
                                       TypeHereHost="{Binding StripEditor.Host}"
                                       BeginTypeHereCommand="{Binding BeginTypeHereCommand}"
+                                      EditItemCommand="{Binding BeginEditItemCommand}"
+                                      EditingItem="{Binding StripEditor.EditTarget}"
                                       SelectedControl="{Binding PropertyGrid.SelectedControl, Mode=TwoWay}"/>
 
           <!-- Task 24 (24d): the Type Here editor — an in-place TextBox over the menu/tool/status strip
@@ -251,7 +253,9 @@
                                        Text="{Binding StripEditor.Text, Mode=TwoWay}"
                                        SlotBounds="{Binding #DesignCanvas.TypeHereBounds}"
                                        CommitCommand="{Binding CommitTypeHereCommand}"
-                                       CancelCommand="{Binding CancelTypeHereCommand}"/>
+                                       CancelCommand="{Binding CancelTypeHereCommand}"
+                                       EditTarget="{Binding StripEditor.EditTarget}"
+                                       ActivateCommand="{Binding ActivateControlCommand}"/>
 
           <!-- Task 25: the component tray — VS's strip under the surface for the things that are
                part of the form but have no position on it. Click selects (through the shared
