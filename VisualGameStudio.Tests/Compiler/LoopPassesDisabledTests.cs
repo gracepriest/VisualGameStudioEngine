@@ -10,36 +10,41 @@ using BasicLang.Compiler.CodeGen.CSharp;
 namespace VisualGameStudio.Tests.Compiler;
 
 /// <summary>
-/// ⭐ ADR-0003's <b>INV-2</b>, and the guard on the <c>IsValueInvariant</c> repair that ships
-/// with it. <c>LoopInvariantCodeMotionPass</c>, <c>LoopUnrollingPass</c> and
-/// <c>LoopFusionPass</c> are all three unregistered, and this fixture is the evidence for why
-/// plus the guard that they stay out.
+/// ⭐ ADR-0003's <b>INV-2, amended 2026-09-24</b>: <c>LoopInvariantCodeMotionPass</c> is
+/// REGISTERED in <c>AddAggressivePasses</c> (and absent, as before, from the standard
+/// pipeline); <c>LoopUnrollingPass</c> and <c>LoopFusionPass</c> stay unregistered in both. This
+/// fixture is the evidence for the split plus the guard that keeps it that way.
 ///
-/// <para>They are the FOURTH, FIFTH and SIXTH passes <c>OptimizationPipeline</c> keeps but does
+/// <para>⛔ <b>WHY THE SPLIT.</b> Master's <c>e063faf</c> (PR #85, owner-approved, adopted into
+/// this branch by its merge of <c>15e4e63</c>) rewrote <c>LoopInvariantCodeMotionPass</c> —
+/// correct invariance (a local is invariant only if nothing in the loop writes it), a real
+/// single-entry preheader, and pure-value-only hoisting — and RE-REGISTERED it, measuring all 13
+/// loop shapes right on JavaScript, C++ and C#. See ADR-0003's Amendment section for the full
+/// record, including what its revisit conditions were and were not measured against.
+/// <c>LoopUnrollingPass</c> and <c>LoopFusionPass</c> were not touched by that rewrite and are
+/// still broken for the reasons pinned below — master unregistered them independently, having
+/// measured unrolling break 9 of 10 single loops and fusion break adjacent same-bound loops.</para>
+///
+/// <para>They were the FOURTH, FIFTH and SIXTH passes <c>OptimizationPipeline</c> kept but did
 /// not ship, after <c>ConstantPropagationPass</c>, <c>FunctionInliningPass</c> and
-/// <c>InductionVariablePass</c>, and they follow the same precedent on the same terms — see
-/// <see cref="FunctionInliningDisabledTests"/> and <see cref="InductionVariableDisabledTests"/>,
+/// <c>InductionVariablePass</c> — <c>LoopUnrollingPass</c> and <c>LoopFusionPass</c> still are;
+/// see <see cref="FunctionInliningDisabledTests"/> and <see cref="InductionVariableDisabledTests"/>,
 /// which this fixture is modelled on.</para>
 ///
 /// <para>⛔ <b>THE AGGRESSIVE PIPELINE SHIPS.</b> <c>Configurations["Release"].OptimizationsEnabled</c>
 /// reaches <c>CompilerOptions.OptimizeAggressive</c> through <c>Program.cs</c> and
 /// <c>BuildService.cs</c>, and thence <c>AddAggressivePasses</c>. A Release <c>.blproj</c> build —
-/// CLI or IDE — took all three of these passes, and so did <c>BasicLang.exe file.bas --optimize</c>.</para>
+/// CLI or IDE — takes LICM (registered) and does not take unrolling or fusion (still not), and
+/// so does <c>BasicLang.exe file.bas --optimize</c>.</para>
 ///
-/// <para>⛔ <b>WHY ALL THREE GO TOGETHER.</b> They share ONE substrate,
-/// <c>ControlFlowGraph.IdentifyLoops</c>, and there is no per-consumer opt-out of it. LICM was
-/// the only one that fired before ADR-0003, and it miscompiled: two sibling loops printed 65 where
-/// 29 is correct on C#, this suite's reference oracle, and C++ and MSIL ran every counted loop
-/// ZERO times. Repairing the substrate does not make any of them shippable — it TURNS THE OTHER
-/// TWO ON for the first time, and both are broken when they fire. The pins below measure exactly
-/// that, on the corpus <see cref="CfgLoopShapes"/> holds.</para>
-///
-/// <para>⚠ <b>GREEN HERE IS NOT A LICENCE TO RE-REGISTER ANYTHING.</b>
-/// <see cref="TheAggressivePipelineWithLicmAddedBack_StillPrintsTheCorrectValue"/> deliberately
-/// constructs a pipeline that ADR-0003 forbids, because that is the only way to see the
-/// <c>IsValueInvariant</c> repair at all. The registration question is
-/// <see cref="TheThreeLoopPassesAreAbsentFromBothPipelines_AndTheClassesStillExist"/>, and it is
-/// separate.</para>
+/// <para>⛔ <b>THEY SHARE ONE SUBSTRATE.</b> All three read <c>ControlFlowGraph.IdentifyLoops</c>,
+/// and there is no per-consumer opt-out of it. Before the back-edge predicate was fixed, LICM was
+/// the only one of the three that fired at all, and it miscompiled: two sibling loops printed 65
+/// where 29 is correct on C#, this suite's reference oracle, and C++ and MSIL ran every counted
+/// loop ZERO times. Repairing the substrate is what turned the other two on for the first time —
+/// both are still broken when they fire, which the pins below measure, on the corpus
+/// <see cref="CfgLoopShapes"/> holds. LICM's own rewrite is the exception: it is what makes
+/// its re-registration correct on this corpus.</para>
 /// </summary>
 [TestFixture]
 [NonParallelizable]
@@ -54,16 +59,20 @@ public class LoopPassesDisabledTests
     /// for the reason <c>InductionVariableDisabledTests.ThePassIsAbsentFromTheAggressivePipeline_AndTheClassStillExists</c>
     /// gives: the list is the thing the decision is about.
     ///
-    /// <para>⛔ <b>AND HERE IT IS THE ONLY THING THAT CAN SEE ONE OF THEM.</b> MEASURED with
-    /// <c>LoopInvariantCodeMotionPass</c> put back into <c>AddAggressivePasses</c>: all 104
-    /// end-to-end cells of <see cref="CfgLoopShapesAggressiveTests"/> stay byte-identical and
-    /// correct, because the <c>IsValueInvariant</c> repair that ships with ADR-0003 makes LICM
-    /// INERT — with locals reading non-invariant it can hoist nothing at all. So a re-registration
-    /// of LICM is invisible to every value oracle in the suite and this list is the guard.
-    /// (<c>LoopFusionPass</c> and <c>LoopUnrollingPass</c> re-registered DO change output, on 4
-    /// and 8 of 52 aggressive cells respectively, and
-    /// <see cref="CfgLoopShapesAggressiveTests"/> catches those too — but only this test catches
-    /// all three.)</para>
+    /// <para>⭐ <b>AMENDED 2026-09-24 — LICM IS NOW EXPECTED IN <c>AddAggressivePasses</c>.</b>
+    /// Master's <c>e063faf</c> (PR #85, owner-approved) rewrote <c>LoopInvariantCodeMotionPass</c>
+    /// and re-registered it, and this branch's merge of <c>15e4e63</c> adopts that. ADR-0003's
+    /// Amendment section records the full change; INV-2 is withdrawn as a blanket rule but still
+    /// holds for <c>LoopUnrollingPass</c> and <c>LoopFusionPass</c>, which stay banned from BOTH
+    /// pipelines below, unchanged from the original ruling. This test used to assert LICM was
+    /// banned too, back when the old, unregistered pass was inert-by-brokenness; it now asserts
+    /// the opposite for LICM specifically, on purpose, because that is what actually ships.</para>
+    ///
+    /// <para>⛔ <b>AND HERE IT IS THE ONLY THING THAT CAN SEE THE OTHER TWO.</b>
+    /// <c>LoopFusionPass</c> and <c>LoopUnrollingPass</c> re-registered DO change output, on 4
+    /// and 8 of 52 aggressive cells respectively, and <see cref="CfgLoopShapesAggressiveTests"/>
+    /// catches those too — but only this test catches the pass list directly, which is what the
+    /// decision is actually about.</para>
     ///
     /// <para>The positive half is asserted as well: the CLASSES must still exist and still be
     /// constructible, because the "still broken" pins below depend on constructing them, and
@@ -71,34 +80,45 @@ public class LoopPassesDisabledTests
     /// trap <see cref="FunctionInliningDisabledTests"/> documents for <c>CloneAndRemap</c>.</para>
     /// </summary>
     [Test]
-    public void TheThreeLoopPassesAreAbsentFromBothPipelines_AndTheClassesStillExist()
+    public void LicmIsInAggressiveOnly_UnrollingAndFusionAreAbsentFromBothPipelines_AndTheClassesStillExist()
     {
         var standard = PassesOf(p => p.AddStandardPasses());
         var aggressive = PassesOf(p => p.AddAggressivePasses());
 
-        var banned = new[]
+        var bannedFromBoth = new[]
         {
-            typeof(LoopInvariantCodeMotionPass),
             typeof(LoopUnrollingPass),
             typeof(LoopFusionPass),
         };
 
         Assert.Multiple(() =>
         {
-            foreach (var t in banned)
+            foreach (var t in bannedFromBoth)
             {
                 Assert.That(standard, Does.Not.Contain(t),
-                    $"{t.Name} is registered in AddStandardPasses. ADR-0003 INV-2: no loop pass is "
-                    + "registered in any pipeline. The list was: " + string.Join(", ", standard.Select(x => x.Name)));
+                    $"{t.Name} is registered in AddStandardPasses. ADR-0003 INV-2 (amended "
+                    + "2026-09-24) still forbids it for this pass. The list was: "
+                    + string.Join(", ", standard.Select(x => x.Name)));
                 Assert.That(aggressive, Does.Not.Contain(t),
-                    $"{t.Name} is back in AddAggressivePasses. ADR-0003 INV-2 forbids it, and D2's "
-                    + "revisit condition is explicit about the terms: one pass at a time, each "
-                    + "behind its own commit, and only once (a) the IsValueInvariant class of "
-                    + "defect is closed for it and (b) a differential harness runs the 13 shapes "
-                    + "across four backends comparing VALUES. Read this fixture and the disabled "
-                    + "AddPass lines in IROptimizer.cs first. The list was: "
+                    $"{t.Name} is back in AddAggressivePasses. ADR-0003's amended D2 unregisters "
+                    + "it independently of LICM — master measured unrolling break 9 of 10 single "
+                    + "loops and fusion break adjacent same-bound loops. Read this fixture and "
+                    + "the disabled AddPass lines in IROptimizer.cs first. The list was: "
                     + string.Join(", ", aggressive.Select(x => x.Name)));
             }
+
+            // LICM: the opposite claim. Absent from the standard pipeline (unchanged), present
+            // in the aggressive one (master's e063faf, adopted here — see ADR-0003's Amendment).
+            Assert.That(standard, Does.Not.Contain(typeof(LoopInvariantCodeMotionPass)),
+                "LoopInvariantCodeMotionPass is registered in AddStandardPasses. Master's "
+                + "e063faf registers it only in AddAggressivePasses. The list was: "
+                + string.Join(", ", standard.Select(x => x.Name)));
+            Assert.That(aggressive, Does.Contain(typeof(LoopInvariantCodeMotionPass)),
+                "LoopInvariantCodeMotionPass is missing from AddAggressivePasses. ADR-0003's "
+                + "amendment records it as registered there (master's e063faf, PR #85, adopted "
+                + "in this branch's merge of 15e4e63) — read the Amendment section before "
+                + "removing it again. The list was: "
+                + string.Join(", ", aggressive.Select(x => x.Name)));
 
             // Non-vacuity, both halves: the lists must be real, and aggressive must still be a
             // strict superset of standard. If AddAggressivePasses ever added nothing of its own,
@@ -115,45 +135,58 @@ public class LoopPassesDisabledTests
     }
 
     // ====================================================================================
-    // The IsValueInvariant repair — visible ONLY with LICM added back explicitly.
+    // The invariance check, run directly — LICM hoists nothing from a loop with nothing
+    // invariant in it, even though (unlike before ADR-0003's amendment) this is now the exact
+    // class this branch ships.
     // ====================================================================================
 
     /// <summary>
-    /// ⛔ <b>THE M5 GUARD, AND THE ONLY TEST IN THE SUITE THAT CAN SEE THE
-    /// <c>IsValueInvariant</c> REPAIR.</b>
+    /// ⛔ <b>THE INVARIANCE-CHECK GUARD, RUN DIRECTLY.</b> Constructs
+    /// <c>LoopInvariantCodeMotionPass</c> — master's <c>e063faf</c> rewrite, the SAME class
+    /// <c>AddAggressivePasses</c> registers since ADR-0003's amendment — and runs it alone
+    /// against two shapes that each contain a natural loop but nothing invariant inside it, so a
+    /// correct invariance check must hoist nothing from either.
     ///
-    /// <para><c>IsValueInvariant</c> is private to <c>LoopInvariantCodeMotionPass</c>, and no
-    /// pipeline registers that pass, so reverting the repair is <b>provably inert</b> against
-    /// every shipping route: a single-mutant sweep reports it as a survivor of the entire suite.
-    /// The only way to observe it is to construct the pass and run it, which is what this does —
-    /// the pattern <c>InductionVariableDisabledTests.RunDirectly_ThePassStillMiscompiles_WhichIsWhyItIsDisabled</c>
+    /// <para>⚠ It is a single <c>pass.Run(module)</c> and not a <c>pipeline.Run</c>, deliberately
+    /// — <c>OptimizationPipeline.Run</c> iterates to a fixed point, so the pass's
+    /// <c>ModificationCount</c> is ZERO after any converging pipeline run no matter what the pass
+    /// did on the way there, and an assertion made there would be vacuous. The pattern is the one
+    /// <c>InductionVariableDisabledTests.RunDirectly_ThePassStillMiscompiles_WhichIsWhyItIsDisabled</c>
     /// established for exactly this situation.</para>
     ///
-    /// <para><b>What the repair is.</b> A bare <c>IRVariable</c> used as an OPERAND has
-    /// <c>ParentBlock == null</c>, so the old fall-through arm evaluated
-    /// <c>!loop.Contains(null)</c> — TRUE — and read EVERY local as loop-invariant, including the
-    /// loop's own induction variable. ADR-0003 fixes it by returning <c>false</c> for a local
-    /// before that arm is reached.</para>
-    ///
-    /// <para><b>Two assertions, because one is not enough.</b> The MECHANISM assertion is that a
-    /// single <c>Run</c> reports NO modification: with the repair, LICM hoists nothing out of any
-    /// of the 13 corpus shapes. ⚠ It is a single <c>pass.Run(module)</c> and not a
-    /// <c>pipeline.Run</c>, deliberately — <c>OptimizationPipeline.Run</c> iterates to a fixed
-    /// point, so the pass's <c>ModificationCount</c> is ZERO after any converging pipeline run and
-    /// an assertion made there would be vacuous no matter what the pass did. The VALUE assertion
-    /// is the one with teeth: MEASURED with the repair reverted, this same construction turns
-    /// <c>A12</c> into <c>S=1</c> where <c>S=29</c> is correct and <c>A13</c> into <c>S=1,S=1</c>
-    /// where <c>S=29,S=29</c> is — a silent wrong answer on C#, the reference oracle, with no
-    /// build failure anywhere.</para>
+    /// <para><b>Why these two shapes hoist nothing.</b> <c>A12</c>'s loop body is
+    /// <c>acc = acc + i</c>: <c>i</c> is the loop counter and <c>acc</c> is written every
+    /// iteration, so by the pass's own invariance test —
+    /// <c>!variable.IsGlobal &amp;&amp; !written.Contains(variable.Name)</c> — neither operand of
+    /// the add is invariant, and nothing else in the loop is a pure binary/unary/compare op built
+    /// only from invariant operands. <c>A13</c> is the same shape twice, over two independent
+    /// accumulators. <b>THIS IS NOT A GENERAL LIMIT OF THE PASS</b> — unlike the branch-local fix
+    /// ADR-0003 originally shipped, master's rewrite genuinely CAN hoist a loop-invariant
+    /// expression out of a loop that has one (measured separately: probe
+    /// <c>scratchpad/f111g/licm/L6</c> hoists <c>x * y</c>, where neither operand is written in
+    /// the loop, and the program stays correct). These two shapes were chosen because they
+    /// contain nothing invariant, which is exactly the case a REGRESSED invariance check gets
+    /// wrong: a bare <c>IRVariable</c> operand falling through to a null-<c>ParentBlock</c> check
+    /// that reads as "outside the loop" for every local — the defect both the pre-e063faf pass on
+    /// master and this branch's original ADR-0003 fix were written against. MEASURED with that
+    /// defect present: this same construction turns <c>A12</c> into <c>S=1</c> where <c>S=29</c>
+    /// is correct and <c>A13</c> into <c>S=1,S=1</c> where <c>S=29,S=29</c> is — a silent wrong
+    /// answer on C#, the reference oracle, with no build failure anywhere.</para>
     ///
     /// <para>⚠ NON-VACUITY: the shape must actually contain a natural loop, asserted here, or
     /// "hoisted nothing" would be a statement about an empty input.</para>
     ///
-    /// <para>⚠ Shape choice is measured, not arbitrary. <c>A01</c> would NOT do: with the repair
-    /// reverted LICM modifies it (2 hoists) and it still prints the right answer, so its value is
-    /// blind to this defect. <c>A04_while</c> and <c>A05_do</c> would be worse than useless — with
-    /// the repair reverted the emitted C# runs the host out of memory. <c>A12</c> and <c>A13</c>
-    /// are the two that go silently, quickly wrong.</para>
+    /// <para>⚠ Shape choice is measured, not arbitrary. <c>A01</c> would NOT do: when the
+    /// invariance check was broken this way (this branch's pre-ADR-0003 fall-through, and
+    /// master's own pre-<c>e063faf</c> pass), it was measured to hoist the loop counter and bound
+    /// out of shapes like <c>A01</c> while the program still printed the right answer — the loop
+    /// only reads them, so a hoisted copy changes nothing observable — so a shape like it is
+    /// blind to the regression. <c>A04_while</c> and <c>A05_do</c> would be worse than useless —
+    /// with the check broken this way, the emitted C# runs the host out of memory. <c>A12</c> and
+    /// <c>A13</c> are the two that go silently, quickly wrong. RE-CONFIRMED here: with the
+    /// current, corrected pass, <c>A01</c>, <c>A02</c>, <c>A12</c> and <c>A13</c> all hoist
+    /// nothing (<c>ModificationCount == 0</c> for each) — the loop counter is the one non-invariant
+    /// operand every one of these shapes' loop-carried expressions depends on.</para>
     /// </summary>
     [Test]
     [TestCase("A12_unrollable", TestName = "LicmRunDirectly_OnACountedCallFreeLoop")]
@@ -176,66 +209,66 @@ public class LoopPassesDisabledTests
         {
             Assert.That(cfg.NaturalLoops, Is.Not.Empty,
                 "non-vacuity: this shape must contain a natural loop, or 'LICM hoisted nothing' "
-                + "says nothing about IsValueInvariant");
+                + "says nothing about the invariance check");
 
             Assert.That(changed, Is.False,
-                "LICM hoisted something out of a loop. With IsValueInvariant repaired it can hoist "
-                + "NOTHING from these shapes — a local is not invariant without a reaching-"
-                + "definition check, and nothing computes one. Reverting that repair makes LICM "
-                + "hoist the induction variable out of its own loop. ADR-0003.");
+                "LICM hoisted something out of a loop that has nothing invariant in it — the "
+                + "invariance check has regressed to treating a local as invariant when it "
+                + "should not (a local is not invariant if the loop writes it). That is what "
+                + "hoists the induction variable out of its own loop. See ADR-0003's Amendment.");
             Assert.That(pass.ModificationCount, Is.Zero,
                 "LICM reported modifications: " + pass.ModificationCount);
 
             Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharpText(
                     new ImprovedCSharpCodeGenerator().Generate(module))),
                 Is.EqualTo(shape.Expected),
-                "…and the program still prints the right answer. With IsValueInvariant reverted "
-                + "this prints S=1 for A12 and S=1,S=1 for A13 — silently, on the reference "
-                + "oracle, with no build failure to notice.");
+                "…and the program still prints the right answer. With the invariance check "
+                + "broken this prints S=1 for A12 and S=1,S=1 for A13 — silently, on the "
+                + "reference oracle, with no build failure to notice.");
         });
     }
 
     /// <summary>
-    /// ⛔ <b>M5 + M2 TOGETHER — the original defect, reconstructed.</b> A single-mutant sweep
-    /// reports BOTH the <c>IsValueInvariant</c> revert and the LICM re-registration as survivors,
-    /// because each one alone is harmless: the revert is inert while nothing registers the pass,
-    /// and the registration is inert while the repair holds. Put them together and issue #114 is
-    /// back. This is the test that makes the pair visible.
+    /// ⭐ <b>UPDATED 2026-09-24 — LICM SHIPS NOW; THIS TEST'S PREMISE HAS CHANGED, NOT ITS
+    /// VALUE.</b> Written when ADR-0003 forbade LICM outright, this test deliberately built a
+    /// pipeline the ADR did not allow, purely to exercise the invariance check end-to-end.
+    /// <c>AddAggressivePasses</c> now registers <c>LoopInvariantCodeMotionPass</c> itself (master's
+    /// <c>e063faf</c>, adopted by this branch's merge of <c>15e4e63</c> — see ADR-0003's
+    /// Amendment), so <c>pipeline.AddPass(new LoopInvariantCodeMotionPass())</c> below now adds a
+    /// SECOND instance on top of the one <c>AddAggressivePasses</c> already added — the pipeline
+    /// this test builds is a superset of what ships, not a forbidden one. It is kept anyway: it
+    /// still catches a regression of the invariance check inside something closer to the real
+    /// aggressive pipeline (every other aggressive pass runs too) than
+    /// <see cref="LicmAddedExplicitly_HoistsNothing_AndLeavesTheProgramCorrect"/>'s bare
+    /// <c>pass.Run</c> does, and it still asserts a genuine invariant: if the invariance check
+    /// ever regresses to "every local is invariant" — this branch's pre-ADR-0003 state, and
+    /// master's own pre-<c>e063faf</c> state — TWO copies of a broken LICM back to back compound
+    /// the damage rather than cancelling it, which makes this a strictly HARDER bar to pass than
+    /// the shipping pipeline's single copy, not an easier one.</para>
     ///
-    /// <para>It builds the REAL aggressive pass list and then adds LICM to it — the exact shape
-    /// of the change someone reaching for D2's revisit clause will make — and asserts the value.
-    /// MEASURED at this change: correct on all four shapes, and the pipeline reports ZERO total
-    /// modifications on them. MEASURED with <c>IsValueInvariant</c> reverted: the two
-    /// literal-bound shapes go red in ~250 ms each; the other two are labelled controls (see the
-    /// comment on the cases).</para>
+    /// <para>MEASURED on the current, corrected pass: correct on all four shapes, and the
+    /// pipeline reports ZERO total modifications on them — consistent with
+    /// <see cref="LicmIsInAggressiveOnly_UnrollingAndFusionAreAbsentFromBothPipelines_AndTheClassesStillExist"/>'s
+    /// probe that none of these four shapes has anything invariant to hoist.</para>
     ///
     /// <para>⛔⛔ <b>THE PIPELINE IS PINNED TO ONE ITERATION, AND THAT IS NOT A CONVENIENCE.</b>
     /// <c>OptimizationPipeline</c> defaults to iterating to a fixed point (up to 10 rounds), and
-    /// MEASURED with <c>IsValueInvariant</c> reverted, <b>that loop does not converge</b>: LICM
-    /// re-hoists its own output round after round. One case alone took 31 s; another never
-    /// terminated at all (killed at 200 s); and inside a full fixture run the test host reached
-    /// <b>5.9 GB and CRASHED</b>, turning four clean red rows into
-    /// <c>Test Run Aborted</c> — a result nobody can read. ⚠ <b>A mutant that hangs is worse than
-    /// a mutant that survives</b>, because it takes the rest of the run with it. One round is
-    /// enough to expose the defect (one hoist out of a loop is already the wrong answer) and is
-    /// bounded by construction. Do not remove the argument to "test what really ships": what
-    /// really ships does not include LICM at all, which is
-    /// <see cref="TheThreeLoopPassesAreAbsentFromBothPipelines_AndTheClassesStillExist"/>'s
-    /// business, and the fixed-point behaviour of a pass ADR-0003 forbids is not a property worth
-    /// an aborted suite.</para>
-    ///
-    /// <para>⛔ <b>This test passing is NOT permission to register LICM.</b> ADR-0003 D2 unregisters
-    /// it because it has no measured value, not only because it was wrong;
-    /// <see cref="TheThreeLoopPassesAreAbsentFromBothPipelines_AndTheClassesStillExist"/> is the
-    /// assertion about what ships, and it is unaffected by this one.</para>
+    /// MEASURED with the invariance check broken the way it was before ADR-0003 and before
+    /// <c>e063faf</c>, <b>that loop does not converge</b>: LICM re-hoists its own output round
+    /// after round. One case alone took 31 s; another never terminated at all (killed at 200 s);
+    /// and inside a full fixture run the test host reached <b>5.9 GB and CRASHED</b>, turning
+    /// four clean red rows into <c>Test Run Aborted</c> — a result nobody can read. ⚠ <b>A mutant
+    /// that hangs is worse than a mutant that survives</b>, because it takes the rest of the run
+    /// with it. One round is enough to expose the defect (one hoist out of a loop is already the
+    /// wrong answer) and is bounded by construction.</para>
     /// </summary>
-    // ⚠ The first two are labelled CONTROLS, not guards, and the difference is measured: with
-    // IsValueInvariant reverted, ONE round of LICM over A01 and A02 still prints the right answer
+    // ⚠ The first two are labelled CONTROLS, not guards, and the difference is measured: with the
+    // invariance check broken, ONE round of LICM over A01 and A02 still prints the right answer
     // (those shapes only go wrong once the fixed-point loop re-hoists, which is the behaviour this
     // test deliberately does not run). They are kept because they must stay correct, and a
     // fixture that quietly dropped every shape it could not kill a mutant with would be claiming
     // narrower coverage than it has. The two literal-bound shapes are the ones with teeth: both go
-    // red in ~250 ms with the repair reverted.
+    // red in ~250 ms with the check broken.
     [Test]
     [TestCase("A01_for_single", TestName = "AggressivePlusLicm_ACountedFor_Control")]
     [TestCase("A02_for_nested", TestName = "AggressivePlusLicm_ANestedCountedFor_Control")]
@@ -458,9 +491,10 @@ public class LoopPassesDisabledTests
 
     /// <summary>
     /// The pipeline's pass list. Reflection because <c>_passes</c> is private and the list IS the
-    /// subject: INV-2 is a statement about what <c>AddAggressivePasses</c> puts in it, and
-    /// inferring that from emitted text would make the guard depend on a pass's observable
-    /// effect — which for LICM, after the <c>IsValueInvariant</c> repair, is nil.
+    /// subject: INV-2 (amended for LICM — see ADR-0003's Amendment) is a statement about what
+    /// <c>AddAggressivePasses</c> puts in it, and inferring that from emitted text would make the
+    /// guard depend on a pass's observable effect — which on this fixture's own corpus is nil for
+    /// LICM (nothing in these 13 shapes is invariant), even though LICM is not inert in general.
     /// </summary>
     private static List<Type> PassesOf(OptimizationPipeline pipeline)
     {

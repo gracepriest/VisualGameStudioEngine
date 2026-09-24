@@ -87,19 +87,26 @@ internal static class FourBackends
     /// suite did not have; see <see cref="AggressivePipeline"/> for what its absence cost.
     ///
     /// <para>⭐ <b>USABLE FOR LOOPS SINCE ADR-0003 — this used to say it was not.</b> The
-    /// exclusion it carried was real: under <c>AddAggressivePasses()</c>
+    /// exclusion it carried was real: under <c>AddAggressivePasses()</c> the OLD
     /// <c>LoopInvariantCodeMotionPass</c> sank a counted loop's condition out of the condition
     /// block and into the loop's own LATCH, because <c>ControlFlowGraph.IdentifyLoops</c> handed
     /// it a "preheader" that was the latch; C++ and MSIL emit the CFG as labels and <c>goto</c>s,
     /// read the condition flag before anything wrote it, and ran the loop ZERO times. That was
-    /// issue #114. ADR-0003 unregisters all three loop passes, so no aggressive pass now touches
-    /// a loop at all.</para>
+    /// issue #114. ADR-0003 first closed it by unregistering all three loop passes. <b>UPDATED
+    /// 2026-09-24:</b> master's <c>e063faf</c> (PR #85, adopted by this branch's merge of
+    /// <c>15e4e63</c>; see ADR-0003's Amendment) rewrote <c>LoopInvariantCodeMotionPass</c> —
+    /// correct invariance, a verified single-entry preheader, pure-value-only hoisting — and
+    /// re-registered it in <c>AddAggressivePasses</c>. <c>LoopUnrollingPass</c> and
+    /// <c>LoopFusionPass</c> stay unregistered, so an aggressive pass DOES touch a loop again —
+    /// LICM — but the class of defect that made this fixture's exclusion necessary does not
+    /// recur, because the rewrite places hoisted code only in a preheader it verifies itself.</para>
     ///
     /// <para>RE-MEASURED across the 13-shape CFG corpus (<see cref="CfgLoopShapes"/>) on all four
-    /// backends under both pipelines: <b>104 of 104 cells correct</b>, including every counted
-    /// <c>For</c>, <c>While</c>, <c>Do While</c>, <c>Exit For</c> and nested-loop shape on C++
-    /// and MSIL. <see cref="CfgLoopShapesAggressiveTests"/> is that measurement, committed. Write
-    /// a four-backend aggressive loop assertion here and expect the right answer.</para>
+    /// backends under both pipelines, with LICM back in the aggressive pipeline: <b>104 of 104
+    /// cells correct</b>, including every counted <c>For</c>, <c>While</c>, <c>Do While</c>,
+    /// <c>Exit For</c> and nested-loop shape on C++ and MSIL. <see cref="CfgLoopShapesAggressiveTests"/>
+    /// is that measurement, committed. Write a four-backend aggressive loop assertion here and
+    /// expect the right answer.</para>
     ///
     /// <para>⚠ <c>Assert.Multiple</c> and an in-process Roslyn C# leg with no timeout, exactly as
     /// <see cref="RunsOnEveryBackend"/>: ONE shape per test.</para>

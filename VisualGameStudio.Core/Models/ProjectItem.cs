@@ -6,8 +6,15 @@ public class ProjectItem
     public ProjectItemType ItemType { get; set; } = ProjectItemType.None;
     public Dictionary<string, string> Metadata { get; set; } = new();
 
-    public string FileName => Path.GetFileName(Include);
-    public string Directory => Path.GetDirectoryName(Include) ?? "";
+    public string FileName => Path.GetFileName(LocalInclude);
+    public string Directory => Path.GetDirectoryName(LocalInclude) ?? "";
+
+    // Include may still carry the MSBuild-style backslashes of a Windows-authored project file
+    // (items built directly, not through the loader); on Linux/macOS Path would read the whole
+    // string as one file name. A no-op on Windows.
+    private string LocalInclude => Path.DirectorySeparatorChar == '\\'
+        ? Include
+        : Include.Replace('\\', Path.DirectorySeparatorChar);
 
     public ProjectItem() { }
 

@@ -72,8 +72,8 @@ namespace BasicLang.Compiler.IR
         /// would rewrite those lists. May repeat a target (AddEdge de-duplicates); a null target
         /// is yielded as-is, exactly as <see cref="Build"/> handed it to AddEdge before.
         ///
-        /// <para>Not an analysis: no dominance, no loops, no reducibility — ADR-0003 D4/D5's
-        /// deleted surface stays deleted.</para>
+        /// <para>Not an analysis — it lists edges and nothing else; it revives none of the
+        /// surface ADR-0003 D5 deleted.</para>
         /// </summary>
         public static IEnumerable<BasicBlock> SuccessorsOf(BasicBlock block)
         {
@@ -263,6 +263,11 @@ namespace BasicLang.Compiler.IR
                     // Testing successor.Dominators.Contains(block) instead asks "does the tail
                     // dominate the head", which is the defining property of a FORWARD edge --
                     // it selects every edge that is not a back edge and never the real one.
+                    // (Fixed identically on this branch, 60b7226 / ADR-0003, and on master,
+                    // e063faf: MEASURED there on `For i = 1 To 5 : s = s + i * 3 : Next`,
+                    // entry->for0.cond was a "back edge", every "loop" contained entry, and
+                    // LoopInvariantCodeMotionPass moved the loop condition into for0.inc —
+                    // every For loop printed 0 on C++ under --optimize.)
                     if (block.Dominators.Contains(successor))
                     {
                         backEdges.Add((block, successor));
@@ -385,6 +390,35 @@ namespace BasicLang.Compiler.IR
             DFS(EntryBlock);
             postOrder.Reverse();
             return postOrder;
+        }
+        
+        /// <summary>
+        /// Check if the CFG is reducible (structured control flow)
+        ///
+        /// <para>⚠ ADR-0003 D4 deleted this as dead; it is back because master's e063faf fixed
+        /// its orientation and <c>LoopInvariantCodeMotionTests</c> calls it. Note that with both
+        /// orientations now agreeing it cannot return false: <see cref="FindBackEdges"/> admits
+        /// an edge only when its head dominates its tail, which is exactly what this re-checks.
+        /// A real reducibility test compares DFS retreating edges against dominance back
+        /// edges.</para>
+        /// </summary>
+        public bool IsReducible()
+        {
+            // A CFG is reducible if all back edges are to loop headers
+            var backEdges = FindBackEdges();
+            
+            foreach (var (tail, head) in backEdges)
+            {
+                // Check if head dominates tail (making it a proper loop header). Same
+                // orientation fix as FindBackEdges: "head dominates tail" is
+                // tail.Dominators.Contains(head).
+                if (!tail.Dominators.Contains(head))
+                {
+                    return false;
+                }
+            }
+            
+            return true;
         }
         
         /// <summary>

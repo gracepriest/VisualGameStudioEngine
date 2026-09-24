@@ -1154,14 +1154,20 @@ public class OptimizerDanglingOperandInvariantTests
     /// battery above keeps its check because all twelve of ITS shapes satisfy it. Do not copy it
     /// down here.</para>
     ///
-    /// <para>⚠ <b>THE CONCLUSION IS UNCHANGED; ITS STATED REASON WAS AND IS NO LONGER TRUE.</b>
-    /// This note used to explain the zero as "the only aggressive-only pass that acts on those
-    /// shapes is <c>LoopInvariantCodeMotionPass</c>, and it MOVES instructions rather than
-    /// removing any". Since ADR-0003 that is not why: <c>LoopInvariantCodeMotionPass</c>,
-    /// <c>LoopUnrollingPass</c> and <c>LoopFusionPass</c> are all three UNREGISTERED, so NO
-    /// aggressive-only pass touches these loop shapes at all — the count is zero because nothing
-    /// runs on them, not because the thing that runs on them only moves. The zero itself is
-    /// re-measured and unchanged.</para>
+    /// <para>⚠ <b>THE CONCLUSION IS UNCHANGED; ITS STATED REASON HAS CHANGED TWICE.</b> This note
+    /// originally explained the zero as "the only aggressive-only pass that acts on those shapes
+    /// is <c>LoopInvariantCodeMotionPass</c>, and it MOVES instructions rather than removing any".
+    /// ADR-0003 then unregistered all three loop passes, so the reason became "nothing runs on
+    /// them at all." <b>UPDATED 2026-09-24:</b> master's <c>e063faf</c> (PR #85, adopted by this
+    /// branch's merge of <c>15e4e63</c>; see ADR-0003's Amendment) re-registers
+    /// <c>LoopInvariantCodeMotionPass</c> in <c>AddAggressivePasses</c>, so the original reason is
+    /// closer to true again, but for a different cause: LICM DOES run on every one of these
+    /// shapes, and removes nothing from any of them, because in each one the multiply's non-
+    /// constant operand is the loop's induction variable — written every iteration, hence never
+    /// invariant by the pass's own test — so LICM never identifies these instructions as
+    /// candidates to move in the first place. <c>LoopUnrollingPass</c> and <c>LoopFusionPass</c>
+    /// stay unregistered and still touch nothing here. The zero itself is re-measured and
+    /// unchanged.</para>
     ///
     /// <para>⚠ These are the same twelve source bodies as the battery above rather than a shared
     /// constant, because NUnit needs them as attribute arguments. If one is edited, edit both — a
@@ -1260,20 +1266,27 @@ public class OptimizerDanglingOperandInvariantTests
     /// <para>⚠ This assertion is deliberately NOT paired with the battery's non-vacuity check.
     /// Nothing is removed from this shape by any aggressive pass, so "something was removed" is
     /// false here and would fail for a reason that has nothing to do with the property. Do not
-    /// add it back. ⚠ The REASON has changed since this was written and the conclusion has not:
-    /// it used to be that the only pass touching this shape,
-    /// <c>LoopInvariantCodeMotionPass</c>, MOVED instructions rather than removing any; since
-    /// ADR-0003 that pass — and <c>LoopUnrollingPass</c> and <c>LoopFusionPass</c> with it — is
-    /// UNREGISTERED, so no aggressive-only pass touches this shape at all.</para>
+    /// add it back. ⚠ <b>UPDATED 2026-09-24, AND THE REASON HAS CHANGED AGAIN.</b> It used to be
+    /// that the only pass touching this shape, <c>LoopInvariantCodeMotionPass</c>, MOVED
+    /// instructions rather than removing any; ADR-0003 then unregistered that pass — and
+    /// <c>LoopUnrollingPass</c> and <c>LoopFusionPass</c> with it — so nothing touched this shape
+    /// at all. Master's <c>e063faf</c> (PR #85, adopted by this branch's merge of <c>15e4e63</c>;
+    /// see ADR-0003's Amendment) re-registers <c>LoopInvariantCodeMotionPass</c> in
+    /// <c>AddAggressivePasses</c>, so it DOES run over this shape again — and moves nothing,
+    /// because <c>i</c> (the loop counter) is the one non-invariant operand <c>i * 3</c> depends
+    /// on, so nothing here is invariant. <c>LoopUnrollingPass</c> and <c>LoopFusionPass</c> stay
+    /// unregistered.</para>
     ///
     /// <para>⭐ <b>CORRECTED, AND IT WAS FACTUALLY FALSE.</b> This paragraph used to read "Still
     /// open… under the aggressive pipeline C++ and MSIL run this loop ZERO times, because LICM
-    /// moves the loop condition's definition into the loop's own latch." That was issue #114 and
-    /// it is CLOSED: ADR-0003 unregisters LICM, and RE-MEASURED on the 13-shape CFG corpus all
-    /// four backends run every loop shape the right number of times under both pipelines
-    /// (<c>CfgLoopShapesAggressiveTests</c>, 104/104 cells). It remains true that such a defect
-    /// would produce no dangling operand, so this invariant would be blind to it — that is the
-    /// part worth keeping, and it is why the four-backend VALUE fixture exists separately.</para>
+    /// moves the loop condition's definition into the loop's own latch." That was issue #114 —
+    /// closed first by ADR-0003 unregistering LICM, and, after master's rewrite re-registered it,
+    /// by the rewrite's own correctness. RE-MEASURED on the 13-shape CFG corpus with LICM back in
+    /// the aggressive pipeline: all four backends still run every loop shape the right number of
+    /// times under both pipelines (<c>CfgLoopShapesAggressiveTests</c>, 104/104 cells). It remains
+    /// true that a MOVE-only defect like the old one would produce no dangling operand, so this
+    /// invariant would be blind to it — that is the part worth keeping, and it is why the
+    /// four-backend VALUE fixture exists separately.</para>
     /// </summary>
     [Test]
     public void TheAggressivePipelineLeavesNoDanglingOperand_WasAPinnedPreExistingDefect()

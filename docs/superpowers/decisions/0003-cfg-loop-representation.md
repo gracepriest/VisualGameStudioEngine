@@ -1,5 +1,8 @@
 # ADR 0003: loop representation in `ControlFlowGraph.cs`, and disabling the loop passes
 
+⚠ **Amended 2026-09-24** — D2 is superseded for LICM only. See the Amendment section at the
+end of this file before relying on anything D2 says about `LoopInvariantCodeMotionPass`.
+
 - **Date:** 2026-09-22
 - **Status:** Accepted
 - **Decided by:** architect role, ruling made by Opus — the pinned architect model, Fable 5.1,
@@ -135,3 +138,42 @@ reporting zero loops for them is the CORRECT answer for a natural-loop analysis,
   not the answer.
 - **D4/D5:** a pass needs a reducibility guard, or a dominance frontier — write it then, against
   the now-correct predicate, with a caller and a test.
+
+## Amendment (2026-09-24): LICM re-registered by master
+
+This section records facts, not a new ruling. It does not re-litigate D2; it states what
+superseded it and on what terms.
+
+- **Superseded by:** master's `e063faf` ("Make loops correct under --optimize: fix loop
+  detection and LICM", PR #85), owner-approved and merged to `master`. Adopted into this branch
+  by its merge of `15e4e63`.
+- **D1 (back-edge predicate) — unchanged.** Both lines of work made the identical one-token fix
+  (`ControlFlowGraph.cs`'s back-edge test reads `block.Dominators.Contains(successor)`).
+- **D2 (loop passes out of the pipeline) — superseded FOR LICM ONLY.**
+  `LoopInvariantCodeMotionPass` is registered in `AddAggressivePasses`, immediately after the
+  standard passes. `LoopUnrollingPass` and `LoopFusionPass` stay unregistered — master
+  unregistered them independently, having measured that unrolling broke 9 of 10 single loops
+  (`_u3_i is not defined`) and fusion broke adjacent same-bound loops. `InductionVariablePass`
+  and `FunctionInliningPass` stay off. **INV-2 is withdrawn** (as a blanket "no loop pass" rule;
+  it still holds for every pass except LICM).
+  - D2's revisit conditions were only PARTLY met at the time of re-registration:
+    - (a) invariance is now "not global, and nothing in the loop writes it" — closer than the
+      old `IsValueInvariant`, but the written-set this rewrite computes still misses
+      instance-method ByRef writes and call-visible class fields (probes L1 and L3: silent wrong
+      answers under `--optimize` on the C++, JavaScript and MSIL backends, present on master
+      too; a follow-up commit on this branch fixes both by giving LICM the shared kill
+      vocabulary the rest of the optimizer uses). A lambda-captured local (probe L5) stays
+      wrong pending a capture set (task #122).
+    - (b) `CfgLoopShapesAggressiveTests` (13 shapes, four backends) passes with LICM on; master's
+      own run tests cover JavaScript, C++ and C#, not MSIL.
+- **D4 (delete `IsReducible`) — reversed.** Restored, with master's orientation fix, because
+  `LoopInvariantCodeMotionTests` calls it; per the note added there, it can no longer return
+  `false`.
+- **D5 (delete the dead CFG surface) — stands.** Nothing calls `ComputeDominanceFrontier`,
+  `ComputeBlockDepths`, `DominatorTree` or `PostDominatorTree`.
+- **INV-3 holds** (`CfgLoopShapesAggressiveTests`). **INV-4** holds under master's LICM: it
+  places hoisted code only in a single-entry preheader it identifies itself — checked by
+  reading the pass, not by a differential measurement.
+- This branch's `IsValueInvariant` fix was replaced outright by master's rewrite: a
+  `case IRVariable` arm ahead of the `ParentBlock` arm, where a local is invariant only if it is
+  not global and nothing in the loop writes it.

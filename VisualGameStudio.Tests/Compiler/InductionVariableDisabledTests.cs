@@ -245,19 +245,24 @@ public class InductionVariableDisabledTests
     ///
     /// <para>⭐ <b>ALL FOUR BACKENDS SINCE ADR-0003; C++ AND MSIL USED TO BE EXCLUDED HERE.</b>
     /// The exclusion was measured and unrelated to this pass: under <c>AddAggressivePasses()</c>
-    /// <c>LoopInvariantCodeMotionPass</c> sank the loop condition's definition out of the
+    /// the OLD <c>LoopInvariantCodeMotionPass</c> sank the loop condition's definition out of the
     /// condition block and into the loop's own LATCH, because <c>ControlFlowGraph.IdentifyLoops</c>
     /// handed it a "preheader" that WAS the latch. C++ and MSIL emit the CFG as labels and
     /// branches, so they read the condition flag before anything wrote it and ran the loop ZERO
     /// TIMES; C# and JavaScript rebuild the condition from the CFG in their structured-loop
     /// emitters and were unaffected. The emitted C++ was literally
     /// <c>bool t1 = {}; … for0_cond: if (t1) …</c> with <c>t1 = i &lt;= n</c> moved down into
-    /// <c>for0_inc</c>. That was issue #114, and ADR-0003 closed it by unregistering all three
+    /// <c>for0_inc</c>. That was issue #114. ADR-0003 first closed it by unregistering all three
     /// loop passes — the inverted back-edge predicate underneath them is repaired, and the loop
-    /// sets it produced were what made the "preheader" resolve to the latch. RE-MEASURED across
-    /// the 13-shape CFG corpus, all four backends agree on every loop shape under both pipelines
-    /// (104/104 cells); <see cref="CfgLoopShapesAggressiveTests"/> is that measurement,
-    /// committed. So <see cref="BothPipelinesAgree"/> now runs all four.</para>
+    /// sets it produced were what made the "preheader" resolve to the latch. <b>UPDATED
+    /// 2026-09-24:</b> master's <c>e063faf</c> (PR #85, adopted by this branch's merge of
+    /// <c>15e4e63</c>; see ADR-0003's Amendment) rewrote <c>LoopInvariantCodeMotionPass</c> —
+    /// among other fixes, it places hoisted code only in a real single-entry preheader it
+    /// verifies itself, never a latch — and re-registered it in <c>AddAggressivePasses</c>, so
+    /// this shape now runs LICM again and still gets the right answer. RE-MEASURED across the
+    /// 13-shape CFG corpus with LICM back in the pipeline, all four backends still agree on every
+    /// loop shape under both pipelines (104/104 cells); <see cref="CfgLoopShapesAggressiveTests"/>
+    /// is that measurement, committed. So <see cref="BothPipelinesAgree"/> now runs all four.</para>
     ///
     /// <para>⚠ ONE SHAPE PER TEST. Both harnesses use <c>Assert.Multiple</c>, and the C# leg is
     /// in-process Roslyn with NO timeout, so several programs in one case would report the first
@@ -464,11 +469,14 @@ public class InductionVariableDisabledTests
     /// <para>⭐ <b>ALL FOUR BACKENDS SINCE ADR-0003; THIS CASE USED TO BE C# ONLY.</b> JavaScript
     /// was excluded by measurement and for a reason that was not this defect: under
     /// <c>--optimize</c> a nested <c>For</c> gave <c>ReferenceError: t4 is not defined</c>,
-    /// because LICM sank the OUTER loop's increment <c>t4 = i + 1</c> into the INNER loop's latch,
-    /// where the emitter declared it <c>const</c> inside the inner block and the outer loop's
-    /// <c>i = t4</c> then read a name that was out of scope. C++ and MSIL were excluded for the
-    /// zero-iteration reason above. All three were issue #114, and ADR-0003 closed it — the
-    /// <c>t4</c> failure is gone, RE-MEASURED on this very shape.</para>
+    /// because the OLD LICM sank the OUTER loop's increment <c>t4 = i + 1</c> into the INNER
+    /// loop's latch, where the emitter declared it <c>const</c> inside the inner block and the
+    /// outer loop's <c>i = t4</c> then read a name that was out of scope. C++ and MSIL were
+    /// excluded for the zero-iteration reason above. All three were issue #114. ADR-0003 first
+    /// closed it by unregistering LICM; <b>UPDATED 2026-09-24:</b> master's <c>e063faf</c> (PR
+    /// #85, adopted by this branch's merge of <c>15e4e63</c>; see ADR-0003's Amendment)
+    /// re-registers it, rewritten to hoist only into a real preheader, never a latch — the
+    /// <c>t4</c> failure stays gone, RE-MEASURED on this very shape with LICM running again.</para>
     /// </summary>
     // ⚠ NOW [Category("Integration")], and that is a real trade being made deliberately. This
     // case used to sit in the 2-minute subset because both its legs were the in-process Roslyn C#
@@ -646,12 +654,17 @@ public class InductionVariableDisabledTests
     /// under the AGGRESSIVE one, all eight equal to the arithmetically correct value.
     ///
     /// <para>⭐ <b>C++ AND MSIL WERE EXCLUDED HERE AND ARE NOT ANY MORE.</b> They were absent by
-    /// measurement, not oversight: issue #114 — <c>LoopInvariantCodeMotionPass</c> sinking a
-    /// counted loop's condition into its own latch — made both backends run every one of these
+    /// measurement, not oversight: issue #114 — the OLD <c>LoopInvariantCodeMotionPass</c> sinking
+    /// a counted loop's condition into its own latch — made both backends run every one of these
     /// loops ZERO times under the aggressive pipeline, so a four-backend assertion could not have
     /// gone green and writing one would have been a red test about a different defect. ADR-0003
-    /// unregisters all three loop passes, and RE-MEASURED on the 13-shape CFG corpus all four
-    /// backends now agree on every loop shape under both pipelines (104/104 cells).</para>
+    /// first closed this by unregistering all three loop passes. <b>UPDATED 2026-09-24:</b>
+    /// master's <c>e063faf</c> (PR #85, adopted by this branch's merge of <c>15e4e63</c>; see
+    /// ADR-0003's Amendment) rewrote and re-registered <c>LoopInvariantCodeMotionPass</c> — it
+    /// hoists only into a real preheader, never a latch, so the zero-iteration defect stays
+    /// closed. <c>LoopUnrollingPass</c> and <c>LoopFusionPass</c> stay unregistered. RE-MEASURED
+    /// on the 13-shape CFG corpus with LICM back in the aggressive pipeline, all four backends
+    /// still agree on every loop shape under both pipelines (104/104 cells).</para>
     ///
     /// <para>⚠ Note what this promotion IS: the previous fixture EXCLUDED the two damaged
     /// backends rather than pinning their damaged output, so nothing here is being re-baselined —

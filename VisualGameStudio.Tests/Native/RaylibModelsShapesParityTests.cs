@@ -61,7 +61,7 @@ public class RaylibModelsShapesParityTests
                 Assert.That(wrapper.Contains($"Framework_{name}("), Is.True, $"RaylibWrapper.vb missing import Framework_{name}");
             }
 
-            var raylibHeader = File.ReadAllText(Path.Combine(root, "packages", "raylib.5.5.0", "build", "native", "include", "raylib.h"));
+            var raylibHeader = RaylibHeader.Read(root);
             var range = ExtractRlapiRange(raylibHeader, "DrawLine3D(", "DrawGrid(");
             Assert.That(range, Is.EquivalentTo(AllShapes()),
                 "raylib's DrawLine3D..DrawGrid range must be exactly the 20 bound + the already-bound DrawGrid");

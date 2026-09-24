@@ -7,24 +7,34 @@ using BasicLang.Compiler.IR;
 namespace VisualGameStudio.Tests.Compiler;
 
 /// <summary>
-/// ⭐ THE STRUCTURAL FIXTURE FOR ADR-0003's INV-1 AND INV-4, and the ONLY thing in the suite
-/// that can see the fix at all.
+/// ⭐ THE STRUCTURAL FIXTURE FOR ADR-0003's INV-1 AND INV-4, and the DIRECT, unambiguous check
+/// on the reported loop sets themselves — the only place that property is asserted without going
+/// through a pass's downstream behaviour.
 ///
 /// <para>⛔ <b>WHY THIS FIXTURE HAD TO BE WRITTEN, AND WHY IT CANNOT BE REPLACED BY A VALUE
 /// ASSERTION.</b> The whole of ADR-0003's D1 is one token in
 /// <c>ControlFlowGraph.FindBackEdges</c> — <c>block.Dominators.Contains(successor)</c>, which the
-/// defect spelled the other way round. MEASURED by re-running the 13-shape corpus below with
-/// that token put back: <b>all 104 end-to-end cells (13 shapes × 4 backends × both pipelines)
-/// stay byte-identical and stay CORRECT.</b> Not one backend, not one program, not one entry
-/// point notices. The reason is D2: all three loop passes are unregistered, so
-/// <see cref="ControlFlowGraph.NaturalLoops"/> has <b>no consumer in the shipping compiler at
-/// all</b>, and a property with no consumer cannot be observed downstream of itself.</para>
+/// defect spelled the other way round. MEASURED AT THE TIME by re-running the 13-shape corpus
+/// below with that token put back, while all three loop passes were still unregistered (the
+/// original ADR-0003 state): <b>all 104 end-to-end cells (13 shapes × 4 backends × both
+/// pipelines) stayed byte-identical and stayed CORRECT.</b> Not one backend, not one program, not
+/// one entry point noticed, because <see cref="ControlFlowGraph.NaturalLoops"/> had <b>no
+/// consumer in the shipping compiler at all</b>, and a property with no consumer cannot be
+/// observed downstream of itself.</para>
 ///
-/// <para>So the core repair is invisible to every value oracle the suite has, and would be
-/// silently revertible forever behind a green suite. The assertions here are made DIRECTLY on
-/// <c>ControlFlowGraph</c> — reported loop sets, block by block — because that is the only place
-/// the property exists. If a future change gives <c>NaturalLoops</c> a real consumer, this
-/// fixture stops being the only guard; until then it is.</para>
+/// <para>⚠ <b>UPDATED 2026-09-24 — THAT SECOND HALF IS NO LONGER TRUE.</b> Master's
+/// <c>e063faf</c> (PR #85, adopted by this branch's merge of <c>15e4e63</c>; see ADR-0003's
+/// Amendment) re-registers <c>LoopInvariantCodeMotionPass</c> in <c>AddAggressivePasses</c>, and
+/// that pass calls <c>cfg.IdentifyLoops()</c> and iterates <c>cfg.NaturalLoops</c> directly — so
+/// <c>NaturalLoops</c> DOES have a shipping consumer now, and a bad-enough loop-set regression
+/// could in principle surface through LICM's behaviour (a malformed loop set can make
+/// <c>HoistInvariants</c> pick the wrong header or no preheader at all). This has not been
+/// re-measured against the current codebase, so it is not claimed here as a guarantee — the CFG
+/// shape corpus's 13 shapes are not chosen to stress that path, and a regression could still
+/// slip through it. The assertions here are still made DIRECTLY on <c>ControlFlowGraph</c> —
+/// reported loop sets, block by block — because that remains the only place the property is
+/// checked without depending on what happens to make it observable downstream, and it is cheaper
+/// and more precise than inferring loop-set correctness from a pass's emitted code either way.</para>
 ///
 /// <para>⭐ <b>THE CORPUS IS SHARED.</b> <see cref="CfgLoopShapes"/> holds all 13 shapes with
 /// their expected block names, expected loop sets AND expected stdout, and

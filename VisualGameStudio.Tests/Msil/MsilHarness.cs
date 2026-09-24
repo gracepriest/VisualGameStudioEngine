@@ -154,20 +154,7 @@ internal static class MsilHarness
                 + "v4.0.30319; elsewhere restore runtime.<rid>.Microsoft.NETCore.ILAsm, or point "
                 + "BASICLANG_ILASM at a build.";
 
-            // NUnit 4 keeps the "am I inside Assert.Multiple" level internal, so ask Assert.Ignore:
-            // outside a block it throws IgnoreException (let it go); inside one it throws a plain
-            // Exception refusing to run, which is the case handled below.
-            try
-            {
-                Assert.Ignore(message);
-            }
-            catch (Exception ex) when (ex is not IgnoreException)
-            {
-                var result = NUnit.Framework.Internal.TestExecutionContext.CurrentContext.CurrentResult;
-                if (result.PendingFailures > 0)
-                    throw new MultipleAssertException(result);
-                throw new IgnoreException(message);
-            }
+            TestSkip.IgnoreEvenInsideMultiple(message);
         }
         return IlasmPath.Value;
     }
@@ -191,13 +178,17 @@ internal static class MsilHarness
     /// false.
     ///
     /// <para>⭐ <b>SAFE FOR LOOPS SINCE ADR-0003 — this used to say it was not.</b> It assembled a
-    /// program that ran a counted <c>For</c> ZERO times: issue #114, the same
+    /// program that ran a counted <c>For</c> ZERO times: issue #114, the same OLD
     /// <c>LoopInvariantCodeMotionPass</c> condition-sinking that broke the C++ leg, for the same
     /// reason — MSIL emits the CFG as labels and branches and cannot recover a condition that
-    /// moved into the latch. ADR-0003 unregisters all three loop passes. RE-MEASURED on the
-    /// 13-shape CFG corpus: every loop shape now assembles, runs the right number of iterations
-    /// and prints what the non-aggressive path prints — see
-    /// <c>VisualGameStudio.Tests.Compiler.CfgLoopShapesAggressiveTests</c>.</para>
+    /// moved into the latch. ADR-0003 first closed this by unregistering all three loop passes.
+    /// <b>UPDATED 2026-09-24:</b> master's <c>e063faf</c> (PR #85, adopted by this branch's merge
+    /// of <c>15e4e63</c>; see ADR-0003's Amendment) rewrote <c>LoopInvariantCodeMotionPass</c> to
+    /// hoist only into a verified single-entry preheader, never a latch, and re-registered it.
+    /// <c>LoopUnrollingPass</c> and <c>LoopFusionPass</c> stay unregistered. RE-MEASURED on the
+    /// 13-shape CFG corpus with LICM back in the aggressive pipeline: every loop shape still
+    /// assembles, runs the right number of iterations and prints what the non-aggressive path
+    /// prints — see <c>VisualGameStudio.Tests.Compiler.CfgLoopShapesAggressiveTests</c>.</para>
     /// </param>
     internal static string CompileToIl(string source, string moduleName = "MsilProbe",
         bool optimize = true, bool aggressive = false)

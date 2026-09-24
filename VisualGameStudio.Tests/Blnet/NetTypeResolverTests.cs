@@ -1680,6 +1680,7 @@ public class TypeRegistryMetadataTests
     /// that look like success, so the whole namespace index was empty and nobody noticed. Reading
     /// metadata has no such version coupling.
     /// </summary>
+    [Platform(Include = "Win", Reason = "reads the Windows SDK layout under %ProgramFiles%\\dotnet\\packs")]
     [Test]
     public void IndexesAnAssemblyBuiltForANewerFrameworkThanTheRunningRuntime()
     {

@@ -1,8 +1,8 @@
 // Merged in from master (c283d6d, #79), which disabled InductionVariablePass independently of this
 // branch (3338dfd). Both files originally declared `InductionVariableDisabledTests`; this one is
 // renamed so neither side's coverage is lost. The branch file keeps the original name because
-// other fixtures cite it. NOTE: the "inside If" exclusion below was for LoopInvariantCodeMotionPass,
-// which this branch also unregisters (ADR-0003, 60b7226).
+// other fixtures cite it. NOTE: the "inside If" exclusion the run tests below used to carry was for
+// LoopInvariantCodeMotionPass; master's e063faf rewrote that pass and re-enabled the shape.
 using System.Linq;
 using NUnit.Framework;
 using BasicLang.Compiler.IR;
@@ -119,13 +119,11 @@ public class InductionVariableLoopShapeTests
 [NonParallelizable] // the C# leg redirects Console.Out
 public class InductionVariableLoopShapeRunTests
 {
-    // "inside If" is left out of the RUN tests on purpose: with this pass gone it no longer
-    // introduces `_div_`, but LoopInvariantCodeMotionPass still breaks it under --optimize — it
-    // moves the loop's `i + 1` into the If branch ("ReferenceError: t5 is not defined"). That is
-    // a separate defect, measured by skipping each aggressive pass in turn: only skipping LICM
-    // makes it print 120. Running it here would pin LICM's bug, not this pass's.
+    // "inside If" used to be left out here: LoopInvariantCodeMotionPass moved its `i + 1` into
+    // the If branch ("ReferenceError: t5 is not defined"). Fixed with that pass (see
+    // LoopInvariantCodeMotionTests), so every shape runs.
     private static System.Collections.Generic.IEnumerable<(string Name, string Body, string Expected)> Runnable() =>
-        InductionVariableLoopShapeTests.Loops.Where(l => l.Name != "inside If");
+        InductionVariableLoopShapeTests.Loops;
 
     private static System.Collections.Generic.IEnumerable<TestCaseData> Cases() =>
         Runnable().Select(l => new TestCaseData(l.Body, l.Expected).SetArgDisplayNames(l.Name));
