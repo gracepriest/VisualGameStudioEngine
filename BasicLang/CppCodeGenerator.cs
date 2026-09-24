@@ -96,6 +96,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             _usesFramework = false;
             _frameworkFunctionsUsed.Clear();
             _tempCounter = 0;
+            _userTempShapedNames = IRTempNames.UserOwned(module);
             // P2a-2 Task 7a: same walk the phase-3 collector uses — drives the boundary
             // includes; false for every surface-free program (the inertness rule).
             DetectNetSurface(module);

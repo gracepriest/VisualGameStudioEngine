@@ -368,7 +368,7 @@ namespace BasicLang.Compiler.IR.Optimization
                         ReplaceAllReferences(block, binaryOp, folded);
 
                         // If this was a named variable (not a temp), preserve assignment
-                        if (IsNamedVariable(binaryOp.Name))
+                        if (IsNamedVariable(binaryOp))
                         {
                             var targetVar = new IRVariable(binaryOp.Name, binaryOp.Type);
                             block.Instructions[i] = new IRAssignment(targetVar, folded);
@@ -389,7 +389,7 @@ namespace BasicLang.Compiler.IR.Optimization
                         ReplaceAllReferences(block, unaryOp, folded);
 
                         // If this was a named variable (not a temp), preserve assignment
-                        if (IsNamedVariable(unaryOp.Name))
+                        if (IsNamedVariable(unaryOp))
                         {
                             var targetVar = new IRVariable(unaryOp.Name, unaryOp.Type);
                             block.Instructions[i] = new IRAssignment(targetVar, folded);
@@ -410,7 +410,7 @@ namespace BasicLang.Compiler.IR.Optimization
                         ReplaceAllReferences(block, compare, folded);
 
                         // If this was a named variable (not a temp), preserve assignment
-                        if (IsNamedVariable(compare.Name))
+                        if (IsNamedVariable(compare))
                         {
                             var targetVar = new IRVariable(compare.Name, compare.Type);
                             block.Instructions[i] = new IRAssignment(targetVar, folded);
@@ -424,6 +424,18 @@ namespace BasicLang.Compiler.IR.Optimization
                 }
             }
         }
+
+        /// <summary>
+        /// Whether <paramref name="value"/> is a STORE into a user variable, which folding must
+        /// keep as an assignment rather than delete. The IRBuilder's flag is authoritative; the
+        /// name-shape guess below is only the fallback for values that carry no flag.
+        ///
+        /// <para>⛔ The guess alone treated a user variable named like a temp as a temp: with
+        /// <c>Dim t3 As Integer = 6 \ 2</c> the store folded away and t3 stayed 0. MEASURED on
+        /// master 883fb1d. See IRBuilder.SeparateTempsFromUserNames.</para>
+        /// </summary>
+        private bool IsNamedVariable(IRValue value) =>
+            value.NamedAfterVariable || IsNamedVariable(value.Name);
 
         /// <summary>
         /// Check if a name represents a real variable (not a temp)
@@ -1199,7 +1211,7 @@ namespace BasicLang.Compiler.IR.Optimization
 
                         // If the current instruction is a named destination (actual variable, not a temp),
                         // we should NOT remove it. Instead, convert to an assignment.
-                        if (IsNamedVariable(binaryOp.Name))
+                        if (IsNamedVariable(binaryOp))
                         {
                             // Convert to assignment: target = existingResult
                             var targetVar = new IRVariable(binaryOp.Name, binaryOp.Type);
@@ -1229,6 +1241,12 @@ namespace BasicLang.Compiler.IR.Optimization
                 }
             }
         }
+
+        // A store into a user variable must survive as an assignment. The flag is authoritative;
+        // the name-shape guess is the fallback. ⛔ The guess alone merged `Dim t2 = n + 1` into
+        // an earlier `Dim t1 = n + 1` and DELETED the store to t2 (MEASURED on master 883fb1d).
+        private bool IsNamedVariable(IRValue value) =>
+            value.NamedAfterVariable || IsNamedVariable(value.Name);
 
         // Check if a name represents a real variable (not a temp)
         private bool IsNamedVariable(string name)
@@ -1570,7 +1588,31 @@ namespace BasicLang.Compiler.IR.Optimization
             AddPass(new AlgebraicSimplificationPass());
             AddPass(new LoopFusionPass());  // Fuse adjacent loops before unrolling
             AddPass(new LoopUnrollingPass(4));  // 4x unrolling
-            AddPass(new InductionVariablePass());
+
+            // InductionVariablePass DISABLED — same call, for the same reason, as FunctionInliningPass
+            // above: every loop it rewrites is broken, and it stays in the file (pinned by
+            // InductionVariableDisabledTests) but nothing ships it.
+            //
+            // MEASURED on master 152d6b9 with --optimize, 11 loop programs: it fired on 6 (For with
+            // Step 1 and Step 2, Long, a Double accumulator, a multiply inside an If, a multiply
+            // assigned to a Dim) and ALL 6 broke — JavaScript threw "ReferenceError: Cannot access
+            // '_div_t1' before initialization" on every one, and C++ (checked on the first) failed
+            // "'_div_t1' was not declared". The other 5 were untouched. `For i = 1 To 5 :
+            // s = s + i * 3` must print 45. Defects 1-2 are those measurements; 3-6 are read from
+            // the code below:
+            //  1. The derived variable is NEVER INITIALISED: nothing sets `_div_x = i * c` before
+            //     the loop, so its first read is garbage (JS: a TDZ error).
+            //  2. It is never added to LocalVariables, so no backend declares it.
+            //  3. The multiply is swapped for an IRAssignment without ReplaceUses, so consumers
+            //     still hold the discarded node.
+            //  4. A "basic IV" is any `i = i +/- c` in the loop: nothing proves it is the ONLY
+            //     update, so after LoopUnrollingPass (4 copies) the increment is wrong.
+            //  5. It keys the "increment block" off a block NAME containing ".inc".
+            //  6. It accepts any operand type the constant happens to be an int for.
+            // A sound version is a rewrite (preheader init, single-def proof, lock-step update,
+            // declaration, re-pointing), and it buys nothing: clang, the CLR JIT and V8 all do
+            // induction-variable strength reduction downstream, where it is legal.
+            // AddPass(new InductionVariablePass());
         }
         
         public OptimizationResult Run(IRModule module)

@@ -31,8 +31,10 @@ internal static class FourBackends
         {
             Assert.That(Norm(BclE2E.CompileRun(BclE2E.CompileToCppOptimized(program))), Is.EqualTo(expected), "C++");
             Assert.That(Norm(JavaScriptExecutionTests.RunJs(program)), Is.EqualTo(expected), "JavaScript");
-            Assert.That(Norm(Msil.MsilHarness.RunExpectingSuccess(program)), Is.EqualTo(expected), "MSIL");
             Assert.That(Norm(RunEmittedCSharp(program)), Is.EqualTo(expected), "C#");
+            // Last: on a machine without ilasm this leg ends the block as Ignored (see
+            // MsilHarness.RequireIlasm), so every other backend must already have run.
+            Assert.That(Norm(Msil.MsilHarness.RunExpectingSuccess(program)), Is.EqualTo(expected), "MSIL");
         });
     }
 
