@@ -2189,6 +2189,15 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                         if (sw.DefaultTarget != null) yield return sw.DefaultTarget;
                         foreach (var (_, target) in sw.Cases)
                             if (target != null) yield return target;
+                        // ⛔ PATTERN CASES TOO — and they are the ones that matter: the parser
+                        // routes EVERY case value into PatternCases and leaves Cases empty (see
+                        // ControlFlowGraph, which this method mirrors). Missing them, a Select's
+                        // case bodies were never part of an enclosing Try's region, so they were
+                        // emitted OUTSIDE the try braces and the switch jumped back in — MEASURED:
+                        // `Try : Select Case n : Case 7 ...` failed to compile with
+                        // "jump to label 'switch0_end'" (a goto into a try block is ill-formed).
+                        foreach (var patternCase in sw.PatternCases ?? Enumerable.Empty<IRPatternCase>())
+                            if (patternCase?.Target != null) yield return patternCase.Target;
                         break;
                     case IRForEach fe:
                         if (fe.BodyBlock != null) yield return fe.BodyBlock;
@@ -4813,15 +4822,29 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 // pre-existing _fex/_fex collision; non-nested emission is byte-identical.
                 // Known limitation: Return inside Try bypasses the finally body.
                 var savedFinallySuffix = _regionLabelSuffix;
+
+                // ⛔ BOTH COPIES BELOW jump to an exit label placed right after their region, the
+                // way the `_fnex` copy above already does — they used RegionEnd.FallThrough, whose
+                // failure mode is documented at the top of this method and on EmitRegionEnd: a
+                // region's exit is NOT necessarily its last emitted block (blocks emit in creation
+                // order, and a Select's switch.end — like an If's merge — is created before its
+                // arms). MEASURED: `Finally : Select Case n : Case 7 ...` compiled, then printed
+                // "finally seven" forever — the end block emitted nothing and fell into the case
+                // arm, which jumped back to the end block. Labels are captured at the ENCLOSING
+                // suffix so each copy's region gotos (emitted under _fex/_fnorm) share one name.
+                var finallyExceptionExit = LabelName(tryCatch.EndBlock.Name + ".fexit");
+                var finallyNormalExit = LabelName(tryCatch.EndBlock.Name + ".fnexit");
+
                 WriteLine("catch (...)");
                 WriteLine("{");
                 Indent();
                 WriteLine("{");
                 Indent();
                 _regionLabelSuffix = savedFinallySuffix + "_fex";
-                EmitInlineRegion(tryCatch.FinallyBlock, tryCatch.EndBlock, RegionEnd.FallThrough);
+                EmitInlineRegion(tryCatch.FinallyBlock, tryCatch.EndBlock, RegionEnd.GotoEnd, finallyExceptionExit);
                 _regionLabelSuffix = savedFinallySuffix;
                 Unindent();
+                WriteLine($"{finallyExceptionExit}: ;");
                 WriteLine("}");
                 WriteLine("throw;");
                 Unindent();
@@ -4840,9 +4863,10 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 WriteLine("{");
                 Indent();
                 _regionLabelSuffix = savedFinallySuffix + "_fnorm";
-                EmitInlineRegion(tryCatch.FinallyBlock, tryCatch.EndBlock, RegionEnd.FallThrough);
+                EmitInlineRegion(tryCatch.FinallyBlock, tryCatch.EndBlock, RegionEnd.GotoEnd, finallyNormalExit);
                 _regionLabelSuffix = savedFinallySuffix;
                 Unindent();
+                WriteLine($"{finallyNormalExit}: ;");
                 WriteLine("}");
             }
         }

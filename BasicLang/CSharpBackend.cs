@@ -3816,19 +3816,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             // Generate try block body
             _processedBlocks.Add(tryCatch.TryBlock);
             EmitBlockInstructions(tryCatch.TryBlock);
-
-            // Handle try block's terminator (may have nested control flow)
-            var tryTerminator = tryCatch.TryBlock.Instructions.LastOrDefault();
-            if (tryTerminator is IRConditionalBranch tryCond)
-            {
-                HandleConditionalBranch(tryCond);
-            }
-            else if (tryTerminator is IRBranch tryBranch &&
-                     tryBranch.Target != tryCatch.EndBlock &&
-                     !_processedBlocks.Contains(tryBranch.Target))
-            {
-                HandleUnconditionalBranch(tryBranch);
-            }
+            EmitTryRegionTerminator(tryCatch.TryBlock, tryCatch.EndBlock);
 
             Unindent();
             WriteLine("}");
@@ -3847,19 +3835,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
                 _processedBlocks.Add(catchClause.Block);
                 EmitBlockInstructions(catchClause.Block);
-
-                // Handle catch block's terminator
-                var catchTerminator = catchClause.Block.Instructions.LastOrDefault();
-                if (catchTerminator is IRConditionalBranch catchCond)
-                {
-                    HandleConditionalBranch(catchCond);
-                }
-                else if (catchTerminator is IRBranch catchBranch &&
-                         catchBranch.Target != tryCatch.EndBlock &&
-                         !_processedBlocks.Contains(catchBranch.Target))
-                {
-                    HandleUnconditionalBranch(catchBranch);
-                }
+                EmitTryRegionTerminator(catchClause.Block, tryCatch.EndBlock);
 
                 Unindent();
                 WriteLine("}");
@@ -3874,6 +3850,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
                 _processedBlocks.Add(tryCatch.FinallyBlock);
                 EmitBlockInstructions(tryCatch.FinallyBlock);
+                EmitTryRegionTerminator(tryCatch.FinallyBlock, tryCatch.EndBlock);
 
                 Unindent();
                 WriteLine("}");
@@ -3890,6 +3867,40 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                     HandleConditionalBranch(endCond);
                 else if (endTerminator is IRBranch endBranch)
                     HandleUnconditionalBranch(endBranch);
+            }
+        }
+
+        /// <summary>
+        /// The control flow that ENDS a try, catch or finally region's first block, emitted inside
+        /// that region's braces.
+        ///
+        /// <para>⛔ The IRSwitch arm was missing, so a <c>Select Case</c> anywhere in a Try was
+        /// DROPPED WITHOUT A TRACE — its switch, every case body, and everything after it up to the
+        /// End Try. MEASURED: <c>Try : Select Case n ... : Catch</c> emitted an empty
+        /// <c>try { }</c>, and the program printed nothing, with a green build. Loop bodies had
+        /// already needed the same arm (see GenerateLoop). A Finally handled no terminator at all,
+        /// so the same held there for an If.</para>
+        ///
+        /// <para>Continuing into the region's successors stops at the Try's end block: its name
+        /// ends in ".end", which HandleUnconditionalBranch never follows, and the direct branch is
+        /// refused below — so code after End Try is never pulled inside the braces.</para>
+        /// </summary>
+        private void EmitTryRegionTerminator(BasicBlock regionBlock, BasicBlock tryEndBlock)
+        {
+            var terminator = regionBlock.Instructions.LastOrDefault();
+            if (terminator is IRConditionalBranch cond)
+            {
+                HandleConditionalBranch(cond);
+            }
+            else if (terminator is IRSwitch switchInst)
+            {
+                HandleSwitchStatement(switchInst);
+            }
+            else if (terminator is IRBranch branch &&
+                     branch.Target != tryEndBlock &&
+                     !_processedBlocks.Contains(branch.Target))
+            {
+                HandleUnconditionalBranch(branch);
             }
         }
 

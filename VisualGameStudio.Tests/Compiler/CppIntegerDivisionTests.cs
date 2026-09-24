@@ -164,8 +164,11 @@ End Sub
         Assert.That(cpp, Is.Not.Null);
         Assert.That(UserCode(cpp), Does.Not.Contain(" ? "),
             "a literal '?' in the generated C++ is a syntax error that the CLI reports as success");
-        Assert.That(UserCode(cpp), Does.Contain("a / b"),
-            "integer division lowers to '/' on integral C++ operands");
+        // Through the checked helper, which divides with '/' on the integral operands and throws
+        // DivideByZeroException for a zero divisor (IntegerDivideByZeroTests) — a bare 'a / b'
+        // there is undefined behaviour in C++.
+        Assert.That(UserCode(cpp), Does.Contain("BasicLang::CheckedDiv(a, b)"),
+            "integer division lowers to the checked '/' helper on integral C++ operands");
     }
 
     [Test]
@@ -215,7 +218,7 @@ End Sub
         Assert.That(errors, Is.Empty, "compilation should succeed");
         Assert.That(cpp, Is.Not.Null);
         Assert.That(UserCode(cpp), Does.Not.Contain(" ? "));
-        Assert.That(UserCode(cpp), Does.Contain("a / b"));
+        Assert.That(UserCode(cpp), Does.Contain("BasicLang::CheckedDiv(a, b)"));
     }
 
     // ========================================================================

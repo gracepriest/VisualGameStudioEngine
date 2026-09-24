@@ -7899,6 +7899,12 @@ namespace BasicLang.Compiler.SemanticAnalysis
             {
                 catchClause.Accept(this);
             }
+
+            // ⛔ The Finally body was NEVER analyzed, so nothing in it had a type and nothing in it
+            // was checked. MEASURED: `Finally : If n = 7 Then ...` left the comparison untyped, and
+            // the C++ backend declared its temp `void*` — "cannot convert 'bool' to 'void*'", a
+            // build break for any Finally holding a condition.
+            node.FinallyBlock?.Accept(this);
         }
 
         public void Visit(CatchClauseNode node)
