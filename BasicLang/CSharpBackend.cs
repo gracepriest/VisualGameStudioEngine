@@ -2951,7 +2951,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                     {
                         // Sub-expressions need parens to preserve precedence
                         var left = EmitExpression(bin.Left, stack, true);
-                        var right = EmitExpression(bin.Right, stack, true);
+                        var right = EmitDivisor(bin, EmitExpression(bin.Right, stack, true));
                         var op = MapBinaryOperator(bin.Operation);
                         var expr = $"{left} {op} {right}";
                         return needsParens ? $"({expr})" : expr;
@@ -3204,7 +3204,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
             // Use needsParens=true for sub-expressions to preserve operator precedence
             var left = EmitExpression(binaryOp.Left, new HashSet<IRValue>(), needsParens: true);
-            var right = EmitExpression(binaryOp.Right, new HashSet<IRValue>(), needsParens: true);
+            var right = EmitDivisor(binaryOp, EmitExpression(binaryOp.Right, new HashSet<IRValue>(), needsParens: true));
             var op = MapBinaryOperator(binaryOp.Operation);
 
             var target = GetValueName(binaryOp);
@@ -4139,6 +4139,51 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 _ when type.Kind == TypeKind.Union => "default",           // Union types (all members share same memory)
                 _ when type.Kind == TypeKind.Class => "default!",          // Reference types
                 _ => "default!"  // Use default for unknown types (safe for both value and reference types)
+            };
+        }
+
+        /// <summary>
+        /// The rendered divisor of <paramref name="bin"/>, made NON-CONSTANT to Roslyn when it is a
+        /// constant zero of an integral or Decimal type.
+        ///
+        /// <para>⛔ A constant over a constant zero is CS0020 ("Division by constant zero") — a
+        /// COMPILE error, where .NET/VB throws DivideByZeroException at RUN time and a Try can
+        /// catch it. Roslyn raises it only when BOTH operands are constants (it is a constant-
+        /// folding error): `n / 0` compiles and throws. But the IR hands us two constants far more
+        /// often than a literal `5 \ 0`, because copy propagation substitutes locals. MEASURED, each
+        /// emitted as a constant over a constant and rejected: `Dim z = 0 : 5 \ z` → `5 / 0`,
+        /// `Dim a = 5 : a \ 0` → `5 / 0`, `5 Mod 0` → `5 % 0`, Decimal `d / 0` → `5m / 0m`. The IR
+        /// constant folder correctly refuses these (it catches DivideByZeroException), so the
+        /// emitter is the one place that knows the operands became C# constants.</para>
+        ///
+        /// <para>An array element read is not a constant expression, keeps the literal's own type
+        /// (int, long, decimal, byte...) with no type name to spell, and has no side effect. It is
+        /// only ever reached on a path that throws, so its allocation costs nothing that matters.
+        /// Floating divisors are left alone: `5.0 / 0.0` is legal C# (Infinity), as in .NET.</para>
+        /// </summary>
+        private static string EmitDivisor(IRBinaryOp bin, string renderedRight)
+        {
+            if (bin.Operation is not (BinaryOpKind.Div or BinaryOpKind.IntDiv or BinaryOpKind.Mod))
+                return renderedRight;
+            return IsNonFloatingConstantZero(bin.Right) ? $"new[] {{ {renderedRight} }}[0]" : renderedRight;
+        }
+
+        private static bool IsNonFloatingConstantZero(IRValue value)
+        {
+            // The OUTERMOST type decides: `(double)(0)` is a floating divisor even though the
+            // constant inside it is an int.
+            if (value?.Type?.IsFloatingPoint() == true) return false;
+
+            var inner = value;
+            while (inner is IRCast cast) inner = cast.Value;
+            if (inner is not IRConstant { Value: not null } constant) return false;
+
+            return constant.Value switch
+            {
+                double or float => value.Type != null && !value.Type.IsFloatingPoint() && Convert.ToDouble(constant.Value) == 0.0,
+                int or long or short or byte or sbyte or ushort or uint or ulong or decimal
+                    => Convert.ToDecimal(constant.Value) == 0m,
+                _ => false
             };
         }
 
