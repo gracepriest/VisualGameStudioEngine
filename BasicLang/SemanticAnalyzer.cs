@@ -5585,6 +5585,35 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 }
             }
 
+            // An interface property's type goes through the SAME resolver, and is recorded the
+            // SAME way, as a class property's (Visit(PropertyNode)) — so the IR builder reads it
+            // with GetNodeType on both paths and the two cannot disagree (ADR-0005 D3: a parallel
+            // resolver is forbidden). Nothing else of Visit(PropertyNode) applies: an interface
+            // property has no accessor bodies to analyse and declares no symbol here.
+            //
+            // ⛔ BEFORE THIS NOTHING RESOLVED THEM, and the IR builder invented a class-kinded
+            // type from the bare NAME — so `Integer` was a class, a typo'd type name compiled,
+            // and on C++ an interface accessor passed a class-kinded type by const& while the
+            // implementing class passed it by value.
+            foreach (var prop in node.Properties)
+            {
+                TypeInfo propertyType;
+                if (prop.PropertyType != null)
+                {
+                    propertyType = ResolveTypeReference(prop.PropertyType);
+                    if (propertyType == null)
+                    {
+                        Error($"Unknown property type '{prop.PropertyType.Name}'", prop.Line, prop.Column);
+                        propertyType = _typeManager.ObjectType;
+                    }
+                }
+                else
+                {
+                    propertyType = _typeManager.ObjectType;
+                }
+                SetNodeType(prop, propertyType);
+            }
+
             ExitScope();
         }
 

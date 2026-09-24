@@ -1749,7 +1749,7 @@ namespace BasicLang.Compiler.IR
                 irInterface.Properties.Add(new IRInterfaceProperty
                 {
                     Name = prop.Name,
-                    Type = new TypeInfo(prop.PropertyType?.Name ?? "Object", TypeKind.Class),
+                    Type = InterfacePropertyType(_semanticAnalyzer.GetNodeType(prop), node.Name, prop),
                     HasGetter = prop.Getter != null,
                     HasSetter = prop.Setter != null
                 });
@@ -3190,6 +3190,35 @@ namespace BasicLang.Compiler.IR
         public void Visit(CaseClauseNode node)
         {
             // Handled in SelectStatementNode
+        }
+
+        /// <summary>
+        /// The type of interface property <paramref name="prop"/>, as the semantic analyzer
+        /// resolved it — <paramref name="resolved"/> is <c>GetNodeType(prop)</c>, the same
+        /// read a class property gets, so an interface property and the class property that
+        /// implements it carry the same <see cref="TypeInfo"/> for the same declared text
+        /// (ADR-0005 D3).
+        ///
+        /// <para>⛔ THERE IS NO STAND-IN, ON PURPOSE. This used to invent
+        /// <c>new TypeInfo(name, TypeKind.Class)</c> from the bare name, which made every
+        /// interface property class-kinded — <c>Integer</c> included — silently. The analyzer
+        /// now records a type for every interface property it visits (an unknown name is a
+        /// diagnostic there, as it is for a class property), so a null here means an interface
+        /// property reached the IR without being analysed: a compiler bug, reported as one in
+        /// every build. Not <c>Debug.Assert</c>: the suite runs Release, where that compiles
+        /// away. A thrown exception is how this builder already refuses what it cannot lower.</para>
+        ///
+        /// <para>Internal and static so a test can reach the refusal directly — no parseable
+        /// program can.</para>
+        /// </summary>
+        internal static TypeInfo InterfacePropertyType(TypeInfo resolved, string interfaceName, PropertyNode prop)
+        {
+            if (resolved != null) return resolved;
+
+            throw new InvalidOperationException(
+                $"Internal compiler error: interface property '{interfaceName}.{prop?.Name}' "
+                + $"(declared As '{prop?.PropertyType?.Name ?? "<none>"}') reached the IR builder with no "
+                + "type from semantic analysis. Refusing to invent one (ADR-0005 D3).");
         }
 
         /// <summary>
