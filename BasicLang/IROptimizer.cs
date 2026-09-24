@@ -112,7 +112,7 @@ namespace BasicLang.Compiler.IR.Optimization
         /// behaviour change that has to be measured on its own rather than smuggled into a fix
         /// for something else.</para>
         /// </summary>
-        protected static bool IsTempDestination(string name)
+        protected internal static bool IsTempDestination(string name)
         {
             if (string.IsNullOrEmpty(name)) return true;
             if (name.StartsWith("_tmp", StringComparison.OrdinalIgnoreCase)) return true;
@@ -131,7 +131,7 @@ namespace BasicLang.Compiler.IR.Optimization
         /// callee can reach. An undeclared non-temp name is treated as reachable — over-killing
         /// only costs a merge.
         /// </summary>
-        protected static bool IsCallVisibleDestination(string name, IRFunction function)
+        protected internal static bool IsCallVisibleDestination(string name, IRFunction function)
         {
             if (string.IsNullOrEmpty(name) || function == null) return false;
             if (function.Parameters != null)
@@ -143,6 +143,85 @@ namespace BasicLang.Compiler.IR.Optimization
                     if (string.Equals(local.Name, name, StringComparison.OrdinalIgnoreCase))
                         return local.IsGlobal && !local.IsConst;
             return !IsTempDestination(name);
+        }
+
+        /// <summary>
+        /// THE KILL VOCABULARY: every variable name <paramref name="inst"/> may WRITE, and whether
+        /// it is a call (which additionally writes any storage a callee can reach — see
+        /// <c>CommonSubexpressionEliminationPass.ReadsCallVisible</c>). Null when it writes no
+        /// name.
+        ///
+        /// <para>⭐ SHARED, and the sharing is the point (ADR-0005 D2): CSE's
+        /// <c>Invalidate</c> kills on exactly these writes, and <see cref="IRVerifier"/>'s
+        /// Invariant S′ calls exactly these writes "assigned". A write form missing here is
+        /// missing for BOTH — the verifier cannot catch a pass for a write the vocabulary
+        /// does not name, and that is deliberate: a gap is fixed once, here.</para>
+        ///
+        /// <para>Forms: an <see cref="IRAssignment"/> target; an <see cref="IRStore"/> address;
+        /// a NAMED value instruction (a rename — how both <c>Dim p = Seed(1)</c> and
+        /// <c>p = p + 10</c> lower); a call's <c>ByRef</c> arguments.</para>
+        ///
+        /// <para>⛔ KNOWN GAPS — writes this vocabulary does not name, so CSE merges across them
+        /// and the verifier cannot see them. Each MEASURED as a live wrong answer with a merge:
+        /// <list type="bullet">
+        /// <item>an <see cref="IRFieldStore"/> through <c>Me.</c> to a member the function also
+        /// names bare — operand side (<c>a = K + q : Me.K = 10 : l(0) = K + q</c>, C++/JS/MSIL
+        /// print 3 for 12) and destination side (<c>K = p + q : Me.K = 0 : l(0) = p + q</c>,
+        /// C++/MSIL);</item>
+        /// <item>a write through a second <c>ByRef</c> parameter aliasing the destination
+        /// (<c>n = p + q : m = 0 : l(0) = p + q</c> called as <c>Work(v, v)</c>, C++/MSIL) —
+        /// destination side only, since a <c>ByRef</c> operand is never replicable;</item>
+        /// <item>a local captured by reference and written inside a lambda (JavaScript; C++ and
+        /// MSIL do not build the shape). The operand side is recorded in HANDOFF.</item>
+        /// </list>
+        /// Recorded rather than fixed: ADR-0005 D2 rules the vocabulary is shared and a gap is
+        /// flagged, not patched on one side.</para>
+        /// </summary>
+        protected internal static List<string> NamesWrittenBy(IRInstruction inst, out bool isCall)
+        {
+            isCall = false;
+            List<string> killed = null;
+            void Kill(string name)
+            {
+                if (!string.IsNullOrEmpty(name)) (killed ??= new List<string>()).Add(name);
+            }
+
+            switch (inst)
+            {
+                case IRAssignment assignment when assignment.Target is IRVariable target:
+                    Kill(target.Name);
+                    break;
+                case IRStore store when store.Address is IRVariable stored:
+                    Kill(stored.Name);
+                    break;
+            }
+
+            // A NAMED non-assignment instruction redefines that name. `Dim p = Seed(1)` is an
+            // IRCall renamed `p`; `p = p + 10` is an IRBinaryOp renamed `p`. Neither produces an
+            // IRAssignment, so without this arm the two measured shapes are not covered at all.
+            if (inst is IRValue defined) Kill(defined.Name);
+
+            // A call WRITES its ByRef arguments, and the write is invisible in this block — there
+            // is no IRAssignment and no rename for it. MEASURED on `Bump(p)` with a ByRef `p`:
+            // C++ and MSIL printed the stale answer (JavaScript refuses ByRef by design).
+            List<bool> byRefFlags = null;
+            List<IRValue> arguments = null;
+            switch (inst)
+            {
+                case IRCall call:
+                    isCall = true; byRefFlags = call.ByRefArguments; arguments = call.Arguments; break;
+                case IRInstanceMethodCall methodCall:
+                    isCall = true; byRefFlags = methodCall.ByRefArguments; arguments = methodCall.Arguments; break;
+                case IRNewObject:
+                    isCall = true; break;
+            }
+            if (byRefFlags != null && arguments != null)
+            {
+                for (int i = 0; i < arguments.Count && i < byRefFlags.Count; i++)
+                    if (byRefFlags[i]) CollectNames(arguments[i], killed ??= new List<string>());
+            }
+
+            return killed;
         }
 
         /// <summary>
@@ -161,7 +240,7 @@ namespace BasicLang.Compiler.IR.Optimization
         /// commit 67782af removed from CSE for the operand walker. One implementation, two
         /// consumers — the ModuleResolver/ModuleTypeWalker rule in CLAUDE.md.</para>
         /// </summary>
-        protected static void CollectNames(IRValue value, List<string> into)
+        protected internal static void CollectNames(IRValue value, List<string> into)
         {
             switch (value)
             {
@@ -212,114 +291,144 @@ namespace BasicLang.Compiler.IR.Optimization
         }
 
 
-        private static void ReplaceInList(List<IRValue> operands, IRValue oldValue, IRValue newValue)
+        private static void MapList(List<IRValue> operands, Func<IRValue, IRValue> map)
         {
             if (operands == null) return;
             for (int i = 0; i < operands.Count; i++)
-                if (ReferenceEquals(operands[i], oldValue)) operands[i] = newValue;
+            {
+                // Written only on a change: a List<T> store bumps its version even for the same
+                // element, which would break a caller enumerating this list around the walk.
+                var mapped = map(operands[i]);
+                if (!ReferenceEquals(mapped, operands[i])) operands[i] = mapped;
+            }
+        }
+
+        private static void ReplaceUsesIn(IRInstruction inst, IRValue oldValue, IRValue newValue)
+            => MapUses(inst, v => ReferenceEquals(v, oldValue) ? newValue : v);
+
+        /// <summary>
+        /// Every value <paramref name="inst"/> USES, one entry per operand slot (a value used
+        /// twice appears twice), from the same arm set <see cref="ReplaceUses"/> rewrites — so the
+        /// two can never disagree about what a use is. <see cref="IRVerifier"/> counts uses
+        /// through this.
+        /// </summary>
+        protected internal static List<IRValue> UsesOf(IRInstruction inst)
+        {
+            var uses = new List<IRValue>();
+            MapUses(inst, v =>
+            {
+                if (v != null) uses.Add(v);
+                return v;
+            });
+            return uses;
         }
 
         /// <summary>
-        /// One arm per IR node that CONSUMES a value. Definition slots are deliberately absent:
-        /// <c>IRAssignment.Target</c> is an <see cref="IRVariable"/> being written, not a use.
+        /// THE total use walker: one arm per IR node that CONSUMES a value, each operand slot
+        /// replaced by <paramref name="map"/>'s answer for it (an identity map rewrites nothing).
+        /// Definition slots are deliberately absent: <c>IRAssignment.Target</c> is an
+        /// <see cref="IRVariable"/> being written, not a use.
         /// </summary>
-        private static void ReplaceUsesIn(IRInstruction inst, IRValue oldValue, IRValue newValue)
+        private static void MapUses(IRInstruction inst, Func<IRValue, IRValue> map)
         {
             switch (inst)
             {
                 case IRBinaryOp binOp:
-                    if (ReferenceEquals(binOp.Left, oldValue)) binOp.Left = newValue;
-                    if (ReferenceEquals(binOp.Right, oldValue)) binOp.Right = newValue;
+                    binOp.Left = map(binOp.Left);
+                    binOp.Right = map(binOp.Right);
                     break;
                 case IRUnaryOp unOp:
-                    if (ReferenceEquals(unOp.Operand, oldValue)) unOp.Operand = newValue;
+                    unOp.Operand = map(unOp.Operand);
                     break;
                 case IRCompare cmp:
-                    if (ReferenceEquals(cmp.Left, oldValue)) cmp.Left = newValue;
-                    if (ReferenceEquals(cmp.Right, oldValue)) cmp.Right = newValue;
+                    cmp.Left = map(cmp.Left);
+                    cmp.Right = map(cmp.Right);
                     break;
                 case IRLoad load:
-                    if (ReferenceEquals(load.Address, oldValue)) load.Address = newValue;
+                    load.Address = map(load.Address);
                     break;
                 case IRStore store:
-                    if (ReferenceEquals(store.Value, oldValue)) store.Value = newValue;
-                    if (ReferenceEquals(store.Address, oldValue)) store.Address = newValue;
+                    store.Value = map(store.Value);
+                    store.Address = map(store.Address);
                     break;
                 case IRGetElementPtr gep:
-                    if (ReferenceEquals(gep.BasePointer, oldValue)) gep.BasePointer = newValue;
-                    ReplaceInList(gep.Indices, oldValue, newValue);
+                    gep.BasePointer = map(gep.BasePointer);
+                    MapList(gep.Indices, map);
                     break;
                 case IRConditionalBranch condBr:
-                    if (ReferenceEquals(condBr.Condition, oldValue)) condBr.Condition = newValue;
+                    condBr.Condition = map(condBr.Condition);
                     break;
                 case IRSwitch sw:
-                    if (ReferenceEquals(sw.Value, oldValue)) sw.Value = newValue;
+                    sw.Value = map(sw.Value);
                     if (sw.Cases != null)
                         for (int i = 0; i < sw.Cases.Count; i++)
-                            if (ReferenceEquals(sw.Cases[i].CaseValue, oldValue))
-                                sw.Cases[i] = (newValue, sw.Cases[i].Target);
+                        {
+                            var mapped = map(sw.Cases[i].CaseValue);
+                            if (!ReferenceEquals(mapped, sw.Cases[i].CaseValue))
+                                sw.Cases[i] = (mapped, sw.Cases[i].Target);
+                        }
                     if (sw.PatternCases != null)
                         foreach (var patternCase in sw.PatternCases)
-                            ReplaceUsesInPattern(patternCase, oldValue, newValue);
+                            MapPatternUses(patternCase, map);
                     break;
                 case IRReturn ret:
-                    if (ReferenceEquals(ret.Value, oldValue)) ret.Value = newValue;
+                    ret.Value = map(ret.Value);
                     break;
                 case IRCall call:
-                    if (ReferenceEquals(call.CalleeValue, oldValue)) call.CalleeValue = newValue;
-                    ReplaceInList(call.Arguments, oldValue, newValue);
+                    call.CalleeValue = map(call.CalleeValue);
+                    MapList(call.Arguments, map);
                     break;
                 case IRCast cast:
-                    if (ReferenceEquals(cast.Value, oldValue)) cast.Value = newValue;
+                    cast.Value = map(cast.Value);
                     break;
                 case IRAssignment asg:
-                    if (ReferenceEquals(asg.Value, oldValue)) asg.Value = newValue;
+                    asg.Value = map(asg.Value);
                     break;
                 case IRArrayStore arrayStore:
-                    if (ReferenceEquals(arrayStore.Array, oldValue)) arrayStore.Array = newValue;
-                    if (ReferenceEquals(arrayStore.Index, oldValue)) arrayStore.Index = newValue;
-                    if (ReferenceEquals(arrayStore.Value, oldValue)) arrayStore.Value = newValue;
+                    arrayStore.Array = map(arrayStore.Array);
+                    arrayStore.Index = map(arrayStore.Index);
+                    arrayStore.Value = map(arrayStore.Value);
                     break;
                 case IRAwait await:
-                    if (ReferenceEquals(await.Expression, oldValue)) await.Expression = newValue;
+                    await.Expression = map(await.Expression);
                     break;
                 case IRYield yield:
-                    if (ReferenceEquals(yield.Value, oldValue)) yield.Value = newValue;
+                    yield.Value = map(yield.Value);
                     break;
                 case IRIndexerAccess indexerAccess:
-                    if (ReferenceEquals(indexerAccess.Collection, oldValue)) indexerAccess.Collection = newValue;
-                    ReplaceInList(indexerAccess.Indices, oldValue, newValue);
+                    indexerAccess.Collection = map(indexerAccess.Collection);
+                    MapList(indexerAccess.Indices, map);
                     break;
                 case IRIndexerStore indexerStore:
-                    if (ReferenceEquals(indexerStore.Collection, oldValue)) indexerStore.Collection = newValue;
-                    ReplaceInList(indexerStore.Indices, oldValue, newValue);
-                    if (ReferenceEquals(indexerStore.Value, oldValue)) indexerStore.Value = newValue;
+                    indexerStore.Collection = map(indexerStore.Collection);
+                    MapList(indexerStore.Indices, map);
+                    indexerStore.Value = map(indexerStore.Value);
                     break;
                 case IRForEach forEach:
-                    if (ReferenceEquals(forEach.Collection, oldValue)) forEach.Collection = newValue;
+                    forEach.Collection = map(forEach.Collection);
                     break;
                 case IRThrow thrown:
-                    if (ReferenceEquals(thrown.Exception, oldValue)) thrown.Exception = newValue;
+                    thrown.Exception = map(thrown.Exception);
                     break;
                 case IRNewObject newObject:
-                    ReplaceInList(newObject.Arguments, oldValue, newValue);
+                    MapList(newObject.Arguments, map);
                     break;
                 case IRInstanceMethodCall instanceCall:
-                    if (ReferenceEquals(instanceCall.Object, oldValue)) instanceCall.Object = newValue;
-                    ReplaceInList(instanceCall.Arguments, oldValue, newValue);
+                    instanceCall.Object = map(instanceCall.Object);
+                    MapList(instanceCall.Arguments, map);
                     break;
                 case IRBaseMethodCall baseCall:
-                    ReplaceInList(baseCall.Arguments, oldValue, newValue);
+                    MapList(baseCall.Arguments, map);
                     break;
                 case IRFieldAccess fieldAccess:
-                    if (ReferenceEquals(fieldAccess.Object, oldValue)) fieldAccess.Object = newValue;
+                    fieldAccess.Object = map(fieldAccess.Object);
                     break;
                 case IRFieldStore fieldStore:
-                    if (ReferenceEquals(fieldStore.Object, oldValue)) fieldStore.Object = newValue;
-                    if (ReferenceEquals(fieldStore.Value, oldValue)) fieldStore.Value = newValue;
+                    fieldStore.Object = map(fieldStore.Object);
+                    fieldStore.Value = map(fieldStore.Value);
                     break;
                 case IRTupleElement tupleElement:
-                    if (ReferenceEquals(tupleElement.Tuple, oldValue)) tupleElement.Tuple = newValue;
+                    tupleElement.Tuple = map(tupleElement.Tuple);
                     break;
                 case IRPhi phi:
                     // The only operand-bearing node this walk was missing. Nothing in the
@@ -330,39 +439,42 @@ namespace BasicLang.Compiler.IR.Optimization
                     // operand list is a value tuple, so it is rewritten by index.
                     if (phi.Operands != null)
                         for (int i = 0; i < phi.Operands.Count; i++)
-                            if (ReferenceEquals(phi.Operands[i].Value, oldValue))
-                                phi.Operands[i] = (newValue, phi.Operands[i].Block);
+                        {
+                            var mapped = map(phi.Operands[i].Value);
+                            if (!ReferenceEquals(mapped, phi.Operands[i].Value))
+                                phi.Operands[i] = (mapped, phi.Operands[i].Block);
+                        }
                     break;
             }
         }
 
-        private static void ReplaceUsesInPattern(IRPatternCase patternCase, IRValue oldValue, IRValue newValue)
+        private static void MapPatternUses(IRPatternCase patternCase, Func<IRValue, IRValue> map)
         {
             if (patternCase == null) return;
 
-            if (ReferenceEquals(patternCase.WhenGuard, oldValue)) patternCase.WhenGuard = newValue;
+            patternCase.WhenGuard = map(patternCase.WhenGuard);
 
             switch (patternCase)
             {
                 case IRRangePatternCase range:
-                    if (ReferenceEquals(range.LowerBound, oldValue)) range.LowerBound = newValue;
-                    if (ReferenceEquals(range.UpperBound, oldValue)) range.UpperBound = newValue;
+                    range.LowerBound = map(range.LowerBound);
+                    range.UpperBound = map(range.UpperBound);
                     break;
                 case IRComparisonPatternCase comparison:
-                    if (ReferenceEquals(comparison.CompareValue, oldValue)) comparison.CompareValue = newValue;
+                    comparison.CompareValue = map(comparison.CompareValue);
                     break;
                 case IRConstantPatternCase constant:
-                    if (ReferenceEquals(constant.Value, oldValue)) constant.Value = newValue;
+                    constant.Value = map(constant.Value);
                     break;
                 case IROrPatternCase or:
                     if (or.Alternatives != null)
                         foreach (var alternative in or.Alternatives)
-                            ReplaceUsesInPattern(alternative, oldValue, newValue);
+                            MapPatternUses(alternative, map);
                     break;
                 case IRTuplePatternCase tuple:
                     if (tuple.Elements != null)
                         foreach (var element in tuple.Elements)
-                            ReplaceUsesInPattern(element, oldValue, newValue);
+                            MapPatternUses(element, map);
                     break;
             }
         }
@@ -1477,47 +1589,7 @@ namespace BasicLang.Compiler.IR.Optimization
         {
             if (expressions.Count == 0 || inst == null) return;
 
-            List<string> killed = null;
-            void Kill(string name)
-            {
-                if (!string.IsNullOrEmpty(name)) (killed ??= new List<string>()).Add(name);
-            }
-
-            switch (inst)
-            {
-                case IRAssignment assignment when assignment.Target is IRVariable target:
-                    Kill(target.Name);
-                    break;
-                case IRStore store when store.Address is IRVariable stored:
-                    Kill(stored.Name);
-                    break;
-            }
-
-            // A NAMED non-assignment instruction redefines that name. `Dim p = Seed(1)` is an
-            // IRCall renamed `p`; `p = p + 10` is an IRBinaryOp renamed `p`. Neither produces an
-            // IRAssignment, so without this arm the two measured shapes are not covered at all.
-            if (inst is IRValue defined) Kill(defined.Name);
-
-            // A call WRITES its ByRef arguments, and the write is invisible in this block — there
-            // is no IRAssignment and no rename for it. MEASURED on `Bump(p)` with a ByRef `p`:
-            // C++ and MSIL printed the stale answer (JavaScript refuses ByRef by design).
-            bool isCall = false;
-            List<bool> byRefFlags = null;
-            List<IRValue> arguments = null;
-            switch (inst)
-            {
-                case IRCall call:
-                    isCall = true; byRefFlags = call.ByRefArguments; arguments = call.Arguments; break;
-                case IRInstanceMethodCall methodCall:
-                    isCall = true; byRefFlags = methodCall.ByRefArguments; arguments = methodCall.Arguments; break;
-                case IRNewObject:
-                    isCall = true; break;
-            }
-            if (byRefFlags != null && arguments != null)
-            {
-                for (int i = 0; i < arguments.Count && i < byRefFlags.Count; i++)
-                    if (byRefFlags[i]) CollectNames(arguments[i], killed ??= new List<string>());
-            }
+            var killed = NamesWrittenBy(inst, out bool isCall);
 
             List<string> stale = null;
             foreach (var entry in expressions)
@@ -2163,7 +2235,12 @@ namespace BasicLang.Compiler.IR.Optimization
                 
                 result.IterationsRun = iteration + 1;
             }
-            
+
+            // ADR-0004 D2 / ADR-0005 D2: assert Invariant S′ over what the passes produced. A
+            // no-op unless enabled (DEBUG builds, the test suite, BASICLANG_VERIFY_IR); it only
+            // reads the IR, so output is identical either way.
+            IRVerifier.VerifyAfterOptimization(module);
+
             return result;
         }
     }

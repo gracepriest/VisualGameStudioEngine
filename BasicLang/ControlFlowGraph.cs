@@ -55,67 +55,88 @@ namespace BasicLang.Compiler.IR
             // Build edges from terminators
             foreach (var block in Blocks)
             {
-                var terminator = block.GetTerminator();
-
-                if (terminator is IRBranch branch)
+                foreach (var successor in SuccessorsOf(block))
                 {
-                    AddEdge(block, branch.Target);
-                }
-                else if (terminator is IRConditionalBranch condBranch)
-                {
-                    AddEdge(block, condBranch.TrueTarget);
-                    AddEdge(block, condBranch.FalseTarget);
-                }
-                else if (terminator is IRSwitch switchInst)
-                {
-                    AddEdge(block, switchInst.DefaultTarget);
-                    foreach (var (_, target) in switchInst.Cases)
-                    {
-                        AddEdge(block, target);
-                    }
-                    // Pattern cases (constant/range/comparison/Or/When from a Select Case)
-                    // carry their target block by reference just like the integral Cases. The
-                    // parser routes EVERY case value into PatternCases (Cases stays empty), so
-                    // WITHOUT these edges the case-body blocks are unreachable from entry and
-                    // DeadCodeEliminationPass.RemoveUnreachableBlocks() deletes them — silently
-                    // dropping every Select Case branch (same failure class as the For Each/Try
-                    // structured edges below).
-                    foreach (var patternCase in switchInst.PatternCases)
-                    {
-                        AddEdge(block, patternCase.Target);
-                    }
-                }
-                // IRReturn has no successors
-
-                // Structured control-flow instructions (For Each, Try/Catch) carry their
-                // body/continuation blocks by reference rather than by branch terminator, so
-                // they must be wired into the CFG explicitly. Without these edges the loop
-                // body, the post-loop continuation, the try/catch/finally bodies and the
-                // post-try continuation are all UNREACHABLE from entry — so
-                // DeadCodeEliminationPass.RemoveUnreachableBlocks() deletes them from
-                // Function.Blocks. That silently dropped every statement after a For Each/Try
-                // (and every temporary produced inside a For Each/Try body) from the emitted
-                // code. They can appear anywhere in the block (not only as the terminator),
-                // so scan all instructions.
-                foreach (var inst in block.Instructions)
-                {
-                    if (inst is IRForEach forEach)
-                    {
-                        if (forEach.BodyBlock != null) AddEdge(block, forEach.BodyBlock);
-                        if (forEach.EndBlock != null) AddEdge(block, forEach.EndBlock);
-                    }
-                    else if (inst is IRTryCatch tryCatch)
-                    {
-                        if (tryCatch.TryBlock != null) AddEdge(block, tryCatch.TryBlock);
-                        foreach (var catchClause in tryCatch.CatchClauses)
-                            if (catchClause.Block != null) AddEdge(block, catchClause.Block);
-                        if (tryCatch.FinallyBlock != null) AddEdge(block, tryCatch.FinallyBlock);
-                        if (tryCatch.EndBlock != null) AddEdge(block, tryCatch.EndBlock);
-                    }
+                    AddEdge(block, successor);
                 }
             }
         }
-        
+
+        /// <summary>
+        /// The blocks control can reach directly from <paramref name="block"/>, in the order
+        /// <see cref="Build"/> adds them — THE edge rule, extracted from <see cref="Build"/>
+        /// unchanged so it has one definition and two consumers. <see cref="Build"/> writes these
+        /// into <see cref="BasicBlock.Successors"/>/<see cref="BasicBlock.Predecessors"/>;
+        /// <c>IRVerifier</c> (ADR-0004 D2) walks them WITHOUT touching any block's edge lists,
+        /// because verification must not change what a backend sees and rebuilding the CFG
+        /// would rewrite those lists. May repeat a target (AddEdge de-duplicates); a null target
+        /// is yielded as-is, exactly as <see cref="Build"/> handed it to AddEdge before.
+        ///
+        /// <para>Not an analysis: no dominance, no loops, no reducibility — ADR-0003 D4/D5's
+        /// deleted surface stays deleted.</para>
+        /// </summary>
+        public static IEnumerable<BasicBlock> SuccessorsOf(BasicBlock block)
+        {
+            var terminator = block.GetTerminator();
+
+            if (terminator is IRBranch branch)
+            {
+                yield return branch.Target;
+            }
+            else if (terminator is IRConditionalBranch condBranch)
+            {
+                yield return condBranch.TrueTarget;
+                yield return condBranch.FalseTarget;
+            }
+            else if (terminator is IRSwitch switchInst)
+            {
+                yield return switchInst.DefaultTarget;
+                foreach (var (_, target) in switchInst.Cases)
+                {
+                    yield return target;
+                }
+                // Pattern cases (constant/range/comparison/Or/When from a Select Case)
+                // carry their target block by reference just like the integral Cases. The
+                // parser routes EVERY case value into PatternCases (Cases stays empty), so
+                // WITHOUT these edges the case-body blocks are unreachable from entry and
+                // DeadCodeEliminationPass.RemoveUnreachableBlocks() deletes them — silently
+                // dropping every Select Case branch (same failure class as the For Each/Try
+                // structured edges below).
+                foreach (var patternCase in switchInst.PatternCases)
+                {
+                    yield return patternCase.Target;
+                }
+            }
+            // IRReturn has no successors
+
+            // Structured control-flow instructions (For Each, Try/Catch) carry their
+            // body/continuation blocks by reference rather than by branch terminator, so
+            // they must be wired into the CFG explicitly. Without these edges the loop
+            // body, the post-loop continuation, the try/catch/finally bodies and the
+            // post-try continuation are all UNREACHABLE from entry — so
+            // DeadCodeEliminationPass.RemoveUnreachableBlocks() deletes them from
+            // Function.Blocks. That silently dropped every statement after a For Each/Try
+            // (and every temporary produced inside a For Each/Try body) from the emitted
+            // code. They can appear anywhere in the block (not only as the terminator),
+            // so scan all instructions.
+            foreach (var inst in block.Instructions)
+            {
+                if (inst is IRForEach forEach)
+                {
+                    if (forEach.BodyBlock != null) yield return forEach.BodyBlock;
+                    if (forEach.EndBlock != null) yield return forEach.EndBlock;
+                }
+                else if (inst is IRTryCatch tryCatch)
+                {
+                    if (tryCatch.TryBlock != null) yield return tryCatch.TryBlock;
+                    foreach (var catchClause in tryCatch.CatchClauses)
+                        if (catchClause.Block != null) yield return catchClause.Block;
+                    if (tryCatch.FinallyBlock != null) yield return tryCatch.FinallyBlock;
+                    if (tryCatch.EndBlock != null) yield return tryCatch.EndBlock;
+                }
+            }
+        }
+
         private void AddEdge(BasicBlock from, BasicBlock to)
         {
             if (!from.Successors.Contains(to))
