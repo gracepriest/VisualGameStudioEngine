@@ -88,6 +88,27 @@ or a shipped sample/test asserts truncation on fractional operands.
 
 None (new rule; the analyzer's stated intent was already this).
 
+## Implementation note (D1)
+
+- The conversion is an `IRCast(x → Long, FPToSI)`, not the `IRCall("CLng")` a
+  written `CLng(x)` lowers to. JavaScript refuses the `CLng` call by design
+  (BL7003), whereas every backend already lowers and rounds the IRCast
+  half-to-even (the implicit-narrowing node). The contract — one conversion in
+  the IR, rounding half-to-even — is met; the node differs, as the D3 note in
+  ADR-0004 records for its mechanism.
+- Obligation 3 was split. Step 3a first teaches C++, JS and MSIL to render an
+  IRCast inside a `When` guard (a no-op on its own; emitted output
+  byte-identical), because the IR change alone moved 6 SC6 cells right→wrong.
+- Obligations 1 and 2 needed no change: `CLng` / implicit narrowing already
+  round half-to-even on C#, C++ and MSIL, and `ConstantFolding` does no
+  conversion folding.
+- Obligation 4: no truncation was dead. JS's `Math.trunc(l / r)` IS the
+  integer divide, and C++ never had explicit truncation. So there was no
+  output churn and the ADR-0001 fence question does not arise.
+- Out of scope, recorded: Decimal operands (typed Long by the analyzer, not
+  converted; MSIL Decimal is unsupported, #129), and out-of-range operands
+  (`1e30 \ 2` differs by backend).
+
 ## D2: Does Invariant S also protect a shared value's named destination?
 
 ### Decision

@@ -5297,10 +5297,14 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             BinaryOpKind.Shl => "<<",
             BinaryOpKind.Shr => ">>",
             BinaryOpKind.Concat => "+",
-            // `\` (integer division). Both operands are integral by the time we get here
-            // (SemanticAnalyzer rejects floating operands), so C++ `/` on integers already
-            // truncates toward zero exactly as VB requires. The RESULT WIDTH is what makes
-            // this safe: SemanticAnalyzer types the result by the widened operand type, so
+            // `\` (integer division). Both operands are integral by the time we get here —
+            // IRBuilder converts a floating operand to Long, rounding half to even (ADR-0005
+            // D1; the analyzer ACCEPTS floating operands, it does not reject them) — so C++ `/`
+            // on integers truncates toward zero exactly as VB requires. Before that conversion
+            // a Double operand divided in floating point here and only the int64_t temp's
+            // implicit conversion truncated the QUOTIENT: 7.5 \ 2 printed 3, not VB's 4. (So
+            // there is no truncation code of this backend's own to remove.) The RESULT WIDTH is
+            // what makes this safe: SemanticAnalyzer types the result by the widened operand type, so
             // the temp this lands in is int64_t for a 64-bit division. It used to be
             // hardcoded to Integer, which would have made this arm emit a silent modulo-2^32
             // truncation instead of the loud syntax error the missing arm produced.

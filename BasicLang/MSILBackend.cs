@@ -4425,7 +4425,10 @@ namespace BasicLang.Compiler.CodeGen.MSIL
         /// mixes were InvalidProgramException. The IR only inserts casts for <c>/</c>; every other
         /// mix reached this backend raw. The arithmetic ops convert to the IR's RESULT type — so
         /// <c>\</c>, whose result is integral, converts floating operands DOWN (rounding half to
-        /// even, as the IRCast narrowing does) before an integer <c>div</c>. A comparison, whose
+        /// even, as the IRCast narrowing does) before an integer <c>div</c>. ⚠ Since ADR-0005 D1
+        /// IRBuilder does that conversion itself, as an IRCast to Long on each floating operand of
+        /// <c>\</c>, so for IRBuilder output this arm is a Long→Long no-op (verified in the emitted
+        /// IL) — it only ever widens the other, Integer operand. A comparison, whose
         /// result is Boolean, converts to the wider operand. Shifts are excluded (the count stays
         /// int32 whatever the shifted type is), and so are the logical ops and concatenation.</para>
         /// </summary>

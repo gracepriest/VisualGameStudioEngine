@@ -243,7 +243,7 @@ One runtime numeric type (`number`). Consequences:
 
 | BasicLang | JavaScript | Why |
 |---|---|---|
-| `\` (integer division) | `Math.trunc(a / b)` | JS `/` is always float; VB `\` has no JS operator |
+| `\` (integer division) | `Math.trunc(a / b)` | JS `/` is always float; VB `\` has no JS operator. **Superseded for floating operands by [ADR-0005 D1](../decisions/0005-integer-division-cse-destination-interface-property-type.md):** IRBuilder first converts each `Single`/`Double` operand to `Long`, half to even, so `a` and `b` are always integral here — truncating the float quotient gave `7.5 \ 2` = 3 where VB gives 4 |
 | `Mod` | `%` | sign semantics match .NET exactly |
 | `CInt(x)` | `Math.trunc(x)` | |
 | `CDbl` / `CSng` | identity | all three are `number` |

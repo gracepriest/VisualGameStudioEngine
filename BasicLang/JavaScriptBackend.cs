@@ -992,6 +992,11 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 // BasicLang `\`. JS has NO integer-division operator — `/` is always floating
                 // point — and .NET truncates TOWARD ZERO. Math.floor is the tempting wrong
                 // answer: it agrees for positives and gives -4 where .NET gives -3.
+                //
+                // ⚠ Both operands are INTEGRAL here: IRBuilder converts a floating operand to
+                // Long, half to even, before the divide (ADR-0005 D1). Before that, this trunc
+                // was applied to the float QUOTIENT and 7.5 \ 2 printed 3, not VB's 4. It is not
+                // dead now — it is the integer division itself: without it 7 \ 2 is 3.5.
                 case BinaryOpKind.IntDiv: return $"Math.trunc({l} / {r})";
 
                 // .NET's Mod takes the sign of the DIVIDEND, and so does JS's %. They agree
@@ -2567,14 +2572,23 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// that decision has since been made: the whole narrowing surface rounds, so
         /// <c>7 / 2</c> into an Integer is <b>4</b> on all four backends, not 3. VB rounds it.</para>
         ///
+        /// <para>⚠ A floating→<c>Long</c> cast DOES reach this backend, although no declared
+        /// position may be Long: IRBuilder inserts one on each floating operand of <c>\</c>
+        /// (ADR-0005 D1). It takes the floating arm above like any other narrowing — the helper
+        /// rounds without an int32 wrap, and the value never leaves an expression.</para>
+        ///
         /// <para>⛔ Integral→integral is NOT handled, and a <c>| 0</c> arm for it was written here
         /// and then removed as unreachable speculation. Measured: <c>Long</c> never reaches this
-        /// backend at all (<c>JsCapabilityChecker</c> rejects it with BL7003 — a JS number is
-        /// exact only to 2^53), and <c>Function … As Short</c> returning an Integer produces NO
+        /// backend in a DECLARED position (<c>JsCapabilityChecker</c> rejects it with BL7003 — a
+        /// JS number is exact only to 2^53), and <c>Function … As Short</c> returning an Integer produces NO
         /// cast, because the analyzer already types the expression <c>Short</c>. With no shape
         /// that reaches it, the arm could not be tested, so it keeps throwing — this file's
         /// <c>NotYet()</c> exists to refuse exactly that trade. (A Short return not being wrapped
-        /// to 16 bits is a real defect, but it is the analyzer's, and it is not this seam's.)</para>
+        /// to 16 bits is a real defect, but it is the analyzer's, and it is not this seam's.)
+        /// ⚠ That premise has one known exception, measured 2026-09-24 and refused identically
+        /// before and after ADR-0005 D1: the analyzer types <c>x \ y</c> with a floating operand
+        /// Long, so <c>Dim i As Integer = 7.5 \ 2</c> (or returning it As Integer) narrows
+        /// Long→Integer here and is refused. Deciding that arm is its own change.</para>
         /// </summary>
         private bool TryNumericCast(IRCast cast, out string rendered)
         {

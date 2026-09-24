@@ -8319,6 +8319,10 @@ namespace BasicLang.Compiler.SemanticAnalysis
                         // correctly Double, keeping the old rejection would turn that
                         // expression — which compiles today — into a hard error. This
                         // relaxation is REQUIRED BY the `/` change, not optional cleanup.
+                        //
+                        // This arm only TYPES the result; the rounding itself is inserted
+                        // once, in IRBuilder.ConvertIntegerDivisionOperand (ADR-0005 D1), so
+                        // no backend ever sees a floating operand of `\`.
                         resultType = _typeManager.LongType;
                     }
                     else
