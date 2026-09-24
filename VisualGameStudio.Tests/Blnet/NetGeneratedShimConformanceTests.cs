@@ -69,6 +69,10 @@ public class NetGeneratedShimConformanceTests
         string projectName, IReadOnlyDictionary<string, string> files,
         bool withProbe = false, string extraItemGroupXml = "")
     {
+        // Every program here is a BasicLang native project, which always builds with MSVC.
+        // Checked OUTSIDE the memoized Lazy so a skip is not cached as the build's result.
+        VisualGameStudio.Tests.Native.NativeBuildSkip.RequireMsvcForBasicLangNative();
+
         // The key covers the NAME and every build INPUT. Keyed on the name alone — as it was
         // until P2a-2 Task 14 — a second row passing the same name with different sources or a
         // different item group silently got the FIRST program's build back and asserted, green,
@@ -228,6 +232,7 @@ public class NetGeneratedShimConformanceTests
             """);
 
         var projectPath = NetShimPipelineFixture.WriteProject(dir, "ConfCharRefusal");
+        VisualGameStudio.Tests.Native.NativeBuildSkip.RequireMsvcForBasicLangNative();
         var result = CppProjectBuilder.Build(ProjectFile.Load(projectPath), "Release");
 
         Assert.That(result.Success, Is.False,
@@ -285,6 +290,7 @@ public class NetGeneratedShimConformanceTests
             """);
 
         var projectPath = NetShimPipelineFixture.WriteProject(dir, "ConfNullReceiver");
+        VisualGameStudio.Tests.Native.NativeBuildSkip.RequireMsvcForBasicLangNative();
         var result = CppProjectBuilder.Build(ProjectFile.Load(projectPath), "Release");
         var text = NetShimPipelineFixture.Diagnostics(result) + "\n" + result.RawToolchainOutput;
 
@@ -1197,6 +1203,7 @@ public class NetGeneratedShimConformanceTests
             """);
 
         var projectPath = NetShimPipelineFixture.WriteProject(dir, "ConfIndexer");
+        VisualGameStudio.Tests.Native.NativeBuildSkip.RequireMsvcForBasicLangNative();
         var result = CppProjectBuilder.Build(ProjectFile.Load(projectPath), "Release");
         var text = NetShimPipelineFixture.Diagnostics(result) + "\n" + result.RawToolchainOutput;
 
@@ -1238,6 +1245,7 @@ public class NetGeneratedShimConformanceTests
             """);
 
         var projectPath = NetShimPipelineFixture.WriteProject(dir, "ConfMultiCatch");
+        VisualGameStudio.Tests.Native.NativeBuildSkip.RequireMsvcForBasicLangNative();
         var result = CppProjectBuilder.Build(ProjectFile.Load(projectPath), "Release");
         var text = NetShimPipelineFixture.Diagnostics(result) + "\n" + result.RawToolchainOutput;
 
@@ -1466,6 +1474,7 @@ public class NetGeneratedShimConformanceTests
         var probe = NetShimPipelineFixture.EmitProbeAssembly(dir);
         var projectPath = NetShimPipelineFixture.WriteProject(
             dir, "ConfAddressOf", NetShimPipelineFixture.ReferenceItemGroup(probe));
+        VisualGameStudio.Tests.Native.NativeBuildSkip.RequireMsvcForBasicLangNative();
         var result = CppProjectBuilder.Build(ProjectFile.Load(projectPath), "Release");
         var text = NetShimPipelineFixture.Diagnostics(result) + "\n" + result.RawToolchainOutput;
 

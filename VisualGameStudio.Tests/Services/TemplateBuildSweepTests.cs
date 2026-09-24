@@ -115,7 +115,7 @@ public class TemplateBuildSweepTests
         if (BasicLang.Compiler.ProjectSystem.CppToolchain.Find() == null)
             Assert.Ignore("No C++ toolchain available (clang++/g++/MSVC)");
         if (templateId == "cpp-game-app")
-            IgnoreUnlessEngineImportLibUsable();
+            VisualGameStudio.Tests.Native.NativeBuildSkip.RequireUsableEngineImportLib();
 
         var template = ProjectTemplates.All.Single(t => t.Id == templateId);
         var name = "Sweep" + string.Concat(templateId.Split('-').Select(
@@ -511,7 +511,7 @@ public class TemplateBuildSweepTests
         if (BasicLang.Compiler.ProjectSystem.CppToolchain.Find() == null)
             Assert.Ignore("No C++ toolchain available (clang++/g++/MSVC)");
         if (shortName == "cpp-game")
-            IgnoreUnlessEngineImportLibUsable();
+            VisualGameStudio.Tests.Native.NativeBuildSkip.RequireUsableEngineImportLib();
 
         var name = "SweepCli" + string.Concat(shortName.Split('-').Select(
             p => char.ToUpperInvariant(p[0]) + p.Substring(1)));
@@ -521,20 +521,6 @@ public class TemplateBuildSweepTests
         var (exitCode, output) = RunCompilerBuild(compiler, projectFile);
         Assert.That(exitCode, Is.EqualTo(0),
             $"CLI '{shortName}' template project failed to build.\n--- compiler output ---\n{output}");
-    }
-
-    /// <summary>
-    /// The game templates link the engine's MSVC import library
-    /// (VisualGameStudioEngine.lib), which only links on Windows. Off Windows the test
-    /// process can still find a copy (one is deployed into the test output folder),
-    /// but the CLI cannot use it, so the build fails with BL6009 — skip rather than fail.
-    /// </summary>
-    private static void IgnoreUnlessEngineImportLibUsable()
-    {
-        if (!OperatingSystem.IsWindows())
-            Assert.Ignore("VisualGameStudioEngine.lib is an MSVC import library (Windows only)");
-        if (BasicLang.Compiler.ProjectSystem.EngineDeployment.LocateImportLib() == null)
-            Assert.Ignore("VisualGameStudioEngine.lib not found (engine not built)");
     }
 
     private static (int ExitCode, string Output) RunCompilerBuild(string compiler, string projectFile)

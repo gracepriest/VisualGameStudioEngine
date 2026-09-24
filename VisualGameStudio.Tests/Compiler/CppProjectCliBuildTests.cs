@@ -368,8 +368,7 @@ public class CppProjectCliBuildTests
     public async Task Cli_New_CppGame_Builds_WhenEngineLibAvailable()
     {
         if (CppToolchain.Find() == null) Assert.Ignore("No C++ toolchain available");
-        if (EngineDeployment.LocateImportLib() == null)
-            Assert.Ignore("VisualGameStudioEngine.lib not found (engine not built on this machine)");
+        VisualGameStudio.Tests.Native.NativeBuildSkip.RequireUsableEngineImportLib();
 
         var (exitNew, _, _) = await RunCli(_dir, "new", "cpp-game", "-n", "MyGame", "-o",
             Path.Combine(_dir, "MyGame"));
@@ -502,23 +501,21 @@ public class CppProjectCliBuildTests
     }
 
     [Test]
-    public async Task Cli_Build_CppProject_ProjectReference_WarnsAndStillSucceeds()
+    public async Task Cli_Build_CppProject_ProjectReference_FailsWithBL6021()
     {
+        // The CLI leg of NativeProject_WithProjectReference_FailsWithBL6021_NamingTheWorkaround.
+        // Until P2a-2 this row pinned the P2a-1 WARNING ("warning BL6021" on stdout, exit 0); THE
+        // FLIP promoted it to an error (NetReferenceResolver, "Promoted WARNING → ERROR"), and the
+        // CLI row was never updated, so it failed on every machine. Reference resolution runs
+        // before the toolchain gate, so this is machine-independent.
         var project = MakeCppProjectWithProjectReference("..\\Sibling\\Sibling.blproj");
 
         var (exit, stdout, stderr) = await RunCli(_dir, "build", project.FilePath);
 
-        // Machine-independent: the warning is printed before the toolchain gate is even reached,
-        // so this — the only coverage of the CLI's warning FORMATTING — runs everywhere. Matching
-        // the conditional-assertion idiom used by Build_NoToolchainElement_UsesMachineProbe_AsToday.
-        Assert.That(stdout, Does.Contain("warning BL6021"),
-            $"the CLI prints warnings to stdout via CppDiagnosticsParser.FormatNormalized."
-            + $"\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}");
-
-        if (CppToolchain.Find() == null)
-            Assert.Ignore("No C++ toolchain available; the warning-formatting assertion above still ran");
-
-        Assert.That(exit, Is.EqualTo(0),
-            $"INERTNESS GATE (CLI leg).\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}");
+        Assert.That(exit, Is.Not.EqualTo(0),
+            $"A native project with a <ProjectReference> must fail the CLI build.\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}");
+        Assert.That(stderr, Does.Contain("error BL6021").And.Contain("HintPath"),
+            "The CLI prints errors to stderr via CppDiagnosticsParser.FormatNormalized, and the "
+            + $"message must keep naming the <Reference>+<HintPath> workaround.\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}");
     }
 }
