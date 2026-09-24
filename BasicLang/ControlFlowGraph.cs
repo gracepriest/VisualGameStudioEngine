@@ -14,17 +14,29 @@ namespace BasicLang.Compiler.IR
         public BasicBlock EntryBlock => Function.EntryBlock;
         
         // Analysis results
-        public Dictionary<BasicBlock, HashSet<BasicBlock>> DominatorTree { get; private set; }
-        public Dictionary<BasicBlock, HashSet<BasicBlock>> PostDominatorTree { get; private set; }
-        public Dictionary<BasicBlock, int> BlockDepths { get; private set; }
+        /// <summary>
+        /// Natural loops found by <see cref="IdentifyLoops"/>, one entry per back edge.
+        ///
+        /// ⛔ This covers ONLY loops expressed as branches in the CFG. BasicLang has a SECOND,
+        /// structurally different loop representation: `For Each` lowers to a structured
+        /// <c>IRForEach</c> node and `Try` to <c>IRTryCatch</c>, whose body/continuation blocks
+        /// <see cref="Build"/> wires as FORWARD edges only. Those constructs contribute no cycle,
+        /// hence no back edge, hence NO ENTRY IN THIS LIST. Reporting zero loops for a function
+        /// whose only loop is a `For Each` is the CORRECT answer here, not a gap to be patched by
+        /// widening this analysis.
+        ///
+        /// Any future loop pass must therefore be correct under the premise that UNSEEN LOOPS
+        /// EXIST IN THE FUNCTION, and may NOT treat "this block is in no loop" as "this block
+        /// executes once." A block that is in no natural loop may still sit inside a `For Each`
+        /// body and run many times; hoisting into it, or computing a trip count for it, is
+        /// unsound. Membership in this list is evidence that a loop exists — absence from it is
+        /// not evidence that one does not.
+        /// </summary>
         public List<List<BasicBlock>> NaturalLoops { get; private set; }
-        
+
         public ControlFlowGraph(IRFunction function)
         {
             Function = function;
-            DominatorTree = new Dictionary<BasicBlock, HashSet<BasicBlock>>();
-            PostDominatorTree = new Dictionary<BasicBlock, HashSet<BasicBlock>>();
-            BlockDepths = new Dictionary<BasicBlock, int>();
             NaturalLoops = new List<List<BasicBlock>>();
         }
         
@@ -43,67 +55,88 @@ namespace BasicLang.Compiler.IR
             // Build edges from terminators
             foreach (var block in Blocks)
             {
-                var terminator = block.GetTerminator();
-
-                if (terminator is IRBranch branch)
+                foreach (var successor in SuccessorsOf(block))
                 {
-                    AddEdge(block, branch.Target);
-                }
-                else if (terminator is IRConditionalBranch condBranch)
-                {
-                    AddEdge(block, condBranch.TrueTarget);
-                    AddEdge(block, condBranch.FalseTarget);
-                }
-                else if (terminator is IRSwitch switchInst)
-                {
-                    AddEdge(block, switchInst.DefaultTarget);
-                    foreach (var (_, target) in switchInst.Cases)
-                    {
-                        AddEdge(block, target);
-                    }
-                    // Pattern cases (constant/range/comparison/Or/When from a Select Case)
-                    // carry their target block by reference just like the integral Cases. The
-                    // parser routes EVERY case value into PatternCases (Cases stays empty), so
-                    // WITHOUT these edges the case-body blocks are unreachable from entry and
-                    // DeadCodeEliminationPass.RemoveUnreachableBlocks() deletes them — silently
-                    // dropping every Select Case branch (same failure class as the For Each/Try
-                    // structured edges below).
-                    foreach (var patternCase in switchInst.PatternCases)
-                    {
-                        AddEdge(block, patternCase.Target);
-                    }
-                }
-                // IRReturn has no successors
-
-                // Structured control-flow instructions (For Each, Try/Catch) carry their
-                // body/continuation blocks by reference rather than by branch terminator, so
-                // they must be wired into the CFG explicitly. Without these edges the loop
-                // body, the post-loop continuation, the try/catch/finally bodies and the
-                // post-try continuation are all UNREACHABLE from entry — so
-                // DeadCodeEliminationPass.RemoveUnreachableBlocks() deletes them from
-                // Function.Blocks. That silently dropped every statement after a For Each/Try
-                // (and every temporary produced inside a For Each/Try body) from the emitted
-                // code. They can appear anywhere in the block (not only as the terminator),
-                // so scan all instructions.
-                foreach (var inst in block.Instructions)
-                {
-                    if (inst is IRForEach forEach)
-                    {
-                        if (forEach.BodyBlock != null) AddEdge(block, forEach.BodyBlock);
-                        if (forEach.EndBlock != null) AddEdge(block, forEach.EndBlock);
-                    }
-                    else if (inst is IRTryCatch tryCatch)
-                    {
-                        if (tryCatch.TryBlock != null) AddEdge(block, tryCatch.TryBlock);
-                        foreach (var catchClause in tryCatch.CatchClauses)
-                            if (catchClause.Block != null) AddEdge(block, catchClause.Block);
-                        if (tryCatch.FinallyBlock != null) AddEdge(block, tryCatch.FinallyBlock);
-                        if (tryCatch.EndBlock != null) AddEdge(block, tryCatch.EndBlock);
-                    }
+                    AddEdge(block, successor);
                 }
             }
         }
-        
+
+        /// <summary>
+        /// The blocks control can reach directly from <paramref name="block"/>, in the order
+        /// <see cref="Build"/> adds them — THE edge rule, extracted from <see cref="Build"/>
+        /// unchanged so it has one definition and two consumers. <see cref="Build"/> writes these
+        /// into <see cref="BasicBlock.Successors"/>/<see cref="BasicBlock.Predecessors"/>;
+        /// <c>IRVerifier</c> (ADR-0004 D2) walks them WITHOUT touching any block's edge lists,
+        /// because verification must not change what a backend sees and rebuilding the CFG
+        /// would rewrite those lists. May repeat a target (AddEdge de-duplicates); a null target
+        /// is yielded as-is, exactly as <see cref="Build"/> handed it to AddEdge before.
+        ///
+        /// <para>Not an analysis — it lists edges and nothing else; it revives none of the
+        /// surface ADR-0003 D5 deleted.</para>
+        /// </summary>
+        public static IEnumerable<BasicBlock> SuccessorsOf(BasicBlock block)
+        {
+            var terminator = block.GetTerminator();
+
+            if (terminator is IRBranch branch)
+            {
+                yield return branch.Target;
+            }
+            else if (terminator is IRConditionalBranch condBranch)
+            {
+                yield return condBranch.TrueTarget;
+                yield return condBranch.FalseTarget;
+            }
+            else if (terminator is IRSwitch switchInst)
+            {
+                yield return switchInst.DefaultTarget;
+                foreach (var (_, target) in switchInst.Cases)
+                {
+                    yield return target;
+                }
+                // Pattern cases (constant/range/comparison/Or/When from a Select Case)
+                // carry their target block by reference just like the integral Cases. The
+                // parser routes EVERY case value into PatternCases (Cases stays empty), so
+                // WITHOUT these edges the case-body blocks are unreachable from entry and
+                // DeadCodeEliminationPass.RemoveUnreachableBlocks() deletes them — silently
+                // dropping every Select Case branch (same failure class as the For Each/Try
+                // structured edges below).
+                foreach (var patternCase in switchInst.PatternCases)
+                {
+                    yield return patternCase.Target;
+                }
+            }
+            // IRReturn has no successors
+
+            // Structured control-flow instructions (For Each, Try/Catch) carry their
+            // body/continuation blocks by reference rather than by branch terminator, so
+            // they must be wired into the CFG explicitly. Without these edges the loop
+            // body, the post-loop continuation, the try/catch/finally bodies and the
+            // post-try continuation are all UNREACHABLE from entry — so
+            // DeadCodeEliminationPass.RemoveUnreachableBlocks() deletes them from
+            // Function.Blocks. That silently dropped every statement after a For Each/Try
+            // (and every temporary produced inside a For Each/Try body) from the emitted
+            // code. They can appear anywhere in the block (not only as the terminator),
+            // so scan all instructions.
+            foreach (var inst in block.Instructions)
+            {
+                if (inst is IRForEach forEach)
+                {
+                    if (forEach.BodyBlock != null) yield return forEach.BodyBlock;
+                    if (forEach.EndBlock != null) yield return forEach.EndBlock;
+                }
+                else if (inst is IRTryCatch tryCatch)
+                {
+                    if (tryCatch.TryBlock != null) yield return tryCatch.TryBlock;
+                    foreach (var catchClause in tryCatch.CatchClauses)
+                        if (catchClause.Block != null) yield return catchClause.Block;
+                    if (tryCatch.FinallyBlock != null) yield return tryCatch.FinallyBlock;
+                    if (tryCatch.EndBlock != null) yield return tryCatch.EndBlock;
+                }
+            }
+        }
+
         private void AddEdge(BasicBlock from, BasicBlock to)
         {
             if (!from.Successors.Contains(to))
@@ -167,7 +200,6 @@ namespace BasicLang.Compiler.IR
             }
             
             ComputeImmediateDominators();
-            BuildDominatorTree();
         }
         
         /// <summary>
@@ -215,60 +247,6 @@ namespace BasicLang.Compiler.IR
         }
         
         /// <summary>
-        /// Build dominator tree from immediate dominators
-        /// </summary>
-        private void BuildDominatorTree()
-        {
-            DominatorTree.Clear();
-            
-            foreach (var block in Blocks)
-            {
-                DominatorTree[block] = new HashSet<BasicBlock>();
-            }
-            
-            foreach (var block in Blocks)
-            {
-                if (block.ImmediateDominator != null)
-                {
-                    DominatorTree[block.ImmediateDominator].Add(block);
-                }
-            }
-        }
-        
-        /// <summary>
-        /// Compute dominance frontier for all blocks
-        /// DF(X) is the set of blocks where X's dominance stops
-        /// </summary>
-        public void ComputeDominanceFrontier()
-        {
-            foreach (var block in Blocks)
-            {
-                block.DominanceFrontier.Clear();
-            }
-            
-            foreach (var block in Blocks)
-            {
-                if (block.Predecessors.Count >= 2)
-                {
-                    foreach (var pred in block.Predecessors)
-                    {
-                        var runner = pred;
-                        
-                        while (runner != block.ImmediateDominator)
-                        {
-                            runner.DominanceFrontier.Add(block);
-                            
-                            if (runner.ImmediateDominator == null)
-                                break;
-                            
-                            runner = runner.ImmediateDominator;
-                        }
-                    }
-                }
-            }
-        }
-        
-        /// <summary>
         /// Find back edges in CFG (edges from a node to its dominator)
         /// </summary>
         public List<(BasicBlock From, BasicBlock To)> FindBackEdges()
@@ -279,16 +257,17 @@ namespace BasicLang.Compiler.IR
             {
                 foreach (var successor in block.Successors)
                 {
-                    // Back edge: successor dominates block. `X.Dominators` is the set of blocks
-                    // that dominate X, so that is `block.Dominators.Contains(successor)`.
-                    //
-                    // ⛔ This read `successor.Dominators.Contains(block)` — "block dominates
-                    // successor" — which is true of nearly every FORWARD edge. MEASURED on
-                    // `For i = 1 To 5 : s = s + i * 3 : Next` (master 42a2280): entry->for0.cond
-                    // was a "back edge", every "loop" contained entry (one contained for0.end),
-                    // and LoopInvariantCodeMotionPass, handed the one real loop with its
-                    // "preheader" chosen as for0.inc, moved the loop condition INTO the
-                    // increment block — every For loop printed 0 on C++ under --optimize.
+                    // Back edge tail->head: the HEAD dominates the TAIL, i.e. the head is in
+                    // the tail's own dominator set. `b.Dominators` holds the blocks that
+                    // dominate b, so the test is block.Dominators.Contains(successor).
+                    // Testing successor.Dominators.Contains(block) instead asks "does the tail
+                    // dominate the head", which is the defining property of a FORWARD edge --
+                    // it selects every edge that is not a back edge and never the real one.
+                    // (Fixed identically on this branch, 60b7226 / ADR-0003, and on master,
+                    // e063faf: MEASURED there on `For i = 1 To 5 : s = s + i * 3 : Next`,
+                    // entry->for0.cond was a "back edge", every "loop" contained entry, and
+                    // LoopInvariantCodeMotionPass moved the loop condition into for0.inc —
+                    // every For loop printed 0 on C++ under --optimize.)
                     if (block.Dominators.Contains(successor))
                     {
                         backEdges.Add((block, successor));
@@ -329,39 +308,6 @@ namespace BasicLang.Compiler.IR
                 }
                 
                 NaturalLoops.Add(loop.ToList());
-            }
-        }
-        
-        /// <summary>
-        /// Compute depth of each block (distance from entry)
-        /// </summary>
-        public void ComputeBlockDepths()
-        {
-            BlockDepths.Clear();
-            
-            foreach (var block in Blocks)
-            {
-                BlockDepths[block] = int.MaxValue;
-            }
-            
-            BlockDepths[EntryBlock] = 0;
-            
-            var queue = new Queue<BasicBlock>();
-            queue.Enqueue(EntryBlock);
-            
-            while (queue.Count > 0)
-            {
-                var block = queue.Dequeue();
-                int depth = BlockDepths[block];
-                
-                foreach (var successor in block.Successors)
-                {
-                    if (BlockDepths[successor] > depth + 1)
-                    {
-                        BlockDepths[successor] = depth + 1;
-                        queue.Enqueue(successor);
-                    }
-                }
             }
         }
         
@@ -448,6 +394,13 @@ namespace BasicLang.Compiler.IR
         
         /// <summary>
         /// Check if the CFG is reducible (structured control flow)
+        ///
+        /// <para>⚠ ADR-0003 D4 deleted this as dead; it is back because master's e063faf fixed
+        /// its orientation and <c>LoopInvariantCodeMotionTests</c> calls it. Note that with both
+        /// orientations now agreeing it cannot return false: <see cref="FindBackEdges"/> admits
+        /// an edge only when its head dominates its tail, which is exactly what this re-checks.
+        /// A real reducibility test compares DFS retreating edges against dominance back
+        /// edges.</para>
         /// </summary>
         public bool IsReducible()
         {

@@ -214,8 +214,15 @@ public class MsilClassTypeTests
     /// ⭐ ADDED BY MUTATION: `d2-1415-base-ctor-args` SURVIVED. The base-ctor tests all passed an
     /// EXACTLY-TYPED argument, where spelling the argument and spelling the declaration agree —
     /// the blind spot this file's own header warns about. Here the base ctor declares Animal and
-    /// the derived class hands it a Dog. ⚠ A `New` expression as the base-ctor argument instead
-    /// of a variable hits a SEPARATE C# backend bug (undefined temp `t0`), so it is a variable.
+    /// the derived class hands it a Dog. ⚠ A computed base-ctor argument (a `New` expression, or
+    /// `x + 1`) hits a separate defect, so the argument here is a plain variable. ⛔ CORRECTED:
+    /// that defect was recorded here as C#-only ("undefined temp `t0`"). Measured at a36262c, the
+    /// attribution is WRONG — C++ fails identically (`use of undeclared identifier 't0'`), and JS
+    /// and MSIL refuse the construct with documented capability messages. A C#-backend fix alone
+    /// would NOT unblock this case, so it is not a promotion target for that work. The site is
+    /// `CSharpBackend.cs:1136` (`SanitizeName(a.Name)`) with a C++ twin; the shape is already
+    /// pinned at `MsilBaseConstructorTests.cs:265,301` and
+    /// `BaseConstructorDiagnosticTests.cs:476,505`.
     /// </summary>
     [Test]
     public void base_ctor_declared_base_given_derived()

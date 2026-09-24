@@ -47,11 +47,62 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         // Use counts help decide whether to emit calls as statements or inline them into expressions
         private readonly Dictionary<IRValue, int> _useCounts;
 
+        /// <summary>
+        /// ADR-0001's declared-local temps for the function being emitted: values used more than
+        /// once whose definition is not replicable. See <see cref="ComputeMaterialisedTemps"/>.
+        /// </summary>
+        private readonly HashSet<IRValue> _materialised = new HashSet<IRValue>();
+
+        /// <summary>The materialised values whose DEFINING text is being written right now.</summary>
+        private readonly HashSet<IRValue> _emittingDefinition = new HashSet<IRValue>();
+
         // For structured control flow generation
         private HashSet<BasicBlock> _processedBlocks;
 
         // Stack of loop end blocks for break detection
         private Stack<BasicBlock> _loopEndBlocks;
+
+        /// <summary>
+        /// The end blocks of the <c>For Each</c> loops currently OPEN around the text being
+        /// written — <see cref="_loopEndBlocks"/>'s counterpart for the one loop shape that is
+        /// not emitted through <see cref="GenerateLoop"/>.
+        ///
+        /// <para>⛔ It cannot be folded into <see cref="_loopEndBlocks"/>, because the two are
+        /// asked DIFFERENT questions. A <c>while</c>-shaped loop's body ends by branching to its
+        /// CONDITION block, so any branch to its <c>.end</c> is necessarily an exit. A
+        /// <c>For Each</c>'s does not: <c>IRBuilder.Visit(ForEachLoopNode)</c> gives the loop
+        /// <c>LoopContext(endBlock, endBlock)</c> and then ends the body with
+        /// <c>IRBranch(endBlock)</c> — byte-identical to the <c>Exit For</c> branch except for
+        /// <c>IRBranch.IsLoopExit</c>. Treating every branch to a <c>For Each</c>'s end as a
+        /// <c>break</c> makes an ordinary iteration exit the loop; treating none of them as one
+        /// is what this backend did, and <c>Exit For</c> was a silent NO-OP.</para>
+        /// </summary>
+        private HashSet<BasicBlock> _forEachEndBlocks;
+
+        /// <summary>
+        /// Loop-variable renames in force while a <c>For Each</c> body is being emitted: BasicLang
+        /// name → the C# name its <c>foreach</c> declared. See <see cref="Visit(IRForEach)"/>.
+        /// </summary>
+        private readonly Dictionary<string, string> _forEachRenames = new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>The <c>For Each</c> variables whose bodies are open, outermost first (BasicLang names).</summary>
+        private readonly List<string> _openForEachVariables = new();
+
+        /// <summary>Fresh loop-variable names already issued in <see cref="_forEachNamesOwner"/>'s body.</summary>
+        private readonly HashSet<string> _issuedForEachNames = new(StringComparer.OrdinalIgnoreCase);
+        private IRFunction _forEachNamesOwner;
+
+        /// <summary>How many C# <c>switch</c> statements are open around the text being written.</summary>
+        private int _switchDepth;
+
+        /// <summary><see cref="_switchDepth"/> as it stood when each enclosing loop opened.</summary>
+        private Stack<int> _loopSwitchDepths;
+
+        /// <summary>
+        /// Loop end blocks a <c>goto</c> was emitted for, so the matching label is written after
+        /// that loop closes — and ONLY then, since an unreferenced label is CS0164.
+        /// </summary>
+        private HashSet<BasicBlock> _labelledLoopEnds;
 
         // Standard library provider for built-in functions
         private readonly CSharpStdLibProvider _stdLib;
@@ -680,22 +731,10 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                     InitializeFunctionContext(method.DefaultImplementation);
                     _processedBlocks = new HashSet<BasicBlock>();
                     _loopEndBlocks = new Stack<BasicBlock>();
+                    ResetLoopExitState();
 
-                    // Declare locals
-                    var declared = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                    foreach (var localVar in method.DefaultImplementation.LocalVariables)
-                    {
-                        var varName = GetValueName(localVar);
-                        if (declared.Add(varName))
-                        {
-                            var csharpType = MapType(localVar.Type);
-                            var defaultValue = GetDefaultValue(localVar.Type);
-                            WriteLine($"{csharpType} {varName} = {defaultValue};");
-                        }
-                    }
-
-                    if (method.DefaultImplementation.LocalVariables.Count > 0)
-                        WriteLine();
+                    // Declare locals — and any temp materialised under ADR-0001 (see DeclareLocals)
+                    DeclareLocals(method.DefaultImplementation, sizedArrays: false);
 
                     if (method.DefaultImplementation.EntryBlock != null)
                         GenerateStructuredBlock(method.DefaultImplementation.EntryBlock);
@@ -1116,22 +1155,10 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 InitializeFunctionContext(ctor.Implementation);
                 _processedBlocks = new HashSet<BasicBlock>();
                 _loopEndBlocks = new Stack<BasicBlock>();
+                ResetLoopExitState();
 
-                // Declare locals (same as GenerateMethod)
-                var declared = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                foreach (var localVar in ctor.Implementation.LocalVariables)
-                {
-                    var varName = GetValueName(localVar);
-                    if (declared.Add(varName))
-                    {
-                        var csharpType = MapType(localVar.Type);
-                        var defaultValue = GetDefaultValue(localVar.Type);
-                        WriteLine($"{csharpType} {varName} = {defaultValue};");
-                    }
-                }
-
-                if (ctor.Implementation.LocalVariables.Count > 0)
-                    WriteLine();
+                // Declare locals — and any temp materialised under ADR-0001 (see DeclareLocals)
+                DeclareLocals(ctor.Implementation, sizedArrays: false);
 
                 GenerateStructuredBlock(ctor.Implementation.EntryBlock);
                 _currentFunction = null;
@@ -1201,8 +1228,12 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 Indent();
                 _currentFunction = prop.Getter;
                 InitializeFunctionContext(prop.Getter);
+                // ⛔ An accessor declared NO locals at all: a Get whose whole body was
+                // `Dim sum As Integer = 5` / `Return sum + 1` was CS0103 on `sum`, loop or not.
+                DeclareLocals(prop.Getter, sizedArrays: false);
                 _processedBlocks = new HashSet<BasicBlock>();
                 _loopEndBlocks = new Stack<BasicBlock>();
+                ResetLoopExitState();
                 if (prop.Getter.EntryBlock != null)
                     GenerateStructuredBlock(prop.Getter.EntryBlock);
                 _currentFunction = null;
@@ -1218,8 +1249,10 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 Indent();
                 _currentFunction = prop.Setter;
                 InitializeFunctionContext(prop.Setter);
+                DeclareLocals(prop.Setter, sizedArrays: false);
                 _processedBlocks = new HashSet<BasicBlock>();
                 _loopEndBlocks = new Stack<BasicBlock>();
+                ResetLoopExitState();
                 if (prop.Setter.EntryBlock != null)
                     GenerateStructuredBlock(prop.Setter.EntryBlock);
                 _currentFunction = null;
@@ -1346,22 +1379,10 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 InitializeFunctionContext(method.Implementation);
                 _processedBlocks = new HashSet<BasicBlock>();
                 _loopEndBlocks = new Stack<BasicBlock>();
+                ResetLoopExitState();
 
-                // Declare locals
-                var declared = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                foreach (var localVar in method.Implementation.LocalVariables)
-                {
-                    var varName = GetValueName(localVar);
-                    if (declared.Add(varName))
-                    {
-                        var csharpType = MapType(localVar.Type);
-                        var defaultValue = GetDefaultValue(localVar.Type);
-                        WriteLine($"{csharpType} {varName} = {defaultValue};");
-                    }
-                }
-
-                if (method.Implementation.LocalVariables.Count > 0)
-                    WriteLine();
+                // Declare locals — and any temp materialised under ADR-0001 (see DeclareLocals)
+                DeclareLocals(method.Implementation, sizedArrays: false);
 
                 if (method.Implementation.EntryBlock != null)
                     GenerateStructuredBlock(method.Implementation.EntryBlock);
@@ -1416,6 +1437,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
             AnalyzeUseCounts(function);
             BuildTempDefinitions(function);
+            ComputeMaterialisedTemps(function);
         }
 
         /// <summary>
@@ -1500,6 +1522,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
             AnalyzeUseCounts(function);
             BuildTempDefinitions(function);
+            ComputeMaterialisedTemps(function);
 
             // Check if this is a lambda - lambdas are generated inline, not as separate functions
             if (function.IsLambda)
@@ -1569,25 +1592,14 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             WriteLine("{");
             Indent();
 
-            // Declare locals (ONLY real locals; no compiler temps)
+            // Declare locals — and any temp materialised under ADR-0001 (see DeclareLocals).
             // Use #line hidden so the PDB doesn't map these to the temp .cs file
-            if (function.LocalVariables.Count > 0)
+            var hasDeclarations = function.LocalVariables.Count > 0 || MaterialisedTempsOf(function).Any();
+            if (hasDeclarations)
                 EmitLineHidden();
-            var declared = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var localVar in function.LocalVariables)
-            {
-                var varName = GetValueName(localVar);
-                if (declared.Add(varName))
-                {
-                    var csharpType = MapType(localVar.Type);
-                    var defaultValue = SizedArrayInitializer(localVar.Type)
-                                       ?? GetDefaultValue(localVar.Type);
+            DeclareLocals(function, sizedArrays: true, blankLineAfter: false);
 
-                    WriteLine($"{csharpType} {varName} = {defaultValue};");
-                }
-            }
-
-            if (function.LocalVariables.Count > 0)
+            if (hasDeclarations)
             {
                 _output.AppendLine("#line default");
                 _lastEmittedSourceLine = -1;
@@ -1598,6 +1610,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             // Body - use structured control flow generation
             _processedBlocks = new HashSet<BasicBlock>();
             _loopEndBlocks = new Stack<BasicBlock>();
+            ResetLoopExitState();
             if (function.EntryBlock != null)
                 GenerateStructuredBlock(function.EntryBlock);
 
@@ -1852,21 +1865,8 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             WriteLine("{");
             Indent();
 
-            // Declare locals
-            var declared = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var localVar in function.LocalVariables)
-            {
-                var varName = GetValueName(localVar);
-                if (declared.Add(varName))
-                {
-                    var csharpType = MapType(localVar.Type);
-                    var defaultValue = GetDefaultValue(localVar.Type);
-                    WriteLine($"{csharpType} {varName} = {defaultValue};");
-                }
-            }
-
-            if (function.LocalVariables.Count > 0)
-                WriteLine("");
+            // Declare locals — and any temp materialised under ADR-0001 (see DeclareLocals)
+            DeclareLocals(function, sizedArrays: false);
 
             // Generate body
             _processedBlocks.Clear();
@@ -1958,6 +1958,17 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
                 if (!ShouldEmitInstruction(instruction))
                     continue;
+
+                // A materialised temp is written ONCE, here, into the local DeclareLocals declared;
+                // every use reads that local (EmitExpression). Not through Visit: Visit(IRCall)
+                // deliberately emits nothing for a call whose result is used.
+                if (instruction is IRValue materialisedValue && _materialised.Contains(materialisedValue))
+                {
+                    if (materialisedValue.SourceLine > 0)
+                        EmitLineDirective(materialisedValue.SourceLine, _currentFunction?.SourceFilePath);
+                    EmitMaterialisedDefinition(materialisedValue);
+                    continue;
+                }
 
                 // Skip tuple elements that were already emitted as part of a group
                 if (emittedTupleGroups.Contains(i))
@@ -2064,6 +2075,13 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         {
             var target = branch.Target;
 
+            // ⛔ FIRST, and before the _processedBlocks / ".end" tests below: an `Exit For` out of
+            // a For Each targets a block those two tests both discard, which is exactly how
+            // `Exit For` became a silent no-op on this backend (measured: a loop over 1,2,3,4
+            // exiting at 3 totalled 10).
+            if (TryEmitLoopExit(branch))
+                return;
+
             // If the target is already processed or is a loop back-edge, skip
             // (the loop structure handles continuation)
             if (_processedBlocks.Contains(target))
@@ -2084,6 +2102,8 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             WriteLine($"switch ({value})");
             WriteLine("{");
             Indent();
+            // Inside these braces `break` means the SWITCH — see EmitLoopExit.
+            _switchDepth++;
 
             // Group value cases by their target block
             var casesByBlock = new Dictionary<BasicBlock, List<IRValue>>();
@@ -2148,12 +2168,17 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             {
                 // Return already emitted
             }
+            else if (defaultTerminator is IRBranch defaultExit && TryEmitLoopExit(defaultExit))
+            {
+                // `Case Else` holding an Exit For: the goto already leaves both constructs.
+            }
             else
             {
                 WriteLine("break;");
             }
             Unindent();
 
+            _switchDepth--;
             Unindent();
             WriteLine("}");
 
@@ -2336,6 +2361,12 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             {
                 // Return already emitted
             }
+            else if (terminator is IRBranch loopExit && TryEmitLoopExit(loopExit))
+            {
+                // ⛔ An `Exit For` written inside a `Select Case` arm. TryEmitLoopExit spells it
+                // as a `goto` precisely because a `break` here would leave the SWITCH; adding
+                // the usual trailing `break;` after it would be unreachable code (CS0162).
+            }
             else if (terminator is IRBranch br && br.Target.Name.Contains("switch.end"))
             {
                 // Jump to switch end - emit break
@@ -2435,6 +2466,28 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 }
             }
 
+            // ⛔ NO BY-NAME LAST RESORT HERE, and one was measured and removed rather than never
+            // tried. The tempting rule is "if neither scan found it, take the block named
+            // `{bodyPrefix}.inc`", on the theory that a body ending in `Exit For` never branches
+            // to its own increment and so loses it. It cannot help, in either direction:
+            //
+            //   • When the `.inc` IS reachable, the structured walk out of the body's terminator
+            //     (an If's merge block, a Select Case's `switch.end`, a nested loop's `.end`)
+            //     emits it BEFORE GenerateLoop reaches the `incBlock` check, so the name lookup
+            //     only ever hands back a block already in _processedBlocks. Measured over 207
+            //     programs through the CLI — 66 shapes written to make the body terminate in
+            //     every non-falling-through way, plus every loop program in this test project:
+            //     the lookup reached its one emission site 51 times, ALREADY PROCESSED all 51.
+            //   • When the `.inc` is NOT reachable — a body ending in an unconditional
+            //     `Exit For` — it does not survive to be found: the IR optimizer deletes it, and
+            //     every shipping route runs the optimizer unconditionally.
+            //
+            // So on the shipping path it is inert (all 207 emissions byte-identical with and
+            // without it), and on the UNOPTIMIZED path some fixtures use it emits `i = i + 1`
+            // after the `break` — CS0162, unreachable code. What actually stops
+            // `For i = 1 To 4 / t = t + 1 / Exit For / Next` from looping forever is the `break`,
+            // from TryEmitLoopExit; with the break suppressed the program hangs whether this
+            // lookup is here or not.
             return null;
         }
 
@@ -2443,6 +2496,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             // Push the loop end block so inner code can emit 'break' when targeting it
             if (endBlock != null)
                 _loopEndBlocks.Push(endBlock);
+            _loopSwitchDepths.Push(_switchDepth);
 
             WriteLine($"while ({condition})");
             WriteLine("{");
@@ -2466,16 +2520,23 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             }
             else if (bodyTerminator is IRBranch innerBranch)
             {
-                // Nested loop: body branches unconditionally to inner loop's condition block
-                // Don't follow branches to increment or end blocks - those are handled below
-                var target = innerBranch.Target;
-                if (!_processedBlocks.Contains(target) &&
-                    target != incBlock &&
-                    target != endBlock &&
-                    !target.Name.EndsWith(".inc") &&
-                    !target.Name.EndsWith(".end"))
+                // ⛔ THE EXIT TEST GOES FIRST. `target != endBlock` below discards exactly the
+                // branch an `Exit While`/`Exit For` written as the body's LAST statement
+                // produces — measured: a While over 0..3 exiting on the first pass printed 4
+                // instead of 1, because that branch was dropped and the loop ran to completion.
+                if (!TryEmitLoopExit(innerBranch))
                 {
-                    HandleUnconditionalBranch(innerBranch);
+                    // Nested loop: body branches unconditionally to inner loop's condition block
+                    // Don't follow branches to increment or end blocks - those are handled below
+                    var target = innerBranch.Target;
+                    if (!_processedBlocks.Contains(target) &&
+                        target != incBlock &&
+                        target != endBlock &&
+                        !target.Name.EndsWith(".inc") &&
+                        !target.Name.EndsWith(".end"))
+                    {
+                        HandleUnconditionalBranch(innerBranch);
+                    }
                 }
             }
 
@@ -2488,10 +2549,12 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
             Unindent();
             WriteLine("}");
+            EmitLoopExitLabelIfNeeded(endBlock);
 
             // Pop the loop end block
             if (endBlock != null)
                 _loopEndBlocks.Pop();
+            _loopSwitchDepths.Pop();
 
             // Continue after the loop
             if (endBlock != null && !_processedBlocks.Contains(endBlock))
@@ -2582,9 +2645,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 HandleConditionalBranch(thenCond);
             else if (thenTerminator is IRBranch thenBranch)
             {
-                if (IsLoopEndBlock(thenBranch.Target))
-                    WriteLine("break;");
-                else if (!_processedBlocks.Contains(thenBranch.Target))
+                if (!TryEmitLoopExit(thenBranch) && !_processedBlocks.Contains(thenBranch.Target))
                     HandleUnconditionalBranch(thenBranch);
             }
 
@@ -2603,9 +2664,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 HandleConditionalBranch(elseCond);
             else if (elseTerminator is IRBranch elseBranch)
             {
-                if (IsLoopEndBlock(elseBranch.Target))
-                    WriteLine("break;");
-                else if (!_processedBlocks.Contains(elseBranch.Target))
+                if (!TryEmitLoopExit(elseBranch) && !_processedBlocks.Contains(elseBranch.Target))
                     HandleUnconditionalBranch(elseBranch);
             }
 
@@ -2642,9 +2701,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             else if (thenTerminator is IRBranch thenBranch)
             {
                 // Check if this is a break (branch to loop end)
-                if (IsLoopEndBlock(thenBranch.Target))
-                    WriteLine("break;");
-                else if (!_processedBlocks.Contains(thenBranch.Target))
+                if (!TryEmitLoopExit(thenBranch) && !_processedBlocks.Contains(thenBranch.Target))
                     HandleUnconditionalBranch(thenBranch);
             }
 
@@ -2672,8 +2729,102 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             return _loopEndBlocks.Contains(block);
         }
 
+        // ====================================================================
+        // LEAVING A LOOP. Every `Exit For` / `Exit While` / `Exit Do` in the language arrives
+        // here as an IRBranch to the enclosing loop's end block, and there are only three
+        // questions: is this branch an exit at all, is `break` the right C# for it, and where
+        // does the label go when it is not.
+        // ====================================================================
+
+        /// <summary>Fresh loop-exit bookkeeping for one method/accessor body.</summary>
+        private void ResetLoopExitState()
+        {
+            _forEachEndBlocks = new HashSet<BasicBlock>();
+            _loopSwitchDepths = new Stack<int>();
+            _labelledLoopEnds = new HashSet<BasicBlock>();
+            _switchDepth = 0;
+        }
+
+        /// <summary>
+        /// The C# label placed after a loop whose exit could not be spelled <c>break</c>.
+        /// Derived from the IR block name, which <c>IRBuilder</c> already makes unique per
+        /// function (<c>foreach0.end</c>, <c>for1.end</c>, …).
+        /// </summary>
+        private static string LoopExitLabel(BasicBlock endBlock) =>
+            "__exit_" + new string((endBlock.Name ?? "loop")
+                .Select(c => char.IsLetterOrDigit(c) ? c : '_').ToArray());
+
+        /// <summary>
+        /// Emit the jump that LEAVES the loop <paramref name="endBlock"/> ends.
+        ///
+        /// <para>⛔ <c>break</c> is not always it. Inside a C# <c>switch</c>, <c>break</c> leaves
+        /// the SWITCH — measured on the pre-existing counted-<c>For</c> path, where
+        /// <c>Exit For</c> in a <c>Select Case</c> over 1..4 totalled <b>7</b> instead of
+        /// <b>3</b> from a program that compiled, ran and exited 0. A <c>goto</c> to a label
+        /// after the loop is the only spelling C# has that means "leave the loop" from inside a
+        /// switch, and it is emitted ONLY in that case so the ordinary loops keep reading as
+        /// ordinary loops.</para>
+        /// </summary>
+        private void EmitLoopExit(BasicBlock endBlock)
+        {
+            if (_loopSwitchDepths.Count > 0 && _switchDepth > _loopSwitchDepths.Peek())
+            {
+                _labelledLoopEnds.Add(endBlock);
+                WriteLine($"goto {LoopExitLabel(endBlock)};");
+                return;
+            }
+
+            WriteLine("break;");
+        }
+
+        /// <summary>
+        /// Handle <paramref name="branch"/> if it targets an enclosing loop's end block, and say
+        /// whether it did — so every caller that owns an <c>IRBranch</c> terminator can ask the
+        /// one question before falling back to its own fall-through handling.
+        ///
+        /// <para>⛔ A <c>For Each</c>'s end block is the target of BOTH its <c>Exit For</c> and
+        /// its ordinary end-of-iteration branch, so this returns <c>true</c> (handled) for both
+        /// and emits nothing for the second. <c>IRBranch.IsLoopExit</c> is the only thing that
+        /// separates them — see <see cref="_forEachEndBlocks"/>.</para>
+        /// </summary>
+        private bool TryEmitLoopExit(IRBranch branch)
+        {
+            var target = branch?.Target;
+            if (target == null) return false;
+
+            if (_forEachEndBlocks.Contains(target))
+            {
+                if (branch.IsLoopExit) EmitLoopExit(target);
+                return true;
+            }
+
+            // A while-shaped loop's body ends by branching to its CONDITION block, so a branch
+            // to its end block is always a real exit and needs no flag to prove it.
+            if (IsLoopEndBlock(target))
+            {
+                EmitLoopExit(target);
+                return true;
+            }
+
+            return false;
+        }
+
+        /// <summary>Write the <c>goto</c> target for a loop that needed one, after its closing brace.</summary>
+        private void EmitLoopExitLabelIfNeeded(BasicBlock endBlock)
+        {
+            if (endBlock == null || !_labelledLoopEnds.Remove(endBlock)) return;
+            // A label must be followed by a statement; the empty one is the smallest.
+            WriteLine($"{LoopExitLabel(endBlock)}: ;");
+        }
+
         private bool ShouldEmitInstruction(IRInstruction instruction)
         {
+            // ADR-0001's arm: GetUseCount(v) > 1 && !IsReplicable(v) -> a declared local. Decided
+            // once per function in ComputeMaterialisedTemps; first, because every arm below would
+            // otherwise inline it (or, for a used call, emit nothing) and let each use evaluate it.
+            if (instruction is IRValue materialisedValue && _materialised.Contains(materialisedValue))
+                return true;
+
             // Non-values are usually control-flow or statements and should be emitted
             if (instruction is IRReturn or IRBranch or IRConditionalBranch or IRSwitch or IRLabel)
                 return true;
@@ -2738,6 +2889,159 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         }
 
         private int GetUseCount(IRValue value) => _useCounts.TryGetValue(value, out var c) ? c : 0;
+
+        /// <summary>
+        /// ADR-0001's materialisation decision for <paramref name="function"/>: every value
+        /// instruction with <c>GetUseCount(v) &gt; 1 &amp;&amp; !IsReplicable(v)</c> becomes a declared
+        /// local, written once and read by name. Use count &lt;= 1, or replicable, keeps today's
+        /// inlining — that is the whole truth table, and it must not be widened (ADR-0001's trap:
+        /// C# re-emitting a replicable expression is what keeps it right across a bad CSE merge).
+        ///
+        /// <para>Not candidates, each for a stated reason:</para>
+        /// <list type="bullet">
+        /// <item>A value named after a DECLARED variable. Materialising it would not create a
+        /// temp: its "temp" name IS the variable, so every use would read the variable's CURRENT
+        /// value rather than the value computed. CSE produces exactly that use pattern — it merges
+        /// later copies of an expression onto a binop named after a variable, and does not kill
+        /// the entry when that variable is reassigned (task #125). With a NON-replicable operand
+        /// (a non-Const global, or a ByRef parameter) such a binop is otherwise a candidate:
+        /// <c>Dim a = g + q</c> / <c>a = z</c> / <c>l(0) = g + q</c> / <c>l(1) = g + q</c> (g a
+        /// module global) prints <c>3,3,0</c> with this exclusion and <c>0,0,0</c> without it, on
+        /// all three entry points. Re-emitting the expression is what keeps the C# oracle right
+        /// there (C++, JS and MSIL print 0,0,0 regardless — that is the CSE defect). C4
+        /// (<c>p + q</c>, two locals) does NOT exercise this: its value is replicable and never
+        /// a candidate.
+        /// <para>⚠ This test is on SPELLING: an IR temp that happens to be spelled like a user
+        /// local (<c>Dim t0</c> — task #126) is also excluded, and is then both assigned to the
+        /// user's variable and inlined at every use. ADR-0004 D3's reservation removes that case;
+        /// until then T2 stays wrong either way.</para></item>
+        /// <item>A value defined in a LOOP-CONDITION block. That block's instructions are written
+        /// once, before the <c>while</c>, and its condition is re-emitted as text each iteration —
+        /// a local written once would freeze the condition. Such a value stays inlined, so a
+        /// multi-use non-replicable one there is still evaluated per use; the optimizer gate on
+        /// the rewrite that creates it (ADR-0004 D4, step 3) is what closes that case.</item>
+        /// <item>No name, no type, or a void type — nothing to declare.</item>
+        /// <item>Kinds that already declare themselves or are never emitted as values
+        /// (<see cref="IRArrayAlloc"/>, <see cref="IRAlloca"/>, <see cref="IRPhi"/>,
+        /// <see cref="IRVariable"/>, <see cref="IRConstant"/>) and <see cref="IRTupleElement"/>,
+        /// whose consecutive runs are emitted as one deconstruction.</item>
+        /// </list>
+        /// <para>⚠ Temp NAMES are the IR's own (<c>t0</c>, …). A user local of the same spelling
+        /// collides; ADR-0004 D3 fixes that in the IR by reservation, not here.</para>
+        /// </summary>
+        private void ComputeMaterialisedTemps(IRFunction function)
+        {
+            _materialised.Clear();
+            _emittingDefinition.Clear();
+
+            var loopConditionBlocks = new HashSet<BasicBlock>();
+            foreach (var block in function.Blocks)
+            {
+                if (block.Instructions.LastOrDefault() is IRConditionalBranch cb
+                    && cb.TrueTarget != null && cb.FalseTarget != null
+                    && IsLoopHeader(cb.TrueTarget, cb.FalseTarget, out _, out _, out _, out _, out _))
+                    loopConditionBlocks.Add(block);
+            }
+
+            foreach (var block in function.Blocks)
+            {
+                if (loopConditionBlocks.Contains(block)) continue;
+
+                foreach (var instr in block.Instructions)
+                {
+                    if (instr is not IRValue v) continue;
+                    if (v is IRArrayAlloc or IRAlloca or IRPhi or IRVariable or IRConstant or IRTupleElement) continue;
+                    if (string.IsNullOrEmpty(v.Name) || v.Type == null
+                        || v.Type.Name.Equals("Void", StringComparison.OrdinalIgnoreCase)) continue;
+                    if (IsNamedDestination(v)) continue;
+                    if (GetUseCount(v) <= 1) continue;
+                    if (IsReplicableHere(v)) continue;
+                    _materialised.Add(v);
+                }
+            }
+        }
+
+        /// <summary>
+        /// <see cref="IRReplicability.IsReplicable(IRValue, Func{IRValue, bool?})"/> as this backend
+        /// sees an operand: an already-materialised value is a local (replicable), and an
+        /// <see cref="IRVariable"/> that merely NAMES a temp is judged by the temp's definition,
+        /// because <see cref="EmitExpression(IRValue)"/> inlines that definition in its place.
+        /// </summary>
+        private bool IsReplicableHere(IRValue value)
+        {
+            var visiting = new HashSet<IRValue>();
+            bool? Override(IRValue v)
+            {
+                if (_materialised.Contains(v)) return true;
+                if (v is IRVariable tempRef && !string.IsNullOrEmpty(tempRef.Name)
+                    && !_declaredIdentifiers.Contains(tempRef.Name) && !tempRef.IsParameter && !tempRef.IsGlobal
+                    && !_currentClassMemberNames.Contains(tempRef.Name)
+                    && _tempDefsByName.TryGetValue(tempRef.Name, out var def) && !ReferenceEquals(def, v))
+                {
+                    if (!visiting.Add(def)) return false; // a cycle is not provably anything
+                    return IRReplicability.IsReplicable(def, Override);
+                }
+                return null;
+            }
+            return IRReplicability.IsReplicable(value, Override);
+        }
+
+        /// <summary>The materialised temps defined in <paramref name="function"/>'s own blocks, in order.</summary>
+        private IEnumerable<IRValue> MaterialisedTempsOf(IRFunction function) =>
+            function.Blocks.SelectMany(b => b.Instructions).OfType<IRValue>().Where(_materialised.Contains);
+
+        /// <summary>
+        /// The ONE place a function body's locals are declared: the function's own locals, then
+        /// every temp <see cref="ComputeMaterialisedTemps"/> decided to materialise, each typed
+        /// from the IR. Replaces five hand-copied loops, and is also what a property accessor
+        /// calls — it used to declare nothing.
+        /// </summary>
+        private void DeclareLocals(IRFunction function, bool sizedArrays, bool blankLineAfter = true)
+        {
+            var declared = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var any = false;
+
+            foreach (var localVar in function.LocalVariables)
+            {
+                var varName = GetValueName(localVar);
+                any = true;
+                if (declared.Add(varName))
+                {
+                    var csharpType = MapType(localVar.Type);
+                    var defaultValue = (sizedArrays ? SizedArrayInitializer(localVar.Type) : null)
+                                       ?? GetDefaultValue(localVar.Type);
+                    WriteLine($"{csharpType} {varName} = {defaultValue};");
+                }
+            }
+
+            foreach (var temp in MaterialisedTempsOf(function))
+            {
+                var tempName = GetValueName(temp);
+                any = true;
+                if (declared.Add(tempName))
+                    WriteLine($"{MapType(temp.Type)} {tempName} = {GetDefaultValue(temp.Type)};");
+            }
+
+            if (any && blankLineAfter)
+                WriteLine();
+        }
+
+        /// <summary>
+        /// Writes <c>tN = &lt;definition&gt;;</c> for a materialised temp — the single place its
+        /// defining expression text is emitted.
+        /// </summary>
+        private void EmitMaterialisedDefinition(IRValue value)
+        {
+            _emittingDefinition.Add(value);
+            try
+            {
+                WriteLine($"{GetValueName(value)} = {EmitExpression(value)};");
+            }
+            finally
+            {
+                _emittingDefinition.Remove(value);
+            }
+        }
 
         /// <summary>Render explicit generic type arguments as "&lt;T1, T2&gt;", or "" if none.</summary>
         private string FormatGenericArgs(List<TypeInfo> genericArgs)
@@ -2842,6 +3146,12 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             if (value is IRConstant constant)
                 return EmitConstant(constant);
 
+            // Inside a For Each body whose variable had to be renamed, that name means the LOOP
+            // variable — checked before both caches, which map it to the outer local.
+            if (_forEachRenames.Count > 0 && value is IRVariable loopRead && loopRead.Name != null
+                && _forEachRenames.TryGetValue(loopRead.Name, out var loopName))
+                return loopName;
+
             if (_valueNames.TryGetValue(value, out var name))
                 return name;
 
@@ -2897,12 +3207,18 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
         private string EmitExpression(IRValue value) => EmitExpression(value, new HashSet<IRValue>(), false);
 
+
         /// <summary>
         /// Emit an expression, optionally wrapping in parentheses if it's a compound expression used as a sub-expression.
         /// </summary>
         private string EmitExpression(IRValue value, HashSet<IRValue> stack, bool needsParens = false)
         {
             if (value == null) return string.Empty;
+
+            // A materialised temp is READ by name everywhere except the one place its definition
+            // is written (EmitMaterialisedDefinition). ADR-0001 E1: its text appears once.
+            if (_materialised.Contains(value) && !_emittingDefinition.Contains(value))
+                return GetValueName(value);
 
             // Prevent infinite recursion on weird cyclic graphs
             if (!stack.Add(value))
@@ -3126,6 +3442,18 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             }
         }
 
+        /// <summary>
+        /// Every <see cref="IRValue"/> an instruction READS — the use-count walker behind
+        /// <see cref="AnalyzeUseCounts"/>.
+        ///
+        /// <para>⛔ TOTAL OVER IR NODE KINDS, and the default arm THROWS (ADR-0001). A missing arm
+        /// is not an absent feature: it is a silently-zero use count, and a zero-use call is
+        /// emitted as a statement by <see cref="ShouldEmitInstruction"/> AND inlined again by the
+        /// consumer that reads it. Measured before the arms below existed: <c>b.V = Tag()</c>
+        /// (IRFieldStore) and <c>Throw MakeEx()</c> (IRThrow) each called their function TWICE on
+        /// the reference backend, and a <c>For Each</c> over a call had the same shape waiting
+        /// behind its CS0103. A new node kind must get an arm here, even an empty one.</para>
+        /// </summary>
         private IEnumerable<IRValue> GetOperands(IRInstruction instr)
         {
             switch (instr)
@@ -3170,7 +3498,15 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 case IRConditionalBranch br:
                     return new[] { br.Condition };
                 case IRSwitch sw:
-                    return new[] { sw.Value };
+                {
+                    var switchOps = new List<IRValue> { sw.Value };
+                    if (sw.Cases != null)
+                        switchOps.AddRange(sw.Cases.Select(c => c.CaseValue));
+                    if (sw.PatternCases != null)
+                        foreach (var patternCase in sw.PatternCases)
+                            AddPatternOperands(patternCase, switchOps);
+                    return switchOps;
+                }
                 case IRGetElementPtr gep:
                     var ops = new List<IRValue> { gep.BasePointer };
                     ops.AddRange(gep.Indices);
@@ -3181,8 +3517,68 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                     return new[] { tupleElem.Tuple };
                 case IRAwait awaited:
                     return awaited.Expression != null ? new[] { awaited.Expression } : Array.Empty<IRValue>();
-                default:
+                case IRArrayStore arrayStore:
+                    return new[] { arrayStore.Array, arrayStore.Index, arrayStore.Value };
+                case IRFieldStore fieldStore:
+                    return new[] { fieldStore.Object, fieldStore.Value };
+                case IRForEach forEach:
+                    return new[] { forEach.Collection };
+                case IRThrow throwInst:
+                    return throwInst.Exception != null ? new[] { throwInst.Exception } : Array.Empty<IRValue>();
+                case IRYield yieldInst:
+                    return yieldInst.Value != null ? new[] { yieldInst.Value } : Array.Empty<IRValue>();
+
+                // Kinds that read no IRValue. Listed, not defaulted, so the default can throw.
+                // ⚠ IRVariable.DefaultValue / InitialValue are DECLARATION data (a parameter's
+                // optional default, a module-scope initializer), evaluated outside every function
+                // body — excluded exactly as OptimizationPass.ReplaceUses excludes them.
+                case IRConstant:
+                case IRVariable:
+                case IRAlloca:
+                case IRArrayAlloc:
+                case IRBranch:
+                case IRLabel:
+                case IRComment:
+                case IRInlineCode:
+                case IRTryCatch:
                     return Array.Empty<IRValue>();
+
+                default:
+                    throw new InvalidOperationException(
+                        $"CSharpBackend.GetOperands has no arm for IR node kind '{instr?.GetType().Name ?? "null"}'. "
+                        + "Every kind needs one (ADR-0001): a missing arm is a silently-zero use count, which "
+                        + "makes a call both a statement and an inlined expression — evaluated twice.");
+            }
+        }
+
+        /// <summary>The values a Select Case pattern reads — mirrors OptimizationPass.ReplaceUsesInPattern.</summary>
+        private static void AddPatternOperands(IRPatternCase patternCase, List<IRValue> operands)
+        {
+            if (patternCase == null) return;
+            if (patternCase.WhenGuard != null) operands.Add(patternCase.WhenGuard);
+
+            switch (patternCase)
+            {
+                case IRRangePatternCase range:
+                    operands.Add(range.LowerBound);
+                    operands.Add(range.UpperBound);
+                    break;
+                case IRComparisonPatternCase comparison:
+                    operands.Add(comparison.CompareValue);
+                    break;
+                case IRConstantPatternCase constant:
+                    operands.Add(constant.Value);
+                    break;
+                case IROrPatternCase or:
+                    if (or.Alternatives != null)
+                        foreach (var alternative in or.Alternatives)
+                            AddPatternOperands(alternative, operands);
+                    break;
+                case IRTuplePatternCase tuple:
+                    if (tuple.Elements != null)
+                        foreach (var element in tuple.Elements)
+                            AddPatternOperands(element, operands);
+                    break;
             }
         }
 
@@ -3449,9 +3845,32 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 bool isVoidFunction = _currentFunction?.ReturnType == null ||
                     _currentFunction.ReturnType.Name.Equals("Void", StringComparison.OrdinalIgnoreCase);
 
-                bool isLastBlock = ret.ParentBlock?.Successors?.Count == 0;
+                // ⛔ THIS TEST USED TO BE `ret.ParentBlock?.Successors?.Count == 0`, WHICH IS
+                // TRUE OF EVERY RETURN. A return terminates its block, so NO return block has
+                // successors — early or not — and the suppression therefore swallowed EVERY
+                // void return. `Exit Sub` was a complete no-op: measured, a Sub that prints "5"
+                // and exits, then prints "-1", printed BOTH on C# where C++, JavaScript and
+                // MSIL all print "5".
+                //
+                // Suppressing the ONE trailing return of a void method is still worth having,
+                // and the question it really asks is "will anything else be emitted after this
+                // point?". ⚠ It is NOT "is this the last block in IRFunction.Blocks": creation
+                // order is not emission order — an `If` inside a `For Each` body creates
+                // `if0.then`/`if0.end` AFTER `foreach0.end`, so the block carrying the trailing
+                // return is followed in the list by two blocks emitted long before it. The set
+                // of blocks ALREADY EMITTED answers the real question directly.
+                //
+                // ⚠ INVARIANT RELIED ON: a return is the LAST instruction of its block, so
+                // suppressing it cannot strand statements behind it. Measured over 45 programs,
+                // optimized AND unoptimized, including `Exit Sub` with a statement written after
+                // it (the front end drops the unreachable statement and the block still ends at
+                // the return). A guard for it was written and then removed: nothing can reach it,
+                // and an unreachable guard is an unkillable mutant, not insurance.
+                bool nothingLeftToEmit = isVoidFunction
+                    && _currentFunction?.Blocks != null
+                    && _currentFunction.Blocks.All(b => _processedBlocks.Contains(b));
 
-                if (isVoidFunction && isLastBlock)
+                if (nothingLeftToEmit)
                 {
                     // Don't emit unnecessary return at end of void method
                     return;
@@ -3652,9 +4071,9 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
         public void Visit(IRArrayStore arrayStore)
         {
-            var arrayName = GetValueName(arrayStore.Array);
-            var indexVal = arrayStore.Index is IRConstant c ? c.Value.ToString() : GetValueName(arrayStore.Index);
-            var valueVal = arrayStore.Value is IRConstant vc ? EmitConstant(vc) : GetValueName(arrayStore.Value);
+            var arrayName = EmitExpression(arrayStore.Array);
+            var indexVal = arrayStore.Index is IRConstant c ? c.Value.ToString() : EmitExpression(arrayStore.Index);
+            var valueVal = arrayStore.Value is IRConstant vc ? EmitConstant(vc) : EmitExpression(arrayStore.Value);
             WriteLine($"{arrayName}[{indexVal}] = {valueVal};");
         }
 
@@ -3662,10 +4081,21 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         {
             // In C#, both List<T> and Dictionary<K,V> writes are `collection[index] = value`
             // (Dictionary's indexer setter inserts-or-updates), so a single form is faithful.
-            var collection = GetValueName(indexerStore.Collection);
+            //
+            // ⛔ EmitExpression, never GetValueName, for every operand here and in the IRArrayStore,
+            // IRYield and IRForEach visitors (ADR-0001 E2): GetValueName is valid only for a value
+            // already declared as a local, and an inlined temp has no declaration — `l(i) = l(i) * 10`,
+            // `For Each n In Make()`, `Yield Tag()` and `{Tag(), 2}` all emitted a bare `tN` (CS0103).
+            // Inlining is sound only because GetOperands counts these operands; without its arms the
+            // call was ALSO emitted as a statement and ran twice. A value named after a declared
+            // variable is re-emitted as its expression, exactly as every other consumer (a call
+            // argument, an IRStore) does; honouring the name instead made these four sites read a
+            // variable that CSE had merged onto and the program had since REASSIGNED (measured:
+            // `a = p + q` / `a = Seed(0)` / `l(0) = p + q` stored 0, not 3 — a CSE defect).
+            var collection = EmitExpression(indexerStore.Collection);
             var indices = string.Join(", ", indexerStore.Indices.Select(i =>
-                i is IRConstant ic ? EmitConstant(ic) : GetValueName(i)));
-            var value = indexerStore.Value is IRConstant vc ? EmitConstant(vc) : GetValueName(indexerStore.Value);
+                i is IRConstant ic ? EmitConstant(ic) : EmitExpression(i)));
+            var value = indexerStore.Value is IRConstant vc ? EmitConstant(vc) : EmitExpression(indexerStore.Value);
             WriteLine($"{collection}[{indices}] = {value};");
         }
 
@@ -3692,7 +4122,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             }
             else
             {
-                var valueVal = yieldInst.Value is IRConstant c ? EmitConstant(c) : GetValueName(yieldInst.Value);
+                var valueVal = yieldInst.Value is IRConstant c ? EmitConstant(c) : EmitExpression(yieldInst.Value);
                 WriteLine($"yield return {valueVal};");
             }
         }
@@ -3817,11 +4247,17 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             {
                 HandleConditionalBranch(tryCond);
             }
-            else if (tryTerminator is IRBranch tryBranch &&
-                     tryBranch.Target != tryCatch.EndBlock &&
-                     !_processedBlocks.Contains(tryBranch.Target))
+            else if (tryTerminator is IRBranch tryBranch)
             {
-                HandleUnconditionalBranch(tryBranch);
+                // An `Exit For` as the last statement of a Try body targets the LOOP's end, not
+                // the Try's, so the two guards below would drop it. C# allows both `break` and
+                // `goto` out of a try block.
+                if (!TryEmitLoopExit(tryBranch) &&
+                    tryBranch.Target != tryCatch.EndBlock &&
+                    !_processedBlocks.Contains(tryBranch.Target))
+                {
+                    HandleUnconditionalBranch(tryBranch);
+                }
             }
 
             Unindent();
@@ -3848,11 +4284,14 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 {
                     HandleConditionalBranch(catchCond);
                 }
-                else if (catchTerminator is IRBranch catchBranch &&
-                         catchBranch.Target != tryCatch.EndBlock &&
-                         !_processedBlocks.Contains(catchBranch.Target))
+                else if (catchTerminator is IRBranch catchBranch)
                 {
-                    HandleUnconditionalBranch(catchBranch);
+                    if (!TryEmitLoopExit(catchBranch) &&
+                        catchBranch.Target != tryCatch.EndBlock &&
+                        !_processedBlocks.Contains(catchBranch.Target))
+                    {
+                        HandleUnconditionalBranch(catchBranch);
+                    }
                 }
 
                 Unindent();
@@ -3891,11 +4330,39 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         {
             var elemType = MapType(forEach.ElementType);
             var varName = SanitizeName(forEach.VariableName);
-            var collectionExpr = GetValueName(forEach.Collection);
+            // Evaluated BEFORE the rename below: the collection is read in the enclosing scope,
+            // where the name still has its outer meaning.
+            var collectionExpr = EmitExpression(forEach.Collection);
+
+            // ⛔ THE LOOP VARIABLE MAY NOT REUSE AN OUTER NAME. BasicLang scopes a For Each variable
+            // to its body and lets it shadow a local, a parameter or an enclosing loop's variable;
+            // C# refuses that (CS0136). And BasicLang is case-INSENSITIVE where C# is not, so a
+            // local `N` beside `For Each n` compiled — and the body read the OUTER `N` through the
+            // case-insensitive name map: a silent wrong answer (68 where 43 was right, measured).
+            // A colliding variable gets a fresh name for its body only.
+            var hadOuterRename = false;
+            string outerRename = null;
+            var renamed = forEach.VariableName != null && ForEachVariableCollides(forEach.VariableName);
+            if (renamed)
+            {
+                hadOuterRename = _forEachRenames.TryGetValue(forEach.VariableName, out outerRename);
+                varName = FreshForEachVariableName(varName);
+                _forEachRenames[forEach.VariableName] = varName;
+            }
+            _openForEachVariables.Add(forEach.VariableName ?? string.Empty);
 
             WriteLine($"foreach ({elemType} {varName} in {collectionExpr})");
             WriteLine("{");
             Indent();
+
+            // ⛔ REGISTER THE END BLOCK FIRST. Everything emitted between here and the closing
+            // brace — the body, an If's arms, a Try, a Select Case — asks TryEmitLoopExit
+            // whether a branch is an `Exit For`, and the answer is "only for a block in this
+            // set, and only when IRBranch.IsLoopExit". Without the registration `Exit For`
+            // emitted NOTHING and the loop ran to completion (measured: 10 for a loop over
+            // 1,2,3,4 that must total 3).
+            var registeredEnd = forEach.EndBlock != null && _forEachEndBlocks.Add(forEach.EndBlock);
+            _loopSwitchDepths.Push(_switchDepth);
 
             // Generate body block
             _processedBlocks.Add(forEach.BodyBlock);
@@ -3907,15 +4374,39 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             {
                 HandleConditionalBranch(bodyCond);
             }
-            else if (bodyTerminator is IRBranch bodyBranch &&
-                     bodyBranch.Target != forEach.EndBlock &&
-                     !_processedBlocks.Contains(bodyBranch.Target))
+            else if (bodyTerminator is IRSwitch bodySwitch)
             {
-                HandleUnconditionalBranch(bodyBranch);
+                // ⛔ THIS ARM DID NOT EXIST, and EmitBlockInstructions skips every IRSwitch
+                // because control flow is emitted structurally — so a `Select Case` that was
+                // the whole body of a For Each was DROPPED. Measured: a loop summing 1,2,3
+                // through a Select Case printed 0 from a program that compiled and ran.
+                HandleSwitchStatement(bodySwitch);
+            }
+            else if (bodyTerminator is IRBranch bodyBranch)
+            {
+                // The exit test owns `Target == forEach.EndBlock`: that is BOTH the end of an
+                // ordinary iteration (emit nothing) and a bare `Exit For` written as the body's
+                // last statement (emit the jump), told apart only by IRBranch.IsLoopExit.
+                if (!TryEmitLoopExit(bodyBranch) && !_processedBlocks.Contains(bodyBranch.Target))
+                {
+                    HandleUnconditionalBranch(bodyBranch);
+                }
             }
 
             Unindent();
             WriteLine("}");
+
+            // The body is closed: the name resolves back to whatever it meant outside it.
+            _openForEachVariables.RemoveAt(_openForEachVariables.Count - 1);
+            if (renamed)
+            {
+                if (hadOuterRename) _forEachRenames[forEach.VariableName] = outerRename;
+                else _forEachRenames.Remove(forEach.VariableName);
+            }
+
+            _loopSwitchDepths.Pop();
+            if (registeredEnd) _forEachEndBlocks.Remove(forEach.EndBlock);
+            EmitLoopExitLabelIfNeeded(forEach.EndBlock);
 
             // Continue with end block
             if (forEach.EndBlock != null && !_processedBlocks.Contains(forEach.EndBlock))
@@ -3928,6 +4419,55 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                     HandleConditionalBranch(endCond);
                 else if (endTerminator is IRBranch endBranch)
                     HandleUnconditionalBranch(endBranch);
+            }
+        }
+
+        /// <summary>
+        /// Whether a <c>For Each</c> variable's name is already taken in the C# method body it lands
+        /// in: a local or parameter of the function (compared case-insensitively, as BasicLang
+        /// does), or the variable of a <c>For Each</c> whose body is still open. A module global or
+        /// a class member is NOT a collision — a C# local may shadow a field.
+        /// </summary>
+        private bool ForEachVariableCollides(string name)
+        {
+            if (_openForEachVariables.Contains(name, StringComparer.OrdinalIgnoreCase)) return true;
+            if (_currentFunction == null) return false;
+            return _currentFunction.LocalVariables.Any(v => string.Equals(v.Name, name, StringComparison.OrdinalIgnoreCase))
+                || _currentFunction.Parameters.Any(p => string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase));
+        }
+
+        /// <summary>
+        /// <c>{name}_{k}</c> for the smallest k not already a name in this body — a local,
+        /// parameter, global, class member, open loop variable, or an earlier fresh name —
+        /// all compared case-insensitively. A user may spell <c>n_1</c> too; that is why the
+        /// candidate is checked rather than assumed free.
+        ///
+        /// <para>Locals, parameters and globals come from <see cref="_declaredIdentifiers"/>
+        /// (case-insensitive, filled from the same function whenever <see cref="_currentFunction"/>
+        /// is set). An active rename is always an earlier fresh name of this same body, so
+        /// <see cref="_issuedForEachNames"/> covers it.</para>
+        /// </summary>
+        private string FreshForEachVariableName(string baseName)
+        {
+            if (!ReferenceEquals(_forEachNamesOwner, _currentFunction))
+            {
+                _issuedForEachNames.Clear();
+                _forEachNamesOwner = _currentFunction;
+            }
+
+            bool Taken(string candidate) =>
+                _declaredIdentifiers.Contains(candidate)
+                || _currentClassMemberNames.Contains(candidate)
+                || _issuedForEachNames.Contains(candidate)
+                || _openForEachVariables.Contains(candidate, StringComparer.OrdinalIgnoreCase);
+
+            var trimmed = baseName.TrimStart('@');
+            for (var k = 1; ; k++)
+            {
+                var candidate = $"{trimmed}_{k}";
+                if (Taken(candidate)) continue;
+                _issuedForEachNames.Add(candidate);
+                return candidate;
             }
         }
 

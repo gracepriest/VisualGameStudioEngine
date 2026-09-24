@@ -106,6 +106,61 @@ public class AlgebraicSimplificationTests
     }
 
     /// <summary>
+    /// ⭐ BOTH ORIENTATIONS OF THE GATE, DIRECTLY ON THE PASS — <c>2 * call</c> (constant on the
+    /// LEFT) and <c>call * 2</c> (constant on the RIGHT) each write the SAME call object into
+    /// both slots of the rewrite unless gated. ADR-0001/ADR-0004 D4's fix guards each arm's own
+    /// branch with <c>IRReplicability.IsReplicable</c> on the OTHER operand (the non-constant
+    /// one) — a mutant that checks only one orientation (e.g. always tests
+    /// <c>binOp.Left</c> regardless of which side the constant is on) lets the other orientation's
+    /// call get duplicated. This test constructs the IR directly, one <c>IRCall</c> as the
+    /// non-constant operand, and runs ONLY <c>AlgebraicSimplificationPass</c> — no front end, no
+    /// CSE — so it is a probe of this one pass's gate and nothing else.
+    /// </summary>
+    [Test]
+    [TestCase(true, TestName = "TheArmIsGated_ConstantOnTheLeft_2TimesCall")]
+    [TestCase(false, TestName = "TheArmIsGated_ConstantOnTheRight_CallTimes2")]
+    public void TheArmIsGated_RegardlessOfWhichSideTheConstantIsOn(bool constantOnLeft)
+    {
+        var module = new IRModule("AlgebraicOrientationProbe");
+        var function = new IRFunction("F", IntType);
+        var entry = new BasicBlock("entry");
+
+        var call = new IRCall("t0", "Tag", IntType);
+        var two = new IRConstant(2, IntType);
+        var mul = constantOnLeft
+            ? new IRBinaryOp("t1", BinaryOpKind.Mul, two, call, IntType)
+            : new IRBinaryOp("t1", BinaryOpKind.Mul, call, two, IntType);
+        var ret = new IRReturn(mul);
+
+        entry.AddInstruction(call);
+        entry.AddInstruction(mul);
+        entry.AddInstruction(ret);
+        function.Blocks.Add(entry);
+        function.EntryBlock = entry;
+        module.Functions.Add(function);
+
+        var pipeline = new OptimizationPipeline();
+        pipeline.AddPass(new AlgebraicSimplificationPass());
+        pipeline.Run(module);
+
+        var survivingBinOps = entry.Instructions.OfType<IRBinaryOp>().ToList();
+        Assert.That(survivingBinOps, Has.Count.EqualTo(1));
+        var op = survivingBinOps[0];
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(op.Operation, Is.EqualTo(BinaryOpKind.Mul),
+                (constantOnLeft ? "`2 * Tag()`" : "`Tag() * 2`")
+                + " must stay a MULTIPLY — the non-constant operand is a call, not replicable, on "
+                + (constantOnLeft ? "the RIGHT" : "the LEFT")
+                + " of the multiply. If this is Add, the gate checked the wrong operand for this "
+                + "orientation and the call is being duplicated.");
+            Assert.That(op.Left, Is.Not.SameAs(op.Right),
+                "no instruction may hold the same call object in both operand slots");
+        });
+    }
+
+    /// <summary>
     /// ⛔ The shapes that were a <c>ReferenceError</c>. They now run, and agree with the standard
     /// pipeline — which is the property, since a pipeline-specific answer is the failure mode this
     /// whole area keeps producing.
@@ -202,6 +257,101 @@ public class AlgebraicSimplificationTests
         });
     }
 
+    /// <summary>
+    /// ⭐ ADR-0001/ADR-0004 D4's gate, at the IR level, through the FULL aggressive pipeline (not
+    /// just this one pass in isolation, the way <see cref="TheConsumerIsRePointedAtTheReplacement_NotTheDiscardedNode"/>
+    /// does) — <c>2 * Tag()</c> must stay <c>Mul(2, t0)</c>, never become <c>Add(t0, t0)</c> with
+    /// the SAME call object in both slots. Asserted structurally rather than by running the
+    /// program, because it is the shape the C# oracle's use-count materialisation depends on:
+    /// see <c>Family111MaterialisationBehaviourTests</c> for the same guarantee proved by output.
+    /// </summary>
+    [Test]
+    [TestCase("Integer", "3", TestName = "TheArmDoesNotFire_ForANonReplicableCallOperand_Integer")]
+    [TestCase("Double", "1.5", TestName = "TheArmDoesNotFire_ForANonReplicableCallOperand_Double")]
+    public void TheArmDoesNotFire_ForANonReplicableCallOperand(string type, string literal)
+    {
+        var program = $"""
+            Function Tag() As {type}
+             Console.WriteLine("tag")
+             Return {literal}
+            End Function
+
+            Sub Main()
+             Dim r As {type} = 2 * Tag()
+             Console.WriteLine(r)
+            End Sub
+            """;
+
+        var module = JsTestSupport.BuildModule(program, sourceFilePath: "prog.bas");
+        AggressivePipeline.Apply(module);
+
+        var main = module.Functions.Single(f => f.Name == "Main");
+        var binOps = main.Blocks.SelectMany(b => b.Instructions).OfType<IRBinaryOp>().ToList();
+
+        Assert.That(binOps, Has.Count.EqualTo(1),
+            "expected exactly one surviving IRBinaryOp for `2 * Tag()`; found: "
+            + string.Join(", ", binOps.Select(b => $"{b.Operation}({b.Left?.Name},{b.Right?.Name})")));
+
+        var op = binOps[0];
+        Assert.Multiple(() =>
+        {
+            Assert.That(op.Operation, Is.EqualTo(BinaryOpKind.Mul),
+                "the gate must keep `2 * Tag()` as a MULTIPLY — the operand (a call) is not "
+                + "replicable, so the 2*x -> x+x rewrite must not fire. If this is Add, the call "
+                + "is being evaluated twice (`Tag() + Tag()`), which prints \"tag\" an extra time "
+                + "on the C# oracle (ADR-0001's measured instance).");
+
+            var callOperand = (op.Left as IRCall) ?? (op.Right as IRCall);
+            Assert.That(callOperand, Is.Not.Null, "expected one operand to be the Tag() call");
+            Assert.That(op.Left, Is.Not.SameAs(op.Right),
+                "no instruction may hold the SAME call object in both operand slots — that is a "
+                + "use count of 2 on a side-effecting call, which is exactly the hazard this gate "
+                + "closes (ADR-0001 Obligations, ADR-0004 D4)");
+        });
+    }
+
+    /// <summary>
+    /// ⭐ THE POSITIVE CONTROL — the gate must not disable the rewrite wholesale. For a REPLICABLE
+    /// operand (here, a parameter — no side effect, safe to evaluate twice), `2 * x` must still
+    /// become `x + x`, exactly as <see cref="TheSurvivingArm_StillFiresAndIsCorrect"/> already
+    /// proves by VALUE; this pins the same case at the IR level, alongside the negative case
+    /// above, so the two read as one gate rather than two unrelated assertions.
+    /// </summary>
+    [Test]
+    public void TheArmStillFires_ForAReplicableParameterOperand()
+    {
+        var program = """
+            Function Double2(x As Integer) As Integer
+             Return 2 * x
+            End Function
+
+            Sub Main()
+             Console.WriteLine(Double2(6))
+            End Sub
+            """;
+
+        var module = JsTestSupport.BuildModule(program, sourceFilePath: "prog.bas");
+        AggressivePipeline.Apply(module);
+
+        var fn = module.Functions.Single(f => f.Name == "Double2");
+        var binOps = fn.Blocks.SelectMany(b => b.Instructions).OfType<IRBinaryOp>().ToList();
+
+        Assert.That(binOps, Has.Count.EqualTo(1),
+            "expected exactly one surviving IRBinaryOp for `2 * x`");
+
+        var op = binOps[0];
+        Assert.Multiple(() =>
+        {
+            Assert.That(op.Operation, Is.EqualTo(BinaryOpKind.Add),
+                "for a replicable operand (a parameter) the rewrite must still fire — the gate is "
+                + "specific to non-replicable operands, not a wholesale disabling of the arm");
+            Assert.That(op.Left, Is.SameAs(op.Right),
+                "duplicating a replicable operand object is exactly what the surviving arm does "
+                + "(both slots are the SAME IRVariable) — harmless here because re-reading a "
+                + "parameter has no side effect");
+        });
+    }
+
     /// <summary>⚠ And it really is the rewrite, not the original multiply, reaching the output.</summary>
     [Test]
     public void TheSurvivingArm_EmitsAnAdditionRatherThanAMultiply()
@@ -225,16 +375,17 @@ public class AlgebraicSimplificationTests
         });
     }
 
-    private static string Aggressive(string source)
-    {
-        var module = JsTestSupport.BuildModule(source, sourceFilePath: "prog.bas");
-
-        var pipeline = new OptimizationPipeline();
-        pipeline.AddAggressivePasses();
-        pipeline.Run(module);
-
-        return new BasicLang.Compiler.CodeGen.JavaScript.JavaScriptCodeGenerator().Generate(module);
-    }
+    /// <summary>
+    /// ⚠ Was a private copy of "build the module, <c>AddAggressivePasses</c>, run, generate JS",
+    /// identical to <c>FunctionInliningDisabledTests</c>'. Both are now
+    /// <c>JsTestSupport.CompileAggressive</c>, which goes through
+    /// <c>AggressivePipeline.Apply</c> — ONE definition of aggressive for every backend, per the
+    /// <c>ModuleResolver</c>/<c>ModuleTypeWalker</c> rule in CLAUDE.md. Those two copies were the
+    /// ONLY aggressive execution anywhere in the suite, and both were JavaScript-only. See
+    /// <c>AggressivePipeline</c>.
+    /// </summary>
+    private static string Aggressive(string source) =>
+        JsTestSupport.CompileAggressive(source);
 
     private static string RunAggressive(string source) =>
         JavaScriptExecutionTests.RunNodeScript(Aggressive(source));
