@@ -74,6 +74,10 @@ public class JsExecutionTierRosterTests
         typeof(BooleanOperatorExecutionTests),
         typeof(MemberCasingExecutionTests),
 
+        // Cross-backend (C#/C++/JS); its JS leg runs under Node via
+        // JavaScriptOptimizedExecutionTests.RunOptimized.
+        typeof(NegativeCaseLabelExecutionTests),
+
         // Runs one program under Node AND a C++ compiler, and compares both against .NET.
         typeof(InterpolatedStringExecutionTests),
     };
@@ -123,7 +127,7 @@ public class JsExecutionTierRosterTests
 
     [Test]
     public void RosterIsPinned()
-        => Assert.That(ExecutionTier, Has.Length.EqualTo(32),
+        => Assert.That(ExecutionTier, Has.Length.EqualTo(33),
             "The execution-tier roster changed. That is fine — update the number — but it must " +
             "be a deliberate edit, not a silent shrink.");
 

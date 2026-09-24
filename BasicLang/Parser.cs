@@ -3289,6 +3289,27 @@ namespace BasicLang.Compiler
         /// </summary>
         private ExpressionNode ParsePrimaryExpression()
         {
+            // Signed Case value (Case -1, Case -3.75, Case +2, Case -kMax): a prefix -/+ on a
+            // primary. Only the sign, not a full expression — `Case -1 Or 2` must still split
+            // at `Or` into two alternatives rather than parse as a bitwise Or.
+            if (Check(TokenType.Minus) || Check(TokenType.Plus))
+            {
+                int signPos = _current;
+                var op = Advance();
+                var operand = ParsePrimaryExpression();
+                if (operand == null)
+                {
+                    _current = signPos;
+                    return null;
+                }
+                return new UnaryExpressionNode(op.Line, op.Column)
+                {
+                    Operator = op.Lexeme,
+                    Operand = operand,
+                    IsPostfix = false
+                };
+            }
+
             // Parse only the primary part, not full binary expressions
             if (Check(TokenType.IntegerLiteral) || Check(TokenType.LongLiteral) ||
                 Check(TokenType.SingleLiteral) || Check(TokenType.DoubleLiteral) ||
