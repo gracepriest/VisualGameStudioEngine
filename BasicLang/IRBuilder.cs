@@ -1746,12 +1746,21 @@ namespace BasicLang.Compiler.IR
 
             foreach (var prop in node.Properties)
             {
+                // ⛔ HasGetter/HasSetter mean "DECLARES this accessor", not "has a body"
+                // (ADR-0002). An interface accessor never has a body, so the old
+                // `prop.Getter != null` answered false for every bare `Property Slot As String`,
+                // and every backend declared a property with no accessors: C# refused it
+                // outright (CS0548), and C++/MSIL declared no slot for the class to fill.
+                // ReadOnly/WriteOnly are the source of truth; an explicit (empty) Get/Set block
+                // still counts, which is what the old reading got right.
                 irInterface.Properties.Add(new IRInterfaceProperty
                 {
                     Name = prop.Name,
                     Type = InterfacePropertyType(_semanticAnalyzer.GetNodeType(prop), node.Name, prop),
-                    HasGetter = prop.Getter != null,
-                    HasSetter = prop.Setter != null
+                    IsReadOnly = prop.IsReadOnly,
+                    IsWriteOnly = prop.IsWriteOnly,
+                    HasGetter = prop.Getter != null || !prop.IsWriteOnly,
+                    HasSetter = prop.Setter != null || !prop.IsReadOnly
                 });
             }
 
