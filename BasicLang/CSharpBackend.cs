@@ -59,6 +59,16 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         // For structured control flow generation
         private HashSet<BasicBlock> _processedBlocks;
 
+        /// <summary>
+        /// The merge blocks of the Ifs being generated right now. An <c>ElseIf</c> clause is lowered
+        /// as a nested conditional (<c>ifN.elseifK.then</c> / <c>ifN.elseifK.else</c>) that branches
+        /// to the OUTER If's <c>ifN.end</c>, so its reconstruction finds the same merge block. Only
+        /// the outermost If — the first to claim the block — may emit it, after its own braces.
+        /// ⛔ MEASURED before: the inner one emitted it inside the outer Else, so every statement
+        /// after an ElseIf chain was lost whenever the first branch was taken.
+        /// </summary>
+        private readonly HashSet<BasicBlock> _pendingIfMerges = new HashSet<BasicBlock>();
+
         // Stack of loop end blocks for break detection
         private Stack<BasicBlock> _loopEndBlocks;
 
@@ -2628,6 +2638,9 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
         private void GenerateIfThenElse(string condition, BasicBlock thenBlock, BasicBlock elseBlock, BasicBlock mergeBlock)
         {
+            // An ElseIf's nested conditional shares the outer If's merge block — leave it to the owner.
+            bool ownsMerge = mergeBlock != null && _pendingIfMerges.Add(mergeBlock);
+
             WriteLine($"if ({condition})");
             WriteLine("{");
             Indent();
@@ -2653,8 +2666,12 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             Unindent();
             WriteLine("}");
 
+            if (!ownsMerge)
+                return;
+            _pendingIfMerges.Remove(mergeBlock);
+
             // Continue after merge
-            if (mergeBlock != null && !_processedBlocks.Contains(mergeBlock))
+            if (!_processedBlocks.Contains(mergeBlock))
             {
                 _processedBlocks.Add(mergeBlock);
                 EmitBlockInstructions(mergeBlock);
@@ -2665,6 +2682,8 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
         private void GenerateIfThen(string condition, BasicBlock thenBlock, BasicBlock mergeBlock)
         {
+            bool ownsMerge = mergeBlock != null && _pendingIfMerges.Add(mergeBlock);
+
             WriteLine($"if ({condition})");
             WriteLine("{");
             Indent();
@@ -2678,8 +2697,12 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             Unindent();
             WriteLine("}");
 
+            if (!ownsMerge)
+                return;
+            _pendingIfMerges.Remove(mergeBlock);
+
             // Continue after merge
-            if (mergeBlock != null && !_processedBlocks.Contains(mergeBlock))
+            if (!_processedBlocks.Contains(mergeBlock))
             {
                 _processedBlocks.Add(mergeBlock);
                 EmitBlockInstructions(mergeBlock);

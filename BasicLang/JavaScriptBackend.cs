@@ -2296,6 +2296,11 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         private void EmitConditional(IRConditionalBranch cond)
         {
             var merge = FindMergeBlock(cond.TrueTarget);
+            // ⛔ An ElseIf's nested conditional resolves to the OUTER If's end (see FindMergeBlock),
+            // which that If already owns. Emitting it here put it inside the outer `else`, so the
+            // code after an ElseIf chain was lost on the Then path — MEASURED, and a For loop whose
+            // body ended with such a chain lost its increment and never terminated.
+            if (merge != null && _pendingMerges.Contains(merge)) merge = null;
             if (merge != null) _pendingMerges.Push(merge);
 
             Line($"if ({Expr(cond.Condition)}) {{");

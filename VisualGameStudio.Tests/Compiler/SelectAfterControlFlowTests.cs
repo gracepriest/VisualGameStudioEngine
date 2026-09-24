@@ -14,9 +14,9 @@ namespace VisualGameStudio.Tests.Compiler;
 /// and each If arm followed only a conditional or plain branch, never an IRSwitch — the same gap
 /// SelectInsideTryTests found in the Try regions. Two helpers now carry one terminator dispatch.</para>
 ///
-/// <para>⚠ NOT covered, because they are separate pre-existing C# defects that fail with plain
-/// statements too (measured on master, no Select needed): code after an <c>ElseIf</c> chain is
-/// lost on the Then path, and an <c>If</c> inside a <c>Case</c> body is lost. JavaScript also fails
+/// <para>⚠ NOT covered: an <c>If</c> inside a <c>Case</c> body is lost on C# — a separate
+/// pre-existing defect that fails with plain statements too (measured on master, no Select needed).
+/// Code after an <c>ElseIf</c> chain is pinned by ElseIfChainContinuationTests. JavaScript also fails
 /// two Selects in one function ("Identifier '_sel0' has already been declared"), so each Select
 /// here lives in its own Sub.</para>
 /// </summary>
