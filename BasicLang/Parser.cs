@@ -352,6 +352,9 @@ namespace BasicLang.Compiler
                 {
                     node.Members.Add(member);
                 }
+                // Same rule as a statement in a block: `Dim G As Integer = 5 E3` must not read
+                // E3 as the start of a second declaration.
+                RequireEndOfStatement(new[] { TokenType.EndModule });
                 SkipNewlines();
             }
 
@@ -3018,6 +3021,7 @@ namespace BasicLang.Compiler
                     {
                         block.Statements.Add(statement);
                     }
+                    RequireEndOfStatement(new[] { endToken });
                 }
                 catch (ParseException ex)
                 {
@@ -3265,6 +3269,7 @@ namespace BasicLang.Compiler
                     {
                         block.Statements.Add(statement);
                     }
+                    RequireEndOfStatement(endTokens);
                 }
                 catch (ParseException ex)
                 {
@@ -4019,6 +4024,26 @@ namespace BasicLang.Compiler
         /// <summary>
         /// Check if current token terminates a statement
         /// </summary>
+        /// <summary>
+        /// After a statement in a block, the line must end: a newline, <c>:</c> (left to its
+        /// existing handling), end of file, a block terminator, or one of the block's own end
+        /// tokens. ⛔ Nothing checked this, so whatever followed a complete statement on the same
+        /// line began a SECOND statement: <c>Dim d As Integer = 5 E3</c> compiled, the stray
+        /// <c>E3</c> passing as a possible .NET type, and before exponents lexed it was how
+        /// <c>5E3</c> silently became 5.
+        /// </summary>
+        private void RequireEndOfStatement(IEnumerable<TokenType> endTokens)
+        {
+            if (IsAtEnd() || Check(TokenType.Newline) || Check(TokenType.Colon) || IsStatementTerminator()
+                || endTokens.Any(t => Check(t)))
+                return;
+
+            throw new ParseException(
+                $"Expected the end of the statement, but found '{Peek().Lexeme}'",
+                Peek(),
+                "Put each statement on its own line.");
+        }
+
         private bool IsStatementTerminator()
         {
             var t = Peek().Type;
