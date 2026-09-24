@@ -403,14 +403,15 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // `namespace BasicLang { … }` (a sibling re-open at file scope, indent 0) and its
             // std::hash specializations follow the namespace close. The bodies are
             // include-free; their std headers live in the unconditional include set above.
-            SpliceRuntimeSource(CppBclRuntime.BclBody);
-            SpliceRuntimeSource(CppDecimalRuntime.DecimalBody);
-
-            // §11.1 NetException + the BasicLang::String alias: UNCONDITIONAL in both
+            //
+            // §11.1 NetException + the BasicLang::String alias FIRST: UNCONDITIONAL in both
             // modes — the typed-catch ladder's trigger is source-level (any .NET-typed
             // Catch), not surface-level, so the declaration must always exist
-            // (split-mode counterpart: EmitRuntimeHeader in CppCodeGenerator.Split.cs).
+            // (split-mode counterpart: EmitRuntimeHeader in CppCodeGenerator.Split.cs). It
+            // precedes the BCL bodies because the Decimal runtime THROWS it (division by zero).
             SpliceRuntimeSource(CppNetExceptionRuntime.Source);
+            SpliceRuntimeSource(CppBclRuntime.BclBody);
+            SpliceRuntimeSource(CppDecimalRuntime.DecimalBody);
 
             // D-P7 NetRef (P2a-2 flip): UNCONDITIONAL in both modes — ManagedOwned
             // declaration positions lower to BasicLang::NetRef even with an empty surface,
