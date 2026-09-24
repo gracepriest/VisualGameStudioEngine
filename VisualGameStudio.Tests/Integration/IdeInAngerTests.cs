@@ -428,6 +428,12 @@ End Sub
     [Test]
     public async Task Debug_BreakpointAfterAwait_StackAndLocals_ThenCleanShutdown()
     {
+        // The .NET debug engine (NetDebugProcess) attaches through dbgshim.dll, found only in
+        // Windows Visual Studio/Rider installs (BasicLang/Debugger/DbgShim.cs). Elsewhere the
+        // adapter starts but launch fails ("A task was canceled").
+        if (!OperatingSystem.IsWindows())
+            Assert.Ignore("The .NET debug engine needs dbgshim.dll (Windows only).");
+
         using var fixture = new TempBasicLangProject();
 
         var (buildResult, buildOutput) = await BuildProjectAsync(fixture);
@@ -545,6 +551,12 @@ End Sub
         if (!File.Exists(idePath))
         {
             Assert.Ignore($"IDE executable not found at {idePath} — skipping smoke test.");
+        }
+        // The checked-in IDE\ build is a Windows executable; elsewhere it exists on disk but
+        // cannot be started (Win32Exception "Exec format error"/"Permission denied").
+        if (!OperatingSystem.IsWindows())
+        {
+            Assert.Ignore("IDE\\VisualGameStudio.exe is a Windows build — the launch smoke test runs on Windows only.");
         }
 
         var psi = new ProcessStartInfo(idePath)

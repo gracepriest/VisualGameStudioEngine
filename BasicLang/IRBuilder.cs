@@ -101,7 +101,65 @@ namespace BasicLang.Compiler.IR
 
             CanonicaliseMemberNames();
 
+            SeparateTempsFromUserNames();
+
             return _module;
+        }
+
+        /// <summary>
+        /// Renames any compiler temp whose <c>t{N}</c> name is also a USER name — a local,
+        /// parameter, global, field, property, method or function the program declares.
+        ///
+        /// <para>⛔ Temps come from <see cref="IRFunction.GetNextTempName"/> as <c>t0, t1, ...</c>,
+        /// while a store into a variable is the value itself renamed to the variable
+        /// (<see cref="TryRenameToVariable"/>). Nothing kept the two apart, so a program with a
+        /// local named <c>t1</c> gave the optimizer and the backends two unrelated values sharing
+        /// one name. MEASURED on master 883fb1d, all silent:
+        /// <c>Dim t1 = n + 1 : Dim t2 = n + 1 : Dim t3 = 6 \ 2 : Return t1 + t2 + t3</c>
+        /// returned 10 for n = 4, not 13 — CSE merged the store to t2 into t1's, constant folding
+        /// deleted the store to t3, and the C# backend emitted <c>t3 = t1 + t2</c> because the
+        /// return's temp was also called t3. With Singles, the <c>Console.WriteLine</c> call's temp
+        /// was called t4 and C# emitted <c>t4 = Console.WriteLine(...)</c>.</para>
+        ///
+        /// <para>Renaming the TEMP, never the user's name, keeps every emitted identifier the user
+        /// wrote. A program without a temp-shaped name is left exactly as it was: the reserved set
+        /// is empty and this returns before touching anything.</para>
+        /// </summary>
+        private void SeparateTempsFromUserNames()
+        {
+            var reserved = IRTempNames.UserOwned(_module);
+            if (reserved.Count == 0) return;
+
+            foreach (var fn in IRTempNames.AllFunctions(_module))
+            {
+                // Every value reachable from the body: instructions and their operand trees.
+                var values = new List<IRValue>();
+                var seen = new HashSet<IRInstruction>();
+                var pending = new Stack<IRInstruction>(fn.Blocks.SelectMany(b => b.Instructions).Reverse());
+                while (pending.Count > 0)
+                {
+                    var inst = pending.Pop();
+                    if (inst == null || !seen.Add(inst)) continue;
+                    if (inst is IRValue v) values.Add(v);
+                    foreach (var operand in CodeGen.IROperandWalker.EnumerateOperands(inst))
+                        pending.Push(operand);
+                }
+
+                var taken = new HashSet<string>(reserved, StringComparer.OrdinalIgnoreCase);
+                foreach (var v in values)
+                    if (v.Name != null) taken.Add(v.Name);
+
+                foreach (var v in values)
+                {
+                    if (v is IRVariable || v is IRConstant || v.NamedAfterVariable) continue;
+                    if (v.Name == null || !reserved.Contains(v.Name)) continue;
+
+                    string fresh;
+                    do { fresh = fn.GetNextTempName(); } while (taken.Contains(fresh));
+                    taken.Add(fresh);
+                    v.Name = fresh;
+                }
+            }
         }
 
         /// <summary>See <see cref="_sharedGlobalNames"/>.</summary>

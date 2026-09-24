@@ -56,6 +56,9 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             _usesFramework = false;
             _frameworkFunctionsUsed.Clear();
             _tempCounter = 0;
+            _userTempShapedNames = IRTempNames.UserOwned(combined);
+            foreach (var unit in unitModules ?? Array.Empty<IRModule>())
+                _userTempShapedNames.UnionWith(IRTempNames.UserOwned(unit));
             // P2a-2 Task 7a: drives the aggregate header's boundary includes (see
             // EmitNetBoundaryIncludes) — same walk as the phase-3 collector.
             DetectNetSurface(combined);

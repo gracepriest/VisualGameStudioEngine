@@ -57,6 +57,18 @@ public class RaylibTextStringTests
         return p == IntPtr.Zero ? "" : Marshal.PtrToStringAnsi(p);
     }
 
+    /// <summary>
+    /// The non-string twin of <see cref="S"/>: the first engine call in a test must go through one
+    /// of the two, so a DLL that cannot load (on Linux/macOS it never can) skips the test instead
+    /// of failing it with DllNotFoundException.
+    /// </summary>
+    private static T G<T>(Func<T> call)
+    {
+        try { return call(); }
+        catch (DllNotFoundException) { Assert.Ignore(NativeEngineSkip.DllNotFound(DLL)); throw; }
+        catch (EntryPointNotFoundException) { Assert.Ignore($"{DLL} predates text Batch 2 exports; refresh IDE\\ first."); throw; }
+    }
+
     [Test] public void ToUpper_ToLower_exact()
     {
         Assert.That(S(() => Framework_TextToUpper("aB3c")), Is.EqualTo("AB3C"));
@@ -67,7 +79,7 @@ public class RaylibTextStringTests
 
     [Test] public void Length_Equal_FindIndex()
     {
-        Assert.That(Framework_TextLength("hello"), Is.EqualTo(5u));
+        Assert.That(G(() => Framework_TextLength("hello")), Is.EqualTo(5u));
         Assert.That(Framework_TextIsEqual("abc", "abc"), Is.True);
         Assert.That(Framework_TextIsEqual("abc", "abd"), Is.False);
         Assert.That(Framework_TextFindIndex("abcbc", "bc"), Is.EqualTo(1));
@@ -75,7 +87,7 @@ public class RaylibTextStringTests
 
     [Test] public void ToInteger_ToFloat()
     {
-        Assert.That(Framework_TextToInteger("42"), Is.EqualTo(42));
+        Assert.That(G(() => Framework_TextToInteger("42")), Is.EqualTo(42));
         Assert.That(Framework_TextToFloat("3.5"), Is.EqualTo(3.5f).Within(1e-4));
     }
 
@@ -109,13 +121,13 @@ public class RaylibTextStringTests
         Assert.That(size, Is.EqualTo(1));
     }
 
-    [Test] public void GetCodepointCount_ascii() => Assert.That(Framework_GetCodepointCount("hello"), Is.EqualTo(5));
+    [Test] public void GetCodepointCount_ascii() => Assert.That(G(() => Framework_GetCodepointCount("hello")), Is.EqualTo(5));
 
     // Proves the caller-buffer LoadCodepoints + static-buffer LoadUTF8 round-trip.
     [Test] public void Codepoints_roundtrip()
     {
         var buf = new int[16];
-        var count = Framework_LoadCodepoints("hi", buf, buf.Length);
+        var count = G(() => Framework_LoadCodepoints("hi", buf, buf.Length));
         Assert.That(count, Is.EqualTo(2));
         Assert.That(buf[0], Is.EqualTo((int)'h'));
         Assert.That(buf[1], Is.EqualTo((int)'i'));
