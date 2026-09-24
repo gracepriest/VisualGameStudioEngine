@@ -406,8 +406,15 @@ public class FormStripLayoutTests
         Assert.Multiple(() =>
         {
             Assert.That(mnuFileCell.Role, Is.EqualTo(FormLayoutRole.Cell));
-            Assert.That(mnuFileCell.Bounds, Is.EqualTo(new Rect(0, 0, CellWidth("&File"), 24)),
-                "'&' counts as a written character in the schematic width rule");
+            // ⛔ Sized from the DISPLAY text ("&File" -> "File"), never the raw accelerator-marked
+            // string — FormCanvasTransform.Caption resolves an item's Text through
+            // FormAccelerator.Display before a cell is ever sized from it, so the '&' is NOT counted
+            // as a written character. Going through FormAccelerator.Display here (never a literal
+            // "File") is what stops this pin drifting from that shared rule a second time.
+            Assert.That(mnuFileCell.Bounds,
+                Is.EqualTo(new Rect(0, 0, CellWidth(FormAccelerator.Display("&File").Display), 24)),
+                "the cell is sized from the DISPLAY text FormAccelerator.Display produces, not the raw " +
+                "accelerator-marked string");
 
             Assert.That(slots, Has.Count.EqualTo(1), "the strip is the only active host — exactly one slot");
             Assert.That(slots[0].Control, Is.Null);

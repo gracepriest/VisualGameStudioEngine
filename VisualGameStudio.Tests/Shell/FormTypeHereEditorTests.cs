@@ -335,14 +335,23 @@ public class FormTypeHereEditorTests
         editor.IsActive = true;
         window.UpdateLayout();
 
+        // ⛔ Expressed through the SAME shared constant the constructor itself reads
+        // (FormCanvasTransform.MenuItemCaptionInset), never a hard-coded (2,0): the constructor sets
+        // Padding to (MenuItemCaptionInset - border, 0, 2, 0) so the overlay's typed text starts
+        // exactly where the committed MenuItem caption will draw — a literal (2,0) here would silently
+        // stop discriminating the day either number changes. `border` mirrors the constructor's own
+        // local BorderThickness (also a local value, for the same anti-drift reason).
+        const double border = 1;
+        var expectedPadding = new Thickness(FormCanvasTransform.MenuItemCaptionInset - border, 0, 2, 0);
+
         Assert.Multiple(() =>
         {
             Assert.That(Box(editor).Bounds, Is.EqualTo(slot),
                 "a window-level TextBox style more hostile than FluentTheme's own clamp must still " +
                 "lose to the constructor's local MinHeight/MinWidth values");
-            Assert.That(Box(editor).Padding, Is.EqualTo(new Thickness(2, 0)),
-                "the constructor's local Padding must beat a window-level style too, or 8px of a " +
-                "22px-tall slot is gone before a glyph is drawn");
+            Assert.That(Box(editor).Padding, Is.EqualTo(expectedPadding),
+                "the constructor's local Padding must beat a window-level style too, or the text's " +
+                "left inset drifts from the committed MenuItem caption's own inset");
         });
     }
 

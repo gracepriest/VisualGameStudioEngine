@@ -54,7 +54,15 @@ public class FormTypeHereEditor : Canvas
         // controls the same way, with attributes (also local values).
         _box.MinHeight = 0;
         _box.MinWidth = 0;
-        _box.Padding = new Thickness(2, 0);
+
+        // ⛔⛔ The text must START where the committed caption will be drawn, at the size it will be
+        // drawn at — otherwise what the user sees while typing jumps sideways (and changes size) the
+        // moment they press Enter. Both numbers come from FormCanvasTransform.SlotCaption, the one
+        // answer DrawTypeHereSlot and the item arms use; ApplyCaptionMetrics re-asks it whenever the
+        // host or the slot moves. The border is pinned locally, or a theme that thickened it would
+        // shift the text again. Local values, for the same reason as the clamp above.
+        _box.BorderThickness = new Thickness(Border);
+        ApplyCaptionMetrics();
 
         // Text is two-way with the box: the view model's Text (Task 24 binds it) is what the user
         // is typing, and clearing the box after a commit flows back out through the same binding.
@@ -130,6 +138,13 @@ public class FormTypeHereEditor : Canvas
         // Focus() unconditionally before firing BeginTypeHereCommand — so without this the CANVAS
         // holds keyboard focus while the user believes they are typing into the slot, and the next
         // Delete reaches the canvas's OnKeyDown → DeleteCommand and deletes the selected control.
+        // Where the typed text starts and how big it is depend on WHICH host (its item kind's inset)
+        // and on the slot's canvas size (the zoom) — so both re-ask, active or not.
+        if (change.Property == HostProperty || change.Property == SlotBoundsProperty)
+        {
+            ApplyCaptionMetrics();
+        }
+
         if (change.Property == IsActiveProperty
             || (change.Property == HostProperty && IsActive))
         {
@@ -160,6 +175,22 @@ public class FormTypeHereEditor : Canvas
             _box.Width = slot.Width;
             _box.Height = slot.Height;
         }
+    }
+
+    /// <summary>The box's local border thickness — part of the text's left inset.</summary>
+    private const double Border = 1;
+
+    /// <summary>
+    /// Puts the typed text where the committed caption will draw and at its size:
+    /// <see cref="FormCanvasTransform.SlotCaption(BasicLang.Forms.FormControl?, Rect)"/> for this host at this slot. The
+    /// box's left edge is the slot's, so the padding is the caption inset less the border the
+    /// template draws first (floored at zero for a zoom so small the inset is under the border).
+    /// </summary>
+    private void ApplyCaptionMetrics()
+    {
+        var (inset, fontSize) = FormCanvasTransform.SlotCaption(Host as BasicLang.Forms.FormControl, SlotBounds);
+        _box.Padding = new Thickness(Math.Max(0, inset - Border), 0, 2, 0);
+        _box.FontSize = fontSize;
     }
 
     /// <summary>

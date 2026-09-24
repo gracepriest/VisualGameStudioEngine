@@ -463,8 +463,10 @@ public sealed class FormCanvasTransform
             // type into with no way to say which one a keystroke meant.
             if (ReferenceEquals(strip, activeStrip))
             {
+                // ⚠ TypeHereSlotHeight(strip) IS band.Height (the strip's DefaultHeight) — asked of the
+                // one function because the overlay recovers the zoom from this very height.
                 yield return new FormLayoutEntry(
-                    null, new Rect(x, band.Y, TypeHereWidth, band.Height), FormLayoutRole.TypeHere, strip);
+                    null, new Rect(x, band.Y, TypeHereWidth, TypeHereSlotHeight(strip)), FormLayoutRole.TypeHere, strip);
             }
         }
 
@@ -507,7 +509,7 @@ public sealed class FormCanvasTransform
             // A dropdown's slot is as wide as the dropdown, never the Type Here caption's own
             // width: it is the next ROW of that menu, and a narrower one would tear the edge.
             yield return new FormLayoutEntry(
-                null, new Rect(origin.X, y, width, ItemRowHeight), FormLayoutRole.TypeHere, host);
+                null, new Rect(origin.X, y, width, TypeHereSlotHeight(host)), FormLayoutRole.TypeHere, host);
         }
     }
 
@@ -545,12 +547,98 @@ public sealed class FormCanvasTransform
     private static readonly double TypeHereWidth = CellWidth(TypeHereCaption);
 
     /// <summary>
+    /// The size every caption on the canvas is drawn at, in canvas pixels — and therefore the size
+    /// the Type Here overlay's TextBox must type at, or what the user sees while typing is not what
+    /// lands once committed. <c>FormCanvasControl.Text</c>, its slot caption and
+    /// <c>FormTypeHereEditor</c> all read this one constant.
+    /// </summary>
+    public const double CaptionFontSize = 12;
+
+    /// <summary>
+    /// How far right of its cell's left edge a MENU ITEM's caption is drawn, in canvas pixels —
+    /// the <c>FormSchematic.MenuItem</c> arm's inset. The Type Here slot draws its placeholder here
+    /// and the overlay editor starts its text here, so the word the user types sits exactly where
+    /// the committed item will draw it.
+    /// </summary>
+    public const double MenuItemCaptionInset = 8;
+
+    /// <summary>A ToolButton's raised box is inset this far into its cell on every side, at 1:1.</summary>
+    public const double ToolButtonBoxInset = 2;
+
+    /// <summary>A ToolButton's caption sits this far right of its BOX's left edge, at 1:1.</summary>
+    public const double ToolButtonCaptionOffset = 4;
+
+    /// <summary>A StatusLabel's caption inset, right of the panel divider, at 1:1.</summary>
+    public const double StatusLabelCaptionInset = 4;
+
+    /// <summary>
+    /// ⛔⛔ The ONE per-kind answer to "how far right of its cell's left edge does an ITEM's caption
+    /// start", at 1:1 — multiply by the zoom for canvas pixels. Read by <c>DrawSchematic</c>'s
+    /// MenuItem / ToolButton / StatusLabel arms, by <c>DrawTypeHereSlot</c> (the placeholder sits
+    /// where the host's next item will write) and by <see cref="FormTypeHereEditor"/> (the typed
+    /// text starts there too). A second spelling of 8/6/4 in any one of them is the "overlay is not
+    /// in line with where the text will go" defect.
+    ///
+    /// <para>Keyed on the SCHEMATIC, which the catalog row chooses — never on a kind name. Anything
+    /// that is not one of the three item captions answers with the menu item's inset.</para>
+    /// </summary>
+    public static double ItemCaptionInset(FormSchematic schematic) => schematic switch
+    {
+        FormSchematic.ToolButton => ToolButtonBoxInset + ToolButtonCaptionOffset,
+        FormSchematic.StatusLabel => StatusLabelCaptionInset,
+        _ => MenuItemCaptionInset
+    };
+
+    /// <summary>
+    /// The kind a Type Here commit creates in <paramref name="host"/> — the host's default item kind
+    /// (<c>Items.Kinds[0]</c>) — or null for a host that holds no items. <c>CommitTypeHere</c> places
+    /// this kind and the slot/overlay align to its caption, so they are asked of ONE function.
+    /// </summary>
+    public static string? TypeHereItemKind(FormControl? host) =>
+        host?.Definition?.Items is { Kinds.Count: > 0 } rule ? rule.Kinds[0] : null;
+
+    /// <summary>
+    /// The height a Type Here slot on <paramref name="host"/> is laid out at, in FORM units: a
+    /// strip's band height, or one dropdown row. <see cref="Bands"/> lays the slot out with this, and
+    /// <see cref="SlotCaption(FormControl?, Rect)"/> recovers the zoom from it.
+    /// </summary>
+    public static double TypeHereSlotHeight(FormControl host) =>
+        host.Definition?.Place == FormPlace.Docked ? host.Definition.DefaultHeight : ItemRowHeight;
+
+    /// <summary>
+    /// Where the caption of a Type Here slot — and the text typed into it, and the item it will
+    /// commit to — starts, and at what size, for a slot on <paramref name="host"/> drawn at
+    /// <paramref name="zoom"/>. Canvas pixels.
+    /// </summary>
+    public static (double Inset, double FontSize) SlotCaption(FormControl? host, double zoom)
+    {
+        var kind = TypeHereItemKind(host);
+        var schematic = kind == null
+            ? FormSchematic.MenuItem
+            : FormControlCatalog.Find(kind)?.Schematic ?? FormSchematic.MenuItem;
+        return (ItemCaptionInset(schematic) * zoom, CaptionFontSize * zoom);
+    }
+
+    /// <summary>
+    /// <see cref="SlotCaption(FormControl?, double)"/> for a slot the overlay only knows by its canvas
+    /// rectangle. The zoom is recovered from the slot's height, which <see cref="Bands"/> lays out
+    /// as <see cref="TypeHereSlotHeight"/> × zoom — so the overlay needs no second binding to the
+    /// canvas's zoom, and cannot hold a stale one. No host, or an empty rectangle, answers at 1:1.
+    /// </summary>
+    public static (double Inset, double FontSize) SlotCaption(FormControl? host, Rect slotCanvasBounds)
+    {
+        var zoom = host != null && slotCanvasBounds.Height > 0
+            ? slotCanvasBounds.Height / TypeHereSlotHeight(host)
+            : 1.0;
+        return SlotCaption(host, zoom);
+    }
+
+    /// <summary>
     /// The schematic width of a caption: padding, 7 units a character, padding.
     ///
-    /// <para>⚠ <c>&amp;</c> is counted as a written character rather than stripped as an
-    /// accelerator marker. The designer shows what the document SAYS — a user who typed
-    /// <c>&amp;File</c> sees <c>&amp;File</c> — and the two rules differ by 7 units, which is a
-    /// visible misalignment of the slot at the end of the bar.</para>
+    /// <para>⛔ Sized from the DISPLAY text (<see cref="Caption"/>), never the raw <c>Text</c>: the
+    /// canvas draws <c>&amp;File</c> as <c>File</c> with the F underlined, exactly as the running
+    /// form does, so counting the mark would leave a 7-unit gap after every accelerated item.</para>
     /// </summary>
     private static double CellWidth(string caption) => CellPadding + (CharWidth * caption.Length) + CellPadding;
 
@@ -569,13 +657,29 @@ public sealed class FormCanvasTransform
     /// </summary>
     private static bool IsSeparator(FormControl item) => item.Definition?.Schematic == FormSchematic.Separator;
 
+    /// <summary>What a cell is sized from: the caption the canvas will actually draw.</summary>
+    private static string CaptionOf(FormControl item) => Caption(item).Display;
+
     /// <summary>
-    /// What a cell is labelled with — the same rule the canvas draws by (<c>DrawControl</c>): the
-    /// control's own non-empty <c>Text</c>, else its id, because an unlabelled box on a schematic
-    /// is unidentifiable.
+    /// ⛔⛔ The ONE answer to "what caption does the canvas draw for this control, and which
+    /// character is underlined" — asked by the layout (a cell's width) AND by
+    /// <c>FormCanvasControl.DrawControl</c> (the text handed to <c>DrawText</c>). Two copies of it
+    /// is how a cell gets sized for one string while another is drawn in it.
+    ///
+    /// <para>The control's own non-empty <c>Text</c>, else its id — an unlabelled box on a schematic
+    /// is unidentifiable. An ITEM's text is then resolved through
+    /// <see cref="FormAccelerator.Display"/>, the rule the web emitter applies too.</para>
+    ///
+    /// <para>⚠ Items ONLY. A WinForms Button, Label, CheckBox… also honour <c>&amp;</c>
+    /// (<c>UseMnemonic</c>), but those captions are pinned by the schematic and render gates, and
+    /// the web emitter does not strip them either — widening this is its own change, made in both
+    /// places at once.</para>
     /// </summary>
-    private static string CaptionOf(FormControl item) =>
-        item.Properties.TryGetValue("Text", out var text) && !string.IsNullOrEmpty(text) ? text : item.Id;
+    public static (string Display, int UnderlineIndex) Caption(FormControl control)
+    {
+        var text = control.Properties.TryGetValue("Text", out var t) && !string.IsNullOrEmpty(t) ? t : control.Id;
+        return control.Definition?.Place == FormPlace.Item ? FormAccelerator.Display(text) : (text, -1);
+    }
 
     /// <summary>As wide as its widest item, floored at <see cref="MinDropdownWidth"/>.</summary>
     private static double DropdownWidth(FormControl host) =>

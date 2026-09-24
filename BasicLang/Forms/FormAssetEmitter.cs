@@ -221,12 +221,13 @@ public static class FormAssetEmitter
 
         // ⛔ An item's caption carries a WinForms ACCELERATOR mark: "&File" means File with F
         // underlined, and "&&" is a literal ampersand. The generic escaper turns both into
-        // "&amp;" — "&amp;File" reaches the page as the visible text "&File". One regex, never two
-        // Replace calls: stripping "&" first would turn "&&" into "" instead of "&".
-        // The same rule, spelt the same way, produces an item's id in FormPlacement.ItemId.
+        // "&amp;" — "&amp;File" reaches the page as the visible text "&File". ⛔ FormAccelerator is
+        // the ONE rule — the designer canvas draws the same display text, and FormPlacement.ItemId
+        // derives an item's id from it. A private copy here is how the page and the designer came
+        // to disagree about what "&Open" looks like.
         if (text != null && definition.Place == FormPlace.Item)
         {
-            text = System.Text.RegularExpressions.Regex.Replace(text, "&(&?)", "$1");
+            text = FormAccelerator.Display(text).Display;
         }
 
         // ⛔ A <select> takes <option> children and NOTHING else. Its Text was being written as a

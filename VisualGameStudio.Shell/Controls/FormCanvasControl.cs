@@ -1222,7 +1222,7 @@ public class FormCanvasControl : Control
             // that is already probe-only, rather than beside the DrawText call — so the live draw
             // path below stays free of it.
             _probeResult = new SchematicProbeResult(DrawSchematic(
-                context, probe.Schematic, probe.Bounds, probe.Label, SurfaceBrush, WindowBrush, LabelBrush));
+                context, probe.Schematic, probe.Bounds, probe.Label, SurfaceBrush, WindowBrush, LabelBrush)?.Origin);
             return;
         }
 
@@ -1266,7 +1266,8 @@ public class FormCanvasControl : Control
                     editedSlot = bounds;
                 }
 
-                DrawTypeHereSlot(context, bounds, edited);
+                var slotCaption = DrawTypeHereSlot(context, bounds, edited, entry.Host, _transform.Zoom);
+                _captionLog?.Add(new CaptionRecord(null, entry.Host, bounds, FormCanvasTransform.TypeHereCaption, slotCaption));
                 continue;
             }
 
@@ -1281,7 +1282,8 @@ public class FormCanvasControl : Control
             // where "&File" should be. Same catalog lookup, one copy of it.
             if (entry.Control != null)
             {
-                DrawControl(context, entry.Control, bounds);
+                var drawn = DrawControl(context, entry.Control, bounds);
+                _captionLog?.Add(new CaptionRecord(entry.Control, null, bounds, CaptionForTest(entry.Control), drawn));
             }
         }
 
@@ -1602,7 +1604,7 @@ public class FormCanvasControl : Control
     /// and this repo has been bitten by exactly that: it falls to its default the day a row is
     /// added, and the symptom is a new control that silently draws as a plain box.</para>
     /// </summary>
-    private void DrawControl(DrawingContext context, FormControl control, Rect bounds)
+    private CaptionDraw? DrawControl(DrawingContext context, FormControl control, Rect bounds)
     {
         // ⚠ No selected/unselected variant here, deliberately. VB6 marks a selection with its eight
         // handles and NOTHING else — a control does not change colour or gain an outline when you
@@ -1618,16 +1620,51 @@ public class FormCanvasControl : Control
         var ink = ControlColour(control, "ForeColor") ?? LabelBrush;
 
         // The control's own Text if it has one, else its id — a box with no label is unidentifiable
-        // on a schematic, which is the one thing the canvas has to get right.
-        var label = control.Properties.TryGetValue("Text", out var text) && !string.IsNullOrEmpty(text)
-            ? text
-            : control.Id;
+        // on a schematic, which is the one thing the canvas has to get right. ⛔ The SAME answer the
+        // layout sized this control's cell from (FormCanvasTransform.Caption): an item's accelerator
+        // is resolved, so "&Open" draws as "Open" with the O underlined, as the running form does.
+        var (label, underline) = FormCanvasTransform.Caption(control);
 
-        // ⚠ The caption origin is DISCARDED here, deliberately. It exists for the probe seam alone
-        // (see DrawSchematic's <returns>); the live canvas has no use for it, and this discard is
-        // what keeps the reporting out of the per-control, per-render path.
-        _ = DrawSchematic(context, schematic, bounds, label, face, client, ink);
+        // ⚠ What was drawn is RETURNED, never stored here: the live canvas discards it, and only
+        // Render's test-only caption log (null on every real canvas) records it — see
+        // RenderDocumentForTest.
+        return DrawSchematic(context, schematic, bounds, label, face, client, ink, underline);
     }
+
+    /// <summary>
+    /// TEST SEAM (form-designer menu-editor defects): the exact string <see cref="DrawControl"/>
+    /// hands to <c>DrawSchematic</c> — i.e. the caption that actually reaches <c>DrawText</c>. It is
+    /// <see cref="FormCanvasTransform.Caption"/>, the one rule DrawControl and the layout both call,
+    /// so the seam cannot drift from the draw path. Public only because the Shell grants no
+    /// <c>InternalsVisibleTo</c> to the test project.
+    /// </summary>
+    public static string CaptionForTest(FormControl control) => FormCanvasTransform.Caption(control).Display;
+
+    /// <summary>
+    /// TEST SEAM (menu-editor defects, zoom-scaling correction): measures a caption the way the
+    /// canvas is meant to draw one under the DECIDED design — same typeface, same
+    /// <see cref="FormCanvasTransform.CaptionFontSize"/>, scaled by <paramref name="zoom"/>. Exposed
+    /// so a clipping test can compare a real Avalonia-measured width against a cell's (zoom-scaled)
+    /// layout width without duplicating the font settings.
+    ///
+    /// <para>⚠ <paramref name="zoom"/> defaults to 1.0, so every existing caller is
+    /// behaviour-identical to the old, zoom-less overload — this is purely additive.</para>
+    ///
+    /// <para>⛔ This seam does NOT itself fix the live drawing bug: <see cref="Text(string, IBrush)"/>
+    /// — the helper <see cref="DrawSchematic"/> and <see cref="DrawTypeHereSlot"/> actually call — is
+    /// still FIXED at <see cref="FormCanvasTransform.CaptionFontSize"/> regardless of zoom. A test
+    /// using this seam therefore checks whether the DESIGN is self-consistent (a caption that fits at
+    /// zoom 1:1 keeps fitting once both the font and the cell are scaled by the same zoom), not
+    /// whether the live render path has been updated to apply that scaling yet — that update is a
+    /// production change out of this pass's scope.</para>
+    /// </summary>
+    public static FormattedText MeasureCaptionForTest(string text, double zoom = 1.0) => new(
+        text,
+        CultureInfo.CurrentCulture,
+        FlowDirection.LeftToRight,
+        new Typeface(FontFamily.Default),
+        FormCanvasTransform.CaptionFontSize * zoom,
+        Brushes.Black);
 
     /// <summary>
     /// The empty cell at the end of a strip's or a dropdown's items — VS's "Type Here".
@@ -1648,7 +1685,8 @@ public class FormCanvasControl : Control
     /// selection-coloured border, because the overlay TextBox is positioned exactly on it and the
     /// user needs to see WHERE the thing they are typing into is before it appears.</para>
     /// </summary>
-    private static void DrawTypeHereSlot(DrawingContext context, Rect bounds, bool active)
+    private static CaptionDraw? DrawTypeHereSlot(
+        DrawingContext context, Rect bounds, bool active, FormControl? host, double zoom)
     {
         context.FillRectangle(active ? WindowBrush : SurfaceBrush, bounds);
         context.DrawRectangle(null, active ? ActiveSlotPen : SlotPen, bounds);
@@ -1656,19 +1694,25 @@ public class FormCanvasControl : Control
         // The same floor DrawSchematic uses: below it a caption is a smear rather than a word.
         if (bounds.Width < 12 || bounds.Height < 10)
         {
-            return;
+            return null;
         }
 
-        var caption = SlotText();
+        // ⛔ At the inset and size of the item this slot will COMMIT to (FormCanvasTransform.
+        // SlotCaption — the host's default item kind's caption inset, scaled by the zoom like the
+        // cell is). The overlay editor asks the same function, so the placeholder, the typed text
+        // and the committed caption all start at one x. Clipped to the slot, like every caption.
+        var (inset, fontSize) = FormCanvasTransform.SlotCaption(host, zoom);
+        var caption = SlotText(fontSize);
+        var origin = new Point(
+            bounds.X + inset,
+            bounds.Y + Math.Max(2 * zoom, (bounds.Height - caption.Height) / 2));
 
-        // ⚠ Clipped to the slot, like every other caption on this canvas. Text is drawn at a fixed
-        // 12px whatever the zoom, so at a fitted zoom below 1:1 the caption is wider than the box
-        // the layout sized for it and would otherwise run over the cell beside it.
         using (context.PushClip(bounds))
         {
-            context.DrawText(caption, new Point(
-                bounds.X + 4, bounds.Y + Math.Max(2, (bounds.Height - caption.Height) / 2)));
+            context.DrawText(caption, origin);
         }
+
+        return new CaptionDraw(origin, caption.Width, caption.Height, fontSize);
     }
 
     /// <summary>
@@ -1719,19 +1763,29 @@ public class FormCanvasControl : Control
     /// with measured text (<c>Button</c> and <c>StatusLabel</c> centre against <c>caption.Width</c>
     /// and <c>caption.Height</c>), so there is no separable pure function here anyway.</para>
     /// </returns>
-    private Point? DrawSchematic(
+    private CaptionDraw? DrawSchematic(
         DrawingContext context,
         FormSchematic schematic,
         Rect bounds,
         string label,
         IBrush face,
         IBrush client,
-        IBrush ink)
+        IBrush ink,
+        int underline = -1)
     {
         // Where the label goes once the shape has had its say: indented past a tick or a bullet,
         // centred in a button, at the top-left of everything else.
         var labelOrigin = new Point(bounds.X + 4, bounds.Y + 2);
         var tooSmallForText = bounds.Width < 12 || bounds.Height < 10;
+
+        // ⛔⛔ An ITEM's caption scales with the zoom — font size AND inset — because its cell does:
+        // the cell is laid out in form units from the caption and scaled by the zoom, so a caption
+        // drawn at a fixed 12px outgrew it below 1:1 (the owner's "&Ope"). Scaling both sides by the
+        // same zoom means a caption that fits at 1:1 fits at every zoom. The three item arms set
+        // captionSize; every other arm keeps the fixed size (a positioned control's caption is not
+        // part of this fix — see the report). The probe renders with the default transform, zoom 1.
+        var zoom = _transform.Zoom;
+        var captionSize = FormCanvasTransform.CaptionFontSize;
 
         switch (schematic)
         {
@@ -2276,7 +2330,10 @@ public class FormCanvasControl : Control
                 // ⚠ NOT "the caption with a 2px pad and no box" — that is the Label arm shifted two
                 // pixels, and the pairwise pin refuses it. The filled cell is the difference.
                 context.FillRectangle(client, bounds);
-                labelOrigin = new Point(bounds.X + 8, bounds.Y + 2);
+                captionSize = FormCanvasTransform.CaptionFontSize * zoom;
+                labelOrigin = new Point(
+                    bounds.X + (FormCanvasTransform.ItemCaptionInset(FormSchematic.MenuItem) * zoom),
+                    bounds.Y + (2 * zoom));
                 break;
 
             case FormSchematic.Separator:
@@ -2301,12 +2358,16 @@ public class FormCanvasControl : Control
             {
                 // A small raised box INSET in its cell, caption at its left. ⚠ Inset and left, both
                 // load-bearing: a full-bounds raised box with a centred caption IS the Button arm.
+                var boxInset = FormCanvasTransform.ToolButtonBoxInset * zoom;
                 var box = new Rect(
-                    bounds.X + 2, bounds.Y + 2,
-                    Math.Max(4, bounds.Width - 4), Math.Max(4, bounds.Height - 4));
+                    bounds.X + boxInset, bounds.Y + boxInset,
+                    Math.Max(4, bounds.Width - (2 * boxInset)), Math.Max(4, bounds.Height - (2 * boxInset)));
                 context.FillRectangle(face, box);
                 Bevel(context, box, raised: true);
-                labelOrigin = new Point(box.X + 4, box.Y + 3);
+                captionSize = FormCanvasTransform.CaptionFontSize * zoom;
+                labelOrigin = new Point(
+                    bounds.X + (FormCanvasTransform.ItemCaptionInset(FormSchematic.ToolButton) * zoom),
+                    box.Y + (3 * zoom));
                 break;
             }
 
@@ -2319,11 +2380,13 @@ public class FormCanvasControl : Control
                 context.DrawLine(new Pen(ink, 1),
                     new Point(bounds.X, bounds.Y + 2), new Point(bounds.X, bounds.Bottom - 2));
 
+                captionSize = FormCanvasTransform.CaptionFontSize * zoom;
                 if (!tooSmallForText && !string.IsNullOrEmpty(label))
                 {
-                    var caption = Text(label, ink);
+                    var caption = Text(label, ink, captionSize);
                     labelOrigin = new Point(
-                        bounds.X + 4, bounds.Y + Math.Max(2, (bounds.Height - caption.Height) / 2));
+                        bounds.X + (FormCanvasTransform.ItemCaptionInset(FormSchematic.StatusLabel) * zoom),
+                        bounds.Y + Math.Max(2 * zoom, (bounds.Height - caption.Height) / 2));
                 }
 
                 break;
@@ -2341,15 +2404,76 @@ public class FormCanvasControl : Control
             return null;
         }
 
-        using (context.PushClip(bounds))
+        // ⛔ The mnemonic underline is a decoration ON the formatted text, not a line drawn at a
+        // computed x: the shaper decides where that glyph starts, so this lands under the right
+        // character in any font, and moves with it wherever an arm put the caption.
+        var fontSize = captionSize;
+        var formatted = Text(label, ink, fontSize);
+        if (underline >= 0 && underline < label.Length)
         {
-            context.DrawText(Text(label, ink), labelOrigin);
+            formatted.SetTextDecorations(TextDecorations.Underline, underline, 1);
         }
 
-        // ⚠ Reported AFTER the draw, and it is the very value the draw above consumed — not a
-        // recomputation. Anything else could agree with the test while disagreeing with the pixels,
-        // which is the whole failure this return value exists to make impossible.
-        return labelOrigin;
+        using (context.PushClip(bounds))
+        {
+            context.DrawText(formatted, labelOrigin);
+        }
+
+        // ⚠ Reported AFTER the draw, and every field is the very value the draw above consumed —
+        // not a recomputation. Anything else could agree with the test while disagreeing with the
+        // pixels, which is the whole failure this return value exists to make impossible.
+        return new CaptionDraw(labelOrigin, formatted.Width, formatted.Height, fontSize);
+    }
+
+    /// <summary>
+    /// What one caption draw actually did: where, how big the shaped text was, and the font size it
+    /// was shaped at. Returned by <see cref="DrawSchematic"/> and <see cref="DrawTypeHereSlot"/>;
+    /// discarded by the live canvas and recorded only by the test-only caption log.
+    /// </summary>
+    public sealed record CaptionDraw(Point Origin, double Width, double Height, double FontSize);
+
+    /// <summary>One caption the LIVE document render drew — see <see cref="RenderDocumentForTest"/>.</summary>
+    /// <param name="Control">The control whose caption this is; null for a Type Here slot.</param>
+    /// <param name="SlotHost">The slot's host; null for a control.</param>
+    /// <param name="Bounds">The canvas rectangle the caption was drawn in.</param>
+    /// <param name="Label">The caption text.</param>
+    /// <param name="Drawn">What was drawn, or null when this render drew no caption there.</param>
+    public sealed record CaptionRecord(
+        FormControl? Control, FormControl? SlotHost, Rect Bounds, string Label, CaptionDraw? Drawn);
+
+    /// <summary>The result of <see cref="RenderDocumentForTest"/>.</summary>
+    public sealed record DocumentCaptions(double Zoom, IReadOnlyList<CaptionRecord> Captions);
+
+    /// <summary>
+    /// Null on every real canvas. Set only by <see cref="RenderDocumentForTest"/>, for the one
+    /// render it drives — so the live path pays a null check per control and records nothing.
+    /// </summary>
+    private List<CaptionRecord>? _captionLog;
+
+    /// <summary>
+    /// TEST SEAM: renders a DOCUMENT through the real <see cref="Render"/> — Fit, Layout, DrawControl,
+    /// DrawTypeHereSlot — at <paramref name="viewport"/>, and reports every caption it drew, as drawn.
+    ///
+    /// <para>⛔ Exists because the clipping tests measure through <see cref="MeasureCaptionForTest"/>,
+    /// which is NOT the draw path: a draw that ignored the zoom left them green. This reports the
+    /// font size and extent the live render actually shaped, so a fixed-size draw is visible.</para>
+    /// </summary>
+    public static DocumentCaptions RenderDocumentForTest(
+        FormDocument document, FormControl? selected, FormControl? typeHereHost, Size viewport)
+    {
+        var canvas = new FormCanvasControl
+        {
+            Document = document, SelectedControl = selected, TypeHereHost = typeHereHost
+        };
+        canvas._captionLog = new List<CaptionRecord>();
+        canvas.Measure(viewport);
+        canvas.Arrange(new Rect(viewport));
+
+        using var bitmap = new RenderTargetBitmap(
+            new PixelSize((int)Math.Ceiling(viewport.Width), (int)Math.Ceiling(viewport.Height)), new Vector(96, 96));
+        bitmap.Render(canvas);
+
+        return new DocumentCaptions(canvas._transform.Zoom, canvas._captionLog);
     }
 
     /// <summary>The one shape a probing canvas draws — see <see cref="RenderSchematicForTest"/>.</summary>
@@ -2477,12 +2601,15 @@ public class FormCanvasControl : Control
         }
     }
 
-    private static FormattedText Text(string text, IBrush brush) => new(
+    private static FormattedText Text(string text, IBrush brush) =>
+        Text(text, brush, FormCanvasTransform.CaptionFontSize);
+
+    private static FormattedText Text(string text, IBrush brush, double size) => new(
         text,
         CultureInfo.CurrentCulture,
         FlowDirection.LeftToRight,
         new Typeface(FontFamily.Default),
-        12,
+        size,
         brush);
 
     /// <summary>
@@ -2491,12 +2618,12 @@ public class FormCanvasControl : Control
     /// the document contains, and drawing it in the same ink as a real menu item would claim the
     /// form has an item called "Type Here".
     /// </summary>
-    private static FormattedText SlotText() => new(
+    private static FormattedText SlotText(double size) => new(
         FormCanvasTransform.TypeHereCaption,
         CultureInfo.CurrentCulture,
         FlowDirection.LeftToRight,
         new Typeface(FontFamily.Default, FontStyle.Italic),
-        12,
+        size,
         SlotInkBrush);
 
     // ── The classic Win95/98 system palette, which is what a VB6 form designer IS ────────────

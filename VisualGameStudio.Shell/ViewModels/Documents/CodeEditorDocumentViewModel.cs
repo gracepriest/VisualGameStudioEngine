@@ -366,7 +366,11 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
         }
 
         var typed = text.Trim();
-        var kind = typed == "-" ? "ToolStripSeparator" : rule.Kinds[0];
+        // ⛔ The SAME answer the slot and the overlay align their caption to — FormCanvasTransform.
+        // TypeHereItemKind — so the text is typed where the item it becomes will draw it.
+        var kind = typed == "-"
+            ? "ToolStripSeparator"
+            : VisualGameStudio.Shell.Controls.FormCanvasTransform.TypeHereItemKind(host) ?? rule.Kinds[0];
         var result = ViewModels.Designer.FormPlacement.PlaceItem(file.Model, host, kind, typed);
         if (result.Control == null)
         {

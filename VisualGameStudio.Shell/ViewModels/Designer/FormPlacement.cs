@@ -256,11 +256,9 @@ public static class FormPlacement
 
         var kindPart = char.ToLowerInvariant(definition.Kind[0]) + definition.Kind[1..];
 
-        // ⛔ `&&` is a LITERAL ampersand in a WinForms caption and a lone `&` is the accelerator mark:
-        // ONE regex, never String.Replace with an empty pattern (which throws), and never two Replace
-        // calls (stripping "&" first turns "&&" into "" rather than "&"). This is the same rule,
-        // spelt the same way, as FormAssetEmitter's accelerator stripping — change them together.
-        var plain = System.Text.RegularExpressions.Regex.Replace(text ?? "", "&(&?)", "$1");
+        // ⛔ `&&` is a LITERAL ampersand in a WinForms caption and a lone `&` is the accelerator mark.
+        // FormAccelerator is the ONE rule — the web emitter and the designer canvas call it too.
+        var plain = FormAccelerator.Display(text ?? "").Display;
         var words = new string(plain.Where(c => char.IsLetterOrDigit(c) || c == ' ').ToArray())
             .Split(' ', StringSplitOptions.RemoveEmptyEntries);
         var caption = string.Concat(words.Select((w, i) =>
