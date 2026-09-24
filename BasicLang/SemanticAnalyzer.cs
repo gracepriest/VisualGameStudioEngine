@@ -6095,9 +6095,18 @@ namespace BasicLang.Compiler.SemanticAnalysis
             else
             {
                 node.Value.Accept(this);
+                // Same two rules as a Dim initializer (see Visit(VariableDeclarationNode)), which
+                // this site used to skip: `Const X As Single = 2.5` and `Const D As Decimal = 2.5`
+                // were rejected ("Constant value type 'Double' is not compatible with declared type
+                // 'Single'") while `Dim x As Single = 2.5` compiled — so a Single constant needed
+                // an F suffix that no Dim did. Spec 6.1 makes the initializer a Decimal context,
+                // and a numeric literal may initialise any numeric type (VB constant conversion);
+                // CheckConstantFitsNumericTarget below still rejects a value that does not fit.
+                TryRetypeLiteralToDecimal(node.Value, constType);
                 var valueType = GetNodeType(node.Value);
 
-                if (!constType.IsAssignableFrom(valueType))
+                if (!constType.IsAssignableFrom(valueType)
+                    && !IsNumericLiteralAssignable(node.Value, constType, valueType))
                 {
                     Error($"Constant value type '{valueType}' is not compatible with declared type '{constType}'",
                           node.Line, node.Column);
