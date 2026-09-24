@@ -47,6 +47,15 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         // Use counts help decide whether to emit calls as statements or inline them into expressions
         private readonly Dictionary<IRValue, int> _useCounts;
 
+        /// <summary>
+        /// ADR-0001's declared-local temps for the function being emitted: values used more than
+        /// once whose definition is not replicable. See <see cref="ComputeMaterialisedTemps"/>.
+        /// </summary>
+        private readonly HashSet<IRValue> _materialised = new HashSet<IRValue>();
+
+        /// <summary>The materialised values whose DEFINING text is being written right now.</summary>
+        private readonly HashSet<IRValue> _emittingDefinition = new HashSet<IRValue>();
+
         // For structured control flow generation
         private HashSet<BasicBlock> _processedBlocks;
 
@@ -724,21 +733,8 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                     _loopEndBlocks = new Stack<BasicBlock>();
                     ResetLoopExitState();
 
-                    // Declare locals
-                    var declared = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                    foreach (var localVar in method.DefaultImplementation.LocalVariables)
-                    {
-                        var varName = GetValueName(localVar);
-                        if (declared.Add(varName))
-                        {
-                            var csharpType = MapType(localVar.Type);
-                            var defaultValue = GetDefaultValue(localVar.Type);
-                            WriteLine($"{csharpType} {varName} = {defaultValue};");
-                        }
-                    }
-
-                    if (method.DefaultImplementation.LocalVariables.Count > 0)
-                        WriteLine();
+                    // Declare locals — and any temp materialised under ADR-0001 (see DeclareLocals)
+                    DeclareLocals(method.DefaultImplementation, sizedArrays: false);
 
                     if (method.DefaultImplementation.EntryBlock != null)
                         GenerateStructuredBlock(method.DefaultImplementation.EntryBlock);
@@ -1163,21 +1159,8 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 _loopEndBlocks = new Stack<BasicBlock>();
                 ResetLoopExitState();
 
-                // Declare locals (same as GenerateMethod)
-                var declared = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                foreach (var localVar in ctor.Implementation.LocalVariables)
-                {
-                    var varName = GetValueName(localVar);
-                    if (declared.Add(varName))
-                    {
-                        var csharpType = MapType(localVar.Type);
-                        var defaultValue = GetDefaultValue(localVar.Type);
-                        WriteLine($"{csharpType} {varName} = {defaultValue};");
-                    }
-                }
-
-                if (ctor.Implementation.LocalVariables.Count > 0)
-                    WriteLine();
+                // Declare locals — and any temp materialised under ADR-0001 (see DeclareLocals)
+                DeclareLocals(ctor.Implementation, sizedArrays: false);
 
                 GenerateStructuredBlock(ctor.Implementation.EntryBlock);
                 _currentFunction = null;
@@ -1247,6 +1230,9 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 Indent();
                 _currentFunction = prop.Getter;
                 InitializeFunctionContext(prop.Getter);
+                // ⛔ An accessor declared NO locals at all: a Get whose whole body was
+                // `Dim sum As Integer = 5` / `Return sum + 1` was CS0103 on `sum`, loop or not.
+                DeclareLocals(prop.Getter, sizedArrays: false);
                 _processedBlocks = new HashSet<BasicBlock>();
                 _loopEndBlocks = new Stack<BasicBlock>();
                 ResetLoopExitState();
@@ -1265,6 +1251,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 Indent();
                 _currentFunction = prop.Setter;
                 InitializeFunctionContext(prop.Setter);
+                DeclareLocals(prop.Setter, sizedArrays: false);
                 _processedBlocks = new HashSet<BasicBlock>();
                 _loopEndBlocks = new Stack<BasicBlock>();
                 ResetLoopExitState();
@@ -1396,21 +1383,8 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 _loopEndBlocks = new Stack<BasicBlock>();
                 ResetLoopExitState();
 
-                // Declare locals
-                var declared = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                foreach (var localVar in method.Implementation.LocalVariables)
-                {
-                    var varName = GetValueName(localVar);
-                    if (declared.Add(varName))
-                    {
-                        var csharpType = MapType(localVar.Type);
-                        var defaultValue = GetDefaultValue(localVar.Type);
-                        WriteLine($"{csharpType} {varName} = {defaultValue};");
-                    }
-                }
-
-                if (method.Implementation.LocalVariables.Count > 0)
-                    WriteLine();
+                // Declare locals — and any temp materialised under ADR-0001 (see DeclareLocals)
+                DeclareLocals(method.Implementation, sizedArrays: false);
 
                 if (method.Implementation.EntryBlock != null)
                     GenerateStructuredBlock(method.Implementation.EntryBlock);
@@ -1465,6 +1439,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
             AnalyzeUseCounts(function);
             BuildTempDefinitions(function);
+            ComputeMaterialisedTemps(function);
         }
 
         /// <summary>
@@ -1549,6 +1524,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
             AnalyzeUseCounts(function);
             BuildTempDefinitions(function);
+            ComputeMaterialisedTemps(function);
 
             // Check if this is a lambda - lambdas are generated inline, not as separate functions
             if (function.IsLambda)
@@ -1618,25 +1594,14 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             WriteLine("{");
             Indent();
 
-            // Declare locals (ONLY real locals; no compiler temps)
+            // Declare locals — and any temp materialised under ADR-0001 (see DeclareLocals).
             // Use #line hidden so the PDB doesn't map these to the temp .cs file
-            if (function.LocalVariables.Count > 0)
+            var hasDeclarations = function.LocalVariables.Count > 0 || MaterialisedTempsOf(function).Any();
+            if (hasDeclarations)
                 EmitLineHidden();
-            var declared = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var localVar in function.LocalVariables)
-            {
-                var varName = GetValueName(localVar);
-                if (declared.Add(varName))
-                {
-                    var csharpType = MapType(localVar.Type);
-                    var defaultValue = SizedArrayInitializer(localVar.Type)
-                                       ?? GetDefaultValue(localVar.Type);
+            DeclareLocals(function, sizedArrays: true, blankLineAfter: false);
 
-                    WriteLine($"{csharpType} {varName} = {defaultValue};");
-                }
-            }
-
-            if (function.LocalVariables.Count > 0)
+            if (hasDeclarations)
             {
                 _output.AppendLine("#line default");
                 _lastEmittedSourceLine = -1;
@@ -1902,21 +1867,8 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             WriteLine("{");
             Indent();
 
-            // Declare locals
-            var declared = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var localVar in function.LocalVariables)
-            {
-                var varName = GetValueName(localVar);
-                if (declared.Add(varName))
-                {
-                    var csharpType = MapType(localVar.Type);
-                    var defaultValue = GetDefaultValue(localVar.Type);
-                    WriteLine($"{csharpType} {varName} = {defaultValue};");
-                }
-            }
-
-            if (function.LocalVariables.Count > 0)
-                WriteLine("");
+            // Declare locals — and any temp materialised under ADR-0001 (see DeclareLocals)
+            DeclareLocals(function, sizedArrays: false);
 
             // Generate body
             _processedBlocks.Clear();
@@ -2008,6 +1960,17 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
                 if (!ShouldEmitInstruction(instruction))
                     continue;
+
+                // A materialised temp is written ONCE, here, into the local DeclareLocals declared;
+                // every use reads that local (EmitExpression). Not through Visit: Visit(IRCall)
+                // deliberately emits nothing for a call whose result is used.
+                if (instruction is IRValue materialisedValue && _materialised.Contains(materialisedValue))
+                {
+                    if (materialisedValue.SourceLine > 0)
+                        EmitLineDirective(materialisedValue.SourceLine, _currentFunction?.SourceFilePath);
+                    EmitMaterialisedDefinition(materialisedValue);
+                    continue;
+                }
 
                 // Skip tuple elements that were already emitted as part of a group
                 if (emittedTupleGroups.Contains(i))
@@ -2858,6 +2821,12 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
         private bool ShouldEmitInstruction(IRInstruction instruction)
         {
+            // ADR-0001's arm: GetUseCount(v) > 1 && !IsReplicable(v) -> a declared local. Decided
+            // once per function in ComputeMaterialisedTemps; first, because every arm below would
+            // otherwise inline it (or, for a used call, emit nothing) and let each use evaluate it.
+            if (instruction is IRValue materialisedValue && _materialised.Contains(materialisedValue))
+                return true;
+
             // Non-values are usually control-flow or statements and should be emitted
             if (instruction is IRReturn or IRBranch or IRConditionalBranch or IRSwitch or IRLabel)
                 return true;
@@ -2922,6 +2891,159 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         }
 
         private int GetUseCount(IRValue value) => _useCounts.TryGetValue(value, out var c) ? c : 0;
+
+        /// <summary>
+        /// ADR-0001's materialisation decision for <paramref name="function"/>: every value
+        /// instruction with <c>GetUseCount(v) &gt; 1 &amp;&amp; !IsReplicable(v)</c> becomes a declared
+        /// local, written once and read by name. Use count &lt;= 1, or replicable, keeps today's
+        /// inlining — that is the whole truth table, and it must not be widened (ADR-0001's trap:
+        /// C# re-emitting a replicable expression is what keeps it right across a bad CSE merge).
+        ///
+        /// <para>Not candidates, each for a stated reason:</para>
+        /// <list type="bullet">
+        /// <item>A value named after a DECLARED variable. Materialising it would not create a
+        /// temp: its "temp" name IS the variable, so every use would read the variable's CURRENT
+        /// value rather than the value computed. CSE produces exactly that use pattern — it merges
+        /// later copies of an expression onto a binop named after a variable, and does not kill
+        /// the entry when that variable is reassigned (task #125). With a NON-replicable operand
+        /// (a non-Const global, or a ByRef parameter) such a binop is otherwise a candidate:
+        /// <c>Dim a = g + q</c> / <c>a = z</c> / <c>l(0) = g + q</c> / <c>l(1) = g + q</c> (g a
+        /// module global) prints <c>3,3,0</c> with this exclusion and <c>0,0,0</c> without it, on
+        /// all three entry points. Re-emitting the expression is what keeps the C# oracle right
+        /// there (C++, JS and MSIL print 0,0,0 regardless — that is the CSE defect). C4
+        /// (<c>p + q</c>, two locals) does NOT exercise this: its value is replicable and never
+        /// a candidate.
+        /// <para>⚠ This test is on SPELLING: an IR temp that happens to be spelled like a user
+        /// local (<c>Dim t0</c> — task #126) is also excluded, and is then both assigned to the
+        /// user's variable and inlined at every use. ADR-0004 D3's reservation removes that case;
+        /// until then T2 stays wrong either way.</para></item>
+        /// <item>A value defined in a LOOP-CONDITION block. That block's instructions are written
+        /// once, before the <c>while</c>, and its condition is re-emitted as text each iteration —
+        /// a local written once would freeze the condition. Such a value stays inlined, so a
+        /// multi-use non-replicable one there is still evaluated per use; the optimizer gate on
+        /// the rewrite that creates it (ADR-0004 D4, step 3) is what closes that case.</item>
+        /// <item>No name, no type, or a void type — nothing to declare.</item>
+        /// <item>Kinds that already declare themselves or are never emitted as values
+        /// (<see cref="IRArrayAlloc"/>, <see cref="IRAlloca"/>, <see cref="IRPhi"/>,
+        /// <see cref="IRVariable"/>, <see cref="IRConstant"/>) and <see cref="IRTupleElement"/>,
+        /// whose consecutive runs are emitted as one deconstruction.</item>
+        /// </list>
+        /// <para>⚠ Temp NAMES are the IR's own (<c>t0</c>, …). A user local of the same spelling
+        /// collides; ADR-0004 D3 fixes that in the IR by reservation, not here.</para>
+        /// </summary>
+        private void ComputeMaterialisedTemps(IRFunction function)
+        {
+            _materialised.Clear();
+            _emittingDefinition.Clear();
+
+            var loopConditionBlocks = new HashSet<BasicBlock>();
+            foreach (var block in function.Blocks)
+            {
+                if (block.Instructions.LastOrDefault() is IRConditionalBranch cb
+                    && cb.TrueTarget != null && cb.FalseTarget != null
+                    && IsLoopHeader(cb.TrueTarget, cb.FalseTarget, out _, out _, out _, out _, out _))
+                    loopConditionBlocks.Add(block);
+            }
+
+            foreach (var block in function.Blocks)
+            {
+                if (loopConditionBlocks.Contains(block)) continue;
+
+                foreach (var instr in block.Instructions)
+                {
+                    if (instr is not IRValue v) continue;
+                    if (v is IRArrayAlloc or IRAlloca or IRPhi or IRVariable or IRConstant or IRTupleElement) continue;
+                    if (string.IsNullOrEmpty(v.Name) || v.Type == null
+                        || v.Type.Name.Equals("Void", StringComparison.OrdinalIgnoreCase)) continue;
+                    if (IsNamedDestination(v)) continue;
+                    if (GetUseCount(v) <= 1) continue;
+                    if (IsReplicableHere(v)) continue;
+                    _materialised.Add(v);
+                }
+            }
+        }
+
+        /// <summary>
+        /// <see cref="IRReplicability.IsReplicable(IRValue, Func{IRValue, bool?})"/> as this backend
+        /// sees an operand: an already-materialised value is a local (replicable), and an
+        /// <see cref="IRVariable"/> that merely NAMES a temp is judged by the temp's definition,
+        /// because <see cref="EmitExpression(IRValue)"/> inlines that definition in its place.
+        /// </summary>
+        private bool IsReplicableHere(IRValue value)
+        {
+            var visiting = new HashSet<IRValue>();
+            bool? Override(IRValue v)
+            {
+                if (_materialised.Contains(v)) return true;
+                if (v is IRVariable tempRef && !string.IsNullOrEmpty(tempRef.Name)
+                    && !_declaredIdentifiers.Contains(tempRef.Name) && !tempRef.IsParameter && !tempRef.IsGlobal
+                    && !_currentClassMemberNames.Contains(tempRef.Name)
+                    && _tempDefsByName.TryGetValue(tempRef.Name, out var def) && !ReferenceEquals(def, v))
+                {
+                    if (!visiting.Add(def)) return false; // a cycle is not provably anything
+                    return IRReplicability.IsReplicable(def, Override);
+                }
+                return null;
+            }
+            return IRReplicability.IsReplicable(value, Override);
+        }
+
+        /// <summary>The materialised temps defined in <paramref name="function"/>'s own blocks, in order.</summary>
+        private IEnumerable<IRValue> MaterialisedTempsOf(IRFunction function) =>
+            function.Blocks.SelectMany(b => b.Instructions).OfType<IRValue>().Where(_materialised.Contains);
+
+        /// <summary>
+        /// The ONE place a function body's locals are declared: the function's own locals, then
+        /// every temp <see cref="ComputeMaterialisedTemps"/> decided to materialise, each typed
+        /// from the IR. Replaces five hand-copied loops, and is also what a property accessor
+        /// calls — it used to declare nothing.
+        /// </summary>
+        private void DeclareLocals(IRFunction function, bool sizedArrays, bool blankLineAfter = true)
+        {
+            var declared = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var any = false;
+
+            foreach (var localVar in function.LocalVariables)
+            {
+                var varName = GetValueName(localVar);
+                any = true;
+                if (declared.Add(varName))
+                {
+                    var csharpType = MapType(localVar.Type);
+                    var defaultValue = (sizedArrays ? SizedArrayInitializer(localVar.Type) : null)
+                                       ?? GetDefaultValue(localVar.Type);
+                    WriteLine($"{csharpType} {varName} = {defaultValue};");
+                }
+            }
+
+            foreach (var temp in MaterialisedTempsOf(function))
+            {
+                var tempName = GetValueName(temp);
+                any = true;
+                if (declared.Add(tempName))
+                    WriteLine($"{MapType(temp.Type)} {tempName} = {GetDefaultValue(temp.Type)};");
+            }
+
+            if (any && blankLineAfter)
+                WriteLine();
+        }
+
+        /// <summary>
+        /// Writes <c>tN = &lt;definition&gt;;</c> for a materialised temp — the single place its
+        /// defining expression text is emitted.
+        /// </summary>
+        private void EmitMaterialisedDefinition(IRValue value)
+        {
+            _emittingDefinition.Add(value);
+            try
+            {
+                WriteLine($"{GetValueName(value)} = {EmitExpression(value)};");
+            }
+            finally
+            {
+                _emittingDefinition.Remove(value);
+            }
+        }
 
         /// <summary>Render explicit generic type arguments as "&lt;T1, T2&gt;", or "" if none.</summary>
         private string FormatGenericArgs(List<TypeInfo> genericArgs)
@@ -3094,6 +3216,11 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         private string EmitExpression(IRValue value, HashSet<IRValue> stack, bool needsParens = false)
         {
             if (value == null) return string.Empty;
+
+            // A materialised temp is READ by name everywhere except the one place its definition
+            // is written (EmitMaterialisedDefinition). ADR-0001 E1: its text appears once.
+            if (_materialised.Contains(value) && !_emittingDefinition.Contains(value))
+                return GetValueName(value);
 
             // Prevent infinite recursion on weird cyclic graphs
             if (!stack.Add(value))

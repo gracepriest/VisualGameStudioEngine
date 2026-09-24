@@ -1057,18 +1057,16 @@ public class MsilForEachTests
     /// case-insensitive naming hazard against the property <c>Total</c> noted on the constructor
     /// case above.
     ///
-    /// <para>⚠ Asserted against JavaScript, not C#: measured, the C# backend does not compile this
-    /// program — <c>CS0103: The name 'sum' does not exist in the current context</c>.
-    /// ⛔ <b>The loop is not what breaks it.</b> An earlier version of this note blamed locals
-    /// "declared inside a loop"; that is wrong, and the correction is measured:
-    /// <c>GenerateProperty</c> emits NO local declarations AT ALL, so a property <c>Get</c> whose
-    /// entire body is <c>Dim sum As Integer = 5</c> / <c>Return sum + 1</c> — no loop anywhere — is
-    /// the same <c>CS0103</c>, while a <c>Get</c> that declares nothing (<c>Return 6</c>) compiles
-    /// and prints 6. A separate, pre-existing, general C#-backend gap, unchanged by the
-    /// C#-backend batch that fixed <c>Exit For</c>, and not fixed here. MSIL alone (verified
-    /// directly, outside this helper) already prints the correct 7 for this exact program.</para>
+    /// <para>⭐ <b>PROMOTED to also assert C#.</b> This test used to exclude C# here, because the
+    /// C# backend did not compile this program at all — <c>CS0103: The name 'sum' does not exist
+    /// in the current context</c>, since <c>GenerateProperty</c> emitted NO local declarations
+    /// for a property accessor body at all (not a loop-specific gap: a <c>Get</c> whose entire
+    /// body was <c>Dim sum As Integer = 5</c> / <c>Return sum + 1</c>, no loop anywhere, hit the
+    /// same <c>CS0103</c>). <c>GenerateProperty</c> now calls <c>DeclareLocals</c> for both the
+    /// getter and the setter (family #111), so this shape compiles and runs on C# too.</para>
     /// </summary>
     [Test]
+    [NonParallelizable] // the C# leg redirects Console.Out
     public void ForEachInAPropertyAccessorBody()
     {
         const string program =
@@ -1099,6 +1097,7 @@ public class MsilForEachTests
         {
             Assert.That(FourBackends.Norm(JavaScriptExecutionTests.RunJs(program)), Is.EqualTo("7"), "JavaScript");
             Assert.That(FourBackends.Norm(MsilHarness.RunExpectingSuccess(program)), Is.EqualTo("7"), "MSIL");
+            Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharp(program)), Is.EqualTo("7"), "C#");
         });
     }
 }
