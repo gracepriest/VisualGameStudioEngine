@@ -270,23 +270,32 @@ namespace BasicLang.Compiler.IR
         
         /// <summary>
         /// Find back edges in CFG (edges from a node to its dominator)
+        ///
+        /// <para>⛔ The test is "the SUCCESSOR dominates this block", i.e. the successor is in
+        /// THIS block's dominator set. It was written the other way round
+        /// (<c>successor.Dominators.Contains(block)</c>: this block dominates its successor),
+        /// which is true of every FORWARD edge — so every <c>entry → header</c> edge came back
+        /// as a "loop" containing the entry block, and the real <c>inc → header</c> edge was
+        /// never found. LoopInvariantCodeMotionPass then took the loop's increment block for its
+        /// "preheader" and hoisted the For condition into it: on C++ with <c>--optimize</c> the
+        /// first trip read an uninitialised condition and every For loop ran zero times.</para>
         /// </summary>
         public List<(BasicBlock From, BasicBlock To)> FindBackEdges()
         {
             var backEdges = new List<(BasicBlock, BasicBlock)>();
-            
+
             foreach (var block in Blocks)
             {
                 foreach (var successor in block.Successors)
                 {
                     // Back edge: successor dominates block
-                    if (successor.Dominators.Contains(block))
+                    if (block.Dominators.Contains(successor))
                     {
                         backEdges.Add((block, successor));
                     }
                 }
             }
-            
+
             return backEdges;
         }
         
@@ -442,19 +451,29 @@ namespace BasicLang.Compiler.IR
         /// </summary>
         public bool IsReducible()
         {
-            // A CFG is reducible if all back edges are to loop headers
-            var backEdges = FindBackEdges();
-            
-            foreach (var (tail, head) in backEdges)
+            // Reducible iff every RETREATING edge of a depth-first walk (one into a block still
+            // on the DFS stack) is a back edge, i.e. its target dominates its source. (Checking
+            // FindBackEdges' own results would be a tautology: they are back edges by definition.)
+            var visited = new HashSet<BasicBlock>();
+            var onStack = new HashSet<BasicBlock>();
+            var reducible = true;
+
+            void Dfs(BasicBlock block)
             {
-                // Check if head dominates tail (making it a proper loop header)
-                if (!head.Dominators.Contains(tail))
+                visited.Add(block);
+                onStack.Add(block);
+                foreach (var successor in block.Successors)
                 {
-                    return false;
+                    if (onStack.Contains(successor) && !block.Dominators.Contains(successor))
+                        reducible = false;
+                    else if (!visited.Contains(successor))
+                        Dfs(successor);
                 }
+                onStack.Remove(block);
             }
-            
-            return true;
+
+            if (EntryBlock != null) Dfs(EntryBlock);
+            return reducible;
         }
         
         /// <summary>

@@ -1557,7 +1557,32 @@ namespace BasicLang.Compiler.IR.Optimization
         public void AddAggressivePasses()
         {
             AddStandardPasses();
-            AddPass(new LoopInvariantCodeMotionPass());
+
+            // LoopInvariantCodeMotionPass, LoopUnrollingPass and InductionVariablePass DISABLED —
+            // the ConstantPropagationPass / FunctionInliningPass call again: each MISCOMPILES real
+            // loops SILENTLY, and the classes stay in the file.
+            //
+            // Until 2026-09-24 ControlFlowGraph.FindBackEdges tested dominance backwards, so these
+            // passes never saw a real loop: every `entry -> header` edge was a "loop" containing
+            // the entry block. LICM then took a For loop's INCREMENT block for its "preheader" and
+            // hoisted the loop condition into it, so on C++ `For i = 0 To 2` ran ZERO times, and
+            // on C# and JavaScript several loop shapes printed wrong answers or failed to build.
+            // With back edges found correctly the passes are worse, not better. MEASURED, each
+            // added alone to the standard passes, on twelve loop programs run under Node
+            // (nested For, Step, While/Do, Exit For, For Each, guarded division, variable bounds):
+            //  - LICM: undeclared temps ("t2 is not defined") in 7 of 12, infinite loops in 5,
+            //    and on C# `If d <> 0 Then q = 100 \ d` hoisted above its guard: an unhandled
+            //    DivideByZeroException. It treats an operand defined outside the loop as
+            //    invariant, which this non-SSA IR does not guarantee (a variable can be
+            //    reassigned inside the loop), and it hoists trapping operations speculatively.
+            //  - LoopUnrollingPass: undeclared renamed copies ("_u0_i is not defined") and
+            //    duplicate declarations ("Identifier 't8' has already been declared").
+            //  - InductionVariablePass: a read before initialisation ("Cannot access '_div_t1'
+            //    before initialization").
+            // Every one of those programs is correct without the pass. LoopFusionPass (which checks
+            // data dependences before fusing), TailCallOptimizationPass and
+            // AlgebraicSimplificationPass agreed with the unoptimized output on all of them.
+            // AddPass(new LoopInvariantCodeMotionPass());
 
             // FunctionInliningPass DISABLED — it has never produced correct output for any
             // function it actually inlines, and it MISCOMPILES SILENTLY. Same call as the
@@ -1591,8 +1616,8 @@ namespace BasicLang.Compiler.IR.Optimization
             AddPass(new TailCallOptimizationPass());
             AddPass(new AlgebraicSimplificationPass());
             AddPass(new LoopFusionPass());  // Fuse adjacent loops before unrolling
-            AddPass(new LoopUnrollingPass(4));  // 4x unrolling
-            AddPass(new InductionVariablePass());
+            // AddPass(new LoopUnrollingPass(4));  // DISABLED — see the note at the top of this method
+            // AddPass(new InductionVariablePass());  // DISABLED — ditto
         }
         
         public OptimizationResult Run(IRModule module)
