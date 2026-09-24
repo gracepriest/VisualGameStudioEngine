@@ -2483,6 +2483,63 @@ namespace BasicLang.Compiler
         }
 
         /// <summary>
+        /// <c>ReDim [Preserve] name(upperBound) [As Type]</c> or <c>ReDim [Preserve] name[count]</c>,
+        /// lowered to the assignment <c>name = &lt;resize&gt;</c> so later passes see an ordinary
+        /// write. The size follows the Dim rule: parentheses are an upper bound, brackets a
+        /// count, and it may be computed at run time (that is what ReDim is for).
+        /// </summary>
+        private StatementNode ParseReDimStatement()
+        {
+            var reDim = Advance(); // ReDim
+
+            var preserve = false;
+            if (Check(TokenType.Identifier) && Peek().Lexeme.Equals("Preserve", StringComparison.OrdinalIgnoreCase)
+                && PeekNext().Type == TokenType.Identifier)
+            {
+                Advance();
+                preserve = true;
+            }
+
+            var nameToken = Consume(TokenType.Identifier, "Expected the array to resize after 'ReDim'");
+            ExpressionNode Name() => new IdentifierExpressionNode(nameToken.Line, nameToken.Column) { Name = nameToken.Lexeme };
+
+            List<ExpressionNode> sizes;
+            if (Match(TokenType.LeftParen))
+                sizes = ParseArrayDimensionList(TokenType.RightParen, ")");
+            else if (Match(TokenType.LeftBracket))
+                sizes = ParseArrayDimensionList(TokenType.RightBracket, "]");
+            else
+                throw new ParseException($"Expected '(' or '[' with the new size after 'ReDim {nameToken.Lexeme}'", Peek(),
+                    "Write ReDim a[count] (or ReDim a(upperBound), as older BASICs do).");
+
+            if (sizes.Count != 1 || sizes[0] == null)
+                throw new ParseException(
+                    sizes.Count != 1
+                        ? "ReDim resizes a one-dimensional array; give exactly one size"
+                        : "ReDim needs a size", nameToken, null);
+
+            TypeReference elementType = null;
+            if (Match(TokenType.As))
+                elementType = ParseTypeReference();
+
+            if (Check(TokenType.Comma))
+                throw new ParseException("ReDim resizes one array per statement; put each on its own line", Peek(), null);
+
+            return new AssignmentStatementNode(reDim.Line, reDim.Column)
+            {
+                Target = Name(),
+                Operator = "=",
+                Value = new ArrayResizeExpressionNode(reDim.Line, reDim.Column)
+                {
+                    Array = Name(),
+                    Size = sizes[0],
+                    Preserve = preserve,
+                    ElementType = elementType,
+                },
+            };
+        }
+
+        /// <summary>
         /// An upper bound as an element count: a literal is folded (<c>(9)</c> is 10), so every
         /// consumer that wants a constant size still gets one; anything else becomes
         /// <c>bound + 1</c>.
@@ -3010,6 +3067,16 @@ namespace BasicLang.Compiler
                 return ParseAutoDeclaration();
             if (Check(TokenType.Const))
                 return ParseConstantDeclaration();
+            // ReDim is CONTEXTUAL (an identifier token), like Preserve after it, so a program
+            // that already names something ReDim keeps compiling: it is ReDim only when an
+            // identifier follows. ⛔ It used to fall through to the expression-statement path,
+            // so `ReDim a(n)` compiled "successfully" to a call to a nonexistent function
+            // `ReDim(a[n])`, and `ReDim Preserve a(6)` to `ReDim(Preserve)`, silently dropping
+            // the array and its size.
+            if (Check(TokenType.Identifier)
+                && Peek().Lexeme.Equals("ReDim", StringComparison.OrdinalIgnoreCase)
+                && PeekNext().Type == TokenType.Identifier)
+                return ParseReDimStatement();
             if (Check(TokenType.Yield))
                 return ParseYieldStatement();
             if (Check(TokenType.RaiseEvent))

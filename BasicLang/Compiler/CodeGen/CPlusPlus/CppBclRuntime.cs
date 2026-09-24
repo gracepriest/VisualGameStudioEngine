@@ -43,6 +43,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
 #include <ostream>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 ";
 
@@ -222,6 +223,19 @@ inline std::string format_net_float(T value, int maxDigits) {
    CStr, CType(x, String) and x.ToString() all go through these, so they cannot disagree. */
 inline std::string FormatDouble(double value) { return bcl_detail::format_net_float(value, 17); }
 inline std::string FormatSingle(float value) { return bcl_detail::format_net_float(value, 9); }
+
+/* ReDim a[n] / ReDim a(upperBound): the array resized to n elements (the generator has already
+   turned an upper bound into a count). Plain ReDim is n fresh default elements; Preserve keeps the
+   first min(old, n) and value-initialises the rest. A negative count throws, as .NET's does. */
+template <typename T>
+inline std::vector<T> ReDimArray(const std::vector<T>& array, int64_t count, bool preserve) {
+    if (count < 0) throw std::out_of_range(""ReDim size cannot be negative"");
+    if (!preserve) return std::vector<T>((size_t)count);
+    const size_t keep = array.size() < (size_t)count ? array.size() : (size_t)count;
+    std::vector<T> resized(array.begin(), array.begin() + (std::ptrdiff_t)keep);
+    resized.resize((size_t)count);
+    return resized;
+}
 
 /* ---- TimeSpan: one int64 ticks (100ns). Spec §3. ---- */
 struct TimeSpan {

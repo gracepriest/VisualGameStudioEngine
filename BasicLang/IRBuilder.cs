@@ -5326,6 +5326,33 @@ namespace BasicLang.Compiler.IR
             _expressionResult = cast;
         }
 
+        /// <summary>
+        /// The IR intrinsic a ReDim's value lowers to: <c>ArrayResizeIntrinsic(array, count,
+        /// preserve)</c>, returning the resized array, which the enclosing assignment stores back.
+        /// Each backend renders it natively (C# <c>new T[n]</c> / <c>Array.Resize</c>, C++
+        /// <c>BasicLang::ReDimArray</c>, JavaScript <c>new Array(n).fill</c> / <c>Array.from</c>).
+        /// A call, not a new IR node: optimizer passes already treat a call as opaque and
+        /// side-effecting, so nothing folds, hoists or merges it.
+        /// </summary>
+        public const string ArrayResizeIntrinsic = "__BLReDim";
+
+        public void Visit(ArrayResizeExpressionNode node)
+        {
+            node.Array.Accept(this);
+            var array = _expressionResult;
+            node.Size.Accept(this);
+            var size = _expressionResult;
+
+            var arrayType = _semanticAnalyzer.GetNodeType(node);
+            var call = new IRCall(_currentFunction.GetNextTempName(), ArrayResizeIntrinsic, arrayType);
+            call.Arguments.Add(array);
+            call.Arguments.Add(size);
+            call.Arguments.Add(new IRConstant(node.Preserve, new TypeInfo("Boolean", TypeKind.Primitive)));
+            EmitInstruction(call);
+
+            _expressionResult = call;
+        }
+
         // ====================================================================
         // Helper Methods
         // ====================================================================

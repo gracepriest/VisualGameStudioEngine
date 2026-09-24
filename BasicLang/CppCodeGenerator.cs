@@ -2653,6 +2653,15 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 EmitRegion(destination != null ? $"{destination} = {expression};" : $"{expression};");
             }
 
+            // ReDim's value (IRBuilder.ArrayResizeIntrinsic: array, count, preserve) — the runtime's
+            // BasicLang::ReDimArray (CppBclRuntime), which returns the resized std::vector.
+            if (functionName == IRBuilder.ArrayResizeIntrinsic && args.Count == 3)
+            {
+                var preserve = call.Arguments[2] is IRConstant { Value: true } ? "true" : "false";
+                EmitCallStatement($"BasicLang::ReDimArray({args[0]}, {args[1]}, {preserve})");
+                return;
+            }
+
             // Check if this is an extern function call
             if (_module != null && _module.IsExtern(functionName))
             {

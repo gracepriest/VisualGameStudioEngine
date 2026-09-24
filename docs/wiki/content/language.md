@@ -240,6 +240,19 @@ an array is indexed with either `nums[i]` or `nums(i)` (`grid[x, y]` or `grid(x,
 one-dimensional array's `Length` counts its elements whichever form declared it. A size
 must be a compile-time constant (a literal, a `Const`, or arithmetic over them).
 
+For a size known only at run time, declare the array unsized and `ReDim` it. `ReDim` follows
+the same rule: brackets give a count, parentheses an upper bound. `Preserve` keeps the
+elements that still fit; without it the array starts over with default values.
+
+```vb
+Dim items[] As Integer
+ReDim items[n]                       ' n elements, all 0
+ReDim Preserve items[n * 2]          ' grow; the first n keep their values
+ReDim scores(n)                      ' older-BASIC form: n + 1 elements
+```
+
+`ReDim` resizes a one-dimensional array, one array per statement, and keeps its element type.
+
 ```vb
 Dim primes = {2, 3, 5, 7, 11}        ' initialised
 

@@ -2387,9 +2387,8 @@ namespace BasicLang.Compiler.SemanticAnalysis
         /// <c>a[0] = 1</c> (NullReferenceException under C#). Both compiled clean.</para>
         ///
         /// <para>A size expression that will not fold is therefore REFUSED rather than dropped.
-        /// There is no run-time-sizing fallback to fall back to: <c>ReDim</c> is not implemented
-        /// (it lowers to a call to a function that does not exist), so an unfoldable size has no
-        /// correct lowering at all and a diagnostic is the only honest answer.</para>
+        /// A declaration's size is baked into its allocation; a size known only at run time
+        /// belongs to <c>ReDim</c> (ArrayResizeExpressionNode), which the diagnostic points to.</para>
         /// </summary>
         /// <param name="report">
         /// False on the sibling-signature path, which must never accuse the current unit.
@@ -2428,8 +2427,9 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 if (report && _reportedNonConstantArraySizes.Add(dimension))
                 {
                     Error("Array size must be a compile-time constant (an integer literal, a "
-                          + "Const, or arithmetic over them). A size computed at run time cannot "
-                          + "be declared this way, and ReDim is not supported.",
+                          + "Const, or arithmetic over them). For a size computed at run time, "
+                          + "declare the array unsized (Dim a[] As Integer) and ReDim it: "
+                          + "ReDim a[n].",
                           dimension.Line, dimension.Column);
                 }
                 sizes.Add(0);
@@ -9628,6 +9628,48 @@ namespace BasicLang.Compiler.SemanticAnalysis
             RejectImpossibleConversion(node, targetType);
 
             SetNodeType(node, targetType);
+        }
+
+        /// <summary>
+        /// A <c>ReDim</c>'s value (see <see cref="ArrayResizeExpressionNode"/>). The array must
+        /// already be a one-dimensional array variable, the size an integer, and an
+        /// <c>As Type</c> must name the element type it already has: ReDim resizes, it does not
+        /// retype. The node takes the array's own type, so the assignment it sits in type-checks
+        /// as array-to-same-array.
+        /// </summary>
+        public void Visit(ArrayResizeExpressionNode node)
+        {
+            node.Array.Accept(this);
+            node.Size.Accept(this);
+
+            var arrayType = GetNodeType(node.Array);
+            if (arrayType?.Kind != TypeKind.Array)
+            {
+                Error($"ReDim needs an array, but '{(node.Array as IdentifierExpressionNode)?.Name}' "
+                      + $"{(arrayType == null ? "is not declared" : $"has type {arrayType.Name}")}. Declare it "
+                      + "as an array first, for example Dim a[] As Integer.", node.Line, node.Column);
+                SetNodeType(node, arrayType ?? _typeManager.ObjectType);
+                return;
+            }
+
+            if (arrayType.ArrayRank > 1)
+                Error($"ReDim resizes a one-dimensional array; this one has {arrayType.ArrayRank} dimensions.",
+                      node.Line, node.Column);
+
+            var sizeType = GetNodeType(node.Size);
+            if (sizeType != null && !sizeType.IsIntegral())
+                Error($"A ReDim size must be an integer, not {sizeType.Name}.", node.Size.Line, node.Size.Column);
+
+            if (node.ElementType != null)
+            {
+                var declared = ResolveTypeReference(node.ElementType);
+                if (declared != null && arrayType.ElementType != null
+                    && !string.Equals(declared.Name, arrayType.ElementType.Name, StringComparison.OrdinalIgnoreCase))
+                    Error($"ReDim cannot change the element type: the array holds {arrayType.ElementType.Name}, "
+                          + $"not {declared.Name}.", node.Line, node.Column);
+            }
+
+            SetNodeType(node, arrayType);
         }
 
         /// <summary>

@@ -3005,6 +3005,9 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                     {
                         var argExprs = call.Arguments.Select(a => EmitExpression(a, stack, false)).ToArray();
 
+                        if (TryRenderArrayResize(call, argExprs, out var resized))
+                            return resized;
+
                         // Invoke a delegate value directly: (calleeExpr)(args), e.g. f(a)(b)
                         if (call.CalleeValue != null)
                         {
@@ -3311,9 +3314,35 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             WriteLine($"{address} = {value};");
         }
 
+        /// <summary>
+        /// ReDim's value (IRBuilder.ArrayResizeIntrinsic: array, count, preserve), for both the
+        /// inline and the statement path. Preserve goes through a one-shot lambda so the array
+        /// and the count are each evaluated once; Array.Resize on the lambda's own copy returns
+        /// a new array (or allocates one for a Nothing array) and leaves the original alone.
+        /// </summary>
+        private bool TryRenderArrayResize(IRCall call, IReadOnlyList<string> argExprs, out string expression)
+        {
+            expression = null;
+            if (call.FunctionName != IR.IRBuilder.ArrayResizeIntrinsic || call.Arguments.Count != 3)
+                return false;
+
+            var element = MapType(call.Type?.ElementType);
+            expression = call.Arguments[2] is IRConstant { Value: true }
+                ? $"((System.Func<{element}[], int, {element}[]>)((__a, __n) => {{ System.Array.Resize(ref __a, __n); return __a; }}))({argExprs[0]}, {argExprs[1]})"
+                : $"new {element}[{argExprs[1]}]";
+            return true;
+        }
+
         public void Visit(IRCall call)
         {
             var functionName = call.FunctionName;
+
+            // A ReDim that assigns straight into its variable (IRBuilder names the call after it).
+            if (TryRenderArrayResize(call, call.Arguments.Select(a => EmitExpression(a)).ToList(), out var resizedArray))
+            {
+                WriteLine($"{GetValueName(call)} = {resizedArray};");
+                return;
+            }
 
             // RaiseEvent X(args) arrives as a call named raise_X (IRBuilder's convention).
             // MEASURED before this arm: emitted verbatim, CS0103 — nothing defined raise_X, so

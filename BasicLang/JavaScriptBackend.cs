@@ -1835,9 +1835,10 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// whose holes read as <c>undefined</c> and which iteration treats differently from
         /// filled slots. BasicLang expects 0 / "" / false per element type.</para>
         ///
-        /// <para>⚠ <c>ArrayDimensionSizes</c> entries are ELEMENT COUNTS, not upper bounds:
-        /// <c>Dim a(4)</c> is four elements here, matching the C# and C++ backends. That
-        /// diverges from real VB, deliberately and consistently — do not add one.</para>
+        /// <para>⚠ <c>ArrayDimensionSizes</c> entries are ELEMENT COUNTS: do not add one here.
+        /// The parser has already turned the paren form's upper bound into a count
+        /// (<c>Dim a(4)</c> reaches every backend as 5, <c>Dim a[4]</c> as 4), so every backend
+        /// allocates exactly what it is given.</para>
         /// </summary>
         private string ArrayInitializer(TypeInfo type)
         {
@@ -2573,6 +2574,18 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             // are rendered whole here.
             if (TryTextCall(call, rendered, out var text))
                 return text;
+
+            // ReDim's value (IRBuilder.ArrayResizeIntrinsic: array, count, preserve). Plain ReDim
+            // is a fresh filled array, as a Dim is (see ArrayInitializer on why .fill matters);
+            // Preserve copies what still fits, via a one-shot arrow so the array and the count
+            // are each evaluated once and a Nothing array reads as empty.
+            if (call.FunctionName == IRBuilder.ArrayResizeIntrinsic && rendered.Count == 3)
+            {
+                var element = TypeMapper.GetDefaultValue(call.Type?.ElementType);
+                return call.Arguments[2] is IRConstant { Value: true }
+                    ? $"((a, n) => Array.from({{ length: n }}, (_, i) => a != null && i < a.length ? a[i] : {element}))({rendered[0]}, {rendered[1]})"
+                    : $"new Array({rendered[1]}).fill({element})";
+            }
 
             if (TryStringBuiltin(call.FunctionName, rendered, out var builtin))
                 return builtin;

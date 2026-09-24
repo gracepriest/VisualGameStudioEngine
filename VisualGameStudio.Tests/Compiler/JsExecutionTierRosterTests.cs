@@ -84,6 +84,7 @@ public class JsExecutionTierRosterTests
 
         // Both array spellings, run under Node, a C++ compiler and dotnet.
         typeof(ArrayBoundsExecutionTests),
+        typeof(ReDimExecutionTests),
     };
 
     /// <summary>
@@ -132,7 +133,7 @@ public class JsExecutionTierRosterTests
 
     [Test]
     public void RosterIsPinned()
-        => Assert.That(ExecutionTier, Has.Length.EqualTo(35),
+        => Assert.That(ExecutionTier, Has.Length.EqualTo(36),
             "The execution-tier roster changed. That is fine — update the number — but it must " +
             "be a deliberate edit, not a silent shrink.");
 
