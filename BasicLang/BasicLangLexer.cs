@@ -1046,23 +1046,26 @@ namespace BasicLang.Compiler
                     sb.Append(Advance());
                 }
                 
-                // Check for exponent
-                if (!IsAtEnd() && (Peek() == 'e' || Peek() == 'E'))
-                {
-                    sb.Append(Advance()); // Consume 'e' or 'E'
-                    
-                    if (!IsAtEnd() && (Peek() == '+' || Peek() == '-'))
-                    {
-                        sb.Append(Advance());
-                    }
-                    
-                    while (!IsAtEnd() && IsDigit(Peek()))
-                    {
-                        sb.Append(Advance());
-                    }
-                }
-                
+                TryScanExponent(sb);
+
                 // Check for type suffix
+                if (!IsAtEnd() && (Peek() == 'f' || Peek() == 'F'))
+                {
+                    sb.Append(Advance());
+                    float value = float.Parse(sb.ToString().TrimEnd('f', 'F'), CultureInfo.InvariantCulture);
+                    AddToken(TokenType.SingleLiteral, sb.ToString(), value, startLine, startColumn);
+                }
+                else
+                {
+                    double value = double.Parse(sb.ToString(), CultureInfo.InvariantCulture);
+                    AddToken(TokenType.DoubleLiteral, sb.ToString(), value, startLine, startColumn);
+                }
+            }
+            else if (TryScanExponent(sb))
+            {
+                // An exponent with no decimal point is still floating point, as in VB: 1E+15 is
+                // a Double (1E+15F a Single). ⛔ It used to lex as the integer 1 followed by the
+                // identifier E ("Undefined identifier 'E'"), and 5E3 as 5 followed by E3.
                 if (!IsAtEnd() && (Peek() == 'f' || Peek() == 'F'))
                 {
                     sb.Append(Advance());
@@ -1113,6 +1116,26 @@ namespace BasicLang.Compiler
             }
         }
         
+        /// <summary>
+        /// Appends an exponent (<c>e</c>/<c>E</c>, an optional sign, digits) to <paramref name="sb"/>
+        /// if one follows, and reports whether it did. The <c>e</c> is taken only when a digit (or a
+        /// sign and then a digit) comes after it, so a number followed by a name that starts with
+        /// <c>e</c> is not swallowed, and <c>1.5E</c> is not handed to double.Parse half-formed.
+        /// </summary>
+        private bool TryScanExponent(StringBuilder sb)
+        {
+            if (IsAtEnd() || (Peek() != 'e' && Peek() != 'E')) return false;
+
+            var afterE = _position + 1;
+            if (afterE < _source.Length && (_source[afterE] == '+' || _source[afterE] == '-')) afterE++;
+            if (afterE >= _source.Length || !IsDigit(_source[afterE])) return false;
+
+            sb.Append(Advance()); // e / E
+            if (Peek() == '+' || Peek() == '-') sb.Append(Advance());
+            while (!IsAtEnd() && IsDigit(Peek())) sb.Append(Advance());
+            return true;
+        }
+
         private void ScanPrefixedNumber(int startLine, int startColumn)
         {
             char prefix = Advance(); // Consume H, O, or B
