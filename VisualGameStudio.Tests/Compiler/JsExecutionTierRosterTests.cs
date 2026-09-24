@@ -94,6 +94,7 @@ public class JsExecutionTierRosterTests
         // Both array spellings, run under Node, a C++ compiler and dotnet.
         typeof(ArrayBoundsExecutionTests),
         typeof(ReDimExecutionTests),
+        typeof(SingleLineIfExecutionTests),
 
         // ADR-0005 D2 — CSE guards a shared value's own destination, not only its operands.
         // CseDestinationInvalidationExecutionTests / DestinationInvalidation_D4_ByRefExecutionTests
@@ -192,7 +193,7 @@ public class JsExecutionTierRosterTests
 
     [Test]
     public void RosterIsPinned()
-        => Assert.That(ExecutionTier, Has.Length.EqualTo(47),
+        => Assert.That(ExecutionTier, Has.Length.EqualTo(48),
             "The execution-tier roster changed. That is fine — update the number — but it must " +
             "be a deliberate edit, not a silent shrink.");
 

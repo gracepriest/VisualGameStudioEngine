@@ -355,7 +355,7 @@ namespace BasicLang.Compiler
                 // Same rule as a statement in a block: `Dim G As Integer = 5 E3` must not read
                 // E3 as the start of a second declaration.
                 RequireEndOfStatement(new[] { TokenType.EndModule });
-                SkipNewlines();
+                SkipStatementSeparators();
             }
 
             node.EndLine = Consume(TokenType.EndModule, "Expected 'End Module'").Line;
@@ -3009,7 +3009,7 @@ namespace BasicLang.Compiler
 
             while (!Check(endToken) && !IsAtEnd())
             {
-                SkipNewlines();
+                SkipStatementSeparators();
 
                 if (Check(endToken) || IsAtEnd())
                     break;
@@ -3035,7 +3035,7 @@ namespace BasicLang.Compiler
                         break;
                 }
 
-                SkipNewlines();
+                SkipStatementSeparators();
             }
 
             return block;
@@ -3237,10 +3237,14 @@ namespace BasicLang.Compiler
                 }
                 else
                 {
-                    // Single-line if: If condition Then statement
-                    var statement = ParseStatement();
-                    node.ThenBlock = new BlockNode(token.Line, token.Column);
-                    node.ThenBlock.Statements.Add(statement);
+                    // Single-line if, as in VB: `If c Then s1 : s2 Else s3 : s4`. Everything up to
+                    // the end of the line belongs to the If — a `:`-joined statement is part of the
+                    // Then (or Else) list, not a statement after the If. ⛔ This took ONE statement
+                    // and returned, so the enclosing block met `Else` (or `:`) where a statement
+                    // should start: `If x > 3 Then A() Else B()` failed to parse at all.
+                    node.ThenBlock = ParseSingleLineIfList(token);
+                    if (Match(TokenType.Else))
+                        node.ElseBlock = ParseSingleLineIfList(token);
                 }
             }
             else
@@ -3251,13 +3255,39 @@ namespace BasicLang.Compiler
 
             return node;
         }
+        /// <summary>
+        /// The statement list of a single-line If's Then or Else part: statements joined by
+        /// <c>:</c>, ending at the end of the line or at the single-line <c>Else</c>. An empty
+        /// list is legal (<c>If c Then Else x</c>). A nested single-line If consumes the rest of
+        /// the line, its own Else included — VB binds an Else to the nearest If.
+        /// </summary>
+        private BlockNode ParseSingleLineIfList(Token ifToken)
+        {
+            var block = new BlockNode(ifToken.Line, ifToken.Column);
+            while (!IsAtEnd() && !Check(TokenType.Newline) && !Check(TokenType.Else))
+            {
+                if (Match(TokenType.Colon))
+                    continue;
+
+                var statement = ParseStatement();
+                if (statement != null)
+                    block.Statements.Add(statement);
+
+                // Only a `:` continues the list; anything else ends it, and the enclosing
+                // block's RequireEndOfStatement reports a stray token.
+                if (!Check(TokenType.Colon))
+                    break;
+            }
+            return block;
+        }
+
         private BlockNode ParseBlock(params TokenType[] endTokens)
         {
             var block = new BlockNode(Peek().Line, Peek().Column);
 
             while (!endTokens.Any(t => Check(t)) && !IsAtEnd())
             {
-                SkipNewlines();
+                SkipStatementSeparators();
 
                 if (endTokens.Any(t => Check(t)) || IsAtEnd())
                     break;
@@ -3281,7 +3311,7 @@ namespace BasicLang.Compiler
                         break;
                 }
 
-                SkipNewlines();
+                SkipStatementSeparators();
             }
 
             return block;
@@ -4025,8 +4055,7 @@ namespace BasicLang.Compiler
         /// Check if current token terminates a statement
         /// </summary>
         /// <summary>
-        /// After a statement in a block, the line must end: a newline, <c>:</c> (left to its
-        /// existing handling), end of file, a block terminator, or one of the block's own end
+        /// After a statement in a block, the line must end: a newline, a <c>:</c> separator, end of file, a block terminator, or one of the block's own end
         /// tokens. ⛔ Nothing checked this, so whatever followed a complete statement on the same
         /// line began a SECOND statement: <c>Dim d As Integer = 5 E3</c> compiled, the stray
         /// <c>E3</c> passing as a possible .NET type, and before exponents lexed it was how
@@ -5224,6 +5253,19 @@ namespace BasicLang.Compiler
                     return "Multiple items should be separated by commas.";
                 default:
                     return null;
+            }
+        }
+
+        /// <summary>
+        /// Between statements: newlines and <c>:</c> separators. <c>:</c> joins statements on one
+        /// line, as in VB — the lexer has always produced it, but no statement loop consumed it,
+        /// so <c>a() : b()</c> failed with "Unexpected token in expression: ':'".
+        /// </summary>
+        private void SkipStatementSeparators()
+        {
+            while ((Check(TokenType.Newline) || Check(TokenType.Colon)) && !IsAtEnd())
+            {
+                Advance();
             }
         }
 

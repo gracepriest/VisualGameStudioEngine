@@ -79,6 +79,17 @@ Loop Until condition
 `Exit For` / `Exit While` / `Exit Do` break; `Continue For` and friends skip to the next
 iteration.
 
+`:` joins statements on one line. A single-line `If` owns everything to the end of its line, so
+a `:`-joined statement runs only when its branch does, and an `Else` binds to the nearest `If`:
+
+```vb
+If n > 0 Then Return "pos" Else Return "other"
+If ready Then Start() : Log("started")          ' both run only when ready
+If x < 0 Then x = 0 Else x = x * 2 : Log("x")   ' Log is part of the Else
+If a Then If b Then P() Else Q()                ' the Else belongs to If b
+For i = 1 To 3 : Console.Write(i) : Next
+```
+
 ## Functions and subroutines
 
 ```vb
