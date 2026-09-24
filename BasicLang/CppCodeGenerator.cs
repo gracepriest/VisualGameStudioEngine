@@ -2421,9 +2421,47 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 // so a future analyzer relaxation degrades to a C++ compile error.
             }
 
+            var checkedHelper = CheckedDivisionHelper(binaryOp);
+            if (checkedHelper != null)
+            {
+                WriteLine($"{result} = {checkedHelper}({left}, {right});");
+                return;
+            }
+
             WriteLine($"{result} = {left} {op} {right};");
         }
-        
+
+        /// <summary>
+        /// The runtime helper an INTEGRAL division or modulo must go through, or null for any other
+        /// operation. A bare C++ <c>n / 0</c> or <c>n % 0</c> on integers is undefined behaviour —
+        /// MEASURED on x86-64/g++: the process died with SIGFPE (exit 136) before the enclosing
+        /// <c>Try</c> could run, where .NET throws a catchable DivideByZeroException. The helpers
+        /// (<c>CppNetExceptionRuntime</c>) throw the typed NetException the Catch ladder matches.
+        /// Keyed on the RESULT type: any floating operand makes the result floating, and floating
+        /// division by zero is IEEE Infinity/NaN, not a throw.
+        ///
+        /// <para>⚠ An UNTYPED op is the <c>When</c>-guard case: guards are not run through the
+        /// semantic analyzer, so their operator trees carry no type. There the operands decide,
+        /// and a <c>\</c> is checked regardless — the language admits it on integers only.</para>
+        /// </summary>
+        private static string CheckedDivisionHelper(IRBinaryOp op)
+        {
+            if (!IsIntegralDivision(op)) return null;
+            return op.Operation switch
+            {
+                BinaryOpKind.IntDiv or BinaryOpKind.Div => "BasicLang::CheckedDiv",
+                BinaryOpKind.Mod => "BasicLang::CheckedMod",
+                _ => null,
+            };
+        }
+
+        private static bool IsIntegralDivision(IRBinaryOp op)
+        {
+            if (op.Type != null) return op.Type.IsIntegral();
+            if (op.Operation == BinaryOpKind.IntDiv) return true;
+            return op.Left?.Type?.IsIntegral() == true && op.Right?.Type?.IsIntegral() == true;
+        }
+
         public override void Visit(IRUnaryOp unaryOp)
         {
             var operand = GetValueName(unaryOp.Operand);
@@ -3827,6 +3865,9 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 case IRConstant c:
                     return EmitConstant(c);
                 case IRBinaryOp b:
+                    var checkedHelper = CheckedDivisionHelper(b);
+                    if (checkedHelper != null)
+                        return $"{checkedHelper}({RenderInline(b.Left)}, {RenderInline(b.Right)})";
                     return $"({RenderInline(b.Left)} {MapBinaryOperator(b.Operation)} {RenderInline(b.Right)})";
                 case IRCompare cmp:
                     return $"({RenderInline(cmp.Left)} {MapCompareOperator(cmp.Comparison)} {RenderInline(cmp.Right)})";

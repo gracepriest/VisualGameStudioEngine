@@ -97,7 +97,11 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// variable through <c>Exception.Wrap</c> so a native JS error still has a
         /// <c>Message</c>.</para>
         /// </summary>
-        public static List<string> CollectRequired(IRModule module)
+        /// <param name="alsoRequired">
+        /// Names the RUNTIME needs even though the program never spells them — e.g.
+        /// <c>DivideByZeroException</c>, thrown by the checked integer-division helper.
+        /// </param>
+        public static List<string> CollectRequired(IRModule module, IEnumerable<string> alsoRequired = null)
         {
             var mentioned = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
@@ -106,6 +110,9 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 var canonical = Canonical(name);
                 if (canonical != null) mentioned.Add(canonical);
             }
+
+            foreach (var name in alsoRequired ?? Enumerable.Empty<string>())
+                Mention(name);
 
             foreach (var irClass in module?.Classes?.Values ?? Enumerable.Empty<IRClass>())
                 Mention(irClass.BaseClass);

@@ -183,6 +183,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             // `class MyError extends Exception` hits the temporal dead zone otherwise.
             EmitExceptionPrelude(module);
             EmitConversionPrelude(module);
+            EmitCheckedDivisionPrelude(module);
 
             // Module-level Dims, also before classes — a static field initialiser may read one.
             EmitGlobals(module);
@@ -310,9 +311,82 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             Line();
         }
 
+        /// <summary>
+        /// True for an Integer-family <c>\</c> or <c>Mod</c>, which must throw on a zero divisor.
+        /// An UNTYPED op is a <c>When</c> guard's tree (guards skip the semantic analyzer): there
+        /// the operands decide, and <c>\</c> is checked regardless — it is integer-only. MEASURED:
+        /// keyed on <c>op.Type</c> alone, <c>Case 7 When n \ z &gt; 1</c> with z = 0 still took
+        /// the arm (Infinity &gt; 1).
+        /// </summary>
+        private static bool IsCheckedDivision(IRBinaryOp op)
+        {
+            if (op.Operation is not (BinaryOpKind.IntDiv or BinaryOpKind.Mod)) return false;
+            if (op.Type != null) return IsInt32(op.Type);
+            if (op.Operation == BinaryOpKind.IntDiv) return true;
+            return IsInt32(op.Left?.Type) && IsInt32(op.Right?.Type);
+        }
+
+        /// <summary>
+        /// True when any value in the module is a checked division — found by walking operand
+        /// trees, not just block instructions, because a suppressed <c>When</c> guard's tree
+        /// never enters a block yet is still rendered through <see cref="RenderBinary"/>.
+        /// Scanned up front for the same reason as <see cref="UsesRoundingHelper"/>: the
+        /// prelude is written before any body.
+        /// </summary>
+        private static bool UsesCheckedDivision(IRModule module)
+        {
+            var seen = new HashSet<IRInstruction>(ReferenceEqualityComparer.Instance);
+
+            bool Walk(IRInstruction inst)
+            {
+                if (inst == null || !seen.Add(inst)) return false;
+                if (inst is IRBinaryOp b && IsCheckedDivision(b)) return true;
+                foreach (var operand in BasicLang.Compiler.CodeGen.IROperandWalker.EnumerateOperands(inst))
+                    if (Walk(operand)) return true;
+                return false;
+            }
+
+            foreach (var function in module?.Functions ?? Enumerable.Empty<IRFunction>())
+                foreach (var block in function.Blocks ?? Enumerable.Empty<BasicBlock>())
+                    foreach (var instruction in block.Instructions ?? Enumerable.Empty<IRInstruction>())
+                        if (Walk(instruction)) return true;
+
+            return false;
+        }
+
+        private const string IntDivHelperName = "__blIntDiv";
+        private const string IntModHelperName = "__blIntMod";
+
+        /// <summary>
+        /// Integer <c>\</c> and <c>Mod</c> that throw DivideByZeroException, as .NET does.
+        /// MEASURED before: JavaScript has no integer division, so <c>7 \ 0</c> was
+        /// <c>Math.trunc(7 / 0)</c> = Infinity and <c>7 Mod 0</c> was NaN — stored in an
+        /// Integer, printed, and never caught. Functions rather than inline ternaries because
+        /// JavaScript has no throw expression and each operand must be evaluated exactly once.
+        /// </summary>
+        private void EmitCheckedDivisionPrelude(IRModule module)
+        {
+            if (!UsesCheckedDivision(module)) return;
+
+            Line($"function {IntDivHelperName}(a, b) {{");
+            _indentLevel++;
+            Line("if (b === 0) throw new DivideByZeroException(\"Attempted to divide by zero.\");");
+            Line("return Math.trunc(a / b);");
+            _indentLevel--;
+            Line("}");
+            Line($"function {IntModHelperName}(a, b) {{");
+            _indentLevel++;
+            Line("if (b === 0) throw new DivideByZeroException(\"Attempted to divide by zero.\");");
+            Line("return a % b;");
+            _indentLevel--;
+            Line("}");
+            Line();
+        }
+
         private void EmitExceptionPrelude(IRModule module)
         {
-            var required = JsExceptionTypes.CollectRequired(module);
+            var required = JsExceptionTypes.CollectRequired(module,
+                UsesCheckedDivision(module) ? new[] { "DivideByZeroException" } : null);
             if (required.Count == 0) return;
 
             foreach (var name in required)
@@ -958,11 +1032,15 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 // BasicLang `\`. JS has NO integer-division operator — `/` is always floating
                 // point — and .NET truncates TOWARD ZERO. Math.floor is the tempting wrong
                 // answer: it agrees for positives and gives -4 where .NET gives -3.
-                case BinaryOpKind.IntDiv: return $"Math.trunc({l} / {r})";
+                // An Integer-family `\` goes through the checked helper, which throws
+                // DivideByZeroException on a zero divisor (EmitCheckedDivisionPrelude).
+                case BinaryOpKind.IntDiv:
+                    return IsCheckedDivision(op) ? $"{IntDivHelperName}({l}, {r})" : $"Math.trunc({l} / {r})";
 
                 // .NET's Mod takes the sign of the DIVIDEND, and so does JS's %. They agree
-                // exactly, so a bare operator is correct here — unlike IntDiv above.
-                case BinaryOpKind.Mod: return $"({l} % {r})";
+                // exactly for a nonzero divisor; an Integer-family zero divisor must throw.
+                case BinaryOpKind.Mod:
+                    return IsCheckedDivision(op) ? $"{IntModHelperName}({l}, {r})" : $"({l} % {r})";
 
                 // String concatenation is its own kind, so `+` here is never numeric addition
                 // in disguise.

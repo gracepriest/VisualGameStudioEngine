@@ -74,6 +74,27 @@ private:
     std::string chain_;
 };
 
+/* Integral `\` and `Mod`. A C++ integer division by zero is UNDEFINED BEHAVIOUR (on x86 the
+   process dies with SIGFPE before any handler runs); .NET throws DivideByZeroException, which a
+   `Catch ex As DivideByZeroException` (or ArithmeticException / Exception) must catch. The
+   chain string MUST match CppExceptionTypes' DivideByZeroException entry (a test pins it). The
+   generator passes already-evaluated temps/variables, so argument evaluation order (unspecified
+   in C++) cannot reorder a side effect. */
+constexpr const char* DivideByZeroChain =
+    ""System.DivideByZeroException;System.ArithmeticException;System.SystemException;System.Exception"";
+
+template <typename A, typename B>
+inline auto CheckedDiv(A a, B b) -> decltype(a / b) {
+    if (b == 0) throw NetException(DivideByZeroChain, ""Attempted to divide by zero."");
+    return a / b;
+}
+
+template <typename A, typename B>
+inline auto CheckedMod(A a, B b) -> decltype(a % b) {
+    if (b == 0) throw NetException(DivideByZeroChain, ""Attempted to divide by zero."");
+    return a % b;
+}
+
 } /* namespace BasicLang */
 #endif /* BASICLANG_NETEXCEPTION_RUNTIME */
 ";
