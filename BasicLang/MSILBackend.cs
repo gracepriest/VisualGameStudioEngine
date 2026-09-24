@@ -332,8 +332,10 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 : string.Join(", ", (arguments ?? Enumerable.Empty<IRValue>()).Select(a => IlTypeSpec(a.Type)));
 
         /// <summary>
-        /// True when <paramref name="irClass"/>, or a base of it, implements an interface that
-        /// declares a member named <paramref name="memberName"/>.
+        /// True when <paramref name="irClass"/> itself implements (lists) an interface that declares
+        /// a member named <paramref name="memberName"/> — see
+        /// <see cref="InterfaceImplementationLookup"/> for why an interface inherited from a base
+        /// class does not count.
         ///
         /// <para>⛔ AN INTERFACE SLOT CAN ONLY BE FILLED BY A VIRTUAL METHOD. The class emitted
         /// its `implements` clause correctly and then emitted the implementing method as an
@@ -346,33 +348,11 @@ namespace BasicLang.Compiler.CodeGen.MSIL
         {
             if (irClass == null || string.IsNullOrEmpty(memberName) || _module?.Interfaces == null) return false;
 
-            var classSeen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            for (var current = irClass; current != null; )
-            {
-                if (!classSeen.Add(current.Name)) break;
-
-                var pending = new Queue<string>(current.Interfaces ?? new List<string>());
-                var ifaceSeen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                while (pending.Count > 0)
-                {
-                    var name = pending.Dequeue();
-                    if (string.IsNullOrEmpty(name) || !ifaceSeen.Add(name)) continue;
-                    if (!_module.Interfaces.TryGetValue(name, out var iface) || iface == null) continue;
-
-                    if (iface.Methods != null && iface.Methods.Any(m => m?.Name != null
-                            && string.Equals(m.Name, memberName, StringComparison.OrdinalIgnoreCase)))
-                        return true;
-                    if (iface.Properties != null && iface.Properties.Any(pr => pr?.Name != null
-                            && string.Equals(pr.Name, memberName, StringComparison.OrdinalIgnoreCase)))
-                        return true;
-
-                    foreach (var b in iface.BaseInterfaces ?? new List<string>()) pending.Enqueue(b);
-                }
-
-                if (string.IsNullOrEmpty(current.BaseClass)) break;
-                if (!TryFindClass(current.BaseClass, out current)) break;
-            }
-            return false;
+            return InterfaceImplementationLookup.ImplementedInterfaces(_module, irClass).Any(iface =>
+                (iface.Methods != null && iface.Methods.Any(m => m?.Name != null
+                    && string.Equals(m.Name, memberName, StringComparison.OrdinalIgnoreCase)))
+                || (iface.Properties != null && iface.Properties.Any(pr => pr?.Name != null
+                    && string.Equals(pr.Name, memberName, StringComparison.OrdinalIgnoreCase))));
         }
 
         /// <summary>
@@ -1052,6 +1032,51 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             WriteLine($"}} // end of interface {interfaceName}");
         }
 
+        /// <summary>
+        /// An explicit implementation stub for an interface accessor whose implementation this
+        /// class INHERITS: <c>Holder</c> lists <c>IHolder</c>, and only <c>BaseHolder</c>
+        /// declares <c>Slot</c>. The stub is private, carries <c>.override</c> naming the
+        /// interface slot, and forwards to the base accessor with a non-virtual <c>call</c> —
+        /// the shape the C# compiler emits when a base-class member implements a derived class's
+        /// interface.
+        ///
+        /// <para>⛔ WITHOUT IT THE TYPE DID NOT LOAD: TypeLoadException "Method 'get_Slot' in type
+        /// 'Holder' ... does not have an implementation", because the base's accessor is not
+        /// virtual and so cannot fill the slot. Making the BASE accessor virtual instead was
+        /// rejected: it changes the base's own dispatch, which a same-named member in a further
+        /// derived class would then override rather than shadow.</para>
+        /// </summary>
+        private void GenerateInheritedAccessorStub(InterfaceImplementationLookup.InheritedAccessor inherited)
+        {
+            var propType = IlTypeSpec(inherited.InterfaceProperty.Type);
+            var iface = SanitizeName(inherited.Interface.Name);
+            var owner = SanitizeName(inherited.DeclaringClass.Name);
+            var slotRaw = (inherited.Getter ? "get_" : "set_") + RawName(inherited.InterfaceProperty.Name);
+            var baseRaw = (inherited.Getter ? "get_" : "set_") + RawName(inherited.InheritedProperty.Name);
+            var stubName = IlName($"{RawName(inherited.Interface.Name)}.{slotRaw}");
+
+            WriteLine("  .method private hidebysig newslot virtual final specialname");
+            WriteLine(inherited.Getter
+                ? $"          instance {propType} {stubName}() cil managed"
+                : $"          instance void {stubName}({propType} 'value') cil managed");
+            WriteLine("  {");
+            WriteLine($"    .override {iface}::{slotRaw}");
+            WriteLine("    .maxstack 8");
+            WriteLine("    ldarg.0");
+            if (inherited.Getter)
+            {
+                WriteLine($"    call instance {propType} {owner}::{baseRaw}()");
+            }
+            else
+            {
+                WriteLine("    ldarg.1");
+                WriteLine($"    call instance void {owner}::{baseRaw}({propType})");
+            }
+            WriteLine("    ret");
+            WriteLine($"  }} // end of method {slotRaw} (inherited implementation)");
+            WriteLine();
+        }
+
         private void GenerateUserClass(IRClass irClass)
         {
             _currentClass = irClass;
@@ -1107,6 +1132,13 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             foreach (var prop in irClass.Properties)
             {
                 GenerateProperty(irClass, prop);
+            }
+
+            // Interface accessors this class takes on through its own Implements list but
+            // inherits the implementation of — see GenerateInheritedAccessorStub.
+            foreach (var inherited in InterfaceImplementationLookup.InheritedInterfaceAccessors(_module, irClass))
+            {
+                GenerateInheritedAccessorStub(inherited);
             }
 
             // Constructors
@@ -1245,6 +1277,22 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 : prop.IsVirtual ? "newslot virtual "
                 : "";
 
+            // ⛔ AN INTERFACE SLOT CAN ONLY BE FILLED BY A VIRTUAL METHOD — the property twin of
+            // the GenerateClassMethod arm. An accessor an implemented interface declares was
+            // emitted non-virtual, and the type did not load: TypeLoadException "Method
+            // 'get_Slot' in type 'Holder' ... does not have an implementation" (measured with an
+            // interface property carrying an empty Get block). `newslot virtual final` is what
+            // C# emits for an implicit implementation. Decided PER ACCESSOR, on what the
+            // interface declares, so a class setter the interface never asked for stays an
+            // ordinary method. An Overridable/Overrides property is already virtual and keeps
+            // its own spelling.
+            var getterVirtualMod = virtualMod.Length == 0 && !prop.IsStatic
+                && InterfaceImplementationLookup.ImplementsInterfaceAccessor(_module, irClass, prop.Name, getter: true)
+                ? "newslot virtual final " : virtualMod;
+            var setterVirtualMod = virtualMod.Length == 0 && !prop.IsStatic
+                && InterfaceImplementationLookup.ImplementsInterfaceAccessor(_module, irClass, prop.Name, getter: false)
+                ? "newslot virtual final " : virtualMod;
+
             // ⛔ WHAT WILL ACTUALLY BE EMITTED, computed once and used for both the `.property`
             // block and the methods. They used to disagree: the block was written
             // unconditionally while each method was gated on `prop.Getter != null`, so an AUTO
@@ -1280,7 +1328,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             {
                 if (emitGetter)
                 {
-                    WriteLine($"  .method public hidebysig specialname {virtualMod}{staticMod}");
+                    WriteLine($"  .method public hidebysig specialname {getterVirtualMod}{staticMod}");
                     WriteLine($"          {instanceMod}{propType} {getter}() cil managed");
                     WriteLine("  {");
                     WriteLine("    .maxstack 8");
@@ -1300,7 +1348,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
 
                 if (emitSetter)
                 {
-                    WriteLine($"  .method public hidebysig specialname {virtualMod}{staticMod}");
+                    WriteLine($"  .method public hidebysig specialname {setterVirtualMod}{staticMod}");
                     WriteLine($"          {instanceMod}void {setter}({propType} 'value') cil managed");
                     WriteLine("  {");
                     WriteLine("    .maxstack 8");
@@ -1327,7 +1375,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             // Getter
             if (prop.Getter != null && !prop.IsWriteOnly)
             {
-                WriteLine($"  .method public hidebysig specialname {virtualMod}{staticMod}");
+                WriteLine($"  .method public hidebysig specialname {getterVirtualMod}{staticMod}");
                 WriteLine($"          {instanceMod}{propType} {getter}() cil managed");
                 WriteLine("  {");
                 EmitAccessorBody(prop.Getter, irClass, prop.IsStatic, closeWithRet: false);
@@ -1338,7 +1386,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             // Setter
             if (prop.Setter != null && !prop.IsReadOnly)
             {
-                WriteLine($"  .method public hidebysig specialname {virtualMod}{staticMod}");
+                WriteLine($"  .method public hidebysig specialname {setterVirtualMod}{staticMod}");
                 WriteLine($"          {instanceMod}void {setter}({propType} 'value') cil managed");
                 WriteLine("  {");
                 EmitAccessorBody(prop.Setter, irClass, prop.IsStatic, closeWithRet: true);
