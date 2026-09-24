@@ -106,7 +106,10 @@ namespace BasicLang.Compiler.ProjectSystem
                 return false;
             try
             {
-                return string.Equals(Path.GetFileNameWithoutExtension(nameOrPath),
+                // ToLocalPath: a Windows-authored Include/HintPath ("..\\libs\\RaylibWrapper.dll")
+                // otherwise has no separator Path can see on Linux/macOS, and the whole string was
+                // compared as the file name — so the wrapper went unrecognized.
+                return string.Equals(Path.GetFileNameWithoutExtension(ProjectFile.ToLocalPath(nameOrPath)),
                     WrapperAssemblyName, StringComparison.OrdinalIgnoreCase);
             }
             catch

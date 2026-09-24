@@ -147,6 +147,7 @@ public class CapabilityNegotiationTests
     // The expected URI is written out literally rather than calling PathToUri. Deriving
     // it from the code under test would make this flip together with the code and pin
     // nothing at all.
+    [Platform(Include = "Win", Reason = "uses Windows workspace roots (C:\\projects\\…)")]
     [Test]
     public void InitializeParams_WithWorkspaceRoot_SendsRootUriRootPathAndWorkspaceFolders()
     {
@@ -201,6 +202,7 @@ public class CapabilityNegotiationTests
     [TestCase(@"C:\projets\Jeu Vidéo", "Jeu Vidéo")]
     // A drive root has no name component to take; the documented fallback is the path
     // itself. Pins that a root can never produce the empty label this method guards against.
+    [Platform(Include = "Win", Reason = "uses Windows workspace roots (C:\\projects\\…)")]
     [TestCase(@"C:\", @"C:\")]
     public void InitializeParams_WorkspaceFolderName_IsDirectoryName_EvenWithTrailingSeparator(
         string root, string expectedName)

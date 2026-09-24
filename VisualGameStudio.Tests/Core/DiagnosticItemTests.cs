@@ -118,6 +118,7 @@ public class DiagnosticItemTests
         Assert.That(diagnostic.Source, Is.EqualTo("BasicLang Compiler"));
     }
 
+    [Platform(Include = "Win", Reason = "feeds Windows paths (C:\\…) into the host OS's Path APIs")]
     [Test]
     public void Location_WithFilePath_ReturnsFormattedLocation()
     {
@@ -143,6 +144,7 @@ public class DiagnosticItemTests
         Assert.That(diagnostic.Location, Is.EqualTo(""));
     }
 
+    [Platform(Include = "Win", Reason = "feeds Windows paths (C:\\…) into the host OS's Path APIs")]
     [Test]
     public void Location_ExtractsFileNameOnly()
     {
@@ -156,6 +158,7 @@ public class DiagnosticItemTests
         Assert.That(diagnostic.Location, Is.EqualTo("MyFile.bas(10,5)"));
     }
 
+    [Platform(Include = "Win", Reason = "feeds Windows paths (C:\\…) into the host OS's Path APIs")]
     [Test]
     public void FileName_WithFilePath_ReturnsNameOnly()
     {

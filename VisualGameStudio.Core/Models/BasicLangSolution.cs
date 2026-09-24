@@ -67,7 +67,12 @@ public class SolutionProject
     /// </summary>
     public string GetFullPath(string solutionDirectory)
     {
-        return Path.GetFullPath(Path.Combine(solutionDirectory, RelativePath));
+        // RelativePath comes from a .blsln written MSBuild-style ("ProjectA\ProjectA.blproj");
+        // off Windows a backslash is a file-name character, so convert it first (no-op on Windows).
+        var relative = Path.DirectorySeparatorChar == '\\'
+            ? RelativePath
+            : RelativePath.Replace('\\', Path.DirectorySeparatorChar);
+        return Path.GetFullPath(Path.Combine(solutionDirectory, relative));
     }
 }
 

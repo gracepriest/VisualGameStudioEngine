@@ -102,7 +102,10 @@ public class ProjectSerializer
             }
         }
 
-        // Parse ItemGroup elements
+        // Parse ItemGroup elements. File/dir items go through ToLocalPath: project files store
+        // MSBuild-style backslashes, which Linux/macOS read as part of a file NAME — see
+        // ProjectFile.ToLocalPath, the compiler-side twin this delegates to so both loaders agree.
+        static string ToLocalPath(string p) => BasicLang.Compiler.ProjectSystem.ProjectFile.ToLocalPath(p);
         foreach (var itemGroup in root.Elements("ItemGroup"))
         {
             foreach (var compile in itemGroup.Elements("Compile"))
@@ -110,7 +113,7 @@ public class ProjectSerializer
                 var include = compile.Attribute("Include")?.Value;
                 if (!string.IsNullOrEmpty(include))
                 {
-                    project.Items.Add(new ProjectItem(include, ProjectItemType.Compile));
+                    project.Items.Add(new ProjectItem(ToLocalPath(include), ProjectItemType.Compile));
                 }
             }
 
@@ -119,7 +122,7 @@ public class ProjectSerializer
                 var include = contentItem.Attribute("Include")?.Value;
                 if (!string.IsNullOrEmpty(include))
                 {
-                    project.Items.Add(new ProjectItem(include, ProjectItemType.Content));
+                    project.Items.Add(new ProjectItem(ToLocalPath(include), ProjectItemType.Content));
                 }
             }
 
@@ -128,7 +131,7 @@ public class ProjectSerializer
                 var include = resource.Attribute("Include")?.Value;
                 if (!string.IsNullOrEmpty(include))
                 {
-                    project.Items.Add(new ProjectItem(include, ProjectItemType.Resource));
+                    project.Items.Add(new ProjectItem(ToLocalPath(include), ProjectItemType.Resource));
                 }
             }
 
@@ -138,7 +141,7 @@ public class ProjectSerializer
                 if (!string.IsNullOrEmpty(include))
                 {
                     project.CppSettings ??= new CppProjectSettings();
-                    project.CppSettings.IncludeDirs.Add(include);
+                    project.CppSettings.IncludeDirs.Add(ToLocalPath(include));
                 }
             }
 
@@ -148,7 +151,7 @@ public class ProjectSerializer
                 if (!string.IsNullOrEmpty(include))
                 {
                     project.CppSettings ??= new CppProjectSettings();
-                    project.CppSettings.NativeLibs.Add(include);
+                    project.CppSettings.NativeLibs.Add(ToLocalPath(include));
                 }
             }
 
@@ -187,7 +190,7 @@ public class ProjectSerializer
                     {
                         // Path keeps the raw Include verbatim so a save round-trips it
                         // unchanged; Name is just the friendly project name for display.
-                        Name = Path.GetFileNameWithoutExtension(include),
+                        Name = Path.GetFileNameWithoutExtension(ToLocalPath(include)),
                         Path = include,
                         IsProjectReference = true
                     });

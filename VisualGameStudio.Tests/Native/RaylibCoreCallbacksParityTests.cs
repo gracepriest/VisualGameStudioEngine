@@ -61,7 +61,7 @@ public class RaylibCoreCallbacksParityTests
                 Assert.That(wrapper.Contains($"Framework_{name}("), Is.True, $"RaylibWrapper.vb missing import Framework_{name}");
             }
 
-            var raylibHeader = File.ReadAllText(Path.Combine(root, "packages", "raylib.5.5.0", "build", "native", "include", "raylib.h"));
+            var raylibHeader = RaylibHeader.Read(root);
             var rcoreRange = ExtractRlapiRange(raylibHeader, "SetTraceLogCallback(", "SetSaveFileTextCallback(");
             Assert.That(rcoreRange, Is.EquivalentTo(RcoreCallbackNames),
                 "raylib's SetTraceLogCallback..SetSaveFileTextCallback range must be exactly the 5 rcore callback setters");

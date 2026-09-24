@@ -44,7 +44,10 @@ public class ProjectSerializerItemsTests
 
         Assert.That(
             reloaded.Items.Where(i => i.ItemType == ProjectItemType.Resource).Select(i => i.Include),
-            Is.EqualTo(new[] { @"assets\sprite.png", @"assets\music.ogg" }),
+            // Loaded paths are converted to the OS's separators (ProjectFile.ToLocalPath) — identical
+            // to the stored text on Windows, "assets/…" on Linux/macOS.
+            Is.EqualTo(new[] { @"assets\sprite.png", @"assets\music.ogg" }
+                .Select(BasicLang.Compiler.ProjectSystem.ProjectFile.ToLocalPath)),
             "an IDE save must not strip <Resource> items from the project file");
         Assert.That(
             reloaded.Items.Where(i => i.ItemType == ProjectItemType.Compile).Select(i => i.Include),

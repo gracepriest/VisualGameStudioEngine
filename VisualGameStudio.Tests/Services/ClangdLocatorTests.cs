@@ -252,6 +252,7 @@ public class ClangdLocatorTests
         }
     }
 
+    [Platform(Include = "Win", Reason = "uses a Windows drive-rooted fake tools directory (X:\\vgs\\tools)")]
     [Test]
     public void ToolsProbe_PosixBinaryName()
     {

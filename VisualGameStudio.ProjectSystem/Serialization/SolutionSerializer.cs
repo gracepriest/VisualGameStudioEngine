@@ -57,8 +57,11 @@ public class SolutionSerializer
                 // Resolve absolute path from solution directory
                 if (!string.IsNullOrEmpty(project.RelativePath) && !string.IsNullOrEmpty(solutionDir))
                 {
-                    project.AbsolutePath = Path.GetFullPath(
-                        Path.Combine(solutionDir, project.RelativePath));
+                    // RelativePath is kept verbatim (a save round-trips it); only the path built
+                    // from it is converted — .blsln files store MSBuild-style backslashes, which
+                    // Linux/macOS would read as part of ONE file name (ProjectFile.ToLocalPath).
+                    project.AbsolutePath = Path.GetFullPath(Path.Combine(solutionDir,
+                        BasicLang.Compiler.ProjectSystem.ProjectFile.ToLocalPath(project.RelativePath)));
                 }
 
                 // Parse ProjectReference child elements
