@@ -1697,8 +1697,21 @@ namespace BasicLang.Compiler.IR
     {
         public string Name { get; set; }
         public TypeInfo Type { get; set; }
+
+        /// <summary>
+        /// The interface DECLARES a getter — not "the getter has a body"; an interface accessor
+        /// never has one. True unless the property is <see cref="IsWriteOnly"/> (ADR-0002).
+        /// </summary>
         public bool HasGetter { get; set; }
+
+        /// <summary>The interface DECLARES a setter. True unless <see cref="IsReadOnly"/> (ADR-0002).</summary>
         public bool HasSetter { get; set; }
+
+        /// <summary><c>ReadOnly Property</c>, as written — the source of truth for <see cref="HasSetter"/>.</summary>
+        public bool IsReadOnly { get; set; }
+
+        /// <summary><c>WriteOnly Property</c>, as written — the source of truth for <see cref="HasGetter"/>.</summary>
+        public bool IsWriteOnly { get; set; }
     }
 
     /// <summary>

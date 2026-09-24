@@ -352,7 +352,24 @@ namespace BasicLang.Compiler.StdLib.CSharp
         public string EmitLen(string str) => $"{str}.Length";
         public string EmitMid(string str, string start, string length) => $"{str}.Substring({start} - 1, {length})";
         public string EmitLeft(string str, string length) => $"{str}.Substring(0, {length})";
-        public string EmitRight(string str, string length) => $"{str}.Substring({str}.Length - {length})";
+        /// <summary>
+        /// ⛔ <b>THE RECEIVER APPEARS ONCE.</b> This was
+        /// <c>$"{str}.Substring({str}.Length - {length})"</c>, which interpolates the receiver
+        /// EXPRESSION twice — so <c>Right(Tag(), 2)</c> CALLED <c>Tag()</c> twice. Measured
+        /// against an effectful receiver: C# printed <c>tag</c> twice where C++, JavaScript and
+        /// MSIL each print it once, from a program that compiled, ran and printed the right
+        /// substring. An emitter may not duplicate an argument expression.
+        ///
+        /// <para>The C# range form <c>s[^n..]</c> is <c>Substring(s.Length - n)</c> with the
+        /// receiver bound once, and it is behaviour-identical on every shape this repo pins:
+        /// <c>[^0..]</c> is empty, <c>[^len..]</c> is the whole string, and <c>n</c> past the
+        /// end, an empty receiver, or a negative <c>n</c> each throw
+        /// <c>ArgumentOutOfRangeException</c> exactly as the <c>Substring</c> spelling did
+        /// (verified against both spellings side by side). Both operands are parenthesised:
+        /// <c>{str}</c> may be a binary expression, whose indexer would otherwise bind to its
+        /// right operand alone, and <c>^{length}</c> must take the whole index expression.</para>
+        /// </summary>
+        public string EmitRight(string str, string length) => $"({str})[^({length})..]";
         public string EmitUCase(string str) => $"{str}.ToUpper()";
         public string EmitLCase(string str) => $"{str}.ToLower()";
         public string EmitTrim(string str) => $"{str}.Trim()";

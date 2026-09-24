@@ -62,6 +62,41 @@ internal static class BclE2E
     }
 
     /// <summary>
+    /// The same front end through the AGGRESSIVE passes — the C++ leg of
+    /// <c>FourBackends.RunsOnEveryBackendAggressive</c>. <see cref="CompileToCppOptimized"/> runs
+    /// <c>AddStandardPasses</c> only, so it is blind to every aggressive-only pass.
+    ///
+    /// <para>⭐ <b>SAFE FOR LOOPS SINCE ADR-0003 — this used to say it was not.</b> It emitted a
+    /// program that ran a counted <c>For</c> ZERO times: issue #114, the OLD
+    /// <c>LoopInvariantCodeMotionPass</c> sinking the loop condition into the latch, which the
+    /// label-and-<c>goto</c> C++ emitter cannot recover from. ADR-0003 first closed this by
+    /// unregistering all three loop passes. <b>UPDATED 2026-09-24:</b> master's <c>e063faf</c>
+    /// (PR #85, adopted by this branch's merge of <c>15e4e63</c>; see ADR-0003's Amendment)
+    /// rewrote <c>LoopInvariantCodeMotionPass</c> to hoist only into a verified single-entry
+    /// preheader, never a latch, and re-registered it — so LICM DOES touch a loop again, but not
+    /// the way that broke this. <c>LoopUnrollingPass</c> and <c>LoopFusionPass</c> stay
+    /// unregistered. RE-MEASURED on the 13-shape CFG corpus with LICM back in the aggressive
+    /// pipeline: every counted <c>For</c>, <c>While</c>, <c>Do While</c>, <c>Exit For</c> and
+    /// nested-loop shape still runs the right number of iterations through this helper and prints
+    /// the same thing as <see cref="CompileToCppOptimized"/> —
+    /// see <c>CfgLoopShapesAggressiveTests</c>.</para>
+    /// </summary>
+    internal static string CompileToCppAggressive(string source)
+    {
+        var tokens = new Lexer(source).Tokenize();
+        var ast = new Parser(tokens).Parse();
+        var analyzer = new SemanticAnalyzer();
+        Assert.That(analyzer.Analyze(ast), Is.True,
+            string.Join("; ", analyzer.Errors.Select(e => e.Message)));
+        var irModule = new IRBuilder(analyzer).Build(ast, "TestModule");
+
+        VisualGameStudio.Tests.Compiler.AggressivePipeline.Apply(irModule);
+
+        return new CppCodeGenerator(new CppCodeGenOptions { GenerateComments = false })
+            .Generate(irModule);
+    }
+
+    /// <summary>
     /// Compile the generated C++ with a real compiler, run it, return stdout with
     /// line endings normalized. Ignores when no C++ compiler is available.
     /// </summary>

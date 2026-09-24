@@ -127,4 +127,29 @@ internal static class JsTestSupport
 
         return new JavaScriptCodeGenerator().Generate(module);
     }
+
+    /// <summary>
+    /// Compile with the AGGRESSIVE passes — what <c>--optimize</c> and a Release <c>.blproj</c>
+    /// build actually run.
+    ///
+    /// <para>⛔ <see cref="CompileOptimized"/> is NOT this. Despite the name it runs
+    /// <c>AddStandardPasses</c>, and so does
+    /// <c>JavaScriptOptimizedExecutionTests.RunOptimized</c>, which is built on it. Neither can
+    /// see an aggressive-only pass at all: <c>LoopInvariantCodeMotionPass</c>,
+    /// <c>TailCallOptimizationPass</c>, <c>AlgebraicSimplificationPass</c>,
+    /// <c>LoopFusionPass</c> and <c>LoopUnrollingPass</c> are only in
+    /// <c>AddAggressivePasses</c>, and so were <c>FunctionInliningPass</c> and
+    /// <c>InductionVariablePass</c> — both of which shipped broken behind this hole. Use this for
+    /// anything whose correctness an aggressive-only pass could disturb.</para>
+    ///
+    /// <para>The pipeline itself comes from <c>AggressivePipeline.Apply</c> — one definition for
+    /// all four backends, not a per-fixture copy.</para>
+    /// </summary>
+    public static string CompileAggressive(string source, bool runPreprocessor = false,
+        string sourceFilePath = "prog.bas")
+    {
+        var module = BuildModule(source, runPreprocessor, sourceFilePath);
+        AggressivePipeline.Apply(module);
+        return new JavaScriptCodeGenerator().Generate(module);
+    }
 }

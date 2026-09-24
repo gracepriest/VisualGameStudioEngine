@@ -207,7 +207,7 @@ public class ReturnCoercionTests
     // ====================================================================================
 
     /// <summary>BasicLang → C# source, through the optimizer, as the CLI does.</summary>
-    private static string EmitCSharp(string source)
+    private static string EmitCSharp(string source, bool aggressive = false)
     {
         var parser = new Parser(new Lexer(source).Tokenize());
         var ast = parser.Parse();
@@ -219,9 +219,16 @@ public class ReturnCoercionTests
             "semantic errors:\n" + string.Join("\n", analyzer.Errors.Select(e => e.ToString())));
 
         var module = new IRBuilder(analyzer).Build(ast, "ReturnCoercionProbe");
-        var pipeline = new OptimizationPipeline();
-        pipeline.AddStandardPasses();
-        pipeline.Run(module);
+        if (aggressive)
+        {
+            AggressivePipeline.Apply(module);
+        }
+        else
+        {
+            var pipeline = new OptimizationPipeline();
+            pipeline.AddStandardPasses();
+            pipeline.Run(module);
+        }
 
         return new ImprovedCSharpCodeGenerator().Generate(module);
     }
@@ -235,6 +242,16 @@ public class ReturnCoercionTests
 
     /// <summary>The emitted C# itself, for the few properties that are invisible at run time.</summary>
     internal static string EmitCSharpForTest(string source) => EmitCSharp(source);
+
+    /// <summary>
+    /// The emitted C#, AGGRESSIVE — the C# leg of
+    /// <c>FourBackends.RunsOnEveryBackendAggressive</c>, through
+    /// <see cref="AggressivePipeline"/>. <see cref="EmitCSharpForTest"/> runs
+    /// <c>AddStandardPasses</c> only and is blind to every aggressive-only pass; C# is this
+    /// suite's reference oracle, so having no aggressive C# route at all is what let
+    /// <c>FunctionInliningPass</c> and <c>InductionVariablePass</c> both ship broken.
+    /// </summary>
+    internal static string EmitCSharpAggressiveForTest(string source) => EmitCSharp(source, aggressive: true);
 
     /// <summary>
     /// The emitted C#, run past Roslyn. Returns the ERROR diagnostics only — warnings are not this

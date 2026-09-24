@@ -1118,15 +1118,16 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 WriteLine($"virtual {returnType} {methodName}({paramList}) = 0;");
             }
 
-            // Generate property getter/setter declarations
+            // Generate property getter/setter declarations. The signature comes from the SAME
+            // helper the implementing class uses (PropertyAccessorSignature) — see its comment
+            // for why two spellings of one accessor cannot be allowed.
             foreach (var prop in irInterface.Properties)
             {
-                var propType = MapType(prop.Type);
                 var propName = SanitizeName(prop.Name);
                 if (prop.HasGetter)
-                    WriteLine($"virtual {propType} get_{propName}() = 0;");
+                    WriteLine($"virtual {PropertyAccessorSignature(prop.Type, propName, isStatic: false, getter: true)} = 0;");
                 if (prop.HasSetter)
-                    WriteLine($"virtual void set_{propName}({propType} value) = 0;");
+                    WriteLine($"virtual {PropertyAccessorSignature(prop.Type, propName, isStatic: false, getter: false)} = 0;");
             }
 
             Unindent();
@@ -1300,6 +1301,13 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 GenerateProperty(irClass, prop);
             }
 
+            // Interface accessors this class takes on through its own Implements list but
+            // inherits the implementation of — see GenerateInheritedAccessorForwarder.
+            foreach (var inherited in InterfaceImplementationLookup.InheritedInterfaceAccessors(_module, irClass))
+            {
+                GenerateInheritedAccessorForwarder(irClass, inherited);
+            }
+
             // Generate simple inline getters/setters for private fields with public access pattern
             GenerateSimplePropertyAccessors(irClass);
 
@@ -1449,19 +1457,83 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             }
         }
 
+        /// <summary>
+        /// The declarator of a property accessor — <c>const std::string&amp; get_Slot() const</c> /
+        /// <c>void set_Slot(const std::string&amp; value)</c> — with no <c>virtual</c>, no
+        /// <c>= 0</c>/<c>override</c>, and no body. The ONE place this spelling is decided: the
+        /// interface declaration and the implementing class both come through here, differing
+        /// only in what they wrap around it (ADR-0004 D1).
+        ///
+        /// <para>⛔ TWO SPELLINGS OF ONE ACCESSOR IS A CLASS THAT CANNOT BE CONSTRUCTED. The
+        /// interface used to declare <c>virtual std::string get_Slot() = 0</c> while the class
+        /// defined <c>const std::string&amp; get_Slot() const</c>. Those are different functions
+        /// in C++ — the return type and the <c>const</c> both matter — so the class did not
+        /// override, stayed abstract, and <c>std::make_shared&lt;Holder&gt;()</c> failed inside
+        /// <c>construct_at</c>. Measured with an interface property that carried an (empty) Get
+        /// block, the one shape whose interface accessor was emitted at all.</para>
+        ///
+        /// <para>Strings and class-kinded types pass and return by <c>const&amp;</c>; a non-static
+        /// getter is <c>const</c>. <paramref name="isStatic"/> adds the <c>static</c> prefix and
+        /// drops the <c>const</c>, since a static member function has no object to promise not
+        /// to change.</para>
+        /// </summary>
+        private string PropertyAccessorSignature(TypeInfo type, string propName, bool isStatic, bool getter)
+        {
+            var propType = MapType(type);
+            var staticMod = isStatic ? "static " : "";
+            var byConstRef = propType == "std::string" || (type != null && type.Kind == TypeKind.Class);
+            var passType = byConstRef ? $"const {propType}&" : propType;
+
+            return getter
+                ? $"{staticMod}{passType} get_{propName}(){(isStatic ? "" : " const")}"
+                : $"{staticMod}void set_{propName}({passType} value)";
+        }
+
+        /// <summary>
+        /// <c>" override"</c> when this class's getter (or setter) fills a slot an implemented
+        /// interface declares, else empty. Spelling the override out turns a signature drift
+        /// between <see cref="PropertyAccessorSignature"/>'s two call sites into a compile error
+        /// at the accessor, instead of a class that silently stays abstract. A Shared property
+        /// can never fill an interface slot.
+        /// </summary>
+        private string InterfaceAccessorOverride(IRClass irClass, IRProperty prop, bool getter) =>
+            !prop.IsStatic && InterfaceImplementationLookup.ImplementsInterfaceAccessor(_module, irClass, prop.Name, getter)
+                ? " override"
+                : "";
+
+        /// <summary>
+        /// A forwarding override for an interface accessor whose implementation this class
+        /// INHERITS: <c>Holder : BaseHolder, IHolder</c> with <c>Slot</c> declared only on
+        /// <c>BaseHolder</c>.
+        ///
+        /// <para>⛔ THE INHERITED MEMBER DOES NOT OVERRIDE. <c>BaseHolder::get_Slot</c> and
+        /// <c>IHolder::get_Slot</c> sit in unrelated bases, so C++ leaves the interface's pure
+        /// virtual unimplemented, <c>Holder</c> stays abstract, and <c>make_shared&lt;Holder&gt;</c>
+        /// fails inside <c>construct_at</c> — measured once the interface declared its accessors.
+        /// The forwarder is spelled by <see cref="PropertyAccessorSignature"/> from the
+        /// INTERFACE's type, so it matches the pure virtual it overrides by construction, and
+        /// calls the base accessor qualified, which is also what keeps a later unqualified
+        /// <c>get_Slot</c> in this class from being ambiguous between the two bases.</para>
+        /// </summary>
+        private void GenerateInheritedAccessorForwarder(IRClass irClass, InterfaceImplementationLookup.InheritedAccessor inherited)
+        {
+            var declared = SanitizeName(inherited.InterfaceProperty.Name);
+            var target = $"{SanitizeName(irClass.BaseClass)}::{(inherited.Getter ? "get_" : "set_")}{SanitizeName(inherited.InheritedProperty.Name)}";
+            var signature = PropertyAccessorSignature(inherited.InterfaceProperty.Type, declared, isStatic: false, getter: inherited.Getter);
+
+            WriteLine(inherited.Getter
+                ? $"{signature} override {{ return {target}(); }}"
+                : $"{signature} override {{ {target}(value); }}");
+        }
+
         private void GenerateProperty(IRClass irClass, IRProperty prop)
         {
             var propType = MapType(prop.Type);
             var propName = SanitizeName(prop.Name);
-            var staticMod = prop.IsStatic ? "static " : "";
-
-            // Determine if getter should be const (non-static, read-only access)
-            var constQualifier = (!prop.IsStatic) ? " const" : "";
-
-            // Use const reference for return type if it's a string or class type
-            var returnType = propType;
-            if (propType == "std::string" || (prop.Type != null && prop.Type.Kind == TypeKind.Class))
-                returnType = $"const {propType}&";
+            var getterSignature = PropertyAccessorSignature(prop.Type, propName, prop.IsStatic, getter: true)
+                + InterfaceAccessorOverride(irClass, prop, getter: true);
+            var setterSignature = PropertyAccessorSignature(prop.Type, propName, prop.IsStatic, getter: false)
+                + InterfaceAccessorOverride(irClass, prop, getter: false);
 
             // AUTO-PROPERTY: both accessors null. C++ has no property syntax, so emit a real
             // data member plus inline accessors.
@@ -1480,14 +1552,9 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 var memberMod = prop.IsStatic ? "inline static " : "";
                 WriteLine($"{memberMod}{propType} {propName} = {GetDefaultValue(prop.Type)};");
                 if (!prop.IsWriteOnly)
-                    WriteLine($"{staticMod}{returnType} get_{propName}(){constQualifier} {{ return {propName}; }}");
+                    WriteLine($"{getterSignature} {{ return {propName}; }}");
                 if (!prop.IsReadOnly)
-                {
-                    var autoParamType = propType;
-                    if (propType == "std::string" || (prop.Type != null && prop.Type.Kind == TypeKind.Class))
-                        autoParamType = $"const {propType}&";
-                    WriteLine($"{staticMod}void set_{propName}({autoParamType} value) {{ {propName} = value; }}");
-                }
+                    WriteLine($"{setterSignature} {{ {propName} = value; }}");
                 WriteLine();
                 return;
             }
@@ -1495,7 +1562,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // Getter - returns const reference for complex types, const method for non-static
             if (prop.Getter != null && !prop.IsWriteOnly)
             {
-                WriteLine($"{staticMod}{returnType} get_{propName}(){constQualifier}");
+                WriteLine(getterSignature);
                 WriteLine("{");
                 Indent();
 
@@ -1515,11 +1582,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // Setter - takes const reference for complex types
             if (prop.Setter != null && !prop.IsReadOnly)
             {
-                var paramType = propType;
-                if (propType == "std::string" || (prop.Type != null && prop.Type.Kind == TypeKind.Class))
-                    paramType = $"const {propType}&";
-
-                WriteLine($"{staticMod}void set_{propName}({paramType} value)");
+                WriteLine(setterSignature);
                 WriteLine("{");
                 Indent();
 
@@ -3846,6 +3909,14 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                     return $"({RenderInline(cmp.Left)} {MapCompareOperator(cmp.Comparison)} {RenderInline(cmp.Right)})";
                 case IRUnaryOp u:
                     return $"({MapUnaryOperator(u.Operation)}{RenderInline(u.Operand)})";
+                // ⛔ Without this arm a numeric cast in a guard renders by NAME — an undeclared
+                // temp, because the guard's instructions never entered a block. Nothing put one
+                // there until IRBuilder began converting a floating operand of `\` (ADR-0005 D1);
+                // since then `When y \ 2 = 4` on a Double `y` needs this arm to compile at all.
+                // Decimal and String casts keep the old fallback: their statement forms route
+                // through the engine, not a static_cast.
+                case IRCast c when IsPlainNumericCast(c):
+                    return $"({StaticCastText(c, RenderInline(c.Value))})";
                 default:
                     return GetValueName(v);
             }
@@ -4004,6 +4075,18 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 }
             }
 
+            WriteLine($"{result} = {StaticCastText(cast, value)};");
+        }
+
+        /// <summary>
+        /// The C++ expression text of the plain <c>static_cast</c> tail of
+        /// <see cref="Visit(IRCast)"/> — every cast its Decimal and String arms did not claim —
+        /// with <paramref name="value"/> as the operand text. Shared with
+        /// <see cref="RenderInline"/> so a cast in a <c>When</c> guard means what the same cast
+        /// means in a statement.
+        /// </summary>
+        private string StaticCastText(IRCast cast, string value)
+        {
             var targetType = MapType(cast.Type);
 
             // ⛔ A FLOATING -> INTEGRAL narrowing ROUNDS HALF-TO-EVEN, because a bare static_cast
@@ -4013,12 +4096,20 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // mode is ToEven and matches Convert.ToInt32; std::round would NOT, it is
             // AwayFromZero and answers 9 for 8.5.
             if (IsFloatingTypeName(cast.Value?.Type?.Name) && IsIntegralTypeName(cast.Type?.Name))
-            {
-                WriteLine($"{result} = static_cast<{targetType}>(std::nearbyint({value}));");
-                return;
-            }
+                return $"static_cast<{targetType}>(std::nearbyint({value}))";
 
-            WriteLine($"{result} = static_cast<{targetType}>({value});");
+            return $"static_cast<{targetType}>({value})";
+        }
+
+        /// <summary>
+        /// A cast between two numeric primitives that are not Decimal — exactly the casts
+        /// <see cref="Visit(IRCast)"/> renders with <see cref="StaticCastText"/> alone, so
+        /// rendering one inline cannot disagree with its statement form.
+        /// </summary>
+        private static bool IsPlainNumericCast(IRCast cast)
+        {
+            static bool Plain(string name) => IsIntegralTypeName(name) || IsFloatingTypeName(name);
+            return Plain(cast.Value?.Type?.Name) && Plain(cast.Type?.Name);
         }
 
         /// <summary>A floating source, i.e. one a narrowing has something to round from.</summary>
@@ -5218,10 +5309,14 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             BinaryOpKind.Shl => "<<",
             BinaryOpKind.Shr => ">>",
             BinaryOpKind.Concat => "+",
-            // `\` (integer division). Both operands are integral by the time we get here
-            // (SemanticAnalyzer rejects floating operands), so C++ `/` on integers already
-            // truncates toward zero exactly as VB requires. The RESULT WIDTH is what makes
-            // this safe: SemanticAnalyzer types the result by the widened operand type, so
+            // `\` (integer division). Both operands are integral by the time we get here —
+            // IRBuilder converts a floating operand to Long, rounding half to even (ADR-0005
+            // D1; the analyzer ACCEPTS floating operands, it does not reject them) — so C++ `/`
+            // on integers truncates toward zero exactly as VB requires. Before that conversion
+            // a Double operand divided in floating point here and only the int64_t temp's
+            // implicit conversion truncated the QUOTIENT: 7.5 \ 2 printed 3, not VB's 4. (So
+            // there is no truncation code of this backend's own to remove.) The RESULT WIDTH is
+            // what makes this safe: SemanticAnalyzer types the result by the widened operand type, so
             // the temp this lands in is int64_t for a 64-bit division. It used to be
             // hardcoded to Integer, which would have made this arm emit a silent modulo-2^32
             // truncation instead of the loud syntax error the missing arm produced.

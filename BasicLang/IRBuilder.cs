@@ -553,6 +553,62 @@ namespace BasicLang.Compiler.IR
             return variable;
         }
 
+        /// <summary>
+        /// Whether <paramref name="name"/> already denotes something with STORAGE at this point
+        /// in the current function — a declared local, a parameter, a live SSA version, a field
+        /// or property of the enclosing class, or a module global.
+        ///
+        /// <para>This is the same resolution <see cref="GetOrCreateVariable"/> performs, asked
+        /// as a question instead of acted on, so a caller can tell "this name is about to be
+        /// CREATED" from "this name already resolves somewhere". The only caller is the counted
+        /// <c>For</c>, which must give its induction variable a local when nothing else holds it
+        /// and must NOT when something does — see <see cref="Visit(ForLoopNode)"/> for why each
+        /// half matters.</para>
+        ///
+        /// <para>⚠ Must be asked BEFORE <c>GetOrCreateVariable</c>, which pushes a version and
+        /// would then make every name look as though it already existed.</para>
+        /// </summary>
+        private bool ResolvesToExistingStorage(string name)
+        {
+            if (_currentFunction == null || string.IsNullOrEmpty(name)) return true;
+
+            // Ordinal, matching the guard this replaced — a case-insensitive test here would
+            // change which names the EXPLICIT `For i As Integer` form considers already declared.
+            if (_currentFunction.LocalVariables != null
+                && _currentFunction.LocalVariables.Any(v => v?.Name == name)) return true;
+
+            // A live SSA version. This covers a PARAMETER, and it covers a module global in
+            // the one function that has already touched it.
+            if (_variableVersions.TryGetValue(name, out var versions) && versions.Count > 0) return true;
+
+            // A field or property of the enclosing class. The SSA builder never binds one, so
+            // this arm is the only thing standing between `For Total = 1 To 3` and a local
+            // that shadows the member the loop is supposed to mutate.
+            if (IsCurrentClassMember(name)) return true;
+
+            // ⛔ A MODULE GLOBAL, reachable from EVERY function in its module — not only from
+            // whichever one happens to have bound a version already. Keyed exactly as
+            // GetOrCreateVariable keys it, because the two must agree about what a bare name
+            // denotes or this guard says "fresh" for something that resolver says "global".
+            //
+            // ⛔⛔ THIS ARM WAS DELETED ONCE AND HAD TO COME BACK. It was dropped as provably
+            // redundant, on the strength of a probe that put the loop and the read-back in the
+            // SAME function — where a spurious shadowing local happens to hold the right value
+            // at the end of the loop, so nothing observes the shadowing. The shape that
+            // observes it puts them in DIFFERENT functions:
+            //     Dim g As Integer = 0
+            //     Sub Bump()  : For g = 1 To 3 : Next : End Sub
+            //     Sub Main()  : Bump() : PrintLine(CStr(g)) : End Sub
+            // Measured 4 on all four backends before the deletion and 0 on all four after —
+            // the loop ran against a local nobody could see. A guard arm is not redundant
+            // because no shape kills it; it is redundant when no shape CAN.
+            if (_moduleGlobals.ContainsKey(ModuleGlobalKey(_currentModuleName ?? _module?.Name, name)))
+                return true;
+
+            // The bare-keyed fallback GetOrCreateVariable consults after the module-keyed one.
+            return _globalVariables.ContainsKey(name);
+        }
+
         private void PushVariableVersion(string name, IRVariable variable)
         {
             if (!_variableVersions.ContainsKey(name))
@@ -1695,12 +1751,21 @@ namespace BasicLang.Compiler.IR
 
             foreach (var prop in node.Properties)
             {
+                // ⛔ HasGetter/HasSetter mean "DECLARES this accessor", not "has a body"
+                // (ADR-0002). An interface accessor never has a body, so the old
+                // `prop.Getter != null` answered false for every bare `Property Slot As String`,
+                // and every backend declared a property with no accessors: C# refused it
+                // outright (CS0548), and C++/MSIL declared no slot for the class to fill.
+                // ReadOnly/WriteOnly are the source of truth; an explicit (empty) Get/Set block
+                // still counts, which is what the old reading got right.
                 irInterface.Properties.Add(new IRInterfaceProperty
                 {
                     Name = prop.Name,
-                    Type = new TypeInfo(prop.PropertyType?.Name ?? "Object", TypeKind.Class),
-                    HasGetter = prop.Getter != null,
-                    HasSetter = prop.Setter != null
+                    Type = InterfacePropertyType(_semanticAnalyzer.GetNodeType(prop), node.Name, prop),
+                    IsReadOnly = prop.IsReadOnly,
+                    IsWriteOnly = prop.IsWriteOnly,
+                    HasGetter = prop.Getter != null || !prop.IsWriteOnly,
+                    HasSetter = prop.Setter != null || !prop.IsReadOnly
                 });
             }
 
@@ -3142,6 +3207,35 @@ namespace BasicLang.Compiler.IR
         }
 
         /// <summary>
+        /// The type of interface property <paramref name="prop"/>, as the semantic analyzer
+        /// resolved it — <paramref name="resolved"/> is <c>GetNodeType(prop)</c>, the same
+        /// read a class property gets, so an interface property and the class property that
+        /// implements it carry the same <see cref="TypeInfo"/> for the same declared text
+        /// (ADR-0005 D3).
+        ///
+        /// <para>⛔ THERE IS NO STAND-IN, ON PURPOSE. This used to invent
+        /// <c>new TypeInfo(name, TypeKind.Class)</c> from the bare name, which made every
+        /// interface property class-kinded — <c>Integer</c> included — silently. The analyzer
+        /// now records a type for every interface property it visits (an unknown name is a
+        /// diagnostic there, as it is for a class property), so a null here means an interface
+        /// property reached the IR without being analysed: a compiler bug, reported as one in
+        /// every build. Not <c>Debug.Assert</c>: the suite runs Release, where that compiles
+        /// away. A thrown exception is how this builder already refuses what it cannot lower.</para>
+        ///
+        /// <para>Internal and static so a test can reach the refusal directly — no parseable
+        /// program can.</para>
+        /// </summary>
+        internal static TypeInfo InterfacePropertyType(TypeInfo resolved, string interfaceName, PropertyNode prop)
+        {
+            if (resolved != null) return resolved;
+
+            throw new InvalidOperationException(
+                $"Internal compiler error: interface property '{interfaceName}.{prop?.Name}' "
+                + $"(declared As '{prop?.PropertyType?.Name ?? "<none>"}') reached the IR builder with no "
+                + "type from semantic analysis. Refusing to invent one (ADR-0005 D3).");
+        }
+
+        /// <summary>
         /// Gets TypeInfo from a type name string for built-in types
         /// </summary>
         private TypeInfo GetTypeInfoFromName(string typeName)
@@ -3218,15 +3312,54 @@ namespace BasicLang.Compiler.IR
 
             // Determine loop variable type - use inline type if specified, otherwise use start value type
             TypeInfo loopVarType = startValue.Type;
+
+            // ⚠ THE TWO SPELLINGS ARE DIFFERENT STATEMENTS AND MUST NOT SHARE A GUARD.
+            // `For i As Integer = 1 To 3` DECLARES i — it introduces a loop-scoped variable
+            // that SHADOWS any same-named field or module global, which is VB's rule and what
+            // every backend already did. `For i = 1 To 3` declares nothing; it drives whatever
+            // i already denotes. Measured on all four backends against the pre-change build:
+            // with a module-level `Dim g`, a `For g As Integer` loop in another Sub leaves g
+            // at 0 (correct: it shadowed) while a `For g` loop leaves it at 4 (correct: it
+            // drove the global). Collapsing both into one storage-resolving guard broke the
+            // second and would equally have broken the first in the other direction.
             if (!string.IsNullOrEmpty(node.VariableType))
             {
                 loopVarType = GetTypeInfoFromName(node.VariableType) ?? startValue.Type;
-                // Add to local variables since this is an inline declaration
-                var localVar = new IRVariable(node.Variable, loopVarType, 0);
+
+                // The inline declaration: always its own local, deduped only against itself.
+                var declared = new IRVariable(node.Variable, loopVarType, 0);
                 if (!_currentFunction.LocalVariables.Any(v => v.Name == node.Variable))
                 {
-                    _currentFunction.LocalVariables.Add(localVar);
+                    _currentFunction.LocalVariables.Add(declared);
                 }
+            }
+
+            // ⛔ THE INDUCTION VARIABLE NEEDS STORAGE, AND THE INFERRED FORM USED TO GET NONE.
+            // This registration lived INSIDE the `VariableType` branch above, so
+            // `For i As Integer = 1 To n` worked and `For i = 1 To n` — the ordinary VB
+            // spelling — produced a loop over a variable no backend had declared. Measured on
+            // ALL FOUR backends, compiled and run:
+            //   C#     CS0103: The name 'i' does not exist in the current context (×5)
+            //   C++    error: use of undeclared identifier 'i'  at  `i = 1;`
+            //   JS     ReferenceError: i is not defined         at  `i = 1;`
+            //   MSIL   InvalidProgramException  (`// WARNING: Unknown local 'i'` in the IL)
+            // One omission, four identical symptoms — every backend writes its declarations
+            // from IRFunction.LocalVariables, so this is the shared cause and not a per-backend
+            // gap. It is NOT the For Each situation: there IRBuilder deliberately keeps the
+            // element variable out of the list because `foreach`/`for(:)` declares it in the
+            // target language. A counted For has no such construct; each backend emits a bare
+            // assignment.
+            //
+            // ⚠ Registered only when the name does not ALREADY resolve to storage, which is
+            // exactly the resolution GetOrCreateVariable performs on the next line — and it
+            // must be asked BEFORE that call, which pushes a version of its own. Without the
+            // guard, `For Total = 1 To 3` where Total is a FIELD or a module global would
+            // acquire a same-named local and the loop would silently stop mutating the member.
+            // The already-a-local case is what keeps `Dim i As Integer = 100` followed by
+            // `For i = 1 To 3` (which works today on all four backends) unchanged.
+            else if (!ResolvesToExistingStorage(node.Variable))
+            {
+                _currentFunction.LocalVariables.Add(new IRVariable(node.Variable, loopVarType, 0));
             }
 
             var loopVar = GetOrCreateVariable(node.Variable, loopVarType);
@@ -4098,13 +4231,27 @@ namespace BasicLang.Compiler.IR
                 // Widening the OPERANDS is the same fix, and the same reasoning, as
                 // WidenDivisionOperand in Visit(BinaryExpressionNode) — a Double-typed result
                 // over two Integer operands still divides as integers on the C-family backends.
-                // `\=` (IntDiv) is excluded there and is excluded here: it must keep truncating.
+                // `\=` (IntDiv) is excluded from that widening here as it is there.
                 var resultType = currentValue.Type;
                 if (op == BinaryOpKind.Div)
                 {
                     resultType = new TypeInfo("Double", TypeKind.Primitive);
                     currentValue = WidenDivisionOperand(currentValue, resultType);
                     value = WidenDivisionOperand(value, resultType);
+                }
+                else if (op == BinaryOpKind.IntDiv)
+                {
+                    // ADR-0005 D1, the same conversion as binary `\` — so that NO IntDiv leaves
+                    // IRBuilder with a floating operand, whichever site built it. A converted
+                    // divide is Long, as the analyzer types `a \ b`; the store coercion below
+                    // then narrows or widens it to the target. (⚠ Unreachable from source
+                    // today: the lexer has no `\=` token, so `d \= 2` is a parse error.)
+                    var convertedLeft = ConvertIntegerDivisionOperand(currentValue);
+                    var convertedRight = ConvertIntegerDivisionOperand(value);
+                    if (!ReferenceEquals(convertedLeft, currentValue) || !ReferenceEquals(convertedRight, value))
+                        resultType = new TypeInfo("Long", TypeKind.Primitive);
+                    currentValue = convertedLeft;
+                    value = convertedRight;
                 }
 
                 var tempName = _currentFunction.GetNextTempName();
@@ -4477,11 +4624,35 @@ namespace BasicLang.Compiler.IR
                 // IRPrettyPrinter and CppCapabilityChecker, so one insertion here moves every
                 // consumer at once instead of repeating the coercion per backend.
                 //
-                // IntDiv is deliberately excluded — `\` must keep truncating.
+                // IntDiv is deliberately excluded from this WIDENING — `\` is the integer
+                // operator, and its floating operands go the other way (next block).
                 if (opKind == BinaryOpKind.Div && resultType != null && resultType.IsFloatingPoint())
                 {
                     left = WidenDivisionOperand(left, resultType);
                     right = WidenDivisionOperand(right, resultType);
+                }
+
+                // ⛔ ADR-0005 D1: a FLOATING operand of `\` is converted to Long, rounding half
+                // to even, BEFORE the divide — VB.NET's rule, and the one the analyzer already
+                // states by typing the result Long. See ConvertIntegerDivisionOperand.
+                if (opKind == BinaryOpKind.IntDiv)
+                {
+                    var convertedLeft = ConvertIntegerDivisionOperand(left);
+                    var convertedRight = ConvertIntegerDivisionOperand(right);
+
+                    // ⚠ A `When` guard is never analyzed (SemanticAnalyzer.Visit(CaseClauseNode)
+                    // skips node.Patterns), so its `\` arrives untyped while its variable operands
+                    // still carry their declared types — the conversion fires, the result type
+                    // does not. Give a converted divide the type the analyzer gives it everywhere
+                    // else: Long. MSIL's operand coercion reads it — measured on `When y \ n`
+                    // (Integer n), without it the guard emitted `conv.i8; ldloc n; div`, an
+                    // int64/int32 mix ECMA-335 does not allow and the x64 JIT merely tolerates.
+                    if (resultType == null
+                        && (!ReferenceEquals(convertedLeft, left) || !ReferenceEquals(convertedRight, right)))
+                        resultType = new TypeInfo("Long", TypeKind.Primitive);
+
+                    left = convertedLeft;
+                    right = convertedRight;
                 }
 
                 result = new IRBinaryOp(tempName, opKind, left, right, resultType);
@@ -4505,6 +4676,45 @@ namespace BasicLang.Compiler.IR
             var castName = _currentFunction.GetNextTempName();
             var cast = new IRCast(castName, operand, sourceType, targetType,
                                   DetermineCastKind(sourceType, targetType));
+            EmitInstruction(cast);
+            return cast;
+        }
+
+        /// <summary>
+        /// Converts a FLOATING (Single/Double) operand of <c>\</c> to Long, rounding half to
+        /// even; any other operand is returned unchanged. ADR-0005 D1: <c>7.5 \ 2</c> is
+        /// <c>CLng(7.5) \ 2</c> = 4, <c>-7.5 \ 2</c> = -4, <c>8.5 \ 2</c> = 4 (8.5 → 8), and the
+        /// integral divide then truncates toward zero (<c>-7 \ 2</c> = -3).
+        ///
+        /// <para>⛔ ONE conversion, here, so that after <c>IRBuilder</c> NO <c>IntDiv</c> has a
+        /// floating operand and no backend implements the rule itself. Measured before it, one
+        /// program printed three answers: <c>7.5 \ 2</c> was 4 on MSIL (its ADR-0004 D4 operand
+        /// coercion already converted), 3 on C++ and JavaScript (they divided in floating point
+        /// and truncated the quotient) and 3.75 on C# (plain <c>/</c>, no truncation at
+        /// all).</para>
+        ///
+        /// <para>⚠ An <see cref="IRCast"/>, the node every implicit numeric narrowing lowers to
+        /// (<see cref="CoerceToDeclaredType"/>), NOT the <c>IRCall</c> that a written
+        /// <c>CLng(x)</c> lowers to. The rounding is the same on every backend — each renders a
+        /// floating→integral IRCast half-to-even (<c>Convert.ToInt64</c>,
+        /// <c>std::nearbyint</c>, the <c>__blCInt</c> helper, <c>Math::Round</c> + <c>conv.i8</c>)
+        /// — but the JavaScript backend deliberately has no <c>CLng</c> lowering (BL7003), so an
+        /// IRCall would have turned a wrong answer into a refused build there.</para>
+        ///
+        /// <para>⛔ A CONSTANT operand is still wrapped, never folded to a Long literal as
+        /// <see cref="CoerceToDeclaredType"/> would: the JavaScript renderer refuses every
+        /// <c>long</c> constant (BL7003), so <c>7.5 \ 2</c> would stop compiling there.</para>
+        /// </summary>
+        private IRValue ConvertIntegerDivisionOperand(IRValue operand)
+        {
+            var sourceType = operand?.Type;
+            if (sourceType == null || !sourceType.IsFloatingPoint())
+                return operand;
+
+            var longType = new TypeInfo("Long", TypeKind.Primitive);
+            var castName = _currentFunction.GetNextTempName();
+            var cast = new IRCast(castName, operand, sourceType, longType,
+                                  DetermineCastKind(sourceType, longType));
             EmitInstruction(cast);
             return cast;
         }
@@ -5030,7 +5240,21 @@ namespace BasicLang.Compiler.IR
                         var refKind = parameters != null && call.Arguments.Count - 1 < parameters.Count
                             ? parameters[call.Arguments.Count - 1].RefKind
                             : BasicLang.Net.NetRefKind.None;
-                        call.ByRefArguments.Add(refKind != BasicLang.Net.NetRefKind.None);
+
+                        // ⛔ A USER `Shared` method's ByRef came from NOWHERE on this arm: only the
+                        // .NET descriptor above was consulted, so `Util.Bump(v)` against
+                        // `Shared Sub Bump(ByRef n)` was IR claiming a by-value call. The C# backend
+                        // dropped the `ref` (CS1620), and — worse — the optimizer trusted the claim
+                        // and kept `v + 1` across the call: C++ and MSIL printed b=42 where 43 is
+                        // right, measured on BOTH pipelines. Read from the declaration exactly as
+                        // the instance arm below does. `NetArgumentRefKinds` stays None for a user
+                        // callee: it is the .NET marshalling list, and a VB ByRef records nothing
+                        // there (CSharpBackend then spells it `ref`, VB's only form).
+                        var userParameters = call.ResolvedNetTarget == null ? staticCalleeSymbol?.Parameters : null;
+                        var userByRef = userParameters != null && call.Arguments.Count - 1 < userParameters.Count
+                            && userParameters[call.Arguments.Count - 1].IsByRef;
+
+                        call.ByRefArguments.Add(refKind != BasicLang.Net.NetRefKind.None || userByRef);
                         call.NetArgumentRefKinds.Add(refKind);
                     }
 
