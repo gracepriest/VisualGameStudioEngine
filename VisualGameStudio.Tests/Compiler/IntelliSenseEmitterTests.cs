@@ -238,8 +238,10 @@ public class IntelliSenseEmitterTests
         // Pin the premise: the very same project through Build() fails at the lib gate.
         // Build() probes for itself and hard-fails BL6005 at section 6 — BEFORE the lib gate
         // — when nothing is installed, so the premise is only observable with a toolchain
-        // present. (Emit below is unconditional: it is handed toolchain: null explicitly.)
-        if (CppToolchain.Find() != null)
+        // present — and for a BasicLang native project that toolchain is always MSVC, so with
+        // only clang/gcc installed Build() stops at BL6015, still before the lib gate. (Emit below
+        // is unconditional: it is handed toolchain: null explicitly.)
+        if (CppToolchain.TryFindById("msvc") != null)
         {
             var built = CppProjectBuilder.Build(ProjectFile.Load(project.FilePath), "Debug");
             Assert.That(built.Success, Is.False);
@@ -269,6 +271,11 @@ public class IntelliSenseEmitterTests
     [Test]
     public void Emit_WhenStaleGeneratedFileIsLocked_SucceedsButWarns()
     {
+        // FileShare.None blocks a DELETE only on Windows (mandatory locking). Linux/macOS locks
+        // are advisory, so the "locked" stale file is simply deleted and there is nothing to warn.
+        if (!OperatingSystem.IsWindows())
+            Assert.Ignore("needs Windows' mandatory file locking to make the stale file undeletable");
+
         var project = WriteProject(Blproj("App"), ("App.bas", MainSource));
         Assert.That(IntelliSenseEmitter.Emit(project, "Debug", null).Success, Is.True);
 
@@ -314,8 +321,9 @@ public class IntelliSenseEmitterTests
     [Test]
     public void Build_WhenCompileDatabaseCannotBeWritten_StillSucceeds()
     {
-        if (CppToolchain.Find() == null)
-            Assert.Ignore("Build() needs a real toolchain to reach the compile step");
+        // A BasicLang native Build() always compiles with MSVC — "any toolchain" let this run
+        // (and fail BL6015) on machines with only clang/gcc.
+        VisualGameStudio.Tests.Native.NativeBuildSkip.RequireMsvcForBasicLangNative();
 
         var project = WriteProject(Blproj("App"), ("App.bas", MainSource));
         Directory.CreateDirectory(CompileCommandsPath);

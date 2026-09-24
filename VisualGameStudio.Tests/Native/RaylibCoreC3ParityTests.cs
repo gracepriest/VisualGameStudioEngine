@@ -71,7 +71,7 @@ public class RaylibCoreC3ParityTests
 
             // Completeness cross-check against raylib.h: the RLAPI range BeginMode2D..UnloadVrStereoConfig (a comment+blank
             // separate the Begin/End block from the two Load/Unload lines, both skipped) is EXACTLY the 16 mode names.
-            var raylibHeader = File.ReadAllText(Path.Combine(root, "packages", "raylib.5.5.0", "build", "native", "include", "raylib.h"));
+            var raylibHeader = RaylibHeader.Read(root);
             var range = ExtractRlapiRange(raylibHeader, "BeginMode2D(", "UnloadVrStereoConfig(");
             Assert.That(range, Is.EquivalentTo(C3AllModeNames),
                 "raylib's BeginMode2D..UnloadVrStereoConfig range must be exactly the 16 drawing-mode/VR names");

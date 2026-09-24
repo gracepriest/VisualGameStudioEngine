@@ -584,7 +584,7 @@ public class ProjectItemTests
     {
         var item = new ProjectItem { Include = @"Source\Modules\main.bas" };
 
-        Assert.That(item.Directory, Is.EqualTo(@"Source\Modules"));
+        Assert.That(item.Directory, Is.EqualTo(Path.Combine("Source", "Modules")));
     }
 
     [TestCase(ProjectItemType.None, 0)]

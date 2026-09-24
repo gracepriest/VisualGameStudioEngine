@@ -26,6 +26,7 @@ public class ToolchainPathValidatorTests
         Assert.That(r.Status, Is.EqualTo(ToolchainPathStatus.Invalid));
     }
 
+    [Platform(Include = "Win", Reason = "validates Windows toolchain paths (clang++.exe, vcvars64.bat)")]
     [Test]
     public void Recognized_Clang_That_Smokes_Is_Valid_With_Version()
     {
@@ -61,6 +62,7 @@ public class ToolchainPathValidatorTests
         Assert.That(r.ResolvedPath, Is.EqualTo(bat));
     }
 
+    [Platform(Include = "Win", Reason = "validates Windows toolchain paths (clang++.exe, vcvars64.bat)")]
     [Test]
     public void Msvc_Compiler_Install_Dir_Derives_Vcvars()
     {

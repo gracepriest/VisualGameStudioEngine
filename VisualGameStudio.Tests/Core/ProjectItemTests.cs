@@ -54,7 +54,7 @@ public class ProjectItemTests
     {
         var item = new ProjectItem("Source\\SubFolder\\Main.bas", ProjectItemType.Compile);
 
-        Assert.That(item.Directory, Is.EqualTo("Source\\SubFolder"));
+        Assert.That(item.Directory, Is.EqualTo(Path.Combine("Source", "SubFolder")));
     }
 
     [Test]
