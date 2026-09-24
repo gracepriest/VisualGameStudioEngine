@@ -2563,11 +2563,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 EmitBlockInstructions(endBlock);
 
                 // Handle end block's terminator
-                var endTerminator = endBlock.Instructions.LastOrDefault();
-                if (endTerminator is IRConditionalBranch endCond)
-                    HandleConditionalBranch(endCond);
-                else if (endTerminator is IRBranch endBranch)
-                    HandleUnconditionalBranch(endBranch);
+                EmitContinuationTerminator(endBlock);
             }
         }
 
@@ -2640,14 +2636,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             EmitBlockInstructions(thenBlock);
 
             // Handle then block's terminator (might have nested control flow, return, or break)
-            var thenTerminator = thenBlock.Instructions.LastOrDefault();
-            if (thenTerminator is IRConditionalBranch thenCond)
-                HandleConditionalBranch(thenCond);
-            else if (thenTerminator is IRBranch thenBranch)
-            {
-                if (!TryEmitLoopExit(thenBranch) && !_processedBlocks.Contains(thenBranch.Target))
-                    HandleUnconditionalBranch(thenBranch);
-            }
+            EmitIfArmTerminator(thenBlock);
 
             Unindent();
             WriteLine("}");
@@ -2659,14 +2648,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             EmitBlockInstructions(elseBlock);
 
             // Handle else block's terminator
-            var elseTerminator = elseBlock.Instructions.LastOrDefault();
-            if (elseTerminator is IRConditionalBranch elseCond)
-                HandleConditionalBranch(elseCond);
-            else if (elseTerminator is IRBranch elseBranch)
-            {
-                if (!TryEmitLoopExit(elseBranch) && !_processedBlocks.Contains(elseBranch.Target))
-                    HandleUnconditionalBranch(elseBranch);
-            }
+            EmitIfArmTerminator(elseBlock);
 
             Unindent();
             WriteLine("}");
@@ -2677,11 +2659,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 _processedBlocks.Add(mergeBlock);
                 EmitBlockInstructions(mergeBlock);
 
-                var mergeTerminator = mergeBlock.Instructions.LastOrDefault();
-                if (mergeTerminator is IRConditionalBranch mergeCond)
-                    HandleConditionalBranch(mergeCond);
-                else if (mergeTerminator is IRBranch mergeBranch)
-                    HandleUnconditionalBranch(mergeBranch);
+                EmitContinuationTerminator(mergeBlock);
             }
         }
 
@@ -2695,15 +2673,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             EmitBlockInstructions(thenBlock);
 
             // Handle then block's terminator
-            var thenTerminator = thenBlock.Instructions.LastOrDefault();
-            if (thenTerminator is IRConditionalBranch thenCond)
-                HandleConditionalBranch(thenCond);
-            else if (thenTerminator is IRBranch thenBranch)
-            {
-                // Check if this is a break (branch to loop end)
-                if (!TryEmitLoopExit(thenBranch) && !_processedBlocks.Contains(thenBranch.Target))
-                    HandleUnconditionalBranch(thenBranch);
-            }
+            EmitIfArmTerminator(thenBlock);
 
             Unindent();
             WriteLine("}");
@@ -2714,12 +2684,53 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 _processedBlocks.Add(mergeBlock);
                 EmitBlockInstructions(mergeBlock);
 
-                var mergeTerminator = mergeBlock.Instructions.LastOrDefault();
-                if (mergeTerminator is IRConditionalBranch mergeCond)
-                    HandleConditionalBranch(mergeCond);
-                else if (mergeTerminator is IRBranch mergeBranch)
-                    HandleUnconditionalBranch(mergeBranch);
+                EmitContinuationTerminator(mergeBlock);
             }
+        }
+
+        /// <summary>
+        /// The terminator of an If arm's first block, emitted inside the arm's braces.
+        ///
+        /// <para>⛔ The IRSwitch arm was missing here and in every continuation below (see
+        /// <see cref="EmitContinuationTerminator"/>), so a <c>Select Case</c> ending an If arm
+        /// was DROPPED — the switch, its case bodies, and the code after it — with a green build.
+        /// MEASURED: <c>If n &gt; 0 Then … Select Case n …</c> printed only the arm's first
+        /// line. C++ and JavaScript were correct; they do not reconstruct structure from the
+        /// CFG this way.</para>
+        /// </summary>
+        private void EmitIfArmTerminator(BasicBlock armBlock)
+        {
+            var terminator = armBlock.Instructions.LastOrDefault();
+            if (terminator is IRConditionalBranch cond)
+                HandleConditionalBranch(cond);
+            else if (terminator is IRSwitch switchInst)
+                HandleSwitchStatement(switchInst);
+            else if (terminator is IRBranch branch)
+            {
+                // Check if this is a break (branch to loop end)
+                if (!TryEmitLoopExit(branch) && !_processedBlocks.Contains(branch.Target))
+                    HandleUnconditionalBranch(branch);
+            }
+        }
+
+        /// <summary>
+        /// The terminator of the block that CONTINUES after a structured construct — an If's
+        /// merge block, a loop's, Try's or For Each's end block.
+        ///
+        /// <para>⛔ Without the IRSwitch arm, a <c>Select Case</c> placed AFTER any of those
+        /// constructs was dropped with everything following it. MEASURED on master: an
+        /// <c>If … End If</c> followed by <c>Select Case n</c> compiled to the If alone — in a
+        /// plain Sub, no Try involved — and the same after For, While, Try and For Each.</para>
+        /// </summary>
+        private void EmitContinuationTerminator(BasicBlock continuationBlock)
+        {
+            var terminator = continuationBlock.Instructions.LastOrDefault();
+            if (terminator is IRConditionalBranch cond)
+                HandleConditionalBranch(cond);
+            else if (terminator is IRSwitch switchInst)
+                HandleSwitchStatement(switchInst);
+            else if (terminator is IRBranch branch)
+                HandleUnconditionalBranch(branch);
         }
 
         private bool IsLoopEndBlock(BasicBlock block)
@@ -4286,11 +4297,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 _processedBlocks.Add(tryCatch.EndBlock);
                 EmitBlockInstructions(tryCatch.EndBlock);
 
-                var endTerminator = tryCatch.EndBlock.Instructions.LastOrDefault();
-                if (endTerminator is IRConditionalBranch endCond)
-                    HandleConditionalBranch(endCond);
-                else if (endTerminator is IRBranch endBranch)
-                    HandleUnconditionalBranch(endBranch);
+                EmitContinuationTerminator(tryCatch.EndBlock);
             }
         }
 
@@ -4421,11 +4428,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 _processedBlocks.Add(forEach.EndBlock);
                 EmitBlockInstructions(forEach.EndBlock);
 
-                var endTerminator = forEach.EndBlock.Instructions.LastOrDefault();
-                if (endTerminator is IRConditionalBranch endCond)
-                    HandleConditionalBranch(endCond);
-                else if (endTerminator is IRBranch endBranch)
-                    HandleUnconditionalBranch(endBranch);
+                EmitContinuationTerminator(forEach.EndBlock);
             }
         }
 
