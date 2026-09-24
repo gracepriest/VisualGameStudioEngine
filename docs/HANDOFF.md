@@ -120,8 +120,9 @@ These are measured, not cautionary. Each one shipped a green build that did the 
   is enough, and the unrecognised side is handed to C++ overload resolution, which is the only
   place a foreign return type is knowable (`const char*`/`std::string` concatenate; an integer
   has no operator and becomes a build break). Note the asymmetry that made this worth fixing:
-  the same fall-through is SAFE for Single/Double, which fail to build loudly, and unsafe for a
-  foreign integer, which compiles with at most `-Wstring-plus-int` and walks off the literal.
+  the same fall-through was SAFE for Single/Double, which failed to build loudly (they now
+  stringify through `FormatDouble`/`FormatSingle`), and unsafe for a foreign integer, which
+  compiles with at most `-Wstring-plus-int` and walks off the literal.
   **A build break is the intended outcome for the numeric case** — do not "fix" it by reaching
   for `std::to_string` on an operand whose type you do not know.
 - ⛔ **A "Passed!" summary line does not mean the suite passed.** A crashed test host still
@@ -889,9 +890,9 @@ do NOT read those 18 as a regression, and do not baseline them either.
   namespace-scope objects in that order within a translation unit. Held by a mutation that
   reverses the loop. ⛔ JavaScript REFUSES that shape outright ("a module-level initializer ...
   that is not a constant"), so the backends do NOT agree on it and JS is the strict one.
-  ⛔ **`CStr(Double)` prints `3.500000` on C++** where C# and MSIL print `3.5` — pre-existing and
-  nothing to do with globals (measured on a plain LOCAL). Pinned as C++ actually behaves rather
-  than normalised away.
+  ✅ **`CStr(Double)` used to print `3.500000` on C++** where C# and MSIL print `3.5`. Fixed on
+  2026-09-24: every Single/Double → text route goes through the runtime's `FormatDouble` /
+  `FormatSingle` (`CppFloatFormattingTests`), and the pins now expect `3.5`.
   ⚠ **`ValueText` vs `GetValueName` at that site is a WASH**, measured: the base `GetValueName`
   (`ICodeGenerator`) already routes an `IRConstant` to `EmitConstant`, so swapping them passes
   every test. `ValueText` is there for consistency with its sibling sites, not protection — an
@@ -925,9 +926,8 @@ do NOT read those 18 as a regression, and do not baseline them either.
   value"); a `Protected` field is not visible from a derived class ("Undefined identifier"), as the
   analyzer does not inherit Protected members into scope; a `Structure` field initializer does not
   PARSE ("Expected member name but found Assignment").
-  ⚠ **`CStr(Double)` → `2.500000` and `CStr(Boolean)` → `True` on C++** are the long-recorded
-  divergences above, not this fix's; the tests assert C++'s own spelling rather than normalising
-  it away.
+  ✅ **`CStr(Double)` → `2.500000` on C++** was the divergence above; it now prints `2.5`.
+  `CStr(Boolean)` → `True` is .NET's spelling (JavaScript printed `true` until 2026-09-24).
 
   ⚠ **A NON-LITERAL field initializer FOLDS as of 2026-09-18** — `FieldInitializerFoldTests`,
   `IRBuilder.BuildConstantFieldInitializer` + the extracted `TryFoldInitializerToConstant`.

@@ -50,10 +50,9 @@ public class ModuleScopeInitializerTests
     /// MSIL <c>.cctor</c> comment warns about — and exactly what C++ does, see
     /// <see cref="ACppGlobalInitializer_IsStillDropped"/>.
     ///
-    /// <para>⛔ THREE backends here, not four. C++ carries these too, but it FORMATS a Double
-    /// differently (<c>3.500000</c>), so it is asserted in
-    /// <see cref="AModuleScopeInitializer_ReachesTheCppProgram"/> against its own expected text
-    /// rather than folded into this list on a shared string.</para>
+    /// <para>⛔ THREE backends here, not four. C++ carries these too, and is asserted in
+    /// <see cref="AModuleScopeInitializer_ReachesTheCppProgram"/> (it once formatted a Double
+    /// as <c>3.500000</c>, which is why it has its own list).</para>
     /// </summary>
     [Test]
     [Category("Integration")]
@@ -86,12 +85,9 @@ public class ModuleScopeInitializerTests
     /// Verified at the time on unmodified master: a plain LITERAL printed 0 there too, so this
     /// was never the folding path.
     ///
-    /// <para>⚠ Separate from the shared list above because C++ FORMATS a Double differently:
-    /// <c>CStr(3.5)</c> is <c>3.500000</c> here against <c>3.5</c> on C# and MSIL. That is
-    /// pre-existing and nothing to do with globals — measured, a plain LOCAL
-    /// <c>Dim d As Double = 3.5</c> prints <c>3.500000</c> on C++ too. Pinned as C++ actually
-    /// behaves rather than normalised away, because a test that trimmed the zeroes would also
-    /// pass if the initializer were lost and the global happened to read 0.0.</para>
+    /// <para>⚠ Separate from the shared list above because C++ used to FORMAT a Double
+    /// differently (<c>CStr(3.5)</c> was <c>3.500000</c>). It now prints .NET's <c>3.5</c>
+    /// (CppFloatFormattingTests); a lost initializer would print <c>0</c>.</para>
     /// </summary>
     [Test]
     [Category("Integration")]
@@ -101,7 +97,7 @@ public class ModuleScopeInitializerTests
     [TestCase("Dim G As Integer = (1 + 2) * 3", "PrintLine(CStr(G))", "9", TestName = "Cpp_Nested")]
     [TestCase("Dim G As Boolean = True", "PrintLine(CStr(G))", "True", TestName = "Cpp_Bool")]
     [TestCase("Const C As Integer = 40 + 2", "PrintLine(CStr(C))", "42", TestName = "Cpp_Const")]
-    [TestCase("Dim G As Double = 7.0 / 2.0", "PrintLine(CStr(G))", "3.500000", TestName = "Cpp_Double_FormattingPinned")]
+    [TestCase("Dim G As Double = 7.0 / 2.0", "PrintLine(CStr(G))", "3.5", TestName = "Cpp_Double")]
     public void AModuleScopeInitializer_ReachesTheCppProgram(
         string declaration, string print, string expected)
     {

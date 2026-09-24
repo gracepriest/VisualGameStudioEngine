@@ -36,10 +36,8 @@ namespace VisualGameStudio.Tests.Compiler;
 /// <item>A <c>Structure</c> field initializer does not PARSE at all.</item>
 /// </list>
 ///
-/// <para>⚠ Two differences from JavaScript in the headline output are NOT this fix's and stay:
-/// <c>CStr(Double)</c> prints <c>2.500000</c> on C++ and <c>CStr(Boolean)</c> prints <c>True</c>,
-/// both long-recorded formatting divergences. The tests assert C++'s own spelling rather than
-/// normalising it away.</para>
+/// <para>The headline output is .NET's spelling: <c>CStr(Double)</c> prints <c>2.5</c> (it was
+/// <c>2.500000</c> before CppFloatFormattingTests) and <c>CStr(Boolean)</c> prints <c>True</c>.</para>
 /// </summary>
 [TestFixture]
 [Category("Integration")]
@@ -69,9 +67,7 @@ public class CppFieldInitializerTests
             End Module
             """);
 
-        Assert.That(BclE2E.CompileRun(cpp), Is.EqualTo("5,hi,2.500000,1.500000,True\n"),
-            "2.500000 and True are C++'s own CStr spellings — a separate, pre-existing "
-            + "divergence from JavaScript's 2.5 and true, deliberately not normalised here");
+        Assert.That(BclE2E.CompileRun(cpp), Is.EqualTo("5,hi,2.5,1.5,True\n"));
     }
 
     /// <summary>
@@ -256,15 +252,16 @@ public class CppFieldInitializerTests
             End Module
             """);
 
-        Assert.That(BclE2E.CompileRun(cpp), Is.EqualTo("400.000000,0.000000\n"));
+        Assert.That(BclE2E.CompileRun(cpp), Is.EqualTo("400,0\n"));
     }
 
     /// <summary>
     /// ⛔ Before the fix, <c>-0.0</c> emitted the INTEGER literal <c>-0</c> (unary minus on an int
     /// literal), which is <c>+0.0</c> once stored in a float slot — the sign was silently lost. A
     /// text assertion cannot catch that (<c>-0</c> and <c>-0.0</c> both read as "the same number"
-    /// to a human skim); only <c>1 / NZ</c> printing <c>-inf</c> rather than <c>inf</c> proves the
-    /// sign survived, for BOTH Double and Single.
+    /// to a human skim); only <c>1 / NZ</c> printing <c>-Infinity</c> rather than <c>Infinity</c>
+    /// proves the sign survived, for BOTH Double and Single. (.NET's spelling; C++ printed
+    /// <c>-inf</c> before CppFloatFormattingTests.)
     /// </summary>
     [Test]
     public void NegativeZero_KeepsItsSign_ForDoubleAndSingle()
@@ -285,12 +282,8 @@ public class CppFieldInitializerTests
             End Module
             """);
 
-        var output = BclE2E.CompileRun(cpp);
-        Assert.Multiple(() =>
-        {
-            Assert.That(output, Does.Contain("-inf"), output);
-            Assert.That(output, Does.Not.Contain(",inf"), "the Single half must be negative too:\n" + output);
-        });
+        Assert.That(BclE2E.CompileRun(cpp), Is.EqualTo("-Infinity,-Infinity\n"),
+            "both halves, Double then Single, must be negative");
     }
 
     /// <summary>
@@ -357,8 +350,8 @@ public class CppFieldInitializerTests
     }
 
     /// <summary>
-    /// ⛔ The de-DE end-to-end headline: before the fix this printed <c>2.000000</c>, not
-    /// <c>2.500000</c> — <c>V = 2,5;</c> is the COMMA OPERATOR in C++ (evaluate <c>2</c>, discard
+    /// ⛔ The de-DE end-to-end headline: before the fix this printed <c>2</c>, not <c>2.5</c>
+    /// (then spelled <c>2.000000</c>/<c>2.500000</c>) — <c>V = 2,5;</c> is the COMMA OPERATOR in C++ (evaluate <c>2</c>, discard
     /// it, keep the enclosing expression's value), so the program BUILT and silently held the
     /// wrong number. Generation happens under de-DE (<c>[SetCulture]</c> covers the whole
     /// pipeline, matching what a de-DE machine's own CurrentCulture would have done before this
@@ -385,6 +378,6 @@ public class CppFieldInitializerTests
             End Module
             """);
 
-        Assert.That(BclE2E.CompileRun(cpp), Is.EqualTo("2.500000\n"));
+        Assert.That(BclE2E.CompileRun(cpp), Is.EqualTo("2.5\n"));
     }
 }

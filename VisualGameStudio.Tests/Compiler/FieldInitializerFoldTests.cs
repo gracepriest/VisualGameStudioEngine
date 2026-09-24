@@ -133,15 +133,15 @@ public class FieldInitializerFoldTests
     }
 
     /// <summary>
-    /// ⚠ C++ separately, because it spells a Double <c>3.500000</c> and a Boolean <c>True</c> —
-    /// long-recorded divergences, pinned as C++ actually behaves rather than normalised away.
+    /// ⚠ C++ separately. It used to spell a Double <c>3.500000</c>; it now prints .NET's
+    /// <c>3.5</c> (see CppFloatFormattingTests).
     /// </summary>
     [Test]
     [Category("Integration")]
     [TestCase("Public N As Integer = 2 + 3", "PrintLine(CStr(c.N))", "5", TestName = "Cpp_Arithmetic")]
     [TestCase("Public N As Integer = (1 + 2) * 3", "PrintLine(CStr(c.N))", "9", TestName = "Cpp_Nested")]
     [TestCase("Public N As String = \"a\" & \"b\"", "PrintLine(c.N)", "ab", TestName = "Cpp_Concat")]
-    [TestCase("Public N As Double = 7.0 / 2.0", "PrintLine(CStr(c.N))", "3.500000", TestName = "Cpp_Double_FormattingPinned")]
+    [TestCase("Public N As Double = 7.0 / 2.0", "PrintLine(CStr(c.N))", "3.5", TestName = "Cpp_Double")]
     [TestCase("Public N As Boolean = 1 < 2", "PrintLine(CStr(c.N))", "True", TestName = "Cpp_Compare")]
     public void AFoldedFieldInitializer_ReachesTheCppProgram(
         string field, string print, string expected)

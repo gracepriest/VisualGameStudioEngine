@@ -382,7 +382,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 "iostream", "vector", "string", "cstdint", "cmath", "algorithm", "cstdlib",
                 "ctime", "functional", "coroutine", "exception", "iterator",
                 "unordered_map", "unordered_set", "stdexcept", "cstdio", "cstring", "ostream",
-                "limits"
+                "limits", "charconv" /* FormatDouble/FormatSingle, as in GenerateHeader */
             };
             foreach (var inc in _headerIncludes)
             {

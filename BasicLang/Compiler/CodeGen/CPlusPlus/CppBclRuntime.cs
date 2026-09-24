@@ -32,6 +32,8 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         private const string Includes = @"/* bl_bcltypes.hpp — native BCL value types (P1). Header-only C++20.
    SOURCE OF TRUTH: BasicLang CppBclRuntime.cs — do not edit the emitted copy. */
 #pragma once
+#include <charconv>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -164,7 +166,62 @@ inline int16_t dto_validate_offset(int64_t offsetTicks) {
     return (int16_t)(offsetTicks / 600000000LL);
 }
 
+/* .NET Core 3.0+ Double/Single.ToString() (invariant culture): the SHORTEST digits that round-trip
+   (std::to_chars), laid out like .NET's ""G"" formatting. Scientific notation is used when the
+   decimal point would sit more than maxDigits (17 Double / 9 Single, the round-trip precisions)
+   places right of the first digit, or more than 3 places left of it. The exponent is E+XX / E-XX,
+   at least two digits. -0 keeps its sign, and NaN / Infinity use the invariant spellings. */
+template <typename T>
+inline std::string format_net_float(T value, int maxDigits) {
+    if (std::isnan(value)) return ""NaN"";
+    if (std::isinf(value)) return value < 0 ? ""-Infinity"" : ""Infinity"";
+    if (value == 0) return std::signbit(value) ? ""-0"" : ""0"";
+
+    char buf[64];
+    const auto res = std::to_chars(buf, buf + sizeof buf, value, std::chars_format::scientific);
+    const char* p = buf;
+    const char* end = res.ptr;
+    std::string out;
+    if (*p == '-') { out += '-'; ++p; }
+
+    std::string digits;                      /* mantissa digits without the point: 1.2345e+17 -> 12345 */
+    while (p < end && *p != 'e') { if (*p != '.') digits += *p; ++p; }
+    while (digits.size() > 1 && digits.back() == '0') digits.pop_back();
+
+    int exp10 = 0;                           /* after 'e': sign then digits */
+    bool expNeg = false;
+    if (p < end) ++p;
+    if (p < end && (*p == '+' || *p == '-')) { expNeg = *p == '-'; ++p; }
+    while (p < end) { exp10 = exp10 * 10 + (*p - '0'); ++p; }
+    if (expNeg) exp10 = -exp10;
+
+    const int scale = exp10 + 1;             /* digits sit left of the point: value = 0.digits * 10^scale */
+    const int count = (int)digits.size();
+    if (scale > maxDigits || scale < -3) {
+        out += digits[0];
+        if (count > 1) { out += '.'; out.append(digits, 1, std::string::npos); }
+        out += 'E';
+        out += exp10 < 0 ? '-' : '+';
+        const int mag = exp10 < 0 ? -exp10 : exp10;
+        if (mag < 10) out += '0';
+        out += std::to_string(mag);
+    } else if (scale > 0) {
+        if (count <= scale) { out += digits; out.append((size_t)(scale - count), '0'); }
+        else { out.append(digits, 0, (size_t)scale); out += '.'; out.append(digits, (size_t)scale, std::string::npos); }
+    } else {
+        out += ""0."";
+        out.append((size_t)(-scale), '0');
+        out += digits;
+    }
+    return out;
+}
+
 } /* namespace bcl_detail */
+
+/* The one Double/Single -> text conversion the C++ backend emits: Console.WriteLine, &, interpolation,
+   CStr, CType(x, String) and x.ToString() all go through these, so they cannot disagree. */
+inline std::string FormatDouble(double value) { return bcl_detail::format_net_float(value, 17); }
+inline std::string FormatSingle(float value) { return bcl_detail::format_net_float(value, 9); }
 
 /* ---- TimeSpan: one int64 ticks (100ns). Spec §3. ---- */
 struct TimeSpan {
@@ -370,7 +427,7 @@ public:
     std::shared_ptr<StringBuilder> Append(int32_t v) { buf_ += std::to_string(v); return shared_from_this(); }  /* REQUIRED: without it, Append(Integer) is ambiguous (int32->int64 and int32->double are both rank Conversion) */
     std::shared_ptr<StringBuilder> Append(int64_t v) { buf_ += std::to_string(v); return shared_from_this(); }
     std::shared_ptr<StringBuilder> Append(bool v) { buf_ += (v ? ""True"" : ""False""); return shared_from_this(); } /* else bool promotes to int and prints 1/0 vs .NET True/False */
-    std::shared_ptr<StringBuilder> Append(double v);   /* invariant formatting, matches the backend's existing double->string style */
+    std::shared_ptr<StringBuilder> Append(double v);   /* invariant formatting via FormatDouble, as .NET's v.ToString() */
     std::shared_ptr<StringBuilder> AppendLine(const std::string& s = """") { buf_ += s; buf_ += ""\n""; return shared_from_this(); }
     std::shared_ptr<StringBuilder> AppendFormat(const std::string& fmt, const std::string& a0); /* {0} only, v1 */
     std::shared_ptr<StringBuilder> Insert(int32_t index, const std::string& s);   /* byte index; range-checked throw */
@@ -849,7 +906,7 @@ inline std::string DateTimeOffset::ToString() const {
 /* ================= StringBuilder bodies ================= */
 
 inline std::shared_ptr<StringBuilder> StringBuilder::Append(double v) {
-    buf_ += std::to_string(v);   /* the backend's existing double->string style (CppCodeGenerator) */
+    buf_ += FormatDouble(v);     /* .NET's Append(double) is v.ToString(): 1.5, not std::to_string's 1.500000 */
     return shared_from_this();
 }
 
