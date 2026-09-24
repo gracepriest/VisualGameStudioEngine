@@ -3187,6 +3187,17 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                     return new[] { tupleElem.Tuple };
                 case IRAwait awaited:
                     return awaited.Expression != null ? new[] { awaited.Expression } : Array.Empty<IRValue>();
+                // ⛔ These three visitors render their operands through EmitExpression, which
+                // inlines a single-use value. An operand NOT counted here reads as unused, so
+                // ShouldEmitInstruction also emits it as a standalone statement — measured,
+                // `For Each v In Doubles(3)` called Doubles twice (`Doubles(3);` then
+                // `foreach (int v in Doubles(3))`).
+                case IRForEach forEach:
+                    return forEach.Collection != null ? new[] { forEach.Collection } : Array.Empty<IRValue>();
+                case IRYield yielded:
+                    return yielded.Value != null ? new[] { yielded.Value } : Array.Empty<IRValue>();
+                case IRArrayStore arrayStore:
+                    return new[] { arrayStore.Array, arrayStore.Index, arrayStore.Value };
                 default:
                     return Array.Empty<IRValue>();
             }
@@ -3658,9 +3669,11 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
         public void Visit(IRArrayStore arrayStore)
         {
-            var arrayName = GetValueName(arrayStore.Array);
-            var indexVal = arrayStore.Index is IRConstant c ? c.Value.ToString() : GetValueName(arrayStore.Index);
-            var valueVal = arrayStore.Value is IRConstant vc ? EmitConstant(vc) : GetValueName(arrayStore.Value);
+            // EmitExpression for the same reason as Visit(IRIndexerStore): an inlined operand's
+            // bare name is an undeclared temp.
+            var arrayName = EmitExpression(arrayStore.Array);
+            var indexVal = EmitExpression(arrayStore.Index);
+            var valueVal = EmitExpression(arrayStore.Value);
             WriteLine($"{arrayName}[{indexVal}] = {valueVal};");
         }
 
@@ -3668,10 +3681,15 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         {
             // In C#, both List<T> and Dictionary<K,V> writes are `collection[index] = value`
             // (Dictionary's indexer setter inserts-or-updates), so a single form is faithful.
-            var collection = GetValueName(indexerStore.Collection);
-            var indices = string.Join(", ", indexerStore.Indices.Select(i =>
-                i is IRConstant ic ? EmitConstant(ic) : GetValueName(i)));
-            var value = indexerStore.Value is IRConstant vc ? EmitConstant(vc) : GetValueName(indexerStore.Value);
+            //
+            // ⛔ EmitExpression, not GetValueName, for every operand — as Visit(IRStore) does. This
+            // backend INLINES a single-use value into its consumer instead of declaring a temp
+            // (ShouldEmitInstruction), so the bare name of an inlined operand is a temp that was
+            // never declared or computed: `l(i) = i * 10` emitted `l[i] = t2;` (CS0103), for any
+            // computed value stored through a List or Dictionary indexer.
+            var collection = EmitExpression(indexerStore.Collection);
+            var indices = string.Join(", ", indexerStore.Indices.Select(EmitExpression));
+            var value = EmitExpression(indexerStore.Value);
             WriteLine($"{collection}[{indices}] = {value};");
         }
 
@@ -3698,7 +3716,9 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             }
             else
             {
-                var valueVal = yieldInst.Value is IRConstant c ? EmitConstant(c) : GetValueName(yieldInst.Value);
+                // EmitExpression: an inlined operand's bare name is an undeclared temp (see
+                // Visit(IRIndexerStore)). `Yield i * 2` emitted `yield return t1;` (CS0103).
+                var valueVal = EmitExpression(yieldInst.Value);
                 WriteLine($"yield return {valueVal};");
             }
         }
@@ -3897,7 +3917,9 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         {
             var elemType = MapType(forEach.ElementType);
             var varName = SanitizeName(forEach.VariableName);
-            var collectionExpr = GetValueName(forEach.Collection);
+            // EmitExpression, as in Visit(IRIndexerStore): `For Each v In MakeList(7)` emitted
+            // `foreach (int v in t0)` with the call inlined away and t0 never declared (CS0103).
+            var collectionExpr = EmitExpression(forEach.Collection);
 
             WriteLine($"foreach ({elemType} {varName} in {collectionExpr})");
             WriteLine("{");
