@@ -3021,15 +3021,25 @@ namespace BasicLang.Compiler.IR.Optimization
             // three is a shape anyone writes. Every backend's own optimizer does this legally
             // downstream where it is legal at all.
 
-            // 2 * x -> x + x. KEPT, and sound on both fronts: `x + x` is EXACTLY `2 * x` in IEEE 754
-            // (one rounding either way, same result), and it wraps identically on integer overflow.
+            // 2 * x -> x + x. The VALUE is right: `x + x` is exactly `2 * x` in IEEE 754 (one rounding
+            // either way) and wraps identically on integer overflow. That argument says NOTHING about
+            // how many times `x` is EVALUATED, and this rewrite writes the SAME operand object into
+            // both slots — a use count of 2. For `2 * Tag()` that is `Tag() + Tag()` on any backend
+            // that inlines (the C# oracle printed "tag" twice, measured — ADR-0001's Premise status).
+            // A value-preserving rewrite is not automatically an effect-preserving one, so the arm
+            // fires only for an operand that may be evaluated twice: ADR-0001/ADR-0004 D4's gate,
+            // the SAME predicate the C# backend's materialisation uses (IRReplicability), never a
+            // private copy. It also satisfies ADR-0004's Invariant S trivially: both uses sit in one
+            // instruction, so nothing can be assigned between them.
             if (binOp.Operation == BinaryOpKind.Mul)
             {
-                if (binOp.Left is IRConstant c && c.Value is int i && i == 2)
+                if (binOp.Left is IRConstant c && c.Value is int i && i == 2
+                    && IRReplicability.IsReplicable(binOp.Right))
                 {
                     return new IRBinaryOp(binOp.Name, BinaryOpKind.Add, binOp.Right, binOp.Right, binOp.Type);
                 }
-                if (binOp.Right is IRConstant c2 && c2.Value is int i2 && i2 == 2)
+                if (binOp.Right is IRConstant c2 && c2.Value is int i2 && i2 == 2
+                    && IRReplicability.IsReplicable(binOp.Left))
                 {
                     return new IRBinaryOp(binOp.Name, BinaryOpKind.Add, binOp.Left, binOp.Left, binOp.Type);
                 }

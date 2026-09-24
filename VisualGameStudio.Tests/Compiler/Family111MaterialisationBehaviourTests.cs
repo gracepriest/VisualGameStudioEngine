@@ -426,25 +426,28 @@ public class Family111MaterialisationBehaviourTests
     // ====================================================================================
 
     /// <summary>
-    /// ⛔ PINNED WRONG — LP1: the doubled call lives in a LOOP'S OWN CONDITION, not its body.
+    /// LP1: the doubled call lives in a LOOP'S OWN CONDITION, not its body.
     /// <c>ComputeMaterialisedTemps</c> deliberately excludes a loop-condition block (its
     /// instructions are written once, before the C# <c>while</c>, and the condition text is
-    /// RE-EMITTED each iteration — a local written once would freeze it), so the multi-use call
-    /// stays inlined there and is evaluated TWICE per condition check instead of once.
-    ///
-    /// <para>MEASURED, on all three entry points (in-process unit helper, CLI single-file,
-    /// project build): <c>next</c> ×4, final value <c>1</c> — <c>counter</c> only reaches 3 by
-    /// the FOURTH check (2 evaluations/check except the last, which short-circuits), so the loop
-    /// body (<c>n = n + 1</c>) runs once, not the CORRECT <c>3</c> a single evaluation per check
-    /// would produce.</para>
+    /// RE-EMITTED each iteration — a local written once would freeze it), so before ADR-0004 D4's
+    /// gate shipped, a doubled call there stayed inlined and was evaluated TWICE per condition
+    /// check instead of once — MEASURED WRONG (<c>next</c> ×4, final value <c>1</c>).
     ///
     /// <para>⭐ <b>Fixed by:</b> ADR-0004 D4, step 3 — gating <c>AlgebraicSimplificationPass</c>'s
-    /// <c>2*x → x+x</c> rewrite on <c>IsReplicable</c> ("#111 part 2 step c"). Once the rewrite
-    /// itself does not fire for a non-replicable operand, there is no doubled call in the
-    /// condition block for materialisation to have to reach.</para>
+    /// <c>2*x → x+x</c> rewrite on <c>IsReplicable</c> ("#111 part 2 step c"). The rewrite no
+    /// longer fires for a non-replicable operand (here, a call), so the condition IR stays
+    /// <c>Mul(2, NextVal())</c> — evaluated once per check — rather than
+    /// <c>Add(NextVal(), NextVal())</c>. There is then no doubled call in the condition block for
+    /// materialisation to have to reach at all.</para>
+    ///
+    /// <para>MEASURED CORRECT, on all three entry points (in-process unit helper, CLI
+    /// single-file, project build): <c>next</c> ×4, final value <c>3</c> — one evaluation per
+    /// condition check, matching the standard/non-optimizing pipelines' output. (Still four
+    /// <c>next</c> lines: the condition is checked four times — three that pass, one that
+    /// doesn't — but each check now costs exactly one call instead of two.)</para>
     /// </summary>
     [Test]
-    public void LP1_DoubledCallInATheLoopsOwnCondition_PinnedWrong_UnitHelperEntryPoint()
+    public void LP1_DoubledCallInTheLoopsOwnCondition_EvaluatesOncePerCheck_UnitHelperEntryPoint()
         => Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharpAggressive(
             "Dim counter As Integer\n\n" +
             "Function NextVal() As Integer\n" +
@@ -460,14 +463,15 @@ public class Family111MaterialisationBehaviourTests
             " Loop\n" +
             " Console.WriteLine(n)\n" +
             "End Sub")),
-            Is.EqualTo("next\nnext\nnext\nnext\n1"),
-            "if this changed (correct is next×4 then 3), ADR-0004 D4 step 3's 2*x replicability "
-            + "gate may be shipped — update or delete this pin, do not just widen it");
+            Is.EqualTo("next\nnext\nnext\nnext\n3"),
+            "ADR-0004 D4 step 3's 2*x replicability gate must keep `2 * NextVal()` from becoming "
+            + "`NextVal() + NextVal()` in the loop condition — if this regresses to 'next×4 then "
+            + "1', the gate (or the arm's operand-replicability check) has been lost");
 
     [Test]
-    [TestCase(false, TestName = "TheCliSingleFileEntryPoint_LP1_PinnedWrong")]
-    [TestCase(true, TestName = "TheProjectBuildEntryPoint_LP1_PinnedWrong")]
-    public void BothCompilerEntryPoints_LP1_PinnedWrong(bool asProject)
+    [TestCase(false, TestName = "TheCliSingleFileEntryPoint_LP1_EvaluatesOncePerCheck")]
+    [TestCase(true, TestName = "TheProjectBuildEntryPoint_LP1_EvaluatesOncePerCheck")]
+    public void BothCompilerEntryPoints_LP1_EvaluatesOncePerCheck(bool asProject)
         => Assert.That(RunThroughEntryPoint(
             "Dim counter As Integer\n\n" +
             "Function NextVal() As Integer\n" +
@@ -483,10 +487,9 @@ public class Family111MaterialisationBehaviourTests
             " Loop\n" +
             " Console.WriteLine(n)\n" +
             "End Sub", asProject),
-            Is.EqualTo("next\nnext\nnext\nnext\n1"),
+            Is.EqualTo("next\nnext\nnext\nnext\n3"),
             (asProject ? "CompileProjectFiles" : "CompileFile")
-            + " — measured on this entry point too (\"C# cli-O/proj print 1 not 3\"); if this "
-            + "changed, update or delete the pin, do not just widen it");
+            + " — measured correct on this entry point too, per ADR-0004 D4 step 3");
 
     /// <summary>
     /// T2 — the user declares a local ALSO named <c>t0</c>, colliding with the IR's own
