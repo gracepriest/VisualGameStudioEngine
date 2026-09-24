@@ -1036,36 +1036,28 @@ namespace BasicLang.Compiler
                 sb.Append(Advance());
             }
             
-            // Check for decimal point (Single or Double)
-            if (!IsAtEnd() && Peek() == '.' && _position + 1 < _source.Length && IsDigit(_source[_position + 1]))
+            // Check for decimal point (Single or Double) — or an exponent with none (`1E40`, `2E-3`),
+            // which is a floating literal too. ⛔ The exponent used to be read ONLY after a '.', so
+            // `1E40` lexed as the Integer 1 followed by an identifier `E40`: at module scope that
+            // was "Unexpected token at top level: 'E40'", but inside a procedure the parser dropped
+            // the stray identifier and `Dim x As Double = 1E40` compiled with x = 1 — silently, on
+            // every backend (`2E3` was 2). MEASURED on master fd67f57.
+            bool hasFraction = !IsAtEnd() && Peek() == '.' && _position + 1 < _source.Length && IsDigit(_source[_position + 1]);
+            if (hasFraction || ExponentFollows())
             {
-                sb.Append(Advance()); // Consume '.'
-                
-                while (!IsAtEnd() && IsDigit(Peek()))
+                if (hasFraction)
                 {
-                    sb.Append(Advance());
+                    sb.Append(Advance()); // Consume '.'
+
+                    while (!IsAtEnd() && IsDigit(Peek()))
+                    {
+                        sb.Append(Advance());
+                    }
                 }
-                
-                TryScanExponent(sb);
+
+                ScanExponent(sb);
 
                 // Check for type suffix
-                if (!IsAtEnd() && (Peek() == 'f' || Peek() == 'F'))
-                {
-                    sb.Append(Advance());
-                    float value = float.Parse(sb.ToString().TrimEnd('f', 'F'), CultureInfo.InvariantCulture);
-                    AddToken(TokenType.SingleLiteral, sb.ToString(), value, startLine, startColumn);
-                }
-                else
-                {
-                    double value = double.Parse(sb.ToString(), CultureInfo.InvariantCulture);
-                    AddToken(TokenType.DoubleLiteral, sb.ToString(), value, startLine, startColumn);
-                }
-            }
-            else if (TryScanExponent(sb))
-            {
-                // An exponent with no decimal point is still floating point, as in VB: 1E+15 is
-                // a Double (1E+15F a Single). ⛔ It used to lex as the integer 1 followed by the
-                // identifier E ("Undefined identifier 'E'"), and 5E3 as 5 followed by E3.
                 if (!IsAtEnd() && (Peek() == 'f' || Peek() == 'F'))
                 {
                     sb.Append(Advance());
@@ -1117,23 +1109,29 @@ namespace BasicLang.Compiler
         }
         
         /// <summary>
-        /// Appends an exponent (<c>e</c>/<c>E</c>, an optional sign, digits) to <paramref name="sb"/>
-        /// if one follows, and reports whether it did. The <c>e</c> is taken only when a digit (or a
-        /// sign and then a digit) comes after it, so a number followed by a name that starts with
-        /// <c>e</c> is not swallowed, and <c>1.5E</c> is not handed to double.Parse half-formed.
+        /// True when the next characters are an exponent part: <c>e</c>/<c>E</c>, an optional sign,
+        /// then at least one digit. Only then is the <c>E</c> part of the number — <c>1E</c> or
+        /// <c>1Else</c> leave it to the next token, and <c>1.5E</c> no longer reaches
+        /// <c>double.Parse</c> with no exponent digits (a FormatException before).
         /// </summary>
-        private bool TryScanExponent(StringBuilder sb)
+        private bool ExponentFollows()
         {
             if (IsAtEnd() || (Peek() != 'e' && Peek() != 'E')) return false;
+            int i = _position + 1;
+            if (i < _source.Length && (_source[i] == '+' || _source[i] == '-')) i++;
+            return i < _source.Length && IsDigit(_source[i]);
+        }
 
-            var afterE = _position + 1;
-            if (afterE < _source.Length && (_source[afterE] == '+' || _source[afterE] == '-')) afterE++;
-            if (afterE >= _source.Length || !IsDigit(_source[afterE])) return false;
+        /// <summary>Appends an exponent part to <paramref name="sb"/> if <see cref="ExponentFollows"/>.</summary>
+        private void ScanExponent(StringBuilder sb)
+        {
+            if (!ExponentFollows()) return;
 
-            sb.Append(Advance()); // e / E
-            if (Peek() == '+' || Peek() == '-') sb.Append(Advance());
-            while (!IsAtEnd() && IsDigit(Peek())) sb.Append(Advance());
-            return true;
+            sb.Append(Advance()); // 'e' or 'E'
+            if (Peek() == '+' || Peek() == '-')
+                sb.Append(Advance());
+            while (!IsAtEnd() && IsDigit(Peek()))
+                sb.Append(Advance());
         }
 
         private void ScanPrefixedNumber(int startLine, int startColumn)
