@@ -19,12 +19,13 @@ namespace VisualGameStudio.Tests.Compiler;
 ///
 /// <para>3. <c>FormatDefaultValue</c> kept its own copy of the literal rules: no Char arm
 /// (<c>Optional c As Char = "a"c</c> → <c>char c = a</c>, CS0103 in EVERY culture), String defaults
-/// unescaped (<c>"a""b\\c"</c> → <c>string s = "a"bc"</c>… CS1003/CS1010), and the same
+/// unescaped (<c>"a""b\c"</c> → <c>string s = "a"b\c"</c>… CS1003/CS1010), and the same
 /// CurrentCulture fallback (sv-SE <c>int n = −5</c>, CS1056). It now delegates to
 /// <c>EmitConstant</c>.</para>
 ///
-/// <para>Note: BasicLang string literals take BACKSLASH escapes (<c>\\</c>, <c>\"</c>, <c>\n</c>) as
-/// well as the VB doubled quote, so <c>"a""b\\c"</c> is the four characters <c>a"b\c</c>.</para>
+/// <para>Note: BasicLang string literals follow VB: a backslash is an ordinary character and the
+/// only escape is the doubled quote, so <c>"a""b\c"</c> is the five characters <c>a"b\c</c>, which
+/// the C# default must spell <c>"a\"b\\c"</c>.</para>
 /// </summary>
 [TestFixture]
 public class CSharpLiteralCultureTests
@@ -139,7 +140,7 @@ public class CSharpLiteralCultureTests
     /// <summary>The four characters <c>a"b\c</c>: a doubled quote AND a backslash escape.</summary>
     internal const string StringDefault = """
         Module M
-         Function Echo(Optional s As String = "a""b\\c") As String
+         Function Echo(Optional s As String = "a""b\c") As String
           Return s
          End Function
          Sub Main()
@@ -190,7 +191,7 @@ public class CSharpLiteralCultureTests
                  Function Ch(Optional c As Char = "a"c) As Char
                   Return c
                  End Function
-                 Function Str(Optional s As String = "a""b\\c") As String
+                 Function Str(Optional s As String = "a""b\c") As String
                   Return s
                  End Function
                  Sub Main()
