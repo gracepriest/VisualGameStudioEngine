@@ -267,10 +267,14 @@ public class FloatingIntegerDivisionExecutionTests
     //    which measured all three IDENTICAL on every backend:
     //      C#/MSIL: throws System.DivideByZeroException at run time (both map `\` to a plain
     //               integral divide once the floating operand is converted to Long).
-    //      C++:     prints "before" then a SIGFPE crash (native `int64_t` division by zero is a
-    //               hardware trap, not a C++ exception) — exit code 136 (128 + SIGFPE) on Linux.
-    //      JS:      does NOT crash. `\` lowers to Math.trunc(l / r) and JS division by zero is
-    //               floating Infinity, so it prints "before", "Infinity", "after" and keeps going.
+    //      C++:     prints "before", then the division throws a typed DivideByZeroException
+    //               (BasicLang::CheckedDiv — a bare native division by zero is undefined behaviour,
+    //               which was a SIGFPE crash, exit 136, before that helper). Uncaught here, so the
+    //               program ends in std::terminate: non-zero exit, "after" never printed.
+    //      JS:      prints "before", then throws DivideByZeroException (__blIntDiv / __blWideDiv —
+    //               JS division by zero is floating Infinity, which this used to print along with
+    //               "after"). Uncaught here, so node exits non-zero.
+    //    Every backend now matches .NET: the division throws, and Z1/Z2 stay identical to Z0.
     // ============================================================================================
 
     private const string Z0_IntegralDivByZero = """
@@ -338,7 +342,7 @@ public class FloatingIntegerDivisionExecutionTests
     [TestCase(nameof(Z0_IntegralDivByZero), TestName = "Z0_Integral_DivByZero_Cpp")]
     [TestCase(nameof(Z1_FunctionCallFloatDivByZero), TestName = "Z1_FunctionCallFloat_DivByZero_BehavesLikeZ0_Cpp")]
     [TestCase(nameof(Z2_LiteralFloatDivByZero), TestName = "Z2_LiteralFloat_DivByZero_BehavesLikeZ0_Cpp")]
-    public void DivideByZero_Cpp_CrashesWithSigfpe(string sourceField)
+    public void DivideByZero_Cpp_ThrowsUncaught_TerminatesAfterBefore(string sourceField)
     {
         var compiler = CppCompile.FindRunCompiler();
         if (compiler == null) Assert.Ignore("No C++ compiler available on this machine");
@@ -358,9 +362,16 @@ public class FloatingIntegerDivisionExecutionTests
     [TestCase(nameof(Z0_IntegralDivByZero), TestName = "Z0_Integral_DivByZero_Js")]
     [TestCase(nameof(Z1_FunctionCallFloatDivByZero), TestName = "Z1_FunctionCallFloat_DivByZero_BehavesLikeZ0_Js")]
     [TestCase(nameof(Z2_LiteralFloatDivByZero), TestName = "Z2_LiteralFloat_DivByZero_BehavesLikeZ0_Js")]
-    public void DivideByZero_Js_DoesNotCrash_PrintsInfinity(string sourceField)
-        => Assert.That(JavaScriptExecutionTests.RunJs(Const(sourceField)),
-            Is.EqualTo("before\nInfinity\nafter"));
+    public void DivideByZero_Js_ThrowsDivideByZeroException(string sourceField)
+    {
+        var (exitCode, stdout, stderr) =
+            JavaScriptExecutionTests.RunNodeScriptForOutcome(JsTestSupport.Compile(Const(sourceField)));
+
+        Assert.That(exitCode, Is.Not.Zero, "an uncaught DivideByZeroException must end the program");
+        Assert.That(stdout.Replace("\r\n", "\n"), Is.EqualTo("before\n"),
+            "the division must throw after \"before\" and before \"after\" — Infinity means it did not");
+        Assert.That(stderr, Does.Contain("DivideByZeroException: Attempted to divide by zero."));
+    }
 
     /// <summary>
     /// Compiles the given C# straight to an in-memory assembly and runs it, exactly like

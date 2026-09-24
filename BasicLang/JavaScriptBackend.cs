@@ -361,6 +361,18 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         }
 
         /// <summary>
+        /// True for an integral <c>\</c> or <c>Mod</c> WIDER than Integer — in practice the Long
+        /// division ADR-0005 D1 produces for a floating operand (<c>7 \ 0.4</c> rounds 0.4 to Long
+        /// 0 and divides as Long). It must throw on a zero divisor exactly like Integer does, or
+        /// <c>7 \ 0.4</c> and <c>7 \ 0</c> diverge. MEASURED: once Integer `\` threw, the Long
+        /// form still printed Infinity. The Integer helper's int32 overflow check and <c>| 0</c>
+        /// would be WRONG for these values, so they get their own helper.
+        /// </summary>
+        private static bool IsWideCheckedDivision(IRBinaryOp op) =>
+            op.Operation is BinaryOpKind.IntDiv or BinaryOpKind.Mod
+            && op.Type != null && op.Type.IsIntegral() && !IsInt32(op.Type);
+
+        /// <summary>
         /// True when any value in the module is a checked division — found by walking operand
         /// trees, not just block instructions, because a suppressed <c>When</c> guard's tree
         /// never enters a block yet is still rendered through <see cref="RenderBinary"/>.
@@ -374,7 +386,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             bool Walk(IRInstruction inst)
             {
                 if (inst == null || !seen.Add(inst)) return false;
-                if (inst is IRBinaryOp b && IsCheckedDivision(b)) return true;
+                if (inst is IRBinaryOp b && (IsCheckedDivision(b) || IsWideCheckedDivision(b))) return true;
                 foreach (var operand in BasicLang.Compiler.CodeGen.IROperandWalker.EnumerateOperands(inst))
                     if (Walk(operand)) return true;
                 return false;
@@ -390,6 +402,8 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
         private const string IntDivHelperName = "__blIntDiv";
         private const string IntModHelperName = "__blIntMod";
+        private const string WideDivHelperName = "__blWideDiv";
+        private const string WideModHelperName = "__blWideMod";
 
         /// <summary>
         /// Integer <c>\</c> and <c>Mod</c> that throw DivideByZeroException, as .NET does.
@@ -424,6 +438,20 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             Line("if (b === 0) throw new DivideByZeroException(\"Attempted to divide by zero.\");");
             Line("if (b === -1 && a === -2147483648) throw new OverflowException(\"Arithmetic operation resulted in an overflow.\");");
             Line("return (a % b) | 0;");
+            _indentLevel--;
+            Line("}");
+            // Wider than Integer: the zero check only, and `+ 0` (not `| 0`, which would
+            // truncate to 32 bits) to turn a -0 into 0.
+            Line($"function {WideDivHelperName}(a, b) {{");
+            _indentLevel++;
+            Line("if (b === 0) throw new DivideByZeroException(\"Attempted to divide by zero.\");");
+            Line("return Math.trunc(a / b) + 0;");
+            _indentLevel--;
+            Line("}");
+            Line($"function {WideModHelperName}(a, b) {{");
+            _indentLevel++;
+            Line("if (b === 0) throw new DivideByZeroException(\"Attempted to divide by zero.\");");
+            Line("return (a % b) + 0;");
             _indentLevel--;
             Line("}");
             Line();
@@ -1088,12 +1116,16 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 // DivideByZeroException on a zero divisor and OverflowException for the minimum
                 // over -1 (EmitCheckedDivisionPrelude).
                 case BinaryOpKind.IntDiv:
-                    return IsCheckedDivision(op) ? $"{IntDivHelperName}({l}, {r})" : $"Math.trunc({l} / {r})";
+                    return IsCheckedDivision(op) ? $"{IntDivHelperName}({l}, {r})"
+                        : IsWideCheckedDivision(op) ? $"{WideDivHelperName}({l}, {r})"
+                        : $"Math.trunc({l} / {r})";
 
                 // .NET's Mod takes the sign of the DIVIDEND, and so does JS's %. They agree
                 // exactly for a nonzero divisor; an Integer-family zero divisor must throw.
                 case BinaryOpKind.Mod:
-                    return IsCheckedDivision(op) ? $"{IntModHelperName}({l}, {r})" : $"({l} % {r})";
+                    return IsCheckedDivision(op) ? $"{IntModHelperName}({l}, {r})"
+                        : IsWideCheckedDivision(op) ? $"{WideModHelperName}({l}, {r})"
+                        : $"({l} % {r})";
 
                 // String concatenation is its own kind, so `+` here is never numeric addition
                 // in disguise.

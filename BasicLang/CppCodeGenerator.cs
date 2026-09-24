@@ -2141,6 +2141,95 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         private string _regionLabelSuffix = "";
 
         /// <summary>
+        /// The blocks of the inline region being emitted right now (null outside any region).
+        /// A goto to a block OUTSIDE it — an <c>Exit For</c> from a Try/Catch body to the enclosing
+        /// loop's end, since ComputeInlineRegion leaves an enclosing construct's blocks out — must
+        /// target the label as the top-level walker writes it, once and UNSUFFIXED. MEASURED: with
+        /// the suffix, the §11.1 ladder's copy of a Catch body emitted `goto for1_end_nex;`,
+        /// "label used but not defined".
+        /// </summary>
+        private HashSet<BasicBlock> _currentRegionBlocks;
+
+        /// <summary>The label a goto to <paramref name="target"/> must name from here.</summary>
+        private string GotoLabel(BasicBlock target) =>
+            _currentRegionBlocks != null && !_currentRegionBlocks.Contains(target)
+                ? EndLabelName(target)
+                : LabelName(target.Name);
+
+        /// <summary>
+        /// The Trys WITH A FINALLY whose try or catch body is being emitted right now, innermost
+        /// LAST, each with every block its try and catch bodies own.
+        /// </summary>
+        private readonly List<(IRTryCatch Try, HashSet<BasicBlock> Owned)> _finallyFrames = new();
+
+        private int _finallyExitCopies;
+
+        /// <summary>
+        /// A goto to <paramref name="target"/>, running every Finally it LEAVES first.
+        ///
+        /// <para>⛔ A goto out of a try block runs no handler — only a THROW reaches the
+        /// <c>catch (...)</c> copy of the Finally — so a jump that leaves a Try must carry its own
+        /// copy of the Finally, as the normal and exceptional exits already do. MEASURED: once
+        /// <c>Exit For</c> inside a Try compiled (it was "jump to label 'for0_end'" before),
+        /// <c>Try : If i = 2 Then Exit For : Finally : Print "finally"</c> printed nothing for
+        /// the exiting iteration, where .NET runs the Finally. Every frame the target is outside
+        /// of is left, innermost first; each copy gets its own label suffix, and while a copy is
+        /// emitted the frames being left are popped, so an exit inside that Finally cannot re-run
+        /// it.</para>
+        /// </summary>
+        private void EmitGoto(BasicBlock target)
+        {
+            var label = GotoLabel(target);
+
+            // A jump to a block of the region being emitted leaves nothing. MEASURED without this:
+            // the jumps between a Finally's own If arms were each given ANOTHER copy of that
+            // Finally, and `fin-a` printed three times.
+            if (_currentRegionBlocks == null || _currentRegionBlocks.Contains(target))
+            {
+                WriteLine($"goto {label};");
+                return;
+            }
+
+            var leaving = new List<IRTryCatch>();
+            for (int k = _finallyFrames.Count - 1; k >= 0; k--)
+            {
+                if (_finallyFrames[k].Owned.Contains(target)) break;
+                leaving.Add(_finallyFrames[k].Try);
+            }
+
+            if (leaving.Count == 0)
+            {
+                WriteLine($"goto {label};");
+                return;
+            }
+
+            var savedFrames = new List<(IRTryCatch, HashSet<BasicBlock>)>(_finallyFrames);
+            WriteLine("{");
+            Indent();
+            foreach (var tc in leaving)
+            {
+                var at = _finallyFrames.FindIndex(f => ReferenceEquals(f.Try, tc));
+                if (at >= 0) _finallyFrames.RemoveRange(at, _finallyFrames.Count - at);
+
+                var savedSuffix = _regionLabelSuffix;
+                _regionLabelSuffix = savedSuffix + $"_fx{_finallyExitCopies++}";
+                var copyExit = LabelName(tc.EndBlock.Name + ".fxend");
+                WriteLine("{");
+                Indent();
+                EmitInlineRegion(tc.FinallyBlock, tc.EndBlock, RegionEnd.GotoEnd, copyExit);
+                Unindent();
+                WriteLine($"{copyExit}: ;");
+                WriteLine("}");
+                _regionLabelSuffix = savedSuffix;
+            }
+            _finallyFrames.Clear();
+            _finallyFrames.AddRange(savedFrames);
+            Unindent();
+            WriteLine("}");
+            WriteLine($"goto {label};");
+        }
+
+        /// <summary>
         /// Emit a function body: the entry block, then every remaining block in creation
         /// order. BasicBlock.Successors is only populated by the ControlFlowGraph analysis
         /// pass (which codegen does not run), so successor-walking alone would silently
@@ -2208,11 +2297,29 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         /// the function's creation order for stable, readable output. Reachability is computed
         /// from the IR's own branch/structured edges (not <c>BasicBlock.Successors</c>, which is
         /// only populated when a CFG pass has run), so it works on the un-optimized path too.
+        ///
+        /// <para>⛔ A block created BEFORE <paramref name="entry"/> is never part of the region.
+        /// IRBuilder creates a construct's entry (and a Try's catch/finally entries) BEFORE it
+        /// builds the body, so everything the body owns — a nested If, a whole nested loop — is
+        /// created after the entry, while a block created earlier belongs to an ENCLOSING
+        /// construct. Reachability alone could not tell them apart: an <c>Exit For</c> in a Try
+        /// body branches to the enclosing loop's end block. MEASURED: that pulled the loop end,
+        /// and the code after the loop including its <c>return</c>, INSIDE the try braces; the
+        /// loop's normal exit then jumped into the try block — "jump to label 'for0_end'", a C++
+        /// compile error, for any Exit For / Exit Do inside a Try or Catch. Left outside, the exit
+        /// is a goto OUT of the try, which C++ allows (and unwinds correctly).</para>
         /// </summary>
         private IReadOnlyList<BasicBlock> ComputeInlineRegion(BasicBlock entry, BasicBlock boundary)
         {
             var region = new HashSet<BasicBlock>();
             if (entry == null || entry == boundary) return new List<BasicBlock>();
+
+            var creationIndex = new Dictionary<BasicBlock, int>();
+            for (int k = 0; k < _currentFunction.Blocks.Count; k++)
+                creationIndex[_currentFunction.Blocks[k]] = k;
+            var entryIndex = creationIndex.TryGetValue(entry, out var ei) ? ei : -1;
+            bool OwnedByOuterConstruct(BasicBlock b) =>
+                entryIndex >= 0 && creationIndex.TryGetValue(b, out var bi) && bi < entryIndex;
 
             var stack = new Stack<BasicBlock>();
             stack.Push(entry);
@@ -2221,7 +2328,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 var block = stack.Pop();
                 if (block == null || block == boundary || !region.Add(block)) continue;
                 foreach (var succ in ControlFlowTargets(block))
-                    if (succ != null && succ != boundary && !region.Contains(succ))
+                    if (succ != null && succ != boundary && !region.Contains(succ) && !OwnedByOuterConstruct(succ))
                         stack.Push(succ);
             }
 
@@ -3821,7 +3928,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         
         public override void Visit(IRBranch branch)
         {
-            WriteLine($"goto {LabelName(branch.Target.Name)};");
+            EmitGoto(branch.Target);
         }
         
         public override void Visit(IRConditionalBranch condBranch)
@@ -3830,12 +3937,12 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             
             WriteLine($"if ({condition}) {{");
             Indent();
-            WriteLine($"goto {LabelName(condBranch.TrueTarget.Name)};");
+            EmitGoto(condBranch.TrueTarget);
             Unindent();
             WriteLine("}");
             WriteLine($"else {{");
             Indent();
-            WriteLine($"goto {LabelName(condBranch.FalseTarget.Name)};");
+            EmitGoto(condBranch.FalseTarget);
             Unindent();
             WriteLine("}");
         }
@@ -3855,16 +3962,16 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // though the parser never populates them today.)
             foreach (var (caseValue, target) in switchInst.Cases)
             {
-                WriteLine($"if ({value} == {ValueText(caseValue)}) {{ goto {LabelName(target.Name)}; }}");
+                WriteLine($"if ({value} == {ValueText(caseValue)}) {{ goto {GotoLabel(target)}; }}");
             }
 
             foreach (var patternCase in switchInst.PatternCases)
             {
                 var cond = PatternCaseCondition(value, patternCase);
-                WriteLine($"if ({cond}) {{ goto {LabelName(patternCase.Target.Name)}; }}");
+                WriteLine($"if ({cond}) {{ goto {GotoLabel(patternCase.Target)}; }}");
             }
 
-            WriteLine($"goto {LabelName(switchInst.DefaultTarget.Name)};");
+            WriteLine($"goto {GotoLabel(switchInst.DefaultTarget)};");
         }
 
         /// <summary>
@@ -4764,6 +4871,17 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 ? LabelName(tryCatch.EndBlock.Name + ".fin")
                 : EndLabelName(tryCatch.EndBlock);
 
+            // Exits from the try and catch bodies must run this Try's Finally (EmitGoto). Popped
+            // before the Finally copies below are emitted, which are not inside it.
+            var pushedFinallyFrame = tryCatch.FinallyBlock != null;
+            if (pushedFinallyFrame)
+            {
+                var owned = new HashSet<BasicBlock>(ComputeInlineRegion(tryCatch.TryBlock, tryCatch.EndBlock));
+                foreach (var cc in tryCatch.CatchClauses)
+                    owned.UnionWith(ComputeInlineRegion(cc.Block, tryCatch.EndBlock));
+                _finallyFrames.Add((tryCatch, owned));
+            }
+
             WriteLine("try");
             WriteLine("{");
             Indent();
@@ -4873,7 +4991,12 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                     WriteLine("{");
                     Indent();
                     _regionLabelSuffix = savedSuffix + "_fnex";
+                    // This copy IS the Finally running: an exit inside it must not run it again.
+                    var suspendedFrame = _finallyFrames.FindLastIndex(f => ReferenceEquals(f.Try, tryCatch));
+                    var suspended = suspendedFrame >= 0 ? _finallyFrames[suspendedFrame] : default;
+                    if (suspendedFrame >= 0) _finallyFrames.RemoveAt(suspendedFrame);
                     EmitInlineRegion(tryCatch.FinallyBlock, tryCatch.EndBlock, RegionEnd.GotoEnd, propagationLabel);
+                    if (suspendedFrame >= 0) _finallyFrames.Insert(suspendedFrame, suspended);
                     _regionLabelSuffix = savedSuffix;
                     Unindent();
                     WriteLine($"{propagationLabel}: ;");
@@ -4903,6 +5026,9 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 Unindent();
                 WriteLine("}");
             }
+
+            if (pushedFinallyFrame)
+                _finallyFrames.RemoveAt(_finallyFrames.FindLastIndex(f => ReferenceEquals(f.Try, tryCatch)));
 
             if (tryCatch.FinallyBlock != null)
             {
@@ -5012,6 +5138,21 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         private void EmitInlineRegion(BasicBlock entry, BasicBlock endBlock, RegionEnd endMode, string endLabel = null)
         {
             var region = ComputeInlineRegion(entry, endBlock);
+            var savedRegionBlocks = _currentRegionBlocks;
+            _currentRegionBlocks = new HashSet<BasicBlock>(region);
+            try
+            {
+                EmitInlineRegionBlocks(entry, endBlock, endMode, endLabel, region);
+            }
+            finally
+            {
+                _currentRegionBlocks = savedRegionBlocks;
+            }
+        }
+
+        private void EmitInlineRegionBlocks(BasicBlock entry, BasicBlock endBlock, RegionEnd endMode, string endLabel,
+            IReadOnlyList<BasicBlock> region)
+        {
             // Blocks a NESTED structured construct owns are emitted by that construct's own Visit
             // (inline, inside ITS braces); skip them here so they are not emitted twice.
             var nestedConsumed = new HashSet<BasicBlock>();
@@ -5164,7 +5305,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             }
             else
             {
-                WriteLine($"goto {LabelName(target.Name)};");
+                EmitGoto(target);
             }
         }
 
