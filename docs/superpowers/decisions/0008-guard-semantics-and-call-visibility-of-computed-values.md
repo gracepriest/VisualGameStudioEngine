@@ -331,11 +331,174 @@ pin must hold across all three steps.
 
 ## Implementation status
 
-D1 — the shared `CollectReads` walk in `BasicLang/IROptimizer.cs`, feeding
-both `Guard` (`BasicLang/IRVerifier.cs`) and `ReadsCallVisible` — is being
-implemented in the same PR as this ADR, alongside the D1-sub rename and
-mutant M6 in
-`VisualGameStudio.Tests/Compiler/DynamicUseSPrimeTests.cs`/
-`DynamicUseSPrimeHandBuiltIRTests`. D2 lands after D1, as pins only. An
-implementation note, in the style of ADR-0006's and ADR-0007's, follows
-once that work lands.
+D1, D1-sub and D2 are IMPLEMENTED. `BasicLang/IROptimizer.cs`'s shared
+`CollectReads` walk feeds both `Guard` (`BasicLang/IRVerifier.cs`) and
+`ReadsCallVisible`; the D1-sub rename (dropping `_PendingTask157`) and
+mutant M6 live in
+`VisualGameStudio.Tests/Compiler/DynamicUseSPrimeTests.cs`'s
+`DynamicUseSPrimeHandBuiltIRTests`; D2 lands as pins only, no code change.
+
+## Implementation note (D1, D1-sub, D2)
+
+- **What changed.** `IRVerifier.cs`'s `CheckFunction` used to build
+  `Guard(v)`'s operand half with a private `CollectOperandGuard` walk that
+  pruned by `IRReplicability.IsReplicable` — a `ByRef` parameter and a
+  non-`Const` global were excluded outright (ADR-0005 D2). That walk is
+  deleted. `IROptimizer.cs` gains one new walk, `CollectReads(IRValue) →
+  (Names, HitCallShaped)`: it descends the same four pure operators
+  (`IRBinaryOp`/`IRUnaryOp`/`IRCompare`/`IRCast`), collects every
+  `IRVariable` and every named-destination instruction it reaches
+  (blind to replicability), and stops at a call-shaped node (a call,
+  instance/base call, allocation, field/indexer load, await) or any kind
+  on neither list, setting `HitCallShaped`. `Guard(v)` is now
+  `CollectReads(v).Names ∪ { v's destination }`; `ReadsCallVisible(v, f)`
+  is now `HitCallShaped || Names.Any(r => IsCallVisible(r, f))` — the same
+  walk, so the two consumers cannot drift (the ADR's own obligation).
+- **Three choices the implementer made, each worth stating on its own:**
+  - **A named nested operand DESCENDS.** `t0 = a * 2` where `a` is itself
+    a named pure operator (`a = p + 1`) collects both `a`'s name AND `a`'s
+    own operand `p` — not just `a`. The rejected alternative (stop at a
+    named operand without descending into it) is exactly mutant G4 below;
+    it is killed by
+    `Adr0008GuardReplicabilityBlindHandBuiltIRTests.NamedNestedOperand_DescendsIntoItsOwnOperands_WriteToNestedOperand_Fires`,
+    which would go QUIET under that alternative (measured, this session).
+  - **Guard has NO call-hit arm.** A pure value's walk hitting a
+    call-shaped node (`HitCallShaped`) does not, itself, add anything to
+    `Guard(v)` — the call-shaped operand is evaluated once where it is
+    defined, so `t = Foo(n) : v = t + 1` guards only `t`'s own name (if
+    named) and `v`'s destination, never `n`. **Variant B** (give Guard a
+    synthetic `<call-shaped operand>` entry whenever a pure value's walk
+    hits one, so ANY later call fires it) was measured and REJECTED: it
+    turns every one of the ruling's quiet shapes FIRES — `t = Foo(n)` then
+    a call (`q1`), `t` renamed to a declared local then a call (`q1c`), a
+    field-load operand then a call (`q2`) all flip to FIRES under B,
+    contradicting the ruling's own "Guard stops at `t`; `n` is not
+    collected" contract. (This session's own G2/G4 mutants target
+    `CollectReads`/`ReadsCallVisible` specifically; Variant B is a
+    THIRD, separate alternative — a Guard-only widening — already
+    measured and rejected by the implementer, not re-mutated here, since
+    the ruling itself rejects it outright and the quiet-shape hand-built
+    tests already pin against it by construction.)
+  - **A nameless variable's `StorageRead.Name` is `""`, not `null`, and is
+    call-visible.** `StorageRead.Name`'s own doc comment calls this out;
+    `IsCallVisible(IRVariable, f)`'s own words are "An IRVariable with no
+    name is not a declaration of anything — unknown, so visible" — TRUE,
+    matching every other undeclared name. Pinned in
+    `Adr0008CollectReadsAgreementTests.PerNodeKind_AgreementAndPinnedValues`
+    (this session's first draft assumed FALSE here and was corrected
+    against the live behaviour before shipping).
+- **The zero-fire ASSUMPTION, measured true.** From the implementer's own
+  instrumented full/fast-subset sweeps (`S/adr8/full-after-instr.trace*`,
+  `fast-final-instr.trace*` — cross-checked this session for staleness:
+  the instrumented tree's core `CollectReads`/Guard/`ReadsCallVisible`
+  logic diffs identically to the current landed code, comment-only and
+  one behaviourally-inert reordering aside, and its RCV-call count
+  matches the ADR's own headline figure below exactly): the fast subset
+  (5,962 tests, 5,887 passed, 75 skipped, 0 failed) swept 557 compiled
+  modules through `CheckInvariantSPrime` under the CURRENT Guard
+  construction AND, separately, under the pre-ADR8 (`IsReplicable`-pruned)
+  Guard, the G4-style (named-nested-stop) Guard, and Variant B — all four
+  produced the exact SAME single S′ violation, from
+  `IRVerifierModeResolutionTests`'s own deliberate known-S′ probe (a
+  named destination's own unconditional self-guard, unrelated to
+  replicability). The full suite (8,301 tests, 8,050 passed, 251 skipped,
+  0 failed, 3,397 modules swept) shows the identical result: one S′ fire,
+  one F fire, one V fire — the same three deliberate fixtures ADR-0006 D2
+  already named, none of them new. No IRBuilder shape anywhere in the
+  suite fires under the replicability-blind rule that did not already
+  fire under the old one. (This session's OWN mutation-prove, below, is
+  the independently-reproduced half of this same claim: G1/G2/G3/G4/M6
+  each applied to a scratch tree, confirmed to change nothing on the
+  ~132-test filtered set except the shapes each targets.)
+- **`ReadsCallVisible` equivalence.** `OptimizationPass.ReadsCallVisible`
+  was called 76,167 times sweeping the full suite's compiled IR
+  (`S/adr8/full-after-instr.trace.rcvcount`); every call answers exactly
+  `HitCallShaped || Names.Any(IsCallVisible)` by construction (the method
+  IS that formula now), and `Adr0008CollectReadsAgreementTests` pins the
+  formula directly, per node kind and swept over L1-L7/L4r/Q2a-Q2e's
+  aggressive-pipeline IR, so a future edit that lets the two drift again
+  is caught structurally, not only by corpus luck.
+- **Byte identity.** Re-verified live this session (`bytecmp.py`,
+  `S/adr8/probes/out-before` vs `out-final`): **222/222 emitted probe
+  files byte-identical** across L1-L7, L4r and Q2a-Q2e, all four backends,
+  all three entry points (CLI, CLI `--optimize`, Release `.blproj`). The
+  five sample games, same three entry points, four backends (60 cells):
+  the 45 non-C# cells are byte-identical outright; the 15 C# cells differ
+  ONLY in a `#line` directive's embedded scratch-output path (confirmed by
+  direct diff — every other byte matches), an artifact of the comparison
+  script's two output roots having different names, not a codegen change.
+  `fires=0` on all 60 cells, both before and after. (Three of the five
+  sample paths do not currently compile on any backend, unrelated to this
+  task — ADR-0006 D2's implementation note already flags this; `fires=0`/
+  byte-identity is reported for every row regardless, matching that
+  note's own convention.)
+- **The L4r discriminator matrix — this batch's own contract cell.**
+  Under TODAY's LICM (no mutant): zero fires, `12` on every backend that
+  builds (C++, MSIL, C# at all three entry points; JavaScript refuses the
+  `ByRef` parameter, BL7002) — shipped as
+  `DynamicUseSPrimeAggressivePipelineStructuralTests`/`ExecutionTests`.
+  Under the LICM DOUBLE MUTANT (`S/adr6-d2/mutsrc/IROptimizer.licmbyref.cs`'s
+  reading applied to a SCRATCH tree, never this repo): re-run live this
+  session (`bin-licm-after`, confirmed byte-identical to the current
+  `IRVerifier.cs` and differing from the current `IROptimizer.cs` in
+  EXACTLY the two mutated lines) — SIX cells fire (`[VERIFY x1]`): C++
+  `-O`, MSIL `-O`, MSIL `Release`, C# `-O`, C# `Release`, and (a fifth
+  backend cell the ruling's own contract sentence does not name) the
+  JavaScript `-O` CLI leg — the verifier runs on the optimized,
+  backend-agnostic IR before JavaScript's own BL7002 `ByRef` refusal is
+  raised at code-generation time, so it fires on the same wrong hoist
+  before the backend ever gets a chance to refuse it. Two cells stay
+  quiet: `cli` (unoptimized, no LICM at all) on every backend, and C++
+  `Release` (the native project build path does not route through the
+  same `--optimize` aggressive pipeline the mutant targets). C# `-O`/
+  `Release` fire even though they PRINT 12 (C# re-reads `n` inline) — the
+  exact discriminator the ruling calls for: D1 says so in every `-O`
+  cell regardless of whether a backend's own accident hides the bug.
+- **The flipped test.** `A4g_PreheaderDefOverModuleGlobal_InGuardSinceAdr8_CallAfterUse_Fires`
+  (was `..._NonReplicable_OutsideGuard_Quiet`): a non-`Const` module
+  global, one in-loop use, a call in the loop — QUIET before ADR-0008
+  (pruned as non-replicable), FIRES after (D1's contract shape (ii)).
+  Kept, per the brief.
+- **Settled point 4 (direct stores do kill) — measured true, plus a new
+  pre-existing gap this task found.** A direct `IRStore` through a
+  variable's address kills a `CopyPropagation` fact that reads it, not
+  only a call (`Adr0008D2Pins.SettledPoint4_DirectStoreThroughAnAddress_KillsTheFact`,
+  MEASURED live). But: a direct `IRAssignment` to a NAMED NESTED
+  operand's OWN NAME (`u = a + 1` renamed `u`, `t0 = u * 2`, `x := t0`,
+  then `u = 5`) does NOT kill `x`'s fact — `CollectReads(t0)` correctly
+  reports `t0` reads storage named `u` (ADR-0008's own walk gets this
+  right), but `CopyPropagationPass.Invalidate`'s `Mentions()` walks the
+  recorded VALUE structurally for an `IRVariable` named `u` and has no
+  case for "a named pure-operator instruction whose destination happens
+  to be `u`", so it never finds it. Pinned as a KNOWN-WRONG regression
+  test,
+  `Adr0008D2Pins.KnownGap_DirectStoreToANamedNestedOperandsOwnName_DoesNotKillTheFact`,
+  NOT fixed here (test-writer scope). This is a genuine, separate defect
+  in `CopyPropagationPass`'s own kill rule — filed as task #161, outside
+  ADR-0008's scope, and it blocks #118
+  (DCE) the same way settled point 4 does: DCE cannot safely remove `u`'s
+  own defining instruction while a stale fact might still reference it.
+- **The mutation table** (each mutant built in a SCRATCH tree, its
+  `BasicLang.dll` swapped into
+  `VisualGameStudio.Tests/bin/Release/net8.0/`, the filtered suite
+  (`IRVerifier*`/`DynamicUseSPrime*`/`CopyPropagation*`/`Adr0008*`, 132
+  tests) run, then the CLEAN dll restored. The repo's own
+  `IROptimizer.cs`/`IRVerifier.cs` were confirmed at their reviewed md5s
+  after the last mutant):
+
+  | Mutant | What it does | Killed by | Result |
+  |---|---|---|---|
+  | G1 | Restores the `IsReplicable` prune in Guard | (i)/(ii)/(iii)/(iii-g)/static-twin×2/A4g | 7 failures |
+  | G2 | `ReadsCallVisible` reverts to a private recursion that ALSO drops the named-destination check (the brief's own suggested drift — the implementer's own verbatim-restore G2 is mathematically equivalent and measures 0 mismatches, so it needs this drift to have anything to kill) | the named-operand agreement-pin entry | 1 failure |
+  | G3 | `CollectReads`'s default arm sets `HitCallShaped = false` | the default-arm `HitCallShaped` pins (`IRLoad`/`IRPhi`/`IRGetElementPtr`/`IRArrayAlloc`) and the per-kind table | 2 failures |
+  | G4 | `CollectReads` stops at a NESTED named operand without descending (root unaffected — an existing statically-shared named value, `A10`, still fires normally) | `NamedNestedOperand_DescendsIntoItsOwnOperands_WriteToNestedOperand_Fires` | 1 failure |
+  | M6 | `UseRepeats`'s natural-loop-participation reading (exempt when the definition's own block sits on any cycle), not the confirmed CYCLE reading | (d)/(d2), PLUS `A5` (its definition's block, `outer.body`, also loops back to itself — a broader kill than the contract requires, not a violation of it) | 3 failures |
+
+  L4r's LICM-double-mutant discriminator is not a shipped test — see the
+  matrix above; recorded for this note.
+- **Revisit is NOT triggered.** No IRBuilder-produced shape anywhere in
+  the fast subset, the full suite, or the five sample paths fires under
+  the replicability-blind rule that did not already fire under the old
+  one — the corpus measurement above is the direct evidence.
+- Implementer data: `S/adr8/` (harness, probes, matrices, the full/fast
+  instrumented traces this note's numbers are drawn from).

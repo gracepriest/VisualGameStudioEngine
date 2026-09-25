@@ -66,6 +66,32 @@ namespace BasicLang.Compiler.IR.Optimization
     }
 
     /// <summary>
+    /// One piece of storage a value READS, as <see cref="OptimizationPass.CollectReads"/> finds it
+    /// (ADR-0008 D1): a variable operand, or an operand instruction that every backend reads back
+    /// by its named destination.
+    /// </summary>
+    public readonly struct StorageRead
+    {
+        public StorageRead(string name, IRVariable variable)
+        {
+            Name = name;
+            Variable = variable;
+        }
+
+        /// <summary>The variable's name, or the operand instruction's named destination
+        /// (<see cref="OptimizationPass.NamedDestination"/>). Empty or null only for a variable
+        /// that has no name.</summary>
+        public string Name { get; }
+
+        /// <summary>The variable itself, so the call-visibility rule can read its flags (a
+        /// <c>Const</c>, a global, a <c>ByRef</c> parameter). Null for a named operand instruction,
+        /// which carries no variable flags and is answered by its name alone.</summary>
+        public IRVariable Variable { get; }
+
+        public override string ToString() => (Variable != null ? "var " : "named ") + Name;
+    }
+
+    /// <summary>
     /// Base class for optimization passes
     /// </summary>
     public abstract class OptimizationPass
@@ -355,6 +381,115 @@ namespace BasicLang.Compiler.IR.Optimization
             => NamedDestination(value) is string name && IsCallVisible(name, function);
 
         /// <summary>
+        /// <see cref="IsCallVisible(IRVariable, IRFunction)"/> for one read
+        /// <see cref="CollectReads"/> found: the variable overload when the read is a variable (its
+        /// flags count), the name overload when it is a named operand instruction.
+        /// </summary>
+        protected internal static bool IsCallVisible(StorageRead read, IRFunction function)
+            => read.Variable != null ? IsCallVisible(read.Variable, function) : IsCallVisible(read.Name, function);
+
+        /// <summary>
+        /// ⭐ THE ONE OPERAND WALK (ADR-0008 D1): the storage reading <paramref name="value"/>
+        /// reads. It descends through the PURE operators (<see cref="IRBinaryOp"/>,
+        /// <see cref="IRUnaryOp"/>, <see cref="IRCompare"/>, <see cref="IRCast"/>) from
+        /// <paramref name="value"/> itself and collects, in <c>Names</c>:
+        /// <list type="bullet">
+        /// <item>every <see cref="IRVariable"/> it reaches;</item>
+        /// <item>every instruction it reaches that has a named destination
+        /// (<see cref="NamedDestination"/>), <paramref name="value"/> included. Every backend reads
+        /// such a value back by that name, so the name is storage the value reads. The walk still
+        /// descends into a named pure operator's operands.</item>
+        /// </list>
+        /// It STOPS at a call-shaped node and sets <c>HitCallShaped</c>. The call-shaped nodes are
+        /// the kinds ADR-0006 D1 classifies as calls or as acting like one: a call, an instance or
+        /// base call, an object allocation (<see cref="IRNewObject"/>, a constructor call), a field
+        /// or indexer load, an await. The walk does not look at a
+        /// call-shaped node's operands, because the node is evaluated once where it is defined. A
+        /// kind on NEITHER list also sets <c>HitCallShaped</c>. That is the safe default: a kind
+        /// nobody classified reads storage nobody described.
+        ///
+        /// <para>⭐ TWO CONSUMERS, ONE WALK, so they cannot drift (ADR-0008 D1):</para>
+        /// <list type="bullet">
+        /// <item><see cref="ReadsCallVisible"/>(v) = <c>HitCallShaped</c> || some read in
+        /// <c>Names</c> is <see cref="IsCallVisible(StorageRead, IRFunction)"/>;</item>
+        /// <item><see cref="IRVerifier"/>'s <c>Guard(v)</c> = <c>Names</c> ∪ { v's named
+        /// destination }.</item>
+        /// </list>
+        /// <para>Guard has no <c>HitCallShaped</c> half. Under IR semantics a call-shaped operand
+        /// is a value, computed once where it is defined, and a later write cannot change it; the
+        /// guard stops there (the ruling's quiet shape: <c>t = Foo(n) : v = t + 1</c> does not
+        /// guard <c>n</c>). <see cref="ReadsCallVisible"/> keeps the call-shaped arm (ADR-0008 D2,
+        /// "Keep").</para>
+        ///
+        /// <para>⛔ NOT <see cref="IRReplicability.IsReplicable"/>. Replicability is a backend's
+        /// question ("may I evaluate this twice?"). This walk and both of its consumers are blind
+        /// to it: a <c>ByRef</c> parameter or a non-<c>Const</c> global is collected like any
+        /// other variable (ADR-0008 D1, which strikes ADR-0005 D2's "non-replicable operands are
+        /// left out").</para>
+        /// </summary>
+        protected internal static (IReadOnlyList<StorageRead> Names, bool HitCallShaped) CollectReads(IRValue value)
+        {
+            var names = new List<StorageRead>();
+            bool hitCallShaped = false;
+            Walk(value);
+            return (names, hitCallShaped);
+
+            void Walk(IRValue node)
+            {
+                switch (node)
+                {
+                    case null:
+                    case IRConstant:
+                        return;
+                    case IRVariable variable:
+                        names.Add(new StorageRead(variable.Name, variable));
+                        return;
+                }
+
+                if (NamedDestination(node) is string named)
+                    names.Add(new StorageRead(named, null));
+
+                switch (node)
+                {
+                    // Pure: re-reading the operator re-reads its operands.
+                    case IRBinaryOp binary:
+                        Walk(binary.Left);
+                        Walk(binary.Right);
+                        return;
+                    case IRUnaryOp unary:
+                        Walk(unary.Operand);
+                        return;
+                    case IRCompare compare:
+                        Walk(compare.Left);
+                        Walk(compare.Right);
+                        return;
+                    case IRCast cast:
+                        Walk(cast.Value);
+                        return;
+
+                    // Call-shaped (NamesWrittenBy's call arms): evaluated once, and it may read (or
+                    // run code that reads) storage a call can write. The walk stops here.
+                    case IRCall:
+                    case IRInstanceMethodCall:
+                    case IRBaseMethodCall:
+                    case IRNewObject:
+                    case IRFieldAccess:
+                    case IRIndexerAccess:
+                    case IRAwait:
+                        hitCallShaped = true;
+                        return;
+
+                    // On neither list (a load through an address, an element pointer, a phi, a
+                    // tuple element, an array allocation, an alloca slot, and every kind added
+                    // after this was written): the safe default.
+                    default:
+                        hitCallShaped = true;
+                        return;
+                }
+            }
+        }
+
+        /// <summary>
         /// Whether reading <paramref name="value"/> reads storage that a CALL can write without
         /// that write appearing in the function — the VALUE's half of the call-visibility question,
         /// asked by every pass that carries a value past a later instruction (CSE for a candidate's
@@ -362,6 +497,13 @@ namespace BasicLang.Compiler.IR.Optimization
         /// is answered by the one call-visibility rule,
         /// <see cref="IsCallVisible(IRVariable, IRFunction)"/> (ADR-0006 D3); a pure operator by
         /// its operands; anything else is assumed call-visible.
+        ///
+        /// <para>⭐ Computed from <see cref="CollectReads"/>, the walk <see cref="IRVerifier"/>'s
+        /// <c>Guard(v)</c> is built from too (ADR-0008 D1): <c>HitCallShaped</c>, or any read in
+        /// <c>Names</c> call-visible. Before ADR-0008 this method walked the operands itself and
+        /// the verifier walked them a second way, pruned by replicability, so the two disagreed
+        /// about a <c>ByRef</c> parameter. The answer is unchanged for every input: the walk
+        /// descends and stops exactly where this method's recursion did.</para>
         ///
         /// <para>⛔ MEASURED. <c>a = Counter + q</c>, <c>z = Seed(100)</c>, <c>b = Counter + q</c>
         /// has NO syntactic redefinition of <c>Counter</c> anywhere in <c>Main</c> — the write
@@ -381,8 +523,8 @@ namespace BasicLang.Compiler.IR.Optimization
         ///
         /// <para>A NAMED operand instruction (a value renamed to a variable, which a backend reads
         /// back by that name — see <see cref="NamedDestination"/>) is asked the same question of
-        /// its name, exactly as <see cref="IRVerifier"/> puts that name in <c>Guard(v)</c>; its
-        /// operands are still walked, as before.</para>
+        /// its name. It is in <c>Guard(v)</c> for the same reason, since both come from
+        /// <see cref="CollectReads"/>. Its operands are still walked, as before.</para>
         ///
         /// <para>A local captured BY REFERENCE by a lambda that a call then invokes is closed by
         /// ADR-0006 D1's interim closure rule, inside
@@ -400,34 +542,16 @@ namespace BasicLang.Compiler.IR.Optimization
         /// </summary>
         protected internal static bool ReadsCallVisible(IRValue value, IRFunction function)
         {
-            switch (value)
-            {
-                case null:
-                case IRConstant:
-                    return false;
-                case IRVariable variable:
-                    return IsCallVisible(variable, function);
-            }
+            var (names, hitCallShaped) = CollectReads(value);
 
-            if (NamedDestination(value) is string named && IsCallVisible(named, function))
-                return true;
+            // Calls, field/indexer loads, allocations, and anything not enumerated: a call may
+            // change what they read. Over-killing costs optimization; keeping a stale entry is the
+            // outcome that miscompiles.
+            if (hitCallShaped) return true;
 
-            switch (value)
-            {
-                case IRBinaryOp binary:
-                    return ReadsCallVisible(binary.Left, function) || ReadsCallVisible(binary.Right, function);
-                case IRUnaryOp unary:
-                    return ReadsCallVisible(unary.Operand, function);
-                case IRCompare compare:
-                    return ReadsCallVisible(compare.Left, function) || ReadsCallVisible(compare.Right, function);
-                case IRCast cast:
-                    return ReadsCallVisible(cast.Value, function);
-                default:
-                    // Calls, field/indexer loads, allocations, and anything not enumerated: a
-                    // call may change what they read. Over-killing costs optimization; keeping a
-                    // stale entry is the outcome that miscompiles.
-                    return true;
-            }
+            foreach (var read in names)
+                if (IsCallVisible(read, function)) return true;
+            return false;
         }
 
         /// <summary>
