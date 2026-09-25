@@ -198,6 +198,7 @@ End Sub
 }
 
 /// <summary>The program run on each backend, through the optimizer.</summary>
+[TestFixture]
 [Category("Integration")]
 [NonParallelizable] // the C# leg redirects Console.Out
 public class IntegerDivisionByZeroRunTests
