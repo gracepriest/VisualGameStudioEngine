@@ -121,8 +121,8 @@ still works but warns).
   `String`/structs stay values. Foreign C++ via `#CppInclude` / `::`. Targets `-std=c++20`.
 - **Reference vs value:** classes/interfaces → `shared_ptr<T>` + `make_shared` + `->`;
   `Structure` → value `struct`. Generics → real C++ templates.
-- Exceptions via the `IRThrow` node (known limitation: a `Return` inside a `Try` bypasses
-  its `Finally` on the C++ backend); iterators are real C++20 coroutines (`Generator<T>` /
+- Exceptions via the `IRThrow` node; a `Return` or `Exit` out of a `Try` carries its own copy
+  of every `Finally` it leaves (a C++ `return`/`goto` runs no handler); iterators are real C++20 coroutines (`Generator<T>` /
   `co_yield`); async is synchronous `Task<T>` emulation (no scheduler).
 - Plans/specs in `docs/superpowers/`. Known gap: broad .NET API surface
   (List/Console/String methods) on the C++ backend —

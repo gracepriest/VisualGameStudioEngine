@@ -42,7 +42,8 @@ Key semantic decisions, all deliberate:
 - Generics → real C++ templates.
 - Iterators → real C++20 coroutines (`Generator<T>` / `co_yield`).
 - Async → synchronous `Task<T>` emulation; there is no scheduler.
-- Exceptions → the `IRThrow` node. **A `Return` inside a `Try` bypasses its `Finally`.**
+- Exceptions → the `IRThrow` node. A `Return` or `Exit` out of a `Try` runs its `Finally`: the
+  jump carries its own copy of every `Finally` it leaves.
 
 See [C++ backend and interop](#/cpp-interop) for `#CppInclude`, `::`-qualified foreign
 types, and the toolchain controls.
