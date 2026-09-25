@@ -190,6 +190,15 @@ public class JsExecutionTierRosterTests
         // JavaScriptCodeGenerator directly (the BL7002 refusal check); L3/L4/L5/L6/L7's JS legs
         // run through FourBackends.RunsOnEveryBackendAggressive / FourBackends.RunAggressiveJs.
         typeof(DynamicUseSPrimeExecutionTests),
+
+        // Task #161 — CopyPropagationPass.Mentions becomes the union of ADR-0008's CollectReads
+        // walk and the old structural descent into call-shaped operands (MentionsPastTheWalk).
+        // Named "...ExecutionTests", so the widened match below WOULD catch it on its own; listed
+        // explicitly anyway, matching every row above. E3/E4's JS leg runs through
+        // FourBackends.RunAggressiveJs (inside RunsOnEveryBackendAggressive), which spawns Node.
+        // CopyPropagationMentionsTests and CopyPropagationMentionsStructuralTests are NOT here:
+        // pure in-process IR/front-end fixtures, spawn nothing, carry no [Category("Integration")].
+        typeof(CopyPropagationMentionsExecutionTests),
     };
 
     /// <summary>
@@ -237,7 +246,7 @@ public class JsExecutionTierRosterTests
 
     [Test]
     public void RosterIsPinned()
-        => Assert.That(ExecutionTier, Has.Length.EqualTo(51),
+        => Assert.That(ExecutionTier, Has.Length.EqualTo(52),
             "The execution-tier roster changed. That is fine — update the number — but it must " +
             "be a deliberate edit, not a silent shrink.");
 

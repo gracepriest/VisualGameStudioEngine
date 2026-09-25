@@ -1934,7 +1934,9 @@ namespace BasicLang.Compiler.IR.Optimization
                 // await-valued `x = Await F()`).
                 Invalidate(copies, inst, function);
 
-                // Track copy assignments; recording is restricted to the safe subset.
+                // Track copy assignments; recording is restricted to the safe subset. A value that
+                // reads its own target (Mentions: a variable, or an operand instruction named after
+                // it) is not recorded: after the store, re-reading it at a use would read the NEW value.
                 if (inst is IRAssignment assignment && assignment.Target is IRVariable target
                     // Never propagate awaits - duplicating them would re-execute the awaited task.
                     && assignment.Value is IRValue value && value is not IRAwait
@@ -1992,29 +1994,84 @@ namespace BasicLang.Compiler.IR.Optimization
 
 
         /// <summary>
-        /// Whether a recorded copy value reads the named variable anywhere in
-        /// its operand tree. Unknown value shapes conservatively answer TRUE
-        /// (killing a copy fact is always safe; keeping a stale one is not).
+        /// Whether a recorded copy value reads the storage called <paramref name="name"/>
+        /// anywhere in its operand tree (case-insensitively). Unknown value shapes conservatively
+        /// answer TRUE (killing a copy fact is always safe; keeping a stale one is not).
+        ///
+        /// <para>⭐ TWO HALVES, and the answer is their union:</para>
+        /// <list type="number">
+        /// <item>the storage the value reads by THE ONE OPERAND WALK,
+        /// <see cref="OptimizationPass.CollectReads"/> (ADR-0008 D1): every variable, and every
+        /// operand instruction with a named destination (<see cref="OptimizationPass.NamedDestination"/>),
+        /// the value itself included, reached through the pure operators. Every backend reads such
+        /// an instruction back BY THAT NAME, so a store to the name changes what the value reads;</item>
+        /// <item><see cref="MentionsPastTheWalk"/>: what the walk does not look at — the
+        /// arguments of a call or an allocation, and the object of a field access or instance
+        /// call, where <see cref="OptimizationPass.CollectReads"/> stops. Each is asked this whole
+        /// question again, so a named instruction inside a call's argument counts too.</item>
+        /// </list>
+        ///
+        /// <para>⛔ MEASURED (task #161): before the first half existed this walked the operand
+        /// tree for an <see cref="IRVariable"/> spelled <paramref name="name"/> and nothing else,
+        /// so an operand INSTRUCTION renamed after a variable was invisible to it: with
+        /// <c>u = a + 1</c> (an IRBinaryOp renamed <c>u</c>), <c>t0 = u * 2</c> and
+        /// <c>x := t0</c>, the direct store <c>u = 5</c> left the fact standing, although
+        /// ADR-0008 settled point 4 requires it to die. A SOURCE program reaches that shape:
+        /// <c>Dim u As Integer = a + b : Dim x As Double = a + b : u = 5 : Dim y As Double = x :
+        /// Return y * c + u</c>. CSE forwards the second <c>a + b</c> to the renamed <c>u</c>, so
+        /// on the pipeline's second iteration the fact is <c>x := CDbl(u)</c>, and it was
+        /// propagated past the store into <c>y * c</c>. <see cref="IRVerifier"/> then reported an
+        /// S′ violation (the cast, used twice, reads <c>u</c>, which is written between) on all
+        /// four backends at all three entry points (CLI, CLI <c>--optimize</c>, Release project).
+        /// Every backend still printed the right number, only because none of them re-evaluated
+        /// the cast after the store (C++, JavaScript and MSIL materialise it before the store; C#
+        /// re-evaluates it inline as <c>(double)(a + b)</c>). A backend that re-evaluated it there
+        /// and read the renamed operand BY ITS NAME, as C++ renders it
+        /// (<c>static_cast&lt;double&gt;(u)</c>), would read the new <c>u</c> — the hazard
+        /// settled point 4 and task #118 name.</para>
+        ///
+        /// <para>⛔ Do NOT reduce this to the first half alone. The walk stops at a call-shaped
+        /// node because it answers a different question (what a value reads once it has been
+        /// evaluated where it is defined); this pass has always also killed a fact whose value
+        /// passes the written variable to a call, an allocation or a member access, and dropping
+        /// that second half narrows the kills. The union is a superset of the old answer at every
+        /// node: a variable is found by the walk exactly as the old variable arm found it, a pure
+        /// operator's operands are reached by both halves, and every other kind is answered by the
+        /// second half with the old arms verbatim.</para>
         /// </summary>
         private static bool Mentions(IRValue value, string name)
+        {
+            foreach (var read in CollectReads(value).Names)
+                if (string.Equals(read.Name, name, StringComparison.OrdinalIgnoreCase))
+                    return true;
+            return MentionsPastTheWalk(value, name);
+        }
+
+        /// <summary>
+        /// The half of <see cref="Mentions"/> that <see cref="OptimizationPass.CollectReads"/>
+        /// does not cover: it descends the same pure operators to find the call-shaped nodes the
+        /// walk stopped at, and asks <see cref="Mentions"/> of their operands. A variable, a
+        /// constant and a pure operator's own name are the walk's to answer, so they answer FALSE
+        /// here. A kind neither half lists answers TRUE, as it always has.
+        /// </summary>
+        private static bool MentionsPastTheWalk(IRValue value, string name)
         {
             switch (value)
             {
                 case null:
                 case IRConstant:
+                case IRVariable:
                     return false;
-                case IRVariable v:
-                    return string.Equals(v.Name, name, StringComparison.OrdinalIgnoreCase);
+                case IRBinaryOp b:
+                    return MentionsPastTheWalk(b.Left, name) || MentionsPastTheWalk(b.Right, name);
+                case IRUnaryOp u:
+                    return MentionsPastTheWalk(u.Operand, name);
+                case IRCompare c:
+                    return MentionsPastTheWalk(c.Left, name) || MentionsPastTheWalk(c.Right, name);
+                case IRCast cast:
+                    return MentionsPastTheWalk(cast.Value, name);
                 case IRNewObject n:
                     return n.Arguments.Any(a => Mentions(a, name));
-                case IRBinaryOp b:
-                    return Mentions(b.Left, name) || Mentions(b.Right, name);
-                case IRUnaryOp u:
-                    return Mentions(u.Operand, name);
-                case IRCompare c:
-                    return Mentions(c.Left, name) || Mentions(c.Right, name);
-                case IRCast cast:
-                    return Mentions(cast.Value, name);
                 case IRFieldAccess f:
                     return Mentions(f.Object, name);
                 case IRInstanceMethodCall m:
