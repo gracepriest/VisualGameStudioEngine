@@ -3292,6 +3292,8 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                         var left = EmitExpression(bin.Left, stack, true);
                         var right = EmitDivisor(bin, EmitExpression(bin.Right, stack, true));
                         var op = MapBinaryOperator(bin.Operation);
+                        var narrowed = NarrowArithmetic(bin, $"{left} {op} {right}");
+                        if (narrowed != null) return narrowed;
                         var expr = $"{left} {op} {right}";
                         return needsParens ? $"({expr})" : expr;
                     }
@@ -3627,7 +3629,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             var op = MapBinaryOperator(binaryOp.Operation);
 
             var target = GetValueName(binaryOp);
-            WriteLine($"{target} = {left} {op} {right};");
+            WriteLine($"{target} = {NarrowArithmetic(binaryOp, $"{left} {op} {right}") ?? $"{left} {op} {right}"};");
         }
 
         public void Visit(IRUnaryOp unaryOp)
@@ -4775,6 +4777,34 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         /// `-2147483648 / -1` and did not build. A variable over -1 is unaffected either way; the
         /// rewrite only costs a -1 divisor, which nobody writes in a hot loop.</para>
         /// </summary>
+        /// <summary>
+        /// <paramref name="expr"/> cast back to the NARROW integral type of <paramref name="bin"/>
+        /// (Short, UShort, Byte, SByte), or null when no cast is needed.
+        ///
+        /// <para>⛔ C# promotes a <c>short</c>, <c>sbyte</c>, <c>byte</c> or <c>ushort</c> operand to
+        /// <c>int</c>, so <c>a + b</c> on two Shorts is an <c>int</c>, and assigning it to the Short
+        /// the IR declared was CS0266 ("Cannot implicitly convert type 'int' to 'short'"). MEASURED
+        /// on master <c>7a62bdea</c>: every Short or SByte <c>+ - * \ Mod</c> assigned back to its
+        /// own type failed the C# build. The cast is UNCHECKED — the width the Integer arithmetic
+        /// of this backend already wraps at — except for <c>\</c>: there the promoted quotient
+        /// only fails to fit for <c>MinValue \ -1</c>, which .NET reports as an OverflowException
+        /// (Integer and Long trap the same way), so that cast is CHECKED. A narrow <c>Mod</c> by
+        /// -1 is 0, which always fits.</para>
+        /// </summary>
+        private string NarrowArithmetic(IRBinaryOp bin, string expr)
+        {
+            if (bin.Type?.Name is not ("Short" or "UShort" or "Byte" or "SByte" or "UByte")) return null;
+            if (bin.Operation is not (BinaryOpKind.Add or BinaryOpKind.Sub or BinaryOpKind.Mul
+                or BinaryOpKind.IntDiv or BinaryOpKind.Mod or BinaryOpKind.And or BinaryOpKind.Or
+                or BinaryOpKind.BitwiseAnd or BinaryOpKind.BitwiseOr or BinaryOpKind.Xor
+                or BinaryOpKind.Shl or BinaryOpKind.Shr))
+                return null;
+            var type = MapType(bin.Type);
+            return bin.Operation == BinaryOpKind.IntDiv
+                ? $"checked(({type})({expr}))"
+                : $"unchecked(({type})({expr}))";
+        }
+
         private static string EmitDivisor(IRBinaryOp bin, string renderedRight)
         {
             if (bin.Operation is not (BinaryOpKind.Div or BinaryOpKind.IntDiv or BinaryOpKind.Mod))
