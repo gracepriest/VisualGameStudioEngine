@@ -229,17 +229,25 @@ namespace BasicLang.Compiler.IR.Optimization
         protected internal static bool IsCallVisible(string name, IRFunction function)
         {
             if (string.IsNullOrEmpty(name)) return false;
+            // ⭐ ADR-0006 D1's INTERIM CLOSURE RULE, here and nowhere else (every consumer reaches
+            // the declarations through this method): in a function that contains a lambda, every
+            // local is call-visible — a lambda may capture it by reference, and a call may invoke
+            // the lambda. MEASURED before this rule: `Dim bump = Sub() x = x + 1` with `bump()` in
+            // a loop let LICM hoist `x * 2` (L5, JavaScript under --optimize printed 6 for 12), and
+            // `a = p + q : clr() : l(0) = p + q` with `clr = Sub() a = 0` let CSE read the cleared
+            // `a` back (A1, JavaScript printed 0,0 for 3,0). A BY-VALUE PARAMETER is a local of the
+            // frame for this purpose — a lambda captures it the same way (MEASURED:
+            // `Sub Work(p, q) : bump = Sub() p = p + 100 : a = p + q : bump() : l(0) = p + q`
+            // printed 3,3 for 103,3 on JavaScript). Task #122 narrows "every local" to the capture
+            // set; that is a pure precision gain. A Const is still exempt: nothing can write it.
             if (function?.Parameters != null)
                 foreach (var parameter in function.Parameters)
                     if (string.Equals(parameter.Name, name, StringComparison.OrdinalIgnoreCase))
-                        return parameter.IsByRef;
-            // ⚠ ADR-0006 D1's interim closure rule ("in a function that contains a lambda, every
-            // local is call-visible") belongs in THIS method and nowhere else: every consumer
-            // reaches the declarations through here.
+                        return parameter.IsByRef || ContainsLambda(function);
             if (function?.LocalVariables != null)
                 foreach (var local in function.LocalVariables)
                     if (string.Equals(local.Name, name, StringComparison.OrdinalIgnoreCase))
-                        return local.IsGlobal && !local.IsConst;
+                        return !local.IsConst && (local.IsGlobal || ContainsLambda(function));
             // Undeclared: a class member read bare, a module variable, or a name whose
             // declaration IRFunction does not carry. The last only costs a merge or a hoist.
             // ⚠ IRBuilder leaves three locals out of LocalVariables: a For Each loop variable
@@ -247,6 +255,68 @@ namespace BasicLang.Compiler.IR.Optimization
             // merge it made before D3), a Catch variable and the With carrier (both objects, so
             // never an operand of a CSE candidate).
             return true;
+        }
+
+        /// <summary>
+        /// Whether <paramref name="function"/> creates a lambda — the trigger of ADR-0006 D1's
+        /// interim closure rule (<see cref="IsCallVisible(string, IRFunction)"/>). IRBuilder lowers a
+        /// lambda to its own <see cref="IRFunction"/> named <c>__lambda_N</c> and leaves the
+        /// enclosing function an <see cref="IRVariable"/> spelled that name wherever the delegate
+        /// value is used — the same reference every backend recognises the lambda by
+        /// (<c>CppCodeGenerator</c>, <c>JavaScriptBackend.IsLambdaRef</c>, <c>CSharpBackend</c>).
+        /// The walk follows every operand slot (<see cref="UsesOf"/>) and descends into operand
+        /// instructions, so a reference inside a never-emitted When guard is found too.
+        ///
+        /// <para>Cached per function, because every consumer asks per operand. A YES is kept for
+        /// good (a stale yes only costs a merge). A NO is kept only while the function's
+        /// instruction count is unchanged, and is otherwise re-walked — the hole left is an
+        /// instruction REPLACED in place by one that references a lambda, which nothing does:
+        /// IRBuilder writes every lambda reference before any pass runs, and no pass creates one
+        /// (the one pass that could copy code between functions, FunctionInliningPass, is not
+        /// registered).</para>
+        /// </summary>
+        protected internal static bool ContainsLambda(IRFunction function)
+        {
+            if (function?.Blocks == null) return false;
+            int count = 0;
+            foreach (var block in function.Blocks) count += block?.Instructions?.Count ?? 0;
+            if (LambdaScans.TryGetValue(function, out var cached) && (cached.Found || cached.InstructionCount == count))
+                return cached.Found;
+            bool found = ScanForLambda(function);
+            LambdaScans.AddOrUpdate(function, new LambdaScan(found, count));
+            return found;
+        }
+
+        private sealed record LambdaScan(bool Found, int InstructionCount);
+
+        private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<IRFunction, LambdaScan> LambdaScans = new();
+
+        private static bool ScanForLambda(IRFunction function)
+        {
+            var seen = new HashSet<IRValue>(ReferenceEqualityComparer.Instance);
+            var pending = new Stack<IRValue>();
+            foreach (var block in function.Blocks)
+            {
+                if (block?.Instructions == null) continue;
+                foreach (var inst in block.Instructions)
+                {
+                    if (inst == null) continue;
+                    foreach (var used in UsesOf(inst)) pending.Push(used);
+                    while (pending.Count > 0)
+                    {
+                        var value = pending.Pop();
+                        if (value == null || !seen.Add(value)) continue;
+                        if (value is IRVariable variable)
+                        {
+                            if (variable.Name != null && variable.Name.StartsWith("__lambda_", StringComparison.Ordinal))
+                                return true;
+                            continue;
+                        }
+                        foreach (var operand in UsesOf(value)) pending.Push(operand);
+                    }
+                }
+            }
+            return false;
         }
 
         /// <summary>
@@ -308,20 +378,6 @@ namespace BasicLang.Compiler.IR.Optimization
         /// <para>⚠ When you add an IR node kind, add it to an arm here, stating what it writes.
         /// Leaving it off is safe for output but fails Invariant V in every test that builds
         /// it.</para>
-        ///
-        /// <para>⛔ KNOWN GAPS — writes this vocabulary does not name, so CSE merges across them
-        /// and the verifier cannot see them. Each MEASURED as a live wrong answer with a merge:
-        /// <list type="bullet">
-        /// <item>an <see cref="IRFieldStore"/> through <c>Me.</c> to a member the function also
-        /// names bare — operand side (<c>a = K + q : Me.K = 10 : l(0) = K + q</c>, C++/JS/MSIL
-        /// print 3 for 12) and destination side (<c>K = p + q : Me.K = 0 : l(0) = p + q</c>,
-        /// C++/MSIL);</item>
-        /// <item>a write through a second <c>ByRef</c> parameter aliasing the destination
-        /// (<c>n = p + q : m = 0 : l(0) = p + q</c> called as <c>Work(v, v)</c>, C++/MSIL) —
-        /// destination side only, since a <c>ByRef</c> operand is never replicable;</item>
-        /// <item>a local captured by reference and written inside a lambda (JavaScript; C++ and
-        /// MSIL do not build the shape). The operand side is recorded in HANDOFF.</item>
-        /// </list></para>
         /// </summary>
         protected internal static WriteSet NamesWrittenBy(IRInstruction inst, IRFunction function)
         {
@@ -329,6 +385,35 @@ namespace BasicLang.Compiler.IR.Optimization
             void Name(string name)
             {
                 if (!string.IsNullOrEmpty(name)) (names ??= new List<string>()).Add(name);
+            }
+
+            // ADR-0006 D1 (b) and its converse — see the two rules after the switch: whether this
+            // instruction writes a VARIABLE that is a ByRef parameter of the function, and whether
+            // it writes storage a ByRef parameter may ALIAS (a call-visible variable, or an
+            // element or member no variable names).
+            // Both only matter in a function that HAS a ByRef parameter; elsewhere they are not
+            // computed at all.
+            bool hasByRef = HasByRefParameter(function);
+            bool throughByRef = false;
+            bool escapes = false;
+            void Variable(string name)
+            {
+                Name(name);
+                if (!hasByRef || string.IsNullOrEmpty(name)) return;
+                if (IsByRefParameter(name, function)) throughByRef = true;
+                else if (IsCallVisible(name, function)) escapes = true;
+            }
+            // A value instruction's own destination: always a kill name (a temp too — CSE keys on
+            // it), and a VARIABLE write when it names one (NamedDestination: not a temp, an
+            // alloca slot or a folded constant).
+            void Definition(IRValue value)
+            {
+                Name(value.Name);
+                if (hasByRef && NamedDestination(value) is string variable)
+                {
+                    if (IsByRefParameter(variable, function)) throughByRef = true;
+                    else if (IsCallVisible(variable, function)) escapes = true;
+                }
             }
 
             bool isCall = false;
@@ -349,12 +434,63 @@ namespace BasicLang.Compiler.IR.Optimization
 
                 // ---- A plain assignment writes its target.
                 case IRAssignment assignment:
-                    Name(assignment.Target?.Name);
+                    Variable(assignment.Target?.Name);
                     break;
 
                 // ---- A store writes the variable its address names.
                 case IRStore store:
-                    if (store.Address is IRVariable stored) Name(stored.Name);
+                    if (store.Address is IRVariable stored) Variable(stored.Name);
+                    else if (store.Address is IRAlloca slot)
+                    {
+                        // An alloca is the backing slot of a local (`V_addr` for an array `V`):
+                        // C# and C++ write the local `V` itself, MSIL the slot. Both are named.
+                        Name(slot.Name);
+                        if (slot.Name != null && slot.Name.EndsWith("_addr", StringComparison.OrdinalIgnoreCase))
+                            Variable(slot.Name.Substring(0, slot.Name.Length - "_addr".Length));
+                    }
+                    else escapes = true; // an element, through a pointer
+                    break;
+
+                // ---- An element store writes storage no variable names: an array or collection
+                // slot, which a ByRef parameter may alias (the caller passed `arr(0)`).
+                case IRArrayStore:
+                    escapes = true;
+                    break;
+                // The same for a collection slot — and a call when the node carries a resolved
+                // .NET `set_Item` accessor (§8.5): that is .NET code running, not a native store.
+                // A native collection's setter is library code that runs no user code.
+                case IRIndexerStore indexerStore:
+                    escapes = true;
+                    if (indexerStore.ResolvedNetTarget != null) isCall = true;
+                    break;
+
+                // ---- A member store names its MEMBER (ADR-0006 D1 (a)). Inside a class method a
+                // field is read BARE, as an IRVariable spelled like the member, so `Me.K = 0`
+                // writes the `K` that `K + q` reads. MEASURED before this arm (A5b, A6): C++ and
+                // MSIL printed `0,0` for `K = p + q : Me.K = 0 : l(0) = p + q` (right `3,0`), and
+                // C++, JavaScript and MSIL printed `3,3` for `a = K + q : Me.K = 10 : l(0) = K + q`
+                // (right `12,3`). The receiver is not consulted: `o.K = 0` may alias `Me`, and a
+                // Shared `Box.K = 0` writes the same member a bare `K` reads.
+                //
+                // ⛔ ...and it is a CALL: IRBuilder lowers `obj.P = v` to IRFieldStore for a
+                // PROPERTY as well as a field ("both properties and fields use field store
+                // syntax"), and a Property Set runs user code. MEASURED before this: `a = K + q :
+                // Me.P = 10 : l(0) = K + q`, with P's setter writing K, printed 3,3 for 12,3 on
+                // JavaScript and MSIL. The node does not say which it is, so every member store
+                // is treated as one that may run a setter.
+                case IRFieldStore fieldStore:
+                    isCall = true;
+                    Name(fieldStore.FieldName);
+                    escapes = true; // a member, which a ByRef parameter may alias (`Work(K)`)
+                    break;
+
+                // ---- A member READ may run a Property Get (IRBuilder lowers `obj.P` to
+                // IRFieldAccess for both), which can write anything a call can. MEASURED: with a
+                // getter that bumps the field K, `a = K + q : t = Me.Tick : l(0) = K + q` printed
+                // 3,3,11 for 13,3,11 on JavaScript and MSIL.
+                case IRFieldAccess fieldAccess:
+                    isCall = true;
+                    Definition(fieldAccess);
                     break;
 
                 // ---- Calls: the result's name (a rename, `Dim p = Seed(1)`), every ByRef
@@ -363,20 +499,34 @@ namespace BasicLang.Compiler.IR.Optimization
                 // answer), and — through isCall — everything a callee can reach.
                 case IRCall call:
                     isCall = true;
-                    Name(call.Name);
+                    Definition(call);
                     NameByRefArguments(call.Arguments, call.ByRefArguments, ref names);
                     break;
                 case IRInstanceMethodCall methodCall:
                     isCall = true;
-                    Name(methodCall.Name);
+                    Definition(methodCall);
                     NameByRefArguments(methodCall.Arguments, methodCall.ByRefArguments, ref names);
                     break;
+                // A constructor is a call. The node records no ByRef flags, so, as for a base
+                // call, every VARIABLE argument is treated as written: VB passes it by reference
+                // to a `Sub New(ByRef n)`. (Today every backend lowers such a parameter BY VALUE —
+                // measured, a separate defect — so this costs a merge and buys nothing until one
+                // does not; it is the answer the node's meaning requires.)
                 case IRNewObject newObject:
                     isCall = true;
-                    Name(newObject.Name);
+                    Definition(newObject);
+                    NameVariableArguments(newObject.Arguments, ref names);
                     break;
+                // `MyBase.Bump()` is a call like any other (ADR-0006 D1 (c)): MEASURED before
+                // this arm, a base method that writes a field the caller reads bare printed `3,3`
+                // for `13,3` on C++, JavaScript and MSIL (`a = K + q : MyBase.Bump() :
+                // l(0) = K + q`). The node records no ByRef flags, and C++ does pass a ByRef
+                // argument by reference (`MyBase.SetIt(p)` MEASURED stale on C++), so every
+                // VARIABLE argument is treated as written (see NameVariableArguments).
                 case IRBaseMethodCall baseCall:
-                    Name(baseCall.Name);
+                    isCall = true;
+                    Definition(baseCall);
+                    NameVariableArguments(baseCall.Arguments, ref names);
                     break;
 
                 // ---- A NAMED value instruction redefines that name. `Dim p = Seed(1)` is an
@@ -385,7 +535,6 @@ namespace BasicLang.Compiler.IR.Optimization
                 case IRConstant:
                 case IRVariable:
                 case IRBinaryOp:
-                case IRUnaryOp:
                 case IRCompare:
                 case IRCast:
                 case IRLoad:
@@ -393,24 +542,83 @@ namespace BasicLang.Compiler.IR.Optimization
                 case IRGetElementPtr:
                 case IRPhi:
                 case IRArrayAlloc:
-                case IRAwait:
-                case IRIndexerAccess:
-                case IRFieldAccess:
                 case IRTupleElement:
-                    Name(((IRValue)inst).Name);
+                    Definition((IRValue)inst);
                     break;
 
-                // ---- Not yet given a write (step 1 of ADR-0006 D1 classifies today's answer).
-                case IRSwitch:
+                // A collection read is a definition — and a call when the node carries a resolved
+                // .NET `get_Item` accessor (§8.5), as for IRIndexerStore above.
+                case IRIndexerAccess indexerAccess:
+                    Definition(indexerAccess);
+                    if (indexerAccess.ResolvedNetTarget != null) isCall = true;
+                    break;
+
+                // ---- `++x` / `--x` (IRUnaryOp Inc/Dec) writes its OPERAND as well as its result:
+                // the C# backend emits `t = ++x`, so `x` changes. (C++ increments the RESULT
+                // instead and JavaScript and MSIL refuse the operator — backend matters, not what
+                // the node means.) Every other unary operator is a pure definition.
+                case IRUnaryOp unary:
+                    Definition(unary);
+                    if (unary.Operation is UnaryOpKind.Inc or UnaryOpKind.Dec)
+                    {
+                        if (unary.Operand is IRVariable incremented) Variable(incremented.Name);
+                        else if (unary.Operand is IRFieldAccess member) { Name(member.FieldName); escapes = true; }
+                        else escapes = true; // an element
+                    }
+                    break;
+
+                // ---- For Each writes its loop variable on every iteration, and each iteration
+                // runs the enumerator — an Iterator function's body, or a user collection's
+                // MoveNext/Current — so it is also a call. The body and continuation are separate
+                // blocks, classified instruction by instruction.
+                case IRForEach forEach:
+                    isCall = true;
+                    Variable(forEach.VariableName);
+                    break;
+
+                // ---- Try/Catch writes each Catch variable when that clause catches. The try,
+                // catch and finally BODIES are separate blocks, classified on their own.
+                case IRTryCatch tryCatch:
+                    if (tryCatch.CatchClauses != null)
+                        foreach (var clause in tryCatch.CatchClauses)
+                            Variable(clause?.VariableName);
+                    break;
+
+                // ---- Select Case writes every pattern BINDING variable (`Case x As Integer`,
+                // `Case Is String s`), and it EVALUATES every When guard itself: IRBuilder lowers a
+                // guard with its emission suppressed, so the guard's instructions sit in no block
+                // and each backend renders the tree inline at the switch. A guard may call
+                // anything, so a switch with one is a call. Case VALUES are ordinary instructions
+                // emitted before the switch, classified on their own.
+                case IRSwitch switchInst:
+                    if (switchInst.PatternCases != null)
+                        foreach (var patternCase in switchInst.PatternCases)
+                            ClassifyPattern(patternCase, Variable, ref isCall);
+                    break;
+
+                // ---- Writes nothing: a throw transfers control to a handler (the Catch variable
+                // is IRTryCatch's write, above) and assigns no storage.
                 case IRThrow:
-                case IRInlineCode:
-                case IRArrayStore:
-                case IRYield:
-                case IRIndexerStore:
-                case IRForEach:
-                case IRTryCatch:
-                case IRFieldStore:
                     return WriteSet.Nothing;
+
+                // ---- Raw target-language text can assign ANY variable: classified UNIVERSAL
+                // (explicitly — unlike an unclassified kind, this is a decision, not a gap).
+                case IRInlineCode:
+                    return WriteSet.Everything;
+
+                // ---- SUSPENSION POINTS are calls. At `Await` and at `Yield` control leaves the
+                // function and other code runs before it resumes — the awaited continuation's
+                // neighbours, the iterator's consumer — and can write anything a callee could.
+                // MEASURED before this arm: an Iterator that yields `K + 1` twice around a
+                // consumer that bumps the field `K` yielded 2,2 on C++ (right 2,12): CSE merged
+                // the two sums across the Yield.
+                case IRAwait awaited:
+                    isCall = true;
+                    Definition(awaited);
+                    break;
+                case IRYield:
+                    isCall = true;
+                    break;
 
                 default:
                     // UNCLASSIFIED: a kind added after this switch was written. Every pass kills
@@ -418,7 +626,82 @@ namespace BasicLang.Compiler.IR.Optimization
                     return WriteSet.Unclassified;
             }
 
+            // ADR-0006 D1 (b): a write THROUGH a ByRef parameter writes every escaping name. The
+            // parameter may alias ANY storage its caller could pass — another ByRef parameter
+            // bound to the same argument (A2b: `n = p + q : m = 0 : l(0) = p + q` called as
+            // `Work(v, v)`, MEASURED 0,0 on C++ and MSIL, right 3,0), a module variable, a field.
+            // That set is exactly what a call can write (IsCallVisible), so the write kills as a
+            // call does.
+            if (throughByRef) isCall = true;
+
+            // ...and its converse: a write to storage a ByRef parameter may ALIAS writes that
+            // parameter. `n = p + q : G = 0 : l(0) = p + q` called as `Work(G)` is the same
+            // aliasing seen from the other side (MEASURED 0,0 on C++ and MSIL, right 3,0, with G a
+            // module variable, with a field read bare, and with `Me.K = 0`). Implementer's
+            // completion of rule (b), ADR-0006 implementation note; only adds kills.
+            if (escapes)
+                foreach (var parameter in function.Parameters)
+                    if (parameter.IsByRef) Name(parameter.Name);
+
             return WriteSet.Of(names, isCall);
+        }
+
+        /// <summary>Whether <paramref name="function"/> has any <c>ByRef</c> parameter.</summary>
+        protected internal static bool HasByRefParameter(IRFunction function)
+        {
+            if (function?.Parameters == null) return false;
+            foreach (var parameter in function.Parameters)
+                if (parameter.IsByRef) return true;
+            return false;
+        }
+
+        /// <summary>Whether <paramref name="name"/> is a <c>ByRef</c> parameter of
+        /// <paramref name="function"/> — storage that aliases whatever its caller passed.</summary>
+        protected internal static bool IsByRefParameter(string name, IRFunction function)
+        {
+            if (string.IsNullOrEmpty(name) || function?.Parameters == null) return false;
+            foreach (var parameter in function.Parameters)
+                if (parameter.IsByRef && string.Equals(parameter.Name, name, StringComparison.OrdinalIgnoreCase))
+                    return true;
+            return false;
+        }
+
+        /// <summary>
+        /// The pattern half of <see cref="NamesWrittenBy"/>'s IRSwitch arm: every binding
+        /// variable a Select Case pattern introduces (through Or alternatives and tuple elements),
+        /// and a call whenever a pattern carries a When guard (evaluated inline by the switch).
+        /// </summary>
+        private static void ClassifyPattern(IRPatternCase pattern, Action<string> variable, ref bool isCall)
+        {
+            if (pattern == null) return;
+            if (!string.IsNullOrEmpty(pattern.BindingVariable)) variable(pattern.BindingVariable);
+            if (pattern.WhenGuard != null) isCall = true;
+            switch (pattern)
+            {
+                case IROrPatternCase or:
+                    if (or.Alternatives != null)
+                        foreach (var alternative in or.Alternatives) ClassifyPattern(alternative, variable, ref isCall);
+                    break;
+                case IRTuplePatternCase tuple:
+                    if (tuple.Elements != null)
+                        foreach (var element in tuple.Elements) ClassifyPattern(element, variable, ref isCall);
+                    break;
+            }
+        }
+
+        /// <summary>
+        /// The ByRef arm of <see cref="NamesWrittenBy"/> for a call node that records NO ByRef
+        /// flags: any argument that is a VARIABLE may be bound to a ByRef parameter, so its name
+        /// is written. Only a variable needs naming: an argument that reads a member, an element
+        /// or anything else a callee can reach is already killed by the call arm, and an rvalue
+        /// (a sum, a call result) reaches a ByRef parameter as a temporary copy.
+        /// </summary>
+        private static void NameVariableArguments(List<IRValue> arguments, ref List<string> names)
+        {
+            if (arguments == null) return;
+            foreach (var argument in arguments)
+                if (argument is IRVariable variable && !string.IsNullOrEmpty(variable.Name))
+                    (names ??= new List<string>()).Add(variable.Name);
         }
 
         /// <summary>The ByRef arm of <see cref="NamesWrittenBy"/>: every name read by an argument
@@ -1716,7 +1999,10 @@ namespace BasicLang.Compiler.IR.Optimization
             public IRBinaryOp Value;
             public List<string> Reads;
             public string Destination;
-            public bool ReadsCallVisibleStorage;
+            /// <summary>An operand reads storage a call can write.</summary>
+            public bool OperandsCallVisible;
+            /// <summary>The destination names storage a call can write.</summary>
+            public bool DestinationCallVisible;
 
             public static Candidate For(IRBinaryOp op, IRFunction function)
             {
@@ -1730,10 +2016,10 @@ namespace BasicLang.Compiler.IR.Optimization
                     Reads = reads,
                     Destination = destination,
                     // ⭐ ONE rule for both halves (ADR-0006 D3): operands and destination are
-                    // asked the same question of the same declarations.
-                    ReadsCallVisibleStorage =
-                        ReadsCallVisible(op.Left, function) || ReadsCallVisible(op.Right, function)
-                        || IsCallVisibleDestination(op, function)
+                    // asked the same question of the same declarations. Kept apart only so the
+                    // defining instruction can be exempt on its destination (see Invalidate).
+                    OperandsCallVisible = ReadsCallVisible(op.Left, function) || ReadsCallVisible(op.Right, function),
+                    DestinationCallVisible = IsCallVisibleDestination(op, function)
                 };
             }
         }
@@ -1825,12 +2111,17 @@ namespace BasicLang.Compiler.IR.Optimization
             List<string> stale = null;
             foreach (var entry in expressions)
             {
-                bool dead = isCall && entry.Value.ReadsCallVisibleStorage;
+                // The defining instruction renames its own destination; that is the value being
+                // BORN, not a write that makes it stale (see Candidate) — through the call arm as
+                // much as through the name. It acts as a call only under ADR-0006 D1 (b), a
+                // binop renamed to a ByRef parameter (`n = p + q`), and IRVerifier skips the
+                // defining instruction the same way.
+                bool self = ReferenceEquals(entry.Value.Value, inst);
+                bool dead = isCall
+                    && (entry.Value.OperandsCallVisible || (!self && entry.Value.DestinationCallVisible));
                 if (!dead && killed.Count > 0)
                 {
-                    // The defining instruction renames its own destination; that is the value
-                    // being BORN, not a write that makes it stale (see Candidate).
-                    string destination = ReferenceEquals(entry.Value.Value, inst) ? null : entry.Value.Destination;
+                    string destination = self ? null : entry.Value.Destination;
                     foreach (var name in killed)
                     {
                         if (destination != null && string.Equals(destination, name, StringComparison.OrdinalIgnoreCase))
