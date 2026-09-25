@@ -347,6 +347,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
         private const string IntDivHelperName = "__blIntDiv";
         private const string ModHelperName = "__blMod";
+        private const string NarrowDivHelperName = "__blNarrowDiv";
 
         private static bool IsCheckedMod(IRBinaryOp op) =>
             op.Left?.Type?.IsIntegral() == true && op.Right?.Type?.IsIntegral() == true;
@@ -424,6 +425,17 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 _indentLevel--;
                 Line("}");
             }
+
+            // ⛔ A Short/SByte `\`: its quotient only fails to fit for MinValue \ -1 (+32768 /
+            // +128), which .NET reports as OverflowException. MEASURED on master 7a62bdea:
+            // `-32768 \ -1` printed 32768, a value no Short can hold.
+            Line($"function {NarrowDivHelperName}(a, b, max) {{");
+            _indentLevel++;
+            Line($"const q = {IntDivHelperName}(a, b);");
+            Line("if (q > max) throw new OverflowException(\"Arithmetic operation resulted in an overflow.\");");
+            Line("return q;");
+            _indentLevel--;
+            Line("}");
             Line();
         }
 
@@ -1115,6 +1127,8 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 // ⛔ Through the checked helper, not a bare Math.trunc: `7 \ 0` was Infinity and
                 // `7 Mod 0` NaN, printed as numbers where .NET throws DivideByZeroException (see
                 // EmitIntegerDivisionPrelude).
+                case BinaryOpKind.IntDiv when op.Type?.Name == "Short": return $"{NarrowDivHelperName}({l}, {r}, 32767)";
+                case BinaryOpKind.IntDiv when op.Type?.Name == "SByte": return $"{NarrowDivHelperName}({l}, {r}, 127)";
                 case BinaryOpKind.IntDiv: return $"{IntDivHelperName}({l}, {r})";
 
                 // .NET's Mod takes the sign of the DIVIDEND, and so does JS's %. They agree

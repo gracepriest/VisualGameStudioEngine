@@ -2,6 +2,8 @@
 
 **Amended by [ADR-0007](0007-bare-name-property-lowering-fidelity.md)** — D1's Revisit clause replaced (lowering fidelity, invariant F, beside V).
 
+**Amended by [ADR-0008](0008-guard-semantics-and-call-visibility-of-computed-values.md) D1/D1-sub** — D2's known-gap note is closed and its cycle-reading question is confirmed.
+
 - **Date:** 2026-09-24
 - **Status:** Accepted
 - **Decided by:** the architect role, dispatched on its pinned model with no
@@ -315,6 +317,9 @@ ADR-0005 D2 (use count is dynamic; region is path-based).
   and its `D2_...WriteOnTheOtherArm_...` sibling both FIRE. A natural-loop reading ("the loop
   lexically contains the definition") would exempt both instead — a real behavioural fork the
   architect has not ruled on. Filed as task #157, alongside the known gap below.
+
+  **Confirmed by [ADR-0008](0008-guard-semantics-and-call-visibility-of-computed-values.md) D1-sub: the
+  CYCLE reading is adopted as ruled; "not yet architect-confirmed (task #157)" above is resolved.**
 - **Measured, per the Obligations:** `S/adr6-d1/probes/L1..L7.bas` identical before and after,
   zero verifier fires, at all three entry points (CLI, CLI `--optimize`, Release `.blproj` —
   `S/adr6-d2/probes/matrix-before.txt` vs `matrix-after.txt`). The fast subset fires ZERO new violations —
@@ -364,6 +369,10 @@ ADR-0005 D2 (use count is dynamic; region is path-based).
   `Guard(v)` also takes its NON-replicable operands, so the C#-only re-read becomes visible too;
   `S/adr6-d2/mutsrc/IRVerifier.E.cs`) was explored but NOT adopted here: whether `Guard(v)` should depend on which BACKEND will read the
   value is a real ruling question, not an implementation detail this task can decide.
+
+  **Closed by [ADR-0008](0008-guard-semantics-and-call-visibility-of-computed-values.md) D1: `Guard(v)`
+  is now replicability-blind, so a wrong hoist over a `ByRef` parameter or a non-`Const` global is
+  reported on every backend, C# included.**
 - `For Each` bodies are not cycles (`ControlFlowGraph`, ADR-0003 D3 — no back edge), so a use inside
   one is never seen as repeated by D2 either. No pass moves a value into a `For Each` body today
   (CSE is block-local; LICM hoists only out of natural loops, which a `For Each` is not), so this is

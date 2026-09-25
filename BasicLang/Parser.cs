@@ -3810,9 +3810,7 @@ namespace BasicLang.Compiler
             var target = ParseAssignmentTarget();
 
             // Check for assignment operators
-            if (Check(TokenType.Assignment) || Check(TokenType.PlusAssign) ||
-                Check(TokenType.MinusAssign) || Check(TokenType.MultiplyAssign) ||
-                Check(TokenType.DivideAssign))
+            if (IsAssignmentOperator(Peek().Type))
             {
                 var token = Advance();
                 var assignment = new AssignmentStatementNode(token.Line, token.Column);
@@ -3854,6 +3852,16 @@ namespace BasicLang.Compiler
         }
 
         /// <summary>
+        /// `=` and VB's compound assignments. The lexer produced no `\=`, `&amp;=`, `&lt;&lt;=` or
+        /// `&gt;&gt;=` token, so each was a parse error ("End of statement expected, found '\'")
+        /// although IRBuilder already lowered all four.
+        /// </summary>
+        internal static bool IsAssignmentOperator(TokenType type) => type is
+            TokenType.Assignment or TokenType.PlusAssign or TokenType.MinusAssign or
+            TokenType.MultiplyAssign or TokenType.DivideAssign or TokenType.IntegerDivideAssign or
+            TokenType.ConcatAssign or TokenType.LeftShiftAssign or TokenType.RightShiftAssign;
+
+        /// <summary>
         /// Check if the current state indicates a VB-style call statement without parentheses.
         /// E.g., PrintLine "Hello" or Debug.Print message
         /// </summary>
@@ -3877,9 +3885,7 @@ namespace BasicLang.Compiler
                 return false;
 
             // Skip if it's an assignment operator
-            if (next.Type == TokenType.Assignment || next.Type == TokenType.PlusAssign ||
-                next.Type == TokenType.MinusAssign || next.Type == TokenType.MultiplyAssign ||
-                next.Type == TokenType.DivideAssign)
+            if (IsAssignmentOperator(next.Type))
                 return false;
 
             // Skip if it's a binary operator (not a call, but a binary expression)

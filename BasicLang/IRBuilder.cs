@@ -4341,8 +4341,8 @@ namespace BasicLang.Compiler.IR
                 // Determine operation
                 BinaryOpKind op = node.Operator switch
                 {
-                    "+=" or "=+" => BinaryOpKind.Add,
-                    "-=" or "=-" => BinaryOpKind.Sub,
+                    "+=" => BinaryOpKind.Add,
+                    "-=" => BinaryOpKind.Sub,
                     "*=" => BinaryOpKind.Mul,
                     "/=" => BinaryOpKind.Div,
                     "\\=" => BinaryOpKind.IntDiv,        // Integer division assignment
@@ -4380,8 +4380,7 @@ namespace BasicLang.Compiler.IR
                     // ADR-0005 D1, the same conversion as binary `\` — so that NO IntDiv leaves
                     // IRBuilder with a floating operand, whichever site built it. A converted
                     // divide is Long, as the analyzer types `a \ b`; the store coercion below
-                    // then narrows or widens it to the target. (⚠ Unreachable from source
-                    // today: the lexer has no `\=` token, so `d \= 2` is a parse error.)
+                    // then narrows or widens it to the target.
                     var convertedLeft = ConvertIntegerDivisionOperand(currentValue);
                     var convertedRight = ConvertIntegerDivisionOperand(value);
                     if (!ReferenceEquals(convertedLeft, currentValue) || !ReferenceEquals(convertedRight, value))
