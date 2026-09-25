@@ -47,6 +47,13 @@ namespace VisualGameStudio.Tests.Compiler;
 //                                                   (no optimizer at all): see CLAUDE.md and
 //                                                   docs/HANDOFF.md's notes on the two.
 //
+//  ADR-0008 D1-sub (2026-09-25) CONFIRMED the CYCLE reading (d)/(d2) above use — the
+//  `_PendingTask157` suffix and the "not yet architect-confirmed" doc comments are gone. ADR-0008
+//  D1/D2 also add L4r (the LICM-double-mutant discriminator probe) to the two fixtures below and
+//  Q2a-Q2e (Adr0008GuardTests.cs's Adr0008Q2Probes) to the execution fixture — see that file for
+//  the hand-built Guard(v) contract tests, the CollectReads/ReadsCallVisible agreement pin and the
+//  D2 pins.
+//
 //  ⚠ THE TEST HOST ALREADY VERIFIES IN THROW MODE. `VisualGameStudio.Tests.csproj` sets the
 //  `BasicLang.VerifyIR` runtime switch, which `IRVerifier.Resolve()` reads whenever nothing has
 //  pinned `Mode` first (IRVerifierModeResolutionTests.InTheTestHost_ModeIsThrow pins this).  So
@@ -86,6 +93,48 @@ internal static class DynamicUseSPrimeProbes
         """;
 
     internal const string ExpectedL7 = "seed\nseed\nseed\n3,0\nseed\n3,0";
+
+    /// <summary>L4r (ADR-0008's own L4r-discriminator probe, ported from <c>S/adr8/probes/L4r.bas</c> /
+    /// <c>S/adr6-d2/probes/L4r.bas</c> — identical bytes in both): <c>Work(ByRef n)</c> aliased to
+    /// the global <c>g</c> from <c>Main</c>, a call in the loop (<c>IncG</c>) that bumps <c>g</c>
+    /// through the alias, loop body <c>s = s + n * 2</c>. Correct output is <c>12</c>. Under
+    /// TODAY's LICM this never hoists (a global is never treated as loop-invariant, and the
+    /// call-visible read check counts <c>IncG()</c>'s bump as a write of <c>n</c>) — see
+    /// <c>DynamicUseSPrimeAggressivePipelineStructuralTests</c>/<c>ExecutionTests</c> below for the
+    /// zero-fire, correct-output pin. The L4r LICM-DOUBLE-MUTANT discriminator (ADR-0008 D1's
+    /// contract: S′ FIRES on C++ -O, MSIL -O/Release and C# -O even though C# still prints 12) is
+    /// NOT a shipped test — it needs a mutated <c>IROptimizer.cs</c> in a SCRATCH tree, never the
+    /// repo — see the ADR's implementation note for that measurement
+    /// (<c>S/adr8/probes/matrix-licm-after.txt</c>, independently reconfirmed against the current
+    /// production <c>IRVerifier.cs</c>/mutated-<c>IROptimizer.cs</c> scratch tree this session).</summary>
+    internal const string L4r = """
+        Dim g As Integer
+
+        Function Seed(v As Integer) As Integer
+            Console.WriteLine("seed")
+            Return v
+        End Function
+
+        Sub IncG()
+            g = g + 1
+        End Sub
+
+        Sub Work(ByRef n As Integer)
+            Dim s As Integer = 0
+            For i As Integer = 1 To 3
+                s = s + n * 2
+                IncG()
+            Next
+            Console.WriteLine(CStr(s))
+        End Sub
+
+        Sub Main()
+            g = Seed(1)
+            Work(g)
+        End Sub
+        """;
+
+    internal const string ExpectedL4r = "seed\n12";
 }
 
 /// <summary>
@@ -303,15 +352,21 @@ public class DynamicUseSPrimeHandBuiltIRTests
         AssertVerdict(f.Module, expectFires: true, expectVariable: "K", expectWriterBlock: "loop.body", expectUseBlock: "loop.body");
     }
 
-    // ---- (a4g) same over a non-Const MODULE GLOBAL: not replicable, so outside Guard(v). -------
+    // ---- (a4g) same over a non-Const MODULE GLOBAL: in Guard(v) since ADR-0008 D1. -------------
 
     /// <summary>Same shape as (a4), but over a module global <c>g</c> instead of a bare field.
-    /// <c>g.IsGlobal &amp;&amp; !g.IsConst</c> makes it call-visible too — but
-    /// <see cref="IRReplicability.IsReplicable"/> excludes a non-Const global outright (ADR-0005
-    /// D2), so it never enters <c>Guard(v)</c> in the first place: QUIET regardless of the dynamic
-    /// count. Distinguishes "outside Guard" from "inside Guard but not dynamically shared".</summary>
+    /// <c>g.IsGlobal &amp;&amp; !g.IsConst</c> makes it call-visible, so the call after the use
+    /// hits it: FIRES.
+    ///
+    /// <para>⚠ FLIPPED by ADR-0008 D1 (task #157). This was QUIET: ADR-0005 D2 left
+    /// non-replicable operands out of <c>Guard(v)</c>, and <c>IRReplicability.IsReplicable</c>
+    /// calls a non-Const global non-replicable. ADR-0008 D1 strikes that rule. <c>Guard(v)</c> is
+    /// now blind to replicability (the walk <c>OptimizationPass.CollectReads</c> shares with
+    /// <c>ReadsCallVisible</c>), so <c>g</c> is guarded like any other variable. This is the
+    /// ruling's contract shape (ii): a non-Const global, one in-loop use, a call in the
+    /// loop.</para></summary>
     [Test]
-    public void A4g_PreheaderDefOverModuleGlobal_NonReplicable_OutsideGuard_Quiet()
+    public void A4g_PreheaderDefOverModuleGlobal_InGuardSinceAdr8_CallAfterUse_Fires()
     {
         var f = NewFixture();
         var g = new IRVariable("g", IntType) { IsGlobal = true };
@@ -327,7 +382,7 @@ public class DynamicUseSPrimeHandBuiltIRTests
         body.Instructions.Add(new IRBranch(head));
         exit.Instructions.Add(new IRReturn());
 
-        AssertVerdict(f.Module, expectFires: false);
+        AssertVerdict(f.Module, expectFires: true, expectVariable: "g", expectWriterBlock: "loop.body", expectUseBlock: "loop.body");
     }
 
     // ---- (a10) a NAMED value: already checked before D2 (static rule) -- must fire before AND after.
@@ -645,19 +700,20 @@ public class DynamicUseSPrimeHandBuiltIRTests
 
     // ---- (d)/(d2)/(d3): def INSIDE the loop, on a branch the cycle CAN AVOID. -------------------
     //
-    // ⚠⚠ THE IMPLEMENTED READING, NOT YET ARCHITECT-CONFIRMED (task #157). D2's rule reads
-    // "repeated" off a CYCLE, not a natural loop: `head -> arm -> merge -> head` (skipping the
-    // definition on `arm`) is a cycle that avoids the definition's block, so `t0`'s one use at
-    // `merge` counts as repeated even though the definition IS lexically inside the same natural
-    // loop. A natural-loop reading ("the loop contains the definition") would exempt it instead.
-    // MEASURED (S/adr6-d2/hand-final-full.txt): both (d) and (d2) FIRE under the landed code. The ADR
-    // doc's "## Implementation note (D2)" records this as the implemented interpretation pending
-    // the architect's confirmation, per the implementer brief.
+    // ✅ THE CYCLE READING, CONFIRMED (ADR-0008 D1-sub). D2's rule reads "repeated" off a CYCLE,
+    // not a natural loop: `head -> arm -> merge -> head` (skipping the definition on `arm`) is a
+    // cycle that avoids the definition's block, so `t0`'s one use at `merge` counts as repeated
+    // even though the definition IS lexically inside the same natural loop. A natural-loop
+    // reading ("the loop contains the definition") would exempt it instead — REJECTED: it exempts
+    // a value live across a back edge, which is the exact hazard S′ names. MEASURED
+    // (S/adr6-d2/hand-final-full.txt): both (d) and (d2) FIRE under the landed code, and CYCLE is now the
+    // confirmed reading, not a pending one — see ADR-0008 D1-sub and its mutant M6 (the
+    // natural-loop reading, killed by (d)/(d2)).
 
     /// <summary>(d): the write is AFTER the use, at the merge point. FIRES under the CYCLE
-    /// reading — see the section note above and task #157.</summary>
+    /// reading, CONFIRMED by ADR-0008 D1-sub — see the section note above.</summary>
     [Test]
-    public void D_DefInLoopOnAnAvoidableBranch_UseAtMerge_WriteAfterUse_Fires_PendingTask157()
+    public void D_DefInLoopOnAnAvoidableBranch_UseAtMerge_WriteAfterUse_Fires()
     {
         var f = NewFixture();
         var head = f.Function.CreateBlock("loop.head");
@@ -680,11 +736,12 @@ public class DynamicUseSPrimeHandBuiltIRTests
     }
 
     /// <summary>(d2): same as (d), but the write is on the SKIP arm instead of after the use.
-    /// FIRES under the CYCLE reading — same task #157 note as (d): the skip arm is on a path from
-    /// the use's block back to itself that never re-executes the definition (which lives on the
-    /// OTHER arm), so the write precedes the use's next execution on that path.</summary>
+    /// FIRES under the CYCLE reading, CONFIRMED by ADR-0008 D1-sub — same note as (d): the skip
+    /// arm is on a path from the use's block back to itself that never re-executes the definition
+    /// (which lives on the OTHER arm), so the write precedes the use's next execution on that
+    /// path.</summary>
     [Test]
-    public void D2_DefInLoopOnAnAvoidableBranch_WriteOnTheOtherArm_Fires_PendingTask157()
+    public void D2_DefInLoopOnAnAvoidableBranch_WriteOnTheOtherArm_Fires()
     {
         var f = NewFixture();
         var head = f.Function.CreateBlock("loop.head");
@@ -850,6 +907,7 @@ public class DynamicUseSPrimeAggressivePipelineStructuralTests
                          ("L5", LicmKillVocabularyShapes.L5),
                          ("L6", LicmKillVocabularyShapes.L6),
                          ("L7", DynamicUseSPrimeProbes.L7),
+                         ("L4r", DynamicUseSPrimeProbes.L4r), // ADR-0008 D1: today's LICM, zero fires.
                      })
             {
                 var module = JsTestSupport.BuildModule(source, sourceFilePath: "prog.bas");
@@ -929,6 +987,84 @@ public class DynamicUseSPrimeExecutionTests
         var ex = Assert.Throws<ForeignFeatureException>(() => new JavaScriptCodeGenerator().Generate(module));
         Assert.That(ex!.Message, Does.Contain("BL7002"));
     }
+
+    // ---- L4r (ADR-0008 D1's own probe): ByRef param aliased to a global, BL7002 on JavaScript. --
+
+    /// <summary>The L4r-discriminator probe itself, run for real under TODAY's LICM (no mutant):
+    /// zero S′ fires (see the structural fixture above), correct <c>12</c> on every backend that
+    /// builds. The LICM-DOUBLE-MUTANT half of the discriminator (S′ FIRES on C++/MSIL -O and C#
+    /// -O once LICM is mutated to hoist across the call) is not run here — it needs a mutated
+    /// production file in a SCRATCH tree, never this repo; see ADR-0008's implementation note.</summary>
+    [Test]
+    public void L4r_AggressivePipeline_CSharpCppMsilAgree()
+        => Assert.Multiple(() =>
+        {
+            Assert.That(FourBackends.Norm(BclE2E.CompileRun(BclE2E.CompileToCppAggressive(DynamicUseSPrimeProbes.L4r))),
+                Is.EqualTo(DynamicUseSPrimeProbes.ExpectedL4r), "C++");
+            Assert.That(FourBackends.Norm(MsilHarness.RunAggressiveExpectingSuccess(DynamicUseSPrimeProbes.L4r)),
+                Is.EqualTo(DynamicUseSPrimeProbes.ExpectedL4r), "MSIL");
+            Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharpAggressive(DynamicUseSPrimeProbes.L4r)),
+                Is.EqualTo(DynamicUseSPrimeProbes.ExpectedL4r), "C#");
+        });
+
+    [Test]
+    public void L4r_JavaScript_RefusesByRef_BL7002()
+    {
+        var module = JsTestSupport.BuildModule(DynamicUseSPrimeProbes.L4r);
+        var ex = Assert.Throws<ForeignFeatureException>(() => new JavaScriptCodeGenerator().Generate(module));
+        Assert.That(ex!.Message, Does.Contain("BL7002"));
+    }
+
+    // ---- ADR-0008 D2 (task #156): Q2a-Q2e, byte-identity's proxy — correct output where the ------
+    // backend supports the types; Q2e right on all four (the "12/12" claim's aggressive slice).
+    // Ported from S/arch-batch/probes/Q2*.bas — see Adr0008GuardTests.cs's Adr0008Q2Probes, which
+    // this fixture and the CollectReads/ReadsCallVisible agreement-pin corpus sweep both share
+    // (CLAUDE.md: change shared source once).
+
+    [Test]
+    public void Q2a_AggressivePipeline_AllFourBackendsAgree()
+        => FourBackends.RunsOnEveryBackendAggressive(Adr0008Q2Probes.Q2a, Adr0008Q2Probes.Q2aExpected);
+
+    [Test]
+    public void Q2b_AggressivePipeline_AllFourBackendsAgree()
+        => FourBackends.RunsOnEveryBackendAggressive(Adr0008Q2Probes.Q2b, Adr0008Q2Probes.Q2bExpected);
+
+    /// <summary>Q2c: <c>New DateTime</c>/<c>.AddDays</c> — C#/C++ only (MEASURED,
+    /// <c>S/arch-batch/probes/matrix.txt</c>). JavaScript has no <c>DateTime</c>
+    /// (<c>ReferenceError: DateTime is not defined</c> at RUN time, not a BasicLang refusal) and
+    /// MSIL has no lowering for it (<c>ilasm</c>: "Reference to undefined class 'DateTime'") —
+    /// both pre-existing gaps this task neither caused nor closes.</summary>
+    [Test]
+    public void Q2c_AggressivePipeline_CSharpCppAgree()
+        => Assert.Multiple(() =>
+        {
+            Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharpAggressive(Adr0008Q2Probes.Q2c)),
+                Is.EqualTo(Adr0008Q2Probes.Q2cExpected), "C#");
+            Assert.That(FourBackends.Norm(BclE2E.CompileRun(BclE2E.CompileToCppAggressive(Adr0008Q2Probes.Q2c))),
+                Is.EqualTo(Adr0008Q2Probes.Q2cExpected), "C++");
+        });
+
+    /// <summary>Q2d: adds a <c>TimeSpan</c> subtraction — C#/C++ only (MEASURED,
+    /// <c>S/arch-batch/probes/matrix2.txt</c>). JavaScript refuses <c>TimeSpan</c> outright
+    /// (BL7007); MSIL has no <c>DateTime</c> lowering (same gap as Q2c). Pre-existing, unrelated
+    /// to ADR-0008.</summary>
+    [Test]
+    public void Q2d_AggressivePipeline_CSharpCppAgree()
+        => Assert.Multiple(() =>
+        {
+            Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharpAggressive(Adr0008Q2Probes.Q2d)),
+                Is.EqualTo(Adr0008Q2Probes.Q2dExpected), "C#");
+            Assert.That(FourBackends.Norm(BclE2E.CompileRun(BclE2E.CompileToCppAggressive(Adr0008Q2Probes.Q2d))),
+                Is.EqualTo(Adr0008Q2Probes.Q2dExpected), "C++");
+        });
+
+    /// <summary>Q2e: a class allocation and instance-method call substituted across an intervening
+    /// call — the D2 "Keep" contract's headline: right on ALL FOUR backends (the ADR's "12/12"
+    /// claim's aggressive slice; the full 12 cells span three entry points too, MEASURED in
+    /// <c>S/arch-batch/probes/matrix2.txt</c>, not reproduced here).</summary>
+    [Test]
+    public void Q2e_AggressivePipeline_AllFourBackendsAgree()
+        => FourBackends.RunsOnEveryBackendAggressive(Adr0008Q2Probes.Q2e, Adr0008Q2Probes.Q2eExpected);
 
     // ---- L3 / L4 / L6 / L7: all four backends agree, no ByRef restriction. ---------------------
 

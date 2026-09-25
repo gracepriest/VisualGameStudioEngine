@@ -82,12 +82,19 @@ namespace BasicLang.Compiler.IR.Optimization
 
     /// <summary>
     /// The post-optimizer IR verifier ADR-0004 D2 obliges, asserting Invariant S′ as ADR-0005 D2
-    /// widened it and ADR-0006 D2 made dynamic:
+    /// widened it, ADR-0006 D2 made dynamic and ADR-0008 D1 made blind to replicability:
     ///
     /// <para><b>S′:</b> for any instruction <c>v</c> with use count &gt; 1, no variable in
     /// <c>Guard(v)</c> is assigned between <c>v</c>'s definition and its last use, where
-    /// <c>Guard(v)</c> = the variables reachable through <c>v</c>'s replicable operands ∪
-    /// { <c>v</c>'s named destination, if any }.</para>
+    /// <c>Guard(v)</c> = the storage <see cref="OptimizationPass.CollectReads"/> finds in
+    /// <c>v</c> ∪ { <c>v</c>'s named destination, if any }.</para>
+    ///
+    /// <para><b>What S′ certifies</b> (ADR-0008 D1): a value the optimizer moved or shared keeps
+    /// its source semantics, judged under IR semantics. A value is computed once per execution of
+    /// its definition, and a named destination materialises it. How a backend materialises a
+    /// value (the C# backend inlines a single-use one) is not the verifier's concern. A backend
+    /// that re-evaluates a value away from its definition has an IR-to-backend fidelity defect,
+    /// never an S′ one.</para>
     ///
     /// <para><b>The use count is DYNAMIC</b> (ADR-0006 D2): a use that lies in a loop that does
     /// not contain the definition counts as repeated, because it runs again before the definition
@@ -135,24 +142,28 @@ namespace BasicLang.Compiler.IR.Optimization
     /// named value is shared once it has one operand use. Anonymous values keep the literal
     /// "&gt; 1". This reading is recorded as an assumption pending the architect.</para>
     ///
-    /// <para><b>Guard, operand half:</b> only a pure operator (<see cref="IRBinaryOp"/>,
-    /// <see cref="IRUnaryOp"/>, <see cref="IRCompare"/>, <see cref="IRCast"/>) is ever
-    /// re-emitted, so only its operand tree contributes: a replicable variable by name; an
-    /// operand instruction with a named destination by that name (every backend reads it by
-    /// name); an anonymous pure operand recursively. A call's arguments are never re-read — the
-    /// call is evaluated once — so they contribute nothing. <b>Destination half:</b>
-    /// unconditional on replicability, per the ADR.</para>
+    /// <para><b>Guard, operand half</b> (ADR-0008 D1): <see cref="OptimizationPass.CollectReads"/>,
+    /// the ONE operand walk <see cref="OptimizationPass.ReadsCallVisible"/> also answers from, so
+    /// the verifier and the passes cannot disagree about what a value reads. It descends through
+    /// the pure operators (<see cref="IRBinaryOp"/>, <see cref="IRUnaryOp"/>,
+    /// <see cref="IRCompare"/>, <see cref="IRCast"/>) and collects every variable it reaches, and
+    /// every instruction it reaches that has a named destination, by that name (every backend
+    /// reads it back by name). It still descends into a named pure operand, as
+    /// <c>ReadsCallVisible</c> does. It stops at a call-shaped node (a call, an instance or base
+    /// call, an allocation, a field or indexer load, an await): the node is evaluated once where
+    /// it is defined, so its arguments are not re-read and contribute nothing. A non-pure value
+    /// guards only its own name. <b>Destination half:</b> the value's named destination.</para>
     ///
-    /// <para>⚠ <b>Known gap, pending a ruling (found measuring ADR-0006 D2):</b> "a non-replicable
-    /// operand is never re-read" holds for a value with more than one static use, which the C#
-    /// backend materialises. It does not hold for a value shared only DYNAMICALLY: C# inlines a
-    /// value with one static use at that use whatever its replicability, so a hoisted
-    /// <c>n * 2</c> over a <c>ByRef</c> parameter (or a non-Const global) is re-read every
-    /// iteration on C# while C++/MSIL read it once. Such an operand is outside <c>Guard(v)</c>, so
-    /// a wrong hoist over it is not reported. MEASURED with LICM's call-visible read check
-    /// disabled: C++ and MSIL printed 6 for 12, and this verifier was quiet. Today's LICM
-    /// refuses that hoist on its own (it never treats a global as invariant, and it counts a
-    /// call-visible read as written).</para>
+    /// <para>⛔ <b>Blind to replicability</b> (ADR-0008 D1, striking ADR-0005 D2's "non-replicable
+    /// operands are left out"). A <c>ByRef</c> parameter or a non-<c>Const</c> global is
+    /// guarded like any other variable, for every value S′ checks, statically or dynamically
+    /// shared. The old prune certified backend agreement instead of the optimizer: a hoisted
+    /// <c>n * 2</c> over a <c>ByRef</c> <c>n</c> across a call that writes <c>n</c>'s storage
+    /// printed 6 for 12 on C++ and MSIL and was reported by no one (MEASURED with LICM's
+    /// call-visible read check disabled). C# printed 12 only because it re-reads <c>n</c> inline.
+    /// Today's LICM refuses that hoist on its own (it never treats a global as invariant, and it
+    /// counts a call-visible read as written). <see cref="IRReplicability"/> is a backend concept
+    /// (the C# backend's "may I inline?") and is not consulted here.</para>
     ///
     /// <para><b>"Between"</b> is path-based over <see cref="ControlFlowGraph.SuccessorsOf"/>:
     /// every write on some path from the definition to a use that does not re-execute the
@@ -606,8 +617,12 @@ namespace BasicLang.Compiler.IR.Optimization
                 // so nothing else is worth a walk.
                 if (!staticallyShared && !IsPureOperator(value)) continue;
 
+                // Guard(v) = CollectReads(v).Names ∪ { v's destination } (ADR-0008 D1): the same
+                // walk ReadsCallVisible answers from, blind to replicability. A non-pure value
+                // stops the walk at once, so it guards only its own name, which is its destination.
                 var guard = new Dictionary<string, GuardName>(StringComparer.OrdinalIgnoreCase);
-                if (IsPureOperator(value)) CollectOperandGuard(value, guard, function, isRoot: true);
+                foreach (var read in OptimizationPass.CollectReads(value).Names)
+                    AddOperandGuard(guard, read.Name ?? "", OptimizationPass.IsCallVisible(read, function));
                 if (destination != null)
                     guard[destination] = new GuardName(true,
                         OptimizationPass.IsCallVisible(destination, function)
@@ -702,51 +717,6 @@ namespace BasicLang.Compiler.IR.Optimization
             guard[name] = guard.TryGetValue(name, out var existing)
                 ? existing with { CallVisible = existing.CallVisible || callVisible }
                 : new GuardName(false, callVisible);
-        }
-
-        /// <summary>The operand half of Guard(v) (<see cref="GuardName.IsDestination"/> false here).</summary>
-        private static void CollectOperandGuard(IRValue value, Dictionary<string, GuardName> guard,
-            IRFunction function, bool isRoot)
-        {
-            switch (value)
-            {
-                case null:
-                case IRConstant:
-                    return;
-                case IRVariable variable:
-                    if (!string.IsNullOrEmpty(variable.Name) && IRReplicability.IsReplicable(variable))
-                        AddOperandGuard(guard, variable.Name, OptimizationPass.IsCallVisible(variable, function));
-                    return;
-            }
-
-            if (!isRoot)
-            {
-                if (!IRReplicability.IsReplicable(value)) return; // evaluated once, read back by name
-                var named = OptimizationPass.NamedDestination(value);
-                if (named != null)
-                {
-                    AddOperandGuard(guard, named, OptimizationPass.IsCallVisible(named, function));
-                    return;
-                }
-            }
-
-            switch (value)
-            {
-                case IRBinaryOp binary:
-                    CollectOperandGuard(binary.Left, guard, function, false);
-                    CollectOperandGuard(binary.Right, guard, function, false);
-                    break;
-                case IRUnaryOp unary:
-                    CollectOperandGuard(unary.Operand, guard, function, false);
-                    break;
-                case IRCompare compare:
-                    CollectOperandGuard(compare.Left, guard, function, false);
-                    CollectOperandGuard(compare.Right, guard, function, false);
-                    break;
-                case IRCast cast:
-                    CollectOperandGuard(cast.Value, guard, function, false);
-                    break;
-            }
         }
 
         private static IEnumerable<BasicBlock> Successors(BasicBlock block, HashSet<BasicBlock> inFunction)

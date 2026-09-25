@@ -87,14 +87,23 @@ that calls into a DLL that never loaded throws again and turns a skip into a fai
 
 ## Where things stand
 
-⭐ **Newest (2026-09-25): ADR-0006 D2 — the S′ use count is dynamic.** The post-optimizer IR
+⭐ **Newest (2026-09-25): ADR-0008 — Guard(v) is replicability-blind.** S′'s `Guard(v)`
+(`BasicLang/IRVerifier.cs`) and `ReadsCallVisible` (`BasicLang/IROptimizer.cs`) now share ONE
+operand walk, `CollectReads`, blind to `IRReplicability` — a `ByRef` parameter or a non-`Const`
+global is guarded like any other variable. Also confirms ADR-0006 D2's CYCLE reading (below) and
+keeps `ReadsCallVisible`'s call-shaped arm. Full ruling and implementation note:
+`docs/superpowers/decisions/0008-guard-semantics-and-call-visibility-of-computed-values.md`; tasks
+#157/#156.
+
+⭐ **(2026-09-25): ADR-0006 D2 — the S′ use count is dynamic.** The post-optimizer IR
 verifier's Invariant S′ (`BasicLang/IRVerifier.cs`, `CheckInvariantSPrime`) now counts a value's uses DYNAMICALLY, not only statically: a value with exactly one STATIC use
 still counts as shared when that use sits in a loop that does not contain the value's definition
 (the shape LICM's rewrite leaves behind — one hoisted value, one use, re-executed every iteration).
 Full ruling, measurement and the mutation table are in
 `docs/superpowers/decisions/0006-kill-vocabulary-totality-dynamic-use-call-visibility.md`'s D2
-section and its "Implementation note (D2)"; task #137. Known gap, pending an architect ruling:
-task #157 (a dynamically shared value's non-replicable operands are outside `Guard(v)`).
+section and its "Implementation note (D2)"; task #137. The known gap this note used to list here
+(task #157: a dynamically shared value's non-replicable operands sat outside `Guard(v)`) is CLOSED
+by ADR-0008 D1, above.
 
 ⭐ **(2026-09-22): ADR-0003 —
 the CFG loop representation.** `ControlFlowGraph.FindBackEdges` had its dominance test inverted;
