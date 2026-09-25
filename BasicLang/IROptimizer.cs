@@ -5,6 +5,66 @@ using BasicLang.Compiler.SemanticAnalysis;
 
 namespace BasicLang.Compiler.IR.Optimization
 {
+    /// <summary>The three answers the kill vocabulary gives (ADR-0006 D1).</summary>
+    public enum WriteKind
+    {
+        /// <summary>Writes no variable name (a call may still write what a callee can reach —
+        /// see <see cref="WriteSet.IsCall"/>).</summary>
+        None,
+        /// <summary>Writes exactly <see cref="WriteSet.Names"/> (plus, for a call, what a callee
+        /// can reach).</summary>
+        Named,
+        /// <summary>May write ANY name: every pass kills everything across it.</summary>
+        Universal,
+    }
+
+    /// <summary>
+    /// What one instruction may write — the answer of
+    /// <see cref="OptimizationPass.NamesWrittenBy"/>, the one kill vocabulary (ADR-0006 D1).
+    /// </summary>
+    public readonly struct WriteSet
+    {
+        private static readonly IReadOnlyList<string> NoNames = Array.Empty<string>();
+
+        private WriteSet(WriteKind kind, IReadOnlyList<string> names, bool isCall, bool isClassified)
+        {
+            Kind = kind;
+            Names = names ?? NoNames;
+            IsCall = isCall;
+            IsClassified = isClassified;
+        }
+
+        public WriteKind Kind { get; }
+
+        /// <summary>The names written, for <see cref="WriteKind.Named"/>; empty otherwise.</summary>
+        public IReadOnlyList<string> Names { get; }
+
+        /// <summary>True when the instruction ALSO writes every name a call can reach
+        /// (<see cref="OptimizationPass.IsCallVisible(IRVariable, IRFunction)"/>): a call, or
+        /// anything that acts like one for a kill.</summary>
+        public bool IsCall { get; }
+
+        /// <summary>False only for a kind the vocabulary has no arm for — which answers
+        /// <see cref="WriteKind.Universal"/> and fails <see cref="IRVerifier"/>'s Invariant V.</summary>
+        public bool IsClassified { get; }
+
+        public bool IsUniversal => Kind == WriteKind.Universal;
+
+        public static WriteSet Nothing => new WriteSet(WriteKind.None, null, false, true);
+        public static WriteSet Everything => new WriteSet(WriteKind.Universal, null, true, true);
+        public static WriteSet Unclassified => new WriteSet(WriteKind.Universal, null, true, false);
+
+        public static WriteSet Of(List<string> names, bool isCall) =>
+            names != null && names.Count > 0
+                ? new WriteSet(WriteKind.Named, names, isCall, true)
+                : new WriteSet(WriteKind.None, null, isCall, true);
+
+        public override string ToString() =>
+            !IsClassified ? "Unclassified (Universal)"
+            : Kind == WriteKind.Universal ? "Universal"
+            : (Kind == WriteKind.Named ? "Named{" + string.Join(",", Names) + "}" : "None") + (IsCall ? " +call" : "");
+    }
+
     /// <summary>
     /// Base class for optimization passes
     /// </summary>
@@ -224,19 +284,30 @@ namespace BasicLang.Compiler.IR.Optimization
             => NamedDestination(value) is string name && IsCallVisible(name, function);
 
         /// <summary>
-        /// THE KILL VOCABULARY: every variable name <paramref name="inst"/> may WRITE, and whether
-        /// it is a call (which additionally writes any storage a callee can reach — see
-        /// <see cref="IsCallVisible(IRVariable, IRFunction)"/>). Null when it writes no name.
+        /// THE KILL VOCABULARY (ADR-0006 D1): what <paramref name="inst"/> may WRITE — a set of
+        /// variable NAMES, whether it is a call (which additionally writes every name a callee
+        /// can reach, <see cref="IsCallVisible(IRVariable, IRFunction)"/>), or everything.
         ///
         /// <para>⭐ SHARED, and the sharing is the point (ADR-0005 D2): CSE's
-        /// <c>Invalidate</c> kills on exactly these writes, and <see cref="IRVerifier"/>'s
-        /// Invariant S′ calls exactly these writes "assigned". A write form missing here is
-        /// missing for BOTH — the verifier cannot catch a pass for a write the vocabulary
-        /// does not name, and that is deliberate: a gap is fixed once, here.</para>
+        /// <c>Invalidate</c> kills on exactly these writes, LICM's <c>VariablesWrittenIn</c>
+        /// counts exactly these writes, and <see cref="IRVerifier"/>'s Invariant S′ calls exactly
+        /// these writes "assigned". A write form missing here is missing for ALL of them — the
+        /// verifier cannot catch a pass for a write the vocabulary does not name, and that is
+        /// deliberate: a gap is fixed once, here.</para>
         ///
-        /// <para>Forms: an <see cref="IRAssignment"/> target; an <see cref="IRStore"/> address;
-        /// a NAMED value instruction (a rename — how both <c>Dim p = Seed(1)</c> and
-        /// <c>p = p + 10</c> lower); a call's <c>ByRef</c> arguments.</para>
+        /// <para>⭐ TOTAL (ADR-0006 D1). Every IR instruction kind is on exactly ONE arm of the
+        /// switch below, with the reason it writes what it writes. A kind that is on NO arm —
+        /// one added to IRNodes.cs after this was written — answers
+        /// <see cref="WriteKind.Universal"/> (every pass kills everything across it: weak, never
+        /// wrong) with <see cref="WriteSet.IsClassified"/> false, and <see cref="IRVerifier"/>'s
+        /// Invariant V fires on it in test builds. So the verifier's independence is
+        /// COMPLETENESS, not a second write model: it cannot catch a classified kind whose
+        /// answer is wrong (only execution probes can), but it catches every kind nobody
+        /// classified.</para>
+        ///
+        /// <para>⚠ When you add an IR node kind, add it to an arm here, stating what it writes.
+        /// Leaving it off is safe for output but fails Invariant V in every test that builds
+        /// it.</para>
         ///
         /// <para>⛔ KNOWN GAPS — writes this vocabulary does not name, so CSE merges across them
         /// and the verifier cannot see them. Each MEASURED as a live wrong answer with a merge:
@@ -250,55 +321,114 @@ namespace BasicLang.Compiler.IR.Optimization
         /// destination side only, since a <c>ByRef</c> operand is never replicable;</item>
         /// <item>a local captured by reference and written inside a lambda (JavaScript; C++ and
         /// MSIL do not build the shape). The operand side is recorded in HANDOFF.</item>
-        /// </list>
-        /// Recorded rather than fixed: ADR-0005 D2 rules the vocabulary is shared and a gap is
-        /// flagged, not patched on one side.</para>
+        /// </list></para>
         /// </summary>
-        protected internal static List<string> NamesWrittenBy(IRInstruction inst, out bool isCall)
+        protected internal static WriteSet NamesWrittenBy(IRInstruction inst, IRFunction function)
         {
-            isCall = false;
-            List<string> killed = null;
-            void Kill(string name)
+            List<string> names = null;
+            void Name(string name)
             {
-                if (!string.IsNullOrEmpty(name)) (killed ??= new List<string>()).Add(name);
+                if (!string.IsNullOrEmpty(name)) (names ??= new List<string>()).Add(name);
             }
 
+            bool isCall = false;
             switch (inst)
             {
-                case IRAssignment assignment when assignment.Target is IRVariable target:
-                    Kill(target.Name);
-                    break;
-                case IRStore store when store.Address is IRVariable stored:
-                    Kill(stored.Name);
-                    break;
-            }
+                case null:
+                    return WriteSet.Nothing;
 
-            // A NAMED non-assignment instruction redefines that name. `Dim p = Seed(1)` is an
-            // IRCall renamed `p`; `p = p + 10` is an IRBinaryOp renamed `p`. Neither produces an
-            // IRAssignment, so without this arm the two measured shapes are not covered at all.
-            if (inst is IRValue defined) Kill(defined.Name);
+                // ---- Writes nothing: control flow and markers. Each reads at most one operand
+                // (a condition, a returned or thrown value) and assigns no storage. A branch's
+                // TARGET blocks are separate blocks, classified instruction by instruction.
+                case IRBranch:
+                case IRConditionalBranch:
+                case IRReturn:
+                case IRLabel:
+                case IRComment:
+                    return WriteSet.Nothing;
 
-            // A call WRITES its ByRef arguments, and the write is invisible in this block — there
-            // is no IRAssignment and no rename for it. MEASURED on `Bump(p)` with a ByRef `p`:
-            // C++ and MSIL printed the stale answer (JavaScript refuses ByRef by design).
-            List<bool> byRefFlags = null;
-            List<IRValue> arguments = null;
-            switch (inst)
-            {
+                // ---- A plain assignment writes its target.
+                case IRAssignment assignment:
+                    Name(assignment.Target?.Name);
+                    break;
+
+                // ---- A store writes the variable its address names.
+                case IRStore store:
+                    if (store.Address is IRVariable stored) Name(stored.Name);
+                    break;
+
+                // ---- Calls: the result's name (a rename, `Dim p = Seed(1)`), every ByRef
+                // argument (the write is invisible in this block — no IRAssignment and no rename
+                // for it; MEASURED on `Bump(p)` with a ByRef `p`: C++ and MSIL printed the stale
+                // answer), and — through isCall — everything a callee can reach.
                 case IRCall call:
-                    isCall = true; byRefFlags = call.ByRefArguments; arguments = call.Arguments; break;
+                    isCall = true;
+                    Name(call.Name);
+                    NameByRefArguments(call.Arguments, call.ByRefArguments, ref names);
+                    break;
                 case IRInstanceMethodCall methodCall:
-                    isCall = true; byRefFlags = methodCall.ByRefArguments; arguments = methodCall.Arguments; break;
-                case IRNewObject:
-                    isCall = true; break;
-            }
-            if (byRefFlags != null && arguments != null)
-            {
-                for (int i = 0; i < arguments.Count && i < byRefFlags.Count; i++)
-                    if (byRefFlags[i]) CollectNames(arguments[i], killed ??= new List<string>());
+                    isCall = true;
+                    Name(methodCall.Name);
+                    NameByRefArguments(methodCall.Arguments, methodCall.ByRefArguments, ref names);
+                    break;
+                case IRNewObject newObject:
+                    isCall = true;
+                    Name(newObject.Name);
+                    break;
+                case IRBaseMethodCall baseCall:
+                    Name(baseCall.Name);
+                    break;
+
+                // ---- A NAMED value instruction redefines that name. `Dim p = Seed(1)` is an
+                // IRCall renamed `p`; `p = p + 10` is an IRBinaryOp renamed `p`. Neither produces an
+                // IRAssignment, so without this arm the two measured shapes are not covered at all.
+                case IRConstant:
+                case IRVariable:
+                case IRBinaryOp:
+                case IRUnaryOp:
+                case IRCompare:
+                case IRCast:
+                case IRLoad:
+                case IRAlloca:
+                case IRGetElementPtr:
+                case IRPhi:
+                case IRArrayAlloc:
+                case IRAwait:
+                case IRIndexerAccess:
+                case IRFieldAccess:
+                case IRTupleElement:
+                    Name(((IRValue)inst).Name);
+                    break;
+
+                // ---- Not yet given a write (step 1 of ADR-0006 D1 classifies today's answer).
+                case IRSwitch:
+                case IRThrow:
+                case IRInlineCode:
+                case IRArrayStore:
+                case IRYield:
+                case IRIndexerStore:
+                case IRForEach:
+                case IRTryCatch:
+                case IRFieldStore:
+                    return WriteSet.Nothing;
+
+                default:
+                    // UNCLASSIFIED: a kind added after this switch was written. Every pass kills
+                    // everything across it, and Invariant V reports it.
+                    return WriteSet.Unclassified;
             }
 
-            return killed;
+            return WriteSet.Of(names, isCall);
+        }
+
+        /// <summary>The ByRef arm of <see cref="NamesWrittenBy"/>: every name read by an argument
+        /// passed by reference is an OUTPUT of the call (an argument such as <c>h.F</c> or
+        /// <c>arr(i)</c> writes storage reachable through <c>h</c> / <c>arr</c>).</summary>
+        private static void NameByRefArguments(List<IRValue> arguments, List<bool> byRefFlags, ref List<string> names)
+        {
+            if (arguments == null || byRefFlags == null) return;
+            for (int i = 0; i < arguments.Count && i < byRefFlags.Count; i++)
+                if (byRefFlags[i]) CollectNames(arguments[i], names ??= new List<string>());
         }
 
         /// <summary>
@@ -1557,7 +1687,7 @@ namespace BasicLang.Compiler.IR.Optimization
                 // re-kill and the latent IndexOutOfRange go away by naming the instruction this
                 // iteration actually processed. The named arm's replacement IRAssignment carries
                 // the same Target.Name as the IRBinaryOp it replaced, so the kill is unchanged.
-                Invalidate(expressions, inst);
+                Invalidate(expressions, inst, function);
             }
         }
 
@@ -1675,17 +1805,28 @@ namespace BasicLang.Compiler.IR.Optimization
         /// is how BOTH <c>Dim p = Seed(1)</c> and <c>p = p + 10</c> lower (no IRAssignment at all).
         /// The fifth, calls, is CSE-specific: see <see cref="ReadsCallVisible"/>.</para>
         /// </summary>
-        private static void Invalidate(Dictionary<string, Candidate> expressions, IRInstruction inst)
+        private static void Invalidate(Dictionary<string, Candidate> expressions, IRInstruction inst, IRFunction function)
         {
             if (expressions.Count == 0 || inst == null) return;
 
-            var killed = NamesWrittenBy(inst, out bool isCall);
+            var writes = NamesWrittenBy(inst, function);
+
+            // ADR-0006 D1: an instruction that may write ANY name (an unclassified kind, or one
+            // classified as universal) leaves no record standing.
+            if (writes.IsUniversal)
+            {
+                expressions.Clear();
+                return;
+            }
+
+            bool isCall = writes.IsCall;
+            var killed = writes.Names;
 
             List<string> stale = null;
             foreach (var entry in expressions)
             {
                 bool dead = isCall && entry.Value.ReadsCallVisibleStorage;
-                if (!dead && killed != null)
+                if (!dead && killed.Count > 0)
                 {
                     // The defining instruction renames its own destination; that is the value
                     // being BORN, not a write that makes it stale (see Candidate).
@@ -1868,7 +2009,11 @@ namespace BasicLang.Compiler.IR.Optimization
             var preheader = outside[0];
             if (preheader.Successors.Count != 1 || preheader.Successors[0] != header) return;
 
-            var written = VariablesWrittenIn(loop, cfg.Function);
+            var written = VariablesWrittenIn(loop, cfg.Function, out bool writesEverything);
+
+            // ADR-0006 D1: an instruction in the loop that may write ANY name (an unclassified
+            // kind, or one classified as universal) leaves nothing invariant.
+            if (writesEverything) return;
 
             // Fixed point, recorded in DISCOVERY order: an instruction joins only after all of its
             // loop-defined operands have, so this list is already in dependency order.
@@ -1933,16 +2078,21 @@ namespace BasicLang.Compiler.IR.Optimization
         /// <para>The vocabulary's own documented gaps still apply here — notably a local captured
         /// by reference and written inside a lambda, which needs a capture set (#122).</para>
         /// </summary>
-        private static HashSet<string> VariablesWrittenIn(List<BasicBlock> loop, IRFunction function)
+        private static HashSet<string> VariablesWrittenIn(List<BasicBlock> loop, IRFunction function, out bool writesEverything)
         {
             var written = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             bool loopCalls = false;
+            writesEverything = false;
             foreach (var inst in loop.SelectMany(b => b.Instructions))
             {
-                var names = NamesWrittenBy(inst, out bool isCall);
-                if (names != null)
-                    foreach (var name in names) written.Add(name);
-                loopCalls |= isCall;
+                var writes = NamesWrittenBy(inst, function);
+                if (writes.IsUniversal)
+                {
+                    writesEverything = true;
+                    return written;
+                }
+                foreach (var name in writes.Names) written.Add(name);
+                loopCalls |= writes.IsCall;
             }
 
             if (loopCalls)

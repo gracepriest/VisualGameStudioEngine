@@ -18,9 +18,14 @@ namespace BasicLang.Compiler.IR.Optimization
         Log,
     }
 
-    /// <summary>One breach of Invariant S′.</summary>
+    /// <summary>One breach of Invariant S′, or of Invariant V (ADR-0006 D1).</summary>
     public sealed class InvariantViolation
     {
+        /// <summary>Which invariant: <c>"S′"</c> (a shared value's guarded variable written
+        /// before a use) or <c>"V"</c> (an instruction kind the kill vocabulary does not
+        /// classify; only <see cref="Function"/>, <see cref="Writer"/> and
+        /// <see cref="WriterBlock"/> are set).</summary>
+        public string Invariant { get; init; } = "S′";
         public string Function { get; init; }
         /// <summary>The shared value.</summary>
         public IRValue Value { get; init; }
@@ -35,8 +40,11 @@ namespace BasicLang.Compiler.IR.Optimization
         public string WriterBlock { get; init; }
         public string UseBlock { get; init; }
 
-        public override string ToString() =>
-            $"Invariant S′ violated in {Function}: '{Value?.Name}' ({Value?.GetType().Name}, {UseCount} use(s), "
+        public override string ToString() => Invariant == "V"
+            ? $"Invariant V violated in {Function}: {Writer?.GetType().Name} in {WriterBlock} is an instruction "
+              + "kind the kill vocabulary (OptimizationPass.NamesWrittenBy) does not classify, so every pass "
+              + "treats it as writing everything. Give it an arm there, stating what it writes."
+            : $"Invariant S′ violated in {Function}: '{Value?.Name}' ({Value?.GetType().Name}, {UseCount} use(s), "
             + $"defined in {DefinitionBlock}) — {(IsDestination ? "its destination" : "operand")} '{Variable}' "
             + $"is written by {Writer?.GetType().Name}{(Writer is IRValue w && !string.IsNullOrEmpty(w.Name) ? " '" + w.Name + "'" : "")} "
             + $"in {WriterBlock} before a use in {UseBlock}.";
@@ -62,6 +70,11 @@ namespace BasicLang.Compiler.IR.Optimization
     /// <c>Guard(v)</c> is assigned between <c>v</c>'s definition and its last use, where
     /// <c>Guard(v)</c> = the variables reachable through <c>v</c>'s replicable operands ∪
     /// { <c>v</c>'s named destination, if any }.</para>
+    ///
+    /// <para><b>V</b> (ADR-0006 D1): no reachable instruction kind is unclassified — every
+    /// instruction's kind has an arm in <see cref="OptimizationPass.NamesWrittenBy"/>. See
+    /// <see cref="CheckInvariantV"/>. This is the verifier's independence from the vocabulary it
+    /// shares with CSE: not a second write model, but completeness of the one model.</para>
     ///
     /// <para><b>"Assigned"</b> is <see cref="OptimizationPass.NamesWrittenBy"/> — the one kill
     /// vocabulary CSE's <c>Invalidate</c> also uses, so the verifier and the pass cannot
@@ -181,7 +194,7 @@ namespace BasicLang.Compiler.IR.Optimization
             var mode = Mode;
             if (mode == IRVerifierMode.Off || module == null) return;
 
-            var violations = CheckInvariantSPrime(module);
+            var violations = CheckInvariantV(module).Concat(CheckInvariantSPrime(module)).ToList();
             if (violations.Count == 0) return;
 
             if (mode == IRVerifierMode.Log)
@@ -196,6 +209,43 @@ namespace BasicLang.Compiler.IR.Optimization
             }
 
             throw new IRVerificationException(violations);
+        }
+
+        /// <summary>
+        /// Every breach of Invariant V (ADR-0006 D1) in <paramref name="module"/>: "no reachable
+        /// instruction kind is unclassified". An instruction whose kind
+        /// <see cref="OptimizationPass.NamesWrittenBy"/> has no arm for is treated by every pass as
+        /// writing everything, which is safe for output — but it means someone added an IR node
+        /// kind without deciding what it writes, and the next such kind may be one whose
+        /// classification matters. Reads the IR only.
+        ///
+        /// <para>Checks every instruction of every block the passes can see, a superset of the
+        /// reachable ones (a pass does not skip an unreachable block, so neither does this).</para>
+        /// </summary>
+        public static IReadOnlyList<InvariantViolation> CheckInvariantV(IRModule module)
+        {
+            var violations = new List<InvariantViolation>();
+            if (module?.Functions == null) return violations;
+            foreach (var function in module.Functions)
+            {
+                if (function == null || function.IsExternal || function.Blocks == null) continue;
+                foreach (var block in function.Blocks)
+                {
+                    if (block?.Instructions == null) continue;
+                    foreach (var inst in block.Instructions)
+                    {
+                        if (inst == null || OptimizationPass.NamesWrittenBy(inst, function).IsClassified) continue;
+                        violations.Add(new InvariantViolation
+                        {
+                            Invariant = "V",
+                            Function = function.Name,
+                            Writer = inst,
+                            WriterBlock = block.Name,
+                        });
+                    }
+                }
+            }
+            return violations;
         }
 
         /// <summary>Every breach of Invariant S′ in <paramref name="module"/>. Reads the IR only.</summary>
@@ -242,14 +292,11 @@ namespace BasicLang.Compiler.IR.Optimization
             }
 
             // The kill vocabulary, per instruction, computed once.
-            var writes = new Dictionary<IRInstruction, (List<string> Names, bool IsCall)>(ReferenceEqualityComparer.Instance);
-            (List<string> Names, bool IsCall) WritesOf(IRInstruction inst)
+            var writes = new Dictionary<IRInstruction, WriteSet>(ReferenceEqualityComparer.Instance);
+            WriteSet WritesOf(IRInstruction inst)
             {
                 if (!writes.TryGetValue(inst, out var w))
-                {
-                    var names = OptimizationPass.NamesWrittenBy(inst, out bool isCall);
-                    writes[inst] = w = (names, isCall);
-                }
+                    writes[inst] = w = OptimizationPass.NamesWrittenBy(inst, function);
                 return w;
             }
 
@@ -279,6 +326,12 @@ namespace BasicLang.Compiler.IR.Optimization
                     foreach (var (name, entry) in guard)
                         if (entry.CallVisible) { callHit = name; break; }
 
+                // A writer of EVERYTHING (ADR-0006 D1: an unclassified kind, or one classified as
+                // universal) hits every guarded name; the report names the destination first.
+                string anyHit = destination;
+                if (anyHit == null)
+                    foreach (var name in guard.Keys) { anyHit = name; break; }
+
                 foreach (var use in useSites)
                 {
                     InvariantViolation found = null;
@@ -287,13 +340,17 @@ namespace BasicLang.Compiler.IR.Optimization
                     {
                         var writer = block.Instructions[index];
                         if (writer == null || ReferenceEquals(writer, valueInst)) continue;
-                        var (names, isCall) = WritesOf(writer);
+                        var written = WritesOf(writer);
 
                         string hit = null;
-                        if (names != null)
-                            foreach (var name in names)
+                        if (written.IsUniversal)
+                            hit = anyHit;
+                        else
+                        {
+                            foreach (var name in written.Names)
                                 if (guard.ContainsKey(name)) { hit = name; break; }
-                        if (hit == null && isCall) hit = callHit;
+                            if (hit == null && written.IsCall) hit = callHit;
+                        }
                         if (hit == null) continue;
 
                         found = new InvariantViolation
