@@ -95,6 +95,8 @@ public class JsExecutionTierRosterTests
         typeof(ArrayBoundsExecutionTests),
         typeof(ReDimExecutionTests),
         typeof(SingleLineIfExecutionTests),
+        // C# placement program; its JS leg runs under Node (the `_sel0` fix).
+        typeof(CSharpNestedTerminatorExecutionTests),
 
         // ADR-0005 D2 — CSE guards a shared value's own destination, not only its operands.
         // CseDestinationInvalidationExecutionTests / DestinationInvalidation_D4_ByRefExecutionTests
@@ -176,7 +178,6 @@ public class JsExecutionTierRosterTests
         // Builds and runs the C# backend's output through the CLI and dotnet — no Node.
         "CSharpFieldAssignmentExecutionTests",
         "CSharpInlinedOperandExecutionTests",
-        "CSharpNestedTerminatorExecutionTests",
     };
 
     /// <summary>Counts NUnit cases: a [TestCase]-driven method contributes one per attribute.</summary>
@@ -194,7 +195,7 @@ public class JsExecutionTierRosterTests
 
     [Test]
     public void RosterIsPinned()
-        => Assert.That(ExecutionTier, Has.Length.EqualTo(48),
+        => Assert.That(ExecutionTier, Has.Length.EqualTo(49),
             "The execution-tier roster changed. That is fine — update the number — but it must " +
             "be a deliberate edit, not a silent shrink.");
 

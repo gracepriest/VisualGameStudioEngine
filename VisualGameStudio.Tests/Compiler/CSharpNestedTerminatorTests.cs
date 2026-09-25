@@ -55,14 +55,14 @@ public class CSharpNestedTerminatorCodeGenTests
 }
 
 [TestFixture]
-[Category("Integration")]   // builds and runs with dotnet through the CLI
+[Category("Integration")]   // builds and runs with dotnet through the CLI, and spawns node
 public class CSharpNestedTerminatorExecutionTests
 {
     /// <summary>
     /// Every placement in one program; each letter records one statement that ran. The expected
-    /// line is what VB semantics give. (C++ and JavaScript are not legs here: this program also
-    /// trips unrelated gaps there — two Selects in one JS scope reuse `_sel0`, and a Select in
-    /// both a Try and its Catch jumps past an initialisation in C++.)
+    /// line is what VB semantics give. JavaScript runs it too (it needed the `_sel0` fix: two
+    /// Selects in one scope). C++ is not a leg: a Select in both a Try and its Catch jumps past
+    /// an initialisation there, an unrelated gap.
     /// </summary>
     private const string Program = @"
 Function Name(n As Integer) As String
@@ -158,8 +158,15 @@ Sub Main()
     Console.WriteLine(""end"")
 End Sub";
 
+    private const string Expected = "ace12ghiijklmnpst\nonetwomany\nend";
+
     [Test]
     public void EveryPlacement_Runs() =>
         Assert.That(CliTestHarness.CompileRunCSharp(Program).Replace("\r\n", "\n").TrimEnd('\n'),
-            Is.EqualTo("ace12ghiijklmnpst\nonetwomany\nend"));
+            Is.EqualTo(Expected));
+
+    [Test]
+    public void EveryPlacement_Runs_OnJavaScript() =>
+        Assert.That(JavaScriptOptimizedExecutionTests.RunOptimized(Program).Replace("\r\n", "\n").TrimEnd('\n'),
+            Is.EqualTo(Expected));
 }

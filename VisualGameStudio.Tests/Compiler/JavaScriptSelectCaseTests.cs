@@ -1,3 +1,4 @@
+using System.Linq;
 using NUnit.Framework;
 
 namespace VisualGameStudio.Tests.Compiler;
@@ -115,4 +116,82 @@ public class JavaScriptSelectCaseTests
             "Case Else\nConsole.WriteLine(\"c\")\n" +
             "End Select\n" +
             "Next\nEnd Sub"), Is.EqualTo("a\nb\nc"));
+
+    // ------------------------------------------------- several Selects in one scope
+
+    /// <summary>
+    /// ⛔ The subject temp was named after the NESTING DEPTH, which dropped back before the code
+    /// after a Select was emitted, so two Selects in a row both declared <c>const _sel0</c>: a
+    /// SyntaxError that stopped the whole program loading. In a row, nested in sequence, inside
+    /// a loop body and inside a function, with and without --optimize.
+    /// </summary>
+    private const string SeveralSelects = @"
+Function Grade(n As Integer) As String
+    Dim g As String = """"
+    Select Case n
+        Case Is >= 90 : g = ""A""
+        Case Else : g = ""C""
+    End Select
+    Select Case g
+        Case ""A"" : g = g & ""+""
+    End Select
+    Return g
+End Function
+
+Sub Main()
+    Dim x As Integer = 5
+    Dim log As String = """"
+    Select Case x
+        Case 5 : log = log & ""a""
+    End Select
+    Select Case x
+        Case 5 : log = log & ""b""
+    End Select
+    Select Case x
+        Case 5
+            Select Case x * 2
+                Case 10 : log = log & ""c""
+            End Select
+            Select Case x * 3
+                Case 15 : log = log & ""d""
+            End Select
+    End Select
+    For i As Integer = 1 To 2
+        Select Case i
+            Case 1 : log = log & ""e""
+        End Select
+        Select Case i
+            Case 2 : log = log & ""f""
+        End Select
+    Next
+    Console.WriteLine(log)
+    Console.WriteLine(Grade(95) & Grade(10))
+End Sub";
+
+    [Test]
+    public void SeveralSelects_InOneScope_Run()
+        => Assert.That(JavaScriptExecutionTests.RunJs(SeveralSelects), Is.EqualTo("abcdef\nA+C"));
+
+    [Test]
+    public void SeveralSelects_InOneScope_Run_Optimized()
+        => Assert.That(JavaScriptOptimizedExecutionTests.RunOptimized(SeveralSelects).Replace("\r\n", "\n").TrimEnd('\n'),
+            Is.EqualTo("abcdef\nA+C"));
+}
+
+/// <summary>The codegen half of the `_sel0` fix: every Select subject is a distinct const.</summary>
+[TestFixture]
+public class JavaScriptSelectSubjectNameTests
+{
+    [Test]
+    public void TwoSelectsInARow_DeclareDistinctSubjects()
+    {
+        var js = new BasicLang.Compiler.CodeGen.JavaScript.JavaScriptCodeGenerator().Generate(JsTestSupport.BuildModule(
+            "Sub Main()\nDim x As Integer = 5\n" +
+            "Select Case x\nCase 5\nConsole.WriteLine(1)\nEnd Select\n" +
+            "Select Case x\nCase 5\nConsole.WriteLine(2)\nEnd Select\nEnd Sub"));
+        var names = System.Text.RegularExpressions.Regex.Matches(js, @"const (_sel\d+) =")
+            .Select(m => m.Groups[1].Value).ToList();
+        Assert.That(names, Has.Count.EqualTo(2), js);
+        Assert.That(names, Is.Unique, js);
+    }
 }

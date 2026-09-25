@@ -2301,7 +2301,10 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// </summary>
         private void EmitSelectCase(IRSwitch sw)
         {
-            var subject = $"_sel{_selectDepth++}";
+            // A fresh name per Select, never its nesting depth. ⛔ The depth dropped back before
+            // the code AFTER the Select was emitted, so two Selects in a row in one scope both
+            // declared `const _sel0` — a SyntaxError that stopped the whole program loading.
+            var subject = $"_sel{_selectCount++}";
             Line($"const {subject} = {Expr(sw.Value)};");
 
             // Arms are grouped by TARGET BLOCK IDENTITY: `Case 1, 2, 3` produces three
@@ -2356,11 +2359,10 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 EmitStructured(sw.DefaultTarget);
             }
 
-            _selectDepth--;
             EmitStructured(sw.EndBlock);
         }
 
-        private int _selectDepth;
+        private int _selectCount;
 
         /// <summary>
         /// The JS test for one pattern arm. Every operand goes through
