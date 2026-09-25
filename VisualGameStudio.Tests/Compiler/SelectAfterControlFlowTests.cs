@@ -15,9 +15,8 @@ namespace VisualGameStudio.Tests.Compiler;
 /// SelectInsideTryTests found in the Try regions. Two helpers now carry one terminator dispatch.</para>
 ///
 /// <para>Pinned elsewhere: code after an <c>ElseIf</c> chain (ElseIfChainContinuationTests) and an
-/// <c>If</c> inside a <c>Case</c> body (IfInsideCaseTests). JavaScript also fails
-/// two Selects in one function ("Identifier '_sel0' has already been declared"), so each Select
-/// here lives in its own Sub.</para>
+/// <c>If</c> inside a <c>Case</c> body (IfInsideCaseTests), and two Selects in one function on
+/// JavaScript (SiblingSelectTests — each Select here lives in its own Sub because that once failed).</para>
 /// </summary>
 [TestFixture]
 public class SelectAfterControlFlowTests
