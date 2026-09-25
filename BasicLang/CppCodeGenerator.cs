@@ -2208,9 +2208,23 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 return;
             }
 
-            var savedFrames = new List<(IRTryCatch, HashSet<BasicBlock>)>(_finallyFrames);
             WriteLine("{");
             Indent();
+            EmitFinallyCopies(leaving);
+            Unindent();
+            WriteLine("}");
+            WriteLine($"goto {label};");
+        }
+
+        /// <summary>
+        /// One inline copy of each Finally in <paramref name="leaving"/> (innermost FIRST), for a
+        /// jump or a <c>Return</c> that leaves those Trys. Each copy gets its own label suffix, and
+        /// while a copy is emitted the frames being left are popped, so an exit inside that Finally
+        /// cannot re-run it.
+        /// </summary>
+        private void EmitFinallyCopies(List<IRTryCatch> leaving)
+        {
+            var savedFrames = new List<(IRTryCatch, HashSet<BasicBlock>)>(_finallyFrames);
             foreach (var tc in leaving)
             {
                 var at = _finallyFrames.FindIndex(f => ReferenceEquals(f.Try, tc));
@@ -2229,9 +2243,6 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             }
             _finallyFrames.Clear();
             _finallyFrames.AddRange(savedFrames);
-            Unindent();
-            WriteLine("}");
-            WriteLine($"goto {label};");
         }
 
         /// <summary>
@@ -2608,7 +2619,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 // so a future analyzer relaxation degrades to a C++ compile error.
             }
 
-            if (CheckedIntegerDivisionHelper(binaryOp) is { } helper)
+            if (DivisionHelper(binaryOp) is { } helper)
             {
                 WriteLine($"{result} = {helper}({left}, {right});");
                 return;
@@ -2618,18 +2629,29 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         }
 
         /// <summary>
-        /// The checked runtime helper (<see cref="CppIntegerDivisionRuntime"/>) an integral
-        /// <c>\</c> or <c>Mod</c> lowers to, or null. ⛔ Never the bare operator: C++ integer
-        /// division by zero is undefined behaviour — on x86 a SIGFPE that no <c>Catch</c> can
-        /// see — where .NET throws <c>DivideByZeroException</c>. <c>\</c> is always integral here
-        /// (IRBuilder converts a floating operand, ADR-0005 D1); a floating <c>Mod</c> is not
-        /// division-by-zero-trapping (.NET gives NaN) and keeps the operator.
+        /// The function a <c>\</c> or <c>Mod</c> lowers to instead of the bare operator, or null.
+        ///
+        /// <para>Integral: the checked runtime helpers (<see cref="CppIntegerDivisionRuntime"/>).
+        /// ⛔ Never the bare operator: C++ integer division by zero is undefined behaviour — on
+        /// x86 a SIGFPE that no <c>Catch</c> can see — where .NET throws
+        /// <c>DivideByZeroException</c>. <c>\</c> is always integral here (IRBuilder converts a
+        /// floating operand, ADR-0005 D1).</para>
+        ///
+        /// <para>Floating <c>Mod</c>: <c>std::fmod</c>. C++ has no <c>%</c> for floating operands,
+        /// so the bare operator was a C++ compile error — MEASURED: <c>D(7.5) Mod D(2.0)</c> failed
+        /// with "invalid operands of types 'double' and 'double' to binary 'operator%'". .NET's
+        /// floating <c>%</c> IS fmod: truncated toward zero, the sign of the dividend, NaN for a
+        /// zero divisor or an infinite dividend, exact (no rounding). Mixed with an integral
+        /// operand it promotes like the arithmetic operators; <c>float, float</c> stays float, as
+        /// .NET's Single <c>%</c> does.</para>
         /// </summary>
-        private static string CheckedIntegerDivisionHelper(IRBinaryOp op) => op.Operation switch
+        private static string DivisionHelper(IRBinaryOp op) => op.Operation switch
         {
             BinaryOpKind.IntDiv => "BasicLang::IntDiv",
             BinaryOpKind.Mod when op.Left?.Type?.IsIntegral() == true && op.Right?.Type?.IsIntegral() == true
                 => "BasicLang::IntMod",
+            BinaryOpKind.Mod when op.Left?.Type?.IsFloatingPoint() == true || op.Right?.Type?.IsFloatingPoint() == true
+                => "std::fmod",
             _ => null,
         };
 
@@ -3893,7 +3915,45 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             return sb.ToString();
         }
 
+        /// <summary>
+        /// A <c>Return</c>, running every Finally it leaves first.
+        ///
+        /// <para>⛔ A C++ <c>return</c> out of a try block runs no handler, and the Finally was only
+        /// ever copied onto the normal and the exceptional (<c>catch (...)</c>) exits — so a
+        /// <c>Return</c> inside a Try or Catch SKIPPED its Finally. MEASURED on master
+        /// <c>c30d52e5</c>: <c>Try : If n = 1 Then Return 10 : Finally : Print "finally"</c>
+        /// returned 10 and printed nothing, where .NET runs the Finally. A Return leaves every
+        /// open frame, so it carries a copy of each, innermost first (<see cref="EmitFinallyCopies"/>).
+        /// The value is taken BEFORE the Finally runs, as in .NET: a Finally that assigns the
+        /// returned variable does not change what is returned.</para>
+        /// </summary>
         public override void Visit(IRReturn ret)
+        {
+            if (_finallyFrames.Count == 0)
+            {
+                EmitReturn(ret.Value == null ? null : GetValueName(ret.Value));
+                return;
+            }
+
+            WriteLine("{");
+            Indent();
+            string value = null;
+            if (ret.Value != null && _currentFunction?.IsIterator != true)
+            {
+                value = $"__blReturn{_finallyExitCopies}";
+                WriteLine($"auto {value} = {GetValueName(ret.Value)};");
+            }
+            var leaving = new List<IRTryCatch>();
+            for (int k = _finallyFrames.Count - 1; k >= 0; k--)
+                leaving.Add(_finallyFrames[k].Try);
+            EmitFinallyCopies(leaving);
+            EmitReturn(value);
+            Unindent();
+            WriteLine("}");
+        }
+
+        /// <summary>The return statement itself, <paramref name="value"/> already rendered (or null).</summary>
+        private void EmitReturn(string value)
         {
             // Coroutines must end with co_return, never a plain return
             if (_currentFunction != null && _currentFunction.IsIterator)
@@ -3905,22 +3965,14 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // Async functions wrap the value in the Task<T> emulation struct
             if (_currentFunction != null && _currentFunction.IsAsync)
             {
-                if (ret.Value != null)
-                    WriteLine($"return {MapReturnType(_currentFunction)}{{ {GetValueName(ret.Value)} }};");
+                if (value != null)
+                    WriteLine($"return {MapReturnType(_currentFunction)}{{ {value} }};");
                 else
                     WriteLine("return {};");
                 return;
             }
 
-            if (ret.Value != null)
-            {
-                var value = GetValueName(ret.Value);
-                WriteLine($"return {value};");
-            }
-            else
-            {
-                WriteLine("return;");
-            }
+            WriteLine(value != null ? $"return {value};" : "return;");
         }
         
         public override void Visit(IRBranch branch)
@@ -4041,7 +4093,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             {
                 case IRConstant c:
                     return EmitConstant(c);
-                case IRBinaryOp b when CheckedIntegerDivisionHelper(b) is { } helper:
+                case IRBinaryOp b when DivisionHelper(b) is { } helper:
                     return $"{helper}({RenderInline(b.Left)}, {RenderInline(b.Right)})";
                 case IRBinaryOp b:
                     return $"({RenderInline(b.Left)} {MapBinaryOperator(b.Operation)} {RenderInline(b.Right)})";
