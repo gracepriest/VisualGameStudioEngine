@@ -2,6 +2,8 @@
 
 **Amended by [ADR-0006](0006-kill-vocabulary-totality-dynamic-use-call-visibility.md)** — D2's Revisit clause replaced, S′'s use count and region made dynamic, and call-write coverage unified to one predicate.
 
+**Amended by [ADR-0008](0008-guard-semantics-and-call-visibility-of-computed-values.md) D1** — D2's `Guard(v)` definition is further amended: `Guard(v)` is replicability-blind, not only destination-widened.
+
 - **Date:** 2026-09-24
 - **Status:** Accepted
 - **Decided by:** the architect role, dispatched on its pinned model with no
@@ -136,6 +138,8 @@ any}. "Assigned" uses the identical kill vocabulary `Invalidate` already
 applies to operands (`IRAssignment` target, `IRStore` address, rename; if
 ByRef passing is missing there, it is missing for both — flag, don't fix
 silently).
+
+**Amended by [ADR-0008](0008-guard-semantics-and-call-visibility-of-computed-values.md) D1:** `Guard(v)` is replicability-blind; "vars reachable through `v`'s replicable operands" above — i.e. "non-replicable operands are left out" — is struck.
 
 CSE: `Candidate` records `Reads ∪ {Destination}`; `Invalidate` kills on
 either. Verifier: asserts S′ — the destination check is unconditional on
