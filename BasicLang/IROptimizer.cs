@@ -1739,7 +1739,32 @@ namespace BasicLang.Compiler.IR.Optimization
     }
     
     /// <summary>
-    /// Dead code elimination - remove instructions that don't affect program output
+    /// Dead code elimination - remove instructions that don't affect program output.
+    ///
+    /// <para>⭐ A CONSUMER OF THE ONE USE WALKER (task #118). What counts as a use is
+    /// <see cref="OptimizationPass.UsesOf"/> — the arm set <see cref="OptimizationPass.ReplaceUses"/>
+    /// rewrites and <see cref="IRVerifier"/> counts — followed through operand trees, over the
+    /// WHOLE function (<see cref="UsedValues"/>). This pass used to keep its own walker,
+    /// <c>MarkUsed</c>, which knew ten node kinds and was consulted one BLOCK at a time. It missed
+    /// every operand of sixteen kinds (an element pointer, a cast, an array store, an await, a
+    /// yield, an indexer load or store, a For Each collection, a throw, an allocation's
+    /// arguments, an instance call's object and arguments, a base call's arguments, a field
+    /// load or store, a tuple element, a phi) and part of two more (a call's callee value; a
+    /// switch's case values and pattern cases), it never looked inside an operand tree that is
+    /// not itself in a block (a When guard), and a value defined in one block and used only in
+    /// another read as unused. Each of those is a LIVE value this pass would delete, leaving its
+    /// consumer holding an instruction that is no longer in the function.</para>
+    ///
+    /// <para>⛔ STILL LATENT, DELIBERATELY. The removal guard below skips every value whose name
+    /// is non-empty and does not start with <c>_tmp</c>, and IRBuilder names every temp
+    /// <c>t0</c>, <c>t1</c>, … — so in a real program this pass removes no instruction; only
+    /// <see cref="ControlFlowGraph.RemoveUnreachableBlocks"/> has an effect. Task #118 made the
+    /// use analysis total and left the guard alone, so emitted code is unchanged. Switching the
+    /// removal on (e.g. <see cref="OptimizationPass.IsTempDestination"/>) is a separate, measured
+    /// decision: ADR-0008 settled point 3 — removing a use can leave a NON-replicable value
+    /// single-use and not adjacent to its definition, which the C# backend then inlines away
+    /// from where it was computed — and the <c>T5</c> caveat on
+    /// <see cref="OptimizationPass.IsTempDestination"/> (a user variable spelled like a temp).</para>
     /// </summary>
     public class DeadCodeEliminationPass : OptimizationPass
     {
@@ -1761,26 +1786,52 @@ namespace BasicLang.Compiler.IR.Optimization
                 int removed = cfg.RemoveUnreachableBlocks();
                 ModificationCount += removed;
                 
-                // Remove dead instructions
+                // Remove dead instructions. The uses are collected over EVERY block before any
+                // block loses an instruction: a value defined in one block is routinely used in
+                // another (a loop body reading a value computed before the loop).
+                var used = UsedValues(function);
                 foreach (var block in function.Blocks)
                 {
-                    RemoveDeadInstructions(block);
+                    RemoveDeadInstructions(block, used);
                 }
             }
             
             return ModificationCount > 0;
         }
-        
-        private void RemoveDeadInstructions(BasicBlock block)
+
+        /// <summary>
+        /// Every value <paramref name="function"/> uses: each operand slot of each instruction in
+        /// each of its blocks (<see cref="OptimizationPass.UsesOf"/>), and — through operand trees —
+        /// each operand of an operand instruction, the same descent
+        /// <see cref="IRVerifier"/> makes. The descent is what finds a block value whose only
+        /// consumer is an instruction that is not itself in a block (a When guard's tree hangs
+        /// off its <see cref="IRSwitch"/>; an expression tree hangs off its consumer).
+        /// Reference identity, never names: a use is of the <see cref="IRValue"/> object.
+        /// </summary>
+        private static HashSet<IRValue> UsedValues(IRFunction function)
         {
-            var used = new HashSet<IRValue>();
-
-            // Mark instructions that are used
-            foreach (var inst in block.Instructions)
+            var used = new HashSet<IRValue>(ReferenceEqualityComparer.Instance);
+            var pending = new Stack<IRValue>();
+            foreach (var block in function.Blocks)
             {
-                MarkUsed(inst, used);
+                if (block?.Instructions == null) continue;
+                foreach (var inst in block.Instructions)
+                {
+                    if (inst == null) continue;
+                    foreach (var operand in UsesOf(inst)) pending.Push(operand);
+                    while (pending.Count > 0)
+                    {
+                        var value = pending.Pop();
+                        if (value == null || !used.Add(value)) continue;
+                        foreach (var nested in UsesOf(value)) pending.Push(nested);
+                    }
+                }
             }
-
+            return used;
+        }
+        
+        private void RemoveDeadInstructions(BasicBlock block, HashSet<IRValue> used)
+        {
             // Remove unused assignments
             for (int i = block.Instructions.Count - 1; i >= 0; i--)
             {
@@ -1813,56 +1864,6 @@ namespace BasicLang.Compiler.IR.Optimization
                     block.Instructions.RemoveAt(i);
                     ReportModification();
                 }
-            }
-        }
-        
-        private void MarkUsed(IRInstruction inst, HashSet<IRValue> used)
-        {
-            if (inst is IRBinaryOp binaryOp)
-            {
-                used.Add(binaryOp.Left);
-                used.Add(binaryOp.Right);
-            }
-            else if (inst is IRUnaryOp unaryOp)
-            {
-                used.Add(unaryOp.Operand);
-            }
-            else if (inst is IRCompare compare)
-            {
-                used.Add(compare.Left);
-                used.Add(compare.Right);
-            }
-            else if (inst is IRStore store)
-            {
-                used.Add(store.Value);
-                used.Add(store.Address);
-            }
-            else if (inst is IRLoad load)
-            {
-                used.Add(load.Address);
-            }
-            else if (inst is IRCall call)
-            {
-                foreach (var arg in call.Arguments)
-                {
-                    used.Add(arg);
-                }
-            }
-            else if (inst is IRReturn ret && ret.Value != null)
-            {
-                used.Add(ret.Value);
-            }
-            else if (inst is IRConditionalBranch condBr)
-            {
-                used.Add(condBr.Condition);
-            }
-            else if (inst is IRSwitch switchInst)
-            {
-                used.Add(switchInst.Value);
-            }
-            else if (inst is IRAssignment assignment)
-            {
-                used.Add(assignment.Value);
             }
         }
     }
