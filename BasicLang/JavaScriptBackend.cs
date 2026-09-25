@@ -183,6 +183,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             // `class MyError extends Exception` hits the temporal dead zone otherwise.
             EmitExceptionPrelude(module);
             EmitConversionPrelude(module);
+            EmitIntegerDivisionPrelude(module);
 
             // Module-level Dims, also before classes — a static field initialiser may read one.
             EmitGlobals(module);
@@ -435,6 +436,88 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             Line("return (f % 2 === 0) ? f : f + 1;");
             _indentLevel--;
             Line("}");
+            Line();
+        }
+
+        private const string IntDivHelperName = "__blIntDiv";
+        private const string ModHelperName = "__blMod";
+
+        private static bool IsCheckedMod(IRBinaryOp op) =>
+            op.Left?.Type?.IsIntegral() == true && op.Right?.Type?.IsIntegral() == true;
+
+        private static bool IsCheckedDivision(IRBinaryOp op) =>
+            op.Operation == BinaryOpKind.IntDiv || (op.Operation == BinaryOpKind.Mod && IsCheckedMod(op));
+
+        /// <summary>
+        /// True when the module lowers an integral <c>\</c> or <c>Mod</c> anywhere — a block
+        /// instruction or a <c>When</c> guard (built with emission suppressed, so in no block; the
+        /// same blind spot <see cref="GuardUsesRoundingHelper"/> covers). ⛔ Scanned up front for
+        /// the reason <see cref="EmitConversionPrelude"/> gives: the prelude precedes every body.
+        /// </summary>
+        internal static bool UsesIntegerDivisionHelper(IRModule module)
+        {
+            foreach (var function in module?.Functions ?? Enumerable.Empty<IRFunction>())
+                foreach (var block in function.Blocks ?? Enumerable.Empty<BasicBlock>())
+                    foreach (var instruction in block.Instructions ?? Enumerable.Empty<IRInstruction>())
+                        switch (instruction)
+                        {
+                            case IRBinaryOp binary when IsCheckedDivision(binary):
+                                return true;
+                            case IRSwitch sw when sw.PatternCases?.Any(GuardUsesIntegerDivision) == true:
+                                return true;
+                        }
+
+            return false;
+        }
+
+        private static bool GuardUsesIntegerDivision(IRPatternCase pattern) =>
+            pattern != null
+            && (TreeUsesIntegerDivision(pattern.WhenGuard)
+                || pattern switch
+                {
+                    IROrPatternCase or => or.Alternatives?.Any(GuardUsesIntegerDivision) == true,
+                    IRTuplePatternCase tuple => tuple.Elements?.Any(GuardUsesIntegerDivision) == true,
+                    _ => false,
+                });
+
+        private static bool TreeUsesIntegerDivision(IRValue value) => value switch
+        {
+            IRBinaryOp binary => IsCheckedDivision(binary)
+                || TreeUsesIntegerDivision(binary.Left) || TreeUsesIntegerDivision(binary.Right),
+            IRCast cast => TreeUsesIntegerDivision(cast.Value),
+            IRCall call => call.Arguments.Any(TreeUsesIntegerDivision),
+            IRCompare compare => TreeUsesIntegerDivision(compare.Left) || TreeUsesIntegerDivision(compare.Right),
+            IRUnaryOp unary => TreeUsesIntegerDivision(unary.Operand),
+            _ => false,
+        };
+
+        /// <summary>
+        /// Integral <c>\</c> and <c>Mod</c> with .NET's checks. JavaScript numbers are doubles, so
+        /// a zero divisor gave <c>Infinity</c> / <c>NaN</c> and the program carried on printing
+        /// them — MEASURED: <c>Try : Console.WriteLine(7 \ z) : Catch e As DivideByZeroException</c>
+        /// printed "Infinity" and never entered the handler. <c>-2147483648 \ -1</c> is 2147483648,
+        /// outside Integer, where .NET throws <c>OverflowException</c> (for <c>Mod</c> as well).
+        /// Only 32-bit and narrower types reach this backend (Long is refused, BL7003), so that
+        /// is the only overflowing pair: no other allowed type holds -2147483648.
+        ///
+        /// <para>The <c>+ 0</c> turns a NEGATIVE ZERO into 0: <c>Math.trunc(-1 / 5)</c> and
+        /// <c>-7 % -1</c> are -0, which an integer cannot be, and <c>console.log</c> printed it
+        /// as "-0".</para>
+        /// </summary>
+        private void EmitIntegerDivisionPrelude(IRModule module)
+        {
+            if (!UsesIntegerDivisionHelper(module)) return;
+
+            foreach (var (name, result) in new[] { (IntDivHelperName, "Math.trunc(a / b) + 0"), (ModHelperName, "a % b + 0") })
+            {
+                Line($"function {name}(a, b) {{");
+                _indentLevel++;
+                Line("if (b === 0) throw new DivideByZeroException(\"Attempted to divide by zero.\");");
+                Line("if (b === -1 && a === -2147483648) throw new OverflowException(\"Arithmetic operation resulted in an overflow.\");");
+                Line($"return {result};");
+                _indentLevel--;
+                Line("}");
+            }
             Line();
         }
 
@@ -1105,10 +1188,16 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 // Long, half to even, before the divide (ADR-0005 D1). Before that, this trunc
                 // was applied to the float QUOTIENT and 7.5 \ 2 printed 3, not VB's 4. It is not
                 // dead now — it is the integer division itself: without it 7 \ 2 is 3.5.
-                case BinaryOpKind.IntDiv: return $"Math.trunc({l} / {r})";
+                //
+                // ⛔ Through the checked helper, not a bare Math.trunc: `7 \ 0` was Infinity and
+                // `7 Mod 0` NaN, printed as numbers where .NET throws DivideByZeroException (see
+                // EmitIntegerDivisionPrelude).
+                case BinaryOpKind.IntDiv: return $"{IntDivHelperName}({l}, {r})";
 
                 // .NET's Mod takes the sign of the DIVIDEND, and so does JS's %. They agree
-                // exactly, so a bare operator is correct here — unlike IntDiv above.
+                // exactly — except by zero, hence the helper for an integral Mod. A floating Mod
+                // by zero is NaN in .NET too, so it keeps the bare operator.
+                case BinaryOpKind.Mod when IsCheckedMod(op): return $"{ModHelperName}({l}, {r})";
                 case BinaryOpKind.Mod: return $"({l} % {r})";
 
                 // String concatenation is its own kind, so `+` here is never numeric addition

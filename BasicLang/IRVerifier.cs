@@ -18,9 +18,21 @@ namespace BasicLang.Compiler.IR.Optimization
         Log,
     }
 
-    /// <summary>One breach of Invariant S′.</summary>
+    /// <summary>One breach of Invariant S′, of Invariant V (ADR-0006 D1), or of Invariant F
+    /// (ADR-0007).</summary>
     public sealed class InvariantViolation
     {
+        /// <summary>Which invariant: <c>"S′"</c> (a shared value's guarded variable written
+        /// before a use), <c>"V"</c> (an instruction kind the kill vocabulary does not
+        /// classify; only <see cref="Function"/>, <see cref="Writer"/> and
+        /// <see cref="WriterBlock"/> are set) or <c>"F"</c> (an <see cref="IRVariable"/> spelling
+        /// an accessor-backed property of the function's class; <see cref="Function"/>,
+        /// <see cref="Variable"/>, <see cref="IsDestination"/>, <see cref="Writer"/> — the
+        /// instruction holding it —, <see cref="WriterBlock"/> and <see cref="DeclaringClass"/>
+        /// are set).</summary>
+        public string Invariant { get; init; } = "S′";
+        /// <summary>For Invariant F: the class that declares the property.</summary>
+        public string DeclaringClass { get; init; }
         public string Function { get; init; }
         /// <summary>The shared value.</summary>
         public IRValue Value { get; init; }
@@ -35,8 +47,16 @@ namespace BasicLang.Compiler.IR.Optimization
         public string WriterBlock { get; init; }
         public string UseBlock { get; init; }
 
-        public override string ToString() =>
-            $"Invariant S′ violated in {Function}: '{Value?.Name}' ({Value?.GetType().Name}, {UseCount} use(s), "
+        public override string ToString() => Invariant == "V"
+            ? $"Invariant V violated in {Function}: {Writer?.GetType().Name} in {WriterBlock} is an instruction "
+              + "kind the kill vocabulary (OptimizationPass.NamesWrittenBy) does not classify, so every pass "
+              + "treats it as writing everything. Give it an arm there, stating what it writes."
+            : Invariant == "F"
+            ? $"Invariant F violated in {Function}: {Writer?.GetType().Name} in {WriterBlock} "
+              + $"{(IsDestination ? "writes" : "reads")} a VARIABLE '{Variable}', which spells a property of "
+              + $"{DeclaringClass} whose accessors run user code. A bare property name must lower to the node "
+              + "its qualified form produces (IRFieldStore / IRFieldAccess), never to a variable (ADR-0007)."
+            : $"Invariant S′ violated in {Function}: '{Value?.Name}' ({Value?.GetType().Name}, {UseCount} use(s), "
             + $"defined in {DefinitionBlock}) — {(IsDestination ? "its destination" : "operand")} '{Variable}' "
             + $"is written by {Writer?.GetType().Name}{(Writer is IRValue w && !string.IsNullOrEmpty(w.Name) ? " '" + w.Name + "'" : "")} "
             + $"in {WriterBlock} before a use in {UseBlock}.";
@@ -63,6 +83,18 @@ namespace BasicLang.Compiler.IR.Optimization
     /// <c>Guard(v)</c> = the variables reachable through <c>v</c>'s replicable operands ∪
     /// { <c>v</c>'s named destination, if any }.</para>
     ///
+    /// <para><b>V</b> (ADR-0006 D1): no reachable instruction kind is unclassified — every
+    /// instruction's kind has an arm in <see cref="OptimizationPass.NamesWrittenBy"/>. See
+    /// <see cref="CheckInvariantV"/>. This is the verifier's independence from the vocabulary it
+    /// shares with CSE: not a second write model, but completeness of the one model.</para>
+    ///
+    /// <para><b>F</b> (ADR-0007, "lowering fidelity"): for each function f, no
+    /// <see cref="IRVariable"/> — operand or destination — spells a member with accessors declared
+    /// on f's enclosing class or on a base class present in the IR module. See
+    /// <see cref="CheckInvariantF"/>. V is the vocabulary's COMPLETENESS arm; F is its FIDELITY
+    /// arm: user code must reach the IR as a node the vocabulary classifies as a call, not hide
+    /// behind a variable the vocabulary rightly treats as storage.</para>
+    ///
     /// <para><b>"Assigned"</b> is <see cref="OptimizationPass.NamesWrittenBy"/> — the one kill
     /// vocabulary CSE's <c>Invalidate</c> also uses, so the verifier and the pass cannot
     /// disagree about what a write is — plus its call arm: a call writes EVERY name in
@@ -70,9 +102,12 @@ namespace BasicLang.Compiler.IR.Optimization
     /// (<see cref="OptimizationPass.IsCallVisible(IRVariable, IRFunction)"/>, the one
     /// call-visibility rule, ADR-0006 D3), exactly as CSE kills on it. Before D3 this arm
     /// checked the destination only, so a merge across a call that writes a class field read
-    /// bare as an OPERAND (Q3: <c>a = K + q : Inc() : l(0) = K + q</c>) was certified. A write
-    /// form missing from the vocabulary is invisible to BOTH; see the gap list on
-    /// <c>NamesWrittenBy</c>.</para>
+    /// bare as an OPERAND (Q3: <c>a = K + q : Inc() : l(0) = K + q</c>) was certified. An
+    /// instruction KIND missing from the vocabulary is caught by Invariant V; user code lowered
+    /// to a non-call kind (a bare property as a variable) by Invariant F; a classified kind
+    /// whose answer is too narrow is invisible to the passes and to all three checks (only
+    /// execution probes see it) — see the note on <c>NamesWrittenBy</c>. An instruction that may
+    /// write anything (<see cref="WriteKind.Universal"/>) hits every guarded name.</para>
     ///
     /// <para>⚠ <b>"Use count" for a value with a named destination counts the destination as
     /// a reader.</b> A merge re-points a duplicate's consumers at the surviving instruction, and
@@ -181,7 +216,8 @@ namespace BasicLang.Compiler.IR.Optimization
             var mode = Mode;
             if (mode == IRVerifierMode.Off || module == null) return;
 
-            var violations = CheckInvariantSPrime(module);
+            var violations = CheckInvariantV(module).Concat(CheckInvariantF(module))
+                .Concat(CheckInvariantSPrime(module)).ToList();
             if (violations.Count == 0) return;
 
             if (mode == IRVerifierMode.Log)
@@ -196,6 +232,270 @@ namespace BasicLang.Compiler.IR.Optimization
             }
 
             throw new IRVerificationException(violations);
+        }
+
+        /// <summary>
+        /// Every breach of Invariant V (ADR-0006 D1) in <paramref name="module"/>: "no reachable
+        /// instruction kind is unclassified". An instruction whose kind
+        /// <see cref="OptimizationPass.NamesWrittenBy"/> has no arm for is treated by every pass as
+        /// writing everything, which is safe for output — but it means someone added an IR node
+        /// kind without deciding what it writes, and the next such kind may be one whose
+        /// classification matters. Reads the IR only.
+        ///
+        /// <para>Checks every instruction of every block the passes can see, a superset of the
+        /// reachable ones (a pass does not skip an unreachable block, so neither does this).</para>
+        /// </summary>
+        public static IReadOnlyList<InvariantViolation> CheckInvariantV(IRModule module)
+        {
+            var violations = new List<InvariantViolation>();
+            if (module?.Functions == null) return violations;
+            foreach (var function in module.Functions)
+            {
+                if (function == null || function.IsExternal || function.Blocks == null) continue;
+                foreach (var block in function.Blocks)
+                {
+                    if (block?.Instructions == null) continue;
+                    foreach (var inst in block.Instructions)
+                    {
+                        if (inst == null || OptimizationPass.NamesWrittenBy(inst, function).IsClassified) continue;
+                        violations.Add(new InvariantViolation
+                        {
+                            Invariant = "V",
+                            Function = function.Name,
+                            Writer = inst,
+                            WriterBlock = block.Name,
+                        });
+                    }
+                }
+            }
+            return violations;
+        }
+
+        /// <summary>
+        /// Every breach of Invariant F (ADR-0007, "lowering fidelity") in <paramref name="module"/>:
+        /// for each function f, no <see cref="IRVariable"/> — operand or destination — spells a
+        /// member with accessors declared on f's enclosing class or on a base class present in the
+        /// IR module. Reads the IR only.
+        ///
+        /// <para><b>Why.</b> A property used by its bare name inside its own class runs its
+        /// accessor. Lowered as a variable (<c>IRAssignment %P = 10</c>, a read of
+        /// <c>%Tick</c>), the IR states something false, and no per-kind answer of the kill
+        /// vocabulary can see it: V is quiet (both kinds are classified) while CSE merges across
+        /// user code — MEASURED, JavaScript and MSIL printed stale values (P4, P5). IRBuilder now
+        /// lowers such a name to <see cref="IRFieldStore"/> / <see cref="IRFieldAccess"/>; this is
+        /// what makes a regression of that lowering structurally detectable rather than visible
+        /// only to an execution probe on a non-C# backend.</para>
+        ///
+        /// <para><b>The terms, as read off the IR.</b></para>
+        /// <list type="bullet">
+        /// <item><b>f's enclosing class</b>: the class whose method, constructor or property
+        /// accessor f implements; a lambda (<c>__lambda_N</c>) belongs to the class of the
+        /// function that creates it. A function in no class is not checked.</item>
+        /// <item><b>A member with accessors</b>: <see cref="IRProperty.IsAccessorBacked"/> — a
+        /// Get/Set accessor function, or Overridable/Overrides. A plain field and a plain
+        /// auto-property are storage, and a bare name for one is a variable: NOT a breach. The
+        /// NEAREST member of a name wins, walking up <see cref="IRClass.BaseClass"/> while the base
+        /// is in the module, so a derived field shadowing a base property is not a breach
+        /// either.</item>
+        /// <item><b>Spells</b>: the same name, ignoring case (BasicLang is case-insensitive),
+        /// unless f DECLARES it — a parameter, a local, a For Each / Catch / pattern variable, or
+        /// (for a lambda) a declaration of an enclosing function — or the variable is a module
+        /// global. Those shadow the member, exactly as every backend resolves them.</item>
+        /// <item><b>Operand</b>: every value reachable through <see cref="OptimizationPass.UsesOf"/>,
+        /// operand trees included. <b>Destination</b>: an <see cref="IRAssignment"/> or
+        /// <see cref="IRStore"/> target, and a value renamed after a variable
+        /// (<see cref="OptimizationPass.NamedDestination"/> — <c>P = K + 1</c> lowered by renaming
+        /// the add to <c>P</c> is a variable write too).</item>
+        /// </list>
+        /// <para>Checks every instruction of every block in <see cref="IRFunction.Blocks"/>, the
+        /// same superset of the reachable ones <see cref="CheckInvariantV"/> checks.</para>
+        /// </summary>
+        public static IReadOnlyList<InvariantViolation> CheckInvariantF(IRModule module)
+        {
+            var violations = new List<InvariantViolation>();
+            if (module?.Functions == null || module.Classes == null || module.Classes.Count == 0) return violations;
+
+            // f -> the class it is a member of.
+            var owners = new Dictionary<IRFunction, IRClass>(ReferenceEqualityComparer.Instance);
+            void Own(IRFunction function, IRClass cls)
+            {
+                if (function != null && cls != null) owners.TryAdd(function, cls);
+            }
+            foreach (var cls in module.Classes.Values)
+            {
+                if (cls == null) continue;
+                foreach (var method in cls.Methods ?? new List<IRMethod>()) Own(method?.Implementation, cls);
+                foreach (var ctor in cls.Constructors ?? new List<IRConstructor>()) Own(ctor?.Implementation, cls);
+                foreach (var prop in cls.Properties ?? new List<IRProperty>())
+                {
+                    Own(prop?.Getter, cls);
+                    Own(prop?.Setter, cls);
+                }
+            }
+
+            // A lambda belongs to its creator's class and sees its creator's declarations. IRBuilder
+            // lowers a lambda to its own function named __lambda_N and leaves the creator a
+            // variable of that name (the reference OptimizationPass.ContainsLambda keys on too).
+            var lambdas = new Dictionary<string, IRFunction>(StringComparer.Ordinal);
+            foreach (var function in module.Functions)
+                if (function != null && function.IsLambda && function.Name != null) lambdas.TryAdd(function.Name, function);
+            var creators = new Dictionary<IRFunction, IRFunction>(ReferenceEqualityComparer.Instance);
+            if (lambdas.Count > 0)
+            {
+                var pending = new Queue<IRFunction>(owners.Keys);
+                while (pending.Count > 0)
+                {
+                    var creator = pending.Dequeue();
+                    foreach (var variable in VariablesIn(creator))
+                    {
+                        if (variable.Name == null || !lambdas.TryGetValue(variable.Name, out var lambda)) continue;
+                        if (ReferenceEquals(lambda, creator) || owners.ContainsKey(lambda)) continue;
+                        owners[lambda] = owners[creator];
+                        creators[lambda] = creator;
+                        pending.Enqueue(lambda);
+                    }
+                }
+            }
+
+            var accessorsByClass = new Dictionary<IRClass, Dictionary<string, string>>(ReferenceEqualityComparer.Instance);
+            foreach (var function in module.Functions)
+            {
+                if (function == null || function.IsExternal || function.Blocks == null) continue;
+                if (!owners.TryGetValue(function, out var cls)) continue;
+
+                if (!accessorsByClass.TryGetValue(cls, out var accessors))
+                    accessorsByClass[cls] = accessors = AccessorBackedMembers(cls, module);
+                if (accessors.Count == 0) continue;
+
+                var declared = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                for (var scope = function; scope != null; scope = creators.TryGetValue(scope, out var outer) ? outer : null)
+                    AddDeclarations(scope, declared);
+
+                var seen = new HashSet<IRValue>(ReferenceEqualityComparer.Instance);
+                foreach (var block in function.Blocks)
+                {
+                    if (block?.Instructions == null) continue;
+                    foreach (var inst in block.Instructions)
+                    {
+                        if (inst == null) continue;
+
+                        void Report(string name, bool isDestination) => violations.Add(new InvariantViolation
+                        {
+                            Invariant = "F",
+                            Function = function.Name,
+                            Variable = name,
+                            IsDestination = isDestination,
+                            Writer = inst,
+                            WriterBlock = block.Name,
+                            DeclaringClass = accessors[name],
+                        });
+                        bool Spells(IRVariable v) =>
+                            v?.Name != null && !v.IsGlobal && !v.IsParameter
+                            && accessors.ContainsKey(v.Name) && !declared.Contains(v.Name);
+
+                        // Destinations.
+                        if (inst is IRAssignment assignment && Spells(assignment.Target))
+                            Report(assignment.Target.Name, true);
+                        else if (inst is IRStore store && store.Address is IRVariable address && Spells(address))
+                            Report(address.Name, true);
+                        else if (inst is IRValue value && OptimizationPass.NamedDestination(value) is string named
+                                 && accessors.ContainsKey(named) && !declared.Contains(named))
+                            Report(named, true);
+
+                        // Operands, through operand trees.
+                        var stack = new Stack<IRValue>();
+                        foreach (var used in OptimizationPass.UsesOf(inst)) stack.Push(used);
+                        while (stack.Count > 0)
+                        {
+                            var operand = stack.Pop();
+                            if (operand == null || !seen.Add(operand)) continue;
+                            if (operand is IRVariable variable)
+                            {
+                                if (Spells(variable)) Report(variable.Name, false);
+                                continue;
+                            }
+                            if (operand is IRInstruction nested)
+                                foreach (var used in OptimizationPass.UsesOf(nested)) stack.Push(used);
+                        }
+                    }
+                }
+            }
+            return violations;
+        }
+
+        /// <summary>
+        /// The accessor-backed property names in scope in <paramref name="cls"/>'s methods, each
+        /// mapped to its declaring class: the class's own members, then each base's while the base
+        /// is in <paramref name="module"/>, the NEAREST member of a name winning — so a field, an
+        /// auto-property or a method that shadows a base property removes the name.
+        /// </summary>
+        private static Dictionary<string, string> AccessorBackedMembers(IRClass cls, IRModule module)
+        {
+            var accessors = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var claimed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var visited = new HashSet<IRClass>(ReferenceEqualityComparer.Instance);
+            for (var current = cls; current != null && visited.Add(current);)
+            {
+                foreach (var prop in current.Properties ?? new List<IRProperty>())
+                    if (prop?.Name != null && claimed.Add(prop.Name) && prop.IsAccessorBacked)
+                        accessors[prop.Name] = current.Name;
+                foreach (var field in current.Fields ?? new List<IRField>())
+                    if (field?.Name != null) claimed.Add(field.Name);
+                foreach (var method in current.Methods ?? new List<IRMethod>())
+                    if (method?.Name != null) claimed.Add(method.Name);
+                foreach (var evt in current.Events ?? new List<IREvent>())
+                    if (evt?.Name != null) claimed.Add(evt.Name);
+
+                if (string.IsNullOrEmpty(current.BaseClass) || !module.Classes.TryGetValue(current.BaseClass, out current))
+                    break;
+            }
+            return accessors;
+        }
+
+        /// <summary>The names <paramref name="function"/> declares: parameters, locals, and the
+        /// variables a For Each, a Catch or a Select Case pattern binds (IRBuilder leaves those out
+        /// of <see cref="IRFunction.LocalVariables"/>; the kill vocabulary names them as the
+        /// variables those constructs write).</summary>
+        private static void AddDeclarations(IRFunction function, HashSet<string> declared)
+        {
+            foreach (var parameter in function.Parameters ?? new List<IRVariable>())
+                if (parameter?.Name != null) declared.Add(parameter.Name);
+            foreach (var local in function.LocalVariables ?? new List<IRVariable>())
+                if (local?.Name != null) declared.Add(local.Name);
+            foreach (var block in function.Blocks ?? new List<BasicBlock>())
+            {
+                if (block?.Instructions == null) continue;
+                foreach (var inst in block.Instructions)
+                    if (inst is IRForEach || inst is IRTryCatch || inst is IRSwitch)
+                        foreach (var name in OptimizationPass.NamesWrittenBy(inst, function).Names)
+                            declared.Add(name);
+            }
+        }
+
+        /// <summary>Every <see cref="IRVariable"/> <paramref name="function"/>'s instructions use,
+        /// through operand trees.</summary>
+        private static IEnumerable<IRVariable> VariablesIn(IRFunction function)
+        {
+            if (function?.Blocks == null) yield break;
+            var seen = new HashSet<IRValue>(ReferenceEqualityComparer.Instance);
+            var stack = new Stack<IRValue>();
+            foreach (var block in function.Blocks)
+            {
+                if (block?.Instructions == null) continue;
+                foreach (var inst in block.Instructions)
+                {
+                    if (inst == null) continue;
+                    foreach (var used in OptimizationPass.UsesOf(inst)) stack.Push(used);
+                    while (stack.Count > 0)
+                    {
+                        var operand = stack.Pop();
+                        if (operand == null || !seen.Add(operand)) continue;
+                        if (operand is IRVariable variable) yield return variable;
+                        else if (operand is IRInstruction nested)
+                            foreach (var used in OptimizationPass.UsesOf(nested)) stack.Push(used);
+                    }
+                }
+            }
         }
 
         /// <summary>Every breach of Invariant S′ in <paramref name="module"/>. Reads the IR only.</summary>
@@ -242,14 +542,11 @@ namespace BasicLang.Compiler.IR.Optimization
             }
 
             // The kill vocabulary, per instruction, computed once.
-            var writes = new Dictionary<IRInstruction, (List<string> Names, bool IsCall)>(ReferenceEqualityComparer.Instance);
-            (List<string> Names, bool IsCall) WritesOf(IRInstruction inst)
+            var writes = new Dictionary<IRInstruction, WriteSet>(ReferenceEqualityComparer.Instance);
+            WriteSet WritesOf(IRInstruction inst)
             {
                 if (!writes.TryGetValue(inst, out var w))
-                {
-                    var names = OptimizationPass.NamesWrittenBy(inst, out bool isCall);
-                    writes[inst] = w = (names, isCall);
-                }
+                    writes[inst] = w = OptimizationPass.NamesWrittenBy(inst, function);
                 return w;
             }
 
@@ -279,6 +576,12 @@ namespace BasicLang.Compiler.IR.Optimization
                     foreach (var (name, entry) in guard)
                         if (entry.CallVisible) { callHit = name; break; }
 
+                // A writer of EVERYTHING (ADR-0006 D1: an unclassified kind, or one classified as
+                // universal) hits every guarded name; the report names the destination first.
+                string anyHit = destination;
+                if (anyHit == null)
+                    foreach (var name in guard.Keys) { anyHit = name; break; }
+
                 foreach (var use in useSites)
                 {
                     InvariantViolation found = null;
@@ -287,13 +590,17 @@ namespace BasicLang.Compiler.IR.Optimization
                     {
                         var writer = block.Instructions[index];
                         if (writer == null || ReferenceEquals(writer, valueInst)) continue;
-                        var (names, isCall) = WritesOf(writer);
+                        var written = WritesOf(writer);
 
                         string hit = null;
-                        if (names != null)
-                            foreach (var name in names)
+                        if (written.IsUniversal)
+                            hit = anyHit;
+                        else
+                        {
+                            foreach (var name in written.Names)
                                 if (guard.ContainsKey(name)) { hit = name; break; }
-                        if (hit == null && isCall) hit = callHit;
+                            if (hit == null && written.IsCall) hit = callHit;
+                        }
                         if (hit == null) continue;
 
                         found = new InvariantViolation

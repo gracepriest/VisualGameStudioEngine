@@ -3295,7 +3295,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                     {
                         // Sub-expressions need parens to preserve precedence
                         var left = EmitExpression(bin.Left, stack, true);
-                        var right = EmitExpression(bin.Right, stack, true);
+                        var right = DivisorText(bin, EmitExpression(bin.Right, stack, true));
                         var op = MapBinaryOperator(bin.Operation);
                         var expr = $"{left} {op} {right}";
                         return needsParens ? $"({expr})" : expr;
@@ -3631,7 +3631,8 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
             // Use needsParens=true for sub-expressions to preserve operator precedence
             var left = EmitExpression(binaryOp.Left, new HashSet<IRValue>(), needsParens: true);
-            var right = EmitExpression(binaryOp.Right, new HashSet<IRValue>(), needsParens: true);
+            var right = DivisorText(binaryOp,
+                EmitExpression(binaryOp.Right, new HashSet<IRValue>(), needsParens: true));
             var op = MapBinaryOperator(binaryOp.Operation);
 
             var target = GetValueName(binaryOp);
@@ -4772,6 +4773,27 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 _ when type.Kind == TypeKind.Class => "default!",          // Reference types
                 _ => "default!"  // Use default for unknown types (safe for both value and reference types)
             };
+        }
+
+        /// <summary>
+        /// The divisor of an integral <c>\</c> / <c>Mod</c>, respelled when it is a literal zero.
+        /// C# rejects a CONSTANT integral division by zero at compile time (CS0020 "Division by
+        /// constant zero"), so <c>7 \ 0</c> — or a C# <c>const</c> dividend — compiled here and
+        /// then failed the C# build, where the other backends now throw
+        /// <c>DivideByZeroException</c> at run time. Unboxing is not a constant expression
+        /// (<c>new int()</c> is), so <c>(int)(object)0</c> makes this backend throw too. Applied
+        /// whatever the dividend, since whether a C# rendering of it is a constant is not
+        /// knowable here; a variable dividend just keeps its run-time throw. The inner cast makes the boxed type exactly
+        /// the unboxed one whatever suffix the literal rendered with (a mismatch is an
+        /// InvalidCastException).
+        /// </summary>
+        private string DivisorText(IRBinaryOp op, string rendered)
+        {
+            if (op.Operation is not (BinaryOpKind.IntDiv or BinaryOpKind.Mod)) return rendered;
+            if (op.Right is not IRConstant { Value: not null } c || c.Type?.IsIntegral() != true) return rendered;
+            if (Convert.ToDecimal(c.Value, System.Globalization.CultureInfo.InvariantCulture) != 0m) return rendered;
+            var type = MapType(c.Type);
+            return $"(({type})(object)({type}){rendered})";
         }
 
         private string MapBinaryOperator(BinaryOpKind op) => op switch

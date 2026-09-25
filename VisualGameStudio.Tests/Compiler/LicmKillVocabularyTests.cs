@@ -33,10 +33,15 @@ namespace VisualGameStudio.Tests.Compiler;
 //
 //  L2/L4 are the CONTROLS that must stay correct: L2's ByRef write is through a FREE
 //  function (an IRCall, always covered), L4's write is a module global (always IsGlobal,
-//  always covered). L5 is a KNOWN-WRONG gap the fix does NOT close (task #122 - a local
-//  captured BY REFERENCE and written inside a lambda has no capture set yet). L6 is the
-//  pass's OWN control: a truly invariant product with no call in the loop at all, proving
-//  the fix does not disable LICM wholesale.
+//  always covered). L5 (a local captured BY REFERENCE and written inside a lambda) was a
+//  KNOWN-WRONG gap this fix alone did NOT close (task #122's capture set). ADR-0006 D1's
+//  interim closure rule closes it for JavaScript (now correct, seed\n12 under --optimize) —
+//  see LicmKillVocabularyKnownGapsTask122Tests below, whose JavaScript pin is now promoted.
+//  C++ stays known-wrong, but for an UNRELATED reason settled in the ADR's implementation
+//  note: the C++ BACKEND's own capture-by-copy lowering (task #140), present even with NO
+//  optimizer pass at all — not a kill-vocabulary gap this file's passes could ever close.
+//  L6 is the pass's OWN control: a truly invariant product with no call in the loop at all,
+//  proving the fix does not disable LICM wholesale.
 //
 //  ⛔ THE PROOF REQUIRES BOTH SHIPPING ENTRY POINTS, PER CLAUDE.md - a fix seen only through
 //  the non-optimizing/in-fixture helper can still break through the CLI or the IDE build. For
@@ -561,13 +566,16 @@ public class LicmKillVocabularyExecutionTests
 }
 
 /// <summary>
-/// Item 4 of the fixture brief — L5 (a local captured BY REFERENCE and written inside a lambda)
-/// stays KNOWN-WRONG. Task #122: the shared kill vocabulary's own documented gap
-/// (<c>OptimizationPass.NamesWrittenBy</c>'s doc comment) — a lambda capture needs a capture set,
-/// which neither <c>NamesWrittenBy</c> nor this LICM fix add. These pins measure the WRONG outputs
-/// on purpose (matching <c>CseDestinationKnownGapsTask133Tests</c>' idiom) so a future fix to #122
-/// changes these tests loudly instead of being silently absorbed. Correct is <c>seed\n12</c>
-/// everywhere; C# alone gets it right today and is not pinned here for that reason.
+/// Item 4 of the fixture brief — L5 (a local captured BY REFERENCE and written inside a lambda).
+/// JavaScript is now CORRECT under ADR-0006 D1's interim closure rule (a function containing a
+/// lambda call-visits every local, so <c>bump()</c> kills LICM's belief that <c>x * 2</c> is
+/// invariant); C++ and MSIL stay KNOWN-WRONG, but for reasons ADR-0006 D1's implementation note
+/// settles as UNRELATED to the kill vocabulary or to LICM: C++'s is task #140, a BACKEND lambda
+/// lowering defect (capture BY COPY where BasicLang means capture by reference — MEASURED present
+/// even with NO optimizer pass at all, so no kill-vocabulary fix could ever have closed it); MSIL
+/// cannot build the shape at all (no lowering for the delegate type a <c>Sub()</c> lambda gets
+/// typed as), unrelated to LICM. Correct is <c>seed\n12</c> everywhere; C# alone got it right
+/// before D1 too and is not pinned here for that reason.
 ///
 /// <para>⛔ NOT caught by <c>JsExecutionTierRosterTests</c>' name-based auto-discovery (matches
 /// neither "JavaScript"/"Js" nor "*ExecutionTests" — same reason
@@ -579,28 +587,46 @@ public class LicmKillVocabularyExecutionTests
 [NonParallelizable] // the C# leg (not exercised here, but the fixture pattern) redirects Console.Out
 public class LicmKillVocabularyKnownGapsTask122Tests
 {
+    /// <summary>
+    /// CORRECT under ADR-0006 D1: the interim closure rule makes <c>x</c> call-visible (the
+    /// enclosing function contains a lambda), so <c>bump()</c> — a call — is no longer invisible
+    /// to <c>VariablesWrittenIn</c>, and LICM no longer hoists <c>x * 2</c> out of the loop.
+    /// Promoted from a known-wrong pin (was <c>seed\n6</c>, task #122). D2's L5 NOTE said this
+    /// attribution would move to JavaScript once C++'s failure was confirmed a backend defect —
+    /// see <see cref="L5_LambdaCapturedLocal_Cpp_StandardPipeline_PinnedForTask140"/>'s doc comment.
+    /// </summary>
     [Test]
-    public void L5_LambdaCapturedLocal_JavaScript_AggressivePipeline_PinnedForTask122()
+    public void L5_LambdaCapturedLocal_JavaScript_AggressivePipeline_CorrectAfterAdr6D1()
         => Assert.That(FourBackends.Norm(FourBackends.RunAggressiveJs(LicmKillVocabularyShapes.L5)),
-            Is.EqualTo("seed\n6"),
-            "task #122 — a local captured by reference and written inside a lambda has no capture "
-            + "set. Correct is seed\\n12; if this changed, #122 may be closed (or the defect moved) "
-            + "— re-measure and update or delete this pin, do not just widen it.");
+            Is.EqualTo("seed\n12"),
+            "ADR-0006 D1's interim closure rule closes this for JavaScript under --optimize; if "
+            + "this regressed, re-measure against S/adr6-d1/probes/matrix-final.txt (or "
+            + "matrix-in-step5.txt) before touching it.");
 
+    /// <summary>
+    /// STAYS known-wrong, but the STALE attribution is fixed: this is NOT "ConstantFolding +
+    /// CopyPropagation fold across the capture on their own" (that claim named the wrong cause).
+    /// MEASURED with NO optimizer pass running at all: the C++ backend itself emits
+    /// <c>bump = [=]() { int32_t t0 = {}; t0 = x + 1; return; };</c> — a lambda captured BY COPY
+    /// (<c>[=]</c>), so the write inside never reaches the caller's <c>x</c> no matter what the
+    /// optimizer does or does not run. This is task #140, a C++ BACKEND lambda-capture defect;
+    /// LICM (or any kill-vocabulary fix) could never have closed it.
+    /// </summary>
     [Test]
-    public void L5_LambdaCapturedLocal_Cpp_StandardPipeline_PinnedForTask122()
+    public void L5_LambdaCapturedLocal_Cpp_StandardPipeline_PinnedForTask140()
         => Assert.That(FourBackends.Norm(BclE2E.CompileRun(BclE2E.CompileToCppOptimized(LicmKillVocabularyShapes.L5))),
             Is.EqualTo("seed\n6"),
-            "task #122 — pre-existing lambda-capture defect, present under the STANDARD pipeline "
-            + "too (ConstantFolding + CopyPropagation fold across the capture on their own), so "
-            + "LICM is not the cause and closing this LICM change cannot close #122 by itself.");
+            "task #140 (C++ BACKEND capture-by-copy, NOT a kill-vocabulary or LICM defect — MEASURED "
+            + "wrong even with zero optimizer passes running); if this changed, re-measure before "
+            + "touching it.");
 
     [Test]
-    public void L5_LambdaCapturedLocal_Cpp_AggressivePipeline_PinnedForTask122()
+    public void L5_LambdaCapturedLocal_Cpp_AggressivePipeline_PinnedForTask140()
         => Assert.That(FourBackends.Norm(BclE2E.CompileRun(BclE2E.CompileToCppAggressive(LicmKillVocabularyShapes.L5))),
             Is.EqualTo("seed\n6"),
-            "task #122 — same defect, aggressive pipeline: wrong \"at every level\" (both pins here "
-            + "agree with each other, not just with the standard-pipeline one above).");
+            "task #140 — same backend capture-by-copy defect, aggressive pipeline: wrong \"at every "
+            + "level\" (both C++ pins here agree with each other, not just with the standard-"
+            + "pipeline one above) because the cause is the backend's lambda lowering, not LICM.");
 
     [Test]
     public void L5_LambdaCapturedLocal_Msil_CannotBuild_PinnedForTask122()

@@ -689,6 +689,20 @@ namespace BasicLang.Compiler.AST
         /// </summary>
         public bool IsAuto { get; set; }
 
+        /// <summary>
+        /// ⭐ ADR-0007's "ACCESSOR-BACKED": reading or writing this property may run USER CODE —
+        /// it declares a Get or Set block, or it is Overridable/Overrides, so a derived class's
+        /// accessor may run in its place (an Overrides member is itself overridable).
+        /// A plain auto-property is NOT: no user code runs behind it, so, like a plain field, it
+        /// is storage and out of the ruling's scope.
+        ///
+        /// <para>The analyzer copies it onto the property's symbol
+        /// (<c>Symbol.IsAccessorBacked</c>), which is what <c>IRBuilder</c>'s bare-name lowering
+        /// reads; <c>IRProperty.IsAccessorBacked</c> is the same fact read back off the IR by
+        /// <c>IRVerifier</c>'s Invariant F. Change the three together.</para>
+        /// </summary>
+        public bool IsAccessorBacked => Getter != null || Setter != null || IsVirtual || IsOverride;
+
         public PropertyNode(int line, int column) : base(line, column)
         {
             Access = AccessModifier.Public;

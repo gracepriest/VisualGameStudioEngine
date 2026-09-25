@@ -430,6 +430,10 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // The typed-catch ladder's trigger is source-level, not surface-level.
             SpliceRuntimeSource(CppNetExceptionRuntime.Source);
 
+            // Checked integral `\` / `Mod`, after the NetException it throws — mirroring the
+            // combined mode (keep in sync).
+            SpliceRuntimeSource(CppIntegerDivisionRuntime.Source);
+
             // D-P7 NetRef (P2a-2 flip): UNCONDITIONAL, mirroring the combined mode —
             // ManagedOwned declaration positions lower to BasicLang::NetRef even with an
             // empty surface. Include-guarded and self-including; shared verbatim with
