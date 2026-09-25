@@ -144,10 +144,7 @@ namespace BasicLang.Compiler.LSP
                 if (nextToken.Type == TokenType.Newline) break;
 
                 if (nextToken.Type == TokenType.Equals ||
-                    nextToken.Type == TokenType.PlusAssign ||
-                    nextToken.Type == TokenType.MinusAssign ||
-                    nextToken.Type == TokenType.MultiplyAssign ||
-                    nextToken.Type == TokenType.DivideAssign)
+                    BasicLang.Compiler.Parser.IsAssignmentOperator(nextToken.Type))
                 {
                     return true;
                 }
