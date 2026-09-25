@@ -102,6 +102,9 @@ V is quiet and a probe on a *classified* kind prints a stale value. That
 means the vocabulary is wrong, not incomplete, and the verifier then needs
 a real may-alias model.
 
+Replaced by ADR-0007 (its first settled point): F takes the fidelity arm, V
+the completeness arm.
+
 ### Amends
 
 ADR-0005 D2. Its Revisit clause is replaced by the one above. "Assigned

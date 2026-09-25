@@ -151,6 +151,15 @@ public class JsExecutionTierRosterTests
         // run through FourBackends.RunAggressiveJs.
         typeof(KillVocabularyExtensionsExecutionTests),
         typeof(KillVocabularyExtensionsAggressiveLoopExecutionTests),
+
+        // ADR-0007 — bare-name property lowering fidelity. Named "...ExecutionTests", so the
+        // widened match below WOULD catch it on its own; listed explicitly anyway, matching every
+        // row above. BarePropertyLoweringExecutionTests' JS legs run through
+        // JavaScriptOptimizedExecutionTests.RunOptimized (the standard pipeline — deliberately NOT
+        // JavaScriptExecutionTests.RunJs, which runs no optimizer at all and would silently
+        // certify a CopyPropagation/CSE regression, see that fixture's own doc comment) and
+        // FourBackends.RunAggressiveJs (the aggressive pipeline); both spawn Node.
+        typeof(BarePropertyLoweringExecutionTests),
     };
 
     /// <summary>
@@ -198,7 +207,7 @@ public class JsExecutionTierRosterTests
 
     [Test]
     public void RosterIsPinned()
-        => Assert.That(ExecutionTier, Has.Length.EqualTo(45),
+        => Assert.That(ExecutionTier, Has.Length.EqualTo(46),
             "The execution-tier roster changed. That is fine — update the number — but it must " +
             "be a deliberate edit, not a silent shrink.");
 

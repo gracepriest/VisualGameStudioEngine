@@ -122,6 +122,147 @@ ADR-0007" callout under its title, the way ADR-0005 carries "Amended by
 ADR-0006" — added by the orchestrator after the concurrent ADR-0006 edit
 lands. Not added here.
 
+## Implementation note (D1)
+
+- **What landed.** `IRBuilder.AccessorMemberOf` / `AccessorMemberReceiver`,
+  used at the two places a bare name is lowered — the identifier READ
+  (`Visit(IdentifierExpressionNode)`) and the assignment TARGET
+  (`Visit(AssignmentStatementNode)`; a compound `P += 1` goes through both).
+  Invariant F is `IRVerifier.CheckInvariantF`, run by
+  `VerifyAfterOptimization` beside V and S′ under the same switch.
+- **MEASURED "exactly the node its qualified form produces".** The
+  no-optimizer IR dump of each bare probe after the change is
+  byte-identical, receiver type included, to its qualified twin's dump
+  before it: P4 ≡ P1 (`Me.P = 10`), P5 ≡ P3 (`Me.Tick`), P6 ≡ `Box.P = 10`,
+  the Shared getter ≡ `Box.Tick`, and the Overridable case below ≡ `Me.V`.
+  The emitted C#, JavaScript and MSIL of P4/P5 at CLI and CLI `--optimize`
+  is identical (paths normalised) to P1/P3's. No `IRVariable` spelled `P`
+  or `Tick` remains in P4/P5.
+- **P6's ASSUMPTION holds, measured before the change:** `Box.P = 10` and
+  `t = Box.Tick` in a Shared method lower to `IRFieldStore(Box, P)` /
+  `IRFieldAccess(Box, Tick)` (call-classified) and print the right value on
+  C#, JavaScript and MSIL at all three entry points. The bare Shared form
+  lowers to exactly that — the receiver is the DECLARING class, never `Me`
+  (`this.P` on a static member is CS0176). P6 is wrong→right, not
+  wrong→wrong; no node-addition ruling is needed.
+- **Implementer choices beyond the ruling's letter, and the probe matrix
+  below, were RATIFIED by the orchestrator:** (1) the accessor-backed scope
+  (plain auto-properties out, Overridable/Overrides in); (2) all 69
+  wrong→right cells, including P6g, P7 (`P += 10`), P8 (inherited), P9
+  (Shared from an instance method), P10 (`P = K + 5`), CP3/CP4
+  (CopyPropagation through a bare property — C# was ALSO wrong, printing
+  `6` for `16` and `6` for `11`) and MSIL P16 — under ADR-0007's own churn
+  rule these are the ruling's own scope ("a bare name the analyzer binds to
+  an accessor-backed member"), not unintended changes; (3) the generic
+  MSIL ByRef message; (4) the new flags. Item (1)'s detail:
+  - *"Accessor-backed" is defined* as: the property declares a Get or Set
+    block, OR is Overridable/Overrides (a derived accessor may run in its
+    place). One definition, read twice: `PropertyNode.IsAccessorBacked`
+    (copied by the analyzer onto `Symbol.IsAccessorBacked`, which the
+    lowering reads) and `IRProperty.IsAccessorBacked` (which F reads).
+    A plain non-virtual AUTO-property is excluded: no user code runs
+    behind it, so it is storage, like the plain field the ruling puts out
+    of scope. This matters for Obligation 2: a bare plain auto-property is
+    the one bare-property shape C++ builds AND runs right today (MEASURED
+    green on all four backends, as `AGetSetPropertyByBareName_IsACppGap_Pinned`'s
+    own text says), so it is left exactly as it was. Every Get/Set property
+    used bare is COMPILE-FAIL on C++ today (P4–P11, P13, P14), and the one
+    other shape C++ builds — an Overridable auto-property, below — prints the
+    same wrong value before and after, so Obligation 2's condition is not
+    met and the C++ property-codegen fix stays a separate brief. **P12 (the
+    bare plain auto-property, MEASURED green on all four backends including
+    C++) stays green** — this scope change touches no shape C++ was already
+    getting right, so Obligation 2 was NOT triggered by this ruling.
+  - *Overridable/Overrides auto-properties are in scope.* MEASURED: a base
+    method writing its own `Overridable Property V As Integer` bare, with a
+    derived `Overrides` setter writing `K`, printed `3,3` for `12,3` on
+    MSIL; it now prints `12,3` (its `Me.V` twin already did). JavaScript is
+    wrong for BOTH forms before and after (a class-field initializer
+    shadows the derived accessor — a separate JavaScript defect), and C++
+    builds and prints `3,3` for both forms, before and after (unchanged).
+  - *Static-ness and accessor-backedness are recorded on the analyzer's
+    `Symbol`* (`IsShared`, `IsAccessorBacked`, set by `Visit(PropertyNode)`
+    and by the pass-1/sibling signature path). The IR class is built in
+    source order, so a property declared below its use is not yet in it;
+    the symbol the analyzer bound is complete whatever the order or file.
+  - *A built-in or .NET base property* (`Exception.Message` read bare in a
+    subclass) is not flagged, so it is not lowered: its outputs (C# right,
+    JavaScript `ReferenceError`, MSIL `InvalidProgramException`) are
+    unchanged, and F only checks bases present in the IR module.
+  - *F's exemptions,* mirroring how every backend resolves a bare name: a
+    name f declares (parameter, local, For Each / Catch / pattern variable,
+    and for a lambda its creators' declarations) or a module global
+    shadows the member; the NEAREST member of a name wins up the base chain
+    (a derived field shadowing a base property is not a breach). A lambda
+    (`__lambda_N`) belongs to the class of the function that creates it.
+    "Destination" includes a value renamed after a variable
+    (`NamedDestination`): `P = K + 5` / `P += 10` used to lower to an add
+    RENAMED `P`, with no `IRAssignment` at all.
+- **Probe matrix, 62 probes × 4 backends × 3 entry points:** 69 cells
+  wrong→right, 0 right→wrong; P4/P5/P6 are 18 of them. The other 51 are
+  all this ruling's defect in another position: compound `P += 10`; an
+  inherited property; a Shared property read or written bare from a Shared or an
+  instance method; `P = K + 5` (a renamed value); the Overridable case on
+  MSIL. And CopyPropagation, which reads the same IR (Obligation 5): with
+  `P = 5 : Inc() : P + 1`, and with `P = 5 : P + 1` over a getter
+  returning `K * 2`, the copy fact `P = 5` was propagated through the
+  getter — `6` for `16` and `6` for `11` on C#, JavaScript AND MSIL at
+  every entry point. Both are right now on all three, with no
+  CopyPropagation change. Task #146's own probe (a plain FIELD across a
+  call) is unchanged: `6` for `16` on all four backends, before and after.
+- **C++:** every moved C++ cell is COMPILE-FAIL → COMPILE-FAIL; the first
+  error changes from "use of undeclared identifier 'P'" to the qualified
+  form's "no member named 'P' in 'Box'" (task #141).
+- **Corpus pins: unchanged, nothing to attribute.** The sample games
+  declare no class (0 bare-property sites); `Corpus_Platformer_Makes6Merges`
+  and `Corpus_SpaceShooter_Makes0Merges` pass unchanged. Across the whole
+  suite the lowering fires 19 times (one test program compiled for several
+  backends counts once per compile; 7 test programs), the fast subset
+  none. Over every optimizer run those programs' fixtures make (612
+  pipeline runs, 15 fixture classes), the per-pass modification totals are
+  identical with the lowering on and off: no CSE merge, LICM hoist or other
+  pass rewrite is lost.
+- **F alone would fire** — MEASURED with the lowering switched off and F
+  on: 11 F reports over the property-bearing fixtures (11 real sites), and
+  5 existing tests turned red in Throw mode. That is Obligation 3's reason
+  for one commit, observed: F alone would have turned 5 passing tests red
+  for a defect the lowering alone would have left undetectable elsewhere.
+  With the lowering ON (this commit, as shipped), **F fires ZERO times**
+  across the whole suite (see the Suite bullet below) — quiet exactly
+  where it should be.
+- **Separate defects found and tracked while measuring the above, each
+  UNRELATED to this ruling's lowering and left exactly as found:** task
+  #150 (an Overridable auto-property's Overrides does not DISPATCH on
+  JavaScript or C++ — both print the BASE value, `3,3`, for both the bare
+  and the `Me.`-qualified form of P16, before and after this ADR; a
+  class-field initializer shadows the derived accessor on JavaScript,
+  unmeasured root cause on C++); task #151 (P15 — `Message` read bare in a
+  class inheriting `System.Exception`; JavaScript `ReferenceError`, MSIL
+  `InvalidProgramException`, unchanged by this ADR because F only checks
+  bases PRESENT in the IR module, and a built-in .NET base is not); task
+  #152 (P17 — a `Private` property declared BELOW its bare use fails to
+  compile at all, "Undefined identifier 'P'", on all four backends; P17p,
+  the identical shape with the property `Public`, runs correctly — a
+  pass-1/sibling-signature visibility gap in the semantic analyzer, not a
+  lowering defect).
+- **One existing expectation changed:**
+  `MsilByRefTests.BarePropertyNameArgument_IsRefused` (a bare Get/Set
+  property passed `ByRef`) is still REFUSED by MSIL, but now with the
+  message its qualified twin `QualifiedPropertyArgument_IsRefused` already
+  gets ("an expression's value lives in a temporary") instead of "'X' is a
+  PROPERTY" — the argument is an `IRFieldAccess` now, not a name. No
+  backend's build or run outcome for that program changed (C# CS0206,
+  C++ compile error, JavaScript BL7002, MSIL refusal, before and after).
+  The "is a PROPERTY" arm is still live for a bare plain auto-property.
+- **Suite (Linux):** the fast subset is cell-for-cell identical to the
+  base (5763 tests, 0 failed); the full suite is 7979 tests, 0 failed, 269
+  skipped, with the verifier in Throw mode — so V, S′ and F are quiet
+  across all of it.
+- **OWED:** the Windows run for MSIL and `.blproj` (see the third settled
+  point's NOTE) — the owner has explicitly ACCEPTED that this stays owed
+  for this merge, on the strength of the Linux MSIL measurements above
+  (ilasm and a real CLR run, on every entry point) standing in for it.
+
 ## The three settled points
 
 1. ADR-0006 D1's Revisit clause is amended, not discharged. The trigger

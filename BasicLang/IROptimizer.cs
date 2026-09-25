@@ -379,24 +379,27 @@ namespace BasicLang.Compiler.IR.Optimization
         /// Leaving it off is safe for output but fails Invariant V in every test that builds
         /// it.</para>
         ///
-        /// <para>⛔ WHAT NO PER-KIND ANSWER CAN SEE — user code behind syntax that is neither a call
-        /// nor a member-access node, so no arm below can classify it. Each MEASURED wrong on
-        /// JavaScript and MSIL (C# right by re-emission; C++ does not build the shapes):
+        /// <para>⛔ USER CODE MUST REACH THE IR AS A CALL (ADR-0007). No per-kind answer here can see
+        /// user code hidden behind a node that is neither a call nor a member access, and the fix
+        /// is never a name- or type-based guess in a pass — it is lowering the construct to a node
+        /// this vocabulary already classifies as a call:
         /// <list type="bullet">
-        /// <item>a Property used BARE inside its own class — <c>P = 10</c> lowers to an
-        /// <see cref="IRAssignment"/> to <c>P</c> that runs the setter, and <c>t = Tick</c> reads an
-        /// <see cref="IRVariable"/> that runs the getter (<c>a = K + q : P = 10 : l(0) = K + q</c>
-        /// with P's setter writing K printed 3,3 for 12,3). Through <c>Me.</c> the same accessors
-        /// are an IRFieldStore / IRFieldAccess and ARE classified (as calls);</item>
+        /// <item>a Property used BARE inside its own class. It used to lower to an
+        /// <see cref="IRAssignment"/> to <c>P</c> / a read of an <see cref="IRVariable"/>
+        /// <c>Tick</c>, and <c>a = K + q : P = 10 : l(0) = K + q</c> with P's setter writing K
+        /// printed 3,3 for 12,3 on JavaScript and MSIL. IRBuilder now lowers it to the
+        /// IRFieldStore / IRFieldAccess its <c>Me.</c> (or, Shared, <c>Class.</c>) form produces,
+        /// classified below as calls; <see cref="IRVerifier"/>'s Invariant F fires if a bare
+        /// accessor-backed property reaches the IR as a variable again;</item>
         /// <item>a user-defined operator or conversion (<c>Operator +</c>, <c>CType</c>) applied to
-        /// class operands — an IRBinaryOp / IRCompare / IRUnaryOp / IRCast that runs user code
-        /// (not measured: JavaScript refuses operator overloading, BL7006).</item>
+        /// class operands — unreachable today (the analyzer rejects the use). ADR-0007 binds the
+        /// commit that makes it reachable to lower it to an <see cref="IRCall"/> (or a node V
+        /// classifies as a call), never to an IRBinaryOp / IRCompare / IRUnaryOp / IRCast, and to
+        /// extend Invariant F to match.</item>
         /// </list>
-        /// Closing them needs declarations the IR node does not carry — which member names are
-        /// properties, which operand types overload — an open question for the architect, not a
-        /// per-kind answer. <see cref="CopyPropagationPass"/> keeps its OWN kill rules and is not
-        /// a consumer of this vocabulary at all (a copy fact for a field survives a call that
-        /// writes the field: MEASURED wrong on all four backends, C# included).</para>
+        /// <see cref="CopyPropagationPass"/> keeps its OWN kill rules and is not a consumer of this
+        /// vocabulary at all (a copy fact for a field survives a call that writes the field:
+        /// MEASURED wrong on all four backends, C# included — task #146).</para>
         /// </summary>
         protected internal static WriteSet NamesWrittenBy(IRInstruction inst, IRFunction function)
         {
