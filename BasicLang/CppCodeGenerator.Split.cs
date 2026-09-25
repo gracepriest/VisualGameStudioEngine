@@ -422,16 +422,17 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // Each body opens its OWN `namespace BasicLang { … }` (sibling re-open, like the
             // collections runtime above); every out-of-class definition inside is `inline`,
             // so the header is ODR-safe across the per-module translation units.
+            //
+            // §11.1 NetException + the BasicLang::String alias FIRST: UNCONDITIONAL, mirroring
+            // the combined mode (GenerateHeader in CppCodeGenerator.cs — keep in sync). The
+            // typed-catch ladder's trigger is source-level, not surface-level. It precedes the
+            // BCL bodies because the Decimal runtime THROWS it (division by zero).
+            SpliceRuntimeSource(CppNetExceptionRuntime.Source);
             SpliceRuntimeSource(CppBclRuntime.BclBody);
             SpliceRuntimeSource(CppDecimalRuntime.DecimalBody);
 
-            // §11.1 NetException + the BasicLang::String alias: UNCONDITIONAL, mirroring
-            // the combined mode (GenerateHeader in CppCodeGenerator.cs — keep in sync).
-            // The typed-catch ladder's trigger is source-level, not surface-level.
-            SpliceRuntimeSource(CppNetExceptionRuntime.Source);
-
-            // Checked integral `\` / `Mod`, after the NetException it throws — mirroring the
-            // combined mode (keep in sync).
+            // Checked integral `\` / `Mod`, after the NetException it throws (spliced above) —
+            // mirroring the combined mode (keep in sync).
             SpliceRuntimeSource(CppIntegerDivisionRuntime.Source);
 
             // D-P7 NetRef (P2a-2 flip): UNCONDITIONAL, mirroring the combined mode —

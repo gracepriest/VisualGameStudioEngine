@@ -1804,9 +1804,26 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             }
         }
 
-        /// <summary>True when something later reads this value, so it must be bound.</summary>
+        /// <summary>
+        /// True when the value must be bound: something later in this body reads it, or it is a
+        /// STORE — its name is a variable (IRBuilder renames a result to the variable it
+        /// initialises), so dropping the binding drops the assignment.
+        ///
+        /// <para>⛔ "Read later in this body" alone is the wrong test for a store. MEASURED: the
+        /// reader need not be in this body at all. <c>Dim n1 = MinusOne()</c> read only inside a
+        /// lambda (a separate IRFunction, rendered inline) emitted a bare <c>MinusOne();</c> and
+        /// the lambda saw 0; <c>g = MinusOne()</c> in a Sub, for a module-level <c>g</c> read by
+        /// another function, likewise left <c>g</c> at 0. Both built clean.</para>
+        /// </summary>
         private bool IsUsed(IRValue value) =>
-            !string.IsNullOrEmpty(value?.Name) && _usedOperandNames.Contains(value.Name);
+            !string.IsNullOrEmpty(value?.Name)
+            && (_usedOperandNames.Contains(value.Name) || IsStore(value));
+
+        /// <summary>The names <see cref="Bind"/> ASSIGNS rather than declaring a fresh const.</summary>
+        private bool IsStore(IRValue value) =>
+            _declaredNames.Contains(value.Name)
+            || (value.NamedAfterVariable && _memberNames.Contains(value.Name))
+            || _globalNames.Contains(value.Name);
 
         /// <summary>Parameters and locals — names that are already declared in scope.</summary>
         private HashSet<string> _declaredNames = new HashSet<string>(StringComparer.Ordinal);
@@ -2291,6 +2308,11 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         private void EmitConditional(IRConditionalBranch cond)
         {
             var merge = FindMergeBlock(cond.TrueTarget);
+            // ⛔ An ElseIf's nested conditional resolves to the OUTER If's end (see FindMergeBlock),
+            // which that If already owns. Emitting it here put it inside the outer `else`, so the
+            // code after an ElseIf chain was lost on the Then path — MEASURED, and a For loop whose
+            // body ended with such a chain lost its increment and never terminated.
+            if (merge != null && _pendingMerges.Contains(merge)) merge = null;
             if (merge != null) _pendingMerges.Push(merge);
 
             Line($"if ({Expr(cond.Condition)}) {{");

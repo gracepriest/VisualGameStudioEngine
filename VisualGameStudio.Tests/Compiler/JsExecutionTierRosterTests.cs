@@ -170,6 +170,25 @@ public class JsExecutionTierRosterTests
         // certify a CopyPropagation/CSE regression, see that fixture's own doc comment) and
         // FourBackends.RunAggressiveJs (the aggressive pipeline); both spawn Node.
         typeof(BarePropertyLoweringExecutionTests),
+
+        // Task #146 — CopyPropagationPass becomes a consumer of the shared kill vocabulary
+        // (ADR-0006 D1/D3). Named "...ExecutionTests", so the widened match below WOULD catch it
+        // on its own; listed explicitly anyway, matching every row above. Its JS legs run through
+        // JavaScriptOptimizedExecutionTests.RunOptimized (the standard pipeline — deliberately NOT
+        // JavaScriptExecutionTests.RunJs, which runs no optimizer at all and would silently
+        // certify a CopyPropagation regression, same trap BarePropertyLoweringExecutionTests'
+        // note above names) and FourBackends.RunAggressiveJs (the aggressive pipeline); both spawn
+        // Node. CopyPropagationSharedVocabularyStructuralTests and
+        // CopyPropagationSharedVocabularyUnitTests are NOT here: pure in-process IR fixtures,
+        // spawn nothing, carry no [Category("Integration")].
+        typeof(CopyPropagationSharedVocabularyExecutionTests),
+
+        // A call's result stored into a variable read elsewhere (a lambda, another function).
+        typeof(JsStoreOfCallResultRunTests),
+
+        // Integral `\` / `Mod` by zero. Its name matches none of the patterns below, so the
+        // coverage test cannot see it — listed by hand; its JS leg spawns Node.
+        typeof(IntegerDivisionByZeroRunTests),
     };
 
     /// <summary>
@@ -217,7 +236,7 @@ public class JsExecutionTierRosterTests
 
     [Test]
     public void RosterIsPinned()
-        => Assert.That(ExecutionTier, Has.Length.EqualTo(47),
+        => Assert.That(ExecutionTier, Has.Length.EqualTo(50),
             "The execution-tier roster changed. That is fine — update the number — but it must " +
             "be a deliberate edit, not a silent shrink.");
 
