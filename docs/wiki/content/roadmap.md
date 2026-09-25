@@ -54,8 +54,6 @@ Broad .NET API surface — parts of `List`, `Console` and `String` — is missin
 native backend. Catalogue:
 `docs/superpowers/specs/2026-07-07-cpp-backend-preexisting-gaps.md`.
 
-Known behavioural limitation: **a `Return` inside a `Try` bypasses its `Finally`.**
-
 ## Front-end gaps affecting every backend
 
 - `Inherits ArgumentException` — inheriting from a BCL exception type.

@@ -2208,9 +2208,23 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 return;
             }
 
-            var savedFrames = new List<(IRTryCatch, HashSet<BasicBlock>)>(_finallyFrames);
             WriteLine("{");
             Indent();
+            EmitFinallyCopies(leaving);
+            Unindent();
+            WriteLine("}");
+            WriteLine($"goto {label};");
+        }
+
+        /// <summary>
+        /// One inline copy of each Finally in <paramref name="leaving"/> (innermost FIRST), for a
+        /// jump or a <c>Return</c> that leaves those Trys. Each copy gets its own label suffix, and
+        /// while a copy is emitted the frames being left are popped, so an exit inside that Finally
+        /// cannot re-run it.
+        /// </summary>
+        private void EmitFinallyCopies(List<IRTryCatch> leaving)
+        {
+            var savedFrames = new List<(IRTryCatch, HashSet<BasicBlock>)>(_finallyFrames);
             foreach (var tc in leaving)
             {
                 var at = _finallyFrames.FindIndex(f => ReferenceEquals(f.Try, tc));
@@ -2229,9 +2243,6 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             }
             _finallyFrames.Clear();
             _finallyFrames.AddRange(savedFrames);
-            Unindent();
-            WriteLine("}");
-            WriteLine($"goto {label};");
         }
 
         /// <summary>
@@ -3904,7 +3915,45 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             return sb.ToString();
         }
 
+        /// <summary>
+        /// A <c>Return</c>, running every Finally it leaves first.
+        ///
+        /// <para>⛔ A C++ <c>return</c> out of a try block runs no handler, and the Finally was only
+        /// ever copied onto the normal and the exceptional (<c>catch (...)</c>) exits — so a
+        /// <c>Return</c> inside a Try or Catch SKIPPED its Finally. MEASURED on master
+        /// <c>c30d52e5</c>: <c>Try : If n = 1 Then Return 10 : Finally : Print "finally"</c>
+        /// returned 10 and printed nothing, where .NET runs the Finally. A Return leaves every
+        /// open frame, so it carries a copy of each, innermost first (<see cref="EmitFinallyCopies"/>).
+        /// The value is taken BEFORE the Finally runs, as in .NET: a Finally that assigns the
+        /// returned variable does not change what is returned.</para>
+        /// </summary>
         public override void Visit(IRReturn ret)
+        {
+            if (_finallyFrames.Count == 0)
+            {
+                EmitReturn(ret.Value == null ? null : GetValueName(ret.Value));
+                return;
+            }
+
+            WriteLine("{");
+            Indent();
+            string value = null;
+            if (ret.Value != null && _currentFunction?.IsIterator != true)
+            {
+                value = $"__blReturn{_finallyExitCopies}";
+                WriteLine($"auto {value} = {GetValueName(ret.Value)};");
+            }
+            var leaving = new List<IRTryCatch>();
+            for (int k = _finallyFrames.Count - 1; k >= 0; k--)
+                leaving.Add(_finallyFrames[k].Try);
+            EmitFinallyCopies(leaving);
+            EmitReturn(value);
+            Unindent();
+            WriteLine("}");
+        }
+
+        /// <summary>The return statement itself, <paramref name="value"/> already rendered (or null).</summary>
+        private void EmitReturn(string value)
         {
             // Coroutines must end with co_return, never a plain return
             if (_currentFunction != null && _currentFunction.IsIterator)
@@ -3916,22 +3965,14 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // Async functions wrap the value in the Task<T> emulation struct
             if (_currentFunction != null && _currentFunction.IsAsync)
             {
-                if (ret.Value != null)
-                    WriteLine($"return {MapReturnType(_currentFunction)}{{ {GetValueName(ret.Value)} }};");
+                if (value != null)
+                    WriteLine($"return {MapReturnType(_currentFunction)}{{ {value} }};");
                 else
                     WriteLine("return {};");
                 return;
             }
 
-            if (ret.Value != null)
-            {
-                var value = GetValueName(ret.Value);
-                WriteLine($"return {value};");
-            }
-            else
-            {
-                WriteLine("return;");
-            }
+            WriteLine(value != null ? $"return {value};" : "return;");
         }
         
         public override void Visit(IRBranch branch)
