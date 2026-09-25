@@ -1,5 +1,7 @@
 # ADR 0006: kill-vocabulary totality, dynamic-use S′ regions, and call visibility
 
+**Amended by [ADR-0007](0007-bare-name-property-lowering-fidelity.md)** — D1's Revisit clause replaced (lowering fidelity, invariant F, beside V).
+
 - **Date:** 2026-09-24
 - **Status:** Accepted
 - **Decided by:** the architect role, dispatched on its pinned model with no
@@ -100,11 +102,132 @@ V is quiet and a probe on a *classified* kind prints a stale value. That
 means the vocabulary is wrong, not incomplete, and the verifier then needs
 a real may-alias model.
 
+Replaced by ADR-0007 (its first settled point): F takes the fidelity arm, V
+the completeness arm.
+
 ### Amends
 
 ADR-0005 D2. Its Revisit clause is replaced by the one above. "Assigned
 uses CSE's vocabulary" stands, with the vocabulary now total and
 completeness-checked.
+
+## Implementation note (D1)
+
+- Five implementer choices sit beyond the ruling's own letter, each RATIFIED
+  by the orchestrator, each ONLY ADDING kills (none loosens an existing
+  one), and each costing 0 merges or hoists across the suite:
+  - the CONVERSE of rule (b) — a write to storage a `ByRef` parameter may
+    ALIAS also names every such parameter, not only the reverse direction
+    the ruling states. MEASURED fix: A2b/A2c/A2f/A2m (`n = p + q : G = 0 :
+    l(0) = p + q`, aliased through a global/field/`Me.`field/a second
+    `ByRef` parameter, called as `Work(v, v)` or `Work(G, …)`).
+  - the closure rule's BY-VALUE-PARAMETER reading — a parameter is a local
+    of the frame too, so a lambda may capture it the same way a `Dim`'d
+    local can. MEASURED fix: A1p (a `Sub`'s own by-value parameter,
+    captured and written by a lambda the `Sub` then calls). A1/A1o
+    exercise the ruling's own LOCAL-variable letter (a `Dim`'d local), not
+    this addition.
+  - `IRBaseMethodCall` naming its VARIABLE ARGUMENTS, on the theory a base
+    constructor/method may take one `ByRef` — the node records no `ByRef`
+    flags at all, unlike an ordinary call. MEASURED fix: B2
+    (`MyBase.SetIt(p)`). B1/B1r/B1L exercise the ruling's OWN "is a call"
+    text (no variable argument to name), not this addition.
+  - the 6a/6b/6c classification audit, closing kinds the ruling's own text
+    never named at all: `For Each`'s loop variable and its call status,
+    `Catch` variables, `Select Case` pattern bindings and a `When` guard's
+    call status, `++`/`--`'s extra operand, `IRInlineCode` as Universal,
+    an alloca's `_addr`-suffixed store also naming the stripped local, an
+    element store escaping to a `ByRef` parameter, a constructor's
+    variable arguments (6a); `IRAwait`/`IRYield` as calls (6b);
+    `IRFieldAccess`/`IRFieldStore` ALSO acting as calls (not only naming
+    their member — the member a Property Setter/Getter actually touches
+    may be a DIFFERENT name than the one the store/access node itself
+    names), and a resolved indexer accessor as a call (6c). MEASURED fix:
+    P1/P3 (a Property Setter/Getter that writes a DIFFERENTLY-named
+    backing field than the one `Me.P`/`Me.Tick` itself names — the naming
+    half alone, already in the ruling's letter, cannot see this; only the
+    call half can); Y1 (`Yield` inside an `Iterator`); IN_javascript/
+    IN_cpp (an inline-code block); W1L (a `Select Case` `When` guard
+    inside a loop, for LICM).
+  - the CSE self-exemption (`Candidate.ReadsCallVisibleStorage` split into
+    `OperandsCallVisible`/`DestinationCallVisible` so the defining
+    instruction is exempt on its OWN destination without also exempting
+    its operands) — a structural precision fix, not a measured-wrong-value
+    one: `n = p + q : l(0) = p + q` (`n` `ByRef`) still makes exactly 1
+    merge (`KillVocabularyPrecisionPinTests.SelfExemption_NByRef_
+    StillMakesOneMerge`).
+- Measured across the whole suite, steps 1-7: of 139 CSE merges and LICM
+  hoists, 13 are lost — every one of the 13 is a shape this ADR pins as a
+  now-CORRECT value (the family task #133/#122 used to pin known-wrong);
+  zero are lost anywhere else. Zero Invariant V or S′ fires anywhere in the
+  suite. Summed over the per-step probe matrices (`S/adr6-d1/probes/
+  matrix-step*.txt`, each step measured against the one before), 102 cells
+  flip from a measured wrong answer to the correct one, and zero flip the
+  other way at any step. A single base-vs-final diff counts fewer (82–96,
+  depending on the base file), because later steps added probes (B1, P1,
+  Y1, the inline-code probes, …) that have no base cell.
+- The L5 attribution ADR-0005 D2's own NOTE left UNVERIFIED is now settled:
+  C++'s L5 failure is the C++ BACKEND's own lambda lowering (task #140) —
+  MEASURED present even with NO optimizer pass running at all (`bump =
+  [=]() { int32_t t0 = {}; t0 = x + 1; return; };`, a capture BY COPY where
+  BasicLang's semantics need capture by reference) — not a kill-vocabulary
+  or LICM defect this ADR could ever have closed. D2's L5 contract
+  therefore applies to JavaScript, per that NOTE's own contingency:
+  JavaScript now prints `12` under `--optimize` and in a Release
+  `.blproj` build, closed by this ADR's interim closure rule.
+- This ADR's own Revisit trigger is MET, not closed here. A property used
+  by its BARE name inside its own class (`P = 10` lowers to a plain
+  `IRAssignment` that happens to run a Setter; `t = Tick` lowers to a plain
+  `IRVariable` read that happens to run a Getter) runs user code behind a
+  CLASSIFIED kind — `IRAssignment`/`IRVariable`, not `IRFieldStore`/
+  `IRFieldAccess` — and V stays quiet while JavaScript and MSIL print a
+  stale value. The `Me.`-qualified form of the SAME property (P1/P3,
+  above) IS correct, because IRBuilder lowers that form to `IRFieldStore`/
+  `IRFieldAccess`, which ARE classified as calls. The same is true of a
+  user-defined `Operator`/`CType` applied to class operands. Closing
+  either needs a declaration the IR node does not carry (which bare name
+  is a property; which operand types overload an operator) — an open
+  question for the architect, not a per-kind answer this vocabulary can
+  give. Escalated as task #147 for a new ruling; NOT fixed here, per this
+  ADR's own Contract (D1 fixes the CLASSIFIED-kind gaps, not this one).
+- Separate defects found and tracked while measuring the above, each
+  UNRELATED to the kill vocabulary and left exactly as found: task #139
+  (the C# backend drops a STATEMENT-level `MyBase` call entirely — B1,
+  B1L; B1r's `Dim r = MyBase.Bump()` form is unaffected since it is not a
+  bare statement); task #140 (C++'s lambda capture-by-copy, above); task
+  #141 (C++ cannot build a BasicLang `Property` at all — P1's "no member
+  named 'P' in 'Box'"; P3's "cannot assign to non-static data member
+  within const member function"); task #142 (MSIL RUN-FAILs a virtual
+  `MyBase` call to an INHERITED method — B2 — with
+  `MissingMethodException`, unrelated to the `ByRef` argument B2 exists to
+  test); task #143 (C++ does not lower a `Select Case` `When` guard's
+  pattern/tuple shape under the aggressive pipeline — W1L's `t5`
+  undeclared-identifier error); task #144 (MSIL has no IL lowering for a
+  `When` guard node that is itself an `IRCall` — the same W1L shape); task
+  #145 (neither MSIL nor JavaScript fully lowers a closure/iterator shape
+  outside C#: MSIL has no lowering for the delegate type a `Sub()` lambda
+  gets typed as — `Action` undefined, A1/A1o/A1p/L5 — nor for
+  `IEnumerable` — Y1's `Iterator Function`; JavaScript's own `Iterator`/
+  `Yield` lowering rejects Y1's shape with a strict-mode `SyntaxError`);
+  task #146, per the orchestrator's own label — `CopyPropagationPass`
+  keeps its OWN kill rules and is not a consumer of `NamesWrittenBy` at
+  all: a copy fact for a field survives a call that writes the field,
+  MEASURED wrong on all four backends including C#, out of this ADR's
+  scope.
+- `IRVerifier.CheckInvariantV`'s "reachable" is implemented as EVERY
+  instruction of every block a function's `Blocks` collection holds — a
+  SUPERSET of what a pass can actually reach at runtime (it does not
+  exclude a block no predecessor ever branches to), matching how
+  `CheckInvariantSPrime` already treats "reachable" for the same reason:
+  a pass does not skip an unreachable block either, so neither does the
+  verifier.
+- MUTATION-TESTED: every arm this note's first bullet lists, the ByRef
+  aliasing rule and its converse, the closure rule's parameter half, the
+  Universal short-circuit in CSE/LICM/the verifier, `CheckInvariantV`
+  itself, and the CSE self-exemption — 22 mutants, each removed singly,
+  rebuilt, and run against the fast unit-level `KillVocabulary*`/`Cse*`/
+  `Licm*`/`CallVisibility*`/`IRVerifier*` fixtures; ALL 22 were KILLED, 0
+  survived.
 
 ## D2: Should S′ cover a value used in a loop that does not contain its definition?
 

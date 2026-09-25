@@ -2921,6 +2921,7 @@ namespace BasicLang.Compiler
                     {
                         block.Statements.Add(statement);
                     }
+                    ExpectEndOfStatement(endToken);
                 }
                 catch (ParseException ex)
                 {
@@ -3158,6 +3159,7 @@ namespace BasicLang.Compiler
                     {
                         block.Statements.Add(statement);
                     }
+                    ExpectEndOfStatement(endTokens);
                 }
                 catch (ParseException ex)
                 {
@@ -4649,6 +4651,7 @@ namespace BasicLang.Compiler
                         {
                             lambda.StatementBody.Statements.Add(stmt);
                         }
+                        ExpectEndOfStatement(endToken);
                     }
                     catch (ParseException ex)
                     {
@@ -5088,6 +5091,31 @@ namespace BasicLang.Compiler
             {
                 Advance();
             }
+        }
+
+        /// <summary>
+        /// VB's BC30205, "End of statement expected": after a statement in a block, the line must
+        /// end — a newline, end of file, one of the block's own terminators, or a <c>:</c>
+        /// separator (consumed here, so the next statement on the line parses normally).
+        ///
+        /// <para>⛔ The block loops used to go straight on to the next statement, so anything left
+        /// on the line after a complete statement was parsed as ANOTHER statement and a bare
+        /// expression there was silently dropped. MEASURED on master e7df955, every one compiling
+        /// clean on every backend: <c>Dim x As Integer = 1 y</c> (x = 1), <c>y = 1 2</c>,
+        /// <c>Console.WriteLine(y) 7</c>, <c>If y &gt; 1 Then y = 2 y</c>, <c>y += 1 y</c>. It
+        /// is also what hid <c>1E40</c> lexing as <c>1</c> then <c>E40</c> (x = 1).</para>
+        /// </summary>
+        private void ExpectEndOfStatement(params TokenType[] endTokens)
+        {
+            if (IsAtEnd() || Check(TokenType.Newline)) return;
+            if (Check(TokenType.Colon)) { Advance(); return; }
+            // A statement whose parser already consumed the line end (block statements do).
+            if (_current > 0 && Previous().Type == TokenType.Newline) return;
+            if (endTokens.Any(t => Check(t))) return;
+
+            throw new ParseException(
+                $"End of statement expected, found '{Peek().Lexeme}'", Peek(),
+                "Each statement must end at the end of its line (or at a ':' separator).");
         }
 
         private void ConsumeNewlines()

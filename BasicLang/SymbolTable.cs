@@ -411,6 +411,31 @@ public class TypeInfo
         // Access control
         public AccessModifier Access { get; set; }
 
+        /// <summary>
+        /// For a <see cref="SymbolKind.Property"/> declared in BasicLang source: reading or
+        /// writing it may run user code (<c>PropertyNode.IsAccessorBacked</c> — a Get/Set block,
+        /// or Overridable/Overrides). False for every other symbol, a plain auto-property and a
+        /// built-in or .NET property included.
+        ///
+        /// <para>⭐ ADR-0007: <c>IRBuilder</c> lowers a bare name bound to such a property to the
+        /// node its qualified form produces (<c>IRFieldStore</c>/<c>IRFieldAccess</c>, both calls
+        /// to the kill vocabulary), never to an <c>IRAssignment</c>/<c>IRVariable</c>. Recorded
+        /// on the symbol because the analyzer's binding is all the IR builder has at the use,
+        /// whatever the declaration order and whichever file declares the class.</para>
+        /// </summary>
+        public bool IsAccessorBacked { get; set; }
+
+        /// <summary>
+        /// For a class <see cref="SymbolKind.Property"/>: declared <c>Shared</c>. False for every
+        /// other symbol.
+        ///
+        /// <para>Read by <c>IRBuilder</c>'s bare-name lowering (ADR-0007): the qualified form's
+        /// receiver is <c>Me</c> for an instance property but the DECLARING CLASS for a Shared one
+        /// (<c>Box.P</c>) — <c>this.P</c> on a static member is CS0176 on C#, and on JavaScript
+        /// reads a property of the INSTANCE where the static lives on the class.</para>
+        /// </summary>
+        public bool IsShared { get; set; }
+
         // For extern declarations
         public bool IsExtern { get; set; }
         public Dictionary<string, string> ExternImplementations { get; set; }

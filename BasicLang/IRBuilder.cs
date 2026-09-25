@@ -297,6 +297,73 @@ namespace BasicLang.Compiler.IR
             return false;
         }
 
+        /// <summary>An accessor-backed property a bare name denotes: its declared spelling, the
+        /// class that declares it, and whether it is Shared. See <see cref="AccessorMemberOf"/>.</summary>
+        private readonly record struct BareAccessorMember(string MemberName, TypeInfo DeclaringType, bool IsShared);
+
+        /// <summary>
+        /// ⭐ ADR-0007 (bare-name property lowering fidelity). The ACCESSOR-BACKED property of the
+        /// class being built, or of one of its bases, that the ANALYZER bound the bare name
+        /// <paramref name="node"/> to — or null for anything else: a local or parameter (lexical
+        /// resolution finds those first, so they shadow the member), a plain field, a plain
+        /// auto-property, a module variable, a built-in or .NET property, any name outside a class.
+        ///
+        /// <para>⛔ WHY. Inside its own class a property can be used by its bare name: <c>P = 10</c>
+        /// runs the Set accessor and <c>t = Tick</c> the Get. Both used to lower to a plain
+        /// <see cref="IRAssignment"/> / <see cref="IRVariable"/>, so the IR said "variable P is
+        /// written" where the program runs user code. The kill vocabulary saw no call, CSE kept
+        /// <c>K + q</c> alive across an accessor that writes <c>K</c>, and — MEASURED —
+        /// JavaScript and MSIL printed <c>3,3</c> for <c>12,3</c> (P4) and <c>3,3,11</c> for
+        /// <c>13,3,11</c> (P5), at every entry point; C# was right only because it re-emits the
+        /// text. Each backend already ran the accessor, by re-resolving the bare name privately.
+        /// The fact is now stated ONCE, here, where the analyzer's binding exists: the bare name
+        /// lowers to EXACTLY the node its qualified form produces — <c>IRFieldStore(Me, P)</c> /
+        /// <c>IRFieldAccess(Me, Tick)</c>, or <c>(Box, P)</c> for a Shared property — which the
+        /// kill vocabulary already classifies as calls (ADR-0006 D1 step 6c), so every consumer
+        /// (CSE, LICM, the verifier, any future pass) is corrected at once. The verifier's
+        /// Invariant F (<see cref="Optimization.IRVerifier.CheckInvariantF"/>) catches a bare
+        /// property that reaches the IR as a variable again.</para>
+        ///
+        /// <para>⚠ Scoped by ACCESSOR-BACKED (<see cref="Symbol.IsAccessorBacked"/>), not by
+        /// "undeclared": a plain field or plain auto-property runs no user code and lowers as it
+        /// always did — ADR-0007 rejected C and A-wide for over-killing exactly those.</para>
+        /// </summary>
+        private BareAccessorMember? AccessorMemberOf(IdentifierExpressionNode node)
+        {
+            if (string.IsNullOrEmpty(_currentClassName) || node == null || node.IsForeignQualified) return null;
+
+            var symbol = _semanticAnalyzer?.GetNodeSymbol(node);
+            if (symbol == null || symbol.Kind != SymbolKind.Property || !symbol.IsAccessorBacked) return null;
+
+            // A member of the class being built or of a base (the walk IsCurrentClassProcedure
+            // makes), which also names the DECLARING class — a Shared property's receiver. The
+            // nearest member of that name must be the property itself: anything else there is
+            // what the name denotes, and the analyzer and the class disagree.
+            var guard = 0;
+            for (var type = _semanticAnalyzer.LookupType(_currentClassName); type != null && guard++ < 64;)
+            {
+                if (type.Members != null && type.Members.TryGetValue(node.Name, out var member) && member != null)
+                    return member.Kind == SymbolKind.Property
+                        ? new BareAccessorMember(member.Name ?? node.Name, type, symbol.IsShared)
+                        : null;
+
+                var baseType = type.BaseType;
+                type = baseType == null ? null : (_semanticAnalyzer.LookupType(baseType.Name) ?? baseType);
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// The receiver the QUALIFIED form of <paramref name="member"/> evaluates to — the same
+        /// <see cref="GetOrCreateVariable"/> call visiting its receiver identifier makes:
+        /// <c>Me</c> (typed as the class being built) for an instance property, the declaring
+        /// class's name for a Shared one (<c>Box.P</c>).
+        /// </summary>
+        private IRValue AccessorMemberReceiver(BareAccessorMember member) =>
+            member.IsShared
+                ? GetOrCreateVariable(member.DeclaringType.Name, member.DeclaringType)
+                : GetOrCreateVariable("Me", _semanticAnalyzer.LookupType(_currentClassName));
+
         /// <summary>
         /// The global that a resolved module member reference binds to: the declared one when
         /// its declaration has been visited, else a forward reference carrying the same IR name
@@ -4277,6 +4344,15 @@ namespace BasicLang.Compiler.IR
                 var foreignTarget = new IRVariable(idExpr.Name, new TypeInfo(idExpr.Name, TypeKind.Foreign));
                 EmitInstruction(new IRAssignment(foreignTarget, value));
             }
+            else if (node.Target is IdentifierExpressionNode accessorTarget
+                     && AccessorMemberOf(accessorTarget) is { } accessor)
+            {
+                // ⭐ ADR-0007: a bare accessor-backed property WRITE runs its Set accessor — the
+                // IRFieldStore `Me.P = v` / `Box.P = v` produces (the member arm below), never an
+                // IRAssignment, and never a rename of the value to `P` either (a renamed value is
+                // a variable write to every consumer). See AccessorMemberOf.
+                EmitInstruction(new IRFieldStore(AccessorMemberReceiver(accessor), accessor.MemberName, value));
+            }
             else if (node.Target is IdentifierExpressionNode idExpr2)
             {
                 // Check if this identifier is an imported symbol from another module
@@ -4881,6 +4957,18 @@ namespace BasicLang.Compiler.IR
             {
                 _expressionResult = GlobalReference(moduleMember.Name, moduleMember.OwningModule,
                     _semanticAnalyzer.GetNodeType(node));
+                return;
+            }
+
+            // ⭐ ADR-0007: a bare accessor-backed property READ runs its Get accessor — the node
+            // `Me.Tick` / `Box.Tick` produces (Visit(MemberAccessExpressionNode)), never a
+            // variable read. See AccessorMemberOf.
+            if (AccessorMemberOf(node) is { } accessor)
+            {
+                var read = new IRFieldAccess(_currentFunction.GetNextTempName(),
+                    AccessorMemberReceiver(accessor), accessor.MemberName, _semanticAnalyzer.GetNodeType(node));
+                EmitInstruction(read);
+                _expressionResult = read;
                 return;
             }
 

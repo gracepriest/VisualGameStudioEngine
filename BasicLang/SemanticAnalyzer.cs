@@ -570,7 +570,12 @@ namespace BasicLang.Compiler.SemanticAnalysis
                         classType.Members[prop.Name] = new Symbol(prop.Name, SymbolKind.Property,
                             ResolveSiblingSignatureType(prop.PropertyType) ?? _typeManager.ObjectType, 0, 0)
                         {
-                            Access = prop.Access
+                            Access = prop.Access,
+                            // ADR-0007 — the same two facts Visit(PropertyNode) records, so a
+                            // bare use that binds through THIS signature (a class declared in a
+                            // sibling file, or below its use) lowers the same way.
+                            IsAccessorBacked = prop.IsAccessorBacked,
+                            IsShared = prop.IsStatic
                         };
                         break;
                     }
@@ -6717,6 +6722,9 @@ namespace BasicLang.Compiler.SemanticAnalysis
             // Create a symbol for the property
             var symbol = new Symbol(node.Name, SymbolKind.Property, propertyType, node.Line, node.Column);
             symbol.Access = node.Access;
+            // ADR-0007: what IRBuilder's bare-name lowering reads (see Symbol.IsAccessorBacked).
+            symbol.IsAccessorBacked = node.IsAccessorBacked;
+            symbol.IsShared = node.IsStatic;
 
             // Try to define in current scope
             if (!_currentScope.Define(symbol))

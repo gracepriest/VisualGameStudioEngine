@@ -91,11 +91,12 @@ public class JsExecutionTierRosterTests
         // CseDestinationInvalidationExecutionTests / DestinationInvalidation_D4_ByRefExecutionTests
         // are four-backend fixtures (FourBackends.RunsOnEveryBackend[Aggressive]); their JS legs
         // run under JavaScriptExecutionTests.RunJs / FourBackends.RunAggressiveJs like any other
-        // row here. CseDestinationKnownGapsTask133Tests (task #133's known-wrong pins) is NOT
-        // caught by the widened name match below — it neither starts with "JavaScript"/"Js" nor
-        // ends with "ExecutionTests" — but its A1/A6 pins DO spawn Node
-        // (FourBackends.RunAggressiveJs), so it belongs here for the same reason
-        // BooleanOperatorExecutionTests/MemberCasingExecutionTests do (see their own note above).
+        // row here. CseDestinationKnownGapsTask133Tests (six of its eight pins are now CORRECT
+        // under ADR-0006 D1; A1's C# leg alone stays known-wrong, task #136) is NOT caught by the
+        // widened name match below — it neither starts with "JavaScript"/"Js" nor ends with
+        // "ExecutionTests" — but its A1/A6 legs DO spawn Node (FourBackends.RunAggressiveJs), so
+        // it belongs here for the same reason BooleanOperatorExecutionTests/MemberCasingExecutionTests
+        // do (see their own note above).
         typeof(CseDestinationInvalidationExecutionTests),
         typeof(DestinationInvalidation_D4_ByRefExecutionTests),
         typeof(CseDestinationKnownGapsTask133Tests),
@@ -111,8 +112,10 @@ public class JsExecutionTierRosterTests
         typeof(LicmKillVocabularyExecutionTests),
         // LicmKillVocabularyKnownGapsTask122Tests is NOT caught by the widened name match below —
         // it neither starts with "JavaScript"/"Js" nor ends with "ExecutionTests" — same reason
-        // CseDestinationKnownGapsTask133Tests needed a manual entry above. Its JavaScript pin
-        // (task #122) DOES spawn Node (FourBackends.RunAggressiveJs), so it belongs here.
+        // CseDestinationKnownGapsTask133Tests needed a manual entry above. Its JavaScript leg is
+        // now CORRECT under ADR-0006 D1's interim closure rule (promoted from task #122); C++
+        // stays known-wrong for an unrelated backend defect (task #140). Either way it DOES spawn
+        // Node (FourBackends.RunAggressiveJs), so it belongs here.
         typeof(LicmKillVocabularyKnownGapsTask122Tests),
 
         // ADR-0005 D1 — `\` with a floating operand. Named "...ExecutionTests", so the widened
@@ -136,6 +139,27 @@ public class JsExecutionTierRosterTests
         // in-process IR/front-end fixtures, spawn nothing, carry no [Category("Integration")].
         typeof(CallVisibilityQ3ExecutionTests),
         typeof(CallVisibilityQ3nExecutionTests),
+
+        // ADR-0006 D1 — the total kill vocabulary's EXTENSION arms (IRBaseMethodCall as a call;
+        // IRFieldAccess/IRFieldStore as calls; the ByRef aliasing converse; the closure rule's
+        // by-value-parameter half; IRInlineCode Universal; IRYield as a call). Named
+        // "...ExecutionTests", so the widened match below WOULD catch both on its own; listed
+        // explicitly anyway, matching every row above. KillVocabularyExtensionsExecutionTests'
+        // JS legs run through FourBackends.RunsOnEveryBackend[Aggressive] / JavaScriptExecutionTests.
+        // RunJs / FourBackends.RunAggressiveJs (B1r/B1/B2's JS-refusal check/A1o/A1p/P1/P3/
+        // IN_javascript); KillVocabularyExtensionsAggressiveLoopExecutionTests' (B1L/W1L) JS legs
+        // run through FourBackends.RunAggressiveJs.
+        typeof(KillVocabularyExtensionsExecutionTests),
+        typeof(KillVocabularyExtensionsAggressiveLoopExecutionTests),
+
+        // ADR-0007 — bare-name property lowering fidelity. Named "...ExecutionTests", so the
+        // widened match below WOULD catch it on its own; listed explicitly anyway, matching every
+        // row above. BarePropertyLoweringExecutionTests' JS legs run through
+        // JavaScriptOptimizedExecutionTests.RunOptimized (the standard pipeline — deliberately NOT
+        // JavaScriptExecutionTests.RunJs, which runs no optimizer at all and would silently
+        // certify a CopyPropagation/CSE regression, see that fixture's own doc comment) and
+        // FourBackends.RunAggressiveJs (the aggressive pipeline); both spawn Node.
+        typeof(BarePropertyLoweringExecutionTests),
     };
 
     /// <summary>
@@ -183,7 +207,7 @@ public class JsExecutionTierRosterTests
 
     [Test]
     public void RosterIsPinned()
-        => Assert.That(ExecutionTier, Has.Length.EqualTo(43),
+        => Assert.That(ExecutionTier, Has.Length.EqualTo(46),
             "The execution-tier roster changed. That is fine — update the number — but it must " +
             "be a deliberate edit, not a silent shrink.");
 

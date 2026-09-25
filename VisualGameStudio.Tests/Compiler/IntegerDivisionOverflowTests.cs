@@ -27,7 +27,7 @@ public class IntegerDivisionOverflowTests
     public void CppHelperOverflowChain_MatchesTheOverflowExceptionTable()
     {
         Assert.That(CppExceptionTypes.TryGetInheritanceChain("OverflowException", out var chain), Is.True);
-        Assert.That(CppNetExceptionRuntime.Source, Does.Contain($"\"{chain}\""));
+        Assert.That(CppIntegerDivisionRuntime.Source, Does.Contain($"\"{chain}\""));
     }
 
     [Test]
@@ -74,8 +74,9 @@ public class IntegerDivisionOverflowTests
             "Sub P(a As Integer, b As Integer)\n    Console.WriteLine(a \\ b)\n    Console.WriteLine(a Mod b)\nEnd Sub\n" +
             "Sub Main()\n    P(7, 2)\nEnd Sub\n");
         Assert.That(js, Does.Contain("if (b === -1 && a === -2147483648) throw new OverflowException("));
-        Assert.That(js, Does.Contain("return Math.trunc(a / b) | 0;"));
-        Assert.That(js, Does.Contain("return (a % b) | 0;"));
+        // `+ 0` turns a JavaScript negative zero into 0 (master's spelling, kept at the merge).
+        Assert.That(js, Does.Contain("return Math.trunc(a / b) + 0;"));
+        Assert.That(js, Does.Contain("return a % b + 0;"));
         Assert.That(js, Does.Contain("class OverflowException extends ArithmeticException"),
             "the helper throws a class the program never names");
     }

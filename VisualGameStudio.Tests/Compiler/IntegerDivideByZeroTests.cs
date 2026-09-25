@@ -17,9 +17,10 @@ namespace VisualGameStudio.Tests.Compiler;
 ///   Both        a `When n \ z > 1` guard took its arm on JavaScript (Infinity > 1): guards skip
 ///               the semantic analyzer, so their operator trees carry no type.
 /// </code>
-/// <para>Fix: C++ routes integral <c>\</c>/<c>Mod</c> through <c>BasicLang::CheckedDiv</c> /
-/// <c>CheckedMod</c>, which throw the typed <c>NetException</c> the Catch ladder matches;
-/// JavaScript through <c>__blIntDiv</c> / <c>__blIntMod</c>, which throw its real
+/// <para>Fix (master's, kept at the merge — see IntegerDivisionByZeroTests): C++ routes integral
+/// <c>\</c>/<c>Mod</c> through <c>BasicLang::IntDiv</c> / <c>IntMod</c>
+/// (<c>CppIntegerDivisionRuntime</c>), which throw the typed <c>NetException</c> the Catch ladder
+/// matches; JavaScript through <c>__blIntDiv</c> / <c>__blMod</c>, which throw its real
 /// <c>DivideByZeroException</c> class. Floating division is untouched (Infinity, as in .NET).</para>
 /// </summary>
 [TestFixture]
@@ -30,8 +31,8 @@ public class IntegerDivideByZeroTests
     public void CppHelperChain_MatchesTheDivideByZeroExceptionTable()
     {
         Assert.That(CppExceptionTypes.TryGetInheritanceChain("DivideByZeroException", out var chain), Is.True);
-        Assert.That(CppNetExceptionRuntime.Source, Does.Contain($"\"{chain}\""),
-            "CheckedDiv/CheckedMod would throw an exception no `Catch … As DivideByZeroException` matches");
+        Assert.That(CppIntegerDivisionRuntime.Source, Does.Contain($"\"{chain}\""),
+            "IntDiv/IntMod would throw an exception no `Catch … As DivideByZeroException` matches");
     }
 
     private const string DivSource =
@@ -51,26 +52,26 @@ public class IntegerDivideByZeroTests
     public void Cpp_IntegralDivisionAndModulo_GoThroughTheCheckedHelpers()
     {
         var cpp = CppGeneratedCode.WithoutBclRuntime(BclE2E.CompileToCppOptimized(DivSource));
-        Assert.That(cpp, Does.Contain("BasicLang::CheckedDiv(n, z)"));
-        Assert.That(cpp, Does.Contain("BasicLang::CheckedMod(n, z)"));
+        Assert.That(cpp, Does.Contain("BasicLang::IntDiv(n, z)"));
+        Assert.That(cpp, Does.Contain("BasicLang::IntMod(n, z)"));
     }
 
     [Test]
     public void Cpp_UntypedWhenGuardDivision_GoesThroughTheCheckedHelper()
         => Assert.That(CppGeneratedCode.WithoutBclRuntime(BclE2E.CompileToCppOptimized(GuardSource)),
-            Does.Contain("BasicLang::CheckedDiv("));
+            Does.Contain("BasicLang::IntDiv("));
 
     [Test]
     public void Cpp_FloatingDivision_IsLeftAlone()
         => Assert.That(CppGeneratedCode.WithoutBclRuntime(BclE2E.CompileToCppOptimized(DoubleSource)),
-            Does.Not.Contain("BasicLang::CheckedDiv("));
+            Does.Not.Contain("BasicLang::IntDiv("));
 
     [Test]
     public void Js_IntegralDivisionAndModulo_GoThroughTheCheckedHelpers()
     {
         var js = JsTestSupport.CompileOptimized(DivSource);
         Assert.That(js, Does.Contain("__blIntDiv(n, z)"));
-        Assert.That(js, Does.Contain("__blIntMod(n, z)"));
+        Assert.That(js, Does.Contain("__blMod(n, z)"));
         Assert.That(js, Does.Contain("function __blIntDiv("), "helper call sites with no definition");
         Assert.That(js, Does.Contain("class DivideByZeroException extends ArithmeticException"),
             "the helper throws a class the program never names, so the prelude must supply it");

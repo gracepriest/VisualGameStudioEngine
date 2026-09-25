@@ -414,6 +414,10 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             SpliceRuntimeSource(CppBclRuntime.BclBody);
             SpliceRuntimeSource(CppDecimalRuntime.DecimalBody);
 
+            // Checked integral `\` / `Mod` (throws NetException, so AFTER it). UNCONDITIONAL
+            // in both modes (split-mode counterpart: EmitRuntimeHeader in CppCodeGenerator.Split.cs).
+            SpliceRuntimeSource(CppIntegerDivisionRuntime.Source);
+
             // D-P7 NetRef (P2a-2 flip): UNCONDITIONAL in both modes — ManagedOwned
             // declaration positions lower to BasicLang::NetRef even with an empty surface,
             // so the type must always exist. Include-guarded and self-including; shared
@@ -2604,10 +2608,9 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 // so a future analyzer relaxation degrades to a C++ compile error.
             }
 
-            var checkedHelper = CheckedDivisionHelper(binaryOp);
-            if (checkedHelper != null)
+            if (CheckedIntegerDivisionHelper(binaryOp) is { } helper)
             {
-                WriteLine($"{result} = {checkedHelper}({left}, {right});");
+                WriteLine($"{result} = {helper}({left}, {right});");
                 return;
             }
 
@@ -2615,35 +2618,20 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         }
 
         /// <summary>
-        /// The runtime helper an INTEGRAL division or modulo must go through, or null for any other
-        /// operation. A bare C++ <c>n / 0</c> or <c>n % 0</c> on integers is undefined behaviour —
-        /// MEASURED on x86-64/g++: the process died with SIGFPE (exit 136) before the enclosing
-        /// <c>Try</c> could run, where .NET throws a catchable DivideByZeroException. The helpers
-        /// (<c>CppNetExceptionRuntime</c>) throw the typed NetException the Catch ladder matches.
-        /// Keyed on the RESULT type: any floating operand makes the result floating, and floating
-        /// division by zero is IEEE Infinity/NaN, not a throw.
-        ///
-        /// <para>⚠ An UNTYPED op is the <c>When</c>-guard case: guards are not run through the
-        /// semantic analyzer, so their operator trees carry no type. There the operands decide,
-        /// and a <c>\</c> is checked regardless — the language admits it on integers only.</para>
+        /// The checked runtime helper (<see cref="CppIntegerDivisionRuntime"/>) an integral
+        /// <c>\</c> or <c>Mod</c> lowers to, or null. ⛔ Never the bare operator: C++ integer
+        /// division by zero is undefined behaviour — on x86 a SIGFPE that no <c>Catch</c> can
+        /// see — where .NET throws <c>DivideByZeroException</c>. <c>\</c> is always integral here
+        /// (IRBuilder converts a floating operand, ADR-0005 D1); a floating <c>Mod</c> is not
+        /// division-by-zero-trapping (.NET gives NaN) and keeps the operator.
         /// </summary>
-        private static string CheckedDivisionHelper(IRBinaryOp op)
+        private static string CheckedIntegerDivisionHelper(IRBinaryOp op) => op.Operation switch
         {
-            if (!IsIntegralDivision(op)) return null;
-            return op.Operation switch
-            {
-                BinaryOpKind.IntDiv or BinaryOpKind.Div => "BasicLang::CheckedDiv",
-                BinaryOpKind.Mod => "BasicLang::CheckedMod",
-                _ => null,
-            };
-        }
-
-        private static bool IsIntegralDivision(IRBinaryOp op)
-        {
-            if (op.Type != null) return op.Type.IsIntegral();
-            if (op.Operation == BinaryOpKind.IntDiv) return true;
-            return op.Left?.Type?.IsIntegral() == true && op.Right?.Type?.IsIntegral() == true;
-        }
+            BinaryOpKind.IntDiv => "BasicLang::IntDiv",
+            BinaryOpKind.Mod when op.Left?.Type?.IsIntegral() == true && op.Right?.Type?.IsIntegral() == true
+                => "BasicLang::IntMod",
+            _ => null,
+        };
 
         public override void Visit(IRUnaryOp unaryOp)
         {
@@ -4053,10 +4041,9 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             {
                 case IRConstant c:
                     return EmitConstant(c);
+                case IRBinaryOp b when CheckedIntegerDivisionHelper(b) is { } helper:
+                    return $"{helper}({RenderInline(b.Left)}, {RenderInline(b.Right)})";
                 case IRBinaryOp b:
-                    var checkedHelper = CheckedDivisionHelper(b);
-                    if (checkedHelper != null)
-                        return $"{checkedHelper}({RenderInline(b.Left)}, {RenderInline(b.Right)})";
                     return $"({RenderInline(b.Left)} {MapBinaryOperator(b.Operation)} {RenderInline(b.Right)})";
                 case IRCompare cmp:
                     return $"({RenderInline(cmp.Left)} {MapCompareOperator(cmp.Comparison)} {RenderInline(cmp.Right)})";
@@ -5673,7 +5660,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
 
             // ⛔ C++ HAS NO NEGATIVE LITERALS: `-2147483648` is `-(2147483648)`, and 2147483648 does
             // not fit int, so the expression is typed `long` — the minimum Integer silently became
-            // a 64-bit value. MEASURED: `BasicLang::CheckedDiv(-2147483648, -1)` saw an int64
+            // a 64-bit value. MEASURED: `BasicLang::IntDiv(-2147483648, -1)` saw an int64
             // dividend, found no overflow, and wrapped 2147483648 back into the Integer, where .NET
             // throws OverflowException. `9223372036854775808LL` fits NO signed type (a hard error).
             // Each minimum is spelled as (min + 1) - 1, which keeps its own type.
