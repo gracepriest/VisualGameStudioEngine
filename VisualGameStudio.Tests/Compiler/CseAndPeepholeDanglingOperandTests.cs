@@ -389,9 +389,9 @@ public class CseAndPeepholeDanglingOperandTests
     /// ⛔ The NOT-NOT arm. Listed separately from double negation because the two arms are
     /// independent code: a fixture covering only <c>Neg</c> leaves <c>Not</c> open.
     ///
-    /// <para>⚠ JavaScript prints <c>B=true</c> where the other three print <c>B=True</c>. A
-    /// PRE-EXISTING <c>CStr(Boolean)</c> casing difference, reproduced on a control program with
-    /// nothing optimizable in it; pinned per-backend rather than normalised away.</para>
+    /// <para>JavaScript used to print <c>B=true</c> here, a <c>CStr(Boolean)</c> casing difference
+    /// unrelated to the optimizer. Master's #102 made JavaScript spell a Boolean as .NET does, so
+    /// all four backends now print <c>B=True</c>.</para>
     /// </summary>
     [Test]
     public void ThePeepholeNotNotArm_LeavesNoUndeclaredTemp()
@@ -405,7 +405,7 @@ public class CseAndPeepholeDanglingOperandTests
             Sub Main()
              Run(True)
             End Sub
-            """, "B=True", jsExpected: "B=true");
+            """, "B=True");
 
     /// <summary>
     /// ⛔ CONTROLS: <c>x * 1</c> and <c>x / 1</c> NEVER REACH the peephole pass.

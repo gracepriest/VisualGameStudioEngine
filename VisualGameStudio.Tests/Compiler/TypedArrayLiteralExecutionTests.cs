@@ -255,11 +255,12 @@ public class TypedArrayLiteralExecutionTests
             "the M4 idiom (menuStrip1.Items.AddRange(New ToolStripItem() {mnuFile, sep})) must compile under csc");
         TestContext.Out.WriteLine("[3] csc accepts the generated C#");
 
-        // Steps 1-3 run everywhere. Building and running the app needs the WindowsDesktop MSBuild
-        // SDK, which does not exist off Windows (MSB4019) — skip there, as the sibling
-        // FormComponentAcceptanceTests.WinForms_ATimerFromTheTray_TicksInARealWindow does.
+        // The build + run below targets net8.0-windows with UseWindowsForms, which needs
+        // Microsoft.NET.Sdk.WindowsDesktop — only the Windows .NET SDK ships it (MSB4019
+        // elsewhere). Steps [1]-[3] above already ran; same skip as BuildServicePipelineTests'
+        // and TemplateBuildSweepTests' WinForms rows.
         if (!OperatingSystem.IsWindows())
-            Assert.Ignore("steps 1-3 passed; building and running a WinForms app needs Windows");
+            Assert.Ignore("building and running the WinForms app needs the Windows Desktop SDK (Windows only); steps [1]-[3] passed");
 
         var dir = Path.Combine(Path.GetTempPath(), "bl-menu-vsidiom-" + Guid.NewGuid().ToString("N"));
         var app = Path.Combine(dir, "app");
