@@ -4670,6 +4670,10 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     case "insert":
                     case "removeat":
                         return _typeManager.VoidType;
+                    // ⛔ Unlisted, List.Sort was Object, and the C++ backend stored its void
+                    // result in a temp ("void value not ignored as it ought to be").
+                    case "sort" when lowerTypeName == "list":
+                        return _typeManager.VoidType;
                     case "count":
                     case "indexof":
                         return _typeManager.IntegerType;
