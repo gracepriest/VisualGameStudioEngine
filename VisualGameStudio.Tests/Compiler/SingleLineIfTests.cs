@@ -110,7 +110,7 @@ public class SingleLineIfTests
 
     [Test]
     public void AStrayToken_AfterASingleLineIf_IsStillRefused()
-        => Assert.That(ParseErrors("If x Then a() b()"), Does.Contain("Expected the end of the statement, but found 'b'"));
+        => Assert.That(ParseErrors("If x Then a() b()"), Does.Contain("End of statement expected, found 'b'"));
 }
 
 [TestFixture]

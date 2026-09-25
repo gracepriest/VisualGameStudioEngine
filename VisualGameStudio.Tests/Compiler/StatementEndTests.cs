@@ -28,14 +28,14 @@ public class StatementEndTests
     public void ATrailingToken_AfterAStatement_IsRefused(string body, string culprit)
     {
         var errors = ParseErrors(InMain(body));
-        Assert.That(errors, Does.Contain("Expected the end of the statement"));
+        Assert.That(errors, Does.Contain("End of statement expected"));
         Assert.That(errors, Does.Contain(culprit));
     }
 
     [Test]
     public void ATrailingToken_AfterAModuleMember_IsRefusedTheSameWay()
         => Assert.That(ParseErrors("Module M\n    Dim G As Integer = 5 E3\nEnd Module"),
-            Does.Contain("Expected the end of the statement, but found 'E3'"));
+            Does.Contain("End of statement expected, found 'E3'"));
 
     [TestCase("Dim x As Integer = 1 ' a comment\nConsole.WriteLine(x) ' another")]
     [TestCase("Dim f = Function(a As Integer) a * 2\nConsole.WriteLine(f(4))")]
