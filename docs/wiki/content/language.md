@@ -266,6 +266,7 @@ ReDim scores(n)                      ' older-BASIC form: n + 1 elements
 
 ```vb
 Dim primes = {2, 3, 5, 7, 11}        ' initialised
+Dim none[] As Integer = {}           ' empty: {} takes the type it is stored in
 
 Dim list As New List(Of String)()
 list.Add("x")

@@ -6057,6 +6057,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 // Spec 6.1: a Dim initializer is a Decimal context — a numeric
                 // literal converts from its source text and retypes to Decimal.
                 TryRetypeLiteralToDecimal(node.Initializer, varType);
+                TargetTypeEmptyArrayLiteral(node.Initializer, varType);
                 var initType = GetNodeType(node.Initializer);
 
                 // A `::` foreign VALUE converts to whatever it is declared as — `Dim v As Integer
@@ -6992,11 +6993,34 @@ namespace BasicLang.Compiler.SemanticAnalysis
             try
             {
                 argument.Accept(this);
+                TargetTypeEmptyArrayLiteral(argument, parameterType);
             }
             finally
             {
                 _lambdaTargetType = savedTarget;
             }
+        }
+
+        /// <summary>
+        /// An EMPTY array literal takes its type from where it is used, as in VB: `{}` stored in
+        /// an Integer array is an empty Integer array. ⛔ Visit(CollectionInitializerNode) types a
+        /// literal from its elements, and `{}` has none, so it fell back to Object[] and
+        /// `Dim a() As Integer = {}` was refused ("Cannot assign value of type 'Object[]' to
+        /// variable of type 'Integer[]'"). Called at every target-typed site: a typed Dim, an
+        /// assignment, a call argument and a Return. With no target (`Dim x = {}`) it stays
+        /// Object[], which is also VB's answer.
+        /// </summary>
+        private void TargetTypeEmptyArrayLiteral(ExpressionNode value, TypeInfo target)
+        {
+            if (value is not CollectionInitializerNode { Elements.Count: 0 } literal) return;
+            if (target?.Kind != TypeKind.Array || target.ElementType == null) return;
+
+            var arrayType = new TypeInfo(target.Name, TypeKind.Array)
+            {
+                ElementType = target.ElementType,
+                ArrayRank = 1,
+            };
+            SetNodeType(literal, arrayType);
         }
 
         public void Visit(CollectionInitializerNode node)
@@ -8002,6 +8026,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 // Spec 6.1: Return in a Decimal function is a Decimal context —
                 // 'Return 1.5' converts the literal from its source text.
                 TryRetypeLiteralToDecimal(node.Value, expectedReturnType);
+                TargetTypeEmptyArrayLiteral(node.Value, expectedReturnType);
                 var returnType = GetNodeType(node.Value);
 
                 // BC30439 at the return: `Return 300` from a `Function … As Byte` was CS0031 on
@@ -8079,6 +8104,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
             // Decimal contexts — a numeric literal value converts from its
             // source text and retypes ('d = 1.5', 'd += 0.5').
             TryRetypeLiteralToDecimal(node.Value, targetType);
+            TargetTypeEmptyArrayLiteral(node.Value, targetType);
             var valueType = GetNodeType(node.Value);
 
             if (targetType == null || valueType == null)
