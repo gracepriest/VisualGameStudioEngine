@@ -291,6 +291,113 @@ then S′ has outgrown a structural check.
 
 ADR-0005 D2 (use count is dynamic; region is path-based).
 
+## Implementation note (D2)
+
+- **What changed is the USE COUNT only; the region was already path-based.** `IRVerifier.CheckFunction`'s
+  gate, `useSites.Count > 1 || (destination != null && useSites.Count >= 1)`, was a STATIC count —
+  an anonymous value with exactly one static use was never checked, whatever its dynamic behaviour.
+  `InstructionsBetween` (now `DefUsePaths.Region()`) was ALREADY the region the ruling asks for: a
+  use sitting on a cycle that avoids the definition's block already pulled in the full loop body,
+  including the back edge. Evidence the count, not the region, was the gap: at HEAD (pre-D2), a
+  NAMED value with one use in such a loop and a Guard-name write after the use already FIRED (the
+  static rule's "a named destination is itself a reader" clause already caught it — ADR-0005 D2);
+  its exact anonymous twin, same shape, no destination, was QUIET (`S/adr6-d2/hand-before.txt`: (a10)
+  FIRES, (a) QUIET). D2 adds `DefUsePaths.UseRepeats`, computed in the SAME walk `Region()` already
+  needed — one walk now answers both "is this use repeated" and "what lies between it and the
+  definition" — so the loop that makes a use count as repeated is, by construction, the loop
+  `Region()` walks.
+- **The rule reads a CYCLE, not a natural loop — the implemented interpretation, not yet
+  architect-confirmed (task #157).** A definition inside a loop but on a branch the loop CAN skip
+  (`If c Then t = p + q` … a use of `t` after `End If`, still inside the loop) sits on a cycle that
+  avoids its OWN block: one execution of the definition reaches the use this iteration and again
+  next iteration if that iteration skips the arm. So the use counts as repeated. MEASURED:
+  `DynamicUseSPrimeHandBuiltIRTests.D_DefInLoopOnAnAvoidableBranch_UseAtMerge_WriteAfterUse_Fires_PendingTask157`
+  and its `D2_...WriteOnTheOtherArm_...` sibling both FIRE. A natural-loop reading ("the loop
+  lexically contains the definition") would exempt both instead — a real behavioural fork the
+  architect has not ruled on. Filed as task #157, alongside the known gap below.
+- **Measured, per the Obligations:** `S/adr6-d1/probes/L1..L7.bas` identical before and after,
+  zero verifier fires, at all three entry points (CLI, CLI `--optimize`, Release `.blproj` —
+  `S/adr6-d2/probes/matrix-before.txt` vs `matrix-after.txt`). The fast subset fires ZERO new violations —
+  the ASSUMPTION the ruling flagged UNVERIFIED is now measured TRUE (`S/adr6-d2/trace-before.txt` ==
+  `S/adr6-d2/trace-after.txt`: the same three deliberate fixtures both times —
+  `IRVerifierModeResolutionTests`'s own known-S′ probe, `InvariantFWiringTests`'s Invariant F probe,
+  `KillVocabularyVInvariantHandBuiltIRTests`'s Invariant V probe — none of them D2's dynamic count).
+  All five sample-game paths fire zero, before and after (`S/adr6-d2/samples/summary.txt`; three of the
+  five — `SampleGames/SpaceShooter`, `Samples/Pong`, `Samples/SpaceShooter` — do not currently
+  compile on any backend, unrelated to this change; `fires=0` is reported for every row regardless).
+  The verifier DOES run after the aggressive
+  pipeline in the fast subset, per the Contract's own requirement: 86 of the 542 verified modules
+  recorded an aggressive-pipeline compile, 454 a standard one (`S/adr6-d2/trace-after.txt.pipelines`) —
+  confirming a test-host run actually reaches aggressive-pipeline IR, not only standard.
+- **The probes discriminate — this is not a vacuous "nothing ever fires" measurement.** With
+  `LoopInvariantCodeMotionPass`'s ByRef written-set reverted to the pre-fix version (an
+  `IRInstanceMethodCall` ByRef argument no longer counts as a write), L1 and L2 print `seed\n6` for
+  the correct `seed\n12` on C++ `--optimize` and on MSIL (`--optimize` and Release `.blproj`) — and
+  D2 FIRES on exactly those cells, where the pre-D2 verifier stayed silent
+  (`S/adr6-d2/probes/matrix-licmmut-d2.txt`'s `[VERIFY x1]` markers vs `matrix-licmmut-head.txt`'s none).
+  D2 catches a real LICM regression over the same shape an execution-only probe already covers for
+  a different reason — a structural check that would have caught the defect even before it was
+  measured wrong at runtime.
+- ⚠ **CLARIFYING (not a ruling change): the "'≥ 1 use' fires on correct L1" premise under Because is
+  STALE.** It was measured before `6168628`, when LICM wrongly hoisted a value named `t3` in this
+  shape; L1 has been correct since `6168628`. Two different mutants both answer to "the wrong
+  widening" today, and they do NOT agree. The LITERAL "≥ 1 use" mutant (`useSites.Count >= 1`,
+  collapsing the STATIC/DYNAMIC distinction rather than widening what counts as repeated) is QUIET
+  on L1-L7, both under a direct `CheckInvariantSPrime` call and under the aggressive pipeline; it is
+  killed only by the anonymous-single-use-with-a-non-repeating-write shapes ((c3)/(e)/(f)). The
+  ADR's OWN wrong-widening model — "a use in any loop is repeated, and the region is that whole
+  loop, regardless of whether the loop contains the definition" — DOES fire on correct L1: `t3`
+  (`x * 2` hoisted to `for0.body`, `x` written by `b.Bump(x)`'s `IRInstanceMethodCall`), plus
+  `t2`/`t5` on the loop's own induction variable `i`. So the mutant that matches this ADR's prose is
+  the "any loop, whole-loop region" one, not the literal use-count one; both are real, distinct, and
+  both are killed by the suite (see MUTATION-TESTED below).
+- **Known gap, pending the architect — task #157, alongside the cycle-reading question above.** A
+  value shared only DYNAMICALLY (one static use, in a repeating loop) is materialised differently by
+  different backends: C# inlines it at its one syntactic use regardless of replicability, so a
+  hoisted `n * 2` over a `ByRef` parameter or a non-Const global is RE-READ every iteration on C#,
+  while C++/MSIL read the hoisted value once (computed in the preheader). Such an operand sits
+  outside `Guard(v)` (`IRReplicability.IsReplicable` excludes a `ByRef` parameter and a non-Const
+  global outright), so a wrong hoist over it goes unreported. MEASURED, with LICM's call-visible
+  read check ALSO disabled: C++ and MSIL print `seed\n6` for `L4r` (a `ByRef` parameter aliasing the
+  same global L4 hoists over) while this verifier stays quiet
+  (`S/adr6-d2/probes/matrix-L4r-licmcv.txt`). "Option E" (for a value shared only dynamically,
+  `Guard(v)` also takes its NON-replicable operands, so the C#-only re-read becomes visible too;
+  `S/adr6-d2/mutsrc/IRVerifier.E.cs`) was explored but NOT adopted here: whether `Guard(v)` should depend on which BACKEND will read the
+  value is a real ruling question, not an implementation detail this task can decide.
+- `For Each` bodies are not cycles (`ControlFlowGraph`, ADR-0003 D3 — no back edge), so a use inside
+  one is never seen as repeated by D2 either. No pass moves a value into a `For Each` body today
+  (CSE is block-local; LICM hoists only out of natural loops, which a `For Each` is not), so this is
+  a noted boundary, not yet a measured gap.
+- **MUTATION-TESTED** (`VisualGameStudio.Tests/Compiler/DynamicUseSPrimeTests.cs`, task #137): five
+  mutants, applied singly to the working tree, rebuilt, run, and restored by md5
+  (`BasicLang/IRVerifier.cs` — `e3dad903420b0dc657354525ce4425bb` before, between and after every
+  one). **M1** (revert the dynamic gate to the static count alone: `if (!staticallyShared) continue;`)
+  killed by (a)/(a2)/(a3)/(a4)/(a5)/(a7)/(g) as predicted, PLUS (d)/(d2) — two more than the
+  implementer's own contract, since those definitions are likewise anonymous single-static-use
+  values the reverted gate would skip. **M2** (region without the back-edge body:
+  `int end = _use.Index;` unconditionally) killed by (a)/(a4)/(a5)/(g)/(a10)/(d), NOT by (a2) or by
+  the pre-existing `IRVerifierHandBuiltIRTests.DestinationWrittenLaterInALoopBody_ThatReReachesTheUse_Fails`
+  — exactly as predicted: (a2)'s write sits in a separate LATCH block, reached by the forward walk
+  regardless of whether the use's own block is truncated. **M3a** (the literal "≥ 1 use":
+  `useSites.Count >= 1`) killed by (c3)/(e)/(f), plus the pre-existing
+  `AnonymousTemp_OneUse_OperandWrittenInBetween_IsExempt`. **M3b** (the ADR's actual wrong-widening
+  model: any cycle repeats, region is the whole loop) killed by (c)/(c2)/(c3)/(a6), plus — the
+  direct evidence for the CLARIFYING bullet above — the L1-L7 structural check itself and
+  `IRVerifierOutputIdentityTests.EmittedOutput_IsByteIdentical_WithTheVerifierOnAndOff`: a real
+  compile throws under this mutant. A fifth, own mutant dropped the backward walk's "without
+  re-entering the definition's block" boundary inside `DefUsePaths.Between` — killed by
+  (a6)/(c2)/(c3). The brief's own suggested example, dropping `!ReferenceEquals(d, u)` from
+  `bool repeats = !ReferenceEquals(d, u) && backward.Contains(u);`, is an EQUIVALENT MUTANT: the
+  backward walk never adds the definition's block (it stops on it), so when `d == u`,
+  `backward.Contains(u)` is already false and the guard is redundant. (A same-block use AFTER the
+  definition never reaches that line at all: it takes the straight-line early return.) MEASURED: 0
+  of 39 tests (this file plus every `IRVerifier*` fixture) fail under it.
+- **Revisit is NOT triggered.** ("Keeping the verifier quiet requires loop-carried dataflow, i.e.
+  phi reasoning.") Every FIRES shape measured is a structural CFG property — a cycle avoiding the
+  definition's block, and a write reachable within it — and every fire measured across the fast
+  subset and the sample games is zero. No case needed reasoning about a value's actual data-flow-
+  merged identity across iterations to stay quiet.
+
 ## D3: Which rule decides whether a call can write a value's operand?
 
 ### Decision
