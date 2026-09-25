@@ -103,7 +103,7 @@ public class JavaScriptGenericsLinqTests
             "Console.WriteLine(l.All(Function(x As Integer) x > 2))\n" +
             "Console.WriteLine(l.Count())\n" +
             "Console.WriteLine(l.Sum())"),
-            Is.EqualTo("true\nfalse\n3\n6"));
+            Is.EqualTo("True\nFalse\n3\n6"));
 
     [Test]
     public void Linq_SkipTakeDistinct()
