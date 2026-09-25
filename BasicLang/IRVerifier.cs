@@ -83,9 +83,12 @@ namespace BasicLang.Compiler.IR.Optimization
     /// (<see cref="OptimizationPass.IsCallVisible(IRVariable, IRFunction)"/>, the one
     /// call-visibility rule, ADR-0006 D3), exactly as CSE kills on it. Before D3 this arm
     /// checked the destination only, so a merge across a call that writes a class field read
-    /// bare as an OPERAND (Q3: <c>a = K + q : Inc() : l(0) = K + q</c>) was certified. A write
-    /// form missing from the vocabulary is invisible to BOTH; see the gap list on
-    /// <c>NamesWrittenBy</c>.</para>
+    /// bare as an OPERAND (Q3: <c>a = K + q : Inc() : l(0) = K + q</c>) was certified. An
+    /// instruction KIND missing from the vocabulary is caught by Invariant V; a classified kind
+    /// whose answer is too narrow is invisible to BOTH the passes and this check (only execution
+    /// probes see it) — see the note on <c>NamesWrittenBy</c> about what no per-kind answer can
+    /// see. An instruction that may write anything (<see cref="WriteKind.Universal"/>) hits every
+    /// guarded name.</para>
     ///
     /// <para>⚠ <b>"Use count" for a value with a named destination counts the destination as
     /// a reader.</b> A merge re-points a duplicate's consumers at the surviving instruction, and

@@ -378,6 +378,25 @@ namespace BasicLang.Compiler.IR.Optimization
         /// <para>⚠ When you add an IR node kind, add it to an arm here, stating what it writes.
         /// Leaving it off is safe for output but fails Invariant V in every test that builds
         /// it.</para>
+        ///
+        /// <para>⛔ WHAT NO PER-KIND ANSWER CAN SEE — user code behind syntax that is neither a call
+        /// nor a member-access node, so no arm below can classify it. Each MEASURED wrong on
+        /// JavaScript and MSIL (C# right by re-emission; C++ does not build the shapes):
+        /// <list type="bullet">
+        /// <item>a Property used BARE inside its own class — <c>P = 10</c> lowers to an
+        /// <see cref="IRAssignment"/> to <c>P</c> that runs the setter, and <c>t = Tick</c> reads an
+        /// <see cref="IRVariable"/> that runs the getter (<c>a = K + q : P = 10 : l(0) = K + q</c>
+        /// with P's setter writing K printed 3,3 for 12,3). Through <c>Me.</c> the same accessors
+        /// are an IRFieldStore / IRFieldAccess and ARE classified (as calls);</item>
+        /// <item>a user-defined operator or conversion (<c>Operator +</c>, <c>CType</c>) applied to
+        /// class operands — an IRBinaryOp / IRCompare / IRUnaryOp / IRCast that runs user code
+        /// (not measured: JavaScript refuses operator overloading, BL7006).</item>
+        /// </list>
+        /// Closing them needs declarations the IR node does not carry — which member names are
+        /// properties, which operand types overload — an open question for the architect, not a
+        /// per-kind answer. <see cref="CopyPropagationPass"/> keeps its OWN kill rules and is not
+        /// a consumer of this vocabulary at all (a copy fact for a field survives a call that
+        /// writes the field: MEASURED wrong on all four backends, C# included).</para>
         /// </summary>
         protected internal static WriteSet NamesWrittenBy(IRInstruction inst, IRFunction function)
         {
@@ -2173,14 +2192,14 @@ namespace BasicLang.Compiler.IR.Optimization
         /// same question of its name, exactly as <see cref="IRVerifier"/> puts that name in
         /// <c>Guard(v)</c>; its operands are still walked, as before.</para>
         ///
-        /// <para>⚠ NOT closed by this predicate: a local captured BY REFERENCE by a lambda that a
-        /// call then invokes. Such a local is a declared local and is indistinguishable here. That
-        /// hazard is live TODAY and is NOT CSE's alone — measured on
-        /// <c>Dim bump = Sub() n = n + 100</c>, CopyPropagation plus ConstantFolding already fold
-        /// <c>n + q</c> to a constant on BOTH sides of <c>bump()</c>, so ALL FOUR backends
-        /// (C# included) print the stale answer with CSE out of the picture. ADR-0006 D1's
-        /// interim closure rule is to close it, as one addition to
-        /// <see cref="OptimizationPass.IsCallVisible(string, IRFunction)"/>.</para>
+        /// <para>A local captured BY REFERENCE by a lambda that a call then invokes is closed for
+        /// CSE by ADR-0006 D1's interim closure rule, inside
+        /// <see cref="OptimizationPass.IsCallVisible(string, IRFunction)"/>: in a function that
+        /// creates a lambda every local is call-visible. ⚠ The same hazard is NOT closed for
+        /// CopyPropagation, which does not use this rule — measured on
+        /// <c>Dim bump = Sub() n = n + 100</c>, CopyPropagation plus ConstantFolding fold
+        /// <c>n + q</c> to a constant on BOTH sides of <c>bump()</c> when <c>n</c> starts as a
+        /// constant, so every backend prints the stale answer with CSE out of the picture.</para>
         /// </summary>
         private static bool ReadsCallVisible(IRValue value, IRFunction function)
         {
@@ -2366,8 +2385,11 @@ namespace BasicLang.Compiler.IR.Optimization
         /// inside a method is not <c>IsGlobal</c>, so <c>K * 2</c> was hoisted out of a loop
         /// whose <c>Inc()</c> call bumps <c>K</c> (C++, JavaScript and MSIL).</item>
         /// </list>
-        /// <para>The vocabulary's own documented gaps still apply here — notably a local captured
-        /// by reference and written inside a lambda, which needs a capture set (#122).</para>
+        /// <para>A local captured by reference and written inside a lambda counts as call-visible
+        /// under ADR-0006 D1's interim closure rule, so a loop that calls a lambda keeps it
+        /// (MEASURED: L5 now 12 on JavaScript under --optimize, 6 before). Task #122's capture set
+        /// narrows that from "every local" to the captured ones. An instruction that may write
+        /// ANY name (<see cref="WriteKind.Universal"/>) leaves nothing in the loop invariant.</para>
         /// </summary>
         private static HashSet<string> VariablesWrittenIn(List<BasicBlock> loop, IRFunction function, out bool writesEverything)
         {
