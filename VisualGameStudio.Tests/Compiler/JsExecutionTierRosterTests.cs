@@ -97,6 +97,8 @@ public class JsExecutionTierRosterTests
         typeof(SingleLineIfExecutionTests),
         // C# placement program; its JS leg runs under Node (the `_sel0` fix).
         typeof(CSharpNestedTerminatorExecutionTests),
+        // Array literals on JavaScript, with C++ and C# legs.
+        typeof(JavaScriptArrayLiteralExecutionTests),
 
         // ADR-0005 D2 — CSE guards a shared value's own destination, not only its operands.
         // CseDestinationInvalidationExecutionTests / DestinationInvalidation_D4_ByRefExecutionTests
@@ -195,7 +197,7 @@ public class JsExecutionTierRosterTests
 
     [Test]
     public void RosterIsPinned()
-        => Assert.That(ExecutionTier, Has.Length.EqualTo(49),
+        => Assert.That(ExecutionTier, Has.Length.EqualTo(50),
             "The execution-tier roster changed. That is fine — update the number — but it must " +
             "be a deliberate edit, not a silent shrink.");
 

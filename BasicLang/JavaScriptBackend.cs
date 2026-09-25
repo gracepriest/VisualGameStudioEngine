@@ -934,6 +934,15 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 case IRLoad load:
                     return Expr(load.Address);
 
+                // IRBuilder gives an array local a memory slot named `<name>_addr` (only arrays:
+                // see Visit(VariableDeclarationNode)). In JavaScript the slot IS the local, as the
+                // C# backend also renders it. ⛔ Unhandled, an initialised array local —
+                // `Dim a[] As Integer = {1, 2}` — failed the build ("IRAlloca (as an expression)").
+                case IRAlloca alloca:
+                    return SanitizeName(alloca.Name != null && alloca.Name.EndsWith("_addr", StringComparison.Ordinal)
+                        ? alloca.Name.Substring(0, alloca.Name.Length - "_addr".Length)
+                        : alloca.Name);
+
                 // `.Length` on an array OR a string. The rename to lowercase is MANDATORY:
                 // JavaScript has no `.Length`, and reading it yields `undefined` with no
                 // error, which then propagates as NaN through arithmetic. Matched
@@ -953,6 +962,11 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
                 case IRNewObject n:
                     return Bound(n) ? SanitizeName(n.Name) : NewObject(n);
+
+                // Bound by Visit(IRArrayAlloc) before its element stores; re-rendering it here
+                // would allocate a second, empty array.
+                case IRArrayAlloc alloc when Bound(alloc):
+                    return SanitizeName(alloc.Name);
 
                 case IRInstanceMethodCall mc:
                     return Bound(mc) ? SanitizeName(mc.Name) : InstanceCall(mc);
@@ -2524,7 +2538,14 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         public void Visit(IRStore store)
         {
             // The destination is an L-VALUE expression, not a previously-bound temp.
-            Line($"{Expr(store.Address)} = {Expr(store.Value)};");
+            var target = Expr(store.Address);
+            var value = Expr(store.Value);
+
+            // `Dim a[] As Integer = {1, 2}` stores the literal into the local's `a_addr` slot AND
+            // renames the literal to `a` — the store would read `a = a;`. Skip it.
+            if (store.Address is IRAlloca && target == value) return;
+
+            Line($"{target} = {value};");
         }
 
         /// <summary>
@@ -2759,8 +2780,21 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         public void Visit(IRSwitch switchInst) => throw NotYet(nameof(IRSwitch));
         public void Visit(IRLabel label) => throw NotYet(nameof(IRLabel));
         public void Visit(IRComment comment) => throw NotYet(nameof(IRComment));
-        public void Visit(IRArrayAlloc arrayAlloc) => throw NotYet(nameof(IRArrayAlloc));
-        public void Visit(IRArrayStore arrayStore) => throw NotYet(nameof(IRArrayStore));
+        /// <summary>
+        /// An array literal — <c>{1, 2, 3}</c> — reaches every backend as one IRArrayAlloc of
+        /// its length followed by one IRArrayStore per element. ⛔ Neither was lowered here, so
+        /// <c>Dim a() As Integer = {1, 2}</c>, and any array literal passed or returned, failed
+        /// the whole JavaScript build ("IRArrayAlloc lowering is not implemented").
+        ///
+        /// <para>Always bound, whatever the use count says: the element stores that follow
+        /// write through this name. Filled with the element type's default, as a sized
+        /// <c>Dim</c> is (<see cref="ArrayInitializer"/>), so no slot is ever a JS hole.</para>
+        /// </summary>
+        public void Visit(IRArrayAlloc arrayAlloc) =>
+            Bind(arrayAlloc, $"new Array({arrayAlloc.Size}).fill({TypeMapper.GetDefaultValue(arrayAlloc.ElementType)})");
+
+        public void Visit(IRArrayStore arrayStore) =>
+            Line($"{Expr(arrayStore.Array)}[{Expr(arrayStore.Index)}] = {Expr(arrayStore.Value)};");
         // `await` binds tighter than most operators but not all, so the operand is
         // parenthesised — `await a + b` would await only `a`.
         private string AwaitExpr(IRAwait a) => $"await {Receiver(Expr(a.Expression))}";
