@@ -46,6 +46,17 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
     [ObservableProperty]
     private bool _isSplitView;
 
+    /// <summary>
+    /// True when the Design view is showing instead of the text editor.
+    ///
+    /// <para>⛔ A MODE ON THE EXISTING DOCUMENT, not a new document type — the same idiom as
+    /// <see cref="IsSplitView"/>, which this is cloned from. A second document type would mean two
+    /// tabs for one file, two undo stacks, and two things that both think they own the text; D1
+    /// puts the designer's output INSIDE the user's own file precisely so there is one of each.</para>
+    /// </summary>
+    [ObservableProperty]
+    private bool _isDesignMode;
+
     [ObservableProperty]
     private SplitOrientation _splitOrientation = SplitOrientation.Horizontal;
 
@@ -61,6 +72,930 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
     public bool TrimTrailingWhitespaceOnSave { get; set; }
 
     public new string Id => FilePath ?? Guid.NewGuid().ToString();
+
+    /// <summary>
+    /// True when this file is a form document, so the Design toggle is worth offering.
+    ///
+    /// <para>⛔ Asks <c>FileExtensions</c> rather than testing the extension here. That list is
+    /// already the single source of truth for which extensions are form documents, and a second
+    /// copy would be a second thing to update — with the failure mode that a new extension shows
+    /// no Design tab and nobody can say why.</para>
+    /// </summary>
+    public bool IsFormDocument =>
+        FilePath != null && VisualGameStudio.Core.Constants.FileExtensions.IsFormDocument(FilePath);
+
+    /// <summary>
+    /// The parsed document behind the Design view, or null when this file is not one, cannot be
+    /// parsed, or is refused.
+    ///
+    /// <para>⚠ Read from <see cref="Text"/> on demand rather than cached. The text is the truth and
+    /// the user can edit it in Code view at any moment; a cached model would show a canvas that no
+    /// longer matches the file, which is the designer/runtime divergence D9 exists to prevent — one
+    /// step earlier.</para>
+    ///
+    /// <para>⚠ A REFUSED document yields null, so the canvas shows nothing rather than showing the
+    /// empty model a refusal produces. A refusal's model is deliberately unpopulated; drawing it
+    /// would tell the user their form has no controls.</para>
+    /// </summary>
+    public BasicLang.Forms.FormDocument? DesignDocument => DesignFile?.Model;
+
+    private BasicLang.Forms.Serialization.FormFile? _designFile;
+    private string? _designFileText;
+
+    /// <summary>
+    /// The loaded form file — the model plus the diagnostics and D9 tiers reading it produced.
+    ///
+    /// <para>⛔ Cached against the TEXT it was parsed from, and re-parsed only when that text
+    /// changes. Not an optimisation: the canvas and the property grid hold references to
+    /// <c>FormControl</c> objects out of this model, and re-parsing on every read would hand each
+    /// caller a DIFFERENT object graph. The selected control would then never reference-equal
+    /// anything in the document being drawn, so the selection outline would vanish and the property
+    /// grid would edit a model nothing else can see.</para>
+    ///
+    /// <para>⚠ Still follows the text. An edit in Code view invalidates the cache, so the canvas
+    /// never shows a form the file no longer describes.</para>
+    /// </summary>
+    public BasicLang.Forms.Serialization.FormFile? DesignFile
+    {
+        get
+        {
+            if (!IsFormDocument || string.IsNullOrEmpty(Text))
+            {
+                return null;
+            }
+
+            if (_designFile != null && string.Equals(_designFileText, Text, StringComparison.Ordinal))
+            {
+                return _designFile;
+            }
+
+            var form = BasicLang.Forms.Serialization.FormDocumentReader.Read(FilePath!, Text);
+            _designFileText = Text;
+            _designFile = form.IsRefused ? null : form;
+            return _designFile;
+        }
+    }
+
+    [RelayCommand]
+    private void ToggleDesignMode()
+    {
+        IsDesignMode = !IsDesignMode;
+        if (IsDesignMode)
+        {
+            SyncDesignerPanels();
+        }
+    }
+
+    /// <summary>
+    /// Opens this document IN the designer when it is a form document that parses. Returns whether
+    /// the mode changed. Called once, by the file-open route — not on every reload, so a user who
+    /// switched to Code view stays there.
+    ///
+    /// <para>⛔⛔ Without this, opening a <c>.blform</c> shows its raw XML with a "Design" button
+    /// the user has to know to press. Every piece of the designer existed and worked when the
+    /// report came back as "I can't see the form designer" — a form opens in its designer, the
+    /// same as it does in every other tool that has one.</para>
+    ///
+    /// <para>⚠ A REFUSED or unparseable document stays in Code view deliberately. Its model is
+    /// empty, so the canvas would be blank, and Code view is the only place the user can see what
+    /// is wrong with the file.</para>
+    /// </summary>
+    public bool EnterDesignModeForFormDocument()
+    {
+        if (IsDesignMode || !IsFormDocument || DesignDocument == null)
+        {
+            return false;
+        }
+
+        IsDesignMode = true;
+        SyncDesignerPanels();
+        return true;
+    }
+
+    /// <summary>The property grid beside the canvas. Always present; empty until something is selected.</summary>
+    public ViewModels.Designer.FormPropertyGridViewModel PropertyGrid { get; } = new();
+
+    /// <summary>The toolbox beside the canvas, driven from the catalog for this document's target.</summary>
+    public ViewModels.Designer.FormToolboxViewModel Toolbox { get; } = new();
+
+    /// <summary>
+    /// Bumped whenever the designer changed the model in place, so the canvas repaints.
+    ///
+    /// <para>⛔ The property grid edits <c>FormControl.Properties</c> directly — the canvas, the
+    /// grid and the writer deliberately share ONE object graph, so the document reference never
+    /// changes and Avalonia's <c>AffectsRender</c> has nothing to notice. Without this counter the
+    /// user renames a button, the file updates, and the box on the canvas keeps the old caption.
+    /// </para>
+    /// </summary>
+    [ObservableProperty]
+    private int _designModelRevision;
+
+    private bool _designerPanelsWired;
+    private bool _applyingDesignerEdit;
+
+    /// <summary>
+    /// Points the designer panels at the current document.
+    ///
+    /// <para>⚠ The <c>Edited</c> subscription is wired ONCE. The panels are owned by this view
+    /// model and live as long as it does, so re-subscribing on every sync would add a handler per
+    /// toggle into Design view — and each edit would then write the document two, three, four
+    /// times over.</para>
+    /// </summary>
+    private void SyncDesignerPanels()
+    {
+        var file = DesignFile;
+
+        if (!_designerPanelsWired)
+        {
+            PropertyGrid.Edited += OnDesignerEdited;
+            _designerPanelsWired = true;
+        }
+
+        PropertyGrid.Load(file);
+        if (file != null)
+        {
+            Toolbox.Target = file.Model.Target;
+        }
+
+        Tray.Rebuild(file?.Model);
+    }
+
+    /// <summary>
+    /// A property-grid edit, written back through the structure-preserving writer.
+    ///
+    /// <para>⛔⛔ <c>_applyingDesignerEdit</c> exists because setting <see cref="Text"/> normally
+    /// invalidates the parsed document — which is right for a Code-view edit and WRONG here. The
+    /// cached model is not stale: it is precisely the model this new text was written FROM.
+    /// Dropping it would re-parse into a fresh object graph, and the control the user has selected
+    /// would no longer be in the document being drawn — the selection outline would vanish and the
+    /// property grid would go empty on every keystroke they committed.</para>
+    ///
+    /// <para>⚠ The writer returns the original text unchanged when the model asked for nothing, so
+    /// a no-op edit sets Text to what it already was and marks nothing dirty.</para>
+    /// </summary>
+    private void OnDesignerEdited(object? sender, EventArgs e) => WriteDesignerEditBack();
+
+    /// <summary>
+    /// Places a control of <paramref name="kind"/> at a point in FORM space — the model half of a
+    /// toolbox drop, and the only way a drop reaches the file.
+    ///
+    /// <para>⛔⛔ This method exists so that something in a shipping build CALLS the placer. Three
+    /// pieces of this feature have already shipped complete, unit-tested and unreachable; a placer
+    /// with no caller would be the fourth, and the symptom is the one the user actually reports —
+    /// "I drag a Button onto the form and nothing happens".</para>
+    ///
+    /// <para>⚠ The point is in FORM space, not canvas pixels. The canvas converts, using the same
+    /// <c>FormCanvasTransform</c> it rendered and hit-tested with, so the control lands under the
+    /// pointer at any zoom.</para>
+    /// </summary>
+    /// <returns>Null when the control was placed; otherwise why it was not.</returns>
+    /// <summary>
+    /// What the canvas's <c>DropCommand</c> is bound to. A refusal is reported the way every other
+    /// designer finding is — through the Error List — rather than being swallowed.
+    /// </summary>
+    /// <summary>
+    /// Removes a control from the document — what Delete does on the canvas.
+    ///
+    /// <para>⛔ Removed from the list it actually LIVES in, which is its container's when it is
+    /// nested. Removing from <c>Document.Controls</c> unconditionally would silently do nothing for
+    /// any control inside a Panel, and Delete would look broken only for nested controls.</para>
+    ///
+    /// <para>⚠ The selection is cleared BEFORE the write. The property grid holds the control being
+    /// deleted, and rebuilding its rows against an object no longer in the document is how a
+    /// designer starts editing a ghost.</para>
+    /// </summary>
+    [RelayCommand]
+    private void DeleteControl(BasicLang.Forms.FormControl? control)
+    {
+        var file = DesignFile;
+        if (control == null || file == null)
+        {
+            return;
+        }
+
+        var siblings = file.Model.ListContaining(control);
+        if (siblings == null || !siblings.Remove(control))
+        {
+            return;
+        }
+
+        // ⚠ Both stores, not only the grid: a deleted control left in Selection is a ghost the
+        // next tray click could not displace (Set() is a no-op for the control already selected).
+        SelectInDesigner(null);
+        WriteDesignerEditBack();
+    }
+
+    /// <summary>
+    /// Selects a control everywhere at once — the shared <see cref="Selection"/> that the canvas,
+    /// the tray and every command read, and the property grid.
+    ///
+    /// <para>⛔⛔ ONE selection path (Task 25 review). A drop used to write the grid ALONE, and a
+    /// tray click wrote the selection alone; after "click Timer1, drop a ToolTip, click Timer1,
+    /// Delete" the two disagreed, the tray highlighted Timer1, and the tray's Delete — which passes
+    /// the grid's control — removed the ToolTip. Every write to the grid from this class goes
+    /// through here or through <see cref="Selection"/>, whose <c>Changed</c> the constructor
+    /// subscribes to. The grid write below is redundant when the selection actually changes and
+    /// load-bearing when it does not: <c>Set</c> is a no-op for a control that is already the whole
+    /// selection, and the grid must still show it.</para>
+    /// </summary>
+    private void SelectInDesigner(BasicLang.Forms.FormControl? control)
+    {
+        Selection.Set(control);
+        PropertyGrid.SelectedControl = control;
+    }
+
+    /// <summary>
+    /// What is selected on the canvas (Task 20). Owned here rather than by the canvas, because the
+    /// align, size, z-order and clipboard commands below all operate on it.
+    /// </summary>
+    public ViewModels.Designer.FormSelection Selection { get; } = new();
+
+    /// <summary>
+    /// "Type Here" (Task 23, spec §6): which strip/item host is being typed into, and what has been
+    /// typed so far. Bound by the overlay editor (Task 22) and the canvas's slot highlight (Task 21).
+    /// </summary>
+    public ViewModels.Designer.FormStripEditorViewModel StripEditor { get; } = new();
+
+    // ⚠ The three Type Here commands are the ONLY public [RelayCommand] methods in this file — there
+    // is no precedent (the plan's "PlaceControl is the precedent" is false: PlaceControl carries no
+    // [RelayCommand]; every other one here is on a private method). Public because the tests call
+    // the methods directly and the Shell grants the tests no internals access; the generated
+    // *Command properties are what the view binds (24d pre-flight BLOCKER 2).
+    // ⛔⛔ Keep each [RelayCommand] PHYSICALLY ADJACENT to its own method — doc comment ABOVE the
+    // attribute, never between. An attribute binds to the next DECLARATION and a doc comment is
+    // trivia: that is how AddNewFormCommand was never generated while a SaveProjectOrReportCommand
+    // nothing binds was.
+
+    /// <summary>
+    /// Opens the Type Here editor on <paramref name="host"/> — a strip, or an item that holds items.
+    /// Selects the host first, because the slot exists only on the selected strip/item's path.
+    /// </summary>
+    [RelayCommand]
+    public void BeginTypeHere(BasicLang.Forms.FormControl? host)
+    {
+        if (host?.Definition?.Items == null)
+        {
+            return;
+        }
+
+        SelectInDesigner(host);
+        StripEditor.Host = host;
+        StripEditor.Text = "";
+        StripEditor.IsActive = true;
+    }
+
+    /// <summary>
+    /// Appends what was typed to the editor's host: <c>-</c> is a separator, anything else the
+    /// host's default item kind. Selects the new item and stays open on the SAME host, so a whole
+    /// menu is typed in one run. A refusal (a separator on a StatusStrip) is reported, never placed.
+    /// </summary>
+    [RelayCommand]
+    public void CommitTypeHere(string? text)
+    {
+        // ⛔ A RENAME is decided first and never falls through: in rename mode Host is the item
+        // itself, and an item usually accepts children, so the create path below would nest a NEW
+        // item under the one being renamed.
+        if (StripEditor.EditTarget is { } target)
+        {
+            CommitRename(target, text);
+            return;
+        }
+
+        var host = StripEditor.Host;
+        var file = DesignFile;
+        if (host == null || file == null || string.IsNullOrWhiteSpace(text))
+        {
+            return;
+        }
+
+        var rule = host.Definition?.Items;
+        if (rule == null)
+        {
+            return;
+        }
+
+        var typed = text.Trim();
+        // ⛔ The SAME answer the slot and the overlay align their caption to — FormCanvasTransform.
+        // TypeHereItemKind — so the text is typed where the item it becomes will draw it.
+        var kind = typed == "-"
+            ? "ToolStripSeparator"
+            : VisualGameStudio.Shell.Controls.FormCanvasTransform.TypeHereItemKind(host) ?? rule.Kinds[0];
+        var result = ViewModels.Designer.FormPlacement.PlaceItem(file.Model, host, kind, typed);
+        if (result.Control == null)
+        {
+            ReportPlacementRefusal(result.Refusal ?? "the item could not be placed.");
+            return;
+        }
+
+        WriteDesignerEditBack();
+
+        // ⚠ Selecting the new item runs the leave-rule; it is inside the host, so the editor stays.
+        // The host is re-asserted after, in case a later rule ever changes that.
+        SelectInDesigner(result.Control);
+        StripEditor.Host = host;
+        StripEditor.Text = "";
+        StripEditor.IsActive = true;
+    }
+
+    /// <summary>Closes the Type Here editor without placing anything.</summary>
+    [RelayCommand]
+    public void CancelTypeHere()
+    {
+        // ⚠ IsActive first: EditTarget's change hook closes an editor whose target is withdrawn,
+        // and with IsActive already false it has nothing left to do.
+        StripEditor.IsActive = false;
+        StripEditor.Host = null;
+        StripEditor.Text = "";
+        StripEditor.EditTarget = null;
+    }
+
+    /// <summary>
+    /// "Can't edit a menu item once it is entered" (owner's report, 2026-09-23; spec §6 follow-up).
+    /// VS's second-click / F2 gesture: opens the SAME Type Here editor on an EXISTING item's OWN
+    /// cell, pre-filled with its current Text, so committing RENAMES it in place instead of
+    /// appending a new one — unlike <see cref="BeginTypeHere"/>, which opens a fresh slot at the
+    /// end of a host's items.
+    ///
+    /// <para>Sets <c>EditTarget</c> AND <c>Host</c> to <paramref name="item"/>: the overlay takes
+    /// its caption inset from its Host, and a rename's caption is the item's own. Any open Type Here
+    /// session is closed first; then no editor opens unless the CATALOG says the item is a strip item
+    /// with a Text property
+    /// (<c>FormCanvasTransform.IsRenamableItem</c>, the same question the canvas asks before it
+    /// offers the gesture): a separator is not renamable.</para>
+    /// </summary>
+    [RelayCommand]
+    public void BeginEditItem(BasicLang.Forms.FormControl? item)
+    {
+        // ⚠ A rename request ENDS whatever Type Here session is open — a create run on the item's
+        // host, or a rename of something else — whether or not it can open one of its own. That
+        // also withdraws the target the canvas wrote into its TwoWay EditingItem just before running
+        // this command, so a refusal below can never leave a later Enter renaming an item nobody
+        // opened an editor on.
+        CancelTypeHere();
+
+        if (item == null || DesignFile == null ||
+            !VisualGameStudio.Shell.Controls.FormCanvasTransform.IsRenamableItem(item))
+        {
+            return;
+        }
+
+        // Keeps the selection on the item (a no-op when it already is — the gesture's precondition).
+        SelectInDesigner(item);
+        StripEditor.EditTarget = item;
+        StripEditor.Host = item;
+        StripEditor.Text = item.Properties.GetValueOrDefault("Text") ?? "";
+        StripEditor.IsActive = true;
+    }
+
+    /// <summary>
+    /// The rename half of <see cref="CommitTypeHere"/>: writes the item's Text through the normal
+    /// write-back (so Undo restores it), keeps its Id — and so every event binding keyed on it —
+    /// keeps it selected, and closes the editor. VS closes a rename on Enter; only the CREATE flow
+    /// stays open for the next item. Whitespace is a cancel, never an empty caption.
+    /// </summary>
+    private void CommitRename(BasicLang.Forms.FormControl target, string? text)
+    {
+        if (DesignFile == null || string.IsNullOrWhiteSpace(text))
+        {
+            CancelTypeHere();
+            return;
+        }
+
+        var typed = text.Trim();
+        if (!string.Equals(target.Properties.GetValueOrDefault("Text"), typed, StringComparison.Ordinal))
+        {
+            target.Properties["Text"] = typed;
+            WriteDesignerEditBack();
+        }
+
+        SelectInDesigner(target);
+        CancelTypeHere();
+    }
+
+    /// <summary>
+    /// Whether <paramref name="control"/> is <paramref name="host"/> or lies inside it — the Type
+    /// Here editor's "leave" test. A null control (an emptied selection) is inside nothing.
+    /// </summary>
+    private static bool IsInside(
+        BasicLang.Forms.FormDocument document,
+        BasicLang.Forms.FormControl? control,
+        BasicLang.Forms.FormControl host)
+    {
+        for (var c = control; c != null; c = ViewModels.Designer.FormGeometryEdit.ParentOf(document, c))
+        {
+            if (ReferenceEquals(c, host))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// The designer's copy buffer.
+    ///
+    /// <para>⚠ Static, so copy in one open form and paste into another works — which is most of the
+    /// point. ⚠ NOT the OS clipboard: Avalonia's clipboard is async and reached through a
+    /// <c>TopLevel</c>, which a document view model does not have. The cost is that Ctrl+C here does
+    /// not put anything on the system clipboard, and pasting from another application does nothing.
+    /// Within one IDE session, which is where a form subtree is meaningful at all, it behaves.</para>
+    /// </summary>
+    private static string? _designerClipboard;
+
+    /// <summary>
+    /// Align and make-same-size over the multi-selection, against its primary.
+    ///
+    /// <para>⚠ Writes the document only when something actually moved, so pressing "align left" on
+    /// an already-aligned selection does not mark the form dirty or add an undo step.</para>
+    /// </summary>
+    [RelayCommand]
+    private void Arrange(ViewModels.Designer.FormArrangeKind kind)
+    {
+        var file = DesignFile;
+        if (file == null)
+        {
+            return;
+        }
+
+        if (ViewModels.Designer.FormArrange.Apply(
+                file.Model, kind, Selection.Controls, Selection.Primary))
+        {
+            WriteDesignerEditBack();
+        }
+    }
+
+    [RelayCommand]
+    private void BringToFront() => Reorder(toFront: true);
+
+    [RelayCommand]
+    private void SendToBack() => Reorder(toFront: false);
+
+    /// <summary>
+    /// ⚠ Every selected control, in an order that keeps the selection's own relative layering. Sent
+    /// to the back one at a time in FORWARD order, each lands at index 0 and pushes the previous one
+    /// back — which reverses them. Walking backwards for that case keeps the group's internal order.
+    /// </summary>
+    private void Reorder(bool toFront)
+    {
+        var file = DesignFile;
+        if (file == null || Selection.IsEmpty)
+        {
+            return;
+        }
+
+        var order = toFront
+            ? Selection.Controls.ToList()
+            : Selection.Controls.Reverse().ToList();
+
+        var changed = false;
+        foreach (var control in order)
+        {
+            changed |= toFront ? file.Model.BringToFront(control) : file.Model.SendToBack(control);
+        }
+
+        if (changed)
+        {
+            WriteDesignerEditBack();
+        }
+    }
+
+    [RelayCommand]
+    private void CopyControls()
+    {
+        var file = DesignFile;
+        if (file == null || Selection.IsEmpty)
+        {
+            return;
+        }
+
+        _designerClipboard = BasicLang.Forms.FormClipboard.SerializeSubtree(
+            file.Model.Target, Selection.Controls);
+    }
+
+    [RelayCommand]
+    private void CutControls()
+    {
+        var file = DesignFile;
+        if (file == null || Selection.IsEmpty)
+        {
+            return;
+        }
+
+        CopyControls();
+
+        // ⚠ A snapshot: removing mutates the document, and Selection.Clear below would otherwise be
+        // iterating the collection it is emptying.
+        foreach (var control in Selection.Controls.ToList())
+        {
+            file.Model.ListContaining(control)?.Remove(control);
+        }
+
+        Selection.Clear();
+        PropertyGrid.SelectedControl = null;
+        WriteDesignerEditBack();
+    }
+
+    /// <summary>
+    /// Pastes the copy buffer, renaming anything whose id is taken.
+    ///
+    /// <para>⛔ <c>DeserializeSubtree</c> does the renaming AND retargets the binds that named the
+    /// old id — which is why it was built alongside the model rather than when Ctrl+V was wired.
+    /// Pasting a button called <c>btnLogin</c> beside an existing one must not produce two controls
+    /// answering to one handler.</para>
+    ///
+    /// <para>⚠ Offset by a grid step so a paste is VISIBLE. Pasting exactly on top of the original
+    /// looks like nothing happened, and the user pastes again.</para>
+    /// </summary>
+    [RelayCommand]
+    private void PasteControls()
+    {
+        var file = DesignFile;
+        if (file == null || string.IsNullOrEmpty(_designerClipboard))
+        {
+            return;
+        }
+
+        // Both lists: a component and a control become fields of one class, so a pasted Timer
+        // must not be allowed the name of an existing Button either.
+        var taken = new HashSet<string>(
+            file.Model.AllControls().Concat(file.Model.AllComponents()).Select(c => c.Id),
+            StringComparer.OrdinalIgnoreCase);
+
+        var pasted = BasicLang.Forms.FormClipboard.DeserializeSubtree(
+            _designerClipboard, file.Model.Target, id => taken.Contains(id));
+
+        if (pasted.Count == 0)
+        {
+            return;
+        }
+
+        // ⚠ Only what actually landed. A refused item is not in the document, so selecting it would
+        // select a ghost.
+        var added = new List<BasicLang.Forms.FormControl>();
+        var host = Selection.Primary;
+
+        foreach (var control in pasted)
+        {
+            // ⛔⛔ ONE if / else-if / else chain, so exactly ONE list receives each control (24d
+            // pre-flight BLOCKER 3). A guard-and-continue whose success path fell through to the
+            // unconditional add at the bottom put an item in its host's Children AND in
+            // document.Controls: AllControls() then yields it twice, the writer emits it twice,
+            // and the next Delete removes the wrong copy — green build, no diagnostic.
+            // ⛔ By the ROW, never by where the copy came from.
+            var place = control.Definition?.Place;
+            if (place == BasicLang.Forms.FormPlace.Item)
+            {
+                // An item has no place of its own: it goes into the selected host, if that host's
+                // rule takes this kind, and nowhere else.
+                if (host?.Definition?.Items?.Accepts(control.Kind) == true)
+                {
+                    host.Children.Add(control);
+                    added.Add(control);
+                }
+                else
+                {
+                    ReportPlacementRefusal(host == null
+                        ? $"'{control.Kind}' is an item; select the menu or strip to paste it into."
+                        : $"'{host.Id}' ({host.Kind}) does not hold a {control.Kind}; select the menu " +
+                          "or strip to paste it into.");
+                }
+            }
+            else if (place == BasicLang.Forms.FormPlace.Docked)
+            {
+                // A strip docks to an edge: no geometry to offset and no tab stop.
+                file.Model.Controls.Add(control);
+                added.Add(control);
+            }
+            else
+            {
+                if (control.Geometry is BasicLang.Forms.PixelGeometry pixel)
+                {
+                    pixel.X += 8;
+                    pixel.Y += 8;
+                }
+
+                // A component pasted among the controls would be drawn nowhere, emitted with
+                // Controls.Add, and refused on reload.
+                (control.Definition?.IsComponent == true ? file.Model.Components : file.Model.Controls).Add(control);
+                added.Add(control);
+            }
+        }
+
+        // ⛔ Before the renumber, SetRange and write: SetRange with an EMPTY list CLEARS the
+        // selection (measured), which would contradict "a refused paste changes nothing" and — via
+        // the leave-rule — cancel an open Type Here editor. Nothing landed, so nothing is written.
+        if (added.Count == 0)
+        {
+            return;
+        }
+
+        file.Model.RenumberTabIndexes();
+        Selection.SetRange(added);
+        PropertyGrid.SelectedControl = Selection.Primary;
+        WriteDesignerEditBack();
+    }
+
+    /// <summary>
+    /// The double-click gesture (Task 22): put the caret in this control's handler, creating it if
+    /// it does not exist yet.
+    ///
+    /// <para>⛔⛔ <b>This writes a file the user owns and that this document is not even open on</b> —
+    /// the <c>.bas</c> beside the form. Everything else the designer does edits the document in this
+    /// buffer; this reaches sideways, so it re-reads the code-behind from disk each time rather than
+    /// caching it. A cached copy would be stale the moment the user typed in Code view, and the stub
+    /// would be inserted into a file that no longer looked like that.</para>
+    ///
+    /// <para>⚠ The bind is ensured even when the handler already EXISTS. A user can write
+    /// <c>btnLogin_Click</c> by hand before ever double-clicking; without this the gesture would
+    /// navigate to it and still leave it unwired, which looks exactly like the designer working.</para>
+    ///
+    /// <para>⚠ The document is written back only when something actually changed, so double-clicking
+    /// a control that is already wired does not mark the form dirty.</para>
+    /// </summary>
+    [RelayCommand]
+    private async Task ActivateControlAsync(BasicLang.Forms.FormControl? control)
+    {
+        var file = DesignFile;
+        if (control == null || file == null || FilePath == null)
+        {
+            return;
+        }
+
+        var codePath = BasicLang.Forms.FormCodeBehind.PathFor(FilePath);
+
+        try
+        {
+            if (!await _fileService.FileExistsAsync(codePath))
+            {
+                ReportDesignerRefusal(
+                    codePath,
+                    BasicLang.Forms.DesignCodes.RegionAbsent,
+                    $"'{Path.GetFileName(FilePath)}' has no code-behind: expected " +
+                    $"'{Path.GetFileName(codePath)}' beside it, so there is nowhere to put the " +
+                    "handler.");
+                return;
+            }
+
+            var before = await _fileService.ReadFileAsync(codePath, CancellationToken.None);
+            var plan = BasicLang.Forms.FormHandlers.PlanDefault(file.Model, control, before);
+
+            if (plan.Outcome == BasicLang.Forms.HandlerOutcome.Refused)
+            {
+                ReportDesignerRefusal(
+                    codePath, BasicLang.Forms.DesignCodes.RegionAbsent,
+                    plan.Refusal ?? "the handler could not be created.");
+                return;
+            }
+
+            if (plan.Outcome == BasicLang.Forms.HandlerOutcome.Created)
+            {
+                await _fileService.WriteFileAsync(codePath, plan.CodeText, CancellationToken.None);
+                _eventAggregator.Publish(new FileSavedEvent(codePath));
+            }
+
+            if (BasicLang.Forms.FormHandlers.EnsureBind(control, plan.EventName, plan.Handler))
+            {
+                WriteDesignerEditBack();
+            }
+
+            SelectInDesigner(control);
+            _eventAggregator.Publish(new NavigateToFileEvent(codePath, plan.CaretLine));
+        }
+        catch (Exception ex)
+        {
+            ReportDesignerRefusal(
+                codePath, BasicLang.Forms.DesignCodes.RegionAbsent,
+                $"the designer could not open a handler in '{Path.GetFileName(codePath)}': {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Publishes one designer finding against the code-behind's key.
+    ///
+    /// <para>⚠ Always the CODE-BEHIND's path, never the document's. The aggregator keys findings by
+    /// (collection, file), and a finding filed against the .blform would never be cleared by the
+    /// save path — which republishes on the .bas — leaving a phantom in the Error List for the rest
+    /// of the session.</para>
+    /// </summary>
+    private void ReportDesignerRefusal(string codePath, string code, string message) =>
+        _eventAggregator.Publish(new DesignerDiagnosticsEvent(codePath, new List<DiagnosticItem>
+        {
+            new()
+            {
+                Id = code,
+                Message = message,
+                Severity = DiagnosticSeverity.Warning,
+                FilePath = codePath,
+                Source = DesignerDiagnosticSource
+            }
+        }));
+
+    [RelayCommand]
+    private void PlaceDroppedControl(Controls.FormControlDropRequest? request)
+    {
+        if (request == null)
+        {
+            return;
+        }
+
+        var refusal = PlaceControl(request.Kind, request.X, request.Y);
+        if (refusal != null)
+        {
+            ReportPlacementRefusal(refusal);
+        }
+    }
+
+    /// <summary>
+    /// A drop on the component TRAY (Task 25). Its own command, deliberately: a
+    /// <c>FormControlDropRequest</c> carries no origin, so the canvas's command cannot tell a tray
+    /// drop from a canvas drop and would place a Button at (0,0). A component kind is placed — the
+    /// point is irrelevant to it — and a control kind is refused the way a bad canvas drop is.
+    /// </summary>
+    [RelayCommand]
+    private void TrayDrop(string? kind)
+    {
+        if (string.IsNullOrEmpty(kind))
+        {
+            return;
+        }
+
+        // ⛔ The ITEM check comes FIRST, and says something different. The refusal below — "has a
+        // position; drop it on the form" — is true of a Button and FALSE of a ToolStripMenuItem,
+        // which has no position anywhere: it is created from its host's Type Here slot (spec §6).
+        // Sending the user to the form with it would be advice that cannot be followed.
+        if (BasicLang.Forms.FormControlCatalog.Find(kind) is { Place: BasicLang.Forms.FormPlace.Item } item)
+        {
+            ReportPlacementRefusal(
+                $"'{item.Kind}' is created from its menu's Type Here slot, not dropped.");
+            return;
+        }
+
+        if (BasicLang.Forms.FormControlCatalog.Find(kind) is not { IsComponent: true })
+        {
+            ReportPlacementRefusal($"'{kind}' has a position; drop it on the form, not the tray.");
+            return;
+        }
+
+        var refusal = PlaceControl(kind, 0, 0);
+        if (refusal != null)
+        {
+            ReportPlacementRefusal(refusal);
+        }
+    }
+
+    /// <summary>
+    /// ⛔ A drop that does nothing and says nothing is the failure this feature was added to fix.
+    /// The finding goes on the CODE-BEHIND's key, like every other designer diagnostic, so the next
+    /// good save clears it — see RegenerateDesignerRegionsAsync, which republishes the same
+    /// (collection, file) pair and would otherwise leave this stranded in the Error List.
+    /// </summary>
+    private void ReportPlacementRefusal(string refusal)
+    {
+        var codePath = BasicLang.Forms.FormCodeBehind.PathFor(FilePath ?? "");
+        _eventAggregator.Publish(new DesignerDiagnosticsEvent(codePath, new List<DiagnosticItem>
+        {
+            new()
+            {
+                Id = BasicLang.Forms.DesignCodes.PlacementRefused,
+                Message = refusal,
+                Severity = DiagnosticSeverity.Warning,
+                FilePath = codePath,
+                Source = DesignerDiagnosticSource
+            }
+        }));
+    }
+
+    /// <summary>
+    /// Writes a finished move or resize back to the document. Bound to the canvas's
+    /// <c>CommitGeometryCommand</c> and executed once, when the drag ends.
+    ///
+    /// <para>⛔ The canvas has already mutated the model — it shares this view model's object graph
+    /// — so there is nothing to apply here, only to persist. Re-applying the drag from a delta
+    /// would be a second implementation of the geometry maths, and the two would drift.</para>
+    ///
+    /// <para>⚠ A drag that ended where it started still lands here on some paths. That is harmless:
+    /// the structure-preserving writer returns the original text unchanged when the model asked for
+    /// nothing, so a no-op commit writes nothing and marks nothing dirty.</para>
+    /// </summary>
+    [RelayCommand]
+    private void CommitGeometry() => WriteDesignerEditBack();
+
+    public string? PlaceControl(string kind, int x, int y)
+    {
+        var file = DesignFile;
+        if (file == null)
+        {
+            return "This document is not a form the designer can edit.";
+        }
+
+        var result = ViewModels.Designer.FormPlacement.Place(file.Model, kind, x, y);
+        if (result.Control == null)
+        {
+            return result.Refusal ?? $"'{kind}' could not be placed.";
+        }
+
+        WriteDesignerEditBack();
+
+        // A designer drops a control and puts its properties in front of you. Selecting it also
+        // draws the selection outline (or the tray highlight), which is how the user sees WHERE it
+        // landed — through the one selection store, so the tray, the canvas and the grid agree.
+        SelectInDesigner(result.Control);
+        return null;
+    }
+
+    private void WriteDesignerEditBack()
+    {
+        var file = DesignFile;
+        if (file == null)
+        {
+            return;
+        }
+
+        var written = BasicLang.Forms.Serialization.FormDocumentWriter.Write(file);
+
+        // The model changed behind an unchanged reference — tell the canvas to repaint.
+        DesignModelRevision++;
+
+        _applyingDesignerEdit = true;
+        try
+        {
+            // ⛔ ORDER MATTERS, and getting it wrong is silent. Text first: its setter is what
+            // raises the change notification the canvas and the dirty indicator listen for, and it
+            // only raises when the backing field actually changes. ReplaceContent writes that same
+            // field directly, so doing it first leaves the setter with nothing to notice — one
+            // edit, zero notifications, a canvas that never repaints.
+            Text = written;
+
+            // ⛔⛔ Then the EDITOR'S document. The two are one document kept in two places, and the
+            // editor owns the undo stack. Writing only Text left the editor holding the pre-edit
+            // copy — and the view syncs that copy back on every keystroke, so the first character
+            // typed in Code view silently discarded every drop, move and resize the user had made.
+            // ReplaceContent is the same call the refactoring tools use: it writes the editor's
+            // document as ONE undoable operation, which is also the whole of the designer's undo.
+            ReplaceContent(written);
+            _designFileText = written;
+        }
+        finally
+        {
+            _applyingDesignerEdit = false;
+        }
+    }
+
+    /// <summary>
+    /// Undoes the last designer edit — a drop, a move, a resize, a property change.
+    ///
+    /// <para>⛔ The editor's undo stack, deliberately, not a second one of the designer's own. The
+    /// document text is the truth; a model-level stack would be a second truth that can disagree
+    /// with it, and the disagreement would surface as a form that redraws one way and saves
+    /// another. It also means Ctrl+Z means the same thing in both views.</para>
+    /// </summary>
+    [RelayCommand]
+    private void UndoDesignerEdit()
+    {
+        if (!TextDocument.UndoStack.CanUndo)
+        {
+            return;
+        }
+
+        TextDocument.UndoStack.Undo();
+        AdoptDocumentText();
+    }
+
+    /// <summary>Redoes what <see cref="UndoDesignerEdit"/> took away.</summary>
+    [RelayCommand]
+    private void RedoDesignerEdit()
+    {
+        if (!TextDocument.UndoStack.CanRedo)
+        {
+            return;
+        }
+
+        TextDocument.UndoStack.Redo();
+        AdoptDocumentText();
+    }
+
+    /// <summary>
+    /// Takes the editor document's text as the truth after an undo or redo, and rebuilds the
+    /// designer's view of it.
+    ///
+    /// <para>⛔ The re-parse is the point. Undo rewinds TEXT; the canvas and the property grid hold
+    /// references into the model that text was parsed from, and that model still has the control
+    /// the undo just removed. Without dropping it, the control stays on the canvas and comes back
+    /// on the next save — the file and the picture disagreeing, which is the failure a designer
+    /// cannot have.</para>
+    /// </summary>
+    private void AdoptDocumentText()
+    {
+        Text = TextDocument.Text;
+
+        _designFile = null;
+        _designFileText = null;
+        OnPropertyChanged(nameof(DesignFile));
+        OnPropertyChanged(nameof(DesignDocument));
+        SyncDesignerPanels();
+        DesignModelRevision++;
+    }
     public new string Title => GetTitle();
     public new bool CanClose => true;
 
@@ -157,6 +1092,61 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
         _fileService = fileService;
         _eventAggregator = eventAggregator;
         _bookmarkService = bookmarkService;
+
+        // ⚠ In the constructor, not a property initializer: an initializer cannot reference the
+        // instance member Selection (CS0236), and the tray marks its items from that selection.
+        Tray = new ViewModels.Designer.FormTrayViewModel(Selection);
+
+        // ⛔ The grid FOLLOWS the selection here, in the view model — not only through the canvas's
+        // TwoWay binding, which a tray click never touches and a headless test never has. The tray's
+        // Delete passes the grid's control, so the grid must never lag the selection (see
+        // SelectInDesigner for the sequence that deleted the wrong component).
+        Selection.Changed += (_, _) =>
+        {
+            PropertyGrid.SelectedControl = Selection.Primary;
+
+            // The Type Here leave-rule: selecting anything outside the editor's host — including
+            // nothing, which is what every delete leaves — closes the editor. Selecting the host's
+            // own items (the one just committed) does not. ⚠ For a RENAME, "inside" is the item
+            // ITSELF: selecting one of its dropdown children is leaving the caption being edited.
+            var model = DesignFile?.Model;
+            if (StripEditor.IsActive && StripEditor.Host is { } host && model != null)
+            {
+                var stays = StripEditor.EditTarget is { } target
+                    ? ReferenceEquals(Selection.Primary, target)
+                    : IsInside(model, Selection.Primary, host);
+                if (!stays)
+                {
+                    CancelTypeHere();
+                }
+            }
+        };
+    }
+
+    /// <summary>The component tray under the canvas (Task 25): a view of <c>DesignDocument.Components</c>.</summary>
+    public ViewModels.Designer.FormTrayViewModel Tray { get; }
+
+    /// <summary>
+    /// The tray follows the DOCUMENT: every designer edit bumps the revision, and an undo re-parses
+    /// and bumps it too, so the strip can never show a component the file no longer has.
+    ///
+    /// <para>⚠ The Type Here editor follows it too: an undo RE-PARSES the model, so the editor's host
+    /// is then a reference into a document that no longer exists, and typing into it would edit
+    /// nothing the file contains. Same id is not enough — it must be the same object.</para>
+    /// </summary>
+    partial void OnDesignModelRevisionChanged(int value)
+    {
+        Tray.Rebuild(DesignDocument);
+
+        // ⚠ A rename's target is asked too: it is normally the Host as well, but EditTarget is the
+        // one the commit writes to, so it is the one that must never outlive its document.
+        bool Stale(BasicLang.Forms.FormControl? c) =>
+            c != null && !ReferenceEquals(DesignDocument?.FindById(c.Id), c);
+
+        if (Stale(StripEditor.Host) || Stale(StripEditor.EditTarget))
+        {
+            CancelTypeHere();
+        }
     }
 
     public IBookmarkService? BookmarkService => _bookmarkService;
@@ -179,6 +1169,19 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
 
     partial void OnTextChanged(string value)
     {
+        // The Design view reads DesignDocument from Text on demand, so it only redraws when told
+        // the property changed. Without this, an edit in Code view leaves a stale canvas.
+        // ⛔ Not while the designer is writing its OWN edit back — see OnDesignerEdited. The
+        // cached model is what produced this text, so discarding it would drop the selection.
+        if (IsFormDocument && !_applyingDesignerEdit)
+        {
+            _designFile = null;
+            _designFileText = null;
+            OnPropertyChanged(nameof(DesignFile));
+            OnPropertyChanged(nameof(DesignDocument));
+            SyncDesignerPanels();
+        }
+
         var wasDirty = IsDirty;
         IsDirty = value != _originalText;
 
@@ -623,13 +1626,131 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
             TitleChanged?.Invoke(this, EventArgs.Empty);
 
             _eventAggregator.Publish(new FileSavedEvent(FilePath));
-            return true;
         }
         catch
         {
             return false;
         }
+
+        // ⚠ OUTSIDE the try that owns the save, and deliberately last. The document is already
+        // on disk and the save has already succeeded; a problem regenerating the companion .bas is
+        // reported as a diagnostic on that file, not as a failed save of this one.
+        await RegenerateDesignerRegionsAsync(cancellationToken);
+        return true;
     }
+
+    /// <summary>
+    /// Puts the saved document's controls into the user's own <c>.bas</c> (D1).
+    ///
+    /// <para>⛔⛔ <b>This is what makes the designer more than a drawing.</b> The document
+    /// describes the form; nothing on the desktop compiles from it. Only the two marked regions in
+    /// the <c>.bas</c> declare the fields and build the controls, so without this call a user could
+    /// drag a button onto the canvas, save, build, and get an error about the
+    /// <c>InitializeComponent</c> the scaffold calls — in a file they never wrote a line of.</para>
+    ///
+    /// <para>⚠ On SAVE rather than on each edit. The two files are one unit: regenerating on every
+    /// committed property change would put the .bas on disk while the .blform it was generated from
+    /// was still an unsaved buffer, so a crash or a discarded edit would leave the pair describing
+    /// two different forms.</para>
+    ///
+    /// <para>⚠ A refusal WRITES NOTHING and must still be seen. RegionWriter refuses rather than
+    /// overwriting a hand-edited region (BL8011), and a refusal the user is never shown is
+    /// indistinguishable from the designer quietly not working — so the findings go to the error
+    /// list either way, keyed to the .bas they are about.</para>
+    /// </summary>
+    private async Task RegenerateDesignerRegionsAsync(CancellationToken cancellationToken)
+    {
+        if (!IsFormDocument || FilePath == null)
+        {
+            return;
+        }
+
+        // ⛔⛔ EVERY path below publishes exactly once, and always on THIS key. The aggregator
+        // keys findings by (collection, file), so a finding published against the .blform is a
+        // DIFFERENT key from one against the .bas — and a later good save, which publishes on the
+        // .bas, would never clear it. One transient IO error would have left a phantom entry in
+        // the Error List for the rest of the session, pointing at a problem that no longer exists
+        // and that nothing could remove. Same reason the early returns publish an empty list
+        // rather than returning silently: an empty publish is how the previous save's findings
+        // are retracted.
+        var codePath = BasicLang.Forms.FormCodeBehind.PathFor(FilePath);
+        var findings = new List<DiagnosticItem>();
+
+        try
+        {
+            // A REFUSED document has no trustworthy model to generate from. The designer has
+            // already opened it read-only and said why, but the .bas is now out of step with a
+            // document the user just saved, and silence would read as "the designer wrote it".
+            var file = DesignFile;
+            if (file == null)
+            {
+                findings.Add(new DiagnosticItem
+                {
+                    Id = BasicLang.Forms.DesignCodes.MalformedDocument,
+                    Message = $"'{Path.GetFileName(FilePath)}' could not be read as a form, so " +
+                              $"'{Path.GetFileName(codePath)}' was not regenerated and no longer " +
+                              "matches it. Fix the document and save again.",
+                    Severity = DiagnosticSeverity.Warning,
+                    FilePath = codePath,
+                    Source = DesignerDiagnosticSource
+                });
+            }
+            else if (!await _fileService.FileExistsAsync(codePath))
+            {
+                findings.Add(new DiagnosticItem
+                {
+                    Id = BasicLang.Forms.DesignCodes.RegionAbsent,
+                    Message = $"'{Path.GetFileName(FilePath)}' has no code-behind: expected " +
+                              $"'{Path.GetFileName(codePath)}' beside it. The designer has " +
+                              "nowhere to write the controls, so nothing was generated.",
+                    Severity = DiagnosticSeverity.Warning,
+                    FilePath = codePath,
+                    Source = DesignerDiagnosticSource
+                });
+            }
+            else
+            {
+                var before = await _fileService.ReadFileAsync(codePath, cancellationToken);
+                var result = BasicLang.Forms.FormCodeBehind.Regenerate(file, codePath, before);
+
+                if (result.Changed)
+                {
+                    await _fileService.WriteFileAsync(codePath, result.Text, cancellationToken);
+                    _eventAggregator.Publish(new FileSavedEvent(codePath));
+                }
+
+                findings.AddRange(result.Diagnostics.Select(ToDiagnosticItem));
+            }
+        }
+        catch (Exception ex)
+        {
+            findings.Add(new DiagnosticItem
+            {
+                Id = BasicLang.Forms.DesignCodes.RegionAbsent,
+                Message = $"the designer could not update '{Path.GetFileName(codePath)}': {ex.Message}",
+                Severity = DiagnosticSeverity.Error,
+                FilePath = codePath,
+                Source = DesignerDiagnosticSource
+            });
+        }
+
+        _eventAggregator.Publish(new DesignerDiagnosticsEvent(codePath, findings));
+    }
+
+    /// <summary>Names the collection these findings own, so a republish replaces only its own.</summary>
+    public const string DesignerDiagnosticSource = "Form designer";
+
+    private static DiagnosticItem ToDiagnosticItem(BasicLang.Forms.DesignDiagnostic diagnostic) =>
+        new()
+        {
+            Id = diagnostic.Code,
+            Message = diagnostic.Message,
+            Severity = diagnostic.IsWarning ? DiagnosticSeverity.Warning : DiagnosticSeverity.Error,
+            FilePath = diagnostic.FilePath,
+            Line = diagnostic.Line,
+            Column = diagnostic.Column,
+            Source = DesignerDiagnosticSource
+        };
 
     public async Task<bool> SaveAsAsync(string path, CancellationToken cancellationToken = default)
     {
@@ -653,8 +1774,14 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
     public void SetContent(string content)
     {
         _originalText = content;
-        // Set the TextDocument's text - this will clear undo history (which is correct for initial load)
+
+        // ⛔ Setting Text does NOT clear the undo stack — it is an ordinary replace, and an
+        // ordinary replace is undoable. The comment here used to claim the opposite, and the claim
+        // was false: opening a file left "load the file" sitting on the stack as step one, so a
+        // single Ctrl+Z on a freshly opened document emptied it. Found by a designer-undo test,
+        // but it was never designer-specific — Code view had it too.
         TextDocument.Text = content;
+        TextDocument.UndoStack.ClearAll();
         // Keep Text in sync for backward compatibility
         Text = content;
         IsDirty = false;
@@ -700,9 +1827,26 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
     /// </summary>
     public void UpdateTextFromEditor(string newText)
     {
+        var changed = !string.Equals(_text, newText, StringComparison.Ordinal);
+
         // Update the backing field directly to avoid triggering property change
         // that would push back to the editor and clear undo
         _text = newText;
+
+        // ⛔ The canvas draws DesignDocument, which is bound — so it only refreshes when told the
+        // property changed, and this path deliberately bypasses the property setter. Without this
+        // the canvas keeps drawing the form as it was: edit the XML in Code view and switch to
+        // Design and you see the OLD form, and — now that the editor's own Ctrl+Z can undo a
+        // designer edit, because those edits are on its stack — undoing from the editor would move
+        // the control in the file and leave it where it was on screen.
+        if (changed && IsFormDocument)
+        {
+            _designFile = null;
+            _designFileText = null;
+            OnPropertyChanged(nameof(DesignFile));
+            OnPropertyChanged(nameof(DesignDocument));
+            DesignModelRevision++;
+        }
 
         // Update dirty state
         var wasDirty = IsDirty;

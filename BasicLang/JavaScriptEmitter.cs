@@ -71,7 +71,8 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             string sourceMapJson = null,
             IReadOnlyList<BasicLang.Compiler.IR.JsImportDirective> jsImports = null,
             string importBaseDirectory = null,
-            Action<string> warn = null)
+            Action<string> warn = null,
+            IReadOnlyList<BasicLang.Forms.FormDocument> forms = null)
         {
             if (string.IsNullOrWhiteSpace(outputDirectory))
                 throw new ArgumentException("An output directory is required.", nameof(outputDirectory));
@@ -117,6 +118,16 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 importBaseDirectory ?? outputDirectory, warn, written);
 
             WriteModulePackageJson(jsImports, outputDirectory, written);
+
+            // Form pages are a SIXTH output and always overwrite — every form needs a starting
+            // point on every build, and they are generated files rather than a harness. They are
+            // written into `outputDirectory`, the same directory handed to this method, precisely
+            // so the IDE (bin\Debug) and the CLI (bin\Debug\<tfm>) cannot disagree about where the
+            // site lives. index.html and package.json above remain the only protected files.
+            if (forms != null && forms.Count > 0)
+            {
+                written.AddRange(BasicLang.Forms.FormAssetEmitter.Emit(outputDirectory, scriptFileName, forms));
+            }
 
             return written;
         }

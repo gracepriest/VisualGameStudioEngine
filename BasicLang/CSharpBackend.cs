@@ -3545,6 +3545,10 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 case IRAwait awaited:
                     return awaited.Expression != null ? new[] { awaited.Expression } : Array.Empty<IRValue>();
                 case IRArrayStore arrayStore:
+                    // Task 24a. An array-literal element's use must be COUNTED here, or a call
+                    // element has use-count 0, ShouldEmitInstruction emits it as a bare statement
+                    // and Visit(IRArrayStore) re-renders it inline — measured: a green build that
+                    // ran `Bump()` four times for `{Bump(), Bump()}`.
                     return new[] { arrayStore.Array, arrayStore.Index, arrayStore.Value };
                 case IRFieldStore fieldStore:
                     return new[] { fieldStore.Object, fieldStore.Value };
@@ -4098,6 +4102,11 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
         public void Visit(IRArrayStore arrayStore)
         {
+            // ⛔ EmitExpression, never GetValueName (see Visit(IRIndexerStore) below). Task 24a's typed
+            // array literal (`New Double() {1, i}`) wraps every NON-literal element in an IRCast
+            // (CoerceToDeclaredType re-types a literal in place and builds no cast), and a by-name
+            // render emitted `t1[1] = t0;` with t0 declared nowhere — CS0103. Measured through the
+            // CLI for both a Sub parameter and a local `i`: a local does not hide it, only a literal.
             var arrayName = EmitExpression(arrayStore.Array);
             var indexVal = arrayStore.Index is IRConstant c ? c.Value.ToString() : EmitExpression(arrayStore.Index);
             var valueVal = arrayStore.Value is IRConstant vc ? EmitConstant(vc) : EmitExpression(arrayStore.Value);

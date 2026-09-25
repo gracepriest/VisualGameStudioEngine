@@ -8,8 +8,25 @@ namespace BasicLang.Compiler
 {
     /// <summary>
     /// Error codes for BasicLang compiler errors.
-    /// Organized by phase: BL1xxx = Lexer, BL2xxx = Parser, BL3xxx = Semantic,
-    /// BL4xxx = IR/CodeGen, BL5xxx = Linker/Build, BL9xxx = General.
+    ///
+    /// <para>The bands, ALL of them — this list previously named only the six with members here,
+    /// which read as "those are the bands that exist" and they are not:</para>
+    /// <list type="bullet">
+    ///   <item>BL0xxx — IDE-surfaced build/parse diagnostics</item>
+    ///   <item>BL1xxx — Lexer</item>
+    ///   <item>BL2xxx — Parser</item>
+    ///   <item>BL3xxx — Semantic</item>
+    ///   <item>BL4xxx — IR / CodeGen</item>
+    ///   <item>BL5xxx — Linker / Build</item>
+    ///   <item>BL6xxx — project and compile-set guards (emitted as literal strings; 20 codes in use)</item>
+    ///   <item>BL7xxx — JavaScript capability rejections (emitted as literal strings; 11 codes in use)</item>
+    ///   <item>BL8xxx — design-time findings (<see cref="BasicLang.Forms.DesignCodes"/>)</item>
+    ///   <item>BL9xxx — General</item>
+    /// </list>
+    ///
+    /// <para>⚠ BL0xxx, BL6xxx and BL7xxx are emitted as literal strings elsewhere and have no
+    /// members in this enum. Adding one here does not create it there, and vice versa — check for a
+    /// collision across the whole repository before claiming a number, not just against this type.</para>
     /// </summary>
     public enum ErrorCode
     {
@@ -75,6 +92,24 @@ namespace BasicLang.Compiler
         BL5001_FileNotFound,
         BL5002_CircularImport,
         BL5003_DuplicateModule,
+
+        // Design-time findings (BL8xxx). Collected, never thrown — see
+        // BasicLang.Forms.DesignDiagnostic, which carries the strings that actually reach the user.
+        BL8001_FormDocumentIsNotAProgram,
+        BL8002_HandlesClauseNotSupported,
+        BL8003_WithBlockOverControl,
+        BL8004_UnsupportedControlType,
+        BL8005_NoFormShape,
+        BL8006_OrphanedControl,
+        BL8007_FormFileUnreadable,
+        BL8008_MalformedFormDocument,
+        BL8009_DegradedProperty,
+        BL8011_RegionHandEdited,
+        BL8012_RegionMalformed,
+        BL8013_HandlerDeclaredAfterWiring,
+        BL8014_NoDesignerRegions,
+        BL8021_ReservedBindingPopulated,
+        BL8022_ReservedResourceReference,
 
         // General errors
         BL9999_UnknownError

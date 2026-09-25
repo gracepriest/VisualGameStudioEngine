@@ -85,15 +85,22 @@ public class ProjectSerializerPackageReferenceTests
         await serializer.SaveAsync(project);          // the save that used to drop them
 
         var xml = XDocument.Load(path);
+        // ⚠ Version is read from EITHER form. It used to be safe to read only the attribute,
+        // because SaveAsync rebuilt the document from the model and re-emitted every package in
+        // attribute form. That normalization was a side effect of the rebuild that destroyed
+        // unmodeled content, and it went away with it: a preserving save now leaves Serilog in the
+        // <Version> child-element form the fixture wrote. Preserving the author's spelling is the
+        // point, so this assertion pins the VERSION, not the syntax carrying it.
         var pkgs = xml.Descendants("PackageReference")
-            .Select(e => ((string?)e.Attribute("Include"), (string?)e.Attribute("Version")))
+            .Select(e => ((string?)e.Attribute("Include"),
+                          (string?)e.Attribute("Version") ?? (string?)e.Element("Version")))
             .ToList();
 
         Assert.Multiple(() =>
         {
             Assert.That(pkgs, Has.Count.EqualTo(2));
             Assert.That(pkgs, Does.Contain(("Newtonsoft.Json", "13.0.3")));
-            Assert.That(pkgs, Does.Contain(("Serilog", "3.1.1")));   // normalized to the attribute form
+            Assert.That(pkgs, Does.Contain(("Serilog", "3.1.1")));
         });
 
         // reload confirms the model survived a full round-trip

@@ -146,4 +146,44 @@ public class ProjectSerializerReferenceTests
         var hasBom = bytes.Length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF;
         Assert.That(hasBom, Is.False, ".blproj must stay BOM-less UTF-8");
     }
+
+    [Test]
+    public async Task ANamespacedProject_RefusesToSave_WithACatchableType()
+    {
+        // ⛔⛔ A save that CANNOT happen must not report success. This path used to return
+        // quietly: the IDE said "saved", the user believed their change was persisted, and it was
+        // gone at the next reload. The structure-preserving writer cannot edit a namespaced file
+        // without rebuilding it from a model that never read it, so it refuses.
+        //
+        // ⚠ And the refusal is a NAMED type. Eleven call sites await SaveProjectAsync and none of
+        // them caught anything, so throwing a bare InvalidOperationException traded one silent
+        // failure for an unhandled exception in whichever flow the user was in — in the form case,
+        // after both new files were already on disk. Callers must be able to catch this one thing
+        // without swallowing real bugs.
+        var path = Path.Combine(_dir, "Namespaced.blproj");
+        await File.WriteAllTextAsync(path, """
+            <?xml version="1.0" encoding="utf-8"?>
+            <BasicLangProject xmlns="http://schemas.microsoft.com/developer/msbuild/2003" Version="1.0">
+              <PropertyGroup>
+                <ProjectName>Namespaced</ProjectName>
+              </PropertyGroup>
+            </BasicLangProject>
+            """);
+
+        var before = await File.ReadAllTextAsync(path);
+        var serializer = new ProjectSerializer();
+        var project = await serializer.LoadAsync(path);
+        project.Name = "Renamed";
+
+        var refusal = Assert.ThrowsAsync<ProjectSaveRefusedException>(
+            async () => await serializer.SaveAsync(project));
+
+        Assert.Multiple(async () =>
+        {
+            Assert.That(refusal!.FilePath, Is.EqualTo(path), "the caller has to name the file");
+            Assert.That(refusal.Message, Does.Contain("xmlns"), "and say what to do about it");
+            Assert.That(await File.ReadAllTextAsync(path), Is.EqualTo(before),
+                "refusing means the file is untouched, not half-written");
+        });
+    }
 }

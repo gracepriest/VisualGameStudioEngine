@@ -1,4 +1,6 @@
+using System;
 using System.Linq;
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
@@ -8,6 +10,8 @@ using VisualGameStudio.Editor.Completion;
 using VisualGameStudio.Editor.Controls;
 using VisualGameStudio.Editor.Margins;
 using VisualGameStudio.Shell.ViewModels;
+using VisualGameStudio.Shell.Controls;
+using VisualGameStudio.Shell.ViewModels.Designer;
 using VisualGameStudio.Shell.ViewModels.Dialogs;
 using VisualGameStudio.Shell.ViewModels.Documents;
 using VisualGameStudio.Shell.Views.Controls;
@@ -51,6 +55,98 @@ public partial class CodeEditorDocumentView : UserControl
         InitializeComponent();
         DataContextChanged += OnDataContextChanged;
         KeyDown += OnViewKeyDown;
+
+        // ⛔⛔ PointerPressed on the toolbox CANNOT be wired as a XAML attribute. ListBox marks the
+        // press HANDLED while updating selection, and `PointerPressed="..."` subscribes without
+        // handledEventsToo — so the handler never ran, _toolboxDragKind stayed null, and every
+        // OnToolboxPointerMoved returned at its first line. The row highlighted and nothing could
+        // ever be dragged onto the canvas.
+        //
+        // MEASURED (Avalonia 11.3.13, headless): pressing a ListBox row fires the XAML-style
+        // handler False / a handledEventsToo handler True with e.Handled ALREADY true.
+        // PointerMoved and PointerReleased are NOT handled — they stay as XAML attributes, and
+        // moving this one alone is the whole fix.
+        ToolboxList.AddHandler(
+            InputElement.PointerPressedEvent,
+            OnToolboxPointerPressed,
+            RoutingStrategies.Bubble,
+            handledEventsToo: true);
+
+        // Task 25: the component tray is a drop target for the same toolbox drag the canvas
+        // accepts — but it routes to ITS OWN command (see OnTrayDrop).
+        ComponentTray.AddHandler(DragDrop.DragOverEvent, OnTrayDragOver);
+        ComponentTray.AddHandler(DragDrop.DropEvent, OnTrayDrop);
+    }
+
+    // ==================================================================
+    // Task 25 — the component tray
+    // ==================================================================
+
+    /// <summary>
+    /// A click on a tray item selects it through the shared <c>Selection</c> — the canvas's own
+    /// subscription then pushes it into the property grid — and moves keyboard focus INTO the tray,
+    /// which is what makes its Delete KeyBinding live.
+    /// </summary>
+    private void OnTrayItemPressed(object? sender, PointerPressedEventArgs e)
+    {
+        if ((sender as Control)?.DataContext is not FormTrayItem item ||
+            DataContext is not CodeEditorDocumentViewModel vm)
+        {
+            return;
+        }
+
+        vm.Tray.Select(item);
+        ComponentTray.Focus();
+        e.Handled = true;
+    }
+
+    /// <summary>Double-click: the default handler, exactly as on the canvas (Task 22).</summary>
+    private void OnTrayItemDoubleTapped(object? sender, TappedEventArgs e)
+    {
+        if ((sender as Control)?.DataContext is not FormTrayItem item ||
+            DataContext is not CodeEditorDocumentViewModel vm)
+        {
+            return;
+        }
+
+        vm.ActivateControlCommand.Execute(item.Control);
+        e.Handled = true;
+    }
+
+    private static string? DraggedKind(DragEventArgs e) =>
+        e.Data.Contains(FormCanvasControl.ControlKindFormat) &&
+        e.Data.Get(FormCanvasControl.ControlKindFormat) is string kind &&
+        !string.IsNullOrEmpty(kind)
+            ? kind
+            : null;
+
+    private void OnTrayDragOver(object? sender, DragEventArgs e)
+    {
+        // Copy only for a COMPONENT kind: the cursor says no to a Button over the tray before the
+        // drop does, which is where a refusal is cheapest.
+        var kind = DraggedKind(e);
+        e.DragEffects = kind != null && BasicLang.Forms.FormControlCatalog.Find(kind) is { IsComponent: true }
+            ? DragDropEffects.Copy
+            : DragDropEffects.None;
+        e.Handled = true;
+    }
+
+    /// <summary>
+    /// ⛔ The tray's OWN command, never the canvas's <c>PlaceDroppedControlCommand</c>: a
+    /// <c>FormControlDropRequest</c> carries no origin, so the canvas path would place a control
+    /// kind at (0,0). <c>TrayDropCommand</c> places a component and refuses a control by name.
+    /// </summary>
+    private void OnTrayDrop(object? sender, DragEventArgs e)
+    {
+        e.Handled = true;
+
+        var kind = DraggedKind(e);
+        if (kind == null || DataContext is not CodeEditorDocumentViewModel vm)
+        {
+            return;
+        }
+
+        vm.TrayDropCommand.Execute(kind);
     }
 
     private void UnsubscribeFromViewModel(CodeEditorDocumentViewModel vm)
@@ -2019,6 +2115,86 @@ public partial class CodeEditorDocumentView : UserControl
         {
             // Settings application is non-critical
         }
+    }
+
+    #endregion
+
+    #region Designer toolbox drag source
+
+    // ⛔⛔ Without these three handlers the toolbox is a LIST, not a source. That was the state
+    // this feature shipped in first: a toolbox naming ten control kinds, a canvas that drew and
+    // selected, and no way whatsoever to put a control on a form except by typing XML in Code view.
+    // "A generator with no caller" has a user-facing twin, and this is it.
+
+    /// <summary>Where the press landed and what it was on, or null when no drag is pending.</summary>
+    private Point? _toolboxDragOrigin;
+    private string? _toolboxDragKind;
+
+    private void OnToolboxPointerPressed(object? sender, PointerPressedEventArgs e)
+    {
+        _toolboxDragOrigin = null;
+        _toolboxDragKind = null;
+
+        if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
+        {
+            return;
+        }
+
+        // ⚠ The kind comes from the item under the POINTER, not from ListBox.SelectedItem: on a
+        // press the selection has not moved yet, so using it would drag whatever was selected last
+        // — the previous row, or nothing at all on the very first drag of a session.
+        if ((e.Source as Control)?.DataContext is FormToolboxItem item)
+        {
+            _toolboxDragOrigin = e.GetPosition(this);
+            _toolboxDragKind = item.Kind;
+        }
+    }
+
+    private async void OnToolboxPointerMoved(object? sender, PointerEventArgs e)
+    {
+        if (_toolboxDragOrigin is not { } origin || _toolboxDragKind is not { } kind)
+        {
+            return;
+        }
+
+        if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
+        {
+            _toolboxDragOrigin = null;
+            return;
+        }
+
+        // ⚠ A threshold, so a plain click still selects the row instead of starting a drag nobody
+        // asked for. Without it every click on the toolbox becomes a drag gesture and the list
+        // stops behaving like a list.
+        var moved = e.GetPosition(this) - origin;
+        if (Math.Abs(moved.X) < 4 && Math.Abs(moved.Y) < 4)
+        {
+            return;
+        }
+
+        // Cleared BEFORE the await: DoDragDrop runs a nested loop until the drop, and a second
+        // PointerMoved arriving in the meantime would start a second drag for the same press.
+        _toolboxDragOrigin = null;
+        _toolboxDragKind = null;
+
+        var data = new DataObject();
+        data.Set(FormCanvasControl.ControlKindFormat, kind);
+
+        try
+        {
+            await DragDrop.DoDragDrop(e, data, DragDropEffects.Copy);
+        }
+        catch (Exception)
+        {
+            // A drag that the platform refuses to start is not worth taking the IDE down for. The
+            // toolbox stays usable and the user can try again.
+        }
+    }
+
+    private void OnToolboxPointerReleased(object? sender, PointerReleasedEventArgs e)
+    {
+        _toolboxDragOrigin = null;
+        _toolboxDragKind = null;
     }
 
     #endregion
