@@ -77,7 +77,7 @@ private:
 /* Decimal `/` and `Mod` by zero (CppDecimalRuntime) throw .NET's DivideByZeroException, which a
    `Catch ex As DivideByZeroException` (or ArithmeticException / Exception) must catch. The chain
    string MUST match CppExceptionTypes' DivideByZeroException entry (a test pins it). Integral `\`
-   and `Mod` go through CppIntegerDivisionRuntime instead. */
+   and `Mod` go through BasicLang::IntDiv / IntMod instead. */
 constexpr const char* DivideByZeroChain =
     ""System.DivideByZeroException;System.ArithmeticException;System.SystemException;System.Exception"";
 
