@@ -404,14 +404,19 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // `namespace BasicLang { … }` (a sibling re-open at file scope, indent 0) and its
             // std::hash specializations follow the namespace close. The bodies are
             // include-free; their std headers live in the unconditional include set above.
+            //
+            // §11.1 NetException + the BasicLang::String alias FIRST: UNCONDITIONAL in both
+            // modes — the typed-catch ladder's trigger is source-level (any .NET-typed
+            // Catch), not surface-level, so the declaration must always exist
+            // (split-mode counterpart: EmitRuntimeHeader in CppCodeGenerator.Split.cs). It
+            // precedes the BCL bodies because the Decimal runtime THROWS it (division by zero).
+            SpliceRuntimeSource(CppNetExceptionRuntime.Source);
             SpliceRuntimeSource(CppBclRuntime.BclBody);
             SpliceRuntimeSource(CppDecimalRuntime.DecimalBody);
 
-            // §11.1 NetException + the BasicLang::String alias: UNCONDITIONAL in both
-            // modes — the typed-catch ladder's trigger is source-level (any .NET-typed
-            // Catch), not surface-level, so the declaration must always exist
-            // (split-mode counterpart: EmitRuntimeHeader in CppCodeGenerator.Split.cs).
-            SpliceRuntimeSource(CppNetExceptionRuntime.Source);
+            // Checked integral `\` / `Mod` (throws NetException, so AFTER it). UNCONDITIONAL
+            // in both modes (split-mode counterpart: EmitRuntimeHeader in CppCodeGenerator.Split.cs).
+            SpliceRuntimeSource(CppIntegerDivisionRuntime.Source);
 
             // D-P7 NetRef (P2a-2 flip): UNCONDITIONAL in both modes — ManagedOwned
             // declaration positions lower to BasicLang::NetRef even with an empty surface,
@@ -2141,6 +2146,95 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         private string _regionLabelSuffix = "";
 
         /// <summary>
+        /// The blocks of the inline region being emitted right now (null outside any region).
+        /// A goto to a block OUTSIDE it — an <c>Exit For</c> from a Try/Catch body to the enclosing
+        /// loop's end, since ComputeInlineRegion leaves an enclosing construct's blocks out — must
+        /// target the label as the top-level walker writes it, once and UNSUFFIXED. MEASURED: with
+        /// the suffix, the §11.1 ladder's copy of a Catch body emitted `goto for1_end_nex;`,
+        /// "label used but not defined".
+        /// </summary>
+        private HashSet<BasicBlock> _currentRegionBlocks;
+
+        /// <summary>The label a goto to <paramref name="target"/> must name from here.</summary>
+        private string GotoLabel(BasicBlock target) =>
+            _currentRegionBlocks != null && !_currentRegionBlocks.Contains(target)
+                ? EndLabelName(target)
+                : LabelName(target.Name);
+
+        /// <summary>
+        /// The Trys WITH A FINALLY whose try or catch body is being emitted right now, innermost
+        /// LAST, each with every block its try and catch bodies own.
+        /// </summary>
+        private readonly List<(IRTryCatch Try, HashSet<BasicBlock> Owned)> _finallyFrames = new();
+
+        private int _finallyExitCopies;
+
+        /// <summary>
+        /// A goto to <paramref name="target"/>, running every Finally it LEAVES first.
+        ///
+        /// <para>⛔ A goto out of a try block runs no handler — only a THROW reaches the
+        /// <c>catch (...)</c> copy of the Finally — so a jump that leaves a Try must carry its own
+        /// copy of the Finally, as the normal and exceptional exits already do. MEASURED: once
+        /// <c>Exit For</c> inside a Try compiled (it was "jump to label 'for0_end'" before),
+        /// <c>Try : If i = 2 Then Exit For : Finally : Print "finally"</c> printed nothing for
+        /// the exiting iteration, where .NET runs the Finally. Every frame the target is outside
+        /// of is left, innermost first; each copy gets its own label suffix, and while a copy is
+        /// emitted the frames being left are popped, so an exit inside that Finally cannot re-run
+        /// it.</para>
+        /// </summary>
+        private void EmitGoto(BasicBlock target)
+        {
+            var label = GotoLabel(target);
+
+            // A jump to a block of the region being emitted leaves nothing. MEASURED without this:
+            // the jumps between a Finally's own If arms were each given ANOTHER copy of that
+            // Finally, and `fin-a` printed three times.
+            if (_currentRegionBlocks == null || _currentRegionBlocks.Contains(target))
+            {
+                WriteLine($"goto {label};");
+                return;
+            }
+
+            var leaving = new List<IRTryCatch>();
+            for (int k = _finallyFrames.Count - 1; k >= 0; k--)
+            {
+                if (_finallyFrames[k].Owned.Contains(target)) break;
+                leaving.Add(_finallyFrames[k].Try);
+            }
+
+            if (leaving.Count == 0)
+            {
+                WriteLine($"goto {label};");
+                return;
+            }
+
+            var savedFrames = new List<(IRTryCatch, HashSet<BasicBlock>)>(_finallyFrames);
+            WriteLine("{");
+            Indent();
+            foreach (var tc in leaving)
+            {
+                var at = _finallyFrames.FindIndex(f => ReferenceEquals(f.Try, tc));
+                if (at >= 0) _finallyFrames.RemoveRange(at, _finallyFrames.Count - at);
+
+                var savedSuffix = _regionLabelSuffix;
+                _regionLabelSuffix = savedSuffix + $"_fx{_finallyExitCopies++}";
+                var copyExit = LabelName(tc.EndBlock.Name + ".fxend");
+                WriteLine("{");
+                Indent();
+                EmitInlineRegion(tc.FinallyBlock, tc.EndBlock, RegionEnd.GotoEnd, copyExit);
+                Unindent();
+                WriteLine($"{copyExit}: ;");
+                WriteLine("}");
+                _regionLabelSuffix = savedSuffix;
+            }
+            _finallyFrames.Clear();
+            _finallyFrames.AddRange(savedFrames);
+            Unindent();
+            WriteLine("}");
+            WriteLine($"goto {label};");
+        }
+
+        /// <summary>
         /// Emit a function body: the entry block, then every remaining block in creation
         /// order. BasicBlock.Successors is only populated by the ControlFlowGraph analysis
         /// pass (which codegen does not run), so successor-walking alone would silently
@@ -2208,11 +2302,29 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         /// the function's creation order for stable, readable output. Reachability is computed
         /// from the IR's own branch/structured edges (not <c>BasicBlock.Successors</c>, which is
         /// only populated when a CFG pass has run), so it works on the un-optimized path too.
+        ///
+        /// <para>⛔ A block created BEFORE <paramref name="entry"/> is never part of the region.
+        /// IRBuilder creates a construct's entry (and a Try's catch/finally entries) BEFORE it
+        /// builds the body, so everything the body owns — a nested If, a whole nested loop — is
+        /// created after the entry, while a block created earlier belongs to an ENCLOSING
+        /// construct. Reachability alone could not tell them apart: an <c>Exit For</c> in a Try
+        /// body branches to the enclosing loop's end block. MEASURED: that pulled the loop end,
+        /// and the code after the loop including its <c>return</c>, INSIDE the try braces; the
+        /// loop's normal exit then jumped into the try block — "jump to label 'for0_end'", a C++
+        /// compile error, for any Exit For / Exit Do inside a Try or Catch. Left outside, the exit
+        /// is a goto OUT of the try, which C++ allows (and unwinds correctly).</para>
         /// </summary>
         private IReadOnlyList<BasicBlock> ComputeInlineRegion(BasicBlock entry, BasicBlock boundary)
         {
             var region = new HashSet<BasicBlock>();
             if (entry == null || entry == boundary) return new List<BasicBlock>();
+
+            var creationIndex = new Dictionary<BasicBlock, int>();
+            for (int k = 0; k < _currentFunction.Blocks.Count; k++)
+                creationIndex[_currentFunction.Blocks[k]] = k;
+            var entryIndex = creationIndex.TryGetValue(entry, out var ei) ? ei : -1;
+            bool OwnedByOuterConstruct(BasicBlock b) =>
+                entryIndex >= 0 && creationIndex.TryGetValue(b, out var bi) && bi < entryIndex;
 
             var stack = new Stack<BasicBlock>();
             stack.Push(entry);
@@ -2221,7 +2333,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 var block = stack.Pop();
                 if (block == null || block == boundary || !region.Add(block)) continue;
                 foreach (var succ in ControlFlowTargets(block))
-                    if (succ != null && succ != boundary && !region.Contains(succ))
+                    if (succ != null && succ != boundary && !region.Contains(succ) && !OwnedByOuterConstruct(succ))
                         stack.Push(succ);
             }
 
@@ -2253,6 +2365,15 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                         if (sw.DefaultTarget != null) yield return sw.DefaultTarget;
                         foreach (var (_, target) in sw.Cases)
                             if (target != null) yield return target;
+                        // ⛔ PATTERN CASES TOO — and they are the ones that matter: the parser
+                        // routes EVERY case value into PatternCases and leaves Cases empty (see
+                        // ControlFlowGraph, which this method mirrors). Missing them, a Select's
+                        // case bodies were never part of an enclosing Try's region, so they were
+                        // emitted OUTSIDE the try braces and the switch jumped back in — MEASURED:
+                        // `Try : Select Case n : Case 7 ...` failed to compile with
+                        // "jump to label 'switch0_end'" (a goto into a try block is ill-formed).
+                        foreach (var patternCase in sw.PatternCases ?? Enumerable.Empty<IRPatternCase>())
+                            if (patternCase?.Target != null) yield return patternCase.Target;
                         break;
                     case IRForEach fe:
                         if (fe.BodyBlock != null) yield return fe.BodyBlock;
@@ -2487,9 +2608,31 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 // so a future analyzer relaxation degrades to a C++ compile error.
             }
 
+            if (CheckedIntegerDivisionHelper(binaryOp) is { } helper)
+            {
+                WriteLine($"{result} = {helper}({left}, {right});");
+                return;
+            }
+
             WriteLine($"{result} = {left} {op} {right};");
         }
-        
+
+        /// <summary>
+        /// The checked runtime helper (<see cref="CppIntegerDivisionRuntime"/>) an integral
+        /// <c>\</c> or <c>Mod</c> lowers to, or null. ⛔ Never the bare operator: C++ integer
+        /// division by zero is undefined behaviour — on x86 a SIGFPE that no <c>Catch</c> can
+        /// see — where .NET throws <c>DivideByZeroException</c>. <c>\</c> is always integral here
+        /// (IRBuilder converts a floating operand, ADR-0005 D1); a floating <c>Mod</c> is not
+        /// division-by-zero-trapping (.NET gives NaN) and keeps the operator.
+        /// </summary>
+        private static string CheckedIntegerDivisionHelper(IRBinaryOp op) => op.Operation switch
+        {
+            BinaryOpKind.IntDiv => "BasicLang::IntDiv",
+            BinaryOpKind.Mod when op.Left?.Type?.IsIntegral() == true && op.Right?.Type?.IsIntegral() == true
+                => "BasicLang::IntMod",
+            _ => null,
+        };
+
         public override void Visit(IRUnaryOp unaryOp)
         {
             var operand = GetValueName(unaryOp.Operand);
@@ -3782,7 +3925,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         
         public override void Visit(IRBranch branch)
         {
-            WriteLine($"goto {LabelName(branch.Target.Name)};");
+            EmitGoto(branch.Target);
         }
         
         public override void Visit(IRConditionalBranch condBranch)
@@ -3791,12 +3934,12 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             
             WriteLine($"if ({condition}) {{");
             Indent();
-            WriteLine($"goto {LabelName(condBranch.TrueTarget.Name)};");
+            EmitGoto(condBranch.TrueTarget);
             Unindent();
             WriteLine("}");
             WriteLine($"else {{");
             Indent();
-            WriteLine($"goto {LabelName(condBranch.FalseTarget.Name)};");
+            EmitGoto(condBranch.FalseTarget);
             Unindent();
             WriteLine("}");
         }
@@ -3816,16 +3959,16 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // though the parser never populates them today.)
             foreach (var (caseValue, target) in switchInst.Cases)
             {
-                WriteLine($"if ({value} == {ValueText(caseValue)}) {{ goto {LabelName(target.Name)}; }}");
+                WriteLine($"if ({value} == {ValueText(caseValue)}) {{ goto {GotoLabel(target)}; }}");
             }
 
             foreach (var patternCase in switchInst.PatternCases)
             {
                 var cond = PatternCaseCondition(value, patternCase);
-                WriteLine($"if ({cond}) {{ goto {LabelName(patternCase.Target.Name)}; }}");
+                WriteLine($"if ({cond}) {{ goto {GotoLabel(patternCase.Target)}; }}");
             }
 
-            WriteLine($"goto {LabelName(switchInst.DefaultTarget.Name)};");
+            WriteLine($"goto {GotoLabel(switchInst.DefaultTarget)};");
         }
 
         /// <summary>
@@ -3898,6 +4041,8 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             {
                 case IRConstant c:
                     return EmitConstant(c);
+                case IRBinaryOp b when CheckedIntegerDivisionHelper(b) is { } helper:
+                    return $"{helper}({RenderInline(b.Left)}, {RenderInline(b.Right)})";
                 case IRBinaryOp b:
                     return $"({RenderInline(b.Left)} {MapBinaryOperator(b.Operation)} {RenderInline(b.Right)})";
                 case IRCompare cmp:
@@ -4725,6 +4870,17 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 ? LabelName(tryCatch.EndBlock.Name + ".fin")
                 : EndLabelName(tryCatch.EndBlock);
 
+            // Exits from the try and catch bodies must run this Try's Finally (EmitGoto). Popped
+            // before the Finally copies below are emitted, which are not inside it.
+            var pushedFinallyFrame = tryCatch.FinallyBlock != null;
+            if (pushedFinallyFrame)
+            {
+                var owned = new HashSet<BasicBlock>(ComputeInlineRegion(tryCatch.TryBlock, tryCatch.EndBlock));
+                foreach (var cc in tryCatch.CatchClauses)
+                    owned.UnionWith(ComputeInlineRegion(cc.Block, tryCatch.EndBlock));
+                _finallyFrames.Add((tryCatch, owned));
+            }
+
             WriteLine("try");
             WriteLine("{");
             Indent();
@@ -4834,7 +4990,12 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                     WriteLine("{");
                     Indent();
                     _regionLabelSuffix = savedSuffix + "_fnex";
+                    // This copy IS the Finally running: an exit inside it must not run it again.
+                    var suspendedFrame = _finallyFrames.FindLastIndex(f => ReferenceEquals(f.Try, tryCatch));
+                    var suspended = suspendedFrame >= 0 ? _finallyFrames[suspendedFrame] : default;
+                    if (suspendedFrame >= 0) _finallyFrames.RemoveAt(suspendedFrame);
                     EmitInlineRegion(tryCatch.FinallyBlock, tryCatch.EndBlock, RegionEnd.GotoEnd, propagationLabel);
+                    if (suspendedFrame >= 0) _finallyFrames.Insert(suspendedFrame, suspended);
                     _regionLabelSuffix = savedSuffix;
                     Unindent();
                     WriteLine($"{propagationLabel}: ;");
@@ -4865,6 +5026,9 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 WriteLine("}");
             }
 
+            if (pushedFinallyFrame)
+                _finallyFrames.RemoveAt(_finallyFrames.FindLastIndex(f => ReferenceEquals(f.Try, tryCatch)));
+
             if (tryCatch.FinallyBlock != null)
             {
                 // The finally body is emitted TWICE (exceptional + normal path). When it contains
@@ -4875,15 +5039,29 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 // pre-existing _fex/_fex collision; non-nested emission is byte-identical.
                 // Known limitation: Return inside Try bypasses the finally body.
                 var savedFinallySuffix = _regionLabelSuffix;
+
+                // ⛔ BOTH COPIES BELOW jump to an exit label placed right after their region, the
+                // way the `_fnex` copy above already does — they used RegionEnd.FallThrough, whose
+                // failure mode is documented at the top of this method and on EmitRegionEnd: a
+                // region's exit is NOT necessarily its last emitted block (blocks emit in creation
+                // order, and a Select's switch.end — like an If's merge — is created before its
+                // arms). MEASURED: `Finally : Select Case n : Case 7 ...` compiled, then printed
+                // "finally seven" forever — the end block emitted nothing and fell into the case
+                // arm, which jumped back to the end block. Labels are captured at the ENCLOSING
+                // suffix so each copy's region gotos (emitted under _fex/_fnorm) share one name.
+                var finallyExceptionExit = LabelName(tryCatch.EndBlock.Name + ".fexit");
+                var finallyNormalExit = LabelName(tryCatch.EndBlock.Name + ".fnexit");
+
                 WriteLine("catch (...)");
                 WriteLine("{");
                 Indent();
                 WriteLine("{");
                 Indent();
                 _regionLabelSuffix = savedFinallySuffix + "_fex";
-                EmitInlineRegion(tryCatch.FinallyBlock, tryCatch.EndBlock, RegionEnd.FallThrough);
+                EmitInlineRegion(tryCatch.FinallyBlock, tryCatch.EndBlock, RegionEnd.GotoEnd, finallyExceptionExit);
                 _regionLabelSuffix = savedFinallySuffix;
                 Unindent();
+                WriteLine($"{finallyExceptionExit}: ;");
                 WriteLine("}");
                 WriteLine("throw;");
                 Unindent();
@@ -4902,9 +5080,10 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 WriteLine("{");
                 Indent();
                 _regionLabelSuffix = savedFinallySuffix + "_fnorm";
-                EmitInlineRegion(tryCatch.FinallyBlock, tryCatch.EndBlock, RegionEnd.FallThrough);
+                EmitInlineRegion(tryCatch.FinallyBlock, tryCatch.EndBlock, RegionEnd.GotoEnd, finallyNormalExit);
                 _regionLabelSuffix = savedFinallySuffix;
                 Unindent();
+                WriteLine($"{finallyNormalExit}: ;");
                 WriteLine("}");
             }
         }
@@ -4958,6 +5137,21 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         private void EmitInlineRegion(BasicBlock entry, BasicBlock endBlock, RegionEnd endMode, string endLabel = null)
         {
             var region = ComputeInlineRegion(entry, endBlock);
+            var savedRegionBlocks = _currentRegionBlocks;
+            _currentRegionBlocks = new HashSet<BasicBlock>(region);
+            try
+            {
+                EmitInlineRegionBlocks(entry, endBlock, endMode, endLabel, region);
+            }
+            finally
+            {
+                _currentRegionBlocks = savedRegionBlocks;
+            }
+        }
+
+        private void EmitInlineRegionBlocks(BasicBlock entry, BasicBlock endBlock, RegionEnd endMode, string endLabel,
+            IReadOnlyList<BasicBlock> region)
+        {
             // Blocks a NESTED structured construct owns are emitted by that construct's own Visit
             // (inline, inside ITS braces); skip them here so they are not emitted twice.
             var nestedConsumed = new HashSet<BasicBlock>();
@@ -5110,7 +5304,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             }
             else
             {
-                WriteLine($"goto {LabelName(target.Name)};");
+                EmitGoto(target);
             }
         }
 
@@ -5464,8 +5658,17 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             if (constant.Value is double d)
                 return CppDoubleLiteral(d);
 
+            // ⛔ C++ HAS NO NEGATIVE LITERALS: `-2147483648` is `-(2147483648)`, and 2147483648 does
+            // not fit int, so the expression is typed `long` — the minimum Integer silently became
+            // a 64-bit value. MEASURED: `BasicLang::IntDiv(-2147483648, -1)` saw an int64
+            // dividend, found no overflow, and wrapped 2147483648 back into the Integer, where .NET
+            // throws OverflowException. `9223372036854775808LL` fits NO signed type (a hard error).
+            // Each minimum is spelled as (min + 1) - 1, which keeps its own type.
             if (constant.Value is long l)
-                return l.ToString(CultureInfo.InvariantCulture) + "LL";
+                return l == long.MinValue ? "(-9223372036854775807LL - 1)" : l.ToString(CultureInfo.InvariantCulture) + "LL";
+
+            if (constant.Value is int i32 && i32 == int.MinValue)
+                return "(-2147483647 - 1)";
 
             // P1 Decimal literal: emit the exact .NET bit pattern
             // through the engine, never a lossy double literal. GetBits: [0..2] = 96-bit

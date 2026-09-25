@@ -172,6 +172,13 @@ public class JsExecutionTierRosterTests
         // CopyPropagationSharedVocabularyUnitTests are NOT here: pure in-process IR fixtures,
         // spawn nothing, carry no [Category("Integration")].
         typeof(CopyPropagationSharedVocabularyExecutionTests),
+
+        // A call's result stored into a variable read elsewhere (a lambda, another function).
+        typeof(JsStoreOfCallResultRunTests),
+
+        // Integral `\` / `Mod` by zero. Its name matches none of the patterns below, so the
+        // coverage test cannot see it — listed by hand; its JS leg spawns Node.
+        typeof(IntegerDivisionByZeroRunTests),
     };
 
     /// <summary>
@@ -219,7 +226,7 @@ public class JsExecutionTierRosterTests
 
     [Test]
     public void RosterIsPinned()
-        => Assert.That(ExecutionTier, Has.Length.EqualTo(47),
+        => Assert.That(ExecutionTier, Has.Length.EqualTo(49),
             "The execution-tier roster changed. That is fine — update the number — but it must " +
             "be a deliberate edit, not a silent shrink.");
 

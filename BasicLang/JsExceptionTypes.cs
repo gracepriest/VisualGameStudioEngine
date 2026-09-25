@@ -134,6 +134,14 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 }
             }
 
+            // The checked integral `\` / `Mod` helpers throw these whether or not the program
+            // names them — an uncaught throw must still find its class.
+            if (JavaScriptCodeGenerator.UsesIntegerDivisionHelper(module))
+            {
+                Mention("DivideByZeroException");
+                Mention("OverflowException");
+            }
+
             // Close over ancestors, then emit in table order so every base precedes its derived.
             foreach (var name in mentioned.ToList())
             {
