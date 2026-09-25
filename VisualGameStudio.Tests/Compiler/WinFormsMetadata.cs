@@ -30,8 +30,15 @@ internal sealed class WinFormsMetadata
                         "tools/WinFormsMetadataDump (see its README) and check the csproj copies it.");
         }
 
-        _loaded = JsonSerializer.Deserialize<WinFormsMetadata>(
-            File.ReadAllText(path), new JsonSerializerOptions { PropertyNameCaseInsensitive = true })!;
+        var loaded = JsonSerializer.Deserialize<WinFormsMetadata>(
+            File.ReadAllText(path), new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+        if (loaded == null)
+        {
+            Assert.Fail($"the WinForms oracle at {path} deserialised to null (a file holding just 'null'?). " +
+                        "Regenerate it with tools/WinFormsMetadataDump.");
+        }
+
+        _loaded = loaded;
         return _loaded;
     }
 
@@ -65,7 +72,18 @@ internal sealed class WinFormsPropertyEntry
     public bool IsFlags { get; set; }
     public List<string>? EnumMembers { get; set; }
     public bool IsCollection { get; set; }
+
+    /// <summary>
+    /// One of <see cref="DefaultKinds"/> — the vocabulary is tools/WinFormsMetadataDump/README.md's
+    /// "What defaultKind means" table. Only attribute/reset carry a <see cref="Default"/> to compare.
+    /// </summary>
     public string DefaultKind { get; set; } = "";
+
+    public static readonly IReadOnlyList<string> DefaultKinds = new[]
+    {
+        "collection", "attribute", "ambient", "unreadable", "volatile", "serialized", "reset"
+    };
+
     public string? Default { get; set; }
     public string Description { get; set; } = "";
 }

@@ -26,16 +26,36 @@ Then run the parity fixture:
 
 The JSON records `framework` and `windowsForms` so a diff shows which runtime produced it.
 
+## Culture
+
+The tool pins `CurrentCulture` and `CurrentUICulture` to the invariant culture before it reads
+anything. `Category` and `Description` are LOCALISED through `CurrentUICulture`, and the
+WindowsDesktop runtime ships German, French, Japanese, … resources, so without the pin a
+regeneration on a non-English Windows would write `"Verhalten"` where the catalog says `Behavior`.
+Invariant resolves to the neutral (English) resources. Every value's text form is invariant as well
+(`800, 450`, never `800; 450`), so the file is byte-identical whatever machine regenerates it.
+
+## The Form is measured top-level
+
+Every control is PARENTED (into a `Panel`) to find out whether it inherits `Font`, `ForeColor`,
+`Cursor` or `RightToLeft` from its parent (`ambient`). The Form is not: the designer's root Form is
+top-level, which is what Visual Studio's Properties window shows, and a top-level form has no
+parent to inherit from — its values are its own and classify as `attribute`/`reset`/`serialized`.
+
 ## What `defaultKind` means
 
 | kind | meaning | the catalog's `Default` must be |
 |---|---|---|
 | attribute | a `[DefaultValue]` exists | equal to it |
-| reset | no attribute; the fresh instance holds what Reset gives back | equal to it |
+| reset | no attribute; `ShouldSerializeValue` is false on a fresh instance, so the designer would not write it — its current value is the type's default (`ResetValue` is never called) | equal to it |
 | ambient | inherited from the parent (measured by parenting) | null |
 | volatile | two fresh instances disagree (a clock read) | null |
 | serialized | no attribute and a fresh instance would be written | null |
 | collection | a collection | null |
+| unreadable | the getter or `ShouldSerializeValue` threw on a fresh instance: nothing was measured | not judged — the row needs an `OracleExemption` or a look |
+
+A value the tool has no text form for (a complex object such as `FlatAppearance`) is recorded as
+`null`, never as its type name.
 
 A read that depends on the object being PARENTED or SHOWN (an unparented ToolStripItem reports
 `Visible=False`; a Form starts hidden) is wrong as a default; the catalog row says so with

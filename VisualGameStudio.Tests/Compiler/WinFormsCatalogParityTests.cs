@@ -37,4 +37,20 @@ public class WinFormsCatalogParityTests
             "Add them to tools/WinFormsMetadataDump/Program.cs's Types table and regenerate (see its README): " +
             string.Join(", ", missing));
     }
+
+    [Test]
+    public void EverySnapshotDefaultKind_IsInTheLoadersVocabulary()
+    {
+        // ⛔ A kind the loader does not know would reach Task 8's comparer as "unknown" — and a tool
+        // change that invents one must update README + loader together, not silently.
+        var unknown = WinFormsMetadata.Load().Types
+            .SelectMany(t => t.Properties.Select(p => (Where: $"{t.Name}.{p.Name}", p.DefaultKind)))
+            .Where(x => !WinFormsPropertyEntry.DefaultKinds.Contains(x.DefaultKind))
+            .Select(x => $"{x.Where}='{x.DefaultKind}'")
+            .ToList();
+
+        Assert.That(unknown, Is.Empty,
+            "defaultKind values outside WinFormsPropertyEntry.DefaultKinds (tools/WinFormsMetadataDump/README.md): " +
+            string.Join(", ", unknown));
+    }
 }

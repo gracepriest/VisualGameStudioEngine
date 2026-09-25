@@ -352,8 +352,8 @@
           "isFlags": false,
           "enumMembers": null,
           "isCollection": false,
-          "defaultKind": "ambient",
-          "default": null,
+          "defaultKind": "reset",
+          "default": "Default",
           "description": "The cursor that appears when the pointer moves over the control."
         },
         {
@@ -411,8 +411,8 @@
           "isFlags": false,
           "enumMembers": null,
           "isCollection": false,
-          "defaultKind": "ambient",
-          "default": null,
+          "defaultKind": "reset",
+          "default": "Segoe UI, 9pt",
           "description": "The font used to display text in the control."
         },
         {
@@ -424,8 +424,8 @@
           "isFlags": false,
           "enumMembers": null,
           "isCollection": false,
-          "defaultKind": "ambient",
-          "default": null,
+          "defaultKind": "reset",
+          "default": "ControlText",
           "description": "The foreground color of this component, which is used to display text."
         },
         {
@@ -472,7 +472,7 @@
           "enumMembers": null,
           "isCollection": false,
           "defaultKind": "reset",
-          "default": "(Icon)",
+          "default": null,
           "description": "Indicates the icon for a form. This icon is displayed in the form's system menu box and when the form is minimized."
         },
         {
@@ -659,8 +659,8 @@
             "Inherit"
           ],
           "isCollection": false,
-          "defaultKind": "ambient",
-          "default": null,
+          "defaultKind": "reset",
+          "default": "No",
           "description": "Indicates whether the component should draw right-to-left for RTL languages."
         },
         {
@@ -4001,7 +4001,7 @@
           "enumMembers": null,
           "isCollection": false,
           "defaultKind": "serialized",
-          "default": "System.Windows.Forms.FlatButtonAppearance",
+          "default": null,
           "description": "For buttons whose FlatStyle is FlatStyle.Flat, determines the appearance of the border and the colors used to indicate check state and mouse state."
         },
         {
@@ -5221,7 +5221,7 @@
           "enumMembers": null,
           "isCollection": false,
           "defaultKind": "serialized",
-          "default": "System.Windows.Forms.FlatButtonAppearance",
+          "default": null,
           "description": "For buttons whose FlatStyle is FlatStyle.Flat, determines the appearance of the border and the colors used to indicate check state and mouse state."
         },
         {
@@ -6458,7 +6458,7 @@
           "enumMembers": null,
           "isCollection": false,
           "defaultKind": "serialized",
-          "default": "System.Windows.Forms.FlatButtonAppearance",
+          "default": null,
           "description": "For buttons whose FlatStyle is FlatStyle.Flat, determines the appearance of the border and the colors used to indicate check state and mouse state."
         },
         {
@@ -11891,7 +11891,7 @@
           "enumMembers": null,
           "isCollection": false,
           "defaultKind": "reset",
-          "default": "System.Drawing.Bitmap",
+          "default": null,
           "description": "Image to display when the load of another image fails."
         },
         {
@@ -11930,7 +11930,7 @@
           "enumMembers": null,
           "isCollection": false,
           "defaultKind": "reset",
-          "default": "System.Drawing.Bitmap",
+          "default": null,
           "description": "Image to display while another image is loading."
         },
         {
@@ -12879,7 +12879,7 @@
           "enumMembers": null,
           "isCollection": false,
           "defaultKind": "reset",
-          "default": "{Start=0, Length=0}",
+          "default": null,
           "description": "Portion of the text in the label to render as a hyperlink."
         },
         {
@@ -21472,7 +21472,7 @@
           "enumMembers": null,
           "isCollection": false,
           "defaultKind": "reset",
-          "default": "DataGridViewCellStyle { }",
+          "default": null,
           "description": "The default cell style applied to odd-numbered rows. "
         },
         {
@@ -21651,7 +21651,7 @@
           "enumMembers": null,
           "isCollection": false,
           "defaultKind": "reset",
-          "default": "DataGridViewCellStyle { BackColor=Color [Control], ForeColor=Color [WindowText], SelectionBackColor=Color [Highlight], SelectionForeColor=Color [HighlightText], Font=[Font: Name=Segoe UI, Size=9, Units=3, GdiCharSet=1, GdiVerticalFont=False], WrapMode=True, Alignment=MiddleLeft }",
+          "default": null,
           "description": "The default column header style."
         },
         {
@@ -21785,7 +21785,7 @@
           "enumMembers": null,
           "isCollection": false,
           "defaultKind": "reset",
-          "default": "DataGridViewCellStyle { BackColor=Color [Window], ForeColor=Color [ControlText], SelectionBackColor=Color [Highlight], SelectionForeColor=Color [HighlightText], Font=[Font: Name=Segoe UI, Size=9, Units=3, GdiCharSet=1, GdiVerticalFont=False], WrapMode=False, Alignment=MiddleLeft }",
+          "default": null,
           "description": "The DataGridViewBand.DefaultCellStyle to be applied to the DataGridView if no other style is set."
         },
         {
@@ -22018,7 +22018,7 @@
           "enumMembers": null,
           "isCollection": false,
           "defaultKind": "reset",
-          "default": "DataGridViewCellStyle { BackColor=Color [Control], ForeColor=Color [WindowText], SelectionBackColor=Color [Highlight], SelectionForeColor=Color [HighlightText], Font=[Font: Name=Segoe UI, Size=9, Units=3, GdiCharSet=1, GdiVerticalFont=False], WrapMode=True, Alignment=MiddleLeft }",
+          "default": null,
           "description": "The default style applied to the row header cells."
         },
         {
@@ -22076,7 +22076,7 @@
           "enumMembers": null,
           "isCollection": false,
           "defaultKind": "serialized",
-          "default": "DataGridViewRow { Index=-1 }",
+          "default": null,
           "description": "Identifies the template row whose characteristics are used as the basis for all new implicitly added rows."
         },
         {
@@ -22089,7 +22089,7 @@
           "enumMembers": null,
           "isCollection": false,
           "defaultKind": "reset",
-          "default": "DataGridViewCellStyle { }",
+          "default": null,
           "description": "The default style applied to the row cells of the DataGridView."
         },
         {
@@ -24968,7 +24968,7 @@
           "enumMembers": null,
           "isCollection": false,
           "defaultKind": "serialized",
-          "default": "System.Windows.Forms.SplitterPanel, BorderStyle: System.Windows.Forms.BorderStyle.None",
+          "default": null,
           "description": "The Left or Top panel in the SplitContainer."
         },
         {
@@ -25007,7 +25007,7 @@
           "enumMembers": null,
           "isCollection": false,
           "defaultKind": "serialized",
-          "default": "System.Windows.Forms.SplitterPanel, BorderStyle: System.Windows.Forms.BorderStyle.None",
+          "default": null,
           "description": "The Right or Bottom panel in the SplitContainer."
         },
         {
@@ -28085,7 +28085,7 @@
           "enumMembers": null,
           "isCollection": false,
           "defaultKind": "reset",
-          "default": "(Icon)",
+          "default": null,
           "description": "The icon used to indicate an error."
         },
         {
@@ -31909,7 +31909,7 @@
           "enumMembers": null,
           "isCollection": false,
           "defaultKind": "reset",
-          "default": "System.Windows.Forms.ToolStripDropDownMenu, Name: , Items: 0",
+          "default": null,
           "description": "Specifies a ToolStripDropDown to show when the item is clicked."
         },
         {

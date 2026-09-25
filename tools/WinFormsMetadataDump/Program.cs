@@ -18,6 +18,11 @@ Exception? failure = null;
 // ⛔ STA: WinForms controls (and TypeDescriptor over them) require it, exactly as the designer does.
 var thread = new Thread(() =>
 {
+    // ⛔ FIRST, before anything touches a descriptor: PropertyDescriptor/EventDescriptor.Category and
+    // .Description localise through CurrentUICulture, and the WindowsDesktop runtime ships de/fr/ja/…
+    // satellite resources — a regeneration on a German Windows would write "Verhalten". Invariant
+    // falls back to the neutral (English) resources, which is what the catalog is written against.
+    CultureInfo.CurrentCulture = CultureInfo.CurrentUICulture = CultureInfo.InvariantCulture;
     try { json = Dump.Run(); }
     catch (Exception ex) { failure = ex; }
 });
@@ -154,9 +159,13 @@ internal static class Dump
     ///   collection — a collection-typed property: no scalar default at all;
     ///   attribute  — a [DefaultValue] exists: that value IS the default;
     ///   ambient    — the child inherits the parent's value (measured by parenting): no static default;
+    ///   unreadable — the getter or ShouldSerializeValue THREW on a fresh instance: nothing was measured,
+    ///                so no default is recorded (never a confident "reset" of null);
     ///   volatile   — two fresh instances disagree (a clock read): no static default;
     ///   serialized — no attribute, and ShouldSerializeValue says a fresh instance WOULD be written;
-    ///   reset      — no attribute, and the fresh instance's value is what Reset gives back.
+    ///   reset      — no attribute, and ShouldSerializeValue is FALSE on a fresh instance: the designer
+    ///                would not write it, so its current value is the type's default. (Measured through
+    ///                ShouldSerializeValue; ResetValue is never called.)
     /// </summary>
     private static object DescribeProperty(Type owner, object first, object second, PropertyDescriptor p)
     {
@@ -184,15 +193,29 @@ internal static class Dump
         }
         else
         {
-            var a = Normalize(Read(p, first));
-            var b = Normalize(Read(p, second));
+            var readA = TryRead(p, first, out var rawA);
+            var readB = TryRead(p, second, out var rawB);
+            var a = Normalize(rawA);
+            var b = Normalize(rawB);
 
-            if (!string.Equals(a, b, StringComparison.Ordinal))
+            // ⛔ Either read throwing is unreadable, not only both: one throw and one value would
+            // otherwise compare unequal and be recorded as a clock read.
+            if (!readA || !readB)
+            {
+                kind = "unreadable";
+                value = null;
+            }
+            else if (!string.Equals(a, b, StringComparison.Ordinal))
             {
                 kind = "volatile";
                 value = null;
             }
-            else if (SafeShouldSerialize(p, first))
+            else if (!TryShouldSerialize(p, first, out var wouldWrite))
+            {
+                kind = "unreadable";
+                value = null;
+            }
+            else if (wouldWrite)
             {
                 kind = "serialized";
                 value = a;
@@ -237,12 +260,18 @@ internal static class Dump
 
     /// <summary>
     /// Parents a fresh instance, gives the PARENT a sentinel, and asks whether the child now reports it.
-    /// A Form is parented with TopLevel=false; a ToolStripItem into a ToolStrip; a component (Timer…)
-    /// has no parent and is never ambient.
+    /// A control goes into a Panel; a ToolStripItem into a ToolStrip; a component (Timer…) has no parent
+    /// and is never ambient.
+    ///
+    /// ⛔ The Form is NEVER parented (review decision I2): the designer's root Form is TOP-LEVEL, and that
+    /// is what Visual Studio's Properties window shows for it — a top-level form has no parent to inherit
+    /// Font/ForeColor/Cursor/RightToLeft from, so its values are its own. Parenting it (TopLevel=false)
+    /// measured a situation the designer never produces. It is also required, not only chosen: a
+    /// top-level Form falling through to the Control arm would throw adding itself to a Panel.
     /// </summary>
     private static bool IsAmbient(Type owner, PropertyDescriptor p)
     {
-        if (!Sentinels.TryGetValue(p.PropertyType, out var make))
+        if (!Sentinels.TryGetValue(p.PropertyType, out var make) || typeof(Form).IsAssignableFrom(owner))
         {
             return false;
         }
@@ -252,12 +281,6 @@ internal static class Dump
 
         switch (child)
         {
-            case Form form:
-                form.TopLevel = false;
-                var host = new Panel();
-                host.Controls.Add(form);
-                parent = host;
-                break;
             case Control control:
                 var panel = new Panel();
                 panel.Controls.Add(control);
@@ -292,33 +315,53 @@ internal static class Dump
         }
     }
 
-    private static object? Read(PropertyDescriptor p, object instance)
+    /// <summary>False when the getter throws — the caller records "unreadable", never a null default.</summary>
+    private static bool TryRead(PropertyDescriptor p, object instance, out object? value)
     {
-        try { return p.GetValue(instance); }
-        catch { return null; }
+        try
+        {
+            value = p.GetValue(instance);
+            return true;
+        }
+        catch
+        {
+            value = null;
+            return false;
+        }
     }
 
-    private static bool SafeShouldSerialize(PropertyDescriptor p, object instance)
+    /// <summary>False when ShouldSerializeValue throws — the caller records "unreadable".</summary>
+    private static bool TryShouldSerialize(PropertyDescriptor p, object instance, out bool wouldWrite)
     {
-        try { return p.ShouldSerializeValue(instance); }
-        catch { return false; }
+        try
+        {
+            wouldWrite = p.ShouldSerializeValue(instance);
+            return true;
+        }
+        catch
+        {
+            wouldWrite = false;
+            return false;
+        }
     }
 
     /// <summary>
     /// One culture-invariant text form per value type, so the test needs no WinForms types to compare.
     /// Colour: the KnownColor/system name when named, else #AARRGGBB; Empty is null. DateTime: round-trip.
+    /// ⛔ Every interpolation is FormattableString.Invariant — the thread culture is pinned too, but a
+    /// value's text must not depend on a pin set 300 lines away.
     /// </summary>
     private static string? Normalize(object? v) => v switch
     {
         null => null,
-        Color c => c.IsEmpty ? null : c.IsNamedColor ? c.Name : $"#{c.A:X2}{c.R:X2}{c.G:X2}{c.B:X2}",
-        Font f => $"{f.Name}, {f.SizeInPoints.ToString(CultureInfo.InvariantCulture)}pt" +
+        Color c => c.IsEmpty ? null : c.IsNamedColor ? c.Name : FormattableString.Invariant($"#{c.A:X2}{c.R:X2}{c.G:X2}{c.B:X2}"),
+        Font f => FormattableString.Invariant($"{f.Name}, {f.SizeInPoints}pt") +
                   (f.Style != FontStyle.Regular ? $", style={f.Style}" : ""),
-        Size s => $"{s.Width}, {s.Height}",
-        Point pt => $"{pt.X}, {pt.Y}",
+        Size s => FormattableString.Invariant($"{s.Width}, {s.Height}"),
+        Point pt => FormattableString.Invariant($"{pt.X}, {pt.Y}"),
         Padding pd => pd.All >= 0
             ? pd.All.ToString(CultureInfo.InvariantCulture)
-            : $"{pd.Left}, {pd.Top}, {pd.Right}, {pd.Bottom}",
+            : FormattableString.Invariant($"{pd.Left}, {pd.Top}, {pd.Right}, {pd.Bottom}"),
         Cursor cur => new CursorConverter().ConvertToInvariantString(cur),
         bool b => b ? "True" : "False",
         char ch => ch == '\0' ? null : ch.ToString(),
@@ -328,6 +371,10 @@ internal static class Dump
         DateTime dt => dt.ToString("o", CultureInfo.InvariantCulture),
         Enum e => e.ToString(),
         IFormattable f => f.ToString(null, CultureInfo.InvariantCulture),
-        _ => v.ToString()
+        IConvertible cv => cv.ToString(CultureInfo.InvariantCulture),
+        // ⛔ A complex value this table does not know (FlatAppearance, LinkArea, …) has no text form a
+        // catalog Default could equal; its ToString is usually the TYPE NAME, which would read as a
+        // confident default. Null says "no scalar value recorded".
+        _ => null
     };
 }
