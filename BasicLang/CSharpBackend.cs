@@ -3302,6 +3302,8 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                     {
                         var operand = EmitExpression(un.Operand, stack, true);
                         var op = MapUnaryOperator(un.Operation);
+                        var narrowed = NarrowUnary(un, $"{op}{operand}");
+                        if (narrowed != null) return narrowed;
                         var expr = $"{op}{operand}";
                         return needsParens ? $"({expr})" : expr;
                     }
@@ -3642,7 +3644,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             var op = MapUnaryOperator(unaryOp.Operation);
 
             var target = GetValueName(unaryOp);
-            WriteLine($"{target} = {op}{operand};");
+            WriteLine($"{target} = {NarrowUnary(unaryOp, $"{op}{operand}") ?? $"{op}{operand}"};");
         }
 
         public void Visit(IRCompare compare)
@@ -4803,6 +4805,20 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             return bin.Operation == BinaryOpKind.IntDiv
                 ? $"checked(({type})({expr}))"
                 : $"unchecked(({type})({expr}))";
+        }
+
+        /// <summary>
+        /// A Short/UShort/Byte/SByte negation or bitwise Not cast back to its narrow type, or
+        /// null. ⛔ C# promotes the operand to <c>int</c>, so <c>Dim lo As Short = -s</c> was
+        /// CS0266 — MEASURED on master <c>e69ec64e</c>, the unary twin of
+        /// <see cref="NarrowArithmetic"/>. Unchecked: <c>-(-32768)</c> wraps to -32768, as this
+        /// backend's Integer negation does.
+        /// </summary>
+        private string NarrowUnary(IRUnaryOp un, string expr)
+        {
+            if (un.Type?.Name is not ("Short" or "UShort" or "Byte" or "SByte" or "UByte")) return null;
+            if (un.Operation is not (UnaryOpKind.Neg or UnaryOpKind.BitwiseNot)) return null;
+            return $"unchecked(({MapType(un.Type)})({expr}))";
         }
 
         private static string EmitDivisor(IRBinaryOp bin, string renderedRight)
