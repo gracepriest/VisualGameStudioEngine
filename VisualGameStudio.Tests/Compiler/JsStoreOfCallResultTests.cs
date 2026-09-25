@@ -92,6 +92,7 @@ End Sub
 }
 
 /// <summary>The program run under Node (both pipelines) and as C#, the reference.</summary>
+[TestFixture]
 [Category("Integration")]
 [NonParallelizable] // the C# leg redirects Console.Out
 public class JsStoreOfCallResultRunTests
