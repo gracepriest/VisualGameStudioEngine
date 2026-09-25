@@ -1080,6 +1080,25 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         };
 
         /// <summary>
+        /// <paramref name="rendered"/> as .NET TEXT. A Boolean is the one primitive whose JS
+        /// spelling differs: JavaScript's <c>"b" + true</c> is "btrue", and <c>console.log(true)</c>
+        /// prints "true", where .NET says "True" / "False" — MEASURED: <c>"b" &amp; True</c>,
+        /// <c>s &amp;= f</c>, <c>CStr(b)</c> and <c>Console.WriteLine(b)</c> all printed lower case.
+        /// Type-directed, like the C++ backend's StringifyForText: a Boolean-typed value is
+        /// spelled out, everything else is left to JavaScript, which already agrees.
+        /// </summary>
+        private static string TextOf(IRValue value, string rendered) =>
+            IsBoolean(value?.Type) ? $"({rendered} ? \"True\" : \"False\")" : rendered;
+
+        private static bool IsBoolean(TypeInfo type) =>
+            string.Equals(type?.Name, "Boolean", StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>The primitives whose <c>ToString()</c> is their text: Boolean, numbers, Char, String.</summary>
+        private static bool IsTextablePrimitive(TypeInfo type) =>
+            type != null && (IsBoolean(type) || type.IsIntegral() || type.IsFloatingPoint()
+                || type.Name is "String" or "Char");
+
+        /// <summary>
         /// <paramref name="int32"/> (an expression already wrapped to int32) wrapped again to
         /// the NARROW integral <paramref name="type"/>: sign-extended for Short / SByte, masked
         /// for UShort / Byte; unchanged for Integer.
@@ -1157,7 +1176,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
                 // String concatenation is its own kind, so `+` here is never numeric addition
                 // in disguise.
-                case BinaryOpKind.Concat: return $"({l} + {r})";
+                case BinaryOpKind.Concat: return $"({TextOf(op.Left, l)} + {TextOf(op.Right, r)})";
 
                 case BinaryOpKind.Eq: return $"({l} === {r})";
                 case BinaryOpKind.Ne: return $"({l} !== {r})";
@@ -2731,6 +2750,10 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         {
             var rendered = call.Arguments.ConvertAll(Expr);
 
+            // The builtins that turn their argument into TEXT spell a Boolean the .NET way.
+            if (call.FunctionName is "CStr" or "Console.WriteLine" or "Console.Write")
+                rendered = call.Arguments.Select((a, i) => TextOf(a, rendered[i])).ToList();
+
             // String builtins arrive as a BARE FunctionName, which CallTarget would pass
             // straight through as if it were a user function — emitting `Len(s)`, a call to
             // something that exists nowhere in JavaScript. They also cannot be expressed as a
@@ -3141,6 +3164,13 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 var raw = methodIsForeign ? foreignMethod : mc.MethodName;
                 return $"{receiver}.{raw}({string.Join(", ", args)})";
             }
+
+            // `x.ToString()` on a primitive. A JS primitive has no ToString method — it has
+            // toString — so this emitted `x.ToString()` and died in Node with "ToString is not a
+            // function" for every Boolean, number and String receiver.
+            if (args.Count == 0 && string.Equals(mc.MethodName, "ToString", StringComparison.OrdinalIgnoreCase)
+                && IsTextablePrimitive(mc.Object?.Type))
+                return IsBoolean(mc.Object.Type) ? TextOf(mc.Object, receiver) : $"String({receiver})";
 
             var kind = ReceiverKind(mc.Object);
 

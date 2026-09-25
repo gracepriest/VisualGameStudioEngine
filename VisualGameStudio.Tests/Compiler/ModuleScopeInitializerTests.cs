@@ -167,15 +167,14 @@ public class ModuleScopeInitializerTests
     }
 
     /// <summary>
-    /// ⚠ A folded COMPARISON, split out from the list above because the backends disagree about
-    /// how a Boolean PRINTS: <c>CStr(True)</c> is <c>"True"</c> on C# and MSIL and <c>"true"</c>
-    /// on JavaScript.
+    /// ⚠ A folded COMPARISON, split out from the list above because the backends used to
+    /// disagree about how a Boolean PRINTS: <c>CStr(True)</c> was <c>"True"</c> on C# and MSIL
+    /// and <c>"true"</c> on JavaScript.
     ///
-    /// <para>⛔ That divergence is PRE-EXISTING and has nothing to do with module scope —
-    /// measured, a plain local <c>Dim b As Boolean = True</c> prints <c>true</c> on JavaScript
-    /// too. It is pinned as each backend ACTUALLY behaves rather than normalised away, because a
-    /// test that lowercased both sides would also pass if the fold silently produced the wrong
-    /// boolean.</para>
+    /// <para>That divergence had nothing to do with module scope, and master's #102 made
+    /// JavaScript spell a Boolean as .NET does, so every backend now prints <c>True</c>. It is
+    /// still pinned exactly rather than normalised, because a test that lowercased both sides
+    /// would also pass if the fold silently produced the wrong boolean.</para>
     /// </summary>
     [Test]
     [Category("Integration")]
@@ -187,8 +186,8 @@ public class ModuleScopeInitializerTests
         {
             Assert.That(ReturnCoercionTests.CompileEmittedCSharpForTest(program), Is.Empty);
             Assert.That(Msil.MsilHarness.RunExpectingSuccess(program), Is.EqualTo("True\n"));
-            Assert.That(JavaScriptExecutionTests.RunJs(program), Is.EqualTo("true"),
-                "lowercase on JavaScript is pre-existing CStr(Boolean) behaviour, not the fold");
+            Assert.That(JavaScriptExecutionTests.RunJs(program), Is.EqualTo("True"),
+                "JavaScript spells a Boolean as .NET does since #102");
         });
     }
 

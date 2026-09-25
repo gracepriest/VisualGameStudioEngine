@@ -34,10 +34,10 @@ namespace VisualGameStudio.Tests.Compiler;
 //    Adr0008D2Pins                                  — the "Keep" contract: ReadsCallVisible TRUE
 //                                                      for every call-shaped kind, a CP1-family
 //                                                      New/instance-method-call kill, and the
-//                                                      pre-existing CopyPropagation gap this task
-//                                                      found (a store to a NAMED NESTED operand
-//                                                      does not kill a fact — NOT fixed here; see
-//                                                      that fixture's own remarks).
+//                                                      CopyPropagation gap this task found (a store
+//                                                      to a NAMED NESTED operand not killing a fact)
+//                                                      — FIXED by task #161; see that fixture's own
+//                                                      remarks.
 // =====================================================================================
 
 /// <summary>Q2a-Q2e, ported verbatim from <c>S/arch-batch/probes/Q2*.bas</c>/<c>.exp</c> — ADR-0008
@@ -876,25 +876,39 @@ public class Adr0008D2Pins
     }
 
     /// <summary>
-    /// ⚠ PRE-EXISTING GAP, FOUND BY ADR-0008's IMPLEMENTATION — NOT FIXED HERE (task #161).
-    /// <c>u = a + 1</c> renamed <c>u</c>
-    /// (<c>NamedAfterVariable</c>, a declared local), <c>t0 = u * 2</c>, <c>x := t0</c>. A DIRECT
-    /// STORE to <c>u</c>'s own name (<c>u = 5</c>, an <c>IRAssignment</c> to the DECLARED local
-    /// <c>u</c>) does NOT kill <c>x</c>'s fact — <c>CollectReads(t0)</c> correctly says <c>t0</c>
-    /// reads storage named <c>u</c> (<c>CollectReads(t).Names</c> includes it — see
-    /// <c>Adr0008CollectReadsAgreementTests</c>), but <c>CopyPropagationPass.Invalidate</c>'s
-    /// redefinition kill (<c>Mentions</c>, <c>IROptimizer.cs</c>) walks the recorded VALUE
-    /// structurally looking for an <see cref="IRVariable"/> named <c>u</c> — it has no case for "a
-    /// named pure-operator INSTRUCTION whose destination happens to be named <c>u</c>", so it never
-    /// finds it. MEASURED (this session, live): the fact SURVIVES. This is a genuine defect in
-    /// <c>CopyPropagationPass</c>'s OWN kill rule (separate from ADR-0008's Guard/ReadsCallVisible
-    /// walk, which gets this case right), pinned here as a KNOWN-WRONG regression test so a future
-    /// fix turns it green rather than silently landing unnoticed. It blocks #118 (DCE) the same way
-    /// settled point 4 does: DCE cannot safely remove <c>u</c>'s own defining instruction while a
-    /// stale copy fact might still reference it.
+    /// FIXED by task #161. Was: a pre-existing gap found while implementing ADR-0008, pinned here
+    /// as KNOWN-WRONG (<c>KnownGap_DirectStoreToANamedNestedOperandsOwnName_DoesNotKillTheFact</c>,
+    /// before this rename).
+    ///
+    /// <para><c>u = a + 1</c> renamed <c>u</c> (<c>NamedAfterVariable</c>, a declared local),
+    /// <c>t0 = u * 2</c>, <c>x := t0</c>. A DIRECT STORE to <c>u</c>'s own name (<c>u = 5</c>, an
+    /// <c>IRAssignment</c> to the DECLARED local <c>u</c>) now KILLS <c>x</c>'s fact.
+    /// <c>CollectReads(t0)</c> already correctly said <c>t0</c> reads storage named <c>u</c>
+    /// (<c>CollectReads(t).Names</c> includes it — see <c>Adr0008CollectReadsAgreementTests</c>); the
+    /// bug was entirely in <c>CopyPropagationPass.Invalidate</c>'s OWN redefinition kill
+    /// (<c>Mentions</c>, <c>IROptimizer.cs</c>), which walked the recorded VALUE structurally looking
+    /// only for an <see cref="IRVariable"/> named <c>u</c> and had no case for "a named pure-operator
+    /// INSTRUCTION whose destination happens to be named <c>u</c>". Task #161 makes <c>Mentions</c>
+    /// the union of <see cref="OptimizationPass.CollectReads"/>'s own <c>Names</c> (which already
+    /// found this) and the old structural descent into call-shaped operands' arguments/object
+    /// (<c>MentionsPastTheWalk</c>, covering what the walk does not) — see <c>IROptimizer.cs</c>'s
+    /// own remarks on <c>CopyPropagationPass.Mentions</c> for the superset proof.</para>
+    ///
+    /// <para>A SOURCE program reaches this exact shape (probe E3): <c>Dim u As Integer = a + b :
+    /// Dim x As Double = a + b : u = 5 : Dim y As Double = x : Return y * c + u</c>. CSE forwards
+    /// the second <c>a + b</c> to the renamed <c>u</c>, so on the pipeline's second iteration the
+    /// fact is <c>x := CDbl(u)</c>, propagated past the store into <c>y * c</c>;
+    /// <see cref="IRVerifier"/> reported an S′ violation on all four backends at all three entry
+    /// points (CLI, CLI <c>--optimize</c>, Release project) at master — MEASURED zero violations
+    /// after the fix, with the same output. See
+    /// <c>CopyPropagationMentionsTests</c>/<c>CopyPropagationMentionsStructuralTests</c>/
+    /// <c>CopyPropagationMentionsExecutionTests</c> (<c>CopyPropagationMentionsTests.cs</c>) for the
+    /// hand-built shapes (this test's own shape is S1 there) and the end-to-end proof. This gap
+    /// blocked #118 (DCE) the same way settled point 4 does: DCE could not safely remove <c>u</c>'s
+    /// own defining instruction while a stale copy fact might still reference it.</para>
     /// </summary>
     [Test]
-    public void KnownGap_DirectStoreToANamedNestedOperandsOwnName_DoesNotKillTheFact()
+    public void DirectStoreToANamedNestedOperandsOwnName_KillsTheFact()
     {
         var m = new IRModule("M");
         var f = new IRFunction("Main", IntType);
@@ -918,14 +932,13 @@ public class Adr0008D2Pins
 
         // Sanity: CollectReads (Guard/ReadsCallVisible's shared walk) DOES see `u` as a read of t.
         Assert.That(OptimizationPass.CollectReads(t).Names.Select(r => r.Name), Does.Contain("u"),
-            "CollectReads must see 't0' as reading storage named 'u' — if this fails, the gap " +
-            "pinned below has moved into ADR-0008's own walk, which would be a real regression");
+            "CollectReads must see 't0' as reading storage named 'u' — if this fails, task #161's " +
+            "fix has moved out of Mentions and into ADR-0008's own walk, which would need its own pin");
 
         new CopyPropagationPass().Run(m);
-        Assert.That(ReferenceEquals(use.Left, t), Is.True,
-            "KNOWN GAP (pre-existing, not part of ADR-0008): CopyPropagationPass.Invalidate's Mentions() " +
-            "does not recognise a store to a named nested operand's own name as redefining it, so the " +
-            "fact wrongly SURVIVES. If this assertion starts failing, the gap has been fixed — update " +
-            "this test to assert False and drop the KnownGap naming.");
+        Assert.That(ReferenceEquals(use.Left, t), Is.False,
+            "task #161: CopyPropagationPass.Invalidate's Mentions() must recognise a store to a " +
+            "named nested operand's own name as redefining it, so the fact is KILLED — not left to " +
+            "survive the store, as it wrongly did before task #161.");
     }
 }
