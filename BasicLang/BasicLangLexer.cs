@@ -281,6 +281,10 @@ namespace BasicLang.Compiler
         MinusAssign,
         MultiplyAssign,
         DivideAssign,
+        IntegerDivideAssign,   // \=
+        ConcatAssign,          // &=
+        LeftShiftAssign,       // <<=
+        RightShiftAssign,      // >>=
         
         // Operators - Increment/Decrement
         Increment,
@@ -693,7 +697,10 @@ namespace BasicLang.Compiler
                     break;
                     
                 case '\\':
-                    AddToken(TokenType.IntegerDivide, "\\", null, startLine, startColumn);
+                    if (Match('='))
+                        AddToken(TokenType.IntegerDivideAssign, "\\=", null, startLine, startColumn);
+                    else
+                        AddToken(TokenType.IntegerDivide, "\\", null, startLine, startColumn);
                     break;
                     
                 case '%':
@@ -701,12 +708,12 @@ namespace BasicLang.Compiler
                     break;
                     
                 case '=':
+                    // ⛔ No `=+` / `=-` tokens. They used to lex as PlusAssign / MinusAssign, so
+                    // `x =-1` compiled as `x -= 1` (7 became 6, not -1), `x =+1` as `x += 1`, and
+                    // `Dim x As Integer =-1` failed to parse. VB reads both as `=` followed by a
+                    // signed operand; a space must not change the meaning.
                     if (Match('='))
                         AddToken(TokenType.IsEqual, "==", null, startLine, startColumn);
-                    else if (Match('+'))
-                        AddToken(TokenType.PlusAssign, "=+", null, startLine, startColumn);
-                    else if (Match('-'))
-                        AddToken(TokenType.MinusAssign, "=-", null, startLine, startColumn);
                     else
                         AddToken(TokenType.Assignment, "=", null, startLine, startColumn);
                     break;
@@ -715,7 +722,12 @@ namespace BasicLang.Compiler
                     if (Match('='))
                         AddToken(TokenType.LessThanOrEqual, "<=", null, startLine, startColumn);
                     else if (Match('<'))
-                        AddToken(TokenType.LeftShift, "<<", null, startLine, startColumn);
+                    {
+                        if (Match('='))
+                            AddToken(TokenType.LeftShiftAssign, "<<=", null, startLine, startColumn);
+                        else
+                            AddToken(TokenType.LeftShift, "<<", null, startLine, startColumn);
+                    }
                     else if (Match('>'))
                         AddToken(TokenType.NotEqual, "<>", null, startLine, startColumn);
                     else
@@ -726,7 +738,12 @@ namespace BasicLang.Compiler
                     if (Match('='))
                         AddToken(TokenType.GreaterThanOrEqual, ">=", null, startLine, startColumn);
                     else if (Match('>'))
-                        AddToken(TokenType.RightShift, ">>", null, startLine, startColumn);
+                    {
+                        if (Match('='))
+                            AddToken(TokenType.RightShiftAssign, ">>=", null, startLine, startColumn);
+                        else
+                            AddToken(TokenType.RightShift, ">>", null, startLine, startColumn);
+                    }
                     else
                         AddToken(TokenType.GreaterThan, ">", null, startLine, startColumn);
                     break;
@@ -741,6 +758,8 @@ namespace BasicLang.Compiler
                 case '&':
                     if (Match('&'))
                         AddToken(TokenType.AndAnd, "&&", null, startLine, startColumn);
+                    else if (Match('='))
+                        AddToken(TokenType.ConcatAssign, "&=", null, startLine, startColumn);
                     else if (!IsAtEnd() && (Peek() == 'H' || Peek() == 'h' || Peek() == 'O' || Peek() == 'o' || Peek() == 'B' || Peek() == 'b'))
                         ScanPrefixedNumber(startLine, startColumn);
                     else

@@ -8166,6 +8166,23 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     Error(errorMsg, node.Line, node.Column);
                 }
             }
+            else if (node.Operator == "&=" &&
+                     targetType.Kind != TypeKind.TypeParameter && targetType.Kind != TypeKind.Foreign)
+            {
+                // `a &= b` is `a = a & b`: the target supplies the string operand `&` needs, and
+                // the String result is stored back — so the TARGET must be a String, whatever b
+                // is. The numeric check below would refuse `s &= "b"` and pass `x &= 1`.
+                if (!string.Equals(targetType.Name, "String", StringComparison.OrdinalIgnoreCase))
+                    Error($"Operator '&=' requires a String target: the result of '&' is a String and cannot be stored in '{targetType.Name}'",
+                          node.Line, node.Column);
+            }
+            else if ((node.Operator == "<<=" || node.Operator == ">>=") &&
+                     targetType.Kind != TypeKind.TypeParameter && valueType.Kind != TypeKind.TypeParameter &&
+                     !(targetType.IsIntegral() && valueType.IsIntegral()))
+            {
+                Error($"Operator '{node.Operator}' requires integral operands, not '{targetType.Name}' and '{valueType.Name}'",
+                      node.Line, node.Column);
+            }
             else // Compound assignment
             {
                 // P1 surface gate (spec 6.1): when a non-numeric P1 type is
