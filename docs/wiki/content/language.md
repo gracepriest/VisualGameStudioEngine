@@ -320,9 +320,6 @@ Finally
 End Try
 ```
 
-> [trap] On the C++ backend, a `Return` inside a `Try` bypasses its `Finally`. This is a
-> known limitation, not a bug to be surprised by.
-
 ## Preprocessor
 
 ```vb
