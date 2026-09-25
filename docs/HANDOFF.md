@@ -2044,8 +2044,27 @@ single new failure against the 170-name baseline.
   widened for CSE. **No reaching program was found**, so this is a suspicion, not a defect.
   ⛔ `WideningCastFoldingPass` runs from `IRBuilder.cs:1165` — **outside the pipeline, on every
   build regardless of flags** — so if it is reachable it is reachable everywhere.
-- `DeadCodeEliminationPass`'s instruction-removal arm is **effectively dead**: its guard is
-  `!v.Name.StartsWith("_tmp")` and temps are spelled `t0`/`t1`. Relates to existing **#118**.
+- **#118 DONE (the use-analysis half).** `DeadCodeEliminationPass`'s use analysis is now the
+  shared, TOTAL `OptimizationPass.UsesOf` walker, run FUNCTION-WIDE (collected once over every
+  block before any block loses an instruction) and descending nested operand trees — the same
+  descent `IRVerifier` makes. Tests: `VisualGameStudio.Tests/Compiler/DeadCodeEliminationUseAnalysisTests.cs`
+  (44 hand-built shapes: 33 missing-arm/sub-slot, 2 cross-block, 2 operand-tree, 7 controls
+  including the guard pin).
+  - Its instruction-removal arm is **still effectively dead, DELIBERATELY** — #118 left the
+    removal GUARD unchanged (`!v.Name.StartsWith("_tmp")`, and IRBuilder spells every real temp
+    `t0`/`t1`/…), so in a real program this pass still removes nothing; only
+    `ControlFlowGraph.RemoveUnreachableBlocks` has any effect. The fixed use analysis is
+    observable only in hand-built IR.
+  - Switching the guard on (e.g. to `OptimizationPass.IsTempDestination`) is a **separate,
+    measured decision**, not folded into #118. A scratch experiment (info-only, never shipped;
+    its numbers are in commit `d4d0633`'s message) un-gated the guard: 62 removals and 9 test
+    failures over the full suite. Two hazards — a user variable SPELLED like a temp (`Dim t5 = a + b`) got removed (37
+    of the 62 removals) and the program printed 12 instead of the correct 82, and a
+    `MyBase.New(v + 1)` argument reachable only through `IRConstructor.BaseConstructorArgs` is
+    invisible to `UsesOf` — against one measured benefit, dropping orphan peephole temps.
+    Whoever picks this up next should start from that commit message and re-measure; the
+    guard needs at least `&& !v.NamedAfterVariable`, and the base-constructor-argument uses
+    must become visible to `UsesOf`, before it can be switched on.
 - ⚠ **Two arms of the CSE repair are unreachable from any BasicLang program**, and are pinned by
   direct unit assertions in `CseKeyEncodingUnitTests` rather than by a program, because no program
   can express them:
