@@ -11,8 +11,12 @@ namespace VisualGameStudio.Tests.Compiler;
 /// clean on every backend: <c>Dim x As Integer = 1 y</c> (x = 1), <c>y = 1 2</c>,
 /// <c>Console.WriteLine(y) 7</c>, <c>If y &gt; 1 Then y = 2 y</c>, <c>y += 1 y</c>. It is also what
 /// made <c>1E40</c> (then lexed as <c>1</c> <c>E40</c>) compile to x = 1, and it let
-/// <c>New Integer() {1, 2}</c>, whose initializer this parser does not read, compile and then crash
-/// at run time on JavaScript.
+/// <c>New Integer() {1, 2}</c>, whose initializer the parser did not read then, compile and then
+/// crash at run time on JavaScript.
+///
+/// <para>⚠ Form-designer Task 24a taught the parser that initializer (<c>New T() { … }</c>), so the
+/// bare shape is now WELL-FORMED (see <c>TypedArrayLiteralTests</c>) and is pinned below as such;
+/// what stays an error is a token left over AFTER the initializer.</para>
 /// </summary>
 public class StatementTerminationTests
 {
@@ -32,7 +36,7 @@ public class StatementTerminationTests
     [TestCase("    y += 1 y", "y")]
     [TestCase("    Console.WriteLine(y) 7", "7")]
     [TestCase("    If y > 1 Then y = 2 y", "y")]
-    [TestCase("    Dim x = New Integer() {1, 2}", "{")]
+    [TestCase("    Dim x = New Integer() {1, 2} y", "y")]
     public void TrailingTokens_AreAnError(string line, string found) =>
         Assert.That(ParseErrors(line), Has.Some.Contains($"End of statement expected, found '{found}'"));
 
@@ -54,6 +58,7 @@ public class StatementTerminationTests
     [TestCase("    Do\n        y += 1\n    Loop While y < 10", TestName = "DoLoopWhile")]
     [TestCase("    Try\n        y = 1\n    Catch ex As Exception\n        y = 2\n    End Try", TestName = "TryCatch")]
     [TestCase("    Dim a() As Integer = {1, 2, 3}", TestName = "ArrayLiteral")]
+    [TestCase("    Dim x = New Integer() {1, 2}", TestName = "TypedArrayCreationWithInitializer")]
     [TestCase("    Dim z As Integer = y _\n        + 1", TestName = "LineContinuation")]
     public void WellFormedStatements_StillParse(string body) =>
         Assert.That(ParseErrors(body), Is.Empty);

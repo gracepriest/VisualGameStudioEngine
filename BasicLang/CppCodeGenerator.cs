@@ -2643,6 +2643,12 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         /// </summary>
         private static string DivisionHelper(IRBinaryOp op) => op.Operation switch
         {
+            // ⛔ A Short/SByte `\` promotes to int, where MinValue \ -1 is +32768 / +128 and no
+            // longer traps — it silently wrapped back to the minimum on narrowing. MEASURED on
+            // master 7a62bdea: `-32768 \ -1` printed -32768 where .NET throws OverflowException.
+            // IntDivNarrow checks the promoted quotient against the NARROW type's range.
+            BinaryOpKind.IntDiv when op.Type?.Name == "Short" => "BasicLang::IntDivNarrow<int16_t>",
+            BinaryOpKind.IntDiv when op.Type?.Name == "SByte" => "BasicLang::IntDivNarrow<int8_t>",
             BinaryOpKind.IntDiv => "BasicLang::IntDiv",
             BinaryOpKind.Mod when op.Left?.Type?.IsIntegral() == true && op.Right?.Type?.IsIntegral() == true
                 => "BasicLang::IntMod",

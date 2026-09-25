@@ -17,10 +17,10 @@ public class JavaScriptArrayLiteralCodeGenTests
         new BasicLang.Compiler.CodeGen.JavaScript.JavaScriptCodeGenerator().Generate(JsTestSupport.BuildModule(source));
 
     [Test]
-    public void ALiteral_IsAFilledArray_ThenOneStorePerElement()
+    public void ALiteral_IsAnArrayOfItsLength_ThenOneStorePerElement()
     {
         var js = Js("Sub Main()\n    Dim a[] As Integer = {4, 5}\n    Console.WriteLine(a(1))\nEnd Sub");
-        Assert.That(js, Does.Match(@"const (\w+) = new Array\(2\)\.fill\(0\);"), js);
+        Assert.That(js, Does.Match(@"const (\w+) = new Array\(2\);"), js);
         Assert.That(js, Does.Match(@"\w+\[0\] = 4;"), js);
         Assert.That(js, Does.Match(@"\w+\[1\] = 5;"), js);
         Assert.That(js, Does.Not.Match(@"\b(\w+) = \1;"), "no self-assignment through the _addr slot:\n" + js);

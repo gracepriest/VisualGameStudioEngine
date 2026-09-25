@@ -5059,6 +5059,36 @@ namespace BasicLang.Compiler.SemanticAnalysis
         }
 
         /// <summary>
+        /// "Already defined" — naming WHAT it collides with, and WHERE.
+        ///
+        /// <para>⚠ The bare message cost real debugging time: a class with a field <c>tag</c> and a
+        /// function <c>Tag</c> reported only "Function 'Tag' is already defined in this scope" at the
+        /// FUNCTION's line, so the field eleven lines above — differing only in case — was invisible,
+        /// and the error read like a cross-class collision. BasicLang is case-insensitive, so those
+        /// are one identifier; when that is what happened, the message now says so outright.</para>
+        /// </summary>
+        private static string AlreadyDefinedMessage(string kindWord, string name, Symbol existing)
+        {
+            if (existing == null)
+            {
+                return $"{kindWord} '{name}' is already defined in this scope";
+            }
+
+            var where = existing.Line > 0 ? $" at line {existing.Line}" : "";
+            var collidesWith = $"the {existing.Kind} '{existing.Name}'{where}";
+
+            // Only worth saying when the spellings actually differ — otherwise it is noise on an
+            // ordinary duplicate.
+            var caseOnly = !string.Equals(existing.Name, name, StringComparison.Ordinal)
+                && string.Equals(existing.Name, name, StringComparison.OrdinalIgnoreCase);
+            var note = caseOnly
+                ? $" Names are case-insensitive, so '{existing.Name}' and '{name}' are the same identifier."
+                : string.Empty;
+
+            return $"{kindWord} '{name}' is already defined in this scope — it collides with {collidesWith}.{note}";
+        }
+
+        /// <summary>
         /// Pass 1, sweep 2: record a constructor's signature on its class, so a <c>New</c> written
         /// ABOVE the class declaration binds to the real constructor.
         ///
@@ -5784,7 +5814,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 }
                 else
                 {
-                    Error($"Function '{node.Name}' is already defined in this scope", node.Line, node.Column);
+                    Error(AlreadyDefinedMessage("Function", node.Name, existing), node.Line, node.Column);
                     symbol = new Symbol(node.Name, SymbolKind.Function, null, node.Line, node.Column);
                 }
             }
@@ -5883,7 +5913,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 }
                 else
                 {
-                    Error($"Subroutine '{node.Name}' is already defined in this scope", node.Line, node.Column);
+                    Error(AlreadyDefinedMessage("Subroutine", node.Name, existing), node.Line, node.Column);
                     symbol = new Symbol(node.Name, SymbolKind.Subroutine, _typeManager.VoidType, node.Line, node.Column);
                 }
             }
@@ -7025,6 +7055,12 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
         public void Visit(CollectionInitializerNode node)
         {
+            if (node.ElementType != null)
+            {
+                VisitTypedCollectionInitializer(node);
+                return;
+            }
+
             TypeInfo commonType = null;
 
             // Analyze each element
@@ -7053,6 +7089,186 @@ namespace BasicLang.Compiler.SemanticAnalysis
             arrayType.ElementType = commonType ?? _typeManager.GetType("Object");
             arrayType.ArrayRank = 1;  // Collection initializers create 1D arrays
             SetNodeType(node, arrayType);
+        }
+
+        /// <summary>
+        /// <c>New T() { … }</c> (Task 24a, spec §9). The element type is STATED, so nothing is inferred
+        /// and the "mixed types" warning never applies. Three policies, deliberately distinct from the
+        /// Dim path's (<see cref="IsNumericLiteralAssignable"/>, which admits <c>Dim i As Integer = 1.5</c>)
+        /// and from <c>RejectImpossibleConversion</c>'s (which exempts only the target):
+        /// <list type="bullet">
+        /// <item><description>a numeric LITERAL: an integral literal into any numeric target, a floating
+        /// literal into Single/Double/Decimal only, and BC30439 per element;</description></item>
+        /// <item><description><c>Nothing</c>: into any reference or unresolvable .NET <c>T</c>, never into
+        /// a value type — it is typed <c>Object</c>, so the non-literal rule would refuse
+        /// <c>New String() {"a", Nothing}</c>;</description></item>
+        /// <item><description>otherwise: <c>T</c>, or a WIDENING to <c>T</c> (<see cref="WidensTo"/>:
+        /// IsAssignableFrom minus its permissive narrowing arm);</description></item>
+        /// <item><description>either side an unresolvable .NET type → accepted, csc decides.</description></item>
+        /// </list>
+        /// The parser discards the <c>NewExpressionNode</c>, so <c>Visit(NewExpressionNode)</c>'s
+        /// abstract/Extern refusals are never reached: an array OF an abstract type is legal.
+        /// </summary>
+        private void VisitTypedCollectionInitializer(CollectionInitializerNode node)
+        {
+            // ResolveTypeReference reports "Unknown type" itself and answers Object for it; it never
+            // returns null. The fallback is belt-and-braces, not a second diagnostic.
+            var elementType = ResolveTypeReference(node.ElementType) ?? _typeManager.ObjectType;
+            var targetIsUnresolvedNet = IsUnresolvableNetType(elementType);
+
+            foreach (var element in node.Elements)
+            {
+                element.Accept(this);
+                CheckTypedLiteralElement(element, elementType, targetIsUnresolvedNet);
+            }
+
+            var arrayType = new TypeInfo($"{elementType.Name}[]", TypeKind.Array)
+            {
+                ElementType = elementType,
+                ArrayRank = 1
+            };
+            SetNodeType(node, arrayType);
+        }
+
+        /// <summary>
+        /// "ResolveTypeName fell to its synthetic .NET branch", re-derived from the NAME in that
+        /// method's own order — a TypeInfo carries no synthetic marker, and a sibling-file BasicLang
+        /// class lives in scope rather than in _typeManager, which is what makes the bare
+        /// <c>_typeManager.GetType(name) == null &amp;&amp; IsNetType(name)</c> spelling exempt too much.
+        ///
+        /// <para>⚠ The KIND guard is load-bearing. <see cref="IsNetType"/> is PascalCase-permissive, so
+        /// it also says yes to an array's <c>Integer[]</c> and to a type parameter's <c>TItem</c>,
+        /// neither of which any user channel or the type manager answers for. Every synthetic .NET
+        /// handle is minted as <see cref="TypeKind.Class"/> (the four mint sites) or flipped to
+        /// <see cref="TypeKind.Delegate"/> (<c>Func</c>/<c>Action</c>); every user-declared type —
+        /// class, interface, enum, structure, delegate — is registered in <c>_typeManager</c> and so
+        /// never reaches the name test.</para>
+        /// </summary>
+        private bool IsUnresolvableNetType(TypeInfo type) =>
+            type != null &&
+            (type.Kind == TypeKind.Class || type.Kind == TypeKind.Delegate) &&
+            !string.IsNullOrEmpty(type.Name) &&
+            !IsUserDefinedTypeName(type.Name) &&
+            _typeManager.GetType(type.Name) == null &&
+            IsNetType(type.Name);
+
+        private void CheckTypedLiteralElement(ExpressionNode element, TypeInfo target, bool targetIsUnresolvedNet)
+        {
+            var elementType = GetNodeType(element);
+
+            if (IsNothingLiteral(element))
+            {
+                // Admitted without a check into any reference or unresolvable .NET T (csc takes null);
+                // refused into a value type, with advice that names a value OF that type — "write 0"
+                // for an enum sends the user straight into the non-literal arm's second refusal.
+                var advice = NothingAdviceFor(target);
+                if (advice != null)
+                {
+                    Error($"Nothing has no value of type '{target.Name}'; {advice}", element.Line, element.Column);
+                }
+                return;
+            }
+
+            // ⚠ `-1` and `-1.5` are a UnaryExpressionNode WRAPPING the literal (no constant folding in
+            // the parser), typed as the operand. Unwrap a leading +/- before the literal test, exactly
+            // as TryRetypeLiteralToDecimal does — or every negative literal takes the non-literal path
+            // and `New Single() {-1.5}` / `New Short() {-1}` are refused.
+            var bare = element is UnaryExpressionNode { Operator: "-" or "+" } sign ? sign.Operand : element;
+
+            if (bare is LiteralExpressionNode && elementType != null && elementType.IsNumeric() && target.IsNumeric())
+            {
+                if (target.Name == "Decimal" && TryRetypeLiteralToDecimal(element, target))
+                {
+                    return;
+                }
+
+                if (elementType.IsFloatingPoint() && target.IsIntegral())
+                {
+                    Error($"cannot put {Article(elementType.Name)} '{elementType.Name}' in {Article(target.Name)} '{target.Name}()' — " +
+                          "a floating literal never narrows into an integral array; write an integer or change the element type",
+                          element.Line, element.Column);
+                    return;
+                }
+
+                // BC30439 per element: `New Byte() {300}` is refused exactly as `Dim b As Byte = 300`.
+                CheckConstantFitsNumericTarget(element, target, "an element of the array initializer",
+                    element.Line, element.Column);
+                return;
+            }
+
+            if (elementType == null)
+            {
+                return;   // an unresolved expression; the untyped visitor skips these too
+            }
+
+            if (targetIsUnresolvedNet || IsUnresolvableNetType(elementType))
+            {
+                return;   // csc decides — ToolStripMenuItem into ToolStripItem() is exactly this
+            }
+
+            if (target.Equals(elementType) || WidensTo(elementType, target))
+            {
+                return;
+            }
+
+            Error($"cannot put {Article(elementType.Name)} '{elementType.Name}' in {Article(target.Name)} '{target.Name}()'",
+                element.Line, element.Column);
+        }
+
+        /// <summary>
+        /// The advice half of the typed literal's <c>Nothing</c> refusal, per value-type kind; null for
+        /// a reference (or unresolvable .NET) target, which admits <c>Nothing</c>.
+        /// </summary>
+        private static string NothingAdviceFor(TypeInfo target)
+        {
+            if (target.IsNumeric()) return "write 0";
+            if (target.Name == "Boolean") return "write False";
+            if (target.Name == "Char") return "write a character literal";
+            if (target.Kind == TypeKind.Structure || target.Kind == TypeKind.UserDefinedType)
+            {
+                return $"write New {target.Name}()";   // `Type … End Type` is a value type too (CS0037 otherwise)
+            }
+            if (target.Kind == TypeKind.Enum) return $"write a member of '{target.Name}'";
+            return null;
+        }
+
+        /// <summary>
+        /// "a Double", "an Integer" — the spec's messages use both, so the article is computed.
+        /// ⚠ The unsigned family is the exception a letter test gets wrong: <c>UInteger</c> is spoken
+        /// "you-integer", so it takes "a" — a leading 'U' followed by another capital is that family.
+        /// </summary>
+        private static string Article(string typeName)
+        {
+            if (string.IsNullOrEmpty(typeName)) return "a";
+            if (typeName[0] == 'U' && typeName.Length > 1 && char.IsUpper(typeName[1])) return "a";
+            return "AEIOUaeiou".IndexOf(typeName[0]) >= 0 ? "an" : "a";
+        }
+
+        /// <summary>
+        /// <see cref="TypeInfo.IsAssignableFrom"/> WITHOUT its permissive narrowing arm (the single
+        /// <c>if</c> that admits integral ← floating AND integral ← integral, so that
+        /// <c>Dim i As Integer = a / b</c> keeps compiling). Into an integral target only a genuine
+        /// widening is admitted: never a floating or Decimal source, and an integral source only when
+        /// EVERY value of it fits the target (Byte → Integer, Integer → Long; not Long → Integer, not
+        /// Integer → UInteger). IsAssignableFrom lists just one of those pairs (Long ← Integer) ahead of
+        /// the arm — the others were only ever admitted BY the arm, so excluding it wholesale would
+        /// refuse <c>New Integer() {aByte}</c>, which VB widens.
+        /// </summary>
+        private static bool WidensTo(TypeInfo source, TypeInfo target)
+        {
+            if (source.IsNumeric() && target.IsNumeric() && target.IsIntegral())
+            {
+                if (!source.IsIntegral())
+                {
+                    return false;   // floating or Decimal into an integral array is the narrowing arm
+                }
+
+                return TryGetIntegralRange(source.Name, out var sourceMin, out var sourceMax)
+                    && TryGetIntegralRange(target.Name, out var targetMin, out var targetMax)
+                    && sourceMin >= targetMin && sourceMax <= targetMax;
+            }
+
+            return target.IsAssignableFrom(source);
         }
 
         public void Visit(TupleLiteralNode node)
@@ -7162,6 +7378,9 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
             // Analyze the handler expression
             node.HandlerExpression?.Accept(this);
+
+            ValidateHandlerWiring(node.EventExpression, node.HandlerExpression, "AddHandler",
+                node.Line, node.Column);
         }
 
         public void Visit(RemoveHandlerStatementNode node)
@@ -7171,7 +7390,116 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
             // Analyze the handler expression
             node.HandlerExpression?.Accept(this);
+
+            ValidateHandlerWiring(node.EventExpression, node.HandlerExpression, "RemoveHandler",
+                node.Line, node.Column);
         }
+
+        /// <summary>
+        /// What <c>AddHandler</c>/<c>RemoveHandler</c> can actually be checked for here.
+        ///
+        /// <para>⛔⛔ Deliberately silent whenever the event side is UNRESOLVED, which on the
+        /// target this matters most for is nearly always. <c>EnableNetResolution</c> returns early
+        /// for <c>UseWindowsForms</c> (<c>Compiler.cs:145</c>) and the resolver closure cannot reach
+        /// <c>System.Windows.Forms.dll</c>, so <c>btnLogin.Click</c> types as <c>Object</c> with no
+        /// symbol and no diagnostic. Requiring <c>SymbolKind.Event</c> outright would therefore
+        /// reject every correct WinForms program — including the code this designer generates for
+        /// D8. The check fires only where there is real evidence of a mistake: a resolved symbol
+        /// that is plainly not an event, or two delegate shapes we can both see and that disagree.
+        /// </para>
+        /// </summary>
+        private void ValidateHandlerWiring(
+            ExpressionNode eventExpression, ExpressionNode handlerExpression,
+            string keyword, int line, int column)
+        {
+            if (eventExpression == null || handlerExpression == null)
+            {
+                return;
+            }
+
+            var eventSymbol = GetNodeSymbol(eventExpression);
+            var eventType = GetNodeType(eventExpression);
+
+            // A resolved symbol that is neither an event nor delegate-typed is a real mistake:
+            // `AddHandler someInteger, AddressOf Foo` wires nothing and reports nothing today.
+            if (eventSymbol != null &&
+                eventSymbol.Kind != SymbolKind.Event &&
+                eventSymbol.Kind != SymbolKind.Property &&
+                eventType != null &&
+                eventType.Kind != TypeKind.Delegate &&
+                !IsUnresolvedType(eventType))
+            {
+                Error($"'{eventSymbol.Name}' is a {eventSymbol.Kind}, not an event, so " +
+                      $"{keyword} cannot attach a handler to it.", line, column);
+                return;
+            }
+
+            // Shape comparison, only when BOTH shapes are visible. GetDelegateParameterTypes
+            // returns null for anything it cannot read, and a null on either side means "no
+            // evidence", never "mismatch".
+            var expected = GetDelegateParameterTypes(eventType);
+            var actual = GetDelegateParameterTypes(GetNodeType(handlerExpression));
+
+            if (expected == null || actual == null)
+            {
+                return;
+            }
+
+            if (expected.Count != actual.Count)
+            {
+                Error($"the handler passed to {keyword} takes {actual.Count} parameter(s) but the " +
+                      $"event supplies {expected.Count}.", line, column);
+                return;
+            }
+
+            for (var i = 0; i < expected.Count; i++)
+            {
+                if (IsDefiniteParameterMismatch(expected[i], actual[i]))
+                {
+                    Error($"the handler passed to {keyword} takes '{actual[i].Name}' as parameter " +
+                          $"{i + 1}, but the event supplies '{expected[i].Name}'.", line, column);
+                    return;
+                }
+            }
+        }
+
+        /// <summary>
+        /// True only when two parameter types CANNOT be the same type — never merely "these look
+        /// different".
+        ///
+        /// <para>⛔ Restricted to primitives on both sides, and there is no general
+        /// assignability helper in this analyzer to widen it with. Comparing class names would
+        /// report <c>EventArgs</c> against <c>MouseEventArgs</c> as a mismatch, which is the
+        /// ordinary correct shape of an event handler; primitives have no inheritance, so a
+        /// difference between two of them is a real disagreement and not a widening. Anything
+        /// outside that — an unresolved type, a class, an interface, a foreign type — is treated
+        /// as no evidence, because a false error on a hot path is worse than a missed one.</para>
+        /// </summary>
+        private bool IsDefiniteParameterMismatch(TypeInfo expected, TypeInfo actual)
+        {
+            if (expected == null || actual == null ||
+                IsUnresolvedType(expected) || IsUnresolvedType(actual))
+            {
+                return false;
+            }
+
+            if (expected.Kind != TypeKind.Primitive || actual.Kind != TypeKind.Primitive)
+            {
+                return false;
+            }
+
+            return !expected.Name.Equals(actual.Name, StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>
+        /// True when the type is the resolver's stand-in for "I could not work this out" rather
+        /// than a type the user wrote. Everything unresolved lands on Object here (IsNetType), so
+        /// treating Object as evidence would turn every unreadable .NET member into a false error.
+        /// </summary>
+        private bool IsUnresolvedType(TypeInfo type) =>
+            type == null ||
+            type.Name.Equals("Object", StringComparison.OrdinalIgnoreCase) ||
+            type.Kind == TypeKind.Foreign;
 
         public void Visit(TypePatternNode node)
         {
@@ -8617,9 +8945,49 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     break;
 
                 case "AddressOf":
-                    resultType = DelegateTypeOf(GetNodeSymbol(node.Operand))
-                                 ?? _typeManager.CreatePointerType(operandType);
+                {
+                    // ⛔ This arm could not fail, and the accidental guarantee it gave was
+                    // PUNCTUATION-DEPENDENT: `AddressOf OnClick` naming a handler the user had
+                    // deleted produced NO diagnostic, while `AddressOf On_Click` produced
+                    // "Undefined identifier". The difference is IsNetType, which treats any
+                    // PascalCase identifier without an underscore as a .NET type — so the
+                    // un-punctuated name typed as Object, the symbol lookup returned null, and the
+                    // ungated pointer fallback below accepted it. D8 wires every generated handler
+                    // through AddressOf, so that silence is a handler that never fires.
+                    var handlerDelegate = DelegateTypeOf(GetNodeSymbol(node.Operand));
+
+                    if (handlerDelegate != null)
+                    {
+                        resultType = handlerDelegate;
+                    }
+                    else if (node.Operand is IdentifierExpressionNode bareName &&
+                             !bareName.IsForeignQualified &&
+                             GetNodeSymbol(node.Operand) == null &&
+                             !operandType.IsPointer)
+                    {
+                        // ⛔⛔ The ONLY new error, and deliberately the narrowest one that catches
+                        // the defect: a BARE NAME that resolved to no symbol whatsoever. A member
+                        // access is left alone because the resolver genuinely cannot see through it
+                        // — EnableNetResolution returns early for UseWindowsForms (Compiler.cs:145)
+                        // and the closure cannot reach System.Windows.Forms.dll, so every
+                        // `AddressOf Me.Handler` and `AddressOf obj.Method` in a WinForms program
+                        // has a null symbol and always will. Erroring on those would make every
+                        // AddHandler this designer generates a build failure. IsNetType is NOT
+                        // narrowed — the plan is explicit that doing so fails programs across the
+                        // suite, and this arm does not need it to.
+                        Error($"'{bareName.Name}' is not a Sub or Function in scope, so " +
+                              "AddressOf cannot take its address. If this names an event handler, " +
+                              "check it has not been renamed or deleted.",
+                              node.Line, node.Column);
+                        resultType = _typeManager.ObjectType;
+                    }
+                    else
+                    {
+                        resultType = _typeManager.CreatePointerType(operandType);
+                    }
+
                     break;
+                }
 
                 case "Deref":
                     // Dereference pointer
@@ -9829,8 +10197,39 @@ namespace BasicLang.Compiler.SemanticAnalysis
             static bool IsReference(TypeInfo t) =>
                 (t.Kind == TypeKind.Class || t.Kind == TypeKind.Interface) && !IsScalar(t);
 
-            if ((IsReference(sourceType) && IsScalar(targetType)) ||
-                (IsScalar(sourceType) && IsReference(targetType)))
+            // ⛔⛔ AN UNRESOLVABLE .NET TYPE IS NOT A JUDGEMENT THIS CHECK CAN MAKE.
+            //
+            // `ResolveTypeName` falls back to the permissive .NET branch only after the type
+            // manager and the project-symbol channel have both declined the name, so a type that
+            // is absent from _typeManager AND looks like a .NET name is one the analyzer has
+            // never seen a declaration for. It registers as a Class-kind handle — which is why
+            // `AnchorStyles` is not TypeKind.Enum and does not take the enum exemption above.
+            //
+            // MEASURED 2026-09-18 against csc: `btn.Anchor = (AnchorStyles)7;` is ACCEPTED, and
+            // `btn.Anchor = 7` is rejected with CS0266. So `CType(7, AnchorStyles)` is both
+            // correct and necessary, and refusing it here is the ONLY reason the form designer
+            // could not emit a multi-edge `Anchor` — every stage downstream was already able to.
+            var targetIsUnresolvedNet =
+                _typeManager.GetType(targetType.Name) == null && IsNetType(targetType.Name);
+
+            // ⛔ The reference→scalar arm is UNTOUCHED. It is what closed chip task_0c803e75 — a
+            // GREEN build emitting `static_cast<int32_t>(NetRef)` — and its worst row is silent:
+            // any reference cast to Boolean compiles AND RUNS on the C++ backend, binding to the
+            // handle's `explicit operator bool()`. Loosening this direction would reopen that.
+            if (IsReference(sourceType) && IsScalar(targetType))
+            {
+                Error($"Cannot convert '{sourceType.Name}' to '{targetType.Name}': no such " +
+                      $"conversion exists",
+                      node.Line, node.Column);
+                return;
+            }
+
+            // ⚠ The native path stays protected without this check's help: CppCapabilityChecker
+            // refuses unmapped .NET types outright, and records that refusal as permanent until a
+            // .NET-surface design exists. So exempting this arm cannot put a .NET handle through
+            // a `static_cast` on C++ — it only stops refusing what the C# backend already emits
+            // correctly.
+            if (IsScalar(sourceType) && IsReference(targetType) && !targetIsUnresolvedNet)
             {
                 Error($"Cannot convert '{sourceType.Name}' to '{targetType.Name}': no such " +
                       $"conversion exists",

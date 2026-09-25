@@ -6,7 +6,9 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using VisualGameStudio.Core.Abstractions.Services;
 using VisualGameStudio.Core.Abstractions.ViewModels;
+using VisualGameStudio.Core.Events;
 using VisualGameStudio.Core.Models;
+using VisualGameStudio.ProjectSystem.Serialization;
 using VisualGameStudio.ProjectSystem.Services;
 
 namespace VisualGameStudio.Shell.ViewModels.Panels;
@@ -19,6 +21,12 @@ public partial class SolutionExplorerViewModel : ViewModelBase
     private readonly ISolutionService _solutionService;
     private readonly IGitService? _gitService;
     private readonly IWorkspaceService? _workspaceService;
+
+    /// <summary>
+    /// Where "Retarget Form…" files its findings. Optional so the many fixtures that construct this
+    /// view model with four services keep compiling; DI resolves it because it is registered.
+    /// </summary>
+    private readonly IEventAggregator? _eventAggregator;
 
     [ObservableProperty]
     private ObservableCollection<TreeNode> _nodes = new();
@@ -93,7 +101,7 @@ public partial class SolutionExplorerViewModel : ViewModelBase
     [ObservableProperty]
     private string? _startupProjectName;
 
-    public SolutionExplorerViewModel(IProjectService projectService, IFileService fileService, IDialogService dialogService, ISolutionService solutionService, IGitService? gitService = null, IWorkspaceService? workspaceService = null)
+    public SolutionExplorerViewModel(IProjectService projectService, IFileService fileService, IDialogService dialogService, ISolutionService solutionService, IGitService? gitService = null, IWorkspaceService? workspaceService = null, IEventAggregator? eventAggregator = null)
     {
         _projectService = projectService;
         _fileService = fileService;
@@ -101,6 +109,7 @@ public partial class SolutionExplorerViewModel : ViewModelBase
         _solutionService = solutionService;
         _gitService = gitService;
         _workspaceService = workspaceService;
+        _eventAggregator = eventAggregator;
 
         _projectService.ProjectOpened += OnProjectOpened;
         _projectService.ProjectClosed += OnProjectClosed;
@@ -123,6 +132,7 @@ public partial class SolutionExplorerViewModel : ViewModelBase
     {
         AddProjectReferenceCommand.NotifyCanExecuteChanged();
         OnPropertyChanged(nameof(SelectedIsProject));
+        OnPropertyChanged(nameof(SelectedIsFormDocument));
     }
 
     /// <summary>
@@ -131,6 +141,15 @@ public partial class SolutionExplorerViewModel : ViewModelBase
     /// Build Project, Remove from Solution).
     /// </summary>
     public bool SelectedIsProject => SelectedNode?.IsProject == true;
+
+    /// <summary>
+    /// Whether the selected node is a form DOCUMENT (<c>.blform</c> / <c>.blwebform</c>) — gates
+    /// "Retarget Form…". The code-behind beside it is a <c>.bas</c> and does not qualify: the
+    /// retarget converts the document and scaffolds a new code-behind; it never converts code.
+    /// </summary>
+    public bool SelectedIsFormDocument =>
+        SelectedNode?.IsFile == true &&
+        BasicLang.Forms.Serialization.FormDocumentReader.TargetOfExtension(SelectedNode.FullPath) != null;
 
     private void OnProjectOpened(object? sender, ProjectEventArgs e)
     {
@@ -348,7 +367,11 @@ public partial class SolutionExplorerViewModel : ViewModelBase
             var sourceExtensions = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
             {
                 ".bas", ".bl", ".mod", ".cls", ".class", ".bli", ".json", ".xml", ".blproj",
-                ".cpp", ".h", ".hpp", ".c", ".cc", ".cxx"
+                ".cpp", ".h", ".hpp", ".c", ".cc", ".cxx",
+                // ⛔ Form documents MUST be here. This is a hardcoded whitelist, not the shared
+                // extension list, and it is one of three independent tree filters — a file missing
+                // from this one exists on disk and is simply invisible in the Solution Explorer.
+                ".blform", ".blwebform"
             };
 
             var files = Directory.GetFiles(projectDir)
@@ -385,6 +408,7 @@ public partial class SolutionExplorerViewModel : ViewModelBase
         return ext switch
         {
             ".bas" or ".bl" => TreeNodeType.SourceFile,
+            ".blform" or ".blwebform" => TreeNodeType.SourceFile,   // a designer document is project source
             ".mod" => TreeNodeType.ContentFile,       // "M" icon
             ".cls" or ".class" => TreeNodeType.Resource, // "C" icon via converter
             ".png" or ".jpg" or ".bmp" or ".ico" or ".svg" => TreeNodeType.Resource,
@@ -819,7 +843,11 @@ public partial class SolutionExplorerViewModel : ViewModelBase
         var ext = Path.GetExtension(fileName).ToLowerInvariant();
         return ext switch
         {
-            ".bas" or ".bl" or ".mod" or ".cls" or ".class" or ".cs" or ".vb" or ".cpp" or ".h" or ".fs" => TreeNodeType.SourceFile,
+            // ⛔ The second of three tree builders. A form added only to the project-items path
+            // VANISHES when the same project is opened as part of a solution, because this is the
+            // filter that path uses.
+            ".bas" or ".bl" or ".mod" or ".cls" or ".class" or ".cs" or ".vb" or ".cpp" or ".h" or ".fs"
+                or ".blform" or ".blwebform" => TreeNodeType.SourceFile,
             ".png" or ".jpg" or ".bmp" or ".ico" or ".svg" => TreeNodeType.Resource,
             _ => TreeNodeType.File
         };
@@ -1111,7 +1139,7 @@ public partial class SolutionExplorerViewModel : ViewModelBase
                 Include = relativePath,
                 ItemType = GetItemTypeForExtension(name)
             });
-            await _projectService.SaveProjectAsync();
+            await SaveProjectOrReportAsync();
 
             CancelNewItem();
             RefreshTree(_projectService.CurrentProject);
@@ -1158,7 +1186,11 @@ public partial class SolutionExplorerViewModel : ViewModelBase
         var ext = Path.GetExtension(fileName).ToLowerInvariant();
         return ext switch
         {
+            // Form documents ride as <Compile> (D11): listed so the build can find them, and
+            // skipped by both compile routes. ⚠ This is a SECOND copy of the Compile-vs-Content
+            // decision — ProjectService uses FileExtensions.IsSourceFile for the same question.
             ".bas" or ".bl" or ".mod" or ".cls" or ".class" or ".bli"
+                or ".blform" or ".blwebform"
                 or ".cpp" or ".cc" or ".cxx" or ".c" or ".h" or ".hpp" => ProjectItemType.Compile,
             ".png" or ".jpg" or ".jpeg" or ".gif" or ".bmp" or ".ico" => ProjectItemType.Resource,
             _ => ProjectItemType.Content
@@ -1203,7 +1235,7 @@ public partial class SolutionExplorerViewModel : ViewModelBase
             ItemType = GetItemTypeForExtension(fileName)
         });
 
-        await _projectService.SaveProjectAsync();
+        await SaveProjectOrReportAsync();
         RefreshTree(_projectService.CurrentProject);
         FileOpenRequested?.Invoke(this, filePath);
     }
@@ -1212,6 +1244,272 @@ public partial class SolutionExplorerViewModel : ViewModelBase
     private async Task AddNewBasicLangFileAsync()
     {
         await AddNewFileWithExtensionAsync("New BasicLang File", "NewFile.bas", ".bas");
+    }
+
+    /// <summary>
+    /// Saves the project, turning a REFUSED save into something the user can read.
+    ///
+    /// <para>⛔⛔ Every "add item" flow ends by writing the project file, and a save the
+    /// serializer refuses (today: a project whose root carries an old-style MSBuild
+    /// <c>xmlns</c>, which the structure-preserving writer cannot edit without discarding
+    /// everything the loader does not model) used to return QUIETLY — the IDE said "saved", the
+    /// user believed it, and the change was gone at the next reload. Making it throw fixed the lie
+    /// and created a new one: nothing here caught it, so adding a form to such a project would take
+    /// down the flow AFTER both files were already on disk. Reported, not thrown and not
+    /// swallowed.</para>
+    ///
+    /// <para>⚠ The files that were already written are LEFT. They are valid on their own; only
+    /// the project file's record of them is missing, and deleting the user's new source to tidy up
+    /// a bookkeeping failure would be the worse mistake.</para>
+    /// </summary>
+    private async Task SaveProjectOrReportAsync()
+    {
+        try
+        {
+            await _projectService.SaveProjectAsync();
+        }
+        catch (VisualGameStudio.Core.Models.ProjectSaveRefusedException ex)
+        {
+            await _dialogService.ShowMessageAsync(
+                "The project file was not saved",
+                $"{ex.Message}\n\nAny files just created are still on disk; the project file does " +
+                "not list them yet.");
+        }
+    }
+
+    /// <summary>
+    /// "Add ▸ New Form" — the IDE's only entry point to the form designer.
+    ///
+    /// <para>⛔⛔ The <c>[RelayCommand]</c> and the menu item that binds it are load-bearing, not
+    /// decoration: this method shipped complete, careful and completely unreachable, the fifth
+    /// piece of this feature to do so with a green suite throughout. <c>SolutionExplorerNewFormTests</c>
+    /// drives the generated command and reads the AXAML for the binding for exactly that reason.</para>
+    ///
+    /// <para>⛔ HOW it was unreachable, recorded so it is not repeated: the attribute sat above
+    /// <c>SaveProjectOrReportAsync</c>, which had been inserted between it and the method it was
+    /// written for. Attributes bind to the next DECLARATION and a doc comment in between is trivia,
+    /// so the toolkit generated a <c>SaveProjectOrReportCommand</c> nothing binds and no
+    /// <c>AddNewFormCommand</c> at all — and it compiles either way, the only symptom being a menu
+    /// item that cannot exist. <b>Keep the attribute adjacent to this method.</b></para>
+    ///
+    /// <para>Modelled on <see cref="ConfirmNewItemAsync"/>, which adds the item <b>and</b> calls
+    /// <c>SaveProjectAsync</c> — deliberately NOT on <c>ProjectService.AddFileToProjectAsync</c>,
+    /// which mutates the model and never writes, so the new files would vanish from the project on
+    /// the next load.</para>
+    /// </summary>
+    [RelayCommand]
+    private async Task AddNewFormAsync()
+    {
+        var project = _projectService.CurrentProject;
+        if (project == null) return;
+
+        var targetDir = GetTargetDirectory();
+        if (targetDir == null) return;
+
+        var name = await _dialogService.PromptAsync("New Form", "Form name:", "LoginForm");
+        if (string.IsNullOrWhiteSpace(name)) return;
+
+        name = Path.GetFileNameWithoutExtension(name.Trim());
+
+        // ⛔ A form name becomes a CLASS name, so this is stricter than a filename check: no
+        // underscore, letters and digits only. A type name containing '_' falls out of the
+        // compiler's .NET-type heuristic and every Me.<inherited member> in the class becomes a
+        // hard error — which would look like a compiler bug, not a naming rule.
+        var illegal = BasicLang.Forms.FormScaffolder.DescribeIllegalName(name);
+        if (illegal != null)
+        {
+            await _dialogService.ShowMessageAsync("Error", illegal);
+            return;
+        }
+
+        // ⛔⛔ The TARGET comes from the project, not from the scaffolder's default. Taking the
+        // default gave a WinForms project a <WebForm> document and a code-behind with no
+        // `Inherits Form` — a form that cannot compile, in a project whose whole point is WinForms.
+        // UseWindowsForms is what the template writes and what the build reads; the JavaScript
+        // backend is the web case, and everything else has no designer target of its own, so Web
+        // (the format that needs no desktop runtime) is the safe fallback.
+        var target = project.UseWindowsForms == true
+            ? BasicLang.Forms.FormTarget.WinForms
+            : BasicLang.Forms.FormTarget.Web;
+
+        var scaffold = BasicLang.Forms.FormScaffolder.Create(name, target);
+        var documentPath = Path.Combine(targetDir, scaffold.DocumentFileName);
+        var codePath = Path.Combine(targetDir, scaffold.CodeFileName);
+
+        if (File.Exists(documentPath) || File.Exists(codePath))
+        {
+            await _dialogService.ShowMessageAsync("Error", $"'{name}' already exists in this folder.");
+            return;
+        }
+
+        // ⛔⛔ BEFORE adding the first explicit <Compile> item. The compiler globs **/*.bas ONLY
+        // while a project has no explicit Compile items; the first one flips it to the explicit
+        // list. So adding a form to a project that had been relying on the glob would SILENTLY DROP
+        // EVERY OTHER SOURCE from the build — no diagnostic, just a build that compiles two files
+        // and reports success. Materialising what the glob would have found keeps the explicit list
+        // saying exactly what the glob already said.
+        var materialised = ProjectGlobSafety.MaterialiseGlobbedSources(project);
+        if (materialised.Count > 0)
+        {
+            // Told, not done silently: this materially changes the user's project file, and the
+            // next person to read it should know why it suddenly lists every source. One dialog,
+            // once per project — the list can only become explicit a single time.
+            await _dialogService.ShowMessageAsync(
+                "Project sources listed explicitly",
+                $"Adding a form makes this project's source list explicit, so {materialised.Count} " +
+                "existing source file(s) have been listed in the project file. Without that, adding " +
+                "the first file would have silently removed the others from the build.");
+        }
+
+        await File.WriteAllTextAsync(documentPath, scaffold.DocumentText);
+        await File.WriteAllTextAsync(codePath, scaffold.CodeText);
+
+        foreach (var path in new[] { documentPath, codePath })
+        {
+            project.Items.Add(new ProjectItem
+            {
+                Include = Path.GetRelativePath(project.ProjectDirectory, path),
+                ItemType = GetItemTypeForExtension(path)
+            });
+        }
+
+        await SaveProjectOrReportAsync();
+        RefreshTree(project);
+
+        // ⛔⛔ The DOCUMENT, not the code-behind. The design view is a mode on the form document's
+        // own editor, so opening the .bas leaves a brand-new form showing Basic source with no
+        // designer anywhere — which is exactly how "I can't see the form designer" happened. The
+        // code-behind sits beside it in the tree, one double-click away.
+        //
+        // ⚠ ONE file. The open handler is `async void`, so two raises race and whichever read
+        // finishes last takes the active tab — "open both, designer last" is not something this
+        // seam can promise.
+        FileOpenRequested?.Invoke(this, documentPath);
+    }
+
+    /// <summary>
+    /// "Retarget Form…" — Task 21's entry point in the IDE. Converts the selected form document to
+    /// the other format and writes the document plus a fresh code-behind into a folder the user
+    /// picks; every property that could not cross goes to the Error List, keyed on the new
+    /// code-behind like every other designer finding.
+    ///
+    /// <para>⛔⛔ NOT added to this project, and never written beside the source — and both for the
+    /// same reason. A form's document and code-behind pair by BASE NAME
+    /// (<c>FormCodeBehind.PathFor</c>) and the class is named after the form, so the web
+    /// <c>LoginForm.bas</c> in the same project as the WinForms <c>LoginForm.bas</c> is a duplicate
+    /// class, and <c>LoginForm.blwebform</c> beside <c>LoginForm.blform</c> would pair with the
+    /// WinForms class already there — the designer's next save would write web regions into it. The
+    /// pair belongs in the other target's project, one "Existing File…" away, and the dialog says
+    /// so.</para>
+    ///
+    /// <para>⚠ Keep the attribute adjacent to this method — see <see cref="AddNewFormAsync"/> for
+    /// how a doc comment between them once produced a command nothing could bind.</para>
+    /// </summary>
+    [RelayCommand]
+    private async Task RetargetFormAsync()
+    {
+        var node = SelectedNode;
+        if (node == null || !node.IsFile) return;
+
+        var from = BasicLang.Forms.Serialization.FormDocumentReader.TargetOfExtension(node.FullPath);
+        if (from == null) return;
+
+        var to = from == BasicLang.Forms.FormTarget.Web
+            ? BasicLang.Forms.FormTarget.WinForms
+            : BasicLang.Forms.FormTarget.Web;
+
+        string text;
+        try
+        {
+            text = await File.ReadAllTextAsync(node.FullPath);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            await _dialogService.ShowMessageAsync("Error", $"Could not read '{node.Name}': {ex.Message}");
+            return;
+        }
+
+        var file = BasicLang.Forms.Serialization.FormDocumentReader.Read(node.FullPath, text);
+        if (file.IsRefused)
+        {
+            // The reader's refusal is the reason. A document the designer will not open cannot
+            // become a second one it will not open either.
+            await _dialogService.ShowMessageAsync(
+                "Cannot retarget",
+                $"'{node.Name}' is refused by the designer, so it cannot be retargeted:\n\n" +
+                string.Join("\n", file.Diagnostics.Where(d => !d.IsWarning).Select(d => d.Message)));
+            return;
+        }
+
+        var describe = to == BasicLang.Forms.FormTarget.Web ? "a web form (.blwebform)" : "a WinForms form (.blform)";
+        var folder = await _dialogService.ShowFolderDialogAsync(new FolderDialogOptions
+        {
+            Title = $"Retarget '{file.Model.Name}' to {describe}: choose a folder for the new pair",
+            InitialDirectory = Path.GetDirectoryName(node.FullPath)
+        });
+
+        if (string.IsNullOrWhiteSpace(folder)) return;
+
+        BasicLang.Forms.FormRetargetPair pair;
+        try
+        {
+            pair = BasicLang.Forms.FormRetarget.ConvertToPair(file.Model, to);
+        }
+        catch (ArgumentException ex)
+        {
+            await _dialogService.ShowMessageAsync("Error", ex.Message);
+            return;
+        }
+
+        var documentPath = Path.Combine(folder, pair.DocumentFileName);
+        var codePath = Path.Combine(folder, pair.CodeFileName);
+
+        // ⛔ Neither half is ever overwritten, and neither is written when either exists — half a
+        // pair is a document whose code-behind belongs to something else.
+        var existing = new[] { documentPath, codePath }.FirstOrDefault(File.Exists);
+        if (existing != null)
+        {
+            await _dialogService.ShowMessageAsync(
+                "Error",
+                $"'{existing}' already exists. Nothing was written — choose another folder, or remove it first.");
+            return;
+        }
+
+        try
+        {
+            Directory.CreateDirectory(folder);
+            await File.WriteAllTextAsync(documentPath, pair.DocumentText);
+            await File.WriteAllTextAsync(codePath, pair.CodeText);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            await _dialogService.ShowMessageAsync("Error", $"The retargeted form could not be written: {ex.Message}");
+            return;
+        }
+
+        // Keyed on the NEW code-behind: the save path republishes designer findings on the .bas,
+        // so a finding filed anywhere else would be a phantom for the rest of the session.
+        _eventAggregator?.Publish(new DesignerDiagnosticsEvent(codePath, pair.Diagnostics
+            .Select(d => new DiagnosticItem
+            {
+                Id = d.Code,
+                Message = d.Message,
+                Severity = DiagnosticSeverity.Warning,
+                FilePath = codePath,
+                Source = Documents.CodeEditorDocumentViewModel.DesignerDiagnosticSource
+            })
+            .ToList()));
+
+        await _dialogService.ShowMessageAsync(
+            "Form retargeted",
+            $"Wrote {pair.DocumentFileName} and {pair.CodeFileName} into:\n{folder}\n\n" +
+            $"{pair.Diagnostics.Count} thing(s) could not cross between the two formats; each is " +
+            "listed in the Error List.\n\n" +
+            "The new code-behind is a fresh scaffold with an empty stub per handler — the original " +
+            "code-behind was not converted. The pair is not part of this project: add it to the " +
+            "other target's project with Add ▸ Existing File.");
+
+        FileOpenRequested?.Invoke(this, documentPath);
     }
 
     [RelayCommand]
@@ -1259,7 +1557,7 @@ public partial class SolutionExplorerViewModel : ViewModelBase
             ItemType = GetItemTypeForExtension(fileName)
         });
 
-        await _projectService.SaveProjectAsync();
+        await SaveProjectOrReportAsync();
         RefreshTree(_projectService.CurrentProject);
         FileOpenRequested?.Invoke(this, filePath);
     }
@@ -1294,7 +1592,7 @@ public partial class SolutionExplorerViewModel : ViewModelBase
 
         var files = await _dialogService.ShowOpenFileDialogAsync(
             "Add Existing File",
-            new[] { ("BasicLang Files", new[] { "*.bas", "*.bl", "*.mod", "*.cls", "*.class" }), ("C++ Files", new[] { "*.cpp", "*.h", "*.hpp", "*.c", "*.cc", "*.cxx" }), ("All Files", new[] { "*.*" }) },
+            new[] { ("BasicLang Files", new[] { "*.bas", "*.bl", "*.mod", "*.cls", "*.class" }), ("Form Designer Documents", new[] { "*.blform", "*.blwebform" }), ("C++ Files", new[] { "*.cpp", "*.h", "*.hpp", "*.c", "*.cc", "*.cxx" }), ("All Files", new[] { "*.*" }) },
             allowMultiple: true);
 
         if (files == null || files.Length == 0) return;
@@ -1316,7 +1614,7 @@ public partial class SolutionExplorerViewModel : ViewModelBase
             });
         }
 
-        await _projectService.SaveProjectAsync();
+        await SaveProjectOrReportAsync();
         RefreshTree(_projectService.CurrentProject);
     }
 
@@ -1387,7 +1685,7 @@ public partial class SolutionExplorerViewModel : ViewModelBase
                     if (item != null)
                     {
                         item.Include = newRelative;
-                        await _projectService.SaveProjectAsync();
+                        await SaveProjectOrReportAsync();
                     }
                 }
 
@@ -1410,7 +1708,7 @@ public partial class SolutionExplorerViewModel : ViewModelBase
                         }
                     }
 
-                    await _projectService.SaveProjectAsync();
+                    await SaveProjectOrReportAsync();
                 }
             }
 
@@ -1506,7 +1804,7 @@ public partial class SolutionExplorerViewModel : ViewModelBase
                 }
             }
 
-            await _projectService.SaveProjectAsync();
+            await SaveProjectOrReportAsync();
             SelectedNodes.Clear();
             RefreshTree(_projectService.CurrentProject);
         }
@@ -1681,7 +1979,7 @@ public partial class SolutionExplorerViewModel : ViewModelBase
                 _isCutOperation = false;
             }
 
-            await _projectService.SaveProjectAsync();
+            await SaveProjectOrReportAsync();
             RefreshTree(_projectService.CurrentProject);
         }
         catch (Exception ex)
@@ -2020,7 +2318,7 @@ public partial class SolutionExplorerViewModel : ViewModelBase
                 }
             }
 
-            await _projectService.SaveProjectAsync();
+            await SaveProjectOrReportAsync();
             RefreshTree(_projectService.CurrentProject);
         }
         catch (Exception ex)

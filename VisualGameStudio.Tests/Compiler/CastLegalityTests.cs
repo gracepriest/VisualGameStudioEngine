@@ -178,4 +178,76 @@ End Sub
 ");
         Assert.That(errors, Is.Empty);
     }
+
+    // ========================================================================
+    // An UNRESOLVABLE .NET type is not a judgement this check can make
+    // ========================================================================
+
+    /// <summary>
+    /// ⛔⛔ <b>A flags enum the resolver cannot see.</b> <c>EnableNetResolution</c> returns early
+    /// for <c>UseWindowsForms</c>, so <c>AnchorStyles</c> registers as a Class-kind handle rather
+    /// than <c>TypeKind.Enum</c> — and the scalar→reference arm below refused
+    /// <c>CType(7, AnchorStyles)</c>, an ordinary and correct thing to write.
+    ///
+    /// <para>MEASURED 2026-09-18 against csc: <c>btn.Anchor = (AnchorStyles)7;</c> is ACCEPTED,
+    /// and so is <c>AnchorStyles.Left | AnchorStyles.Top</c>. The only reason the designer could
+    /// not emit a multi-edge Anchor is this front-end refusal — every downstream stage was ready.
+    /// <c>btn.Anchor = 7</c> compiles in BasicLang and is then rejected by csc with CS0266, so the
+    /// cast is the whole of what was missing.</para>
+    ///
+    /// <para>⚠ This exempts ONE ARM ONLY — scalar to an unresolvable .NET type. The
+    /// reference→scalar arm is what closed chip task_0c803e75 (a GREEN build emitting
+    /// <c>static_cast&lt;int32_t&gt;(NetRef)</c>) and is deliberately untouched. The native path
+    /// remains protected regardless: <c>CppCapabilityChecker</c> refuses unmapped .NET types
+    /// outright, and says so is permanent until a .NET-surface design exists.</para>
+    /// </summary>
+    [Test]
+    public void CastingAnIntegerToAnUnresolvableNetEnum_IsAllowed()
+    {
+        var errors = Analyze(@"
+Using System.Windows.Forms
+
+Sub Main()
+    Dim a As AnchorStyles = CType(7, AnchorStyles)
+    Console.WriteLine(""ok"")
+End Sub
+");
+        Assert.That(errors, Is.Empty,
+            "the analyzer cannot see AnchorStyles, so it cannot judge this cast — and csc " +
+            "accepts (AnchorStyles)7. Refusing it is what made multi-edge Anchor impossible.");
+    }
+
+    /// <summary>
+    /// ⛔ The exemption must NOT reach a type the analyzer CAN see. A project-declared class is
+    /// resolvable, so casting a number to it is still a judgement this check is entitled to make —
+    /// and still wrong in both backends.
+    /// </summary>
+    [Test]
+    public void CastingANumberToAProjectClass_IsStillRefused()
+    {
+        var errors = Analyze(WidgetClass + @"
+Sub Main()
+    Dim w As Widget = CType(7, Widget)
+    w.Poke()
+End Sub
+");
+        Assert.That(errors, Is.Not.Empty,
+            "Widget is declared in this program, so the analyzer can and must judge this");
+    }
+
+    /// <summary>⛔ The arm that closed task_0c803e75 stays closed.</summary>
+    [Test]
+    public void CastingAClassReferenceToANumber_IsStillRefused_AfterTheExemption()
+    {
+        var errors = Analyze(WidgetClass + @"
+Sub Main()
+    Dim w As Widget = New Widget()
+    Dim n As Integer = CType(w, Integer)
+    Console.WriteLine(n)
+End Sub
+");
+        Assert.That(errors, Is.Not.Empty,
+            "reference-to-scalar is the arm that closed the chip; exempting the other arm must " +
+            "not have loosened it");
+    }
 }

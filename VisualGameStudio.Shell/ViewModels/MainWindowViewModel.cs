@@ -575,6 +575,19 @@ public partial class MainWindowViewModel : ViewModelBase
         _debugService.Stopped += OnDebugStopped;
         _debugService.OutputReceived += OnDebugOutput;
 
+        // ⚠ The form designer's own findings. Keyed as their own COLLECTION so a designer refusal
+        // and the language server's diagnostics for the same .bas do not erase one another — the
+        // same reasoning as the extension collections below, and the reason an empty publish is
+        // meaningful rather than a no-op: it is how the previous save's findings are cleared.
+        _eventAggregator.Subscribe<DesignerDiagnosticsEvent>(OnDesignerDiagnostics);
+
+        // ⛔⛔ WITHOUT THIS SUBSCRIPTION THE DOUBLE-CLICK GESTURE IS DECORATIVE. The designer writes
+        // the handler into the .bas and publishes "now take them there"; a document view model has
+        // no reference to the tab well, so nothing else can answer it. The symptom of forgetting is
+        // the worst kind here — double-clicking a Button silently DOES generate the handler, and the
+        // user sees absolutely nothing happen and concludes the designer is broken.
+        _eventAggregator.Subscribe<NavigateToFileEvent>(OnNavigateToFileRequested);
+
         // Subscribe to solution events
         _solutionService.SolutionLoaded += OnSolutionLoaded;
         _solutionService.SolutionClosed += OnSolutionClosed;
@@ -1575,6 +1588,36 @@ public partial class MainWindowViewModel : ViewModelBase
         });
     }
 
+    /// <summary>
+    /// Designer findings for one file, straight into the Error List.
+    ///
+    /// <para>⛔ Without this the designer could refuse to write a hand-edited region (BL8011) and
+    /// the user would see a save that appeared to work and a form that never changed. A refusal
+    /// nobody is shown is indistinguishable from the feature being broken.</para>
+    /// </summary>
+    private void OnDesignerDiagnostics(DesignerDiagnosticsEvent e)
+    {
+        try
+        {
+            if (string.IsNullOrEmpty(e.FilePath))
+            {
+                return;
+            }
+
+            _diagnosticsAggregator.SetExtensionDiagnostics(
+                Documents.CodeEditorDocumentViewModel.DesignerDiagnosticSource, e.FilePath, e.Diagnostics);
+
+            ErrorList.UpdateDiagnostics(_diagnosticsAggregator.GetSnapshot());
+            Problems.ReplaceAllDiagnostics(_diagnosticsAggregator.GetSnapshot());
+        }
+        catch (Exception ex)
+        {
+            _outputService?.WriteError(
+                $"[Designer] Failed to apply diagnostics for {e.FilePath}: {ex.Message}",
+                OutputCategory.General);
+        }
+    }
+
     private void OnExtensionDiagnosticsReceived(object? sender, ExtensionDiagnosticsEventArgs e)
     {
         try
@@ -1883,6 +1926,27 @@ public partial class MainWindowViewModel : ViewModelBase
         catch (Exception)
         {
             // Ignore exceptions in event handler
+        }
+    }
+
+    /// <summary>
+    /// Answers a document's "open this file at this line" — today, the form designer's double-click
+    /// landing the user in the handler it just wrote.
+    ///
+    /// <para>⚠ Reuses <c>OpenFileAndNavigateAsync</c>, the same call the Error List uses, so the
+    /// file being already open, not open, or open in another group behaves identically to every
+    /// other navigation in the IDE rather than being a second, subtly different one.</para>
+    /// </summary>
+    private async void OnNavigateToFileRequested(NavigateToFileEvent request)
+    {
+        try
+        {
+            await OpenFileAndNavigateAsync(request.FilePath, request.Line, request.Column);
+        }
+        catch (Exception)
+        {
+            // An event handler must not throw into the aggregator; a failed navigation is not worth
+            // taking the IDE down for, and the handler it could not reach is still on disk.
         }
     }
 
@@ -2286,6 +2350,7 @@ public partial class MainWindowViewModel : ViewModelBase
             Filters = new List<FileDialogFilter>
             {
                 new("BasicLang Files", "bas", "bl", "basic"),
+                new("Form Designer Documents", "blform", "blwebform"),
                 new("C++ Files", "cpp", "h", "hpp", "c", "cc", "cxx"),
                 new("All Files", "*")
             }
@@ -2454,6 +2519,11 @@ public partial class MainWindowViewModel : ViewModelBase
                 GitService = _gitService
             };
             document.SetContent(content);
+
+            // A .blform/.blwebform opens in its designer rather than in its XML. Here rather than
+            // in the view model's own constructor because this is the file-open route: a later
+            // reload must not throw a user who switched to Code view back into the canvas.
+            document.EnterDesignModeForFormDocument();
 
             // Update status bar for the new document
             StatusBar.UpdateForFile(filePath);
@@ -3169,7 +3239,17 @@ public partial class MainWindowViewModel : ViewModelBase
 
         if (_projectService.HasUnsavedChanges)
         {
-            await _projectService.SaveProjectAsync();
+            try
+            {
+                await _projectService.SaveProjectAsync();
+            }
+            catch (VisualGameStudio.Core.Models.ProjectSaveRefusedException ex)
+            {
+                // ⚠ Save All must not take the window down because ONE file could not be written,
+                // and must not claim success either. The document saves above already happened.
+                _outputService?.WriteError(
+                    $"The project file was not saved: {ex.Message}", OutputCategory.General);
+            }
         }
     }
 
@@ -4141,6 +4221,36 @@ public partial class MainWindowViewModel : ViewModelBase
     /// stale root, and it is deliberately left RUNNING after this returns: the page is live
     /// until the user stops it or opens something else.</para>
     /// </summary>
+    /// <summary>
+    /// Points the browser at the startup form's generated page rather than at the site root.
+    ///
+    /// <para>⛔ Without this, generated form pages are unreachable from F5. The preview server maps
+    /// only the BARE ROOT to <c>index.html</c> and 404s anything it cannot resolve, and F5 has
+    /// always handed the browser the root URL — so a project whose whole UI is a generated
+    /// <c>LoginForm.html</c> would open on the hand-authored harness and appear to have built
+    /// nothing.</para>
+    ///
+    /// <para>This needs NO exception to the never-overwrite rule: <c>index.html</c> stays the
+    /// user's own harness, served at <c>/</c> exactly as before. Both F5 and Ctrl+F5 route through
+    /// the caller, so both are fixed by this one line.</para>
+    /// </summary>
+    private static string AppendStartupFormPage(string url, string siteDirectory)
+    {
+        // Exactly one generated page means there is no ambiguity about which to open. With several,
+        // the choice is the project's StartupForm property, which does not exist yet — opening the
+        // root is the honest fallback rather than guessing one of them.
+        var pages = Directory.GetFiles(siteDirectory, "*.html")
+            .Where(p => !string.Equals(Path.GetFileName(p), "index.html", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        if (pages.Count != 1)
+        {
+            return url;
+        }
+
+        return url.TrimEnd('/') + "/" + Uri.EscapeDataString(Path.GetFileName(pages[0]));
+    }
+
     private async Task StartJavaScriptPreviewAsync()
     {
         await SaveBeforeBuildAsync();
@@ -4166,6 +4276,7 @@ public partial class MainWindowViewModel : ViewModelBase
         try
         {
             url = _webPreviewServer.Start(siteDirectory);
+            url = AppendStartupFormPage(url, siteDirectory);
         }
         catch (Exception ex)
         {

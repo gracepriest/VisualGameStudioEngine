@@ -3315,6 +3315,8 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                         var left = EmitExpression(bin.Left, stack, true);
                         var right = EmitDivisor(bin, EmitExpression(bin.Right, stack, true));
                         var op = MapBinaryOperator(bin.Operation);
+                        var narrowed = NarrowArithmetic(bin, $"{left} {op} {right}");
+                        if (narrowed != null) return narrowed;
                         var expr = $"{left} {op} {right}";
                         return needsParens ? $"({expr})" : expr;
                     }
@@ -3323,6 +3325,8 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                     {
                         var operand = EmitExpression(un.Operand, stack, true);
                         var op = MapUnaryOperator(un.Operation);
+                        var narrowed = NarrowUnary(un, $"{op}{operand}");
+                        if (narrowed != null) return narrowed;
                         var expr = $"{op}{operand}";
                         return needsParens ? $"({expr})" : expr;
                     }
@@ -3569,6 +3573,10 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 case IRAwait awaited:
                     return awaited.Expression != null ? new[] { awaited.Expression } : Array.Empty<IRValue>();
                 case IRArrayStore arrayStore:
+                    // Task 24a. An array-literal element's use must be COUNTED here, or a call
+                    // element has use-count 0, ShouldEmitInstruction emits it as a bare statement
+                    // and Visit(IRArrayStore) re-renders it inline — measured: a green build that
+                    // ran `Bump()` four times for `{Bump(), Bump()}`.
                     return new[] { arrayStore.Array, arrayStore.Index, arrayStore.Value };
                 case IRFieldStore fieldStore:
                     return new[] { fieldStore.Object, fieldStore.Value };
@@ -3653,7 +3661,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             var op = MapBinaryOperator(binaryOp.Operation);
 
             var target = GetValueName(binaryOp);
-            WriteLine($"{target} = {left} {op} {right};");
+            WriteLine($"{target} = {NarrowArithmetic(binaryOp, $"{left} {op} {right}") ?? $"{left} {op} {right}"};");
         }
 
         public void Visit(IRUnaryOp unaryOp)
@@ -3666,7 +3674,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             var op = MapUnaryOperator(unaryOp.Operation);
 
             var target = GetValueName(unaryOp);
-            WriteLine($"{target} = {op}{operand};");
+            WriteLine($"{target} = {NarrowUnary(unaryOp, $"{op}{operand}") ?? $"{op}{operand}"};");
         }
 
         public void Visit(IRCompare compare)
@@ -4148,6 +4156,11 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
         public void Visit(IRArrayStore arrayStore)
         {
+            // ⛔ EmitExpression, never GetValueName (see Visit(IRIndexerStore) below). Task 24a's typed
+            // array literal (`New Double() {1, i}`) wraps every NON-literal element in an IRCast
+            // (CoerceToDeclaredType re-types a literal in place and builds no cast), and a by-name
+            // render emitted `t1[1] = t0;` with t0 declared nowhere — CS0103. Measured through the
+            // CLI for both a Sub parameter and a local `i`: a local does not hide it, only a literal.
             var arrayName = EmitExpression(arrayStore.Array);
             var indexVal = arrayStore.Index is IRConstant c ? c.Value.ToString() : EmitExpression(arrayStore.Index);
             var valueVal = arrayStore.Value is IRConstant vc ? EmitConstant(vc) : EmitExpression(arrayStore.Value);
@@ -4827,6 +4840,48 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         /// `-2147483648 / -1` and did not build. A variable over -1 is unaffected either way; the
         /// rewrite only costs a -1 divisor, which nobody writes in a hot loop.</para>
         /// </summary>
+        /// <summary>
+        /// <paramref name="expr"/> cast back to the NARROW integral type of <paramref name="bin"/>
+        /// (Short, UShort, Byte, SByte), or null when no cast is needed.
+        ///
+        /// <para>⛔ C# promotes a <c>short</c>, <c>sbyte</c>, <c>byte</c> or <c>ushort</c> operand to
+        /// <c>int</c>, so <c>a + b</c> on two Shorts is an <c>int</c>, and assigning it to the Short
+        /// the IR declared was CS0266 ("Cannot implicitly convert type 'int' to 'short'"). MEASURED
+        /// on master <c>7a62bdea</c>: every Short or SByte <c>+ - * \ Mod</c> assigned back to its
+        /// own type failed the C# build. The cast is UNCHECKED — the width the Integer arithmetic
+        /// of this backend already wraps at — except for <c>\</c>: there the promoted quotient
+        /// only fails to fit for <c>MinValue \ -1</c>, which .NET reports as an OverflowException
+        /// (Integer and Long trap the same way), so that cast is CHECKED. A narrow <c>Mod</c> by
+        /// -1 is 0, which always fits.</para>
+        /// </summary>
+        private string NarrowArithmetic(IRBinaryOp bin, string expr)
+        {
+            if (bin.Type?.Name is not ("Short" or "UShort" or "Byte" or "SByte" or "UByte")) return null;
+            if (bin.Operation is not (BinaryOpKind.Add or BinaryOpKind.Sub or BinaryOpKind.Mul
+                or BinaryOpKind.IntDiv or BinaryOpKind.Mod or BinaryOpKind.And or BinaryOpKind.Or
+                or BinaryOpKind.BitwiseAnd or BinaryOpKind.BitwiseOr or BinaryOpKind.Xor
+                or BinaryOpKind.Shl or BinaryOpKind.Shr))
+                return null;
+            var type = MapType(bin.Type);
+            return bin.Operation == BinaryOpKind.IntDiv
+                ? $"checked(({type})({expr}))"
+                : $"unchecked(({type})({expr}))";
+        }
+
+        /// <summary>
+        /// A Short/UShort/Byte/SByte negation or bitwise Not cast back to its narrow type, or
+        /// null. ⛔ C# promotes the operand to <c>int</c>, so <c>Dim lo As Short = -s</c> was
+        /// CS0266 — MEASURED on master <c>e69ec64e</c>, the unary twin of
+        /// <see cref="NarrowArithmetic"/>. Unchecked: <c>-(-32768)</c> wraps to -32768, as this
+        /// backend's Integer negation does.
+        /// </summary>
+        private string NarrowUnary(IRUnaryOp un, string expr)
+        {
+            if (un.Type?.Name is not ("Short" or "UShort" or "Byte" or "SByte" or "UByte")) return null;
+            if (un.Operation is not (UnaryOpKind.Neg or UnaryOpKind.BitwiseNot)) return null;
+            return $"unchecked(({MapType(un.Type)})({expr}))";
+        }
+
         private static string EmitDivisor(IRBinaryOp bin, string renderedRight)
         {
             if (bin.Operation is not (BinaryOpKind.Div or BinaryOpKind.IntDiv or BinaryOpKind.Mod))
