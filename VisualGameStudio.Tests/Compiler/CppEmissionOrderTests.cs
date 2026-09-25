@@ -104,15 +104,13 @@ public class CppEmissionOrderTests
             """, "42");
 
     /// <summary>
-    /// ⛔ PINNED, pre-existing and NOT this change's: the same constructor writing the call
-    /// result STRAIGHT to the field prints 0 on JavaScript — the other three print 42, and the
-    /// local-first form above prints 42 on all four. A JavaScript constructor-lowering gap;
-    /// recorded as a candidate. If JavaScript starts printing 42, promote this to every backend.
+    /// The same constructor writing the call result STRAIGHT to the field. This was pinned as a
+    /// JavaScript gap (JavaScript printed 0, the other three 42). Master's JS store-of-call-result
+    /// fix (#72) closed it, so it now runs on every backend, as the pin said it should.
     /// </summary>
     [Test]
-    public void AConstructor_AssigningACallResultStraightToAField_IsAJavaScriptGap_Pinned()
-    {
-        var program = HelpersTwice + """
+    public void AConstructor_AssigningACallResultStraightToAField_RunsOnEveryBackend()
+        => RunsOnEveryBackend(HelpersTwice + """
 
             Class Box
              Public V As Integer
@@ -124,15 +122,7 @@ public class CppEmissionOrderTests
              Dim b As New Box()
              PrintLine(CStr(b.V))
             End Sub
-            """;
-        Assert.Multiple(() =>
-        {
-            Assert.That(Cpp(program), Is.EqualTo("42"), "C++");
-            Assert.That(Msil(program), Is.EqualTo("42"), "MSIL");
-            Assert.That(Cs(program), Is.EqualTo("42"), "C#");
-            Assert.That(Js(program), Is.EqualTo("0"), "PINNED: JavaScript drops the call result written straight to a field in a constructor");
-        });
-    }
+            """, "42");
 
     [Test]
     public void ASharedMethod_CallingAModuleProcedure_RunsOnEveryBackend()
