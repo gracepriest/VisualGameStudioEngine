@@ -413,6 +413,10 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // (split-mode counterpart: EmitRuntimeHeader in CppCodeGenerator.Split.cs).
             SpliceRuntimeSource(CppNetExceptionRuntime.Source);
 
+            // Checked integral `\` / `Mod` (throws NetException, so AFTER it). UNCONDITIONAL
+            // in both modes (split-mode counterpart: EmitRuntimeHeader in CppCodeGenerator.Split.cs).
+            SpliceRuntimeSource(CppIntegerDivisionRuntime.Source);
+
             // D-P7 NetRef (P2a-2 flip): UNCONDITIONAL in both modes — ManagedOwned
             // declaration positions lower to BasicLang::NetRef even with an empty surface,
             // so the type must always exist. Include-guarded and self-including; shared
@@ -2487,9 +2491,31 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 // so a future analyzer relaxation degrades to a C++ compile error.
             }
 
+            if (CheckedIntegerDivisionHelper(binaryOp) is { } helper)
+            {
+                WriteLine($"{result} = {helper}({left}, {right});");
+                return;
+            }
+
             WriteLine($"{result} = {left} {op} {right};");
         }
-        
+
+        /// <summary>
+        /// The checked runtime helper (<see cref="CppIntegerDivisionRuntime"/>) an integral
+        /// <c>\</c> or <c>Mod</c> lowers to, or null. ⛔ Never the bare operator: C++ integer
+        /// division by zero is undefined behaviour — on x86 a SIGFPE that no <c>Catch</c> can
+        /// see — where .NET throws <c>DivideByZeroException</c>. <c>\</c> is always integral here
+        /// (IRBuilder converts a floating operand, ADR-0005 D1); a floating <c>Mod</c> is not
+        /// division-by-zero-trapping (.NET gives NaN) and keeps the operator.
+        /// </summary>
+        private static string CheckedIntegerDivisionHelper(IRBinaryOp op) => op.Operation switch
+        {
+            BinaryOpKind.IntDiv => "BasicLang::IntDiv",
+            BinaryOpKind.Mod when op.Left?.Type?.IsIntegral() == true && op.Right?.Type?.IsIntegral() == true
+                => "BasicLang::IntMod",
+            _ => null,
+        };
+
         public override void Visit(IRUnaryOp unaryOp)
         {
             var operand = GetValueName(unaryOp.Operand);
@@ -3898,6 +3924,8 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             {
                 case IRConstant c:
                     return EmitConstant(c);
+                case IRBinaryOp b when CheckedIntegerDivisionHelper(b) is { } helper:
+                    return $"{helper}({RenderInline(b.Left)}, {RenderInline(b.Right)})";
                 case IRBinaryOp b:
                     return $"({RenderInline(b.Left)} {MapBinaryOperator(b.Operation)} {RenderInline(b.Right)})";
                 case IRCompare cmp:
