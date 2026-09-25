@@ -944,6 +944,157 @@ public class FormRetargetTests
     }
 
     // ==================================================================
+    // Task 26 — a strip and its items cross GEOMETRY-LESS, never sized like an ordinary control
+    // ==================================================================
+    //
+    // ⛔ RED for the right reason today: Place() (FormRetarget.cs:584) sizes and positions every
+    // sibling unconditionally, including a Docked strip and, by recursing into DeriveCells/Place, its
+    // Item children — so a strip currently receives a PixelGeometry/GridGeometry and a BL8025 finding
+    // naming it, exactly like an ordinary control. These tests must fail on THAT (geometry not null,
+    // or a BL8025 message naming the strip/an item) — not on a compile error or an unrelated exception.
+
+    private static IEnumerable<FormControl> Recurse(IEnumerable<FormControl> controls)
+    {
+        foreach (var c in controls)
+        {
+            yield return c;
+            foreach (var d in Recurse(c.Children))
+            {
+                yield return d;
+            }
+        }
+    }
+
+    [Test]
+    public void ToWinForms_AStripAndItsItems_CrossGeometryLess_WithDock()
+    {
+        var source = Web("""
+            <WebForm Name="LoginForm" Version="1">
+              <Layout Kind="Grid"/>
+              <Controls>
+                <MenuStrip Id="menuStrip1" Dock="Top">
+                  <ToolStripMenuItem Id="mnuFile" Text="&amp;File">
+                    <ToolStripMenuItem Id="mnuOpen" Text="&amp;Open..."/>
+                  </ToolStripMenuItem>
+                  <ToolStripMenuItem Id="mnuExit" Text="E&amp;xit"/>
+                </MenuStrip>
+                <StatusStrip Id="statusStrip1">
+                  <ToolStripStatusLabel Id="lblStatus" Text="Ready"/>
+                </StatusStrip>
+                <Button Id="btnGo" Text="Go" Col="0" Row="0" TabIndex="0"/>
+              </Controls>
+            </WebForm>
+            """);
+
+        var result = FormRetarget.Convert(source, FormTarget.WinForms);
+        var doc = result.Document;
+
+        var menuStrip = doc.Controls.Single(c => c.Id == "menuStrip1");
+        var statusStrip = doc.Controls.Single(c => c.Id == "statusStrip1");
+        var items = Recurse(menuStrip.Children).ToList();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(menuStrip.Geometry, Is.Null, "a strip docks to the form; it is never given pixels");
+            Assert.That(menuStrip.Properties["Dock"], Is.EqualTo("Top"),
+                "the fixture set Dock explicitly — it crosses because Dock applies to both targets, " +
+                "not because the retarget invented it");
+
+            Assert.That(items.Select(i => i.Id), Is.EquivalentTo(new[] { "mnuFile", "mnuOpen", "mnuExit" }));
+            foreach (var item in items)
+            {
+                Assert.That(item.Geometry, Is.Null, $"'{item.Id}' is an Item; it must not receive geometry");
+            }
+            Assert.That(menuStrip.Children.Select(c => c.Id), Is.EqualTo(new[] { "mnuFile", "mnuExit" }),
+                "items stay nested under their host, in document order");
+            Assert.That(menuStrip.Children.Single(c => c.Id == "mnuFile").Children.Select(c => c.Id),
+                Is.EqualTo(new[] { "mnuOpen" }));
+
+            var btn = doc.Controls.Single(c => c.Id == "btnGo");
+            Assert.That(btn.Geometry, Is.TypeOf<PixelGeometry>(), "the ordinary control is still placed");
+
+            var crossedMessages = Of(result, DesignCodes.RetargetLayoutCrossed).Select(d => d.Message).ToList();
+            foreach (var id in new[] { "menuStrip1", "mnuFile", "mnuOpen", "mnuExit", "statusStrip1", "lblStatus" })
+            {
+                Assert.That(crossedMessages, Has.None.Contains($"'{id}'"),
+                    $"'{id}' is a strip or an item; it must never be named at the pixel⇄cell edge");
+            }
+
+            // The fixture deliberately left Dock unset on the StatusStrip: it must not gain one, and
+            // the catalog's OWN default for the row (Bottom — every StatusStrip docks to the bottom
+            // unless told otherwise) must still be what "IsDockedToBottom" for this row means.
+            Assert.That(statusStrip.Properties.ContainsKey("Dock"), Is.False,
+                "nothing was set on the source, so nothing must be invented on the destination");
+            Assert.That(FormControlCatalog.Find("StatusStrip")!.Property("Dock")!.Default, Is.EqualTo("Bottom"),
+                "the row's own default IS 'docked to bottom' — the catalog states it once");
+        });
+    }
+
+    [Test]
+    public void ToWinForms_APageWhoseTopLevelIsAStripAlone_DoesNotThrow()
+    {
+        // Guards the Max()-on-an-empty-sequence trap once "positioned" filtering exists: a page whose
+        // only top-level control is a strip has ZERO positioned siblings, and Place() must not throw.
+        var source = Web("""
+            <WebForm Name="LoginForm" Version="1">
+              <Controls>
+                <MenuStrip Id="menuStrip1" Dock="Top">
+                  <ToolStripMenuItem Id="mnuFile" Text="&amp;File"/>
+                </MenuStrip>
+              </Controls>
+            </WebForm>
+            """);
+
+        FormRetargetResult result = null!;
+        Assert.DoesNotThrow(() => result = FormRetarget.Convert(source, FormTarget.WinForms));
+
+        Assert.That(result.Document.Controls.Single(c => c.Id == "menuStrip1").Geometry, Is.Null);
+    }
+
+    [Test]
+    public void ToWeb_AStripCrosses_AndTheRetargetedPageIsChrome()
+    {
+        var source = WinForms("""
+            <Form Name="LoginForm" Version="1" Width="400" Height="300" Text="Sign in">
+              <Controls>
+                <MenuStrip Id="menuStrip1" Dock="Top">
+                  <ToolStripMenuItem Id="mnuFile" Text="&amp;File">
+                    <ToolStripMenuItem Id="mnuOpen" Text="&amp;Open..."/>
+                  </ToolStripMenuItem>
+                </MenuStrip>
+                <Button Id="btnLogin" Text="Sign in" X="190" Y="60" Width="100" Height="30" TabIndex="0"/>
+              </Controls>
+              <Components/>
+              <Resources/>
+            </Form>
+            """);
+
+        var pair = FormRetarget.ConvertToPair(source, FormTarget.Web);
+        var read = FormDocumentReader.Read(Path.Combine("C:", "forms", pair.DocumentFileName), pair.DocumentText);
+        Assert.That(read.IsRefused, Is.False,
+            "the retargeted document was refused by its own reader: " +
+            string.Join("; ", read.Diagnostics.Select(d => d.Format())));
+
+        var html = FormAssetEmitter.Html(read.Model, "app.js");
+
+        var nav = html.IndexOf("<nav", StringComparison.Ordinal);
+        var formDiv = html.IndexOf("<div class=\"vgs-form\"", StringComparison.Ordinal);
+        Assert.That(nav, Is.GreaterThanOrEqualTo(0), "the MenuStrip must be emitted as page chrome");
+        Assert.That(formDiv, Is.GreaterThanOrEqualTo(0));
+        Assert.That(nav, Is.LessThan(formDiv), "chrome docks to the page, before the form div");
+
+        // ⚠ DeriveCells' else-branch (FormRetarget.cs:529-534) already nulls a control's geometry when
+        // it has no PixelGeometry to derive a cell from — which is every item, since Task 26's own
+        // fixture never gives one pixels. This assertion may already be GREEN; if so, that is stated
+        // here rather than assumed.
+        var menuStrip = read.Model.Controls.Single(c => c.Id == "menuStrip1");
+        foreach (var item in Recurse(menuStrip.Children))
+        {
+            Assert.That(item.Geometry, Is.Null, $"'{item.Id}' must not receive geometry crossing to the web");
+        }
+    }
+
+    // ==================================================================
     // The catalog gate: every kind, every property, both directions
     // ==================================================================
 
@@ -1028,6 +1179,22 @@ public class FormRetargetTests
             {
                 Assert.That(reportedLost, Is.EqualTo(expectedLost), $"{definition.Kind} {from}→{to}: reported loss");
                 Assert.That(crossed, Is.EqualTo(expectedCrossed), $"{definition.Kind} {from}→{to}: what crossed");
+
+                // Task 26: a Docked strip or an Item never receives geometry, and is never named at
+                // the pixel⇄cell edge (BL8025/RetargetLayoutCrossed) — that edge is for Positioned
+                // controls only. Scoped to messages naming exactly 'c' (quoted), never the host "cHost".
+                if (definition.Place is FormPlace.Docked or FormPlace.Item)
+                {
+                    Assert.That(matches[0].Geometry, Is.Null,
+                        $"{definition.Kind} {from}→{to}: a {definition.Place} control must not receive geometry");
+                    var crossedAtLayoutEdge = Of(result, DesignCodes.RetargetLayoutCrossed)
+                        .Select(d => d.Message)
+                        .Where(m => m.Contains("'c'"))
+                        .ToList();
+                    Assert.That(crossedAtLayoutEdge, Is.Empty,
+                        $"{definition.Kind} {from}→{to}: a {definition.Place} control must not be reported " +
+                        "at the pixel⇄cell edge");
+                }
             });
         }
     }

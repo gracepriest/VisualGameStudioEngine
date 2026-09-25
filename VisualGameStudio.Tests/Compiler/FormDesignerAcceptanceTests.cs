@@ -265,9 +265,15 @@ public class FormDesignerAcceptanceTests
     ///
     /// <para>⚠ <c>internal static</c> so <c>FormRetargetPairTests</c> runs a RETARGETED page through
     /// the same harness rather than a second DOM stub that could drift from this one. It assumes a
-    /// form named <c>LoginForm</c>, as the <c>data-form</c> line below says.</para>
+    /// form named <paramref name="formName"/> (default <c>LoginForm</c>), as the <c>data-form</c> line
+    /// below says.</para>
+    ///
+    /// <para><paramref name="clickId"/> null (the default) clicks every element the page registered,
+    /// exactly as before. A non-null id clicks ONLY that element — and if the page never registered an
+    /// element under that id, prints <c>NO ELEMENT &lt;clickId&gt;</c> so a miss is visible rather than
+    /// silently clicking nothing.</para>
     /// </summary>
-    internal static string? RunPageUnderNode(string outDir)
+    internal static string? RunPageUnderNode(string outDir, string formName = "LoginForm", string? clickId = null)
     {
         var script = Directory.GetFiles(outDir, "*.js").FirstOrDefault();
         if (script == null)
@@ -275,6 +281,10 @@ public class FormDesignerAcceptanceTests
             Assert.Fail("the build emitted no JavaScript at all:\n" +
                         string.Join("\n", Directory.GetFiles(outDir)));
         }
+
+        var clickScript = clickId == null
+            ? "for (const [id, el] of els) { try { el.click(); } catch (e) { console.log(\"CLICK ERROR \" + id + \": \" + e); } }"
+            : $"if (els.has(\"{clickId}\")) {{ try {{ els.get(\"{clickId}\").click(); }} catch (e) {{ console.log(\"CLICK ERROR {clickId}: \" + e); }} }} else {{ console.log(\"NO ELEMENT {clickId}\"); }}";
 
         // A DOM stub just real enough for the generated dispatch: elements by id, addEventListener,
         // and a click() that invokes what was registered.
@@ -300,7 +310,7 @@ public class FormDesignerAcceptanceTests
               return el;
             }
             const body = make("body");
-            body.setAttribute("data-form", "LoginForm");
+            body.setAttribute("data-form", "{{formName}}");
             globalThis.document = {
               getElementById: (id) => els.get(id) || make(id),
               querySelector: () => null,
@@ -320,8 +330,7 @@ public class FormDesignerAcceptanceTests
             } catch (e) {
               console.log("LOAD ERROR: " + e);
             }
-            // Click every button-ish element the page registered a click on.
-            for (const [id, el] of els) { try { el.click(); } catch (e) { console.log("CLICK ERROR " + id + ": " + e); } }
+            {{clickScript}}
             """);
 
         var (exit, stdout, stderr) = CliTestHarness.RunProcess(

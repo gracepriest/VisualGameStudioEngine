@@ -300,6 +300,15 @@ a second document type.
   container right (`public static class M`) and breaks the unqualified call instead. Repro, matrix
   and per-backend fix shapes in `docs/form-designer-followups.md` 14. **PR #6 fixes JavaScript
   only** — C# and C++ still need theirs.
+- ⛔ **`Place` decides "strip" vs "item" vs "positioned", and each has its own rule.** A **strip**
+  (`FormPlace.Docked`) is geometry-less — `Geometry == null`, its edge is a `Dock` PROPERTY not a
+  rect, it draws as a BAND on the canvas, and it is page chrome on the web (before/after the form
+  `<div>`, never a grid cell). An **item** (`FormPlace.Item`) lives under its host and is added by
+  the HOST row's verb, in DOCUMENT order — reversing that order runs File/Edit/Help as Help/Edit/File
+  from a green build, with nothing else looking wrong. A retarget carries this rule with it: `Place`
+  places only `Positioned` siblings and returns early when none exist; it never recurses into a
+  Docked/Item control's own children. `FormCatalogShapes.Canonical` is the one fixture shape every
+  catalog gate (render, sweep, coverage) builds from — never hand-roll a second one.
 
 ## BasicLang language
 
@@ -309,6 +318,13 @@ multi-file projects (Import/Using); .NET interop via `Using`; five backends. Sou
 files: `.bas` (also `.mod`, `.cls`). In a `.cls` file, a
 first code-line `Option Public` marks the implicit class public (legacy bare `Public`
 still works but warns).
+`New T() { … }` is a typed array-literal constructor call — parentheses are REQUIRED (`New T {…}` is
+refused with the fix in the message) — whose elements are checked by the literal's OWN rules, NOT
+the `Dim` path's: a non-literal must be `T` or WIDEN to it (no narrowing — stricter than `Dim`); a
+numeric literal has a literal-fit rule stricter than `Dim`'s (a floating literal never enters an
+integral `T`) plus `CheckConstantFitsNumericTarget` per element; `Nothing` is admitted only into a
+reference `T`; and either side being an unresolvable .NET type defers to csc. Never "harmonise" them
+with the `Dim` path — see `docs/superpowers/specs/2026-09-19-menus-toolbars-statusbars-design.md` §9.
 
 ## C++ backend (`CppCodeGenerator.cs` ↔ engine)
 

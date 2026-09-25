@@ -810,6 +810,76 @@ public class FormDesignerRealViewTests
             $"{label}: item must be renamed. typing trace: {afterTyping}; commit trace: {afterEnter}");
     }
 
+    // ==================================================================
+    // Task 26e — the owed test for Render's POSTED TypeHereBounds write
+    // (PublishTypeHereBoundsFromRender, FormCanvasControl.cs:1685). A surviving mutant made that write
+    // SYNCHRONOUS (TypeHereBounds = bounds; directly, inside Render) — indistinguishable from the
+    // posted version on every existing test because a render is always preceded by a bound-property
+    // change that already ran the EAGER path (RefreshTypeHereBounds, OnPropertyChanged). This test
+    // invalidates the canvas WITHOUT touching any bound property — a direct in-place mutation of an
+    // EARLIER item's Text, which widens its cell and shifts the strip's Type Here slot to the right —
+    // so Render's own publish is the ONLY path that can ever see the new bounds.
+    // ==================================================================
+
+    /// <summary>Asserts the overlay box's WINDOW rect matches <c>Canvas.TypeHereBounds</c>'s window
+    /// rect within 1px — i.e. the overlay is actually where the canvas's OWN published value says it
+    /// should be, not just wherever a fresh (independent) layout computation would put it.</summary>
+    private static Rect AssertOverlayMatchesCanvasBounds(Rig rig, string label)
+    {
+        var expected = rig.ToWindowRect(rig.Canvas.TypeHereBounds);
+        var actual = rig.OverlayWindowRect();
+        TestContext.WriteLine($"[{label}] canvas.TypeHereBounds(window)={expected}; overlay(window)={actual}");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(actual.X, Is.EqualTo(expected.X).Within(1), $"[{label}] overlay X != TypeHereBounds X");
+            Assert.That(actual.Y, Is.EqualTo(expected.Y).Within(1), $"[{label}] overlay Y != TypeHereBounds Y");
+            Assert.That(actual.Width, Is.EqualTo(expected.Width).Within(1), $"[{label}] overlay Width != TypeHereBounds Width");
+            Assert.That(actual.Height, Is.EqualTo(expected.Height).Within(1), $"[{label}] overlay Height != TypeHereBounds Height");
+        });
+
+        return expected;
+    }
+
+    [AvaloniaTest]
+    public void ARenderInvalidatedWithNoPropertyChange_StillMovesTheOverlayOntoTheNewSlot()
+    {
+        var rig = Open();
+        var strip = rig.MenuStrip();
+
+        rig.Vm.BeginTypeHere(strip);
+        rig.Vm.CommitTypeHere("A");
+        Dispatcher.UIThread.RunJobs();
+        var item = strip.Children.Single();
+
+        // Select the strip so its OWN Type Here slot (right after "A") is the one being tracked, then
+        // let a normal render pass settle it — this is the EAGER path working correctly, establishing
+        // the baseline the mutation below must move away from.
+        rig.Click(rig.CentreOfEntry(strip, FormLayoutRole.Band));
+        Dispatcher.UIThread.RunJobs();
+        using (rig.Window.CaptureRenderedFrame()) { }
+
+        AssertOverlayMatchesCanvasBounds(rig, "before widening the earlier item");
+        var beforeX = rig.Canvas.TypeHereBounds.X;
+
+        // Widen the EARLIER item's Text DIRECTLY on the model object — no ModelRevision bump, no
+        // OnPropertyChanged trigger of any kind — so RefreshTypeHereBounds (the eager path) cannot
+        // possibly have run before the render below. Only Render's own publish can ever see this.
+        item.Properties["Text"] = "AAAAAAAAAAAAAAAAAAAA";
+        rig.Canvas.InvalidateVisual();
+
+        using (rig.Window.CaptureRenderedFrame()) { } // Render computes+posts; nothing drained yet
+        Dispatcher.UIThread.RunJobs();                 // drains the posted write -> TypeHereBounds updates
+        using (rig.Window.CaptureRenderedFrame()) { } // the overlay gets a chance to re-arrange onto it
+
+        var afterX = rig.Canvas.TypeHereBounds.X;
+        Assert.That(afterX, Is.GreaterThan(beforeX),
+            "widening the earlier item must shift the strip's Type Here slot to the right — " +
+            $"before X={beforeX}, after X={afterX}");
+
+        AssertOverlayMatchesCanvasBounds(rig, "after widening the earlier item");
+    }
+
     private sealed class RecorderCommand : System.Windows.Input.ICommand
     {
         public int Executions { get; private set; }

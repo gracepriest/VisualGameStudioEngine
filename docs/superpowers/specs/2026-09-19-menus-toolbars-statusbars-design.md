@@ -668,3 +668,37 @@ Commit 24c (the designer half) adds three more:
   before the `Accepts` check because the D9 Degraded tier keeps a bad value so it round-trips
   (`FormDocumentReader.cs:508`). Treating `""` as merely "not Bottom" docks a `<StatusStrip Dock=""/>`
   to the TOP, against its own row's default. `DockEdge` therefore tests for empty, not just null.
+
+Commit 24d adds one more, and it changes what "gated" means for this feature rather than adding a
+new fact about the compiler or the model:
+
+- **The Type Here gate asserts AXAML BINDINGS, not a code-behind handler.** §7's "handler name"
+  wording predates the control-based design measured while building Task 24: `FormCanvasControl`
+  raises `BeginTypeHereCommand` and the overlay editor (`FormTypeHereEditor`) is bound two-way
+  through `CommitCommand`/`CancelCommand` — there is no handler method for a gate to name, so
+  `FormStripViewTests` parses `CodeEditorDocumentView.axaml` and asserts each attribute
+  (`TypeHereHost`, `BeginTypeHereCommand`, and the editor's `IsActive`/`Host`/`Text`/`SlotBounds`/
+  `CommitCommand`/`CancelCommand`) by string, because every binding in that view is a REFLECTION
+  binding (no `AvaloniaUseCompiledBindingsByDefault` anywhere in the repo) and a build-green gate
+  proves nothing about whether the generated command exists. 24d went further than the AXAML gate
+  alone: `FormDesignerRealViewTests` hosts the REAL view (not a bare view model) under
+  `Avalonia.Headless`, because the pre-flight recon found that piece-level tests all passed while
+  four blocker-class defects — an `[ObservableProperty]` on only one of three fields, an overlay
+  born visible and hit-testable, a `PasteControls` double-add, tautological cell assertions — would
+  each have shipped a green suite with a dead or wrong-drawing feature.
+
+Commit 24e adds two:
+
+- **The retarget rule is an EXCLUSION, not a special case for strips.** `FormRetarget.Place` filters
+  its `siblings` to `c.Definition?.Place is null or FormPlace.Positioned` before any sizing runs, and
+  returns `(0, 0)` early when that filtered set is empty — a Docked control (and everything nested
+  under it, an Item) crosses with `Geometry == null` and no BL8025, never recursed into for its own
+  children. The early return exists only because the filter does: without it, a page whose only
+  top-level control is a strip leaves zero `positioned` siblings and `Max` throws on an empty
+  sequence — the filter and the early return are one change, not two.
+- **`Task 28`'s click target is the HOST's `DropDownItems`, not the menu bar's `Items`.** The plan's
+  own driver snippet describes clicking "item 0" of the menu; measured while building the fixture,
+  item 0 of `form.MainMenuStrip.Items` is the top-level `&File` entry itself (a `ToolStripMenuItem`
+  with no `Click` behaviour of its own), and the wired handler lives on `File`'s first
+  `DropDownItems` entry (`&Open...`). The acceptance test clicks
+  `((ToolStripMenuItem)form.MainMenuStrip.Items[0]).DropDownItems[0]`.

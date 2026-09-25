@@ -583,7 +583,21 @@ public static class FormRetarget
         /// <returns>The extent the placed siblings reach: the largest right edge and bottom edge.</returns>
         private (int Right, int Bottom) Place(List<FormControl> siblings, FormLayout layout)
         {
-            if (siblings.Count == 0)
+            // ⛔ Only a Positioned control has a place to derive (Task 26). A Docked strip and its
+            // Items have no geometry on EITHER side — the strip says where it sits with its Dock
+            // PROPERTY, which crossed untouched — so they are given no pixels, no BL8025, and their
+            // children are never walked. Excluded from the pitch too, or a strip's catalog width
+            // would spread every cell. A page whose top level is a strip alone leaves nothing to
+            // measure, and Max over nothing throws: hence the return BEFORE any Max is reached.
+            static bool IsPositioned(FormControl c) => c.Definition?.Place is null or FormPlace.Positioned;
+
+            foreach (var control in siblings.Where(c => !IsPositioned(c)))
+            {
+                control.Geometry = null;
+            }
+
+            var positioned = siblings.Where(IsPositioned).ToList();
+            if (positioned.Count == 0)
             {
                 return (0, 0);
             }
@@ -591,7 +605,7 @@ public static class FormRetarget
             // Sizes first, post-order, so a container is sized to hold the children placed inside it
             // and the pitch below is measured over the sizes the siblings will actually have.
             var sizes = new Dictionary<FormControl, (int W, int H)>();
-            foreach (var control in siblings)
+            foreach (var control in positioned)
             {
                 var (childRight, childBottom) = Place(control.Children, layout);
                 var definition = control.Definition!;
@@ -617,7 +631,7 @@ public static class FormRetarget
             // A Grid control with no cell is auto-placed by the browser. Emulating CSS auto-placement
             // is a guess; putting it in its own row BELOW every explicit one is not, and cannot land
             // on top of a control that was positioned.
-            var lastExplicitRow = siblings
+            var lastExplicitRow = positioned
                 .Select(c => _sourceGeometry.GetValueOrDefault(c) as GridGeometry)
                 .Where(g => g != null)
                 .Select(g => g!.Row)
@@ -628,9 +642,9 @@ public static class FormRetarget
             var right = 0;
             var bottom = 0;
 
-            for (var i = 0; i < siblings.Count; i++)
+            for (var i = 0; i < positioned.Count; i++)
             {
-                var control = siblings[i];
+                var control = positioned[i];
                 var (w, h) = sizes[control];
                 var cell = _sourceGeometry.GetValueOrDefault(control) as GridGeometry;
 

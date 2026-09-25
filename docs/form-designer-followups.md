@@ -559,3 +559,63 @@ in `ItemId` and state at the character filter that it is what removes accelerato
 at the site that it is currently redundant *with that filter* and would only matter if the filter ever
 admitted `&`. ⛔ Do not leave it described as load-bearing — a line that cannot fail, commented as
 though it can, is what makes the next reader trust an unfalsifiable guard elsewhere.
+
+### 28. `ShortcutKeys` is deferred — found 2026-09-19/20, filed 2026-09-25
+
+Spec Decision 8 and measurements M6/M7: a WinForms `ShortcutKeys` value is only expressible today as
+`CType(n, Keys)` — an opaque integer with no readable name — because `Keys` is a flags enum with no
+BasicLang-side editor or name table. Filed rather than built: it needs a picker (a key + modifier
+combo) and a name table mapping the picker's choice to the `Keys` member, not a one-line property
+emission.
+
+### 29. Array-literal common-base widening for BasicLang classes — found 2026-09-20, filed 2026-09-25
+
+Spec Decision 1 and measurements M1/M3: `New T() {…}`'s typed form (§9) was built as the ALTERNATIVE
+compiler shape, not the preferred one, because widening to a common base cannot type
+`{mnuFile, sep1}` — both are unresolvable .NET types with no base chain the analyzer can see. For
+BasicLang's OWN classes, which do carry a real inheritance chain, common-base widening is still
+open: `New Object() {aShape, aCircle}` has no rule that infers `Shape` as the element type today.
+Not needed by the designer (which emits per-item `Add`, Decision 2), but worth its own investigation
+since it is a general array-literal gap, not a form-designer one.
+
+### 30. The C++ capability checker has no `IRArrayAlloc` arm — found 2026-09-20 (spec §9), filed 2026-09-25
+
+Recorded, not widened, in spec §9's own gate paragraph: the capability checker that guards a native
+build against constructs the C++ backend cannot honestly emit has clone/visit arms for the usual IR
+nodes but none for `IRArrayAlloc`. A typed array literal of an unresolvable .NET element type passed
+straight into a foreign `::` call would slip past the checker on a native build (a *declared* local
+or field still catches it, because that path is checked elsewhere) — the gap is narrow, but the
+checker's job is exactly to catch what would otherwise fail silently or fail late in clang/MSVC with
+a confusing message.
+
+### 31. `RejectImpossibleConversion`'s sibling-file hole — spec Decision 14, chip `task_0b7436a5`
+
+`SemanticAnalyzer.cs:9437-9438`'s own unresolved-.NET-type spelling has the same sibling-file hole
+that spec §9 had to route around for the typed array literal's element check: `CType(7, Shape)` with
+`Shape` declared in another `.bas` on the CLI is treated as an unresolvable .NET type and exempted,
+because the check that would recognise `Shape` as a user-defined BasicLang class only sees symbols
+collected from the CURRENT file's parse, not the whole program. §9's element check re-derives the
+same predicate correctly (`ResolveTypeName`'s own order); `RejectImpossibleConversion` was left
+as-is because it is shared machinery outside this feature's scope. Already tracked as chip
+`task_0b7436a5`; recorded here so the two write-ups do not drift apart.
+
+### 32. A bare expression as a statement parses silently — measured 2026-09-20, chip `task_2e1de6b3`
+
+`ParseAssignmentOrExpressionStatement` accepts any expression as a complete statement, with no check
+that it has a side effect. `New Integer()` immediately followed by an unattached `{1, 2}` on the next
+line therefore parses as two things: a parameterless constructor call (the bare expression statement,
+silently discarded) and a vanished array initializer — no diagnostic names the mismatch, and the
+`{1, 2}` is not even flagged as dead. Measured while building Task 1 of commit 24a (the `New T() {…}`
+parser work), where the two-line shape looks like a typo of the one-line typed-literal syntax. Already
+tracked as chip `task_2e1de6b3`.
+
+### 33. Designer captions still show `&` literally and clip below 1:1 zoom — found 2026-09-24, out of scope for 24d
+
+The canvas's own caption draw for Button/Label/CheckBox (and the other simple-caption kinds) does not
+run the accelerator-underline pass that the menu strip's Type Here captions got in commit 24d
+(`415c9b1a`): at zoom levels other than 1:1 the literal `&` is still visible in the drawn text, and
+the caption clips against its control's bounds rather than scaling with it. Separately, below zoom
+≈0.42 a whole band draws NO captions at all — not merely clipped, absent. None of this touches the
+Type Here editing surface or the strip/item model 24d and 24e shipped; it is a pre-existing canvas
+rendering gap in the simple-control caption path, found while eyeballing the IDE for the owner's
+acceptance pass and left for its own investigation.
