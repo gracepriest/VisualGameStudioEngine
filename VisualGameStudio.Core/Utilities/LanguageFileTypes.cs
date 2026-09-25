@@ -147,7 +147,14 @@ public static class LanguageFileTypes
             ".json" => "json",
             ".jsonc" => "jsonc",
             ".md" or ".markdown" => "markdown",
-            ".xml" => "xml",
+            // ⛔ A form document is XML, and is mapped to "xml" rather than "basiclang" on purpose.
+            // It rides in the project as a <Compile> item, so it is tempting to register it beside
+            // the BasicLang extensions — but the extension host uses this map to decide how to
+            // COLOUR and complete the text, and a .blwebform opened in Code view is an XML document.
+            // It is also deliberately absent from BasicLangExtensions above: that list is
+            // LSP-routing, and pointing the BasicLang language server at XML would have it report
+            // syntax errors for every line of a perfectly valid form.
+            ".xml" or ".blform" or ".blwebform" => "xml",
             ".yaml" or ".yml" => "yaml",
             ".py" => "python",
             ".rs" => "rust",

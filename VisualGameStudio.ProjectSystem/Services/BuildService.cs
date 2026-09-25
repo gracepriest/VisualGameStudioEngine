@@ -611,6 +611,56 @@ public class BuildService : IBuildService
 
             cancellationToken.ThrowIfCancellationRequested();
 
+            var backend = GetBackendId(project.TargetBackend);
+            var outputDir = ResolveOutputDirectory(project.ProjectDirectory, config.OutputPath);
+
+            // ⚠ JavaScript only, and BEFORE the "Compiling N file(s)" announcement below. Reading
+            // every form document on a C++ or C# build costs nothing useful and puts a page-emitter
+            // warning into a build that will never emit a page; announcing the file list before the
+            // generated dispatch joins it made the IDE report a count and a list that both left it
+            // out, while the CLI named it — the two routes must say the same thing about what they
+            // compiled.
+            IReadOnlyList<BasicLang.Forms.FormDocument> webForms = Array.Empty<BasicLang.Forms.FormDocument>();
+
+            if (backend == "javascript")
+            {
+                // ⛔⛔ Form documents come from their OWN glob, not from the compile item list.
+                // That glob cannot yield a .blwebform by design (it feeds the lexer, and a form
+                // document is XML), so a project with explicit <Compile> items got pages and a
+                // default one — same files on disk — got none, silently.
+                webForms = BasicLang.Forms.FormDocumentLoader.LoadWebForms(
+                    cliProject != null
+                        ? cliProject.GetFormDocuments()
+                        : sourceFiles.Select(item => Path.Combine(project.ProjectDirectory, item.Include)),
+                    m => _outputService.WriteLine($"Warning: {m}", OutputCategory.Build));
+
+                // ⛔⛔ D7's dispatch, as a real source file compiled with everything else — the
+                // CLI does exactly this, and the two routes must agree. Without it the `data-form`
+                // attribute every generated page carries is read by NOTHING, so every page loads
+                // the one script, runs the one Main(), and shows the same thing.
+                var dispatchPath = BasicLang.Forms.FormDispatch.Write(
+                    webForms, Path.Combine(project.ProjectDirectory, "obj", config.Name),
+                    m => _outputService.WriteLine($"Warning: {m}", OutputCategory.Build));
+
+                if (dispatchPath != null)
+                {
+                    if (!BasicLang.Forms.FormDispatch.IsCalled(absoluteSourcePaths))
+                    {
+                        result.Diagnostics.Add(new DiagnosticItem
+                        {
+                            Id = BasicLang.Forms.DesignCodes.DispatchNotCalled,
+                            Message = BasicLang.Forms.FormDispatch.NotCalledMessage,
+                            FilePath = project.FilePath,
+                            Severity = DiagnosticSeverity.Warning
+                        });
+                        _outputService.WriteLine(
+                            $"Warning: {BasicLang.Forms.FormDispatch.NotCalledMessage}", OutputCategory.Build);
+                    }
+
+                    absoluteSourcePaths.Add(dispatchPath);
+                }
+            }
+
             // ---------- Phase 2: compile with the real compiler engine ----------
             _outputService.WriteLine($"Compiling {absoluteSourcePaths.Count} file(s)...", OutputCategory.Build);
             foreach (var path in absoluteSourcePaths)
@@ -618,9 +668,6 @@ public class BuildService : IBuildService
                 _outputService.WriteLine($"  Compiling {Path.GetFileName(path)}...", OutputCategory.Build);
             }
             BuildProgress?.Invoke(this, new BuildProgressEventArgs("Parsing and analyzing sources...", 20));
-
-            var backend = GetBackendId(project.TargetBackend);
-            var outputDir = ResolveOutputDirectory(project.ProjectDirectory, config.OutputPath);
 
             var compilerOptions = new CompilerOptions
             {
@@ -716,10 +763,21 @@ public class BuildService : IBuildService
                         extension = ".js";
                         break;
 
-                    default: // csharp
+                    case "csharp":
                         generatedCode = new BasicLang.Compiler.CodeGen.CSharp.CSharpCodeGenerator().Generate(compilation.CombinedIR);
                         extension = ".cs";
                         break;
+
+                    // ⛔ Never make this arm default to C#. It used to, and a backend without an
+                    // arm therefore did not fail — it silently generated C#, wrote a .cs, and
+                    // reported the build as succeeded. That is how a JavaScript project emitted C#
+                    // while every other layer already understood JavaScript. `backend` comes only
+                    // from GetBackendId over the closed TargetBackend enum, so this can fire only
+                    // when a new backend is added without an arm here, which is when it must.
+                    default:
+                        throw new NotSupportedException(
+                            $"Backend '{backend}' has no code-generation arm in BuildService — add one. " +
+                            "A missing arm must not silently fall back to C#.");
                 }
             }
             catch (Exception genEx)
@@ -760,7 +818,7 @@ public class BuildService : IBuildService
                 if (backend == "javascript")
                 {
                     EmitJavaScriptSite(outputDir, result.GeneratedFileName, generatedCode,
-                        project, jsGenerator, compilation.CombinedIR.JsImports);
+                        project, jsGenerator, webForms, compilation.CombinedIR.JsImports);
                 }
 
                 var toolchainHint = backend switch
@@ -906,17 +964,22 @@ public class BuildService : IBuildService
 
     /// <summary>Maps the IDE's backend enum to the compiler's backend identifier.</summary>
     /// <remarks>
-    /// ⚠ The <c>_ => "csharp"</c> default means a MISSING arm does not fail — it silently
-    /// builds C# instead. That is how a JavaScript project would have emitted C# even with the
-    /// codegen arm in place, and it is the same shape of bug the CLI project route carried.
+    /// ⛔ Every member of <see cref="TargetBackend"/> gets an explicit arm and the default THROWS.
+    /// This used to end in <c>_ => "csharp"</c>, which meant a missing arm did not fail — it
+    /// silently built C# and reported success. That is how a JavaScript project would have emitted
+    /// C# even with the codegen arm in place, and it is the same shape of bug the CLI project route
+    /// carried. Add a backend, add an arm; never widen the default.
     /// </remarks>
     private static string GetBackendId(TargetBackend backend) => backend switch
     {
+        TargetBackend.CSharp => "csharp",
         TargetBackend.Cpp => "cpp",
         TargetBackend.LLVM => "llvm",
         TargetBackend.MSIL => "msil",
         TargetBackend.JavaScript => "javascript",
-        _ => "csharp"
+        _ => throw new NotSupportedException(
+            $"TargetBackend '{backend}' has no backend-id mapping in BuildService — add an arm. " +
+            "A missing arm must not silently build C#.")
     };
 
     /// <summary>
@@ -937,6 +1000,7 @@ public class BuildService : IBuildService
     private void EmitJavaScriptSite(string outputDir, string scriptFileName, string generatedCode,
         BasicLangProject project,
         BasicLang.Compiler.CodeGen.JavaScript.JavaScriptCodeGenerator generator,
+        IReadOnlyList<BasicLang.Forms.FormDocument> webForms,
         IReadOnlyList<BasicLang.Compiler.IR.JsImportDirective> jsImports = null)
     {
         string mapJson = null;
@@ -954,6 +1018,14 @@ public class BuildService : IBuildService
         BasicLang.Compiler.CodeGen.JavaScript.JavaScriptEmitter.Emit(
             outputDir, scriptFileName, generatedCode, title: project.Name, sourceMapJson: mapJson,
             jsImports: jsImports,
+            // ⛔ The IDE route needs this as much as the CLI's. `forms` is optional and only the
+            // tests ever passed it, so the markup emitter never ran in either shipping path: a
+            // project containing a .blwebform built green and produced no page at all.
+            //
+            // ⚠ Loaded ONCE by the caller and passed in, because the dispatch helper is generated
+            // from the same list before the compile — reading the documents twice would let the
+            // pages and the dispatch disagree about which forms exist.
+            forms: webForms,
             importBaseDirectory: project.ProjectDirectory,
             // WriteLine, not WriteError: a missing #JsImport target does not fail the build, and
             // colouring it as an error would make a warning look like one.
@@ -1153,6 +1225,20 @@ public class BuildService : IBuildService
         if (enableWpf)
         {
             sb.AppendLine("    <UseWPF>true</UseWPF>");
+        }
+
+        // WinForms defaults to the legacy DPI-unaware mode, in which the form designer's pixel
+        // coordinates and the running window's are different units on any scaled display. The
+        // .blproj value wins; PerMonitorV2 is the fallback so a project that never set one still
+        // runs in the mode the designer lays out for.
+        if (enableWindowsForms)
+        {
+            var highDpiMode = cliProject?.ApplicationHighDpiMode;
+            if (string.IsNullOrWhiteSpace(highDpiMode))
+            {
+                highDpiMode = "PerMonitorV2";
+            }
+            sb.AppendLine($"    <ApplicationHighDpiMode>{MSBuildText.EscapeValue(highDpiMode)}</ApplicationHighDpiMode>");
         }
 
         sb.AppendLine("  </PropertyGroup>");

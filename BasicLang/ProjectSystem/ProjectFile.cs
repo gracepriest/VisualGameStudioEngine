@@ -99,12 +99,44 @@ namespace BasicLang.Compiler.ProjectSystem
         /// need to tell BasicLang sources apart from C++ translation units
         /// (CppProjectBuilder's mixed-source partition, and the LSP file filter).
         /// </summary>
+        /// <remarks>
+        /// ⛔ NEVER add <c>.blform</c> or <c>.blwebform</c> here. This list drives the default
+        /// source glob in <see cref="GetSourceFiles"/>, which feeds files straight to
+        /// <c>File.ReadAllText</c> and then the BasicLang lexer. A form document is XML. It rides
+        /// as an explicit <c>&lt;Compile&gt;</c> item and is partitioned out in
+        /// <c>CompileProjectFiles</c> — it must never be swept in by the glob, where no
+        /// <c>&lt;Compile&gt;</c> item and no diagnostic would mark its arrival.
+        /// The IDE-side list (<c>VisualGameStudio.Core.Constants.FileExtensions.SourceExtensions</c>)
+        /// DOES include them, and that difference is deliberate.
+        /// </remarks>
         public static readonly string[] BasicLangSourceExtensions =
             { ".bas", ".bl", ".basic", ".mod", ".cls", ".class", ".bli" };   // .bli = declarations (plan 2c)
+
+        /// <summary>
+        /// Form DOCUMENT extensions — deliberately NOT in
+        /// <see cref="BasicLangSourceExtensions"/>, and never to be merged into it: that list feeds
+        /// the lexer and a form document is XML.
+        ///
+        /// <para>⛔ It still needs a glob of its own. A project with explicit
+        /// <c>&lt;Compile&gt;</c> items listed its .blwebform and got pages; a project with NO
+        /// explicit items — the default shape — got none, silently: the page emitter was handed
+        /// GetSourceFiles(), whose glob cannot yield a form document by design, so the build
+        /// succeeded and wrote no .html at all. Two project shapes, two behaviours, no diagnostic.
+        /// </para>
+        /// </summary>
+        public static readonly string[] FormDocumentExtensions = { ".blform", ".blwebform" };
 
         // Windows desktop UI frameworks (require the net*-windows TFM)
         public bool UseWindowsForms { get; set; } = false;
         public bool UseWpf { get; set; } = false;
+
+        /// <summary>
+        /// &lt;ApplicationHighDpiMode&gt; — a System.Windows.Forms.HighDpiMode name, normally
+        /// PerMonitorV2. Null means the project file does not say, and the csproj emitter supplies
+        /// PerMonitorV2 for a WinForms build. In the legacy DPI-unaware mode the form designer's
+        /// pixel coordinates and the running window's are different units.
+        /// </summary>
+        public string? ApplicationHighDpiMode { get; set; }
 
         // Build configurations
         public Dictionary<string, BuildConfiguration> Configurations { get; set; } = new Dictionary<string, BuildConfiguration>();
@@ -174,6 +206,9 @@ namespace BasicLang.Compiler.ProjectSystem
 
                 var useWpf = propertyGroup.Element("UseWPF")?.Value;
                 if (useWpf != null && bool.TryParse(useWpf, out var uwp)) project.UseWpf = uwp;
+
+                var highDpiMode = propertyGroup.Element("ApplicationHighDpiMode")?.Value?.Trim();
+                if (!string.IsNullOrEmpty(highDpiMode)) project.ApplicationHighDpiMode = highDpiMode;
             }
 
             // Parse ItemGroup for various references
@@ -478,9 +513,20 @@ namespace BasicLang.Compiler.ProjectSystem
             {
                 // Default: all .bas, .bl, .basic, .mod, .cls, and .class files (same
                 // patterns, same order as before — driven off the shared extension list).
+                //
+                // ⛔⛔ bin/ and obj/ are EXCLUDED, the same rule GetCppTranslationUnits has always
+                // had. Measured: the build writes a generated VgsFormDispatch.g.bas into obj/, and
+                // on the SECOND build of a glob-shaped project this walk swept it back in — the
+                // build log read "Compiling VgsFormDispatch.g.bas..." TWICE, from a build that
+                // still reported success. Generated sources under obj/ are the build's own output;
+                // compiling your own output is never what a glob means, and the exact-extension
+                // check is here for the reason the C++ one names: Win32 globbing lets "*.bas"
+                // match a longer extension that merely starts with it.
                 foreach (var ext in BasicLangSourceExtensions)
                     foreach (var file in GetFilesInWindowsOrder(projectDir, "*" + ext))
-                        yield return file;
+                        if (string.Equals(Path.GetExtension(file), ext, StringComparison.OrdinalIgnoreCase)
+                            && !IsInBuildOutputDir(projectDir, file))
+                            yield return file;
             }
             else
             {
@@ -496,6 +542,48 @@ namespace BasicLang.Compiler.ProjectSystem
                                      .OrderBy(f => f, StringComparer.OrdinalIgnoreCase))
                             yield return file;
                     }
+                }
+            }
+        }
+
+        /// <summary>
+        /// The form documents this project owns.
+        ///
+        /// <para>⚠ The SAME rule as <see cref="GetSourceFiles"/>, one extension list over:
+        /// no explicit <c>&lt;Compile&gt;</c> items means a recursive glob, explicit items mean
+        /// exactly what was listed, filtered to form extensions. Anything else makes the default
+        /// project shape and the explicit one disagree about whether a form exists — which is
+        /// precisely the bug this method was added for.</para>
+        /// </summary>
+        public IEnumerable<string> GetFormDocuments()
+        {
+            var projectDir = Path.GetDirectoryName(FilePath) ?? ".";
+
+            if (SourceFiles.Count == 0)
+            {
+                foreach (var ext in FormDocumentExtensions)
+                    foreach (var file in Directory.GetFiles(projectDir, "*" + ext, SearchOption.AllDirectories))
+                        // ⚠ The bin/obj exclusion is the load-bearing one here: they live under the
+                        // project directory, so an unguarded recursive glob walks the build output.
+                        //
+                        // The exact-extension check is DEFENSIVE ONLY, and the justification first
+                        // written here was wrong: Win32's prefix over-match applies to
+                        // three-character patterns (which is why "*.bas" matching `.basic` is real
+                        // and matters in GetSourceFiles above), and ".blform"/".blwebform" are too
+                        // long to be short-name extensions. It costs nothing and keeps the two
+                        // globs the same shape, but no measurement supports needing it.
+                        if (string.Equals(Path.GetExtension(file), ext, StringComparison.OrdinalIgnoreCase)
+                            && !IsInBuildOutputDir(projectDir, file))
+                            yield return file;
+
+                yield break;
+            }
+
+            foreach (var file in GetSourceFiles())
+            {
+                if (FormDocumentExtensions.Contains(Path.GetExtension(file), StringComparer.OrdinalIgnoreCase))
+                {
+                    yield return file;
                 }
             }
         }

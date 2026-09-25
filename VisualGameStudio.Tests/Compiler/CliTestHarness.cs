@@ -22,6 +22,13 @@ internal static class CliTestHarness
     public static string AppHostName(string name)
         => OperatingSystem.IsWindows() ? name + ".exe" : name;
 
+    /// <summary>
+    /// The real CLI deployed next to the tests.
+    ///
+    /// <para>⛔ Hardcoding the <c>.exe</c> spelling did not fail loudly off Windows — it failed as
+    /// "not deployed — project reference output changed?", which reads as a build-layout problem
+    /// and is why every spawned-CLI test in this suite was simply red there.</para>
+    /// </summary>
     public static string CliPath()
     {
         var cliName = AppHostName("BasicLang");

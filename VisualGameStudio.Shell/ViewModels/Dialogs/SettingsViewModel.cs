@@ -18,8 +18,21 @@ namespace VisualGameStudio.Shell.ViewModels.Dialogs;
 /// Represents a single setting entry that can be searched and displayed in a flat list.
 /// Supports User/Workspace scope display with badges and override indicators.
 /// </summary>
-public partial class SearchableSettingItem : ObservableObject
+public partial class SearchableSettingItem : ObservableObject,
+    VisualGameStudio.Core.Abstractions.ViewModels.ITypedValueRow
 {
+    // ⛔ Every member the interface needs already existed here with the same name and a compatible
+    // type — the interface was extracted FROM this class, not imposed on it. The two additions
+    // below are the ones the designer's property grid needs and a setting never does.
+
+    /// <summary>Settings rows are always editable; D9's frozen tier is a designer concept.</summary>
+    public bool IsEditable => true;
+
+    /// <summary>Never frozen, so never a reason.</summary>
+    public string? FrozenReason => null;
+
+    IReadOnlyList<string>? VisualGameStudio.Core.Abstractions.ViewModels.ITypedValueRow.Choices => Choices;
+
     public string Key { get; init; } = "";
     public string Name { get; init; } = "";
     public string Description { get; init; } = "";

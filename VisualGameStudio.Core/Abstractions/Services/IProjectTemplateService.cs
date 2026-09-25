@@ -383,7 +383,10 @@ public static class ProjectTemplates
         Icon = "winforms",
         Category = "Desktop",
         Tags = new List<string> { "winforms", "windows", "desktop", "gui", "ui" },
-        SupportedSolutionTypes = new List<string> { "dotnet", "msil" },
+        // ⛔ "msil" is deliberately absent. The MSIL pipeline stops at a .il file — it never
+        // produces the executable a WinForms app is, and the combination has never been
+        // exercised. Offering it in the wizard only produces a project that cannot run.
+        SupportedSolutionTypes = new List<string> { "dotnet" },
         Order = 3,
         IsBuiltIn = true
     };

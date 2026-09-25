@@ -69,14 +69,14 @@ public class JavaScriptStdLibTests
     public void Random_RndIsInTheUnitInterval()
         => Assert.That(InMain(
             "Dim r As Double = Rnd()\nConsole.WriteLine(r >= 0)\nConsole.WriteLine(r < 1)"),
-            Is.EqualTo("true\ntrue"));
+            Is.EqualTo("True\nTrue"));
 
     // ---------------------------------------------------------------- datetime
 
     [Test]
     public void DateTime_NowYearIsPlausible()
         => Assert.That(InMain("Dim n = Now()\nConsole.WriteLine(Year(n) > 2000)"),
-            Is.EqualTo("true"));
+            Is.EqualTo("True"));
 
     /// <summary>
     /// JavaScript months are 0-BASED and VB's are 1-based. A direct <c>getMonth()</c> is
@@ -86,7 +86,7 @@ public class JavaScriptStdLibTests
     public void DateTime_MonthIsOneBased()
         => Assert.That(InMain(
             "Dim n = Now()\nDim m = Month(n)\nConsole.WriteLine(m >= 1)\nConsole.WriteLine(m <= 12)"),
-            Is.EqualTo("true\ntrue"));
+            Is.EqualTo("True\nTrue"));
 
     // ---------------------------------------------------------------- regex
 
@@ -95,7 +95,7 @@ public class JavaScriptStdLibTests
         => Assert.That(InMain(
             "Console.WriteLine(IsMatch(\"abc123\", \"[0-9]+\"))\n" +
             "Console.WriteLine(IsMatch(\"abc\", \"[0-9]+\"))"),
-            Is.EqualTo("true\nfalse"));
+            Is.EqualTo("True\nFalse"));
 
     [Test]
     public void Regex_ReplaceAndMatch()

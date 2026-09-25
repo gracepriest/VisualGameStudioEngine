@@ -113,7 +113,7 @@ public class JavaScriptCollectionTests
         => Assert.That(Run(
             "Dim d As New Dictionary(Of String, Integer)()\nd.Add(\"a\", 1)\n" +
             "Console.WriteLine(d.ContainsKey(\"a\"))\nConsole.WriteLine(d.ContainsKey(\"z\"))"),
-            Is.EqualTo("true\nfalse"));
+            Is.EqualTo("True\nFalse"));
 
     [Test]
     public void Dictionary_HasReferenceSemantics()

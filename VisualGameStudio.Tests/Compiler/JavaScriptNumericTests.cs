@@ -84,10 +84,10 @@ public class JavaScriptNumericTests
 
     // ---------------------------------------------------------------- comparisons
 
-    [TestCase("1 = 1", "true", TestName = "Equal")]
-    [TestCase("1 <> 2", "true", TestName = "NotEqual")]
-    [TestCase("1 < 2", "true", TestName = "LessThan")]
-    [TestCase("2 >= 2", "true", TestName = "GreaterOrEqual")]
+    [TestCase("1 = 1", "True", TestName = "Equal")]
+    [TestCase("1 <> 2", "True", TestName = "NotEqual")]
+    [TestCase("1 < 2", "True", TestName = "LessThan")]
+    [TestCase("2 >= 2", "True", TestName = "GreaterOrEqual")]
     public void Comparisons(string expr, string expected)
         => Assert.That(Print(expr), Is.EqualTo(expected));
 
