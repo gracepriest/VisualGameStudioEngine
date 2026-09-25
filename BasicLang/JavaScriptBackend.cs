@@ -917,6 +917,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             CollectUsedOperands(impl);
             _currentFunction = impl;
             _emitted.Clear();
+            _selectCount = 0;
             _loopEnds.Clear();
             _pendingMerges.Clear();
             _forEachEnds.Clear();
@@ -2039,6 +2040,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
             _currentFunction = function;
             _emitted.Clear();
+            _selectCount = 0;
             _loopEnds.Clear();
             _pendingMerges.Clear();
             _boundNames.Clear();
@@ -2426,9 +2428,6 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// </summary>
         private void EmitSelectCase(IRSwitch sw)
         {
-            // A fresh name per Select, never its nesting depth. ⛔ The depth dropped back before
-            // the code AFTER the Select was emitted, so two Selects in a row in one scope both
-            // declared `const _sel0` — a SyntaxError that stopped the whole program loading.
             var subject = $"_sel{_selectCount++}";
             Line($"const {subject} = {Expr(sw.Value)};");
 
@@ -2487,6 +2486,13 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             EmitStructured(sw.EndBlock);
         }
 
+        /// <summary>
+        /// Numbers the <c>_selN</c> subject temps of the function being emitted: counts every
+        /// Select, never goes down, reset per function. ⛔ It was a nesting DEPTH, decremented
+        /// before the code after the Select was emitted, so two SIBLING Selects in one function
+        /// both declared <c>const _sel0</c> in the same scope — MEASURED: node refused the whole
+        /// program ("Identifier '_sel0' has already been declared"), and nothing ran.
+        /// </summary>
         private int _selectCount;
 
         /// <summary>
