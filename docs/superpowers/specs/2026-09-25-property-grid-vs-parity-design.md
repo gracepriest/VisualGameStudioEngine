@@ -78,13 +78,23 @@ test). So:
   Size(w, h)` as today, `RegionWriter.cs:614-616`) — the Form shows **ClientSize**, never a second Size;
   `Cols`/`Rows`/`Gap` → `<Layout>`, unchanged.
 - **Reader and writer** parse and write root attributes through `FormRoot` (both `FormDocumentReader` and
-  `FormDocumentWriter`, not only the region writer). The Degraded reason for a root property is keyed by the
-  reserved id `""` in `FormFile.DegradedReason`.
+  `FormDocumentWriter`, not only the region writer). Root tiers get their own entry points
+  (`FormFile.TierOfRoot` / `DegradedReasonOfRoot`) — never a reserved control id, since a control with
+  `Id=""` is legal to read. An unparseable root `Width`/`Height` becomes a DEGRADED ClientSize row (frozen,
+  preserved, explained), no longer an Unknown attribute.
 - **Emission.** WinForms: `Me.X = …` inside `InitializeComponent`, one statement per property (fan-in
-  rule). Web: the root's CSS on `.vgs-form`; `Text` becomes the page `<title>` (a behaviour change: today the
-  title is `form.Name`, `FormAssetEmitter.cs:106` — the title becomes `Text ?? Name`).
-- **Gates.** `FormRoot` gets its OWN csc sweep (every root property emitted as `Me.X = …` on a real Form)
-  and its own parity rows; it is never smuggled through `Canonical`.
+  rule). Web: the root's CSS targets `body` — the whole page is the client area, the Docked strips included
+  (they sit outside `.vgs-form`, `FormAssetEmitter.cs:114-174`), and a `body` Font/ForeColor inherits into
+  every control exactly as WinForms' ambient properties do. `Text` becomes the page `<title>` (a behaviour
+  change: today the title is `form.Name`, `FormAssetEmitter.cs:106` — the title becomes `Text ?? Name`).
+- **Retarget.** `FormRetarget` today copies only control `Properties`/`Binds` (`FormRetarget.cs:313-336,
+  425-434`). It must visit `FormRoot` EXPLICITLY: a root property that applies to the destination crosses; one
+  that does not is dropped AND NAMED (`RetargetPropertyLost`, quoted as `'form.X'`), never carried silently;
+  a root bind whose event is wired on the destination (§5 seam) crosses, otherwise it is dropped and named
+  (the BL8028 rule, applied to the root).
+- **Gates.** `FormRoot` gets its OWN csc sweep (every root property emitted as `Me.X = …` on a real Form),
+  its own parity rows and its own retarget sweep (every root property and event, both directions); it is
+  never smuggled through `Canonical` or `For(target)`.
 - D1 set (~20): Text, FormBorderStyle, StartPosition, ClientSize, WindowState, MinimumSize, MaximumSize,
   ControlBox, MaximizeBox, MinimizeBox, ShowIcon, ShowInTaskbar, TopMost, AcceptButton, CancelButton,
   KeyPreview, BackColor, ForeColor, Font, Opacity (Icon arrives with the image machinery in slice 4). Web:
@@ -116,7 +126,9 @@ writes every property present and never compares with it, and the grid shows an 
 (`RawValue == ""` — so an unset `Enabled`, default true, displays as False today, a live display lie).
 This spec gives `Default` a user-visible meaning:
 - **An absent property DISPLAYS the target's default** (greyed, not bold). `Default` is the WinForms
-  default; an optional `WebDefault` overrides it where the browser's differs; a row with no static default
+  default; an optional `WebDefault` overrides it where the browser's differs (every reader of a default —
+  the grid, the web Timer's `{Interval}` placeholder, `RegionWriter.cs:816-831` — reads the TARGET's value,
+  `WebDefault ?? Default` on the web); a row with no static default
   (ambient BackColor/ForeColor/Font — WinForms uses `ShouldSerialize`, not `[DefaultValue]`) has
   `Default == null` and displays empty.
 - **Bold** = present in the document AND different from the displayed default. **Reset** = remove it.
@@ -131,9 +143,13 @@ This spec gives `Default` a user-visible meaning:
 Today ONE shared definition (default `Left`, vocabulary Left/Center/Right mapped to the Middle row,
 `FormControlCatalog.cs:590-598`) serves Label, Button and LinkLabel, whose WinForms defaults differ
 (`TopLeft`, `MiddleCenter`, `TopLeft`). Decision: **per-row definitions over the full nine-member
-`ContentAlignment` vocabulary with each type's WinForms default**; `Left`/`Center`/`Right` stay ACCEPTED as
-legacy aliases of `MiddleLeft`/`MiddleCenter`/`MiddleRight`, so existing documents read and round-trip
-unchanged (no migration). Web emits `text-align` from the HORIZONTAL part only (`…Left` → `left`, `…Center`
+`ContentAlignment` vocabulary with each type's WinForms default**. `Left`/`Center`/`Right` become LEGACY
+ALIASES of `MiddleLeft`/`MiddleCenter`/`MiddleRight` — a new `FormPropertyDef.Aliases` map: accepted
+(`Accepts`, `IsSourceForm` and `WinFormsLiteral` resolve through it, so an existing document stays Canon and
+round-trips byte-for-byte unless the user edits the row), emitted as the canonical member, but NOT offered
+(`AllowedValues` holds the nine canonical members only). The grid DISPLAYS the resolved canonical value, and
+bold/default compare canonical values — so a Button holding `TextAlign="Center"` shows `MiddleCenter`, not
+bold. Web emits `text-align` from the HORIZONTAL part only (`…Left` → `left`, `…Center`
 → `center`, `…Right` → `right`); the vertical part has no web meaning and is not emitted. `FormAssetEmitter`
 must stop lower-casing the raw value (`:460-463`) — `middleleft` is not CSS. TextBox's `TextAlign` is the
 different `HorizontalAlignment` enum and stays its own row.
@@ -144,7 +160,8 @@ different `HorizontalAlignment` enum and stays its own row.
   the same `FormPropertyGridViewModel`. The real-view tests keep hosting the real document view.
 - Top to bottom: **object selector** (every control, tray component and the form, `Name  Kind`;
   choosing one goes through the ONE selection store — `SelectInDesigner` — so canvas, tray and grid never
-  disagree) → **toolbar** (Categorized | Alphabetical | Properties | Events) → **search** (by name, both
+  disagree; choosing the form is `SelectInDesigner(null)`, as the store is typed `FormControl`,
+  `FormSelection.cs:22`) → **toolbar** (Categorized | Alphabetical | Properties | Events) → **search** (by name, both
   sort modes) → rows (collapsible category headers, or flat A–Z) → **description pane** (name, then
   `Description`; a frozen row keeps its Degraded reason).
 - **Absent → displays the target's default** (greyed); **bold** = present AND different from it;
@@ -182,18 +199,25 @@ silent blank. An acceptance test runs a form with an image on both targets.
   is `RegionWriter`'s private `DeclaredEvents`/`CanonicalWebEvent`, enforced as BL8032 by
   `CheckControlBinds` (`RegionWriter.cs:330-409`), and it admits only the ONE default event
   (`IsEmittedBind` filters tray components only, `:418-432`). `DeclaredEvents` WIDENS to the catalog
-  `Events` list (its own doc comment anticipates this — followup 18) and becomes one PUBLIC seam
-  (e.g. `FormEvents.WiredOn(control, target)`) that the emitter, BL8032 and the grid all call, so the grid
-  can never offer an event that BL8032 refuses or that the emitter drops.
-- Form `Load` on the web = the page ready; Form events with no web meaning are WinForms-only.
+  `Events` list (its own doc comment anticipates this — followup 18) and becomes one PUBLIC seam that
+  takes a DEFINITION, not a control — `FormEvents.WiredOn(FormControlDef definition, FormTarget target)` —
+  so it serves `FormRoot` (not a `FormControl`) and every control alike; the emitter, BL8032 and the grid all
+  call it, so the grid can never offer an event that BL8032 refuses or that the emitter drops. Its signature
+  is fixed in slice 1.
+- **Form events.** Handler name `<FormName>_<Event>` (Visual Studio's `Form1_Load`; the root has no Id);
+  `FormHandlers.PlanDefault`/`EnsureBind` generalise from a `FormControl` to a bind OWNER (a control or the
+  root). WinForms wires `AddHandler Me.Load, AddressOf LoginForm_Load`. Web `Load`: the D7 dispatch
+  already constructs the form after the page is ready, so Load is a call at the END of the constructor, after
+  `Me.InitializeComponent()` — emitted `Me.LoginForm_Load()` (⛔ `Me.`-qualified: an unqualified self-call is
+  a runtime `ReferenceError` on the JS backend). Form events with no web meaning are WinForms-only.
 
 ## 6. Multi-select
 
 - The grid takes `Selection.Controls` (today it takes only `Selection.Primary` via
   `PropertyGrid.SelectedControl`, `CodeEditorDocumentViewModel.cs:1104-1106`) — still fed ONLY by the one
   selection store.
-- Rows: properties shared by every selected control (same name AND same type). Value shown when equal on
-  all; blank when mixed.
+- Rows: properties shared by every selected control (same name AND same type) — catalog rows AND the
+  intrinsic geometry-backed rows (Size). Value shown when equal on all; blank when mixed.
 - One edit applies to all as ONE undo step: undo is the editor's `TextDocument.UndoStack`, one `Edited` →
   one replace (`:931-961`), so the grid raises `Edited` ONCE per multi-edit, never once per control.
 - Object selector blank. Name and Location not offered; Size is (WinForms only, 2.4).
@@ -219,8 +243,8 @@ property or event.
 - **Bindings** — every binding path in the new AXAML resolved by reflection (no compiled bindings here).
 - **Round-trip / retarget** — reader/writer for every new type; the retarget catalog sweep proves new
   properties cross or are reported lost.
-- Mutation-check the load-bearing rules (bold rule, reset-removes, IsEmittedBind filter, multi-select one
-  undo step, default-equals-WinForms).
+- Mutation-check the load-bearing rules (bold rule, reset-removes, the `FormEvents.WiredOn` seam,
+  multi-select one undo step, default-equals-WinForms, alias resolution, the root retarget drop-and-name).
 
 ## 9. Delivery
 
