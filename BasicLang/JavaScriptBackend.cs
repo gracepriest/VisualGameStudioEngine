@@ -1079,6 +1079,24 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             _ => false
         };
 
+        /// <summary>
+        /// <paramref name="int32"/> (an expression already wrapped to int32) wrapped again to
+        /// the NARROW integral <paramref name="type"/>: sign-extended for Short / SByte, masked
+        /// for UShort / Byte; unchanged for Integer.
+        ///
+        /// <para>⛔ The int32 wrap alone let a Short leave its range. MEASURED on master
+        /// <c>e69ec64e</c>: <c>32767 + 1</c> as Short printed 32768 (C# and C++: -32768),
+        /// <c>32767 * 2</c> printed 65534 (-2), and SByte <c>127 + 1</c> printed 128 (-128).</para>
+        /// </summary>
+        private static string NarrowWrap(TypeInfo type, string int32) => type?.Name switch
+        {
+            "Short" => $"(({int32} << 16) >> 16)",
+            "SByte" => $"(({int32} << 24) >> 24)",
+            "UShort" => $"({int32} & 0xFFFF)",
+            "Byte" => $"({int32} & 0xFF)",
+            _ => int32,
+        };
+
         private string RenderBinary(IRBinaryOp op, Func<IRValue, string> render)
         {
             var l = render(op.Left);
@@ -1104,14 +1122,14 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
             switch (op.Operation)
             {
-                case BinaryOpKind.Add: return wrap ? $"(({l} + {r}) | 0)" : $"({l} + {r})";
-                case BinaryOpKind.Sub: return wrap ? $"(({l} - {r}) | 0)" : $"({l} - {r})";
+                case BinaryOpKind.Add: return wrap ? NarrowWrap(op.Type, $"(({l} + {r}) | 0)") : $"({l} + {r})";
+                case BinaryOpKind.Sub: return wrap ? NarrowWrap(op.Type, $"(({l} - {r}) | 0)") : $"({l} - {r})";
 
                 // ⛔ Math.imul, NOT `(a * b) | 0`. A double multiply loses precision above 2^53
                 // BEFORE the coercion can wrap it, so `| 0` gives the wrong int32 for large
                 // operands. Math.imul is an exact 32-bit multiply and is what every JS
                 // transpiler uses for this.
-                case BinaryOpKind.Mul: return wrap ? $"Math.imul({l}, {r})" : $"({l} * {r})";
+                case BinaryOpKind.Mul: return wrap ? NarrowWrap(op.Type, $"Math.imul({l}, {r})") : $"({l} * {r})";
 
                 case BinaryOpKind.Div: return $"({l} / {r})";
 
@@ -1151,7 +1169,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 case BinaryOpKind.BitwiseAnd: return $"({l} & {r})";
                 case BinaryOpKind.BitwiseOr: return $"({l} | {r})";
                 case BinaryOpKind.Xor: return $"({l} ^ {r})";
-                case BinaryOpKind.Shl: return $"({l} << {r})";
+                case BinaryOpKind.Shl: return NarrowWrap(op.Type, $"({l} << {r})");
                 case BinaryOpKind.Shr: return $"({l} >> {r})";
 
                 // And/Or were left unmapped until the semantics were MEASURED rather than
@@ -1197,6 +1215,12 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// </summary>
         private string UnaryText(IRUnaryOp op, string operand)
         {
+            // An integral negation or bitwise Not wraps like the binary operators do:
+            // `-(-32768)` as Short is -32768 on .NET, and 32768 here before (and Integer
+            // `-(-2147483648)` was 2147483648); `Not 5` as Byte is 250, not -6.
+            if (op.Operation is UnaryOpKind.Neg or UnaryOpKind.BitwiseNot && IsInt32(op.Type))
+                return NarrowWrap(op.Type, $"(({UnaryOpToken(op.Operation)}{operand}) | 0)");
+
             if (op.Operation != UnaryOpKind.AddressOf)
                 return $"({UnaryOpToken(op.Operation)}{operand})";
 
