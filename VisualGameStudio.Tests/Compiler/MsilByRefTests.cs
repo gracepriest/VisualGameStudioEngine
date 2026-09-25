@@ -595,9 +595,12 @@ public class MsilByRefTests
             End Sub
             """, "an expression's value lives in a temporary");
 
-    /// <summary>⭐ A BARE property name, from inside the declaring class. It is not the argument
-    /// ladder's "unresolved name" arm — it is checked explicitly, ahead of the module-global
-    /// fallback, so a same-named module global is never written by mistake.</summary>
+    /// <summary>⭐ A BARE property name, from inside the declaring class. Since ADR-0007 IRBuilder
+    /// lowers a bare Get/Set property to the node its qualified form produces (an IRFieldAccess
+    /// on <c>Me</c>), so it reaches the ladder as a TEMPORARY and is refused exactly as
+    /// <see cref="QualifiedPropertyArgument_IsRefused"/> is — and, being no longer a name at all,
+    /// it cannot fall through to a same-named module global. (The ladder's own "is a PROPERTY"
+    /// arm still guards a bare plain AUTO-property, which stays a variable.)</summary>
     [Test]
     public void BarePropertyNameArgument_IsRefused() =>
         RefusedByMsil("""
@@ -623,7 +626,7 @@ public class MsilByRefTests
              h.Go()
              PrintLine(CStr(h.X))
             End Sub
-            """, "is a PROPERTY");
+            """, "an expression's value lives in a temporary");
 
     /// <summary>A managed pointer cannot be coerced, so a mismatched declared type is refused
     /// rather than routed through a widening temporary — both directions.</summary>

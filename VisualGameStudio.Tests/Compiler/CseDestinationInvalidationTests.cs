@@ -25,8 +25,10 @@ namespace VisualGameStudio.Tests.Compiler;
 //  Everything here exercises <c>CommonSubexpressionEliminationPass.Candidate</c>'s new
 //  <c>Destination</c> field and <c>OptimizationPass.IsCallVisibleDestination</c>, both in
 //  <c>BasicLang/IROptimizer.cs</c>. See that file's doc comments for the exact kill vocabulary
-//  (<c>NamesWrittenBy</c>) and its KNOWN GAPS list — the task #133 pins at the foot of this file
-//  are exactly those gaps, as programs.
+//  (<c>NamesWrittenBy</c>, made TOTAL by ADR-0006 D1 — see docs/superpowers/decisions/0006-…md
+//  and KillVocabularyTotalityTests.cs / KillVocabularyExtensionsTests.cs) — the task #133 pins at
+//  the foot of this file are exactly what remained unclassified before D1, as programs; six of
+//  the eight are now promoted to correct-value pins, D1 having closed them.
 // ================================================================================================
 
 /// <summary>
@@ -158,9 +160,12 @@ internal static class CseDestinationShapes
     /// The destination is a MODULE-level global (<c>g</c>), written not by an assignment in this
     /// block but by a CALL, <c>ZeroG()</c>, whose body writes <c>g</c> — invisible as an
     /// <c>IRAssignment</c> to this function entirely. Only <c>IsCallVisibleDestination</c>'s
-    /// "global → call-visible" arm can see this; mutant (a4) removing it from
-    /// <c>Candidate.ReadsCallVisibleStorage</c> leaves this shape unguarded (see the mutant-kill
-    /// section below).
+    /// "global → call-visible" arm can see this: dropping it from
+    /// <c>CommonSubexpressionEliminationPass.Candidate.DestinationCallVisible</c> (the destination
+    /// half of what was, before ADR-0006 D1, one shared <c>ReadsCallVisibleStorage</c> flag — split
+    /// so the defining instruction can be self-exempt on its OWN destination without also
+    /// exempting its operands, see <c>Invalidate</c>'s <c>self</c> check) leaves this shape
+    /// unguarded.
     /// </summary>
     internal const string A3 = """
         Dim g As Integer
@@ -489,19 +494,26 @@ public class CseDestinationDecisionTests
 }
 
 // ================================================================================================
-//  KNOWN-WRONG PINS — task #133. Each is a MEASURED gap in NamesWrittenBy's kill vocabulary
-//  (see BasicLang/IROptimizer.cs, NamesWrittenBy's own "KNOWN GAPS" doc comment): a write CSE's
-//  destination guard cannot see because it never appears as an IRAssignment target, an IRStore
-//  address, a rename or a ByRef argument in the block that reads the stale value. Per this repo's
-//  pinned-broken convention (LoopPassesDisabledTests / InductionVariableDisabledTests /
-//  StatementOperandUndeclaredTempFixTests' task-125 pins): these fail LOUDLY, not silently, the
-//  day task #133 closes one of them — update or delete the pin then, do not widen it.
+//  task #133's family, ADR-0006 D1. Six of the eight measured shapes below were a gap in
+//  NamesWrittenBy's kill vocabulary — a write CSE's destination guard could not see because it
+//  never appeared as an IRAssignment target, an IRStore address, a rename or a ByRef argument in
+//  the block that reads the stale value. ADR-0006 D1 (the total kill vocabulary: IRFieldStore
+//  naming its member and acting as a call; the ByRef aliasing rule and its converse; the interim
+//  closure rule) closes SIX of them — the "CorrectAfterAdr6D1" methods below, promoted from
+//  known-wrong pins and re-measured against S/adr6-d1/probes/matrix-final.txt. The A1 C# leg
+//  alone stays known-wrong — a SEPARATE, pre-existing defect (task #136: the emitted lambda body
+//  is `() => { ; }`) that D1 does not touch and does not claim to fix.
 //
-//  ⚠ Every backend/shape combination below is exactly what scratchpad/f111g/matrix-final.txt
-//  measured on this tree. A backend is EXCLUDED from a shape's pin only when it fails for an
-//  unrelated, pre-existing reason (a compile error nothing here caused, or BL7002's structural
-//  ByRef refusal) rather than printing a wrong VALUE — matching this suite's convention of never
-//  asserting "wrong" against a leg that cannot even run the program.
+//  Per this repo's pinned-broken convention (LoopPassesDisabledTests / InductionVariableDisabledTests /
+//  StatementOperandUndeclaredTempFixTests' task-125 pins): a genuinely still-wrong pin fails
+//  LOUDLY, not silently, the day it is fixed — update or delete it, do not widen it.
+//
+//  ⚠ Every backend/shape combination below is exactly what scratchpad/f111g/matrix-final.txt (the
+//  pre-D1 baseline) and S/adr6-d1/probes/matrix-final.txt (post-D1) measured on this tree. A
+//  backend is EXCLUDED from a shape's assertion only when it fails for an unrelated, pre-existing
+//  reason (a compile error nothing here caused, or BL7002's structural ByRef refusal) rather than
+//  printing a wrong VALUE — matching this suite's convention of never asserting against a leg that
+//  cannot even run the program.
 // ================================================================================================
 
 [TestFixture]
@@ -519,22 +531,27 @@ public class CseDestinationKnownGapsTask133Tests
     /// 'Action'") has no lowering for the delegate type a <c>Sub()</c> lambda gets typed as. Both
     /// are pre-existing, unrelated gaps.</para>
     ///
-    /// <para>C# and JavaScript DO run it, and print DIFFERENT wrong answers — task #133 covers
-    /// both as separately measured pins, not one shared value.</para>
+    /// <para>C# stays task #136 — a SEPARATE, pre-existing defect (the emitted lambda body is
+    /// <c>() => { ; }</c>, so <c>a</c> is never actually zeroed) that ADR-0006 D1 does not touch.
+    /// JavaScript is now CORRECT: D1's interim closure rule (<c>IsCallVisible</c>: "in a function
+    /// that contains a lambda, every local is call-visible") makes <c>a</c> call-visible, so
+    /// <c>clr()</c> kills CSE's record the same way any other call would.</para>
     /// </summary>
     [Test]
-    public void A1_LambdaCapturedDestination_CSharp_PinnedForTask133()
+    public void A1_LambdaCapturedDestination_CSharp_PinnedForTask136()
         => Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharpAggressive(A1)), Is.EqualTo("seed\nseed\n3,3"),
-            "task #133 — if this changed, C#'s handling of a destination written inside a lambda "
-            + "capture may have changed (for better or worse); re-measure and update or delete "
-            + "this pin, do not just widen it. C++ and MSIL are excluded — both fail to compile "
-            + "this shape for unrelated, pre-existing reasons.");
+            "task #136 (unrelated to ADR-0006 D1) — if this changed, C#'s handling of a destination "
+            + "written inside a lambda capture may have changed (for better or worse); re-measure "
+            + "and update or delete this pin, do not just widen it. C++ and MSIL are excluded — "
+            + "both fail to compile this shape for unrelated, pre-existing reasons.");
 
     [Test]
-    public void A1_LambdaCapturedDestination_JavaScript_PinnedForTask133()
-        => Assert.That(FourBackends.Norm(FourBackends.RunAggressiveJs(A1)), Is.EqualTo("seed\nseed\n0,0"),
-            "task #133 — same reasoning as the C# pin above; JavaScript prints a DIFFERENT wrong "
-            + "answer, both are pinned separately.");
+    public void A1_LambdaCapturedDestination_JavaScript_CorrectAfterAdr6D1()
+        => Assert.That(FourBackends.Norm(FourBackends.RunAggressiveJs(A1)), Is.EqualTo("seed\nseed\n3,0"),
+            "ADR-0006 D1's interim closure rule (OptimizationPass.IsCallVisible: a function "
+            + "containing a lambda call-visits every local) makes `a` call-visible, so `clr()` "
+            + "kills CSE's record for it. Promoted from a known-wrong pin (was seed\\nseed\\n0,0, "
+            + "task #133) — re-measured against S/adr6-d1/probes/matrix-final.txt.");
 
     private const string A1 = """
         Function Seed(v As Integer) As Integer
@@ -558,24 +575,30 @@ public class CseDestinationKnownGapsTask133Tests
     /// <summary>
     /// A2b — TWO <c>ByRef</c> parameters (<c>n</c>, <c>m</c>) ALIASED to the SAME argument
     /// (<c>Work(v, v, ...)</c>): the write is to <c>m = 0</c>, but through the alias it also
-    /// changes what <c>n</c> — the destination CSE is guarding — names. <c>NamesWrittenBy</c> kills
-    /// on the LITERAL name written (<c>m</c>); it has no notion of argument aliasing. Correct is
-    /// <c>seed\nseed\n3,0</c>; C++ and MSIL print <c>seed\nseed\n0,0</c>.
+    /// changes what <c>n</c> — the destination CSE is guarding — names. Correct is
+    /// <c>seed\nseed\n3,0</c>.
+    ///
+    /// <para>CORRECT under ADR-0006 D1: a write through a <c>ByRef</c> parameter now names every
+    /// ESCAPING name (every other <c>ByRef</c> parameter included) — the converse half of D1 (b),
+    /// the implementer's completion the ADR's implementation note records. <c>m = 0</c> now kills
+    /// <c>n</c>'s record too, since both alias the same caller argument. Promoted from a
+    /// known-wrong pin (was <c>seed\nseed\n0,0</c>, task #133).</para>
     ///
     /// <para>⛔ JavaScript is EXCLUDED — BL7002, it refuses <c>ByRef</c> outright and cannot run
     /// this program at all. C# is NOT pinned — measured correct (inline-always is, once again,
     /// vacuous for this whole family).</para>
     /// </summary>
     [Test]
-    public void A2b_AliasedByRefParameters_Cpp_PinnedForTask133()
-        => Assert.That(FourBackends.Norm(BclE2E.CompileRun(BclE2E.CompileToCppAggressive(A2b))), Is.EqualTo("seed\nseed\n0,0"),
-            "task #133 — aliased ByRef parameters (Work(v, v, ...)); if this changed, re-measure "
-            + "and update or delete this pin, do not just widen it");
+    public void A2b_AliasedByRefParameters_Cpp_CorrectAfterAdr6D1()
+        => Assert.That(FourBackends.Norm(BclE2E.CompileRun(BclE2E.CompileToCppAggressive(A2b))), Is.EqualTo("seed\nseed\n3,0"),
+            "ADR-0006 D1's ByRef aliasing converse — a write through one ByRef parameter (m) now "
+            + "names every other ByRef parameter it may alias (n) as an escaping name; if this "
+            + "regressed, re-measure against S/adr6-d1/probes/matrix-final.txt before touching it.");
 
     [Test]
-    public void A2b_AliasedByRefParameters_Msil_PinnedForTask133()
-        => Assert.That(FourBackends.Norm(MsilHarness.RunAggressiveExpectingSuccess(A2b)), Is.EqualTo("seed\nseed\n0,0"),
-            "task #133 — same reasoning as the C++ pin above");
+    public void A2b_AliasedByRefParameters_Msil_CorrectAfterAdr6D1()
+        => Assert.That(FourBackends.Norm(MsilHarness.RunAggressiveExpectingSuccess(A2b)), Is.EqualTo("seed\nseed\n3,0"),
+            "same reasoning as the C++ pin above (ADR-0006 D1's ByRef aliasing converse)");
 
     private const string A2b = """
         Function Seed(v As Integer) As Integer
@@ -601,9 +624,13 @@ public class CseDestinationKnownGapsTask133Tests
     /// <summary>
     /// A5b — the destination is a class field, written through an EXPLICIT <c>Me.K = 0</c> rather
     /// than a bare <c>K = 0</c> (contrast A4, which is a bare write through a CALL and IS caught).
-    /// This is the destination-side twin of the field-store gap <c>NamesWrittenBy</c>'s own doc
-    /// comment names. Correct is <c>seed\nseed\n3,0</c>; C++ and MSIL print
-    /// <c>seed\nseed\n0,0</c>.
+    /// This is the destination-side twin of the field-store gap A6 pins on the operand side.
+    /// Correct is <c>seed\nseed\n3,0</c>.
+    ///
+    /// <para>CORRECT under ADR-0006 D1: <c>IRFieldStore</c> now names its member AND acts as a
+    /// call (a field store lowers identically for a field and a property, and a property Setter
+    /// runs user code) — so <c>Me.K = 0</c> now kills the bare <c>K</c> the function also names.
+    /// Promoted from a known-wrong pin (was <c>seed\nseed\n0,0</c>, task #133).</para>
     ///
     /// <para>⛔ JavaScript is EXCLUDED for an UNRELATED reason — measured <c>ReferenceError: K is
     /// not defined</c>, a pre-existing JS field-access lowering gap for a bare-named field read
@@ -611,15 +638,15 @@ public class CseDestinationKnownGapsTask133Tests
     /// fix. C# is not pinned — vacuous, as everywhere in this family.</para>
     /// </summary>
     [Test]
-    public void A5b_MeFieldStore_Cpp_PinnedForTask133()
-        => Assert.That(FourBackends.Norm(BclE2E.CompileRun(BclE2E.CompileToCppAggressive(A5b))), Is.EqualTo("seed\nseed\n0,0"),
-            "task #133 — an explicit Me.K = 0 field store; if this changed, re-measure and update "
-            + "or delete this pin, do not just widen it");
+    public void A5b_MeFieldStore_Cpp_CorrectAfterAdr6D1()
+        => Assert.That(FourBackends.Norm(BclE2E.CompileRun(BclE2E.CompileToCppAggressive(A5b))), Is.EqualTo("seed\nseed\n3,0"),
+            "ADR-0006 D1 — IRFieldStore now names its member (K) and acts as a call; if this "
+            + "regressed, re-measure against S/adr6-d1/probes/matrix-final.txt before touching it.");
 
     [Test]
-    public void A5b_MeFieldStore_Msil_PinnedForTask133()
-        => Assert.That(FourBackends.Norm(MsilHarness.RunAggressiveExpectingSuccess(A5b)), Is.EqualTo("seed\nseed\n0,0"),
-            "task #133 — same reasoning as the C++ pin above");
+    public void A5b_MeFieldStore_Msil_CorrectAfterAdr6D1()
+        => Assert.That(FourBackends.Norm(MsilHarness.RunAggressiveExpectingSuccess(A5b)), Is.EqualTo("seed\nseed\n3,0"),
+            "same reasoning as the C++ pin above (ADR-0006 D1 — IRFieldStore names its member)");
 
     private const string A5b = """
         Function Seed(v As Integer) As Integer
@@ -647,37 +674,33 @@ public class CseDestinationKnownGapsTask133Tests
         """;
 
     /// <summary>
-    /// A6 — the OPERAND side of the SAME field-store gap A5b pins on the destination side
-    /// (<c>NamesWrittenBy</c>'s doc comment lists both as one gap, "an IRFieldStore through Me. to
-    /// a member the function also names bare"). Here the shared expression is <c>K + q</c>, with
-    /// <c>K</c> read BARE as an OPERAND and later written through <c>Me.K = 10</c>. Correct is
-    /// <c>12,3</c> (<c>a</c> keeps the value computed before the write; <c>l(0)</c> must recompute
-    /// with the new <c>K</c>); the defect merges the two occurrences and prints <c>3,3</c> on
-    /// C++/JavaScript/MSIL — MEASURED (<c>matrix-final.txt</c>).
+    /// A6 — the OPERAND side of the SAME field-store gap A5b pins on the destination side. Here
+    /// the shared expression is <c>K + q</c>, with <c>K</c> read BARE as an OPERAND and later
+    /// written through <c>Me.K = 10</c>. Correct is <c>12,3</c> (<c>a</c> keeps the value computed
+    /// before the write; <c>l(0)</c> must recompute with the new <c>K</c>).
     ///
-    /// <para>⚠ C# is NOT pinned wrong here — MEASURED CORRECT (<c>12,3</c>), same as every other
-    /// shape in this family: inline-always re-emits <c>K + q</c> as TEXT at each occurrence rather
-    /// than trusting a merged name, which happens to be right regardless of whether CSE merged the
-    /// two <c>K + q</c> instructions. (This distinguishes A6 from the destination-side shapes A5b/
-    /// A2b/A1 above, where reading a NAMED, reassigned destination by value is what goes wrong —
-    /// there is no equivalent "named destination" here for inline-always to be rescued or tripped
-    /// up by; it only ever re-emits the expression.)</para>
+    /// <para>CORRECT under ADR-0006 D1 on EVERY backend, C# included: <c>IRFieldStore</c> now
+    /// names its member (<c>K</c>) and acts as a call, so <c>Me.K = 10</c> kills the shared
+    /// <c>K + q</c> record CSE was holding for <c>a</c>. Promoted from three known-wrong pins
+    /// (C++/JavaScript/MSIL were <c>seed\nseed\n3,3</c>, task #133); C# was already measured
+    /// correct before D1 (inline-always re-emits <c>K + q</c> as TEXT at each occurrence) and
+    /// stays correct now for the real reason too.</para>
     /// </summary>
     [Test]
-    public void A6_OperandSideFieldStoreTwin_PinnedForTask133()
+    public void A6_OperandSideFieldStoreTwin_CorrectAfterAdr6D1()
         => Assert.Multiple(() =>
         {
             Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharpAggressive(A6)), Is.EqualTo("seed\nseed\n12,3"),
-                "C# — MEASURED CORRECT, vacuous for this family as everywhere else; asserted for "
-                + "agreement, not as a task #133 pin. If this regressed to '3,3', that is a NEW "
-                + "defect on C#, not a widening of this pin.");
-            Assert.That(FourBackends.Norm(BclE2E.CompileRun(BclE2E.CompileToCppAggressive(A6))), Is.EqualTo("seed\nseed\n3,3"),
-                "task #133 (C++) — a bare K operand read, aliased by a later Me.K write; if this "
-                + "changed, re-measure and update or delete this pin, do not just widen it");
-            Assert.That(FourBackends.Norm(FourBackends.RunAggressiveJs(A6)), Is.EqualTo("seed\nseed\n3,3"),
-                "task #133 (JavaScript) — same reasoning");
-            Assert.That(FourBackends.Norm(MsilHarness.RunAggressiveExpectingSuccess(A6)), Is.EqualTo("seed\nseed\n3,3"),
-                "task #133 (MSIL) — same reasoning");
+                "C# — was already correct before ADR-0006 D1 (inline-always re-emits K + q as TEXT); "
+                + "asserted here for agreement across all four backends, not as its own pin.");
+            Assert.That(FourBackends.Norm(BclE2E.CompileRun(BclE2E.CompileToCppAggressive(A6))), Is.EqualTo("seed\nseed\n12,3"),
+                "ADR-0006 D1 (C++) — IRFieldStore now names its member (K), killing the shared "
+                + "K + q record; if this regressed, re-measure against "
+                + "S/adr6-d1/probes/matrix-final.txt before touching it.");
+            Assert.That(FourBackends.Norm(FourBackends.RunAggressiveJs(A6)), Is.EqualTo("seed\nseed\n12,3"),
+                "ADR-0006 D1 (JavaScript) — same reasoning as the C++ assertion above");
+            Assert.That(FourBackends.Norm(MsilHarness.RunAggressiveExpectingSuccess(A6)), Is.EqualTo("seed\nseed\n12,3"),
+                "ADR-0006 D1 (MSIL) — same reasoning as the C++ assertion above");
         });
 
     private const string A6 = """

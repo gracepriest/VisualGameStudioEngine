@@ -1879,6 +1879,16 @@ namespace BasicLang.Compiler.IR
 
         public IRFunction Getter { get; set; }
         public IRFunction Setter { get; set; }
+
+        /// <summary>
+        /// ⭐ ADR-0007's "ACCESSOR-BACKED", read off the IR: using this property may run user code
+        /// — it has a Get or Set accessor function, or it is Overridable/Overrides (a derived
+        /// class's accessor may run in its place). A plain auto-property has neither and is
+        /// storage, like a field. The same fact as <c>PropertyNode.IsAccessorBacked</c>, which
+        /// IRBuilder's bare-name lowering reads through the analyzer's symbol; this copy is what
+        /// <see cref="Optimization.IRVerifier.CheckInvariantF"/> checks the lowering against.
+        /// </summary>
+        public bool IsAccessorBacked => Getter != null || Setter != null || IsVirtual || IsOverride;
     }
 
     /// <summary>
