@@ -91,7 +91,10 @@ test). So:
   425-434`). It must visit `FormRoot` EXPLICITLY: a root property that applies to the destination crosses; one
   that does not is dropped AND NAMED (`RetargetPropertyLost`, quoted as `'form.X'`), never carried silently;
   a root bind whose event is wired on the destination (§5 seam) crosses, otherwise it is dropped and named
-  (the BL8028 rule, applied to the root).
+  with `RetargetBindLost` — the code `FormRetarget` already raises for a dropped control bind
+  (`FormRetarget.cs:378`). ⛔ `ConvertRoot`'s hand-written `IsRootAttributeModelledOn` (`:189-222`) must
+  READ `FormRoot` rather than keep its own list — two lists would be a mirrored pair, and an attribute
+  modelled on one side only would be carried stale or dropped.
 - **Gates.** `FormRoot` gets its OWN csc sweep (every root property emitted as `Me.X = …` on a real Form),
   its own parity rows and its own retarget sweep (every root property and event, both directions); it is
   never smuggled through `Canonical` or `For(target)`.
@@ -207,9 +210,12 @@ silent blank. An acceptance test runs a form with an image on both targets.
 - **Form events.** Handler name `<FormName>_<Event>` (Visual Studio's `Form1_Load`; the root has no Id);
   `FormHandlers.PlanDefault`/`EnsureBind` generalise from a `FormControl` to a bind OWNER (a control or the
   root). WinForms wires `AddHandler Me.Load, AddressOf LoginForm_Load`. Web `Load`: the D7 dispatch
-  already constructs the form after the page is ready, so Load is a call at the END of the constructor, after
-  `Me.InitializeComponent()` — emitted `Me.LoginForm_Load()` (⛔ `Me.`-qualified: an unqualified self-call is
-  a runtime `ReferenceError` on the JS backend). Form events with no web meaning are WinForms-only.
+  already constructs the form after the page is ready, so Load is emitted as the LAST statement of the
+  GENERATED `InitializeComponent` region — `Me.LoginForm_Load()` (⛔ `Me.`-qualified: an unqualified
+  self-call is a runtime `ReferenceError` on the JS backend). The constructor is the user's code
+  (`FormScaffolder.cs:171`) and the designer never edits it. ⚠ Consequence, documented for users: on the
+  web, code the user wrote after `Me.InitializeComponent()` in `New()` runs AFTER Load; on WinForms Load
+  runs later, at `Show`. Form events with no web meaning are WinForms-only.
 
 ## 6. Multi-select
 
