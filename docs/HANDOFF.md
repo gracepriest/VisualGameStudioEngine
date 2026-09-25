@@ -281,7 +281,7 @@ the territory. "Done" = all of these, then the merge.
 
 ### Task 24e (2026-09-25) — retarget, acceptance, records: what it did, measured
 
-Facts, not aspiration — gates for this commit are still **pending** (Task 30 has not run yet).
+Facts, not aspiration. Gated on the merge with master — see the next subsection.
 
 - **Task 26 — the retarget rule.** `FormRetarget.Place` (web→WinForms) now filters `siblings` to
   `c.Definition?.Place is null or FormPlace.Positioned` before sizing, and returns `(0, 0)` early
@@ -335,10 +335,47 @@ Facts, not aspiration — gates for this commit are still **pending** (Task 30 h
   a statement, `task_2e1de6b3`" → **32**. Followup **33** is new: designer captions of
   Button/Label/CheckBox still show `&` literally and clip below 1:1 zoom, and below zoom ≈0.42 a
   band draws no captions at all (found 2026-09-24, out of scope for 24d and 24e).
-- **NEXT = Task 30**: build, fast subset, the named fixtures, then the FULL SUITE on final binaries,
-  failure names vs baseline, zero new; commit; push; IDE drop. Then the real worktree merge of
-  master (135 ahead / 24 behind at last check — re-fetch before trusting that number) and the full
-  suite on the merged tree, with the web half of Task 28 run for the first time right after.
+- 24e committed as `ec9356f4` (fast subset 6108; the full suite deliberately run on the merge).
+
+### Task 24e → the master merge (2026-09-25): four real merges, every failure named
+
+Master moved three times while the first merge was being gated, so there are four merge commits, each
+done for real in a detached worktree (`git worktree add --detach`), never predicted by `merge-tree`.
+
+| Merge | Master | Conflicts | Gate | Result |
+|---|---|---|---|---|
+| `8bcd631b` | `3e244e21` (#65–#92) | 10 files / 14 hunks + 2 semantic (CS0152 duplicate `case IRArrayStore`; master's `StatementTerminationTests` pinned `New Integer() {1, 2}` as an error, which 24a makes legal) | FULL, after `dotnet clean` | 9288 / 15 failed, all named below |
+| `7fa07930` | `21b4468a` (#72/#93/#94) | roster pin | FULL | 9478 / 17 failed = the 15 + 2 Blnet rows (below) |
+| `15e48f2e`+`ad848086` | `a633b4af` (#95–#97) | none — but a SILENT roster-pin collision (→ 51) | fast + targeted Integration (Cpp/Select/JS/DynamicUse/acceptance; Blnet excluded) | fast 7027/5; Integration 1083/9, all named |
+| `4251cefc`+`53c79ba1` | `972a96f9` (#98–#101) | none — the same silent roster collision (→ 52) | fast (carries the lexer/parser rows #99's `\=`/`x =-1` change touches) | 7084 / 5, all named |
+
+⭐ **The web half of Task 28 RUNS** from the first merge on: acceptance fixtures 14/14, none skipped —
+master's write-once JS emitter cleared `ERROR_USER_MAPPED_FILE` here, as measured beforehand.
+
+Every failure, by name — none is new:
+- **Master-inherited (itemised in "BEFORE MERGING MASTER"):** the four `…_Pinned` diagnostic-text rows;
+  `TheCombinedEmission_…`, `TheSplitHeader_…` (#59, 3 ms — no compiler ran).
+- **Fail on PRISTINE master on this machine too (A/B'd in the same worktree):**
+  `JavaScriptEmitterTests.Emit_ReplacesAScriptThatAnotherHandleHasMapped`,
+  `Emit_ReplacesAnImportedModuleThatAnotherHandleHasMapped`, `Emit_ReplacingAnImportedModule_LeavesNoTempFileBehind`
+  (Windows refuses `File.Move` over a mapped file); `CppDoubleFormattingTests.Expected_IsWhatDotNetPrints`
+  (.NET prints `∞`, not `Infinity`, in this machine's culture); `CliCppTemplate_…("cpp-game")`,
+  `CppTemplate_…("cpp-game-app")` (BL6009 `VisualGameStudioEngine.lib` not found — a worktree has no
+  built engine); `NetProxyStubRunTests.PropertyGetAndSet_RouteThroughTheAccessorSlots`,
+  `NetShimPipelineTests.TypedCatchOfABaseType_MatchesTheGeneratedShimsChain` (pass on `3e244e21`, fail
+  on `21b4468a`: the native probe prints NOTHING. The owner's antivirus was seen blocking the
+  test-built `ChainProbe.exe`; unblocking it did not make them pass, and neither Defender nor the
+  Application log recorded anything — AV vs real crash is UNRESOLVED, chip `task_4369e6e0`).
+- **Order-dependent:** `RaylibScreenSpaceMathTests.NonEx_variants_marshal_and_are_screen_size_dependent`
+  expects NaN with no window; in a full run an earlier test has opened one. Passes alone on the merge.
+- **Standing:** the `SearchSnippets` pair.
+
+⚠ **The JS execution-tier roster pin collides SILENTLY on every master merge until this branch
+lands**: both sides edit the one `Has.Length.EqualTo(N)` line to the same number, git merges it
+cleanly, and the real count is N+1. The fast subset catches it every time — read `RosterIsPinned`.
+⚠ `ProjectGlobSafety.MaterialiseGlobbedSources` still walks unordered while master's
+`ProjectFile.GetSourceFiles` now walks in `GetFilesInWindowsOrder` — a mirrored pair the merge left
+asymmetric (same order on Windows; may differ on Linux).
 
 Not part of "done" but part of honesty — compiler defects the designer WORKS AROUND, all still open:
 the JS bare-global self-call (`task_fc397dba`; `FormScaffolder` emits `Me.`), `control.Name` never
