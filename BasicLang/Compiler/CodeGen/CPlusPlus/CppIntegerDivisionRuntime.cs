@@ -15,7 +15,10 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
     /// <para>The result type is <c>decltype(a / b)</c>: the ordinary C++ promotion, the same type
     /// the bare operator produced, so every existing call site stays byte-for-byte compatible
     /// apart from the checks. Sub-<c>int</c> operands promote to <c>int</c>, where
-    /// <c>-32768 \ -1</c> is 32768 and cannot trap — the same promotion .NET performs.</para>
+    /// <c>-32768 \ -1</c> is 32768 and cannot trap — but .NET's Short/SByte <c>\</c> result is
+    /// NARROW and throws <c>OverflowException</c> there, so those lower to <c>IntDivNarrow&lt;N&gt;</c>,
+    /// which range-checks the promoted quotient. A narrow <c>Mod</c> by -1 is 0 and needs no
+    /// check.</para>
     ///
     /// <para>Spliced UNCONDITIONALLY, right after <see cref="CppNetExceptionRuntime"/> (whose
     /// class it throws), in BOTH emission modes: GenerateHeader in CppCodeGenerator.cs and
@@ -53,6 +56,16 @@ template <typename L, typename R>
 inline auto IntDiv(L a, R b) -> decltype(a / b) {
     CheckIntDivOperands(a, b);
     return a / b;
+}
+
+/* A 16- or 8-bit `\`: the operands promote to int, where the minimum over -1 fits and cannot
+   trap, but .NET's narrow quotient does not fit and throws OverflowException. */
+template <typename N, typename L, typename R>
+inline N IntDivNarrow(L a, R b) {
+    const auto q = IntDiv(a, b);
+    if (q < std::numeric_limits<N>::min() || q > std::numeric_limits<N>::max())
+        throw NetException(""" + overflow + @""", ""Arithmetic operation resulted in an overflow."");
+    return static_cast<N>(q);
 }
 
 template <typename L, typename R>
