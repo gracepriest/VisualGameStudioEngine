@@ -46,6 +46,11 @@ namespace BasicLang.Compiler.IR.Optimization
         public string DefinitionBlock { get; init; }
         public string WriterBlock { get; init; }
         public string UseBlock { get; init; }
+        /// <summary>True when the use in <see cref="UseBlock"/> lies in a loop that does not
+        /// contain the definition, so it runs again before the definition does (ADR-0006 D2).
+        /// <see cref="UseCount"/> stays the STATIC count; this says the reported use is
+        /// dynamically repeated, which is what made a single anonymous use shared.</summary>
+        public bool UseRepeats { get; init; }
 
         public override string ToString() => Invariant == "V"
             ? $"Invariant V violated in {Function}: {Writer?.GetType().Name} in {WriterBlock} is an instruction "
@@ -57,7 +62,8 @@ namespace BasicLang.Compiler.IR.Optimization
               + $"{DeclaringClass} whose accessors run user code. A bare property name must lower to the node "
               + "its qualified form produces (IRFieldStore / IRFieldAccess), never to a variable (ADR-0007)."
             : $"Invariant S′ violated in {Function}: '{Value?.Name}' ({Value?.GetType().Name}, {UseCount} use(s), "
-            + $"defined in {DefinitionBlock}) — {(IsDestination ? "its destination" : "operand")} '{Variable}' "
+            + $"defined in {DefinitionBlock}{(UseRepeats ? $"; the use in {UseBlock} repeats in a loop that does not contain the definition" : "")}) "
+            + $"— {(IsDestination ? "its destination" : "operand")} '{Variable}' "
             + $"is written by {Writer?.GetType().Name}{(Writer is IRValue w && !string.IsNullOrEmpty(w.Name) ? " '" + w.Name + "'" : "")} "
             + $"in {WriterBlock} before a use in {UseBlock}.";
     }
@@ -76,12 +82,22 @@ namespace BasicLang.Compiler.IR.Optimization
 
     /// <summary>
     /// The post-optimizer IR verifier ADR-0004 D2 obliges, asserting Invariant S′ as ADR-0005 D2
-    /// widened it:
+    /// widened it and ADR-0006 D2 made dynamic:
     ///
     /// <para><b>S′:</b> for any instruction <c>v</c> with use count &gt; 1, no variable in
     /// <c>Guard(v)</c> is assigned between <c>v</c>'s definition and its last use, where
     /// <c>Guard(v)</c> = the variables reachable through <c>v</c>'s replicable operands ∪
     /// { <c>v</c>'s named destination, if any }.</para>
+    ///
+    /// <para><b>The use count is DYNAMIC</b> (ADR-0006 D2): a use that lies in a loop that does
+    /// not contain the definition counts as repeated, because it runs again before the definition
+    /// does — the shape <see cref="LoopInvariantCodeMotionPass"/> leaves behind, one static use of
+    /// a hoisted value that executes every iteration. "Lies in a loop that does not contain the
+    /// definition" is read off the CFG as: the use's block is on a cycle that avoids the
+    /// definition's block (<see cref="DefUsePaths.UseRepeats"/>). A use in the definition's own
+    /// block, or one every cycle reaches only through the definition, is not repeated: each
+    /// execution of it sees a fresh value. Before D2 a hoisted anonymous value with one use was
+    /// never checked, so a hoist across a write was invisible to the verifier.</para>
     ///
     /// <para><b>V</b> (ADR-0006 D1): no reachable instruction kind is unclassified — every
     /// instruction's kind has an arm in <see cref="OptimizationPass.NamesWrittenBy"/>. See
@@ -127,10 +143,30 @@ namespace BasicLang.Compiler.IR.Optimization
     /// call is evaluated once — so they contribute nothing. <b>Destination half:</b>
     /// unconditional on replicability, per the ADR.</para>
     ///
+    /// <para>⚠ <b>Known gap, pending a ruling (found measuring ADR-0006 D2):</b> "a non-replicable
+    /// operand is never re-read" holds for a value with more than one static use, which the C#
+    /// backend materialises. It does not hold for a value shared only DYNAMICALLY: C# inlines a
+    /// value with one static use at that use whatever its replicability, so a hoisted
+    /// <c>n * 2</c> over a <c>ByRef</c> parameter (or a non-Const global) is re-read every
+    /// iteration on C# while C++/MSIL read it once. Such an operand is outside <c>Guard(v)</c>, so
+    /// a wrong hoist over it is not reported. MEASURED with LICM's call-visible read check
+    /// disabled: C++ and MSIL printed 6 for 12, and this verifier was quiet. Today's LICM
+    /// refuses that hoist on its own (it never treats a global as invariant, and it counts a
+    /// call-visible read as written).</para>
+    ///
     /// <para><b>"Between"</b> is path-based over <see cref="ControlFlowGraph.SuccessorsOf"/>:
     /// every write on some path from the definition to a use that does not re-execute the
-    /// definition. The CFG is read, never rebuilt, so verifying cannot change what a backend
-    /// sees.</para>
+    /// definition. For a repeated use that is <c>region(v)</c> as ADR-0006 D2 defines it: it
+    /// includes the FULL body of the loop the use repeats in — the back edge, and the use's own
+    /// block after the use — so a write textually after the use but dynamically before its next
+    /// execution is between. A write on a path that leaves the loop and never reaches the use
+    /// again (an exit path) is not. The CFG is read, never rebuilt, so verifying cannot change
+    /// what a backend sees.</para>
+    ///
+    /// <para>⚠ <b>Structured loops are not cycles.</b> <c>For Each</c> lowers to an
+    /// <see cref="IRForEach"/> whose body has no back edge in the CFG (ADR-0003 D3), so a use in
+    /// a For Each body is not seen as repeated. No pass moves a value into one today: CSE is
+    /// block-local and LICM hoists only out of natural loops, which a For Each is not.</para>
     ///
     /// <para><b>When it runs:</b> at the end of <see cref="OptimizationPipeline.Run"/>, so every
     /// shipping route (CLI, CLI <c>--optimize</c>, <c>.blproj</c>, the IDE) and every in-process
@@ -558,8 +594,17 @@ namespace BasicLang.Compiler.IR.Optimization
                     continue;
 
                 string destination = OptimizationPass.NamedDestination(value);
-                bool shared = useSites.Count > 1 || (destination != null && useSites.Count >= 1);
-                if (!shared) continue;
+
+                // The STATIC count (ADR-0005 D2): more than one use, or a named destination and one
+                // (the variable is itself a reader; see the class remarks).
+                bool staticallyShared = useSites.Count > 1 || (destination != null && useSites.Count >= 1);
+
+                // Otherwise the value is anonymous with ONE use, and the DYNAMIC count decides
+                // (ADR-0006 D2): it is shared when that use lies in a loop that does not contain
+                // the definition. Only a pure operator can then have a guard (an anonymous
+                // non-pure value is evaluated once and has no destination to be re-read through),
+                // so nothing else is worth a walk.
+                if (!staticallyShared && !IsPureOperator(value)) continue;
 
                 var guard = new Dictionary<string, GuardName>(StringComparer.OrdinalIgnoreCase);
                 if (IsPureOperator(value)) CollectOperandGuard(value, guard, function, isRoot: true);
@@ -568,6 +613,17 @@ namespace BasicLang.Compiler.IR.Optimization
                         OptimizationPass.IsCallVisible(destination, function)
                         || (guard.TryGetValue(destination, out var asOperand) && asOperand.CallVisible));
                 if (guard.Count == 0) continue;
+
+                DefUsePaths PathsTo(Site use) => DefUsePaths.Between(def, use, inFunction,
+                    () => predecessors ??= Predecessors(function, inFunction));
+
+                // The dynamic count needs the one use's paths; the region below reuses them.
+                DefUsePaths onlyUse = null;
+                if (!staticallyShared)
+                {
+                    onlyUse = PathsTo(useSites[0]);
+                    if (!onlyUse.UseRepeats) continue;
+                }
 
                 // The call arm's candidates, destination first so a report names it when it is
                 // one (the pre-D3 arm checked only the destination).
@@ -585,8 +641,8 @@ namespace BasicLang.Compiler.IR.Optimization
                 foreach (var use in useSites)
                 {
                     InvariantViolation found = null;
-                    foreach (var (block, index) in InstructionsBetween(def, use, inFunction,
-                                 () => predecessors ??= Predecessors(function, inFunction)))
+                    var paths = onlyUse ?? PathsTo(use);
+                    foreach (var (block, index) in paths.Region())
                     {
                         var writer = block.Instructions[index];
                         if (writer == null || ReferenceEquals(writer, valueInst)) continue;
@@ -614,6 +670,7 @@ namespace BasicLang.Compiler.IR.Optimization
                             DefinitionBlock = def.Block.Name,
                             WriterBlock = block.Name,
                             UseBlock = use.Block.Name,
+                            UseRepeats = paths.UseRepeats,
                         };
                         break;
                     }
@@ -710,74 +767,138 @@ namespace BasicLang.Compiler.IR.Optimization
         }
 
         /// <summary>
-        /// Every instruction position on some path from <paramref name="def"/> to
-        /// <paramref name="use"/> that does not pass through the definition again (re-executing
-        /// it makes a new value), exclusive of both ends.
+        /// The paths from a definition to ONE of its uses that do not pass through the definition
+        /// again (re-executing it makes a new value), over
+        /// <see cref="ControlFlowGraph.SuccessorsOf"/>. Computed once per use, it answers both
+        /// questions S′ asks of that use: is it repeated (<see cref="UseRepeats"/>, ADR-0006 D2),
+        /// and which instructions lie between (<see cref="Region"/>). One walk answers both, so
+        /// the loop that makes a use count as repeated is by construction the loop whose body
+        /// the region includes.
         /// </summary>
-        private static IEnumerable<(BasicBlock Block, int Index)> InstructionsBetween(
-            Site def, Site use, HashSet<BasicBlock> inFunction,
-            Func<Dictionary<BasicBlock, List<BasicBlock>>> predecessors)
+        private sealed class DefUsePaths
         {
-            var d = def.Block;
-            var u = use.Block;
+            private readonly Site _def;
+            private readonly Site _use;
+            // Blocks reachable from the definition's successors without re-entering its block, and
+            // blocks that reach the use's block without passing through the definition's. Both
+            // null for the straight-line case, which needs neither.
+            private readonly HashSet<BasicBlock> _forward;
+            private readonly HashSet<BasicBlock> _backward;
 
-            // Straight-line: the use follows the definition in its own block.
-            if (ReferenceEquals(d, u) && use.Index > def.Index)
+            /// <summary>Some path runs from the definition to the use without re-executing the
+            /// definition. False only for a use the definition never reaches (dead, or a CFG a
+            /// pass left disconnected): nothing then lies between.</summary>
+            public bool Reachable { get; }
+
+            /// <summary>
+            /// ADR-0006 D2: the use lies in a loop that does not contain the definition, so it runs
+            /// again before the definition does — ONE static use, a dynamic count &gt; 1. Read off
+            /// the CFG as: the use's block is reachable from the definition and reaches itself
+            /// without passing through the definition's block. False for a use in the definition's
+            /// own block (every cycle through it passes the definition) and for a use that every
+            /// cycle reaches only through the definition (a loop that contains it).
+            ///
+            /// <para>A CYCLE, not a natural loop: a definition inside a loop on an arm the loop can
+            /// skip (<c>If c Then t = p + q</c> … use <c>t</c> after the <c>End If</c>) leaves the
+            /// use on a cycle that avoids it, and that use IS repeated — one execution of the
+            /// definition reaches the use on this iteration and again on the next one that skips
+            /// the arm. A natural-loop reading says the loop contains the definition and would
+            /// exempt it.</para>
+            /// </summary>
+            public bool UseRepeats { get; }
+
+            private DefUsePaths(Site def, Site use, HashSet<BasicBlock> forward, HashSet<BasicBlock> backward,
+                bool reachable, bool useRepeats)
             {
-                for (int i = def.Index + 1; i < use.Index; i++) yield return (d, i);
-                yield break;
+                _def = def;
+                _use = use;
+                _forward = forward;
+                _backward = backward;
+                Reachable = reachable;
+                UseRepeats = useRepeats;
             }
 
-            // Forward from d's successors without re-entering d.
-            var forward = new HashSet<BasicBlock>(ReferenceEqualityComparer.Instance);
-            bool loopsBackToDefinition = false;
-            var stack = new Stack<BasicBlock>();
-            foreach (var s in Successors(d, inFunction)) stack.Push(s);
-            while (stack.Count > 0)
+            public static DefUsePaths Between(Site def, Site use, HashSet<BasicBlock> inFunction,
+                Func<Dictionary<BasicBlock, List<BasicBlock>>> predecessors)
             {
-                var b = stack.Pop();
-                if (ReferenceEquals(b, d)) { loopsBackToDefinition = true; continue; }
-                if (!forward.Add(b)) continue;
-                foreach (var s in Successors(b, inFunction)) stack.Push(s);
+                var d = def.Block;
+                var u = use.Block;
+
+                // Straight-line: the use follows the definition in its own block.
+                if (ReferenceEquals(d, u) && use.Index > def.Index)
+                    return new DefUsePaths(def, use, null, null, reachable: true, useRepeats: false);
+
+                // Forward from d's successors without re-entering d.
+                var forward = new HashSet<BasicBlock>(ReferenceEqualityComparer.Instance);
+                bool loopsBackToDefinition = false;
+                var stack = new Stack<BasicBlock>();
+                foreach (var s in Successors(d, inFunction)) stack.Push(s);
+                while (stack.Count > 0)
+                {
+                    var b = stack.Pop();
+                    if (ReferenceEquals(b, d)) { loopsBackToDefinition = true; continue; }
+                    if (!forward.Add(b)) continue;
+                    foreach (var s in Successors(b, inFunction)) stack.Push(s);
+                }
+
+                bool reachable = ReferenceEquals(d, u) ? loopsBackToDefinition : forward.Contains(u);
+                if (!reachable) return new DefUsePaths(def, use, null, null, reachable: false, useRepeats: false);
+
+                // Backward from u's predecessors without re-entering d.
+                var backward = new HashSet<BasicBlock>(ReferenceEqualityComparer.Instance);
+                var preds = predecessors();
+                if (preds.TryGetValue(u, out var up))
+                    foreach (var p in up) stack.Push(p);
+                while (stack.Count > 0)
+                {
+                    var b = stack.Pop();
+                    if (ReferenceEquals(b, d)) continue;
+                    if (!backward.Add(b)) continue;
+                    if (preds.TryGetValue(b, out var bp))
+                        foreach (var p in bp) stack.Push(p);
+                }
+
+                // u reaches itself without passing d: it sits on a cycle that avoids the definition.
+                bool repeats = !ReferenceEquals(d, u) && backward.Contains(u);
+                return new DefUsePaths(def, use, forward, backward, reachable: true, useRepeats: repeats);
             }
 
-            bool reachable = ReferenceEquals(d, u) ? loopsBackToDefinition : forward.Contains(u);
-            if (!reachable) yield break;
-
-            // Backward from u's predecessors without re-entering d.
-            var backward = new HashSet<BasicBlock>(ReferenceEqualityComparer.Instance);
-            var preds = predecessors();
-            if (preds.TryGetValue(u, out var up))
-                foreach (var p in up) stack.Push(p);
-            while (stack.Count > 0)
+            /// <summary>
+            /// Every instruction position on some path from the definition to the use that does not
+            /// pass through the definition again, exclusive of both ends — except that for a
+            /// repeated use it is <c>region(v)</c> as ADR-0006 D2 defines it, which includes the
+            /// full body of the loop the use repeats in: every block of it is on such a path
+            /// (it reaches the use round the back edge), and so is the use's own block AFTER the
+            /// use, which precedes the use's next execution. A block that leaves the loop and
+            /// never reaches the use again is on no such path, so an exit-path write is not in it.
+            /// </summary>
+            public IEnumerable<(BasicBlock Block, int Index)> Region()
             {
-                var b = stack.Pop();
-                if (ReferenceEquals(b, d)) continue;
-                if (!backward.Add(b)) continue;
-                if (preds.TryGetValue(b, out var bp))
-                    foreach (var p in bp) stack.Push(p);
-            }
+                var d = _def.Block;
+                var u = _use.Block;
 
-            // The rest of the definition's block.
-            for (int i = def.Index + 1; i < d.Instructions.Count; i++) yield return (d, i);
+                if (!Reachable) yield break;
 
-            // Blocks strictly between (and the use's own block when it sits on a cycle that
-            // avoids the definition — then all of it precedes some execution of the use).
-            bool useBlockCycles = !ReferenceEquals(d, u) && forward.Contains(u) && backward.Contains(u);
-            foreach (var b in forward)
-            {
-                if (ReferenceEquals(b, u) || !backward.Contains(b)) continue;
-                for (int i = 0; i < b.Instructions.Count; i++) yield return (b, i);
-            }
+                if (_forward == null)
+                {
+                    for (int i = _def.Index + 1; i < _use.Index; i++) yield return (d, i);
+                    yield break;
+                }
 
-            if (useBlockCycles)
-            {
-                // Including the use itself: its own write precedes its next execution.
-                for (int i = 0; i < u.Instructions.Count; i++) yield return (u, i);
-            }
-            else
-            {
-                for (int i = 0; i < use.Index; i++) yield return (u, i);
+                // The rest of the definition's block.
+                for (int i = _def.Index + 1; i < d.Instructions.Count; i++) yield return (d, i);
+
+                // Blocks strictly between: on a path from d that reaches u without passing d.
+                foreach (var b in _forward)
+                {
+                    if (ReferenceEquals(b, u) || !_backward.Contains(b)) continue;
+                    for (int i = 0; i < b.Instructions.Count; i++) yield return (b, i);
+                }
+
+                // The use's own block: all of it when the use repeats (including the use itself:
+                // its own write precedes its next execution), otherwise up to the use.
+                int end = UseRepeats ? u.Instructions.Count : _use.Index;
+                for (int i = 0; i < end; i++) yield return (u, i);
             }
         }
     }
