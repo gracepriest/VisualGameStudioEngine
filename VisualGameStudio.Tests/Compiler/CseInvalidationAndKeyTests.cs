@@ -841,6 +841,14 @@ public class CseKeyEncodingUnitTests
     /// call-visible" (the <c>default:</c> arm) is UNCHANGED by D3 and stays pinned below alongside
     /// the new declarations-rule cases.
     ///
+    /// <para>⭐ Task #146 moved <c>ReadsCallVisible</c> off <see cref="CommonSubexpressionEliminationPass"/>
+    /// and onto <see cref="OptimizationPass"/> itself, unchanged, so <see cref="CopyPropagationPass"/>
+    /// could become a second consumer of it (see <c>CopyPropagationSharedVocabularyTests</c>). It is
+    /// called DIRECTLY here, not through reflection: it is <c>protected internal</c>, and
+    /// <c>BasicLang.csproj</c>'s <c>InternalsVisibleTo</c> names this assembly, which satisfies the
+    /// <c>internal</c> half of <c>protected internal</c> with no subclass needed. The assertions
+    /// below are unchanged from before the move — same predicate, new address.</para>
+    ///
     /// <para>⚠ MEASURED: no program can currently reach the <c>default:</c> arm in a way that
     /// changes a decision. Every non-variable operand lowers to its own instruction carrying a
     /// FRESHLY MINTED temp name (<c>IRFieldAccess("t1")</c> and <c>IRFieldAccess("t3")</c> for two
@@ -853,8 +861,7 @@ public class CseKeyEncodingUnitTests
     [Test]
     public void UnrecognisedOperandShapesAreTreatedAsCallVisibleTest()
     {
-        var readsCallVisible = Private("ReadsCallVisible");
-        bool Reads(IRValue v, IRFunction f) => (bool)readsCallVisible.Invoke(null, new object[] { v, f })!;
+        bool Reads(IRValue v, IRFunction f) => OptimizationPass.ReadsCallVisible(v, f);
 
         // A function that declares: a by-value parameter "p", a ByRef parameter "k", a declared
         // local "a", a declared Const local "cl", and a declared local "g" that ITSELF carries

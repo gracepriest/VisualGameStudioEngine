@@ -686,10 +686,14 @@ internal static class BarePropertyLoweringProbes
 
     internal const string P15Expected = "E:boom";
 
-    /// <summary>CP1 — task #146's own probe, a plain FIELD (not a property) read across a call:
-    /// CopyPropagation's OWN kill rules (it is not a consumer of the shared kill vocabulary at
-    /// all) still let the stale copy fact survive Inc(). KNOWN-WRONG, unchanged by ADR-0007 —
-    /// this ADR is scoped to ACCESSOR-BACKED members, and K here is a plain field.</summary>
+    /// <summary>CP1 — task #146's own probe, a plain FIELD (not a property) read across a call.
+    /// Before #146, CopyPropagation kept its OWN kill rules (it was not a consumer of the shared
+    /// kill vocabulary at all) and let the stale copy fact <c>K -&gt; 5</c> survive <c>Inc()</c>,
+    /// printing "6" where "16" is correct. #146 made <c>CopyPropagationPass</c> a consumer of
+    /// <c>OptimizationPass.NamesWrittenBy</c>/<c>IsCallVisible</c>/<c>ReadsCallVisible</c>, the
+    /// same vocabulary ADR-0006 gave CSE/LICM/the verifier, so the call now kills the fact and
+    /// this probe is RIGHT on all four backends. Unaffected by ADR-0007 either way — that ADR is
+    /// scoped to ACCESSOR-BACKED members, and K here is a plain field.</summary>
     internal const string CP1 = """
         Function Seed(v As Integer) As Integer
             Console.WriteLine("seed")
@@ -716,7 +720,7 @@ internal static class BarePropertyLoweringProbes
         End Sub
         """;
 
-    internal const string CP1KnownWrong = "6";
+    internal const string CP1Expected = "16";
 }
 
 /// <summary>
@@ -965,35 +969,37 @@ public class BarePropertyLoweringExecutionTests
                 Is.EqualTo(BarePropertyLoweringProbes.P13Expected), "MSIL");
         });
 
-    /// <summary>CP1 — task #146's own plain-FIELD probe: still "6" for "16" on all four backends,
-    /// unaffected by ADR-0007 (K here is a plain field, out of this ADR's accessor-backed scope).
-    /// Pinned KNOWN-WRONG so a future fix to #146 changes this loudly instead of leaving it
-    /// accidentally green under a stale expectation. The JavaScript "standard" leg MUST go
-    /// through <see cref="JavaScriptOptimizedExecutionTests.RunOptimized"/> (AddStandardPasses,
-    /// which contains CopyPropagationPass) — <see cref="JavaScriptExecutionTests.RunJs"/> runs no
-    /// optimizer at all, so it would (MEASURED) print the CORRECT "16" whether or not #146 is
-    /// fixed, silently certifying a bug this pin exists to keep visible.</summary>
+    /// <summary>CP1 — task #146's own plain-FIELD probe: NOW "16" on all four backends, both
+    /// pipelines. Before #146 this printed "6" (the stale copy fact <c>K -&gt; 5</c> survived
+    /// <c>Inc()</c>) and was pinned KNOWN-WRONG; #146 made <see cref="CopyPropagationPass"/> a
+    /// consumer of the shared kill vocabulary (ADR-0006), so the call now kills the fact and this
+    /// is RIGHT — re-pinned here so a regression changes this loudly. Unaffected by ADR-0007 (K
+    /// here is a plain field, out of that ADR's accessor-backed scope). The JavaScript "standard"
+    /// leg MUST go through <see cref="JavaScriptOptimizedExecutionTests.RunOptimized"/>
+    /// (AddStandardPasses, which contains CopyPropagationPass) — <see cref="JavaScriptExecutionTests.RunJs"/>
+    /// runs no optimizer at all (task #153) and would print "16" whether or not #146's fix is
+    /// present, silently certifying nothing about this pass.</summary>
     [Test]
-    public void CP1_PlainFieldAcrossACall_StillKnownWrong_Task146()
+    public void CP1_PlainFieldAcrossACall_NowCorrect_Task146()
         => Assert.Multiple(() =>
         {
             Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharp(BarePropertyLoweringProbes.CP1)),
-                Is.EqualTo(BarePropertyLoweringProbes.CP1KnownWrong), "C#, standard");
+                Is.EqualTo(BarePropertyLoweringProbes.CP1Expected), "C#, standard");
             Assert.That(FourBackends.Norm(BclE2E.CompileRun(BclE2E.CompileToCppOptimized(BarePropertyLoweringProbes.CP1))),
-                Is.EqualTo(BarePropertyLoweringProbes.CP1KnownWrong), "C++, standard");
+                Is.EqualTo(BarePropertyLoweringProbes.CP1Expected), "C++, standard");
             Assert.That(FourBackends.Norm(JavaScriptOptimizedExecutionTests.RunOptimized(BarePropertyLoweringProbes.CP1)),
-                Is.EqualTo(BarePropertyLoweringProbes.CP1KnownWrong), "JavaScript, standard");
+                Is.EqualTo(BarePropertyLoweringProbes.CP1Expected), "JavaScript, standard");
             Assert.That(FourBackends.Norm(MsilHarness.RunExpectingSuccess(BarePropertyLoweringProbes.CP1)),
-                Is.EqualTo(BarePropertyLoweringProbes.CP1KnownWrong), "MSIL, standard");
+                Is.EqualTo(BarePropertyLoweringProbes.CP1Expected), "MSIL, standard");
 
             Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharpAggressive(BarePropertyLoweringProbes.CP1)),
-                Is.EqualTo(BarePropertyLoweringProbes.CP1KnownWrong), "C#, aggressive");
+                Is.EqualTo(BarePropertyLoweringProbes.CP1Expected), "C#, aggressive");
             Assert.That(FourBackends.Norm(BclE2E.CompileRun(BclE2E.CompileToCppAggressive(BarePropertyLoweringProbes.CP1))),
-                Is.EqualTo(BarePropertyLoweringProbes.CP1KnownWrong), "C++, aggressive");
+                Is.EqualTo(BarePropertyLoweringProbes.CP1Expected), "C++, aggressive");
             Assert.That(FourBackends.Norm(FourBackends.RunAggressiveJs(BarePropertyLoweringProbes.CP1)),
-                Is.EqualTo(BarePropertyLoweringProbes.CP1KnownWrong), "JavaScript, aggressive");
+                Is.EqualTo(BarePropertyLoweringProbes.CP1Expected), "JavaScript, aggressive");
             Assert.That(FourBackends.Norm(MsilHarness.RunAggressiveExpectingSuccess(BarePropertyLoweringProbes.CP1)),
-                Is.EqualTo(BarePropertyLoweringProbes.CP1KnownWrong), "MSIL, aggressive");
+                Is.EqualTo(BarePropertyLoweringProbes.CP1Expected), "MSIL, aggressive");
         });
 
     /// <summary>P15 — KNOWN-WRONG, task #151, UNCHANGED by ADR-0007 (see the probe's own doc

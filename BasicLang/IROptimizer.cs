@@ -189,12 +189,13 @@ namespace BasicLang.Compiler.IR.Optimization
         /// Everything else — a module variable, a class member read bare, a <c>ByRef</c>
         /// parameter, and any name the function does not declare — is storage a callee can reach.
         ///
-        /// <para>⭐ ONE RULE, EVERY CONSUMER. CSE's <c>ReadsCallVisible</c> (operands) and
-        /// <see cref="IsCallVisibleDestination"/> (destinations), LICM's read check in
-        /// <c>VariablesWrittenIn</c>, and <see cref="IRVerifier"/>'s call arm (all of
-        /// <c>Guard(v)</c>) delegate here. Before D3 the operand side used a FLAG rule,
-        /// <c>(IsGlobal &amp;&amp; !IsConst) || IsByRef</c>, whose polarity is wrong: a variable
-        /// with no flag set was private, and a class field read bare inside a method lowers to an
+        /// <para>⭐ ONE RULE, EVERY CONSUMER. <see cref="ReadsCallVisible"/> (a value's reads —
+        /// CSE's operands, CopyPropagation's recorded values) and
+        /// <see cref="IsCallVisibleDestination"/> (destinations), CopyPropagation's call arm (a
+        /// fact's variable), LICM's read check in <c>VariablesWrittenIn</c>, and
+        /// <see cref="IRVerifier"/>'s call arm (all of <c>Guard(v)</c>) delegate here. Before D3
+        /// the operand side used a FLAG rule, <c>(IsGlobal &amp;&amp; !IsConst) || IsByRef</c>, whose polarity is wrong: a
+        /// variable with no flag set was private, and a class field read bare inside a method lowers to an
         /// <see cref="IRVariable"/> with no flag set. MEASURED (Q3, the DEFAULT pipeline):
         /// <c>K = Seed(1) : a = K + q : Inc() : l(0) = K + q</c> with <c>Inc</c> bumping the field
         /// <c>K</c> printed <c>3,3</c> on C++, JavaScript and MSIL where <c>13,3</c> is correct —
@@ -354,15 +355,91 @@ namespace BasicLang.Compiler.IR.Optimization
             => NamedDestination(value) is string name && IsCallVisible(name, function);
 
         /// <summary>
+        /// Whether reading <paramref name="value"/> reads storage that a CALL can write without
+        /// that write appearing in the function — the VALUE's half of the call-visibility question,
+        /// asked by every pass that carries a value past a later instruction (CSE for a candidate's
+        /// operands, <see cref="CopyPropagationPass"/> for a copy fact's recorded value). A variable
+        /// is answered by the one call-visibility rule,
+        /// <see cref="IsCallVisible(IRVariable, IRFunction)"/> (ADR-0006 D3); a pure operator by
+        /// its operands; anything else is assumed call-visible.
+        ///
+        /// <para>⛔ MEASURED. <c>a = Counter + q</c>, <c>z = Seed(100)</c>, <c>b = Counter + q</c>
+        /// has NO syntactic redefinition of <c>Counter</c> anywhere in <c>Main</c> — the write
+        /// happens inside <c>Seed</c> — and C++, JavaScript and MSIL all printed <c>b=4</c> where
+        /// 104 is correct. Name-based invalidation over the block alone cannot see it.</para>
+        ///
+        /// <para>⛔ MEASURED, and the reason the variable arm no longer reads FLAGS (Q3, ADR-0006
+        /// D3): a class field read bare inside a method is an <see cref="IRVariable"/> with
+        /// <c>IsGlobal</c> and <c>IsByRef</c> both false, so the old flag rule called it private
+        /// and <c>K = Seed(1) : a = K + q : Inc() : l(0) = K + q</c> printed <c>3,3</c> for
+        /// <c>13,3</c> on C++, JavaScript and MSIL, in the default pipeline.</para>
+        ///
+        /// <para>⚠ A <c>Const</c> is exempt, and that exemption is what keeps CSE worth
+        /// having: Platformer's pinned merges read <c>TILE_SIZE</c> (a <c>Const</c> global) and
+        /// the declared locals <c>px</c>/<c>py</c> with <c>DrawLine</c>/<c>DrawRectangle</c> calls
+        /// interleaved. Killing on every call unconditionally would take them all.</para>
+        ///
+        /// <para>A NAMED operand instruction (a value renamed to a variable, which a backend reads
+        /// back by that name — see <see cref="NamedDestination"/>) is asked the same question of
+        /// its name, exactly as <see cref="IRVerifier"/> puts that name in <c>Guard(v)</c>; its
+        /// operands are still walked, as before.</para>
+        ///
+        /// <para>A local captured BY REFERENCE by a lambda that a call then invokes is closed by
+        /// ADR-0006 D1's interim closure rule, inside
+        /// <see cref="IsCallVisible(string, IRFunction)"/>: in a function that creates a lambda
+        /// every local is call-visible — for CSE and, since task #146, for CopyPropagation too
+        /// (MEASURED before #146 on <c>Dim bump = Sub() p = p + 100 : a = p + q : bump() :
+        /// l(0) = p + q</c> with <c>p</c> starting as a constant: CopyPropagation plus
+        /// ConstantFolding folded <c>p + q</c> to a constant on BOTH sides of <c>bump()</c>, so
+        /// C# and JavaScript printed <c>3,3</c> for <c>103,3</c> with CSE out of the picture; C++
+        /// prints <c>3,3</c> with no optimizer at all — its lambda captures by copy, task
+        /// #140).</para>
+        ///
+        /// <para>⛔ NOT <see cref="IRReplicability.IsReplicable"/> (ADR-0004 D2): "can a call
+        /// change this?" (kill) is not "may this be evaluated twice?" (replicate).</para>
+        /// </summary>
+        protected internal static bool ReadsCallVisible(IRValue value, IRFunction function)
+        {
+            switch (value)
+            {
+                case null:
+                case IRConstant:
+                    return false;
+                case IRVariable variable:
+                    return IsCallVisible(variable, function);
+            }
+
+            if (NamedDestination(value) is string named && IsCallVisible(named, function))
+                return true;
+
+            switch (value)
+            {
+                case IRBinaryOp binary:
+                    return ReadsCallVisible(binary.Left, function) || ReadsCallVisible(binary.Right, function);
+                case IRUnaryOp unary:
+                    return ReadsCallVisible(unary.Operand, function);
+                case IRCompare compare:
+                    return ReadsCallVisible(compare.Left, function) || ReadsCallVisible(compare.Right, function);
+                case IRCast cast:
+                    return ReadsCallVisible(cast.Value, function);
+                default:
+                    // Calls, field/indexer loads, allocations, and anything not enumerated: a
+                    // call may change what they read. Over-killing costs optimization; keeping a
+                    // stale entry is the outcome that miscompiles.
+                    return true;
+            }
+        }
+
+        /// <summary>
         /// THE KILL VOCABULARY (ADR-0006 D1): what <paramref name="inst"/> may WRITE — a set of
         /// variable NAMES, whether it is a call (which additionally writes every name a callee
         /// can reach, <see cref="IsCallVisible(IRVariable, IRFunction)"/>), or everything.
         ///
         /// <para>⭐ SHARED, and the sharing is the point (ADR-0005 D2): CSE's
-        /// <c>Invalidate</c> kills on exactly these writes, LICM's <c>VariablesWrittenIn</c>
-        /// counts exactly these writes, and <see cref="IRVerifier"/>'s Invariant S′ calls exactly
-        /// these writes "assigned". A write form missing here is missing for ALL of them — the
-        /// verifier cannot catch a pass for a write the vocabulary does not name, and that is
+        /// <c>Invalidate</c> and <see cref="CopyPropagationPass"/>'s <c>Invalidate</c> kill on
+        /// exactly these writes, LICM's <c>VariablesWrittenIn</c> counts exactly these writes,
+        /// and <see cref="IRVerifier"/>'s Invariant S′ calls exactly these writes "assigned". A
+        /// write form missing here is missing for ALL of them — the verifier cannot catch a pass for a write the vocabulary does not name, and that is
         /// deliberate: a gap is fixed once, here.</para>
         ///
         /// <para>⭐ TOTAL (ADR-0006 D1). Every IR instruction kind is on exactly ONE arm of the
@@ -397,9 +474,10 @@ namespace BasicLang.Compiler.IR.Optimization
         /// classifies as a call), never to an IRBinaryOp / IRCompare / IRUnaryOp / IRCast, and to
         /// extend Invariant F to match.</item>
         /// </list>
-        /// <see cref="CopyPropagationPass"/> keeps its OWN kill rules and is not a consumer of this
-        /// vocabulary at all (a copy fact for a field survives a call that writes the field:
-        /// MEASURED wrong on all four backends, C# included — task #146).</para>
+        /// <see cref="CopyPropagationPass"/> used to keep its OWN kill rules and was not a consumer
+        /// of this vocabulary at all: a copy fact for a field survived a call that writes the
+        /// field (<c>K = 5 : Inc() : K + 1</c> printed 6 for 16, MEASURED on all four backends,
+        /// C# included). Task #146 made it a consumer; it has no private write rule left.</para>
         /// </summary>
         protected internal static WriteSet NamesWrittenBy(IRInstruction inst, IRFunction function)
         {
@@ -746,11 +824,12 @@ namespace BasicLang.Compiler.IR.Optimization
         /// recorded value MENTIONS the name. Over-collecting only costs optimization —
         /// keeping a stale fact is the outcome that miscompiles.
         ///
-        /// <para>⭐ SHARED. <see cref="CopyPropagationPass"/> and
-        /// <see cref="CommonSubexpressionEliminationPass"/> both need the same answer to
-        /// "which names does this expression read", and a second private copy is the defect
-        /// commit 67782af removed from CSE for the operand walker. One implementation, two
-        /// consumers — the ModuleResolver/ModuleTypeWalker rule in CLAUDE.md.</para>
+        /// <para>⭐ SHARED. The kill vocabulary's ByRef arm (<see cref="NameByRefArguments"/> —
+        /// which is how <see cref="CopyPropagationPass"/> reaches it since task #146) and
+        /// <see cref="CommonSubexpressionEliminationPass"/>'s candidate reads both need the same
+        /// answer to "which names does this expression read", and a second private copy is the
+        /// defect commit 67782af removed from CSE for the operand walker. One implementation,
+        /// every consumer — the ModuleResolver/ModuleTypeWalker rule in CLAUDE.md.</para>
         /// </summary>
         protected internal static void CollectNames(IRValue value, List<string> into)
         {
@@ -1665,7 +1744,33 @@ namespace BasicLang.Compiler.IR.Optimization
     }
     
     /// <summary>
-    /// Copy propagation - replace uses of copied variables with their source
+    /// Copy propagation - replace uses of copied variables with their source.
+    ///
+    /// <para>⭐ A CONSUMER OF THE ONE KILL VOCABULARY (ADR-0006 D1/D3, task #146). What an
+    /// instruction writes is <see cref="OptimizationPass.NamesWrittenBy"/> — the same answer CSE's
+    /// <c>Invalidate</c>, LICM's <c>VariablesWrittenIn</c> and <see cref="IRVerifier"/> use — and
+    /// what a CALL writes is every fact a callee can reach:
+    /// <see cref="OptimizationPass.IsCallVisible(IRVariable, IRFunction)"/> for the fact's
+    /// variable, <see cref="OptimizationPass.ReadsCallVisible"/> for the value it records. This
+    /// pass used to keep its OWN kill rules — an assignment target, an IRStore to a variable, a
+    /// renamed value, a ByRef argument of an IRCall/IRInstanceMethodCall — and had NO call arm.
+    /// MEASURED on the DEFAULT pipeline, on all four backends, C# included (C#'s inline-always
+    /// policy cannot rescue a value that was FOLDED): <c>K = 5 : Inc() : K + 1</c> inside a class,
+    /// with <c>Inc</c> bumping the field <c>K</c> by 10, printed 6 for 16 — the fact
+    /// <c>K -> 5</c> survived the call and ConstantFolding folded <c>5 + 1</c>. And
+    /// <c>Dim bump = Sub() p = p + 100 : a = p + q : bump() : l(0) = p + q</c>, with <c>p</c>
+    /// starting as a constant, printed 3,3 for 103,3 on C# and JavaScript: the fact
+    /// <c>p -> 1</c> survived the lambda call (ADR-0006 D1's closure rule makes <c>p</c>
+    /// call-visible in a function that creates a lambda). (C++ prints 3,3 there with no
+    /// optimizer pass at all — its lambda captures by copy, task #140.) Every other kind the private rules
+    /// missed — a member store, an element store a ByRef parameter may alias, a For Each / Catch /
+    /// pattern variable, <c>++x</c>'s operand, a constructor's or base call's variable arguments,
+    /// Await/Yield, inline target code (Universal) — is covered by the same vocabulary now.</para>
+    ///
+    /// <para>What stays here is the FACT side: which facts a written NAME makes stale (its key,
+    /// or a recorded value that <see cref="Mentions"/> it), and which values are safe to record.
+    /// A write form missing from the vocabulary is missing for every pass alike, and is fixed
+    /// there, once.</para>
     /// </summary>
     public class CopyPropagationPass : OptimizationPass
     {
@@ -1681,14 +1786,14 @@ namespace BasicLang.Compiler.IR.Optimization
                 
                 foreach (var block in function.Blocks)
                 {
-                    PropagateCopies(block);
+                    PropagateCopies(function, block);
                 }
             }
             
             return ModificationCount > 0;
         }
         
-        private void PropagateCopies(BasicBlock block)
+        private void PropagateCopies(IRFunction function, BasicBlock block)
         {
             var copies = new Dictionary<IRVariable, IRValue>();
 
@@ -1697,93 +1802,67 @@ namespace BasicLang.Compiler.IR.Optimization
                 // Replace uses
                 ReplaceUses(inst, copies);
 
-                // A CALL WRITES ITS ByRef ARGUMENTS. That write is invisible in this block —
-                // there is no IRAssignment and no rename for it — so without this kill the
-                // argument keeps whatever copy fact preceded the call and a later read folds
-                // against the STALE value. `Dim n = 0 : Int32.TryParse("42", n) : If n = 42`
-                // recorded `n -> 0`, survived the call, and folded the comparison to FALSE:
-                // a silent miscompile on EVERY backend (the C# backend, whose `ref` signature
-                // is correct, emitted `if (false)` just the same). Runs before the redefinition
-                // bookkeeping below because the callee's write happens during the call, ahead
-                // of any binding of the call's own result.
-                InvalidateByRefWrites(copies, inst);
+                // Kill every fact this instruction may make stale, BEFORE recording its own: an
+                // instruction's writes happen after it reads its operands (so the uses above see
+                // the old facts) and before anything later reads (so no later use does). For an
+                // assignment that is its target — the fact about to be recorded is the NEW value,
+                // and a stale `x -> 5` must die first even when nothing is recorded (an
+                // await-valued `x = Await F()`).
+                Invalidate(copies, inst, function);
 
-                // Track copy assignments. ANY assignment to a variable
-                // redefines it — invalidation must run unconditionally
-                // (an await-valued assignment `x = Await F()` records no
-                // fact, but must still kill a stale earlier `x -> 5`);
-                // recording is restricted to the safe subset.
-                if (inst is IRAssignment assignment && assignment.Target is IRVariable target)
+                // Track copy assignments; recording is restricted to the safe subset.
+                if (inst is IRAssignment assignment && assignment.Target is IRVariable target
+                    // Never propagate awaits - duplicating them would re-execute the awaited task.
+                    && assignment.Value is IRValue value && value is not IRAwait
+                    && !Mentions(value, target.Name))
                 {
-                    // Kill every stale fact about the target (including other
-                    // entries whose recorded value MENTIONS it) before
-                    // recording the new one.
-                    InvalidateRedefined(copies, target.Name);
-                    // Never propagate awaits - duplicating them would
-                    // re-execute the awaited task.
-                    if (assignment.Value is IRValue value &&
-                        value is not IRAwait &&
-                        !Mentions(value, target.Name))
-                    {
-                        copies[target] = value;
-                    }
-                }
-                else if (inst is IRStore store && store.Address is IRVariable storedVar)
-                {
-                    InvalidateRedefined(copies, storedVar.Name);
-                }
-                else if (inst is IRValue defined && !string.IsNullOrEmpty(defined.Name))
-                {
-                    // A NAMED non-assignment instruction redefines that name.
-                    // The live case is the compound-assignment lowering:
-                    // `d1 += ts` emits an IRBinaryOp RENAMED "d1" with no
-                    // IRAssignment (IRBuilder's rename optimization), so
-                    // without this kill the pre-compound copy fact
-                    // (d1 -> its initializer value) survives and a later
-                    // `d1 < d2` in the same block propagates the STALE
-                    // initializer — a miscompile (caught by
-                    // NativeBclFrontEndTests.DateTime_CrossTypeOperators_TypeAndRun).
-                    // SSA temps are defined exactly once and are never copy
-                    // keys, so this only fires for renamed real variables.
-                    InvalidateRedefined(copies, defined.Name);
+                    copies[target] = value;
                 }
             }
         }
 
         /// <summary>
-        /// Kills the copy facts invalidated by a call's by-reference writes. A ByRef (or .NET
-        /// <c>ref</c>/<c>out</c>) argument is an OUTPUT of the call, so every variable its
-        /// expression reads may hold a different value afterwards.
-        ///
-        /// <para>Invalidation is by NAME over the argument's whole operand tree, not just the
-        /// top-level variable: an argument such as <c>h.F</c> or <c>arr(i)</c> writes storage
-        /// reachable through <c>h</c> / <c>arr</c>, and killing a fact is always safe while
-        /// keeping a stale one is not.</para>
+        /// Drops every copy fact <paramref name="inst"/> may have made stale, by the one kill
+        /// vocabulary (<see cref="OptimizationPass.NamesWrittenBy"/>):
+        /// <list type="bullet">
+        /// <item>an instruction that may write ANY name (<see cref="WriteKind.Universal"/>) leaves
+        /// no fact standing;</item>
+        /// <item>each NAME it writes kills the facts keyed by that variable and the facts whose
+        /// recorded value mentions it (<see cref="InvalidateRedefined"/>) — an assignment target,
+        /// a renamed value (<c>d1 += ts</c> lowers to an IRBinaryOp renamed <c>d1</c>, no
+        /// IRAssignment; MEASURED stale before that arm, NativeBclFrontEndTests'
+        /// DateTime_CrossTypeOperators_TypeAndRun), every name a ByRef argument reads
+        /// (<c>Dim n = 0 : Int32.TryParse("42", n) : If n = 42</c> folded to FALSE on every backend
+        /// before that arm), and the rest of the vocabulary's arms;</item>
+        /// <item>a CALL (<see cref="WriteSet.IsCall"/>) also kills every fact a callee can reach:
+        /// its variable is call-visible (<see cref="OptimizationPass.IsCallVisible(IRVariable, IRFunction)"/>),
+        /// or its recorded value reads call-visible storage
+        /// (<see cref="OptimizationPass.ReadsCallVisible"/>). That is the arm this pass never had
+        /// (task #146; see the class remarks for the measurements).</item>
+        /// </list>
         /// </summary>
-        private static void InvalidateByRefWrites(Dictionary<IRVariable, IRValue> copies, IRInstruction inst)
+        private static void Invalidate(Dictionary<IRVariable, IRValue> copies, IRInstruction inst, IRFunction function)
         {
-            if (copies.Count == 0) return;
+            if (copies.Count == 0 || inst == null) return;
 
-            List<bool> byRefFlags;
-            List<IRValue> arguments;
-            switch (inst)
+            var writes = NamesWrittenBy(inst, function);
+            if (writes.IsUniversal)
             {
-                case IRCall call:
-                    byRefFlags = call.ByRefArguments; arguments = call.Arguments; break;
-                case IRInstanceMethodCall methodCall:
-                    byRefFlags = methodCall.ByRefArguments; arguments = methodCall.Arguments; break;
-                default:
-                    return;
+                copies.Clear();
+                return;
             }
-            if (byRefFlags == null || arguments == null) return;
 
-            for (int i = 0; i < arguments.Count && i < byRefFlags.Count; i++)
+            foreach (var name in writes.Names)
+                InvalidateRedefined(copies, name);
+
+            if (writes.IsCall && copies.Count > 0)
             {
-                if (!byRefFlags[i]) continue;
-                var written = new List<string>();
-                CollectNames(arguments[i], written);
-                foreach (var name in written)
-                    InvalidateRedefined(copies, name);
+                List<IRVariable> stale = null;
+                foreach (var kvp in copies)
+                    if (IsCallVisible(kvp.Key, function) || ReadsCallVisible(kvp.Value, function))
+                        (stale ??= new List<IRVariable>()).Add(kvp.Key);
+                if (stale != null)
+                    foreach (var key in stale) copies.Remove(key);
             }
         }
 
@@ -2107,11 +2186,12 @@ namespace BasicLang.Compiler.IR.Optimization
         /// <see cref="IRCall"/> renamed <c>p</c>, which does not version anything. Without real
         /// SSA, killing on redefinition is the only available answer.</para>
         ///
-        /// <para>The four definition forms are the ones
-        /// <see cref="CopyPropagationPass"/> already enumerates, and they are enumerated here for
-        /// the same measured reasons — in particular the renamed-<see cref="IRValue"/> form, which
-        /// is how BOTH <c>Dim p = Seed(1)</c> and <c>p = p + 10</c> lower (no IRAssignment at all).
-        /// The fifth, calls, is CSE-specific: see <see cref="ReadsCallVisible"/>.</para>
+        /// <para>What an instruction writes is the one kill vocabulary,
+        /// <see cref="OptimizationPass.NamesWrittenBy"/> — the same answer
+        /// <see cref="CopyPropagationPass"/> kills on — including the renamed-<see cref="IRValue"/>
+        /// form, which is how BOTH <c>Dim p = Seed(1)</c> and <c>p = p + 10</c> lower (no
+        /// IRAssignment at all). A call additionally kills every entry that reads storage a callee
+        /// can reach: see <see cref="OptimizationPass.ReadsCallVisible"/>.</para>
         /// </summary>
         private static void Invalidate(Dictionary<string, Candidate> expressions, IRInstruction inst, IRFunction function)
         {
@@ -2168,73 +2248,11 @@ namespace BasicLang.Compiler.IR.Optimization
                 foreach (var key in stale) expressions.Remove(key);
         }
 
-        /// <summary>
-        /// Whether an operand reads storage that a CALL can write without that write appearing in
-        /// this block. A variable is answered by the one call-visibility rule,
-        /// <see cref="OptimizationPass.IsCallVisible(IRVariable, IRFunction)"/> (ADR-0006 D3); a
-        /// pure operator by its operands; anything else is assumed call-visible.
-        ///
-        /// <para>⛔ MEASURED. <c>a = Counter + q</c>, <c>z = Seed(100)</c>, <c>b = Counter + q</c>
-        /// has NO syntactic redefinition of <c>Counter</c> anywhere in <c>Main</c> — the write
-        /// happens inside <c>Seed</c> — and C++, JavaScript and MSIL all printed <c>b=4</c> where
-        /// 104 is correct. Name-based invalidation over the block alone cannot see it.</para>
-        ///
-        /// <para>⛔ MEASURED, and the reason the variable arm no longer reads FLAGS (Q3, ADR-0006
-        /// D3): a class field read bare inside a method is an <see cref="IRVariable"/> with
-        /// <c>IsGlobal</c> and <c>IsByRef</c> both false, so the old flag rule called it private
-        /// and <c>K = Seed(1) : a = K + q : Inc() : l(0) = K + q</c> printed <c>3,3</c> for
-        /// <c>13,3</c> on C++, JavaScript and MSIL, in the default pipeline.</para>
-        ///
-        /// <para>⚠ A <c>Const</c> is exempt, and that exemption is what keeps the pass worth
-        /// having: Platformer's pinned merges read <c>TILE_SIZE</c> (a <c>Const</c> global) and
-        /// the declared locals <c>px</c>/<c>py</c> with <c>DrawLine</c>/<c>DrawRectangle</c> calls
-        /// interleaved. Killing on every call unconditionally would take them all.</para>
-        ///
-        /// <para>A NAMED operand instruction (a value renamed to a variable, which a backend reads
-        /// back by that name — see <see cref="OptimizationPass.NamedDestination"/>) is asked the
-        /// same question of its name, exactly as <see cref="IRVerifier"/> puts that name in
-        /// <c>Guard(v)</c>; its operands are still walked, as before.</para>
-        ///
-        /// <para>A local captured BY REFERENCE by a lambda that a call then invokes is closed for
-        /// CSE by ADR-0006 D1's interim closure rule, inside
-        /// <see cref="OptimizationPass.IsCallVisible(string, IRFunction)"/>: in a function that
-        /// creates a lambda every local is call-visible. ⚠ The same hazard is NOT closed for
-        /// CopyPropagation, which does not use this rule — measured on
-        /// <c>Dim bump = Sub() n = n + 100</c>, CopyPropagation plus ConstantFolding fold
-        /// <c>n + q</c> to a constant on BOTH sides of <c>bump()</c> when <c>n</c> starts as a
-        /// constant, so every backend prints the stale answer with CSE out of the picture.</para>
-        /// </summary>
-        private static bool ReadsCallVisible(IRValue value, IRFunction function)
-        {
-            switch (value)
-            {
-                case null:
-                case IRConstant:
-                    return false;
-                case IRVariable variable:
-                    return IsCallVisible(variable, function);
-            }
-
-            if (NamedDestination(value) is string named && IsCallVisible(named, function))
-                return true;
-
-            switch (value)
-            {
-                case IRBinaryOp binary:
-                    return ReadsCallVisible(binary.Left, function) || ReadsCallVisible(binary.Right, function);
-                case IRUnaryOp unary:
-                    return ReadsCallVisible(unary.Operand, function);
-                case IRCompare compare:
-                    return ReadsCallVisible(compare.Left, function) || ReadsCallVisible(compare.Right, function);
-                case IRCast cast:
-                    return ReadsCallVisible(cast.Value, function);
-                default:
-                    // Calls, field/indexer loads, allocations, and anything not enumerated: a
-                    // call may change what they read. Over-killing costs optimization; keeping a
-                    // stale entry is the outcome that miscompiles.
-                    return true;
-            }
-        }
+        // ReadsCallVisible (a candidate operand's half of the call-visibility question) USED TO
+        // LIVE HERE as a private method. It moved to OptimizationPass unchanged when
+        // CopyPropagationPass became its second consumer (task #146): the question "can a call
+        // change what reading this value reads?" has one answer for every pass that carries a
+        // value past a later instruction, not one per pass.
 
         // ⛔ A PRIVATE FOUR-ARM `ReplaceAllUses` USED TO LIVE HERE, and a private copy of the
         // temp-name test beside it. Both are gone: the base class already owns one TOTAL operand

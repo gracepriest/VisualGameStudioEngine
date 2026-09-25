@@ -518,15 +518,14 @@ public class InheritedMemberTests
     }
 
     /// <summary>
-    /// ⛔ PINNED, NOT INHERITANCE'S: JavaScript DROPS a field write whose right-hand side is a
-    /// call — the field keeps its old value, from a build that reported success. The control is
-    /// the class's own field with its own method, and with a free function, both of which print 1
-    /// instead of 10 on JavaScript while the other three print 10.
+    /// A field write whose right-hand side is a call, with no inheritance involved: the class's
+    /// own field set from its own method. This was pinned as a JavaScript gap (JavaScript dropped
+    /// the write and printed 1). Master's JS store-of-call-result fix (#72) closed it, so it now
+    /// runs on every backend.
     /// </summary>
     [Test]
-    public void AFieldWriteFromACallResult_IsAJavaScriptGap_Pinned()
-    {
-        const string own = """
+    public void AFieldWriteFromACallResult_RunsOnEveryBackend()
+        => RunsOnEveryBackend("""
             Class Box
              Public Total As Integer = 1
              Public Function Ten() As Integer
@@ -541,16 +540,7 @@ public class InheritedMemberTests
              b.Bump()
              PrintLine(CStr(b.Total))
             End Sub
-            """;
-        Assert.Multiple(() =>
-        {
-            Assert.That(Cpp(own), Is.EqualTo("10"), "C++");
-            Assert.That(Msil(own), Is.EqualTo("10"), "MSIL");
-            Assert.That(Cs(own), Is.EqualTo("10"), "C#");
-            Assert.That(Js(own), Is.EqualTo("1"),
-                "PINNED CONTROL: JavaScript drops a field write whose RHS is a call, with no inheritance involved");
-        });
-    }
+            """, "10");
 
     /// <summary>
     /// ⛔ PINNED, pre-existing and untouched: a class declared in ANOTHER FILE cannot be a base —
