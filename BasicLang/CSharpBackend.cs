@@ -59,6 +59,16 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         // For structured control flow generation
         private HashSet<BasicBlock> _processedBlocks;
 
+        /// <summary>
+        /// The merge blocks of the Ifs being generated right now. An <c>ElseIf</c> clause is lowered
+        /// as a nested conditional (<c>ifN.elseifK.then</c> / <c>ifN.elseifK.else</c>) that branches
+        /// to the OUTER If's <c>ifN.end</c>, so its reconstruction finds the same merge block. Only
+        /// the outermost If — the first to claim the block — may emit it, after its own braces.
+        /// ⛔ MEASURED before: the inner one emitted it inside the outer Else, so every statement
+        /// after an ElseIf chain was lost whenever the first branch was taken.
+        /// </summary>
+        private readonly HashSet<BasicBlock> _pendingIfMerges = new HashSet<BasicBlock>();
+
         // Stack of loop end blocks for break detection
         private Stack<BasicBlock> _loopEndBlocks;
 
@@ -2050,34 +2060,6 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             WriteLine($"({string.Join(", ", varNames)}) = {tupleExpr};");
         }
 
-        /// <summary>
-        /// Emits the structured statement a nested block's terminator opens: an <c>If</c> or loop
-        /// (IRConditionalBranch) or a <c>Select Case</c> (IRSwitch). Returns false for anything
-        /// else — an IRBranch in particular, which each caller handles its own way (loop exits,
-        /// merge targets).
-        ///
-        /// <para>⛔ EmitBlockInstructions skips every control-flow instruction, so a terminator
-        /// nobody dispatches is silently DROPPED together with everything reachable only through
-        /// it. The sites below used to hand-roll this dispatch without the IRSwitch arm (and the
-        /// Case/Finally bodies without either): measured, a <c>Select Case</c> after any
-        /// <c>If</c>, loop or <c>Try</c> vanished with the rest of the method, and so did one
-        /// inside an If, Else, Try or Catch body, or an If inside a Case or a Finally.</para>
-        /// </summary>
-        private bool EmitNestedTerminator(IRInstruction terminator)
-        {
-            switch (terminator)
-            {
-                case IRConditionalBranch cond:
-                    HandleConditionalBranch(cond);
-                    return true;
-                case IRSwitch nested:
-                    HandleSwitchStatement(nested);
-                    return true;
-                default:
-                    return false;
-            }
-        }
-
         private void HandleConditionalBranch(IRConditionalBranch condBranch)
         {
             var condition = EmitExpression(condBranch.Condition);
@@ -2210,9 +2192,11 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             // Emit default case
             var defaultBlock = switchInst.DefaultTarget;
             WriteLine("default:");
-            // The same body rules as a Case arm: a `Case Else` holding an If, a nested Select or
-            // an Exit For is emitted exactly as a Case holding one.
-            EmitCaseBody(defaultBlock);
+            _processedBlocks.Add(defaultBlock);
+            Indent();
+            EmitBlockInstructions(defaultBlock);
+            EmitCaseTerminator(defaultBlock);
+            Unindent();
 
             _switchDepth--;
             Unindent();
@@ -2390,43 +2374,41 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             // Emit the case body with indentation
             Indent();
             EmitBlockInstructions(block);
+            EmitCaseTerminator(block);
+            Unindent();
+        }
 
-            // Check if block ends with a return (no break needed)
+        /// <summary>
+        /// The terminator of a case section's first block — a <c>Case</c> or the <c>Case Else</c> —
+        /// followed by the <c>break;</c> that closes the section.
+        ///
+        /// <para>⛔ The conditional-branch and IRSwitch arms were missing, so a case body holding an
+        /// <c>If</c> or a nested <c>Select</c> became a bare <c>break;</c>: the If, and every
+        /// statement after it in that case, was DROPPED with a green build. MEASURED: a
+        /// <c>Case 1</c> of <c>If m = 1 … Else … End If</c> then a WriteLine compiled to
+        /// <c>case 1: break;</c>. The If's own merge block carries the rest of the body and ends
+        /// with the branch to the switch's end, which emits nothing.</para>
+        /// </summary>
+        private void EmitCaseTerminator(BasicBlock block)
+        {
             var terminator = block.Instructions.LastOrDefault();
             if (terminator is IRReturn)
-            {
-                // Return already emitted
-            }
-            else if (EmitNestedTerminator(terminator))
-            {
-                // An If or Select as the arm's last statement; its merge continuation runs to
-                // the switch end, so the arm still needs its break.
-                WriteLine("break;");
-            }
-            else if (terminator is IRBranch loopExit && TryEmitLoopExit(loopExit))
-            {
-                // ⛔ An `Exit For` written inside a `Select Case` arm. TryEmitLoopExit spells it
-                // as a `goto` precisely because a `break` here would leave the SWITCH; adding
-                // the usual trailing `break;` after it would be unreachable code (CS0162).
-            }
-            else if (terminator is IRBranch br && br.Target.Name.Contains("switch.end"))
-            {
-                // Jump to switch end - emit break
-                WriteLine("break;");
-            }
-            else if (terminator is IRBranch branch)
-            {
-                // Process the branch target (might have more code)
-                HandleUnconditionalBranch(branch);
-                WriteLine("break;");
-            }
-            else
-            {
-                // Default: add break
-                WriteLine("break;");
-            }
+                return; // Return already emitted
 
-            Unindent();
+            // ⛔ An `Exit For` written inside a `Select Case` arm. TryEmitLoopExit spells it as a
+            // `goto` precisely because a `break` here would leave the SWITCH; adding the usual
+            // trailing `break;` after it would be unreachable code (CS0162).
+            if (terminator is IRBranch loopExit && TryEmitLoopExit(loopExit))
+                return;
+
+            if (terminator is IRConditionalBranch cond)
+                HandleConditionalBranch(cond);
+            else if (terminator is IRSwitch switchInst)
+                HandleSwitchStatement(switchInst);
+            else if (terminator is IRBranch branch)
+                HandleUnconditionalBranch(branch); // a branch to the switch's end emits nothing
+
+            WriteLine("break;");
         }
 
         private bool IsLoopHeader(BasicBlock trueBlock, BasicBlock falseBlock,
@@ -2605,9 +2587,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 EmitBlockInstructions(endBlock);
 
                 // Handle end block's terminator
-                var endTerminator = endBlock.Instructions.LastOrDefault();
-                if (!EmitNestedTerminator(endTerminator) && endTerminator is IRBranch endBranch)
-                    HandleUnconditionalBranch(endBranch);
+                EmitContinuationTerminator(endBlock);
             }
         }
 
@@ -2672,6 +2652,9 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
         private void GenerateIfThenElse(string condition, BasicBlock thenBlock, BasicBlock elseBlock, BasicBlock mergeBlock)
         {
+            // An ElseIf's nested conditional shares the outer If's merge block — leave it to the owner.
+            bool ownsMerge = mergeBlock != null && _pendingIfMerges.Add(mergeBlock);
+
             WriteLine($"if ({condition})");
             WriteLine("{");
             Indent();
@@ -2680,12 +2663,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             EmitBlockInstructions(thenBlock);
 
             // Handle then block's terminator (might have nested control flow, return, or break)
-            var thenTerminator = thenBlock.Instructions.LastOrDefault();
-            if (!EmitNestedTerminator(thenTerminator) && thenTerminator is IRBranch thenBranch)
-            {
-                if (!TryEmitLoopExit(thenBranch) && !_processedBlocks.Contains(thenBranch.Target))
-                    HandleUnconditionalBranch(thenBranch);
-            }
+            EmitIfArmTerminator(thenBlock);
 
             Unindent();
             WriteLine("}");
@@ -2697,30 +2675,29 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             EmitBlockInstructions(elseBlock);
 
             // Handle else block's terminator
-            var elseTerminator = elseBlock.Instructions.LastOrDefault();
-            if (!EmitNestedTerminator(elseTerminator) && elseTerminator is IRBranch elseBranch)
-            {
-                if (!TryEmitLoopExit(elseBranch) && !_processedBlocks.Contains(elseBranch.Target))
-                    HandleUnconditionalBranch(elseBranch);
-            }
+            EmitIfArmTerminator(elseBlock);
 
             Unindent();
             WriteLine("}");
 
+            if (!ownsMerge)
+                return;
+            _pendingIfMerges.Remove(mergeBlock);
+
             // Continue after merge
-            if (mergeBlock != null && !_processedBlocks.Contains(mergeBlock))
+            if (!_processedBlocks.Contains(mergeBlock))
             {
                 _processedBlocks.Add(mergeBlock);
                 EmitBlockInstructions(mergeBlock);
 
-                var mergeTerminator = mergeBlock.Instructions.LastOrDefault();
-                if (!EmitNestedTerminator(mergeTerminator) && mergeTerminator is IRBranch mergeBranch)
-                    HandleUnconditionalBranch(mergeBranch);
+                EmitContinuationTerminator(mergeBlock);
             }
         }
 
         private void GenerateIfThen(string condition, BasicBlock thenBlock, BasicBlock mergeBlock)
         {
+            bool ownsMerge = mergeBlock != null && _pendingIfMerges.Add(mergeBlock);
+
             WriteLine($"if ({condition})");
             WriteLine("{");
             Indent();
@@ -2729,27 +2706,68 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             EmitBlockInstructions(thenBlock);
 
             // Handle then block's terminator
-            var thenTerminator = thenBlock.Instructions.LastOrDefault();
-            if (!EmitNestedTerminator(thenTerminator) && thenTerminator is IRBranch thenBranch)
-            {
-                // Check if this is a break (branch to loop end)
-                if (!TryEmitLoopExit(thenBranch) && !_processedBlocks.Contains(thenBranch.Target))
-                    HandleUnconditionalBranch(thenBranch);
-            }
+            EmitIfArmTerminator(thenBlock);
 
             Unindent();
             WriteLine("}");
 
+            if (!ownsMerge)
+                return;
+            _pendingIfMerges.Remove(mergeBlock);
+
             // Continue after merge
-            if (mergeBlock != null && !_processedBlocks.Contains(mergeBlock))
+            if (!_processedBlocks.Contains(mergeBlock))
             {
                 _processedBlocks.Add(mergeBlock);
                 EmitBlockInstructions(mergeBlock);
 
-                var mergeTerminator = mergeBlock.Instructions.LastOrDefault();
-                if (!EmitNestedTerminator(mergeTerminator) && mergeTerminator is IRBranch mergeBranch)
-                    HandleUnconditionalBranch(mergeBranch);
+                EmitContinuationTerminator(mergeBlock);
             }
+        }
+
+        /// <summary>
+        /// The terminator of an If arm's first block, emitted inside the arm's braces.
+        ///
+        /// <para>⛔ The IRSwitch arm was missing here and in every continuation below (see
+        /// <see cref="EmitContinuationTerminator"/>), so a <c>Select Case</c> ending an If arm
+        /// was DROPPED — the switch, its case bodies, and the code after it — with a green build.
+        /// MEASURED: <c>If n &gt; 0 Then … Select Case n …</c> printed only the arm's first
+        /// line. C++ and JavaScript were correct; they do not reconstruct structure from the
+        /// CFG this way.</para>
+        /// </summary>
+        private void EmitIfArmTerminator(BasicBlock armBlock)
+        {
+            var terminator = armBlock.Instructions.LastOrDefault();
+            if (terminator is IRConditionalBranch cond)
+                HandleConditionalBranch(cond);
+            else if (terminator is IRSwitch switchInst)
+                HandleSwitchStatement(switchInst);
+            else if (terminator is IRBranch branch)
+            {
+                // Check if this is a break (branch to loop end)
+                if (!TryEmitLoopExit(branch) && !_processedBlocks.Contains(branch.Target))
+                    HandleUnconditionalBranch(branch);
+            }
+        }
+
+        /// <summary>
+        /// The terminator of the block that CONTINUES after a structured construct — an If's
+        /// merge block, a loop's, Try's or For Each's end block.
+        ///
+        /// <para>⛔ Without the IRSwitch arm, a <c>Select Case</c> placed AFTER any of those
+        /// constructs was dropped with everything following it. MEASURED on master: an
+        /// <c>If … End If</c> followed by <c>Select Case n</c> compiled to the If alone — in a
+        /// plain Sub, no Try involved — and the same after For, While, Try and For Each.</para>
+        /// </summary>
+        private void EmitContinuationTerminator(BasicBlock continuationBlock)
+        {
+            var terminator = continuationBlock.Instructions.LastOrDefault();
+            if (terminator is IRConditionalBranch cond)
+                HandleConditionalBranch(cond);
+            else if (terminator is IRSwitch switchInst)
+                HandleSwitchStatement(switchInst);
+            else if (terminator is IRBranch branch)
+                HandleUnconditionalBranch(branch);
         }
 
         private bool IsLoopEndBlock(BasicBlock block)
@@ -3295,7 +3313,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                     {
                         // Sub-expressions need parens to preserve precedence
                         var left = EmitExpression(bin.Left, stack, true);
-                        var right = DivisorText(bin, EmitExpression(bin.Right, stack, true));
+                        var right = EmitDivisor(bin, EmitExpression(bin.Right, stack, true));
                         var op = MapBinaryOperator(bin.Operation);
                         var expr = $"{left} {op} {right}";
                         return needsParens ? $"({expr})" : expr;
@@ -3631,8 +3649,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
             // Use needsParens=true for sub-expressions to preserve operator precedence
             var left = EmitExpression(binaryOp.Left, new HashSet<IRValue>(), needsParens: true);
-            var right = DivisorText(binaryOp,
-                EmitExpression(binaryOp.Right, new HashSet<IRValue>(), needsParens: true));
+            var right = EmitDivisor(binaryOp, EmitExpression(binaryOp.Right, new HashSet<IRValue>(), needsParens: true));
             var op = MapBinaryOperator(binaryOp.Operation);
 
             var target = GetValueName(binaryOp);
@@ -4300,21 +4317,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             // Generate try block body
             _processedBlocks.Add(tryCatch.TryBlock);
             EmitBlockInstructions(tryCatch.TryBlock);
-
-            // Handle try block's terminator (may have nested control flow)
-            var tryTerminator = tryCatch.TryBlock.Instructions.LastOrDefault();
-            if (!EmitNestedTerminator(tryTerminator) && tryTerminator is IRBranch tryBranch)
-            {
-                // An `Exit For` as the last statement of a Try body targets the LOOP's end, not
-                // the Try's, so the two guards below would drop it. C# allows both `break` and
-                // `goto` out of a try block.
-                if (!TryEmitLoopExit(tryBranch) &&
-                    tryBranch.Target != tryCatch.EndBlock &&
-                    !_processedBlocks.Contains(tryBranch.Target))
-                {
-                    HandleUnconditionalBranch(tryBranch);
-                }
-            }
+            EmitTryRegionTerminator(tryCatch.TryBlock, tryCatch.EndBlock);
 
             Unindent();
             WriteLine("}");
@@ -4333,18 +4336,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
                 _processedBlocks.Add(catchClause.Block);
                 EmitBlockInstructions(catchClause.Block);
-
-                // Handle catch block's terminator
-                var catchTerminator = catchClause.Block.Instructions.LastOrDefault();
-                if (!EmitNestedTerminator(catchTerminator) && catchTerminator is IRBranch catchBranch)
-                {
-                    if (!TryEmitLoopExit(catchBranch) &&
-                        catchBranch.Target != tryCatch.EndBlock &&
-                        !_processedBlocks.Contains(catchBranch.Target))
-                    {
-                        HandleUnconditionalBranch(catchBranch);
-                    }
-                }
+                EmitTryRegionTerminator(catchClause.Block, tryCatch.EndBlock);
 
                 Unindent();
                 WriteLine("}");
@@ -4359,7 +4351,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
                 _processedBlocks.Add(tryCatch.FinallyBlock);
                 EmitBlockInstructions(tryCatch.FinallyBlock);
-                EmitNestedTerminator(tryCatch.FinallyBlock.Instructions.LastOrDefault());
+                EmitTryRegionTerminator(tryCatch.FinallyBlock, tryCatch.EndBlock, allowLoopExit: false);
 
                 Unindent();
                 WriteLine("}");
@@ -4371,9 +4363,46 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 _processedBlocks.Add(tryCatch.EndBlock);
                 EmitBlockInstructions(tryCatch.EndBlock);
 
-                var endTerminator = tryCatch.EndBlock.Instructions.LastOrDefault();
-                if (!EmitNestedTerminator(endTerminator) && endTerminator is IRBranch endBranch)
-                    HandleUnconditionalBranch(endBranch);
+                EmitContinuationTerminator(tryCatch.EndBlock);
+            }
+        }
+
+        /// <summary>
+        /// The control flow that ENDS a try, catch or finally region's first block, emitted inside
+        /// that region's braces.
+        ///
+        /// <para>⛔ The IRSwitch arm was missing, so a <c>Select Case</c> anywhere in a Try was
+        /// DROPPED WITHOUT A TRACE — its switch, every case body, and everything after it up to the
+        /// End Try. MEASURED: <c>Try : Select Case n ... : Catch</c> emitted an empty
+        /// <c>try { }</c>, and the program printed nothing, with a green build. Loop bodies had
+        /// already needed the same arm (see GenerateLoop). A Finally handled no terminator at all,
+        /// so the same held there for an If.</para>
+        ///
+        /// <para>Continuing into the region's successors stops at the Try's end block: its name
+        /// ends in ".end", which HandleUnconditionalBranch never follows, and the direct branch is
+        /// refused below — so code after End Try is never pulled inside the braces.</para>
+        ///
+        /// <para>An <c>Exit For</c> as a try or catch body's last statement targets the LOOP's end,
+        /// not the Try's, so the end-block guard below would drop it — TryEmitLoopExit emits it
+        /// as a <c>break</c>/<c>goto</c> first. Not from a Finally: C# forbids leaving a finally
+        /// block that way (CS0157).</para>
+        /// </summary>
+        private void EmitTryRegionTerminator(BasicBlock regionBlock, BasicBlock tryEndBlock, bool allowLoopExit = true)
+        {
+            var terminator = regionBlock.Instructions.LastOrDefault();
+            if (terminator is IRConditionalBranch cond)
+            {
+                HandleConditionalBranch(cond);
+            }
+            else if (terminator is IRSwitch switchInst)
+            {
+                HandleSwitchStatement(switchInst);
+            }
+            else if (terminator is IRBranch branch)
+            {
+                if (allowLoopExit && TryEmitLoopExit(branch)) return;
+                if (branch.Target != tryEndBlock && !_processedBlocks.Contains(branch.Target))
+                    HandleUnconditionalBranch(branch);
             }
         }
 
@@ -4465,9 +4494,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 _processedBlocks.Add(forEach.EndBlock);
                 EmitBlockInstructions(forEach.EndBlock);
 
-                var endTerminator = forEach.EndBlock.Instructions.LastOrDefault();
-                if (!EmitNestedTerminator(endTerminator) && endTerminator is IRBranch endBranch)
-                    HandleUnconditionalBranch(endBranch);
+                EmitContinuationTerminator(forEach.EndBlock);
             }
         }
 
@@ -4776,24 +4803,56 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         }
 
         /// <summary>
-        /// The divisor of an integral <c>\</c> / <c>Mod</c>, respelled when it is a literal zero.
-        /// C# rejects a CONSTANT integral division by zero at compile time (CS0020 "Division by
-        /// constant zero"), so <c>7 \ 0</c> — or a C# <c>const</c> dividend — compiled here and
-        /// then failed the C# build, where the other backends now throw
-        /// <c>DivideByZeroException</c> at run time. Unboxing is not a constant expression
-        /// (<c>new int()</c> is), so <c>(int)(object)0</c> makes this backend throw too. Applied
-        /// whatever the dividend, since whether a C# rendering of it is a constant is not
-        /// knowable here; a variable dividend just keeps its run-time throw. The inner cast makes the boxed type exactly
-        /// the unboxed one whatever suffix the literal rendered with (a mismatch is an
-        /// InvalidCastException).
+        /// The rendered divisor of <paramref name="bin"/>, made NON-CONSTANT to Roslyn when it is a
+        /// constant zero of an integral or Decimal type, or a constant -1 of a signed integral type.
+        ///
+        /// <para>⛔ A constant over a constant zero is CS0020 ("Division by constant zero") — a
+        /// COMPILE error, where .NET/VB throws DivideByZeroException at RUN time and a Try can
+        /// catch it. Roslyn raises it only when BOTH operands are constants (it is a constant-
+        /// folding error): `n / 0` compiles and throws. But the IR hands us two constants far more
+        /// often than a literal `5 \ 0`, because copy propagation substitutes locals. MEASURED, each
+        /// emitted as a constant over a constant and rejected: `Dim z = 0 : 5 \ z` → `5 / 0`,
+        /// `Dim a = 5 : a \ 0` → `5 / 0`, `5 Mod 0` → `5 % 0`, Decimal `d / 0` → `5m / 0m`. The IR
+        /// constant folder correctly refuses these (it catches DivideByZeroException), so the
+        /// emitter is the one place that knows the operands became C# constants.</para>
+        ///
+        /// <para>An array element read is not a constant expression, keeps the literal's own type
+        /// (int, long, decimal, byte...) with no type name to spell, and has no side effect. It is
+        /// only ever reached on a path that throws, so its allocation costs nothing that matters.
+        /// Floating divisors are left alone: `5.0 / 0.0` is legal C# (Infinity), as in .NET.</para>
+        ///
+        /// <para>⛔ A constant -1 is the SAME trap: a constant signed minimum over it is CS0220 ("The
+        /// operation overflows at compile time in checked mode"), where .NET throws
+        /// OverflowException at run time. MEASURED: `(-2147483647 - 1) \ -1` emitted
+        /// `-2147483648 / -1` and did not build. A variable over -1 is unaffected either way; the
+        /// rewrite only costs a -1 divisor, which nobody writes in a hot loop.</para>
         /// </summary>
-        private string DivisorText(IRBinaryOp op, string rendered)
+        private static string EmitDivisor(IRBinaryOp bin, string renderedRight)
         {
-            if (op.Operation is not (BinaryOpKind.IntDiv or BinaryOpKind.Mod)) return rendered;
-            if (op.Right is not IRConstant { Value: not null } c || c.Type?.IsIntegral() != true) return rendered;
-            if (Convert.ToDecimal(c.Value, System.Globalization.CultureInfo.InvariantCulture) != 0m) return rendered;
-            var type = MapType(c.Type);
-            return $"(({type})(object)({type}){rendered})";
+            if (bin.Operation is not (BinaryOpKind.Div or BinaryOpKind.IntDiv or BinaryOpKind.Mod))
+                return renderedRight;
+            return IsConstantDivisorTrap(bin.Right) ? $"new[] {{ {renderedRight} }}[0]" : renderedRight;
+        }
+
+        private static bool IsConstantDivisorTrap(IRValue value)
+        {
+            // The OUTERMOST type decides: `(double)(0)` is a floating divisor even though the
+            // constant inside it is an int.
+            if (value?.Type?.IsFloatingPoint() == true) return false;
+
+            var inner = value;
+            while (inner is IRCast cast) inner = cast.Value;
+            if (inner is not IRConstant { Value: not null } constant) return false;
+
+            return constant.Value switch
+            {
+                double or float => value.Type != null && !value.Type.IsFloatingPoint() && Convert.ToDouble(constant.Value) == 0.0,
+                int or long or short or sbyte
+                    => Convert.ToDecimal(constant.Value) is 0m or -1m,
+                byte or ushort or uint or ulong or decimal
+                    => Convert.ToDecimal(constant.Value) == 0m,
+                _ => false
+            };
         }
 
         private string MapBinaryOperator(BinaryOpKind op) => op switch

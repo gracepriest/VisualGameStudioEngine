@@ -21,14 +21,26 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
     /// ODR rule: every out-of-class definition in the header is marked <c>inline</c> — the
     /// header lands in multiple TUs under split emission. Every throw is
     /// <c>std::runtime_error</c> (spec §11: the backend lowers BL catches to that type).
+    ///
+    /// <para>⛔ Division and Mod by zero throw a TYPED <c>NetException</c> (itself a
+    /// <c>std::runtime_error</c>) carrying the DivideByZeroException chain and .NET's message.
+    /// MEASURED before: a plain <c>runtime_error("Decimal division by zero")</c> was taken by
+    /// ANY typed Catch — a <c>Catch ex As InvalidOperationException</c> caught it, where .NET
+    /// passes it to the outer <c>Catch ex As DivideByZeroException</c> — because only a
+    /// NetException enters the chain-matching ladder. This is why NetException is spliced
+    /// BEFORE this body.</para>
     /// </summary>
     public static class CppDecimalRuntime
     {
         /// <summary>Complete standalone <c>bl_decimal.hpp</c> text (what the native tests compile).</summary>
-        public static string DecimalHeader => Includes + Body;
+        public static string DecimalHeader => DecimalIncludes + Body;
 
         /// <summary>Banner + <c>#pragma once</c> + std includes (generator-owned when spliced; Task 9).</summary>
-        internal static string DecimalIncludes => Includes;
+        /// <remarks>Carries the guarded <see cref="CppNetExceptionRuntime"/> block after the std
+        /// includes: the body's division-by-zero throws a typed <c>NetException</c>, so the
+        /// standalone header must define it. The generated runtime splices that block itself,
+        /// BEFORE this body (see the splice order in both emission modes).</remarks>
+        internal static string DecimalIncludes => Includes + CppNetExceptionRuntime.Source;
 
         /// <summary>
         /// Include-free body: opens its own <c>namespace BasicLang</c>; the <c>std::hash</c>
@@ -41,6 +53,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
 #pragma once
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <functional>
 #include <ostream>
 #include <stdexcept>
@@ -319,7 +332,7 @@ inline Decimal operator*(const Decimal& x, const Decimal& y) {
 
 inline Decimal operator/(const Decimal& x, const Decimal& y) {
     using namespace dec_detail;
-    if (y.IsZeroMag()) throw std::runtime_error(""Decimal division by zero"");
+    if (y.IsZeroMag()) throw NetException(DivideByZeroChain, ""Attempted to divide by zero."");
     bool neg = x.IsNegative() != y.IsNegative();
     int32_t scale = x.Scale() - y.Scale();
     U256 A = u_from96(x.lo_, x.mid_, x.hi_);
@@ -367,7 +380,7 @@ inline Decimal operator/(const Decimal& x, const Decimal& y) {
 
 inline Decimal operator%(const Decimal& x, const Decimal& y) {
     using namespace dec_detail;
-    if (y.IsZeroMag()) throw std::runtime_error(""Decimal division by zero"");
+    if (y.IsZeroMag()) throw NetException(DivideByZeroChain, ""Attempted to divide by zero."");
     /* exact remainder at scale max(sa, sb): a - Truncate(a/b)*b with the dividend's sign.
        Always representable: r <= |a| bounds it when msc == sa, r < |b| when msc == sb. */
     int32_t ms = x.Scale() > y.Scale() ? x.Scale() : y.Scale();

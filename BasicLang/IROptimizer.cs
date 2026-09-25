@@ -3476,8 +3476,18 @@ namespace BasicLang.Compiler.IR.Optimization
 
         private IRInstruction OptimizeBinaryOp(IRBinaryOp binOp)
         {
+            // ⛔ `x + 0`, `x * 0` and `x - x` are INTEGER-ONLY (IsIntegralArithmetic); `x / x` is
+            // gone entirely (tombstone below). In IEEE 754 they are false, and each fold
+            // miscompiled SILENTLY on every backend, because the optimizer is shared. MEASURED
+            // (C# and C++ agreed on every wrong answer):
+            //   x + 0   x = -0            ->  +0      the fold gave x, i.e. -0
+            //   x - x, x * 0, x / x: see their own arms.
+            // `x - (+0)`, `x * 1` and `x / 1` ARE exact in IEEE 754 for every x, so they stay
+            // ungated; only a NEGATIVE-zero subtrahend is refused, since `x - (-0)` is `x + 0`.
+            bool integral = IsIntegralArithmetic(binOp);
+
             // x + 0 -> x
-            if (binOp.Operation == BinaryOpKind.Add)
+            if (binOp.Operation == BinaryOpKind.Add && integral)
             {
                 if (IsZero(binOp.Right))
                     return new IRAssignment(new IRVariable(binOp.Name, binOp.Type), binOp.Left);
@@ -3486,7 +3496,8 @@ namespace BasicLang.Compiler.IR.Optimization
             }
 
             // x - 0 -> x
-            if (binOp.Operation == BinaryOpKind.Sub && IsZero(binOp.Right))
+            if (binOp.Operation == BinaryOpKind.Sub && IsZero(binOp.Right)
+                && (integral || !IsNegativeZero(binOp.Right)))
             {
                 return new IRAssignment(new IRVariable(binOp.Name, binOp.Type), binOp.Left);
             }
@@ -3602,6 +3613,11 @@ namespace BasicLang.Compiler.IR.Optimization
             }
             return false;
         }
+
+        private static bool IsNegativeZero(IRValue value) =>
+            value is IRConstant c
+            && ((c.Value is double d && d == 0.0 && double.IsNegative(d))
+                || (c.Value is float f && f == 0.0f && float.IsNegative(f)));
 
         private bool IsOne(IRValue value)
         {
