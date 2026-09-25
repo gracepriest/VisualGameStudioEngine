@@ -2608,7 +2608,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 // so a future analyzer relaxation degrades to a C++ compile error.
             }
 
-            if (CheckedIntegerDivisionHelper(binaryOp) is { } helper)
+            if (DivisionHelper(binaryOp) is { } helper)
             {
                 WriteLine($"{result} = {helper}({left}, {right});");
                 return;
@@ -2618,18 +2618,29 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         }
 
         /// <summary>
-        /// The checked runtime helper (<see cref="CppIntegerDivisionRuntime"/>) an integral
-        /// <c>\</c> or <c>Mod</c> lowers to, or null. ⛔ Never the bare operator: C++ integer
-        /// division by zero is undefined behaviour — on x86 a SIGFPE that no <c>Catch</c> can
-        /// see — where .NET throws <c>DivideByZeroException</c>. <c>\</c> is always integral here
-        /// (IRBuilder converts a floating operand, ADR-0005 D1); a floating <c>Mod</c> is not
-        /// division-by-zero-trapping (.NET gives NaN) and keeps the operator.
+        /// The function a <c>\</c> or <c>Mod</c> lowers to instead of the bare operator, or null.
+        ///
+        /// <para>Integral: the checked runtime helpers (<see cref="CppIntegerDivisionRuntime"/>).
+        /// ⛔ Never the bare operator: C++ integer division by zero is undefined behaviour — on
+        /// x86 a SIGFPE that no <c>Catch</c> can see — where .NET throws
+        /// <c>DivideByZeroException</c>. <c>\</c> is always integral here (IRBuilder converts a
+        /// floating operand, ADR-0005 D1).</para>
+        ///
+        /// <para>Floating <c>Mod</c>: <c>std::fmod</c>. C++ has no <c>%</c> for floating operands,
+        /// so the bare operator was a C++ compile error — MEASURED: <c>D(7.5) Mod D(2.0)</c> failed
+        /// with "invalid operands of types 'double' and 'double' to binary 'operator%'". .NET's
+        /// floating <c>%</c> IS fmod: truncated toward zero, the sign of the dividend, NaN for a
+        /// zero divisor or an infinite dividend, exact (no rounding). Mixed with an integral
+        /// operand it promotes like the arithmetic operators; <c>float, float</c> stays float, as
+        /// .NET's Single <c>%</c> does.</para>
         /// </summary>
-        private static string CheckedIntegerDivisionHelper(IRBinaryOp op) => op.Operation switch
+        private static string DivisionHelper(IRBinaryOp op) => op.Operation switch
         {
             BinaryOpKind.IntDiv => "BasicLang::IntDiv",
             BinaryOpKind.Mod when op.Left?.Type?.IsIntegral() == true && op.Right?.Type?.IsIntegral() == true
                 => "BasicLang::IntMod",
+            BinaryOpKind.Mod when op.Left?.Type?.IsFloatingPoint() == true || op.Right?.Type?.IsFloatingPoint() == true
+                => "std::fmod",
             _ => null,
         };
 
@@ -4041,7 +4052,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             {
                 case IRConstant c:
                     return EmitConstant(c);
-                case IRBinaryOp b when CheckedIntegerDivisionHelper(b) is { } helper:
+                case IRBinaryOp b when DivisionHelper(b) is { } helper:
                     return $"{helper}({RenderInline(b.Left)}, {RenderInline(b.Right)})";
                 case IRBinaryOp b:
                     return $"({RenderInline(b.Left)} {MapBinaryOperator(b.Operation)} {RenderInline(b.Right)})";
