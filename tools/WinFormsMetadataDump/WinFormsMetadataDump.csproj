@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Regenerates VisualGameStudio.Tests/Data/winforms-metadata.json — the TEST ORACLE for the
+       designer's control catalog (spec 2026-09-25 §2.6, D4). Deliberately NOT in
+       VisualGameStudioEngine.sln: it needs the WindowsDesktop runtime, and the JSON it writes is
+       committed, so no build and no test ever runs it. See README.md. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+</Project>
