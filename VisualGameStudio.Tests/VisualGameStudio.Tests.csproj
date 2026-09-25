@@ -70,6 +70,16 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- ADR-0004 D2 / ADR-0005 D2: the post-optimizer IR verifier (Invariant S′) is ON in the
+         suite. The suite builds -c Release, where a Debug.Assert would compile away, so the
+         compiler reads this runtime switch instead (IRVerifier.SwitchName). It lands in the
+         test host's runtimeconfig.json; shipping BasicLang/IDE builds never set it. Any
+         OptimizationPipeline.Run in the test process then throws IRVerificationException on a
+         violation. Override per run with BASICLANG_VERIFY_IR=0 | log:<path>. -->
+    <RuntimeHostConfigurationOption Include="BasicLang.VerifyIR" Value="true" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\BasicLang\BasicLang.csproj" />
     <ProjectReference Include="..\VisualGameStudio.Core\VisualGameStudio.Core.csproj" />
     <ProjectReference Include="..\VisualGameStudio.Editor\VisualGameStudio.Editor.csproj" />

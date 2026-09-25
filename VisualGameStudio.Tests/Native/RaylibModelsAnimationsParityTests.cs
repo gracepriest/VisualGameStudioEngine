@@ -55,7 +55,7 @@ public class RaylibModelsAnimationsParityTests
                 Assert.That(wrapper.Contains($"Framework_{name}("), Is.True, $"RaylibWrapper.vb missing import Framework_{name}");
             }
 
-            var raylibHeader = File.ReadAllText(Path.Combine(root, "packages", "raylib.5.5.0", "build", "native", "include", "raylib.h"));
+            var raylibHeader = RaylibHeader.Read(root);
             var animRange = ExtractRlapiRange(raylibHeader, "LoadModelAnimations(", "IsModelAnimationValid(");
             Assert.That(animRange, Is.EquivalentTo(AnimNames), "raylib's LoadModelAnimations..IsModelAnimationValid range must be exactly the 6 animation fns");
         });

@@ -21,6 +21,33 @@ namespace BasicLang.Compiler.IR
         private readonly Stack<LoopContext> _loopStack;
         private readonly Dictionary<string, Stack<IRVariable>> _variableVersions;
         private readonly Dictionary<string, IRVariable> _globalVariables;
+
+        /// <summary>
+        /// Module-level globals by OWNING MODULE and bare name, beside <see cref="_globalVariables"/>
+        /// which keys by bare name alone and so can hold only one of two Modules' same-named
+        /// globals. This is what a resolved module member reference binds through.
+        /// </summary>
+        private readonly Dictionary<string, IRVariable> _moduleGlobals;
+
+        /// <summary>
+        /// Bare names that more than one Module (the file scope counts as one) declares at
+        /// module level, collected up front from the AST. Such a global gets an IR NAME
+        /// qualified by its owner — <c>Alpha_Scale</c>, <c>Beta_Scale</c> — so that every backend,
+        /// every by-name table in them, and every value the builder renames after its
+        /// assignment target (<c>Scale = Scale + 1</c>) stay distinct BY CONSTRUCTION.
+        ///
+        /// <para>⛔ Measured before, with both declared bare: C++ "redefinition of 'int32_t Value'",
+        /// JavaScript refused outright, and MSIL keyed its field table by bare name and SILENTLY
+        /// kept the last one — <c>A.GetA()</c> printed B's 2. Renaming in the IR fixes all three
+        /// at once and needs no per-backend collision special case, which would also have had to
+        /// thread the owner through the renamed-value path or lose writes.</para>
+        ///
+        /// <para>⚠ Single-unit only: two FILES each declaring <c>Scale</c> meet only in
+        /// CombineIRModules, after each unit's IR is built. That case keeps today's behaviour
+        /// (the key is qualified, the names are not), except that MSIL now refuses it loudly
+        /// instead of overwriting.</para>
+        /// </summary>
+        private readonly HashSet<string> _sharedGlobalNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<string, IRAlloca> _locals;
         private string _currentClassName;
 
@@ -60,6 +87,7 @@ namespace BasicLang.Compiler.IR
             _loopStack = new Stack<LoopContext>();
             _variableVersions = new Dictionary<string, Stack<IRVariable>>();
             _globalVariables = new Dictionary<string, IRVariable>();
+            _moduleGlobals = new Dictionary<string, IRVariable>(StringComparer.OrdinalIgnoreCase);
             _locals = new Dictionary<string, IRAlloca>();
         }
 
@@ -73,11 +101,306 @@ namespace BasicLang.Compiler.IR
             _currentFunction = null;
             _currentBlock = null;
 
+            CollectSharedModuleGlobalNames(program);
+
             program.Accept(this);
 
             CanonicaliseMemberNames();
 
+            SeparateTempsFromUserNames();
+
             return _module;
+        }
+
+        /// <summary>
+        /// Renames any compiler temp whose <c>t{N}</c> name is also a USER name — a local,
+        /// parameter, global, field, property, method or function the program declares.
+        ///
+        /// <para>⛔ Temps come from <see cref="IRFunction.GetNextTempName"/> as <c>t0, t1, ...</c>,
+        /// while a store into a variable is the value itself renamed to the variable
+        /// (<see cref="TryRenameToVariable"/>). Nothing kept the two apart, so a program with a
+        /// local named <c>t1</c> gave the optimizer and the backends two unrelated values sharing
+        /// one name. MEASURED on master 883fb1d, all silent:
+        /// <c>Dim t1 = n + 1 : Dim t2 = n + 1 : Dim t3 = 6 \ 2 : Return t1 + t2 + t3</c>
+        /// returned 10 for n = 4, not 13 — CSE merged the store to t2 into t1's, constant folding
+        /// deleted the store to t3, and the C# backend emitted <c>t3 = t1 + t2</c> because the
+        /// return's temp was also called t3. With Singles, the <c>Console.WriteLine</c> call's temp
+        /// was called t4 and C# emitted <c>t4 = Console.WriteLine(...)</c>.</para>
+        ///
+        /// <para>Renaming the TEMP, never the user's name, keeps every emitted identifier the user
+        /// wrote. A program without a temp-shaped name is left exactly as it was: the reserved set
+        /// is empty and this returns before touching anything.</para>
+        /// </summary>
+        private void SeparateTempsFromUserNames()
+        {
+            var reserved = IRTempNames.UserOwned(_module);
+            if (reserved.Count == 0) return;
+
+            foreach (var fn in IRTempNames.AllFunctions(_module))
+            {
+                // Every value reachable from the body: instructions and their operand trees.
+                var values = new List<IRValue>();
+                var seen = new HashSet<IRInstruction>();
+                var pending = new Stack<IRInstruction>(fn.Blocks.SelectMany(b => b.Instructions).Reverse());
+                while (pending.Count > 0)
+                {
+                    var inst = pending.Pop();
+                    if (inst == null || !seen.Add(inst)) continue;
+                    if (inst is IRValue v) values.Add(v);
+                    foreach (var operand in CodeGen.IROperandWalker.EnumerateOperands(inst))
+                        pending.Push(operand);
+                }
+
+                var taken = new HashSet<string>(reserved, StringComparer.OrdinalIgnoreCase);
+                foreach (var v in values)
+                    if (v.Name != null) taken.Add(v.Name);
+
+                foreach (var v in values)
+                {
+                    if (v is IRVariable || v is IRConstant || v.NamedAfterVariable) continue;
+                    if (v.Name == null || !reserved.Contains(v.Name)) continue;
+
+                    string fresh;
+                    do { fresh = fn.GetNextTempName(); } while (taken.Contains(fresh));
+                    taken.Add(fresh);
+                    v.Name = fresh;
+                }
+            }
+        }
+
+        /// <summary>See <see cref="_sharedGlobalNames"/>.</summary>
+        private void CollectSharedModuleGlobalNames(ProgramNode program)
+        {
+            _sharedGlobalNames.Clear();
+            var owners = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+
+            void Record(string name, string owner)
+            {
+                if (string.IsNullOrEmpty(name)) return;
+                if (!owners.TryGetValue(name, out var set))
+                    owners[name] = set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                set.Add(owner ?? _module?.Name ?? "");
+            }
+
+            void Walk(ASTNode node, string owner)
+            {
+                switch (node)
+                {
+                    case ModuleNode module:
+                        foreach (var m in module.Members) Walk(m, module.Name);
+                        break;
+                    case NamespaceNode ns:
+                        foreach (var m in ns.Members) Walk(m, owner);
+                        break;
+                    case VariableDeclarationNode v: Record(v.Name, owner); break;
+                    case ConstantDeclarationNode c: Record(c.Name, owner); break;
+                    // Procedures too: `Module A / Function F` and `Module B / Function F` used
+                    // to collapse into one in CombineIRModules' bare-name dedupe.
+                    case FunctionNode f: Record(f.Name, owner); break;
+                    case SubroutineNode s: Record(s.Name, owner); break;
+                }
+            }
+
+            foreach (var decl in program?.Declarations ?? new List<ASTNode>())
+                Walk(decl, null);
+
+            foreach (var kv in owners)
+                if (kv.Value.Count > 1) _sharedGlobalNames.Add(kv.Key);
+        }
+
+        /// <summary>The IR name of module-level <paramref name="name"/> owned by <paramref name="module"/>.</summary>
+        private string GlobalIrName(string module, string name) =>
+            _sharedGlobalNames.Contains(name) && !string.IsNullOrEmpty(module) ? $"{module}_{name}" : name;
+
+        private static string ModuleGlobalKey(string module, string name) => $"{module}\0{name}";
+
+        /// <summary>
+        /// The IR name of a module-level or file-scope procedure being DECLARED: owner-qualified
+        /// when another Module declares the same name, bare otherwise. A class member keeps its
+        /// bare name — its identity is its class, and the member-body exemption in
+        /// <c>CombineIRModules</c> already keeps same-named methods of different classes apart.
+        /// </summary>
+        private string ProcedureIrName(string name) =>
+            _currentClassName != null ? name : GlobalIrName(_currentModuleName ?? _module?.Name, name);
+
+        /// <summary>
+        /// The (IR name, owning module) a call to <paramref name="callee"/> is emitted with.
+        ///
+        /// <para>⛔ A cross-unit import used to be spelled as the DOTTED <c>"Helpers.Twice"</c>,
+        /// and that was honoured by C++ alone (see <see cref="IRCall.CalleeModule"/>). Every
+        /// module procedure now goes out under its bare or owner-qualified IR name with the
+        /// owner carried beside it — one wire form for a same-unit call, a cross-unit call and a
+        /// qualified call alike.</para>
+        /// </summary>
+        private (string irName, string calleeModule) ProcedureCallTarget(Symbol callee, string writtenName)
+        {
+            if (callee == null) return (writtenName, null);
+            var isProcedure = callee.Kind == SymbolKind.Function || callee.Kind == SymbolKind.Subroutine;
+            if (isProcedure && !string.IsNullOrEmpty(callee.OwningModule))
+                return (GlobalIrName(callee.OwningModule, callee.Name), callee.OwningModule);
+            // ⛔ ...but NEVER owner an import when the class being built declares that method
+            // itself. One symbol table entry per name means the last declaration wins, so without
+            // this guard an unqualified self-call is emitted against whichever OTHER class happened
+            // to declare the same name last (two forms' InitializeComponent). See
+            // IsCurrentClassMethod. A qualified `Module.M()` never reaches this arm — it carries
+            // its OwningModule and is answered above.
+            if (callee.IsImported && !string.IsNullOrEmpty(callee.SourceModule)
+                && !IsCurrentClassMethod(callee.Name))
+                return (callee.Name, callee.SourceModule);
+            if (isProcedure && IsFileScopeProcedure(callee))
+                return (GlobalIrName(_module.Name, callee.Name), _module.Name);
+            return (callee.Name, null);
+        }
+
+        /// <summary>
+        /// Whether <paramref name="callee"/> is a procedure declared at the FILE scope of this
+        /// unit: its owner is the file's own module, and it is spelled under that owner exactly
+        /// as a Module's procedure is under its Module.
+        ///
+        /// <para>⛔ A file-scope callee used to go out with NO owner, so the one backend that
+        /// keeps each module in its own static class (C#) could not qualify it: <c>Twice(4)</c>
+        /// from a class body, a constructor, a Shared method, a lambda or a <c>Module</c> block
+        /// was CS0103 — measured — while the three flattening backends ran it. And its IR name
+        /// was the BARE one even when <see cref="ProcedureIrName"/> had declared it owner-
+        /// qualified (a file-scope <c>F</c> beside <c>Module A</c>'s <c>F</c>): a call to a
+        /// function that no backend defined, broken on all four.</para>
+        ///
+        /// <para>⚠ What is NOT file scope, each measured: a stdlib procedure (registered at line
+        /// 0 — its IR name must stay the one the backends' tables know); a <c>Declare</c>; and —
+        /// the case that needs the class lookup — a method of the class being built or of a
+        /// base, whichever symbol the analyzer bound the bare name to. Pass 1 flattens every
+        /// method signature into the global scope by bare name, first wins, so a method declared
+        /// BELOW its caller, or sharing a name with a file-scope function declared above the
+        /// class, arrives here bound to a global-scope symbol; every backend resolves the bare
+        /// spelling to the member (the probe printed the member's 3, not the function's 100, on
+        /// all four), and this keeps that so. A Module's procedure and an import never reach
+        /// here: <see cref="ProcedureCallTarget"/> answers those first.</para>
+        ///
+        /// <para>⚠ A check on the symbol's DECLARING SCOPE was here and is gone: it survived
+        /// mutation. Every class-scope symbol the class lookup already excludes, and every
+        /// module-scope one carries its owner, so nothing it refused ever reached it.</para>
+        /// </summary>
+        private bool IsFileScopeProcedure(Symbol callee)
+        {
+            if (callee.IsExtern) return false;
+            if (callee.Line == 0 && callee.Column == 0) return false;
+            return !IsCurrentClassProcedure(callee.Name);
+        }
+
+        /// <summary>
+        /// Whether the class whose member is being built, or one of its bases, declares a
+        /// method or Sub named <paramref name="name"/>. Read from the analyzer's class type,
+        /// which is complete for every member once analysis has run — the IR class lists only
+        /// the methods built so far, and a method declared below its caller is not among them.
+        /// </summary>
+        private bool IsCurrentClassProcedure(string name)
+        {
+            if (string.IsNullOrEmpty(_currentClassName) || string.IsNullOrEmpty(name)) return false;
+
+            var guard = 0;
+            for (var type = _semanticAnalyzer.LookupType(_currentClassName); type != null && guard++ < 64;)
+            {
+                if (type.Members != null && type.Members.TryGetValue(name, out var member) && member != null
+                    && (member.Kind == SymbolKind.Function || member.Kind == SymbolKind.Subroutine))
+                    return true;
+
+                var baseType = type.BaseType;
+                type = baseType == null ? null : (_semanticAnalyzer.LookupType(baseType.Name) ?? baseType);
+            }
+            return false;
+        }
+
+        /// <summary>An accessor-backed property a bare name denotes: its declared spelling, the
+        /// class that declares it, and whether it is Shared. See <see cref="AccessorMemberOf"/>.</summary>
+        private readonly record struct BareAccessorMember(string MemberName, TypeInfo DeclaringType, bool IsShared);
+
+        /// <summary>
+        /// ⭐ ADR-0007 (bare-name property lowering fidelity). The ACCESSOR-BACKED property of the
+        /// class being built, or of one of its bases, that the ANALYZER bound the bare name
+        /// <paramref name="node"/> to — or null for anything else: a local or parameter (lexical
+        /// resolution finds those first, so they shadow the member), a plain field, a plain
+        /// auto-property, a module variable, a built-in or .NET property, any name outside a class.
+        ///
+        /// <para>⛔ WHY. Inside its own class a property can be used by its bare name: <c>P = 10</c>
+        /// runs the Set accessor and <c>t = Tick</c> the Get. Both used to lower to a plain
+        /// <see cref="IRAssignment"/> / <see cref="IRVariable"/>, so the IR said "variable P is
+        /// written" where the program runs user code. The kill vocabulary saw no call, CSE kept
+        /// <c>K + q</c> alive across an accessor that writes <c>K</c>, and — MEASURED —
+        /// JavaScript and MSIL printed <c>3,3</c> for <c>12,3</c> (P4) and <c>3,3,11</c> for
+        /// <c>13,3,11</c> (P5), at every entry point; C# was right only because it re-emits the
+        /// text. Each backend already ran the accessor, by re-resolving the bare name privately.
+        /// The fact is now stated ONCE, here, where the analyzer's binding exists: the bare name
+        /// lowers to EXACTLY the node its qualified form produces — <c>IRFieldStore(Me, P)</c> /
+        /// <c>IRFieldAccess(Me, Tick)</c>, or <c>(Box, P)</c> for a Shared property — which the
+        /// kill vocabulary already classifies as calls (ADR-0006 D1 step 6c), so every consumer
+        /// (CSE, LICM, the verifier, any future pass) is corrected at once. The verifier's
+        /// Invariant F (<see cref="Optimization.IRVerifier.CheckInvariantF"/>) catches a bare
+        /// property that reaches the IR as a variable again.</para>
+        ///
+        /// <para>⚠ Scoped by ACCESSOR-BACKED (<see cref="Symbol.IsAccessorBacked"/>), not by
+        /// "undeclared": a plain field or plain auto-property runs no user code and lowers as it
+        /// always did — ADR-0007 rejected C and A-wide for over-killing exactly those.</para>
+        /// </summary>
+        private BareAccessorMember? AccessorMemberOf(IdentifierExpressionNode node)
+        {
+            if (string.IsNullOrEmpty(_currentClassName) || node == null || node.IsForeignQualified) return null;
+
+            var symbol = _semanticAnalyzer?.GetNodeSymbol(node);
+            if (symbol == null || symbol.Kind != SymbolKind.Property || !symbol.IsAccessorBacked) return null;
+
+            // A member of the class being built or of a base (the walk IsCurrentClassProcedure
+            // makes), which also names the DECLARING class — a Shared property's receiver. The
+            // nearest member of that name must be the property itself: anything else there is
+            // what the name denotes, and the analyzer and the class disagree.
+            var guard = 0;
+            for (var type = _semanticAnalyzer.LookupType(_currentClassName); type != null && guard++ < 64;)
+            {
+                if (type.Members != null && type.Members.TryGetValue(node.Name, out var member) && member != null)
+                    return member.Kind == SymbolKind.Property
+                        ? new BareAccessorMember(member.Name ?? node.Name, type, symbol.IsShared)
+                        : null;
+
+                var baseType = type.BaseType;
+                type = baseType == null ? null : (_semanticAnalyzer.LookupType(baseType.Name) ?? baseType);
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// The receiver the QUALIFIED form of <paramref name="member"/> evaluates to — the same
+        /// <see cref="GetOrCreateVariable"/> call visiting its receiver identifier makes:
+        /// <c>Me</c> (typed as the class being built) for an instance property, the declaring
+        /// class's name for a Shared one (<c>Box.P</c>).
+        /// </summary>
+        private IRValue AccessorMemberReceiver(BareAccessorMember member) =>
+            member.IsShared
+                ? GetOrCreateVariable(member.DeclaringType.Name, member.DeclaringType)
+                : GetOrCreateVariable("Me", _semanticAnalyzer.LookupType(_currentClassName));
+
+        /// <summary>
+        /// The global that a resolved module member reference binds to: the declared one when
+        /// its declaration has been visited, else a forward reference carrying the same IR name
+        /// and owner — which is all any backend spells it by.
+        /// </summary>
+        private IRVariable GlobalReference(string name, string module, TypeInfo type)
+        {
+            if (_moduleGlobals.TryGetValue(ModuleGlobalKey(module, name), out var declared))
+                return declared;
+
+            return new IRVariable(GlobalIrName(module, name), type)
+            {
+                IsGlobal = true,
+                ModuleName = module
+            };
+        }
+
+        /// <summary>The module member a node resolved to, or null for anything else.</summary>
+        private Symbol ModuleMemberSymbolOf(ASTNode node)
+        {
+            var symbol = _semanticAnalyzer?.GetNodeSymbol(node);
+            return symbol != null && !string.IsNullOrEmpty(symbol.OwningModule)
+                && (symbol.Kind == SymbolKind.Variable || symbol.Kind == SymbolKind.Constant)
+                ? symbol : null;
         }
 
         /// <summary>
@@ -254,11 +577,6 @@ namespace BasicLang.Compiler.IR
         }
 
         /// <summary>
-        /// Whether <paramref name="name"/> is a field or property of the class whose member is
-        /// being built (or of a base). Class scope is NEARER than module scope, so an unqualified
-        /// name inside a method is the member before it is a same-named module-level Dim.
-        /// </summary>
-        /// <summary>
         /// Whether <paramref name="name"/> is a method of the class whose member is being built.
         /// The method twin of <see cref="IsCurrentClassMember"/>, and it exists for the same reason:
         /// class scope is NEARER than module scope.
@@ -279,6 +597,11 @@ namespace BasicLang.Compiler.IR
             && _currentClassMethodNames != null
             && _currentClassMethodNames.Contains(name);
 
+        /// <summary>
+        /// Whether <paramref name="name"/> is a field or property of the class whose member is
+        /// being built (or of a base). Class scope is NEARER than module scope, so an unqualified
+        /// name inside a method is the member before it is a same-named module-level Dim.
+        /// </summary>
         private bool IsCurrentClassMember(string name)
         {
             if (string.IsNullOrEmpty(_currentClassName) || _module?.Classes == null) return false;
@@ -307,9 +630,15 @@ namespace BasicLang.Compiler.IR
             // Check global — unless the name is a member of the class being built: found by
             // review, `Total = Total + n` inside Counter.Add resolved to a module-level `Total`
             // and mutated the global while the field stayed 0.
-            if (_globalVariables.ContainsKey(name) && !IsCurrentClassMember(name))
+            //
+            // The CURRENT Module's copy first: _globalVariables is bare-keyed and holds whichever
+            // same-named global was declared last, which is the wrong one from inside the other.
+            if (!IsCurrentClassMember(name))
             {
-                return _globalVariables[name];
+                if (_moduleGlobals.TryGetValue(ModuleGlobalKey(_currentModuleName ?? _module?.Name, name), out var own))
+                    return own;
+                if (_globalVariables.ContainsKey(name))
+                    return _globalVariables[name];
             }
 
             // Create new version
@@ -323,6 +652,62 @@ namespace BasicLang.Compiler.IR
             _variableVersions[name].Push(variable);
 
             return variable;
+        }
+
+        /// <summary>
+        /// Whether <paramref name="name"/> already denotes something with STORAGE at this point
+        /// in the current function — a declared local, a parameter, a live SSA version, a field
+        /// or property of the enclosing class, or a module global.
+        ///
+        /// <para>This is the same resolution <see cref="GetOrCreateVariable"/> performs, asked
+        /// as a question instead of acted on, so a caller can tell "this name is about to be
+        /// CREATED" from "this name already resolves somewhere". The only caller is the counted
+        /// <c>For</c>, which must give its induction variable a local when nothing else holds it
+        /// and must NOT when something does — see <see cref="Visit(ForLoopNode)"/> for why each
+        /// half matters.</para>
+        ///
+        /// <para>⚠ Must be asked BEFORE <c>GetOrCreateVariable</c>, which pushes a version and
+        /// would then make every name look as though it already existed.</para>
+        /// </summary>
+        private bool ResolvesToExistingStorage(string name)
+        {
+            if (_currentFunction == null || string.IsNullOrEmpty(name)) return true;
+
+            // Ordinal, matching the guard this replaced — a case-insensitive test here would
+            // change which names the EXPLICIT `For i As Integer` form considers already declared.
+            if (_currentFunction.LocalVariables != null
+                && _currentFunction.LocalVariables.Any(v => v?.Name == name)) return true;
+
+            // A live SSA version. This covers a PARAMETER, and it covers a module global in
+            // the one function that has already touched it.
+            if (_variableVersions.TryGetValue(name, out var versions) && versions.Count > 0) return true;
+
+            // A field or property of the enclosing class. The SSA builder never binds one, so
+            // this arm is the only thing standing between `For Total = 1 To 3` and a local
+            // that shadows the member the loop is supposed to mutate.
+            if (IsCurrentClassMember(name)) return true;
+
+            // ⛔ A MODULE GLOBAL, reachable from EVERY function in its module — not only from
+            // whichever one happens to have bound a version already. Keyed exactly as
+            // GetOrCreateVariable keys it, because the two must agree about what a bare name
+            // denotes or this guard says "fresh" for something that resolver says "global".
+            //
+            // ⛔⛔ THIS ARM WAS DELETED ONCE AND HAD TO COME BACK. It was dropped as provably
+            // redundant, on the strength of a probe that put the loop and the read-back in the
+            // SAME function — where a spurious shadowing local happens to hold the right value
+            // at the end of the loop, so nothing observes the shadowing. The shape that
+            // observes it puts them in DIFFERENT functions:
+            //     Dim g As Integer = 0
+            //     Sub Bump()  : For g = 1 To 3 : Next : End Sub
+            //     Sub Main()  : Bump() : PrintLine(CStr(g)) : End Sub
+            // Measured 4 on all four backends before the deletion and 0 on all four after —
+            // the loop ran against a local nobody could see. A guard arm is not redundant
+            // because no shape kills it; it is redundant when no shape CAN.
+            if (_moduleGlobals.ContainsKey(ModuleGlobalKey(_currentModuleName ?? _module?.Name, name)))
+                return true;
+
+            // The bare-keyed fallback GetOrCreateVariable consults after the module-keyed one.
+            return _globalVariables.ContainsKey(name);
         }
 
         private void PushVariableVersion(string name, IRVariable variable)
@@ -447,7 +832,7 @@ namespace BasicLang.Compiler.IR
         {
             var returnType = _semanticAnalyzer.GetNodeType(node) ?? new TypeInfo("Void", TypeKind.Void);
 
-            _currentFunction = _module.CreateFunction(node.Name, returnType);
+            _currentFunction = _module.CreateFunction(ProcedureIrName(node.Name), returnType);
 
             // Set module name for multi-file compilation
             _currentFunction.ModuleName = _currentModuleName ?? _module.Name;
@@ -527,7 +912,7 @@ namespace BasicLang.Compiler.IR
         {
             var voidType = new TypeInfo("Void", TypeKind.Void);
 
-            _currentFunction = _module.CreateFunction(node.Name, voidType);
+            _currentFunction = _module.CreateFunction(ProcedureIrName(node.Name), voidType);
 
             // Set module name for multi-file compilation
             _currentFunction.ModuleName = _currentModuleName ?? _module.Name;
@@ -614,11 +999,13 @@ namespace BasicLang.Compiler.IR
                 // AddGlobalVariable keys on ModuleName when the bare name collides, so the
                 // owning module has to be set BEFORE it is registered or two Modules' globals
                 // are attributed to the same key and one is lost.
-                var globalVar = new IRVariable(node.Name, varType) { IsGlobal = true };
-                globalVar.ModuleName = _currentModuleName ?? _module?.Name;
+                var owningModule = _currentModuleName ?? _module?.Name;
+                var globalVar = new IRVariable(GlobalIrName(owningModule, node.Name), varType) { IsGlobal = true };
+                globalVar.ModuleName = owningModule;
                 globalVar.Access = MapAccessModifier(node.Access);
                 _module.AddGlobalVariable(globalVar);
                 _globalVariables[node.Name] = globalVar;
+                _moduleGlobals[ModuleGlobalKey(owningModule, node.Name)] = globalVar;
 
                 if (node.Initializer != null)
                 {
@@ -772,20 +1159,30 @@ namespace BasicLang.Compiler.IR
                     localConst.IsConst = true;
                     PushVariableVersion(node.Name, localConst);
                     _currentFunction.LocalVariables.Add(localConst);
-                    EmitInstruction(new IRAssignment(localConst, value));
+                    // Coerced like a local Dim's initializer. Without it `Const L As Single = 0.5`
+                    // stored the Double literal as-is and C# emitted `L = 0.5;` into a float
+                    // local — CS0664. (Unreachable before the SemanticAnalyzer accepted a Double
+                    // literal for a Single constant; module scope already narrowed via
+                    // BuildModuleScopeInitializer.)
+                    EmitInstruction(new IRAssignment(localConst, CoerceToDeclaredType(value, typeInfo)));
                     return;
                 }
 
                 // Create the constant as a global variable
-                var constVar = new IRVariable(node.Name, typeInfo)
+                var owningModule = _currentModuleName ?? _module?.Name;
+                var constVar = new IRVariable(GlobalIrName(owningModule, node.Name), typeInfo)
                 {
                     IsGlobal = true,
                     IsConst = true,
                     InitialValue = BuildModuleScopeInitializer(
                         node.Value, node.Name, "constant", typeInfo),
-                    ModuleName = _currentModuleName ?? _module?.Name,
+                    ModuleName = owningModule,
                     Access = MapAccessModifier(node.Access)
                 };
+                // Registered like a Dim so a reference binds to THIS instance rather than
+                // minting a fresh local that merely shares the name.
+                _globalVariables[node.Name] = constVar;
+                _moduleGlobals[ModuleGlobalKey(owningModule, node.Name)] = constVar;
 
                 // Add to the module's globals. This used to be first-wins, on the reasoning
                 // that "at module scope a repeated name is a genuine redeclaration" — WRONG.
@@ -1115,7 +1512,9 @@ namespace BasicLang.Compiler.IR
                         Access = MapAccessModifier(propNode.Access),
                         IsStatic = propNode.IsStatic,
                         IsReadOnly = propNode.IsReadOnly,
-                        IsWriteOnly = propNode.IsWriteOnly
+                        IsWriteOnly = propNode.IsWriteOnly,
+                        IsVirtual = propNode.IsVirtual,
+                        IsOverride = propNode.IsOverride
                     };
 
                     // Generate getter/setter methods
@@ -1128,6 +1527,35 @@ namespace BasicLang.Compiler.IR
                     prop.Setter = _module.Functions.FirstOrDefault(f => f.Name == setterName);
 
                     irClass.Properties.Add(prop);
+                }
+                else if (member is ConstantDeclarationNode constNode)
+                {
+                    // ⛔ A class Const REACHED THE else BELOW before this arm existed, and
+                    // Visit(ConstantDeclarationNode) with no _currentFunction takes its
+                    // MODULE-SCOPE branch — so the constant was emitted as a global. Measured on
+                    // C++: `int32_t K = 9;` landed after the class, so a method reading it failed
+                    // with "use of undeclared identifier 'K'", and two classes each declaring
+                    // `Const K` emitted two globals of that name — "redefinition of 'K'". A class
+                    // constant is a MEMBER, and the flat global table has no room for that.
+                    //
+                    // ⚠ Lowered to a STATIC field carrying the folded value, which is what a VB
+                    // class Const is: one per type, not per instance. That reuses the static
+                    // member path every backend already has (C++'s out-of-class definition, MSIL's
+                    // type initializer) rather than teaching each one a new member kind — and the
+                    // initializer goes through the SAME BuildConstantFieldInitializer every other
+                    // field uses, so a Const and a field agree about what a constant expression is,
+                    // including refusing the same ones.
+                    var constType = _semanticAnalyzer.GetNodeType(constNode)
+                                    ?? new TypeInfo(constNode.Type?.Name ?? "Integer", TypeKind.Primitive);
+                    irClass.Fields.Add(new IRField
+                    {
+                        Name = constNode.Name,
+                        Type = constType,
+                        Access = MapAccessModifier(constNode.Access),
+                        IsStatic = true,
+                        Initializer = BuildConstantFieldInitializer(
+                            constNode.Value, constType, constNode.Name)
+                    });
                 }
                 else
                 {
@@ -1327,12 +1755,16 @@ namespace BasicLang.Compiler.IR
         /// old silent drop turned that into a field reading 0 with no diagnostic anywhere; a
         /// refusal naming the constructor is the honest answer until that lowering exists.</para>
         ///
-        /// <para>⚠ Two neighbouring shapes cannot reach this at all, both PRE-EXISTING and
-        /// measured: a <c>Const</c> inside a class does not PARSE ("Unexpected token in class:
-        /// 'Const'"), so a named constant can never be referenced from a field initializer; and a
-        /// <c>Structure</c> field initializer does not parse either ("Expected member name but
-        /// found Assignment"), which makes the structure call site unreachable for initializers.
-        /// </para>
+        /// <para>⚠ A <c>Const</c> inside a class PARSES as of 2026-09-18 and lowers to a static
+        /// field through this same helper, so a Const and a field agree about what is constant.
+        /// Referencing that named constant from another initializer (<c>= K + 1</c>) is still
+        /// refused — the folder substitutes no named constants — but that is a SHARED limit, not a
+        /// class one: measured, module scope refuses the identical shape ("the module-level
+        /// variable 'G' has an initializer that cannot be computed at compile time").</para>
+        ///
+        /// <para>⚠ A <c>Structure</c> field initializer still does not parse ("Expected member
+        /// name but found Assignment"), which keeps the structure call site unreachable for
+        /// initializers. PRE-EXISTING and measured.</para>
         /// </summary>
         private IRConstant BuildConstantFieldInitializer(
             ExpressionNode initializer, TypeInfo fieldType, string fieldName)
@@ -1439,12 +1871,21 @@ namespace BasicLang.Compiler.IR
 
             foreach (var prop in node.Properties)
             {
+                // ⛔ HasGetter/HasSetter mean "DECLARES this accessor", not "has a body"
+                // (ADR-0002). An interface accessor never has a body, so the old
+                // `prop.Getter != null` answered false for every bare `Property Slot As String`,
+                // and every backend declared a property with no accessors: C# refused it
+                // outright (CS0548), and C++/MSIL declared no slot for the class to fill.
+                // ReadOnly/WriteOnly are the source of truth; an explicit (empty) Get/Set block
+                // still counts, which is what the old reading got right.
                 irInterface.Properties.Add(new IRInterfaceProperty
                 {
                     Name = prop.Name,
-                    Type = new TypeInfo(prop.PropertyType?.Name ?? "Object", TypeKind.Class),
-                    HasGetter = prop.Getter != null,
-                    HasSetter = prop.Setter != null
+                    Type = InterfacePropertyType(_semanticAnalyzer.GetNodeType(prop), node.Name, prop),
+                    IsReadOnly = prop.IsReadOnly,
+                    IsWriteOnly = prop.IsWriteOnly,
+                    HasGetter = prop.Getter != null || !prop.IsWriteOnly,
+                    HasSetter = prop.Setter != null || !prop.IsReadOnly
                 });
             }
 
@@ -1580,7 +2021,7 @@ namespace BasicLang.Compiler.IR
                 node.Method.Accept(this);
 
                 // Mark the function as an extension method
-                var irFunc = _module.Functions.FirstOrDefault(f => f.Name == node.Method.Name);
+                var irFunc = _module.Functions.FirstOrDefault(f => f.Name == ProcedureIrName(node.Method.Name));
                 if (irFunc != null)
                 {
                     irFunc.IsExtension = true;
@@ -1766,10 +2207,17 @@ namespace BasicLang.Compiler.IR
 
         public void Visit(MyBaseExpressionNode node)
         {
-            // MyBase represents the base class instance
-            // For now, treat it as a special "this" reference for base class access
+            // MyBase is the SAME OBJECT seen as its base class — an inherited field lives on this
+            // instance, so the receiver is `Me`, carrying the BASE type so a backend that names
+            // the declaring class in the access (MSIL's ldfld token) names the right one.
+            //
+            // ⛔ It used to lower to a variable literally named `__base`, which nothing declares:
+            // "use of undeclared identifier '__base'" on C++, "__base is not defined" on
+            // JavaScript, CS0103 on C# and an InvalidProgramException on MSIL — `MyBase.Field`
+            // was broken on all four, measured. Only `MyBase.Method(...)` escaped it, through the
+            // IRBaseMethodCall arm that intercepts the call before the receiver is ever visited.
             var baseType = _semanticAnalyzer.GetNodeType(node);
-            _expressionResult = new IRVariable("__base", baseType);
+            _expressionResult = new IRVariable("Me", baseType);
         }
 
         public void Visit(LambdaExpressionNode node)
@@ -2895,6 +3343,35 @@ namespace BasicLang.Compiler.IR
         }
 
         /// <summary>
+        /// The type of interface property <paramref name="prop"/>, as the semantic analyzer
+        /// resolved it — <paramref name="resolved"/> is <c>GetNodeType(prop)</c>, the same
+        /// read a class property gets, so an interface property and the class property that
+        /// implements it carry the same <see cref="TypeInfo"/> for the same declared text
+        /// (ADR-0005 D3).
+        ///
+        /// <para>⛔ THERE IS NO STAND-IN, ON PURPOSE. This used to invent
+        /// <c>new TypeInfo(name, TypeKind.Class)</c> from the bare name, which made every
+        /// interface property class-kinded — <c>Integer</c> included — silently. The analyzer
+        /// now records a type for every interface property it visits (an unknown name is a
+        /// diagnostic there, as it is for a class property), so a null here means an interface
+        /// property reached the IR without being analysed: a compiler bug, reported as one in
+        /// every build. Not <c>Debug.Assert</c>: the suite runs Release, where that compiles
+        /// away. A thrown exception is how this builder already refuses what it cannot lower.</para>
+        ///
+        /// <para>Internal and static so a test can reach the refusal directly — no parseable
+        /// program can.</para>
+        /// </summary>
+        internal static TypeInfo InterfacePropertyType(TypeInfo resolved, string interfaceName, PropertyNode prop)
+        {
+            if (resolved != null) return resolved;
+
+            throw new InvalidOperationException(
+                $"Internal compiler error: interface property '{interfaceName}.{prop?.Name}' "
+                + $"(declared As '{prop?.PropertyType?.Name ?? "<none>"}') reached the IR builder with no "
+                + "type from semantic analysis. Refusing to invent one (ADR-0005 D3).");
+        }
+
+        /// <summary>
         /// Gets TypeInfo from a type name string for built-in types
         /// </summary>
         private TypeInfo GetTypeInfoFromName(string typeName)
@@ -2971,15 +3448,54 @@ namespace BasicLang.Compiler.IR
 
             // Determine loop variable type - use inline type if specified, otherwise use start value type
             TypeInfo loopVarType = startValue.Type;
+
+            // ⚠ THE TWO SPELLINGS ARE DIFFERENT STATEMENTS AND MUST NOT SHARE A GUARD.
+            // `For i As Integer = 1 To 3` DECLARES i — it introduces a loop-scoped variable
+            // that SHADOWS any same-named field or module global, which is VB's rule and what
+            // every backend already did. `For i = 1 To 3` declares nothing; it drives whatever
+            // i already denotes. Measured on all four backends against the pre-change build:
+            // with a module-level `Dim g`, a `For g As Integer` loop in another Sub leaves g
+            // at 0 (correct: it shadowed) while a `For g` loop leaves it at 4 (correct: it
+            // drove the global). Collapsing both into one storage-resolving guard broke the
+            // second and would equally have broken the first in the other direction.
             if (!string.IsNullOrEmpty(node.VariableType))
             {
                 loopVarType = GetTypeInfoFromName(node.VariableType) ?? startValue.Type;
-                // Add to local variables since this is an inline declaration
-                var localVar = new IRVariable(node.Variable, loopVarType, 0);
+
+                // The inline declaration: always its own local, deduped only against itself.
+                var declared = new IRVariable(node.Variable, loopVarType, 0);
                 if (!_currentFunction.LocalVariables.Any(v => v.Name == node.Variable))
                 {
-                    _currentFunction.LocalVariables.Add(localVar);
+                    _currentFunction.LocalVariables.Add(declared);
                 }
+            }
+
+            // ⛔ THE INDUCTION VARIABLE NEEDS STORAGE, AND THE INFERRED FORM USED TO GET NONE.
+            // This registration lived INSIDE the `VariableType` branch above, so
+            // `For i As Integer = 1 To n` worked and `For i = 1 To n` — the ordinary VB
+            // spelling — produced a loop over a variable no backend had declared. Measured on
+            // ALL FOUR backends, compiled and run:
+            //   C#     CS0103: The name 'i' does not exist in the current context (×5)
+            //   C++    error: use of undeclared identifier 'i'  at  `i = 1;`
+            //   JS     ReferenceError: i is not defined         at  `i = 1;`
+            //   MSIL   InvalidProgramException  (`// WARNING: Unknown local 'i'` in the IL)
+            // One omission, four identical symptoms — every backend writes its declarations
+            // from IRFunction.LocalVariables, so this is the shared cause and not a per-backend
+            // gap. It is NOT the For Each situation: there IRBuilder deliberately keeps the
+            // element variable out of the list because `foreach`/`for(:)` declares it in the
+            // target language. A counted For has no such construct; each backend emits a bare
+            // assignment.
+            //
+            // ⚠ Registered only when the name does not ALREADY resolve to storage, which is
+            // exactly the resolution GetOrCreateVariable performs on the next line — and it
+            // must be asked BEFORE that call, which pushes a version of its own. Without the
+            // guard, `For Total = 1 To 3` where Total is a FIELD or a module global would
+            // acquire a same-named local and the loop would silently stop mutating the member.
+            // The already-a-local case is what keeps `Dim i As Integer = 100` followed by
+            // `For i = 1 To 3` (which works today on all four backends) unchanged.
+            else if (!ResolvesToExistingStorage(node.Variable))
+            {
+                _currentFunction.LocalVariables.Add(new IRVariable(node.Variable, loopVarType, 0));
             }
 
             var loopVar = GetOrCreateVariable(node.Variable, loopVarType);
@@ -3851,13 +4367,27 @@ namespace BasicLang.Compiler.IR
                 // Widening the OPERANDS is the same fix, and the same reasoning, as
                 // WidenDivisionOperand in Visit(BinaryExpressionNode) — a Double-typed result
                 // over two Integer operands still divides as integers on the C-family backends.
-                // `\=` (IntDiv) is excluded there and is excluded here: it must keep truncating.
+                // `\=` (IntDiv) is excluded from that widening here as it is there.
                 var resultType = currentValue.Type;
                 if (op == BinaryOpKind.Div)
                 {
                     resultType = new TypeInfo("Double", TypeKind.Primitive);
                     currentValue = WidenDivisionOperand(currentValue, resultType);
                     value = WidenDivisionOperand(value, resultType);
+                }
+                else if (op == BinaryOpKind.IntDiv)
+                {
+                    // ADR-0005 D1, the same conversion as binary `\` — so that NO IntDiv leaves
+                    // IRBuilder with a floating operand, whichever site built it. A converted
+                    // divide is Long, as the analyzer types `a \ b`; the store coercion below
+                    // then narrows or widens it to the target. (⚠ Unreachable from source
+                    // today: the lexer has no `\=` token, so `d \= 2` is a parse error.)
+                    var convertedLeft = ConvertIntegerDivisionOperand(currentValue);
+                    var convertedRight = ConvertIntegerDivisionOperand(value);
+                    if (!ReferenceEquals(convertedLeft, currentValue) || !ReferenceEquals(convertedRight, value))
+                        resultType = new TypeInfo("Long", TypeKind.Primitive);
+                    currentValue = convertedLeft;
+                    value = convertedRight;
                 }
 
                 var tempName = _currentFunction.GetNextTempName();
@@ -3883,13 +4413,27 @@ namespace BasicLang.Compiler.IR
                 var foreignTarget = new IRVariable(idExpr.Name, new TypeInfo(idExpr.Name, TypeKind.Foreign));
                 EmitInstruction(new IRAssignment(foreignTarget, value));
             }
+            else if (node.Target is IdentifierExpressionNode accessorTarget
+                     && AccessorMemberOf(accessorTarget) is { } accessor)
+            {
+                // ⭐ ADR-0007: a bare accessor-backed property WRITE runs its Set accessor — the
+                // IRFieldStore `Me.P = v` / `Box.P = v` produces (the member arm below), never an
+                // IRAssignment, and never a rename of the value to `P` either (a renamed value is
+                // a variable write to every consumer). See AccessorMemberOf.
+                EmitInstruction(new IRFieldStore(AccessorMemberReceiver(accessor), accessor.MemberName, value));
+            }
             else if (node.Target is IdentifierExpressionNode idExpr2)
             {
                 // Check if this identifier is an imported symbol from another module
                 var symbol = _semanticAnalyzer.GetNodeSymbol(idExpr2);
 
                 IRVariable targetVar;
-                if (symbol != null && symbol.IsImported && !string.IsNullOrEmpty(symbol.SourceModule))
+                if (ModuleMemberSymbolOf(idExpr2) is Symbol moduleMember)
+                {
+                    // A Module's variable, its own or another's — the same global the read binds.
+                    targetVar = GlobalReference(moduleMember.Name, moduleMember.OwningModule, value.Type);
+                }
+                else if (symbol != null && symbol.IsImported && !string.IsNullOrEmpty(symbol.SourceModule))
                 {
                     // This is an imported variable from another module
                     targetVar = new IRVariable(idExpr2.Name, value.Type);
@@ -3906,6 +4450,19 @@ namespace BasicLang.Compiler.IR
                 if (!TryRenameToVariable(value, targetVar))
                 {
                     // For constants, variables, or other values, emit an assignment
+                    EmitInstruction(new IRAssignment(targetVar, value));
+                }
+            }
+            else if (node.Target is MemberAccessExpressionNode moduleMemberExpr
+                     && ModuleMemberSymbolOf(moduleMemberExpr) is Symbol moduleMemberTarget)
+            {
+                // `Helpers.Value = 13`: a write to a Module's variable is an assignment to that
+                // global — the SAME one the read binds, so the two cannot disagree about where it
+                // lives. Never an IRFieldStore on a phantom receiver ("cannot use arrow operator
+                // on a type" was the C++ reading of that).
+                var targetVar = GlobalReference(moduleMemberTarget.Name, moduleMemberTarget.OwningModule, value.Type);
+                if (!TryRenameToVariable(value, targetVar))
+                {
                     EmitInstruction(new IRAssignment(targetVar, value));
                 }
             }
@@ -4212,11 +4769,35 @@ namespace BasicLang.Compiler.IR
                 // IRPrettyPrinter and CppCapabilityChecker, so one insertion here moves every
                 // consumer at once instead of repeating the coercion per backend.
                 //
-                // IntDiv is deliberately excluded — `\` must keep truncating.
+                // IntDiv is deliberately excluded from this WIDENING — `\` is the integer
+                // operator, and its floating operands go the other way (next block).
                 if (opKind == BinaryOpKind.Div && resultType != null && resultType.IsFloatingPoint())
                 {
                     left = WidenDivisionOperand(left, resultType);
                     right = WidenDivisionOperand(right, resultType);
+                }
+
+                // ⛔ ADR-0005 D1: a FLOATING operand of `\` is converted to Long, rounding half
+                // to even, BEFORE the divide — VB.NET's rule, and the one the analyzer already
+                // states by typing the result Long. See ConvertIntegerDivisionOperand.
+                if (opKind == BinaryOpKind.IntDiv)
+                {
+                    var convertedLeft = ConvertIntegerDivisionOperand(left);
+                    var convertedRight = ConvertIntegerDivisionOperand(right);
+
+                    // ⚠ A `When` guard is never analyzed (SemanticAnalyzer.Visit(CaseClauseNode)
+                    // skips node.Patterns), so its `\` arrives untyped while its variable operands
+                    // still carry their declared types — the conversion fires, the result type
+                    // does not. Give a converted divide the type the analyzer gives it everywhere
+                    // else: Long. MSIL's operand coercion reads it — measured on `When y \ n`
+                    // (Integer n), without it the guard emitted `conv.i8; ldloc n; div`, an
+                    // int64/int32 mix ECMA-335 does not allow and the x64 JIT merely tolerates.
+                    if (resultType == null
+                        && (!ReferenceEquals(convertedLeft, left) || !ReferenceEquals(convertedRight, right)))
+                        resultType = new TypeInfo("Long", TypeKind.Primitive);
+
+                    left = convertedLeft;
+                    right = convertedRight;
                 }
 
                 result = new IRBinaryOp(tempName, opKind, left, right, resultType);
@@ -4244,10 +4825,58 @@ namespace BasicLang.Compiler.IR
             return cast;
         }
 
+        /// <summary>
+        /// Converts a FLOATING (Single/Double) operand of <c>\</c> to Long, rounding half to
+        /// even; any other operand is returned unchanged. ADR-0005 D1: <c>7.5 \ 2</c> is
+        /// <c>CLng(7.5) \ 2</c> = 4, <c>-7.5 \ 2</c> = -4, <c>8.5 \ 2</c> = 4 (8.5 → 8), and the
+        /// integral divide then truncates toward zero (<c>-7 \ 2</c> = -3).
+        ///
+        /// <para>⛔ ONE conversion, here, so that after <c>IRBuilder</c> NO <c>IntDiv</c> has a
+        /// floating operand and no backend implements the rule itself. Measured before it, one
+        /// program printed three answers: <c>7.5 \ 2</c> was 4 on MSIL (its ADR-0004 D4 operand
+        /// coercion already converted), 3 on C++ and JavaScript (they divided in floating point
+        /// and truncated the quotient) and 3.75 on C# (plain <c>/</c>, no truncation at
+        /// all).</para>
+        ///
+        /// <para>⚠ An <see cref="IRCast"/>, the node every implicit numeric narrowing lowers to
+        /// (<see cref="CoerceToDeclaredType"/>), NOT the <c>IRCall</c> that a written
+        /// <c>CLng(x)</c> lowers to. The rounding is the same on every backend — each renders a
+        /// floating→integral IRCast half-to-even (<c>Convert.ToInt64</c>,
+        /// <c>std::nearbyint</c>, the <c>__blCInt</c> helper, <c>Math::Round</c> + <c>conv.i8</c>)
+        /// — but the JavaScript backend deliberately has no <c>CLng</c> lowering (BL7003), so an
+        /// IRCall would have turned a wrong answer into a refused build there.</para>
+        ///
+        /// <para>⛔ A CONSTANT operand is still wrapped, never folded to a Long literal as
+        /// <see cref="CoerceToDeclaredType"/> would: the JavaScript renderer refuses every
+        /// <c>long</c> constant (BL7003), so <c>7.5 \ 2</c> would stop compiling there.</para>
+        /// </summary>
+        private IRValue ConvertIntegerDivisionOperand(IRValue operand)
+        {
+            var sourceType = operand?.Type;
+            if (sourceType == null || !sourceType.IsFloatingPoint())
+                return operand;
+
+            var longType = new TypeInfo("Long", TypeKind.Primitive);
+            var castName = _currentFunction.GetNextTempName();
+            var cast = new IRCast(castName, operand, sourceType, longType,
+                                  DetermineCastKind(sourceType, longType));
+            EmitInstruction(cast);
+            return cast;
+        }
+
         public void Visit(UnaryExpressionNode node)
         {
             node.Operand.Accept(this);
             var operand = _expressionResult;
+
+            // Unary '+' is the identity on a numeric operand (the analyzer has already checked
+            // it is numeric and typed the node as the operand's type) — there is no IR op for it,
+            // so the operand IS the result. `Case +7`, `x = +y`.
+            if (node.Operator == "+")
+            {
+                _expressionResult = operand;
+                return;
+            }
 
             var resultType = _semanticAnalyzer.GetNodeType(node);
             var opKind = MapUnaryOperator(node.Operator);
@@ -4390,6 +5019,28 @@ namespace BasicLang.Compiler.IR
                 return;
             }
 
+            // A variable or constant of a Module in this unit, resolved by the analyzer (its own
+            // module's by lexical scope, another module's by the cross-module fallback). Bound
+            // to the real global, whatever the declaration order.
+            if (ModuleMemberSymbolOf(node) is Symbol moduleMember)
+            {
+                _expressionResult = GlobalReference(moduleMember.Name, moduleMember.OwningModule,
+                    _semanticAnalyzer.GetNodeType(node));
+                return;
+            }
+
+            // ⭐ ADR-0007: a bare accessor-backed property READ runs its Get accessor — the node
+            // `Me.Tick` / `Box.Tick` produces (Visit(MemberAccessExpressionNode)), never a
+            // variable read. See AccessorMemberOf.
+            if (AccessorMemberOf(node) is { } accessor)
+            {
+                var read = new IRFieldAccess(_currentFunction.GetNextTempName(),
+                    AccessorMemberReceiver(accessor), accessor.MemberName, _semanticAnalyzer.GetNodeType(node));
+                EmitInstruction(read);
+                _expressionResult = read;
+                return;
+            }
+
             // Check if this identifier was resolved as an imported symbol
             var symbol = _semanticAnalyzer.GetNodeSymbol(node);
             if (symbol != null && symbol.IsImported && !string.IsNullOrEmpty(symbol.SourceModule))
@@ -4424,6 +5075,18 @@ namespace BasicLang.Compiler.IR
                 && _semanticAnalyzer.NetEnumConstants.TryGetValue(node, out var enumConstant))
             {
                 _expressionResult = new IRConstant(enumConstant.Value, enumConstant.Type);
+                return;
+            }
+
+            // `Helpers.Value`: the analyzer resolved this to a Module's variable or constant, so
+            // it IS that global — not a field read on a receiver. ⛔ Before the receiver visit,
+            // which would materialize a phantom variable named after the module. Measured before:
+            // `t0 = Helpers.Value;` on C++ ("'Helpers' was not declared"), ReferenceError on
+            // JavaScript, MissingFieldException 'System.Object.Value' on MSIL.
+            if (ModuleMemberSymbolOf(node) is Symbol moduleMember)
+            {
+                _expressionResult = GlobalReference(moduleMember.Name, moduleMember.OwningModule,
+                    _semanticAnalyzer.GetNodeType(node));
                 return;
             }
 
@@ -4527,6 +5190,21 @@ namespace BasicLang.Compiler.IR
 
                     EmitInstruction(baseCall);
                     _expressionResult = baseCall;
+                    return;
+                }
+
+                // `Helpers.Twice(4)`: the analyzer resolved the callee to a Module's PROCEDURE,
+                // so this is a plain call to it — not a method on a receiver. ⛔ Before the
+                // receiver visit, which materialized a phantom variable named after the module
+                // and lowered an INSTANCE call on it: `t0 = Helpers.Twice(4);` on C++ ("'Helpers'
+                // was not declared"), ReferenceError on JavaScript, `callvirt ... System.Object::
+                // 'Twice'` (MissingMethodException) on MSIL — and C# ran it only by re-emitting
+                // the text. Measured in the single-file AND the multi-file path alike.
+                if (_semanticAnalyzer.GetNodeSymbol(memberExpr) is Symbol moduleProcedure
+                    && (moduleProcedure.Kind == SymbolKind.Function || moduleProcedure.Kind == SymbolKind.Subroutine)
+                    && !string.IsNullOrEmpty(moduleProcedure.OwningModule))
+                {
+                    EmitProcedureCall(node, moduleProcedure, memberExpr.MemberName, tempName, returnType);
                     return;
                 }
 
@@ -4717,7 +5395,21 @@ namespace BasicLang.Compiler.IR
                         var refKind = parameters != null && call.Arguments.Count - 1 < parameters.Count
                             ? parameters[call.Arguments.Count - 1].RefKind
                             : BasicLang.Net.NetRefKind.None;
-                        call.ByRefArguments.Add(refKind != BasicLang.Net.NetRefKind.None);
+
+                        // ⛔ A USER `Shared` method's ByRef came from NOWHERE on this arm: only the
+                        // .NET descriptor above was consulted, so `Util.Bump(v)` against
+                        // `Shared Sub Bump(ByRef n)` was IR claiming a by-value call. The C# backend
+                        // dropped the `ref` (CS1620), and — worse — the optimizer trusted the claim
+                        // and kept `v + 1` across the call: C++ and MSIL printed b=42 where 43 is
+                        // right, measured on BOTH pipelines. Read from the declaration exactly as
+                        // the instance arm below does. `NetArgumentRefKinds` stays None for a user
+                        // callee: it is the .NET marshalling list, and a VB ByRef records nothing
+                        // there (CSharpBackend then spells it `ref`, VB's only form).
+                        var userParameters = call.ResolvedNetTarget == null ? staticCalleeSymbol?.Parameters : null;
+                        var userByRef = userParameters != null && call.Arguments.Count - 1 < userParameters.Count
+                            && userParameters[call.Arguments.Count - 1].IsByRef;
+
+                        call.ByRefArguments.Add(refKind != BasicLang.Net.NetRefKind.None || userByRef);
                         call.NetArgumentRefKinds.Add(refKind);
                     }
 
@@ -4858,46 +5550,10 @@ namespace BasicLang.Compiler.IR
                     return;
                 }
 
-                // Get function symbol to check source module and ByRef parameters
-                var funcSymbol = symbol;
-
-                // Determine qualified function name (add module prefix if imported)
-                // Use funcSymbol.Name for correct casing (BASIC is case-insensitive, C# is not)
-                var functionName = funcSymbol?.Name ?? idExpr.Name;
-                if (funcSymbol != null && funcSymbol.IsImported && !string.IsNullOrEmpty(funcSymbol.SourceModule)
-                    && !IsCurrentClassMethod(functionName))
-                {
-                    // Prefix with source module name for imported functions.
-                    //
-                    // ⛔ ...but NEVER when the class being built declares that method itself. One
-                    // symbol table entry per name means the last declaration wins, so without this
-                    // guard an unqualified self-call is emitted against whichever OTHER class
-                    // happened to declare the same name last. See IsCurrentClassMethod.
-                    functionName = $"{funcSymbol.SourceModule}.{funcSymbol.Name}";
-                }
-
-                // Regular function call
-                var call = new IRCall(tempName, functionName, returnType);
-                call.GenericArguments.AddRange(BuildGenericArgTypes(node.GenericArguments));
-
-                for (int i = 0; i < node.Arguments.Count; i++)
-                {
-                    node.Arguments[i].Accept(this);
-                    call.Arguments.Add(CoerceToParameterType(_expressionResult, funcSymbol, i));
-
-                    // Check if this parameter is ByRef
-                    bool isByRef = false;
-                    if (funcSymbol?.Parameters != null && i < funcSymbol.Parameters.Count)
-                    {
-                        isByRef = funcSymbol.Parameters[i].IsByRef;
-                    }
-                    call.ByRefArguments.Add(isByRef);
-                }
-
-                AppendOmittedOptionalArguments(call.Arguments, call.ByRefArguments, funcSymbol);
-
-                EmitInstruction(call);
-                _expressionResult = call;
+                // A user procedure: same unit, another Module, or another file — one path.
+                // (The same-class guard for an imported name lives in ProcedureCallTarget.)
+                EmitProcedureCall(node, symbol, idExpr.Name, tempName, returnType);
+                return;
             }
             else
             {
@@ -4921,6 +5577,40 @@ namespace BasicLang.Compiler.IR
                 EmitInstruction(call);
                 _expressionResult = call;
             }
+        }
+
+        /// <summary>
+        /// Emits a call to a user procedure — the arguments coerced to the declared parameter
+        /// types, ByRef marked from the declaration, omitted Optionals filled — under the IR name
+        /// and owner <see cref="ProcedureCallTarget"/> decides. Shared by the bare-identifier
+        /// callee and the <c>Module.Procedure</c> callee, so a qualified call cannot lose what a
+        /// bare one has: before this, <c>Helpers.Inc(x)</c> went through the INSTANCE arm and
+        /// dropped its ByRef marker on every backend (CS1620 on C#).
+        /// </summary>
+        private void EmitProcedureCall(CallExpressionNode node, Symbol funcSymbol, string writtenName,
+            string tempName, TypeInfo returnType)
+        {
+            var (functionName, calleeModule) = ProcedureCallTarget(funcSymbol, funcSymbol?.Name ?? writtenName);
+            var call = new IRCall(tempName, functionName, returnType) { CalleeModule = calleeModule };
+            call.GenericArguments.AddRange(BuildGenericArgTypes(node.GenericArguments));
+
+            for (int i = 0; i < node.Arguments.Count; i++)
+            {
+                node.Arguments[i].Accept(this);
+                call.Arguments.Add(CoerceToParameterType(_expressionResult, funcSymbol, i));
+
+                bool isByRef = false;
+                if (funcSymbol?.Parameters != null && i < funcSymbol.Parameters.Count)
+                {
+                    isByRef = funcSymbol.Parameters[i].IsByRef;
+                }
+                call.ByRefArguments.Add(isByRef);
+            }
+
+            AppendOmittedOptionalArguments(call.Arguments, call.ByRefArguments, funcSymbol);
+
+            EmitInstruction(call);
+            _expressionResult = call;
         }
 
         public void Visit(ArrayAccessExpressionNode node)

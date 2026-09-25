@@ -36,10 +36,9 @@ namespace VisualGameStudio.Tests.Compiler;
 /// <item>A <c>Structure</c> field initializer does not PARSE at all.</item>
 /// </list>
 ///
-/// <para>⚠ Two differences from JavaScript in the headline output are NOT this fix's and stay:
-/// <c>CStr(Double)</c> prints <c>2.500000</c> on C++ and <c>CStr(Boolean)</c> prints <c>True</c>,
-/// both long-recorded formatting divergences. The tests assert C++'s own spelling rather than
-/// normalising it away.</para>
+/// <para>⚠ <c>CStr(Boolean)</c> prints <c>True</c> on C++ against JavaScript's <c>true</c>, a
+/// long-recorded divergence not this fix's. (<c>CStr(Double)</c> printed <c>2.500000</c> here
+/// until C++ got .NET's formatter — CppDoubleFormattingTests; it now prints <c>2.5</c>.)</para>
 /// </summary>
 [TestFixture]
 [Category("Integration")]
@@ -69,9 +68,8 @@ public class CppFieldInitializerTests
             End Module
             """);
 
-        Assert.That(BclE2E.CompileRun(cpp), Is.EqualTo("5,hi,2.500000,1.500000,True\n"),
-            "2.500000 and True are C++'s own CStr spellings — a separate, pre-existing "
-            + "divergence from JavaScript's 2.5 and true, deliberately not normalised here");
+        Assert.That(BclE2E.CompileRun(cpp), Is.EqualTo("5,hi,2.5,1.5,True\n"),
+            "True is C++'s own CStr(Boolean) spelling, as it is .NET's");
     }
 
     /// <summary>
@@ -230,5 +228,162 @@ public class CppFieldInitializerTests
             Assert.That(cpp, Does.Not.Contain("int32_t N ="), cpp);
             Assert.That(BclE2E.CompileRun(cpp), Is.EqualTo("7\n"));
         });
+    }
+
+    /// <summary>
+    /// ⛔ This is the row that failed C3688 ("invalid literal suffix 'f'") before the float-literal
+    /// fix: an INTEGRAL Single field initializer (<c>= 400</c>, and the commonest one, <c>= 0</c>)
+    /// emitted <c>400f</c>/<c>0f</c> — no '.' or exponent in front of the suffix — and the C++
+    /// build failed outright. Run end to end, not just compiled, because a text-only assertion
+    /// cannot tell a build failure from a build that produces the wrong number.
+    /// </summary>
+    [Test]
+    public void ASingleField_WithAnIntegralInitializer_BuildsAndPrints()
+    {
+        var cpp = BclE2E.CompileToCppOptimized("""
+            Class Box
+             Public F400 As Single = 400
+             Public F0 As Single = 0
+            End Class
+
+            Module M
+             Sub Main()
+              Dim c As New Box()
+              PrintLine(CStr(c.F400) & "," & CStr(c.F0))
+             End Sub
+            End Module
+            """);
+
+        Assert.That(BclE2E.CompileRun(cpp), Is.EqualTo("400,0\n"));
+    }
+
+    /// <summary>
+    /// ⛔ Before the fix, <c>-0.0</c> emitted the INTEGER literal <c>-0</c> (unary minus on an int
+    /// literal), which is <c>+0.0</c> once stored in a float slot — the sign was silently lost. A
+    /// text assertion cannot catch that (<c>-0</c> and <c>-0.0</c> both read as "the same number"
+    /// to a human skim); only <c>1 / NZ</c> printing <c>-inf</c> rather than <c>inf</c> proves the
+    /// sign survived, for BOTH Double and Single.
+    /// </summary>
+    [Test]
+    public void NegativeZero_KeepsItsSign_ForDoubleAndSingle()
+    {
+        var cpp = BclE2E.CompileToCppOptimized("""
+            Class Box
+             Public NZD As Double = -0.0
+             Public NZF As Single = -0.0
+            End Class
+
+            Module M
+             Sub Main()
+              Dim c As New Box()
+              Dim d As Double = 1.0 / c.NZD
+              Dim f As Single = 1.0F / c.NZF
+              PrintLine(CStr(d) & "," & CStr(f))
+             End Sub
+            End Module
+            """);
+
+        var output = BclE2E.CompileRun(cpp);
+        Assert.Multiple(() =>
+        {
+            // .NET's spelling since C++ got its formatter (was printf's -inf / inf).
+            Assert.That(output, Does.StartWith("-Infinity,"), output);
+            Assert.That(output, Does.Not.Contain(",Infinity"), "the Single half must be negative too:\n" + output);
+        });
+    }
+
+    /// <summary>
+    /// ⛔ NaN compares unequal to itself by IEEE 754 rule — the one property every NaN bit pattern
+    /// shares, so it exercises the whole family without pinning a specific payload/sign (which
+    /// <see cref="BasicLang.Compiler.CodeGen.CPlusPlus.CppCodeGenerator.CppFloatLiteral"/>'s own
+    /// doc comment explicitly declines to chase). Both types, run end to end.
+    /// </summary>
+    [Test]
+    public void NaN_IsNeverEqualToItself_ForDoubleAndSingle()
+    {
+        var cpp = BclE2E.CompileToCppOptimized("""
+            Class Box
+             Public ND As Double = (1.0E+300 * 1.0E+300) - (1.0E+300 * 1.0E+300)
+             Public NF As Single = (1.0E+30F * 1.0E+30F) - (1.0E+30F * 1.0E+30F)
+            End Class
+
+            Module M
+             Sub Main()
+              Dim c As New Box()
+              PrintLine(CStr(c.ND <> c.ND) & "," & CStr(c.NF <> c.NF))
+             End Sub
+            End Module
+            """);
+
+        Assert.That(BclE2E.CompileRun(cpp), Is.EqualTo("True,True\n"));
+    }
+
+    /// <summary>
+    /// ⛔ ±Infinity, both types, run end to end and asserted on the backend's OWN printed spelling
+    /// (not a hardcoded "inf"/"Infinity") — this fixture already does that for
+    /// <c>CStr(Boolean)</c>/<c>CStr(Double)</c> divergences from JavaScript, so infinity gets the
+    /// same treatment rather than a guessed literal.
+    /// </summary>
+    [Test]
+    public void PositiveAndNegativeInfinity_PrintForDoubleAndSingle()
+    {
+        var cpp = BclE2E.CompileToCppOptimized("""
+            Class Box
+             Public PD As Double = 1.0E+300 * 1.0E+300
+             Public ND As Double = -1.0E+300 * 1.0E+300
+            End Class
+
+            Module M
+             Sub Main()
+              Dim c As New Box()
+              Dim a As Single = 1.0E+30F
+              Dim pf As Single = a * a
+              Dim nf As Single = -pf
+              PrintLine(CStr(c.PD) & "," & CStr(c.ND) & "," & CStr(pf) & "," & CStr(nf))
+             End Sub
+            End Module
+            """);
+
+        var output = BclE2E.CompileRun(cpp);
+        var parts = output.TrimEnd('\n').Split(',');
+        Assert.That(parts, Has.Length.EqualTo(4), output);
+        Assert.Multiple(() =>
+        {
+            Assert.That(parts[1], Is.EqualTo("-" + parts[0]), "Double: negative must be '-' + positive:\n" + output);
+            Assert.That(parts[3], Is.EqualTo("-" + parts[2]), "Single: negative must be '-' + positive:\n" + output);
+            Assert.That(parts[0], Does.Contain("inf").IgnoreCase, "the backend's own +Infinity spelling:\n" + output);
+        });
+    }
+
+    /// <summary>
+    /// ⛔ The de-DE end-to-end headline: before the fix this printed <c>2</c> (then spelled
+    /// <c>2.000000</c>), not <c>2.5</c> — <c>V = 2,5;</c> is the COMMA OPERATOR in C++ (evaluate <c>2</c>, discard
+    /// it, keep the enclosing expression's value), so the program BUILT and silently held the
+    /// wrong number. Generation happens under de-DE (<c>[SetCulture]</c> covers the whole
+    /// pipeline, matching what a de-DE machine's own CurrentCulture would have done before this
+    /// fix); running it needs no culture at all, since C++ has already been emitted by then.
+    /// </summary>
+    [Test]
+    [SetCulture("de-DE")]
+    public void UnderDeDECulture_AssignedDoubleValue_RunsAndPrintsTheRightNumber()
+    {
+        var cpp = BclE2E.CompileToCppOptimized("""
+            Class Box
+             Public V As Double = 0.0
+             Public Sub SetIt()
+              V = 2.5
+             End Sub
+            End Class
+
+            Module M
+             Sub Main()
+              Dim c As New Box()
+              c.SetIt()
+              PrintLine(CStr(c.V))
+             End Sub
+            End Module
+            """);
+
+        Assert.That(BclE2E.CompileRun(cpp), Is.EqualTo("2.5\n"));
     }
 }

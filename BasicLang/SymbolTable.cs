@@ -210,8 +210,59 @@ public class TypeInfo
             {
                 return other.Interfaces.Any(i => Equals(i));
             }
-            
+
             return false;
+        }
+
+        /// <summary>
+        /// The member named <paramref name="name"/> on this type, or — failing that — on the
+        /// nearest base class that declares one. <see cref="Members"/> holds a type's OWN members
+        /// only, so every lookup that should see an INHERITED member has to walk.
+        ///
+        /// <para>⛔ Nothing in the front end walked, and the language's most basic inheritance was
+        /// unusable because of it: a derived class's method naming an inherited field, Const,
+        /// property or Shared field was refused on all four backends, and so was
+        /// <c>obj.InheritedMember</c> — measured. Only METHODS appeared to work, and not by
+        /// inheritance: pass 1 flattens every procedure signature into the GLOBAL scope by bare
+        /// name, so a bare inherited call found it there.</para>
+        ///
+        /// <para>⚠ A PRIVATE member is skipped at depth &gt; 0 and honoured at depth 0: private is
+        /// private to the declaring class. Without that, whether a base's Private field resolved
+        /// depended on declaration order (pass 1 filters Private out of <see cref="Members"/>,
+        /// pass 2 does not), and admitting one turned a front-end acceptance into a CS0122 or a
+        /// clang private-access failure in the emitted code.</para>
+        ///
+        /// <para>⚠ The depth guard is not decoration: a base is a NAME in the source and nothing
+        /// validates that the chain is acyclic, so <c>Class A Inherits B</c> against
+        /// <c>Class B Inherits A</c> would spin here forever. Failing to resolve a member is a
+        /// diagnostic; hanging the compiler is not.</para>
+        ///
+        /// <para>⚠ A re-resolution of each base BY NAME (through the analyzer's type table) was
+        /// here and is gone: it survived mutation. <see cref="BaseType"/> already holds the
+        /// registered type object, so the lookup could only ever return what the walk already
+        /// had — and in the one case it was meant for, a synthetic member-less stand-in minted
+        /// for an unresolved base, the name is not in the table either. The IR builder's own base
+        /// walks DO re-resolve, because they walk a chain of names rather than of types.</para>
+        /// </summary>
+        public Symbol ResolveMember(string name)
+        {
+            if (string.IsNullOrEmpty(name)) return null;
+
+            var guard = 0;
+            for (var type = this; type != null && guard++ < 64; )
+            {
+                if (type.Members != null
+                    && type.Members.TryGetValue(name, out var member)
+                    && member != null
+                    && (ReferenceEquals(type, this) || member.Access != AccessModifier.Private))
+                {
+                    return member;
+                }
+
+                type = type.BaseType;
+            }
+
+            return null;
         }
         
         public bool Equals(TypeInfo other)
@@ -360,6 +411,31 @@ public class TypeInfo
         // Access control
         public AccessModifier Access { get; set; }
 
+        /// <summary>
+        /// For a <see cref="SymbolKind.Property"/> declared in BasicLang source: reading or
+        /// writing it may run user code (<c>PropertyNode.IsAccessorBacked</c> — a Get/Set block,
+        /// or Overridable/Overrides). False for every other symbol, a plain auto-property and a
+        /// built-in or .NET property included.
+        ///
+        /// <para>⭐ ADR-0007: <c>IRBuilder</c> lowers a bare name bound to such a property to the
+        /// node its qualified form produces (<c>IRFieldStore</c>/<c>IRFieldAccess</c>, both calls
+        /// to the kill vocabulary), never to an <c>IRAssignment</c>/<c>IRVariable</c>. Recorded
+        /// on the symbol because the analyzer's binding is all the IR builder has at the use,
+        /// whatever the declaration order and whichever file declares the class.</para>
+        /// </summary>
+        public bool IsAccessorBacked { get; set; }
+
+        /// <summary>
+        /// For a class <see cref="SymbolKind.Property"/>: declared <c>Shared</c>. False for every
+        /// other symbol.
+        ///
+        /// <para>Read by <c>IRBuilder</c>'s bare-name lowering (ADR-0007): the qualified form's
+        /// receiver is <c>Me</c> for an instance property but the DECLARING CLASS for a Shared one
+        /// (<c>Box.P</c>) — <c>this.P</c> on a static member is CS0176 on C#, and on JavaScript
+        /// reads a property of the INSTANCE where the static lives on the class.</para>
+        /// </summary>
+        public bool IsShared { get; set; }
+
         // For extern declarations
         public bool IsExtern { get; set; }
         public Dictionary<string, string> ExternImplementations { get; set; }
@@ -367,6 +443,29 @@ public class TypeInfo
         // For imported symbols (from other modules)
         public bool IsImported { get; set; }
         public string SourceModule { get; set; }
+
+        /// <summary>
+        /// The <c>Module</c> block that DECLARES this module-level variable or constant, or null
+        /// for anything else (a local, a parameter, a class member, a file-scope declaration).
+        ///
+        /// <para>⛔ This is what lets a reference lower to the REAL global. Before it existed, a
+        /// qualified <c>Helpers.Value</c> fell through every resolution channel to the permissive
+        /// "any PascalCase name could be a .NET type" fallback and was typed Object, so the IR
+        /// builder emitted a field read on a phantom variable named <c>Helpers</c>: C++ said
+        /// "'Helpers' was not declared", JavaScript threw ReferenceError, MSIL threw
+        /// MissingFieldException on <c>System.Object.Value</c>, and only C# survived — by
+        /// re-emitting the text and letting csc resolve it. The UNQUALIFIED cross-module form
+        /// took the same fallback: it "worked" on C++ and JavaScript only because the emitted
+        /// bare global happened to share the name, and <c>Value + 1</c> was refused as
+        /// "requires numeric operands".</para>
+        ///
+        /// <para>⚠ Distinct from <see cref="IsImported"/>/<see cref="SourceModule"/>, which mean
+        /// "from ANOTHER compilation unit". A same-file module member is not imported, but it
+        /// lowers the same way — a global carrying its owning module — so the IR builder checks
+        /// either. <see cref="SourceModule"/> is set alongside this so the one consumer that
+        /// reads only that (the C# backend's cross-module qualification) sees the owner too.</para>
+        /// </summary>
+        public string OwningModule { get; set; }
 
         // Signature-level symbol registered from a parsed-but-not-yet-compiled
         // sibling's AST (order-independent cross-file resolution scaffolding).

@@ -73,6 +73,22 @@ namespace BasicLang.Compiler
         // Top-Level Declarations
         // ====================================================================
 
+        /// <summary>
+        /// The access a declaration gets when it names none. VB's table: a Module's (or a file's)
+        /// Functions and Subs are <b>Public</b>; its variables and constants are <b>Private</b>.
+        ///
+        /// <para>⛔ A procedure defaulted to Private here — the opposite of the language — and only
+        /// C# ever noticed, because csc is the one backend that enforces the <c>private static</c>
+        /// the C# backend emits per Module class: a plain <c>Function Twice</c> ran from any module
+        /// on C++, JavaScript and MSIL and was CS0122 on C#. Every arm that used to write
+        /// <c>Private</c> for a Function or Sub now writes this; variables, constants and nested
+        /// types keep the Private they always had.</para>
+        /// </summary>
+        private const AccessModifier ImplicitProcedureAccess = AccessModifier.Public;
+
+        /// <summary>The no-modifier default for a Dim, Const, Class, Enum or Structure member.</summary>
+        private const AccessModifier ImplicitMemberAccess = AccessModifier.Private;
+
         private ASTNode ParseTopLevelDeclaration()
         {
             SkipNewlines();
@@ -127,7 +143,7 @@ namespace BasicLang.Compiler
                 Check(TokenType.Async) || Check(TokenType.Iterator) || Check(TokenType.Inline) ||
                 Check(TokenType.Shared) || Check(TokenType.Extern))
             {
-                var access = AccessModifier.Private;  // Default for top-level
+                AccessModifier? access = null;  // none written: each arm applies its kind's default
                 bool isAsync = false;
                 bool isIterator = false;
                 bool isInline = false;
@@ -177,14 +193,14 @@ namespace BasicLang.Compiler
                             "apply to.", Peek());
 
                     var externCls = ParseClass(isExtern: true);
-                    externCls.Access = access;
+                    externCls.Access = access ?? ImplicitMemberAccess;
                     return externCls;
                 }
 
                 if (Check(TokenType.Function))
                 {
                     var func = ParseFunction();
-                    func.Access = access;
+                    func.Access = access ?? ImplicitProcedureAccess;
                     func.IsAsync = isAsync;
                     func.IsIterator = isIterator;
                     func.IsInline = isInline;
@@ -194,7 +210,7 @@ namespace BasicLang.Compiler
                 if (Check(TokenType.Sub))
                 {
                     var sub = ParseSubroutine();
-                    sub.Access = access;
+                    sub.Access = access ?? ImplicitProcedureAccess;
                     sub.IsAsync = isAsync;
                     sub.IsStatic = isStatic;
                     return sub;
@@ -204,7 +220,7 @@ namespace BasicLang.Compiler
                     var statement = ParseVariableDeclaration();
                     if (statement is VariableDeclarationNode variable)
                     {
-                        variable.Access = access;
+                        variable.Access = access ?? ImplicitMemberAccess;
                         variable.IsStatic = isStatic;
                     }
                     return statement;
@@ -214,14 +230,14 @@ namespace BasicLang.Compiler
                     var statement = ParseConstantDeclaration();
                     if (statement is ConstantDeclarationNode constant)
                     {
-                        constant.Access = access;
+                        constant.Access = access ?? ImplicitMemberAccess;
                     }
                     return statement;
                 }
                 if (Check(TokenType.Class))
                 {
                     var cls = ParseClass();
-                    cls.Access = access;
+                    cls.Access = access ?? ImplicitMemberAccess;
                     return cls;
                 }
                 if (Check(TokenType.Module))
@@ -235,13 +251,13 @@ namespace BasicLang.Compiler
                 if (Check(TokenType.Enum))
                 {
                     var en = ParseEnum();
-                    en.Access = access;
+                    en.Access = access ?? ImplicitMemberAccess;
                     return en;
                 }
                 if (Check(TokenType.Structure))
                 {
                     var st = ParseStructure();
-                    st.Access = access;
+                    st.Access = access ?? ImplicitMemberAccess;
                     return st;
                 }
                 if (Check(TokenType.MustInherit))
@@ -250,7 +266,7 @@ namespace BasicLang.Compiler
                     if (Check(TokenType.Class))
                     {
                         var cls = ParseClass();
-                        cls.Access = access;
+                        cls.Access = access ?? ImplicitMemberAccess;
                         cls.IsAbstract = true;
                         return cls;
                     }
@@ -557,8 +573,10 @@ namespace BasicLang.Compiler
                 SkipNewlines();
             }
 
-            // Handle access modifiers (Public, Private, Friend)
-            var access = AccessModifier.Private; // Default
+            // Handle access modifiers (Public, Private, Friend). None written means the
+            // member KIND's default — Public for a procedure, Private for the rest (see
+            // ImplicitProcedureAccess) — applied at each arm below.
+            AccessModifier? access = null;
             if (Check(TokenType.Public) || Check(TokenType.Private) || Check(TokenType.Friend))
             {
                 if (Match(TokenType.Public)) access = AccessModifier.Public;
@@ -582,27 +600,27 @@ namespace BasicLang.Compiler
                     var func = ParseFunction();
                     func.IsAsync = isAsync;
                     func.IsIterator = isIterator;
-                    func.Access = access;
+                    func.Access = access ?? ImplicitProcedureAccess;
                     return func;
                 }
                 if (Check(TokenType.Sub))
                 {
                     var sub = ParseSubroutine();
                     sub.IsAsync = isAsync;
-                    sub.Access = access;
+                    sub.Access = access ?? ImplicitProcedureAccess;
                     return sub;
                 }
             }
             if (Check(TokenType.Function))
             {
                 var func = ParseFunction();
-                func.Access = access;
+                func.Access = access ?? ImplicitProcedureAccess;
                 return func;
             }
             if (Check(TokenType.Sub))
             {
                 var sub = ParseSubroutine();
-                sub.Access = access;
+                sub.Access = access ?? ImplicitProcedureAccess;
                 return sub;
             }
             if (Check(TokenType.Dim))
@@ -610,7 +628,7 @@ namespace BasicLang.Compiler
                 var statement = ParseVariableDeclaration();
                 if (statement is VariableDeclarationNode varDecl)
                 {
-                    varDecl.Access = access;
+                    varDecl.Access = access ?? ImplicitMemberAccess;
                 }
                 return statement;
             }
@@ -619,7 +637,7 @@ namespace BasicLang.Compiler
                 var statement = ParseConstantDeclaration();
                 if (statement is ConstantDeclarationNode constDecl)
                 {
-                    constDecl.Access = access;
+                    constDecl.Access = access ?? ImplicitMemberAccess;
                 }
                 return statement;
             }
@@ -628,7 +646,7 @@ namespace BasicLang.Compiler
             if (Check(TokenType.Class))
             {
                 var cls = ParseClass();
-                cls.Access = access;
+                cls.Access = access ?? ImplicitMemberAccess;
                 return cls;
             }
             if (Check(TokenType.Module))
@@ -638,13 +656,13 @@ namespace BasicLang.Compiler
             if (Check(TokenType.Enum))
             {
                 var en = ParseEnum();
-                en.Access = access;
+                en.Access = access ?? ImplicitMemberAccess;
                 return en;
             }
             if (Check(TokenType.Structure))
             {
                 var st = ParseStructure();
-                st.Access = access;
+                st.Access = access ?? ImplicitMemberAccess;
                 return st;
             }
             // Module-level field without 'Dim' (VB.NET style):
@@ -654,7 +672,7 @@ namespace BasicLang.Compiler
                 var statement = ParseVariableDeclaration(requireDim: false);
                 if (statement is VariableDeclarationNode fieldDecl)
                 {
-                    fieldDecl.Access = access;
+                    fieldDecl.Access = access ?? ImplicitMemberAccess;
                 }
                 return statement;
             }
@@ -928,6 +946,11 @@ namespace BasicLang.Compiler
                 prop.IsStatic = isStatic;
                 prop.IsReadOnly = isReadOnly;
                 prop.IsWriteOnly = isWriteOnly;
+                // ⛔ isVirtual/isOverride are parsed for EVERY member by the loop above; this arm
+                // used to read them and throw them away, while the Function and Sub arms below
+                // copy them. That one omission is the whole property-override defect.
+                prop.IsVirtual = isVirtual;
+                prop.IsOverride = isOverride;
                 return prop;
             }
 
@@ -1012,6 +1035,23 @@ namespace BasicLang.Compiler
                     varDecl.IsStatic = isStatic;
                 }
                 return field;
+            }
+
+            // Const declaration. ⛔ This arm did not exist, so `Private Const K As Integer = 9`
+            // inside a Class was a PARSE ERROR — "Unexpected token in class: 'Const'" — while the
+            // suggestion this method throws below has always listed Const as a valid member. The
+            // module-level member parser has had the identical arm all along; this is the same
+            // three lines, so the two cannot disagree about the shape they accept.
+            //
+            // ⚠ Kept as a ConstantDeclarationNode rather than desugared to a Shared field.
+            // Constness is REAL here and enforced elsewhere: assigning to a module or local Const
+            // is already "Cannot assign to constant 'K'", and a class Const that quietly became a
+            // writable static field would be the one scope where that check disappears.
+            if (Check(TokenType.Const))
+            {
+                var constant = ParseConstantDeclaration();
+                constant.Access = access;
+                return constant;
             }
 
             // Field declaration without Dim (e.g., "Private _name As String" or "Private items(10) As Integer")
@@ -2892,6 +2932,7 @@ namespace BasicLang.Compiler
                     {
                         block.Statements.Add(statement);
                     }
+                    ExpectEndOfStatement(endToken);
                 }
                 catch (ParseException ex)
                 {
@@ -3129,6 +3170,7 @@ namespace BasicLang.Compiler
                     {
                         block.Statements.Add(statement);
                     }
+                    ExpectEndOfStatement(endTokens);
                 }
                 catch (ParseException ex)
                 {
@@ -3260,6 +3302,27 @@ namespace BasicLang.Compiler
         /// </summary>
         private ExpressionNode ParsePrimaryExpression()
         {
+            // Signed Case value (Case -1, Case -3.75, Case +2, Case -kMax): a prefix -/+ on a
+            // primary. Only the sign, not a full expression — `Case -1 Or 2` must still split
+            // at `Or` into two alternatives rather than parse as a bitwise Or.
+            if (Check(TokenType.Minus) || Check(TokenType.Plus))
+            {
+                int signPos = _current;
+                var op = Advance();
+                var operand = ParsePrimaryExpression();
+                if (operand == null)
+                {
+                    _current = signPos;
+                    return null;
+                }
+                return new UnaryExpressionNode(op.Line, op.Column)
+                {
+                    Operator = op.Lexeme,
+                    Operand = operand,
+                    IsPostfix = false
+                };
+            }
+
             // Parse only the primary part, not full binary expressions
             if (Check(TokenType.IntegerLiteral) || Check(TokenType.LongLiteral) ||
                 Check(TokenType.SingleLiteral) || Check(TokenType.DoubleLiteral) ||
@@ -4656,6 +4719,7 @@ namespace BasicLang.Compiler
                         {
                             lambda.StatementBody.Statements.Add(stmt);
                         }
+                        ExpectEndOfStatement(endToken);
                     }
                     catch (ParseException ex)
                     {
@@ -5095,6 +5159,31 @@ namespace BasicLang.Compiler
             {
                 Advance();
             }
+        }
+
+        /// <summary>
+        /// VB's BC30205, "End of statement expected": after a statement in a block, the line must
+        /// end — a newline, end of file, one of the block's own terminators, or a <c>:</c>
+        /// separator (consumed here, so the next statement on the line parses normally).
+        ///
+        /// <para>⛔ The block loops used to go straight on to the next statement, so anything left
+        /// on the line after a complete statement was parsed as ANOTHER statement and a bare
+        /// expression there was silently dropped. MEASURED on master e7df955, every one compiling
+        /// clean on every backend: <c>Dim x As Integer = 1 y</c> (x = 1), <c>y = 1 2</c>,
+        /// <c>Console.WriteLine(y) 7</c>, <c>If y &gt; 1 Then y = 2 y</c>, <c>y += 1 y</c>. It
+        /// is also what hid <c>1E40</c> lexing as <c>1</c> then <c>E40</c> (x = 1).</para>
+        /// </summary>
+        private void ExpectEndOfStatement(params TokenType[] endTokens)
+        {
+            if (IsAtEnd() || Check(TokenType.Newline)) return;
+            if (Check(TokenType.Colon)) { Advance(); return; }
+            // A statement whose parser already consumed the line end (block statements do).
+            if (_current > 0 && Previous().Type == TokenType.Newline) return;
+            if (endTokens.Any(t => Check(t))) return;
+
+            throw new ParseException(
+                $"End of statement expected, found '{Peek().Lexeme}'", Peek(),
+                "Each statement must end at the end of its line (or at a ':' separator).");
         }
 
         private void ConsumeNewlines()

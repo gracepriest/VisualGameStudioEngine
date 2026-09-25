@@ -48,6 +48,21 @@ namespace BasicLang.Compiler.SemanticAnalysis
         // Imported modules for shorthand access (no prefix needed)
         private readonly HashSet<string> _importedModules = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
+        /// <summary>
+        /// Every module-level variable and constant declared inside a <c>Module</c> block of THIS
+        /// unit, by module name then member name — registered in pass 1 so that a reference is
+        /// resolvable whatever the declaration order, and upgraded to the full-fidelity symbol
+        /// when pass 2 reaches the declaration.
+        ///
+        /// <para>⛔ Pass 1 registered only procedure signatures, and a Module's <c>Dim</c>/<c>Const</c>
+        /// live in the Module's OWN scope, which a sibling Module's lexical chain never reaches.
+        /// So <c>Helpers.Value</c> and a cross-module bare <c>Value</c> both fell through every
+        /// channel — see <see cref="Symbol.OwningModule"/> for what that produced on each
+        /// backend.</para>
+        /// </summary>
+        private readonly Dictionary<string, Dictionary<string, Symbol>> _moduleMembers =
+            new Dictionary<string, Dictionary<string, Symbol>>(StringComparer.OrdinalIgnoreCase);
+
         // .NET namespace tracking
         private readonly HashSet<string> _netNamespaces = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
@@ -555,7 +570,12 @@ namespace BasicLang.Compiler.SemanticAnalysis
                         classType.Members[prop.Name] = new Symbol(prop.Name, SymbolKind.Property,
                             ResolveSiblingSignatureType(prop.PropertyType) ?? _typeManager.ObjectType, 0, 0)
                         {
-                            Access = prop.Access
+                            Access = prop.Access,
+                            // ADR-0007 — the same two facts Visit(PropertyNode) records, so a
+                            // bare use that binds through THIS signature (a class declared in a
+                            // sibling file, or below its use) lowers the same way.
+                            IsAccessorBacked = prop.IsAccessorBacked,
+                            IsShared = prop.IsStatic
                         };
                         break;
                     }
@@ -612,11 +632,11 @@ namespace BasicLang.Compiler.SemanticAnalysis
                             SourceModule = unit.ModuleName
                         });
                     }
-                    RegisterSiblingContainerMemberSignatures(moduleNode.Members, unit);
+                    RegisterSiblingContainerMemberSignatures(moduleNode.Members, unit, applyDeclaredAccess: true);
                     break;
 
                 case NamespaceNode namespaceNode:
-                    RegisterSiblingContainerMemberSignatures(namespaceNode.Members, unit);
+                    RegisterSiblingContainerMemberSignatures(namespaceNode.Members, unit, applyDeclaredAccess: true);
                     break;
 
                 // .cls/.class units export ONLY their class symbol (Compiler.
@@ -624,7 +644,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 // signatures must not be flattened. For every other file the
                 // compiled path flattens class-member signatures globally.
                 case ClassNode classNode when !unit.IsClassFile:
-                    RegisterSiblingContainerMemberSignatures(classNode.Members, unit);
+                    RegisterSiblingContainerMemberSignatures(classNode.Members, unit, applyDeclaredAccess: false);
                     break;
 
                 case VariableDeclarationNode field when field.Access == AccessModifier.Public:
@@ -668,12 +688,16 @@ namespace BasicLang.Compiler.SemanticAnalysis
         /// Fields and constants inside these containers are NOT flattened —
         /// the compiled path's pass 1 only registers functions/subs, so
         /// registering more here would make code compile caller-first that
-        /// fails callee-first. Declared access is not applied: the compiled
-        /// path's pass-1 signatures keep the default (public) symbol access
-        /// because pass 2 re-declares the member inside its container scope
-        /// and never touches the flattened global signature.
+        /// fails callee-first.
+        ///
+        /// <para><paramref name="applyDeclaredAccess"/> is true for a Module's (and a
+        /// Namespace's) procedures: a completed sibling exports them with their declared
+        /// access and the use site refuses a Private one, so a pending sibling's must carry
+        /// it too — otherwise a <c>Private Function</c> was callable whenever its file was
+        /// listed AFTER the caller's, and refused when it was listed before. A class's
+        /// methods keep the default, as before.</para>
         /// </summary>
-        private void RegisterSiblingContainerMemberSignatures(IEnumerable<ASTNode> members, CompilationUnit unit)
+        private void RegisterSiblingContainerMemberSignatures(IEnumerable<ASTNode> members, CompilationUnit unit, bool applyDeclaredAccess)
         {
             if (members == null) return;
 
@@ -682,19 +706,19 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 switch (member)
                 {
                     case FunctionNode func:
-                        RegisterSiblingFunctionSignature(func, unit, applyDeclaredAccess: false);
+                        RegisterSiblingFunctionSignature(func, unit, applyDeclaredAccess);
                         break;
                     case SubroutineNode sub:
-                        RegisterSiblingSubroutineSignature(sub, unit, applyDeclaredAccess: false);
+                        RegisterSiblingSubroutineSignature(sub, unit, applyDeclaredAccess);
                         break;
                     case ModuleNode nestedModule:
-                        RegisterSiblingContainerMemberSignatures(nestedModule.Members, unit);
+                        RegisterSiblingContainerMemberSignatures(nestedModule.Members, unit, applyDeclaredAccess: true);
                         break;
                     case ClassNode nestedClass:
-                        RegisterSiblingContainerMemberSignatures(nestedClass.Members, unit);
+                        RegisterSiblingContainerMemberSignatures(nestedClass.Members, unit, applyDeclaredAccess: false);
                         break;
                     case NamespaceNode nestedNamespace:
-                        RegisterSiblingContainerMemberSignatures(nestedNamespace.Members, unit);
+                        RegisterSiblingContainerMemberSignatures(nestedNamespace.Members, unit, applyDeclaredAccess: true);
                         break;
                 }
             }
@@ -1043,6 +1067,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
             _nodeTypes.Clear();
             _nodeSymbols.Clear();
             _netNamespaces.Clear();
+            _moduleMembers.Clear();
 
             GlobalScope = new Scope("Global", ScopeKind.Global, null);
             _currentScope = GlobalScope;
@@ -1084,6 +1109,15 @@ namespace BasicLang.Compiler.SemanticAnalysis
             _nodeSymbols.TryGetValue(node, out var symbol);
             return symbol;
         }
+
+        /// <summary>
+        /// The declared type named <paramref name="name"/>, as this analysis registered it — a
+        /// class's <see cref="TypeInfo.Members"/> is complete once <see cref="Analyze"/> has run
+        /// (every method, Private ones included, and the sibling-file ones), which is what the
+        /// IR builder needs to tell a class's own method from a same-named file-scope procedure.
+        /// </summary>
+        internal TypeInfo LookupType(string name) =>
+            string.IsNullOrEmpty(name) ? null : _typeManager.GetType(name);
 
         private void SetNodeType(ASTNode node, TypeInfo type)
         {
@@ -1551,17 +1585,22 @@ namespace BasicLang.Compiler.SemanticAnalysis
             // Drawing
             RegisterStdLibFunction("ClearBackground", SymbolKind.Subroutine, _typeManager.VoidType,
                 new[] { ("r", _typeManager.GetType("Integer")), ("g", _typeManager.GetType("Integer")), ("b", _typeManager.GetType("Integer")) });
+            // ⛔ MIRRORED PAIR — this block and BasicLang/StdLib/FrameworkStdLib.cs declare the SAME contract twice.
+            // Change both in the same commit or the checker and the stdlib disagree. Positions are Integer because
+            // framework.h says int; only an engine `float` may be Single (DrawCircle's radius, DrawTextureEx's
+            // Vector2/rotation/scale). Transcribing these as Single is what made every game template fail to build
+            // on the C# backend with CS1503 "cannot convert from 'float' to 'int'".
             RegisterStdLibFunction("DrawRectangle", SymbolKind.Subroutine, _typeManager.VoidType,
-                new[] { ("x", _typeManager.GetType("Single")), ("y", _typeManager.GetType("Single")), ("w", _typeManager.GetType("Single")), ("h", _typeManager.GetType("Single")),
+                new[] { ("x", _typeManager.GetType("Integer")), ("y", _typeManager.GetType("Integer")), ("w", _typeManager.GetType("Integer")), ("h", _typeManager.GetType("Integer")),
                         ("r", _typeManager.GetType("Integer")), ("g", _typeManager.GetType("Integer")), ("b", _typeManager.GetType("Integer")), ("a", _typeManager.GetType("Integer")) });
             RegisterStdLibFunction("DrawCircle", SymbolKind.Subroutine, _typeManager.VoidType,
-                new[] { ("x", _typeManager.GetType("Single")), ("y", _typeManager.GetType("Single")), ("radius", _typeManager.GetType("Single")),
+                new[] { ("x", _typeManager.GetType("Integer")), ("y", _typeManager.GetType("Integer")), ("radius", _typeManager.GetType("Single")),
                         ("r", _typeManager.GetType("Integer")), ("g", _typeManager.GetType("Integer")), ("b", _typeManager.GetType("Integer")), ("a", _typeManager.GetType("Integer")) });
             RegisterStdLibFunction("DrawLine", SymbolKind.Subroutine, _typeManager.VoidType,
-                new[] { ("x1", _typeManager.GetType("Single")), ("y1", _typeManager.GetType("Single")), ("x2", _typeManager.GetType("Single")), ("y2", _typeManager.GetType("Single")),
+                new[] { ("x1", _typeManager.GetType("Integer")), ("y1", _typeManager.GetType("Integer")), ("x2", _typeManager.GetType("Integer")), ("y2", _typeManager.GetType("Integer")),
                         ("r", _typeManager.GetType("Integer")), ("g", _typeManager.GetType("Integer")), ("b", _typeManager.GetType("Integer")), ("a", _typeManager.GetType("Integer")) });
             RegisterStdLibFunction("DrawText", SymbolKind.Subroutine, _typeManager.VoidType,
-                new[] { ("text", _typeManager.GetType("String")), ("x", _typeManager.GetType("Single")), ("y", _typeManager.GetType("Single")), ("fontSize", _typeManager.GetType("Integer")),
+                new[] { ("text", _typeManager.GetType("String")), ("x", _typeManager.GetType("Integer")), ("y", _typeManager.GetType("Integer")), ("fontSize", _typeManager.GetType("Integer")),
                         ("r", _typeManager.GetType("Integer")), ("g", _typeManager.GetType("Integer")), ("b", _typeManager.GetType("Integer")), ("a", _typeManager.GetType("Integer")) });
 
             // Textures
@@ -1570,7 +1609,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
             RegisterStdLibFunction("UnloadTexture", SymbolKind.Subroutine, _typeManager.VoidType,
                 new[] { ("handle", _typeManager.GetType("Integer")) });
             RegisterStdLibFunction("DrawTexture", SymbolKind.Subroutine, _typeManager.VoidType,
-                new[] { ("handle", _typeManager.GetType("Integer")), ("x", _typeManager.GetType("Single")), ("y", _typeManager.GetType("Single")),
+                new[] { ("handle", _typeManager.GetType("Integer")), ("x", _typeManager.GetType("Integer")), ("y", _typeManager.GetType("Integer")),
                         ("r", _typeManager.GetType("Integer")), ("g", _typeManager.GetType("Integer")), ("b", _typeManager.GetType("Integer")), ("a", _typeManager.GetType("Integer")) });
         }
 
@@ -4741,10 +4780,165 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 RegisterClassMemberSignatures(decl);
             }
 
+            // Module-level variables and constants inside Module blocks, AFTER the class sweeps
+            // so a class-typed one resolves to the real class. See _moduleMembers.
+            foreach (var decl in program.Declarations)
+            {
+                RegisterModuleMemberDeclarations(decl, moduleName: null);
+            }
+
             foreach (var decl in program.Declarations)
             {
                 RegisterDeclaration(decl);
             }
+        }
+
+        /// <summary>
+        /// Pass 1, sweep 3: record every <c>Dim</c>/<c>Const</c> declared directly inside a
+        /// <c>Module</c> block, typed from its declaration. A file-scope declaration (no enclosing
+        /// Module) is not recorded — it already lives in the global scope and resolves lexically.
+        ///
+        /// <para>⛔ Typed through <see cref="ResolveSiblingSignatureType"/>, NOT
+        /// <see cref="ResolveTypeReference"/>. The first draft used the latter, and it FOLDS an
+        /// array's declared size — in pass 1, before any <c>Const</c> exists in scope — so
+        /// <c>Dim g(K) As Integer</c> inside a Module, with <c>K</c> a file-scope Const, reported
+        /// "Array size must be a compile-time constant" and failed two previously-green C++
+        /// array tests. The sibling resolver exists for exactly this: it resolves the element type
+        /// and passes <c>report: false</c> for the dimensions. Pass 2 replaces this stand-in with
+        /// the real, fully typed symbol regardless.</para>
+        /// </summary>
+        private void RegisterModuleMemberDeclarations(ASTNode node, string moduleName)
+        {
+            switch (node)
+            {
+                case ModuleNode module:
+                    foreach (var member in module.Members)
+                        RegisterModuleMemberDeclarations(member, module.Name);
+                    break;
+                case NamespaceNode ns:
+                    foreach (var member in ns.Members)
+                        RegisterModuleMemberDeclarations(member, moduleName);
+                    break;
+                case VariableDeclarationNode field when moduleName != null:
+                    RecordModuleMember(new Symbol(field.Name, SymbolKind.Variable,
+                        (field.IsAuto ? null : ResolveSiblingSignatureType(field.Type)) ?? _typeManager.ObjectType,
+                        field.Line, field.Column)
+                    {
+                        Access = field.Access,
+                        OwningModule = moduleName,
+                        SourceModule = moduleName
+                    });
+                    break;
+                case ConstantDeclarationNode constant when moduleName != null:
+                    RecordModuleMember(new Symbol(constant.Name, SymbolKind.Constant,
+                        ResolveSiblingSignatureType(constant.Type) ?? _typeManager.ObjectType,
+                        constant.Line, constant.Column)
+                    {
+                        Access = constant.Access,
+                        IsConstant = true,
+                        OwningModule = moduleName,
+                        SourceModule = moduleName
+                    });
+                    break;
+            }
+        }
+
+        /// <summary>Last writer wins: pass 2's real symbol replaces pass 1's stand-in.</summary>
+        private void RecordModuleMember(Symbol symbol)
+        {
+            if (symbol?.Name == null || string.IsNullOrEmpty(symbol.OwningModule)) return;
+            if (!_moduleMembers.TryGetValue(symbol.OwningModule, out var members))
+            {
+                members = new Dictionary<string, Symbol>(StringComparer.OrdinalIgnoreCase);
+                _moduleMembers[symbol.OwningModule] = members;
+            }
+            members[symbol.Name] = symbol;
+        }
+
+        /// <summary>
+        /// Pass 2's half of the registration: a variable or constant declared directly in a
+        /// Module scope is stamped with its owner and replaces the pass-1 stand-in.
+        /// </summary>
+        private void AttachOwningModule(Symbol symbol)
+        {
+            if (_currentScope?.Kind != ScopeKind.Module || string.IsNullOrEmpty(_currentScope.Name)) return;
+            symbol.OwningModule = _currentScope.Name;
+            symbol.SourceModule ??= _currentScope.Name;
+            RecordModuleMember(symbol);
+        }
+
+        /// <summary>The <c>Module</c> block the current scope is inside, or null.</summary>
+        private string EnclosingModuleName()
+        {
+            for (var s = _currentScope; s != null; s = s.Parent)
+                if (s.Kind == ScopeKind.Module) return s.Name;
+            return null;
+        }
+
+        private static bool IsVisibleOutsideItsModule(Symbol symbol) =>
+            symbol.Access == AccessModifier.Public || symbol.Access == AccessModifier.Friend;
+
+        /// <summary>
+        /// <c>Module.Member</c> for a Module declared in THIS unit. Returns false when the module
+        /// is not one of this unit's or has no such variable/constant, so the caller can go on to
+        /// the cross-unit channels. A member that exists but is Private to another module is an
+        /// error here rather than a fall-through: falling through is what typed it Object.
+        /// </summary>
+        private bool TryResolveModuleMember(string moduleName, string memberName, int line, int column, out Symbol symbol)
+        {
+            symbol = null;
+            if (!_moduleMembers.TryGetValue(moduleName, out var members)
+                || !members.TryGetValue(memberName, out var found)) return false;
+
+            var sameModule = string.Equals(EnclosingModuleName(), found.OwningModule, StringComparison.OrdinalIgnoreCase);
+            if (!sameModule && IsAccessChecked(found) && !IsVisibleOutsideItsModule(found))
+            {
+                Error($"'{found.Name}' is Private to module '{found.OwningModule}' and cannot be accessed from here", line, column);
+            }
+            symbol = found;
+            return true;
+        }
+
+        /// <summary>
+        /// A bare name that resolved to nothing in scope: is it a Public/Friend variable or
+        /// constant of ANOTHER Module in this unit? Exactly one such module means the reference
+        /// is that member; more than one is ambiguous and must be qualified; a match that is
+        /// Private is reported as such. All three are stated rather than left to the permissive
+        /// .NET-type fallback, which is how a bare cross-module name used to be typed Object.
+        /// </summary>
+        private bool TryResolveUnqualifiedModuleMember(string name, int line, int column, out Symbol symbol)
+        {
+            symbol = null;
+            var current = EnclosingModuleName();
+            var visible = new List<Symbol>();
+            Symbol hidden = null;
+            foreach (var members in _moduleMembers.Values)
+            {
+                if (!members.TryGetValue(name, out var candidate)) continue;
+                if (string.Equals(candidate.OwningModule, current, StringComparison.OrdinalIgnoreCase)) continue;
+                if (!IsAccessChecked(candidate) || IsVisibleOutsideItsModule(candidate)) visible.Add(candidate);
+                else hidden ??= candidate;
+            }
+
+            if (visible.Count == 1)
+            {
+                symbol = visible[0];
+                return true;
+            }
+            if (visible.Count > 1)
+            {
+                var owners = string.Join("', '", visible.Select(v => v.OwningModule).OrderBy(o => o, StringComparer.OrdinalIgnoreCase));
+                Error($"'{name}' is ambiguous between modules '{owners}'. Qualify it with the module name", line, column);
+                symbol = visible[0];
+                return true;
+            }
+            if (hidden != null)
+            {
+                Error($"'{name}' is Private to module '{hidden.OwningModule}' and cannot be accessed from here", line, column);
+                symbol = hidden;
+                return true;
+            }
+            return false;
         }
 
         /// <summary>
@@ -4829,25 +5023,29 @@ namespace BasicLang.Compiler.SemanticAnalysis
         private readonly HashSet<string> _preRegisteredClasses =
             new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        private void RegisterDeclaration(ASTNode node, ClassNode owner = null)
+        private void RegisterDeclaration(ASTNode node, ClassNode owner = null, string moduleName = null)
         {
             // DEBUG: Console.WriteLine($"RegisterDeclaration: {node?.GetType()?.Name}");
             switch (node)
             {
                 case FunctionNode func:
                     // DEBUG: Console.WriteLine($"  -> Function: {func.Name} returns {func.ReturnType?.Name}");
-                    RegisterFunctionSignature(func);
+                    RegisterFunctionSignature(func, moduleName);
                     break;
                 case SubroutineNode sub:
                     // DEBUG: Console.WriteLine($"  -> Subroutine: {sub.Name}");
-                    RegisterSubSignature(sub);
+                    RegisterSubSignature(sub, moduleName);
                     break;
                 case ConstructorNode ctor when owner != null:
                     RegisterConstructorSignature(ctor, owner);
                     break;
                 case ModuleNode module:
+                    // The Module's name rides along so its procedures are recorded as ITS members
+                    // (see RecordModuleProcedure) — the flattened global-scope symbol alone cannot
+                    // say which Module a procedure belongs to, and a second Module's same-named
+                    // procedure never reaches the global scope at all.
                     foreach (var member in module.Members)
-                        RegisterDeclaration(member);
+                        RegisterDeclaration(member, moduleName: module.Name);
                     break;
                 case ClassNode cls:
                     foreach (var member in cls.Members)
@@ -4855,7 +5053,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     break;
                 case NamespaceNode ns:
                     foreach (var member in ns.Members)
-                        RegisterDeclaration(member);
+                        RegisterDeclaration(member, moduleName: moduleName);
                     break;
             }
         }
@@ -4938,7 +5136,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
             };
         }
 
-        private void RegisterFunctionSignature(FunctionNode node)
+        private void RegisterFunctionSignature(FunctionNode node, string moduleName = null)
         {
             // Get return type
             var returnTypeName = node.ReturnType?.Name ?? "Object";
@@ -4952,17 +5150,20 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 parameters.Add(new Symbol(param.Name, SymbolKind.Parameter, paramType, param.Line, param.Column) { IsOptional = param.IsOptional, IsByRef = param.IsByRef, IsParamArray = param.IsParamArray, DefaultValueExpression = param.DefaultValue });
             }
 
+            var symbol = new Symbol(node.Name, SymbolKind.Function, returnType, node.Line, node.Column);
+            symbol.ReturnType = returnType;
+            symbol.Parameters = parameters;
+            symbol.Access = node.Access;
+            RecordModuleProcedure(symbol, moduleName);
+
             // Check if already defined
             if (_currentScope.Resolve(node.Name) == null)
             {
-                var symbol = new Symbol(node.Name, SymbolKind.Function, returnType, node.Line, node.Column);
-                symbol.ReturnType = returnType;
-                symbol.Parameters = parameters;
                 _currentScope.Define(symbol);
             }
         }
 
-        private void RegisterSubSignature(SubroutineNode node)
+        private void RegisterSubSignature(SubroutineNode node, string moduleName = null)
         {
             // Build parameter list
             var parameters = new List<Symbol>();
@@ -4972,13 +5173,150 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 parameters.Add(new Symbol(param.Name, SymbolKind.Parameter, paramType, param.Line, param.Column) { IsOptional = param.IsOptional, IsByRef = param.IsByRef, IsParamArray = param.IsParamArray, DefaultValueExpression = param.DefaultValue });
             }
 
+            var symbol = new Symbol(node.Name, SymbolKind.Subroutine, _typeManager.VoidType, node.Line, node.Column);
+            symbol.Parameters = parameters;
+            symbol.Access = node.Access;
+            RecordModuleProcedure(symbol, moduleName);
+
             // Check if already defined
             if (_currentScope.Resolve(node.Name) == null)
             {
-                var symbol = new Symbol(node.Name, SymbolKind.Subroutine, _typeManager.VoidType, node.Line, node.Column);
-                symbol.Parameters = parameters;
                 _currentScope.Define(symbol);
             }
+        }
+
+        /// <summary>
+        /// Pass 1's half for a Module's PROCEDURE: stamp the owner and record it in
+        /// <see cref="_moduleMembers"/> beside the Module's variables and constants — ALWAYS,
+        /// whether or not the name is also defined in the global scope.
+        ///
+        /// <para>⛔ Pass 1 flattens every procedure signature into the global scope by bare name,
+        /// first wins. So <c>Module A / Function F</c> and <c>Module B / Function F</c> left B's
+        /// with no symbol anywhere: <c>B.F()</c> could not resolve, a bare <c>F()</c> from a third
+        /// module silently bound to A's, and — because IR functions were then deduplicated by
+        /// bare name in <c>CombineIRModules</c> — B's <c>F</c> was DROPPED from the output
+        /// entirely, body and all, from a build that reported success. Recording both here is
+        /// what lets the qualified form resolve, the bare form be refused as ambiguous, and the
+        /// IR builder name them apart.</para>
+        /// </summary>
+        private void RecordModuleProcedure(Symbol symbol, string moduleName)
+        {
+            if (symbol == null || string.IsNullOrEmpty(moduleName)) return;
+            symbol.OwningModule = moduleName;
+            RecordModuleMember(symbol);
+        }
+
+        private static bool IsProcedure(Symbol s) =>
+            s != null && (s.Kind == SymbolKind.Function || s.Kind == SymbolKind.Subroutine);
+
+        /// <summary>
+        /// The Module members whose declared access is enforced at a use site outside their
+        /// Module: variables, constants, and — since the parser defaults a no-modifier procedure
+        /// to Public, as the language does — procedures too.
+        ///
+        /// <para>⛔ Procedures were exempt while the parser defaulted them to <c>Private</c>:
+        /// enforcing that would have refused every plain <c>Function</c> called across modules.
+        /// So nothing in the front end enforced a procedure's access, and an explicit
+        /// <c>Private Function</c> ran from any module on C++, JavaScript and MSIL while csc
+        /// alone refused it (CS0122) — the one backend that enforces the <c>private static</c>
+        /// the C# backend emits. Now all four agree, from the front end.</para>
+        /// </summary>
+        private static bool IsAccessChecked(Symbol s) =>
+            s != null && (s.Kind == SymbolKind.Variable || s.Kind == SymbolKind.Constant || IsProcedure(s));
+
+        /// <summary>
+        /// A procedure reached across a Module or unit boundary whose declared access does not
+        /// allow it, refused with the message a Private variable gets. <paramref name="moduleName"/>
+        /// is the module the message names: the written qualifier, or the owner the symbol carries.
+        /// </summary>
+        private void RefuseHiddenProcedure(Symbol symbol, string moduleName, int line, int column)
+        {
+            if (IsProcedure(symbol) && !IsVisibleOutsideItsModule(symbol))
+                Error($"'{symbol.Name}' is Private to module '{moduleName}' and cannot be accessed from here", line, column);
+        }
+
+        /// <summary>
+        /// The procedure a BARE call binds to, given what lexical scope resolved.
+        ///
+        /// <para>⛔ Two things scope resolution gets wrong for a Module procedure, both
+        /// order-dependent: (1) inside Module B, a call to B's own <c>F</c> written ABOVE
+        /// <c>F</c>'s declaration resolved to A's <c>F</c> in the global scope — pass 2 defines
+        /// B's copy in B's scope only when it reaches the declaration; (2) from a third module,
+        /// <c>F()</c> with two candidates silently took whichever pass 1 registered first. The
+        /// enclosing Module's own procedure wins here whatever the order, and a bare name two
+        /// OTHER modules both declare is refused as ambiguous. A local or parameter of the same
+        /// name still shadows both, exactly as before.</para>
+        ///
+        /// <para>Access is decided here as well, because it decides WHICH candidates there are:
+        /// the enclosing Module's own procedure is reachable whatever its access; of the other
+        /// modules' procedures only the Public/Friend ones count — one is the answer, two are
+        /// ambiguous, and none with a Private one present is refused as Private. ⛔ Before, a
+        /// Private procedure counted as a candidate: a Private <c>F</c> beside a Public <c>F</c> was
+        /// "ambiguous" on all four backends, and a lone Private <c>F</c> bound and ran on three. A
+        /// procedure imported from another unit is refused the same way when its declared access
+        /// is not Public/Friend — the exporting unit exports every procedure with the access it
+        /// was declared with, precisely so this can name the module.</para>
+        /// </summary>
+        private Symbol PreferModuleProcedure(string name, Symbol resolved, int line, int column)
+        {
+            if (resolved != null && !IsProcedure(resolved)) return resolved;
+
+            var current = EnclosingModuleName();
+            if (current != null && _moduleMembers.TryGetValue(current, out var own)
+                && own.TryGetValue(name, out var ownProcedure) && IsProcedure(ownProcedure))
+                return ownProcedure;
+
+            if (resolved == null) return null;
+            if (resolved.IsImported)
+            {
+                RefuseHiddenProcedure(resolved, resolved.OwningModule ?? resolved.SourceModule, line, column);
+                return resolved;
+            }
+            if (string.IsNullOrEmpty(resolved.OwningModule)) return resolved;
+
+            var others = _moduleMembers
+                .Where(kv => !string.Equals(kv.Key, current, StringComparison.OrdinalIgnoreCase)
+                             && kv.Value.TryGetValue(name, out var p) && IsProcedure(p))
+                .Select(kv => kv.Value[name])
+                .OrderBy(p => p.OwningModule, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            var visible = others.Where(IsVisibleOutsideItsModule).ToList();
+            if (visible.Count > 1)
+            {
+                var owners = string.Join("', '", visible.Select(v => v.OwningModule));
+                Error($"'{name}' is ambiguous between modules '{owners}'. Qualify it with the module name", line, column);
+                return visible[0];
+            }
+            if (visible.Count == 1) return visible[0];
+            if (others.Count > 0)
+            {
+                RefuseHiddenProcedure(others[0], others[0].OwningModule, line, column);
+                return others[0];
+            }
+            return resolved;
+        }
+
+        /// <summary>
+        /// A procedure symbol reached through a cross-unit channel carries no owner of its own;
+        /// the written qualifier IS the declaring module, so it is stamped here for the IR
+        /// builder, which lowers every module-procedure call the same way.
+        /// </summary>
+        private static void StampProcedureOwner(Symbol symbol, string moduleName)
+        {
+            if (IsProcedure(symbol) && string.IsNullOrEmpty(symbol.OwningModule) && !string.IsNullOrEmpty(moduleName))
+                symbol.OwningModule = moduleName;
+        }
+
+        /// <summary>
+        /// The qualified cross-unit binding: <see cref="StampProcedureOwner"/>, then the declared
+        /// access is enforced — a sibling unit's <c>Private Function</c> is reachable through
+        /// every cross-unit channel (exports carry it with its access), so the refusal lives at
+        /// the binding, where the written qualifier names the module.
+        /// </summary>
+        private void BindCrossUnitProcedure(Symbol symbol, string moduleName, int line, int column)
+        {
+            StampProcedureOwner(symbol, moduleName);
+            RefuseHiddenProcedure(symbol, moduleName, line, column);
         }
 
 
@@ -5034,7 +5372,10 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 {
                     foreach (var memberSymbol in _currentScope.Symbols.Values)
                     {
-                        // Only promote public members (or functions/subs which are public by default in modules)
+                        // Public members, classes and constants; and EVERY procedure, with the
+                        // access it was declared with — the same surface pass 1 flattens for an
+                        // explicit Module block, so an importing unit refuses a Private one at
+                        // the use site by name (see BindCrossUnitProcedure) rather than "Undefined".
                         if (memberSymbol.Access == AST.AccessModifier.Public ||
                             memberSymbol.Kind == SymbolKind.Function ||
                             memberSymbol.Kind == SymbolKind.Subroutine ||
@@ -5279,6 +5620,35 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 }
             }
 
+            // An interface property's type goes through the SAME resolver, and is recorded the
+            // SAME way, as a class property's (Visit(PropertyNode)) — so the IR builder reads it
+            // with GetNodeType on both paths and the two cannot disagree (ADR-0005 D3: a parallel
+            // resolver is forbidden). Nothing else of Visit(PropertyNode) applies: an interface
+            // property has no accessor bodies to analyse and declares no symbol here.
+            //
+            // ⛔ BEFORE THIS NOTHING RESOLVED THEM, and the IR builder invented a class-kinded
+            // type from the bare NAME — so `Integer` was a class, a typo'd type name compiled,
+            // and on C++ an interface accessor passed a class-kinded type by const& while the
+            // implementing class passed it by value.
+            foreach (var prop in node.Properties)
+            {
+                TypeInfo propertyType;
+                if (prop.PropertyType != null)
+                {
+                    propertyType = ResolveTypeReference(prop.PropertyType);
+                    if (propertyType == null)
+                    {
+                        Error($"Unknown property type '{prop.PropertyType.Name}'", prop.Line, prop.Column);
+                        propertyType = _typeManager.ObjectType;
+                    }
+                }
+                else
+                {
+                    propertyType = _typeManager.ObjectType;
+                }
+                SetNodeType(prop, propertyType);
+            }
+
             ExitScope();
         }
 
@@ -5454,7 +5824,17 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 _currentScope.Define(symbol);
             }
             
+            // ⛔ LOAD-BEARING, and it was removed once on a wrong measurement. This re-records
+            // the fully typed pass-2 symbol over pass 1's stand-in, and every call a Module makes
+            // to its own procedure BELOW the declaration resolves through that record
+            // (PreferModuleProcedure). Pass 1 types a RETURN type by bare name — `Task(Of
+            // Integer)` is looked up as "Task" and lands on Object — so without this,
+            // `Dim t As Task(Of Integer) = GetCount()` was refused: "Cannot assign value of type
+            // 'Object' to variable of type 'Task'" (TaskResultTests, three rows). The mutation
+            // that drops this survived the fixture because it probed PARAMETER types only; the
+            // full suite found the return-type shape, and the fixture now has it.
             symbol.Access = node.Access;
+            AttachOwningModule(symbol);
 
             // Enter function scope
             var functionScope = EnterScope(node.Name, ScopeKind.Function);
@@ -5545,6 +5925,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
             
             symbol.ReturnType = _typeManager.VoidType;
             symbol.Access = node.Access;
+            AttachOwningModule(symbol);
             SetNodeSymbol(node, symbol);
 
             // Enter subroutine scope
@@ -5690,6 +6071,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
             {
                 Error($"Variable '{node.Name}' is already defined in this scope", node.Line, node.Column);
             }
+            AttachOwningModule(symbol);
 
             SetNodeSymbol(node, symbol);
             SetNodeType(node, varType);
@@ -5777,9 +6159,18 @@ namespace BasicLang.Compiler.SemanticAnalysis
             else
             {
                 node.Value.Accept(this);
+                // Same two rules as a Dim initializer (see Visit(VariableDeclarationNode)), which
+                // this site used to skip: `Const X As Single = 2.5` and `Const D As Decimal = 2.5`
+                // were rejected ("Constant value type 'Double' is not compatible with declared type
+                // 'Single'") while `Dim x As Single = 2.5` compiled — so a Single constant needed
+                // an F suffix that no Dim did. Spec 6.1 makes the initializer a Decimal context,
+                // and a numeric literal may initialise any numeric type (VB constant conversion);
+                // CheckConstantFitsNumericTarget below still rejects a value that does not fit.
+                TryRetypeLiteralToDecimal(node.Value, constType);
                 var valueType = GetNodeType(node.Value);
 
-                if (!constType.IsAssignableFrom(valueType))
+                if (!constType.IsAssignableFrom(valueType)
+                    && !IsNumericLiteralAssignable(node.Value, constType, valueType))
                 {
                     Error($"Constant value type '{valueType}' is not compatible with declared type '{constType}'",
                           node.Line, node.Column);
@@ -5807,6 +6198,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
             {
                 Error($"Constant '{node.Name}' is already defined in this scope", node.Line, node.Column);
             }
+            AttachOwningModule(symbol);
 
             SetNodeSymbol(node, symbol);
             SetNodeType(node, constType);
@@ -6360,6 +6752,9 @@ namespace BasicLang.Compiler.SemanticAnalysis
             // Create a symbol for the property
             var symbol = new Symbol(node.Name, SymbolKind.Property, propertyType, node.Line, node.Column);
             symbol.Access = node.Access;
+            // ADR-0007: what IRBuilder's bare-name lowering reads (see Symbol.IsAccessorBacked).
+            symbol.IsAccessorBacked = node.IsAccessorBacked;
+            symbol.IsShared = node.IsStatic;
 
             // Try to define in current scope
             if (!_currentScope.Define(symbol))
@@ -7824,8 +8219,9 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 return;
             }
 
-            // Look up the member in the With object type
-            if (withType.Members.TryGetValue(node.MemberName, out var memberSymbol))
+            // Look up the member in the With object type, base chain included — without the walk
+            // `With b : .InheritedMember : End With` was a hard compile error on all four.
+            if (withType.ResolveMember(node.MemberName) is Symbol memberSymbol)
             {
                 SetNodeType(node, memberSymbol.Type ?? memberSymbol.ReturnType ?? _typeManager.ObjectType);
             }
@@ -8032,7 +8428,9 @@ namespace BasicLang.Compiler.SemanticAnalysis
             // Check if target is assignable
             if (node.Target is IdentifierExpressionNode idExpr)
             {
-                var symbol = _currentScope.Resolve(idExpr.Name);
+                // The inherited half needs the same walk the read side got, or an inherited
+                // Const is silently writable by bare name.
+                var symbol = _currentScope.Resolve(idExpr.Name) ?? ResolveClassMember(idExpr.Name);
                 if (symbol != null && symbol.IsConstant)
                 {
                     Error($"Cannot assign to constant '{idExpr.Name}'", node.Line, node.Column);
@@ -8266,6 +8664,10 @@ namespace BasicLang.Compiler.SemanticAnalysis
                         // correctly Double, keeping the old rejection would turn that
                         // expression — which compiles today — into a hard error. This
                         // relaxation is REQUIRED BY the `/` change, not optional cleanup.
+                        //
+                        // This arm only TYPES the result; the rounding itself is inserted
+                        // once, in IRBuilder.ConvertIntegerDivisionOperand (ADR-0005 D1), so
+                        // no backend ever sees a floating operand of `\`.
                         resultType = _typeManager.LongType;
                     }
                     else
@@ -8655,10 +9057,36 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
             var symbol = _currentScope.Resolve(node.Name);
 
+            // A member of the class being analyzed, or of one of its BASES, by bare name.
+            // ⛔ BEFORE every channel below. Two things forced that position, both measured:
+            // the .NET-type arm further down is deliberately permissive ("any PascalCase
+            // identifier could be a .NET type"), so an inherited `Total` was swallowed into a
+            // phantom type named Total with NO diagnostic — only a one-character or lowercase
+            // name ever reached "Undefined identifier"; and class scope is NEARER than module
+            // scope, which the IR builder already assumes (IsCurrentClassMember suppresses the
+            // module-global fallback for a name it classifies as a class member), so binding a
+            // module global here would leave the two halves disagreeing about where the value
+            // lives. Lexical resolution still wins: a local, a parameter and the class's own
+            // already-defined members are found above.
+            if (symbol == null)
+            {
+                symbol = ResolveClassMember(node.Name);
+            }
+
             if (symbol == null)
             {
                 // Try project symbol table for cross-module references (ModuleName.Symbol or imported symbols)
                 symbol = ResolveQualifiedName(node.Name);
+            }
+
+            // A Public/Friend variable or constant of another Module in this unit, by bare name.
+            // ⛔ BEFORE the .NET-type arm below, which is deliberately permissive ("any PascalCase
+            // identifier could be a .NET type") and used to swallow exactly this reference: it
+            // typed `Value` as a phantom class named Value, no error, and the IR builder then
+            // minted a fresh local of that name. See Symbol.OwningModule.
+            if (symbol == null && TryResolveUnqualifiedModuleMember(node.Name, node.Line, node.Column, out var crossModule))
+            {
+                symbol = crossModule;
             }
 
             if (symbol == null)
@@ -8692,6 +9120,20 @@ namespace BasicLang.Compiler.SemanticAnalysis
             }
         }
 
+        /// <summary>
+        /// The member of the class currently being analyzed — its own, or an inherited one —
+        /// named <paramref name="name"/>, or null outside a class.
+        ///
+        /// <para>⚠ Own members are included, not only inherited ones. A class's own member is
+        /// normally found by lexical resolution before this is reached, but not one declared
+        /// BELOW the method that names it: pass 2 defines members into the class scope in source
+        /// order while analyzing each body inline, so the later declaration does not exist yet.
+        /// <c>TypeInfo.Members</c> is complete from pass 1 whatever the order, so including self
+        /// closes that at no cost.</para>
+        /// </summary>
+        private Symbol ResolveClassMember(string name) =>
+            _currentScope?.GetClassScope()?.ClassType?.ResolveMember(name);
+
         public void Visit(MemberAccessExpressionNode node)
         {
             // First, check if this is a module reference (ModuleName.Symbol).
@@ -8703,12 +9145,24 @@ namespace BasicLang.Compiler.SemanticAnalysis
             {
                 var moduleName = objId.Name;
 
+                // A Module declared in THIS unit, before any cross-unit channel: its variables and
+                // constants are in _moduleMembers whatever the declaration order. Not found here
+                // means "not one of this unit's module variables" — a procedure, or another unit's
+                // module — and the channels below still get their turn.
+                if (TryResolveModuleMember(moduleName, node.MemberName, node.Line, node.Column, out var moduleMember))
+                {
+                    SetNodeSymbol(node, moduleMember);
+                    SetNodeType(node, moduleMember.Type);
+                    return;
+                }
+
                 // Check ProjectSymbolTable (used by IDE)
                 if (_projectSymbols != null && _projectSymbols.HasModule(moduleName))
                 {
                     var symbol = _projectSymbols.LookupQualified(moduleName, node.MemberName);
                     if (symbol != null)
                     {
+                        BindCrossUnitProcedure(symbol, moduleName, node.Line, node.Column);
                         SetNodeSymbol(node, symbol);
                         SetNodeType(node, symbol.Type);
                         return;
@@ -8738,6 +9192,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                             s.Name.Equals(node.MemberName, StringComparison.OrdinalIgnoreCase));
                         if (symbol != null)
                         {
+                            BindCrossUnitProcedure(symbol, moduleName, node.Line, node.Column);
                             SetNodeSymbol(node, symbol);
                             SetNodeType(node, symbol.Type);
                             return;
@@ -8772,6 +9227,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                             !string.IsNullOrEmpty(signature.SourceModule) &&
                             signature.SourceModule.Equals(unit.ModuleName, StringComparison.OrdinalIgnoreCase))
                         {
+                            BindCrossUnitProcedure(signature, moduleName, node.Line, node.Column);
                             SetNodeSymbol(node, signature);
                             SetNodeType(node, signature.Type);
                             return;
@@ -8823,8 +9279,13 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 }
             }
 
-            // Look up member in type
-            if (objectType.Members.TryGetValue(node.MemberName, out var memberSymbol))
+            // Look up member in type — including the BASE CHAIN. ⛔ A flat lookup here typed every
+            // inherited member access Object without a diagnostic, because the .NET arm below
+            // claims any PascalCase receiver: `b.InheritedField + 1` was "Arithmetic operator '+'
+            // requires numeric operands" and `Dim n As Integer = b.InheritedField` was a
+            // conversion error, on all four backends, from a receiver whose class really does
+            // have the member.
+            if (objectType.ResolveMember(node.MemberName) is Symbol memberSymbol)
             {
                 SetNodeSymbol(node, memberSymbol);
                 SetNodeType(node, memberSymbol.Type);
@@ -8919,11 +9380,19 @@ namespace BasicLang.Compiler.SemanticAnalysis
             if (node.Callee is IdentifierExpressionNode idExpr)
             {
                 calleeSymbol = _currentScope.Resolve(idExpr.Name);
+                calleeSymbol = PreferModuleProcedure(idExpr.Name, calleeSymbol, node.Line, node.Column);
+                // ⛔ Written back onto the callee node. The identifier visit above bound the node
+                // to what lexical scope found; the IR builder reads THAT, not this local. With
+                // only the local corrected, the call was typed against A's F and lowered to
+                // B's — measured: "1" expected, "2" on all four backends.
+                if (calleeSymbol != null) SetNodeSymbol(idExpr, calleeSymbol);
                 // DEBUG: Console.WriteLine($"DEBUG: Resolving call to '{idExpr.Name}': symbol={calleeSymbol?.Name}, kind={calleeSymbol?.Kind}, returnType={calleeSymbol?.ReturnType?.Name}");
                 // If not found in local scope, check imported modules from project symbol table
                 if (calleeSymbol == null)
                 {
                     calleeSymbol = ResolveQualifiedName(idExpr.Name);
+                    if (calleeSymbol != null)
+                        RefuseHiddenProcedure(calleeSymbol, calleeSymbol.SourceModule, node.Line, node.Column);
                 }
             }
             else if (node.Callee is MemberAccessExpressionNode memberExpr)

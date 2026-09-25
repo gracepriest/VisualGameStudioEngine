@@ -183,6 +183,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             // `class MyError extends Exception` hits the temporal dead zone otherwise.
             EmitExceptionPrelude(module);
             EmitConversionPrelude(module);
+            EmitIntegerDivisionPrelude(module);
 
             // Module-level Dims, also before classes — a static field initialiser may read one.
             EmitGlobals(module);
@@ -262,16 +263,50 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                     foreach (var instruction in block.Instructions ?? Enumerable.Empty<IRInstruction>())
                         switch (instruction)
                         {
-                            case IRCall call when string.Equals(
-                                call.FunctionName, "CInt", StringComparison.OrdinalIgnoreCase):
+                            case IRCall call when IsCIntCall(call):
                                 return true;
-                            case IRCast cast when cast.SourceType?.IsFloatingPoint() == true
-                                && cast.Type?.IsIntegral() == true:
+                            case IRCast cast when IsRoundingCast(cast):
+                                return true;
+                            case IRSwitch sw when sw.PatternCases?.Any(GuardUsesRoundingHelper) == true:
                                 return true;
                         }
 
             return false;
         }
+
+        private static bool IsCIntCall(IRCall call) =>
+            string.Equals(call.FunctionName, "CInt", StringComparison.OrdinalIgnoreCase);
+
+        private static bool IsRoundingCast(IRCast cast) =>
+            cast.SourceType?.IsFloatingPoint() == true && cast.Type?.IsIntegral() == true;
+
+        /// <summary>
+        /// A <c>When</c> guard is built with emission SUPPRESSED, so its nodes are in no block and
+        /// the block walk above cannot see a rounding cast inside one — yet
+        /// <see cref="ExprInline"/> renders that cast as a call to the helper. Missed, the build
+        /// succeeded and Node died with "__blCInt is not defined". Reachable since IRBuilder
+        /// converts a floating operand of <c>\</c> (ADR-0005 D1): <c>When y \ 2 = 4</c>.
+        /// </summary>
+        private static bool GuardUsesRoundingHelper(IRPatternCase pattern) =>
+            pattern != null
+            && (TreeUsesRoundingHelper(pattern.WhenGuard)
+                || pattern switch
+                {
+                    IROrPatternCase or => or.Alternatives?.Any(GuardUsesRoundingHelper) == true,
+                    IRTuplePatternCase tuple => tuple.Elements?.Any(GuardUsesRoundingHelper) == true,
+                    _ => false,
+                });
+
+        /// <summary>The node kinds <see cref="ExprInline"/> rebuilds in place, walked for a rounding cast.</summary>
+        private static bool TreeUsesRoundingHelper(IRValue value) => value switch
+        {
+            IRCast cast => IsRoundingCast(cast) || TreeUsesRoundingHelper(cast.Value),
+            IRCall call => IsCIntCall(call) || call.Arguments.Any(TreeUsesRoundingHelper),
+            IRBinaryOp binary => TreeUsesRoundingHelper(binary.Left) || TreeUsesRoundingHelper(binary.Right),
+            IRCompare compare => TreeUsesRoundingHelper(compare.Left) || TreeUsesRoundingHelper(compare.Right),
+            IRUnaryOp unary => TreeUsesRoundingHelper(unary.Operand),
+            _ => false,
+        };
 
         /// <summary>The emitted name of the half-to-even rounding helper CInt lowers to.</summary>
         private const string CIntHelperName = "__blCInt";
@@ -307,6 +342,88 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             Line("return (f % 2 === 0) ? f : f + 1;");
             _indentLevel--;
             Line("}");
+            Line();
+        }
+
+        private const string IntDivHelperName = "__blIntDiv";
+        private const string ModHelperName = "__blMod";
+
+        private static bool IsCheckedMod(IRBinaryOp op) =>
+            op.Left?.Type?.IsIntegral() == true && op.Right?.Type?.IsIntegral() == true;
+
+        private static bool IsCheckedDivision(IRBinaryOp op) =>
+            op.Operation == BinaryOpKind.IntDiv || (op.Operation == BinaryOpKind.Mod && IsCheckedMod(op));
+
+        /// <summary>
+        /// True when the module lowers an integral <c>\</c> or <c>Mod</c> anywhere — a block
+        /// instruction or a <c>When</c> guard (built with emission suppressed, so in no block; the
+        /// same blind spot <see cref="GuardUsesRoundingHelper"/> covers). ⛔ Scanned up front for
+        /// the reason <see cref="EmitConversionPrelude"/> gives: the prelude precedes every body.
+        /// </summary>
+        internal static bool UsesIntegerDivisionHelper(IRModule module)
+        {
+            foreach (var function in module?.Functions ?? Enumerable.Empty<IRFunction>())
+                foreach (var block in function.Blocks ?? Enumerable.Empty<BasicBlock>())
+                    foreach (var instruction in block.Instructions ?? Enumerable.Empty<IRInstruction>())
+                        switch (instruction)
+                        {
+                            case IRBinaryOp binary when IsCheckedDivision(binary):
+                                return true;
+                            case IRSwitch sw when sw.PatternCases?.Any(GuardUsesIntegerDivision) == true:
+                                return true;
+                        }
+
+            return false;
+        }
+
+        private static bool GuardUsesIntegerDivision(IRPatternCase pattern) =>
+            pattern != null
+            && (TreeUsesIntegerDivision(pattern.WhenGuard)
+                || pattern switch
+                {
+                    IROrPatternCase or => or.Alternatives?.Any(GuardUsesIntegerDivision) == true,
+                    IRTuplePatternCase tuple => tuple.Elements?.Any(GuardUsesIntegerDivision) == true,
+                    _ => false,
+                });
+
+        private static bool TreeUsesIntegerDivision(IRValue value) => value switch
+        {
+            IRBinaryOp binary => IsCheckedDivision(binary)
+                || TreeUsesIntegerDivision(binary.Left) || TreeUsesIntegerDivision(binary.Right),
+            IRCast cast => TreeUsesIntegerDivision(cast.Value),
+            IRCall call => call.Arguments.Any(TreeUsesIntegerDivision),
+            IRCompare compare => TreeUsesIntegerDivision(compare.Left) || TreeUsesIntegerDivision(compare.Right),
+            IRUnaryOp unary => TreeUsesIntegerDivision(unary.Operand),
+            _ => false,
+        };
+
+        /// <summary>
+        /// Integral <c>\</c> and <c>Mod</c> with .NET's checks. JavaScript numbers are doubles, so
+        /// a zero divisor gave <c>Infinity</c> / <c>NaN</c> and the program carried on printing
+        /// them — MEASURED: <c>Try : Console.WriteLine(7 \ z) : Catch e As DivideByZeroException</c>
+        /// printed "Infinity" and never entered the handler. <c>-2147483648 \ -1</c> is 2147483648,
+        /// outside Integer, where .NET throws <c>OverflowException</c> (for <c>Mod</c> as well).
+        /// Only 32-bit and narrower types reach this backend (Long is refused, BL7003), so that
+        /// is the only overflowing pair: no other allowed type holds -2147483648.
+        ///
+        /// <para>The <c>+ 0</c> turns a NEGATIVE ZERO into 0: <c>Math.trunc(-1 / 5)</c> and
+        /// <c>-7 % -1</c> are -0, which an integer cannot be, and <c>console.log</c> printed it
+        /// as "-0".</para>
+        /// </summary>
+        private void EmitIntegerDivisionPrelude(IRModule module)
+        {
+            if (!UsesIntegerDivisionHelper(module)) return;
+
+            foreach (var (name, result) in new[] { (IntDivHelperName, "Math.trunc(a / b) + 0"), (ModHelperName, "a % b + 0") })
+            {
+                Line($"function {name}(a, b) {{");
+                _indentLevel++;
+                Line("if (b === 0) throw new DivideByZeroException(\"Attempted to divide by zero.\");");
+                Line("if (b === -1 && a === -2147483648) throw new OverflowException(\"Arithmetic operation resulted in an overflow.\");");
+                Line($"return {result};");
+                _indentLevel--;
+                Line("}");
+            }
             Line();
         }
 
@@ -434,6 +551,14 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// <summary>The events of the class being emitted, by name — what a <c>raise_X</c> call resolves against.</summary>
         private Dictionary<string, IREvent> _currentClassEvents = new Dictionary<string, IREvent>(StringComparer.OrdinalIgnoreCase);
 
+        /// <summary>
+        /// STATIC members in scope for the class being emitted, mapped to their DECLARING class's
+        /// name. Per-class state like <see cref="_currentClassEvents"/>; see
+        /// <see cref="StaticMemberOwners"/> for what it fixes.
+        /// </summary>
+        private Dictionary<string, string> _staticMemberOwners =
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
         private void EmitClass(IRClass irClass, IRModule module)
         {
             _currentClassEvents = new Dictionary<string, IREvent>(StringComparer.OrdinalIgnoreCase);
@@ -441,14 +566,32 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 if (evt?.Name != null) _currentClassEvents[evt.Name] = evt;
 
             _currentClassMethods = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            _staticMethodOwners = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             {
                 var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 var current = irClass;
                 while (current != null && seen.Add(current.Name))
                 {
                     foreach (var m in current.Methods ?? new List<IRMethod>())
-                        if (m?.Name != null && !m.IsStatic && !_currentClassMethods.ContainsKey(m.Name))
+                    {
+                        if (m?.Name == null) continue;
+
+                        // ⛔ The STATIC half of this walk used to be simply dropped, and an
+                        // unqualified sibling call fell through to a BARE name: `Helper()`
+                        // inside the class, which is a ReferenceError because a member body is
+                        // not a top-level function. It compiled clean and died at run time.
+                        // Statics are keyed to their DECLARING class, instance methods to
+                        // `this` — see MethodReference.
+                        if (m.IsStatic)
+                        {
+                            if (!_staticMethodOwners.ContainsKey(m.Name))
+                                _staticMethodOwners[m.Name] = current.Name;
+                        }
+                        else if (!_currentClassMethods.ContainsKey(m.Name))
+                        {
                             _currentClassMethods[m.Name] = m.Name;
+                        }
+                    }
                     if (string.IsNullOrEmpty(current.BaseClass)) break;
                     module.Classes.TryGetValue(current.BaseClass, out current);
                 }
@@ -463,6 +606,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             _indentLevel++;
 
             var members = MemberNames(irClass, module);
+            _staticMemberOwners = StaticMemberOwners(irClass, module);
 
             foreach (var field in irClass.Fields ?? new List<IRField>())
             {
@@ -496,6 +640,8 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
             _currentClassEvents = new Dictionary<string, IREvent>(StringComparer.OrdinalIgnoreCase);
             _currentClassMethods = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            _staticMemberOwners = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            _staticMethodOwners = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         }
 
         /// <summary>
@@ -524,6 +670,58 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             return names;
         }
 
+        /// <summary>
+        /// Every STATIC member name in scope for <paramref name="irClass"/>, mapped to the JS name
+        /// of the class that DECLARES it.
+        ///
+        /// <para>⛔ Without this a Shared member was read and written through <c>this</c>. The class
+        /// emitted <c>static K = 9;</c> and its methods emitted <c>this.K</c> — which is undefined
+        /// for a JS static, so a read answered <b>undefined</b> and a write silently created an
+        /// INSTANCE property shadowing nothing. Measured: <c>a.Bump()</c> then <c>b.Read()</c> on
+        /// two instances printed <b>undefined</b> on JavaScript where C++ printed <b>7</b>, so
+        /// Shared did not mean shared. A single-instance probe hides it — the write's own instance
+        /// property reads back fine, which is why this needs two objects to show.</para>
+        ///
+        /// <para>⚠ The DECLARING class, not the current one, because a write must land where the
+        /// field lives: JS resolves a static READ up the prototype chain, but
+        /// <c>Derived.K = 7</c> creates a NEW static on Derived and leaves Base's untouched. First
+        /// writer wins while walking up, so a nearer class shadows a farther one — the same
+        /// precedence <see cref="MemberNames"/> gives instance members.</para>
+        /// </summary>
+        private static Dictionary<string, string> StaticMemberOwners(IRClass irClass, IRModule module)
+        {
+            var owners = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            var current = irClass;
+            while (current != null && seen.Add(current.Name))
+            {
+                foreach (var f in current.Fields ?? new List<IRField>())
+                    if (f?.Name != null && f.IsStatic && !owners.ContainsKey(f.Name))
+                        owners[f.Name] = current.Name;
+                foreach (var p in current.Properties ?? new List<IRProperty>())
+                    if (p?.Name != null && p.IsStatic && !owners.ContainsKey(p.Name))
+                        owners[p.Name] = current.Name;
+                foreach (var e in current.Events ?? new List<IREvent>())
+                    if (e?.Name != null && e.IsStatic && !owners.ContainsKey(e.Name))
+                        owners[e.Name] = current.Name;
+
+                if (string.IsNullOrEmpty(current.BaseClass)) break;
+                module.Classes.TryGetValue(current.BaseClass, out current);
+            }
+
+            return owners;
+        }
+
+        /// <summary>
+        /// The reference a member name lowers to inside a class body: <c>Owner.X</c> for a STATIC
+        /// member, <c>this.X</c> otherwise. One place, so a read and a write cannot disagree.
+        /// </summary>
+        private string MemberReference(string rawName, string jsName) =>
+            _staticMemberOwners.TryGetValue(rawName, out var owner)
+                ? $"{SanitizeName(owner)}.{jsName}"
+                : $"this.{jsName}";
+
         private void EmitProperty(IRProperty prop, HashSet<string> members)
         {
             // Both accessors null is an AUTO-PROPERTY: a plain class field, which makes the
@@ -534,13 +732,28 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 return;
             }
 
+            // ⛔ `static` WAS MISSING HERE, though the auto-property arm above has always had it.
+            // A `Shared` property emitted INSTANCE accessors, so nothing reached them: reading
+            // `Box.P` answered `undefined` (the getter lives on the prototype, not the class), and
+            // `Box.P = 7` did not call the setter at all — it quietly created a plain own-property
+            // on the class. The backing field was never touched.
+            //
+            // ⛔ A READ-WRITE Shared property therefore LOOKED CORRECT while doing nothing: the
+            // write created `Box.P` and the read handed the same value back. Measured with a setter
+            // that doubles — `Box.P = 7` then reading both the property and the backing field gave
+            // `7|0` where every other backend gives `14|14`. Only a setter with an observable
+            // effect can tell the two apart, which is why the tests use one.
+            var modifier = prop.IsStatic ? "static " : "";
+
             if (prop.Getter != null && !prop.IsWriteOnly)
-                EmitMemberBody($"get {SanitizeName(prop.Name)}()", prop.Getter, members);
+                EmitMemberBody($"{modifier}get {SanitizeName(prop.Name)}()", prop.Getter, members,
+                    isStatic: prop.IsStatic);
 
             // The setter's implementation already has a parameter named `value`, so the JS
             // accessor's parameter name matches for free.
             if (prop.Setter != null && !prop.IsReadOnly)
-                EmitMemberBody($"set {SanitizeName(prop.Name)}(value)", prop.Setter, members);
+                EmitMemberBody($"{modifier}set {SanitizeName(prop.Name)}(value)", prop.Setter, members,
+                    isStatic: prop.IsStatic);
         }
 
         private void EmitConstructor(IRClass irClass, IRConstructor ctor, HashSet<string> members)
@@ -587,15 +800,25 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
             var parameters = string.Join(", ", impl.Parameters.ConvertAll(p => SanitizeName(p.Name)));
             EmitMemberBody($"{(method.IsStatic ? "static " : "")}{SanitizeName(method.Name)}({parameters})",
-                impl, members);
+                impl, members, isStatic: method.IsStatic);
         }
 
-        /// <summary>Emits a class member's body, with member names resolving to this.X.</summary>
+        /// <summary>
+        /// Emits a class member's body, with member names resolving to this.X.
+        ///
+        /// <para><paramref name="isStatic"/> is what stops an unqualified call to an INSTANCE
+        /// sibling from being rewritten to <c>this.X()</c> inside a <c>Shared</c> member, where
+        /// <c>this</c> is the CLASS and the call would be a TypeError. That shape is invalid VB
+        /// the front end currently accepts (see MethodReference); emitting a plausible-looking
+        /// <c>this.</c> call for it would hide the gap rather than leave it visible.</para>
+        /// </summary>
         private void EmitMemberBody(string signature, IRFunction impl, HashSet<string> members,
-            List<string> prologue = null)
+            List<string> prologue = null, bool isStatic = false)
         {
             var savedMembers = _memberNames;
             _memberNames = members;
+            var savedStatic = _inStaticMember;
+            _inStaticMember = isStatic;
 
             CollectUsedOperands(impl);
             _currentFunction = impl;
@@ -631,6 +854,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
             _currentFunction = null;
             _memberNames = savedMembers;
+            _inStaticMember = savedStatic;
         }
 
         /// <summary>
@@ -881,10 +1105,21 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 // BasicLang `\`. JS has NO integer-division operator — `/` is always floating
                 // point — and .NET truncates TOWARD ZERO. Math.floor is the tempting wrong
                 // answer: it agrees for positives and gives -4 where .NET gives -3.
-                case BinaryOpKind.IntDiv: return $"Math.trunc({l} / {r})";
+                //
+                // ⚠ Both operands are INTEGRAL here: IRBuilder converts a floating operand to
+                // Long, half to even, before the divide (ADR-0005 D1). Before that, this trunc
+                // was applied to the float QUOTIENT and 7.5 \ 2 printed 3, not VB's 4. It is not
+                // dead now — it is the integer division itself: without it 7 \ 2 is 3.5.
+                //
+                // ⛔ Through the checked helper, not a bare Math.trunc: `7 \ 0` was Infinity and
+                // `7 Mod 0` NaN, printed as numbers where .NET throws DivideByZeroException (see
+                // EmitIntegerDivisionPrelude).
+                case BinaryOpKind.IntDiv: return $"{IntDivHelperName}({l}, {r})";
 
                 // .NET's Mod takes the sign of the DIVIDEND, and so does JS's %. They agree
-                // exactly, so a bare operator is correct here — unlike IntDiv above.
+                // exactly — except by zero, hence the helper for an integral Mod. A floating Mod
+                // by zero is NaN in .NET too, so it keeps the bare operator.
+                case BinaryOpKind.Mod when IsCheckedMod(op): return $"{ModHelperName}({l}, {r})";
                 case BinaryOpKind.Mod: return $"({l} % {r})";
 
                 // String concatenation is its own kind, so `+` here is never numeric addition
@@ -974,6 +1209,70 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
         /// <summary>The methods of the class being emitted (and its bases), use-site name → declared name.</summary>
         private Dictionary<string, string> _currentClassMethods = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// STATIC methods in scope for the class being emitted, mapped to their DECLARING class's
+        /// name — the method-side twin of <see cref="_staticMemberOwners"/>.
+        /// </summary>
+        private Dictionary<string, string> _staticMethodOwners = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>True while emitting a <c>Shared</c> member's body, where <c>this</c> is the class.</summary>
+        private bool _inStaticMember;
+
+        /// <summary>
+        /// The call target an UNQUALIFIED name lowers to inside a class body, or null when the
+        /// name is not a sibling method and the caller should fall through.
+        ///
+        /// <para>⛔ Without this, an unqualified sibling call emitted the BARE name — `Helper()`
+        /// — which is a ReferenceError at run time, because a class member body is not a
+        /// top-level function. It affected STATIC and INSTANCE siblings alike (both measured),
+        /// and it compiled clean every time: nothing failed until the program ran.</para>
+        ///
+        /// <para>⚠ A static is called on its DECLARING class and an instance method through
+        /// <c>this</c>, the same split <see cref="MemberReference"/> makes for fields. Statics
+        /// are checked FIRST so a Shared method shadowing a base's instance method of the same
+        /// name resolves the way the nearest declaration says.</para>
+        ///
+        /// <para>⛔ An unqualified INSTANCE call from inside a <c>Shared</c> member is deliberately
+        /// NOT rewritten. `this` is the class there, so `this.Inst()` would be a TypeError — and
+        /// the shape is invalid VB (BC30469, "Reference to a non-shared member requires an object
+        /// reference") that this front end WRONGLY ACCEPTS. Measured: MSIL compiles it and dies
+        /// with MissingMethodException. It is left alone rather than given a plausible-looking
+        /// lowering, so the front-end gap stays visible instead of being papered over here.</para>
+        /// </summary>
+        private string MethodReference(string name)
+        {
+            if (string.IsNullOrEmpty(name)) return null;
+
+            if (_staticMethodOwners.TryGetValue(name, out var owner))
+                return $"{SanitizeName(owner)}.{SanitizeName(name)}";
+
+            if (!_inStaticMember && _currentClassMethods.TryGetValue(name, out var declared))
+                return $"this.{SanitizeName(declared)}";
+
+            return null;
+        }
+
+        /// <summary>
+        /// The name of the class that DECLARES a STATIC method <paramref name="member"/> reachable
+        /// from <paramref name="typeName"/> (walking bases), else null. The static twin of
+        /// <see cref="DeclaredInstanceMethod"/>.
+        /// </summary>
+        private string DeclaringClassOfStaticMethod(string typeName, string member)
+        {
+            if (string.IsNullOrEmpty(typeName) || string.IsNullOrEmpty(member) || _module?.Classes == null) return null;
+
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            while (!string.IsNullOrEmpty(typeName) && seen.Add(typeName) &&
+                   _module.Classes.TryGetValue(typeName, out var cls) && cls != null)
+            {
+                foreach (var m in cls.Methods ?? new List<IRMethod>())
+                    if (m?.Name != null && m.IsStatic && string.Equals(m.Name, member, StringComparison.OrdinalIgnoreCase))
+                        return cls.Name;
+                typeName = cls.BaseClass;
+            }
+            return null;
+        }
 
         /// <summary>The declared name of an INSTANCE method <paramref name="member"/> on the class <paramref name="typeName"/> (or a base), else null.</summary>
         private string DeclaredInstanceMethod(string typeName, string member)
@@ -1388,6 +1687,11 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                     StdLibRegistry.IsStdLibFunction(functionName))
                     throw NoLowering(functionName);
 
+                // A SIBLING method called unqualified from inside the class. Checked after the
+                // stdlib refusal (a builtin's name is not silently captured by a class member)
+                // and before the passthrough, which would emit the bare name and ReferenceError.
+                if (MethodReference(functionName) is string sibling) return sibling;
+
                 return SanitizeName(functionName);
             }
 
@@ -1395,9 +1699,26 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             {
                 case "Console.WriteLine": return "console.log";
                 case "Console.Write":     return "process.stdout.write";
-                default:
-                    throw NoLowering(functionName);
             }
+
+            // `Type.Method(...)` where Method is Shared on Type (or on one of its bases).
+            //
+            // ⛔ Every such call was REFUSED outright — "no lowering for 'Box.Read'" — because
+            // this arm knew only the two Console names. That is the whole Shared-method surface:
+            // a qualified call, a call qualified by the class's own name from inside it, and an
+            // unqualified call from a Shared member (which arrives here already qualified).
+            //
+            // ⚠ Emitted on the DECLARING class, not the written one. A call would survive the
+            // written spelling — JS resolves statics up the prototype chain — but the declaring
+            // class is what the method actually belongs to, and it keeps this arm agreeing with
+            // MemberReference, where naming the wrong class silently creates a second static.
+            var dot = functionName.LastIndexOf('.');
+            var typeName = functionName.Substring(0, dot);
+            var methodName = functionName.Substring(dot + 1);
+            if (DeclaringClassOfStaticMethod(typeName, methodName) is string owner)
+                return $"{SanitizeName(owner)}.{SanitizeName(methodName)}";
+
+            throw NoLowering(functionName);
         }
 
         // ------------------------------------------------------------------
@@ -1555,7 +1876,8 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             // (IRBuilder renames a result to the variable it initialises), so a `const` here
             // would declare a fresh local and the member would never change — the method
             // would silently do nothing. Checked BEFORE the globals: class scope is nearer.
-            if (allowMember && _memberNames.Contains(name)) { Line($"this.{js} = {expression};"); return; }
+            if (allowMember && _memberNames.Contains(name))
+            { Line($"{MemberReference(name, js)} = {expression};"); return; }
 
             // A module-level Dim — assign.
             if (_globalNames.Contains(name)) { Line($"{js} = {expression};"); return; }
@@ -2403,14 +2725,23 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// that decision has since been made: the whole narrowing surface rounds, so
         /// <c>7 / 2</c> into an Integer is <b>4</b> on all four backends, not 3. VB rounds it.</para>
         ///
+        /// <para>⚠ A floating→<c>Long</c> cast DOES reach this backend, although no declared
+        /// position may be Long: IRBuilder inserts one on each floating operand of <c>\</c>
+        /// (ADR-0005 D1). It takes the floating arm above like any other narrowing — the helper
+        /// rounds without an int32 wrap, and the value never leaves an expression.</para>
+        ///
         /// <para>⛔ Integral→integral is NOT handled, and a <c>| 0</c> arm for it was written here
         /// and then removed as unreachable speculation. Measured: <c>Long</c> never reaches this
-        /// backend at all (<c>JsCapabilityChecker</c> rejects it with BL7003 — a JS number is
-        /// exact only to 2^53), and <c>Function … As Short</c> returning an Integer produces NO
+        /// backend in a DECLARED position (<c>JsCapabilityChecker</c> rejects it with BL7003 — a
+        /// JS number is exact only to 2^53), and <c>Function … As Short</c> returning an Integer produces NO
         /// cast, because the analyzer already types the expression <c>Short</c>. With no shape
         /// that reaches it, the arm could not be tested, so it keeps throwing — this file's
         /// <c>NotYet()</c> exists to refuse exactly that trade. (A Short return not being wrapped
-        /// to 16 bits is a real defect, but it is the analyzer's, and it is not this seam's.)</para>
+        /// to 16 bits is a real defect, but it is the analyzer's, and it is not this seam's.)
+        /// ⚠ That premise has one known exception, measured 2026-09-24 and refused identically
+        /// before and after ADR-0005 D1: the analyzer types <c>x \ y</c> with a floating operand
+        /// Long, so <c>Dim i As Integer = 7.5 \ 2</c> (or returning it As Integer) narrows
+        /// Long→Integer here and is refused. Deciding that arm is its own change.</para>
         /// </summary>
         private bool TryNumericCast(IRCast cast, out string rendered)
         {
@@ -2708,7 +3039,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             if (_declaredNames.Contains(v.Name)) return name;   // parameter or local shadows
             if (!_memberNames.Contains(v.Name)) return name;
 
-            return $"this.{name}";
+            return MemberReference(v.Name, name);
         }
 
         /// <summary>
@@ -2758,6 +3089,21 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 // Record the RESULT as a sequence so the next link in the chain resolves.
                 if (yieldsSequence && !string.IsNullOrEmpty(mc.Name)) _sequenceValued.Add(mc.Name);
                 return linq;
+            }
+
+            // ⛔ `obj.SharedMethod()` — legal BasicLang, and it emitted `obj.Read()`, which is a
+            // TypeError because a JS static does not live on the instance. It compiled clean and
+            // died at run time. The call goes to the DECLARING class instead.
+            //
+            // ⚠ The RECEIVER IS STILL EVALUATED, because it may have side effects and VB
+            // evaluates it — `Make().Shared()` must still run Make(). A bare identifier cannot
+            // have any, so the common case stays clean; anything else rides a comma expression,
+            // which keeps both the effect and its order. MSIL does the same thing by evaluating
+            // and then popping.
+            if (DeclaringClassOfStaticMethod(mc.Object?.Type?.Name, mc.MethodName) is string staticOwner)
+            {
+                var call = $"{SanitizeName(staticOwner)}.{SanitizeName(mc.MethodName)}({string.Join(", ", args)})";
+                return Receiver(receiver) == receiver ? call : $"({receiver}, {call})";
             }
 
             return $"{receiver}.{SanitizeName(mc.MethodName)}({string.Join(", ", args)})";

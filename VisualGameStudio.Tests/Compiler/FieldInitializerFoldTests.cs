@@ -33,11 +33,13 @@ namespace VisualGameStudio.Tests.Compiler;
 /// diagnostic anywhere. Measured, the behaviour CHANGES for these: <c>= Helper()</c> and
 /// <c>= CInt(2.5)</c> compiled before and read <b>0</b>, and are compile errors now.</para>
 ///
-/// <para>⚠ Two neighbouring shapes cannot reach this code at all, both PRE-EXISTING and measured:
-/// a <c>Const</c> inside a class does not PARSE ("Unexpected token in class: 'Const'"), so a named
-/// constant can never be referenced from a field initializer; and a <c>Structure</c> field
-/// initializer does not parse either ("Expected member name but found Assignment"), which makes
-/// the structure call site unreachable for initializers even though it is wired up.</para>
+/// <para>⚠ A <c>Const</c> inside a class PARSES as of 2026-09-18 (<see cref="ClassConstantTests"/>)
+/// and lowers to a static field through this same helper. Referencing that named constant from
+/// another initializer (<c>= K + 1</c>) is still refused, because the folder substitutes no named
+/// constants — a SHARED limit rather than a class one, since module scope refuses the identical
+/// shape. A <c>Structure</c> field initializer still does not parse ("Expected member name but
+/// found Assignment"), which keeps the structure call site unreachable for initializers even
+/// though it is wired up.</para>
 /// </summary>
 [TestFixture]
 public class FieldInitializerFoldTests
@@ -131,15 +133,16 @@ public class FieldInitializerFoldTests
     }
 
     /// <summary>
-    /// ⚠ C++ separately, because it spells a Double <c>3.500000</c> and a Boolean <c>True</c> —
-    /// long-recorded divergences, pinned as C++ actually behaves rather than normalised away.
+    /// ⚠ C++ separately, because it spells a Boolean <c>True</c> — a long-recorded divergence,
+    /// pinned as C++ actually behaves. (Its Double was <c>3.500000</c> until C++ got .NET's
+    /// formatter; it is <c>3.5</c> now — CppDoubleFormattingTests.)
     /// </summary>
     [Test]
     [Category("Integration")]
     [TestCase("Public N As Integer = 2 + 3", "PrintLine(CStr(c.N))", "5", TestName = "Cpp_Arithmetic")]
     [TestCase("Public N As Integer = (1 + 2) * 3", "PrintLine(CStr(c.N))", "9", TestName = "Cpp_Nested")]
     [TestCase("Public N As String = \"a\" & \"b\"", "PrintLine(c.N)", "ab", TestName = "Cpp_Concat")]
-    [TestCase("Public N As Double = 7.0 / 2.0", "PrintLine(CStr(c.N))", "3.500000", TestName = "Cpp_Double_FormattingPinned")]
+    [TestCase("Public N As Double = 7.0 / 2.0", "PrintLine(CStr(c.N))", "3.5", TestName = "Cpp_Double")]
     [TestCase("Public N As Boolean = 1 < 2", "PrintLine(CStr(c.N))", "True", TestName = "Cpp_Compare")]
     public void AFoldedFieldInitializer_ReachesTheCppProgram(
         string field, string print, string expected)

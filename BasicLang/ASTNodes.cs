@@ -614,7 +614,12 @@ namespace BasicLang.Compiler.AST
 
         public FunctionNode(int line, int column) : base(line, column)
         {
-            Access = AccessModifier.Private;  // Default to Private for multi-file
+            // Public, like SubroutineNode: VB's default for a procedure. ⛔ This was Private
+            // ("for multi-file") while a Sub's was Public, so a bare file-scope `Function F`
+            // came out `private static` on C# and a bare `Sub S` `public static` — the one
+            // backend that enforces access refused the cross-file call to the Function alone.
+            // The interface, extension-method and template parsers all take this default.
+            Access = AccessModifier.Public;
             Parameters = new List<ParameterNode>();
             GenericParameters = new List<string>();
             GenericTypeParams = new List<GenericTypeParameter>();
@@ -654,6 +659,20 @@ namespace BasicLang.Compiler.AST
         public bool IsReadOnly { get; set; }
         public bool IsWriteOnly { get; set; }
         public bool IsStatic { get; set; }       // Shared
+
+        /// <summary>
+        /// ⛔ WITHOUT THESE A PROPERTY OVERRIDE SILENTLY DID NOT DISPATCH. The parser already
+        /// parsed Overridable/Overrides for every class member, and <see cref="FunctionNode"/>
+        /// and <see cref="SubroutineNode"/> both carried them — a property had nowhere to put
+        /// them, so they were dropped one line after being read. Measured, compiled and run:
+        /// reading an overridden property through a base-typed variable answered the BASE's
+        /// value on MSIL and C#, with no diagnostic on either, because the emitted property was
+        /// plain (C# hiding is a warning, and `callvirt` on a non-virtual accessor binds
+        /// statically). A three-level chain answered the TOPMOST value.
+        /// </summary>
+        public bool IsVirtual { get; set; }      // Overridable
+        public bool IsOverride { get; set; }     // Overrides
+
         public BlockNode Getter { get; set; }
         public BlockNode Setter { get; set; }
         public ParameterNode SetterParameter { get; set; }  // The 'value' parameter
@@ -668,6 +687,20 @@ namespace BasicLang.Compiler.AST
         /// can tell the two apart, so it records which one it saw.</para>
         /// </summary>
         public bool IsAuto { get; set; }
+
+        /// <summary>
+        /// ⭐ ADR-0007's "ACCESSOR-BACKED": reading or writing this property may run USER CODE —
+        /// it declares a Get or Set block, or it is Overridable/Overrides, so a derived class's
+        /// accessor may run in its place (an Overrides member is itself overridable).
+        /// A plain auto-property is NOT: no user code runs behind it, so, like a plain field, it
+        /// is storage and out of the ruling's scope.
+        ///
+        /// <para>The analyzer copies it onto the property's symbol
+        /// (<c>Symbol.IsAccessorBacked</c>), which is what <c>IRBuilder</c>'s bare-name lowering
+        /// reads; <c>IRProperty.IsAccessorBacked</c> is the same fact read back off the IR by
+        /// <c>IRVerifier</c>'s Invariant F. Change the three together.</para>
+        /// </summary>
+        public bool IsAccessorBacked => Getter != null || Setter != null || IsVirtual || IsOverride;
 
         public PropertyNode(int line, int column) : base(line, column)
         {

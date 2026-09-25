@@ -74,6 +74,7 @@ public class NetShimPublisherTests
         Assert.That(env.ContainsKey("PATH"), Is.False);
     }
 
+    [Platform(Include = "Win", Reason = "feeds Windows paths (C:\\proj, C:\\out) into the host OS's Path APIs")]
     [Test]
     public void ExpectedDllPath_NamesTheDllAfterTheProject()
     {
@@ -82,6 +83,7 @@ public class NetShimPublisherTests
         Assert.That(dll, Is.EqualTo(Path.Combine("C:\\out", "BlnetTestShim.dll")));
     }
 
+    [Platform(Include = "Win", Reason = "feeds Windows paths (C:\\proj, C:\\out) into the host OS's Path APIs")]
     [Test]
     public void BuildResult_SucceedsWhenExitZeroAndDllPresent()
     {
@@ -93,6 +95,7 @@ public class NetShimPublisherTests
         Assert.That(result.ExitCode, Is.EqualTo(0));
     }
 
+    [Platform(Include = "Win", Reason = "feeds Windows paths (C:\\proj, C:\\out) into the host OS's Path APIs")]
     [Test]
     public void BuildResult_FailsOnNonZeroExit_ButStillReportsExpectedDllPath()
     {
@@ -104,6 +107,7 @@ public class NetShimPublisherTests
             "even on failure, DllPath should say where the shim was expected — callers (and the wrapper) rely on this instead of re-deriving the naming rule");
     }
 
+    [Platform(Include = "Win", Reason = "feeds Windows paths (C:\\proj, C:\\out) into the host OS's Path APIs")]
     [Test]
     public void BuildResult_FailsWhenExitZeroButDllMissing_DistinguishableFromABuildFailureByExitCode()
     {

@@ -655,6 +655,20 @@ namespace BasicLang.Compiler.IR
         public List<bool> ByRefArguments { get; set; }  // Track which arguments are by-ref
 
         /// <summary>
+        /// The <c>Module</c> that declares the callee, for a user procedure; null for anything
+        /// else (a class method, a stdlib or .NET call, a delegate invocation).
+        ///
+        /// <para>⛔ Carried BESIDE a bare <see cref="FunctionName"/>, never folded into it. The
+        /// old wire form for a cross-unit call was the dotted <c>"Helpers.Twice"</c>, and exactly
+        /// one backend honoured it: C++ strips the qualifier back off, JavaScript refused it
+        /// outright ("no lowering for 'Helpers.Twice'") and MSIL sanitised the dot away into a
+        /// call to <c>Combined::HelpersTwice</c>, a method nothing defines. Three backends spell
+        /// a module procedure by its bare (or owner-qualified) IR name; only C#, which emits one
+        /// static class per module, needs to know the owner — and reads it from here.</para>
+        /// </summary>
+        public string CalleeModule { get; set; }
+
+        /// <summary>
         /// P2a-2 Task 9 (Task-8 quality review I5) — HOW each by-ref argument is passed, for a
         /// call whose target is a resolved .NET member. Parallel to
         /// <see cref="ByRefArguments"/>, and consulted only where an entry exists.
@@ -1683,8 +1697,21 @@ namespace BasicLang.Compiler.IR
     {
         public string Name { get; set; }
         public TypeInfo Type { get; set; }
+
+        /// <summary>
+        /// The interface DECLARES a getter — not "the getter has a body"; an interface accessor
+        /// never has one. True unless the property is <see cref="IsWriteOnly"/> (ADR-0002).
+        /// </summary>
         public bool HasGetter { get; set; }
+
+        /// <summary>The interface DECLARES a setter. True unless <see cref="IsReadOnly"/> (ADR-0002).</summary>
         public bool HasSetter { get; set; }
+
+        /// <summary><c>ReadOnly Property</c>, as written — the source of truth for <see cref="HasSetter"/>.</summary>
+        public bool IsReadOnly { get; set; }
+
+        /// <summary><c>WriteOnly Property</c>, as written — the source of truth for <see cref="HasGetter"/>.</summary>
+        public bool IsWriteOnly { get; set; }
     }
 
     /// <summary>
@@ -1840,8 +1867,28 @@ namespace BasicLang.Compiler.IR
         public bool IsStatic { get; set; }
         public bool IsReadOnly { get; set; }
         public bool IsWriteOnly { get; set; }
+
+        /// <summary>
+        /// Overridable / Overrides, carried for the same reason <see cref="IRMethod"/> carries
+        /// them: a backend cannot mark an accessor virtual from information it never receives.
+        /// Dropping these here made every property override answer the BASE's value on MSIL and
+        /// C#, silently — see <c>PropertyNode.IsVirtual</c> for the measurement.
+        /// </summary>
+        public bool IsVirtual { get; set; }
+        public bool IsOverride { get; set; }
+
         public IRFunction Getter { get; set; }
         public IRFunction Setter { get; set; }
+
+        /// <summary>
+        /// ⭐ ADR-0007's "ACCESSOR-BACKED", read off the IR: using this property may run user code
+        /// — it has a Get or Set accessor function, or it is Overridable/Overrides (a derived
+        /// class's accessor may run in its place). A plain auto-property has neither and is
+        /// storage, like a field. The same fact as <c>PropertyNode.IsAccessorBacked</c>, which
+        /// IRBuilder's bare-name lowering reads through the analyzer's symbol; this copy is what
+        /// <see cref="Optimization.IRVerifier.CheckInvariantF"/> checks the lowering against.
+        /// </summary>
+        public bool IsAccessorBacked => Getter != null || Setter != null || IsVirtual || IsOverride;
     }
 
     /// <summary>

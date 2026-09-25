@@ -16,27 +16,26 @@ namespace VisualGameStudio.Tests.Compiler;
 internal static class CliTestHarness
 {
     /// <summary>
+    /// The file name of a .NET apphost on this OS: <c>BasicLang.exe</c> on Windows, plain
+    /// <c>BasicLang</c> on Linux/macOS (the SDK emits no extension there).
+    /// </summary>
+    public static string AppHostName(string name)
+        => OperatingSystem.IsWindows() ? name + ".exe" : name;
+
+    /// <summary>
     /// The real CLI deployed next to the tests.
     ///
-    /// <para>⛔ The apphost is named <c>BasicLang.exe</c> on Windows and <c>BasicLang</c> with no
-    /// extension everywhere else. Hardcoding the <c>.exe</c> spelling did not fail loudly — it
-    /// failed as "not deployed — project reference output changed?", which reads as a build-layout
-    /// problem and is why every spawned-CLI test in this suite was simply red off Windows rather
-    /// than reported as unsupported.</para>
+    /// <para>⛔ Hardcoding the <c>.exe</c> spelling did not fail loudly off Windows — it failed as
+    /// "not deployed — project reference output changed?", which reads as a build-layout problem
+    /// and is why every spawned-CLI test in this suite was simply red there.</para>
     /// </summary>
     public static string CliPath()
     {
-        var candidates = new[]
-        {
-            Path.Combine(AppContext.BaseDirectory, "BasicLang.exe"),
-            Path.Combine(AppContext.BaseDirectory, "BasicLang")
-        };
-
-        var cliPath = candidates.FirstOrDefault(File.Exists);
-        Assert.That(cliPath, Is.Not.Null,
-            "neither BasicLang.exe nor BasicLang is deployed next to the tests — project " +
-            "reference output changed?");
-        return cliPath!;
+        var cliName = AppHostName("BasicLang");
+        var cliPath = Path.Combine(AppContext.BaseDirectory, cliName);
+        Assert.That(File.Exists(cliPath), Is.True,
+            $"{cliName} not deployed next to the tests — project reference output changed?");
+        return cliPath;
     }
 
     public static Task<(int ExitCode, string StdOut, string StdErr)> RunCli(
@@ -147,9 +146,10 @@ internal static class CliTestHarness
             Assert.That(buildExit, Is.EqualTo(0),
                 $"CLI C# build failed.\nSTDOUT:\n{buildOut}\nSTDERR:\n{buildErr}");
 
-            var exes = Directory.GetFiles(projectDir, "App.exe", SearchOption.AllDirectories);
+            var appName = AppHostName("App");
+            var exes = Directory.GetFiles(projectDir, appName, SearchOption.AllDirectories);
             Assert.That(exes, Is.Not.Empty,
-                $"CLI build claimed success but produced no App.exe.\nSTDOUT:\n{buildOut}");
+                $"CLI build claimed success but produced no {appName}.\nSTDOUT:\n{buildOut}");
 
             var (runExit, runOut, runErr) = RunProcess(
                 exes[0], Array.Empty<string>(), Path.GetDirectoryName(exes[0])!, timeoutMs: 60_000,

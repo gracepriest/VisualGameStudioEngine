@@ -164,8 +164,8 @@ End Sub
         Assert.That(cpp, Is.Not.Null);
         Assert.That(UserCode(cpp), Does.Not.Contain(" ? "),
             "a literal '?' in the generated C++ is a syntax error that the CLI reports as success");
-        Assert.That(UserCode(cpp), Does.Contain("a / b"),
-            "integer division lowers to '/' on integral C++ operands");
+        Assert.That(UserCode(cpp), Does.Contain("BasicLang::IntDiv(a, b)"),
+            "integer division lowers to the checked helper (C++ '/' by zero is a SIGFPE trap)");
     }
 
     [Test]
@@ -215,7 +215,7 @@ End Sub
         Assert.That(errors, Is.Empty, "compilation should succeed");
         Assert.That(cpp, Is.Not.Null);
         Assert.That(UserCode(cpp), Does.Not.Contain(" ? "));
-        Assert.That(UserCode(cpp), Does.Contain("a / b"));
+        Assert.That(UserCode(cpp), Does.Contain("BasicLang::IntDiv(a, b)"));
     }
 
     // ========================================================================

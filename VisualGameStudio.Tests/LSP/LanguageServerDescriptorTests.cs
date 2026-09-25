@@ -67,6 +67,7 @@ public class LanguageServerDescriptorTests
     // D1 (decided): the descriptor holds NO project-scoped state — it is built through DI at
     // startup, when no project is open. --compile-commands-dir is DERIVED from workspaceRoot at
     // BuildStartInfo time.
+    [Platform(Include = "Win", Reason = "uses Windows workspace roots (C:\\…)")]
     [Test]
     public void Descriptor_Clangd_DerivesCompileCommandsDirFromWorkspaceRoot()
     {
@@ -87,6 +88,7 @@ public class LanguageServerDescriptorTests
     // also *contains* the flag, but Windows' CommandLineToArgvW (how clangd's argv is built)
     // splits an unquoted token at the space, and clangd would silently ignore the fragment.
     // Quoting the whole token is the only form that survives.
+    [Platform(Include = "Win", Reason = "uses Windows workspace roots (C:\\…)")]
     [Test]
     public void Descriptor_Clangd_CompileCommandsDir_IsOneArgvToken_EvenWithSpacesInThePath()
     {
@@ -120,6 +122,7 @@ public class LanguageServerDescriptorTests
     // THE ASYMMETRY GUARD (Task 4's near-miss, one level up). The working directory, the root on
     // the `initialize` wire and clangd's --compile-commands-dir must all derive from ONE trim
     // rule. A second copy inside the descriptor would agree with it right up until it didn't.
+    [Platform(Include = "Win", Reason = "uses Windows workspace roots (C:\\…)")]
     [Test]
     public void PaddedRoot_IsNormalizedOnce_ForBothTheWorkingDirectoryAndCompileCommandsDir()
     {

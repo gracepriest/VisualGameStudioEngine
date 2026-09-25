@@ -311,7 +311,7 @@ public class BuildService : IBuildService
 
         foreach (var config in project.Configurations.Values)
         {
-            var outputDir = Path.Combine(project.ProjectDirectory, config.OutputPath);
+            var outputDir = ResolveOutputDirectory(project.ProjectDirectory, config.OutputPath);
             if (Directory.Exists(outputDir))
             {
                 try
@@ -612,7 +612,7 @@ public class BuildService : IBuildService
             cancellationToken.ThrowIfCancellationRequested();
 
             var backend = GetBackendId(project.TargetBackend);
-            var outputDir = Path.Combine(project.ProjectDirectory, config.OutputPath);
+            var outputDir = ResolveOutputDirectory(project.ProjectDirectory, config.OutputPath);
 
             // ⚠ JavaScript only, and BEFORE the "Compiling N file(s)" announcement below. Reading
             // every form document on a C++ or C# build costs nothing useful and puts a page-emitter
@@ -801,7 +801,12 @@ public class BuildService : IBuildService
             result.OutputPath = outputDir;
 
             var generatedFilePath = Path.Combine(outputDir, result.GeneratedFileName);
-            await File.WriteAllTextAsync(generatedFilePath, generatedCode, cancellationToken);
+            // ⛔ Not for JavaScript: EmitJavaScriptSite below writes the script, with its
+            // sourceMappingURL. Writing it here as well wrote the same .js twice milliseconds
+            // apart, and on Windows the second write fails (ERROR_USER_MAPPED_FILE) whenever a
+            // scanner or indexer has mapped the freshly closed first copy in between.
+            if (backend != "javascript")
+                await File.WriteAllTextAsync(generatedFilePath, generatedCode, cancellationToken);
             _outputService.WriteLine($"Generated: {generatedFilePath}", OutputCategory.Build);
 
             // ---------- Other non-.NET backends stop at source ----------
@@ -898,8 +903,12 @@ public class BuildService : IBuildService
             {
                 result.Success = true;
 
-                // Find the executable (directly in the output directory)
-                var exePath = Path.Combine(outputDir, $"{project.Name}.exe");
+                // Find the executable (directly in the output directory). The SDK's apphost is
+                // <Name>.exe on Windows and extension-less <Name> on Linux/macOS — looking only for
+                // .exe reported a successful build with no executable there, so Run had nothing
+                // to start.
+                var exePath = Path.Combine(outputDir,
+                    OperatingSystem.IsWindows() ? $"{project.Name}.exe" : project.Name);
                 if (File.Exists(exePath))
                 {
                     result.ExecutablePath = exePath;
@@ -935,6 +944,23 @@ public class BuildService : IBuildService
 
         return result;
     }
+
+    /// <summary>
+    /// The absolute output directory for a configuration's <c>OutputPath</c>.
+    /// </summary>
+    /// <remarks>
+    /// ⛔ <c>OutputPath</c> is written MSBuild-style with a BACKSLASH (<c>bin\Debug</c>) by every
+    /// default, template and project file. <c>Path.Combine</c> leaves it as-is, which is right on
+    /// Windows and wrong everywhere else: on Linux/macOS <c>\</c> is an ordinary file-name
+    /// character, so the build wrote its output into one directory literally named
+    /// <c>bin\Debug</c>, then asked MSBuild for <c>bin/Debug/App.csproj</c> (MSB1009, "Project
+    /// file does not exist") — and a JavaScript build's imports resolved through an encoded
+    /// <c>bin%5CDebug</c> that Node rejects. The stored value is left alone (project files stay
+    /// portable); only the path built from it is normalized. A no-op on Windows. Public (not
+    /// internal) only so the test project can pin it — this assembly has no InternalsVisibleTo.
+    /// </remarks>
+    public static string ResolveOutputDirectory(string projectDirectory, string outputPath) =>
+        Path.Combine(projectDirectory, (outputPath ?? "").Replace('\\', Path.DirectorySeparatorChar));
 
     /// <summary>Maps the IDE's backend enum to the compiler's backend identifier.</summary>
     /// <remarks>
@@ -1142,6 +1168,7 @@ public class BuildService : IBuildService
                        (codeUpper.Contains("USING SYSTEM.WINDOWS.CONTROLS;") ||
                         codeUpper.Contains("USING SYSTEM.WINDOWS.MEDIA;"));
         bool usesDrawing = codeUpper.Contains("USING SYSTEM.DRAWING;");
+        bool usesAvalonia = codeUpper.Contains("USING AVALONIA;");
         bool usesAspNet = codeUpper.Contains("USING MICROSOFT.ASPNETCORE;");
 
         string outputType = project.OutputType switch
@@ -1156,7 +1183,11 @@ public class BuildService : IBuildService
         // detected from the generated code.
         bool enableWindowsForms = cliProject?.UseWindowsForms ?? false;
         bool enableWpf = cliProject?.UseWpf ?? false;
-        if (!enableWindowsForms && !enableWpf && project.OutputType == OutputType.WinExe)
+        // ⛔ Not for an Avalonia app: it is a WinExe with no UI flag (the avalonia-app template
+        // writes none), so this fallback made it WinForms — UseWindowsForms plus a net*-windows
+        // TFM — which only the Windows SDK can build (MSB4019 on Linux/macOS), for a framework
+        // that is cross-platform and never needed either. The CLI has no such fallback.
+        if (!enableWindowsForms && !enableWpf && project.OutputType == OutputType.WinExe && !usesAvalonia)
         {
             enableWpf = usesWpf;
             enableWindowsForms = usesWindowsForms || !usesWpf;

@@ -55,7 +55,7 @@ public class RaylibCoreC9ParityTests
                 Assert.That(wrapper.Contains($"Framework_{name}("), Is.True, $"RaylibWrapper.vb missing import Framework_{name}");
             }
 
-            var raylibHeader = File.ReadAllText(Path.Combine(root, "packages", "raylib.5.5.0", "build", "native", "include", "raylib.h"));
+            var raylibHeader = RaylibHeader.Read(root);
 
             // (a) The raylib directory/dropped sub-range (LoadDirectoryFiles .. GetFileModTime) is EXACTLY the 7 C9 names —
             // catches a forgotten function in that contiguous block (e.g. a missed UnloadDroppedFiles).

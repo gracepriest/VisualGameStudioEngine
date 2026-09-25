@@ -40,6 +40,18 @@ public class JavaScriptExecutionTests
     /// </summary>
     internal static string RunNodeScript(string js)
     {
+        var (exitCode, stdout, stderr) = RunNodeScriptForOutcome(js);
+        Assert.That(exitCode, Is.Zero,
+            $"node exited {exitCode}.\n--- stderr ---\n{stderr}\n--- generated JS ---\n{js}");
+        return stdout;
+    }
+
+    /// <summary>
+    /// <see cref="RunNodeScript"/> without the exit-code assertion, for a test whose pinned
+    /// behaviour IS an uncaught throw. Returns the exit code, trimmed stdout and stderr.
+    /// </summary>
+    internal static (int ExitCode, string StdOut, string StdErr) RunNodeScriptForOutcome(string js)
+    {
         var node = BasicLang.Runtime.NodeLocator.Find();
         if (node == null)
             Assert.Ignore("Node.js not found — the JS execution tier cannot run on this machine.");
@@ -83,10 +95,7 @@ public class JavaScriptExecutionTests
             var stdout = stdoutTask.GetAwaiter().GetResult();
             var stderr = stderrTask.GetAwaiter().GetResult();
 
-            Assert.That(p.ExitCode, Is.Zero,
-                $"node exited {p.ExitCode}.\n--- stderr ---\n{stderr}\n--- generated JS ---\n{js}");
-
-            return stdout.Trim();
+            return (p.ExitCode, stdout.Trim(), stderr);
         }
         finally
         {

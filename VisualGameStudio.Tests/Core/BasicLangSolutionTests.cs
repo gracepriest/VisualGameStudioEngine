@@ -19,6 +19,7 @@ public class BasicLangSolutionTests
         Assert.That(solution.GlobalProperties, Is.Empty);
     }
 
+    [Platform(Include = "Win", Reason = "feeds Windows paths (C:\\Solutions\\…) into the host OS's Path APIs")]
     [Test]
     public void SolutionDirectory_ExtractsDirectoryFromFilePath()
     {
@@ -113,6 +114,7 @@ public class SolutionProjectTests
         Assert.That(project1.Id, Is.Not.EqualTo(project2.Id));
     }
 
+    [Platform(Include = "Win", Reason = "feeds Windows paths (C:\\Solutions\\…) into the host OS's Path APIs")]
     [Test]
     public void GetFullPath_CombinesPaths()
     {

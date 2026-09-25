@@ -134,7 +134,7 @@ public class MixedProjectBuildTests
     [Test]
     public void Mixed_BasicLangNativeProject_WithUserCpp_DirectionA()
     {
-        if (CppToolchain.Find() == null) Assert.Ignore("No C++ toolchain available");
+        VisualGameStudio.Tests.Native.NativeBuildSkip.RequireMsvcForBasicLangNative();
 
         var project = MakeProject(
             BackendCppBlproj("DirA"),
@@ -161,7 +161,7 @@ public class MixedProjectBuildTests
     [Test]
     public void Mixed_PureBasicLang_NativeBackend_StillBuilds()
     {
-        if (CppToolchain.Find() == null) Assert.Ignore("No C++ toolchain available");
+        VisualGameStudio.Tests.Native.NativeBuildSkip.RequireMsvcForBasicLangNative();
 
         var project = MakeProject(
             BackendCppBlproj("PureBl"),
@@ -284,7 +284,7 @@ public class MixedProjectBuildTests
     [Test]
     public void Mixed_FrameworkCall_AutoLinksEngineLib_AndDeploysDll()
     {
-        if (CppToolchain.Find() == null) Assert.Ignore("No C++ toolchain available");
+        VisualGameStudio.Tests.Native.NativeBuildSkip.RequireMsvcForBasicLangNative();
         if (EngineDeployment.LocateImportLib() == null)
             Assert.Ignore("VisualGameStudioEngine.lib not found (engine not built on this machine)");
 
@@ -349,7 +349,7 @@ public class MixedProjectBuildTests
     [Test]
     public void Mixed_StaleGeneratedFiles_AreCleaned()
     {
-        if (CppToolchain.Find() == null) Assert.Ignore("No C++ toolchain available");
+        VisualGameStudio.Tests.Native.NativeBuildSkip.RequireMsvcForBasicLangNative();
 
         var objGen = Path.Combine(_dir, "obj", "gen");
         Directory.CreateDirectory(objGen);
@@ -409,7 +409,7 @@ public class MixedProjectBuildTests
     [Test]
     public async Task Cli_Build_BackendCppBasicLangProject_LandsInConvergedLayout()
     {
-        if (CppToolchain.Find() == null) Assert.Ignore("No C++ toolchain available");
+        VisualGameStudio.Tests.Native.NativeBuildSkip.RequireMsvcForBasicLangNative();
 
         // Plain BasicLang project (no <Language>Cpp>) targeting the C++ backend —
         // before Task 5 this built via the legacy single-TU path to
@@ -440,7 +440,7 @@ public class MixedProjectBuildTests
     [Test]
     public async Task Cli_Build_MixedProject_CppError_EmitsNormalizedDiagnostic()
     {
-        if (CppToolchain.Find() == null) Assert.Ignore("No C++ toolchain available");
+        VisualGameStudio.Tests.Native.NativeBuildSkip.RequireMsvcForBasicLangNative();
 
         // A BasicLang/native-backend project with a bad hand-written .cpp: before
         // Task 5 this hit the legacy CLI arm (CppToolchain.CompileToExecutable),

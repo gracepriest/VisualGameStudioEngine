@@ -56,7 +56,7 @@ public class RaylibCoreC11ParityTests
                 Assert.That(wrapper.Contains($"Framework_{name}("), Is.True, $"RaylibWrapper.vb missing import Framework_{name}");
             }
 
-            var raylibHeader = File.ReadAllText(Path.Combine(root, "packages", "raylib.5.5.0", "build", "native", "include", "raylib.h"));
+            var raylibHeader = RaylibHeader.Read(root);
             var range = ExtractRlapiRange(raylibHeader, "LoadAutomationEventList(", "PlayAutomationEvent(");
             Assert.That(range, Is.EquivalentTo(C11Names),
                 "raylib's LoadAutomationEventList..PlayAutomationEvent range must be exactly the 8 automation names");

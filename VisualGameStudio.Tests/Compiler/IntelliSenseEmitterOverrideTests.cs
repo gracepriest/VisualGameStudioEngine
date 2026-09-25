@@ -115,6 +115,11 @@ public class IntelliSenseEmitterOverrideTests
     [Test]
     public void Emit_PinnedToGcc_WithoutResolveById_FallsBackToClangDefault()
     {
+        // The premise is "gcc is NOT on PATH" (true on the Windows dev box this was written on).
+        // Where gcc IS installed, the real probe finds it and there is no fallback to pin.
+        if (CppToolchain.TryFindById("gcc") != null)
+            Assert.Ignore("pins the fallback taken when gcc is not installed; this machine has gcc on PATH");
+
         var project = WriteProject("gcc");
 
         var result = IntelliSenseEmitter.Emit(project, "Debug", toolchain: null);

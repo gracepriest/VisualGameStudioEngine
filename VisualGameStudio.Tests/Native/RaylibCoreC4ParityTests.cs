@@ -64,7 +64,7 @@ public class RaylibCoreC4ParityTests
 
             // Completeness cross-check against raylib.h: the RLAPI range LoadShader..UnloadShader is EXACTLY the 10 shader
             // names — catches a forgotten function in that contiguous block (e.g. a missed SetShaderValueV).
-            var raylibHeader = File.ReadAllText(Path.Combine(root, "packages", "raylib.5.5.0", "build", "native", "include", "raylib.h"));
+            var raylibHeader = RaylibHeader.Read(root);
             var range = ExtractRlapiRange(raylibHeader, "LoadShader(", "UnloadShader(");
             Assert.That(range, Is.EquivalentTo(C4ShaderNames),
                 "raylib's LoadShader..UnloadShader range must be exactly the 10 shader-management names");

@@ -56,6 +56,9 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             _usesFramework = false;
             _frameworkFunctionsUsed.Clear();
             _tempCounter = 0;
+            _userTempShapedNames = IRTempNames.UserOwned(combined);
+            foreach (var unit in unitModules ?? Array.Empty<IRModule>())
+                _userTempShapedNames.UnionWith(IRTempNames.UserOwned(unit));
             // P2a-2 Task 7a: drives the aggregate header's boundary includes (see
             // EmitNetBoundaryIncludes) — same walk as the phase-3 collector.
             DetectNetSurface(combined);
@@ -205,7 +208,8 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                                          List<IRFunction> templateFunctions)
         {
             // KEEP IN SYNC with Generate() section order (CppCodeGenerator.cs): forward decls →
-            // enums → delegates → interfaces → classes → static inits → globals → externs → functions.
+            // enums → delegates → interfaces → function prototypes → global declarations →
+            // classes → static inits → global definitions → externs → template definitions.
             WriteLine("#pragma once");
             WriteLine($"#include \"{RuntimeHeaderFileName}\"");
             WriteLine();
@@ -256,6 +260,13 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 }
             }
 
+            // Prototypes and `extern` global declarations BEFORE the class bodies, for the same
+            // reason as the combined emission (see Generate): an inline member body sees only
+            // what precedes its class. The `inline` definitions below pair with these
+            // declarations — an `extern T g;` followed by `inline T g = …;` in the same header
+            // is one inline variable, measured on g++ and clang++ across two translation units.
+            EmitDeclarationsClassBodiesNeed(module, standaloneFunctions, globalPrefix: "extern ");
+
             if (module.Classes.Count > 0)
             {
                 WriteLine("// Classes");
@@ -289,7 +300,16 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                     // project path emits split headers instead, so `Dim g(4, 3)` built through a
                     // project produced `inline ... g = {};` and ACCESS-VIOLATED on the first
                     // index while the identical program run through the CLI was correct.
-                    var init = SizedArrayInitializer(globalVar.Type, type) ?? "{}";
+                    //
+                    // ⛔ And the DECLARED initializer was dropped here too, in the same way the
+                    // combined emission dropped it until 2026-09-17: `Public Count As Integer = 5`
+                    // built through a project was `inline int32_t Count = {};` and read 0 — the
+                    // wrong number from a build that reported success, on this path alone.
+                    // Measured while pairing these definitions with the `extern` declarations
+                    // above. Same rule as the combined site: a declared initializer wins.
+                    var init = globalVar.InitialValue != null
+                        ? ValueText(globalVar.InitialValue)
+                        : SizedArrayInitializer(globalVar.Type, type) ?? "{}";
                     WriteLine($"inline {type} {name} = {init};");
                 }
                 WriteLine();
@@ -306,16 +326,6 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 }
                 Unindent();
                 WriteLine("}");
-                WriteLine();
-            }
-
-            if (standaloneFunctions.Count > 0)
-            {
-                WriteLine("// Function declarations");
-                foreach (var function in standaloneFunctions)
-                {
-                    GenerateFunctionDeclaration(function);
-                }
                 WriteLine();
             }
 
@@ -368,11 +378,16 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // cstdio/cstring/ostream: needed by the always-spliced P1 BCL runtime bodies
             // (bl_bcltypes/bl_decimal below) — the spliced consts are include-free by contract,
             // so the generator owns their std headers (combined-mode counterpart: GenerateHeader).
+            // "limits": NaN/Infinity Single/Double constants render as std::numeric_limits<T>::…
+            // (CppFloatLiteral / CppDoubleLiteral) — same reason as the combined emission.
             var includes = new HashSet<string>
             {
                 "iostream", "vector", "string", "cstdint", "cmath", "algorithm", "cstdlib",
                 "ctime", "functional", "coroutine", "exception", "iterator",
-                "unordered_map", "unordered_set", "stdexcept", "cstdio", "cstring", "ostream"
+                "unordered_map", "unordered_set", "stdexcept", "cstdio", "cstring", "ostream",
+                "limits",
+                // BasicLang::FormatDouble/FormatSingle (the spliced BCL body) use std::to_chars.
+                "charconv"
             };
             foreach (var inc in _headerIncludes)
             {
@@ -414,6 +429,10 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // the combined mode (GenerateHeader in CppCodeGenerator.cs — keep in sync).
             // The typed-catch ladder's trigger is source-level, not surface-level.
             SpliceRuntimeSource(CppNetExceptionRuntime.Source);
+
+            // Checked integral `\` / `Mod`, after the NetException it throws — mirroring the
+            // combined mode (keep in sync).
+            SpliceRuntimeSource(CppIntegerDivisionRuntime.Source);
 
             // D-P7 NetRef (P2a-2 flip): UNCONDITIONAL, mirroring the combined mode —
             // ManagedOwned declaration positions lower to BasicLang::NetRef even with an

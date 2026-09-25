@@ -219,7 +219,7 @@ namespace BasicLang.Compiler.ProjectSystem
                 {
                     var include = compile.Attribute("Include")?.Value;
                     if (!string.IsNullOrEmpty(include))
-                        project.SourceFiles.Add(include);
+                        project.SourceFiles.Add(ToLocalPath(include));
                 }
 
                 // C++ include directories
@@ -227,7 +227,7 @@ namespace BasicLang.Compiler.ProjectSystem
                 {
                     var include = includeDir.Attribute("Include")?.Value;
                     if (!string.IsNullOrEmpty(include))
-                        project.IncludeDirs.Add(include);
+                        project.IncludeDirs.Add(ToLocalPath(include));
                 }
 
                 // C++ native libraries to link
@@ -235,7 +235,7 @@ namespace BasicLang.Compiler.ProjectSystem
                 {
                     var include = nativeLib.Attribute("Include")?.Value;
                     if (!string.IsNullOrEmpty(include))
-                        project.NativeLibs.Add(include);
+                        project.NativeLibs.Add(ToLocalPath(include));
                 }
 
                 // C++ preprocessor defines
@@ -266,7 +266,7 @@ namespace BasicLang.Compiler.ProjectSystem
                 {
                     var include = projectRef.Attribute("Include")?.Value;
                     if (!string.IsNullOrEmpty(include))
-                        project.ProjectReferences.Add(include);
+                        project.ProjectReferences.Add(ToLocalPath(include));
                 }
 
                 // Assembly references
@@ -279,7 +279,7 @@ namespace BasicLang.Compiler.ProjectSystem
                         project.AssemblyReferences.Add(new AssemblyReference
                         {
                             Name = include,
-                            HintPath = hintPath
+                            HintPath = ToLocalPath(hintPath)
                         });
                     }
                 }
@@ -458,6 +458,51 @@ namespace BasicLang.Compiler.ProjectSystem
         }
 
         /// <summary>
+        /// A path as written in a project file, converted to this OS's separators.
+        /// </summary>
+        /// <remarks>
+        /// ⛔ Project files store paths MSBuild-style with BACKSLASHES (<c>Source\Main.bas</c>,
+        /// <c>&lt;HintPath&gt;lib\MyLib.dll&lt;/HintPath&gt;</c>) — every Windows-authored project does.
+        /// On Linux/macOS a backslash is an ordinary file-name character, so combining such a path
+        /// with the project directory names ONE file literally called <c>Source\Main.bas</c>:
+        /// <see cref="GetSourceFiles"/> then matched nothing and SILENTLY dropped the file from the
+        /// build, and every HintPath failed BL6021 "does not exist". Applied once, at load, to every
+        /// path-valued item so no consumer has to remember it. A no-op on Windows. Public because the
+        /// IDE's project loader (a different assembly) reads the same files.
+        /// </remarks>
+        public static string ToLocalPath(string storedPath) =>
+            Path.DirectorySeparatorChar == '\\' || string.IsNullOrEmpty(storedPath)
+                ? storedPath
+                : storedPath.Replace('\\', Path.DirectorySeparatorChar);
+
+        /// <summary>
+        /// <c>Directory.GetFiles(root, pattern, AllDirectories)</c> in a FIXED order: each
+        /// directory's files sorted, then its subdirectories, breadth-first, sorted.
+        /// </summary>
+        /// <remarks>
+        /// ⛔ The file order decides the order of declarations in generated C++ headers, so it must
+        /// not depend on the file system. <c>GetFiles</c> returns entries in the file system's own
+        /// order: alphabetical on NTFS, effectively arbitrary on Linux/macOS — so the same project
+        /// generated different C++ per machine. This walks the tree the way .NET's enumerator does
+        /// (a directory's files, then its subdirectories queued breadth-first) with each level
+        /// sorted case-insensitively like NTFS, so Windows' order is unchanged and every other OS
+        /// now matches it.
+        /// </remarks>
+        private static IEnumerable<string> GetFilesInWindowsOrder(string root, string pattern)
+        {
+            var pending = new Queue<string>();
+            pending.Enqueue(root);
+            while (pending.Count > 0)
+            {
+                var dir = pending.Dequeue();
+                foreach (var file in Directory.GetFiles(dir, pattern).OrderBy(f => f, StringComparer.OrdinalIgnoreCase))
+                    yield return file;
+                foreach (var sub in Directory.GetDirectories(dir).OrderBy(d => d, StringComparer.OrdinalIgnoreCase))
+                    pending.Enqueue(sub);
+            }
+        }
+
+        /// <summary>
         /// Get all source files for this project (resolves globs)
         /// </summary>
         public IEnumerable<string> GetSourceFiles()
@@ -478,7 +523,7 @@ namespace BasicLang.Compiler.ProjectSystem
                 // check is here for the reason the C++ one names: Win32 globbing lets "*.bas"
                 // match a longer extension that merely starts with it.
                 foreach (var ext in BasicLangSourceExtensions)
-                    foreach (var file in Directory.GetFiles(projectDir, "*" + ext, SearchOption.AllDirectories))
+                    foreach (var file in GetFilesInWindowsOrder(projectDir, "*" + ext))
                         if (string.Equals(Path.GetExtension(file), ext, StringComparison.OrdinalIgnoreCase)
                             && !IsInBuildOutputDir(projectDir, file))
                             yield return file;
@@ -493,7 +538,8 @@ namespace BasicLang.Compiler.ProjectSystem
 
                     if (Directory.Exists(dir))
                     {
-                        foreach (var file in Directory.GetFiles(dir, filePattern))
+                        foreach (var file in Directory.GetFiles(dir, filePattern)
+                                     .OrderBy(f => f, StringComparer.OrdinalIgnoreCase))
                             yield return file;
                     }
                 }

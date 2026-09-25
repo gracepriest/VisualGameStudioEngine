@@ -5,6 +5,66 @@ using BasicLang.Compiler.SemanticAnalysis;
 
 namespace BasicLang.Compiler.IR.Optimization
 {
+    /// <summary>The three answers the kill vocabulary gives (ADR-0006 D1).</summary>
+    public enum WriteKind
+    {
+        /// <summary>Writes no variable name (a call may still write what a callee can reach —
+        /// see <see cref="WriteSet.IsCall"/>).</summary>
+        None,
+        /// <summary>Writes exactly <see cref="WriteSet.Names"/> (plus, for a call, what a callee
+        /// can reach).</summary>
+        Named,
+        /// <summary>May write ANY name: every pass kills everything across it.</summary>
+        Universal,
+    }
+
+    /// <summary>
+    /// What one instruction may write — the answer of
+    /// <see cref="OptimizationPass.NamesWrittenBy"/>, the one kill vocabulary (ADR-0006 D1).
+    /// </summary>
+    public readonly struct WriteSet
+    {
+        private static readonly IReadOnlyList<string> NoNames = Array.Empty<string>();
+
+        private WriteSet(WriteKind kind, IReadOnlyList<string> names, bool isCall, bool isClassified)
+        {
+            Kind = kind;
+            Names = names ?? NoNames;
+            IsCall = isCall;
+            IsClassified = isClassified;
+        }
+
+        public WriteKind Kind { get; }
+
+        /// <summary>The names written, for <see cref="WriteKind.Named"/>; empty otherwise.</summary>
+        public IReadOnlyList<string> Names { get; }
+
+        /// <summary>True when the instruction ALSO writes every name a call can reach
+        /// (<see cref="OptimizationPass.IsCallVisible(IRVariable, IRFunction)"/>): a call, or
+        /// anything that acts like one for a kill.</summary>
+        public bool IsCall { get; }
+
+        /// <summary>False only for a kind the vocabulary has no arm for — which answers
+        /// <see cref="WriteKind.Universal"/> and fails <see cref="IRVerifier"/>'s Invariant V.</summary>
+        public bool IsClassified { get; }
+
+        public bool IsUniversal => Kind == WriteKind.Universal;
+
+        public static WriteSet Nothing => new WriteSet(WriteKind.None, null, false, true);
+        public static WriteSet Everything => new WriteSet(WriteKind.Universal, null, true, true);
+        public static WriteSet Unclassified => new WriteSet(WriteKind.Universal, null, true, false);
+
+        public static WriteSet Of(List<string> names, bool isCall) =>
+            names != null && names.Count > 0
+                ? new WriteSet(WriteKind.Named, names, isCall, true)
+                : new WriteSet(WriteKind.None, null, isCall, true);
+
+        public override string ToString() =>
+            !IsClassified ? "Unclassified (Universal)"
+            : Kind == WriteKind.Universal ? "Universal"
+            : (Kind == WriteKind.Named ? "Named{" + string.Join(",", Names) + "}" : "None") + (IsCall ? " +call" : "");
+    }
+
     /// <summary>
     /// Base class for optimization passes
     /// </summary>
@@ -43,6 +103,46 @@ namespace BasicLang.Compiler.IR.Optimization
         /// <para>Uses reference equality throughout: two structurally identical operands are
         /// distinct values here, and only the one being replaced may be rewritten.</para>
         /// </summary>
+        /// <summary>
+        /// Carries the IDENTITY of a replaced value onto the value standing in for it, and returns
+        /// the replacement so it can be used inline.
+        ///
+        /// <para><b>Why a pass that rewrites a value MUST call this.</b> Passing the old
+        /// <c>Name</c> to the replacement's constructor is NOT enough — a value's identity is the
+        /// name PLUS <see cref="IRValue.NamedAfterVariable"/>, which is what tells a backend that
+        /// the result IS an assignment to that variable rather than a temp that shares its name.
+        /// A replacement built without it defaults to false, so the C# and JavaScript backends
+        /// stop recognising the store: the write to a CLASS MEMBER is emitted as a fresh local
+        /// (<c>const K = ...</c>) on JavaScript and DROPPED ENTIRELY on C#, and the field silently
+        /// keeps its old value. Nothing fails to compile and a plausible number is printed.</para>
+        ///
+        /// <para>MEASURED: <c>K = p * 2</c> on a Shared field printed the field's initial value,
+        /// because strength reduction rewrote the multiply to a shift and the new node carried the
+        /// name but not the flag. C++ and MSIL were unaffected — they do not consult it — so two
+        /// backends were right and two were silently wrong.</para>
+        ///
+        /// <para><see cref="IRInstruction.SourceLine"/> rides along for the reason strength
+        /// reduction already carried it by hand: the replacement stands in for the user's own
+        /// statement, and dropping the line leaves <c>SourceLine 0</c> ("synthesized"), which makes
+        /// a debug build emit a <c>#line</c> reset onto generated glue for a line the user wrote,
+        /// so stepping lands in the wrong place.</para>
+        ///
+        /// <para>⚠ The NAME is deliberately NOT copied here: every call site already passes it to
+        /// the replacement's constructor, so an assignment would act and change nothing. MEASURED —
+        /// removing it left all 18 tests green, while corrupting it failed 11, so the tests are
+        /// sensitive to the name without the line being needed. This helper carries only what was
+        /// being LOST. A future caller that does not name its replacement wants a different
+        /// signature, not a silent re-assignment here.</para>
+        /// </summary>
+        protected static T InheritIdentity<T>(T replacement, IRValue original) where T : IRValue
+        {
+            if (replacement == null || original == null) return replacement;
+
+            replacement.NamedAfterVariable = original.NamedAfterVariable;
+            replacement.SourceLine = original.SourceLine;
+            return replacement;
+        }
+
         protected static void ReplaceUses(IEnumerable<IRInstruction> instructions, IRValue oldValue, IRValue newValue)
         {
             if (instructions == null) return;
@@ -50,145 +150,843 @@ namespace BasicLang.Compiler.IR.Optimization
                 ReplaceUsesIn(inst, oldValue, newValue);
         }
 
-        private static void ReplaceInList(List<IRValue> operands, IRValue oldValue, IRValue newValue)
+        /// <summary>
+        /// True when <paramref name="name"/> is an SSA temp minted by
+        /// <see cref="IRFunction.GetNextTempName"/> (<c>t0</c>, <c>t1</c>, …) or one of the
+        /// historical <c>_tmp</c>/<c>_t0</c> spellings, rather than a name the USER wrote.
+        ///
+        /// <para><b>Why a pass that rewrites a value needs this.</b> The two destinations behave
+        /// oppositely when a rewrite replaces an <see cref="IRValue"/> with an
+        /// <see cref="IRAssignment"/>. A user-named destination is a declared local, so the
+        /// assignment must STAY and consumers are re-pointed at its target. A temp is declared
+        /// ONLY because some <c>IRValue</c> instruction in the block carries that name — an
+        /// <c>IRAssignment</c> is not an <c>IRValue</c>, so swapping one in DELETES the
+        /// declaration while leaving the write behind. MEASURED on <c>Show(a + 0)</c>, whose
+        /// peephole rewrite emitted <c>t0 = a;</c> against an undeclared <c>t0</c>: CS0103 on C#,
+        /// "use of undeclared identifier" on C++, ReferenceError on JavaScript. For a temp the
+        /// definition must therefore be REMOVED and its consumers forwarded to the value itself.</para>
+        ///
+        /// <para>⚠ <see cref="ConstantFoldingPass"/> keeps its own copy of this test deliberately;
+        /// see the note there. It is not a second implementation of this one — it answers
+        /// differently for a user variable spelled <c>T5</c>, and reconciling the two is a
+        /// behaviour change that has to be measured on its own rather than smuggled into a fix
+        /// for something else.</para>
+        /// </summary>
+        protected internal static bool IsTempDestination(string name)
         {
-            if (operands == null) return;
-            for (int i = 0; i < operands.Count; i++)
-                if (ReferenceEquals(operands[i], oldValue)) operands[i] = newValue;
+            if (string.IsNullOrEmpty(name)) return true;
+            if (name.StartsWith("_tmp", StringComparison.OrdinalIgnoreCase)) return true;
+            if (name.StartsWith("_t", StringComparison.OrdinalIgnoreCase) && name.Length > 2 && char.IsDigit(name[2])) return true;
+            if (name.Length >= 2 && name[0] == 't' && char.IsDigit(name[1])) return true;
+            return false;
         }
 
         /// <summary>
-        /// One arm per IR node that CONSUMES a value. Definition slots are deliberately absent:
-        /// <c>IRAssignment.Target</c> is an <see cref="IRVariable"/> being written, not a use.
+        /// ⭐ THE CALL-VISIBILITY RULE (ADR-0006 D3): whether a CALL can write
+        /// <paramref name="variable"/> without the write appearing in <paramref name="function"/>.
+        /// ONE predicate, the DECLARATIONS rule — true unless the variable is <c>Const</c>, a
+        /// by-value parameter of <paramref name="function"/>, or a declared local of it.
+        /// Everything else — a module variable, a class member read bare, a <c>ByRef</c>
+        /// parameter, and any name the function does not declare — is storage a callee can reach.
+        ///
+        /// <para>⭐ ONE RULE, EVERY CONSUMER. CSE's <c>ReadsCallVisible</c> (operands) and
+        /// <see cref="IsCallVisibleDestination"/> (destinations), LICM's read check in
+        /// <c>VariablesWrittenIn</c>, and <see cref="IRVerifier"/>'s call arm (all of
+        /// <c>Guard(v)</c>) delegate here. Before D3 the operand side used a FLAG rule,
+        /// <c>(IsGlobal &amp;&amp; !IsConst) || IsByRef</c>, whose polarity is wrong: a variable
+        /// with no flag set was private, and a class field read bare inside a method lowers to an
+        /// <see cref="IRVariable"/> with no flag set. MEASURED (Q3, the DEFAULT pipeline):
+        /// <c>K = Seed(1) : a = K + q : Inc() : l(0) = K + q</c> with <c>Inc</c> bumping the field
+        /// <c>K</c> printed <c>3,3</c> on C++, JavaScript and MSIL where <c>13,3</c> is correct —
+        /// CSE merged across the call, because the destination half asked the declarations and
+        /// the operand half asked the flags. Unknown now means VISIBLE, the only safe default for
+        /// a kill vocabulary: a missing declaration only loses a merge.</para>
+        ///
+        /// <para>The flags a node carries are consulted only in the SAFE direction. <c>Const</c>
+        /// is immutable. <c>IsGlobal</c> / <c>IsByRef</c> mean this node is not a frame-private
+        /// declaration even if a local of the same NAME exists (a local shadowing a module
+        /// variable), so they can only ADD visibility. A missing flag never removes it.</para>
+        ///
+        /// <para>⛔ NOT a replicability test, and <see cref="IRReplicability.IsReplicable"/> must
+        /// NOT delegate here (ADR-0004 D2): "can a call change this?" (kill) is not "may this be
+        /// evaluated twice?" (replicate).</para>
         /// </summary>
-        private static void ReplaceUsesIn(IRInstruction inst, IRValue oldValue, IRValue newValue)
+        protected internal static bool IsCallVisible(IRVariable variable, IRFunction function)
         {
+            if (variable == null) return false;
+            if (variable.IsConst) return false;
+            if (variable.IsGlobal || variable.IsByRef) return true;
+            // An IRVariable with no name is not a declaration of anything — unknown, so visible.
+            if (string.IsNullOrEmpty(variable.Name)) return true;
+            return IsCallVisible(variable.Name, function);
+        }
+
+        /// <summary>
+        /// <see cref="IsCallVisible(IRVariable, IRFunction)"/> for a variable known only by NAME —
+        /// a value's named destination, which carries no <see cref="IRVariable"/> flags. The
+        /// declarations half of the rule, and the ONE place it is written.
+        /// </summary>
+        protected internal static bool IsCallVisible(string name, IRFunction function)
+        {
+            if (string.IsNullOrEmpty(name)) return false;
+            // ⭐ ADR-0006 D1's INTERIM CLOSURE RULE, here and nowhere else (every consumer reaches
+            // the declarations through this method): in a function that contains a lambda, every
+            // local is call-visible — a lambda may capture it by reference, and a call may invoke
+            // the lambda. MEASURED before this rule: `Dim bump = Sub() x = x + 1` with `bump()` in
+            // a loop let LICM hoist `x * 2` (L5, JavaScript under --optimize printed 6 for 12), and
+            // `a = p + q : clr() : l(0) = p + q` with `clr = Sub() a = 0` let CSE read the cleared
+            // `a` back (A1, JavaScript printed 0,0 for 3,0). A BY-VALUE PARAMETER is a local of the
+            // frame for this purpose — a lambda captures it the same way (MEASURED:
+            // `Sub Work(p, q) : bump = Sub() p = p + 100 : a = p + q : bump() : l(0) = p + q`
+            // printed 3,3 for 103,3 on JavaScript). Task #122 narrows "every local" to the capture
+            // set; that is a pure precision gain. A Const is still exempt: nothing can write it.
+            if (function?.Parameters != null)
+                foreach (var parameter in function.Parameters)
+                    if (string.Equals(parameter.Name, name, StringComparison.OrdinalIgnoreCase))
+                        return parameter.IsByRef || ContainsLambda(function);
+            if (function?.LocalVariables != null)
+                foreach (var local in function.LocalVariables)
+                    if (string.Equals(local.Name, name, StringComparison.OrdinalIgnoreCase))
+                        return !local.IsConst && (local.IsGlobal || ContainsLambda(function));
+            // Undeclared: a class member read bare, a module variable, or a name whose
+            // declaration IRFunction does not carry. The last only costs a merge or a hoist.
+            // ⚠ IRBuilder leaves three locals out of LocalVariables: a For Each loop variable
+            // (MEASURED: `For Each x … a = x + q : Console.WriteLine(a) : l.Add(x + q)` loses the
+            // merge it made before D3), a Catch variable and the With carrier (both objects, so
+            // never an operand of a CSE candidate).
+            return true;
+        }
+
+        /// <summary>
+        /// Whether <paramref name="function"/> creates a lambda — the trigger of ADR-0006 D1's
+        /// interim closure rule (<see cref="IsCallVisible(string, IRFunction)"/>). IRBuilder lowers a
+        /// lambda to its own <see cref="IRFunction"/> named <c>__lambda_N</c> and leaves the
+        /// enclosing function an <see cref="IRVariable"/> spelled that name wherever the delegate
+        /// value is used — the same reference every backend recognises the lambda by
+        /// (<c>CppCodeGenerator</c>, <c>JavaScriptBackend.IsLambdaRef</c>, <c>CSharpBackend</c>).
+        /// The walk follows every operand slot (<see cref="UsesOf"/>) and descends into operand
+        /// instructions, so a reference inside a never-emitted When guard is found too.
+        ///
+        /// <para>Cached per function, because every consumer asks per operand. A YES is kept for
+        /// good (a stale yes only costs a merge). A NO is kept only while the function's
+        /// instruction count is unchanged, and is otherwise re-walked — the hole left is an
+        /// instruction REPLACED in place by one that references a lambda, which nothing does:
+        /// IRBuilder writes every lambda reference before any pass runs, and no pass creates one
+        /// (the one pass that could copy code between functions, FunctionInliningPass, is not
+        /// registered).</para>
+        /// </summary>
+        protected internal static bool ContainsLambda(IRFunction function)
+        {
+            if (function?.Blocks == null) return false;
+            int count = 0;
+            foreach (var block in function.Blocks) count += block?.Instructions?.Count ?? 0;
+            if (LambdaScans.TryGetValue(function, out var cached) && (cached.Found || cached.InstructionCount == count))
+                return cached.Found;
+            bool found = ScanForLambda(function);
+            LambdaScans.AddOrUpdate(function, new LambdaScan(found, count));
+            return found;
+        }
+
+        private sealed record LambdaScan(bool Found, int InstructionCount);
+
+        private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<IRFunction, LambdaScan> LambdaScans = new();
+
+        private static bool ScanForLambda(IRFunction function)
+        {
+            var seen = new HashSet<IRValue>(ReferenceEqualityComparer.Instance);
+            var pending = new Stack<IRValue>();
+            foreach (var block in function.Blocks)
+            {
+                if (block?.Instructions == null) continue;
+                foreach (var inst in block.Instructions)
+                {
+                    if (inst == null) continue;
+                    foreach (var used in UsesOf(inst)) pending.Push(used);
+                    while (pending.Count > 0)
+                    {
+                        var value = pending.Pop();
+                        if (value == null || !seen.Add(value)) continue;
+                        if (value is IRVariable variable)
+                        {
+                            if (variable.Name != null && variable.Name.StartsWith("__lambda_", StringComparison.Ordinal))
+                                return true;
+                            continue;
+                        }
+                        foreach (var operand in UsesOf(value)) pending.Push(operand);
+                    }
+                }
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// The variable a value instruction's DESTINATION names, or null when it names none: an
+        /// anonymous SSA temp, and two kinds whose name is NOT a variable — an
+        /// <see cref="IRAlloca"/> (its name spells a STORAGE SLOT, <c>V_addr</c>, whose address
+        /// no later write to <c>V</c> moves) and an <see cref="IRConstant"/> left in a block by
+        /// <see cref="ConstantFoldingPass"/> (every backend emits its VALUE, never reads it back
+        /// by name). Each of those two was a MEASURED false hit in the verifier before it was
+        /// excluded (four <c>V_addr</c>/<c>N_addr</c> across a call over the fast subset; one
+        /// <c>const_there,</c> in <c>AssignmentCoercionTests.ANonNumericStore_IsLeftAlone</c>).
+        ///
+        /// <para>A temp-SHAPED name is still a variable when the value is
+        /// <see cref="IRValue.NamedAfterVariable"/> — the same two disjuncts CSE's own merge arm
+        /// tests — because <c>IRBuilder.SeparateTempsFromUserNames</c> renames the compiler's
+        /// temp, never the user's variable, so a renamed value spelled <c>t1</c> IS the user's
+        /// <c>t1</c>.</para>
+        /// </summary>
+        protected internal static string NamedDestination(IRValue value)
+        {
+            if (value == null || string.IsNullOrEmpty(value.Name)) return null;
+            if (value is IRAlloca || value is IRConstant) return null;
+            if (value.NamedAfterVariable || !IsTempDestination(value.Name)) return value.Name;
+            return null;
+        }
+
+        /// <summary>
+        /// Whether a call can write the variable <paramref name="value"/>'s DESTINATION names —
+        /// the destination's half of the call-visibility question (ADR-0005 D2: the destination
+        /// is guarded like a read). A destination that names no variable
+        /// (<see cref="NamedDestination"/>) cannot be written by anyone; one that does is answered
+        /// by the one rule, <see cref="IsCallVisible(string, IRFunction)"/> (ADR-0006 D3).
+        /// </summary>
+        protected internal static bool IsCallVisibleDestination(IRValue value, IRFunction function)
+            => NamedDestination(value) is string name && IsCallVisible(name, function);
+
+        /// <summary>
+        /// THE KILL VOCABULARY (ADR-0006 D1): what <paramref name="inst"/> may WRITE — a set of
+        /// variable NAMES, whether it is a call (which additionally writes every name a callee
+        /// can reach, <see cref="IsCallVisible(IRVariable, IRFunction)"/>), or everything.
+        ///
+        /// <para>⭐ SHARED, and the sharing is the point (ADR-0005 D2): CSE's
+        /// <c>Invalidate</c> kills on exactly these writes, LICM's <c>VariablesWrittenIn</c>
+        /// counts exactly these writes, and <see cref="IRVerifier"/>'s Invariant S′ calls exactly
+        /// these writes "assigned". A write form missing here is missing for ALL of them — the
+        /// verifier cannot catch a pass for a write the vocabulary does not name, and that is
+        /// deliberate: a gap is fixed once, here.</para>
+        ///
+        /// <para>⭐ TOTAL (ADR-0006 D1). Every IR instruction kind is on exactly ONE arm of the
+        /// switch below, with the reason it writes what it writes. A kind that is on NO arm —
+        /// one added to IRNodes.cs after this was written — answers
+        /// <see cref="WriteKind.Universal"/> (every pass kills everything across it: weak, never
+        /// wrong) with <see cref="WriteSet.IsClassified"/> false, and <see cref="IRVerifier"/>'s
+        /// Invariant V fires on it in test builds. So the verifier's independence is
+        /// COMPLETENESS, not a second write model: it cannot catch a classified kind whose
+        /// answer is wrong (only execution probes can), but it catches every kind nobody
+        /// classified.</para>
+        ///
+        /// <para>⚠ When you add an IR node kind, add it to an arm here, stating what it writes.
+        /// Leaving it off is safe for output but fails Invariant V in every test that builds
+        /// it.</para>
+        ///
+        /// <para>⛔ USER CODE MUST REACH THE IR AS A CALL (ADR-0007). No per-kind answer here can see
+        /// user code hidden behind a node that is neither a call nor a member access, and the fix
+        /// is never a name- or type-based guess in a pass — it is lowering the construct to a node
+        /// this vocabulary already classifies as a call:
+        /// <list type="bullet">
+        /// <item>a Property used BARE inside its own class. It used to lower to an
+        /// <see cref="IRAssignment"/> to <c>P</c> / a read of an <see cref="IRVariable"/>
+        /// <c>Tick</c>, and <c>a = K + q : P = 10 : l(0) = K + q</c> with P's setter writing K
+        /// printed 3,3 for 12,3 on JavaScript and MSIL. IRBuilder now lowers it to the
+        /// IRFieldStore / IRFieldAccess its <c>Me.</c> (or, Shared, <c>Class.</c>) form produces,
+        /// classified below as calls; <see cref="IRVerifier"/>'s Invariant F fires if a bare
+        /// accessor-backed property reaches the IR as a variable again;</item>
+        /// <item>a user-defined operator or conversion (<c>Operator +</c>, <c>CType</c>) applied to
+        /// class operands — unreachable today (the analyzer rejects the use). ADR-0007 binds the
+        /// commit that makes it reachable to lower it to an <see cref="IRCall"/> (or a node V
+        /// classifies as a call), never to an IRBinaryOp / IRCompare / IRUnaryOp / IRCast, and to
+        /// extend Invariant F to match.</item>
+        /// </list>
+        /// <see cref="CopyPropagationPass"/> keeps its OWN kill rules and is not a consumer of this
+        /// vocabulary at all (a copy fact for a field survives a call that writes the field:
+        /// MEASURED wrong on all four backends, C# included — task #146).</para>
+        /// </summary>
+        protected internal static WriteSet NamesWrittenBy(IRInstruction inst, IRFunction function)
+        {
+            List<string> names = null;
+            void Name(string name)
+            {
+                if (!string.IsNullOrEmpty(name)) (names ??= new List<string>()).Add(name);
+            }
+
+            // ADR-0006 D1 (b) and its converse — see the two rules after the switch: whether this
+            // instruction writes a VARIABLE that is a ByRef parameter of the function, and whether
+            // it writes storage a ByRef parameter may ALIAS (a call-visible variable, or an
+            // element or member no variable names).
+            // Both only matter in a function that HAS a ByRef parameter; elsewhere they are not
+            // computed at all.
+            bool hasByRef = HasByRefParameter(function);
+            bool throughByRef = false;
+            bool escapes = false;
+            void Variable(string name)
+            {
+                Name(name);
+                if (!hasByRef || string.IsNullOrEmpty(name)) return;
+                if (IsByRefParameter(name, function)) throughByRef = true;
+                else if (IsCallVisible(name, function)) escapes = true;
+            }
+            // A value instruction's own destination: always a kill name (a temp too — CSE keys on
+            // it), and a VARIABLE write when it names one (NamedDestination: not a temp, an
+            // alloca slot or a folded constant).
+            void Definition(IRValue value)
+            {
+                Name(value.Name);
+                if (hasByRef && NamedDestination(value) is string variable)
+                {
+                    if (IsByRefParameter(variable, function)) throughByRef = true;
+                    else if (IsCallVisible(variable, function)) escapes = true;
+                }
+            }
+
+            bool isCall = false;
             switch (inst)
             {
-                case IRBinaryOp binOp:
-                    if (ReferenceEquals(binOp.Left, oldValue)) binOp.Left = newValue;
-                    if (ReferenceEquals(binOp.Right, oldValue)) binOp.Right = newValue;
+                case null:
+                    return WriteSet.Nothing;
+
+                // ---- Writes nothing: control flow and markers. Each reads at most one operand
+                // (a condition, a returned or thrown value) and assigns no storage. A branch's
+                // TARGET blocks are separate blocks, classified instruction by instruction.
+                case IRBranch:
+                case IRConditionalBranch:
+                case IRReturn:
+                case IRLabel:
+                case IRComment:
+                    return WriteSet.Nothing;
+
+                // ---- A plain assignment writes its target.
+                case IRAssignment assignment:
+                    Variable(assignment.Target?.Name);
                     break;
-                case IRUnaryOp unOp:
-                    if (ReferenceEquals(unOp.Operand, oldValue)) unOp.Operand = newValue;
-                    break;
-                case IRCompare cmp:
-                    if (ReferenceEquals(cmp.Left, oldValue)) cmp.Left = newValue;
-                    if (ReferenceEquals(cmp.Right, oldValue)) cmp.Right = newValue;
-                    break;
-                case IRLoad load:
-                    if (ReferenceEquals(load.Address, oldValue)) load.Address = newValue;
-                    break;
+
+                // ---- A store writes the variable its address names.
                 case IRStore store:
-                    if (ReferenceEquals(store.Value, oldValue)) store.Value = newValue;
-                    if (ReferenceEquals(store.Address, oldValue)) store.Address = newValue;
+                    if (store.Address is IRVariable stored) Variable(stored.Name);
+                    else if (store.Address is IRAlloca slot)
+                    {
+                        // An alloca is the backing slot of a local (`V_addr` for an array `V`):
+                        // C# and C++ write the local `V` itself, MSIL the slot. Both are named.
+                        Name(slot.Name);
+                        if (slot.Name != null && slot.Name.EndsWith("_addr", StringComparison.OrdinalIgnoreCase))
+                            Variable(slot.Name.Substring(0, slot.Name.Length - "_addr".Length));
+                    }
+                    else escapes = true; // an element, through a pointer
                     break;
-                case IRGetElementPtr gep:
-                    if (ReferenceEquals(gep.BasePointer, oldValue)) gep.BasePointer = newValue;
-                    ReplaceInList(gep.Indices, oldValue, newValue);
+
+                // ---- An element store writes storage no variable names: an array or collection
+                // slot, which a ByRef parameter may alias (the caller passed `arr(0)`).
+                case IRArrayStore:
+                    escapes = true;
                     break;
-                case IRConditionalBranch condBr:
-                    if (ReferenceEquals(condBr.Condition, oldValue)) condBr.Condition = newValue;
-                    break;
-                case IRSwitch sw:
-                    if (ReferenceEquals(sw.Value, oldValue)) sw.Value = newValue;
-                    if (sw.Cases != null)
-                        for (int i = 0; i < sw.Cases.Count; i++)
-                            if (ReferenceEquals(sw.Cases[i].CaseValue, oldValue))
-                                sw.Cases[i] = (newValue, sw.Cases[i].Target);
-                    if (sw.PatternCases != null)
-                        foreach (var patternCase in sw.PatternCases)
-                            ReplaceUsesInPattern(patternCase, oldValue, newValue);
-                    break;
-                case IRReturn ret:
-                    if (ReferenceEquals(ret.Value, oldValue)) ret.Value = newValue;
-                    break;
-                case IRCall call:
-                    if (ReferenceEquals(call.CalleeValue, oldValue)) call.CalleeValue = newValue;
-                    ReplaceInList(call.Arguments, oldValue, newValue);
-                    break;
-                case IRCast cast:
-                    if (ReferenceEquals(cast.Value, oldValue)) cast.Value = newValue;
-                    break;
-                case IRAssignment asg:
-                    if (ReferenceEquals(asg.Value, oldValue)) asg.Value = newValue;
-                    break;
-                case IRArrayStore arrayStore:
-                    if (ReferenceEquals(arrayStore.Array, oldValue)) arrayStore.Array = newValue;
-                    if (ReferenceEquals(arrayStore.Index, oldValue)) arrayStore.Index = newValue;
-                    if (ReferenceEquals(arrayStore.Value, oldValue)) arrayStore.Value = newValue;
-                    break;
-                case IRAwait await:
-                    if (ReferenceEquals(await.Expression, oldValue)) await.Expression = newValue;
-                    break;
-                case IRYield yield:
-                    if (ReferenceEquals(yield.Value, oldValue)) yield.Value = newValue;
-                    break;
-                case IRIndexerAccess indexerAccess:
-                    if (ReferenceEquals(indexerAccess.Collection, oldValue)) indexerAccess.Collection = newValue;
-                    ReplaceInList(indexerAccess.Indices, oldValue, newValue);
-                    break;
+                // The same for a collection slot — and a call when the node carries a resolved
+                // .NET `set_Item` accessor (§8.5): that is .NET code running, not a native store.
+                // A native collection's setter is library code that runs no user code.
                 case IRIndexerStore indexerStore:
-                    if (ReferenceEquals(indexerStore.Collection, oldValue)) indexerStore.Collection = newValue;
-                    ReplaceInList(indexerStore.Indices, oldValue, newValue);
-                    if (ReferenceEquals(indexerStore.Value, oldValue)) indexerStore.Value = newValue;
+                    escapes = true;
+                    if (indexerStore.ResolvedNetTarget != null) isCall = true;
                     break;
-                case IRForEach forEach:
-                    if (ReferenceEquals(forEach.Collection, oldValue)) forEach.Collection = newValue;
-                    break;
-                case IRThrow thrown:
-                    if (ReferenceEquals(thrown.Exception, oldValue)) thrown.Exception = newValue;
-                    break;
-                case IRNewObject newObject:
-                    ReplaceInList(newObject.Arguments, oldValue, newValue);
-                    break;
-                case IRInstanceMethodCall instanceCall:
-                    if (ReferenceEquals(instanceCall.Object, oldValue)) instanceCall.Object = newValue;
-                    ReplaceInList(instanceCall.Arguments, oldValue, newValue);
-                    break;
-                case IRBaseMethodCall baseCall:
-                    ReplaceInList(baseCall.Arguments, oldValue, newValue);
-                    break;
-                case IRFieldAccess fieldAccess:
-                    if (ReferenceEquals(fieldAccess.Object, oldValue)) fieldAccess.Object = newValue;
-                    break;
+
+                // ---- A member store names its MEMBER (ADR-0006 D1 (a)). Inside a class method a
+                // field is read BARE, as an IRVariable spelled like the member, so `Me.K = 0`
+                // writes the `K` that `K + q` reads. MEASURED before this arm (A5b, A6): C++ and
+                // MSIL printed `0,0` for `K = p + q : Me.K = 0 : l(0) = p + q` (right `3,0`), and
+                // C++, JavaScript and MSIL printed `3,3` for `a = K + q : Me.K = 10 : l(0) = K + q`
+                // (right `12,3`). The receiver is not consulted: `o.K = 0` may alias `Me`, and a
+                // Shared `Box.K = 0` writes the same member a bare `K` reads.
+                //
+                // ⛔ ...and it is a CALL: IRBuilder lowers `obj.P = v` to IRFieldStore for a
+                // PROPERTY as well as a field ("both properties and fields use field store
+                // syntax"), and a Property Set runs user code. MEASURED before this: `a = K + q :
+                // Me.P = 10 : l(0) = K + q`, with P's setter writing K, printed 3,3 for 12,3 on
+                // JavaScript and MSIL. The node does not say which it is, so every member store
+                // is treated as one that may run a setter.
                 case IRFieldStore fieldStore:
-                    if (ReferenceEquals(fieldStore.Object, oldValue)) fieldStore.Object = newValue;
-                    if (ReferenceEquals(fieldStore.Value, oldValue)) fieldStore.Value = newValue;
+                    isCall = true;
+                    Name(fieldStore.FieldName);
+                    escapes = true; // a member, which a ByRef parameter may alias (`Work(K)`)
                     break;
-                case IRTupleElement tupleElement:
-                    if (ReferenceEquals(tupleElement.Tuple, oldValue)) tupleElement.Tuple = newValue;
+
+                // ---- A member READ may run a Property Get (IRBuilder lowers `obj.P` to
+                // IRFieldAccess for both), which can write anything a call can. MEASURED: with a
+                // getter that bumps the field K, `a = K + q : t = Me.Tick : l(0) = K + q` printed
+                // 3,3,11 for 13,3,11 on JavaScript and MSIL.
+                case IRFieldAccess fieldAccess:
+                    isCall = true;
+                    Definition(fieldAccess);
+                    break;
+
+                // ---- Calls: the result's name (a rename, `Dim p = Seed(1)`), every ByRef
+                // argument (the write is invisible in this block — no IRAssignment and no rename
+                // for it; MEASURED on `Bump(p)` with a ByRef `p`: C++ and MSIL printed the stale
+                // answer), and — through isCall — everything a callee can reach.
+                case IRCall call:
+                    isCall = true;
+                    Definition(call);
+                    NameByRefArguments(call.Arguments, call.ByRefArguments, ref names);
+                    break;
+                case IRInstanceMethodCall methodCall:
+                    isCall = true;
+                    Definition(methodCall);
+                    NameByRefArguments(methodCall.Arguments, methodCall.ByRefArguments, ref names);
+                    break;
+                // A constructor is a call. The node records no ByRef flags, so, as for a base
+                // call, every VARIABLE argument is treated as written: VB passes it by reference
+                // to a `Sub New(ByRef n)`. (Today every backend lowers such a parameter BY VALUE —
+                // measured, a separate defect — so this costs a merge and buys nothing until one
+                // does not; it is the answer the node's meaning requires.)
+                case IRNewObject newObject:
+                    isCall = true;
+                    Definition(newObject);
+                    NameVariableArguments(newObject.Arguments, ref names);
+                    break;
+                // `MyBase.Bump()` is a call like any other (ADR-0006 D1 (c)): MEASURED before
+                // this arm, a base method that writes a field the caller reads bare printed `3,3`
+                // for `13,3` on C++, JavaScript and MSIL (`a = K + q : MyBase.Bump() :
+                // l(0) = K + q`). The node records no ByRef flags, and C++ does pass a ByRef
+                // argument by reference (`MyBase.SetIt(p)` MEASURED stale on C++), so every
+                // VARIABLE argument is treated as written (see NameVariableArguments).
+                case IRBaseMethodCall baseCall:
+                    isCall = true;
+                    Definition(baseCall);
+                    NameVariableArguments(baseCall.Arguments, ref names);
+                    break;
+
+                // ---- A NAMED value instruction redefines that name. `Dim p = Seed(1)` is an
+                // IRCall renamed `p`; `p = p + 10` is an IRBinaryOp renamed `p`. Neither produces an
+                // IRAssignment, so without this arm the two measured shapes are not covered at all.
+                case IRConstant:
+                case IRVariable:
+                case IRBinaryOp:
+                case IRCompare:
+                case IRCast:
+                case IRLoad:
+                case IRAlloca:
+                case IRGetElementPtr:
+                case IRPhi:
+                case IRArrayAlloc:
+                case IRTupleElement:
+                    Definition((IRValue)inst);
+                    break;
+
+                // A collection read is a definition — and a call when the node carries a resolved
+                // .NET `get_Item` accessor (§8.5), as for IRIndexerStore above.
+                case IRIndexerAccess indexerAccess:
+                    Definition(indexerAccess);
+                    if (indexerAccess.ResolvedNetTarget != null) isCall = true;
+                    break;
+
+                // ---- `++x` / `--x` (IRUnaryOp Inc/Dec) writes its OPERAND as well as its result:
+                // the C# backend emits `t = ++x`, so `x` changes. (C++ increments the RESULT
+                // instead and JavaScript and MSIL refuse the operator — backend matters, not what
+                // the node means.) Every other unary operator is a pure definition.
+                case IRUnaryOp unary:
+                    Definition(unary);
+                    if (unary.Operation is UnaryOpKind.Inc or UnaryOpKind.Dec)
+                    {
+                        if (unary.Operand is IRVariable incremented) Variable(incremented.Name);
+                        else if (unary.Operand is IRFieldAccess member) { Name(member.FieldName); escapes = true; }
+                        else escapes = true; // an element
+                    }
+                    break;
+
+                // ---- For Each writes its loop variable on every iteration, and each iteration
+                // runs the enumerator — an Iterator function's body, or a user collection's
+                // MoveNext/Current — so it is also a call. The body and continuation are separate
+                // blocks, classified instruction by instruction.
+                case IRForEach forEach:
+                    isCall = true;
+                    Variable(forEach.VariableName);
+                    break;
+
+                // ---- Try/Catch writes each Catch variable when that clause catches. The try,
+                // catch and finally BODIES are separate blocks, classified on their own.
+                case IRTryCatch tryCatch:
+                    if (tryCatch.CatchClauses != null)
+                        foreach (var clause in tryCatch.CatchClauses)
+                            Variable(clause?.VariableName);
+                    break;
+
+                // ---- Select Case writes every pattern BINDING variable (`Case x As Integer`,
+                // `Case Is String s`), and it EVALUATES every When guard itself: IRBuilder lowers a
+                // guard with its emission suppressed, so the guard's instructions sit in no block
+                // and each backend renders the tree inline at the switch. A guard may call
+                // anything, so a switch with one is a call. Case VALUES are ordinary instructions
+                // emitted before the switch, classified on their own.
+                case IRSwitch switchInst:
+                    if (switchInst.PatternCases != null)
+                        foreach (var patternCase in switchInst.PatternCases)
+                            ClassifyPattern(patternCase, Variable, ref isCall);
+                    break;
+
+                // ---- Writes nothing: a throw transfers control to a handler (the Catch variable
+                // is IRTryCatch's write, above) and assigns no storage.
+                case IRThrow:
+                    return WriteSet.Nothing;
+
+                // ---- Raw target-language text can assign ANY variable: classified UNIVERSAL
+                // (explicitly — unlike an unclassified kind, this is a decision, not a gap).
+                case IRInlineCode:
+                    return WriteSet.Everything;
+
+                // ---- SUSPENSION POINTS are calls. At `Await` and at `Yield` control leaves the
+                // function and other code runs before it resumes — the awaited continuation's
+                // neighbours, the iterator's consumer — and can write anything a callee could.
+                // MEASURED before this arm: an Iterator that yields `K + 1` twice around a
+                // consumer that bumps the field `K` yielded 2,2 on C++ (right 2,12): CSE merged
+                // the two sums across the Yield.
+                case IRAwait awaited:
+                    isCall = true;
+                    Definition(awaited);
+                    break;
+                case IRYield:
+                    isCall = true;
+                    break;
+
+                default:
+                    // UNCLASSIFIED: a kind added after this switch was written. Every pass kills
+                    // everything across it, and Invariant V reports it.
+                    return WriteSet.Unclassified;
+            }
+
+            // ADR-0006 D1 (b): a write THROUGH a ByRef parameter writes every escaping name. The
+            // parameter may alias ANY storage its caller could pass — another ByRef parameter
+            // bound to the same argument (A2b: `n = p + q : m = 0 : l(0) = p + q` called as
+            // `Work(v, v)`, MEASURED 0,0 on C++ and MSIL, right 3,0), a module variable, a field.
+            // That set is exactly what a call can write (IsCallVisible), so the write kills as a
+            // call does.
+            if (throughByRef) isCall = true;
+
+            // ...and its converse: a write to storage a ByRef parameter may ALIAS writes that
+            // parameter. `n = p + q : G = 0 : l(0) = p + q` called as `Work(G)` is the same
+            // aliasing seen from the other side (MEASURED 0,0 on C++ and MSIL, right 3,0, with G a
+            // module variable, with a field read bare, and with `Me.K = 0`). Implementer's
+            // completion of rule (b), ADR-0006 implementation note; only adds kills.
+            if (escapes)
+                foreach (var parameter in function.Parameters)
+                    if (parameter.IsByRef) Name(parameter.Name);
+
+            return WriteSet.Of(names, isCall);
+        }
+
+        /// <summary>Whether <paramref name="function"/> has any <c>ByRef</c> parameter.</summary>
+        protected internal static bool HasByRefParameter(IRFunction function)
+        {
+            if (function?.Parameters == null) return false;
+            foreach (var parameter in function.Parameters)
+                if (parameter.IsByRef) return true;
+            return false;
+        }
+
+        /// <summary>Whether <paramref name="name"/> is a <c>ByRef</c> parameter of
+        /// <paramref name="function"/> — storage that aliases whatever its caller passed.</summary>
+        protected internal static bool IsByRefParameter(string name, IRFunction function)
+        {
+            if (string.IsNullOrEmpty(name) || function?.Parameters == null) return false;
+            foreach (var parameter in function.Parameters)
+                if (parameter.IsByRef && string.Equals(parameter.Name, name, StringComparison.OrdinalIgnoreCase))
+                    return true;
+            return false;
+        }
+
+        /// <summary>
+        /// The pattern half of <see cref="NamesWrittenBy"/>'s IRSwitch arm: every binding
+        /// variable a Select Case pattern introduces (through Or alternatives and tuple elements),
+        /// and a call whenever a pattern carries a When guard (evaluated inline by the switch).
+        /// </summary>
+        private static void ClassifyPattern(IRPatternCase pattern, Action<string> variable, ref bool isCall)
+        {
+            if (pattern == null) return;
+            if (!string.IsNullOrEmpty(pattern.BindingVariable)) variable(pattern.BindingVariable);
+            if (pattern.WhenGuard != null) isCall = true;
+            switch (pattern)
+            {
+                case IROrPatternCase or:
+                    if (or.Alternatives != null)
+                        foreach (var alternative in or.Alternatives) ClassifyPattern(alternative, variable, ref isCall);
+                    break;
+                case IRTuplePatternCase tuple:
+                    if (tuple.Elements != null)
+                        foreach (var element in tuple.Elements) ClassifyPattern(element, variable, ref isCall);
                     break;
             }
         }
 
-        private static void ReplaceUsesInPattern(IRPatternCase patternCase, IRValue oldValue, IRValue newValue)
+        /// <summary>
+        /// The ByRef arm of <see cref="NamesWrittenBy"/> for a call node that records NO ByRef
+        /// flags: any argument that is a VARIABLE may be bound to a ByRef parameter, so its name
+        /// is written. Only a variable needs naming: an argument that reads a member, an element
+        /// or anything else a callee can reach is already killed by the call arm, and an rvalue
+        /// (a sum, a call result) reaches a ByRef parameter as a temporary copy.
+        /// </summary>
+        private static void NameVariableArguments(List<IRValue> arguments, ref List<string> names)
+        {
+            if (arguments == null) return;
+            foreach (var argument in arguments)
+                if (argument is IRVariable variable && !string.IsNullOrEmpty(variable.Name))
+                    (names ??= new List<string>()).Add(variable.Name);
+        }
+
+        /// <summary>The ByRef arm of <see cref="NamesWrittenBy"/>: every name read by an argument
+        /// passed by reference is an OUTPUT of the call (an argument such as <c>h.F</c> or
+        /// <c>arr(i)</c> writes storage reachable through <c>h</c> / <c>arr</c>).</summary>
+        private static void NameByRefArguments(List<IRValue> arguments, List<bool> byRefFlags, ref List<string> names)
+        {
+            if (arguments == null || byRefFlags == null) return;
+            for (int i = 0; i < arguments.Count && i < byRefFlags.Count; i++)
+                if (byRefFlags[i]) CollectNames(arguments[i], names ??= new List<string>());
+        }
+
+        /// <summary>
+        /// Gathers every variable name read anywhere in <paramref name="value"/>'s operand tree,
+        /// plus the value's own destination name (the IRBuilder names result values after their
+        /// assignment target, so a renamed temp IS a definition). Mirrors CopyPropagationPass's
+        /// own <c>Mentions</c> arm for arm; an unrecognized shape still contributes its own
+        /// name, and the caller
+        /// pairs this with its own invalidation step, which additionally kills facts whose
+        /// recorded value MENTIONS the name. Over-collecting only costs optimization —
+        /// keeping a stale fact is the outcome that miscompiles.
+        ///
+        /// <para>⭐ SHARED. <see cref="CopyPropagationPass"/> and
+        /// <see cref="CommonSubexpressionEliminationPass"/> both need the same answer to
+        /// "which names does this expression read", and a second private copy is the defect
+        /// commit 67782af removed from CSE for the operand walker. One implementation, two
+        /// consumers — the ModuleResolver/ModuleTypeWalker rule in CLAUDE.md.</para>
+        /// </summary>
+        protected internal static void CollectNames(IRValue value, List<string> into)
+        {
+            switch (value)
+            {
+                case null:
+                case IRConstant:
+                    return;
+                case IRVariable v:
+                    if (!string.IsNullOrEmpty(v.Name)) into.Add(v.Name);
+                    return;
+                case IRNewObject n:
+                    foreach (var a in n.Arguments) CollectNames(a, into);
+                    break;
+                case IRBinaryOp b:
+                    CollectNames(b.Left, into); CollectNames(b.Right, into);
+                    break;
+                case IRUnaryOp u:
+                    CollectNames(u.Operand, into);
+                    break;
+                case IRCompare c:
+                    CollectNames(c.Left, into); CollectNames(c.Right, into);
+                    break;
+                case IRCast cast:
+                    CollectNames(cast.Value, into);
+                    break;
+                case IRFieldAccess f:
+                    CollectNames(f.Object, into);
+                    break;
+                case IRInstanceMethodCall m:
+                    CollectNames(m.Object, into);
+                    foreach (var a in m.Arguments) CollectNames(a, into);
+                    break;
+                case IRCall call:
+                    foreach (var a in call.Arguments) CollectNames(a, into);
+                    break;
+                case IRLoad load:
+                    CollectNames(load.Address, into);
+                    break;
+                case IRGetElementPtr gep:
+                    CollectNames(gep.BasePointer, into);
+                    foreach (var idx in gep.Indices) CollectNames(idx, into);
+                    break;
+            }
+
+            // A value that names its own destination temp (the IRBuilder names result values
+            // after their assignment target) is itself a definition worth killing.
+            if (value != null && value is not IRVariable && !string.IsNullOrEmpty(value.Name))
+                into.Add(value.Name);
+        }
+
+
+        private static void MapList(List<IRValue> operands, Func<IRValue, IRValue> map)
+        {
+            if (operands == null) return;
+            for (int i = 0; i < operands.Count; i++)
+            {
+                // Written only on a change: a List<T> store bumps its version even for the same
+                // element, which would break a caller enumerating this list around the walk.
+                var mapped = map(operands[i]);
+                if (!ReferenceEquals(mapped, operands[i])) operands[i] = mapped;
+            }
+        }
+
+        private static void ReplaceUsesIn(IRInstruction inst, IRValue oldValue, IRValue newValue)
+            => MapUses(inst, v => ReferenceEquals(v, oldValue) ? newValue : v);
+
+        /// <summary>
+        /// Every value <paramref name="inst"/> USES, one entry per operand slot (a value used
+        /// twice appears twice), from the same arm set <see cref="ReplaceUses"/> rewrites — so the
+        /// two can never disagree about what a use is. <see cref="IRVerifier"/> counts uses
+        /// through this.
+        /// </summary>
+        protected internal static List<IRValue> UsesOf(IRInstruction inst)
+        {
+            var uses = new List<IRValue>();
+            MapUses(inst, v =>
+            {
+                if (v != null) uses.Add(v);
+                return v;
+            });
+            return uses;
+        }
+
+        /// <summary>
+        /// THE total use walker: one arm per IR node that CONSUMES a value, each operand slot
+        /// replaced by <paramref name="map"/>'s answer for it (an identity map rewrites nothing).
+        /// Definition slots are deliberately absent: <c>IRAssignment.Target</c> is an
+        /// <see cref="IRVariable"/> being written, not a use.
+        /// </summary>
+        private static void MapUses(IRInstruction inst, Func<IRValue, IRValue> map)
+        {
+            switch (inst)
+            {
+                case IRBinaryOp binOp:
+                    binOp.Left = map(binOp.Left);
+                    binOp.Right = map(binOp.Right);
+                    break;
+                case IRUnaryOp unOp:
+                    unOp.Operand = map(unOp.Operand);
+                    break;
+                case IRCompare cmp:
+                    cmp.Left = map(cmp.Left);
+                    cmp.Right = map(cmp.Right);
+                    break;
+                case IRLoad load:
+                    load.Address = map(load.Address);
+                    break;
+                case IRStore store:
+                    store.Value = map(store.Value);
+                    store.Address = map(store.Address);
+                    break;
+                case IRGetElementPtr gep:
+                    gep.BasePointer = map(gep.BasePointer);
+                    MapList(gep.Indices, map);
+                    break;
+                case IRConditionalBranch condBr:
+                    condBr.Condition = map(condBr.Condition);
+                    break;
+                case IRSwitch sw:
+                    sw.Value = map(sw.Value);
+                    if (sw.Cases != null)
+                        for (int i = 0; i < sw.Cases.Count; i++)
+                        {
+                            var mapped = map(sw.Cases[i].CaseValue);
+                            if (!ReferenceEquals(mapped, sw.Cases[i].CaseValue))
+                                sw.Cases[i] = (mapped, sw.Cases[i].Target);
+                        }
+                    if (sw.PatternCases != null)
+                        foreach (var patternCase in sw.PatternCases)
+                            MapPatternUses(patternCase, map);
+                    break;
+                case IRReturn ret:
+                    ret.Value = map(ret.Value);
+                    break;
+                case IRCall call:
+                    call.CalleeValue = map(call.CalleeValue);
+                    MapList(call.Arguments, map);
+                    break;
+                case IRCast cast:
+                    cast.Value = map(cast.Value);
+                    break;
+                case IRAssignment asg:
+                    asg.Value = map(asg.Value);
+                    break;
+                case IRArrayStore arrayStore:
+                    arrayStore.Array = map(arrayStore.Array);
+                    arrayStore.Index = map(arrayStore.Index);
+                    arrayStore.Value = map(arrayStore.Value);
+                    break;
+                case IRAwait await:
+                    await.Expression = map(await.Expression);
+                    break;
+                case IRYield yield:
+                    yield.Value = map(yield.Value);
+                    break;
+                case IRIndexerAccess indexerAccess:
+                    indexerAccess.Collection = map(indexerAccess.Collection);
+                    MapList(indexerAccess.Indices, map);
+                    break;
+                case IRIndexerStore indexerStore:
+                    indexerStore.Collection = map(indexerStore.Collection);
+                    MapList(indexerStore.Indices, map);
+                    indexerStore.Value = map(indexerStore.Value);
+                    break;
+                case IRForEach forEach:
+                    forEach.Collection = map(forEach.Collection);
+                    break;
+                case IRThrow thrown:
+                    thrown.Exception = map(thrown.Exception);
+                    break;
+                case IRNewObject newObject:
+                    MapList(newObject.Arguments, map);
+                    break;
+                case IRInstanceMethodCall instanceCall:
+                    instanceCall.Object = map(instanceCall.Object);
+                    MapList(instanceCall.Arguments, map);
+                    break;
+                case IRBaseMethodCall baseCall:
+                    MapList(baseCall.Arguments, map);
+                    break;
+                case IRFieldAccess fieldAccess:
+                    fieldAccess.Object = map(fieldAccess.Object);
+                    break;
+                case IRFieldStore fieldStore:
+                    fieldStore.Object = map(fieldStore.Object);
+                    fieldStore.Value = map(fieldStore.Value);
+                    break;
+                case IRTupleElement tupleElement:
+                    tupleElement.Tuple = map(tupleElement.Tuple);
+                    break;
+                case IRPhi phi:
+                    // The only operand-bearing node this walk was missing. Nothing in the
+                    // pipeline BUILDS an IRPhi today (IRBuilder emits none, and no pass
+                    // introduces one), so no program measured here reaches this arm — it is
+                    // here because a walker that is total except for one node kind gives a
+                    // WRONG answer the day that kind appears, not an absent feature. The
+                    // operand list is a value tuple, so it is rewritten by index.
+                    if (phi.Operands != null)
+                        for (int i = 0; i < phi.Operands.Count; i++)
+                        {
+                            var mapped = map(phi.Operands[i].Value);
+                            if (!ReferenceEquals(mapped, phi.Operands[i].Value))
+                                phi.Operands[i] = (mapped, phi.Operands[i].Block);
+                        }
+                    break;
+            }
+        }
+
+        private static void MapPatternUses(IRPatternCase patternCase, Func<IRValue, IRValue> map)
         {
             if (patternCase == null) return;
 
-            if (ReferenceEquals(patternCase.WhenGuard, oldValue)) patternCase.WhenGuard = newValue;
+            patternCase.WhenGuard = map(patternCase.WhenGuard);
 
             switch (patternCase)
             {
                 case IRRangePatternCase range:
-                    if (ReferenceEquals(range.LowerBound, oldValue)) range.LowerBound = newValue;
-                    if (ReferenceEquals(range.UpperBound, oldValue)) range.UpperBound = newValue;
+                    range.LowerBound = map(range.LowerBound);
+                    range.UpperBound = map(range.UpperBound);
                     break;
                 case IRComparisonPatternCase comparison:
-                    if (ReferenceEquals(comparison.CompareValue, oldValue)) comparison.CompareValue = newValue;
+                    comparison.CompareValue = map(comparison.CompareValue);
                     break;
                 case IRConstantPatternCase constant:
-                    if (ReferenceEquals(constant.Value, oldValue)) constant.Value = newValue;
+                    constant.Value = map(constant.Value);
                     break;
                 case IROrPatternCase or:
                     if (or.Alternatives != null)
                         foreach (var alternative in or.Alternatives)
-                            ReplaceUsesInPattern(alternative, oldValue, newValue);
+                            MapPatternUses(alternative, map);
                     break;
                 case IRTuplePatternCase tuple:
                     if (tuple.Elements != null)
                         foreach (var element in tuple.Elements)
-                            ReplaceUsesInPattern(element, oldValue, newValue);
+                            MapPatternUses(element, map);
                     break;
             }
         }
@@ -303,16 +1101,20 @@ namespace BasicLang.Compiler.IR.Optimization
             foreach (var function in module.Functions)
             {
                 if (function.IsExternal) continue;
-                
+
+                _function = function;
                 foreach (var block in function.Blocks)
                 {
                     FoldBlock(block);
                 }
+                _function = null;
             }
-            
+
             return ModificationCount > 0;
         }
-        
+
+        private IRFunction _function;
+
         private void FoldBlock(BasicBlock block)
         {
             for (int i = 0; i < block.Instructions.Count; i++)
@@ -328,7 +1130,7 @@ namespace BasicLang.Compiler.IR.Optimization
                         ReplaceAllReferences(block, binaryOp, folded);
 
                         // If this was a named variable (not a temp), preserve assignment
-                        if (IsNamedVariable(binaryOp.Name))
+                        if (IsNamedVariable(binaryOp))
                         {
                             var targetVar = new IRVariable(binaryOp.Name, binaryOp.Type);
                             block.Instructions[i] = new IRAssignment(targetVar, folded);
@@ -349,7 +1151,7 @@ namespace BasicLang.Compiler.IR.Optimization
                         ReplaceAllReferences(block, unaryOp, folded);
 
                         // If this was a named variable (not a temp), preserve assignment
-                        if (IsNamedVariable(unaryOp.Name))
+                        if (IsNamedVariable(unaryOp))
                         {
                             var targetVar = new IRVariable(unaryOp.Name, unaryOp.Type);
                             block.Instructions[i] = new IRAssignment(targetVar, folded);
@@ -370,7 +1172,7 @@ namespace BasicLang.Compiler.IR.Optimization
                         ReplaceAllReferences(block, compare, folded);
 
                         // If this was a named variable (not a temp), preserve assignment
-                        if (IsNamedVariable(compare.Name))
+                        if (IsNamedVariable(compare))
                         {
                             var targetVar = new IRVariable(compare.Name, compare.Type);
                             block.Instructions[i] = new IRAssignment(targetVar, folded);
@@ -386,7 +1188,28 @@ namespace BasicLang.Compiler.IR.Optimization
         }
 
         /// <summary>
+        /// Whether <paramref name="value"/> is a STORE into a user variable, which folding must
+        /// keep as an assignment rather than delete. The IRBuilder's flag is authoritative; the
+        /// name-shape guess below is only the fallback for values that carry no flag.
+        ///
+        /// <para>⛔ The guess alone treated a user variable named like a temp as a temp: with
+        /// <c>Dim t3 As Integer = 6 \ 2</c> the store folded away and t3 stayed 0. MEASURED on
+        /// master 883fb1d. See IRBuilder.SeparateTempsFromUserNames.</para>
+        /// </summary>
+        private bool IsNamedVariable(IRValue value) =>
+            value.NamedAfterVariable || IsNamedVariable(value.Name);
+
+        /// <summary>
         /// Check if a name represents a real variable (not a temp)
+        ///
+        /// <para>⚠ DELIBERATELY NOT <see cref="OptimizationPass.IsTempDestination"/>, which CSE and
+        /// the peephole pass share. This copy's <c>t</c> test is case-INSENSITIVE, so it calls a
+        /// user variable spelled <c>T5</c> a temp and folds away the assignment to it; the shared
+        /// one does not. Only <c>t{N}</c> is ever minted by
+        /// <see cref="IRFunction.GetNextTempName"/>, so the two agree on everything the compiler
+        /// itself produces and the difference is reachable only from user source. Reconciling them
+        /// is a behaviour change to constant folding that has to be measured on its own, not
+        /// carried along by a fix to a different pass.</para>
         /// </summary>
         private bool IsNamedVariable(string name)
         {
@@ -398,18 +1221,25 @@ namespace BasicLang.Compiler.IR.Optimization
         }
 
         /// <summary>
-        /// Replace all references to oldValue with newValue in the block.
+        /// Replace all references to oldValue with newValue in the whole FUNCTION.
         ///
         /// <para>Delegates to <see cref="OptimizationPass.ReplaceUses"/> — one implementation
         /// for every pass that swaps an instruction, per the repo rule that shared resolver
-        /// logic changes once rather than per consumer. The block scope is unchanged from the
-        /// hand-rolled version this replaced; what widened is NODE coverage, which previously
-        /// stopped at eight consumer kinds and silently missed field stores, indexer accesses,
-        /// array stores, casts, throws and instance-call receivers.</para>
+        /// logic changes once rather than per consumer.</para>
+        ///
+        /// <para>⛔ This used to re-point only the folded instruction's own BLOCK, so a consumer in
+        /// another block kept the discarded node and rendered an undeclared temp. It surfaced once
+        /// LoopInvariantCodeMotionPass started hoisting correctly: `s = s + x * y` in a loop, with
+        /// x = 6 and y = 7, hoisted `t4 = x * y` into the preheader, folded it to 42 there, and
+        /// left the body's `s = s + t4` — C++: "'t4' was not declared". Same scope as
+        /// StrengthReductionPass and AlgebraicSimplificationPass use, for the same reason.</para>
         /// </summary>
         private void ReplaceAllReferences(BasicBlock block, IRValue oldValue, IRValue newValue)
         {
-            ReplaceUses(block.Instructions, oldValue, newValue);
+            var scope = _function != null
+                ? _function.Blocks.SelectMany(b => b.Instructions)
+                : block.Instructions;
+            ReplaceUses(scope, oldValue, newValue);
         }
 
         private IRConstant TryFoldBinary(IRBinaryOp op)
@@ -957,90 +1787,6 @@ namespace BasicLang.Compiler.IR.Optimization
             }
         }
 
-        /// <summary>
-        /// Gathers every variable name read anywhere in <paramref name="value"/>'s operand tree,
-        /// plus the value's own destination name (the IRBuilder names result values after their
-        /// assignment target, so a renamed temp IS a definition). Mirrors <see cref="Mentions"/>
-        /// arm for arm; an unrecognized shape still contributes its own name, and the caller
-        /// pairs this with <see cref="InvalidateRedefined"/>, which additionally kills facts
-        /// whose recorded value MENTIONS the name. Over-collecting only costs optimization —
-        /// keeping a stale fact is the outcome that miscompiles.
-        /// </summary>
-        private static void CollectNames(IRValue value, List<string> into)
-        {
-            switch (value)
-            {
-                case null:
-                case IRConstant:
-                    return;
-                case IRVariable v:
-                    if (!string.IsNullOrEmpty(v.Name)) into.Add(v.Name);
-                    return;
-                case IRNewObject n:
-                    foreach (var a in n.Arguments) CollectNames(a, into);
-                    break;
-                case IRBinaryOp b:
-                    CollectNames(b.Left, into); CollectNames(b.Right, into);
-                    break;
-                case IRUnaryOp u:
-                    CollectNames(u.Operand, into);
-                    break;
-                case IRCompare c:
-                    CollectNames(c.Left, into); CollectNames(c.Right, into);
-                    break;
-                case IRCast cast:
-                    CollectNames(cast.Value, into);
-                    break;
-                case IRFieldAccess f:
-                    CollectNames(f.Object, into);
-                    break;
-                case IRInstanceMethodCall m:
-                    CollectNames(m.Object, into);
-                    foreach (var a in m.Arguments) CollectNames(a, into);
-                    break;
-                case IRCall call:
-                    foreach (var a in call.Arguments) CollectNames(a, into);
-                    break;
-                case IRLoad load:
-                    CollectNames(load.Address, into);
-                    break;
-                case IRGetElementPtr gep:
-                    CollectNames(gep.BasePointer, into);
-                    foreach (var idx in gep.Indices) CollectNames(idx, into);
-                    break;
-            }
-
-            // A value that names its own destination temp (the IRBuilder names result values
-            // after their assignment target) is itself a definition worth killing.
-            if (value != null && value is not IRVariable && !string.IsNullOrEmpty(value.Name))
-                into.Add(value.Name);
-        }
-
-        /// <summary>
-        /// Removes every copy fact made stale by a (re)definition of
-        /// <paramref name="definedName"/>: entries keyed by that variable and
-        /// entries whose recorded value mentions it (propagating those later
-        /// would read the NEW value at the use site).
-        /// </summary>
-        private static void InvalidateRedefined(Dictionary<IRVariable, IRValue> copies, string definedName)
-        {
-            if (string.IsNullOrEmpty(definedName) || copies.Count == 0) return;
-
-            List<IRVariable> stale = null;
-            foreach (var kvp in copies)
-            {
-                if (string.Equals(kvp.Key.Name, definedName, StringComparison.OrdinalIgnoreCase) ||
-                    Mentions(kvp.Value, definedName))
-                {
-                    (stale ??= new List<IRVariable>()).Add(kvp.Key);
-                }
-            }
-            if (stale != null)
-            {
-                foreach (var key in stale)
-                    copies.Remove(key);
-            }
-        }
 
         /// <summary>
         /// Whether a recorded copy value reads the named variable anywhere in
@@ -1076,6 +1822,33 @@ namespace BasicLang.Compiler.IR.Optimization
                     return true;
             }
         }
+
+        /// <summary>
+        /// Removes every copy fact made stale by a (re)definition of
+        /// <paramref name="definedName"/>: entries keyed by that variable and
+        /// entries whose recorded value mentions it (propagating those later
+        /// would read the NEW value at the use site).
+        /// </summary>
+        private static void InvalidateRedefined(Dictionary<IRVariable, IRValue> copies, string definedName)
+        {
+            if (string.IsNullOrEmpty(definedName) || copies.Count == 0) return;
+
+            List<IRVariable> stale = null;
+            foreach (var kvp in copies)
+            {
+                if (string.Equals(kvp.Key.Name, definedName, StringComparison.OrdinalIgnoreCase) ||
+                    Mentions(kvp.Value, definedName))
+                {
+                    (stale ??= new List<IRVariable>()).Add(kvp.Key);
+                }
+            }
+            if (stale != null)
+            {
+                foreach (var key in stale)
+                    copies.Remove(key);
+            }
+        }
+
         
         private void ReplaceUses(IRInstruction inst, Dictionary<IRVariable, IRValue> copies)
         {
@@ -1133,43 +1906,67 @@ namespace BasicLang.Compiler.IR.Optimization
                 
                 foreach (var block in function.Blocks)
                 {
-                    EliminateCommonSubexpressions(block);
+                    EliminateCommonSubexpressions(function, block);
                 }
             }
-            
+
             return ModificationCount > 0;
         }
-        
-        private void EliminateCommonSubexpressions(BasicBlock block)
+
+        private void EliminateCommonSubexpressions(IRFunction function, BasicBlock block)
         {
-            var expressions = new Dictionary<string, IRValue>();
+            var expressions = new Dictionary<string, Candidate>();
 
             for (int i = 0; i < block.Instructions.Count; i++)
             {
                 var inst = block.Instructions[i];
 
-                if (inst is IRBinaryOp binaryOp)
+                // ⛔ Only a REPLICABLE binop is a candidate (ADR-0001 Obligations, defence in depth):
+                // merging two evaluations of a value that is not replicable deletes one of them,
+                // which no backend can repair. The same predicate the C# backend and
+                // AlgebraicSimplificationPass use — not ReadsCallVisible, which answers a different
+                // question (when to KILL an entry) and must stay separate (ADR-0004 D2). A
+                // non-replicable binop is neither recorded nor merged; the invalidation step below
+                // still runs for it.
+                if (inst is IRBinaryOp binaryOp && IRReplicability.IsReplicable(binaryOp))
                 {
-                    var key = $"{binaryOp.Operation}_{binaryOp.Left.Name}_{binaryOp.Right.Name}";
+                    var key = ExpressionKey(binaryOp);
 
                     if (expressions.ContainsKey(key))
                     {
                         // Found a duplicate expression
-                        var replacement = expressions[key];
+                        var replacement = expressions[key].Value;
 
                         // If the current instruction is a named destination (actual variable, not a temp),
                         // we should NOT remove it. Instead, convert to an assignment.
-                        if (IsNamedVariable(binaryOp.Name))
+                        //
+                        // ⚠ `NamedAfterVariable` is the second half of that question and was missing
+                        // here too, for the same reason and with the same consequence as in
+                        // PeepholeOptimizationPass.ApplyRewrite: the name test is a test on SPELLING,
+                        // and a user variable spelled `t0` was therefore treated as a temp and its
+                        // write REMOVED. MEASURED on a member named `t0` assigned a duplicated
+                        // expression — the field kept its old value on all four backends. This is a
+                        // PRE-EXISTING defect of the pass, not one introduced by pointing it at the
+                        // shared walker; it is fixed here because it is the same predicate on the
+                        // same line and leaving it would mean shipping a known silent miscompile.
+                        if (!IsTempDestination(binaryOp.Name) || binaryOp.NamedAfterVariable)
                         {
                             // Convert to assignment: target = existingResult
-                            var targetVar = new IRVariable(binaryOp.Name, binaryOp.Type);
+                            var targetVar = InheritIdentity(new IRVariable(binaryOp.Name, binaryOp.Type), binaryOp);
                             block.Instructions[i] = new IRAssignment(targetVar, replacement);
+                            // The binop OBJECT is gone from the stream even though its name lives on
+                            // in targetVar, so its consumers are re-pointed here too. They would
+                            // currently resolve by NAME COINCIDENCE — a declared user variable spelled
+                            // the same — which is precisely the accident AlgebraicSimplificationPass
+                            // documents at its own ReplaceUses call and which fails the moment a
+                            // backend keys a temp by object identity instead.
+                            ReplaceUses(function.Blocks.SelectMany(b => b.Instructions), binaryOp, targetVar);
                             ReportModification();
                         }
                         else
                         {
                             // Temp variable - safe to remove and replace uses
-                            ReplaceAllUses(block, binaryOp, replacement);
+                            ReplaceUses(function.Blocks.SelectMany(b => b.Instructions), binaryOp, replacement);
                             block.Instructions.RemoveAt(i);
                             i--;
                             ReportModification();
@@ -1177,52 +1974,294 @@ namespace BasicLang.Compiler.IR.Optimization
                     }
                     else
                     {
-                        expressions[key] = binaryOp;
+                        expressions[key] = Candidate.For(binaryOp, function);
                     }
                 }
+
+                // ⛔ THE INVALIDATION STEP. Runs AFTER this instruction's own lookup/record and
+                // BEFORE the next instruction's, because an instruction can both READ and WRITE
+                // the same name: `p = p + 10` lowers to ONE IRBinaryOp renamed `p`, whose key is
+                // computed against the OLD p and whose record is stale the instant it is made.
+                // Recording then killing gets both right; killing first would leave that entry
+                // alive. Mirrors CopyPropagationPass.PropagateCopies, which orders its own
+                // use/record/kill exactly this way for exactly this reason.
+                //
+                // ⚠ `inst`, NOT `block.Instructions[i]`. The temp arm above does `RemoveAt(i); i--`,
+                // so by here the index can point at the PREVIOUS instruction (already invalidated
+                // on its own pass) — or, for a duplicate at index 0, at -1. Both the redundant
+                // re-kill and the latent IndexOutOfRange go away by naming the instruction this
+                // iteration actually processed. The named arm's replacement IRAssignment carries
+                // the same Target.Name as the IRBinaryOp it replaced, so the kill is unchanged.
+                Invalidate(expressions, inst, function);
             }
         }
 
-        // Check if a name represents a real variable (not a temp)
-        private bool IsNamedVariable(string name)
+        /// <summary>
+        /// One recorded candidate: the defining instruction, every variable name its operand tree
+        /// READS, its own DESTINATION name, and whether any of those reads is storage a CALL can
+        /// write behind our back.
+        ///
+        /// <para>⛔ THE DESTINATION IS GUARDED TOO (ADR-0005 D2, Invariant S′). A merge re-points
+        /// a later duplicate's consumers at THIS instruction, and a backend that materialises it
+        /// (C++, JavaScript, MSIL) reads it back by its destination NAME. So the value is stale
+        /// the moment that name is written, exactly as it is when an operand is written. MEASURED
+        /// on <c>Dim a = p + q : a = Seed(0) : l(0) = p + q</c> at HEAD: C++, JavaScript and MSIL
+        /// printed <c>0,0</c> where <c>3,0</c> is correct; C# printed the right answer only
+        /// because it re-emits <c>p + q</c> as text.</para>
+        ///
+        /// <para>The destination is killed by the SAME vocabulary as the operands — assignment
+        /// target, store address, rename, ByRef argument — with one exception: the defining
+        /// instruction itself carries the destination name (it is a rename), and must not kill
+        /// its own record through it. It still kills through its OPERANDS, which is what keeps
+        /// the self-redefining <c>p = p + 10</c> record dead (see the use → record → kill note in
+        /// <see cref="EliminateCommonSubexpressions"/>).</para>
+        /// </summary>
+        private sealed class Candidate
         {
-            if (string.IsNullOrEmpty(name)) return false;
-            // Temp names typically start with _tmp, _t, or are like "t0", "t1", etc.
-            if (name.StartsWith("_tmp", StringComparison.OrdinalIgnoreCase)) return false;
-            if (name.StartsWith("_t", StringComparison.OrdinalIgnoreCase) && name.Length > 2 && char.IsDigit(name[2])) return false;
-            // Also check for temp patterns like "t0", "t1"
-            if (name.Length >= 2 && name[0] == 't' && char.IsDigit(name[1])) return false;
-            return true;
-        }
-        
-        private void ReplaceAllUses(BasicBlock block, IRValue oldValue, IRValue newValue)
-        {
-            foreach (var inst in block.Instructions)
+            public IRBinaryOp Value;
+            public List<string> Reads;
+            public string Destination;
+            /// <summary>An operand reads storage a call can write.</summary>
+            public bool OperandsCallVisible;
+            /// <summary>The destination names storage a call can write.</summary>
+            public bool DestinationCallVisible;
+
+            public static Candidate For(IRBinaryOp op, IRFunction function)
             {
-                if (inst is IRBinaryOp binaryOp)
+                var reads = new List<string>();
+                CollectNames(op.Left, reads);
+                CollectNames(op.Right, reads);
+                var destination = string.IsNullOrEmpty(op.Name) ? null : op.Name;
+                return new Candidate
                 {
-                    if (ReferenceEquals(binaryOp.Left, oldValue))
-                        binaryOp.Left = newValue;
-                    if (ReferenceEquals(binaryOp.Right, oldValue))
-                        binaryOp.Right = newValue;
-                }
-                else if (inst is IRUnaryOp unaryOp)
-                {
-                    if (ReferenceEquals(unaryOp.Operand, oldValue))
-                        unaryOp.Operand = newValue;
-                }
-                else if (inst is IRStore store)
-                {
-                    if (ReferenceEquals(store.Value, oldValue))
-                        store.Value = newValue;
-                }
-                else if (inst is IRAssignment assignment)
-                {
-                    if (ReferenceEquals(assignment.Value, oldValue))
-                        assignment.Value = newValue;
-                }
+                    Value = op,
+                    Reads = reads,
+                    Destination = destination,
+                    // ⭐ ONE rule for both halves (ADR-0006 D3): operands and destination are
+                    // asked the same question of the same declarations. Kept apart only so the
+                    // defining instruction can be exempt on its destination (see Invalidate).
+                    OperandsCallVisible = ReadsCallVisible(op.Left, function) || ReadsCallVisible(op.Right, function),
+                    DestinationCallVisible = IsCallVisibleDestination(op, function)
+                };
             }
         }
+
+        /// <summary>
+        /// The dictionary key for a candidate expression.
+        ///
+        /// <para>⛔ The key this replaces was <c>$"{Operation}_{Left.Name}_{Right.Name}"</c>, and
+        /// its <c>_</c> delimiter is NOT escaped, so the encoding is not injective: a BasicLang
+        /// identifier may contain <c>_</c>, and <see cref="IRConstant"/> names itself
+        /// <c>const_{value}</c>. MEASURED — <c>p + q_r</c> and <c>p_q + r</c> both key
+        /// <c>Add_p_q_r</c> and the second is rewritten to the first, and
+        /// <c>"a" &amp; b_c</c> collides with <c>"a_b" &amp; c</c> the same way. Those are two
+        /// UNRELATED expressions, so unlike the redefinition case below the C# backend's
+        /// inline-always policy does not rescue it: all FOUR backends print the wrong answer.
+        /// Length-prefixing each part makes the encoding injective.</para>
+        ///
+        /// <para>The result type is part of the key because <c>Operation</c> plus operand names
+        /// does not determine it, and an entry is substituted for its match by NAME.</para>
+        ///
+        /// <para>⚠ Operand names are NOT case-folded, so two spellings of one VB-case-insensitive
+        /// identifier simply miss each other — today's behaviour, and a missed merge is safe.
+        /// <see cref="Invalidate"/> is case-INsensitive, which is the safe polarity on that
+        /// side: it must kill an entry spelled <c>P</c> when <c>p</c> is redefined.</para>
+        /// </summary>
+        private static string ExpressionKey(IRBinaryOp op)
+        {
+            var sb = new System.Text.StringBuilder();
+            AppendPart(sb, op.Operation.ToString());
+            AppendPart(sb, op.Left?.Name);
+            AppendPart(sb, op.Right?.Name);
+            AppendPart(sb, op.Type?.Name);
+            return sb.ToString();
+        }
+
+        private static void AppendPart(System.Text.StringBuilder sb, string part)
+        {
+            part ??= string.Empty;
+            sb.Append(part.Length).Append(':').Append(part).Append('|');
+        }
+
+        /// <summary>
+        /// Drops every recorded expression that <paramref name="inst"/> may have made stale.
+        ///
+        /// <para>⛔ CSE had NO invalidation at all. Its key is a pair of NAMES, and a name is not
+        /// a value: <c>a = p + q</c>, <c>p = Seed(100)</c>, <c>b = p + q</c> recorded
+        /// <c>Add_p_q</c> against the first binop and then rewrote the second to
+        /// <c>IRAssignment(b, a)</c> — <c>b</c> got the value computed BEFORE <c>p</c> changed.
+        /// MEASURED in the DEFAULT pipeline (CSE is in <see cref="OptimizationPipeline.AddStandardPasses"/>),
+        /// on both entry points: C++, JavaScript and MSIL all printed <c>b=4</c> where 106 is
+        /// correct.</para>
+        ///
+        /// <para>⚠ C# printed the RIGHT answer, and that is not reassurance — it is the trap
+        /// ADR-0001 records. C# is right only because its inline-always policy re-emits the
+        /// binop's expression TEXT (<c>b = p + q;</c>) instead of honouring the IR's merge. A
+        /// fixture that asserts only C# cannot see this defect, and a backend change that
+        /// materialises more aggressively than ADR-0001's E1 requires would make the oracle wrong
+        /// too. The repair belongs HERE, in the pass.</para>
+        ///
+        /// <para>Object identity is NOT an alternative key: MEASURED, IRBuilder hands BOTH reads
+        /// of <c>p</c> the SAME <see cref="IRVariable"/> instance, and the redefinition mints no
+        /// new one. Neither is <see cref="IRVariable.Version"/> — the redefinition above is an
+        /// <see cref="IRCall"/> renamed <c>p</c>, which does not version anything. Without real
+        /// SSA, killing on redefinition is the only available answer.</para>
+        ///
+        /// <para>The four definition forms are the ones
+        /// <see cref="CopyPropagationPass"/> already enumerates, and they are enumerated here for
+        /// the same measured reasons — in particular the renamed-<see cref="IRValue"/> form, which
+        /// is how BOTH <c>Dim p = Seed(1)</c> and <c>p = p + 10</c> lower (no IRAssignment at all).
+        /// The fifth, calls, is CSE-specific: see <see cref="ReadsCallVisible"/>.</para>
+        /// </summary>
+        private static void Invalidate(Dictionary<string, Candidate> expressions, IRInstruction inst, IRFunction function)
+        {
+            if (expressions.Count == 0 || inst == null) return;
+
+            var writes = NamesWrittenBy(inst, function);
+
+            // ADR-0006 D1: an instruction that may write ANY name (an unclassified kind, or one
+            // classified as universal) leaves no record standing.
+            if (writes.IsUniversal)
+            {
+                expressions.Clear();
+                return;
+            }
+
+            bool isCall = writes.IsCall;
+            var killed = writes.Names;
+
+            List<string> stale = null;
+            foreach (var entry in expressions)
+            {
+                // The defining instruction renames its own destination; that is the value being
+                // BORN, not a write that makes it stale (see Candidate) — through the call arm as
+                // much as through the name. It acts as a call only under ADR-0006 D1 (b), a
+                // binop renamed to a ByRef parameter (`n = p + q`), and IRVerifier skips the
+                // defining instruction the same way.
+                bool self = ReferenceEquals(entry.Value.Value, inst);
+                bool dead = isCall
+                    && (entry.Value.OperandsCallVisible || (!self && entry.Value.DestinationCallVisible));
+                if (!dead && killed.Count > 0)
+                {
+                    string destination = self ? null : entry.Value.Destination;
+                    foreach (var name in killed)
+                    {
+                        if (destination != null && string.Equals(destination, name, StringComparison.OrdinalIgnoreCase))
+                        {
+                            dead = true;
+                            break;
+                        }
+                        foreach (var read in entry.Value.Reads)
+                        {
+                            if (string.Equals(read, name, StringComparison.OrdinalIgnoreCase))
+                            {
+                                dead = true;
+                                break;
+                            }
+                        }
+                        if (dead) break;
+                    }
+                }
+                if (dead) (stale ??= new List<string>()).Add(entry.Key);
+            }
+            if (stale != null)
+                foreach (var key in stale) expressions.Remove(key);
+        }
+
+        /// <summary>
+        /// Whether an operand reads storage that a CALL can write without that write appearing in
+        /// this block. A variable is answered by the one call-visibility rule,
+        /// <see cref="OptimizationPass.IsCallVisible(IRVariable, IRFunction)"/> (ADR-0006 D3); a
+        /// pure operator by its operands; anything else is assumed call-visible.
+        ///
+        /// <para>⛔ MEASURED. <c>a = Counter + q</c>, <c>z = Seed(100)</c>, <c>b = Counter + q</c>
+        /// has NO syntactic redefinition of <c>Counter</c> anywhere in <c>Main</c> — the write
+        /// happens inside <c>Seed</c> — and C++, JavaScript and MSIL all printed <c>b=4</c> where
+        /// 104 is correct. Name-based invalidation over the block alone cannot see it.</para>
+        ///
+        /// <para>⛔ MEASURED, and the reason the variable arm no longer reads FLAGS (Q3, ADR-0006
+        /// D3): a class field read bare inside a method is an <see cref="IRVariable"/> with
+        /// <c>IsGlobal</c> and <c>IsByRef</c> both false, so the old flag rule called it private
+        /// and <c>K = Seed(1) : a = K + q : Inc() : l(0) = K + q</c> printed <c>3,3</c> for
+        /// <c>13,3</c> on C++, JavaScript and MSIL, in the default pipeline.</para>
+        ///
+        /// <para>⚠ A <c>Const</c> is exempt, and that exemption is what keeps the pass worth
+        /// having: Platformer's pinned merges read <c>TILE_SIZE</c> (a <c>Const</c> global) and
+        /// the declared locals <c>px</c>/<c>py</c> with <c>DrawLine</c>/<c>DrawRectangle</c> calls
+        /// interleaved. Killing on every call unconditionally would take them all.</para>
+        ///
+        /// <para>A NAMED operand instruction (a value renamed to a variable, which a backend reads
+        /// back by that name — see <see cref="OptimizationPass.NamedDestination"/>) is asked the
+        /// same question of its name, exactly as <see cref="IRVerifier"/> puts that name in
+        /// <c>Guard(v)</c>; its operands are still walked, as before.</para>
+        ///
+        /// <para>A local captured BY REFERENCE by a lambda that a call then invokes is closed for
+        /// CSE by ADR-0006 D1's interim closure rule, inside
+        /// <see cref="OptimizationPass.IsCallVisible(string, IRFunction)"/>: in a function that
+        /// creates a lambda every local is call-visible. ⚠ The same hazard is NOT closed for
+        /// CopyPropagation, which does not use this rule — measured on
+        /// <c>Dim bump = Sub() n = n + 100</c>, CopyPropagation plus ConstantFolding fold
+        /// <c>n + q</c> to a constant on BOTH sides of <c>bump()</c> when <c>n</c> starts as a
+        /// constant, so every backend prints the stale answer with CSE out of the picture.</para>
+        /// </summary>
+        private static bool ReadsCallVisible(IRValue value, IRFunction function)
+        {
+            switch (value)
+            {
+                case null:
+                case IRConstant:
+                    return false;
+                case IRVariable variable:
+                    return IsCallVisible(variable, function);
+            }
+
+            if (NamedDestination(value) is string named && IsCallVisible(named, function))
+                return true;
+
+            switch (value)
+            {
+                case IRBinaryOp binary:
+                    return ReadsCallVisible(binary.Left, function) || ReadsCallVisible(binary.Right, function);
+                case IRUnaryOp unary:
+                    return ReadsCallVisible(unary.Operand, function);
+                case IRCompare compare:
+                    return ReadsCallVisible(compare.Left, function) || ReadsCallVisible(compare.Right, function);
+                case IRCast cast:
+                    return ReadsCallVisible(cast.Value, function);
+                default:
+                    // Calls, field/indexer loads, allocations, and anything not enumerated: a
+                    // call may change what they read. Over-killing costs optimization; keeping a
+                    // stale entry is the outcome that miscompiles.
+                    return true;
+            }
+        }
+
+        // ⛔ A PRIVATE FOUR-ARM `ReplaceAllUses` USED TO LIVE HERE, and a private copy of the
+        // temp-name test beside it. Both are gone: the base class already owns one TOTAL operand
+        // walker (OptimizationPass.ReplaceUses) and one temp-name test (IsTempDestination), and
+        // ConstantFoldingPass was pointed at the walker for exactly this reason. Two incomplete
+        // walkers in one file is the ModuleResolver/ModuleTypeWalker rule in CLAUDE.md being
+        // broken — the shared logic changes once, not per consumer.
+        //
+        // The copy rewrote IRBinaryOp.Left/Right, IRUnaryOp.Operand, IRStore.Value and
+        // IRAssignment.Value — FOUR of the twenty-six consumer kinds. Every other kind kept
+        // pointing at the instruction removed on the line below, and the backends then rendered
+        // an identifier that is never declared. MEASURED on this four-line program, with NO
+        // optimizer flag (CSE is in AddStandardPasses):
+        //     Sub Run(a As Integer)
+        //      Show(a + 7)
+        //      Show(a + 7)   ' merged; this argument kept the REMOVED node
+        //     End Sub
+        // C++ emitted `t0 = a + 7; Show(t0); Show(t1);` and refused to compile ("use of
+        // undeclared identifier 't1'"); MSIL assembled and threw InvalidProgramException at run
+        // time. C# and JavaScript were RIGHT BY LUCK — both re-materialise the orphan's
+        // expression text inline (`Show(a + 7)`), which happens to be correct here and is the
+        // same inline-always policy ADR-0001 constrains for the opposite reason.
+        //
+        // Missing arms confirmed live by measurement, one program each: IRCall.Arguments,
+        // IRReturn.Value, IRCompare.Left/Right, IRCast.Value, IRNewObject.Arguments and
+        // IRInstanceMethodCall.Arguments. IRStore.Value was covered, which is why `arr(0) = a + b`
+        // was green and looked like evidence the defect was narrow.
     }
     
     /// <summary>
@@ -1254,114 +2293,179 @@ namespace BasicLang.Compiler.IR.Optimization
             return ModificationCount > 0;
         }
         
+        // ⛔ REWRITTEN. The previous version got all three of its decisions wrong, MEASURED on
+        // master 42a2280 with --optimize (every For loop printed 0 on C++; a loop with an If, or a
+        // nested loop, threw "ReferenceError: t5 is not defined" on JavaScript):
+        //  - WHICH values are invariant: an IRVariable that was neither a parameter nor a global
+        //    fell through to the IRInstruction arm, where its null ParentBlock is "outside the
+        //    loop" — so EVERY local counted as invariant, the loop counter included, and `i + 1`
+        //    and `i <= 5` were hoisted. (A parameter was also assumed invariant, though VB lets a
+        //    ByVal parameter be reassigned inside the loop.)
+        //  - WHERE they go: the "preheader" was any outside predecessor of the first block with
+        //    one, over loops that ControlFlowGraph.FindBackEdges had itself got wrong (fixed there)
+        //    — the loop condition landed in for0.inc.
+        //  - IN WHAT ORDER: a backwards sweep over blocks in arbitrary order, so a hoisted value
+        //    could land after the hoisted value that reads it.
         private void HoistInvariants(List<BasicBlock> loop, ControlFlowGraph cfg)
         {
             var loopSet = new HashSet<BasicBlock>(loop);
-            var header = loop.FirstOrDefault(b => b.Predecessors.Any(p => !loopSet.Contains(p)));
-            
+
+            // The header is the loop block that dominates every other one.
+            var header = loop.FirstOrDefault(h => loop.All(b => b.Dominators.Contains(h)));
             if (header == null) return;
-            
-            // Find preheader (block before loop header)
-            var preheader = header.Predecessors.FirstOrDefault(p => !loopSet.Contains(p));
-            if (preheader == null) return;
-            
+
+            // A real preheader or nothing: the header's ONLY outside predecessor, which in turn
+            // branches ONLY to the header — so code placed there runs exactly once, on every
+            // path into the loop and on no path that skips it.
+            var outside = header.Predecessors.Where(p => !loopSet.Contains(p)).ToList();
+            if (outside.Count != 1) return;
+            var preheader = outside[0];
+            if (preheader.Successors.Count != 1 || preheader.Successors[0] != header) return;
+
+            var written = VariablesWrittenIn(loop, cfg.Function, out bool writesEverything);
+
+            // ADR-0006 D1: an instruction in the loop that may write ANY name (an unclassified
+            // kind, or one classified as universal) leaves nothing invariant.
+            if (writesEverything) return;
+
+            // Fixed point, recorded in DISCOVERY order: an instruction joins only after all of its
+            // loop-defined operands have, so this list is already in dependency order.
             var invariants = new HashSet<IRInstruction>();
-            
-            // Find loop-invariant instructions
+            var order = new List<IRInstruction>();
             bool changed = true;
             while (changed)
             {
                 changed = false;
-                
                 foreach (var block in loop)
                 {
                     foreach (var inst in block.Instructions)
                     {
-                        if (IsLoopInvariant(inst, loopSet, invariants))
+                        if (!invariants.Contains(inst) && IsLoopInvariant(inst, loopSet, invariants, written))
                         {
-                            if (invariants.Add(inst))
-                            {
-                                changed = true;
-                            }
+                            invariants.Add(inst);
+                            order.Add(inst);
+                            changed = true;
                         }
                     }
                 }
             }
-            
-            // Move invariants to preheader
-            foreach (var block in loop)
+
+            if (order.Count == 0) return;
+
+            int insertPos = preheader.Instructions.Count;
+            if (insertPos > 0 && preheader.Instructions[insertPos - 1] is IRBranch)
+                insertPos--;
+
+            foreach (var inst in order)
             {
-                for (int i = block.Instructions.Count - 1; i >= 0; i--)
+                // Removed from whichever loop block actually holds it — not via ParentBlock,
+                // which nothing guarantees is current.
+                foreach (var block in loop)
+                    if (block.Instructions.Remove(inst)) break;
+                preheader.Instructions.Insert(insertPos++, inst);
+                inst.ParentBlock = preheader;
+                ReportModification();
+            }
+        }
+
+        /// <summary>
+        /// Names of the variables anything in the loop may write — the one shared kill
+        /// vocabulary (<see cref="OptimizationPass.NamesWrittenBy"/>: assignment targets, store
+        /// addresses, renamed values, ByRef arguments of free AND instance calls) plus its call
+        /// arm: when the loop contains a call, every variable the loop reads that a callee can
+        /// reach (<see cref="OptimizationPass.IsCallVisible(IRVariable, IRFunction)"/>, the one
+        /// call-visibility rule of ADR-0006 D3: anything but a <c>Const</c>, a by-value parameter
+        /// or a declared local) counts as written.
+        ///
+        /// <para>⛔ This used to be a private, narrower copy of that vocabulary, and each gap was
+        /// a silent wrong answer under <c>--optimize</c>, MEASURED at 15b12e8 (both print 6 where
+        /// 12 is correct):</para>
+        /// <list type="bullet">
+        /// <item>it read ByRef arguments of <see cref="IRCall"/> only, so <c>b.Bump(x)</c> — an
+        /// <see cref="IRInstanceMethodCall"/> — left <c>x * 2</c> "invariant" and it was hoisted
+        /// (C++ and MSIL);</item>
+        /// <item>it treated only <c>IsGlobal</c> as call-visible, and a class field read bare
+        /// inside a method is not <c>IsGlobal</c>, so <c>K * 2</c> was hoisted out of a loop
+        /// whose <c>Inc()</c> call bumps <c>K</c> (C++, JavaScript and MSIL).</item>
+        /// </list>
+        /// <para>A local captured by reference and written inside a lambda counts as call-visible
+        /// under ADR-0006 D1's interim closure rule, so a loop that calls a lambda keeps it
+        /// (MEASURED: L5 now 12 on JavaScript under --optimize, 6 before). Task #122's capture set
+        /// narrows that from "every local" to the captured ones. An instruction that may write
+        /// ANY name (<see cref="WriteKind.Universal"/>) leaves nothing in the loop invariant.</para>
+        /// </summary>
+        private static HashSet<string> VariablesWrittenIn(List<BasicBlock> loop, IRFunction function, out bool writesEverything)
+        {
+            var written = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            bool loopCalls = false;
+            writesEverything = false;
+            foreach (var inst in loop.SelectMany(b => b.Instructions))
+            {
+                var writes = NamesWrittenBy(inst, function);
+                if (writes.IsUniversal)
                 {
-                    var inst = block.Instructions[i];
-                    
-                    if (invariants.Contains(inst))
-                    {
-                        block.Instructions.RemoveAt(i);
-                        
-                        // Insert before preheader's terminator
-                        int insertPos = preheader.Instructions.Count;
-                        if (insertPos > 0 && preheader.Instructions[insertPos - 1] is IRBranch)
-                            insertPos--;
-                        
-                        preheader.Instructions.Insert(insertPos, inst);
-                        ReportModification();
-                    }
+                    writesEverything = true;
+                    return written;
                 }
+                foreach (var name in writes.Names) written.Add(name);
+                loopCalls |= writes.IsCall;
             }
+
+            if (loopCalls)
+            {
+                foreach (var inst in loop.SelectMany(b => b.Instructions))
+                    foreach (var used in UsesOf(inst))
+                        if (used is IRVariable variable && variable.Name != null
+                            && IsCallVisible(variable, function))
+                            written.Add(variable.Name);
+            }
+            return written;
         }
-        
-        private bool IsLoopInvariant(IRInstruction inst, HashSet<BasicBlock> loop, HashSet<IRInstruction> knownInvariants)
+
+        private static bool IsLoopInvariant(IRInstruction inst, HashSet<BasicBlock> loop,
+            HashSet<IRInstruction> knownInvariants, HashSet<string> written)
         {
-            // Terminators and side-effect instructions are not invariant
-            if (inst is IRBranch || inst is IRConditionalBranch || inst is IRReturn ||
-                inst is IRStore || inst is IRCall)
+            // Only pure, NON-TRAPPING computations move. A store into a user variable never does
+            // (hoisting it would perform it even when the loop runs zero times). Division and
+            // modulo can throw (integer divide by zero), and hoisting would raise that exception
+            // on a path — a skipped If, a zero-trip loop — where the program never divides.
+            if (inst is IRValue { NamedAfterVariable: true }) return false;
+
+            switch (inst)
             {
-                return false;
-            }
-            
-            // Check if all operands are invariant
-            if (inst is IRBinaryOp binaryOp)
-            {
-                return IsValueInvariant(binaryOp.Left, loop, knownInvariants) &&
-                       IsValueInvariant(binaryOp.Right, loop, knownInvariants);
-            }
-            else if (inst is IRUnaryOp unaryOp)
-            {
-                return IsValueInvariant(unaryOp.Operand, loop, knownInvariants);
-            }
-            else if (inst is IRCompare compare)
-            {
-                return IsValueInvariant(compare.Left, loop, knownInvariants) &&
-                       IsValueInvariant(compare.Right, loop, knownInvariants);
-            }
-            
-            return false;
-        }
-        
-        private bool IsValueInvariant(IRValue value, HashSet<BasicBlock> loop, HashSet<IRInstruction> knownInvariants)
-        {
-            if (value is IRConstant)
-                return true;
-            
-            if (value is IRVariable variable)
-            {
-                // Parameter variables are invariant
-                if (variable.IsParameter)
-                    return true;
-                
-                // Global variables could change
-                if (variable.IsGlobal)
+                case IRBinaryOp binaryOp:
+                    if (binaryOp.Operation is BinaryOpKind.Div or BinaryOpKind.Mod or BinaryOpKind.IntDiv)
+                        return false;
+                    return IsValueInvariant(binaryOp.Left, loop, knownInvariants, written) &&
+                           IsValueInvariant(binaryOp.Right, loop, knownInvariants, written);
+                case IRUnaryOp unaryOp:
+                    return IsValueInvariant(unaryOp.Operand, loop, knownInvariants, written);
+                case IRCompare compare:
+                    return IsValueInvariant(compare.Left, loop, knownInvariants, written) &&
+                           IsValueInvariant(compare.Right, loop, knownInvariants, written);
+                default:
                     return false;
             }
-            
-            // Check if the defining instruction is a known invariant
-            if (value is IRInstruction inst)
+        }
+
+        private static bool IsValueInvariant(IRValue value, HashSet<BasicBlock> loop,
+            HashSet<IRInstruction> knownInvariants, HashSet<string> written)
+        {
+            switch (value)
             {
-                return !loop.Contains(inst.ParentBlock) || knownInvariants.Contains(inst);
+                case IRConstant:
+                    return true;
+                case IRVariable variable:
+                    // A global can change behind any call; anything else is invariant exactly
+                    // when nothing in the loop writes it (a ByVal parameter included).
+                    return !variable.IsGlobal && variable.Name != null && !written.Contains(variable.Name);
+                case IRInstruction inst:
+                    if (knownInvariants.Contains(inst)) return true;
+                    // Computed once, before the loop. An unknown block is treated as inside.
+                    return inst.ParentBlock != null && !loop.Contains(inst.ParentBlock);
+                default:
+                    return false;
             }
-            
-            return false;
         }
     }
     
@@ -1400,13 +2504,13 @@ namespace BasicLang.Compiler.IR.Optimization
                     var reduced = TryReduceBinary(binaryOp);
                     if (reduced != null)
                     {
-                        // The replacement stands in for the user's own statement, so it
-                        // must keep the original's source location. Dropping it leaves
-                        // SourceLine 0 ("synthesized"), which makes debug builds emit a
-                        // #line reset onto the generated file for a line the user wrote —
-                        // stepping in a debugger then lands in generated glue instead of
-                        // the next source statement (found by the Phase 4 Step-0 gate).
-                        reduced.SourceLine = binaryOp.SourceLine;
+                        // The replacement stands in for the user's own statement, so it must keep
+                        // the original's IDENTITY — its source location AND the flag saying it is
+                        // named after a variable. Carrying only the line (which this used to do)
+                        // left NamedAfterVariable false, and the write to a class member was then
+                        // emitted as a fresh local on JavaScript and dropped on C#. See
+                        // InheritIdentity for the measurements.
+                        InheritIdentity(reduced, binaryOp);
 
                         // The rewrite produces a NEW IRValue object, so every consumer still
                         // pointing at the discarded multiply/divide/modulo has to be re-pointed
@@ -1429,7 +2533,17 @@ namespace BasicLang.Compiler.IR.Optimization
         private IRBinaryOp TryReduceBinary(IRBinaryOp op)
         {
             // Multiplication by power of 2 Ã¢â€ â€™ shift
-            if (op.Operation == BinaryOpKind.Mul)
+            // INTEGRAL OPERANDS ONLY. The guard used to test just the constant, so any
+            // `x * 2^k` with an Integer literal matched whatever x was. MEASURED on
+            // `Const Half As Double = 2.5` / `CStr(Half * 2)`: C# emitted `Half << 1` (CS0019),
+            // C++ `Half << 1` (ill-formed on a double), and JavaScript `(Half << 1)`, which
+            // COMPILES and prints 4 — `<<` truncates its operand to int32 first. Single, a
+            // non-Const Double local and Decimal all matched the same way. Both the operand and
+            // the result must be integral: the result type alone is not enough if a front end
+            // ever widens, and the operand alone is not enough if the product is promoted.
+            if (op.Operation == BinaryOpKind.Mul
+                && op.Type != null && op.Type.IsIntegral()
+                && op.Left.Type != null && op.Left.Type.IsIntegral())
             {
                 if (op.Right is IRConstant constant && constant.Value is int power)
                 {
@@ -1507,13 +2621,179 @@ namespace BasicLang.Compiler.IR.Optimization
         public void AddAggressivePasses()
         {
             AddStandardPasses();
+
+            // LoopInvariantCodeMotionPass is REGISTERED — master's e063faf rewrite (PR #85),
+            // approved by the owner, supersedes ADR-0003's decision to unregister it. ADR-0003
+            // measured the OLD pass (at ef69a2c: every counted loop run zero times on C++/MSIL,
+            // ReferenceErrors on JS, 65-for-29 on C#; and, once the back-edge predicate was fixed,
+            // the induction variable hoisted out of its own loop). e063faf rewrote all three of the
+            // pass's decisions — which values (a variable is invariant only if nothing in the loop
+            // writes it), what moves (pure, non-trapping ops only; never a store, never Div/Mod/
+            // IntDiv), and where (a real single-entry preheader only) — and measured all 13 loop
+            // programs right on JavaScript and C++ under --optimize. See the pass itself.
             AddPass(new LoopInvariantCodeMotionPass());
-            AddPass(new FunctionInliningPass());
+
+            // FunctionInliningPass DISABLED — it has never produced correct output for any
+            // function it actually inlines, and it MISCOMPILES SILENTLY. Same call as the
+            // ConstantPropagationPass line in AddStandardPasses above: the pass stays in the file
+            // (its CloneAndRemap is still the only clone path an IRCall can reach, which
+            // NetIrCarriageTests exercises by adding it explicitly) but nothing ships it.
+            //
+            // MEASURED on `Function F(p As Integer) As Integer : Return p * 2` called as `F(6)`,
+            // which produced this Main:
+            //     _inline_t1_0 = 12;         // undeclared, and nothing reads it
+            //     t1 = (p << 1);             // undeclared t1, and the CALLEE'S PARAMETER p leaked
+            //     const t0 = String(F(6));   // ...and the original call still happens
+            // Six of seven call shapes measured this way fail at run time (ReferenceError); the
+            // seventh only survives because IsInlineable REFUSES it for block count. All seven are
+            // correct without this pass. FIVE separate defects, not one:
+            //  1. Inlined locals are never added to the caller's LocalVariables, so every one is
+            //     emitted undeclared.
+            //  2. A definition is renamed by `tempCounter` while its USES are renamed by
+            //     `prefix + name` (RemapValue) — two schemes that can never agree, which is the
+            //     `_inline_t1_0` / `_inline_t1_x` mismatch above.
+            //  3. RemapValue only rewrites an IRVariable and returns anything else untouched, so a
+            //     nested operand tree keeps the callee's own variables and parameters.
+            //  4. InlineCallsInBlock never calls ReplaceUses, so consumers still reference the
+            //     removed IRCall and the callee is emitted and CALLED anyway — the very thing
+            //     ReplaceUses' own doc comment says a pass that swaps an instruction must do.
+            //  5. `depth` is passed 0 and never incremented, so _maxInlineDepth is dead.
+            // Repairing it is a rewrite, not a patch, and inlining buys nothing here: clang, the
+            // CLR JIT and V8 all inline far better than this pass could downstream.
+            // AddPass(new FunctionInliningPass());
+
             AddPass(new TailCallOptimizationPass());
             AddPass(new AlgebraicSimplificationPass());
-            AddPass(new LoopFusionPass());  // Fuse adjacent loops before unrolling
-            AddPass(new LoopUnrollingPass(4));  // 4x unrolling
-            AddPass(new InductionVariablePass());
+
+            // LoopFusionPass and LoopUnrollingPass DISABLED — on the same terms as
+            // ConstantPropagationPass, FunctionInliningPass and InductionVariablePass: the class
+            // stays in the file so a test can add it explicitly (LoopPassesDisabledTests), but
+            // nothing registers it. This branch (ADR-0003) and master (e063faf) unregistered both
+            // independently and for the same reason; the two sets of measurements follow.
+            //
+            // ⛔ NEITHER HAS EVER EXECUTED. MEASURED at ef69a2c across all 13 CFG shapes,
+            // including shapes built to satisfy every gate each pass names: both report zero
+            // modifications on every program. They refuse early, on the broken loop sets —
+            // LoopUnrolling at CanUnroll's trip-count gate (FindInitialValue needs a predecessor
+            // outside the loop, and `entry` is inside every bogus set), LoopFusion at
+            // GetLoopBounds returning null. So "disabling" them removes nothing that any program
+            // has ever received.
+            //
+            // They are unregistered rather than left alone because fixing the substrate would
+            // TURN THEM ON for the first time, and both are broken when they fire. MEASURED with
+            // the corrected back-edge predicate plus this branch's IsValueInvariant fix (since
+            // replaced by e063faf's LICM rewrite), i.e. the exact
+            // state of this file otherwise:
+            //   * LoopUnrolling, counted call-free loop: emits doubly-prefixed undeclared names
+            //     (`_u0__u0_i`, `_u0__u1_acc`) because the pass re-runs over its own output and
+            //     CloneVariable mints names the optimizer has no facility to declare. CS0103 /
+            //     C++ undeclared identifier / JS ReferenceError / MSIL InvalidProgramException —
+            //     all four backends.
+            //   * LoopFusion, two same-bound sibling loops: FuseLoops removes loop 2's blocks
+            //     from function.Blocks while branches still target them. C++ "undeclared label
+            //     'for0_inc'"; MSIL "Unable to find forward reference label 'for0inc'";
+            //     JavaScript REFUSES the function outright; and C# is SILENTLY WRONG — 29,37
+            //     where 29,29 is correct.
+            // Turning on two never-run passes is not a side effect a substrate repair gets to
+            // have, so the repair ships with them unregistered.
+            //
+            // Master's measurement (e063faf, --optimize, 13 loop programs, JavaScript and C++):
+            //  - LoopUnrollingPass broke 9 of the 10 single loops ("_u3_i is not defined"). Read
+            //    from the code: it renames EVERY local in the cloned body, never checks the trip
+            //    count divides by the factor, turns stores into user variables into fresh temps,
+            //    never re-points operands at the clones, and finds blocks by NAME.
+            //  - LoopFusionPass broke the one shape it exists for, two adjacent independent loops
+            //    with the same bounds (C++: "label 'for0_inc' used but not defined"); before the
+            //    CFG fix the same programs were silently wrong on JavaScript (2020, 30 and 18 for
+            //    1020, 40 and 48).
+            // A sound version of either is a rewrite, and clang, the CLR JIT and V8 all unroll and
+            // fuse downstream, where it is legal.
+            // AddPass(new LoopFusionPass());  // Fuse adjacent loops before unrolling
+            // AddPass(new LoopUnrollingPass(4));  // 4x unrolling
+
+            // InductionVariablePass DISABLED — third entry in the list this method already keeps
+            // (ConstantPropagationPass above, FunctionInliningPass above that), for the same
+            // reason and on the same terms: it has never produced a correct program for any loop
+            // it actually rewrites, and the aggressive pipeline SHIPS. `ProjectFile()` seeds
+            // Configurations["Release"].OptimizationsEnabled = true (ProjectFile.cs:122-127), and
+            // Program.cs:502 / BuildService.cs:629 pass that straight into
+            // CompilerOptions.OptimizeAggressive, which reaches AddAggressivePasses at
+            // Compiler.cs:292 and Compiler.cs:459. So a Release .blproj build took this pass.
+            //
+            // MEASURED at 67782af on `For i = 0 To n : Show(i * 3) : Next`, compiled AND RUN out
+            // of process on all four backends, both entry points (CLI --optimize and a Release
+            // .blproj through CompileProjectFiles). Emitted C# was:
+            //     t2 = _div_t2 + 3;      // CS0103 on BOTH names
+            //     Show(i * 3);           // ...and the original multiply is still here
+            // C++ "use of undeclared identifier '_div_t2'"/"'t3'"; JavaScript ReferenceError
+            // ("Cannot access '_div_t2' before initialization"); MSIL assembled and threw
+            // InvalidProgramException. No backend was right by luck — unusually, all four fail.
+            //
+            // FIVE defects, not the two that were written down, and the two written-down ones are
+            // not the ones that matter:
+            //  1. The uses are never re-pointed. `block.Instructions[i]` is swapped for an
+            //     IRAssignment while every consumer still holds the removed IRBinaryOp, so the
+            //     derived IV is dead weight and the multiply is re-materialised from the orphan.
+            //     Same omission as CSE and Peephole at 67782af.
+            //  2. The derived IV is never added to IRFunction.LocalVariables. No pass in this file
+            //     has ever written LocalVariables — the optimizer has no facility for declaring a
+            //     variable it mints, and the only two passes that ever wanted one are this and
+            //     FunctionInliningPass.
+            //  3. ⛔ IT IS NEVER INITIALISED. There is no preheader store of `i_init * c`, and
+            //     FindBasicInductionVariables does not even collect the initial value. So the
+            //     first iteration reads garbage. `For i = 1 To n` needs the derived IV to start at
+            //     3; nothing puts it there. THIS is the defect that makes a repair a rewrite,
+            //     because placing the init needs a loop preheader — see below.
+            //  4. The minted name `_div_{binOp.Name}` lives in the USER's namespace, which
+            //     ADR-0001's Contract forbids for exactly this reason. MEASURED: a program with
+            //     `Dim _div_x As Integer = 99` and `x = i * 3` COMPILES CLEANLY and prints
+            //     198/204/210/216 where 99/102/105/108 is correct — a silent wrong answer, today,
+            //     on C# (the reference oracle) and JavaScript. C++ and MSIL print neither the
+            //     right nor the wrong numbers, because the separate LICM defect below stops the
+            //     loop running at all; they are not evidence that this defect is narrow.
+            //     And two multiplies onto one local (`x = i * 3` then
+            //     `x = i * 5`) both mint `_div_x`, so both updates land in the same block;
+            //     JavaScript reports "Identifier '_div_x' has already been declared".
+            //  5. `basicIVs[ivVar.Name]` carries the increment block and the pass DISCARDS it
+            //     (`var (increment, _) = ...`), then re-finds one with
+            //     `loop.FirstOrDefault(b => b.Name.Contains(".inc"))` — any `.inc` block in the
+            //     loop list, which for a nested loop can be the wrong loop's latch. There is also
+            //     no check that the recognised increment is the ONLY definition of `i` in the
+            //     loop: on `For i = 0 To n : Show(i * 3) : i = i + 1 : Next` the correct output is
+            //     0, 6 and a derived IV stepping by 3 gives 0, 3.
+            //  6. Even with 1-5 repaired, the pass's OWN minted update (`_div_t2 = _div_t2 + 3`)
+            //     is then seen as loop-invariant by LoopInvariantCodeMotionPass on the next
+            //     fixed-point iteration — both its operands read invariant — and gets moved out.
+            //     MEASURED: running the pass before LICM takes LICM's modification count 4 -> 5;
+            //     in the shipping order an extra `it1 Loop Invariant Code Motion mods=1` appears.
+            //     The derived variable would be frozen across the loop even if everything above
+            //     were fixed. Removing this pass therefore also shrinks the LICM defect's blast
+            //     radius by one hoist per derived IV.
+            //
+            // ⛔ WHY REPAIR IS A REWRITE, MEASURED: fixing exactly the two defects that were
+            // written down (1 and 2) does NOT fix the program — `t2` is a TEMP, so replacing the
+            // IRValue that carried the name with an IRAssignment takes its DECLARATION away, and
+            // C# still gave CS0103 on `t2`, JavaScript still threw. It also CONVERTED the
+            // two-multiplies-onto-one-local shape from a loud build failure into a silent wrong
+            // answer: 0,0,8,8,16,16,24,24 where 0,0,3,5,6,10,9,15 is correct, measured on C# and
+            // JavaScript (the two backends whose emitters survive the LICM defect below, so the
+            // two that can show a wrong VALUE at all). A loud failure traded for a quiet one is a
+            // regression.
+            // And defect 3 cannot be fixed inside this pass at all: it needs a preheader, and
+            // ControlFlowGraph.IdentifyLoops — the substrate all four loop passes call — is wrong.
+            // For a five-block function holding ONE loop it reports FOUR natural loops, every one
+            // of them containing `entry`, and one containing the exit block. LICM's
+            // `header.Predecessors.FirstOrDefault(p => !loopSet.Contains(p))` therefore resolves
+            // the "preheader" to the loop's own LATCH (`for0.inc`). Repairing that is shared-
+            // substrate work for the LICM task, not something to smuggle in here, and a pass that
+            // cannot place an initialisation cannot fire correctly even once.
+            //
+            // Nothing is lost by not shipping it. LLVM's loop-strength-reduction, the CLR JIT and
+            // V8 all perform this exact transform, better, downstream of every one of our
+            // backends; and because defect 1 means the multiply was emitted anyway, the pass never
+            // removed a single multiply even when it "succeeded". The class stays in the file, as
+            // FunctionInliningPass does, so a test can add it explicitly.
+            // AddPass(new InductionVariablePass());
         }
         
         public OptimizationResult Run(IRModule module)
@@ -1551,7 +2831,12 @@ namespace BasicLang.Compiler.IR.Optimization
                 
                 result.IterationsRun = iteration + 1;
             }
-            
+
+            // ADR-0004 D2 / ADR-0005 D2: assert Invariant S′ over what the passes produced. A
+            // no-op unless enabled (DEBUG builds, the test suite, BASICLANG_VERIFY_IR); it only
+            // reads the IR, so output is identical either way.
+            IRVerifier.VerifyAfterOptimization(module);
+
             return result;
         }
     }
@@ -2015,14 +3300,74 @@ namespace BasicLang.Compiler.IR.Optimization
 
                 foreach (var block in function.Blocks)
                 {
-                    OptimizeBlock(block);
+                    OptimizeBlock(function, block);
                 }
             }
 
             return ModificationCount > 0;
         }
 
-        private void OptimizeBlock(BasicBlock block)
+        /// <summary>
+        /// Installs <paramref name="replacement"/> in place of <paramref name="original"/> and
+        /// re-points every consumer, which is the half this pass used to omit entirely.
+        ///
+        /// <para>Returns true when the instruction was REMOVED rather than swapped, so the caller
+        /// can step its index back.</para>
+        ///
+        /// <para>Two cases, and they behave oppositely — see <see cref="IsTempDestination"/>:</para>
+        /// <list type="bullet">
+        /// <item>A USER-NAMED destination is a declared local. The assignment stays, and consumers
+        /// are re-pointed at its target, matching what StrengthReductionPass and
+        /// AlgebraicSimplificationPass already do.</item>
+        /// <item>A TEMP destination is declared only because an <c>IRValue</c> carried its name.
+        /// Swapping in an <c>IRAssignment</c> takes the declaration away and leaves the write, so
+        /// the definition is dropped and consumers are forwarded to the VALUE. The discarded
+        /// operand's own defining instruction stays in the block, so a call on the side that an
+        /// arm like <c>x * 0 -&gt; 0</c> discards is still evaluated.</item>
+        /// </list>
+        ///
+        /// <para>Scoped to the whole FUNCTION, not this block, for the reason the other two passes
+        /// state: a use may live in a later block.</para>
+        /// </summary>
+        private bool ApplyRewrite(IRFunction function, BasicBlock block, int index, IRValue original, IRInstruction replacement)
+        {
+            var stream = function.Blocks.SelectMany(b => b.Instructions);
+
+            // ⛔ BOTH conjuncts, and the second is not belt-and-braces — it is a MEASURED
+            // miscompile. `IsTempDestination` is a test on the SPELLING of the name, and a user
+            // may spell a variable `t0`; CSharpFieldAssignmentTests already has a fixture for a
+            // MEMBER named `t0`. On the name test alone, `t0 = n + 0` inside
+            // `Class Timer : Public t0 As Integer` dropped the field write and emitted an EMPTY
+            // method body — `Set1(5)` then printed 0 instead of 5, silently, on ALL FOUR backends.
+            // `NamedAfterVariable` is the flag IRBuilder sets when it actually renames a value
+            // after a variable, which is what the backends themselves consult to decide a value
+            // IS a store; a genuine SSA temp never carries it. Keeping the assignment when EITHER
+            // test says "real variable" costs only a missed rewrite; dropping it costs the write.
+            if (replacement is IRAssignment assignment
+                && IsTempDestination(original.Name)
+                && !original.NamedAfterVariable)
+            {
+                ReplaceUses(stream, original, assignment.Value);
+                block.Instructions.RemoveAt(index);
+                ReportModification();
+                return true;
+            }
+
+            if (replacement is IRAssignment named)
+                InheritIdentity(named.Target, original);
+            else if (replacement is IRValue value)
+                InheritIdentity(value, original);
+
+            var definition = replacement is IRAssignment a ? (IRValue)a.Target : replacement as IRValue;
+            if (definition != null)
+                ReplaceUses(stream, original, definition);
+
+            block.Instructions[index] = replacement;
+            ReportModification();
+            return false;
+        }
+
+        private void OptimizeBlock(IRFunction function, BasicBlock block)
         {
             bool changed;
             do
@@ -2039,9 +3384,24 @@ namespace BasicLang.Compiler.IR.Optimization
                         var replacement = OptimizeBinaryOp(binOp);
                         if (replacement != null && replacement != inst)
                         {
-                            block.Instructions[i] = replacement;
+                            // ⛔ THE MISSING HALF, and this pass is in AddStandardPasses — it runs
+                            // with NO flag. It swapped the instruction and never re-pointed the
+                            // CONSUMERS, which the base class's ReplaceUses doc says a pass doing so
+                            // MUST; StrengthReductionPass and AlgebraicSimplificationPass both call
+                            // it, and only this one did not. Worse than an orphan alone: every arm
+                            // here returns an IRAssignment, which is NOT an IRValue, so a temp
+                            // destination also loses its DECLARATION.
+                            //
+                            // MEASURED on `Show(a + 0)` — six lines, no flags — where C# emitted
+                            //     t0 = a;            // CS0103: 't0' does not exist
+                            //     Show(a + 0);       // orphan re-materialised the whole expression
+                            // C++ gave "use of undeclared identifier 't0'" and JavaScript threw
+                            // ReferenceError. MSIL was right BY LUCK (it declares locals from its
+                            // own slot table, not from the IRValue stream). `Show(Tag() * 0)` broke
+                            // the same way AND called Tag() twice, because the orphan re-rendered
+                            // its operand tree.
+                            if (ApplyRewrite(function, block, i, binOp, replacement)) i--;
                             changed = true;
-                            ReportModification();
                         }
                     }
 
@@ -2060,6 +3420,9 @@ namespace BasicLang.Compiler.IR.Optimization
                     }
 
                     // Pattern: Double negation --x -> x
+                    // Same missing half as the binary arm above, and just as live: MEASURED on
+                    // `Show(-(-a))`, which gave CS0103 't1' on C#, "use of undeclared identifier
+                    // 't1'" on C++ and a ReferenceError on JavaScript.
                     if (inst is IRUnaryOp unary && unary.Operation == UnaryOpKind.Neg)
                     {
                         if (unary.Operand is IRUnaryOp innerUnary && innerUnary.Operation == UnaryOpKind.Neg)
@@ -2067,13 +3430,13 @@ namespace BasicLang.Compiler.IR.Optimization
                             var newAssign = new IRAssignment(
                                 new IRVariable(unary.Name, unary.Type),
                                 innerUnary.Operand);
-                            block.Instructions[i] = newAssign;
+                            if (ApplyRewrite(function, block, i, unary, newAssign)) i--;
                             changed = true;
-                            ReportModification();
                         }
                     }
 
                     // Pattern: Boolean not not -> identity
+                    // MEASURED on `ShowB(Not (Not a))`: the same three failures.
                     if (inst is IRUnaryOp notOp && notOp.Operation == UnaryOpKind.Not)
                     {
                         if (notOp.Operand is IRUnaryOp innerNot && innerNot.Operation == UnaryOpKind.Not)
@@ -2081,9 +3444,8 @@ namespace BasicLang.Compiler.IR.Optimization
                             var newAssign = new IRAssignment(
                                 new IRVariable(notOp.Name, notOp.Type),
                                 innerNot.Operand);
-                            block.Instructions[i] = newAssign;
+                            if (ApplyRewrite(function, block, i, notOp, newAssign)) i--;
                             changed = true;
-                            ReportModification();
                         }
                     }
                 }
@@ -2138,8 +3500,12 @@ namespace BasicLang.Compiler.IR.Optimization
                     return new IRAssignment(new IRVariable(binOp.Name, binOp.Type), binOp.Right);
             }
 
-            // x * 0 -> 0
-            if (binOp.Operation == BinaryOpKind.Mul)
+            // x * 0 -> 0. INTEGRAL ONLY — in IEEE 754 it is not the identity three ways, all
+            // MEASURED on the JavaScript backend before this guard: Infinity * 0 is NaN (the rule
+            // gave 0), NaN * 0 is NaN, and -5.0 * 0 is -0.0 (the rule gave +0.0, so `1.0 / e`
+            // printed Infinity instead of -Infinity). Decimal is excluded too: .NET keeps the
+            // scale, so 1.5D * 0 prints "0.0", not "0".
+            if (binOp.Operation == BinaryOpKind.Mul && IsIntegralArithmetic(binOp))
             {
                 if (IsZero(binOp.Right) || IsZero(binOp.Left))
                     return new IRAssignment(
@@ -2153,8 +3519,9 @@ namespace BasicLang.Compiler.IR.Optimization
                 return new IRAssignment(new IRVariable(binOp.Name, binOp.Type), binOp.Left);
             }
 
-            // x - x -> 0
-            if (binOp.Operation == BinaryOpKind.Sub &&
+            // x - x -> 0. INTEGRAL ONLY, for the same reason: Infinity - Infinity and NaN - NaN
+            // are NaN. MEASURED: `Dim a As Double = inf - inf` compiled to `a = 0`.
+            if (binOp.Operation == BinaryOpKind.Sub && IsIntegralArithmetic(binOp) &&
                 binOp.Left is IRVariable left &&
                 binOp.Right is IRVariable right &&
                 left.Name == right.Name)
@@ -2164,16 +3531,10 @@ namespace BasicLang.Compiler.IR.Optimization
                     new IRConstant(0, binOp.Type));
             }
 
-            // x / x -> 1 (when x != 0)
-            if (binOp.Operation == BinaryOpKind.Div &&
-                binOp.Left is IRVariable divLeft &&
-                binOp.Right is IRVariable divRight &&
-                divLeft.Name == divRight.Name)
-            {
-                return new IRAssignment(
-                    new IRVariable(binOp.Name, binOp.Type),
-                    new IRConstant(1, binOp.Type));
-            }
+            // `x / x -> 1` REMOVED — unsound for EVERY type, and its "(when x != 0)" was never
+            // checked. A float 0, Infinity or NaN gives NaN (MEASURED: `r = x / x` compiled to
+            // `r = 1`, so DivSelf(0.0) returned 1); an integral 0 throws DivideByZeroException.
+            // No type restriction rescues it, and nobody writes the shape on purpose.
 
             // x And True -> x, x And False -> False
             if (binOp.Operation == BinaryOpKind.And)
@@ -2219,6 +3580,16 @@ namespace BasicLang.Compiler.IR.Optimization
 
             return binOp;
         }
+
+        /// <summary>
+        /// True when the op and both operands are integral, so the ring identities (x - x = 0,
+        /// x * 0 = 0) hold. A null type counts as NOT integral: refusing costs one missed fold,
+        /// guessing wrong produces a wrong answer. The same test StrengthReductionPass applies.
+        /// </summary>
+        private static bool IsIntegralArithmetic(IRBinaryOp binOp) =>
+            binOp.Type != null && binOp.Type.IsIntegral()
+            && binOp.Left?.Type != null && binOp.Left.Type.IsIntegral()
+            && binOp.Right?.Type != null && binOp.Right.Type.IsIntegral();
 
         private bool IsZero(IRValue value)
         {
@@ -2301,14 +3672,14 @@ namespace BasicLang.Compiler.IR.Optimization
 
                 foreach (var block in function.Blocks)
                 {
-                    SimplifyBlock(block);
+                    SimplifyBlock(function, block);
                 }
             }
 
             return ModificationCount > 0;
         }
 
-        private void SimplifyBlock(BasicBlock block)
+        private void SimplifyBlock(IRFunction function, BasicBlock block)
         {
             for (int i = 0; i < block.Instructions.Count; i++)
             {
@@ -2319,7 +3690,38 @@ namespace BasicLang.Compiler.IR.Optimization
                     var simplified = SimplifyBinaryOp(binOp);
                     if (simplified != binOp)
                     {
+                        // Same identity transfer strength reduction needs, for the same reason: the
+                        // `2 * x -> x + x` arm builds a NEW value carrying the old name, and without
+                        // the flag a write to a class member was emitted as a fresh local on
+                        // JavaScript and dropped on C#. MEASURED on `K = 2 * p` under --optimize,
+                        // which is the only pipeline this pass runs in.
+                        if (simplified is IRValue replacement) InheritIdentity(replacement, binOp);
+
                         block.Instructions[i] = simplified;
+
+                        // ⛔ THE MISSING HALF. This pass swapped the instruction and never
+                        // re-pointed the CONSUMERS, which the base class's ReplaceUses doc states
+                        // a pass doing so MUST. Every consumer still held the discarded node, so
+                        // the simplification did not merely fail to apply — it left broken code:
+                        //     const t0 = ((a + b) | 0);
+                        //     t1 = a;                             // UNDECLARED -> ReferenceError
+                        //     return ((((a + b) | 0) - b) | 0);   // consumer re-materialised the
+                        //                                         // WHOLE original expression
+                        // MEASURED on `Return (a + b) - b`. Carrying the old NAME is not enough,
+                        // exactly as that doc says: `2 * x -> x + x` survived only by NAME
+                        // COINCIDENCE (its replacement is a value with the same name, so the
+                        // orphaned consumer resolved by accident), while an arm replacing a value
+                        // with an IRAssignment gives the consumer nothing to resolve at all.
+                        //
+                        // Scoped to the whole FUNCTION, not this block: a use may live in a later
+                        // block (a compare feeding an If, a Return after a branch), which is why
+                        // StrengthReductionPass scopes it the same way.
+                        var definition = simplified is IRAssignment assignment
+                            ? (IRValue)assignment.Target
+                            : simplified as IRValue;
+                        if (definition != null)
+                            ReplaceUses(function.Blocks.SelectMany(b => b.Instructions), binOp, definition);
+
                         ReportModification();
                     }
                 }
@@ -2328,50 +3730,48 @@ namespace BasicLang.Compiler.IR.Optimization
 
         private IRInstruction SimplifyBinaryOp(IRBinaryOp binOp)
         {
-            // (a + b) - b -> a
-            if (binOp.Operation == BinaryOpKind.Sub && binOp.Left is IRBinaryOp leftAdd)
-            {
-                if (leftAdd.Operation == BinaryOpKind.Add &&
-                    leftAdd.Right is IRVariable addRight &&
-                    binOp.Right is IRVariable subRight &&
-                    addRight.Name == subRight.Name)
-                {
-                    return new IRAssignment(new IRVariable(binOp.Name, binOp.Type), leftAdd.Left);
-                }
-            }
+            // `(a + b) - b -> a`, `(a - b) + b -> a` and `(a * b) / b -> a` REMOVED — all three were
+            // UNSOUND for floating-point operands, and this pass's missing ReplaceUses is the only
+            // reason nobody ever saw a wrong answer. The same story as the Div and Mod arms removed
+            // from StrengthReductionPass, and recorded there in the same words: latent rather than
+            // harmless, because the broken machinery around them hid the bad arithmetic behind a
+            // compile or run error.
+            //
+            // MEASURED, correct answer first and what the arm would have produced second:
+            //   (a + b) - b   a=1e-19, b=1e18   ->   0      the arm gives a (1e-19).
+            //                                           Catastrophic cancellation: adding b makes a
+            //                                           vanish, and subtracting it does not bring a
+            //                                           back.
+            //   (a * b) / b   a=4, b=0          ->   NaN    the arm gives 4. Its own comment claimed
+            //                                           "when b != 0" — the code NEVER CHECKED IT.
+            //   (a * b) / b   a=0.1, b=3        ->   0.10000000000000002
+            //                                           the arm gives 0.1. Plain rounding: the
+            //                                           round trip is not the identity.
+            //
+            // Restricting them to integers would be sound for the two additive ones, but `(a*b)/b`
+            // stays wrong at b = 0 there too (DivideByZeroException versus `a`), and none of the
+            // three is a shape anyone writes. Every backend's own optimizer does this legally
+            // downstream where it is legal at all.
 
-            // (a - b) + b -> a
-            if (binOp.Operation == BinaryOpKind.Add && binOp.Left is IRBinaryOp leftSub)
-            {
-                if (leftSub.Operation == BinaryOpKind.Sub &&
-                    leftSub.Right is IRVariable subRightVar &&
-                    binOp.Right is IRVariable addRightVar &&
-                    subRightVar.Name == addRightVar.Name)
-                {
-                    return new IRAssignment(new IRVariable(binOp.Name, binOp.Type), leftSub.Left);
-                }
-            }
-
-            // (a * b) / b -> a (when b != 0)
-            if (binOp.Operation == BinaryOpKind.Div && binOp.Left is IRBinaryOp leftMul)
-            {
-                if (leftMul.Operation == BinaryOpKind.Mul &&
-                    leftMul.Right is IRVariable mulRight &&
-                    binOp.Right is IRVariable divRight &&
-                    mulRight.Name == divRight.Name)
-                {
-                    return new IRAssignment(new IRVariable(binOp.Name, binOp.Type), leftMul.Left);
-                }
-            }
-
-            // 2 * x -> x + x (sometimes faster)
+            // 2 * x -> x + x. The VALUE is right: `x + x` is exactly `2 * x` in IEEE 754 (one rounding
+            // either way) and wraps identically on integer overflow. That argument says NOTHING about
+            // how many times `x` is EVALUATED, and this rewrite writes the SAME operand object into
+            // both slots — a use count of 2. For `2 * Tag()` that is `Tag() + Tag()` on any backend
+            // that inlines (the C# oracle printed "tag" twice, measured — ADR-0001's Premise status).
+            // A value-preserving rewrite is not automatically an effect-preserving one, so the arm
+            // fires only for an operand that may be evaluated twice: ADR-0001/ADR-0004 D4's gate,
+            // the SAME predicate the C# backend's materialisation uses (IRReplicability), never a
+            // private copy. It also satisfies ADR-0004's Invariant S trivially: both uses sit in one
+            // instruction, so nothing can be assigned between them.
             if (binOp.Operation == BinaryOpKind.Mul)
             {
-                if (binOp.Left is IRConstant c && c.Value is int i && i == 2)
+                if (binOp.Left is IRConstant c && c.Value is int i && i == 2
+                    && IRReplicability.IsReplicable(binOp.Right))
                 {
                     return new IRBinaryOp(binOp.Name, BinaryOpKind.Add, binOp.Right, binOp.Right, binOp.Type);
                 }
-                if (binOp.Right is IRConstant c2 && c2.Value is int i2 && i2 == 2)
+                if (binOp.Right is IRConstant c2 && c2.Value is int i2 && i2 == 2
+                    && IRReplicability.IsReplicable(binOp.Left))
                 {
                     return new IRBinaryOp(binOp.Name, BinaryOpKind.Add, binOp.Left, binOp.Left, binOp.Type);
                 }

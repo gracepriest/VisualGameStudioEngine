@@ -58,17 +58,17 @@ IDE/BasicLang.exe --debug-adapter                                              #
 The native C++ engine builds via VS 2022 MSBuild on `VisualGameStudioEngine.vcxproj`
 (x64/Release), auto-discovered through vswhere.
 
-**On Linux / in a cloud container** the SDK installs from the distro archive — the package index in
-a fresh container is stale, so update first:
-
-```bash
-apt-get update && apt-get install -y --no-install-recommends dotnet-sdk-8.0
-```
-
-The full suite runs in ~8 minutes there, but **~170 tests fail for environmental reasons** (hardcoded
-`C:\` paths, clang, MSVC). The raw number therefore means nothing on its own: build the merge-base
-in a `git worktree`, run both, and compare the sorted FAILURE NAMES with `comm -23`. A count alone
-hides a regression that lands as another test goes green. Windows remains the release gate.
+**On Linux (a cloud session):** both commands above are expected to run with **zero failures**
+(install a .NET 8 SDK first — in a fresh container the package index is stale, so
+`apt-get update && apt-get install -y --no-install-recommends dotnet-sdk-8.0`; g++/clang++ and
+Node cover the C++/JS execution tiers). Windows-only
+requirements — MSVC, `ilasm`, the native engine DLL/`.lib`, `dbgshim.dll`, the Windows Desktop
+SDK, the NuGet-restored `packages/raylib.5.5.0` — make their tests **skip**, not fail. So a green
+Linux run is necessary but not sufficient: anything touching the .NET shim, MSVC builds, MSIL or
+the engine still needs a Windows run. Current measured numbers are in `docs/HANDOFF.md`. A new
+Linux failure is a regression or a missing skip — never baseline it. When comparing two runs,
+compare the sorted FAILURE NAMES, never the counts: a count alone hides a regression that lands as
+another test goes green.
 
 ## Working conventions — READ THIS, these prevent real mistakes
 
@@ -103,6 +103,17 @@ hides a regression that lands as another test goes green. Windows remains the re
 - ⚠ **Win32 globbing over-matches THREE-character extensions**: `*.bas` matches `.basic` and `*.cls`
   matches `.class`, so both globs above need an exact-extension check or those files are swept twice.
   Not reproducible on Linux — confirm it on the Windows run.
+- **Paths read from `.blproj`/`.blsln` are MSBuild-style (`Source\Main.bas`).** Off Windows a
+  backslash is a file-name character, so never `Path.Combine` a stored path raw — go through
+  `ProjectFile.ToLocalPath` (both project loaders already apply it at load). Likewise the built
+  program is `<Name>.exe` only on Windows.
+- **A test that needs a Windows-only prerequisite must SKIP without it, not fail.** Use the
+  existing gates: `Native/NativeBuildSkip` (a BasicLang native build ALWAYS uses MSVC — "any C++
+  compiler" is the wrong gate), `NativeEngineSkip.DllNotFound` (the reason for a `DllNotFoundException`
+  skip — every engine call, `finally` cleanup included, must go through the fixture's guard), and
+  `[Platform(Include = "Win")]` for Windows-only input (`C:\` paths, PATHEXT, file locking).
+  Inside `Assert.Multiple`, `Assert.Ignore` FAILS the test — use
+  `TestSkip.IgnoreEvenInsideMultiple`.
 
 ## Compiler layout (`BasicLang/`)
 
@@ -300,6 +311,10 @@ a second document type.
   container right (`public static class M`) and breaks the unqualified call instead. Repro, matrix
   and per-backend fix shapes in `docs/form-designer-followups.md` 14. **PR #6 fixes JavaScript
   only** — C# and C++ still need theirs.
+  ⚠ **Superseded on master by #57 (`e486382d`)**, which reports both spellings, cross-file included
+  (the dotted `'Helper.Helper'` wire form above is gone too), compiling and running on every backend
+  through one `EmitProcedureCall`. This table and the bullet above are kept as the measured history
+  until they are RE-MEASURED on the merged tree — do not rely on either direction without doing so.
 - ⛔ **`Place` decides "strip" vs "item" vs "positioned", and each has its own rule.** A **strip**
   (`FormPlace.Docked`) is geometry-less — `Geometry == null`, its edge is a `Dock` PROPERTY not a
   rect, it draws as a BAND on the canvas, and it is page chrome on the web (before/after the form

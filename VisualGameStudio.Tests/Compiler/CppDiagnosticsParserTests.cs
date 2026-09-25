@@ -6,6 +6,7 @@ namespace VisualGameStudio.Tests.Compiler;
 [TestFixture]
 public class CppDiagnosticsParserTests
 {
+    [Platform(Include = "Win", Reason = "parses diagnostics that carry Windows drive-letter paths")]
     [Test]
     public void Parses_ClangError_WithColumn()
     {
@@ -66,6 +67,7 @@ public class CppDiagnosticsParserTests
         Assert.That(diags[0].Line, Is.EqualTo(0));
     }
 
+    [Platform(Include = "Win", Reason = "parses diagnostics that carry Windows drive-letter paths")]
     [Test]
     public void Parses_LinkerError_WithAbsoluteOutputPath()
     {

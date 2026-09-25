@@ -135,15 +135,26 @@ internal static class MsilHarness
         return null;
     }
 
-    /// <summary>The assembler, or an Ignore for a machine that has none.</summary>
+    /// <summary>
+    /// The assembler, or an Ignore for a machine that has none.
+    ///
+    /// <para>⛔ Most MSIL legs run INSIDE a cross-backend <c>Assert.Multiple</c>, where NUnit
+    /// refuses <c>Assert.Ignore</c> outright ("Assert.Ignore may not be used in a multiple
+    /// assertion block") — so on a machine without ilasm every such test FAILED instead of being
+    /// skipped. Inside a block the skip is therefore raised as a bare <c>IgnoreException</c>,
+    /// which NUnit records as Ignored. It must not hide a real failure from a leg that already
+    /// ran in the same block: if one is pending, those failures are thrown instead.</para>
+    /// </summary>
     internal static string RequireIlasm()
     {
         if (IlasmPath.Value == null)
         {
-            Assert.Ignore(
+            const string message =
                 "No ilasm found. Windows ships one at %WINDIR%\\Microsoft.NET\\Framework64\\"
                 + "v4.0.30319; elsewhere restore runtime.<rid>.Microsoft.NETCore.ILAsm, or point "
-                + "BASICLANG_ILASM at a build.");
+                + "BASICLANG_ILASM at a build.";
+
+            TestSkip.IgnoreEvenInsideMultiple(message);
         }
         return IlasmPath.Value;
     }
@@ -160,7 +171,27 @@ internal static class MsilHarness
     /// — the C++ backend shipped an entire class of optimizer-only bugs behind 2,300 green
     /// tests that skipped it. A backend aiming at parity should not repeat that.</para>
     /// </summary>
-    internal static string CompileToIl(string source, string moduleName = "MsilProbe", bool optimize = true)
+    /// <param name="aggressive">
+    /// Run <c>AddAggressivePasses()</c> instead of <c>AddStandardPasses()</c> — the MSIL leg of
+    /// <c>FourBackends.RunsOnEveryBackendAggressive</c>, through the suite's single definition of
+    /// aggressive (<c>AggressivePipeline.Apply</c>). Ignored when <paramref name="optimize"/> is
+    /// false.
+    ///
+    /// <para>⭐ <b>SAFE FOR LOOPS SINCE ADR-0003 — this used to say it was not.</b> It assembled a
+    /// program that ran a counted <c>For</c> ZERO times: issue #114, the same OLD
+    /// <c>LoopInvariantCodeMotionPass</c> condition-sinking that broke the C++ leg, for the same
+    /// reason — MSIL emits the CFG as labels and branches and cannot recover a condition that
+    /// moved into the latch. ADR-0003 first closed this by unregistering all three loop passes.
+    /// <b>UPDATED 2026-09-24:</b> master's <c>e063faf</c> (PR #85, adopted by this branch's merge
+    /// of <c>15e4e63</c>; see ADR-0003's Amendment) rewrote <c>LoopInvariantCodeMotionPass</c> to
+    /// hoist only into a verified single-entry preheader, never a latch, and re-registered it.
+    /// <c>LoopUnrollingPass</c> and <c>LoopFusionPass</c> stay unregistered. RE-MEASURED on the
+    /// 13-shape CFG corpus with LICM back in the aggressive pipeline: every loop shape still
+    /// assembles, runs the right number of iterations and prints what the non-aggressive path
+    /// prints — see <c>VisualGameStudio.Tests.Compiler.CfgLoopShapesAggressiveTests</c>.</para>
+    /// </param>
+    internal static string CompileToIl(string source, string moduleName = "MsilProbe",
+        bool optimize = true, bool aggressive = false)
     {
         var parser = new Parser(new Lexer(source).Tokenize());
         var ast = parser.Parse();
@@ -173,7 +204,11 @@ internal static class MsilHarness
 
         var module = new IRBuilder(analyzer).Build(ast, moduleName);
 
-        if (optimize)
+        if (optimize && aggressive)
+        {
+            VisualGameStudio.Tests.Compiler.AggressivePipeline.Apply(module);
+        }
+        else if (optimize)
         {
             var pipeline = new OptimizationPipeline();
             pipeline.AddStandardPasses();
@@ -191,13 +226,25 @@ internal static class MsilHarness
     /// The whole round trip. Never throws for a BACKEND failure — the outcome is the result,
     /// so a test can pin "this shape does not work yet" as precisely as it pins one that does.
     /// </summary>
-    internal static MsilRun Run(string source, string moduleName = "MsilProbe", string stdin = null)
+    internal static MsilRun Run(string source, string moduleName = "MsilProbe", string stdin = null,
+        bool aggressive = false)
     {
-        var ilasm = RequireIlasm();
+        RequireIlasm();
 
         string il;
-        try { il = CompileToIl(source, moduleName); }
+        try { il = CompileToIl(source, moduleName, aggressive: aggressive); }
         catch (Exception ex) { return new MsilRun(MsilOutcome.GenerateFailed, "", "", ex.Message); }
+
+        return RunIl(il, moduleName, stdin);
+    }
+
+    /// <summary>
+    /// The IL → process half on its own, for IL generated from a COMBINED multi-file module
+    /// (which <see cref="Run"/>'s single-source front half cannot produce).
+    /// </summary>
+    internal static MsilRun RunIl(string il, string moduleName = "MsilProbe", string stdin = null)
+    {
+        var ilasm = RequireIlasm();
 
         var dir = Path.Combine(Path.GetTempPath(), "blmsil-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(dir);
@@ -251,6 +298,27 @@ internal static class MsilHarness
         string source, string moduleName = "MsilProbe", string stdin = null)
     {
         var r = Run(source, moduleName, stdin);
+        Assert.That(r.Outcome, Is.EqualTo(MsilOutcome.Ran), r.Report);
+        return r.Output;
+    }
+
+    /// <summary>
+    /// The round trip through the AGGRESSIVE pipeline, asserting it ran. The MSIL leg of
+    /// <c>FourBackends.RunsOnEveryBackendAggressive</c>. See <see cref="CompileToIl"/>'s
+    /// <c>aggressive</c> parameter — the #114 loop caveat it used to carry is closed by ADR-0003.
+    /// </summary>
+    internal static string RunAggressiveExpectingSuccess(
+        string source, string moduleName = "MsilProbe", string stdin = null)
+    {
+        var r = Run(source, moduleName, stdin, aggressive: true);
+        Assert.That(r.Outcome, Is.EqualTo(MsilOutcome.Ran), r.Report);
+        return r.Output;
+    }
+
+    /// <summary><see cref="RunIl"/>, asserting it ran and returning what it printed.</summary>
+    internal static string RunIlExpectingSuccess(string il, string moduleName = "MsilProbe")
+    {
+        var r = RunIl(il, moduleName);
         Assert.That(r.Outcome, Is.EqualTo(MsilOutcome.Ran), r.Report);
         return r.Output;
     }
