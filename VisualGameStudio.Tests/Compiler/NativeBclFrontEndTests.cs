@@ -527,6 +527,13 @@ End Module"), Is.EqualTo("1.5\n1.5"));
         var block = fn.CreateBlock("entry");
 
         var n = new IRVariable("n", intType);
+        // Real IR declares n: IRBuilder puts every Dim'd local in IRFunction.LocalVariables.
+        // Left undeclared, OptimizationPass.IsCallVisible(string, IRFunction) defaults an
+        // UNDECLARED name to visible (task #146's own "unknown means visible" rule), so the
+        // call arm alone would kill this fact regardless of the ByRef flag this test exists to
+        // exercise — see this test's anti-vacuity partner below, which needs the SAME
+        // declaration for the same reason (task #146 update, mutants M5/M8).
+        fn.LocalVariables.Add(n);
         // n = 0 (records the copy fact n -> 0)
         block.Instructions.Add(new IRAssignment(n, new IRConstant(0, intType)));
         // SetIt(ByRef n) — the callee assigns n; nothing in this block says so.
@@ -562,6 +569,11 @@ End Module"), Is.EqualTo("1.5\n1.5"));
         var block = fn.CreateBlock("entry");
 
         var n = new IRVariable("n", intType);
+        // Declared, as real IR would (see the ByRef test above): left undeclared,
+        // OptimizationPass.IsCallVisible would default n to visible and the call's own
+        // call-visibility arm would invalidate the fact regardless of ByRef — silently passing
+        // this test even with the ByRef-argument name kill removed (task #146 update).
+        fn.LocalVariables.Add(n);
         block.Instructions.Add(new IRAssignment(n, new IRConstant(0, intType)));
         var call = new IRCall("t0", "Observe", new TypeInfo("Void", TypeKind.Primitive));
         call.Arguments.Add(n);
@@ -594,6 +606,8 @@ End Module"), Is.EqualTo("1.5\n1.5"));
         var block = fn.CreateBlock("entry");
 
         var n = new IRVariable("n", intType);
+        // Declared, for the same reason as the plain-IRCall ByRef test above.
+        fn.LocalVariables.Add(n);
         block.Instructions.Add(new IRAssignment(n, new IRConstant(0, intType)));
         var call = new IRInstanceMethodCall("t0", new IRVariable("w", new TypeInfo("Worker", TypeKind.Class)),
                                             "Bump", new TypeInfo("Void", TypeKind.Primitive));
