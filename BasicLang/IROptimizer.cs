@@ -1739,7 +1739,32 @@ namespace BasicLang.Compiler.IR.Optimization
     }
     
     /// <summary>
-    /// Dead code elimination - remove instructions that don't affect program output
+    /// Dead code elimination - remove instructions that don't affect program output.
+    ///
+    /// <para>⭐ A CONSUMER OF THE ONE USE WALKER (task #118). What counts as a use is
+    /// <see cref="OptimizationPass.UsesOf"/> — the arm set <see cref="OptimizationPass.ReplaceUses"/>
+    /// rewrites and <see cref="IRVerifier"/> counts — followed through operand trees, over the
+    /// WHOLE function (<see cref="UsedValues"/>). This pass used to keep its own walker,
+    /// <c>MarkUsed</c>, which knew ten node kinds and was consulted one BLOCK at a time. It missed
+    /// every operand of sixteen kinds (an element pointer, a cast, an array store, an await, a
+    /// yield, an indexer load or store, a For Each collection, a throw, an allocation's
+    /// arguments, an instance call's object and arguments, a base call's arguments, a field
+    /// load or store, a tuple element, a phi) and part of two more (a call's callee value; a
+    /// switch's case values and pattern cases), it never looked inside an operand tree that is
+    /// not itself in a block (a When guard), and a value defined in one block and used only in
+    /// another read as unused. Each of those is a LIVE value this pass would delete, leaving its
+    /// consumer holding an instruction that is no longer in the function.</para>
+    ///
+    /// <para>⛔ STILL LATENT, DELIBERATELY. The removal guard below skips every value whose name
+    /// is non-empty and does not start with <c>_tmp</c>, and IRBuilder names every temp
+    /// <c>t0</c>, <c>t1</c>, … — so in a real program this pass removes no instruction; only
+    /// <see cref="ControlFlowGraph.RemoveUnreachableBlocks"/> has an effect. Task #118 made the
+    /// use analysis total and left the guard alone, so emitted code is unchanged. Switching the
+    /// removal on (e.g. <see cref="OptimizationPass.IsTempDestination"/>) is a separate, measured
+    /// decision: ADR-0008 settled point 3 — removing a use can leave a NON-replicable value
+    /// single-use and not adjacent to its definition, which the C# backend then inlines away
+    /// from where it was computed — and the <c>T5</c> caveat on
+    /// <see cref="OptimizationPass.IsTempDestination"/> (a user variable spelled like a temp).</para>
     /// </summary>
     public class DeadCodeEliminationPass : OptimizationPass
     {
@@ -1761,26 +1786,52 @@ namespace BasicLang.Compiler.IR.Optimization
                 int removed = cfg.RemoveUnreachableBlocks();
                 ModificationCount += removed;
                 
-                // Remove dead instructions
+                // Remove dead instructions. The uses are collected over EVERY block before any
+                // block loses an instruction: a value defined in one block is routinely used in
+                // another (a loop body reading a value computed before the loop).
+                var used = UsedValues(function);
                 foreach (var block in function.Blocks)
                 {
-                    RemoveDeadInstructions(block);
+                    RemoveDeadInstructions(block, used);
                 }
             }
             
             return ModificationCount > 0;
         }
-        
-        private void RemoveDeadInstructions(BasicBlock block)
+
+        /// <summary>
+        /// Every value <paramref name="function"/> uses: each operand slot of each instruction in
+        /// each of its blocks (<see cref="OptimizationPass.UsesOf"/>), and — through operand trees —
+        /// each operand of an operand instruction, the same descent
+        /// <see cref="IRVerifier"/> makes. The descent is what finds a block value whose only
+        /// consumer is an instruction that is not itself in a block (a When guard's tree hangs
+        /// off its <see cref="IRSwitch"/>; an expression tree hangs off its consumer).
+        /// Reference identity, never names: a use is of the <see cref="IRValue"/> object.
+        /// </summary>
+        private static HashSet<IRValue> UsedValues(IRFunction function)
         {
-            var used = new HashSet<IRValue>();
-
-            // Mark instructions that are used
-            foreach (var inst in block.Instructions)
+            var used = new HashSet<IRValue>(ReferenceEqualityComparer.Instance);
+            var pending = new Stack<IRValue>();
+            foreach (var block in function.Blocks)
             {
-                MarkUsed(inst, used);
+                if (block?.Instructions == null) continue;
+                foreach (var inst in block.Instructions)
+                {
+                    if (inst == null) continue;
+                    foreach (var operand in UsesOf(inst)) pending.Push(operand);
+                    while (pending.Count > 0)
+                    {
+                        var value = pending.Pop();
+                        if (value == null || !used.Add(value)) continue;
+                        foreach (var nested in UsesOf(value)) pending.Push(nested);
+                    }
+                }
             }
-
+            return used;
+        }
+        
+        private void RemoveDeadInstructions(BasicBlock block, HashSet<IRValue> used)
+        {
             // Remove unused assignments
             for (int i = block.Instructions.Count - 1; i >= 0; i--)
             {
@@ -1813,56 +1864,6 @@ namespace BasicLang.Compiler.IR.Optimization
                     block.Instructions.RemoveAt(i);
                     ReportModification();
                 }
-            }
-        }
-        
-        private void MarkUsed(IRInstruction inst, HashSet<IRValue> used)
-        {
-            if (inst is IRBinaryOp binaryOp)
-            {
-                used.Add(binaryOp.Left);
-                used.Add(binaryOp.Right);
-            }
-            else if (inst is IRUnaryOp unaryOp)
-            {
-                used.Add(unaryOp.Operand);
-            }
-            else if (inst is IRCompare compare)
-            {
-                used.Add(compare.Left);
-                used.Add(compare.Right);
-            }
-            else if (inst is IRStore store)
-            {
-                used.Add(store.Value);
-                used.Add(store.Address);
-            }
-            else if (inst is IRLoad load)
-            {
-                used.Add(load.Address);
-            }
-            else if (inst is IRCall call)
-            {
-                foreach (var arg in call.Arguments)
-                {
-                    used.Add(arg);
-                }
-            }
-            else if (inst is IRReturn ret && ret.Value != null)
-            {
-                used.Add(ret.Value);
-            }
-            else if (inst is IRConditionalBranch condBr)
-            {
-                used.Add(condBr.Condition);
-            }
-            else if (inst is IRSwitch switchInst)
-            {
-                used.Add(switchInst.Value);
-            }
-            else if (inst is IRAssignment assignment)
-            {
-                used.Add(assignment.Value);
             }
         }
     }
@@ -1934,7 +1935,9 @@ namespace BasicLang.Compiler.IR.Optimization
                 // await-valued `x = Await F()`).
                 Invalidate(copies, inst, function);
 
-                // Track copy assignments; recording is restricted to the safe subset.
+                // Track copy assignments; recording is restricted to the safe subset. A value that
+                // reads its own target (Mentions: a variable, or an operand instruction named after
+                // it) is not recorded: after the store, re-reading it at a use would read the NEW value.
                 if (inst is IRAssignment assignment && assignment.Target is IRVariable target
                     // Never propagate awaits - duplicating them would re-execute the awaited task.
                     && assignment.Value is IRValue value && value is not IRAwait
@@ -1992,29 +1995,84 @@ namespace BasicLang.Compiler.IR.Optimization
 
 
         /// <summary>
-        /// Whether a recorded copy value reads the named variable anywhere in
-        /// its operand tree. Unknown value shapes conservatively answer TRUE
-        /// (killing a copy fact is always safe; keeping a stale one is not).
+        /// Whether a recorded copy value reads the storage called <paramref name="name"/>
+        /// anywhere in its operand tree (case-insensitively). Unknown value shapes conservatively
+        /// answer TRUE (killing a copy fact is always safe; keeping a stale one is not).
+        ///
+        /// <para>⭐ TWO HALVES, and the answer is their union:</para>
+        /// <list type="number">
+        /// <item>the storage the value reads by THE ONE OPERAND WALK,
+        /// <see cref="OptimizationPass.CollectReads"/> (ADR-0008 D1): every variable, and every
+        /// operand instruction with a named destination (<see cref="OptimizationPass.NamedDestination"/>),
+        /// the value itself included, reached through the pure operators. Every backend reads such
+        /// an instruction back BY THAT NAME, so a store to the name changes what the value reads;</item>
+        /// <item><see cref="MentionsPastTheWalk"/>: what the walk does not look at — the
+        /// arguments of a call or an allocation, and the object of a field access or instance
+        /// call, where <see cref="OptimizationPass.CollectReads"/> stops. Each is asked this whole
+        /// question again, so a named instruction inside a call's argument counts too.</item>
+        /// </list>
+        ///
+        /// <para>⛔ MEASURED (task #161): before the first half existed this walked the operand
+        /// tree for an <see cref="IRVariable"/> spelled <paramref name="name"/> and nothing else,
+        /// so an operand INSTRUCTION renamed after a variable was invisible to it: with
+        /// <c>u = a + 1</c> (an IRBinaryOp renamed <c>u</c>), <c>t0 = u * 2</c> and
+        /// <c>x := t0</c>, the direct store <c>u = 5</c> left the fact standing, although
+        /// ADR-0008 settled point 4 requires it to die. A SOURCE program reaches that shape:
+        /// <c>Dim u As Integer = a + b : Dim x As Double = a + b : u = 5 : Dim y As Double = x :
+        /// Return y * c + u</c>. CSE forwards the second <c>a + b</c> to the renamed <c>u</c>, so
+        /// on the pipeline's second iteration the fact is <c>x := CDbl(u)</c>, and it was
+        /// propagated past the store into <c>y * c</c>. <see cref="IRVerifier"/> then reported an
+        /// S′ violation (the cast, used twice, reads <c>u</c>, which is written between) on all
+        /// four backends at all three entry points (CLI, CLI <c>--optimize</c>, Release project).
+        /// Every backend still printed the right number, only because none of them re-evaluated
+        /// the cast after the store (C++, JavaScript and MSIL materialise it before the store; C#
+        /// re-evaluates it inline as <c>(double)(a + b)</c>). A backend that re-evaluated it there
+        /// and read the renamed operand BY ITS NAME, as C++ renders it
+        /// (<c>static_cast&lt;double&gt;(u)</c>), would read the new <c>u</c> — the hazard
+        /// settled point 4 and task #118 name.</para>
+        ///
+        /// <para>⛔ Do NOT reduce this to the first half alone. The walk stops at a call-shaped
+        /// node because it answers a different question (what a value reads once it has been
+        /// evaluated where it is defined); this pass has always also killed a fact whose value
+        /// passes the written variable to a call, an allocation or a member access, and dropping
+        /// that second half narrows the kills. The union is a superset of the old answer at every
+        /// node: a variable is found by the walk exactly as the old variable arm found it, a pure
+        /// operator's operands are reached by both halves, and every other kind is answered by the
+        /// second half with the old arms verbatim.</para>
         /// </summary>
         private static bool Mentions(IRValue value, string name)
+        {
+            foreach (var read in CollectReads(value).Names)
+                if (string.Equals(read.Name, name, StringComparison.OrdinalIgnoreCase))
+                    return true;
+            return MentionsPastTheWalk(value, name);
+        }
+
+        /// <summary>
+        /// The half of <see cref="Mentions"/> that <see cref="OptimizationPass.CollectReads"/>
+        /// does not cover: it descends the same pure operators to find the call-shaped nodes the
+        /// walk stopped at, and asks <see cref="Mentions"/> of their operands. A variable, a
+        /// constant and a pure operator's own name are the walk's to answer, so they answer FALSE
+        /// here. A kind neither half lists answers TRUE, as it always has.
+        /// </summary>
+        private static bool MentionsPastTheWalk(IRValue value, string name)
         {
             switch (value)
             {
                 case null:
                 case IRConstant:
+                case IRVariable:
                     return false;
-                case IRVariable v:
-                    return string.Equals(v.Name, name, StringComparison.OrdinalIgnoreCase);
+                case IRBinaryOp b:
+                    return MentionsPastTheWalk(b.Left, name) || MentionsPastTheWalk(b.Right, name);
+                case IRUnaryOp u:
+                    return MentionsPastTheWalk(u.Operand, name);
+                case IRCompare c:
+                    return MentionsPastTheWalk(c.Left, name) || MentionsPastTheWalk(c.Right, name);
+                case IRCast cast:
+                    return MentionsPastTheWalk(cast.Value, name);
                 case IRNewObject n:
                     return n.Arguments.Any(a => Mentions(a, name));
-                case IRBinaryOp b:
-                    return Mentions(b.Left, name) || Mentions(b.Right, name);
-                case IRUnaryOp u:
-                    return Mentions(u.Operand, name);
-                case IRCompare c:
-                    return Mentions(c.Left, name) || Mentions(c.Right, name);
-                case IRCast cast:
-                    return Mentions(cast.Value, name);
                 case IRFieldAccess f:
                     return Mentions(f.Object, name);
                 case IRInstanceMethodCall m:
