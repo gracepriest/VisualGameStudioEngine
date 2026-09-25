@@ -110,7 +110,9 @@ End Sub
         var cs = ReturnCoercionTests.EmitCSharpForTest(Program);
         Assert.Multiple(() =>
         {
-            Assert.That(cs, Does.Contain("7 % ((int)(object)(int)0)"), cs);
+            // The branch's EmitDivisor spelling, kept at the merge: it also covers Decimal, a
+            // cast-wrapped divisor and a constant -1 (CS0220) — see CSharpConstantDivideByZeroTests.
+            Assert.That(cs, Does.Contain("7 % new[] { 0 }[0]"), cs);
             Assert.That(ReturnCoercionTests.CompileEmittedCSharpForTest(Program), Is.Empty);
         });
     }
@@ -121,7 +123,7 @@ End Sub
         var cs = ReturnCoercionTests.EmitCSharpForTest(
             "Function Seven() As Integer\n    Return 7\nEnd Function\n" +
             "Sub Main()\n    Dim a As Integer = Seven()\n    Console.WriteLine(a \\ 2)\n    Console.WriteLine(a Mod 3)\nEnd Sub\n");
-        Assert.That(cs, Does.Not.Contain("(object)"), cs);
+        Assert.That(cs, Does.Not.Contain("new[] {"), cs);
     }
 
     [Test]
