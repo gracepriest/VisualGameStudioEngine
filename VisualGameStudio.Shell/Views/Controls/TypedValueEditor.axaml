@@ -1,0 +1,34 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:VisualGameStudio.Core.Abstractions.ViewModels"
+             x:Class="VisualGameStudio.Shell.Views.Controls.TypedValueEditor"
+             x:DataType="vm:ITypedValueRow">
+
+  <!-- ⛔ ONE copy of the four shared editors. SettingsDialog.axaml carried them twice (:140 and
+       :266) and the designer's property grid would have been a third. Each host keeps only the
+       editors that are genuinely its own beside this: the file-path row for Settings, the colour
+       row for the designer. -->
+  <Panel>
+    <ToggleSwitch IsChecked="{Binding BoolValue}" IsVisible="{Binding IsCheckBox}"
+                  IsEnabled="{Binding IsEditable}"
+                  OnContent="" OffContent="" Padding="0" Margin="0"/>
+
+    <NumericUpDown Value="{Binding IntValue}"
+                   Minimum="{Binding Minimum}" Maximum="{Binding Maximum}" Increment="{Binding Increment}"
+                   Width="110" IsVisible="{Binding IsNumericUpDown}"
+                   IsEnabled="{Binding IsEditable}"/>
+
+    <ComboBox ItemsSource="{Binding Choices}" SelectedItem="{Binding StringValue}"
+              MinWidth="170" IsVisible="{Binding IsComboBox}"
+              IsEnabled="{Binding IsEditable}"/>
+
+    <!-- ⛔⛔ UpdateSourceTrigger=LostFocus, not the default PropertyChanged (D13). Committing per
+         KEYSTROKE would push a half-typed value through the whole designer pipeline: every
+         character would rewrite the document, regenerate the region in the user's .bas, and land
+         on the undo stack. Typing "Sign in" would be seven saves and seven undo entries. Enter
+         commits too, which Avalonia's LostFocus trigger already does for a TextBox. -->
+    <TextBox Text="{Binding StringValue, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
+             MinWidth="200" IsVisible="{Binding IsTextBox}"
+             IsReadOnly="{Binding !IsEditable}"/>
+  </Panel>
+</UserControl>

@@ -981,6 +981,36 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 case IRCast c when TryNumericCast(c, out var castRendered):
                     return Bound(c) ? SanitizeName(c.Name) : castRendered;
 
+                // Task 24a. See Visit(IRArrayAlloc). BOUND is the ordinary path — the M4 shape
+                // passes the temp as a call argument AFTER its stores, so the name is declared.
+                //
+                // ⛔ UNBOUND WITH ELEMENTS IS NOT A RENDERING CHOICE, IT IS A DROPPED PROGRAM.
+                // The whole compiler builds an IRArrayAlloc in exactly one place —
+                // Visit(CollectionInitializerNode), IRBuilder.cs:1926 — which emits the alloc and
+                // then exactly Size IRArrayStores through the SAME EmitInstruction. So when
+                // `_suppressEmit` swallows the alloc (a `When` guard: IRBuilder.cs:349, set at
+                // :2883-2885) it swallowed every element store with it, and `new Array(Size)`
+                // renders a SPARSE array of holes wearing the right length. MEASURED through the
+                // real CLI: `Case Is > 0 When Total(New Integer() {1, 2}) = 3` built clean, emitted
+                // `Total(new Array(2))`, and node printed the ELSE arm — iterating two holes sums
+                // to 0, not 3. The C# backend is LOUD on that same source (`Total(t0)` with t0
+                // declared nowhere, CS0103), and the doctrine at :823-825 is that an unrenderable
+                // shape THROWS rather than falling back to something plausible.
+                //
+                // ⚠ Size == 0 is deliberately NOT refused. `New Integer() {}` has no element
+                // stores to lose, so `new Array(0)` IS the whole value; MEASURED, that program
+                // builds and prints the correct arm today, and throwing would regress a working
+                // shape to buy nothing. Size > 0 is therefore the exact condition for "stores
+                // were suppressed", not an approximation of it.
+                case IRArrayAlloc alloc:
+                    if (Bound(alloc)) return SanitizeName(alloc.Name);
+                    if (alloc.Size == 0) return ArrayAlloc(alloc);
+                    throw NotYet(
+                        "IRArrayAlloc with unemitted element stores (an array literal inside a "
+                        + "`When` guard — IRBuilder suppresses the allocation and its element "
+                        + "stores together, so rendering it here would silently produce an array "
+                        + "of holes)");
+
                 default:
                     throw NotYet(value.GetType().Name + " (as an expression)");
             }
@@ -1068,6 +1098,24 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             type != null && (IsBoolean(type) || type.IsIntegral() || type.IsFloatingPoint()
                 || type.Name is "String" or "Char");
 
+        /// <summary>
+        /// <paramref name="int32"/> (an expression already wrapped to int32) wrapped again to
+        /// the NARROW integral <paramref name="type"/>: sign-extended for Short / SByte, masked
+        /// for UShort / Byte; unchanged for Integer.
+        ///
+        /// <para>⛔ The int32 wrap alone let a Short leave its range. MEASURED on master
+        /// <c>e69ec64e</c>: <c>32767 + 1</c> as Short printed 32768 (C# and C++: -32768),
+        /// <c>32767 * 2</c> printed 65534 (-2), and SByte <c>127 + 1</c> printed 128 (-128).</para>
+        /// </summary>
+        private static string NarrowWrap(TypeInfo type, string int32) => type?.Name switch
+        {
+            "Short" => $"(({int32} << 16) >> 16)",
+            "SByte" => $"(({int32} << 24) >> 24)",
+            "UShort" => $"({int32} & 0xFFFF)",
+            "Byte" => $"({int32} & 0xFF)",
+            _ => int32,
+        };
+
         private string RenderBinary(IRBinaryOp op, Func<IRValue, string> render)
         {
             var l = render(op.Left);
@@ -1093,14 +1141,14 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
             switch (op.Operation)
             {
-                case BinaryOpKind.Add: return wrap ? $"(({l} + {r}) | 0)" : $"({l} + {r})";
-                case BinaryOpKind.Sub: return wrap ? $"(({l} - {r}) | 0)" : $"({l} - {r})";
+                case BinaryOpKind.Add: return wrap ? NarrowWrap(op.Type, $"(({l} + {r}) | 0)") : $"({l} + {r})";
+                case BinaryOpKind.Sub: return wrap ? NarrowWrap(op.Type, $"(({l} - {r}) | 0)") : $"({l} - {r})";
 
                 // ⛔ Math.imul, NOT `(a * b) | 0`. A double multiply loses precision above 2^53
                 // BEFORE the coercion can wrap it, so `| 0` gives the wrong int32 for large
                 // operands. Math.imul is an exact 32-bit multiply and is what every JS
                 // transpiler uses for this.
-                case BinaryOpKind.Mul: return wrap ? $"Math.imul({l}, {r})" : $"({l} * {r})";
+                case BinaryOpKind.Mul: return wrap ? NarrowWrap(op.Type, $"Math.imul({l}, {r})") : $"({l} * {r})";
 
                 case BinaryOpKind.Div: return $"({l} / {r})";
 
@@ -1140,7 +1188,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 case BinaryOpKind.BitwiseAnd: return $"({l} & {r})";
                 case BinaryOpKind.BitwiseOr: return $"({l} | {r})";
                 case BinaryOpKind.Xor: return $"({l} ^ {r})";
-                case BinaryOpKind.Shl: return $"({l} << {r})";
+                case BinaryOpKind.Shl: return NarrowWrap(op.Type, $"({l} << {r})");
                 case BinaryOpKind.Shr: return $"({l} >> {r})";
 
                 // And/Or were left unmapped until the semantics were MEASURED rather than
@@ -1186,6 +1234,12 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// </summary>
         private string UnaryText(IRUnaryOp op, string operand)
         {
+            // An integral negation or bitwise Not wraps like the binary operators do:
+            // `-(-32768)` as Short is -32768 on .NET, and 32768 here before (and Integer
+            // `-(-2147483648)` was 2147483648); `Not 5` as Byte is 250, not -6.
+            if (op.Operation is UnaryOpKind.Neg or UnaryOpKind.BitwiseNot && IsInt32(op.Type))
+                return NarrowWrap(op.Type, $"(({UnaryOpToken(op.Operation)}{operand}) | 0)");
+
             if (op.Operation != UnaryOpKind.AddressOf)
                 return $"({UnaryOpToken(op.Operation)}{operand})";
 
@@ -2577,6 +2631,40 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
         public void Visit(IRStore store)
         {
+            // Task 24a. An array-typed local with an initializer lowers to IRAlloca `a_addr` +
+            // IRStore(value, a_addr) (IRBuilder.Visit(VariableDeclarationNode): `needsMemory =
+            // varType.Kind == TypeKind.Array` :643, the alloca :647, the store :671). The alloca is
+            // a memory-model artefact this backend has no counterpart for (`Visit(IRAlloca)` is
+            // already a no-op), and rendering the address threw
+            // NotYet("IRAlloca (as an expression)") before any JS existed.
+            //
+            // ⛔ SKIPPING THE STORE IS SAFE, BUT NOT FOR THE REASON IT IS TEMPTING TO GIVE. It is
+            // NOT true that "an IRAssignment always follows because TryRenameToVariable never
+            // renames an IRArrayAlloc". The alloca+store pair is emitted for EVERY array-typed
+            // local, while the IRAssignment is emitted ONLY when that rename DECLINES (:683-687)
+            // — and it ACCEPTS any non-foreign IRCall/IRAwait (:243-250). The node list is not
+            // what protects this.
+            //
+            // What holds today is narrower and more fragile: no array-typed local can currently
+            // HAVE an IRCall/IRAwait initializer, because the FRONT END refuses every way of
+            // producing one. MEASURED on this compiler, JS target: a user Function cannot declare
+            // an array return type in either spelling (`As Integer()` and `As Integer[]` are both
+            // parse errors), `Dim a() As Byte = Convert.FromBase64String(...)` is refused with
+            // "Cannot assign value of type 'Object'", and `s.Split(",")` is parsed as an ARRAY
+            // INDEX ("Array index must be an integer type"). So the rename never fires for this
+            // shape — by front-end gap, not by design.
+            //
+            // ⚠ THEREFORE: if array return types or the `.Split` parse are ever fixed, this skip
+            // must be RE-DERIVED, not assumed. The value would then reach `a` through Bind's
+            // declared-local arm (:1552) binding the renamed value, with IsUsed true via
+            // IROperandWalker's IRStore arm (IROperandWalker.cs:72-75) — that is the path to
+            // re-verify. Do not widen this skip on the strength of the node list above.
+            //
+            // The C# backend renders the alloca as its variable and lives with a duplicate
+            // assignment; skipping the store is the choice that does not depend on WHERE this
+            // backend declares the local.
+            if (store.Address is IRAlloca) return;
+
             // The destination is an L-VALUE expression, not a previously-bound temp.
             Line($"{Expr(store.Address)} = {Expr(store.Value)};");
         }
@@ -2774,8 +2862,17 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         public void Visit(IRSwitch switchInst) => throw NotYet(nameof(IRSwitch));
         public void Visit(IRLabel label) => throw NotYet(nameof(IRLabel));
         public void Visit(IRComment comment) => throw NotYet(nameof(IRComment));
-        public void Visit(IRArrayAlloc arrayAlloc) => throw NotYet(nameof(IRArrayAlloc));
-        public void Visit(IRArrayStore arrayStore) => throw NotYet(nameof(IRArrayStore));
+        // Task 24a. An array literal is an allocation of N slots followed by N index stores; both
+        // arms are required (the renderer rebuilds operand trees). ⛔ The expression arm returns the
+        // BOUND name when the alloc already appeared in block.Instructions — the M4 shape passes the
+        // temp as a call argument AFTER its stores, and re-rendering it inline would allocate a
+        // second, empty array.
+        public void Visit(IRArrayAlloc arrayAlloc) => Bind(arrayAlloc, ArrayAlloc(arrayAlloc));
+
+        public void Visit(IRArrayStore arrayStore) =>
+            Line($"{Expr(arrayStore.Array)}[{Expr(arrayStore.Index)}] = {Expr(arrayStore.Value)};");
+
+        private static string ArrayAlloc(IRArrayAlloc a) => $"new Array({a.Size})";
         // `await` binds tighter than most operators but not all, so the operand is
         // parenthesised — `await a + b` would await only `a`.
         private string AwaitExpr(IRAwait a) => $"await {Receiver(Expr(a.Expression))}";

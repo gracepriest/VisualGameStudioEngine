@@ -124,7 +124,9 @@ Same grammar, different layout vocabulary (D3) and different catalog.
 - `<Literal>` is the `runat="server"` inversion (D9): content passes through to the markup untouched
   and is shown read-only on the canvas. `.blform` has no `<Literal>` — there is no markup to pass
   through.
-- `<Components>` and `<Resources>` are reserved and empty in v1.
+- `<Components>` holds the tray — non-visual components, each a control with no place (see
+  `2026-09-19-component-tray-design.md`; it was reserved and empty until Task 25). `<Resources>`
+  is reserved and empty in v1.
 - Elements and attributes the reader does not recognise **round-trip untouched** (D9).
 
 ### What lands on disk

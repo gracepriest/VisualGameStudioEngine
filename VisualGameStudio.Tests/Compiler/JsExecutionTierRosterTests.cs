@@ -74,6 +74,16 @@ public class JsExecutionTierRosterTests
         typeof(BooleanOperatorExecutionTests),
         typeof(MemberCasingExecutionTests),
 
+        // Task 24a. Mixed-backend fixture: its JavaScript rows drive
+        // JavaScriptExecutionTests.RunJs AND the optimized JsTestSupport.CompileOptimized route,
+        // so it is squarely in the tier even though it also runs the same programs on C# and C++.
+        // ⛔ It belongs in the ROSTER, not in NotJavaScriptExecution below — the deny-list is only
+        // for fixtures that never touch RunJs, and parking a node-spawning fixture there to quiet
+        // this guard would silence the exact drift the guard exists to catch. Caught by
+        // RosterCoversEveryJavaScriptIntegrationFixture on the 24a gate, which is the discovery
+        // guard doing its job: the fixture was added with five node rows and never registered.
+        typeof(TypedArrayLiteralExecutionTests),
+
         // The CSE invalidation / key-encoding fixtures. Their JavaScript leg is
         // JavaScriptOptimizedExecutionTests.RunOptimized — the STANDARD-pipeline runner, which is
         // the right one for CSE (a standard pass) and which spawns Node like any other row here.
@@ -240,7 +250,7 @@ public class JsExecutionTierRosterTests
 
     [Test]
     public void RosterIsPinned()
-        => Assert.That(ExecutionTier, Has.Length.EqualTo(52),
+        => Assert.That(ExecutionTier, Has.Length.EqualTo(53),
             "The execution-tier roster changed. That is fine — update the number — but it must " +
             "be a deliberate edit, not a silent shrink.");
 
