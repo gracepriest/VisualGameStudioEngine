@@ -1068,6 +1068,15 @@ public static class RegionWriter
             FormPropertyType.Bool => bool.TryParse(value, out var flag) ? (flag ? "True" : "False") : value,
             FormPropertyType.Enum => value,
             FormPropertyType.Color => value,
+            // ⛔ UNREACHABLE by construction, and loud if that ever stops being true. A Size reaches
+            // here only when WinFormsLiteral declined it — i.e. it does not parse — and such a value
+            // is either already source (returned above) or Degraded, which AppendProperties skips
+            // before calling this. Quoting it (the default arm) would emit `X.ClientSize = "800x450"`,
+            // CS0029 at csc with BasicLang silent; verbatim would splice unparsed text into source.
+            // Both hide a broken invariant as a broken build, so this names the invariant instead.
+            FormPropertyType.Size => throw new InvalidOperationException(
+                $"'{control.Id}.{name}' = '{value}' is not a parsable Size and reached the region writer; " +
+                "a Degraded value must be skipped before Literal is called."),
             _ => "\"" + value.Replace("\"", "\"\"") + "\""
         };
     }

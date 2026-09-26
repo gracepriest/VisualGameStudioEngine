@@ -19,7 +19,10 @@ public static class FormSystemColors
         ("ControlDarkDark", null), ("ControlLight", null), ("ControlLightLight", null),
         ("ControlText", "ButtonText"), ("Desktop", null), ("GradientActiveCaption", null),
         ("GradientInactiveCaption", null), ("GrayText", "GrayText"), ("Highlight", "Highlight"),
-        ("HighlightText", "HighlightText"), ("HotTrack", "LinkText"), ("InactiveBorder", null),
+        ("HighlightText", "HighlightText"),
+        // HotTrack is the hot-tracked item's colour; CSS LinkText is an unvisited link's — related,
+        // not the same, so by the rule above it is refused rather than approximated.
+        ("HotTrack", null), ("InactiveBorder", null),
         ("InactiveCaption", null), ("InactiveCaptionText", null), ("Info", null), ("InfoText", null),
         ("Menu", null), ("MenuBar", null), ("MenuHighlight", null), ("MenuText", null),
         ("ScrollBar", null), ("Window", "Canvas"), ("WindowFrame", null), ("WindowText", "CanvasText"),

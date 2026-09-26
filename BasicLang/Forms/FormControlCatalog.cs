@@ -145,6 +145,27 @@ public sealed record FormPropertyDef(
     IReadOnlyDictionary<string, string>? Aliases = null,
     string? OracleExemption = null)
 {
+    // ⛔ Normalised to OrdinalIgnoreCase whatever comparer the caller built the dictionary with —
+    // Accepts and Canonical are case-insensitive for members, and an alias lookup that silently
+    // used a different comparer would make `left` Degraded while `Left` is Canon. The init accessor
+    // normalises too, so a `with` copy cannot bypass it.
+    private readonly IReadOnlyDictionary<string, string>? _aliases = NormaliseAliases(Aliases);
+
+    /// <summary>See the <c>Aliases</c> parameter. Always case-insensitive.</summary>
+    public IReadOnlyDictionary<string, string>? Aliases
+    {
+        get => _aliases;
+        init => _aliases = NormaliseAliases(value);
+    }
+
+    private static IReadOnlyDictionary<string, string>? NormaliseAliases(IReadOnlyDictionary<string, string>? aliases) =>
+        aliases == null
+            ? null
+            : aliases is Dictionary<string, string> d && ReferenceEquals(d.Comparer, StringComparer.OrdinalIgnoreCase)
+                ? d
+                // Throws on two keys differing only by case — a table that ambiguous is a catalog bug.
+                : new Dictionary<string, string>(aliases, StringComparer.OrdinalIgnoreCase);
+
     /// <summary>True when this property exists on <paramref name="target"/>.</summary>
     public bool AppliesTo(FormTarget target) => Targets == null || Targets.Contains(target);
 
@@ -201,6 +222,13 @@ public sealed record FormPropertyDef(
             return flag ? "true" : "false";
         }
 
+        // A system colour in the table's spelling, so `control` and `Control` compare equal wherever
+        // a caller asks "is this the same value?" (the grid's no-op rule). Other colours unchanged.
+        if (Type == FormPropertyType.Color && FormSystemColors.TryCanonical(value, out var system))
+        {
+            return system;
+        }
+
         return value;
     }
 
@@ -227,10 +255,15 @@ public sealed record FormPropertyDef(
         return Type switch
         {
             FormPropertyType.Color => ColorLiteral(value),
-            FormPropertyType.Size => TryParseSize(value, out var w, out var h) ? $"New Size({w}, {h})" : null,
+            FormPropertyType.Size => TryParseSize(value, out var w, out var h) ? SizeLiteral(w, h) : null,
             _ => null
         };
     }
+
+    // ⛔ INVARIANT formatting, not interpolation: under sv-SE an int formats its minus as U+2212, and
+    // `New Size(−5, 10)` is CS1056 at csc.
+    private static string SizeLiteral(int width, int height) =>
+        string.Create(CultureInfo.InvariantCulture, $"New Size({width}, {height})");
 
     /// <summary><c>w, h</c> — WinForms' SizeConverter text, culture-invariant. Exactly two integers.</summary>
     public static bool TryParseSize(string value, out int width, out int height)
@@ -319,14 +352,22 @@ public sealed record FormPropertyDef(
             WinFormsEnumType != null && AllowedValues != null &&
             AllowedValues.Any(v => string.Equals(WinFormsLiteral(v), value, StringComparison.Ordinal)),
 
-        // `Color.Red` / `Color.FromArgb(...)` / `SystemColors.Control`. The 140-odd KnownColor names
-        // are not enumerated here (see IsColor), so the member cannot be checked the way an enum is.
+        // `Color.Red` / `Color.FromArgb(...)`. The 140-odd KnownColor names are not enumerated here
+        // (see IsColor), so a Color member cannot be checked the way an enum is. A SystemColors
+        // member CAN — the table has every one — so it is checked exactly (ordinal): a
+        // `SystemColors.Bogus` spliced in as source is CS0117 at csc, BasicLang silent.
         FormPropertyType.Color =>
-            value.StartsWith("Color.", StringComparison.Ordinal) ||
-            value.StartsWith("SystemColors.", StringComparison.Ordinal) ||
-            value.StartsWith("New ", StringComparison.Ordinal),
+            value.StartsWith("SystemColors.", StringComparison.Ordinal)
+                ? IsSystemColorsSource(value)
+                : value.StartsWith("Color.", StringComparison.Ordinal) ||
+                  value.StartsWith("New ", StringComparison.Ordinal),
 
-        FormPropertyType.Size => value.StartsWith("New Size(", StringComparison.Ordinal),
+        // Exactly `New Size(w, h)` around two integers — never a prefix match, which would pass
+        // `New Size(1, 2) + junk` straight into the generated source.
+        FormPropertyType.Size =>
+            value.StartsWith("New Size(", StringComparison.Ordinal) &&
+            value.EndsWith(")", StringComparison.Ordinal) &&
+            TryParseSize(value.Substring("New Size(".Length, value.Length - "New Size(".Length - 1), out _, out _),
 
         // A string arrives from the document unquoted, so quotes mean it is already source.
         FormPropertyType.String =>
@@ -366,15 +407,27 @@ public sealed record FormPropertyDef(
     /// equivalent is WinForms-only as a VALUE (spec §2.2) — Degraded on a web form, with a reason.
     /// </summary>
     public bool Accepts(string? value, FormTarget target) =>
-        Accepts(value) &&
-        !(target == FormTarget.Web && Type == FormPropertyType.Color &&
-          FormSystemColors.TryCanonical(value!, out var system) && FormSystemColors.CssFor(system) == null);
+        Accepts(value) && !IsSystemColourRefusedOn(value!, target);
 
-    /// <summary>Why <paramref name="value"/> is not usable on <paramref name="target"/> — the Degraded reason.</summary>
+    /// <summary>
+    /// Why <paramref name="value"/> is not usable on <paramref name="target"/> — the Degraded reason.
+    ///
+    /// <para>⛔ Asks the SAME predicate as <see cref="Accepts(string?, FormTarget)"/>, so the reason
+    /// can never describe a refusal that check did not make. Called for a value that IS usable there
+    /// is nothing to describe, and inventing a reason would put a false one in front of the user — so
+    /// it throws.</para>
+    /// </summary>
     public string DescribeRefusal(string value, FormTarget target)
     {
-        if (Accepts(value) && FormSystemColors.TryCanonical(value, out var system))
+        if (Accepts(value, target))
         {
+            throw new ArgumentException(
+                $"'{value}' is usable for {Name} on {target}; there is no refusal to describe.", nameof(value));
+        }
+
+        if (IsSystemColourRefusedOn(value, target))
+        {
+            FormSystemColors.TryCanonical(value, out var system);
             return $"'{value}' is the Windows system colour {system}, which has no CSS equivalent, so a " +
                    "web form cannot use it. The value is preserved exactly as written.";
         }
@@ -382,6 +435,23 @@ public sealed record FormPropertyDef(
         return $"'{value}' is not a valid {Type}" +
                (AllowedValues is { Count: > 0 } ? $" (expected one of: {string.Join(", ", AllowedValues)})" : "") +
                ". The value is preserved exactly as written.";
+    }
+
+    /// <summary>
+    /// THE target-specific refusal — the one predicate <see cref="Accepts(string?, FormTarget)"/> and
+    /// <see cref="DescribeRefusal"/> share. Only a COLOUR row can refuse a system colour: a String
+    /// caption reading "Window" is text, and an Enum member named "Menu" is that enum's business.
+    /// </summary>
+    private bool IsSystemColourRefusedOn(string value, FormTarget target) =>
+        Type == FormPropertyType.Color && target == FormTarget.Web &&
+        FormSystemColors.TryCanonical(value, out var system) && FormSystemColors.CssFor(system) == null;
+
+    /// <summary><c>SystemColors.X</c> where X is, exactly and case-sensitively, a member the table names.</summary>
+    private static bool IsSystemColorsSource(string value)
+    {
+        var member = value.Substring("SystemColors.".Length);
+        return FormSystemColors.TryCanonical(member, out var canonical) &&
+               string.Equals(member, canonical, StringComparison.Ordinal);
     }
 
     private static bool IsColor(string value)
