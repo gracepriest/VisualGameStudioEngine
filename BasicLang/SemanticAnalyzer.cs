@@ -6760,13 +6760,14 @@ namespace BasicLang.Compiler.SemanticAnalysis
                         // Validate argument types
                         if (baseCtorSymbol.Parameters != null)
                         {
-                            for (int i = 0; i < Math.Min(argTypes.Count, baseCtorSymbol.Parameters.Count); i++)
+                            for (int i = 0; i < argTypes.Count; i++)
                             {
-                                var expectedType = baseCtorSymbol.Parameters[i].Type;
+                                var expectedType = ArgumentTargetType(baseCtorSymbol, i, argTypes.Count, argTypes[i]);
+                                if (expectedType == null) continue;
                                 var actualType = argTypes[i];
                                 if (expectedType != null && actualType != null && !expectedType.IsAssignableFrom(actualType))
                                 {
-                                    Error($"Base constructor argument {i + 1} of type '{actualType.Name}' is not compatible with parameter '{baseCtorSymbol.Parameters[i].Name}' of type '{expectedType.Name}'",
+                                    Error($"Base constructor argument {i + 1} of type '{actualType.Name}' is not compatible with parameter '{baseCtorSymbol.Parameters[Math.Min(i, baseCtorSymbol.Parameters.Count - 1)].Name}' of type '{expectedType.Name}'",
                                         node.BaseConstructorArgs[i].Line, node.BaseConstructorArgs[i].Column);
                                 }
                             }
@@ -9955,6 +9956,16 @@ namespace BasicLang.Compiler.SemanticAnalysis
                         TryRetypeLiteralToDecimal(node.Arguments[i], paramType);
                         var argType = GetNodeType(node.Arguments[i]);
 
+                        // VB: the ONE argument in a ParamArray's slot may be an array, and then it
+                        // IS the ParamArray (`Sum(arr)`), not its first element. It was checked
+                        // against the ELEMENT type and refused as "cannot convert Integer[] to
+                        // Integer". IRBuilder.IsParamArrayPassedWhole makes the same call.
+                        if (hasParamArray && i == totalParams - 1 && node.Arguments.Count == totalParams
+                            && argType?.Kind == TypeKind.Array)
+                        {
+                            paramType = calleeSymbol.Parameters[totalParams - 1].Type ?? paramType;
+                        }
+
                         if (paramType == null)
                         {
                             continue;
@@ -10279,6 +10290,29 @@ namespace BasicLang.Compiler.SemanticAnalysis
         /// <c>.ctor</c> key here and every constructor check was skipped SILENTLY —
         /// <c>hasAnyConstructor</c> is false with no key, so not even an error.</para>
         /// </summary>
+        /// <summary>
+        /// The type argument <paramref name="index"/> of <paramref name="argumentCount"/> must convert
+        /// to: its parameter's type, or — in a trailing ParamArray's slot — the array's ELEMENT
+        /// type, unless the argument is one array passed alone as the whole ParamArray. Null past
+        /// the end of a callee that has no ParamArray (the arity check reports that). The call path
+        /// in Visit(CallExpressionNode) applies the same rule inline.
+        /// </summary>
+        private static TypeInfo ArgumentTargetType(Symbol callee, int index, int argumentCount, TypeInfo argumentType)
+        {
+            var parameters = callee?.Parameters;
+            if (parameters == null || parameters.Count == 0) return null;
+
+            var last = parameters[^1];
+            if (!last.IsParamArray)
+                return index < parameters.Count ? parameters[index].Type : null;
+
+            var slot = parameters.Count - 1;
+            if (index < slot) return parameters[index].Type;
+            if (index == slot && argumentCount == parameters.Count && argumentType?.Kind == TypeKind.Array)
+                return last.Type;
+            return last.Type?.ElementType ?? last.Type;
+        }
+
         private static Symbol ResolveConstructor(TypeInfo type, int argumentCount)
         {
             if (type?.Members == null || argumentCount < 0) return null;
@@ -10289,10 +10323,23 @@ namespace BasicLang.Compiler.SemanticAnalysis
             foreach (var entry in type.Members)
             {
                 if (!entry.Key.StartsWith(".ctor")) continue;
-                if (!int.TryParse(entry.Key.Substring(5), out var arity) || arity <= argumentCount) continue;
+                if (!int.TryParse(entry.Key.Substring(5), out var arity)) continue;
 
                 var parameters = entry.Value?.Parameters;
                 if (parameters == null || parameters.Count != arity) continue;
+
+                // A trailing ParamArray takes any number of arguments, none included:
+                // `New Bag("x", "y", "z")` and `New Bag()` against `Sub New(ParamArray names() As
+                // String)` asked for .ctor3 / .ctor0 and were refused. The arguments are packed
+                // into the array by IRBuilder.PackParamArrayArguments.
+                if (arity > 0 && parameters[arity - 1].IsParamArray && argumentCount >= arity - 1)
+                {
+                    if (found != null) return null;   // two candidates — do not guess
+                    found = entry.Value;
+                    continue;
+                }
+
+                if (arity <= argumentCount) continue;
 
                 var fillable = true;
                 for (var i = argumentCount; i < parameters.Count; i++)
@@ -10352,9 +10399,10 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     // Validate argument types
                     if (ctorSymbol.Parameters != null)
                     {
-                        for (int i = 0; i < Math.Min(argTypes.Count, ctorSymbol.Parameters.Count); i++)
+                        for (int i = 0; i < argTypes.Count; i++)
                         {
-                            var expectedType = ctorSymbol.Parameters[i].Type;
+                            var expectedType = ArgumentTargetType(ctorSymbol, i, argTypes.Count, argTypes[i]);
+                            if (expectedType == null) continue;
                             // Spec 6.1: a constructor argument to a Decimal
                             // parameter is a Decimal context — same rule as the
                             // function-call path.
@@ -10363,7 +10411,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                             var actualType = argTypes[i];
                             if (expectedType != null && actualType != null && !expectedType.IsAssignableFrom(actualType))
                             {
-                                Error($"Argument {i + 1} of type '{actualType.Name}' is not compatible with parameter '{ctorSymbol.Parameters[i].Name}' of type '{expectedType.Name}'",
+                                Error($"Argument {i + 1} of type '{actualType.Name}' is not compatible with parameter '{ctorSymbol.Parameters[Math.Min(i, ctorSymbol.Parameters.Count - 1)].Name}' of type '{expectedType.Name}'",
                                     node.Arguments[i].Line, node.Arguments[i].Column);
                             }
                         }
