@@ -910,6 +910,17 @@ public class CopyPropagationSharedVocabularyUnitTests
             + "assign ANY variable) — every fact must die, including a private declared local's.");
     }
 
+    /// <summary>
+    /// Since task #122 (ADR-0006 D1's Obligation, DISCHARGED), <c>IsCallVisible</c> asks whether
+    /// <c>x</c> is in the function's RECORDED capture set — but this <c>IRFunction</c> is
+    /// hand-built, so nothing ever recorded one (<c>LambdaCapturedNames</c>/
+    /// <c>LambdaCaptureSources</c> both stay null). That is exactly the FALLBACK case: a function
+    /// referencing <c>__lambda_0</c> with no recorded set falls all the way back to D1's original
+    /// "every local" rule, so <c>x</c> — never captured by anything real here, since there is no
+    /// real lambda body at all — still ends up call-visible. This is the canonical hand-built pin
+    /// for that fallback; <c>LambdaCaptureSetFallbackTests</c> (LambdaCaptureSetTests.cs) covers
+    /// the same fallback reached from REAL front-end source instead.
+    /// </summary>
     [Test]
     public void U7_ClosureRule_MakesADeclaredLocalFact_CallVisible()
     {
@@ -918,16 +929,17 @@ public class CopyPropagationSharedVocabularyUnitTests
         var kept = Kept((f, b) =>
         {
             // A reference to the IRBuilder lambda spelling, marking this function as one that
-            // "contains a lambda" for ADR-0006 D1's interim closure rule.
+            // "contains a lambda" — but with NO recorded capture set (hand-built IR), so
+            // IsCallVisible falls back to ADR-0006 D1's original "every local" rule.
             b.Instructions.Add(new IRAssignment(bump, new IRVariable("__lambda_0", I)));
             b.Instructions.Add(new IRAssignment(x, new IRConstant(1, I)));
             b.Instructions.Add(new IRCall("t0", "bump", V));
             return x;
         }, f => { f.LocalVariables.Add(x); f.LocalVariables.Add(bump); });
 
-        Assert.That(kept, Is.True, "in a function that creates a lambda, EVERY local — including "
-            + "x, never captured itself — is call-visible (the interim closure rule), so a "
-            + "subsequent call must invalidate x's fact.");
+        Assert.That(kept, Is.True, "the function references __lambda_0 but has no RECORDED "
+            + "capture set (hand-built IR) -- IsCallVisible falls back to D1's original rule, "
+            + "every local call-visible, so a subsequent call must invalidate x's fact.");
     }
 
     [Test]

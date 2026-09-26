@@ -34,12 +34,15 @@ namespace VisualGameStudio.Tests.Compiler;
 //  L2/L4 are the CONTROLS that must stay correct: L2's ByRef write is through a FREE
 //  function (an IRCall, always covered), L4's write is a module global (always IsGlobal,
 //  always covered). L5 (a local captured BY REFERENCE and written inside a lambda) was a
-//  KNOWN-WRONG gap this fix alone did NOT close (task #122's capture set). ADR-0006 D1's
-//  interim closure rule closes it for JavaScript (now correct, seed\n12 under --optimize) —
-//  see LicmKillVocabularyKnownGapsTask122Tests below, whose JavaScript pin is now promoted.
-//  C++ stays known-wrong, but for an UNRELATED reason settled in the ADR's implementation
-//  note: the C++ BACKEND's own capture-by-copy lowering (task #140), present even with NO
-//  optimizer pass at all — not a kill-vocabulary gap this file's passes could ever close.
+//  KNOWN-WRONG gap this fix alone did NOT close. ADR-0006 D1's closure rule closes it for
+//  JavaScript (now correct, seed\n12 under --optimize) — see
+//  LicmKillVocabularyKnownGapsTask122Tests below, whose JavaScript pin is now promoted. Task
+//  #122 (the capture set narrowing D1's "every local" interim rule to just the captured ones)
+//  is DISCHARGED: L5's x is genuinely in bump's capture set, so this is now correct via the
+//  capture set itself, not the coarser fallback. C++ stays known-wrong, but for an UNRELATED
+//  reason settled in the ADR's implementation note: the C++ BACKEND's own capture-by-copy
+//  lowering (task #140), present even with NO optimizer pass at all — not a kill-vocabulary
+//  gap this file's passes could ever close.
 //  L6 is the pass's OWN control: a truly invariant product with no call in the loop at all,
 //  proving the fix does not disable LICM wholesale.
 //
@@ -567,9 +570,10 @@ public class LicmKillVocabularyExecutionTests
 
 /// <summary>
 /// Item 4 of the fixture brief — L5 (a local captured BY REFERENCE and written inside a lambda).
-/// JavaScript is now CORRECT under ADR-0006 D1's interim closure rule (a function containing a
-/// lambda call-visits every local, so <c>bump()</c> kills LICM's belief that <c>x * 2</c> is
-/// invariant); C++ and MSIL stay KNOWN-WRONG, but for reasons ADR-0006 D1's implementation note
+/// JavaScript is now CORRECT under ADR-0006 D1's closure rule: <c>x</c> is genuinely in bump's
+/// capture set (task #122, DISCHARGED — not merely the coarser "every local" interim fallback),
+/// so <c>bump()</c> kills LICM's belief that <c>x * 2</c> is invariant; C++ and MSIL stay
+/// KNOWN-WRONG, but for reasons ADR-0006 D1's implementation note
 /// settles as UNRELATED to the kill vocabulary or to LICM: C++'s is task #140, a BACKEND lambda
 /// lowering defect (capture BY COPY where BasicLang means capture by reference — MEASURED present
 /// even with NO optimizer pass at all, so no kill-vocabulary fix could ever have closed it); MSIL
@@ -588,9 +592,11 @@ public class LicmKillVocabularyExecutionTests
 public class LicmKillVocabularyKnownGapsTask122Tests
 {
     /// <summary>
-    /// CORRECT under ADR-0006 D1: the interim closure rule makes <c>x</c> call-visible (the
-    /// enclosing function contains a lambda), so <c>bump()</c> — a call — is no longer invisible
-    /// to <c>VariablesWrittenIn</c>, and LICM no longer hoists <c>x * 2</c> out of the loop.
+    /// CORRECT under ADR-0006 D1's closure rule: <c>x</c> is written inside bump's own body, so
+    /// it is genuinely in bump's recorded capture set (task #122, DISCHARGED) — <c>bump()</c>, a
+    /// call, is no longer invisible to <c>VariablesWrittenIn</c>, and LICM no longer hoists
+    /// <c>x * 2</c> out of the loop. Before #122 the SAME correct answer came from the coarser
+    /// "every local" interim rule; #122 does not move this VALUE, only narrows WHY it is correct.
     /// Promoted from a known-wrong pin (was <c>seed\n6</c>, task #122). D2's L5 NOTE said this
     /// attribution would move to JavaScript once C++'s failure was confirmed a backend defect —
     /// see <see cref="L5_LambdaCapturedLocal_Cpp_StandardPipeline_PinnedForTask140"/>'s doc comment.
@@ -599,9 +605,9 @@ public class LicmKillVocabularyKnownGapsTask122Tests
     public void L5_LambdaCapturedLocal_JavaScript_AggressivePipeline_CorrectAfterAdr6D1()
         => Assert.That(FourBackends.Norm(FourBackends.RunAggressiveJs(LicmKillVocabularyShapes.L5)),
             Is.EqualTo("seed\n12"),
-            "ADR-0006 D1's interim closure rule closes this for JavaScript under --optimize; if "
-            + "this regressed, re-measure against S/adr6-d1/probes/matrix-final.txt (or "
-            + "matrix-in-step5.txt) before touching it.");
+            "ADR-0006 D1's closure rule closes this for JavaScript under --optimize (x is in "
+            + "bump's capture set, task #122); if this regressed, re-measure against "
+            + "S/adr6-d1/probes/matrix-final.txt (or matrix-in-step5.txt) before touching it.");
 
     /// <summary>
     /// STAYS known-wrong, but the STALE attribution is fixed: this is NOT "ConstantFolding +

@@ -1927,7 +1927,11 @@ structural count must come from a bare `pass.Run(module)`.
 ⭐ **C#'s inlining rescues a bad merge ONLY when the two expressions are textually identical.** It
 is not general immunity, and the key-injectivity row above is the proof.
 
-#### ⛔ A LIVE WRONG ANSWER ON ALL FOUR BACKENDS THAT IS **NOT** CSE AND IS **NOT** FIXED
+#### ✅ CLOSED on C#/JavaScript (ADR-0006 D1, task #122) — C++/MSIL stay wrong for UNRELATED reasons
+
+**Superseded entry — the paragraph below described this branch BEFORE ADR-0006 D1 and task #122
+landed. Left in place, corrected, because the shape is still the reference example for the closure
+rule.**
 
 A lambda capturing a local **by reference**, with `CopyPropagationPass` + `ConstantFoldingPass`
 folding the expression on both sides of a call that writes the captured variable:
@@ -1943,23 +1947,30 @@ Sub Main()
 End Sub
 ```
 
-Measured on this branch: **C#, C++ and JavaScript all print `a=3 b=3`** where `b` should be 103.
-(MSIL does not even build it — "Reference to undefined class 'Action'".)
+**Measured now: C# and JavaScript print `a=3 b=103` — CORRECT — on every entry point (CLI, CLI
+`--optimize`, a Release `.blproj` build).** ADR-0006 D1's closure rule
+(`OptimizationPass.IsCallVisible` → `IsLambdaCaptured`, `BasicLang/IROptimizer.cs`) makes `n`
+call-visible because a lambda of `Main` genuinely writes it, so `bump()` invalidates both
+`CopyPropagation`'s and CSE's facts for `n` the same way any other call would. Two SEPARATE
+backends are still wrong, for reasons this ADR does not touch:
 
-⚠ **TWO INDEPENDENT ROUTES, both measured, and the CSE fix closes NEITHER:**
+- **C++ prints `a=3 b=3`** — a BACKEND defect, task #140: the emitted lambda captures `n` BY COPY
+  (`[=]() { t0 = n + 100; return; }`) instead of by reference, so the write never reaches the
+  caller's `n` no matter what the optimizer does or does not run (MEASURED wrong even with ZERO
+  optimizer passes running — not a kill-vocabulary or CSE/LICM gap this family could ever have
+  closed).
+- **MSIL cannot build this shape at all** — "Reference to undefined class 'Action'", task #155 (no
+  IL lowering for the delegate type a `Sub()` lambda gets typed as).
 
-1. **It is not CSE's to fix.** Re-run with CSE REMOVED from the pipeline (ConstantFolding +
-   CopyPropagation + DeadCodeElimination + StrengthReduction + Peephole only): still `a=3 b=3`.
-   `CopyPropagation` and `ConstantFolding` fold the expression on both sides of `bump()` on their
-   own, so repairing CSE cannot help.
-2. ⛔ **But CSE DOES also merge here — 1 merge, measured** — so it is a second route to the same
-   wrong answer, and the repair in this change does NOT close it. `ReadsCallVisible` cannot: a
-   local captured by reference has `IsGlobal=false` and is indistinguishable from any other local
-   at that point. (An earlier draft of this entry said "CSE is not involved". That is wrong, and
-   the count is where it was caught.)
-
-**Closing it needs a capture set on `IRFunction`, which both the folding passes and
-`ReadsCallVisible` would consult. It needs its own task.**
+D1's own closure rule first closed this for C#/JavaScript with an INTERIM approximation ("every
+local and by-value parameter is call-visible in a function that creates a lambda" — sound, but
+coarser than necessary). Task #122 (committed `22f18284`) narrowed that to the locals a lambda
+ACTUALLY captures — a pure precision gain, re-measured at 492/492 probe cells and 1056/1056 corpus
+cells behaviourally identical, 0 verifier fires; it did not move this example's answer at all,
+since `n` really is captured here. Full rule, its fallback, and a blind spot the soundness review
+found (a lambda passed as a `MyBase.New(...)` argument — pre-existing, not widened by #122; task
+#170) are in `docs/superpowers/decisions/0006-kill-vocabulary-totality-dynamic-use-call-visibility.md`'s
+implementation note for D1. Tests: `VisualGameStudio.Tests/Compiler/LambdaCaptureSetTests.cs`.
 
 #### ⛔ `Samples/*` DO NOT COMPILE — and the "11 merges in shipping code" number rests on that
 
@@ -2065,6 +2076,23 @@ single new failure against the 170-name baseline.
     Whoever picks this up next should start from that commit message and re-measure; the
     guard needs at least `&& !v.NamedAfterVariable`, and the base-constructor-argument uses
     must become visible to `UsesOf`, before it can be switched on.
+- ⭐ **Newest — #122 DONE (ADR-0006 D1's Obligation, committed `22f18284`).** The closure rule
+  narrows from "every local is call-visible in a function that creates a lambda" (the interim
+  approximation) to the locals a lambda of that function actually CAPTURES, read straight off the
+  lambda's own built IR (`OptimizationPass.LambdaCapturesOf`/`IsLambdaCaptured`,
+  `BasicLang/IROptimizer.cs`) and recorded by `IRBuilder` on the creator
+  (`IRFunction.LambdaCapturedNames`/`LambdaCaptureSources`). Falls back to the old interim rule,
+  for the WHOLE function, whenever a referenced lambda's names could not be enumerated
+  (`IRInlineCode`) or were never recorded (hand-built IR) — soundness beats precision throughout.
+  Pure precision gain: 492/492 probe cells and 1056/1056 corpus cells behaviourally IDENTICAL, 0
+  verifier fires; every emitted-code difference is a gained fold/merge/hoist on a local NO lambda
+  captures. Full rule, the own-locals and exact-spelling decisions, and a pre-existing blind spot
+  the soundness review found (not widened by this change — a lambda passed as a `MyBase.New(...)`
+  argument, task #170) are in this ADR's implementation note for D1. The soundness review also
+  filed tasks #164-#169 (side findings; #169 is the separate open question of whether a lambda
+  parameter should bind case-insensitively to a same-spelled creator local — not fixed here).
+  Tests: `VisualGameStudio.Tests/Compiler/LambdaCaptureSetTests.cs`. See also the corrected K1-shape
+  example above ("CLOSED on C#/JavaScript").
 - ⚠ **Two arms of the CSE repair are unreachable from any BasicLang program**, and are pinned by
   direct unit assertions in `CseKeyEncodingUnitTests` rather than by a program, because no program
   can express them:
