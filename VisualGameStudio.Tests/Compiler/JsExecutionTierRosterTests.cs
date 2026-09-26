@@ -113,6 +113,8 @@ public class JsExecutionTierRosterTests
         typeof(EmptyArrayLiteralExecutionTests),
         // Array types written on the type (`As Integer()`); C++ and C# legs too.
         typeof(ArrayTypeSuffixExecutionTests),
+        // Get/Set properties, now reachable on C++ (task #148); every leg incl. Node.
+        typeof(PropertyAccessorExecutionTests),
 
         // ADR-0005 D2 — CSE guards a shared value's own destination, not only its operands.
         // CseDestinationInvalidationExecutionTests / DestinationInvalidation_D4_ByRefExecutionTests

@@ -31,9 +31,8 @@ namespace VisualGameStudio.Tests.Compiler;
 //  (S/adr7/probes/<name>.bas — see this session's scratchpad), each value cross-checked against
 //  that probe's own .exp AND against S/adr7/probes/matrix-after.txt cell by cell before being
 //  pinned here, matching the convention KillVocabularyExtensionsTests.cs already established for
-//  ADR-0006 D1. C++ does not build ANY of these Get/Set probes (task #148: no property lowering
-//  in CppCodeGenerator at all) — pinned "still does not build" on ONE probe only (cheap), per the
-//  brief's own instruction not to chase it elsewhere.
+//  ADR-0006 D1. C++ did not build ANY of these Get/Set probes until task #148 (every property read
+//  and write lowered to a field access); they now run on all four backends.
 // ================================================================================================
 
 internal static class BarePropertyLoweringProbes
@@ -862,8 +861,8 @@ public class BarePropertyLoweringExecutionTests
 
     private const string AllProbeNames = "P4,P5,P6,P6g,P7,P8,P9,P10,CP3,CP4";
 
-    // ---- C#, JavaScript, MSIL — standard and aggressive pipelines. C++ is excluded: it does not
-    //      build any Get/Set property probe (task #148; see the one cheap pin below). ----------------
+    // ---- All four backends — standard and aggressive pipelines. C++ was excluded until task #148:
+    //      it lowered every property read and write to a field access, so no Get/Set probe built. ----
 
     /// <summary>
     /// ⛔ The JavaScript leg is <see cref="JavaScriptOptimizedExecutionTests.RunOptimized"/>
@@ -879,12 +878,13 @@ public class BarePropertyLoweringExecutionTests
     /// </summary>
     [TestCase("P4")] [TestCase("P5")] [TestCase("P6")] [TestCase("P6g")] [TestCase("P7")]
     [TestCase("P8")] [TestCase("P9")] [TestCase("P10")] [TestCase("CP3")] [TestCase("CP4")]
-    public void StandardPipeline_CSharpJavaScriptMsilAgree(string probeName)
+    public void StandardPipeline_AllFourBackendsAgree(string probeName)
     {
         var (source, expected) = Probe(probeName);
         Assert.Multiple(() =>
         {
             Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharp(source)), Is.EqualTo(expected), "C#");
+            Assert.That(FourBackends.Norm(BclE2E.CompileRun(BclE2E.CompileToCppOptimized(source))), Is.EqualTo(expected), "C++");
             Assert.That(FourBackends.Norm(JavaScriptOptimizedExecutionTests.RunOptimized(source)), Is.EqualTo(expected), "JavaScript");
             Assert.That(FourBackends.Norm(MsilHarness.RunExpectingSuccess(source)), Is.EqualTo(expected), "MSIL");
         });
@@ -892,12 +892,13 @@ public class BarePropertyLoweringExecutionTests
 
     [TestCase("P4")] [TestCase("P5")] [TestCase("P6")] [TestCase("P6g")] [TestCase("P7")]
     [TestCase("P8")] [TestCase("P9")] [TestCase("P10")] [TestCase("CP3")] [TestCase("CP4")]
-    public void AggressivePipeline_CSharpJavaScriptMsilAgree(string probeName)
+    public void AggressivePipeline_AllFourBackendsAgree(string probeName)
     {
         var (source, expected) = Probe(probeName);
         Assert.Multiple(() =>
         {
             Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharpAggressive(source)), Is.EqualTo(expected), "C#");
+            Assert.That(FourBackends.Norm(BclE2E.CompileRun(BclE2E.CompileToCppAggressive(source))), Is.EqualTo(expected), "C++");
             Assert.That(FourBackends.Norm(FourBackends.RunAggressiveJs(source)), Is.EqualTo(expected), "JavaScript");
             Assert.That(FourBackends.Norm(MsilHarness.RunAggressiveExpectingSuccess(source)), Is.EqualTo(expected), "MSIL");
         });
@@ -909,10 +910,10 @@ public class BarePropertyLoweringExecutionTests
     public void BothPipelineTestCaseListsCoverTheSameProbes()
     {
         var expected = AllProbeNames.Split(',');
-        var standard = GetType().GetMethod(nameof(StandardPipeline_CSharpJavaScriptMsilAgree))!
+        var standard = GetType().GetMethod(nameof(StandardPipeline_AllFourBackendsAgree))!
             .GetCustomAttributes(typeof(TestCaseAttribute), false).Cast<TestCaseAttribute>()
             .Select(a => (string)a.Arguments[0]).ToArray();
-        var aggressive = GetType().GetMethod(nameof(AggressivePipeline_CSharpJavaScriptMsilAgree))!
+        var aggressive = GetType().GetMethod(nameof(AggressivePipeline_AllFourBackendsAgree))!
             .GetCustomAttributes(typeof(TestCaseAttribute), false).Cast<TestCaseAttribute>()
             .Select(a => (string)a.Arguments[0]).ToArray();
 
@@ -943,14 +944,15 @@ public class BarePropertyLoweringExecutionTests
     public void P12_BarePlainAutoProperty_AggressivePipeline_AllFourBackendsGreen()
         => FourBackends.RunsOnEveryBackendAggressive(BarePropertyLoweringProbes.P12, BarePropertyLoweringProbes.P12Expected);
 
-    /// <summary>P13 — a shadowing LOCAL. C++ excluded: it cannot build the Get/Set property at all
-    /// (the same pre-existing, unrelated gap every Get/Set probe in this file hits).</summary>
+    /// <summary>P13 — a shadowing LOCAL, on all four backends.</summary>
     [Test]
-    public void P13_ShadowingLocal_StandardPipeline_CSharpJavaScriptMsilAgree()
+    public void P13_ShadowingLocal_StandardPipeline_AllFourBackendsAgree()
         => Assert.Multiple(() =>
         {
             Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharp(BarePropertyLoweringProbes.P13)),
                 Is.EqualTo(BarePropertyLoweringProbes.P13Expected), "C#");
+            Assert.That(FourBackends.Norm(BclE2E.CompileRun(BclE2E.CompileToCppOptimized(BarePropertyLoweringProbes.P13))),
+                Is.EqualTo(BarePropertyLoweringProbes.P13Expected), "C++");
             Assert.That(FourBackends.Norm(JavaScriptOptimizedExecutionTests.RunOptimized(BarePropertyLoweringProbes.P13)),
                 Is.EqualTo(BarePropertyLoweringProbes.P13Expected), "JavaScript");
             Assert.That(FourBackends.Norm(MsilHarness.RunExpectingSuccess(BarePropertyLoweringProbes.P13)),
@@ -958,11 +960,13 @@ public class BarePropertyLoweringExecutionTests
         });
 
     [Test]
-    public void P13_ShadowingLocal_AggressivePipeline_CSharpJavaScriptMsilAgree()
+    public void P13_ShadowingLocal_AggressivePipeline_AllFourBackendsAgree()
         => Assert.Multiple(() =>
         {
             Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharpAggressive(BarePropertyLoweringProbes.P13)),
                 Is.EqualTo(BarePropertyLoweringProbes.P13Expected), "C#");
+            Assert.That(FourBackends.Norm(BclE2E.CompileRun(BclE2E.CompileToCppAggressive(BarePropertyLoweringProbes.P13))),
+                Is.EqualTo(BarePropertyLoweringProbes.P13Expected), "C++");
             Assert.That(FourBackends.Norm(FourBackends.RunAggressiveJs(BarePropertyLoweringProbes.P13)),
                 Is.EqualTo(BarePropertyLoweringProbes.P13Expected), "JavaScript");
             Assert.That(FourBackends.Norm(MsilHarness.RunAggressiveExpectingSuccess(BarePropertyLoweringProbes.P13)),
@@ -1026,17 +1030,6 @@ public class BarePropertyLoweringExecutionTests
             Assert.That(msilRun.Outcome, Is.EqualTo(MsilHarness.MsilOutcome.RunFailed), msilRun.Report);
             Assert.That(msilRun.Output, Does.Contain("InvalidProgramException"), "MSIL — the same pre-existing crash");
         });
-
-    /// <summary>The ONE cheap C++ "still does not build" pin (task #148) — not chased elsewhere.</summary>
-    [Test]
-    public void P4_Cpp_StillDoesNotBuild_Task148()
-    {
-        var ex = Assert.Throws<AssertionException>(
-            () => BclE2E.CompileRun(BclE2E.CompileToCppOptimized(BarePropertyLoweringProbes.P4)));
-        Assert.That(ex!.Message, Does.Contain("C++ compilation failed"),
-            "expected a COMPILE failure — if this now builds, task #148 may be closed; re-measure "
-            + "rather than widen this pin");
-    }
 
     // ---- The MSIL ByRef ladder's "is a PROPERTY" arm — now reached ONLY by a bare PLAIN
     //      auto-property (MsilByRefTests.BarePropertyNameArgument_IsRefused's Get/Set shape now

@@ -166,9 +166,7 @@ internal static class CopyPropagationSharedVocabularyProbes
     /// <summary>CP9 — the property-Setter half of the same idea: <c>Me.P = 10</c> lowers to an
     /// IRFieldStore (ADR-0007) whose Setter body writes the DIFFERENTLY-named field K.
     /// Before #146: 6. Correct is 21 (P's setter doubles its argument: K = 10 * 2 = 20, K + 1 =
-    /// 21). C++ cannot build ANY Get/Set property (task #148 — not task #141 as an earlier
-    /// analysis pass mislabeled it; #141 is the unrelated MyBase-Exception family) and is pinned
-    /// separately below.</summary>
+    /// 21), on all four backends — C++ could not build a Get/Set property until task #148.</summary>
     internal const string CP9 = """
         Class Box
             Public K As Integer
@@ -549,54 +547,15 @@ public class CopyPropagationSharedVocabularyExecutionTests
     public void CP8_AggressivePipeline_AllFourBackends()
         => FourBackends.RunsOnEveryBackendAggressive(CopyPropagationSharedVocabularyProbes.CP8, CopyPropagationSharedVocabularyProbes.CP8Expected);
 
-    // ---- CP9: C#/JavaScript/MSIL; C++ cannot build ANY Get/Set property (task #148) --------------
+    // ---- CP9: all four backends. C++ could not build any Get/Set property until task #148 -------
 
     [Test]
-    public void CP9_StandardPipeline_CSharpJavaScriptMsil()
-        => Assert.Multiple(() =>
-        {
-            Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharp(CopyPropagationSharedVocabularyProbes.CP9)),
-                Is.EqualTo(CopyPropagationSharedVocabularyProbes.CP9Expected), "C#, standard");
-            Assert.That(FourBackends.Norm(JavaScriptOptimizedExecutionTests.RunOptimized(CopyPropagationSharedVocabularyProbes.CP9)),
-                Is.EqualTo(CopyPropagationSharedVocabularyProbes.CP9Expected), "JavaScript, standard");
-            Assert.That(FourBackends.Norm(MsilHarness.RunExpectingSuccess(CopyPropagationSharedVocabularyProbes.CP9)),
-                Is.EqualTo(CopyPropagationSharedVocabularyProbes.CP9Expected), "MSIL, standard");
-        });
+    public void CP9_StandardPipeline_AllFourBackends()
+        => FourBackends.RunsOnEveryBackend(CopyPropagationSharedVocabularyProbes.CP9, CopyPropagationSharedVocabularyProbes.CP9Expected);
 
     [Test]
-    public void CP9_AggressivePipeline_CSharpJavaScriptMsil()
-        => Assert.Multiple(() =>
-        {
-            Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharpAggressive(CopyPropagationSharedVocabularyProbes.CP9)),
-                Is.EqualTo(CopyPropagationSharedVocabularyProbes.CP9Expected), "C#, aggressive");
-            Assert.That(FourBackends.Norm(FourBackends.RunAggressiveJs(CopyPropagationSharedVocabularyProbes.CP9)),
-                Is.EqualTo(CopyPropagationSharedVocabularyProbes.CP9Expected), "JavaScript, aggressive");
-            Assert.That(FourBackends.Norm(MsilHarness.RunAggressiveExpectingSuccess(CopyPropagationSharedVocabularyProbes.CP9)),
-                Is.EqualTo(CopyPropagationSharedVocabularyProbes.CP9Expected), "MSIL, aggressive");
-        });
-
-    /// <summary>task #148 ("no member named 'P' in 'Box'") — NOT task #141 as an earlier pass
-    /// mislabeled it; #141 is the unrelated MyBase/Exception family (ADR-0006 D1's own
-    /// implementation note). Matches <c>BarePropertyLoweringTests.P4_Cpp_StillDoesNotBuild_Task148</c>'s
-    /// pattern exactly — same underlying gap, different probe.</summary>
-    [Test]
-    public void CP9_Cpp_CannotBuild_PinnedForTask148_StandardPipeline()
-    {
-        var ex = Assert.Throws<AssertionException>(
-            () => BclE2E.CompileRun(BclE2E.CompileToCppOptimized(CopyPropagationSharedVocabularyProbes.CP9)));
-        Assert.That(ex!.Message, Does.Contain("C++ compilation failed"),
-            "expected a COMPILE failure (task #148) — if this now builds, re-measure before "
-            + "widening this pin.");
-    }
-
-    [Test]
-    public void CP9_Cpp_CannotBuild_PinnedForTask148_AggressivePipeline()
-    {
-        var ex = Assert.Throws<AssertionException>(
-            () => BclE2E.CompileRun(BclE2E.CompileToCppAggressive(CopyPropagationSharedVocabularyProbes.CP9)));
-        Assert.That(ex!.Message, Does.Contain("C++ compilation failed"),
-            "expected a COMPILE failure (task #148), aggressive pipeline — same gap.");
-    }
+    public void CP9_AggressivePipeline_AllFourBackends()
+        => FourBackends.RunsOnEveryBackendAggressive(CopyPropagationSharedVocabularyProbes.CP9, CopyPropagationSharedVocabularyProbes.CP9Expected);
 
     // ---- CPI_cpp / CPI_csharp / CPI_javascript: IRInlineCode is Universal, each on its own backend
 
