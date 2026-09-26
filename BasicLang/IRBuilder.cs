@@ -5186,6 +5186,35 @@ namespace BasicLang.Compiler.IR
                     _expressionResult = chainAccess;
                     return;
                 }
+
+                // The same chain when the inner value is an ARRAY: `lst(0)(2)` over a
+                // List(Of Integer()), `MakeInts()(1)`, `grid(r)(c)` over an array-typed element.
+                // The collection arm above only knows generic collections, so these fell to the
+                // delegate-invocation branch and called the array — `t5(2)`: CS0149 on C#, "cannot
+                // be used as a function" on C++, "t5 is not a function" on JavaScript. Lowered like
+                // every other array read: GEP over the evaluated inner value, then load.
+                if (chainType != null
+                    && chainType.Kind == TypeKind.Array
+                    // §8.5: a handle-represented .NET array owns no native storage to index.
+                    && chainType.NetHandleTypeFullName == null)
+                {
+                    node.Callee.Accept(this);
+                    var innerArray = _expressionResult;
+
+                    var elementType = chainType.ElementType ?? returnType ?? new TypeInfo("Object", TypeKind.Class);
+                    var chainGep = new IRGetElementPtr(_currentFunction.GetNextTempName(), innerArray, elementType);
+                    foreach (var index in node.Arguments)
+                    {
+                        index.Accept(this);
+                        chainGep.Indices.Add(_expressionResult);
+                    }
+                    EmitInstruction(chainGep);
+
+                    var chainLoad = new IRLoad(_currentFunction.GetNextTempName(), chainGep, elementType);
+                    EmitInstruction(chainLoad);
+                    _expressionResult = chainLoad;
+                    return;
+                }
             }
 
             // Check for different call types
@@ -5640,6 +5669,26 @@ namespace BasicLang.Compiler.IR
             var array = _expressionResult;
 
             var elementType = _semanticAnalyzer.GetNodeType(node);
+
+            // `lst[0]` over a List/Dictionary is the collection's INDEXER — the same
+            // IRIndexerAccess the paren spelling `lst(0)` lowers to. As a GEP it emitted
+            // `lst[0]` on the C++ side, which is operator[] on a std::shared_ptr and does not
+            // compile; the two spellings must not diverge.
+            var receiverType = _semanticAnalyzer.GetNodeType(node.Array);
+            if (receiverType != null && IsIndexableGenericType(receiverType))
+            {
+                var indexer = new IRIndexerAccess(_currentFunction.GetNextTempName(), array,
+                    elementType ?? new TypeInfo("Object", TypeKind.Class));
+                foreach (var index in node.Indices)
+                {
+                    index.Accept(this);
+                    indexer.Indices.Add(_expressionResult);
+                }
+                EmitInstruction(indexer);
+                _expressionResult = indexer;
+                return;
+            }
+
             var gepTemp = _currentFunction.GetNextTempName();
             var gep = new IRGetElementPtr(gepTemp, array, elementType);
 

@@ -115,6 +115,8 @@ public class JsExecutionTierRosterTests
         typeof(ArrayTypeSuffixExecutionTests),
         // Get/Set properties, now reachable on C++ (task #148); every leg incl. Node.
         typeof(PropertyAccessorExecutionTests),
+        // Chained indexing over array values; C++ and C# legs too.
+        typeof(ChainedIndexingExecutionTests),
 
         // ADR-0005 D2 — CSE guards a shared value's own destination, not only its operands.
         // CseDestinationInvalidationExecutionTests / DestinationInvalidation_D4_ByRefExecutionTests
@@ -297,7 +299,7 @@ public class JsExecutionTierRosterTests
 
     [Test]
     public void RosterIsPinned()
-        => Assert.That(ExecutionTier, Has.Length.EqualTo(67),
+        => Assert.That(ExecutionTier, Has.Length.EqualTo(68),
             "The execution-tier roster changed. That is fine — update the number — but it must " +
             "be a deliberate edit, not a silent shrink.");
 
