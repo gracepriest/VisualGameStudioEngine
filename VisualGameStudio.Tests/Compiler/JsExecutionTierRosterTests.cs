@@ -223,6 +223,10 @@ public class JsExecutionTierRosterTests
         // by hand; its JS leg spawns Node.
         typeof(StringInterpolationRunTests),
 
+        // The type keywords' Shared members (String.Format, Integer.Parse, …). Named outside the
+        // patterns below, so listed by hand; its JS legs spawn Node.
+        typeof(PrimitiveStaticSurfaceRunTests),
+
         // ADR-0006 D2 (task #137) — the use count Invariant S′ checks is dynamic, not static.
         // Named "...ExecutionTests", so the widened match below WOULD catch it on its own; listed
         // explicitly anyway, matching every row above. L1/L2's JS legs spawn Node via

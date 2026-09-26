@@ -184,6 +184,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             EmitExceptionPrelude(module);
             EmitConversionPrelude(module);
             EmitIntegerDivisionPrelude(module);
+            EmitPrimitiveStaticsPrelude(module);
 
             // Module-level Dims, also before classes — a static field initialiser may read one.
             EmitGlobals(module);
@@ -530,6 +531,15 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             Line("return q;");
             _indentLevel--;
             Line("}");
+            Line();
+        }
+
+        /// <summary>The <see cref="JsPrimitiveStatics"/> helpers, when any row is used (scanned, as above).</summary>
+        private void EmitPrimitiveStaticsPrelude(IRModule module)
+        {
+            if (!JsPrimitiveStatics.IsUsed(module)) return;
+            foreach (var line in JsPrimitiveStatics.Prelude.Replace("\r\n", "\n").TrimEnd('\n').Split('\n'))
+                Line(line);
             Line();
         }
 
@@ -2843,6 +2853,16 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         {
             var rendered = call.Arguments.ConvertAll(Expr);
 
+            // A type keyword's Shared member (`String.Format(...)`, `Integer.Parse(s)`): the prelude
+            // helper for its row. A keyword member outside the table is refused, never emitted as a
+            // member of JavaScript's own String/Number.
+            if (PrimitiveStaticSurface.IsKeywordReceiver(call.FunctionName, out _, out _))
+            {
+                return JsPrimitiveStatics.TryLowerCall(call.FunctionName, call.Arguments, rendered, out var primitive)
+                    ? primitive
+                    : throw NoLowering(call.FunctionName);
+            }
+
             // String builtins arrive as a BARE FunctionName, which CallTarget would pass
             // straight through as if it were a user function — emitting `Len(s)`, a call to
             // something that exists nowhere in JavaScript. They also cannot be expressed as a
@@ -3555,6 +3575,17 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
         private string FieldAccess(IRFieldAccess fa)
         {
+            // A type keyword's Shared property (`Integer.MaxValue`, `String.Empty`). ⛔ Never the bare
+            // member: `String.Empty` read a property of JavaScript's String constructor, which has none,
+            // and `String.Empty & "x"` printed "undefinedx" from a clean build.
+            if (fa.Object is IRVariable keywordRecv && PrimitiveStaticSurface.IsTypeKeyword(keywordRecv.Name))
+            {
+                return PrimitiveStaticSurface.TryGet(keywordRecv.Name, fa.FieldName, out var row)
+                       && JsPrimitiveStatics.TryLowerProperty(row, out var constant)
+                    ? constant
+                    : throw NoLowering($"{keywordRecv.Name}.{fa.FieldName}");
+            }
+
             var receiver = Expr(fa.Object);
 
             // ⚠ FIRST, ahead of every rewrite below. A member of a FOREIGN object is raw

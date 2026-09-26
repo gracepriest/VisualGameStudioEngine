@@ -142,6 +142,11 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 Mention("OverflowException");
             }
 
+            // The type keywords' Shared members (String.Format, Integer.Parse, …) throw these.
+            if (JsPrimitiveStatics.IsUsed(module))
+                foreach (var name in JsPrimitiveStatics.ThrownExceptions)
+                    Mention(name);
+
             // Close over ancestors, then emit in table order so every base precedes its derived.
             foreach (var name in mentioned.ToList())
             {

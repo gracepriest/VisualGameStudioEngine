@@ -418,6 +418,13 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // in both modes (split-mode counterpart: EmitRuntimeHeader in CppCodeGenerator.Split.cs).
             SpliceRuntimeSource(CppIntegerDivisionRuntime.Source);
 
+            // The type keywords' Shared members (String.Format, Integer.Parse, …) — after the
+            // NetException they throw and the BCL body's FormatDouble they use. ON DEMAND, in
+            // both modes (split-mode counterpart: EmitRuntimeHeader in CppCodeGenerator.Split.cs):
+            // a program naming no row carries none of it.
+            if (PrimitiveStaticSurface.IsUsedBy(module))
+                SpliceRuntimeSource(CppPrimitiveStaticsRuntime.Source);
+
             // D-P7 NetRef (P2a-2 flip): UNCONDITIONAL in both modes — ManagedOwned
             // declaration positions lower to BasicLang::NetRef even with an empty surface,
             // so the type must always exist. Include-guarded and self-including; shared
@@ -3485,6 +3492,12 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 return $"BasicLang::{BclCanonicalName(bclTypeName)}::{bclStatic.CppName ?? bclStatic.MemberName}({string.Join(", ", args)})";
             }
 
+            // A type keyword's Shared member (`String.Format(...)`, `Integer.Parse(s)`) → the
+            // BasicLang::Prim runtime function. It used to fall through and emit `StringFormat(...)`,
+            // a name that exists nowhere — a g++ error after "Compilation successful".
+            if (PrimitiveStaticSurface.TryGetDotted(functionName, out var primitive))
+                return $"{PrimitiveRuntimeName(primitive)}({string.Join(", ", args)})";
+
             return StdLibArm(functionName, args, call);
         }
 
@@ -3498,6 +3511,10 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         /// covers the parenthesized access form (<c>DateTime.Now()</c>); the paren-less property
         /// form arrives as an IRFieldAccess and is handled in Visit(IRFieldAccess).
         /// </summary>
+        /// <summary>The <c>BasicLang::Prim</c> function implementing a <see cref="PrimitiveStaticSurface"/> row.</summary>
+        internal static string PrimitiveRuntimeName(PrimitiveStaticSurface.Row row) =>
+            $"BasicLang::Prim::{row.TypeName}_{row.MemberName}";
+
         internal static bool TryGetNativeBclStaticMember(
             string functionName, out string typeName, out NativeBclMember member)
         {
@@ -3913,6 +3930,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
 
             return FrameworkCallExpression(functionName, ArmProbeArgs) != null
                    || TryGetNativeBclStaticMember(functionName, out _, out _)
+                   || PrimitiveStaticSurface.TryGetDotted(functionName, out _)
                    || StdLibArm(functionName, ArmProbeArgs, null) != null;
         }
 
@@ -4885,6 +4903,15 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                     || staticMember.Kind == NativeBclMemberKind.StaticMethod))
             {
                 WriteLine($"{result} = BasicLang::{BclCanonicalName(staticRecv.Name)}::{staticMember.CppName ?? staticMember.MemberName}();");
+                return;
+            }
+
+            // A type keyword's Shared PROPERTY (`Integer.MaxValue`, `String.Empty`, `Double.NaN`):
+            // the BasicLang::Prim function of the same row. A keyword can never name a local.
+            if (fieldAccess.Object is IRVariable keywordRecv
+                && PrimitiveStaticSurface.TryGet(keywordRecv.Name, fieldAccess.FieldName, out var primitiveProp))
+            {
+                WriteLine($"{result} = {PrimitiveRuntimeName(primitiveProp)}();");
                 return;
             }
 

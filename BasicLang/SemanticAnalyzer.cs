@@ -2719,6 +2719,15 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 return ResolveNetTypeName(surfaceReturnType);
             }
 
+            // The Shared members of the type keywords (String.Empty, Integer.Parse, Integer.MaxValue,
+            // Double.IsNaN, Char.IsDigit, …) — typed from the table every native backend implements,
+            // so `Dim n As Integer = Integer.Parse(s)` is an Integer and not an Object no typed store
+            // accepts.
+            if (PrimitiveStaticSurface.TryGet(typeName, memberName, out var primitiveStatic))
+            {
+                return ResolveNetTypeName(primitiveStatic.ReturnTypeName);
+            }
+
             // First try the TypeRegistry for loaded .NET assemblies
             if (_typeRegistry != null)
             {
