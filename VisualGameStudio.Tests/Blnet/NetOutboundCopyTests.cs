@@ -287,7 +287,7 @@ public class NetOutboundCopyTests
             End Module
             """);
 
-        Assert.That(cpp, Does.Contain("std::vector<uint8_t> A"),
+        Assert.That(cpp, Does.Contain("BasicLang::Array<uint8_t> A"),
             "§8.6 row 2: the DECLARATION wins — the local is a native array, not a handle:\n" + cpp);
         Assert.That(cpp, Does.Contain("BasicLang::net::" + form.ReadExportName + "("),
             $"the handle must materialize through §8.6's readback proxy '{form.ReadExportName}'. "

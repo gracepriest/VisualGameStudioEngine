@@ -102,9 +102,9 @@ public class CppSplitCompileTests
 
         // The header must carry the sizes, not `= {}`.
         var header = r.Files.First(f => f.Key.EndsWith("Game.g.h", StringComparison.OrdinalIgnoreCase)).Value;
-        Assert.That(header, Does.Contain("inline std::vector<int32_t> flat = std::vector<int32_t>(4)"), header);
+        Assert.That(header, Does.Contain("inline BasicLang::Array<int32_t> flat = std::vector<int32_t>(4)"), header);
         Assert.That(header,
-            Does.Contain("inline std::vector<std::vector<int32_t>> grid = "
+            Does.Contain("inline BasicLang::Array<std::vector<int32_t>> grid = "
                          + "std::vector<std::vector<int32_t>>(4, std::vector<int32_t>(3))"), header);
 
         var stdout = CppCompile.CompileAndRunFiles(r.Files, r.TranslationUnitFileNames, compiler);
