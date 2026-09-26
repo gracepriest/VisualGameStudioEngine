@@ -420,8 +420,7 @@ public class FormPropertyGridTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(names, Does.Contain("Name").And.Contains("Text")
-                .And.Contains("Width").And.Contains("Height"));
+            Assert.That(names, Does.Contain("Name").And.Contains("Text").And.Contains("ClientSize"));
             Assert.That(grid.Header, Is.EqualTo("F"), "the header names the form, not 'No selection'");
             Assert.That(grid.IsEmpty, Is.False);
 
@@ -500,7 +499,7 @@ public class FormPropertyGridTests
 
         grid.SelectedControl = null;
 
-        Assert.That(grid.Rows.Select(r => r.Name), Does.Contain("Text").And.Contains("Width"),
+        Assert.That(grid.Rows.Select(r => r.Name), Does.Contain("Text").And.Contains("ClientSize"),
             "and the form's rows again once it is deselected");
     }
 

@@ -7,13 +7,23 @@ using BasicLang.Forms.Serialization;
 namespace VisualGameStudio.Shell.ViewModels.Designer;
 
 /// <summary>
-/// The designer's property grid: the catalog properties of the selected control, in catalog order.
+/// The designer's property grid (spec §3): the object selector, Categorized/Alphabetical, search, the
+/// rows, and the description pane.
 ///
-/// <para>⛔ Rows come from <see cref="FormControlCatalog"/>, never from whatever the document
-/// happens to carry. The catalog is the single source of truth for "what can be set on this
-/// control" — the same table the markup emitter, the region writer and the CI gate read. Building
-/// rows from the document's own attributes instead would offer exactly the properties already set
-/// and no way to add a new one.</para>
+/// <para>⛔ Rows come from <see cref="FormControlCatalog"/> (or <see cref="FormControlCatalog.FormRoot"/>
+/// for the form), never from whatever the document happens to carry. The catalog is the single source
+/// of truth for "what can be set on this control" — the same table the markup emitter, the region
+/// writer and the CI gate read. Building rows from the document's own attributes instead would offer
+/// exactly the properties already set and no way to add a new one.</para>
+///
+/// <para>⛔⛔ The grid NEVER selects anything itself. The object selector raises
+/// <see cref="SelectionRequested"/>; the document view model answers through its ONE selection store
+/// (<c>SelectInDesigner</c>), which then sets <see cref="SelectedControl"/>. A grid that wrote its own
+/// selection is the two-store disagreement that once deleted the wrong component (CLAUDE.md).</para>
+///
+/// <para>⚠ <see cref="Rows"/> stays the model: catalog order, every row. <see cref="DisplayItems"/> is
+/// the VIEW of it — headers, sort, search, collapse — so every test and caller that reads
+/// <see cref="Rows"/> keeps its meaning.</para>
 ///
 /// <para>⚠ Identifiers here are <c>Form*</c>, not <c>WebView*</c> — that prefix is taken by the
 /// extension host's HTML source document type across Core, Shell, DockFactory and ViewLocator.</para>
@@ -22,14 +32,54 @@ public partial class FormPropertyGridViewModel : ObservableObject
 {
     private FormFile? _file;
 
+    /// <summary>The categories the user collapsed — by NAME, so a collapse survives reselection.</summary>
+    private readonly HashSet<string> _collapsed = new(StringComparer.Ordinal);
+
+    /// <summary>Set while the grid itself points the selector at the store's selection (an echo).</summary>
+    private bool _syncingObjects;
+
     /// <summary>Raised when a row edited the model, so the host can write the document.</summary>
     public event EventHandler? Edited;
+
+    /// <summary>
+    /// The user picked an object in the selector. The argument is the control, or null for the form.
+    /// ⛔ The host answers through its selection store; the grid does not select.
+    /// </summary>
+    public event EventHandler<FormControl?>? SelectionRequested;
 
     [ObservableProperty]
     private FormControl? _selectedControl;
 
-    /// <summary>The rows for the current selection. Empty when nothing is selected.</summary>
+    /// <summary>Every row for the current selection, in catalog order. Empty when there is no document.</summary>
     public ObservableCollection<FormPropertyRow> Rows { get; } = new();
+
+    /// <summary>What the list SHOWS: <see cref="FormPropertyCategoryHeader"/>s and <see cref="FormPropertyRow"/>s.</summary>
+    public ObservableCollection<object> DisplayItems { get; } = new();
+
+    /// <summary>The object selector's entries: the form, every control, every tray component.</summary>
+    public ObservableCollection<FormObjectItem> Objects { get; } = new();
+
+    [ObservableProperty]
+    private FormObjectItem? _selectedObject;
+
+    /// <summary>Filters the displayed rows by name, in both sort modes.</summary>
+    [ObservableProperty]
+    private string _searchText = "";
+
+    /// <summary>Categorized (VS's default) or Alphabetical.</summary>
+    [ObservableProperty]
+    private bool _isCategorized = true;
+
+    /// <summary>The Alphabetical toggle — the other face of <see cref="IsCategorized"/>.</summary>
+    public bool IsAlphabetical
+    {
+        get => !IsCategorized;
+        set => IsCategorized = !value;
+    }
+
+    /// <summary>The list's selected item — a header or a row.</summary>
+    [ObservableProperty]
+    private object? _selectedItem;
 
     /// <summary>
     /// The selected control's id — or the FORM's name when nothing is selected, because that is
@@ -62,7 +112,8 @@ public partial class FormPropertyGridViewModel : ObservableObject
     public string DescriptionTitle => SelectedRow?.Name ?? (IsEmpty ? string.Empty : "Properties");
 
     /// <summary>
-    /// The description pane's body — the property's type, and WHY it is read-only when it is.
+    /// The description pane's body (spec §3) — the property's Description (its type when it has none),
+    /// and WHY it is read-only when it is.
     ///
     /// <para>⛔ A frozen row's reason belongs here rather than only under the value. D9 freezes a
     /// property when its value did not parse, and "why can I not edit this" is exactly the question
@@ -79,16 +130,44 @@ public partial class FormPropertyGridViewModel : ObservableObject
                     : "Select a property to see what it does.";
             }
 
+            var text = string.IsNullOrEmpty(row.Description) ? row.TypeName : row.Description;
             return row.IsFrozen && !string.IsNullOrEmpty(row.FrozenReason)
-                ? $"{row.TypeName} — read-only. {row.FrozenReason}"
-                : row.TypeName;
+                ? $"{text} — read-only. {row.FrozenReason}"
+                : text;
         }
     }
+
+    /// <summary>A header selected in the list describes nothing: the pane falls back to its prompt.</summary>
+    partial void OnSelectedItemChanged(object? value) => SelectedRow = value as FormPropertyRow;
 
     partial void OnSelectedRowChanged(FormPropertyRow? value)
     {
         OnPropertyChanged(nameof(DescriptionTitle));
         OnPropertyChanged(nameof(DescriptionBody));
+    }
+
+    partial void OnIsCategorizedChanged(bool value)
+    {
+        OnPropertyChanged(nameof(IsAlphabetical));
+        RefreshDisplay();
+    }
+
+    partial void OnSearchTextChanged(string value) => RefreshDisplay();
+
+    /// <summary>
+    /// ⛔ A pick REQUESTS the selection. An echo of the store's own change (<see cref="RefreshObjects"/>
+    /// runs with <c>_syncingObjects</c> set) and a null push from the combo are ignored, and picking what
+    /// is already selected requests nothing — re-running SelectInDesigner for it would close an open Type
+    /// Here editor for a click that changed nothing.
+    /// </summary>
+    partial void OnSelectedObjectChanged(FormObjectItem? value)
+    {
+        if (_syncingObjects || value == null || ReferenceEquals(value.Control, SelectedControl))
+        {
+            return;
+        }
+
+        SelectionRequested?.Invoke(this, value.Control);
     }
 
     /// <summary>
@@ -171,7 +250,7 @@ public partial class FormPropertyGridViewModel : ObservableObject
                 Rows.Add(new FormPropertyRow(
                     "Anchor", FormPropertyType.String,
                     () => pixel.Anchor ?? "",
-                    v => pixel.Anchor = string.IsNullOrWhiteSpace(v) ? null : v,
+                    Changing(() => pixel.Anchor, v => pixel.Anchor = string.IsNullOrWhiteSpace(v) ? null : v),
                     Changed,
                     editor: FormRowEditor.AnchorPicker,
                     category: "Layout",
@@ -180,7 +259,7 @@ public partial class FormPropertyGridViewModel : ObservableObject
                 Rows.Add(new FormPropertyRow(
                     "Dock", FormPropertyType.String,
                     () => pixel.Dock ?? "",
-                    v => pixel.Dock = string.IsNullOrWhiteSpace(v) ? null : v,
+                    Changing(() => pixel.Dock, v => pixel.Dock = string.IsNullOrWhiteSpace(v) ? null : v),
                     Changed,
                     editor: FormRowEditor.DockPicker,
                     category: "Layout",
@@ -230,19 +309,37 @@ public partial class FormPropertyGridViewModel : ObservableObject
                 // the kind of thing that makes a designer feel haunted.
                 if (FormPropertyDef.TryParseInt(text, out var parsed))
                 {
+                    // ⛔ Reports whether the number MOVED: "007" on 7, or 0 on a Width clamped to 1,
+                    // is not an edit (FormPropertyRow._write).
+                    var before = read();
                     write(parsed);
+                    return read() != before;
                 }
+
+                return false;
             },
             changed,
             category: category,
             description: description);
 
     /// <summary>
-    /// The FORM's own properties — what VS shows when nothing on the surface is selected.
-    ///
-    /// <para>⚠ The form is a <see cref="FormDocument"/>, not a <see cref="FormControl"/>, so it has
-    /// no catalog row and none of its values live in an attribute dictionary. Intrinsic rows are
-    /// the whole of it.</para>
+    /// Wraps an intrinsic setter so it reports whether it CHANGED the value (FormPropertyRow._write): a
+    /// write that leaves the model as it was is not an edit and raises no Edited.
+    /// </summary>
+    private static Func<string, bool> Changing(Func<string?> read, Action<string> write) =>
+        value =>
+        {
+            var before = read();
+            write(value);
+            return !string.Equals(before, read(), StringComparison.Ordinal);
+        };
+
+    /// <summary>
+    /// The FORM's own properties — what VS shows when nothing on the surface is selected — from
+    /// <see cref="FormControlCatalog.FormRoot"/> (spec §2.3), their values through
+    /// <see cref="FormRootValues"/>, the ONE map to where each lives. So the form shows ClientSize (not a
+    /// Width/Height pair) on WinForms, and the grid tracks on the web — with or without a
+    /// <c>&lt;Layout&gt;</c> yet: the first write creates one.
     ///
     /// <para>⚠ Name is frozen for a stronger reason than a control's: it names the generated CLASS,
     /// and the document's own file name has to agree with it — a mismatch is refused at load.</para>
@@ -256,37 +353,37 @@ public partial class FormPropertyGridViewModel : ObservableObject
             () => form.Name,
             write: null,
             Changed,
-            "The form's name is its class name, and the file name must agree with it."));
+            "The form's name is its class name, and the file name must agree with it.",
+            category: "Design",
+            description: NameDescription));
 
-        Rows.Add(new FormPropertyRow(
-            "Text", FormPropertyType.String,
-            () => form.Text ?? "",
-            v => form.Text = v,
-            Changed));
+        foreach (var row in FormControlCatalog.FormRoot.Properties.Where(p => p.AppliesTo(form.Target)))
+        {
+            var definition = row;
 
-        if (form.Target == FormTarget.WinForms)
-        {
-            // ⚠ The CLIENT size, as WinForms' ClientSize is — the same numbers the canvas's own
-            // resize grips write, so typing 400 here and dragging to 400 produce one document.
-            // ⚠ Task 12 replaces these two with FormRoot's ClientSize row.
-            const string clientSize = "The size of the client area of the form.";
-            Rows.Add(IntRow("Width", () => form.Width ?? 0, v => form.Width = Math.Max(1, v), Changed, "Layout", clientSize));
-            Rows.Add(IntRow("Height", () => form.Height ?? 0, v => form.Height = Math.Max(1, v), Changed, "Layout", clientSize));
-        }
-        else if (form.Layout is { } layout)
-        {
-            // ⛔ Kept verbatim as CSS track lists, because the browser is the renderer. Offering
-            // them as free text is deliberate: "auto,1fr" and "repeat(3, 1fr)" are both legal and
-            // neither is something a typed editor could enumerate.
-            Rows.Add(new FormPropertyRow(
-                "Cols", FormPropertyType.String,
-                () => layout.Cols ?? "", v => layout.Cols = v, Changed));
-            Rows.Add(new FormPropertyRow(
-                "Rows", FormPropertyType.String,
-                () => layout.Rows ?? "", v => layout.Rows = v, Changed));
-            Rows.Add(new FormPropertyRow(
-                "Gap", FormPropertyType.String,
-                () => layout.Gap ?? "", v => layout.Gap = v, Changed));
+            // ⚠ Ordinal, as FormFile.DegradedReasonOfRoot is: a root row's name is its attribute spelling.
+            var degraded = _file?.DegradedRoot.FirstOrDefault(d =>
+                string.Equals(d.Property, definition.Name, StringComparison.Ordinal));
+
+            Rows.Add(FormPropertyRow.ForStoredValue(
+                definition,
+                form.Target,
+                read: () => FormRootValues.Get(form, definition),
+                write: value =>
+                {
+                    // ⛔ Set returns false for a value it REFUSES (a non-positive ClientSize passes Accepts
+                    // and fails here); a Set that stores the same value ("400,300" over "400, 300") changed
+                    // nothing either. Neither is an edit.
+                    var before = FormRootValues.Get(form, definition);
+                    return FormRootValues.Set(form, definition, value) &&
+                           !string.Equals(before, FormRootValues.Get(form, definition), StringComparison.Ordinal);
+                },
+                remove: FormRootValues.CanReset(definition)
+                    ? () => FormRootValues.Set(form, definition, null)
+                    : null,
+                Changed,
+                frozenReason: degraded?.Reason,
+                frozenText: degraded?.Value));
         }
     }
 
@@ -331,14 +428,152 @@ public partial class FormPropertyGridViewModel : ObservableObject
             AddFormRows(form);
         }
 
-        // ⚠ SelectedRow is cleared first: it points at a row of the PREVIOUS control, and leaving it
-        // would leave the description pane describing a property that is no longer on screen.
+        // ⚠ The selected item is cleared first: it points at a row of the PREVIOUS control, and leaving
+        // it would leave the description pane describing a property that is no longer on screen.
+        // (SelectedRow too, directly: today's view still binds it TwoWay, and a row selected there
+        // never went through SelectedItem.)
+        SelectedItem = null;
         SelectedRow = null;
+
+        RefreshObjects();
+        RefreshDisplay();
 
         OnPropertyChanged(nameof(Header));
         OnPropertyChanged(nameof(HeaderKind));
         OnPropertyChanged(nameof(IsEmpty));
         OnPropertyChanged(nameof(DescriptionTitle));
         OnPropertyChanged(nameof(DescriptionBody));
+    }
+
+    // ==================================================================
+    // The object selector
+    // ==================================================================
+
+    /// <summary>
+    /// Rebuilds the selector's entries only when the document's objects changed, then points it at the
+    /// current selection. ⚠ Not cleared on every selection: clearing an ItemsSource while the combo is
+    /// mid-change is how a combo pushes a stray null back into the binding.
+    ///
+    /// <para>⚠ Runs on every <see cref="Rebuild"/> — a selection change or a load — so a paste or delete
+    /// shows in the selector with the selection change that accompanies it.</para>
+    /// </summary>
+    private void RefreshObjects()
+    {
+        var model = _file?.Model;
+        var wanted = new List<FormObjectItem>();
+        if (model != null)
+        {
+            wanted.Add(new FormObjectItem(model.Name, model.RootElementName, null));
+            foreach (var control in model.AllControls().Concat(model.AllComponents()))
+            {
+                wanted.Add(new FormObjectItem(control.Id, control.Kind, control));
+            }
+        }
+
+        _syncingObjects = true;
+        try
+        {
+            var same = Objects.Count == wanted.Count &&
+                       Objects.Zip(wanted).All(p => ReferenceEquals(p.First.Control, p.Second.Control) &&
+                                                    p.First.Name == p.Second.Name &&
+                                                    p.First.Kind == p.Second.Kind);
+            if (!same)
+            {
+                Objects.Clear();
+                foreach (var item in wanted)
+                {
+                    Objects.Add(item);
+                }
+            }
+
+            // ⛔ The SAME item instance when nothing changed, so the store's own echo is a no-op here.
+            SelectedObject = Objects.FirstOrDefault(o => ReferenceEquals(o.Control, SelectedControl));
+        }
+        finally
+        {
+            _syncingObjects = false;
+        }
+    }
+
+    // ==================================================================
+    // What the list shows
+    // ==================================================================
+
+    private IEnumerable<FormPropertyRow> VisibleRows() =>
+        SearchText.Length == 0
+            ? Rows
+            : Rows.Where(r => r.Name.Contains(SearchText, StringComparison.OrdinalIgnoreCase));
+
+    private static IEnumerable<FormPropertyRow> ByName(IEnumerable<FormPropertyRow> rows) =>
+        rows.OrderBy(r => r.Name, StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Headers + rows (Categorized) or rows alone (Alphabetical), filtered by the search.</summary>
+    private void RefreshDisplay()
+    {
+        DisplayItems.Clear();
+        var visible = VisibleRows().ToList();
+
+        if (!IsCategorized)
+        {
+            foreach (var row in ByName(visible))
+            {
+                DisplayItems.Add(row);
+            }
+
+            return;
+        }
+
+        // ⚠ A category with no visible row gets no header: a search that matches nothing in it hides it.
+        foreach (var group in visible.GroupBy(r => r.Category).OrderBy(g => g.Key, StringComparer.Ordinal))
+        {
+            var header = new FormPropertyCategoryHeader(group.Key, !_collapsed.Contains(group.Key), OnHeaderToggled);
+            DisplayItems.Add(header);
+
+            if (header.IsExpanded)
+            {
+                foreach (var row in ByName(group))
+                {
+                    DisplayItems.Add(row);
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Expands or collapses ONE category in place. ⚠ Incremental, not a full refresh: the header's own
+    /// toggle button is mid-click, and recreating the item under it would drop the gesture.
+    /// </summary>
+    private void OnHeaderToggled(FormPropertyCategoryHeader header)
+    {
+        if (header.IsExpanded)
+        {
+            _collapsed.Remove(header.Name);
+        }
+        else
+        {
+            _collapsed.Add(header.Name);
+        }
+
+        var at = DisplayItems.IndexOf(header);
+        if (at < 0)
+        {
+            return;
+        }
+
+        if (!header.IsExpanded)
+        {
+            while (at + 1 < DisplayItems.Count && DisplayItems[at + 1] is FormPropertyRow)
+            {
+                DisplayItems.RemoveAt(at + 1);
+            }
+
+            return;
+        }
+
+        var insert = at + 1;
+        foreach (var row in ByName(VisibleRows().Where(r => r.Category == header.Name)))
+        {
+            DisplayItems.Insert(insert++, row);
+        }
     }
 }

@@ -199,6 +199,21 @@ Follow this document **alongside** the plan. Where the two disagree, this docume
   write report whether it changed anything — the same shape as the pre-flight's `tryWrite` for `FormRootValues.Set`).
   Carried to Task 14 — decide whether a refused value gets a visible message (spec §7 "refused in the editor"),
   and MEASURE whether Avalonia re-reads a binding during its own push (if not, post the refresh).
+- **Task 12: `FormPropertyRow`'s constructors changed shape** — Task 13/14 code must use these, not the plan's:
+  - The intrinsic constructor no longer takes `definition/target/isPresent/reset`, and its `write` is
+    `Func<string, bool>` — true only when the model CHANGED. `IntRow` reports it by re-reading; Anchor/Dock go
+    through `Changing(read, write)`. A false return takes the §7 snap-back path (editor refresh, no `Edited`).
+  - A catalog row stored outside the bag is `FormPropertyRow.ForStoredValue(definition, target, read, write,
+    remove, onChanged, frozenReason, frozenText)`: `target` required; `read` returns null for ABSENT, so presence
+    cannot disagree with the value; `remove` null = no Reset. `frozenText` (a Degraded root's
+    `DegradedProperty.Value`, e.g. `Width="abc" Height="300"`) is what a frozen row shows, and makes it PRESENT.
+  - The FormRoot `write` is `Set(...) && Get changed` — so `0, 300` (refused) and `400,300` over `400, 300`
+    (same numbers) raise no `Edited`.
+  - `Rebuild` clears BOTH `SelectedItem` and `SelectedRow`: today's AXAML still binds `SelectedRow` TwoWay until
+    Task 13 rebinds the list to `SelectedItem`.
+  - Mutants run (all killed): identity guard, grid-writes-its-own-selection, the constructor wiring, collapse
+    memory, frozen raw text, root same-value, refusal path, `IntRow` change report, search, header clears the
+    described row, and M10 (`UnicodeMinusCulture` did NOT self-skip here).
 
 ## CONFIRMED SOUND
 - Slice 1 has not already implemented anything slice 2 adds: `SameValue`, `IsPresent`/`IsDefaultShown`/`IsBold`/`CanReset`/`ResetCommand`, `Category`/`Description` on the row, `FormRootValues.CanReset`, `DisplayItems`/`Objects`/`SelectionRequested`, and FormRoot-driven form rows. Today's `AddFormRows` is still hand-written, `FormPropertyGridViewModel.cs:228-267`.

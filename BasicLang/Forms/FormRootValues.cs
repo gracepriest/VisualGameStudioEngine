@@ -6,14 +6,14 @@ namespace BasicLang.Forms;
 /// scar of those twice (FormAssetEmitter.Tracks ↔ FormGridLayout.ParseTracks; the four private "how big
 /// is the form" copies that became FormCanvasTransform.SurfaceSize).
 ///
-/// <para>⚠ What actually reads it TODAY (slice 1, Tasks 6–7): the region writer's WinForms root emission
-/// (<see cref="Get"/>), and the reader's and the retarget's "is this root attribute modelled?" test
-/// (<see cref="RowForAttribute"/>). NOT yet: the reader's typed parse and the writer still spell
-/// <c>Text</c>/<c>Width</c>/<c>Height</c> themselves (typed fields, one per row — slice 3's
-/// Properties-stored rows are where a generic path pays), and the retarget crosses Text and derives the
-/// layout edge itself; the property grid arrives in slice 2. Until those land, a new row must be mapped
-/// here AND taught to them — FormRootRetargetTests' catalog sweep goes red for a row the retarget
-/// neither crosses nor names.</para>
+/// <para>⚠ What actually reads it TODAY: the region writer's WinForms root emission (<see cref="Get"/>),
+/// the reader's and the retarget's "is this root attribute modelled?" test (<see cref="RowForAttribute"/>),
+/// and the property grid's Form rows (slice 2: <see cref="Get"/>, <see cref="Set"/>, <see cref="CanReset"/>).
+/// NOT yet: the reader's typed parse and the writer still spell <c>Text</c>/<c>Width</c>/<c>Height</c>
+/// themselves (typed fields, one per row — slice 3's Properties-stored rows are where a generic path
+/// pays), and the retarget crosses Text and derives the layout edge itself. Until those land, a new row
+/// must be mapped here AND taught to them — FormRootRetargetTests' catalog sweep goes red for a row the
+/// retarget neither crosses nor names.</para>
 /// </summary>
 public static class FormRootValues
 {
@@ -82,6 +82,13 @@ public static class FormRootValues
                     $"FormRoot row '{row.Name}' has no storage in FormRootValues — every root row must be mapped here.");
         }
     }
+
+    /// <summary>
+    /// Whether "remove it from the document" is expressible for this row. ⚠ Not ClientSize: the writer
+    /// deliberately never removes Width/Height on a null (FormDocumentWriter.ApplyFormAttributes — null
+    /// also means "present but unparseable"), and the designer always writes a size.
+    /// </summary>
+    public static bool CanReset(FormPropertyDef row) => row.Type != FormPropertyType.Size;
 
     /// <summary>
     /// The ROOT-ELEMENT attributes that carry a row's value. Empty for a row stored on a child element

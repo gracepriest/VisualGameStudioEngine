@@ -51,7 +51,7 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow
     /// <summary>Whose default an absent row shows — WinForms' and the browser's can differ (spec §2.7).</summary>
     private readonly FormTarget _target;
 
-    /// <summary>For a non-attribute row that can be absent (a FormRoot row); null = the attribute rule.</summary>
+    /// <summary>For a catalog row stored outside the bag (a FormRoot row); null = the attribute rule.</summary>
     private readonly Func<bool>? _isPresent;
 
     /// <summary>How a non-attribute row removes itself; null = remove the attribute.</summary>
@@ -68,7 +68,13 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow
     /// </summary>
     private readonly Func<string>? _read;
 
-    private readonly Action<string>? _write;
+    /// <summary>
+    /// Stores a value that lives outside the bag, and answers whether it CHANGED anything. ⛔ False covers
+    /// both "refused" (FormRootValues.Set on a non-positive size, IntRow on unparseable text) and "the
+    /// same value again" (<c>007</c> on an X of 7) — either way no edit happened, so no Edited is raised
+    /// and the editor re-reads what the model still holds.
+    /// </summary>
+    private readonly Func<string, bool>? _write;
 
     /// <summary>A catalog property of the control — an attribute the document carries as text.</summary>
     public FormPropertyRow(
@@ -87,28 +93,22 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow
     }
 
     /// <summary>
-    /// A row whose value lives somewhere other than <see cref="FormControl.Properties"/>: an intrinsic
-    /// field of the control or its geometry (Name, X, TabIndex…), or a form's own value.
+    /// An INTRINSIC row: a field of the control or its geometry (Name, X, TabIndex…), or the form's Name —
+    /// no catalog row, so no default, no bold and no reset; it is always present.
     /// Pass <paramref name="write"/> as null for one the designer cannot change yet, and give
     /// <paramref name="frozenReason"/> the reason — the Degraded tier already renders exactly that.
-    /// Pass <paramref name="definition"/> for a catalog-described row, which then shows its default,
-    /// bolds and resets like any other (with <paramref name="isPresent"/> and <paramref name="reset"/>
-    /// saying where its value lives).
+    /// <paramref name="write"/> returns whether it changed the model (see <see cref="_write"/>).
     /// </summary>
     public FormPropertyRow(
         string name,
         FormPropertyType type,
         Func<string> read,
-        Action<string>? write,
+        Func<string, bool>? write,
         Action onChanged,
         string? frozenReason = null,
         FormRowEditor editor = FormRowEditor.Default,
         string category = "Misc",
-        string description = "",
-        FormPropertyDef? definition = null,
-        FormTarget target = FormTarget.WinForms,
-        Func<bool>? isPresent = null,
-        Action? reset = null)
+        string description = "")
     {
         _onChanged = onChanged;
         Name = name;
@@ -116,15 +116,71 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow
         _read = read;
         _write = write;
         _editor = editor;
+        FrozenReason = frozenReason ?? (write == null ? "This value is not editable here." : null);
+        Category = category;
+        Description = description;
+    }
+
+    /// <summary>A catalog row stored outside the bag — see <see cref="ForStoredValue"/>.</summary>
+    private FormPropertyRow(
+        FormPropertyDef definition,
+        FormTarget target,
+        Func<string?> read,
+        Func<string, bool> write,
+        Action? remove,
+        string? frozenReason,
+        string? frozenText,
+        Action onChanged)
+    {
+        _onChanged = onChanged;
+        Name = definition.Name;
+        _type = definition.Type;
+        _choices = definition.AllowedValues;
         _definition = definition;
         _target = target;
-        _isPresent = isPresent;
-        _reset = reset;
-        _choices = definition?.AllowedValues;
-        FrozenReason = frozenReason ?? (write == null ? "This value is not editable here." : null);
-        Category = definition != null ? CategoryName(definition.Category) : category;
-        Description = definition?.Description ?? description;
+
+        // ⚠ A frozen value the model could not hold (a Degraded ClientSize is null in the model) shows the
+        // document's own text — its reason says it is "preserved exactly as written" — and IS present: the
+        // document carries it, so it must not grey out as a default.
+        var carried = frozenReason != null ? frozenText : null;
+
+        // ⛔ Presence and value come from ONE reader, so they cannot disagree: null IS absent.
+        _isPresent = () => read() != null || carried != null;
+        _read = () => read() ?? carried ?? "";
+        _write = write;
+        _reset = remove;
+        FrozenReason = frozenReason;
+        Category = CategoryName(definition.Category);
+        Description = definition.Description ?? "";
     }
+
+    /// <summary>
+    /// A CATALOG row whose value is stored somewhere other than <see cref="FormControl.Properties"/> — a
+    /// <see cref="FormControlCatalog.FormRoot"/> row, stored in typed <see cref="FormDocument"/> fields via
+    /// <see cref="FormRootValues"/>. It shows its <paramref name="target"/>'s default, bolds, judges and
+    /// resets exactly like a bag row.
+    /// </summary>
+    /// <param name="definition">The catalog row: type, default, description, category, value rules.</param>
+    /// <param name="target">⛔ REQUIRED — whose default an absent row shows and whose value rules apply.</param>
+    /// <param name="read">The stored value, or NULL when the document does not carry it. ⛔ Presence is
+    /// read from here, never passed separately.</param>
+    /// <param name="write">Stores a value; returns whether it CHANGED anything (false = refused or same).</param>
+    /// <param name="remove">Removes the value from the document, or null when removal is not expressible
+    /// for this row (then no Reset is offered, and clearing a typed row snaps back).</param>
+    /// <param name="frozenReason">D9's Degraded reason, or null when editable.</param>
+    /// <param name="frozenText">What a frozen row shows when <paramref name="read"/> has nothing — the
+    /// document's own text. Ignored unless <paramref name="frozenReason"/> is given.</param>
+    /// <param name="onChanged">Raised after an edit that changed the model.</param>
+    public static FormPropertyRow ForStoredValue(
+        FormPropertyDef definition,
+        FormTarget target,
+        Func<string?> read,
+        Func<string, bool> write,
+        Action? remove,
+        Action onChanged,
+        string? frozenReason = null,
+        string? frozenText = null) =>
+        new(definition, target, read, write, remove, frozenReason, frozenText, onChanged);
 
     private readonly FormRowEditor _editor = FormRowEditor.Default;
 
@@ -242,7 +298,8 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow
     /// ⛔ Present AND different from the displayed default. A null default DISPLAYS as empty, so a
     /// present empty Text is not bold while a present "Hi" is.
     /// </summary>
-    public bool IsBold => _definition != null && IsPresent && !_definition.SameValue(DisplayValue, DefaultValue ?? "");
+    public bool IsBold => _definition != null && IsPresent &&
+                          !_definition.SameValue(DisplayValue, _definition.Displayed(null, _target));
 
     /// <summary>Offered on present, editable rows that know how to remove themselves.</summary>
     public bool CanReset => IsEditable && IsPresent && (_reset != null || (_control != null && _definition != null));
@@ -511,7 +568,14 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow
 
         if (_write != null)
         {
-            _write(value);
+            // ⛔ A write that changed nothing is not an edit: refused by the store (a non-positive
+            // ClientSize, unparseable Int text) or the same value re-spelled ("007" on an X of 7). No
+            // Edited, and the editor re-reads what the model holds.
+            if (!_write(value))
+            {
+                RaiseEditorRefresh();
+                return;
+            }
         }
         else if (_control != null)
         {

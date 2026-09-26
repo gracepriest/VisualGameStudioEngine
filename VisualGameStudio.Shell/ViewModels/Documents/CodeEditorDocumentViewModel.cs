@@ -1121,6 +1121,11 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
                 }
             }
         };
+
+        // ⛔⛔ The grid's object selector (spec §3) never writes PropertyGrid.SelectedControl — it asks,
+        // and the ONE selection store answers, so the canvas, the tray and the grid cannot disagree.
+        // Choosing the form is SelectInDesigner(null).
+        PropertyGrid.SelectionRequested += (_, control) => SelectInDesigner(control);
     }
 
     /// <summary>The component tray under the canvas (Task 25): a view of <c>DesignDocument.Components</c>.</summary>
