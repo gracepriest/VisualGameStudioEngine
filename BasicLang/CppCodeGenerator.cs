@@ -2934,6 +2934,18 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // program could reach it. It is fixed here so it stays fixed if multi-dim lands.
             if (store.Address is IRGetElementPtr gep)
             {
+                // `lst(0)(2) = 9` over a List(Of Integer()): the GEP's base is the List ELEMENT,
+                // read into a temp — and a std::vector temp is a COPY, so the write landed in it
+                // and the list never changed. Write through the List's operator[] instead, which
+                // returns a reference. Store-only on purpose: a read through the copy is already
+                // right, and re-deriving it at every load is the aliasing ElementLValueOfArrayRead
+                // warns against.
+                if (ListElementLValue(gep.BasePointer) is string listElement)
+                {
+                    WriteLine($"{listElement}{string.Concat(gep.Indices.Select(i => $"[{GetValueName(i)}]"))} = {value};");
+                    return;
+                }
+
                 WriteLine($"{ElementLValue(gep)} = {value};");
                 return;
             }
@@ -4457,6 +4469,13 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         /// load materialized. See <see cref="Visit(IRFieldStore)"/> for why this is opt-in per
         /// call site rather than applied to every load.
         /// </summary>
+        private string ListElementLValue(IRValue value) =>
+            value is IRIndexerAccess indexer
+            && indexer.ResolvedNetTarget == null
+            && string.Equals(indexer.Collection?.Type?.Name, "List", StringComparison.OrdinalIgnoreCase)
+                ? $"(*{GetValueName(indexer.Collection)})[{string.Join("][", indexer.Indices.Select(i => GetValueName(i)))}]"
+                : null;
+
         private string ElementLValueOfArrayRead(IRValue value) =>
             value is IRLoad load && load.Address is IRGetElementPtr gep
                 ? ElementLValue(gep)
