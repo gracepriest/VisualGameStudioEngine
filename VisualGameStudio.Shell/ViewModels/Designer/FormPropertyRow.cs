@@ -254,6 +254,13 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow
     [RelayCommand(CanExecute = nameof(CanReset))]
     private void Reset()
     {
+        // ⚠ RelayCommand.Execute does NOT consult CanExecute — a context menu, a key binding or a test
+        // can run this on an absent or frozen row, and it must not report an edit that changed nothing.
+        if (!CanReset)
+        {
+            return;
+        }
+
         if (_reset != null)
         {
             _reset();
@@ -287,10 +294,8 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow
     /// </summary>
     public string DisplayValue =>
         IsFrozen ? RawValue
-        : IsPresent ? Canon(RawValue)
-        : DefaultValue ?? "";
-
-    private string Canon(string value) => _definition?.Canonical(value) ?? value;
+        : _definition != null ? _definition.Displayed(IsPresent ? RawValue : null, _target)
+        : RawValue;
 
     /// <summary>The editor's text: <see cref="DisplayValue"/> (frozen → raw; absent → the default).</summary>
     public string StringValue
@@ -315,6 +320,11 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow
     ///
     /// <para>Reads <see cref="DisplayValue"/>, not <see cref="RawValue"/>: an absent row shows the
     /// target's default (spec §2.7).</para>
+    ///
+    /// <para>⚠ An absent row with NO default (a web TextBox's MaxLength: no limit) displays "", which
+    /// this reads as 0 — an int cannot say "empty", and neither can the NumericUpDown. The row is greyed
+    /// (<see cref="IsDefaultShown"/>), and the 0 the editor pushes back is a no-op
+    /// (<see cref="FormPropertyDef.Judge"/>), so the displayed 0 never reaches the document.</para>
     /// </summary>
     public int IntValue
     {
@@ -462,53 +472,41 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow
             return;
         }
 
-        // ⛔ A value EQUAL TO WHAT THE ROW DISPLAYS is not an edit, compared in the row's own terms
-        // (FormPropertyDef.SameValue — the one answer bold and FormRetarget also ask). That one rule
-        // covers every push nobody made:
-        //  - an ABSENT row's displayed default coming back on LostFocus (spec §2.7) — writing it would
-        //    add an attribute for a selection-and-tab-away;
-        //  - the combo pushing "MiddleLeft" back for a document holding "Left" the moment the row
-        //    renders (spec §2.8: round-trips byte-for-byte unless EDITED);
-        //  - the numeric editor's "7" for a document holding "007";
-        //  - the grid's re-push of every row on a selection change.
-        //
-        // ⚠ DELIBERATE consequence: a case-only change (`middleleft` → `MiddleLeft`, `#ff0000` →
-        // `#FF0000`) and picking the member an alias already means (`Left` → `MiddleLeft`) are no-ops
-        // too — neither changes what the program does. A legacy `Left` stays in the document until the
-        // user chooses a genuinely DIFFERENT value, which is then written in its canonical spelling.
-        var display = DisplayValue;
-        if (_definition?.SameValue(value, display) ?? string.Equals(value, display, StringComparison.Ordinal))
-        {
-            return;
-        }
+        // ⛔ The DECISION is the catalog's (FormPropertyDef.Judge — a pure, table-tested function: no-op,
+        // reset, refuse or write, with every rule and its reason stated there). This row only carries
+        // it out. ⚠ DELIBERATE no-ops, per Judge: a case-only change (`middleleft` → `MiddleLeft`,
+        // `#ff0000` → `#FF0000`) and picking the member an alias already means (`Left` → `MiddleLeft`)
+        // change nothing the program does, so a legacy `Left` stays until the user picks a genuinely
+        // DIFFERENT value. An intrinsic row (no definition) has only the exact no-op, and IntRow ignores
+        // text it cannot parse.
+        var verdict = _definition?.Judge(value, IsPresent ? RawValue : null, _target)
+                      ?? (string.Equals(value, DisplayValue, StringComparison.Ordinal)
+                          ? FormEditVerdict.NoOp
+                          : FormEditVerdict.Write);
 
-        // ⛔ Spec §7: clearing the editor of a catalog row whose type cannot hold "" (Color, Int, Enum,
-        // Bool, Size…) means RESET — remove the property, the SAME operation as the Reset command — never
-        // a refusal: the user emptied the box because they want the default back. (A String row accepts
-        // "", so its empty caption is a real value and is written below.)
-        if (value.Length == 0 && _definition != null && !_definition.Accepts("", _target))
+        switch (verdict)
         {
-            if (CanReset)
-            {
-                Reset();
-            }
-            else
-            {
+            case FormEditVerdict.NoOp:
+                return;
+
+            case FormEditVerdict.Reset:
+                // The SAME operation as the Reset command. Nothing to remove (absent, or a row that
+                // cannot remove itself) → the editor snaps back to the default it was showing.
+                if (CanReset)
+                {
+                    Reset();
+                }
+                else
+                {
+                    RaiseEditorRefresh();
+                }
+
+                return;
+
+            case FormEditVerdict.Refuse:
+                // Spec §7: never written; the editor re-reads, so it shows what the document holds.
                 RaiseEditorRefresh();
-            }
-
-            return;
-        }
-
-        // ⛔ Spec §7: a NON-EMPTY invalid typed value is REFUSED in the editor and never written — the
-        // designer must not manufacture a Degraded value of its own (a typed "maybe" in a Bool row froze
-        // it on the next open). The editor is told to re-read, so it snaps back to what the document
-        // holds. ⚠ Accepts is per TARGET: a system colour with no CSS equivalent is refused on the web.
-        // (Intrinsic rows have no definition; IntRow ignores text it cannot parse.)
-        if (_definition != null && !_definition.Accepts(value, _target))
-        {
-            RaiseEditorRefresh();
-            return;
+                return;
         }
 
         if (_write != null)

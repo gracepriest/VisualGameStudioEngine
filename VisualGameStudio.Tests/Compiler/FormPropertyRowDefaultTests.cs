@@ -217,6 +217,109 @@ public class FormPropertyRowDefaultTests
         Assert.That(row.IntValue, Is.EqualTo(250));
     }
 
+    /// <summary>
+    /// ⛔ A web TextBox's MaxLength has NO default (the browser imposes no limit), so the absent row
+    /// displays "" — which the numeric editor renders as 0 and pushes straight back. Writing that echo
+    /// produced MaxLength="0": a text box that accepts no input, for a selection click.
+    ///
+    /// <para>⚠ The absent state still SHOWS 0: ITypedValueRow.IntValue is an int and the
+    /// NumericUpDown cannot render "empty". It is greyed (IsDefaultShown), and the echo is inert.</para>
+    /// </summary>
+    [Test]
+    public void AnAbsentIntRowWithNoDefault_PushedBackWhatItShows_WritesNothing_ButARealEditDoes()
+    {
+        var (file, grid) = Open("<TextBox Id=\"txt\" TabIndex=\"0\"/>", "txt", "F.blwebform");
+        var edits = 0;
+        grid.Edited += (_, _) => edits++;
+        var row = Row(grid, "MaxLength");
+
+        row.IntValue = row.IntValue;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(row.IntValue, Is.Zero, "what the numeric editor can show for 'no limit'");
+            Assert.That(row.IsDefaultShown, Is.True);
+            Assert.That(file.Model.FindById("txt")!.Properties.ContainsKey("MaxLength"), Is.False,
+                "the editor's echo of the absent state is not an edit");
+            Assert.That(edits, Is.Zero);
+        });
+
+        row.IntValue = 10;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(file.Model.FindById("txt")!.Properties["MaxLength"], Is.EqualTo("10"));
+            Assert.That(edits, Is.EqualTo(1));
+        });
+    }
+
+    /// <summary>
+    /// The view repaints from notifications alone: a write, a clear-reset and a Reset must each tell the
+    /// row's bold/greyed/Reset bindings and the editors to re-read, and re-evaluate the Reset command.
+    /// </summary>
+    [Test]
+    public void EveryValueChange_NotifiesTheBindingsThatDependOnIt()
+    {
+        var (_, grid) = Open("<Label Id=\"lbl\" TabIndex=\"0\" BackColor=\"Red\"/>", "lbl");
+        var enabled = Row(grid, "Enabled");
+        var back = Row(grid, "BackColor");
+
+        (HashSet<string?> Names, int CanExecute) Record(FormPropertyRow row, Action act)
+        {
+            var names = new HashSet<string?>();
+            var canExecute = 0;
+            void OnChanged(object? s, System.ComponentModel.PropertyChangedEventArgs e) => names.Add(e.PropertyName);
+            void OnCan(object? s, EventArgs e) => canExecute++;
+            row.PropertyChanged += OnChanged;
+            row.ResetCommand.CanExecuteChanged += OnCan;
+            act();
+            row.PropertyChanged -= OnChanged;
+            row.ResetCommand.CanExecuteChanged -= OnCan;
+            return (names, canExecute);
+        }
+
+        var expected = new[]
+        {
+            nameof(FormPropertyRow.IsBold), nameof(FormPropertyRow.IsPresent), nameof(FormPropertyRow.IsDefaultShown),
+            nameof(FormPropertyRow.CanReset), nameof(FormPropertyRow.StringValue), nameof(FormPropertyRow.BoolValue),
+            nameof(FormPropertyRow.IntValue), nameof(FormPropertyRow.DisplayValue), nameof(FormPropertyRow.RawValue)
+        };
+
+        var write = Record(enabled, () => enabled.BoolValue = false);
+        var clear = Record(back, () => back.StringValue = "");
+        var reset = Record(enabled, () => enabled.ResetCommand.Execute(null));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(write.Names, Is.SupersetOf(expected), "a write");
+            Assert.That(write.CanExecute, Is.GreaterThanOrEqualTo(1), "a write makes Reset available");
+            Assert.That(clear.Names, Is.SupersetOf(expected), "a clear-reset");
+            Assert.That(clear.CanExecute, Is.GreaterThanOrEqualTo(1));
+            Assert.That(reset.Names, Is.SupersetOf(expected), "a Reset");
+            Assert.That(reset.CanExecute, Is.GreaterThanOrEqualTo(1), "a Reset makes Reset unavailable");
+        });
+    }
+
+    /// <summary>
+    /// ⚠ RelayCommand.Execute does not consult CanExecute, so a caller (a context menu, a test, a key
+    /// binding) can run Reset on an absent row; that must not report an edit.
+    /// </summary>
+    [Test]
+    public void ResetOnAnAbsentRow_DoesNothing_AndRaisesNoEdit()
+    {
+        var (file, grid) = Open("<Label Id=\"lbl\" TabIndex=\"0\"/>", "lbl");
+        var edits = 0;
+        grid.Edited += (_, _) => edits++;
+
+        Row(grid, "Enabled").ResetCommand.Execute(null);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(edits, Is.Zero);
+            Assert.That(file.Model.FindById("lbl")!.Properties, Is.Empty);
+        });
+    }
+
     [Test]
     public void TheRowCarriesItsCatalogCategoryAndDescription()
     {

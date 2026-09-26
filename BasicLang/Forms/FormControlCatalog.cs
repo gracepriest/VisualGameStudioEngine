@@ -58,6 +58,22 @@ public enum FormCssConverter
     VisibleToDisplay
 }
 
+/// <summary>What the property grid does with a value an editor pushed — see <see cref="FormPropertyDef.Judge"/>.</summary>
+public enum FormEditVerdict
+{
+    /// <summary>The value is what the row already shows: write nothing, raise nothing.</summary>
+    NoOp,
+
+    /// <summary>The editor was cleared on a row that cannot hold "": remove the property.</summary>
+    Reset,
+
+    /// <summary>Not a value this row accepts on the target: write nothing, snap the editor back.</summary>
+    Refuse,
+
+    /// <summary>A real edit: write it.</summary>
+    Write
+}
+
 /// <summary>One editable property of one control kind.</summary>
 /// <param name="Name">The document attribute name, which is also the WinForms property name.</param>
 /// <param name="Type">Declared type; a value that does not parse to it drops out of the Canon tier.</param>
@@ -258,6 +274,69 @@ public sealed record FormPropertyDef(
             Type is FormPropertyType.Enum or FormPropertyType.Color
                 ? StringComparison.OrdinalIgnoreCase
                 : StringComparison.Ordinal);
+
+    /// <summary>
+    /// What an editor SHOWS for this property on <paramref name="target"/> (spec §2.7): the document's
+    /// value in its canonical spelling when present, the target's default when absent, "" when absent
+    /// with no default. <paramref name="present"/> is the document's text, or null when it carries none.
+    /// </summary>
+    public string Displayed(string? present, FormTarget target) =>
+        present != null
+            ? Canonical(present)
+            : DefaultFor(target) is { } fallback ? Canonical(fallback) : "";
+
+    /// <summary>
+    /// What a typed editor pushes back when it renders "" — a NumericUpDown cannot show empty, so it
+    /// shows (and pushes) 0; a CheckBox shows unchecked. Every other editor pushes "" itself.
+    /// </summary>
+    private string EmptyEcho => Type switch
+    {
+        FormPropertyType.Int => "0",
+        FormPropertyType.Bool => "false",
+        _ => ""
+    };
+
+    /// <summary>
+    /// The property grid's decision about a value an editor pushed (spec §2.7, §7) — a PURE function of
+    /// this row, so every rule is table-testable; the grid row only carries the verdict out.
+    ///
+    /// <list type="number">
+    /// <item><b>NoOp</b> — the value is what the row already DISPLAYS, in this row's own terms
+    /// (<see cref="SameValue"/>): an absent row's default coming back on LostFocus, an alias pushed back
+    /// as its member, <c>7</c> for a document holding <c>007</c>, the grid's re-push on selection. ⛔ Also
+    /// the typed editor's ECHO of an absent row with no default (<see cref="EmptyEcho"/>): a web
+    /// TextBox's MaxLength displays "" (no limit), the NumericUpDown renders it as 0 and pushes 0 back,
+    /// and writing that made a text box that accepts no input — for a selection click.</item>
+    /// <item><b>Reset</b> — "" on a row whose type cannot hold "": the user emptied the box to get the
+    /// default back (spec §7). A String accepts "", so its empty caption is a real value.</item>
+    /// <item><b>Refuse</b> — a value this row does not accept on <paramref name="target"/> (spec §7):
+    /// never written, so the designer cannot manufacture a Degraded value of its own.</item>
+    /// <item><b>Write</b> — everything else.</item>
+    /// </list>
+    /// </summary>
+    /// <param name="value">The pushed value.</param>
+    /// <param name="present">The document's text, or null when the document does not carry the property.</param>
+    /// <param name="target">Whose default and whose value rules apply.</param>
+    public FormEditVerdict Judge(string value, string? present, FormTarget target)
+    {
+        if (SameValue(value, Displayed(present, target)))
+        {
+            return FormEditVerdict.NoOp;
+        }
+
+        if (present == null && DefaultFor(target) == null && EmptyEcho.Length > 0 &&
+            string.Equals(value, EmptyEcho, StringComparison.Ordinal))
+        {
+            return FormEditVerdict.NoOp;
+        }
+
+        if (value.Length == 0 && !Accepts("", target))
+        {
+            return FormEditVerdict.Reset;
+        }
+
+        return Accepts(value, target) ? FormEditVerdict.Write : FormEditVerdict.Refuse;
+    }
 
     /// <summary>
     /// The value as WinForms SOURCE — what the region writer splices after the <c>=</c>.
