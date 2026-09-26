@@ -137,8 +137,9 @@ public partial class FormPropertyGridViewModel : ObservableObject
     private FormPropertyRow? _refusedRow;
 
     /// <summary>
-    /// A refusal still standing when the SELECTION moved, carried over that one rebuild and titled with the
-    /// control it belongs to (<c>lbl.ForeColor</c>). The natural gesture — type into a row, then click
+    /// A refusal still standing at the next REBUILD — a selection change, or a reload (an undo or redo
+    /// re-syncs through <see cref="Load"/>) — carried over that one rebuild and titled with the owner whose
+    /// rows it was typed into (<c>lbl.ForeColor</c>). The natural gesture — type into a row, then click
     /// another control on the canvas — commits (and refuses) on the press and rebuilds the rows in the same
     /// press, so without this the reason was retracted before anyone could read it. Retracted by the next
     /// row pick, edit, refusal or selection change: carried ONCE.
@@ -235,8 +236,9 @@ public partial class FormPropertyGridViewModel : ObservableObject
             return;
         }
 
-        // ⛔ A row of a PREVIOUS selection (a late push from a detached or recycled editor) is not described
-        // over the rows now shown. Rebuild unsubscribes old rows; this guards a push already in flight.
+        // ⛔ A row of a PREVIOUS selection is never described over the rows now shown. Rebuild unsubscribes
+        // old rows before clearing them and delivery is synchronous, so this cannot fire today — it is a
+        // belt-and-braces backstop in case a future path subscribes a row that is not in Rows.
         if (!Rows.Contains(row))
         {
             return;

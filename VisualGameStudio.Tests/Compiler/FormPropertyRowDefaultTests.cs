@@ -225,7 +225,10 @@ public class FormPropertyRowDefaultTests
     [TestCase("a good edit on the same row")]
     [TestCase("a good edit on another row")]
     [TestCase("selecting another row")]
-    // (A selection change CARRIES a standing refusal once: AStandingRefusal_IsCarriedOverOneSelectionChange_….)
+    // (A selection change CARRIES a standing refusal once: AStandingRefusal_IsCarriedOverOneSelectionChange_….
+    // These two run against that CARRIED refusal, after the selection moved to btn.)
+    [TestCase("after a selection change, a good edit")]
+    [TestCase("after a selection change, a new refusal")]
     public void ARefusal_IsRetracted_By(string what)
     {
         var (file, grid) = Open(
@@ -233,14 +236,31 @@ public class FormPropertyRowDefaultTests
         Row(grid, "ForeColor").StringValue = "12345";
         Assume.That(grid.DescriptionBody, Does.Contain("'12345'"), "precondition: the pane shows the refusal");
 
+        if (what.StartsWith("after a selection change", StringComparison.Ordinal))
+        {
+            grid.SelectedControl = file.Model.FindById("btn");
+            Assume.That(grid.DescriptionTitle, Is.EqualTo("lbl.ForeColor"), "precondition: the refusal is CARRIED");
+        }
+
         switch (what)
         {
             case "a good edit on the same row": Row(grid, "ForeColor").StringValue = "Red"; break;
             case "a good edit on another row": Row(grid, "Text").StringValue = "Hi"; break;
             case "selecting another row": grid.SelectedItem = Row(grid, "Text"); break;
+            case "after a selection change, a good edit": Row(grid, "Text").StringValue = "Hi"; break;
+            case "after a selection change, a new refusal": Row(grid, "ForeColor").StringValue = "99999"; break;
         }
 
-        Assert.That(grid.DescriptionBody, Does.Not.Contain("'12345'"), what);
+        Assert.Multiple(() =>
+        {
+            Assert.That(grid.DescriptionBody, Does.Not.Contain("'12345'"), what);
+            Assert.That(grid.DescriptionTitle, Is.Not.EqualTo("lbl.ForeColor"), what);
+            if (what.EndsWith("a new refusal", StringComparison.Ordinal))
+            {
+                Assert.That(grid.DescriptionBody, Does.Contain("'99999'"), "the NEW refusal is what the pane shows");
+                Assert.That(grid.DescriptionTitle, Is.EqualTo("ForeColor"), "btn's own row, unprefixed");
+            }
+        });
     }
 
     /// <summary>
