@@ -434,12 +434,14 @@ public class InheritedMemberTests
     }
 
     /// <summary>
-    /// ⛔ PINNED, NOT INHERITANCE'S: C++ cannot read a Get/Set PROPERTY by bare name inside a
-    /// method — an AUTO-property works on all four. The control is the same property declared on
-    /// the class itself.
+    /// A Get/Set PROPERTY read and written by bare name inside a method — inherited, and the
+    /// class's OWN as the control. This was PINNED as a C++ gap (C++ could not read a Get/Set
+    /// property by bare name at all, own or inherited); master's C++ accessor work (task #148,
+    /// "read and write Get/Set properties through their accessors") closed it and the pin went
+    /// red as designed. Promoted: C++ now runs both, alongside the other three.
     /// </summary>
     [Test]
-    public void AGetSetPropertyByBareName_IsACppGap_Pinned()
+    public void AGetSetPropertyByBareName_RunsOnEveryBackend()
     {
         const string body = " Private _p As Integer\n Public Property P As Integer\n  Get\n   Return _p\n  End Get\n  Set(value As Integer)\n   _p = value\n  End Set\n End Property\n";
         var inherited = Prog(body, " Public Function Run() As Integer\n  P = 8\n  Return P\n End Function\n");
@@ -450,8 +452,8 @@ public class InheritedMemberTests
             Assert.That(Js(inherited), Is.EqualTo("8"), "JavaScript");
             Assert.That(Msil(inherited), Is.EqualTo("8"), "MSIL");
             Assert.That(Cs(inherited), Is.EqualTo("8"), "C#");
-            Assert.That(() => Cpp(own), Throws.Exception,
-                "CONTROL: C++ cannot read the class's OWN Get/Set property by bare name either");
+            Assert.That(Cpp(inherited), Is.EqualTo("8"), "C++, inherited");
+            Assert.That(Cpp(own), Is.EqualTo("8"), "C++, the class's own property");
         });
     }
 
