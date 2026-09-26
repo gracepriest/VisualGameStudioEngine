@@ -197,6 +197,10 @@ public class JsExecutionTierRosterTests
         // A Boolean as .NET text ("True"), and x.ToString() on a primitive.
         typeof(JsBooleanTextRunTests),
 
+        // String interpolation with non-String holes. Named outside the patterns below, so listed
+        // by hand; its JS leg spawns Node.
+        typeof(StringInterpolationRunTests),
+
         // ADR-0006 D2 (task #137) — the use count Invariant S′ checks is dynamic, not static.
         // Named "...ExecutionTests", so the widened match below WOULD catch it on its own; listed
         // explicitly anyway, matching every row above. L1/L2's JS legs spawn Node via
@@ -259,7 +263,7 @@ public class JsExecutionTierRosterTests
 
     [Test]
     public void RosterIsPinned()
-        => Assert.That(ExecutionTier, Has.Length.EqualTo(54),
+        => Assert.That(ExecutionTier, Has.Length.EqualTo(55),
             "The execution-tier roster changed. That is fine — update the number — but it must " +
             "be a deliberate edit, not a silent shrink.");
 
