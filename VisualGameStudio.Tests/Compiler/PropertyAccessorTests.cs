@@ -188,13 +188,15 @@ public class PropertyAccessorExecutionTests
     // the inner counter's first hit; V: 0 + 1 -> set 10; Probe: V = 2 -> 20, plus the 3rd hit.
     private const string Expected = "Woof\nWoof!\n17\nbox!\n5\n3\n1\n10\n23";
 
-    // ⚠ Three backends, not four. MSIL cannot run this program yet: it lowers a property read
-    // through an INTERFACE-typed variable (`s.Area`, `s As IShape`) to a FIELD load, so the run
-    // dies with "MissingFieldException: Field not found: 'IShape.Area'" on both pipelines — a
-    // pre-existing MSIL gap (task #175), not the accessor work this fixture covers. It only
-    // surfaces where ilasm is present (the MSIL leg is ignored without one), which is why a
-    // four-backend assertion here passed where it was written. The MSIL leg is pinned below and
-    // goes red when #175 is fixed: then fold it back into RunsOnEveryBackend.
+    // ⚠ Three backends, not four, STILL. Task #175 fixed the gap this comment used to describe —
+    // MSIL now calls IShape's own get_Area()/set_Label() instead of lowering `s.Area`/`s.Label` to
+    // a field load — but this Program cannot go on MSIL anyway: `Counter.Probe()` does a BARE
+    // (unqualified) property write, `V = 2`, and MSIL emits that write against the FIRST class
+    // declared in the module (`Animal`) instead of the enclosing class (`Counter`) — a separate,
+    // pre-existing MSIL defect, task #176, with NO interface involved. Measured: the run now gets
+    // past every interface access and dies later, inside `Probe()`, with "MissingFieldException:
+    // Field not found: 'Animal.V'". See Msil_BarePropertyWriteInALaterClass_TargetsAnEarlierClass_
+    // PinnedForTask176 below, and its repro S/t175/pin/V6.bas.
 
     [Test]
     public void StandardPipeline_RunsOnCSharpCppAndJavaScript()
@@ -215,19 +217,29 @@ public class PropertyAccessorExecutionTests
         });
 
     /// <summary>
-    /// ⛔ PINNED KNOWN GAP, task #175: MSIL reads `s.Area` through an interface-typed variable as
-    /// a field. Asserts today's failure so it goes RED the day MSIL emits the accessor call —
-    /// then delete this pin and assert MSIL in the two tests above.
+    /// ⛔ PINNED KNOWN GAP, task #176 (re-pinned from task #175, now fixed — see the comment
+    /// above): a BARE property write inside a class's own method is emitted against the FIRST
+    /// class the module declares, not the class the method belongs to. `Counter.Probe()` does
+    /// `V = 2`, unqualified, and MSIL targets `Animal` (declared before `Counter`) instead of
+    /// `Counter` itself — a `MissingFieldException` naming the wrong class's field, at run time.
+    /// No interface is involved. Asserts today's failure so it goes RED the day MSIL fixes the
+    /// bare-write target — then delete this pin and assert MSIL in the two tests above.
+    ///
+    /// <para>⚠ Checked on <c>MsilRun.Output</c> (the raw process text), not on the message of an
+    /// exception caught around <see cref="Msil.MsilHarness.RunExpectingSuccess"/>: this Program
+    /// prints eight lines before the crash, so <c>MsilRun.Detail</c> — the harness's "first line
+    /// of output" summary, meant for a program that fails before printing anything — is just
+    /// "Woof", and a report built from it never shows the exception at all.</para>
     /// </summary>
     [Test]
-    public void Msil_InterfacePropertyRead_IsAFieldLoad_PinnedForTask175()
+    public void Msil_BarePropertyWriteInALaterClass_TargetsAnEarlierClass_PinnedForTask176()
     {
-        // Skip, not fail, where ilasm is absent — outside the Catch below, which would otherwise
-        // swallow the harness's own Assert.Ignore.
+        // Skip, not fail, where ilasm is absent.
         Msil.MsilHarness.RequireIlasm();
-        var ex = Assert.Catch(() => Msil.MsilHarness.RunExpectingSuccess(Program));
-        Assert.That(ex?.Message, Does.Contain("MissingFieldException").And.Contain("IShape.Area"),
-            "task #175 — if MSIL now runs this program, the interface-property gap is fixed: delete "
-            + "this pin and add MSIL back to both pipelines above.");
+        var run = Msil.MsilHarness.Run(Program);
+        Assert.That(run.Outcome, Is.EqualTo(Msil.MsilHarness.MsilOutcome.RunFailed), run.Output);
+        Assert.That(run.Output, Does.Contain("MissingFieldException").And.Contain("Animal.V"),
+            "task #176 — if MSIL no longer targets the wrong class here, the bare-write gap is "
+            + "fixed: delete this pin and add MSIL back to both pipelines above.");
     }
 }

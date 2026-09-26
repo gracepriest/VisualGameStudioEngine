@@ -3860,9 +3860,10 @@ single new failure against the 170-name baseline.
   ⚠ **TWO MUTANTS SURVIVE AND THE CODE IS KEPT, because they are UNREACHABLE, not untested.**
   A `Delegate` returning a class: the FRONT END does not implement user Delegate types
   (`AddressOf` yields 'Func', not the declared type; calling it types as 'Void'), so no legal
-  program reaches `GenerateDelegate`. An interface PROPERTY: broken on BOTH .NET backends
-  independently — C# emits an accessor-less property (**CS0548**) and MSIL lowers the access to a
-  FIELD load (**MissingFieldException**), both newly characterized here and a different family.
+  program reaches `GenerateDelegate`. An interface PROPERTY: at the time, broken on BOTH .NET
+  backends independently — C# emitted an accessor-less property (**CS0548**) and MSIL lowered the
+  access to a FIELD load (**MissingFieldException**), both newly characterized here and a
+  different family. **Both since fixed** — C# by the ADR-0002 flag fix, MSIL by task #175 (below).
   Both lines are correct and identical to their eight proven siblings; reverting one to the
   spelling known to be wrong, to buy a mutation score, would re-introduce the bug the day either
   feature starts working.
@@ -4327,14 +4328,14 @@ single new failure against the 170-name baseline.
   `s.Chars`, `s.Empty`, `s.ToUpper` (no parentheses) and `s.Trim` (no parentheses) all gave
   `MissingFieldException` at RUN time; they now give a named `GenerateFailed`. ⚠ A
   parenthesis-free String METHOD name reaches this arm too, so the refusal fires for it.
-  ⛔ **THE INTERFACE-PROPERTY READ IS STILL BROKEN and was deliberately NOT widened to.**
-  `h.Slot` on an `IHolder` still gives `MissingFieldException: Field not found: 'IHolder.Slot'`:
-  `TryResolveProperty` (`MSILBackend.cs:3104`) resolves only through `TryFindClass`, so an
-  interface receiver misses every arm. **It needs an interface-property resolver alongside the
-  existing `DeclaredInterfaceMethod` — a different lookup, not a table row**, which is why the
-  String fix does not reach it. ⚠ **C# cannot be its oracle either**: it emits an accessor-less
-  interface property and does not compile (**CS0548** + CS0200). JavaScript answers `5`. On the
-  open list.
+  ⛔ **THE INTERFACE-PROPERTY READ WAS BROKEN here and was deliberately NOT widened to — FIXED
+  2026-09-26 by task #175.** `h.Slot` on an `IHolder` used to give `MissingFieldException: Field
+  not found: 'IHolder.Slot'`: `TryResolveProperty` (`MSILBackend.cs:3104`) resolved only through
+  `TryFindClass`, so an interface receiver missed every arm. #175 added the interface-property
+  resolver this paragraph called for (`TryResolveInterfaceProperty`, alongside the existing
+  `DeclaredInterfaceMethod`) — a different lookup, not a table row, which is why the String fix
+  did not reach it. MSIL now calls `IHolder`'s own `get_Slot`/`set_Slot`. See the #175 entry
+  further down for the contract, the mutants, and the two follow-ups it opened (#176, #177).
   **9 of 10 mutants killed against the committed fixture; 1 survivor, declared EQUIVALENT.**
   `s7-unknown-member-falls-through` survived the scratch sweep and dies against the committed
   fixture on all five refusal shapes — it was UNTESTED, not dead. ⚠ **`s8-call-not-callvirt`
@@ -4354,9 +4355,9 @@ single new failure against the 170-name baseline.
     `Right("abcdef", Len(Ab()) + 1)` printed `[f]` instead of `[def]`. Now
     `({str})[^({length})..]`; pinned in `CSharpRightReceiverTests`. ⚠ A folded receiver
     (`Right("ab" & "cdef", 2)`) cannot see any of this — the optimizer collapses it to a literal.
-  - ⛔ **C# backend: an interface property emits an accessor-less property** —
+  - ~~⛔ **C# backend: an interface property emits an accessor-less property**~~ — FIXED by the
+    ADR-0002 flag fix; C# has compiled and run a bare interface property since. Was
     `CS0548: 'IHolder.Slot': property or indexer must have at least one accessor`, plus CS0200.
-    The program does not compile, so C# is not a valid oracle for any interface-property shape.
   - **C# backend: `Dim s As String` with no initializer then `s.Length` prints `0`** — the local
     is initialised to `""`. MSIL gives `NullReferenceException`; every other backend agrees with
     MSIL that the local is null.
@@ -4376,8 +4377,8 @@ single new failure against the 170-name baseline.
     emit, so it was not done from a backend.
   - ⚠ **`BasicLang/StdLib/MSILStdLib.cs` is dead code** registered in `StdLibRegistry.cs:36`
     and referenced by nothing, with a wrong `EmitMid`. Delete or wire.
-  - **MSIL: an INTERFACE property read is still `MissingFieldException`**, needing an
-    interface-property resolver rather than a table row (above).
+  - ~~**MSIL: an INTERFACE property read is still `MissingFieldException`**~~ — FIXED
+    2026-09-26, task #175: the interface-property resolver this line called for. See that entry.
   **Full suite in place for BOTH families: 195 / 6374 / 203 / 6772 against the `2608272`
   baseline 195 / 6299 / 203 / 6697** — +75 passed, +75 total, +0 failed, +0 skipped, which is
   exactly the two new fixtures (54 + 21) and nothing else. 195 reported = 195 anchored
@@ -4657,6 +4658,45 @@ single new failure against the 170-name baseline.
   also a second run-time judge of #122's capture set now: `LambdaCaptureSetExecutionTests` has
   MSIL legs for K1/K8/K11/K12/N1 (N8m/N8n are `javascript{ }` inline code, JS-only), and
   `CseDestinationKnownGapsTask133Tests.A1_…_Msil_…` asserts `3,0`.
+  ⭐ **MSIL NOW CALLS A PROPERTY'S OWN ACCESSORS THROUGH AN INTERFACE-TYPED RECEIVER, as of
+  2026-09-26 (task #175).** `s.Area` with `s As IShape` used to lower to `ldfld 'IShape'::'Area'`
+  — storage an interface cannot have — which assembled (ilasm does not resolve member references)
+  and died at RUN time with `MissingFieldException`, on both pipelines, at every entry point; see
+  the two corrections above (the String-property and mutation-testing entries both called this
+  gap out and are now stale). `TryResolveInterfaceProperty` is the interface sibling of
+  `TryResolveProperty`: it walks `_module.Interfaces` (base interfaces included, visited set),
+  names the DECLARING interface, and `Visit(IRFieldAccess)`/`Visit(IRFieldStore)` now emit
+  `callvirt get_X`/`set_X` on it — spelled exactly as `GenerateInterface` already declared them —
+  through the SAME `EmitAccessorGet`/`EmitAccessorSet` the class-property arm uses, so class output
+  is unchanged. It boxes across a value/reference gap, and refuses (`ForeignFeatureException`,
+  naming the member) a read of a WriteOnly or a write to a ReadOnly interface property, and a
+  receiver carrying type arguments against a non-generic interface. Measured over the probe suite
+  (I1-I6, both pipelines, all three entry points — CLI, CLI `-O`, Release `.blproj`): 15 of 18
+  cells fixed; the other 3 (I5) hit a separate box gap, #177 below. Byte-compare over 2340 cells:
+  every `.cs`/`.js`/`.cpp` file identical; the only `.il` files that differ are the 30 programs
+  that access a property through an interface. Tests: `VisualGameStudio.Tests/Msil/
+  MsilInterfacePropertyTests.cs` (contract + IL-shape, `[Category("Integration")]`) and
+  `MsilInterfacePropertyCompileTests` (the three refusals, fast subset).
+  ⛔ **Two follow-ups this fix exposed, NOT fixed here, both pre-existing and unrelated to
+  interfaces:**
+  - **#176 — a BARE property write inside a class's own method targets the FIRST class the
+    module declares, not the enclosing class.** `Counter.Probe()` doing `V = 2` (unqualified)
+    emits the write against `Animal` (declared earlier in the same file) instead of `Counter`:
+    `MissingFieldException: Field not found: 'Animal.V'`, at run time. Repro:
+    `S/t175/pin/V6.bas`; fails identically on the pre-#175 compiler, so #175 did not cause it —
+    it was hidden behind the interface gap. Pinned:
+    `PropertyAccessorTests.PropertyAccessorExecutionTests.
+    Msil_BarePropertyWriteInALaterClass_TargetsAnEarlierClass_PinnedForTask176`.
+  - **#177 — MSIL never boxes a value type stored into an `Object` slot** — assignment, an
+    argument, a return, and a class property write all reach it; no interface is involved. `Dim o
+    As Object = <Double>` throws `NullReferenceException` where every other backend prints the
+    value. Repro: `S/t175/edge/B1.bas`.
+  - **#178 — the front end accepts a write to a ReadOnly property or a read of a WriteOnly one**,
+    interface- or class-typed alike (measured on both). Nothing in `SemanticAnalyzer` refuses it,
+    so it reaches every backend; C# only fails once `csc` sees the generated accessor-less
+    assignment (CS0200) or read (CS0154), and on MSIL the interface-property fix above is what
+    stands between such a program and a call to an accessor the interface never declared. The
+    front-end refusal these two constructs are supposed to get has never been implemented.
 - **VS Code extension host** — roughly 24 unimplemented requests, enumerated and enforced by
   `ExtensionHostRequestCoverageTests.KnownUnimplemented` (a second test fails once an entry is
   implemented, so the list must shrink). A missing `sendNotification` handler is a silent

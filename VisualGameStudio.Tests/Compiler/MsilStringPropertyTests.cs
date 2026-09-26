@@ -27,15 +27,16 @@ namespace VisualGameStudio.Tests.Compiler;
 /// rather than falling through to an <c>ldfld</c> that cannot be right whatever it names. See the
 /// "AN UNRECORDED MEMBER IS REFUSED" section.</para>
 ///
-/// <para>⚠ <b>Not fixed, not widened to: the interface-property read.</b> <c>h.Slot</c> through an
-/// <c>IHolder</c> reference still gives <c>MissingFieldException: 'IHolder.Slot'</c> —
-/// <c>TryResolveProperty</c> resolves through <c>TryFindClass</c> only, so an interface receiver
-/// misses every arm (the String one included) and still falls to the old <c>ldfld</c>. The C#
-/// backend cannot be the oracle for this shape either: it emits an accessor-less interface
-/// property and does not compile (CS0548 + CS0200). JavaScript answers 5. <b>This is recorded as
-/// a known, pre-existing gap and deliberately has NO test here</b> — pinning MSIL's current
-/// <c>MissingFieldException</c> would assert a defect as correct behaviour, and there is no
-/// backend that computes the right answer to assert it against instead.</para>
+/// <para>⚠ <b>FIXED by task #175, not widened here: the interface-property read.</b> <c>h.Slot</c>
+/// through an <c>IHolder</c> reference used to give <c>MissingFieldException: 'IHolder.Slot'</c> —
+/// <c>TryResolveProperty</c> resolved through <c>TryFindClass</c> only, so an interface receiver
+/// missed every arm (the String one included) and fell to the old <c>ldfld</c>. MSIL now resolves
+/// it through <c>TryResolveInterfaceProperty</c> and calls <c>IHolder</c>'s own <c>get_Slot</c>
+/// instead — see <see cref="MsilInterfacePropertyTests"/>, not this file: it is a different
+/// receiver-resolution arm from the String-member table this fixture covers, so it stays there
+/// rather than growing a shape here. (The C# claim this paragraph used to make — an accessor-less
+/// interface property, CS0548 — was already stale before #175: C# has compiled and run a bare
+/// interface property since the ADR-0002 flag fix; see <see cref="InterfaceAccessorBatchTests"/>.)</para>
 ///
 /// <para>⚠ <b><c>HashSet.Count</c> is unobservable, unrelated to this family.</b> <c>h.Add(1)</c>
 /// is refused first, by <c>TryCollectionMember</c> — a pre-existing gap this fix neither causes
