@@ -3776,13 +3776,28 @@ namespace BasicLang.Compiler.CodeGen.MSIL
         /// <c>ex.Message</c> and collection-<c>Count</c> arms above are the same fix for the BCL's
         /// properties.</para>
         /// </summary>
-        private void EmitPropertyGet(IRClass owner, IRProperty prop)
-        {
-            var propType = IlTypeSpec(prop.Type);
-            var token = SanitizeName(owner.Name);
-            var getter = $"get_{RawName(prop.Name)}";
+        private void EmitPropertyGet(IRClass owner, IRProperty prop) =>
+            EmitAccessorGet(SanitizeName(owner.Name), IlTypeSpec(prop.Type), RawName(prop.Name), prop.IsStatic);
 
-            if (prop.IsStatic)
+        /// <summary>
+        /// A property WRITE as its accessor call. The receiver (for an instance property) and then
+        /// the value are already on the stack, which is the order <c>callvirt</c> wants.
+        /// </summary>
+        private void EmitPropertySet(IRClass owner, IRProperty prop) =>
+            EmitAccessorSet(SanitizeName(owner.Name), IlTypeSpec(prop.Type), RawName(prop.Name), prop.IsStatic);
+
+        /// <summary>
+        /// The getter call itself, shared by the class and interface property arms so the two
+        /// cannot spell an accessor or count the stack differently. <paramref name="token"/> and
+        /// <paramref name="propType"/> must be spelled exactly as the DECLARATION spells them —
+        /// ilasm does not check a member reference against it, so a mismatch assembles and then
+        /// fails with MissingMethodException.
+        /// </summary>
+        private void EmitAccessorGet(string token, string propType, string rawName, bool isStatic)
+        {
+            var getter = $"get_{rawName}";
+
+            if (isStatic)
             {
                 WriteLine($"    call {propType} {token}::{getter}()");
                 _currentStack++;
@@ -3794,17 +3809,12 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             _currentStack++;   // the value
         }
 
-        /// <summary>
-        /// A property WRITE as its accessor call. The receiver (for an instance property) and then
-        /// the value are already on the stack, which is the order <c>callvirt</c> wants.
-        /// </summary>
-        private void EmitPropertySet(IRClass owner, IRProperty prop)
+        /// <summary>The setter half of <see cref="EmitAccessorGet"/>.</summary>
+        private void EmitAccessorSet(string token, string propType, string rawName, bool isStatic)
         {
-            var propType = IlTypeSpec(prop.Type);
-            var token = SanitizeName(owner.Name);
-            var setter = $"set_{RawName(prop.Name)}";
+            var setter = $"set_{rawName}";
 
-            if (prop.IsStatic)
+            if (isStatic)
             {
                 WriteLine($"    call void {token}::{setter}({propType})");
                 _currentStack--;
@@ -3813,6 +3823,109 @@ namespace BasicLang.Compiler.CodeGen.MSIL
 
             WriteLine($"    callvirt instance void {token}::{setter}({propType})");
             _currentStack -= 2;
+        }
+
+        /// <summary>
+        /// The property a member access names through an INTERFACE-typed receiver
+        /// (<c>s.Area</c> where <c>s As IShape</c>), and the interface that DECLARES it.
+        ///
+        /// <para>⛔ The interface sibling of <see cref="TryResolveProperty"/>, which looks in
+        /// <c>_module.Classes</c> only. An interface is not a class, so every property read or
+        /// write through one fell through to the plain <c>ldfld</c>/<c>stfld</c> arm and named
+        /// <c>'IShape'::'Area'</c> — storage an interface cannot have. ilasm does not resolve
+        /// member references, so that assembled and died at RUN time with
+        /// <c>MissingFieldException: Field not found: 'IShape.Area'</c>. The accessors the call
+        /// needs were already there: <see cref="GenerateInterface"/> declares them.</para>
+        ///
+        /// <para>⚠ The base interfaces are walked with a visited set, as
+        /// <see cref="DeclaredInterfaceMethod"/> walks them, and the token names the interface
+        /// that DECLARES the property — the only one whose <c>get_X</c> exists. The front end
+        /// refuses <c>Inherits</c> inside an Interface today, so that walk goes no further than
+        /// the receiver's own interface for now.</para>
+        /// </summary>
+        private bool TryResolveInterfaceProperty(
+            IRValue receiver, string memberName, out IRInterface declaring, out IRInterfaceProperty prop)
+        {
+            declaring = null;
+            prop = null;
+            var typeName = receiver?.Type?.Name;
+            if (string.IsNullOrEmpty(typeName) || string.IsNullOrEmpty(memberName)
+                || _module?.Interfaces == null) return false;
+
+            var pending = new Queue<string>();
+            pending.Enqueue(typeName);
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            while (pending.Count > 0)
+            {
+                var name = pending.Dequeue();
+                if (string.IsNullOrEmpty(name) || !seen.Add(name)) continue;
+                if (!_module.Interfaces.TryGetValue(name, out var iface) || iface == null) continue;
+
+                var found = iface.Properties?.FirstOrDefault(p => p?.Name != null
+                    && string.Equals(p.Name, memberName, StringComparison.OrdinalIgnoreCase));
+                if (found != null)
+                {
+                    declaring = iface;
+                    prop = found;
+                    break;
+                }
+
+                foreach (var b in iface.BaseInterfaces ?? new List<string>()) pending.Enqueue(b);
+            }
+
+            if (prop == null) return false;
+
+            // ⛔ The token below is NON-generic, and a user interface cannot declare type
+            // parameters (the parser refuses `Interface IBox(Of T)`). But the front end does let
+            // `s As IShape(Of Integer)` name a NON-generic interface, and emitting 'IShape' for
+            // that would quietly bind to a type the program did not write.
+            if (receiver.Type.GenericArguments is { Count: > 0 })
+            {
+                throw new ForeignFeatureException(
+                    $"MSIL: property '{memberName}' is reached through '{typeName}' with type arguments, "
+                    + $"but interface '{declaring.Name}' is not generic. A generic interface property "
+                    + "cannot be lowered to an accessor call on this backend.");
+            }
+
+            return true;
+        }
+
+        /// <summary>
+        /// An interface property READ: the receiver is on the stack; this calls the interface's
+        /// getter and boxes the value if the slot it lands in is a reference slot.
+        /// </summary>
+        private void EmitInterfacePropertyGet(IRInterface iface, IRInterfaceProperty prop, string slotSpec)
+        {
+            if (!prop.HasGetter)
+            {
+                throw new ForeignFeatureException(
+                    $"MSIL: '{iface.Name}.{prop.Name}' is WriteOnly and is being read. The interface "
+                    + "declares no getter to call.");
+            }
+
+            // ⛔ Spelled from the INTERFACE declaration, as GenerateInterface spells it — never from
+            // the IR slot, which a caller may have typed differently (Object).
+            var propType = IlTypeSpec(prop.Type);
+            EmitAccessorGet(SanitizeName(iface.Name), propType, RawName(prop.Name), isStatic: false);
+            if (NeedsBoxingInto(slotSpec, propType, out var boxToken)) WriteLine($"    box {boxToken}");
+        }
+
+        /// <summary>
+        /// An interface property WRITE: the receiver and then the value are on the stack; this
+        /// boxes the value if the property is a reference slot and calls the interface's setter.
+        /// </summary>
+        private void EmitInterfacePropertySet(IRInterface iface, IRInterfaceProperty prop, string valueSpec)
+        {
+            if (!prop.HasSetter)
+            {
+                throw new ForeignFeatureException(
+                    $"MSIL: '{iface.Name}.{prop.Name}' is ReadOnly and is being assigned. The interface "
+                    + "declares no setter to call.");
+            }
+
+            var propType = IlTypeSpec(prop.Type);
+            if (NeedsBoxingInto(propType, valueSpec, out var boxToken)) WriteLine($"    box {boxToken}");
+            EmitAccessorSet(SanitizeName(iface.Name), propType, RawName(prop.Name), isStatic: false);
         }
 
         /// <summary>True when this name already denotes storage the current method can load.</summary>
@@ -6575,6 +6688,18 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 return;
             }
 
+            // ⛔ The same property reached through an INTERFACE-typed receiver (`s.Area`, `s As
+            // IShape`) — see TryResolveInterfaceProperty. An interface property is never Shared,
+            // so the receiver is always a value and is always loaded.
+            if (TryResolveInterfaceProperty(fieldAccess.Object, fieldAccess.FieldName,
+                    out var readIface, out var readIfaceProp))
+            {
+                EmitLoadValue(fieldAccess.Object);
+                EmitInterfacePropertyGet(readIface, readIfaceProp, IlTypeSpec(fieldAccess.Type));
+                EmitFieldAccessResult(fieldAccess);
+                return;
+            }
+
             // Load object reference
             EmitLoadValue(fieldAccess.Object);
 
@@ -6713,6 +6838,16 @@ namespace BasicLang.Compiler.CodeGen.MSIL
 
                 EmitLoadValue(fieldStore.Value);
                 EmitPropertySet(storePropOwner, storeProp);
+                return;
+            }
+
+            // The write half of the interface property case.
+            if (TryResolveInterfaceProperty(fieldStore.Object, fieldStore.FieldName,
+                    out var storeIface, out var storeIfaceProp))
+            {
+                EmitLoadValue(fieldStore.Object);
+                EmitLoadValue(fieldStore.Value);
+                EmitInterfacePropertySet(storeIface, storeIfaceProp, IlTypeSpec(fieldStore.Value?.Type));
                 return;
             }
 
