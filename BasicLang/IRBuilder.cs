@@ -4147,6 +4147,53 @@ namespace BasicLang.Compiler.IR
         /// has not been taught, where skipping ahead would silently misalign the argument
         /// list.</para>
         /// </summary>
+        /// <summary>
+        /// Packs the arguments a call passes to a trailing <c>ParamArray</c> into ONE array
+        /// argument, so every backend receives the shape the callee declares.
+        ///
+        /// <para>⛔ Only C# worked, and only because C# has <c>params</c> of its own and csc packed
+        /// the loose arguments. <c>Sum(1, 2, 3)</c> against <c>ParamArray v() As Integer</c> was
+        /// "could not convert '1' from 'int' to 'std::vector&lt;int&gt;'" on C++, and printed
+        /// <c>undefined</c> on JavaScript — the callee iterated its FIRST argument, the number 1.
+        /// Packing here, where the analyzer's resolved callee is known, moves every backend at once;
+        /// the emitted C# passes the array explicitly, which <c>params</c> accepts.</para>
+        ///
+        /// <para>An array passed alone in the ParamArray's slot IS the ParamArray (<c>Sum(arr)</c>)
+        /// and is left as it is — the same rule the analyzer's argument check applies.</para>
+        /// </summary>
+        private void PackParamArrayArguments(
+            List<IRValue> arguments, List<bool> byRefFlags, Symbol callee, IList<ExpressionNode> written)
+        {
+            var parameters = callee?.Parameters;
+            if (parameters == null || parameters.Count == 0 || !parameters[^1].IsParamArray) return;
+
+            var slot = parameters.Count - 1;
+            if (arguments.Count < slot) return;   // too few for the fixed parameters: the analyzer reported it
+
+            if (arguments.Count == parameters.Count && written != null && written.Count == parameters.Count
+                && _semanticAnalyzer.GetNodeType(written[slot])?.Kind == TypeKind.Array)
+                return;
+
+            var elementType = parameters[slot].Type?.ElementType
+                              ?? new TypeInfo("Object", TypeKind.Class);
+            var packed = arguments.Skip(slot).ToList();
+
+            var array = new IRArrayAlloc(_currentFunction.GetNextTempName(), elementType, packed.Count);
+            EmitInstruction(array);
+            for (var i = 0; i < packed.Count; i++)
+                EmitInstruction(new IRArrayStore(array,
+                    new IRConstant(i, new TypeInfo("Integer", TypeKind.Primitive)),
+                    CoerceToDeclaredType(packed[i], elementType)));
+
+            arguments.RemoveRange(slot, arguments.Count - slot);
+            arguments.Add(array);
+            if (byRefFlags != null)
+            {
+                if (byRefFlags.Count > slot) byRefFlags.RemoveRange(slot, byRefFlags.Count - slot);
+                byRefFlags.Add(false);
+            }
+        }
+
         private void AppendOmittedOptionalArguments(
             List<IRValue> arguments, List<bool> byRefFlags, Symbol callee)
         {
@@ -5487,6 +5534,7 @@ namespace BasicLang.Compiler.IR
                     // arguments keep exactly what they had before this existed.
                     if (call.ResolvedNetTarget == null)
                     {
+                        PackParamArrayArguments(call.Arguments, call.ByRefArguments, staticCalleeSymbol, node.Arguments);
                         AppendOmittedOptionalArguments(
                             call.Arguments, call.ByRefArguments, staticCalleeSymbol);
                     }
@@ -5534,6 +5582,9 @@ namespace BasicLang.Compiler.IR
                             && methodParams[methodCall.Arguments.Count - 1].IsByRef);
                     }
 
+                    // A .NET method's `params` is csc's to pack; only a user callee is packed here.
+                    if (methodCall.ResolvedNetTarget == null)
+                        PackParamArrayArguments(methodCall.Arguments, methodCall.ByRefArguments, methodSymbol, node.Arguments);
                     AppendOmittedOptionalArguments(
                         methodCall.Arguments, methodCall.ByRefArguments, methodSymbol);
 
@@ -5672,6 +5723,7 @@ namespace BasicLang.Compiler.IR
                 call.ByRefArguments.Add(isByRef);
             }
 
+            PackParamArrayArguments(call.Arguments, call.ByRefArguments, funcSymbol, node.Arguments);
             AppendOmittedOptionalArguments(call.Arguments, call.ByRefArguments, funcSymbol);
 
             EmitInstruction(call);
@@ -5772,6 +5824,8 @@ namespace BasicLang.Compiler.IR
                     _expressionResult, ctorSymbol, newObj.Arguments.Count));
             }
 
+            if (newObj.ResolvedNetTarget == null)
+                PackParamArrayArguments(newObj.Arguments, null, ctorSymbol, node.Arguments);
             AppendOmittedOptionalArguments(newObj.Arguments, null, ctorSymbol);
 
             EmitInstruction(newObj);
