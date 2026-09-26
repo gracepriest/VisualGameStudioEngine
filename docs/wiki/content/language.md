@@ -264,6 +264,26 @@ ReDim scores(n)                      ' older-BASIC form: n + 1 elements
 
 `ReDim` resizes a one-dimensional array, one array per statement, and keeps its element type.
 
+Where there is no name to carry the brackets, such as a return type, a generic argument or a
+cast, put them on the type. Leave them empty, because a type names no size. Commas give
+the rank. The suffix belongs on the name or on the type, never both, because jagged arrays are
+not supported:
+
+```vb
+Function Squares(n As Integer) As Integer[]      ' or As Integer()
+    Dim r[] As Integer
+    ReDim r[n]
+    For i As Integer = 0 To n - 1
+        r(i) = i * i
+    Next
+    Return r
+End Function
+
+Sub Show(values As Integer[])                    ' same as values[] As Integer, or values() As Integer
+Dim rows As New List(Of String[])()
+Dim grid As Integer[,]                           ' rank 2, unsized
+```
+
 ```vb
 Dim primes = {2, 3, 5, 7, 11}        ' initialised
 Dim none[] As Integer = {}           ' empty: {} takes the type it is stored in
