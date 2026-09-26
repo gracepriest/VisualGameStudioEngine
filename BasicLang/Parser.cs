@@ -352,7 +352,10 @@ namespace BasicLang.Compiler
                 {
                     node.Members.Add(member);
                 }
-                SkipNewlines();
+                // Same rule as a statement in a block: `Dim G As Integer = 5 E3` must not read
+                // E3 as the start of a second declaration.
+                ExpectEndOfStatement(TokenType.EndModule);
+                SkipStatementSeparators();
             }
 
             node.EndLine = Consume(TokenType.EndModule, "Expected 'End Module'").Line;
@@ -2455,6 +2458,16 @@ namespace BasicLang.Compiler
                 return dimensions;
             }
 
+            // The two spellings mean different things, and this is the one place both pass:
+            //  - `Dim a[n]` (BasicLang's preferred form) declares n ELEMENTS, C-style.
+            //  - `Dim a(n)` (kept so older BASIC programs run) declares UPPER BOUND n, as VB does:
+            //    n + 1 elements, indices 0..n.
+            // Everything downstream reads a dimension as an element COUNT, so the paren form is
+            // turned into one here. Both spellings used to mean n elements, contradicting
+            // language.md's `Dim nums(9) As Integer ' 10 elements`: C# threw
+            // IndexOutOfRangeException on `a(9) = x` and C++ wrote past the end.
+            var upperBounds = closeToken == TokenType.RightParen;
+
             do
             {
                 // An empty slot inside the list keeps that dimension unspecified while still
@@ -2462,11 +2475,98 @@ namespace BasicLang.Compiler
                 if (Check(TokenType.Comma) || Check(closeToken))
                     dimensions.Add(null);
                 else
-                    dimensions.Add(ParseExpression());
+                {
+                    var dimension = ParseExpression();
+                    dimensions.Add(upperBounds ? UpperBoundToCount(dimension) : dimension);
+                }
             } while (Match(TokenType.Comma));
 
             Consume(closeToken, $"Expected '{closeStr}'");
             return dimensions;
+        }
+
+        /// <summary>
+        /// <c>ReDim [Preserve] name(upperBound) [As Type]</c> or <c>ReDim [Preserve] name[count]</c>,
+        /// lowered to the assignment <c>name = &lt;resize&gt;</c> so later passes see an ordinary
+        /// write. The size follows the Dim rule: parentheses are an upper bound, brackets a
+        /// count, and it may be computed at run time (that is what ReDim is for).
+        /// </summary>
+        private StatementNode ParseReDimStatement()
+        {
+            var reDim = Advance(); // ReDim
+
+            var preserve = false;
+            if (Check(TokenType.Identifier) && Peek().Lexeme.Equals("Preserve", StringComparison.OrdinalIgnoreCase)
+                && PeekNext().Type == TokenType.Identifier)
+            {
+                Advance();
+                preserve = true;
+            }
+
+            var nameToken = Consume(TokenType.Identifier, "Expected the array to resize after 'ReDim'");
+            ExpressionNode Name() => new IdentifierExpressionNode(nameToken.Line, nameToken.Column) { Name = nameToken.Lexeme };
+
+            List<ExpressionNode> sizes;
+            if (Match(TokenType.LeftParen))
+                sizes = ParseArrayDimensionList(TokenType.RightParen, ")");
+            else if (Match(TokenType.LeftBracket))
+                sizes = ParseArrayDimensionList(TokenType.RightBracket, "]");
+            else
+                throw new ParseException($"Expected '(' or '[' with the new size after 'ReDim {nameToken.Lexeme}'", Peek(),
+                    "Write ReDim a[count] (or ReDim a(upperBound), as older BASICs do).");
+
+            if (sizes.Count != 1 || sizes[0] == null)
+                throw new ParseException(
+                    sizes.Count != 1
+                        ? "ReDim resizes a one-dimensional array; give exactly one size"
+                        : "ReDim needs a size", nameToken, null);
+
+            TypeReference elementType = null;
+            if (Match(TokenType.As))
+                elementType = ParseTypeReference();
+
+            if (Check(TokenType.Comma))
+                throw new ParseException("ReDim resizes one array per statement; put each on its own line", Peek(), null);
+
+            return new AssignmentStatementNode(reDim.Line, reDim.Column)
+            {
+                Target = Name(),
+                Operator = "=",
+                Value = new ArrayResizeExpressionNode(reDim.Line, reDim.Column)
+                {
+                    Array = Name(),
+                    Size = sizes[0],
+                    Preserve = preserve,
+                    ElementType = elementType,
+                },
+            };
+        }
+
+        /// <summary>
+        /// An upper bound as an element count: a literal is folded (<c>(9)</c> is 10), so every
+        /// consumer that wants a constant size still gets one; anything else becomes
+        /// <c>bound + 1</c>.
+        /// </summary>
+        private static ExpressionNode UpperBoundToCount(ExpressionNode bound)
+        {
+            if (bound is LiteralExpressionNode { LiteralType: TokenType.IntegerLiteral } literal
+                && literal.Value is int n && n < int.MaxValue)
+            {
+                return new LiteralExpressionNode(literal.Line, literal.Column)
+                {
+                    Value = n + 1,
+                    LiteralType = TokenType.IntegerLiteral,
+                    Text = (n + 1).ToString(System.Globalization.CultureInfo.InvariantCulture),
+                };
+            }
+
+            var one = new LiteralExpressionNode(bound.Line, bound.Column)
+            {
+                Value = 1,
+                LiteralType = TokenType.IntegerLiteral,
+                Text = "1",
+            };
+            return new BinaryExpressionNode(bound.Line, bound.Column) { Left = bound, Operator = "+", Right = one };
         }
 
         /// <summary>
@@ -2920,7 +3020,7 @@ namespace BasicLang.Compiler
 
             while (!Check(endToken) && !IsAtEnd())
             {
-                SkipNewlines();
+                SkipStatementSeparators();
 
                 if (Check(endToken) || IsAtEnd())
                     break;
@@ -2946,7 +3046,7 @@ namespace BasicLang.Compiler
                         break;
                 }
 
-                SkipNewlines();
+                SkipStatementSeparators();
             }
 
             return block;
@@ -2982,6 +3082,16 @@ namespace BasicLang.Compiler
                 return ParseAutoDeclaration();
             if (Check(TokenType.Const))
                 return ParseConstantDeclaration();
+            // ReDim is CONTEXTUAL (an identifier token), like Preserve after it, so a program
+            // that already names something ReDim keeps compiling: it is ReDim only when an
+            // identifier follows. ⛔ It used to fall through to the expression-statement path,
+            // so `ReDim a(n)` compiled "successfully" to a call to a nonexistent function
+            // `ReDim(a[n])`, and `ReDim Preserve a(6)` to `ReDim(Preserve)`, silently dropping
+            // the array and its size.
+            if (Check(TokenType.Identifier)
+                && Peek().Lexeme.Equals("ReDim", StringComparison.OrdinalIgnoreCase)
+                && PeekNext().Type == TokenType.Identifier)
+                return ParseReDimStatement();
             if (Check(TokenType.Yield))
                 return ParseYieldStatement();
             if (Check(TokenType.RaiseEvent))
@@ -3138,10 +3248,14 @@ namespace BasicLang.Compiler
                 }
                 else
                 {
-                    // Single-line if: If condition Then statement
-                    var statement = ParseStatement();
-                    node.ThenBlock = new BlockNode(token.Line, token.Column);
-                    node.ThenBlock.Statements.Add(statement);
+                    // Single-line if, as in VB: `If c Then s1 : s2 Else s3 : s4`. Everything up to
+                    // the end of the line belongs to the If — a `:`-joined statement is part of the
+                    // Then (or Else) list, not a statement after the If. ⛔ This took ONE statement
+                    // and returned, so the enclosing block met `Else` (or `:`) where a statement
+                    // should start: `If x > 3 Then A() Else B()` failed to parse at all.
+                    node.ThenBlock = ParseSingleLineIfList(token);
+                    if (Match(TokenType.Else))
+                        node.ElseBlock = ParseSingleLineIfList(token);
                 }
             }
             else
@@ -3152,13 +3266,39 @@ namespace BasicLang.Compiler
 
             return node;
         }
+        /// <summary>
+        /// The statement list of a single-line If's Then or Else part: statements joined by
+        /// <c>:</c>, ending at the end of the line or at the single-line <c>Else</c>. An empty
+        /// list is legal (<c>If c Then Else x</c>). A nested single-line If consumes the rest of
+        /// the line, its own Else included — VB binds an Else to the nearest If.
+        /// </summary>
+        private BlockNode ParseSingleLineIfList(Token ifToken)
+        {
+            var block = new BlockNode(ifToken.Line, ifToken.Column);
+            while (!IsAtEnd() && !Check(TokenType.Newline) && !Check(TokenType.Else))
+            {
+                if (Match(TokenType.Colon))
+                    continue;
+
+                var statement = ParseStatement();
+                if (statement != null)
+                    block.Statements.Add(statement);
+
+                // Only a `:` continues the list; anything else ends it, and the enclosing
+                // block's ExpectEndOfStatement reports a stray token.
+                if (!Check(TokenType.Colon))
+                    break;
+            }
+            return block;
+        }
+
         private BlockNode ParseBlock(params TokenType[] endTokens)
         {
             var block = new BlockNode(Peek().Line, Peek().Column);
 
             while (!endTokens.Any(t => Check(t)) && !IsAtEnd())
             {
-                SkipNewlines();
+                SkipStatementSeparators();
 
                 if (endTokens.Any(t => Check(t)) || IsAtEnd())
                     break;
@@ -3182,7 +3322,7 @@ namespace BasicLang.Compiler
                         break;
                 }
 
-                SkipNewlines();
+                SkipStatementSeparators();
             }
 
             return block;
@@ -4287,9 +4427,15 @@ namespace BasicLang.Compiler
                     var arrayAccess = new ArrayAccessExpressionNode(expr.Line, expr.Column);
                     arrayAccess.Array = expr;
 
+                    // A comma list inside the brackets, as the paren form takes: `grid[2, 3]` must
+                    // index what `Dim grid[3, 4]` declared (it failed "Expected ']' but found
+                    // Comma"). Chained `a[i][j]` still adds one index per bracket pair.
                     do
                     {
-                        arrayAccess.Indices.Add(ParseExpression());
+                        do
+                        {
+                            arrayAccess.Indices.Add(ParseExpression());
+                        } while (Match(TokenType.Comma));
                         Consume(TokenType.RightBracket, "Expected ']'");
                     } while (Match(TokenType.LeftBracket));
 
@@ -4618,7 +4764,14 @@ namespace BasicLang.Compiler
 
             while (i < content.Length)
             {
-                if (content[i] == '{')
+                // {{ and }} are literal braces (the lexer keeps them doubled for us).
+                if ((content[i] == '{' || content[i] == '}')
+                    && i + 1 < content.Length && content[i + 1] == content[i])
+                {
+                    currentText.Append(content[i]);
+                    i += 2;
+                }
+                else if (content[i] == '{')
                 {
                     // Save any accumulated text
                     if (currentText.Length > 0)
@@ -5156,6 +5309,19 @@ namespace BasicLang.Compiler
                     return "Multiple items should be separated by commas.";
                 default:
                     return null;
+            }
+        }
+
+        /// <summary>
+        /// Between statements: newlines and <c>:</c> separators. <c>:</c> joins statements on one
+        /// line, as in VB — the lexer has always produced it, but no statement loop consumed it,
+        /// so <c>a() : b()</c> failed with "Unexpected token in expression: ':'".
+        /// </summary>
+        private void SkipStatementSeparators()
+        {
+            while ((Check(TokenType.Newline) || Check(TokenType.Colon)) && !IsAtEnd())
+            {
+                Advance();
             }
         }
 

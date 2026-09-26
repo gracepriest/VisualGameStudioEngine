@@ -30,16 +30,16 @@ public class JavaScriptArrayTests
     /// </summary>
     [Test]
     public void Array_ElementsDefaultToZero()
-        => Assert.That(Run("Dim a(4) As Integer\nConsole.WriteLine(a(0))"), Is.EqualTo("0"));
+        => Assert.That(Run("Dim a[4] As Integer\nConsole.WriteLine(a(0))"), Is.EqualTo("0"));
 
     [Test]
     public void Array_StringElementsDefaultToEmpty()
-        => Assert.That(Run("Dim s(2) As String\nConsole.WriteLine(\"[\" & s(0) & \"]\")"),
+        => Assert.That(Run("Dim s[2] As String\nConsole.WriteLine(\"[\" & s(0) & \"]\")"),
             Is.EqualTo("[]"));
 
     [Test]
     public void Array_HasTheDeclaredLength()
-        => Assert.That(Run("Dim a(4) As Integer\nConsole.WriteLine(a.Length)"), Is.EqualTo("4"));
+        => Assert.That(Run("Dim a[4] As Integer\nConsole.WriteLine(a.Length)"), Is.EqualTo("4"));
 
     // ---------------------------------------------------------------- read / write
 
@@ -50,13 +50,13 @@ public class JavaScriptArrayTests
     /// </summary>
     [Test]
     public void Array_WriteThenReadRoundTrips()
-        => Assert.That(Run("Dim a(4) As Integer\na(0) = 42\nConsole.WriteLine(a(0))"),
+        => Assert.That(Run("Dim a[4] As Integer\na(0) = 42\nConsole.WriteLine(a(0))"),
             Is.EqualTo("42"));
 
     [Test]
     public void Array_WriteIsVisibleAtAnotherIndex()
         => Assert.That(Run(
-            "Dim a(4) As Integer\na(0) = 1\na(3) = 9\n" +
+            "Dim a[4] As Integer\na(0) = 1\na(3) = 9\n" +
             "Console.WriteLine(a(0))\nConsole.WriteLine(a(3))"),
             Is.EqualTo("1\n9"));
 
@@ -64,7 +64,7 @@ public class JavaScriptArrayTests
     [Test]
     public void Array_ComputedIndex()
         => Assert.That(Run(
-            "Dim a(4) As Integer\nDim i As Integer\ni = 2\na(i) = 7\nConsole.WriteLine(a(i))"),
+            "Dim a[4] As Integer\nDim i As Integer\ni = 2\na(i) = 7\nConsole.WriteLine(a(i))"),
             Is.EqualTo("7"));
 
     /// <summary>
@@ -74,7 +74,7 @@ public class JavaScriptArrayTests
     [Test]
     public void Array_WrittenInALoop_RetainsEveryElement()
         => Assert.That(Run(
-            "Dim a(4) As Integer\n" +
+            "Dim a[4] As Integer\n" +
             "For i As Integer = 0 To 3\na(i) = i * 10\nNext\n" +
             "Dim total As Integer\ntotal = 0\n" +
             "For j As Integer = 0 To 3\ntotal = total + a(j)\nNext\n" +
@@ -92,7 +92,7 @@ public class JavaScriptArrayTests
     [Test]
     public void MultiDimArray_IndexesIndependently()
         => Assert.That(Run(
-            "Dim g(2,3) As Integer\ng(0,0) = 1\ng(1,2) = 5\n" +
+            "Dim g[2,3] As Integer\ng(0,0) = 1\ng(1,2) = 5\n" +
             "Console.WriteLine(g(0,0))\nConsole.WriteLine(g(1,2))"),
             Is.EqualTo("1\n5"));
 
@@ -103,6 +103,6 @@ public class JavaScriptArrayTests
     [Test]
     public void MultiDimArray_RowsAreNotShared()
         => Assert.That(Run(
-            "Dim g(2,3) As Integer\ng(0,0) = 7\nConsole.WriteLine(g(1,0))"),
+            "Dim g[2,3] As Integer\ng(0,0) = 7\nConsole.WriteLine(g(1,0))"),
             Is.EqualTo("0"));
 }

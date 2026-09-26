@@ -418,7 +418,7 @@ End Sub";
         // AFTER the For Each over the array survive optimization (they used to be dropped).
         var source = @"
 Sub Main()
-    Dim arr() As Integer = {10, 20, 30}
+    Dim arr[] As Integer = {10, 20, 30}
     Dim total As Integer = 0
     For Each v In arr
         total = total + v
@@ -447,7 +447,7 @@ End Sub";
     {
         var source = @"
 Sub Main()
-    Dim arr() As Integer = {10, 20, 30}
+    Dim arr[] As Integer = {10, 20, 30}
 End Sub";
         var output = CompileToCpp(source, out var errors);
         Assert.That(errors, Is.Empty, string.Join("; ", errors));
@@ -462,7 +462,7 @@ End Sub";
     {
         var source = @"
 Sub Main()
-    Dim arr() As Integer = {10, 20, 30}
+    Dim arr[] As Integer = {10, 20, 30}
     Dim total As Integer = 0
     For Each v In arr
         total = total + v
@@ -1492,7 +1492,7 @@ End Sub";
         // default-constructed empty this is out-of-bounds rather than 60.
         var source = @"
 Sub Main()
-    Dim a(3) As Integer
+    Dim a[3] As Integer
     a(0) = 10
     a(1) = 20
     a(2) = 30
@@ -1516,7 +1516,7 @@ End Sub";
         // element access ever reintroduces a block-scoped declaration.
         var source = @"
 Sub Main()
-    Dim a(3) As Integer
+    Dim a[3] As Integer
     a(0) = 10
     a(1) = 20
     a(2) = 30
@@ -1535,17 +1535,18 @@ End Sub";
     }
 
     [Test]
-    public void Cpp_FixedSizeArray_BracketSyntax_LowersIdenticallyToParen()
+    public void Cpp_FixedSizeArray_ParenUpperBound_LowersIdenticallyToBracketCount()
     {
-        // `Dim a[3]` and `Dim a(3)` are two spellings of ONE grammar (Parser: "support both
-        // [] (C#-style) and () (VB-style) syntax"), so they must not drift into two lowerings.
+        // `Dim a[n]` declares n elements and `Dim a(n)` declares upper bound n (n + 1 elements,
+        // as in VB), so `(3)` and `[4]` are the SAME array and must not drift into two lowerings.
+        // (Both spellings once meant n elements, and this test pinned `(3)` == `[3]`.)
         const string body = @"
     a(0) = 10
     a(1) = 20
     Console.WriteLine(a(0) + a(1))
 End Sub";
         var paren = CompileToCppOptimized("\nSub Main()\n    Dim a(3) As Integer" + body, out var e1);
-        var bracket = CompileToCppOptimized("\nSub Main()\n    Dim a[3] As Integer" + body, out var e2);
+        var bracket = CompileToCppOptimized("\nSub Main()\n    Dim a[4] As Integer" + body, out var e2);
         Assert.That(e1, Is.Empty, string.Join("; ", e1));
         Assert.That(e2, Is.Empty, string.Join("; ", e2));
         Assert.That(bracket, Is.EqualTo(paren));
@@ -1563,7 +1564,7 @@ End Sub";
     {
         var source = @"
 Module Program
-    Dim g(4) As Integer
+    Dim g[4] As Integer
     Sub Main()
         g(0) = 3
         g(3) = 4
@@ -1594,7 +1595,7 @@ Structure Point
 End Structure
 
 Sub Main()
-    Dim pts(3) As Point
+    Dim pts[3] As Point
     pts(0).X = 5
     pts(1).X = 9
     Console.WriteLine(pts(0).X + pts(1).X)
@@ -1612,7 +1613,7 @@ End Sub";
         // A non-primitive element type takes the same sized-construction path.
         var source = @"
 Sub Main()
-    Dim s(2) As String
+    Dim s[2] As String
     s(0) = ""ay""
     s(1) = ""bee""
     Console.WriteLine(s(0) & ""-"" & s(1))
@@ -1962,7 +1963,7 @@ Sub BumpFirst(ByRef a[] As Integer)
 End Sub
 
 Sub Main()
-    Dim a(3) As Integer
+    Dim a[3] As Integer
     a(0) = 1
     BumpFirst(a)
     Console.WriteLine(a(0))
@@ -2093,7 +2094,7 @@ End Class
 
 Sub Main()
     Dim w As New Worker()
-    Dim arr(3) As Integer
+    Dim arr[3] As Integer
     arr(2) = 4
     w.Bump(arr(2))
     Console.WriteLine(arr(2))
@@ -2119,7 +2120,7 @@ Sub Bump(ByRef x As Integer)
 End Sub
 
 Sub Main()
-    Dim arr(3) As Integer
+    Dim arr[3] As Integer
     arr(1) = 4
     Bump(arr(1))
     Console.WriteLine(arr(1))
@@ -2247,7 +2248,7 @@ End Sub";
 Const N As Integer = 5
 
 Sub Main()
-    Dim a(N) As Integer
+    Dim a[N] As Integer
     a(4) = 40
     Console.WriteLine(a.Length)
     Console.WriteLine(a(4))
@@ -2267,7 +2268,7 @@ End Sub";
 Const K As Integer = 3
 
 Sub Main()
-    Dim b(K * 2) As Integer
+    Dim b[K * 2] As Integer
     b(5) = 7
     Console.WriteLine(b.Length)
     Console.WriteLine(b(5))
@@ -2287,7 +2288,7 @@ End Sub";
 Const K As Integer = 3
 
 Module Program
-    Dim g(K) As Integer
+    Dim g[K] As Integer
     Sub Main()
         g(2) = 11
         Console.WriteLine(g.Length)
@@ -2308,7 +2309,7 @@ End Module";
         var source = @"
 Sub Main()
     Dim n As Integer = 5
-    Dim a(n) As Integer
+    Dim a[n] As Integer
     a(0) = 1
 End Sub";
         CompileToCppOptimized(source, out var errors);
@@ -2321,11 +2322,25 @@ End Sub";
     {
         var source = @"
 Sub Main()
-    Dim a(-1) As Integer
+    Dim a[-1] As Integer
 End Sub";
         CompileToCppOptimized(source, out var errors);
         Assert.That(errors, Is.Not.Empty);
         Assert.That(string.Join("; ", errors), Does.Contain("cannot be negative"));
+    }
+
+    /// <summary>
+    /// ...whereas `Dim a(-1)` is legal: upper bound -1 is VB's spelling of an EMPTY array
+    /// (zero elements), not a negative size. `Dim a(-2)` is the first refused paren bound.
+    /// </summary>
+    [Test]
+    public void AnUpperBoundOfMinusOne_IsAnEmptyArray_NotARefusal()
+    {
+        CompileToCppOptimized("\nSub Main()\n    Dim a(-1) As Integer\nEnd Sub", out var empty);
+        Assert.That(empty, Is.Empty, string.Join("; ", empty));
+
+        CompileToCppOptimized("\nSub Main()\n    Dim a(-2) As Integer\nEnd Sub", out var negative);
+        Assert.That(string.Join("; ", negative), Does.Contain("cannot be negative"));
     }
 
     /// <summary>
@@ -2339,7 +2354,7 @@ End Sub";
     {
         var source = @"
 Sub Main()
-    Dim a() As Integer
+    Dim a[] As Integer
     Console.WriteLine(1)
 End Sub";
         var output = CompileToCppOptimized(source, out var errors);
@@ -2382,7 +2397,7 @@ End Sub";
     {
         var source = @"
 Class Board
-    Public Cells(9) As Integer
+    Public Cells[9] As Integer
 End Class
 
 Module Program
@@ -2415,7 +2430,7 @@ End Module";
     {
         var source = @"
 Class Board
-    Public Cells(4) As Integer
+    Public Cells[4] As Integer
 End Class
 
 Module Program
@@ -2442,7 +2457,7 @@ End Module";
 Const SLOTS As Integer = 4
 
 Class Board
-    Private Scratch(SLOTS) As Integer
+    Private Scratch[SLOTS] As Integer
 
     Sub Seed()
         Scratch(3) = 99
@@ -2478,7 +2493,7 @@ End Module";
     {
         var source = @"
 Structure Bag
-    Public Items(2) As Integer
+    Public Items[2] As Integer
 End Structure
 
 Sub Main()
@@ -2500,12 +2515,12 @@ End Sub";
     {
         var source = @"
 Structure Bag
-    Public Items() As Integer
+    Public Items[] As Integer
 End Structure
 
 Sub Main()
     Dim g As Bag
-    Dim src(3) As Integer
+    Dim src[3] As Integer
     src(1) = 8
     g.Items = src
     Console.WriteLine(g.Items(1))
@@ -2547,7 +2562,7 @@ End Sub";
         // _GLIBCXX_ASSERTIONS turns into an abort rather than a silent wrong answer.
         var source = @"
 Sub Main()
-    Dim g(2, 3) As Integer
+    Dim g[2, 3] As Integer
     g(0, 0) = 7
     g(1, 2) = 9
     Console.WriteLine(g(0, 0) + g(1, 2))
@@ -2579,7 +2594,7 @@ Const W As Integer = 4
 Const H As Integer = 3
 
 Module Program
-    Dim level(W, H) As Integer
+    Dim level[W, H] As Integer
     Sub Main()
         For x As Integer = 0 To 3
             For y As Integer = 0 To 2
@@ -2609,7 +2624,7 @@ End Module";
         // Rank is not special-cased at 2 — the nesting is built from the dimension list.
         var source = @"
 Sub Main()
-    Dim cube(2, 2, 2) As Integer
+    Dim cube[2, 2, 2] As Integer
     cube(1, 1, 1) = 5
     Console.WriteLine(cube(1, 1, 1))
 End Sub";
@@ -2644,7 +2659,7 @@ End Sub";
         // on a rank-2 array was typed as an element while both backends handed back a ROW.
         var source = @"
 Sub Main()
-    Dim g(4, 3) As Integer
+    Dim g[4, 3] As Integer
     Console.WriteLine(g(0))
 End Sub";
         CompileToCppOptimized(source, out var errors);
@@ -2658,7 +2673,7 @@ End Sub";
         // `.Length` is the row count natively and the FLATTENED count on .NET; For Each
         // yields rows natively and elements on .NET. Both are silent wrong answers on one
         // target, so both are refused.
-        const string prologue = "\nSub Main()\n    Dim g(4, 3) As Integer\n";
+        const string prologue = "\nSub Main()\n    Dim g[4, 3] As Integer\n";
 
         CompileToCppOptimized(prologue + "    Console.WriteLine(g.Length)\nEnd Sub", out var lengthErrors);
         Assert.That(string.Join("; ", lengthErrors), Does.Contain("2-dimensional array cannot be used"));
@@ -2679,7 +2694,7 @@ End Sub";
     {
         var source = @"
 Sub Main()
-    Dim a(3) As Integer
+    Dim a[3] As Integer
     a(0) = 1
     a(1) = 2
     Console.WriteLine(a.Length)

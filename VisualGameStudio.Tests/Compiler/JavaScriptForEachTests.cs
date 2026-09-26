@@ -26,7 +26,7 @@ public class JavaScriptForEachTests
         JavaScriptExecutionTests.RunJs($"Sub Main()\n{body}\nEnd Sub");
 
     private const string Filled =
-        "Dim a(3) As Integer\na(0) = 1\na(1) = 2\na(2) = 3\n";
+        "Dim a[3] As Integer\na(0) = 1\na(1) = 2\na(2) = 3\n";
 
     [Test]
     public void ForEach_VisitsEveryElementInOrder()
@@ -102,20 +102,20 @@ public class JavaScriptForEachTests
     [Test]
     public void ForEach_OverAnEmptyRange_RunsZeroTimes()
         => Assert.That(Run(
-            "Dim a(0) As Integer\nFor Each n As Integer In a\nConsole.WriteLine(n)\nNext\nConsole.WriteLine(\"done\")"),
+            "Dim a[0] As Integer\nFor Each n As Integer In a\nConsole.WriteLine(n)\nNext\nConsole.WriteLine(\"done\")"),
             Is.EqualTo("done"));
 
     [Test]
     public void ForEach_OverStrings()
         => Assert.That(Run(
-            "Dim s(2) As String\ns(0) = \"a\"\ns(1) = \"b\"\n" +
+            "Dim s[2] As String\ns(0) = \"a\"\ns(1) = \"b\"\n" +
             "For Each t As String In s\nConsole.WriteLine(t)\nNext"),
             Is.EqualTo("a\nb"));
 
     [Test]
     public void ForEach_NestedInsideAForLoop()
         => Assert.That(Run(
-            "Dim a(2) As Integer\na(0) = 1\na(1) = 2\n" +
+            "Dim a[2] As Integer\na(0) = 1\na(1) = 2\n" +
             "For i As Integer = 1 To 2\n" +
             "For Each n As Integer In a\nConsole.WriteLine(i * 10 + n)\nNext\n" +
             "Next"),

@@ -2392,9 +2392,8 @@ namespace BasicLang.Compiler.SemanticAnalysis
         /// <c>a[0] = 1</c> (NullReferenceException under C#). Both compiled clean.</para>
         ///
         /// <para>A size expression that will not fold is therefore REFUSED rather than dropped.
-        /// There is no run-time-sizing fallback to fall back to: <c>ReDim</c> is not implemented
-        /// (it lowers to a call to a function that does not exist), so an unfoldable size has no
-        /// correct lowering at all and a diagnostic is the only honest answer.</para>
+        /// A declaration's size is baked into its allocation; a size known only at run time
+        /// belongs to <c>ReDim</c> (ArrayResizeExpressionNode), which the diagnostic points to.</para>
         /// </summary>
         /// <param name="report">
         /// False on the sibling-signature path, which must never accuse the current unit.
@@ -2433,8 +2432,9 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 if (report && _reportedNonConstantArraySizes.Add(dimension))
                 {
                     Error("Array size must be a compile-time constant (an integer literal, a "
-                          + "Const, or arithmetic over them). A size computed at run time cannot "
-                          + "be declared this way, and ReDim is not supported.",
+                          + "Const, or arithmetic over them). For a size computed at run time, "
+                          + "declare the array unsized (Dim a[] As Integer) and ReDim it: "
+                          + "ReDim a[n].",
                           dimension.Line, dimension.Column);
                 }
                 sizes.Add(0);
@@ -6091,6 +6091,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 // Spec 6.1: a Dim initializer is a Decimal context — a numeric
                 // literal converts from its source text and retypes to Decimal.
                 TryRetypeLiteralToDecimal(node.Initializer, varType);
+                TargetTypeEmptyArrayLiteral(node.Initializer, varType);
                 var initType = GetNodeType(node.Initializer);
 
                 // A `::` foreign VALUE converts to whatever it is declared as — `Dim v As Integer
@@ -7026,11 +7027,34 @@ namespace BasicLang.Compiler.SemanticAnalysis
             try
             {
                 argument.Accept(this);
+                TargetTypeEmptyArrayLiteral(argument, parameterType);
             }
             finally
             {
                 _lambdaTargetType = savedTarget;
             }
+        }
+
+        /// <summary>
+        /// An EMPTY array literal takes its type from where it is used, as in VB: `{}` stored in
+        /// an Integer array is an empty Integer array. ⛔ Visit(CollectionInitializerNode) types a
+        /// literal from its elements, and `{}` has none, so it fell back to Object[] and
+        /// `Dim a() As Integer = {}` was refused ("Cannot assign value of type 'Object[]' to
+        /// variable of type 'Integer[]'"). Called at every target-typed site: a typed Dim, an
+        /// assignment, a call argument and a Return. With no target (`Dim x = {}`) it stays
+        /// Object[], which is also VB's answer.
+        /// </summary>
+        private void TargetTypeEmptyArrayLiteral(ExpressionNode value, TypeInfo target)
+        {
+            if (value is not CollectionInitializerNode { Elements.Count: 0 } literal) return;
+            if (target?.Kind != TypeKind.Array || target.ElementType == null) return;
+
+            var arrayType = new TypeInfo(target.Name, TypeKind.Array)
+            {
+                ElementType = target.ElementType,
+                ArrayRank = 1,
+            };
+            SetNodeType(literal, arrayType);
         }
 
         public void Visit(CollectionInitializerNode node)
@@ -8340,6 +8364,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 // Spec 6.1: Return in a Decimal function is a Decimal context —
                 // 'Return 1.5' converts the literal from its source text.
                 TryRetypeLiteralToDecimal(node.Value, expectedReturnType);
+                TargetTypeEmptyArrayLiteral(node.Value, expectedReturnType);
                 var returnType = GetNodeType(node.Value);
 
                 // BC30439 at the return: `Return 300` from a `Function … As Byte` was CS0031 on
@@ -8417,6 +8442,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
             // Decimal contexts — a numeric literal value converts from its
             // source text and retypes ('d = 1.5', 'd += 0.5').
             TryRetypeLiteralToDecimal(node.Value, targetType);
+            TargetTypeEmptyArrayLiteral(node.Value, targetType);
             var valueType = GetNodeType(node.Value);
 
             if (targetType == null || valueType == null)
@@ -9116,6 +9142,18 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 symbol = crossModule;
             }
 
+            // VB's control-character constants (vbCrLf, vbTab, ...). Backslash is not an escape
+            // in a string literal, so these are how source spells a newline or tab. Only when
+            // nothing user-declared has the name: a user's vbTab shadows the built-in.
+            // Cleared first so a re-analysis that now finds a user symbol is not overruled.
+            node.BuiltinConstantValue = null;
+            if (symbol == null && VbStringConstants.TryGetValue(node.Name, out var vbConstant))
+            {
+                node.BuiltinConstantValue = vbConstant;
+                SetNodeType(node, _typeManager.StringType);
+                return;
+            }
+
             if (symbol == null)
             {
                 // Check if this could be a .NET static class (e.g., Console, Math, File)
@@ -9146,6 +9184,23 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 SetNodeType(node, symbol.Type);
             }
         }
+
+        /// <summary>
+        /// VB's Microsoft.VisualBasic.Constants string members, by (case-insensitive) name.
+        /// The IR builder lowers each to a plain string constant, so every backend gets it.
+        /// ⚠ Only characters every backend's string escaper handles (\r \n \t). vbNullChar is
+        /// deliberately absent: the C++ backend's strings are built from const char*, so an
+        /// embedded NUL would silently truncate.
+        /// </summary>
+        internal static readonly IReadOnlyDictionary<string, string> VbStringConstants =
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["vbCrLf"] = "\r\n",
+                ["vbNewLine"] = "\r\n",
+                ["vbCr"] = "\r",
+                ["vbLf"] = "\n",
+                ["vbTab"] = "\t",
+            };
 
         /// <summary>
         /// The member of the class currently being analyzed — its own, or an inherited one —
@@ -10044,6 +10099,48 @@ namespace BasicLang.Compiler.SemanticAnalysis
             RejectImpossibleConversion(node, targetType);
 
             SetNodeType(node, targetType);
+        }
+
+        /// <summary>
+        /// A <c>ReDim</c>'s value (see <see cref="ArrayResizeExpressionNode"/>). The array must
+        /// already be a one-dimensional array variable, the size an integer, and an
+        /// <c>As Type</c> must name the element type it already has: ReDim resizes, it does not
+        /// retype. The node takes the array's own type, so the assignment it sits in type-checks
+        /// as array-to-same-array.
+        /// </summary>
+        public void Visit(ArrayResizeExpressionNode node)
+        {
+            node.Array.Accept(this);
+            node.Size.Accept(this);
+
+            var arrayType = GetNodeType(node.Array);
+            if (arrayType?.Kind != TypeKind.Array)
+            {
+                Error($"ReDim needs an array, but '{(node.Array as IdentifierExpressionNode)?.Name}' "
+                      + $"{(arrayType == null ? "is not declared" : $"has type {arrayType.Name}")}. Declare it "
+                      + "as an array first, for example Dim a[] As Integer.", node.Line, node.Column);
+                SetNodeType(node, arrayType ?? _typeManager.ObjectType);
+                return;
+            }
+
+            if (arrayType.ArrayRank > 1)
+                Error($"ReDim resizes a one-dimensional array; this one has {arrayType.ArrayRank} dimensions.",
+                      node.Line, node.Column);
+
+            var sizeType = GetNodeType(node.Size);
+            if (sizeType != null && !sizeType.IsIntegral())
+                Error($"A ReDim size must be an integer, not {sizeType.Name}.", node.Size.Line, node.Size.Column);
+
+            if (node.ElementType != null)
+            {
+                var declared = ResolveTypeReference(node.ElementType);
+                if (declared != null && arrayType.ElementType != null
+                    && !string.Equals(declared.Name, arrayType.ElementType.Name, StringComparison.OrdinalIgnoreCase))
+                    Error($"ReDim cannot change the element type: the array holds {arrayType.ElementType.Name}, "
+                          + $"not {declared.Name}.", node.Line, node.Column);
+            }
+
+            SetNodeType(node, arrayType);
         }
 
         /// <summary>

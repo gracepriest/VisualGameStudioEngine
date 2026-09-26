@@ -53,11 +53,10 @@ namespace VisualGameStudio.Tests.Compiler;
 /// docstring names the leg that actually detects the defect, because a fixture that asserted only
 /// the green legs would be a test that cannot fail.</para>
 ///
-/// <para>⚠ Two cross-backend splits appear below and are NOT regressions. They were confirmed
-/// against a control program (<c>ShowB(True)</c> / <c>ShowD(CDbl(3))</c>) that no pass touches:
-/// C++ renders <c>CStr(Double)</c> as <c>3.000000</c>, and JavaScript renders <c>CStr(Boolean)</c>
-/// in lower case. They are pinned as explicit per-backend expectations rather than normalised
-/// away.</para>
+/// <para>⚠ Cross-backend splits were once pinned here as explicit per-backend expectations:
+/// C++ rendered <c>CStr(Double)</c> as <c>3.000000</c> and JavaScript rendered
+/// <c>CStr(Boolean)</c> in lower case. Both now print what .NET prints (C++ through
+/// <c>BasicLang::FormatDouble</c>), so every backend is held to the same string.</para>
 /// </summary>
 [TestFixture]
 [Category("Integration")]   // compiles and runs C++, spawns node, assembles and runs IL

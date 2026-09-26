@@ -23,6 +23,11 @@ still works but warns).
 
 Number literal prefixes: hex `&H1F`, octal `&O17`, binary `&B1010`.
 
+String literals follow VB: a backslash is an ordinary character, so `"C:\temp\new"` is
+the eleven characters it shows. The only escape is a doubled quote, `"say ""hi"""`. In an
+interpolated string, `{{` and `}}` are literal braces. For control characters use
+`vbCrLf`, `vbNewLine`, `vbCr`, `vbLf` or `vbTab`, which work on every backend.
+
 ## Declarations
 
 ```vb
@@ -73,6 +78,17 @@ Loop Until condition
 
 `Exit For` / `Exit While` / `Exit Do` break; `Continue For` and friends skip to the next
 iteration.
+
+`:` joins statements on one line. A single-line `If` owns everything to the end of its line, so
+a `:`-joined statement runs only when its branch does, and an `Else` binds to the nearest `If`:
+
+```vb
+If n > 0 Then Return "pos" Else Return "other"
+If ready Then Start() : Log("started")          ' both run only when ready
+If x < 0 Then x = 0 Else x = x * 2 : Log("x")   ' Log is part of the Else
+If a Then If b Then P() Else Q()                ' the Else belongs to If b
+For i = 1 To 3 : Console.Write(i) : Next
+```
 
 ## Functions and subroutines
 
@@ -216,9 +232,41 @@ End Select
 
 ## Arrays and collections
 
+Declare a fixed-size array with square brackets. The number is the **element count**:
+
 ```vb
-Dim nums(9) As Integer               ' fixed, 10 elements
+Dim nums[10] As Integer              ' 10 elements, nums[0] .. nums[9]
+Dim grid[3, 4] As Integer            ' 3 x 4
+```
+
+Parentheses are also accepted, so older BASIC programs run unchanged. There the number is
+the **upper bound**, as in VB and classic BASIC, so the array has one more element:
+
+```vb
+Dim scores(9) As Integer             ' upper bound 9: 10 elements, scores(0) .. scores(9)
+```
+
+Prefer `[]` in new code. The two spellings differ only in the declaration: once declared,
+an array is indexed with either `nums[i]` or `nums(i)` (`grid[x, y]` or `grid(x, y)`), and a
+one-dimensional array's `Length` counts its elements whichever form declared it. A size
+must be a compile-time constant (a literal, a `Const`, or arithmetic over them).
+
+For a size known only at run time, declare the array unsized and `ReDim` it. `ReDim` follows
+the same rule: brackets give a count, parentheses an upper bound. `Preserve` keeps the
+elements that still fit; without it the array starts over with default values.
+
+```vb
+Dim items[] As Integer
+ReDim items[n]                       ' n elements, all 0
+ReDim Preserve items[n * 2]          ' grow; the first n keep their values
+ReDim scores(n)                      ' older-BASIC form: n + 1 elements
+```
+
+`ReDim` resizes a one-dimensional array, one array per statement, and keeps its element type.
+
+```vb
 Dim primes = {2, 3, 5, 7, 11}        ' initialised
+Dim none[] As Integer = {}           ' empty: {} takes the type it is stored in
 
 Dim list As New List(Of String)()
 list.Add("x")

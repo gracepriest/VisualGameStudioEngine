@@ -311,6 +311,88 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// <summary>The emitted name of the half-to-even rounding helper CInt lowers to.</summary>
         private const string CIntHelperName = "__blCInt";
 
+        /// <summary>The emitted name of the runtime value-to-text helper (see <see cref="TextOf"/>).</summary>
+        private const string TextHelperName = "__blStr";
+
+        private bool _textHelperEmitted;
+
+        /// <summary>
+        /// THE one place a value becomes text on this backend, mirroring the C++ backend's
+        /// <c>StringifyForText</c>: <c>&amp;</c>, interpolation (which lowers to the same Concat),
+        /// <c>CStr</c>, <c>Console.Write</c>/<c>WriteLine</c> and a primitive's <c>.ToString()</c>.
+        ///
+        /// <para>⛔ A Boolean is <c>True</c>/<c>False</c>, as .NET and the C# and C++ backends print
+        /// it. JavaScript's own conversion gives lowercase <c>true</c>, and every one of those
+        /// sites used it: <c>"b=" &amp; flag</c> printed <c>b=true</c>.</para>
+        ///
+        /// <para>A value typed Object may hold a Boolean that nothing here can see, so it goes
+        /// through <see cref="TextHelperName"/>, a runtime check emitted in the prelude. Everything
+        /// else keeps the conversion it had: <paramref name="mustBeString"/> false leaves it to
+        /// JS's <c>+</c> / <c>console.log</c>, true wraps it in <c>String(...)</c>.</para>
+        /// </summary>
+        private string TextOf(IRValue value, string rendered, bool mustBeString)
+        {
+            if (IsBooleanValue(value))
+            {
+                if (value is IRConstant { Value: bool constant })
+                    return constant ? "\"True\"" : "\"False\"";
+                return $"({rendered} ? \"True\" : \"False\")";
+            }
+
+            if (NeedsRuntimeTextCheck(value))
+            {
+                // Scanned into the prelude by UsesTextHelper with this same predicate; a miss
+                // would be "__blStr is not defined" at run time, so refuse it here instead.
+                if (!_textHelperEmitted)
+                    throw new InvalidOperationException(
+                        $"JavaScript backend: {TextHelperName} is needed but UsesTextHelper did not see it.");
+                return $"{TextHelperName}({rendered})";
+            }
+
+            return mustBeString ? $"String({rendered})" : rendered;
+        }
+
+        private static bool IsBooleanValue(IRValue value) =>
+            string.Equals(value?.Type?.Name, "Boolean", StringComparison.OrdinalIgnoreCase);
+
+        private static bool IsPrimitiveTextType(IRValue value) =>
+            (value?.Type?.Name?.ToLowerInvariant()) switch
+            {
+                "boolean" or "string" or "byte" or "sbyte" or "short" or "ushort"
+                    or "integer" or "uinteger" or "single" or "double" => true,
+                _ => false,
+            };
+
+        private static bool NeedsRuntimeTextCheck(IRValue value) =>
+            string.Equals(value?.Type?.Name, "Object", StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>The single-argument calls TextOf lowers (see TryTextCall).</summary>
+        private static bool IsTextCall(string name, int argCount) =>
+            argCount == 1 && (string.Equals(name, "CStr", StringComparison.OrdinalIgnoreCase) ||
+                              name == "Console.WriteLine" || name == "Console.Write");
+
+        /// <summary>
+        /// Whether any TextOf site will need <see cref="TextHelperName"/>. ⛔ SCANNED for the same
+        /// reason as <see cref="UsesRoundingHelper"/>: the prelude is written before any body.
+        /// </summary>
+        private static bool UsesTextHelper(IRModule module)
+        {
+            foreach (var function in module?.Functions ?? Enumerable.Empty<IRFunction>())
+                foreach (var block in function.Blocks ?? Enumerable.Empty<BasicBlock>())
+                    foreach (var instruction in block.Instructions ?? Enumerable.Empty<IRInstruction>())
+                        switch (instruction)
+                        {
+                            case IRBinaryOp { Operation: BinaryOpKind.Concat } op
+                                when NeedsRuntimeTextCheck(op.Left) || NeedsRuntimeTextCheck(op.Right):
+                                return true;
+                            case IRCall call when IsTextCall(call.FunctionName, call.Arguments?.Count ?? 0)
+                                && NeedsRuntimeTextCheck(call.Arguments[0]):
+                                return true;
+                        }
+
+            return false;
+        }
+
 
         /// <summary>
         /// The half-to-even rounding CInt means, which JavaScript has no built-in for.
@@ -329,6 +411,18 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// </param>
         private void EmitConversionPrelude(IRModule module)
         {
+            _textHelperEmitted = UsesTextHelper(module);
+            if (_textHelperEmitted)
+            {
+                // Only for a value typed Object, whose runtime type is unknown here: see TextOf.
+                Line($"function {TextHelperName}(x) {{");
+                _indentLevel++;
+                Line("return typeof x === \"boolean\" ? (x ? \"True\" : \"False\") : String(x);");
+                _indentLevel--;
+                Line("}");
+                Line();
+            }
+
             if (!UsesRoundingHelper(module)) return;
 
             Line($"function {CIntHelperName}(x) {{");
@@ -936,6 +1030,15 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 case IRLoad load:
                     return Expr(load.Address);
 
+                // IRBuilder gives an array local a memory slot named `<name>_addr` (only arrays:
+                // see Visit(VariableDeclarationNode)). In JavaScript the slot IS the local, as the
+                // C# backend also renders it. ⛔ Unhandled, an initialised array local —
+                // `Dim a[] As Integer = {1, 2}` — failed the build ("IRAlloca (as an expression)").
+                case IRAlloca alloca:
+                    return SanitizeName(alloca.Name != null && alloca.Name.EndsWith("_addr", StringComparison.Ordinal)
+                        ? alloca.Name.Substring(0, alloca.Name.Length - "_addr".Length)
+                        : alloca.Name);
+
                 // `.Length` on an array OR a string. The rename to lowercase is MANDATORY:
                 // JavaScript has no `.Length`, and reading it yields `undefined` with no
                 // error, which then propagates as NaN through arithmetic. Matched
@@ -1080,25 +1183,6 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         };
 
         /// <summary>
-        /// <paramref name="rendered"/> as .NET TEXT. A Boolean is the one primitive whose JS
-        /// spelling differs: JavaScript's <c>"b" + true</c> is "btrue", and <c>console.log(true)</c>
-        /// prints "true", where .NET says "True" / "False" — MEASURED: <c>"b" &amp; True</c>,
-        /// <c>s &amp;= f</c>, <c>CStr(b)</c> and <c>Console.WriteLine(b)</c> all printed lower case.
-        /// Type-directed, like the C++ backend's StringifyForText: a Boolean-typed value is
-        /// spelled out, everything else is left to JavaScript, which already agrees.
-        /// </summary>
-        private static string TextOf(IRValue value, string rendered) =>
-            IsBoolean(value?.Type) ? $"({rendered} ? \"True\" : \"False\")" : rendered;
-
-        private static bool IsBoolean(TypeInfo type) =>
-            string.Equals(type?.Name, "Boolean", StringComparison.OrdinalIgnoreCase);
-
-        /// <summary>The primitives whose <c>ToString()</c> is their text: Boolean, numbers, Char, String.</summary>
-        private static bool IsTextablePrimitive(TypeInfo type) =>
-            type != null && (IsBoolean(type) || type.IsIntegral() || type.IsFloatingPoint()
-                || type.Name is "String" or "Char");
-
-        /// <summary>
         /// <paramref name="int32"/> (an expression already wrapped to int32) wrapped again to
         /// the NARROW integral <paramref name="type"/>: sign-extended for Short / SByte, masked
         /// for UShort / Byte; unchanged for Integer.
@@ -1176,7 +1260,8 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
                 // String concatenation is its own kind, so `+` here is never numeric addition
                 // in disguise.
-                case BinaryOpKind.Concat: return $"({TextOf(op.Left, l)} + {TextOf(op.Right, r)})";
+                case BinaryOpKind.Concat:
+                    return $"({TextOf(op.Left, l, mustBeString: false)} + {TextOf(op.Right, r, mustBeString: false)})";
 
                 case BinaryOpKind.Eq: return $"({l} === {r})";
                 case BinaryOpKind.Ne: return $"({l} !== {r})";
@@ -1973,9 +2058,10 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// whose holes read as <c>undefined</c> and which iteration treats differently from
         /// filled slots. BasicLang expects 0 / "" / false per element type.</para>
         ///
-        /// <para>⚠ <c>ArrayDimensionSizes</c> entries are ELEMENT COUNTS, not upper bounds:
-        /// <c>Dim a(4)</c> is four elements here, matching the C# and C++ backends. That
-        /// diverges from real VB, deliberately and consistently — do not add one.</para>
+        /// <para>⚠ <c>ArrayDimensionSizes</c> entries are ELEMENT COUNTS: do not add one here.
+        /// The parser has already turned the paren form's upper bound into a count
+        /// (<c>Dim a(4)</c> reaches every backend as 5, <c>Dim a[4]</c> as 4), so every backend
+        /// allocates exactly what it is given.</para>
         /// </summary>
         private string ArrayInitializer(TypeInfo type)
         {
@@ -2666,7 +2752,14 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             if (store.Address is IRAlloca) return;
 
             // The destination is an L-VALUE expression, not a previously-bound temp.
-            Line($"{Expr(store.Address)} = {Expr(store.Value)};");
+            var target = Expr(store.Address);
+            var value = Expr(store.Value);
+
+            // `Dim a[] As Integer = {1, 2}` stores the literal into the local's `a_addr` slot AND
+            // renames the literal to `a` — the store would read `a = a;`. Skip it.
+            if (store.Address is IRAlloca && target == value) return;
+
+            Line($"{target} = {value};");
         }
 
         /// <summary>
@@ -2750,15 +2843,26 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         {
             var rendered = call.Arguments.ConvertAll(Expr);
 
-            // The builtins that turn their argument into TEXT spell a Boolean the .NET way.
-            if (call.FunctionName is "CStr" or "Console.WriteLine" or "Console.Write")
-                rendered = call.Arguments.Select((a, i) => TextOf(a, rendered[i])).ToList();
-
             // String builtins arrive as a BARE FunctionName, which CallTarget would pass
             // straight through as if it were a user function — emitting `Len(s)`, a call to
             // something that exists nowhere in JavaScript. They also cannot be expressed as a
             // renamed callee, since `Len(s)` becomes the MEMBER expression `s.length`, so they
             // are rendered whole here.
+            if (TryTextCall(call, rendered, out var text))
+                return text;
+
+            // ReDim's value (IRBuilder.ArrayResizeIntrinsic: array, count, preserve). Plain ReDim
+            // is a fresh filled array, as a Dim is (see ArrayInitializer on why .fill matters);
+            // Preserve copies what still fits, via a one-shot arrow so the array and the count
+            // are each evaluated once and a Nothing array reads as empty.
+            if (call.FunctionName == IRBuilder.ArrayResizeIntrinsic && rendered.Count == 3)
+            {
+                var element = TypeMapper.GetDefaultValue(call.Type?.ElementType);
+                return call.Arguments[2] is IRConstant { Value: true }
+                    ? $"((a, n) => Array.from({{ length: n }}, (_, i) => a != null && i < a.length ? a[i] : {element}))({rendered[0]}, {rendered[1]})"
+                    : $"new Array({rendered[1]}).fill({element})";
+            }
+
             if (TryStringBuiltin(call.FunctionName, rendered, out var builtin))
                 return builtin;
 
@@ -2766,6 +2870,34 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 return stdlib;
 
             return $"{CallTarget(call.FunctionName)}({string.Join(", ", rendered)})";
+        }
+
+        /// <summary>
+        /// <c>CStr(x)</c>, <c>Console.WriteLine(x)</c> and <c>Console.Write(x)</c>, through
+        /// <see cref="TextOf"/>. <c>Console.Write</c> needs a real string: Node's
+        /// <c>process.stdout.write</c> THROWS on a number or a Boolean (ERR_INVALID_ARG_TYPE),
+        /// where <c>console.log</c> accepts anything.
+        /// </summary>
+        private bool TryTextCall(IRCall call, List<string> rendered, out string result)
+        {
+            result = null;
+            var name = call.FunctionName;
+            if (!IsTextCall(name, rendered.Count)) return false;
+
+            var arg = call.Arguments[0];
+            switch (name)
+            {
+                case "Console.WriteLine":
+                    result = $"console.log({TextOf(arg, rendered[0], mustBeString: false)})";
+                    return true;
+                case "Console.Write":
+                    result = $"process.stdout.write({TextOf(arg, rendered[0], mustBeString: true)})";
+                    return true;
+                default: // CStr — unless the program declares its own, which must win.
+                    if (_userFunctionNames.Contains(name)) return false;
+                    result = TextOf(arg, rendered[0], mustBeString: true);
+                    return true;
+            }
         }
 
         public void Visit(IRReturn ret) =>
@@ -3165,12 +3297,12 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 return $"{receiver}.{raw}({string.Join(", ", args)})";
             }
 
-            // `x.ToString()` on a primitive. A JS primitive has no ToString method — it has
-            // toString — so this emitted `x.ToString()` and died in Node with "ToString is not a
-            // function" for every Boolean, number and String receiver.
+            // `x.ToString()` on a primitive emitted `x.ToString()`, and a JS boolean, number or
+            // string has no such method: a TypeError at run time. (A class's own ToString is
+            // untouched: its receiver is not one of these types.)
             if (args.Count == 0 && string.Equals(mc.MethodName, "ToString", StringComparison.OrdinalIgnoreCase)
-                && IsTextablePrimitive(mc.Object?.Type))
-                return IsBoolean(mc.Object.Type) ? TextOf(mc.Object, receiver) : $"String({receiver})";
+                && IsPrimitiveTextType(mc.Object))
+                return TextOf(mc.Object, receiver, mustBeString: true);
 
             var kind = ReceiverKind(mc.Object);
 

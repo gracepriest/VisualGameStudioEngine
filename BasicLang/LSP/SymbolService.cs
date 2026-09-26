@@ -120,7 +120,7 @@ namespace BasicLang.Compiler.LSP
             ["UBound"] = "**UBound**(arr As Array) As Integer\n\nReturns the upper bound (last index) of an array.",
             ["LBound"] = "**LBound**(arr As Array) As Integer\n\nReturns the lower bound (first index) of an array.",
             ["Array"] = "**Array**(elements...) As Array\n\nCreates an array from the specified elements.",
-            ["ReDim"] = "**ReDim** arr(size) [Preserve]\n\nResizes an array, optionally preserving existing elements.",
+            ["ReDim"] = "**ReDim** [Preserve] arr[count]\n\nResizes a one-dimensional array to `count` elements; the size may be computed at run time. `Preserve` keeps the elements that still fit. The older-BASIC form `ReDim arr(upperBound)` takes an upper bound, so it gives `upperBound + 1` elements.",
 
             // Collections
             ["CreateList"] = "**CreateList**() As List\n\nCreates a new empty list (dynamic array).\n\n```vb\nDim items = CreateList()\nListAdd(items, \"value\")\n```",

@@ -97,6 +97,21 @@ public class JsExecutionTierRosterTests
         // JavaScriptOptimizedExecutionTests.RunOptimized.
         typeof(NegativeCaseLabelExecutionTests),
 
+        // Runs one program under Node AND a C++ compiler, and compares both against .NET.
+        typeof(InterpolatedStringExecutionTests),
+        typeof(JavaScriptBooleanTextExecutionTests),
+
+        // Both array spellings, run under Node, a C++ compiler and dotnet.
+        typeof(ArrayBoundsExecutionTests),
+        typeof(ReDimExecutionTests),
+        typeof(SingleLineIfExecutionTests),
+        // C# placement program; its JS leg runs under Node (the `_sel0` fix).
+        typeof(CSharpNestedTerminatorExecutionTests),
+        // Array literals on JavaScript, with C++ and C# legs.
+        typeof(JavaScriptArrayLiteralExecutionTests),
+        // Empty array literals, target-typed; C++ and C# legs too.
+        typeof(EmptyArrayLiteralExecutionTests),
+
         // ADR-0005 D2 — CSE guards a shared value's own destination, not only its operands.
         // CseDestinationInvalidationExecutionTests / DestinationInvalidation_D4_ByRefExecutionTests
         // are four-backend fixtures (FourBackends.RunsOnEveryBackend[Aggressive]); their JS legs
@@ -246,6 +261,7 @@ public class JsExecutionTierRosterTests
         "CppExitForExecutionTests",
         // Builds and runs the C# backend's output through the CLI and dotnet — no Node.
         "CSharpFieldAssignmentExecutionTests",
+        "CSharpInlinedOperandExecutionTests",
     };
 
     /// <summary>Counts NUnit cases: a [TestCase]-driven method contributes one per attribute.</summary>
@@ -263,7 +279,7 @@ public class JsExecutionTierRosterTests
 
     [Test]
     public void RosterIsPinned()
-        => Assert.That(ExecutionTier, Has.Length.EqualTo(55),
+        => Assert.That(ExecutionTier, Has.Length.EqualTo(63),
             "The execution-tier roster changed. That is fine — update the number — but it must " +
             "be a deliberate edit, not a silent shrink.");
 
