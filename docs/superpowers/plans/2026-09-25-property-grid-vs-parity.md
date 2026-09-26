@@ -3629,6 +3629,13 @@ git commit -F "$sp\slice1-commit.txt"
 
 ## Slice 2 — The grid
 
+> ⛔⛔ **PRE-FLIGHT CORRECTIONS (2026-09-26) — READ `docs/superpowers/plans/2026-09-26-property-grid-slice2-preflight.md`
+> BEFORE ANY TASK BELOW.** Slice 1 changed the files this slice rewrites. The pre-flight found 4 BLOCKERS where this
+> slice's whole-member replacements would silently UNDO slice-1 fixes that have tests (a frozen row shows its RAW text;
+> `IntValue` and `IntRow` parse/format culture-invariantly via `FormPropertyDef.TryParseInt`), plus moved anchors, steps
+> slice 1 already did, and tests this slice calls "red" that are already green. Where the pre-flight and the text below
+> disagree, THE PRE-FLIGHT WINS.
+
 **Delivers:** `FormPropertyGridView` (extracted), categories (collapsible), Categorized/Alphabetical, search, absent-shows-the-target's-default (greyed), bold, Reset, the object selector (through the one selection store), the description pane reading `Description`, and the Form's rows from `FormRoot`. **Then the owner's click-through in the IDE.**
 
 ### Task 11: The row knows its default — display, bold, reset, the no-op rule, and spec §7's refusal of invalid typed values
