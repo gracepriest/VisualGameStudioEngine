@@ -533,9 +533,11 @@ public class CseDestinationKnownGapsTask133Tests
     ///
     /// <para>C# stays task #136 — a SEPARATE, pre-existing defect (the emitted lambda body is
     /// <c>() => { ; }</c>, so <c>a</c> is never actually zeroed) that ADR-0006 D1 does not touch.
-    /// JavaScript is now CORRECT: D1's interim closure rule (<c>IsCallVisible</c>: "in a function
-    /// that contains a lambda, every local is call-visible") makes <c>a</c> call-visible, so
-    /// <c>clr()</c> kills CSE's record the same way any other call would.</para>
+    /// JavaScript is now CORRECT: <c>a</c> is genuinely in <c>clr</c>'s recorded capture set (it
+    /// is the only name <c>clr</c>'s body writes) — <c>IsCallVisible</c>'s closure rule (task
+    /// #122, DISCHARGED) makes <c>a</c> call-visible on that basis, not merely D1's coarser
+    /// "every local" interim fallback — so <c>clr()</c> kills CSE's record the same way any
+    /// other call would.</para>
     /// </summary>
     [Test]
     public void A1_LambdaCapturedDestination_CSharp_PinnedForTask136()
@@ -548,10 +550,11 @@ public class CseDestinationKnownGapsTask133Tests
     [Test]
     public void A1_LambdaCapturedDestination_JavaScript_CorrectAfterAdr6D1()
         => Assert.That(FourBackends.Norm(FourBackends.RunAggressiveJs(A1)), Is.EqualTo("seed\nseed\n3,0"),
-            "ADR-0006 D1's interim closure rule (OptimizationPass.IsCallVisible: a function "
-            + "containing a lambda call-visits every local) makes `a` call-visible, so `clr()` "
-            + "kills CSE's record for it. Promoted from a known-wrong pin (was seed\\nseed\\n0,0, "
-            + "task #133) — re-measured against S/adr6-d1/probes/matrix-final.txt.");
+            "ADR-0006 D1's closure rule (OptimizationPass.IsCallVisible -> IsLambdaCaptured) makes "
+            + "`a` call-visible because `a` is genuinely in clr's recorded capture set (task #122, "
+            + "DISCHARGED), so `clr()` kills CSE's record for it. Promoted from a known-wrong pin "
+            + "(was seed\\nseed\\n0,0, task #133) — re-measured against "
+            + "S/adr6-d1/probes/matrix-final.txt.");
 
     private const string A1 = """
         Function Seed(v As Integer) As Integer

@@ -123,9 +123,10 @@ public class JsExecutionTierRosterTests
         // LicmKillVocabularyKnownGapsTask122Tests is NOT caught by the widened name match below —
         // it neither starts with "JavaScript"/"Js" nor ends with "ExecutionTests" — same reason
         // CseDestinationKnownGapsTask133Tests needed a manual entry above. Its JavaScript leg is
-        // now CORRECT under ADR-0006 D1's interim closure rule (promoted from task #122); C++
-        // stays known-wrong for an unrelated backend defect (task #140). Either way it DOES spawn
-        // Node (FourBackends.RunAggressiveJs), so it belongs here.
+        // CORRECT under ADR-0006 D1's closure rule — x is genuinely in bump's capture set (task
+        // #122 is now DISCHARGED, not merely the coarser interim fallback); C++ stays known-wrong
+        // for an unrelated backend defect (task #140). Either way it DOES spawn Node
+        // (FourBackends.RunAggressiveJs), so it belongs here.
         typeof(LicmKillVocabularyKnownGapsTask122Tests),
 
         // ADR-0005 D1 — `\` with a floating operand. Named "...ExecutionTests", so the widened
@@ -212,6 +213,15 @@ public class JsExecutionTierRosterTests
         // CopyPropagationMentionsTests and CopyPropagationMentionsStructuralTests are NOT here:
         // pure in-process IR/front-end fixtures, spawn nothing, carry no [Category("Integration")].
         typeof(CopyPropagationMentionsExecutionTests),
+
+        // Task #122 — the lambda capture set (ADR-0006 D1's Obligation). Named
+        // "...ExecutionTests", so the widened match below WOULD catch it on its own; listed
+        // explicitly anyway, matching every row above. Its JS legs all run through
+        // FourBackends.RunAggressiveJs (K1/K8/K11/K12/N1/N8m/N8n). LambdaCaptureSetIrLevelTests,
+        // LambdaCaptureSetFallbackTests and LambdaCaptureSetPrecisionStructuralTests are NOT
+        // here: pure in-process IR/front-end/pass fixtures, spawn nothing, carry no
+        // [Category("Integration")].
+        typeof(LambdaCaptureSetExecutionTests),
     };
 
     /// <summary>
@@ -259,7 +269,7 @@ public class JsExecutionTierRosterTests
 
     [Test]
     public void RosterIsPinned()
-        => Assert.That(ExecutionTier, Has.Length.EqualTo(54),
+        => Assert.That(ExecutionTier, Has.Length.EqualTo(55),
             "The execution-tier roster changed. That is fine — update the number — but it must " +
             "be a deliberate edit, not a silent shrink.");
 
