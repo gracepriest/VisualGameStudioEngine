@@ -475,23 +475,74 @@ public class FormRegionWriterTests
         });
     }
 
-    [TestCase("Color.Red")]
-    [TestCase("Color.FromArgb(255, 1, 2, 3)")]
-    public void Write_EmitsAColorSourceFormTheCatalogCanProve_Verbatim(string value)
+    [TestCase("Color.Red", "Color.Red")]
+    [TestCase("Color.FromArgb(255, 1, 2, 3)", "Color.FromArgb(255, 1, 2, 3)")]
+    [TestCase("Color.FromArgb( 255 ,1,2,3 )", "Color.FromArgb(255, 1, 2, 3)")]
+    [TestCase("red", "Color.Red")]
+    [TestCase("control", "SystemColors.Control")]
+    public void Write_EmitsAColorFromWhatWasParsed(string value, string expected)
     {
-        var form = new FormDocument { Target = FormTarget.WinForms, Name = "LoginForm" };
-        var button = new FormControl { Kind = "Button", Id = "btn", TabIndex = 0 };
-        button.Properties["BackColor"] = value;
-        form.Controls.Add(button);
-
-        var source = ScaffoldedFile().Replace("LoginForm.blwebform", "LoginForm.blform");
-        var result = RegionWriter.Write("LoginForm.bas", source, form, "LoginForm.blform");
+        var result = WriteButtonWith("BackColor", value);
 
         Assert.Multiple(() =>
         {
-            Assert.That(result.Text, Does.Contain($"btn.BackColor = {value}"));
+            Assert.That(result.Text, Does.Contain($"btn.BackColor = {expected}\n").Or.Contain($"btn.BackColor = {expected}\r\n"));
             Assert.That(result.Diagnostics.Select(d => d.Code), Has.None.EqualTo(DesignCodes.DegradedProperty));
         });
+    }
+
+    [TestCase("Color.FromArgb(1,\r\n2,3,4)", TestName = "{m}(FromArgb CRLF)")]
+    [TestCase("Color.FromArgb(1,<NBSP>2,3,4)", TestName = "{m}(FromArgb NBSP)")]
+    [TestCase("Bogus", TestName = "{m}(unknown name)")]
+    [TestCase("RebeccaPurple", TestName = "{m}(a CSS name WinForms lacks)")]
+    public void Write_ADegradedColour_IsNotWritten(string value)
+    {
+        var result = WriteButtonWith("BackColor", FormPropertyDefTests.Unmark(value));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Refused, Is.False);
+            Assert.That(result.Text, Does.Not.Contain("btn.BackColor"));
+            Assert.That(result.Diagnostics.Where(d => d.Code == DesignCodes.DegradedProperty).Select(d => d.Message),
+                Has.Exactly(1).Contains("'btn.BackColor'"));
+        });
+    }
+
+    [TestCase(" 5 ", "5")]
+    [TestCase("+007", "7")]
+    public void Write_EmitsAnIntFromWhatWasParsed(string value, string expected)
+    {
+        var result = WriteTextBoxWith("MaxLength", value);
+
+        Assert.That(result.Text, Does.Contain($"txt.MaxLength = {expected}\n").Or.Contain($"txt.MaxLength = {expected}\r\n"));
+    }
+
+    [TestCase("5\r\n")]
+    [TestCase("5<LS>")]
+    public void Write_AnIntWithALineBreak_IsDegraded_NeverSpliced(string value)
+    {
+        var result = WriteTextBoxWith("MaxLength", FormPropertyDefTests.Unmark(value));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Text, Does.Not.Contain("txt.MaxLength"));
+            Assert.That(result.Diagnostics.Select(d => d.Code), Has.Exactly(1).EqualTo(DesignCodes.DegradedProperty));
+        });
+    }
+
+    private static RegionWriteResult WriteButtonWith(string name, string value) => WriteOne("Button", "btn", name, value);
+
+    private static RegionWriteResult WriteTextBoxWith(string name, string value) => WriteOne("TextBox", "txt", name, value);
+
+    private static RegionWriteResult WriteOne(string kind, string id, string name, string value)
+    {
+        var form = new FormDocument { Target = FormTarget.WinForms, Name = "LoginForm" };
+        var control = new FormControl { Kind = kind, Id = id, TabIndex = 0 };
+        control.Properties[name] = value;
+        form.Controls.Add(control);
+
+        var source = ScaffoldedFile().Replace("LoginForm.blwebform", "LoginForm.blform");
+        return RegionWriter.Write("LoginForm.bas", source, form, "LoginForm.blform");
     }
 
     [TestCase("New Foo")]
@@ -511,10 +562,11 @@ public class FormRegionWriterTests
         var result = RegionWriter.Write("LoginForm.bas", source, form, "LoginForm.blform");
 
         Assert.That(result.Text,
-            Does.Contain("btn.NoSuchRow = \"" + value.Replace("\"", "\"\"") + "\""));
+            Does.Contain("btn.NoSuchRow = " + FormPropertyDef.StringLiteral(value)));
     }
 
     [TestCase(@"a\b", @"""a\\b""", TestName = "{m}(backslash)")]
+    [TestCase(@"a\", @"""a\\""", TestName = "{m}(trailing backslash)")]
     [TestCase("a\nb", @"""a\nb""", TestName = "{m}(line feed)")]
     [TestCase("a\r\nb", @"""a\r\nb""", TestName = "{m}(CRLF)")]
     [TestCase("a\tb", @"""a\tb""", TestName = "{m}(tab)")]

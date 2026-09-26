@@ -1070,7 +1070,8 @@ public static class RegionWriter
     }
 
     /// <summary>
-    /// True when the value is already BasicLang SOURCE rather than a document value.
+    /// The canonical source when the value is already BasicLang SOURCE rather than a document value;
+    /// null otherwise.
     ///
     /// <para>⛔ <c>Properties</c> holds DOCUMENT text (<c>Sign in</c>, unquoted). An Enum, Color or
     /// Size row may also hold its catalog-decided source form (<c>ContentAlignment.MiddleLeft</c>,
@@ -1085,8 +1086,8 @@ public static class RegionWriter
     /// to <c>UnknownAttributes</c> (a reserved resource reference is recorded before the row lookup,
     /// but the reader reports it as an error) — so it is quoted as text.</para>
     /// </summary>
-    private static bool IsAlreadySource(FormPropertyDef? property, string value) =>
-        property?.IsSourceForm(value) ?? false;
+    private static string? AlreadySource(FormPropertyDef? property, string value) =>
+        property?.SourceLiteral(value);
 
     /// <summary>
     /// Formats a property value as BasicLang SOURCE, driven off the catalog's declared type.
@@ -1095,19 +1096,25 @@ public static class RegionWriter
     /// the document reader stores the RAW attribute text (<c>Sign in</c>, unquoted, because XML
     /// attributes are not quoted values), while this writer splices the value into generated source.
     /// Emitting the raw text produced <c>btnLogin.Text = Sign in</c> — a syntax error. Properties
-    /// holds document text; a String is always quoted and escaped (<c>"</c> → <c>""</c>). Typing the
+    /// holds document text; a String is always quoted and escaped through
+    /// <see cref="FormPropertyDef.StringLiteral"/> (quotes, backslashes, CR, LF, tab). Typing the
     /// formatting off the catalog is what lets an Enum/Color/Size row's source form pass through
     /// while a String never does.</para>
+    ///
+    /// <para>⛔⛔ Nothing numeric is spliced as the input text. A source form comes back from
+    /// <see cref="FormPropertyDef.SourceLiteral"/> RE-EMITTED from what was parsed, and an Int from
+    /// <see cref="FormPropertyDef.WinFormsLiteral"/> the same way — so whitespace a parser tolerated
+    /// (a line break around a comma, a leading zero) never reaches the user's file.</para>
     /// </summary>
     /// <param name="property">The row — a control's, or a <see cref="FormControlCatalog.FormRoot"/> row.
     /// Null for a property the catalog does not know.</param>
     private static string Literal(FormPropertyDef? property, string value)
     {
-        // Already a source literal — leave it exactly as read. Re-formatting it would produce
-        // `ContentAlignment.ContentAlignment.MiddleLeft` for an enum. (Never true for a String row.)
-        if (IsAlreadySource(property, value))
+        // Already a source literal — re-emitted canonically, never re-formatted as a document value:
+        // that would produce `ContentAlignment.ContentAlignment.MiddleLeft`. (Never for a String row.)
+        if (AlreadySource(property, value) is { } source)
         {
-            return value;
+            return source;
         }
 
         // ⛔ An enum or a colour is NOT the bare text. MEASURED, both ways:
@@ -1123,19 +1130,18 @@ public static class RegionWriter
 
         return property?.Type switch
         {
-            FormPropertyType.Int => value,
             FormPropertyType.Bool => bool.TryParse(value, out var flag) ? (flag ? "True" : "False") : value,
             FormPropertyType.Enum => value,
             FormPropertyType.Color => value,
-            // ⛔ UNREACHABLE by construction, and loud if that ever stops being true. A Size reaches
-            // here only when WinFormsLiteral declined it — i.e. it does not parse — and such a value
-            // is either already source (returned above) or Degraded, which AppendProperties skips
+            // ⛔ UNREACHABLE by construction, and loud if that ever stops being true. An Int or a Size
+            // reaches here only when WinFormsLiteral declined it — i.e. it does not parse — and such a
+            // value is either already source (returned above) or Degraded, which every caller skips
             // before calling this. Quoting it (the default arm) would emit `X.ClientSize = "800x450"`,
-            // CS0029 at csc with BasicLang silent; verbatim would splice unparsed text into source.
-            // Both hide a broken invariant as a broken build, so this names the invariant instead.
-            FormPropertyType.Size => throw new InvalidOperationException(
-                $"'{property.Name}' = '{value}' is not a parsable Size and reached the region writer; " +
-                "a Degraded value must be skipped before Literal is called."),
+            // CS0029 at csc with BasicLang silent; verbatim would splice unparsed text — `5\r\n` — into
+            // source. Both hide a broken invariant as a broken build, so this names the invariant.
+            FormPropertyType.Int or FormPropertyType.Size => throw new InvalidOperationException(
+                $"'{property.Name}' = '{value}' is not a parsable {property.Type} and reached the region " +
+                "writer; a Degraded value must be skipped before Literal is called."),
             _ => FormPropertyDef.StringLiteral(value)
         };
     }

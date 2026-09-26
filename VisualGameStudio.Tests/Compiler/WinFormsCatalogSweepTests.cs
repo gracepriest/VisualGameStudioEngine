@@ -418,7 +418,11 @@ public class WinFormsCatalogSweepTests
         };
 
         var i = 0;
-        foreach (var caption in new[] { "New Customer", "\"quoted\"", "a \"b\" c", @"a\b", "line1\r\nline2", "a\tb" })
+        foreach (var caption in new[]
+                 {
+                     "New Customer", "\"quoted\"", "a \"b\" c", @"a\b", "line1\r\nline2", "a\tb", @"a\",
+                     "a<LS>b", "a<NEL>b"
+                 }.Select(FormPropertyDefTests.Unmark))
         {
             var button = new FormControl
             {
@@ -443,6 +447,10 @@ public class WinFormsCatalogSweepTests
             Assert.That(generated, Does.Contain("btn3.Text = \"a\\\\b\""), "the backslash survives");
             Assert.That(generated, Does.Contain("btn4.Text = \"line1\\r\\nline2\""), "the line break survives");
             Assert.That(generated, Does.Contain("btn5.Text = \"a\\tb\""), "the tab survives");
+            Assert.That(generated, Does.Contain("btn6.Text = \"a\\\\\""), "a trailing backslash does not eat the quote");
+            // ⛔ C# line terminators BasicLang does not treat as one: raw, they are CS1010 at csc.
+            Assert.That(generated, Does.Contain("btn7.Text = \"a\\u2028b\""), "U+2028 is escaped in the C#");
+            Assert.That(generated, Does.Contain("btn8.Text = \"a\\u0085b\""), "U+0085 is escaped in the C#");
         });
         WinFormsCompile.AssertCompiles(generated, "a caption is a string, whatever it looks like.");
     }
@@ -456,8 +464,12 @@ public class WinFormsCatalogSweepTests
     [TestCase("line1\nline2")]
     [TestCase("a\tb")]
     [TestCase(@"a\b")]
+    [TestCase(@"a\")]
+    [TestCase("a<LS>b")]
+    [TestCase("a<NEL>b")]
     public void ACaptionWithControlCharacters_RewritesCleanly(string caption)
     {
+        caption = FormPropertyDefTests.Unmark(caption);
         var form = new FormDocument
         {
             Target = FormTarget.WinForms, Name = "SweepForm", Width = 800, Height = 450, Text = caption

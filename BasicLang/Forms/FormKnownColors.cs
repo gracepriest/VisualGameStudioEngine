@@ -34,13 +34,30 @@ public static class FormKnownColors
         "Turquoise", "Violet", "Wheat", "White", "WhiteSmoke", "Yellow", "YellowGreen",
     };
 
-    // ⛔ Declared AFTER Table: static initializers run in textual order. ORDINAL — `Color.red` is CS0117
-    // in the generated C#, whatever BasicLang's own case rules say.
+    // ⛔ Declared AFTER Table: static initializers run in textual order. IsMember is ORDINAL — `Color.red`
+    // is CS0117 in the generated C#, whatever BasicLang's own case rules say — while a DOCUMENT value is
+    // matched case-insensitively and written in the table's spelling (TryCanonical).
     private static readonly HashSet<string> Exact = new(Table, StringComparer.Ordinal);
+
+    private static readonly Dictionary<string, string> ByName =
+        Table.ToDictionary(n => n, StringComparer.OrdinalIgnoreCase);
 
     /// <summary>Every named colour, in Color's own spelling.</summary>
     public static IReadOnlyList<string> Names { get; } = Table;
 
     /// <summary>True when <paramref name="member"/> is, exactly and case-sensitively, a named <c>Color</c> property.</summary>
     public static bool IsMember(string member) => Exact.Contains(member);
+
+    /// <summary>True when <paramref name="value"/> names a colour, in any case; <paramref name="name"/> is Color's spelling.</summary>
+    public static bool TryCanonical(string value, out string name)
+    {
+        if (ByName.TryGetValue(value, out var found))
+        {
+            name = found;
+            return true;
+        }
+
+        name = "";
+        return false;
+    }
 }

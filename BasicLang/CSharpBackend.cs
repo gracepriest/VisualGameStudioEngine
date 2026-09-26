@@ -4947,11 +4947,12 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
         private string EscapeString(string str)
         {
-            return str.Replace("\\", "\\\\")
-                     .Replace("\"", "\\\"")
-                     .Replace("\n", "\\n")
-                     .Replace("\r", "\\r")
-                     .Replace("\t", "\\t");
+            return EscapeLineTerminators(
+                str.Replace("\\", "\\\\")
+                   .Replace("\"", "\\\"")
+                   .Replace("\n", "\\n")
+                   .Replace("\r", "\\r")
+                   .Replace("\t", "\\t"));
         }
 
         private string EscapeChar(char ch)
@@ -4961,7 +4962,23 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             if (ch == '\n') return "\\n";
             if (ch == '\r') return "\\r";
             if (ch == '\t') return "\\t";
-            return ch.ToString();
+            return EscapeLineTerminators(ch.ToString());
+        }
+
+        /// <summary>
+        /// ⛔ C# also treats U+0085 (NEL), U+2028 and U+2029 as line terminators, so any of them raw
+        /// inside a regular string or char literal is CS1010. BasicLang's lexer does not, so a program
+        /// BasicLang accepted produced C# csc refused. Built from code points: typed raw here they would
+        /// break THIS file's compile the same way.
+        /// </summary>
+        private static string EscapeLineTerminators(string text)
+        {
+            foreach (var codePoint in new[] { 0x0085, 0x2028, 0x2029 })
+            {
+                text = text.Replace(((char)codePoint).ToString(), "\\" + "u" + codePoint.ToString("x4"));
+            }
+
+            return text;
         }
 
         /// <summary>

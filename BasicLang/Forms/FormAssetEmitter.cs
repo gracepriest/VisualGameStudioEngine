@@ -507,7 +507,9 @@ public static class FormAssetEmitter
         var first = true;
         foreach (var name in formNames)
         {
-            sb.Append($"        {(first ? "If" : "ElseIf")} formName = \"{name}\" Then\n");
+            // Through the one escape, not `\"{name}\"`: a form name is an identifier today, but this is a
+            // BasicLang string literal and every one of those goes through StringLiteral.
+            sb.Append($"        {(first ? "If" : "ElseIf")} formName = {FormPropertyDef.StringLiteral(name)} Then\n");
             // ⛔ Constructing the form is ENOUGH — the scaffolded `Public Sub New()` already calls
             // InitializeComponent (FormScaffolder.CodeBehind). Calling it again here ran the whole
             // init body TWICE, so every addEventListener registered its handler twice and one

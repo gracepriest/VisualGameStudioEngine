@@ -344,6 +344,144 @@ public class FormPropertyDefTests
         Assert.That(FormKnownColors.Names.OrderBy(n => n, StringComparer.Ordinal), Is.EqualTo(real));
     }
 
+    // ------------------------------------------------------------------
+    // Re-emission: a value is written from what was PARSED, never as the input text — so whitespace a
+    // lenient parser skipped (CR LF, NBSP, U+2028) can never reach the generated source.
+    // ------------------------------------------------------------------
+
+    [TestCase("Color.FromArgb(1,\r\n2,3,4)", TestName = "{m}(CRLF)")]
+    [TestCase("Color.FromArgb(1,\n2,3,4)", TestName = "{m}(LF)")]
+    [TestCase("Color.FromArgb(1,<NBSP>2,3,4)", TestName = "{m}(NBSP)")]
+    [TestCase("Color.FromArgb(1,\t2,3,4)", TestName = "{m}(tab)")]
+    [TestCase("Color.FromArgb(1,<LS>2,3,4)", TestName = "{m}(U+2028)")]
+    public void FromArgb_AllowsOnlyAsciiSpaceAroundTheCommas(string value)
+    {
+        Assert.That(new FormPropertyDef("BackColor", FormPropertyType.Color).IsSourceForm(Unmark(value)), Is.False);
+    }
+
+    /// <summary>
+    /// Replaces the markers <c>&lt;NBSP&gt;</c>, <c>&lt;LS&gt;</c> (U+2028) and <c>&lt;NEL&gt;</c> (U+0085)
+    /// with the real characters — built from code points, because U+2028 typed raw into this file is a
+    /// C# line terminator and breaks its compile.
+    /// </summary>
+    internal static string Unmark(string value) => value
+        .Replace("<NBSP>", ((char)0x00A0).ToString())
+        .Replace("<LS>", ((char)0x2028).ToString())
+        .Replace("<NEL>", ((char)0x0085).ToString());
+
+    [TestCase("Color.FromArgb( 1 , 2 ,3,4 )", "Color.FromArgb(1, 2, 3, 4)")]
+    [TestCase("Color.FromArgb(001, 2, 3, 4)", "Color.FromArgb(1, 2, 3, 4)")]
+    [TestCase("New Size( 800 ,450 )", "New Size(800, 450)")]
+    public void ASourceForm_IsReEmittedFromItsParsedValues(string value, string expected)
+    {
+        var type = value.StartsWith("New Size", StringComparison.Ordinal) ? FormPropertyType.Size : FormPropertyType.Color;
+        Assert.That(new FormPropertyDef("X", type).SourceLiteral(value), Is.EqualTo(expected));
+    }
+
+    [TestCase("5\r\n", TestName = "{m}(trailing CRLF)")]
+    [TestCase("\n5", TestName = "{m}(leading LF)")]
+    [TestCase("5\t", TestName = "{m}(tab)")]
+    [TestCase("<NBSP>5", TestName = "{m}(NBSP)")]
+    [TestCase("5<LS>", TestName = "{m}(U+2028)")]
+    public void Int_RefusesWhitespaceOtherThanAsciiSpace(string value)
+    {
+        Assert.That(new FormPropertyDef("MaxLength", FormPropertyType.Int).Accepts(Unmark(value)), Is.False,
+            "int.TryParse would skip it, and the old writer then spliced the raw text");
+    }
+
+    [Test]
+    public void Int_IsReEmittedFromItsParsedValue()
+    {
+        var def = new FormPropertyDef("MaxLength", FormPropertyType.Int);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(def.Accepts(" 5 "), Is.True, "ASCII space is what a person types around a number");
+            Assert.That(def.WinFormsLiteral(" 5 "), Is.EqualTo("5"));
+            Assert.That(def.WinFormsLiteral("+007"), Is.EqualTo("7"));
+            Assert.That(def.WinFormsLiteral("-5"), Is.EqualTo("-5"));
+        });
+    }
+
+    [Test]
+    [SetCulture("sv-SE")]
+    public void Int_IsCultureInvariant_BothWays()
+    {
+        var def = new FormPropertyDef("MaxLength", FormPropertyType.Int);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(def.Accepts("−5"), Is.False, "U+2212 is not a minus in the document");
+            Assert.That(def.WinFormsLiteral("-5"), Is.EqualTo("-5"), "ASCII minus whatever the culture");
+        });
+    }
+
+    [TestCase("5, 10\r\n", TestName = "{m}(trailing CRLF)")]
+    [TestCase("5,\n10", TestName = "{m}(LF after the comma)")]
+    [TestCase("5,<NBSP>10", TestName = "{m}(NBSP)")]
+    public void Size_RefusesWhitespaceOtherThanAsciiSpace(string value)
+    {
+        Assert.That(new FormPropertyDef("ClientSize", FormPropertyType.Size).Accepts(Unmark(value)), Is.False);
+    }
+
+    // ------------------------------------------------------------------
+    // Colour NAMES follow the catalog's spelling (coordinator decision, 2026-09-26).
+    // ------------------------------------------------------------------
+
+    [Test]
+    public void AKnownColourName_IsMatchedCaseInsensitively_AndEmittedInTheTablesSpelling()
+    {
+        var back = new FormPropertyDef("BackColor", FormPropertyType.Color);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(back.Canonical("red"), Is.EqualTo("Red"));
+            Assert.That(back.Canonical("LIGHTGOLDENRODYELLOW"), Is.EqualTo("LightGoldenrodYellow"));
+            Assert.That(back.WinFormsLiteral("red"), Is.EqualTo("Color.Red"), "Color.red is CS0117 in the C#");
+            Assert.That(back.Accepts("red", FormTarget.WinForms), Is.True);
+        });
+    }
+
+    [TestCase("Bogus")]
+    [TestCase("RebeccaPurple")]
+    [TestCase("rebeccapurple")]
+    public void AnUnknownColourName_IsRefusedOnWinForms_ButNotOnTheWeb(string value)
+    {
+        var back = new FormPropertyDef("BackColor", FormPropertyType.Color);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(back.Accepts(value, FormTarget.WinForms), Is.False,
+                $"Color.{value} is CS0117 at csc, BasicLang silent");
+            Assert.That(back.Accepts(value, FormTarget.Web), Is.True, "CSS names are the browser's business");
+            Assert.That(back.Accepts(value), Is.True, "usable on SOME target");
+            Assert.That(back.DescribeRefusal(value, FormTarget.WinForms),
+                Does.Contain(value).And.Contain("not a named colour").And.Contain("preserved exactly as written"));
+            Assert.That(back.Canonical(value), Is.EqualTo(value), "a Degraded value is never coerced");
+        });
+    }
+
+    /// <summary>The invariant: whatever ColorLiteral writes, IsSourceForm recognises and re-emits unchanged.</summary>
+    private static IEnumerable<TestCaseData> EveryNamedAndSystemColour() =>
+        FormKnownColors.Names.Concat(FormSystemColors.Names)
+            .SelectMany(n => new[] { n, n.ToLowerInvariant() })
+            .Concat(new[] { "#123", "#A0B1C2", "#80112233" })
+            .Select(n => new TestCaseData(n).SetName("{m}(" + n + ")"));
+
+    [TestCaseSource(nameof(EveryNamedAndSystemColour))]
+    public void WhatColorLiteralWrites_IsSourceForm_AndReEmitsUnchanged(string value)
+    {
+        var back = new FormPropertyDef("BackColor", FormPropertyType.Color);
+        var written = back.WinFormsLiteral(value)!;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(back.Accepts(value, FormTarget.WinForms), Is.True);
+            Assert.That(back.IsSourceForm(written), Is.True, written);
+            Assert.That(back.SourceLiteral(written), Is.EqualTo(written));
+        });
+    }
+
     [TestCase("New X")]
     [TestCase("\"x\"")]
     public void AStringRow_HasNoSourceForm(string value)

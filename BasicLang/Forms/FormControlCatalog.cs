@@ -222,11 +222,13 @@ public sealed record FormPropertyDef(
             return flag ? "true" : "false";
         }
 
-        // A system colour in the table's spelling, so `control` and `Control` compare equal wherever
-        // a caller asks "is this the same value?" (the grid's no-op rule). Other colours unchanged.
-        if (Type == FormPropertyType.Color && FormSystemColors.TryCanonical(value, out var system))
+        // A system or named colour in its table's spelling, so `control`/`Control` and `red`/`Red` compare
+        // equal wherever a caller asks "is this the same value?" (the grid's no-op rule). Other colours —
+        // #hex, and a name neither table knows — unchanged.
+        if (Type == FormPropertyType.Color &&
+            (FormSystemColors.TryCanonical(value, out var colour) || FormKnownColors.TryCanonical(value, out colour)))
         {
-            return system;
+            return colour;
         }
 
         return value;
@@ -252,10 +254,13 @@ public sealed record FormPropertyDef(
             return $"{WinFormsFactory}({StringLiteral(value)})";
         }
 
+        // ⛔ Re-emitted from the PARSED value, never the input text — whatever the parser tolerated around
+        // the digits stays out of the user's file.
         return Type switch
         {
             FormPropertyType.Color => ColorLiteral(value),
             FormPropertyType.Size => TryParseSize(value, out var w, out var h) ? SizeLiteral(w, h) : null,
+            FormPropertyType.Int => TryParseInt(value, out var n) ? n.ToString(CultureInfo.InvariantCulture) : null,
             _ => null
         };
     }
@@ -299,10 +304,23 @@ public sealed record FormPropertyDef(
     {
         width = height = 0;
         var parts = value.Split(',');
-        return parts.Length == 2 &&
-               int.TryParse(parts[0].Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out width) &&
-               int.TryParse(parts[1].Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out height);
+        return parts.Length == 2 && TryParseInt(parts[0], out width) && TryParseInt(parts[1], out height);
     }
+
+    /// <summary>
+    /// One document integer: an optional ASCII sign and decimal digits, culture-invariant, with only
+    /// ASCII SPACE allowed around it.
+    ///
+    /// <para>⛔ Not <c>int.TryParse(value)</c>, which skips every character from U+0009 to U+000D — so
+    /// <c>"5\r\n"</c> parsed, was Canon, and the writer spliced the raw text (a line break inside the
+    /// generated region). Space is what a person types beside a number; a tab, a line break or an NBSP
+    /// there is never meant, and the one honest answer is Degraded — preserved, reported, not written.
+    /// Refusing rather than trimming also keeps every OTHER consumer of the raw value (the web's markup
+    /// attributes, a script template) safe without each needing its own trim. Current culture is out
+    /// for the U+2212 reason SizeLiteral states.</para>
+    /// </summary>
+    public static bool TryParseInt(string value, out int result) =>
+        int.TryParse(value.Trim(' '), NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out result);
 
     /// <summary>The individual items of an <see cref="IsItemCollection"/> value.</summary>
     public static IEnumerable<string> SplitItems(string value) =>
@@ -325,8 +343,16 @@ public sealed record FormPropertyDef(
             return "SystemColors." + system;
         }
 
+        // A named colour in Color's OWN spelling: `Color.red` is CS0117 in the generated C#.
+        if (FormKnownColors.TryCanonical(value, out var named))
+        {
+            return "Color." + named;
+        }
+
         if (value.Length == 0 || value[0] != '#')
         {
+            // A name neither table knows is refused on WinForms (IsRefusedOn), so this is reached only
+            // by a caller that skipped the Degraded check — kept as the document's text, never invented.
             return "Color." + value;
         }
 
@@ -354,7 +380,7 @@ public sealed record FormPropertyDef(
         static int Hex(string text, int start) =>
             Convert.ToInt32(text.Substring(start, 2), 16);
 
-        return $"Color.FromArgb({Hex(digits, 0)}, {Hex(digits, 2)}, {Hex(digits, 4)}, {Hex(digits, 6)})";
+        return FromArgbLiteral(Hex(digits, 0), Hex(digits, 2), Hex(digits, 4), Hex(digits, 6));
     }
 
     /// <summary>
@@ -377,25 +403,39 @@ public sealed record FormPropertyDef(
     ///
     /// <para>⚠ A String row always answers false — see the String arm.</para>
     /// </summary>
-    public bool IsSourceForm(string value) => Type switch
+    public bool IsSourceForm(string value) => SourceLiteral(value) != null;
+
+    /// <summary>
+    /// The WinForms source to write for a value that <see cref="IsSourceForm"/> recognises — RE-EMITTED
+    /// from what was parsed, never the input text — or null when the value is not a source form.
+    ///
+    /// <para>⛔ A table match is its own canonical text (it matched ORDINALLY). A parsed form —
+    /// <c>Color.FromArgb(…)</c>, <c>New Size(…)</c> — is rebuilt from its numbers, so the spacing, the
+    /// leading zeros and anything else the parser tolerated can never reach the user's file.</para>
+    /// </summary>
+    public string? SourceLiteral(string value) => Type switch
     {
         FormPropertyType.Enum =>
             WinFormsEnumType != null && AllowedValues != null &&
-            AllowedValues.Any(v => string.Equals(WinFormsLiteral(v), value, StringComparison.Ordinal)),
+            AllowedValues.Any(v => string.Equals(WinFormsLiteral(v), value, StringComparison.Ordinal))
+                ? value
+                : null,
 
         // ⛔⛔ Exactly the shapes ColorLiteral WRITES, each proved by a table or a full parse — never a
         // prefix. The grid's Color row is a free-text box, and the old arm (anything starting `Color.`
         // or `New `) spliced `New Foo`, `Color.Bogus` and `Color.Red + junk` verbatim into the user's
         // file: csc errors, BasicLang silent. `New …` is gone entirely — ColorLiteral never emits it.
         FormPropertyType.Color =>
-            IsSystemColorsSource(value) || IsNamedColorSource(value) || IsFromArgbSource(value),
+            IsSystemColorsSource(value) || IsNamedColorSource(value) ? value : FromArgbSource(value),
 
         // Exactly `New Size(w, h)` around two integers — never a prefix match, which would pass
         // `New Size(1, 2) + junk` straight into the generated source.
         FormPropertyType.Size =>
             value.StartsWith("New Size(", StringComparison.Ordinal) &&
             value.EndsWith(")", StringComparison.Ordinal) &&
-            TryParseSize(value.Substring("New Size(".Length, value.Length - "New Size(".Length - 1), out _, out _),
+            TryParseSize(value.Substring("New Size(".Length, value.Length - "New Size(".Length - 1), out var w, out var h)
+                ? SizeLiteral(w, h)
+                : null,
 
         // ⛔⛔ A String has NO source form in the document: `Properties` holds DOCUMENT text, one
         // convention. The old arm (`"…` or `New …` is already source) was a SHAPE test — the thing this
@@ -403,10 +443,11 @@ public sealed record FormPropertyDef(
         // `"quoted"` without its quotes. It was added (525aa88b) for the D12 recognizer, which stores raw
         // source text; nothing feeds recognizer output into Properties, and when the importer is built it
         // must UNQUOTE string literals into document text at that boundary, never teach this method a shape.
-        FormPropertyType.String => false,
+        FormPropertyType.String => null,
 
-        // An Int or a Bool has no source form that differs from its document text.
-        _ => false
+        // An Int or a Bool has no source form that differs from its document text (both are
+        // re-emitted from their parsed value by WinFormsLiteral / the writer instead).
+        _ => null
     };
 
     /// <summary>True when <paramref name="value"/> parses to this property's declared type on SOME target.</summary>
@@ -420,7 +461,7 @@ public sealed record FormPropertyDef(
         return Type switch
         {
             FormPropertyType.String => true,
-            FormPropertyType.Int => int.TryParse(value, out _),
+            FormPropertyType.Int => TryParseInt(value, out _),
             FormPropertyType.Bool => bool.TryParse(value, out _),
             // "#rrggbb", "#rgb", "#aarrggbb", or a bare name the target resolves (KnownColor / system / CSS).
             FormPropertyType.Color => IsColor(value),
@@ -434,11 +475,12 @@ public sealed record FormPropertyDef(
 
     /// <summary>
     /// True when <paramref name="value"/> is usable on <paramref name="target"/>. Stricter than
-    /// <see cref="Accepts(string?)"/> in one place today: a Windows system colour with no CSS
-    /// equivalent is WinForms-only as a VALUE (spec §2.2) — Degraded on a web form, with a reason.
+    /// <see cref="Accepts(string?)"/> in two places today, both colours (<see cref="IsRefusedOn"/>): a
+    /// Windows system colour with no CSS equivalent is WinForms-only as a VALUE (spec §2.2), and a
+    /// colour NAME WinForms' tables do not know is web-only.
     /// </summary>
     public bool Accepts(string? value, FormTarget target) =>
-        Accepts(value) && !IsSystemColourRefusedOn(value!, target);
+        Accepts(value) && !IsRefusedOn(value!, target);
 
     /// <summary>
     /// Why <paramref name="value"/> is not usable on <paramref name="target"/> — the Degraded reason.
@@ -464,6 +506,13 @@ public sealed record FormPropertyDef(
                    "web form cannot use it. The value is preserved exactly as written.";
         }
 
+        if (IsUnknownColourNameRefusedOn(value, target))
+        {
+            return $"'{value}' is not a named colour WinForms knows (System.Drawing.Color has no such " +
+                   "member, and it is not a system colour), so a WinForms form cannot use it. " +
+                   "The value is preserved exactly as written.";
+        }
+
         return $"'{value}' is not a valid {Type}" +
                (AllowedValues is { Count: > 0 } ? $" (expected one of: {string.Join(", ", AllowedValues)})" : "") +
                ". The value is preserved exactly as written.";
@@ -471,12 +520,27 @@ public sealed record FormPropertyDef(
 
     /// <summary>
     /// THE target-specific refusal — the one predicate <see cref="Accepts(string?, FormTarget)"/> and
-    /// <see cref="DescribeRefusal"/> share. Only a COLOUR row can refuse a system colour: a String
-    /// caption reading "Window" is text, and an Enum member named "Menu" is that enum's business.
+    /// <see cref="DescribeRefusal"/> share, each arm of it also asked by DescribeRefusal for its reason.
+    /// Only a COLOUR row refuses by target: a String caption reading "Window" is text, and an Enum
+    /// member named "Menu" is that enum's business.
     /// </summary>
+    private bool IsRefusedOn(string value, FormTarget target) =>
+        IsSystemColourRefusedOn(value, target) || IsUnknownColourNameRefusedOn(value, target);
+
     private bool IsSystemColourRefusedOn(string value, FormTarget target) =>
         Type == FormPropertyType.Color && target == FormTarget.Web &&
         FormSystemColors.TryCanonical(value, out var system) && FormSystemColors.CssFor(system) == null;
+
+    /// <summary>
+    /// A bare colour NAME on WinForms that neither table knows — <c>Bogus</c>, or a CSS name such as
+    /// <c>RebeccaPurple</c> that System.Drawing.Color lacks. Written, it is <c>Color.Bogus</c>: CS0117 at
+    /// csc, BasicLang silent. The web keeps today's acceptance — CSS names are case-insensitive, include
+    /// names WinForms lacks, and the browser is the judge.
+    /// </summary>
+    private bool IsUnknownColourNameRefusedOn(string value, FormTarget target) =>
+        Type == FormPropertyType.Color && target == FormTarget.WinForms &&
+        IsColorName(value) &&
+        !FormSystemColors.TryCanonical(value, out _) && !FormKnownColors.TryCanonical(value, out _);
 
     /// <summary><c>SystemColors.X</c> where X is, exactly and case-sensitively, a member the table names.</summary>
     private static bool IsSystemColorsSource(string value)
@@ -502,23 +566,46 @@ public sealed record FormPropertyDef(
 
     /// <summary>
     /// <c>Color.FromArgb(a, r, g, b)</c> — the one call ColorLiteral emits — around exactly four
-    /// decimal integers 0-255 and nothing after the closing parenthesis. Spacing around the commas is
-    /// free (as <c>New Size(…)</c>'s is); the three-argument overload is refused because nothing here
-    /// writes it.
+    /// decimal integers 0-255 and nothing after the closing parenthesis, RE-EMITTED canonically from
+    /// the parsed numbers (null when it does not parse). Only ASCII SPACE is allowed around the commas:
+    /// <c>Trim()</c> would also strip CR, LF, NBSP and U+2028, and before re-emission that spliced a
+    /// multi-line statement into the user's file. The three-argument overload is refused because nothing
+    /// here writes it.
     /// </summary>
-    private static bool IsFromArgbSource(string value)
+    private static string? FromArgbSource(string value)
     {
         const string prefix = "Color.FromArgb(";
         if (!value.StartsWith(prefix, StringComparison.Ordinal) || !value.EndsWith(")", StringComparison.Ordinal))
         {
-            return false;
+            return null;
         }
 
         var parts = value.Substring(prefix.Length, value.Length - prefix.Length - 1).Split(',');
-        return parts.Length == 4 &&
-               parts.All(p => int.TryParse(p.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out var n) &&
-                              n <= 255);
+        if (parts.Length != 4)
+        {
+            return null;
+        }
+
+        var argb = new int[4];
+        for (var i = 0; i < 4; i++)
+        {
+            if (!int.TryParse(parts[i].Trim(' '), NumberStyles.None, CultureInfo.InvariantCulture, out argb[i]) ||
+                argb[i] > 255)
+            {
+                return null;
+            }
+        }
+
+        return FromArgbLiteral(argb[0], argb[1], argb[2], argb[3]);
     }
+
+    // The ONE spelling of the call, shared by ColorLiteral and FromArgbSource so what is written and what
+    // is recognised cannot drift. Invariant for the SizeLiteral reason.
+    private static string FromArgbLiteral(int a, int r, int g, int b) =>
+        string.Create(CultureInfo.InvariantCulture, $"Color.FromArgb({a}, {r}, {g}, {b})");
+
+    /// <summary>A bare colour name — IsColor's letters-only arm.</summary>
+    private static bool IsColorName(string value) => value.Length > 0 && value.All(char.IsLetter);
 
     private static bool IsColor(string value)
     {
@@ -534,10 +621,9 @@ public sealed record FormPropertyDef(
                    digits.All(Uri.IsHexDigit);
         }
 
-        // A bare identifier — a KnownColor or a CSS named colour. The catalog does not carry the
-        // 140-odd names; the target resolves it, and an unknown one degrades to D9's Opaque tier
-        // rather than being rejected here.
-        return value.All(c => char.IsLetter(c));
+        // A bare name — a KnownColor, a system colour or a CSS named colour. Usable on SOME target, so
+        // accepted here; WinForms refuses a name its tables do not know (IsUnknownColourNameRefusedOn).
+        return IsColorName(value);
     }
 }
 
