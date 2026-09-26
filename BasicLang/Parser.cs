@@ -1084,6 +1084,7 @@ namespace BasicLang.Compiler
 
                     Consume(TokenType.As, "Expected 'As' in field declaration");
 
+                    var fieldTypeToken = Peek();
                     var field = new VariableDeclarationNode(token.Line, token.Column)
                     {
                         Name = name,
@@ -1101,6 +1102,7 @@ namespace BasicLang.Compiler
                     // both; fields were the one path that set only one.
                     if (arrayDimensions != null)
                     {
+                        RejectArrayOnNameAndType(name, field.Type, fieldTypeToken);
                         field.Type.IsArray = true;
                         field.Type.ArrayDimensions = arrayDimensions;
                     }
@@ -1703,10 +1705,12 @@ namespace BasicLang.Compiler
                     RejectChainedArrayDimensions(member.Name);
 
                 Consume(TokenType.As, "Expected 'As'");
+                var memberTypeToken = Peek();
                 member.Type = ParseTypeReference();
 
                 if (memberDimensions != null)
                 {
+                    RejectArrayOnNameAndType(member.Name, member.Type, memberTypeToken);
                     member.Type.IsArray = true;
                     member.Type.ArrayDimensions = memberDimensions;
                 }
@@ -2378,7 +2382,8 @@ namespace BasicLang.Compiler
 
             node.Name = Consume(TokenType.Identifier, "Expected parameter name").Lexeme;
 
-            // Check for array brackets before 'As'
+            // Check for array brackets before 'As': `v[] As T`, or VB's `v() As T`, which used to
+            // be refused here with "Expected 'As'" although Dim and fields accepted it.
             bool isArray = false;
             List<ExpressionNode> arrayDimensions = new List<ExpressionNode>();
 
@@ -2388,13 +2393,21 @@ namespace BasicLang.Compiler
                 arrayDimensions = ParseArrayDimensionList(TokenType.RightBracket, "]");
                 RejectChainedArrayDimensions(node.Name);
             }
+            else if (Match(TokenType.LeftParen))
+            {
+                isArray = true;
+                arrayDimensions = ParseArrayDimensionList(TokenType.RightParen, ")");
+                RejectChainedArrayDimensions(node.Name);
+            }
 
             Consume(TokenType.As, "Expected 'As'");
+            var typeToken = Peek();
             node.Type = ParseTypeReference();
 
             // If we had array brackets, mark the type as an array
             if (isArray)
             {
+                RejectArrayOnNameAndType(node.Name, node.Type, typeToken);
                 node.Type.IsArray = true;
                 node.Type.ArrayDimensions = arrayDimensions;
             }
@@ -2625,7 +2638,9 @@ namespace BasicLang.Compiler
                 RejectChainedArrayDimensions(node.Name);
 
                 Consume(TokenType.As, "Expected 'As'");
+                var typeToken = Peek();
                 var elementType = ParseTypeReference();
+                RejectArrayOnNameAndType(node.Name, elementType, typeToken);
                 elementType.IsArray = true;
                 elementType.ArrayDimensions = dimensions;
                 node.Type = elementType;
@@ -2645,7 +2660,7 @@ namespace BasicLang.Compiler
                 {
                     var newToken = Previous();
                     var newExpr = new NewExpressionNode(newToken.Line, newToken.Column);
-                    newExpr.Type = ParseTypeReference();
+                    newExpr.Type = ParseTypeReference(allowArraySuffix: false);
 
                     // Check for constructor arguments
                     if (Match(TokenType.LeftParen))
@@ -2816,7 +2831,98 @@ namespace BasicLang.Compiler
             return new GenericConstraint(GenericConstraintKind.Type, typeName);
         }
 
-        private TypeReference ParseTypeReference()
+        /// <summary>
+        /// Parses a type, including an array suffix written on the TYPE rather than the name:
+        /// <c>As Integer()</c>, <c>As Integer[]</c>, <c>As Integer(,)</c>. VB puts the suffix
+        /// here wherever there is no name to put it on — a Function's return type, a Property's
+        /// type, a generic argument (<c>List(Of Integer())</c>), a cast target — so without it an
+        /// array could not be returned at all: every one of those failed to parse.
+        ///
+        /// <para>The suffix is always EMPTY (only commas for rank): a type names no size, and a
+        /// sized one (<c>As Integer(3)</c>) is refused. Before that refusal the <c>(3)</c> was
+        /// left behind and swallowed by whatever parsed next, so the declaration silently became
+        /// a SCALAR <c>Integer</c>.</para>
+        /// </summary>
+        /// <param name="allowArraySuffix">
+        /// False after <c>New</c>, where <c>T()</c> is an empty CONSTRUCTOR argument list
+        /// (<c>New List(Of Integer)()</c>, <c>New T() {…}</c>) and must stay the caller's to read.
+        /// </param>
+        /// <param name="refuseSizedSuffix">
+        /// False for a lambda's return type, where a single-line body may begin with <c>(</c>.
+        /// </param>
+        private TypeReference ParseTypeReference(bool allowArraySuffix = true, bool refuseSizedSuffix = true)
+        {
+            var type = ParseTypeReferenceCore();
+            if (!allowArraySuffix)
+                return type;
+
+            if (!TryParseArrayTypeSuffix(out var dimensions))
+            {
+                if (refuseSizedSuffix && (Check(TokenType.LeftBracket) || (Check(TokenType.LeftParen) && PeekNext().Type != TokenType.Of)))
+                {
+                    throw new ParseException(
+                        $"An array size cannot appear in a type ('{type}{Peek().Lexeme}…'): a type names no size.",
+                        Peek(), $"Put the size on the name — 'Dim a[3] As {type.Name}' — or leave the type unsized: '{type.Name}()'");
+                }
+                return type;
+            }
+
+            if (TryPeekArrayTypeSuffix())
+            {
+                throw new ParseException(
+                    $"Jagged array types ('{type.Name}()()') are not supported. "
+                    + $"Declare rank with a comma list — '{type.Name}(,)' — instead.",
+                    Peek(), "Use a single comma-separated suffix");
+            }
+
+            type.IsArray = true;
+            type.ArrayDimensions = dimensions;
+            return type;
+        }
+
+        /// <summary>True when the next tokens are an empty array suffix: <c>()</c>, <c>(,)</c>, <c>[]</c>, <c>[,]</c>.</summary>
+        private bool TryPeekArrayTypeSuffix()
+        {
+            var next = PeekNext().Type;
+            if (Check(TokenType.LeftParen))
+                return next == TokenType.RightParen || next == TokenType.Comma;
+            if (Check(TokenType.LeftBracket))
+                return next == TokenType.RightBracket || next == TokenType.Comma;
+            return false;
+        }
+
+        private bool TryParseArrayTypeSuffix(out List<ExpressionNode> dimensions)
+        {
+            dimensions = null;
+            if (!TryPeekArrayTypeSuffix())
+                return false;
+
+            var close = Advance().Type == TokenType.LeftParen ? TokenType.RightParen : TokenType.RightBracket;
+            var closeStr = close == TokenType.RightParen ? ")" : "]";
+            dimensions = new List<ExpressionNode> { null };
+            while (Match(TokenType.Comma))
+                dimensions.Add(null);
+            Consume(close, $"Expected '{closeStr}' to close the array type suffix (a type names no size)");
+            return true;
+        }
+
+        /// <summary>
+        /// Refuses an array suffix on BOTH the name and the type (<c>Dim a() As Integer()</c>): in
+        /// VB that is a jagged array, which this compiler does not have, and taking either half
+        /// alone would silently declare a different type than the one written.
+        /// </summary>
+        private void RejectArrayOnNameAndType(string name, TypeReference type, Token at)
+        {
+            if (type.IsArray)
+            {
+                throw new ParseException(
+                    $"'{name}' has an array suffix on both its name and its type, which declares a jagged "
+                    + "array; jagged arrays are not supported.",
+                    at, $"Write the suffix once: '{name}() As {type.Name}' or '{name} As {type.Name}()'");
+            }
+        }
+
+        private TypeReference ParseTypeReferenceCore()
         {
             TypeReference type;
 
@@ -4507,7 +4613,7 @@ namespace BasicLang.Compiler
             {
                 var token = Previous();
                 var newExpr = new NewExpressionNode(token.Line, token.Column);
-                newExpr.Type = ParseTypeReference();
+                newExpr.Type = ParseTypeReference(allowArraySuffix: false);
 
                 var sawParens = false;
                 if (Match(TokenType.LeftParen))
@@ -4672,6 +4778,17 @@ namespace BasicLang.Compiler
                 return ParseForeignQualifiedNameExpression();
             }
 
+            // A built-in type keyword naming its TYPE, for a Shared member: `String.Format(...)`,
+            // `Integer.Parse(s)`, `Integer.MaxValue`, `Char.IsDigit(c)`. These lex as keywords, so
+            // every one of them was "Unexpected token in expression: 'String'" — while `Math.Max`,
+            // an ordinary identifier, worked. Only when a `.` follows: a bare `String` is still a
+            // type in a type position and nothing in an expression.
+            if (!IsAtEnd() && IsBuiltInTypeKeyword(Peek().Type) && PeekNext().Type == TokenType.Dot)
+            {
+                var token = Advance();
+                return new IdentifierExpressionNode(token.Line, token.Column) { Name = token.Lexeme };
+            }
+
             // Identifier (soft keywords like First/Take are valid identifiers outside
             // their query-clause positions)
             if (Check(TokenType.Identifier) || (!IsAtEnd() && IsSoftExpressionKeyword(Peek().Type)))
@@ -4730,6 +4847,13 @@ namespace BasicLang.Compiler
                 Peek(),
                 "Expected a value, variable, function call, or operator. Valid expression elements include: literals, identifiers, parentheses, or operators like +, -, *, /.");
         }
+
+        /// <summary>The data-type keywords (the lexer's "Data Types" group).</summary>
+        private static bool IsBuiltInTypeKeyword(TokenType type) => type is
+            TokenType.Integer or TokenType.Long or TokenType.Single or TokenType.Double or
+            TokenType.String or TokenType.Boolean or TokenType.Char or TokenType.Byte or
+            TokenType.Short or TokenType.UByte or TokenType.UShort or TokenType.UInteger or
+            TokenType.ULong;
 
         /// <summary>The brace list of `New T() { … }`, typed by T (spec §9).</summary>
         private CollectionInitializerNode ParseTypedCollectionInitializer(TypeReference elementType)
@@ -4833,9 +4957,25 @@ namespace BasicLang.Compiler
                     var param = new ParameterNode(Peek().Line, Peek().Column);
                     param.Name = Consume(TokenType.Identifier, "Expected parameter name").Lexeme;
 
+                    // `q() As T` / `q[] As T`, as on a named Sub's parameter.
+                    TryParseArrayTypeSuffix(out var nameDimensions);
+
                     if (Match(TokenType.As))
                     {
+                        var typeToken = Peek();
                         param.Type = ParseTypeReference();
+                        if (nameDimensions != null)
+                        {
+                            RejectArrayOnNameAndType(param.Name, param.Type, typeToken);
+                            param.Type.IsArray = true;
+                            param.Type.ArrayDimensions = nameDimensions;
+                        }
+                    }
+                    else if (nameDimensions != null)
+                    {
+                        throw new ParseException(
+                            $"Array parameter '{param.Name}' needs its element type", Peek(),
+                            $"Write '{param.Name}() As <Type>'");
                     }
 
                     lambda.Parameters.Add(param);
@@ -4847,7 +4987,7 @@ namespace BasicLang.Compiler
             // Optional return type for Function lambdas
             if (isFunction && Match(TokenType.As))
             {
-                lambda.ReturnType = ParseTypeReference();
+                lambda.ReturnType = ParseTypeReference(refuseSizedSuffix: false);
             }
 
             // Single-line vs multi-line is decided by whether a NEWLINE follows the parameter

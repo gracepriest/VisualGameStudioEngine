@@ -650,11 +650,12 @@ public class CppEmissionOrderTests
     }
 
     /// <summary>
-    /// ⛔ PINNED: a ReadOnly Property with a Get block is not reachable as <c>b-&gt;Doubled</c> on
-    /// C++ ("no member named"); the other three print 12. A property-emission gap, not ordering.
+    /// A ReadOnly Property whose Get block calls a module procedure. Pinned as a C++ gap until
+    /// task #148: the read lowered to <c>b-&gt;Doubled</c> ("no member named"); it now calls
+    /// <c>get_Doubled()</c>.
     /// </summary>
     [Test]
-    public void APropertyGetter_IsNotAMemberOnCpp_Pinned()
+    public void APropertyGetter_CallingAModuleProcedure_RunsOnEveryBackend()
     {
         var program = HelpersTwice + """
 
@@ -670,14 +671,7 @@ public class CppEmissionOrderTests
              PrintLine(CStr(b.Doubled))
             End Sub
             """;
-        Assert.Multiple(() =>
-        {
-            Assert.That(() => Cpp(program), Throws.Exception.With.Message.Contains("no member named"),
-                "PINNED: if this compiles, promote it to a four-backend case");
-            Assert.That(Js(program), Is.EqualTo("12"), "JavaScript");
-            Assert.That(Msil(program), Is.EqualTo("12"), "MSIL");
-            Assert.That(Cs(program), Is.EqualTo("12"), "C#");
-        });
+        RunsOnEveryBackend(program, "12");
     }
 
     /// <summary>

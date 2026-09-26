@@ -418,6 +418,13 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // in both modes (split-mode counterpart: EmitRuntimeHeader in CppCodeGenerator.Split.cs).
             SpliceRuntimeSource(CppIntegerDivisionRuntime.Source);
 
+            // The type keywords' Shared members (String.Format, Integer.Parse, …) — after the
+            // NetException they throw and the BCL body's FormatDouble they use. ON DEMAND, in
+            // both modes (split-mode counterpart: EmitRuntimeHeader in CppCodeGenerator.Split.cs):
+            // a program naming no row carries none of it.
+            if (PrimitiveStaticSurface.IsUsedBy(module))
+                SpliceRuntimeSource(CppPrimitiveStaticsRuntime.Source);
+
             // D-P7 NetRef (P2a-2 flip): UNCONDITIONAL in both modes — ManagedOwned
             // declaration positions lower to BasicLang::NetRef even with an empty surface,
             // so the type must always exist. Include-guarded and self-including; shared
@@ -973,6 +980,109 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         }
 
         /// <summary>
+        /// A member access that must go through a property's ACCESSORS: <c>Accessor</c> is what
+        /// the member is reached through — <c>"Box::"</c> for a Shared property, else the
+        /// receiver and its access operator — and <c>Name</c> is the property's DECLARED name,
+        /// ready for a <c>get_</c>/<c>set_</c> prefix.
+        /// </summary>
+        private sealed record AccessorProperty(string Accessor, string Name);
+
+        /// <summary>
+        /// Resolves <c>receiver.member</c> to a property whose value lives behind its accessors,
+        /// or null when the member is storage (a field, or a plain auto-property — which keeps a
+        /// data member of its own name, see <see cref="GenerateProperty"/>).
+        ///
+        /// <para>⛔ THE IR CARRIES A PROPERTY READ AS A FIELD READ. <c>b.Count</c> and a bare
+        /// <c>Count</c> inside the class both arrive as an <see cref="IRFieldAccess"/> by NAME,
+        /// and a write as an <see cref="IRFieldStore"/>. For a property with a Get/Set body the
+        /// class has no member of that name — only <c>get_Count()</c> — so every such program
+        /// failed with "no member named 'Count'" on this backend alone (task #148). The same
+        /// holds for an Overridable one, whose value must come from the DERIVED accessor, and
+        /// for any property reached through an INTERFACE, which declares accessors and no
+        /// storage.</para>
+        /// </summary>
+        private AccessorProperty AccessorPropertyOf(IRValue receiver, string member)
+        {
+            if (receiver == null || string.IsNullOrEmpty(member) || _module == null) return null;
+
+            // A Shared property through the class name: `Box.K`.
+            if (receiver is IRVariable typeName && !string.IsNullOrEmpty(typeName.Name)
+                && !_declaredIdentifiers.Contains(typeName.Name)
+                && FindClassProperty(typeName.Name, member) is { } shared && shared.prop.IsStatic)
+            {
+                return shared.prop.IsAccessorBacked
+                    ? new AccessorProperty($"{SanitizeName(shared.owner.Name)}::", SanitizeName(shared.prop.Name))
+                    : null;
+            }
+
+            // ⛔ `Me` IS RESOLVED AGAINST THE CLASS BEING EMITTED, NEVER ITS IR TYPE. IRBuilder
+            // caches one `Me` variable (GetOrCreateVariable) and hands it to every later class,
+            // so inside the SECOND class's method `Me` is typed as the FIRST — measured: with an
+            // Animal declared above Counter, Counter.Probe's bare `V` resolved against Animal,
+            // found no property, and fell back to `this->V`.
+            var receiverType = receiver is IRVariable { Name: var self }
+                               && (string.Equals(self, "Me", StringComparison.OrdinalIgnoreCase) || self == "this")
+                               && _emittingClass != null
+                ? _emittingClass.Name
+                : receiver.Type?.Name;
+            if (string.IsNullOrEmpty(receiverType)) return null;
+
+            if (FindClassProperty(receiverType, member) is { } found)
+            {
+                if (!found.prop.IsAccessorBacked) return null;
+                var accessor = found.prop.IsStatic
+                    ? $"{SanitizeName(found.owner.Name)}::"
+                    : GetValueName(receiver) + MemberAccessOp(receiver);
+                return new AccessorProperty(accessor, SanitizeName(found.prop.Name));
+            }
+
+            if (FindInterfaceProperty(receiverType, member) is { } declared)
+                return new AccessorProperty(GetValueName(receiver) + MemberAccessOp(receiver), SanitizeName(declared.Name));
+
+            return null;
+        }
+
+        /// <summary>The property <paramref name="member"/> reachable from class <paramref name="typeName"/>, walking bases.</summary>
+        private (IRClass owner, IRProperty prop)? FindClassProperty(string typeName, string member)
+        {
+            if (_module?.Classes == null) return null;
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            while (!string.IsNullOrEmpty(typeName) && seen.Add(typeName)
+                   && _module.Classes.TryGetValue(typeName, out var cls) && cls != null)
+            {
+                foreach (var p in cls.Properties ?? new List<IRProperty>())
+                    if (string.Equals(p?.Name, member, StringComparison.OrdinalIgnoreCase))
+                        return (cls, p);
+                // A field of that name further down the chain is storage; stop at it.
+                if ((cls.Fields ?? new List<IRField>()).Any(f => string.Equals(f?.Name, member, StringComparison.OrdinalIgnoreCase)))
+                    return null;
+                typeName = cls.BaseClass;
+            }
+            return null;
+        }
+
+        /// <summary>The property <paramref name="member"/> declared by interface <paramref name="typeName"/> or one it extends.</summary>
+        private IRInterfaceProperty FindInterfaceProperty(string typeName, string member)
+        {
+            if (_module?.Interfaces == null) return null;
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var pending = new Stack<string>();
+            pending.Push(typeName);
+            while (pending.Count > 0)
+            {
+                var name = pending.Pop();
+                if (string.IsNullOrEmpty(name) || !seen.Add(name)
+                    || !_module.Interfaces.TryGetValue(name, out var iface) || iface == null) continue;
+                foreach (var p in iface.Properties ?? new List<IRInterfaceProperty>())
+                    if (string.Equals(p?.Name, member, StringComparison.OrdinalIgnoreCase))
+                        return p;
+                foreach (var b in iface.BaseInterfaces ?? new List<string>())
+                    pending.Push(b);
+            }
+            return null;
+        }
+
+        /// <summary>
         /// The class that DECLARES a STATIC field, property or event <paramref name="member"/>
         /// reachable from <paramref name="typeName"/> (walking bases), else null.
         /// </summary>
@@ -1276,7 +1386,8 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // Destructor - virtual if has base class, interfaces, or virtual methods
             bool needsVirtualDestructor = !string.IsNullOrEmpty(irClass.BaseClass) ||
                                          irClass.Interfaces.Count > 0 ||
-                                         irClass.Methods.Any(m => m.IsVirtual || m.IsOverride);
+                                         irClass.Methods.Any(m => m.IsVirtual || m.IsOverride) ||
+                                         irClass.Properties.Any(p => p.IsVirtual || p.IsOverride);
 
             if (needsVirtualDestructor)
             {
@@ -1477,10 +1588,20 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         /// <c>construct_at</c>. Measured with an interface property that carried an (empty) Get
         /// block, the one shape whose interface accessor was emitted at all.</para>
         ///
-        /// <para>Strings and class-kinded types pass and return by <c>const&amp;</c>; a non-static
-        /// getter is <c>const</c>. <paramref name="isStatic"/> adds the <c>static</c> prefix and
-        /// drops the <c>const</c>, since a static member function has no object to promise not
-        /// to change.</para>
+        /// <para>A setter takes strings and class-kinded types by <c>const&amp;</c>.
+        /// <paramref name="isStatic"/> adds the <c>static</c> prefix.</para>
+        ///
+        /// <para>⛔ A GETTER RETURNS BY VALUE. It used to return <c>const std::string&amp;</c>, so
+        /// <c>Return "Woof"</c> — or any computed value, which is what a Get block is for — bound
+        /// the reference to a temporary destroyed at the <c>return</c>: a segfault on the first
+        /// read, from a clean compile (<c>-Wreturn-local-addr</c> only). Nothing called a getter
+        /// before reads were routed to it, so nothing saw it.</para>
+        ///
+        /// <para>⛔ A GETTER IS NOT <c>const</c>. VB promises nothing about <c>Me</c> inside a Get
+        /// block, and an ordinary one calls a method (<c>Return Bump()</c>) or caches a value —
+        /// both "passing 'const Counter' as 'this' argument" on a <c>const</c> getter, measured
+        /// the moment reads started reaching the getter. Nothing here needs the promise: a class
+        /// is reached through a <c>shared_ptr</c> to a non-const object.</para>
         /// </summary>
         private string PropertyAccessorSignature(TypeInfo type, string propName, bool isStatic, bool getter)
         {
@@ -1490,7 +1611,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             var passType = byConstRef ? $"const {propType}&" : propType;
 
             return getter
-                ? $"{staticMod}{passType} get_{propName}(){(isStatic ? "" : " const")}"
+                ? $"{staticMod}{propType} get_{propName}()"
                 : $"{staticMod}void set_{propName}({passType} value)";
         }
 
@@ -1535,19 +1656,30 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         {
             var propType = MapType(prop.Type);
             var propName = SanitizeName(prop.Name);
-            var getterSignature = PropertyAccessorSignature(prop.Type, propName, prop.IsStatic, getter: true)
-                + InterfaceAccessorOverride(irClass, prop, getter: true);
-            var setterSignature = PropertyAccessorSignature(prop.Type, propName, prop.IsStatic, getter: false)
-                + InterfaceAccessorOverride(irClass, prop, getter: false);
+            // Overridable / Overrides: the accessors are what dispatch, so they are what must be
+            // virtual — every read and write goes through them (AccessorPropertyOf). The same
+            // rule GenerateMethod applies: `virtual` on the introducing declaration, `override`
+            // on the overriding one (unless the interface arm already spelled it).
+            var virtualMod = prop.IsVirtual && !prop.IsOverride && !prop.IsStatic ? "virtual " : "";
+            string Override(bool getter)
+            {
+                var viaInterface = InterfaceAccessorOverride(irClass, prop, getter);
+                return viaInterface.Length > 0 ? viaInterface : (prop.IsOverride && !prop.IsStatic ? " override" : "");
+            }
+            var getterSignature = virtualMod + PropertyAccessorSignature(prop.Type, propName, prop.IsStatic, getter: true)
+                + Override(getter: true);
+            var setterSignature = virtualMod + PropertyAccessorSignature(prop.Type, propName, prop.IsStatic, getter: false)
+                + Override(getter: false);
 
             // AUTO-PROPERTY: both accessors null. C++ has no property syntax, so emit a real
             // data member plus inline accessors.
             //
             // The DATA MEMBER is not optional: a read of `obj.V` lowers to IRFieldAccess by
-            // NAME (IRBuilder.cs:3348) rather than to a get_V() call, so emitting only the
-            // accessors would leave every call site referring to a member that does not
-            // exist. The ACCESSORS are not optional either: an interface property declares
-            // get_X/set_X as pure virtuals, so a class implementing one must define them.
+            // NAME (IRBuilder.cs:3348), and for a plain auto-property AccessorPropertyOf leaves
+            // it a member access — so emitting only the accessors would leave every call site
+            // referring to a member that does not exist. The ACCESSORS are not optional either:
+            // an interface property declares get_X/set_X as pure virtuals, so a class
+            // implementing one must define them, and a read through the interface calls them.
             if (prop.Getter == null && prop.Setter == null)
             {
                 // `inline static`, not bare `static`: a non-const static data member cannot be
@@ -1720,8 +1852,8 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // recognised as a real name. The walk mirrors DeclaringClassOfStaticMember.
             //
             // ⚠ PROPERTIES were registered here too and are not any more: that half survived
-            // mutation. A property is not a storage destination on this backend — a bare
-            // Get/Set property is not even readable here (pinned) — so nothing observed it.
+            // mutation. A property is not a storage destination on this backend — a Get/Set
+            // property is read and written through its accessors (AccessorPropertyOf).
             for (var cls = _emittingClass; cls != null; )
             {
                 foreach (var field in cls.Fields ?? new List<IRField>())
@@ -2784,6 +2916,18 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // program could reach it. It is fixed here so it stays fixed if multi-dim lands.
             if (store.Address is IRGetElementPtr gep)
             {
+                // `lst(0)(2) = 9` over a List(Of Integer()): the GEP's base is the List ELEMENT,
+                // read into a temp — and a std::vector temp is a COPY, so the write landed in it
+                // and the list never changed. Write through the List's operator[] instead, which
+                // returns a reference. Store-only on purpose: a read through the copy is already
+                // right, and re-deriving it at every load is the aliasing ElementLValueOfArrayRead
+                // warns against.
+                if (ListElementLValue(gep.BasePointer) is string listElement)
+                {
+                    WriteLine($"{listElement}{string.Concat(gep.Indices.Select(i => $"[{GetValueName(i)}]"))} = {value};");
+                    return;
+                }
+
                 WriteLine($"{ElementLValue(gep)} = {value};");
                 return;
             }
@@ -2983,6 +3127,8 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             if (field.Type?.Kind == TypeKind.Foreign) return null;
             if (field.ResolvedNetTarget != null) return null;
             if (field.Object == null || string.IsNullOrEmpty(field.FieldName)) return null;
+            // A property read is a getter CALL, not storage — there is nothing to bind to.
+            if (AccessorPropertyOf(field.Object, field.FieldName) != null) return null;
 
             var obj = ElementLValueOfArrayRead(field.Object) ?? GetValueName(field.Object);
             return $"{obj}{MemberAccessOp(field.Object)}{SanitizeName(field.FieldName)}";
@@ -3346,6 +3492,12 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 return $"BasicLang::{BclCanonicalName(bclTypeName)}::{bclStatic.CppName ?? bclStatic.MemberName}({string.Join(", ", args)})";
             }
 
+            // A type keyword's Shared member (`String.Format(...)`, `Integer.Parse(s)`) → the
+            // BasicLang::Prim runtime function. It used to fall through and emit `StringFormat(...)`,
+            // a name that exists nowhere — a g++ error after "Compilation successful".
+            if (PrimitiveStaticSurface.TryGetDotted(functionName, out var primitive))
+                return $"{PrimitiveRuntimeName(primitive)}({string.Join(", ", args)})";
+
             return StdLibArm(functionName, args, call);
         }
 
@@ -3359,6 +3511,10 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         /// covers the parenthesized access form (<c>DateTime.Now()</c>); the paren-less property
         /// form arrives as an IRFieldAccess and is handled in Visit(IRFieldAccess).
         /// </summary>
+        /// <summary>The <c>BasicLang::Prim</c> function implementing a <see cref="PrimitiveStaticSurface"/> row.</summary>
+        internal static string PrimitiveRuntimeName(PrimitiveStaticSurface.Row row) =>
+            $"BasicLang::Prim::{row.TypeName}_{row.MemberName}";
+
         internal static bool TryGetNativeBclStaticMember(
             string functionName, out string typeName, out NativeBclMember member)
         {
@@ -3774,6 +3930,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
 
             return FrameworkCallExpression(functionName, ArmProbeArgs) != null
                    || TryGetNativeBclStaticMember(functionName, out _, out _)
+                   || PrimitiveStaticSurface.TryGetDotted(functionName, out _)
                    || StdLibArm(functionName, ArmProbeArgs, null) != null;
         }
 
@@ -4173,6 +4330,13 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         /// load materialized. See <see cref="Visit(IRFieldStore)"/> for why this is opt-in per
         /// call site rather than applied to every load.
         /// </summary>
+        private string ListElementLValue(IRValue value) =>
+            value is IRIndexerAccess indexer
+            && indexer.ResolvedNetTarget == null
+            && string.Equals(indexer.Collection?.Type?.Name, "List", StringComparison.OrdinalIgnoreCase)
+                ? $"(*{GetValueName(indexer.Collection)})[{string.Join("][", indexer.Indices.Select(i => GetValueName(i)))}]"
+                : null;
+
         private string ElementLValueOfArrayRead(IRValue value) =>
             value is IRLoad load && load.Address is IRGetElementPtr gep
                 ? ElementLValue(gep)
@@ -4742,6 +4906,15 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 return;
             }
 
+            // A type keyword's Shared PROPERTY (`Integer.MaxValue`, `String.Empty`, `Double.NaN`):
+            // the BasicLang::Prim function of the same row. A keyword can never name a local.
+            if (fieldAccess.Object is IRVariable keywordRecv
+                && PrimitiveStaticSurface.TryGet(keywordRecv.Name, fieldAccess.FieldName, out var primitiveProp))
+            {
+                WriteLine($"{result} = {PrimitiveRuntimeName(primitiveProp)}();");
+                return;
+            }
+
             // §8.5's category marker, tested BEFORE every name/Kind-keyed arm below — the same
             // marker-first rule MapType/BareCollectionType/IsCollectionType follow, and for the
             // same reason (P2a-2 Task-9 review item 1). A handle-represented System.String[] is
@@ -4815,6 +4988,14 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 return;
             }
 
+            // A property with a Get body (or Overridable, or read through an interface) has no
+            // data member to read — call its getter. See AccessorPropertyOf.
+            if (AccessorPropertyOf(fieldAccess.Object, fieldAccess.FieldName) is { } getter)
+            {
+                WriteLine($"{result} = {getter.Accessor}get_{getter.Name}();");
+                return;
+            }
+
             var fieldName = SanitizeName(fieldAccess.FieldName);
 
             // A `Shared` READ through the class name: `Box.K` is `Box::K`, not `Box->K`.
@@ -4846,6 +5027,14 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // Classes are unaffected either way — a shared_ptr copy still aliases one object.
             var fieldName = SanitizeName(fieldStore.FieldName);
             var value = GetValueName(fieldStore.Value);
+
+            // The write half of AccessorPropertyOf: a property with a Set body has no member to
+            // assign — call its setter.
+            if (AccessorPropertyOf(fieldStore.Object, fieldStore.FieldName) is { } setter)
+            {
+                WriteLine($"{setter.Accessor}set_{setter.Name}({value});");
+                return;
+            }
 
             // A `Shared` WRITE through the class name — the same qualifier the read takes, so the
             // two cannot disagree about where the member lives.
