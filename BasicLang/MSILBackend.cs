@@ -496,6 +496,17 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             _typeMap["Decimal"] = "valuetype [System.Runtime]System.Decimal";
         }
 
+        /// <summary>
+        /// The IL reference token of each closure ENVIRONMENT class (ADR-0010), keyed by its exact
+        /// IR name: <c>'&lt;&gt;c__Env0'</c> for one at top level, <c>'Box'/'&lt;&gt;c__Env0'</c> for
+        /// one nested in the class whose member created the lambda. <see cref="SanitizeName"/>
+        /// consults it, so every site that names a class — a local's type, <c>newobj</c>,
+        /// <c>ldfld</c>/<c>stfld</c>, <c>ldftn</c> — spells an environment the same way. The IR
+        /// names begin with <c>&lt;&gt;</c>, which no BasicLang identifier can, so no user name is
+        /// ever looked up here by accident.
+        /// </summary>
+        private readonly Dictionary<string, string> _envTypeTokens = new(StringComparer.Ordinal);
+
         public override string Generate(IRModule module)
         {
             _module = module;
@@ -520,6 +531,32 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             // Flipping this to false before that exists trades a clean BL diagnostic for a
             // runtime crash, which is the one thing the honesty matrix exists to prevent.
             ForeignFeatureChecker.Check(module, "MSIL", rejectCollections: false, ownInlineLanguage: "msil");
+
+            // ⭐ CLOSURE CONVERSION (ADR-0010 D1). Lambdas, AddressOf and calls through delegate
+            // values are lowered HERE, at the generator's own entry, because this is the one seam
+            // every MSIL route shares — the CLI (Program.GenerateCode), a .blproj build (the same
+            // GenerateCode), the IDE (BuildService) and the test harness (MsilHarness.CompileToIl)
+            // all call Generate on the optimized module and nothing else. The pass lowers a CLONE
+            // and hands back the module itself when there is nothing to lower, so C#, JavaScript
+            // and C++ never see the lowered form even when one module feeds several backends.
+            var lowered = ClosureLowering.Run(module);
+            if (!ReferenceEquals(lowered, module))
+            {
+                // The lowered IR is new IR: verified under the same invariants as the optimizer's
+                // output. A no-op unless verification is enabled (tests, DEBUG, BASICLANG_VERIFY_IR).
+                BasicLang.Compiler.IR.Optimization.IRVerifier.VerifyAfterOptimization(lowered);
+                module = lowered;
+                _module = lowered;
+            }
+
+            _envTypeTokens.Clear();
+            foreach (var cls in module.Classes.Values)
+            {
+                if (!ClosureLowering.IsEnvironmentClass(cls)) continue;
+                _envTypeTokens[cls.Name] = string.IsNullOrEmpty(cls.EnclosingClass)
+                    ? IlName(cls.Name)
+                    : SanitizeName(cls.EnclosingClass) + "/" + IlName(cls.Name);
+            }
 
             _output.Clear();
             _stringConstants.Clear();
@@ -555,9 +592,11 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 WriteLine();
             }
 
-            // Generate user-defined classes
+            // Generate user-defined classes. A closure environment nested in a class is written
+            // INSIDE that class's body (GenerateUserClass), never at top level.
             foreach (var irClass in module.Classes.Values)
             {
+                if (!string.IsNullOrEmpty(irClass.EnclosingClass)) continue;
                 GenerateUserClass(irClass);
                 WriteLine();
             }
@@ -618,9 +657,12 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             WriteLine("  } // end of method Invoke");
             WriteLine();
 
-            // BeginInvoke
+            // BeginInvoke. ⛔ The separator only when there ARE parameters: a parameterless
+            // `Delegate Sub D()` emitted `BeginInvoke(, class …)`, which ilasm refuses as a syntax
+            // error — no parameterless user delegate had ever assembled here.
+            var beginParams = string.IsNullOrEmpty(paramTypes) ? "" : paramTypes + ", ";
             WriteLine("  .method public hidebysig newslot virtual");
-            WriteLine($"          instance class [mscorlib]System.IAsyncResult BeginInvoke({paramTypes}, class [mscorlib]System.AsyncCallback callback, object 'object') runtime managed");
+            WriteLine($"          instance class [mscorlib]System.IAsyncResult BeginInvoke({beginParams}class [mscorlib]System.AsyncCallback callback, object 'object') runtime managed");
             WriteLine("  {");
             WriteLine("  } // end of method BeginInvoke");
             WriteLine();
@@ -698,11 +740,112 @@ namespace BasicLang.Compiler.CodeGen.MSIL
         /// element type has been lost is not a type IL can name.</para>
         /// </summary>
         private string IlTypeSpec(TypeInfo type) =>
-            TryCollectionToken(type, out var token) ? "class " + token : IlTypeSpec(MapType(type));
+            TryCollectionToken(type, out var token) ? "class " + token
+            : TryDelegateToken(type, out var delegateToken, out _) ? "class " + delegateToken
+            : IlTypeSpec(MapType(type));
 
         /// <inheritdoc cref="IlTypeToken(string)"/>
         private string IlTypeToken(TypeInfo type) =>
-            TryCollectionToken(type, out var token) ? token : IlTypeToken(MapType(type));
+            TryCollectionToken(type, out var token) ? token
+            : TryDelegateToken(type, out var delegateToken, out _) ? delegateToken
+            : IlTypeToken(MapType(type));
+
+        /// <summary>
+        /// ⭐ ADR-0010 D7: <c>Action</c>, <c>Action(Of …)</c> and <c>Func(Of …)</c> are the BCL
+        /// generic delegates, reached through the <c>[mscorlib]</c> reference every generated
+        /// assembly already carries — <c>[mscorlib]System.Func`2&lt;int32, int32&gt;</c>.
+        ///
+        /// <para>⛔ Before this a delegate type fell through to <c>MapTypeName</c> and came out as a
+        /// bare <c>class 'Func'</c>, its type arguments lost, which ilasm refuses as an undefined
+        /// class. A user <c>Delegate</c> declaration stays NOMINAL (it is declared in this assembly
+        /// by <c>GenerateDelegate</c>), and a program's own class named <c>Action</c> wins over the
+        /// BCL one, so both return false here.</para>
+        ///
+        /// <para>⛔ The arity is CAPPED at what was measured to assemble and run through the facade
+        /// on .NET 8 (<see cref="ClosureLowering.MaxActionTypeArguments"/>,
+        /// <see cref="ClosureLowering.MaxFuncTypeArguments"/>): <c>Action`9</c> and <c>Func`10</c>
+        /// assemble and then die with TypeLoadException, because the <c>mscorlib</c> facade does not
+        /// forward them. Above the cap is refused, never emitted.</para>
+        /// </summary>
+        private bool TryDelegateToken(TypeInfo type, out string token, out bool isGeneric)
+        {
+            token = null;
+            isGeneric = false;
+            if (type?.Name == null) return false;
+            if (_module != null && (_module.Delegates.ContainsKey(type.Name) || _module.Classes.ContainsKey(type.Name)
+                                    || _module.Interfaces.ContainsKey(type.Name) || _module.Enums.ContainsKey(type.Name)))
+                return false;
+
+            var bare = type.Name.StartsWith("System.", StringComparison.OrdinalIgnoreCase) ? type.Name.Substring(7) : type.Name;
+            var isAction = string.Equals(bare, "Action", StringComparison.OrdinalIgnoreCase);
+            var isFunc = string.Equals(bare, "Func", StringComparison.OrdinalIgnoreCase);
+            if (!isAction && !isFunc) return false;
+
+            var args = type.GenericArguments ?? new List<TypeInfo>();
+            if (args.Count == 0)
+            {
+                if (isAction)
+                {
+                    token = "[mscorlib]System.Action";
+                    return true;
+                }
+                throw new ForeignFeatureException(
+                    "MSIL: 'Func' reached a type position with its type arguments lost, so there is no "
+                    + "Func`N to name. Emitting a bare 'Func' is an undefined class to ilasm.");
+            }
+
+            var cap = isAction ? ClosureLowering.MaxActionTypeArguments : ClosureLowering.MaxFuncTypeArguments;
+            if (args.Count > cap)
+            {
+                throw new ForeignFeatureException(
+                    $"MSIL: '{(isAction ? "Action" : "Func")}' with {args.Count} type arguments is above the supported "
+                    + $"arity ({cap}). It would assemble and then die with TypeLoadException: the [mscorlib] "
+                    + "facade this backend references does not forward it on .NET 8 (measured). Declare "
+                    + "your own Delegate type instead.");
+            }
+
+            token = $"[mscorlib]System.{(isAction ? "Action" : "Func")}`{args.Count}<{string.Join(", ", args.Select(IlTypeSpec))}>";
+            isGeneric = true;
+            return true;
+        }
+
+        /// <summary>
+        /// How a call through a delegate of <paramref name="delegateType"/> is spelled: the type the
+        /// <c>Invoke</c> (and the constructor) is called on, <c>Invoke</c>'s return and parameter
+        /// specs as its DEFINITION declares them — <c>!0</c>/<c>!1</c> for a BCL generic, exactly as
+        /// a <c>List`1</c> member is called with <c>!0</c> — and the CLOSED return spec, which is
+        /// what is really on the stack afterwards.
+        /// </summary>
+        private bool TryInvokeShape(TypeInfo delegateType, out string receiver, out string returnSpec,
+            out List<string> parameterSpecs, out string closedReturn)
+        {
+            receiver = returnSpec = closedReturn = null;
+            parameterSpecs = null;
+
+            if (TryDelegateToken(delegateType, out var token, out var isGeneric))
+            {
+                var args = delegateType.GenericArguments ?? new List<TypeInfo>();
+                var isAction = token.StartsWith("[mscorlib]System.Action", StringComparison.Ordinal);
+                receiver = isGeneric ? "class " + token : token;
+                var parameterCount = isAction ? args.Count : args.Count - 1;
+                parameterSpecs = Enumerable.Range(0, parameterCount).Select(i => $"!{i}").ToList();
+                returnSpec = isAction ? "void" : $"!{args.Count - 1}";
+                closedReturn = isAction ? "void" : IlTypeSpec(args[args.Count - 1]);
+                return true;
+            }
+
+            if (delegateType?.Name != null && _module != null
+                && _module.Delegates.TryGetValue(delegateType.Name, out var declared) && declared != null)
+            {
+                receiver = SanitizeName(declared.Name);
+                returnSpec = IlTypeSpec(declared.ReturnType);
+                closedReturn = returnSpec;
+                parameterSpecs = declared.Parameters.Select(IlParameterSpec).ToList();
+                return true;
+            }
+
+            return false;
+        }
 
         /// <summary>
         /// The BCL generic token for a BasicLang collection — <c>List</c> →
@@ -865,6 +1008,8 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             if (type?.Name == null) return "[mscorlib]System.Object";
 
             if (TryCollectionToken(type, out var collection)) return "class " + collection;
+            if (TryDelegateToken(type, out var delegateToken, out var isGenericDelegate))
+                return isGenericDelegate ? "class " + delegateToken : delegateToken;
 
             var mapped = MapTypeName(type.Name);
             return PrimitiveTokens.TryGetValue(mapped, out var bcl) ? bcl : mapped;
@@ -960,6 +1105,15 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             // "Reference to undefined class 'Exception'".
             if (CppExceptionTypes.TryGetNetFullName(typeName, out var exceptionFullName))
                 return "[mscorlib]" + exceptionFullName;
+
+            // The non-generic BCL `Action` — the only delegate a bare NAME can denote (ADR-0010 D7;
+            // a generic one needs its TypeInfo, see TryDelegateToken). A program's own type of that
+            // name wins.
+            if ((string.Equals(typeName, "Action", StringComparison.OrdinalIgnoreCase)
+                 || string.Equals(typeName, "System.Action", StringComparison.OrdinalIgnoreCase))
+                && (_module == null || (!_module.Delegates.ContainsKey(typeName) && !_module.Classes.ContainsKey(typeName)
+                                        && !_module.Interfaces.ContainsKey(typeName))))
+                return "[mscorlib]System.Action";
 
             return SanitizeName(typeName);
         }
@@ -1101,7 +1255,14 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             // Same rule as the module class: `beforefieldinit` is dropped when a type initializer
             // exists, as the C# compiler does for a class with a static constructor.
             var needsInitializer = irClass.Fields.Any(NeedsStaticFieldInitialization);
-            WriteLine($".class public auto ansi{(needsInitializer ? "" : " beforefieldinit")} {className}");
+
+            // A closure environment nested in its creator's class (ADR-0010) is DECLARED by its own
+            // simple name and `nested public`; every reference to it spells the full 'Outer'/'Env'
+            // token SanitizeName returns.
+            var isNested = !string.IsNullOrEmpty(irClass.EnclosingClass);
+            var visibility = isNested ? "nested public" : "public";
+            var declaredName = isNested ? IlName(irClass.Name) : className;
+            WriteLine($".class {visibility} auto ansi{(needsInitializer ? "" : " beforefieldinit")} {declaredName}");
             WriteLine($"       extends {extends}{implements}");
             WriteLine("{");
 
@@ -1162,6 +1323,21 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             if (needsInitializer)
             {
                 GenerateClassStaticConstructor(irClass, className);
+            }
+
+            // The closure environments of lambdas this class's members create, nested so a lambda
+            // reaches the class's PRIVATE members through the captured Me — measured: a top-level
+            // environment reading a private field dies with FieldAccessException on .NET 8.
+            if (!isNested)
+            {
+                foreach (var nested in _module.Classes.Values
+                             .Where(c => string.Equals(c.EnclosingClass, irClass.Name, StringComparison.OrdinalIgnoreCase))
+                             .ToList())
+                {
+                    WriteLine();
+                    GenerateUserClass(nested);
+                }
+                _currentClass = irClass;
             }
 
             WriteLine($"}} // end of class {className}");
@@ -2909,7 +3085,8 @@ namespace BasicLang.Compiler.CodeGen.MSIL
         /// setter parameter, which is the same fix applied to the one name that had already been
         /// hit. This generalizes it.</para>
         /// </summary>
-        protected override string SanitizeName(string name) => IlName(RawName(name));
+        protected override string SanitizeName(string name) =>
+            name != null && _envTypeTokens.TryGetValue(name, out var envToken) ? envToken : IlName(RawName(name));
 
         /// <summary>
         /// The sanitized name WITHOUT the quotes.
@@ -4161,6 +4338,15 @@ namespace BasicLang.Compiler.CodeGen.MSIL
 
         public override void Visit(IRCall call)
         {
+            // ⭐ ADR-0010 D8: a call whose callee is a delegate VALUE is `callvirt Invoke` on that
+            // value — never a call by name. ClosureLowering canonicalises a call named after a
+            // delegate-typed variable into this form, so no delegate call reaches the name path.
+            if (call.CalleeValue != null)
+            {
+                EmitDelegateInvoke(call);
+                return;
+            }
+
             var funcName = call.FunctionName;
             var hasReturn = call.Type != null && !call.Type.Name.Equals("Void", StringComparison.OrdinalIgnoreCase);
 
@@ -4304,6 +4490,18 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 : null;
             var isSelfCall = selfCallOwner != null;
 
+            // ⛔ ADR-0010 D8: NEITHER a delegate value NOR a declared procedure — the "call a static
+            // method nothing defines" path dies here. It used to emit `call … 'Combined'::'bump'()`
+            // for `bump()` on a local delegate, which ilasm accepts (it does not resolve member
+            // references) and the CLR rejects at run time with MissingMethodException.
+            if (!isSelfCall && !IsDeclaredModuleProcedure(funcName))
+            {
+                throw new ForeignFeatureException(
+                    $"MSIL: '{funcName}' is called, but it is neither a procedure this program declares nor "
+                    + "a delegate value. Emitting 'call' on it would name a static method nothing defines, "
+                    + "which assembles and then fails with MissingMethodException at run time (ADR-0010 D8).");
+            }
+
             if (isSelfCall) EmitLdarg(0);
 
             var declaredParams =
@@ -4352,6 +4550,176 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 // Discard result if not used
                 WriteLine("    pop");
                 _currentStack--;
+            }
+        }
+
+        /// <summary>
+        /// Whether <paramref name="name"/> is a procedure this module declares at module level —
+        /// what the fallback <c>call 'Module'::'name'</c> can bind to. A class member is not one
+        /// (it is not on the module class), nor an external or a lambda.
+        /// </summary>
+        private bool IsDeclaredModuleProcedure(string name)
+        {
+            if (string.IsNullOrEmpty(name) || _module?.Functions == null) return false;
+            return _module.Functions.Any(f => f?.Name != null && !f.IsExternal && !f.IsLambda
+                                             && string.Equals(f.Name, name, StringComparison.OrdinalIgnoreCase)
+                                             && !IsClassMember(f, _module));
+        }
+
+        /// <summary>
+        /// ⭐ ADR-0010 D8: a call through a delegate VALUE — the value, the arguments, then
+        /// <c>callvirt instance … Invoke</c> spelled from the delegate's DEFINITION
+        /// (<c>class [mscorlib]System.Func`2&lt;int32, int32&gt;::Invoke(!0)</c> returns
+        /// <c>!1</c>). The declaration decides what is left on the stack, not the IR's type for the
+        /// call: the front end types a <c>Sub</c> delegate's call <c>Object</c>, and storing a value
+        /// that <c>Invoke</c> never pushed would underflow the stack — the same disagreement the
+        /// interface-method arm resolves the same way.
+        /// </summary>
+        private void EmitDelegateInvoke(IRCall call)
+        {
+            var delegateType = call.CalleeValue.Type;
+            if (!TryInvokeShape(delegateType, out var receiver, out var returnSpec, out var parameterSpecs, out var closedReturn))
+            {
+                throw new ForeignFeatureException(
+                    $"MSIL: a call through a value of type '{delegateType?.Name ?? "unknown"}', which is not a "
+                    + "delegate type this backend can name (an Action, a Func, or a Delegate this program "
+                    + "declares). Its Invoke has no signature to call.");
+            }
+
+            if (parameterSpecs.Count != call.Arguments.Count)
+            {
+                throw new ForeignFeatureException(
+                    $"MSIL: a call through a '{delegateType.Name}' passes {call.Arguments.Count} argument(s) to an "
+                    + $"Invoke that takes {parameterSpecs.Count}.");
+            }
+
+            EmitLoadValue(call.CalleeValue);
+            foreach (var argument in call.Arguments)
+            {
+                EmitLoadValue(argument);
+            }
+
+            WriteLine($"    callvirt instance {returnSpec} {receiver}::Invoke({string.Join(", ", parameterSpecs)})");
+            _currentStack -= 1 + call.Arguments.Count;
+
+            // A Sub pushed nothing, whatever the IR typed the call.
+            if (closedReturn == "void") return;
+
+            _currentStack++;
+            if (string.IsNullOrEmpty(call.Name))
+            {
+                WriteLine("    pop");
+                _currentStack--;
+                return;
+            }
+
+            // A value type into a slot the IR declared as a reference: box across the gap, exactly
+            // as the .NET-static arm does.
+            if (NeedsBoxingInto(IlTypeSpec(call.Type), closedReturn, out var boxToken))
+            {
+                WriteLine($"    box {boxToken}");
+            }
+
+            if (_declaredIdentifiers.Contains(call.Name)) EmitStoreLocal(call.Name);
+            else EmitStloc(GetTempIndex(call));
+        }
+
+        /// <summary>
+        /// ⭐ ADR-0010 D8: a delegate VALUE — the one node a lambda (as ClosureLowering leaves it) and
+        /// <c>AddressOf</c> both become. <c>ldnull</c> or the target, <c>ldftn</c> (or
+        /// <c>dup; ldvirtftn</c> to bind through the target's vtable), then the delegate's
+        /// <c>.ctor(object, native int)</c>.
+        ///
+        /// <para>⛔ The method reference is spelled from the method's DECLARATION — the same
+        /// <see cref="IlTypeSpec(TypeInfo)"/> and <see cref="ParamSpec"/> the declaration is written
+        /// with — because ilasm does not resolve member references: a <c>ldftn</c> whose signature
+        /// disagrees with the declaration assembles and then fails with MissingMethodException.</para>
+        /// </summary>
+        public override void Visit(IRDelegateCreate create)
+        {
+            var method = create.Method
+                ?? throw new ForeignFeatureException("MSIL: a delegate value with no method to bind.");
+
+            string owner, name;
+            bool isStatic;
+            TypeInfo returnType;
+            var declaringClass = _module.Classes.Values.FirstOrDefault(
+                c => c?.Methods != null && c.Methods.Any(m => ReferenceEquals(m?.Implementation, method)));
+            if (declaringClass != null)
+            {
+                var declared = declaringClass.Methods.First(m => ReferenceEquals(m?.Implementation, method));
+                owner = SanitizeName(declaringClass.Name);
+                name = SanitizeName(declared.Name);
+                isStatic = declared.IsStatic;
+                returnType = declared.ReturnType;
+            }
+            else if (_module.Functions.Contains(method) && !IsClassMember(method, _module))
+            {
+                owner = _moduleName;
+                name = SanitizeName(method.Name);
+                isStatic = true;
+                returnType = method.ReturnType;
+            }
+            else
+            {
+                throw new ForeignFeatureException(
+                    $"MSIL: a delegate bound to '{method.Name}', which is neither a module procedure nor a "
+                    + "method of a class this program declares, has no method to name.");
+            }
+
+            if (!TryInvokeShape(create.DelegateType, out var receiver, out _, out _, out _))
+            {
+                throw new ForeignFeatureException(
+                    $"MSIL: a delegate value of type '{create.DelegateType?.Name ?? "unknown"}', which is not a "
+                    + "delegate type this backend can name.");
+            }
+
+            if (create.Target == null && !isStatic)
+            {
+                throw new ForeignFeatureException(
+                    $"MSIL: a delegate bound to the instance method '{method.Name}' with no object to bind it to.");
+            }
+
+            var methodRef = $"{(isStatic ? "" : "instance ")}{IlTypeSpec(returnType)} {owner}::{name}"
+                            + $"({string.Join(", ", method.Parameters.Select(ParamSpec))})";
+
+            if (create.Target == null)
+            {
+                WriteLine("    ldnull");
+                _currentStack++;
+            }
+            else
+            {
+                EmitLoadValue(create.Target);
+            }
+
+            if (create.IsVirtual)
+            {
+                WriteLine("    dup");
+                _currentStack++;
+                WriteLine($"    ldvirtftn {methodRef}");
+            }
+            else
+            {
+                WriteLine($"    ldftn {methodRef}");
+                _currentStack++;
+            }
+
+            WriteLine($"    newobj instance void {receiver}::.ctor(object, native int)");
+            _currentStack--;
+
+            if (string.IsNullOrEmpty(create.Name))
+            {
+                WriteLine("    pop");
+                _currentStack--;
+            }
+            else if (_declaredIdentifiers.Contains(create.Name))
+            {
+                EmitStoreLocal(create.Name);
+            }
+            else
+            {
+                EmitStloc(GetTempIndex(create));
             }
         }
 

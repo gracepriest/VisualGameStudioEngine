@@ -3599,6 +3599,12 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 case IRYield yieldInst:
                     return yieldInst.Value != null ? new[] { yieldInst.Value } : Array.Empty<IRValue>();
 
+                // ADR-0010: produced only by ClosureLowering, which only MSIL runs, on a clone — this
+                // backend never sees one (its Visit throws). Listed so this census stays TOTAL over
+                // node kinds, which is ADR-0001's contract, not because C# counts it.
+                case IRDelegateCreate delegateCreate:
+                    return delegateCreate.Target != null ? new[] { delegateCreate.Target } : Array.Empty<IRValue>();
+
                 // Kinds that read no IRValue. Listed, not defaulted, so the default can throw.
                 // ⚠ IRVariable.DefaultValue / InitialValue are DECLARATION data (a parameter's
                 // optional default, a module-scope initializer), evaluated outside every function

@@ -617,6 +617,13 @@ namespace BasicLang.Compiler.IR.Optimization
                         Walk(cast.Value);
                         return;
 
+                    // ADR-0010: a member read the producer KNOWS is storage (only ClosureLowering
+                    // sets it) is not call-shaped — NamesWrittenBy gives it no call arm — so it is
+                    // a read of the member it names, exactly as the bare variable it replaced was.
+                    case IRFieldAccess storage when storage.IsStorageAccess:
+                        names.Add(new StorageRead(storage.FieldName, null));
+                        return;
+
                     // Call-shaped (NamesWrittenBy's call arms): evaluated once, and it may read (or
                     // run code that reads) storage a call can write. The walk stops here.
                     case IRCall:
@@ -855,7 +862,10 @@ namespace BasicLang.Compiler.IR.Optimization
                 // JavaScript and MSIL. The node does not say which it is, so every member store
                 // is treated as one that may run a setter.
                 case IRFieldStore fieldStore:
-                    isCall = true;
+                    // ADR-0010: a store the producer KNOWS is a plain field (only ClosureLowering
+                    // says so, for a closure environment or a creator's field reached through the
+                    // captured Me) runs no setter — a named write, not a call.
+                    isCall = !fieldStore.IsStorageAccess;
                     Name(fieldStore.FieldName);
                     escapes = true; // a member, which a ByRef parameter may alias (`Work(K)`)
                     break;
@@ -865,8 +875,16 @@ namespace BasicLang.Compiler.IR.Optimization
                 // getter that bumps the field K, `a = K + q : t = Me.Tick : l(0) = K + q` printed
                 // 3,3,11 for 13,3,11 on JavaScript and MSIL.
                 case IRFieldAccess fieldAccess:
-                    isCall = true;
+                    // ADR-0010: a read the producer KNOWS is storage runs no getter.
+                    isCall = !fieldAccess.IsStorageAccess;
                     Definition(fieldAccess);
+                    break;
+
+                // ---- A delegate value (ADR-0010 D8, produced only by ClosureLowering): a
+                // definition of its own name. Building a delegate runs no user code — the
+                // constructor is runtime-implemented and only records the target and method.
+                case IRDelegateCreate delegateCreate:
+                    Definition(delegateCreate);
                     break;
 
                 // ---- Calls: the result's name (a rename, `Dim p = Seed(1)`), every ByRef
@@ -1191,6 +1209,13 @@ namespace BasicLang.Compiler.IR.Optimization
         }
 
         /// <summary>
+        /// <see cref="MapUses"/> for a consumer outside the pass hierarchy — ClosureLowering
+        /// (ADR-0010), which rewrites operands with the SAME arm set every pass and the verifier
+        /// use, so the lowering cannot miss an operand slot they see.
+        /// </summary>
+        internal static void MapOperands(IRInstruction inst, Func<IRValue, IRValue> map) => MapUses(inst, map);
+
+        /// <summary>
         /// THE total use walker: one arm per IR node that CONSUMES a value, each operand slot
         /// replaced by <paramref name="map"/>'s answer for it (an identity map rewrites nothing).
         /// Definition slots are deliberately absent: <c>IRAssignment.Target</c> is an
@@ -1293,6 +1318,9 @@ namespace BasicLang.Compiler.IR.Optimization
                 case IRFieldStore fieldStore:
                     fieldStore.Object = map(fieldStore.Object);
                     fieldStore.Value = map(fieldStore.Value);
+                    break;
+                case IRDelegateCreate delegateCreate:
+                    delegateCreate.Target = map(delegateCreate.Target);
                     break;
                 case IRTupleElement tupleElement:
                     tupleElement.Tuple = map(tupleElement.Tuple);

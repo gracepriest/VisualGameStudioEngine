@@ -135,6 +135,9 @@ namespace BasicLang.Compiler.CodeGen
                 case IRForEach fe:
                     if (fe.Collection != null) yield return fe.Collection;
                     break;
+                case IRDelegateCreate dc:
+                    if (dc.Target != null) yield return dc.Target;
+                    break;
             }
         }
 
