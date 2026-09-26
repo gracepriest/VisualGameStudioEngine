@@ -1,3 +1,5 @@
+using System.Globalization;
+
 namespace BasicLang.Forms;
 
 /// <summary>
@@ -10,8 +12,50 @@ public enum FormPropertyType
     Int,
     Bool,
     Color,
-    /// <summary>One of <see cref="FormPropertyDef.AllowedValues"/>.</summary>
-    Enum
+    /// <summary>One of <see cref="FormPropertyDef.AllowedValues"/>, or one of its <see cref="FormPropertyDef.Aliases"/>.</summary>
+    Enum,
+    /// <summary>
+    /// <c>75, 23</c> — WinForms' <c>SizeConverter</c> text. Emitted as ONE <c>New Size(w, h)</c>
+    /// statement: the fan-in rule, because <c>X.Width = …</c> through a struct return is CS1612.
+    /// </summary>
+    Size
+}
+
+/// <summary>
+/// Visual Studio's property-grid groups (spec §2.1). ⚠ Events use their OWN enum,
+/// <see cref="FormEventCategory"/> — WinForms files events under Action, Mouse, Key, Property
+/// Changed… which are not property groups.
+/// </summary>
+public enum FormPropertyCategory
+{
+    Accessibility,
+    Appearance,
+    Behavior,
+    Data,
+    Design,
+    Focus,
+    Layout,
+    Misc,
+    WindowStyle
+}
+
+/// <summary>
+/// How a row's value becomes a CSS declaration when it is not the value verbatim (spec §2.1). ONE
+/// place owns each conversion — <see cref="FormCss"/> — so the page cannot carry two opinions.
+/// </summary>
+public enum FormCssConverter
+{
+    /// <summary>The document value is the CSS value.</summary>
+    None,
+
+    /// <summary>A colour: system colours map to CSS system colours; <c>#AARRGGBB</c> becomes <c>rgba()</c>.</summary>
+    Color,
+
+    /// <summary>A <c>ContentAlignment</c>: only its horizontal part (<c>…Left</c> → <c>left</c>).</summary>
+    ContentAlignmentHorizontal,
+
+    /// <summary><c>Visible=false</c> → <c>display: none</c>; <c>true</c> → no declaration.</summary>
+    VisibleToDisplay
 }
 
 /// <summary>One editable property of one control kind.</summary>
@@ -28,11 +72,6 @@ public enum FormPropertyType
 /// compiles <c>lbl.TextAlign = Center</c> happily (WinForms member access degrades to
 /// <c>Object</c> with no diagnostic) and csc then rejects the emitted C# with CS0103. Nothing
 /// short of csc catches it.</para>
-/// </param>
-/// <param name="WinFormsMemberNames">
-/// Where the designer's vocabulary and the WinForms member name DIFFER, keyed by the designer's
-/// value. <c>ContentAlignment</c> has no <c>Left</c> — it has <c>MiddleLeft</c> — so the catalog's
-/// own Left/Center/Right cannot be emitted verbatim. Omit when the names already agree.
 /// </param>
 /// <param name="Targets">
 /// The targets this property actually EXISTS on; null means both.
@@ -56,17 +95,55 @@ public enum FormPropertyType
 /// rather than assigned. <c>ComboBox.Items</c> and <c>ListBox.Items</c> are get-only, so assigning
 /// one is CS0200.
 /// </param>
+/// <param name="HtmlAttribute">See <see cref="HtmlAttributeName"/>.</param>
+/// <param name="Category">
+/// The Visual Studio group this row appears under. ⛔ Required in practice: the parity test compares
+/// it with WinForms for every WinForms row, and a completeness test requires it on EVERY row
+/// (web-only and <see cref="FormControlCatalog.FormRoot"/> included). Nullable only so a missing one
+/// is detectable.
+/// </param>
+/// <param name="Description">
+/// The description-pane text. For a WinForms row, WinForms' own <c>[Description]</c> — the parity
+/// test compares it with the snapshot, so it cannot drift from what VS shows.
+/// </param>
+/// <param name="CssProperty">
+/// The CSS property this row becomes on the web (<c>BackColor</c> → <c>background-color</c>), walked
+/// generically by <c>FormAssetEmitter</c> exactly as <see cref="HtmlAttribute"/> is. Null when the row
+/// has no single-declaration CSS meaning.
+/// </param>
+/// <param name="CssConverter">How the value becomes the CSS value — see <see cref="FormCssConverter"/>.</param>
+/// <param name="WebDefault">
+/// The web's default where the browser's differs from WinForms' (spec §2.7). Null = same as
+/// <see cref="Default"/>; the EMPTY string = "no static default on the web". Read through
+/// <see cref="DefaultFor"/>, never directly.
+/// </param>
+/// <param name="Aliases">
+/// Legacy document values, keyed by the legacy spelling, mapped to a canonical
+/// <see cref="AllowedValues"/> member (spec §2.8 — TextAlign's <c>Left</c> → <c>MiddleLeft</c>).
+/// ACCEPTED (Canon, round-trips byte-for-byte), EMITTED as the canonical member, never OFFERED.
+/// Build it with <c>StringComparer.OrdinalIgnoreCase</c>.
+/// </param>
+/// <param name="OracleExemption">
+/// Why the WinForms snapshot is NOT the truth for this row — a stated reason, carried on the row so
+/// the parity test prints it rather than keeping a hand list. Null for every row the snapshot judges.
+/// </param>
 public sealed record FormPropertyDef(
     string Name,
     FormPropertyType Type,
     string? Default = null,
     IReadOnlyList<string>? AllowedValues = null,
     string? WinFormsEnumType = null,
-    IReadOnlyDictionary<string, string>? WinFormsMemberNames = null,
     IReadOnlyList<FormTarget>? Targets = null,
     string? WinFormsFactory = null,
     bool IsItemCollection = false,
-    string? HtmlAttribute = null)
+    string? HtmlAttribute = null,
+    FormPropertyCategory? Category = null,
+    string? Description = null,
+    string? CssProperty = null,
+    FormCssConverter CssConverter = FormCssConverter.None,
+    string? WebDefault = null,
+    IReadOnlyDictionary<string, string>? Aliases = null,
+    string? OracleExemption = null)
 {
     /// <summary>True when this property exists on <paramref name="target"/>.</summary>
     public bool AppliesTo(FormTarget target) => Targets == null || Targets.Contains(target);
@@ -87,6 +164,47 @@ public sealed record FormPropertyDef(
     public string? HtmlAttributeName => HtmlAttribute;
 
     /// <summary>
+    /// The default a user SEES for an absent property on <paramref name="target"/> (spec §2.7). Every
+    /// reader of a default goes through here — the grid, the web Timer's <c>{Interval}</c>
+    /// placeholder — so the web can differ from WinForms in exactly one place.
+    /// </summary>
+    public string? DefaultFor(FormTarget target) =>
+        target == FormTarget.Web && WebDefault != null
+            ? (WebDefault.Length == 0 ? null : WebDefault)
+            : Default;
+
+    /// <summary>
+    /// The value in this row's canonical spelling: an Enum member as <see cref="AllowedValues"/>
+    /// spells it, an <see cref="Aliases"/> key resolved to its member, a Bool in lower case. A value
+    /// the row does not know is returned UNCHANGED — Degraded values are preserved, never coerced.
+    /// </summary>
+    public string Canonical(string value)
+    {
+        if (Type == FormPropertyType.Enum && AllowedValues != null)
+        {
+            var member = AllowedValues.FirstOrDefault(v => string.Equals(v, value, StringComparison.OrdinalIgnoreCase));
+            if (member != null)
+            {
+                return member;
+            }
+
+            if (Aliases != null && Aliases.TryGetValue(value, out var target))
+            {
+                return target;
+            }
+
+            return value;
+        }
+
+        if (Type == FormPropertyType.Bool && bool.TryParse(value, out var flag))
+        {
+            return flag ? "true" : "false";
+        }
+
+        return value;
+    }
+
+    /// <summary>
     /// The value as WinForms SOURCE — what the region writer splices after the <c>=</c>.
     ///
     /// <para>Returns null when this property has nothing special to say, leaving the caller's
@@ -96,11 +214,9 @@ public sealed record FormPropertyDef(
     {
         if (Type == FormPropertyType.Enum && WinFormsEnumType != null)
         {
-            var member = WinFormsMemberNames != null &&
-                         WinFormsMemberNames.TryGetValue(value, out var mapped)
-                ? mapped
-                : value;
-            return $"{WinFormsEnumType}.{member}";
+            // ⛔ The CANONICAL member: an alias (Left) is emitted as its member (MiddleLeft), never
+            // verbatim — ContentAlignment has no Left, and csc would say CS0117.
+            return $"{WinFormsEnumType}.{Canonical(value)}";
         }
 
         if (WinFormsFactory != null)
@@ -108,7 +224,22 @@ public sealed record FormPropertyDef(
             return $"{WinFormsFactory}(\"{value.Replace("\"", "\"\"")}\")";
         }
 
-        return Type == FormPropertyType.Color ? ColorLiteral(value) : null;
+        return Type switch
+        {
+            FormPropertyType.Color => ColorLiteral(value),
+            FormPropertyType.Size => TryParseSize(value, out var w, out var h) ? $"New Size({w}, {h})" : null,
+            _ => null
+        };
+    }
+
+    /// <summary><c>w, h</c> — WinForms' SizeConverter text, culture-invariant. Exactly two integers.</summary>
+    public static bool TryParseSize(string value, out int width, out int height)
+    {
+        width = height = 0;
+        var parts = value.Split(',');
+        return parts.Length == 2 &&
+               int.TryParse(parts[0].Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out width) &&
+               int.TryParse(parts[1].Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out height);
     }
 
     /// <summary>The individual items of an <see cref="IsItemCollection"/> value.</summary>
@@ -125,6 +256,13 @@ public sealed record FormPropertyDef(
     /// </summary>
     private static string ColorLiteral(string value)
     {
+        // ⛔ A system colour is NOT a Color member: `Color.Control` does not exist (CS0117 at csc,
+        // BasicLang silent). It is SystemColors.Control — spec §2.2, and a live defect before this.
+        if (FormSystemColors.TryCanonical(value, out var system))
+        {
+            return "SystemColors." + system;
+        }
+
         if (value.Length == 0 || value[0] != '#')
         {
             return "Color." + value;
@@ -181,11 +319,14 @@ public sealed record FormPropertyDef(
             WinFormsEnumType != null && AllowedValues != null &&
             AllowedValues.Any(v => string.Equals(WinFormsLiteral(v), value, StringComparison.Ordinal)),
 
-        // `Color.Red` / `Color.FromArgb(...)`. The 140-odd KnownColor names are not enumerated here
-        // (see IsColor), so the member cannot be checked the way an enum member is.
+        // `Color.Red` / `Color.FromArgb(...)` / `SystemColors.Control`. The 140-odd KnownColor names
+        // are not enumerated here (see IsColor), so the member cannot be checked the way an enum is.
         FormPropertyType.Color =>
             value.StartsWith("Color.", StringComparison.Ordinal) ||
+            value.StartsWith("SystemColors.", StringComparison.Ordinal) ||
             value.StartsWith("New ", StringComparison.Ordinal),
+
+        FormPropertyType.Size => value.StartsWith("New Size(", StringComparison.Ordinal),
 
         // A string arrives from the document unquoted, so quotes mean it is already source.
         FormPropertyType.String =>
@@ -196,7 +337,7 @@ public sealed record FormPropertyDef(
         _ => false
     };
 
-    /// <summary>True when <paramref name="value"/> parses to this property's declared type.</summary>
+    /// <summary>True when <paramref name="value"/> parses to this property's declared type on SOME target.</summary>
     public bool Accepts(string? value)
     {
         if (value == null)
@@ -209,12 +350,38 @@ public sealed record FormPropertyDef(
             FormPropertyType.String => true,
             FormPropertyType.Int => int.TryParse(value, out _),
             FormPropertyType.Bool => bool.TryParse(value, out _),
-            // "#rrggbb", "#rgb", or a bare name the target resolves (WinForms KnownColor / CSS name).
+            // "#rrggbb", "#rgb", "#aarrggbb", or a bare name the target resolves (KnownColor / system / CSS).
             FormPropertyType.Color => IsColor(value),
             FormPropertyType.Enum => AllowedValues != null &&
-                                     AllowedValues.Any(v => string.Equals(v, value, StringComparison.OrdinalIgnoreCase)),
+                                     (AllowedValues.Any(v => string.Equals(v, value, StringComparison.OrdinalIgnoreCase)) ||
+                                      Aliases?.ContainsKey(value) == true),
+            FormPropertyType.Size => TryParseSize(value, out _, out _),
             _ => false
         };
+    }
+
+    /// <summary>
+    /// True when <paramref name="value"/> is usable on <paramref name="target"/>. Stricter than
+    /// <see cref="Accepts(string?)"/> in one place today: a Windows system colour with no CSS
+    /// equivalent is WinForms-only as a VALUE (spec §2.2) — Degraded on a web form, with a reason.
+    /// </summary>
+    public bool Accepts(string? value, FormTarget target) =>
+        Accepts(value) &&
+        !(target == FormTarget.Web && Type == FormPropertyType.Color &&
+          FormSystemColors.TryCanonical(value!, out var system) && FormSystemColors.CssFor(system) == null);
+
+    /// <summary>Why <paramref name="value"/> is not usable on <paramref name="target"/> — the Degraded reason.</summary>
+    public string DescribeRefusal(string value, FormTarget target)
+    {
+        if (Accepts(value) && FormSystemColors.TryCanonical(value, out var system))
+        {
+            return $"'{value}' is the Windows system colour {system}, which has no CSS equivalent, so a " +
+                   "web form cannot use it. The value is preserved exactly as written.";
+        }
+
+        return $"'{value}' is not a valid {Type}" +
+               (AllowedValues is { Count: > 0 } ? $" (expected one of: {string.Join(", ", AllowedValues)})" : "") +
+               ". The value is preserved exactly as written.";
     }
 
     private static bool IsColor(string value)
@@ -587,10 +754,14 @@ public static class FormControlCatalog
     // ⛔ ContentAlignment has no Left/Center/Right — it is a 3x3 grid of Top/Middle/Bottom by
     // Left/Center/Right. The designer keeps the simple horizontal vocabulary and maps to the
     // middle row, which is what a single-line Label or Button actually wants.
+    //
+    // ⚠ INTERIM (slice 1 Task 2): the canonical members are the three Middle* ones and the old
+    // Left/Center/Right are ALIASES, so emission is unchanged (Left → ContentAlignment.MiddleLeft).
+    // Task 5 replaces this with per-row TextAlign over all nine ContentAlignment members.
     private static readonly FormPropertyDef TextAlign = new(
-        "TextAlign", FormPropertyType.Enum, "Left", new[] { "Left", "Center", "Right" },
+        "TextAlign", FormPropertyType.Enum, "MiddleLeft", new[] { "MiddleLeft", "MiddleCenter", "MiddleRight" },
         WinFormsEnumType: "ContentAlignment",
-        WinFormsMemberNames: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        Aliases: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
             ["Left"] = "MiddleLeft",
             ["Center"] = "MiddleCenter",
