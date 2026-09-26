@@ -117,6 +117,8 @@ public class JsExecutionTierRosterTests
         typeof(PropertyAccessorExecutionTests),
         // Chained indexing over array values; C++ and C# legs too.
         typeof(ChainedIndexingExecutionTests),
+        // Arrays as references (C++ BasicLang::Array); C++ and C# legs too.
+        typeof(ArrayReferenceSemanticsExecutionTests),
 
         // ADR-0005 D2 — CSE guards a shared value's own destination, not only its operands.
         // CseDestinationInvalidationExecutionTests / DestinationInvalidation_D4_ByRefExecutionTests
@@ -310,7 +312,7 @@ public class JsExecutionTierRosterTests
 
     [Test]
     public void RosterIsPinned()
-        => Assert.That(ExecutionTier, Has.Length.EqualTo(70), // task #168 added ForEachControlVariableReuseTests; WhenGuardCallRunTests
+        => Assert.That(ExecutionTier, Has.Length.EqualTo(71), // + ArrayReferenceSemanticsExecutionTests (C++ arrays as references); + WhenGuardCallRunTests
             "The execution-tier roster changed. That is fine — update the number — but it must " +
             "be a deliberate edit, not a silent shrink.");
 

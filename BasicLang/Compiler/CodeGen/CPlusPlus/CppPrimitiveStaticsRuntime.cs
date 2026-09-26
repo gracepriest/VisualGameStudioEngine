@@ -317,6 +317,11 @@ inline std::string JoinRange(const std::string& sep, const std::vector<T>& items
 /* Join(sep, array) / Join(sep, List) join the ELEMENTS, as .NET's IEnumerable overloads do. */
 template <typename T>
 inline std::string String_Join(const std::string& sep, const std::vector<T>& items) { return JoinRange(sep, items); }
+/* A BasicLang array (CppArrayRuntime). Named, not left to the vector overload: deduction does not
+   see through Array's conversion to std::vector, so the variadic overload below would take the
+   whole array as ONE value and fail to format it. */
+template <typename T>
+inline std::string String_Join(const std::string& sep, const Array<T>& items) { return JoinRange(sep, items.vec()); }
 /* Any shared_ptr collection with Count() and operator[] (BasicLang::List) — not named, because the
    collections runtime is only spliced into a program that uses one. */
 template <typename C>

@@ -428,6 +428,8 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // typed-catch ladder's trigger is source-level, not surface-level. It precedes the
             // BCL bodies because the Decimal runtime THROWS it (division by zero).
             SpliceRuntimeSource(CppNetExceptionRuntime.Source);
+            // Arrays are handles to shared storage (.NET reference semantics) — see CppArrayRuntime.
+            SpliceRuntimeSource(CppArrayRuntime.Source);
             SpliceRuntimeSource(CppBclRuntime.BclBody);
             SpliceRuntimeSource(CppDecimalRuntime.DecimalBody);
 

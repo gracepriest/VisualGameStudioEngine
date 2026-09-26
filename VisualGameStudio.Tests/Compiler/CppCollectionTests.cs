@@ -1970,7 +1970,7 @@ Sub Main()
 End Sub";
         var output = CompileToCppOptimized(source, out var errors);
         Assert.That(errors, Is.Empty, string.Join("; ", errors));
-        Assert.That(output, Does.Contain("std::vector<int32_t>& a"),
+        Assert.That(output, Does.Contain("BasicLang::Array<int32_t>& a"),
             "a ByRef array parameter must alias the caller's vector:\n" + output);
         Assert.That(CompileRun(output), Is.EqualTo("8\n"));
     }
@@ -2411,7 +2411,7 @@ Module Program
 End Module";
         var output = CompileToCppOptimized(source, out var errors);
         Assert.That(errors, Is.Empty, string.Join("; ", errors));
-        Assert.That(output, Does.Contain("std::vector<int32_t> Cells = std::vector<int32_t>(9)"),
+        Assert.That(output, Does.Contain("BasicLang::Array<int32_t> Cells = std::vector<int32_t>(9)"),
             "the field must be declared as a SIZED array, not a scalar:\n" + output);
         Assert.That(output, Does.Not.Contain("int32_t Cells;"),
             "the scalar declaration is the bug:\n" + output);
@@ -2477,7 +2477,7 @@ Module Program
 End Module";
         var output = CompileToCppOptimized(source, out var errors);
         Assert.That(errors, Is.Empty, string.Join("; ", errors));
-        Assert.That(output, Does.Contain("std::vector<int32_t> Scratch = std::vector<int32_t>(4)"), output);
+        Assert.That(output, Does.Contain("BasicLang::Array<int32_t> Scratch = std::vector<int32_t>(4)"), output);
         Assert.That(CompileRun(output), Is.EqualTo("99\n"));
     }
 
@@ -2527,7 +2527,7 @@ Sub Main()
 End Sub";
         var output = CompileToCppOptimized(source, out var errors);
         Assert.That(errors, Is.Empty, string.Join("; ", errors));
-        Assert.That(output, Does.Contain("std::vector<int32_t> Items"),
+        Assert.That(output, Does.Contain("BasicLang::Array<int32_t> Items"),
             "the member must be typed as an array, not rebuilt as a scalar from its name:\n" + output);
         Assert.That(CompileRun(output), Is.EqualTo("8\n"));
     }
