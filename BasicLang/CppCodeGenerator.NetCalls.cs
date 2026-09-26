@@ -1210,7 +1210,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // handle lives exactly as long as the full-expression that consumes it.
             if (NetArrayCopy.TryGetFormForArray(resultType, out var arrayForm)
                 && string.Equals(EffectiveCppType(resultNode),
-                                 "std::vector<" + arrayForm.NativeElement + ">",
+                                 "BasicLang::Array<" + arrayForm.NativeElement + ">",
                                  StringComparison.Ordinal))
             {
                 return $"{destination} = BasicLang::net::{arrayForm.ReadExportName}({expression});";

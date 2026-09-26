@@ -346,6 +346,10 @@ with the `Dim` path — see `docs/superpowers/specs/2026-09-19-menus-toolbars-st
 - **Two-layer std:** collections lower to `std::shared_ptr<BasicLang::List<T>>`
   (**reference** semantics, matching .NET — value wrappers diverged and were wrong);
   `String`/structs stay values. Foreign C++ via `#CppInclude` / `::`. Targets `-std=c++20`.
+- **Arrays are references too:** `BasicLang::Array<T>` (`CppArrayRuntime`), a handle to shared
+  `std::vector` storage with the vector's surface. A bare `std::vector` array was a VALUE, so
+  `b = a`, a Sub writing its argument, and `lst.Add(a)` each silently copied. Only the outermost
+  rank is the handle (`Integer(,)` → `Array<std::vector<int32_t>>`); `ReDim` builds a new array.
 - **Reference vs value:** classes/interfaces → `shared_ptr<T>` + `make_shared` + `->`;
   `Structure` → value `struct`. Generics → real C++ templates.
 - Exceptions via the `IRThrow` node; a `Return` or `Exit` out of a `Try` carries its own copy

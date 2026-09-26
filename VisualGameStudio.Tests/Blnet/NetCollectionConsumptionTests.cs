@@ -106,7 +106,7 @@ public class NetCollectionConsumptionTests
     {
         Assert.That(Map(ManagedIntArray()), Is.EqualTo("BasicLang::NetRef"),
             "MUTATION TARGET (spec §8.5's `MapType` array-branch row). A .NET Int32() arrives "
-            + "with Kind == Array, so the std::vector branch claims it unless the marker is "
+            + "with Kind == Array, so the array branch claims it unless the marker is "
             + "tested first.");
 
         var native = new TypeInfo("Integer", TypeKind.Array)
@@ -114,7 +114,7 @@ public class NetCollectionConsumptionTests
             ElementType = new TypeInfo("Integer", TypeKind.Primitive),
             ArrayRank = 1,
         };
-        Assert.That(Map(native), Is.EqualTo("std::vector<int32_t>"),
+        Assert.That(Map(native), Is.EqualTo("BasicLang::Array<int32_t>"),
             "a native array must be unaffected by §8.5.");
     }
 
@@ -403,8 +403,9 @@ public class NetCollectionConsumptionTests
 
         Assert.That(cpp, Does.Contain("BasicLang::NetRef parts"),
             "§8.6 row 1: `Dim a = obj.GetValues()` (inferred) KEEPS THE HANDLE. Declaring it "
-            + "std::vector<std::string> is the wild pointer:\n" + cpp);
+            + "a native string array is the wild pointer:\n" + cpp);
         Assert.That(cpp, Does.Not.Contain("std::vector<std::string> parts"));
+        Assert.That(cpp, Does.Not.Contain("BasicLang::Array<std::string> parts"));
 
         var arrayGet = NetAccessorSynthesis.ArrayGetFor("System.String");
         Assert.That(cpp, Does.Contain("BasicLang::net::" + NetNameMangler.Mangle(arrayGet)),
