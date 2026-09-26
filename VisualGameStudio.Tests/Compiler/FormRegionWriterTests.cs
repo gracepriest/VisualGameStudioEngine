@@ -384,7 +384,7 @@ public class FormRegionWriterTests
         // strip the property for no reason the user could name.
         var form = new FormDocument { Target = FormTarget.WinForms, Name = "LoginForm" };
         var label = new FormControl { Kind = "Label", Id = "lbl", TabIndex = 0 };
-        label.Properties["Text"] = "Already quoted";   // a String has no source form: document text, quoted on emit
+        label.Properties["Text"] = "Plain text";   // a String has no source form: document text, quoted on emit
         label.Properties["TextAlign"] = "ContentAlignment.MiddleLeft";
         form.Controls.Add(label);
 
@@ -394,7 +394,7 @@ public class FormRegionWriterTests
         Assert.Multiple(() =>
         {
             Assert.That(result.Text, Does.Contain("lbl.TextAlign = ContentAlignment.MiddleLeft"));
-            Assert.That(result.Text, Does.Contain("""lbl.Text = "Already quoted" """.TrimEnd()));
+            Assert.That(result.Text, Does.Contain("""lbl.Text = "Plain text" """.TrimEnd()));
             Assert.That(result.Diagnostics.Select(d => d.Code),
                 Has.None.EqualTo(DesignCodes.DegradedProperty));
         });
@@ -446,6 +446,93 @@ public class FormRegionWriterTests
             Assert.That(result.Diagnostics.Select(d => d.Code),
                 Has.Exactly(1).EqualTo(DesignCodes.DegradedProperty));
         });
+    }
+
+    [TestCase("New Foo")]
+    [TestCase("Color.Bogus")]
+    [TestCase("Color.Red + junk")]
+    [TestCase("Color.FromArgb(1, 2, 3)")]
+    public void Write_TreatsAColorTheCatalogCannotProve_AsDegraded(string typed)
+    {
+        // ⛔⛔ The Color row is a free-text box in the grid and Commit writes the raw text. The old arm
+        // took anything starting `Color.` or `New ` as already-source and spliced it verbatim —
+        // `btn.BackColor = New Foo` in the user's file, BasicLang silent, csc failing.
+        var form = new FormDocument { Target = FormTarget.WinForms, Name = "LoginForm" };
+        var button = new FormControl { Kind = "Button", Id = "btn", TabIndex = 0 };
+        button.Properties["BackColor"] = typed;
+        form.Controls.Add(button);
+
+        var source = ScaffoldedFile().Replace("LoginForm.blwebform", "LoginForm.blform");
+        var result = RegionWriter.Write("LoginForm.bas", source, form, "LoginForm.blform");
+
+        Assert.That(result.Refused, Is.False, "a degraded value is a warning, not a refusal");
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Text, Does.Not.Contain("btn.BackColor"));
+            Assert.That(result.Diagnostics.Where(d => d.Code == DesignCodes.DegradedProperty).Select(d => d.Message),
+                Has.Exactly(1).Contains("'btn.BackColor'"));
+            Assert.That(result.Diagnostics.Single(d => d.Code == DesignCodes.DegradedProperty).IsWarning, Is.True);
+        });
+    }
+
+    [TestCase("Color.Red")]
+    [TestCase("Color.FromArgb(255, 1, 2, 3)")]
+    public void Write_EmitsAColorSourceFormTheCatalogCanProve_Verbatim(string value)
+    {
+        var form = new FormDocument { Target = FormTarget.WinForms, Name = "LoginForm" };
+        var button = new FormControl { Kind = "Button", Id = "btn", TabIndex = 0 };
+        button.Properties["BackColor"] = value;
+        form.Controls.Add(button);
+
+        var source = ScaffoldedFile().Replace("LoginForm.blwebform", "LoginForm.blform");
+        var result = RegionWriter.Write("LoginForm.bas", source, form, "LoginForm.blform");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Text, Does.Contain($"btn.BackColor = {value}"));
+            Assert.That(result.Diagnostics.Select(d => d.Code), Has.None.EqualTo(DesignCodes.DegradedProperty));
+        });
+    }
+
+    [TestCase("New Foo")]
+    [TestCase("\"quoted\"")]
+    [TestCase("Color.Red")]
+    public void Write_AValueWithNoCatalogRow_IsAlwaysQuoted_NeverJudgedByShape(string value)
+    {
+        // Only an in-memory model can hold a property the catalog has no row for (the reader routes
+        // unknown attributes to UnknownAttributes). With no row there is nothing that can PROVE the
+        // value is source, so it is text.
+        var form = new FormDocument { Target = FormTarget.WinForms, Name = "LoginForm" };
+        var button = new FormControl { Kind = "Button", Id = "btn", TabIndex = 0 };
+        button.Properties["NoSuchRow"] = value;
+        form.Controls.Add(button);
+
+        var source = ScaffoldedFile().Replace("LoginForm.blwebform", "LoginForm.blform");
+        var result = RegionWriter.Write("LoginForm.bas", source, form, "LoginForm.blform");
+
+        Assert.That(result.Text,
+            Does.Contain("btn.NoSuchRow = \"" + value.Replace("\"", "\"\"") + "\""));
+    }
+
+    [TestCase(@"a\b", @"""a\\b""", TestName = "{m}(backslash)")]
+    [TestCase("a\nb", @"""a\nb""", TestName = "{m}(line feed)")]
+    [TestCase("a\r\nb", @"""a\r\nb""", TestName = "{m}(CRLF)")]
+    [TestCase("a\tb", @"""a\tb""", TestName = "{m}(tab)")]
+    [TestCase("a\"b", @"""a""""b""", TestName = "{m}(quote)")]
+    public void Write_EscapesACaptionForTheBasicLangLexer(string caption, string literal)
+    {
+        // ⛔ The BasicLang lexer treats `\` as an escape (\n \r \t \\ \" and any other char as itself),
+        // so `"a\b"` lexes as "ab" — the backslash silently gone from the running caption. And a raw
+        // line break inside the region is a multi-line string in the user's own file.
+        var form = new FormDocument { Target = FormTarget.WinForms, Name = "LoginForm" };
+        var button = new FormControl { Kind = "Button", Id = "btn", TabIndex = 0 };
+        button.Properties["Text"] = caption;
+        form.Controls.Add(button);
+
+        var source = ScaffoldedFile().Replace("LoginForm.blwebform", "LoginForm.blform");
+        var result = RegionWriter.Write("LoginForm.bas", source, form, "LoginForm.blform");
+
+        Assert.That(result.Text, Does.Contain("btn.Text = " + literal));
     }
 
     [Test]

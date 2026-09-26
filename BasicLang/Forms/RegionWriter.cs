@@ -938,7 +938,7 @@ public static class RegionWriter
             {
                 foreach (var item in FormPropertyDef.SplitItems(value))
                 {
-                    body.Append($"{inner}{control.Id}.{name}.Add(\"{item.Replace("\"", "\"\"")}\")")
+                    body.Append($"{inner}{control.Id}.{name}.Add({FormPropertyDef.StringLiteral(item)})")
                         .Append(newline);
                 }
 
@@ -1075,15 +1075,14 @@ public static class RegionWriter
     /// answer. A String row has no source form at all: it is always quoted and escaped, so a caption
     /// <c>New Customer</c> or <c>"quoted"</c> is text, never source.</para>
     ///
-    /// <para>⚠ The shape fallback below applies ONLY to a property with NO catalog row — which only
-    /// an in-memory model can hold, since the reader routes unknown attributes to
-    /// <c>UnknownAttributes</c>. It is left as is on purpose; it never answers for a catalog
-    /// row.</para>
+    /// <para>⛔ A property with NO catalog row is never source: with no row there is nothing that can
+    /// prove it, and the old shape fallback (<c>"…</c> or <c>New …</c>) was exactly the test this method
+    /// exists to replace. Only an in-memory model can hold one — the reader routes unknown attributes
+    /// to <c>UnknownAttributes</c> (a reserved resource reference is recorded before the row lookup,
+    /// but the reader reports it as an error) — so it is quoted as text.</para>
     /// </summary>
     private static bool IsAlreadySource(FormPropertyDef? property, string value) =>
-        property?.IsSourceForm(value) ??
-        (value.StartsWith("\"", StringComparison.Ordinal) ||
-         value.StartsWith("New ", StringComparison.Ordinal));
+        property?.IsSourceForm(value) ?? false;
 
     /// <summary>
     /// Formats a property value as BasicLang SOURCE, driven off the catalog's declared type.
@@ -1133,7 +1132,7 @@ public static class RegionWriter
             FormPropertyType.Size => throw new InvalidOperationException(
                 $"'{property.Name}' = '{value}' is not a parsable Size and reached the region writer; " +
                 "a Degraded value must be skipped before Literal is called."),
-            _ => "\"" + value.Replace("\"", "\"\"") + "\""
+            _ => FormPropertyDef.StringLiteral(value)
         };
     }
 

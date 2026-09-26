@@ -418,7 +418,7 @@ public class WinFormsCatalogSweepTests
         };
 
         var i = 0;
-        foreach (var caption in new[] { "New Customer", "\"quoted\"", "a \"b\" c" })
+        foreach (var caption in new[] { "New Customer", "\"quoted\"", "a \"b\" c", @"a\b", "line1\r\nline2", "a\tb" })
         {
             var button = new FormControl
             {
@@ -438,8 +438,50 @@ public class WinFormsCatalogSweepTests
             Assert.That(generated, Does.Contain("btn0.Text = \"New Customer\""));
             Assert.That(generated, Does.Contain("btn1.Text = \"\\\"quoted\\\"\""));
             Assert.That(generated, Does.Contain("btn2.Text = \"a \\\"b\\\" c\""));
+            // ⛔ Compiling proves nothing here on its own: `"a\b"` lexes in BasicLang as "ab" and
+            // compiles just as cleanly. The C# must carry the caption's own characters.
+            Assert.That(generated, Does.Contain("btn3.Text = \"a\\\\b\""), "the backslash survives");
+            Assert.That(generated, Does.Contain("btn4.Text = \"line1\\r\\nline2\""), "the line break survives");
+            Assert.That(generated, Does.Contain("btn5.Text = \"a\\tb\""), "the tab survives");
         });
         WinFormsCompile.AssertCompiles(generated, "a caption is a string, whatever it looks like.");
+    }
+
+    /// <summary>
+    /// A caption with a line break must not leave a region the NEXT write mistakes for a hand edit —
+    /// the region is regenerated on every save, so a first write that the second refuses would lock the
+    /// user out of the designer after one keystroke.
+    /// </summary>
+    [TestCase("line1\r\nline2")]
+    [TestCase("line1\nline2")]
+    [TestCase("a\tb")]
+    [TestCase(@"a\b")]
+    public void ACaptionWithControlCharacters_RewritesCleanly(string caption)
+    {
+        var form = new FormDocument
+        {
+            Target = FormTarget.WinForms, Name = "SweepForm", Width = 800, Height = 450, Text = caption
+        };
+        var button = new FormControl
+        {
+            Kind = "Button", Id = "btn0", TabIndex = 0,
+            Geometry = new PixelGeometry { X = 8, Y = 8, Width = 120, Height = 24 }
+        };
+        button.Properties["Text"] = caption;
+        form.Controls.Add(button);
+
+        var first = RegionWriter.Write("SweepForm.bas", Scaffold(), form, "SweepForm.blform");
+        Assert.That(first.Refused, Is.False, string.Join("; ", first.Diagnostics.Select(d => d.Format())));
+
+        var second = RegionWriter.Write("SweepForm.bas", first.Text, form, "SweepForm.blform");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(second.Refused, Is.False, string.Join("; ", second.Diagnostics.Select(d => d.Format())));
+            Assert.That(second.Diagnostics.Select(d => d.Code),
+                Has.None.EqualTo(DesignCodes.RegionHandEdited).And.None.EqualTo(DesignCodes.RegionMalformed));
+            Assert.That(second.Text, Is.EqualTo(first.Text), "an unchanged form rewrites to the same bytes");
+        });
     }
 
     /// <summary>Every FormRoot row that exists on WinForms — the root's OWN csc sweep (spec §2.3 Gates).</summary>

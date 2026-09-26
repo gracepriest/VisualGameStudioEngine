@@ -272,6 +272,86 @@ public class FormPropertyDefTests
             "only a member the table names is source — SystemColors.Bogus is CS0117 at csc");
     }
 
+    // ------------------------------------------------------------------
+    // Color source forms — proved by the catalog, never by the shape of the string. The grid's Color
+    // row is a free-text box, so anything typed there reaches IsSourceForm verbatim.
+    // ------------------------------------------------------------------
+
+    [TestCase("Color.Red")]
+    [TestCase("Color.Transparent")]
+    [TestCase("Color.LightGoldenrodYellow")]
+    [TestCase("Color.FromArgb(255, 0, 128, 255)")]
+    [TestCase("Color.FromArgb(0,0,0,0)")]
+    [TestCase("Color.FromArgb( 1 , 2 , 3 , 4 )")]
+    public void AColorSourceFormTheCatalogCanProve_IsSourceForm(string value)
+    {
+        Assert.That(new FormPropertyDef("BackColor", FormPropertyType.Color).IsSourceForm(value), Is.True);
+    }
+
+    [TestCase("Color.Bogus", TestName = "{m}(unknown member)")]
+    [TestCase("Color.red", TestName = "{m}(wrong case)")]
+    [TestCase("Color.Control", TestName = "{m}(a SystemColors member is not a Color member)")]
+    [TestCase("Color.", TestName = "{m}(no member)")]
+    [TestCase("Color.Red + junk", TestName = "{m}(trailing junk)")]
+    [TestCase("Color.Red()", TestName = "{m}(call on a member)")]
+    [TestCase("New Foo", TestName = "{m}(New anything)")]
+    [TestCase("New Color()", TestName = "{m}(New Color)")]
+    [TestCase("Color.FromArgb(1, 2, 3)", TestName = "{m}(three args — never emitted)")]
+    [TestCase("Color.FromArgb(1, 2, 3, 4, 5)", TestName = "{m}(five args)")]
+    [TestCase("Color.FromArgb(1, 2, 3, 256)", TestName = "{m}(out of range)")]
+    [TestCase("Color.FromArgb(-1, 2, 3, 4)", TestName = "{m}(negative)")]
+    [TestCase("Color.FromArgb(a, 2, 3, 4)", TestName = "{m}(not an integer)")]
+    [TestCase("Color.FromArgb(1, 2, 3, 4) + junk", TestName = "{m}(FromArgb trailing junk)")]
+    [TestCase("Color.FromArgb(1, 2, 3, 4) + Color.FromArgb(1, 2, 3, 4)", TestName = "{m}(two calls)")]
+    [TestCase("Color.FromArgb(1, 2, 3, 4", TestName = "{m}(unclosed)")]
+    [TestCase("Color.FromArgb(&HFF, 2, 3, 4)", TestName = "{m}(hex literal)")]
+    public void AColorValueTheCatalogCannotProve_IsNotSourceForm(string value)
+    {
+        Assert.That(new FormPropertyDef("BackColor", FormPropertyType.Color).IsSourceForm(value), Is.False,
+            "spliced verbatim this is a csc error with BasicLang silent (WinForms members type as Object)");
+    }
+
+    [Test]
+    public void FromArgb_IsSourceForm_ExactlyForWhatTheCatalogEmits()
+    {
+        var back = new FormPropertyDef("BackColor", FormPropertyType.Color);
+        var emitted = back.WinFormsLiteral("#80112233")!;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(emitted, Is.EqualTo("Color.FromArgb(128, 17, 34, 51)"));
+            Assert.That(back.IsSourceForm(emitted), Is.True, "what the row writes, it must recognise");
+            Assert.That(back.IsSourceForm(back.WinFormsLiteral("Red")!), Is.True);
+        });
+    }
+
+    /// <summary>
+    /// ⛔ The hand table is checked against the real <c>System.Drawing.Color</c> — every name must be a
+    /// static Color property, and every named colour property but the two excluded ones must be listed.
+    /// </summary>
+    [Test]
+    public void TheKnownColorTable_IsExactlyColorsNamedProperties()
+    {
+        var real = typeof(System.Drawing.Color)
+            .GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static)
+            .Where(p => p.PropertyType == typeof(System.Drawing.Color))
+            .Select(p => p.Name)
+            // Empty is not a colour; RebeccaPurple does not exist on .NET Framework WinForms.
+            .Where(n => n != "Empty" && n != "RebeccaPurple")
+            .OrderBy(n => n, StringComparer.Ordinal)
+            .ToList();
+
+        Assert.That(FormKnownColors.Names.OrderBy(n => n, StringComparer.Ordinal), Is.EqualTo(real));
+    }
+
+    [TestCase("New X")]
+    [TestCase("\"x\"")]
+    public void AStringRow_HasNoSourceForm(string value)
+    {
+        Assert.That(new FormPropertyDef("Text", FormPropertyType.String).IsSourceForm(value), Is.False,
+            "a String is document text, always quoted — never spliced");
+    }
+
     [Test]
     public void ASystemColour_IsCanonicalisedToTheTablesSpelling()
     {

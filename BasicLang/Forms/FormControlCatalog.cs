@@ -249,7 +249,7 @@ public sealed record FormPropertyDef(
 
         if (WinFormsFactory != null)
         {
-            return $"{WinFormsFactory}(\"{value.Replace("\"", "\"\"")}\")";
+            return $"{WinFormsFactory}({StringLiteral(value)})";
         }
 
         return Type switch
@@ -258,6 +258,35 @@ public sealed record FormPropertyDef(
             FormPropertyType.Size => TryParseSize(value, out var w, out var h) ? SizeLiteral(w, h) : null,
             _ => null
         };
+    }
+
+    /// <summary>
+    /// Document text as a BasicLang string literal, quotes included — the ONE escape every generated
+    /// string goes through.
+    ///
+    /// <para>⛔ Not just <c>"</c> → <c>""</c>. The BasicLang lexer treats <c>\</c> as an escape
+    /// (<c>\n \r \t \\ \"</c>, and any other character as itself), so a caption <c>a\b</c> written
+    /// raw lexes as <c>ab</c> — the backslash silently gone from the running program. A raw line break
+    /// is worse: it lands inside the generated region, and a CR LF caption in an LF file makes the next
+    /// write read the file's newline style from the caption and rewrite every line ending.</para>
+    /// </summary>
+    public static string StringLiteral(string text)
+    {
+        var sb = new System.Text.StringBuilder(text.Length + 2).Append('"');
+        foreach (var c in text)
+        {
+            sb.Append(c switch
+            {
+                '"' => "\"\"",
+                '\\' => @"\\",
+                '\r' => @"\r",
+                '\n' => @"\n",
+                '\t' => @"\t",
+                _ => c.ToString()
+            });
+        }
+
+        return sb.Append('"').ToString();
     }
 
     // ⛔ INVARIANT formatting, not interpolation: under sv-SE an int formats its minus as U+2212, and
@@ -354,15 +383,12 @@ public sealed record FormPropertyDef(
             WinFormsEnumType != null && AllowedValues != null &&
             AllowedValues.Any(v => string.Equals(WinFormsLiteral(v), value, StringComparison.Ordinal)),
 
-        // `Color.Red` / `Color.FromArgb(...)`. The 140-odd KnownColor names are not enumerated here
-        // (see IsColor), so a Color member cannot be checked the way an enum is. A SystemColors
-        // member CAN — the table has every one — so it is checked exactly (ordinal): a
-        // `SystemColors.Bogus` spliced in as source is CS0117 at csc, BasicLang silent.
+        // ⛔⛔ Exactly the shapes ColorLiteral WRITES, each proved by a table or a full parse — never a
+        // prefix. The grid's Color row is a free-text box, and the old arm (anything starting `Color.`
+        // or `New `) spliced `New Foo`, `Color.Bogus` and `Color.Red + junk` verbatim into the user's
+        // file: csc errors, BasicLang silent. `New …` is gone entirely — ColorLiteral never emits it.
         FormPropertyType.Color =>
-            value.StartsWith("SystemColors.", StringComparison.Ordinal)
-                ? IsSystemColorsSource(value)
-                : value.StartsWith("Color.", StringComparison.Ordinal) ||
-                  value.StartsWith("New ", StringComparison.Ordinal),
+            IsSystemColorsSource(value) || IsNamedColorSource(value) || IsFromArgbSource(value),
 
         // Exactly `New Size(w, h)` around two integers — never a prefix match, which would pass
         // `New Size(1, 2) + junk` straight into the generated source.
@@ -455,9 +481,43 @@ public sealed record FormPropertyDef(
     /// <summary><c>SystemColors.X</c> where X is, exactly and case-sensitively, a member the table names.</summary>
     private static bool IsSystemColorsSource(string value)
     {
-        var member = value.Substring("SystemColors.".Length);
+        const string prefix = "SystemColors.";
+        if (!value.StartsWith(prefix, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var member = value.Substring(prefix.Length);
         return FormSystemColors.TryCanonical(member, out var canonical) &&
                string.Equals(member, canonical, StringComparison.Ordinal);
+    }
+
+    /// <summary><c>Color.X</c> where X is, exactly and case-sensitively, a named Color property.</summary>
+    private static bool IsNamedColorSource(string value)
+    {
+        const string prefix = "Color.";
+        return value.StartsWith(prefix, StringComparison.Ordinal) &&
+               FormKnownColors.IsMember(value.Substring(prefix.Length));
+    }
+
+    /// <summary>
+    /// <c>Color.FromArgb(a, r, g, b)</c> — the one call ColorLiteral emits — around exactly four
+    /// decimal integers 0-255 and nothing after the closing parenthesis. Spacing around the commas is
+    /// free (as <c>New Size(…)</c>'s is); the three-argument overload is refused because nothing here
+    /// writes it.
+    /// </summary>
+    private static bool IsFromArgbSource(string value)
+    {
+        const string prefix = "Color.FromArgb(";
+        if (!value.StartsWith(prefix, StringComparison.Ordinal) || !value.EndsWith(")", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var parts = value.Substring(prefix.Length, value.Length - prefix.Length - 1).Split(',');
+        return parts.Length == 4 &&
+               parts.All(p => int.TryParse(p.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out var n) &&
+                              n <= 255);
     }
 
     private static bool IsColor(string value)
