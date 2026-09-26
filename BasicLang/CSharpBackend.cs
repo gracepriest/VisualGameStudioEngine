@@ -4439,10 +4439,13 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             // where the name still has its outer meaning.
             var collectionExpr = EmitExpression(forEach.Collection);
 
-            // ⛔ THE LOOP VARIABLE MAY NOT REUSE AN OUTER NAME. BasicLang scopes a For Each variable
-            // to its body and lets it shadow a local, a parameter or an enclosing loop's variable;
-            // C# refuses that (CS0136). And BasicLang is case-INSENSITIVE where C# is not, so a
-            // local `N` beside `For Each n` compiled — and the body read the OUTER `N` through the
+            // ⛔ THE LOOP VARIABLE MAY NOT REUSE AN OUTER NAME. A For Each that DECLARES its variable
+            // scopes it to the body, where it may shadow a local, a parameter or an enclosing loop's
+            // variable; C# refuses that (CS0136). Since task #168 only `For Each x As T` still
+            // declares over an existing `x` — a bare `For Each x` naming an existing variable
+            // REUSES it, and the IRForEach then iterates a hidden `__foreach_N`, which never
+            // collides. And BasicLang is case-INSENSITIVE where C# is not, so a local `N` beside a
+            // declaring `For Each n` compiled — and the body read the OUTER `N` through the
             // case-insensitive name map: a silent wrong answer (68 where 43 was right, measured).
             // A colliding variable gets a fresh name for its body only.
             var hadOuterRename = false;

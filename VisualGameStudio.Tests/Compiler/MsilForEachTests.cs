@@ -933,22 +933,22 @@ public class MsilForEachTests
     // ========================================================================================
 
     /// <summary>
-    /// <c>n</c> is declared OUTSIDE the loop (99) and then reused as the loop variable. The front
-    /// end scopes a <c>For Each</c> variable to a fresh, SHADOWING symbol (see
-    /// <c>SemanticAnalyzer.Visit(ForEachLoopNode)</c>'s <c>EnterScope</c>/<c>ExitScope</c>) rather
-    /// than reusing the outer one, so after the loop <c>n</c> must read back 99 — untouched by
-    /// anything the loop wrote to its own (different) slot. Backend-observable because MSIL's
-    /// <c>_localIndices["n"]</c> rebinding in <c>EmitForEachBody</c> is saved and restored around
-    /// the body rather than assigned outright.
+    /// ⛔⛔ REVERSED BY TASK #168 — this used to pin the OPPOSITE answer. <c>n</c> is declared
+    /// OUTSIDE the loop (99); a bare <c>For Each n</c> (no <c>As</c>) now REUSES it (the owner's VB
+    /// ruling, <c>docs/superpowers/decisions/0009-for-each-control-variable.md</c>), rather than
+    /// shadowing it with a fresh loop-scoped symbol. Every iteration assigns the element to `n`
+    /// through the ordinary assignment lowering (<c>ForEachControlBinding</c>), so after the loop
+    /// `n` holds the LAST element assigned — 3, the last of {1,2,3} — not the original 99.
     ///
-    /// <para>⭐ PROMOTED: C# used to REFUSE TO COMPILE this shape — it emitted
-    /// <c>foreach (int n in l)</c> literally inside the same method scope as the pre-existing
-    /// <c>int n</c>, and C# refused that (<c>CS0136</c>). The <c>ForEachVariableCollides</c> /
-    /// <c>FreshForEachVariableName</c> rename now gives the loop variable a fresh scope-safe name
-    /// for its body and restores the outer meaning afterward, so C# is asserted here too.</para>
+    /// <para>⭐ Both .NET backends still agree with each other (that half of this test's contract
+    /// is untouched): C# lowers the same reuse-and-assign IR, through the SAME
+    /// <c>ForEachControlBinding</c>, as every other backend — it never reaches
+    /// <c>ForEachVariableCollides</c>/<c>FreshForEachVariableName</c> for a bare form any more
+    /// (that machinery is now reached only by a declaring <c>For Each n As T</c> — see
+    /// <c>ForEachVariableRenameFixTests</c>).</para>
     /// </summary>
     [Test]
-    public void LoopVariableName_ResolvesBackToItsOuterMeaning_AfterTheLoop()
+    public void LoopVariableName_IsReused_AndHoldsTheLastElement_AfterTheLoop()
         => MsilAgreesWithCSharp(
             "Sub Main()\n" +
             " Dim n As Integer = 99\n" +
@@ -960,30 +960,24 @@ public class MsilForEachTests
             " Next\n" +
             " PrintLine(CStr(n))\n" +
             "End Sub",
-            "99");
+            "3"); // was "99" before task #168
 
     /// <summary>
-    /// ⛔ THE test above does not discriminate a binding that is never withdrawn. It shadows a
-    /// real LOCAL named <c>n</c> — <c>EmitForEachBody</c>'s restore takes the <c>hadName</c>
-    /// (<c>if</c>) arm there, which is exercised regardless of whether the withdrawal on the
-    /// <c>else</c> arm (no PRIOR binding — <c>_localIndices.Remove(forEach.VariableName)</c>)
-    /// actually runs. The discriminating shape needs a name with NO local meaning but an OUTER
-    /// one: a MODULE-LEVEL variable the loop shadows, so the read after the loop can only be
-    /// satisfied by <c>EmitLoadValue</c> falling through <c>_localIndices</c> (empty for
-    /// <c>n</c>) to <c>_moduleGlobals</c> — which happens only if the loop's binding was
-    /// genuinely removed, not merely restored to a prior local index.
+    /// ⛔⛔ REVERSED BY TASK #168 — this used to prove the loop's binding was WITHDRAWN, so a
+    /// MODULE GLOBAL of the same name read back untouched (7, this test's OLD value) once the loop
+    /// closed. Task #168 makes a module global exactly the kind of "existing variable" a bare
+    /// <c>For Each n</c> REUSES (ADR-0009): MSIL's <c>EmitForEachBody</c> no longer needs to save
+    /// and restore <c>_localIndices["n"]</c> around the body at all for this shape, because there
+    /// is no local binding to introduce — the reuse assignment stores straight through to
+    /// <c>ldsfld</c>/<c>stsfld int32 'MsilProbe'::'n'</c>, the SAME store the front end's ordinary
+    /// assignment lowering would produce for a bare <c>n = element</c>. After the loop, `n` holds
+    /// the last element assigned — 2, the last of {1,2} — not 7.
     ///
-    /// <para>⛔ Measured: with the binding never withdrawn, the stale loop slot SHADOWS the
-    /// module global for the rest of the method — <c>ldloc.1</c> instead of
-    /// <c>ldsfld int32 'MsilProbe'::'n'</c> — a clean run with a wrong answer (2, the loop's last
-    /// element, instead of 7).</para>
-    ///
-    /// <para>C# was checked and agrees (7) — no separate C#-backend defect on this shape, so this
-    /// uses the ordinary <c>MsilAgreesWithCSharp</c> pattern rather than falling back to
-    /// JavaScript the way the case above has to.</para>
+    /// <para>C# was checked and agrees (2) — no separate C#-backend defect on this shape, so this
+    /// keeps the ordinary <c>MsilAgreesWithCSharp</c> pattern.</para>
     /// </summary>
     [Test]
-    public void LoopVariableBinding_IsWithdrawn_SoAModuleGlobalOfTheSameNameIsVisibleAfterTheLoop()
+    public void LoopVariableBinding_ReusesAModuleGlobalOfTheSameName_WhichHoldsTheLastElement_AfterTheLoop()
         => MsilAgreesWithCSharp(
             "Dim n As Integer = 7\n\n" +
             "Sub Main()\n" +
@@ -994,7 +988,7 @@ public class MsilForEachTests
             " Next\n" +
             " PrintLine(CStr(n))\n" +
             "End Sub",
-            "7");
+            "2"); // was "7" before task #168
 
     // ========================================================================================
     // CONTRACT ITEM 6 — statements after the loop still run (also see

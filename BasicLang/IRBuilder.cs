@@ -3650,8 +3650,16 @@ namespace BasicLang.Compiler.IR
             var bodyBlock = _currentFunction.CreateBlock($"foreach{suffix}.body");
             var endBlock = _currentFunction.CreateBlock($"foreach{suffix}.end");
 
+            // ⭐ Task #168: `For Each x In coll` over an EXISTING `x` (no `As`) iterates a HIDDEN
+            // variable, and the body begins with `x = hidden` — the analyzer decided which loops
+            // those are and built the assignment (ForEachControlBinding); this never guesses.
+            // Before it, every backend declared its own `x` from the IRForEach and the variable
+            // the program named was never written (measured on all four, every entry point).
+            ForEachControlBinding reusedControl = null;
+            _semanticAnalyzer?.ForEachControlBindings?.TryGetValue(node, out reusedControl);
+
             // Emit IRForEach instruction
-            var forEach = new IRForEach(node.Variable, elemType, collection, bodyBlock, endBlock);
+            var forEach = new IRForEach(reusedControl?.HiddenName ?? node.Variable, elemType, collection, bodyBlock, endBlock);
 
             // P2a-2 Task 9 (§8.5): a For Each over a HANDLE-represented .NET collection carries
             // the four IEnumerable<T>/IEnumerator<T> members the analyzer resolved. Absent for
@@ -3668,6 +3676,13 @@ namespace BasicLang.Compiler.IR
             _currentBlock = bodyBlock;
 
             _loopStack.Push(new LoopContext(endBlock, endBlock));  // Continue goes to end (next iteration handled by foreach)
+
+            // The element reaches `x` FIRST, before any statement of the body can read `x` or
+            // leave the iteration — so an `Exit For` leaves `x` holding the element being
+            // processed, as VB does. Lowered by the ordinary assignment path, so a field, a module
+            // global, a ByRef parameter and the assignment coercion are all its business.
+            reusedControl?.Assignment.Accept(this);
+
             node.Body.Accept(this);
             _loopStack.Pop();
 

@@ -251,6 +251,15 @@ public class JsExecutionTierRosterTests
         // here: pure in-process IR/front-end/pass fixtures, spawn nothing, carry no
         // [Category("Integration")].
         typeof(LambdaCaptureSetExecutionTests),
+
+        // Task #168 — a bare `For Each x In coll` over an existing variable REUSES it (ADR-0009).
+        // Named "...ReuseTests", so the widened match below cannot see it — listed by hand. Its
+        // JS legs run through FourBackends.RunsOnEveryBackend[Aggressive] (which call
+        // JavaScriptExecutionTests.RunJs / FourBackends.RunAggressiveJs) for every reuse and
+        // control shape but G4 (ByRef — JavaScript refuses that by design, so its own test never
+        // asks the JS leg at all). ForEachControlVariableDiagnosticsTests is NOT here: pure
+        // front-end/IR fixture, spawns nothing, carries no [Category("Integration")].
+        typeof(ForEachControlVariableReuseTests),
     };
 
     /// <summary>
@@ -299,7 +308,7 @@ public class JsExecutionTierRosterTests
 
     [Test]
     public void RosterIsPinned()
-        => Assert.That(ExecutionTier, Has.Length.EqualTo(68),
+        => Assert.That(ExecutionTier, Has.Length.EqualTo(69), // task #168 added ForEachControlVariableReuseTests
             "The execution-tier roster changed. That is fine — update the number — but it must " +
             "be a deliberate edit, not a silent shrink.");
 

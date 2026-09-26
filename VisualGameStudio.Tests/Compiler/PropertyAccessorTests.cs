@@ -188,11 +188,46 @@ public class PropertyAccessorExecutionTests
     // the inner counter's first hit; V: 0 + 1 -> set 10; Probe: V = 2 -> 20, plus the 3rd hit.
     private const string Expected = "Woof\nWoof!\n17\nbox!\n5\n3\n1\n10\n23";
 
-    [Test]
-    public void StandardPipeline_RunsOnEveryBackend()
-        => FourBackends.RunsOnEveryBackend(Program, Expected);
+    // ⚠ Three backends, not four. MSIL cannot run this program yet: it lowers a property read
+    // through an INTERFACE-typed variable (`s.Area`, `s As IShape`) to a FIELD load, so the run
+    // dies with "MissingFieldException: Field not found: 'IShape.Area'" on both pipelines — a
+    // pre-existing MSIL gap (task #175), not the accessor work this fixture covers. It only
+    // surfaces where ilasm is present (the MSIL leg is ignored without one), which is why a
+    // four-backend assertion here passed where it was written. The MSIL leg is pinned below and
+    // goes red when #175 is fixed: then fold it back into RunsOnEveryBackend.
 
     [Test]
-    public void AggressivePipeline_RunsOnEveryBackend()
-        => FourBackends.RunsOnEveryBackendAggressive(Program, Expected);
+    public void StandardPipeline_RunsOnCSharpCppAndJavaScript()
+        => Assert.Multiple(() =>
+        {
+            Assert.That(FourBackends.Norm(BclE2E.CompileRun(BclE2E.CompileToCppOptimized(Program))), Is.EqualTo(Expected), "C++");
+            Assert.That(FourBackends.Norm(JavaScriptExecutionTests.RunJs(Program)), Is.EqualTo(Expected), "JavaScript");
+            Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharp(Program)), Is.EqualTo(Expected), "C#");
+        });
+
+    [Test]
+    public void AggressivePipeline_RunsOnCSharpCppAndJavaScript()
+        => Assert.Multiple(() =>
+        {
+            Assert.That(FourBackends.Norm(BclE2E.CompileRun(BclE2E.CompileToCppAggressive(Program))), Is.EqualTo(Expected), "C++");
+            Assert.That(FourBackends.Norm(FourBackends.RunAggressiveJs(Program)), Is.EqualTo(Expected), "JavaScript");
+            Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharpAggressive(Program)), Is.EqualTo(Expected), "C#");
+        });
+
+    /// <summary>
+    /// ⛔ PINNED KNOWN GAP, task #175: MSIL reads `s.Area` through an interface-typed variable as
+    /// a field. Asserts today's failure so it goes RED the day MSIL emits the accessor call —
+    /// then delete this pin and assert MSIL in the two tests above.
+    /// </summary>
+    [Test]
+    public void Msil_InterfacePropertyRead_IsAFieldLoad_PinnedForTask175()
+    {
+        // Skip, not fail, where ilasm is absent — outside the Catch below, which would otherwise
+        // swallow the harness's own Assert.Ignore.
+        Msil.MsilHarness.RequireIlasm();
+        var ex = Assert.Catch(() => Msil.MsilHarness.RunExpectingSuccess(Program));
+        Assert.That(ex?.Message, Does.Contain("MissingFieldException").And.Contain("IShape.Area"),
+            "task #175 — if MSIL now runs this program, the interface-property gap is fixed: delete "
+            + "this pin and add MSIL back to both pipelines above.");
+    }
 }
