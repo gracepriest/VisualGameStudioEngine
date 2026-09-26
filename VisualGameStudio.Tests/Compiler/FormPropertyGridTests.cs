@@ -282,6 +282,65 @@ public class FormPropertyGridTests
             "an unparseable value left the model where it was");
     }
 
+    private const string WebCombo = """
+        <WebForm Name="F" Version="1">
+          <Controls>
+            <ComboBox Id="cmb" TabIndex="0" Items="Alpha, Beta" SelectedIndex="1"/>
+          </Controls>
+        </WebForm>
+        """;
+
+    /// <summary>
+    /// ⛔⛔ sv-SE's NegativeSign is U+2212. A row that wrote <c>value.ToString()</c> put "−1" into the
+    /// document for SelectedIndex's own default, which the culture-free <c>TryParseInt</c> refuses —
+    /// so the designer FROZE a value it had written itself (and before that, csc saw CS1056).
+    /// </summary>
+    [Test]
+    [SetCulture("sv-SE")]
+    public void ANegativeIntEdit_UnderAUnicodeMinusCulture_IsWrittenWithAnAsciiHyphen_AndStaysEditable()
+    {
+        var file = Read(WebCombo);
+        var grid = new FormPropertyGridViewModel();
+        grid.Load(file);
+        grid.SelectedControl = file.Model.FindById("cmb");
+
+        grid.Rows.Single(r => r.Name == "SelectedIndex").IntValue = -1;
+
+        // A fresh grid re-judges the tier from the document, as reopening the form would.
+        var reopened = new FormPropertyGridViewModel();
+        reopened.Load(file);
+        reopened.SelectedControl = file.Model.FindById("cmb");
+        var row = reopened.Rows.Single(r => r.Name == "SelectedIndex");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(file.Model.FindById("cmb")!.Properties["SelectedIndex"], Is.EqualTo("-1"),
+                "ASCII hyphen-minus, whatever the current culture");
+            Assert.That(row.IsFrozen, Is.False, "the designer must not freeze a value it wrote");
+            Assert.That(row.IntValue, Is.EqualTo(-1), "read and write agree");
+        });
+    }
+
+    [Test]
+    [SetCulture("sv-SE")]
+    public void ANegativeIntrinsicEdit_UnderAUnicodeMinusCulture_ShowsAnAsciiHyphen()
+    {
+        var file = FormDocumentReader.Read("F.blform", WinFormsForm);
+        var grid = new FormPropertyGridViewModel();
+        grid.Load(file);
+        grid.SelectedControl = file.Model.FindById("chk");
+
+        var x = grid.Rows.Single(r => r.Name == "X");
+        x.IntValue = -5;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(((PixelGeometry)grid.SelectedControl!.Geometry!).X, Is.EqualTo(-5));
+            Assert.That(x.RawValue, Is.EqualTo("-5"), "an intrinsic row formats invariantly too");
+            Assert.That(x.IntValue, Is.EqualTo(-5));
+        });
+    }
+
     /// <summary>
     /// ⛔ The FORM's own properties, shown when nothing on the surface is selected — which is what
     /// VS does. Clicking the form used to say "No selection" and offer nothing, so a form's caption

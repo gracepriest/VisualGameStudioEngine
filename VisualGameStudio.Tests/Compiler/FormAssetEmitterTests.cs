@@ -396,6 +396,60 @@ public class FormAssetEmitterTests
         Assert.That(FormAssetEmitter.Html(form, "App.js"), Does.Not.Contain("selected"));
     }
 
+    /// <summary>
+    /// ⛔ Both targets must agree on which SelectedIndex values are valid. WinForms judges these
+    /// Degraded (<c>FormPropertyDef.TryParseInt</c>: ASCII space only, culture-free) and emits no
+    /// assignment; a whitespace-tolerant <c>int.TryParse</c> on the web marked Beta anyway, so the
+    /// same document opened on different entries per target.
+    /// </summary>
+    [TestCase("1\r\n")]
+    [TestCase("\t1")]
+    [TestCase("1\n")]
+    public void ASelectsSelectedIndex_ThatWinFormsJudgesDegraded_MarksNothing(string raw)
+    {
+        var form = new FormDocument { Target = FormTarget.Web, Name = "F" };
+        var combo = new FormControl { Kind = "ComboBox", Id = "cmb", TabIndex = 0 };
+        combo.Properties["Items"] = "Alpha, Beta";
+        combo.Properties["SelectedIndex"] = raw;
+        form.Controls.Add(combo);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(FormControlCatalog.Find("ComboBox")!.Property("SelectedIndex")!.Accepts(raw), Is.False,
+                "precondition: the catalog calls this value Degraded");
+            Assert.That(FormAssetEmitter.Html(form, "App.js"), Does.Not.Contain("selected"));
+        });
+    }
+
+    [Test]
+    [SetCulture("sv-SE")]
+    public void ASelectsSelectedIndex_WithAUnicodeMinus_MarksNothing_UnderAnyCulture()
+    {
+        // U+2212 built from its code point: sv-SE's own negative sign, which the culture-free reader
+        // refuses on the desktop. The web must refuse it too.
+        var raw = ((char)0x2212) + "1";
+        var form = new FormDocument { Target = FormTarget.Web, Name = "F" };
+        var combo = new FormControl { Kind = "ComboBox", Id = "cmb", TabIndex = 0 };
+        combo.Properties["Items"] = "Alpha, Beta";
+        combo.Properties["SelectedIndex"] = raw;
+        form.Controls.Add(combo);
+
+        Assert.That(FormAssetEmitter.Html(form, "App.js"), Does.Not.Contain("selected"));
+    }
+
+    [Test]
+    public void ASelectsSelectedIndex_WithAsciiSpaces_StillMarksThatOption()
+    {
+        // Space is what a person types beside a number; TryParseInt accepts it, so both targets do.
+        var form = new FormDocument { Target = FormTarget.Web, Name = "F" };
+        var combo = new FormControl { Kind = "ComboBox", Id = "cmb", TabIndex = 0 };
+        combo.Properties["Items"] = "Alpha, Beta";
+        combo.Properties["SelectedIndex"] = " 1 ";
+        form.Controls.Add(combo);
+
+        Assert.That(FormAssetEmitter.Html(form, "App.js"), Does.Contain("<option selected>Beta</option>"));
+    }
+
     [Test]
     public void ASelectWithNoItems_EmitsNoOptions()
     {

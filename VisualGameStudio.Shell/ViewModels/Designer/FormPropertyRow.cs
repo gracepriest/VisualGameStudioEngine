@@ -1,3 +1,4 @@
+using System.Globalization;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using BasicLang.Forms;
@@ -202,10 +203,16 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow
         set => Commit(value ? "true" : "false");
     }
 
+    /// <summary>
+    /// ⛔⛔ Culture-INVARIANT both ways. sv-SE/fi-FI/nb-NO format a negative number with U+2212,
+    /// which <see cref="FormPropertyDef.TryParseInt"/> refuses — so a current-culture write froze
+    /// SelectedIndex's own default (-1) the moment the user set it. Read with the same parser the
+    /// catalog judges tiers with, so the row and the document can never disagree on a value.
+    /// </summary>
     public int IntValue
     {
-        get => int.TryParse(RawValue, out var parsed) ? parsed : 0;
-        set => Commit(value.ToString());
+        get => FormPropertyDef.TryParseInt(RawValue, out var parsed) ? parsed : 0;
+        set => Commit(value.ToString(CultureInfo.InvariantCulture));
     }
 
     // ==================================================================

@@ -308,8 +308,11 @@ public static class FormAssetEmitter
             // option the desktop opened on the user's chosen entry while the web opened on the
             // first one. It is an INDEX into this list, so it can only be resolved here, where the
             // list is being written.
+            //
+            // ⚠ Read with the catalog's TryParseInt, never int.TryParse: a "1\r\n" the desktop judges
+            // Degraded (and emits nothing for) must not mark an option on the page either.
             var selected = control.Properties.TryGetValue("SelectedIndex", out var raw) &&
-                           int.TryParse(raw, out var parsed)
+                           FormPropertyDef.TryParseInt(raw, out var parsed)
                 ? parsed
                 : -1;
 

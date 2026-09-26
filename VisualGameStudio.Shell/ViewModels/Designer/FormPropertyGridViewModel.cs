@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Globalization;
 using CommunityToolkit.Mvvm.ComponentModel;
 using BasicLang.Forms;
 using BasicLang.Forms.Serialization;
@@ -199,14 +200,15 @@ public partial class FormPropertyGridViewModel : ObservableObject
         string name, Func<int> read, Action<int> write, Action changed) =>
         new(name,
             FormPropertyType.Int,
-            () => read().ToString(),
+            // ⛔ Invariant, and parsed by the catalog's own reader: see FormPropertyRow.IntValue.
+            () => read().ToString(CultureInfo.InvariantCulture),
             text =>
             {
                 // ⚠ An unparseable value is IGNORED rather than coerced to zero. The numeric editor
                 // should not produce one, but a binding can push mid-edit text — and snapping a
                 // control to the origin because the user was halfway through typing "1" of "128" is
                 // the kind of thing that makes a designer feel haunted.
-                if (int.TryParse(text, out var parsed))
+                if (FormPropertyDef.TryParseInt(text, out var parsed))
                 {
                     write(parsed);
                 }
