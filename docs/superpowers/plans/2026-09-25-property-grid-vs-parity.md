@@ -1263,6 +1263,8 @@ public class FormEventsTests
 
 ⚠ `WiredOn_TheFormRoot_…` references `FormRoot` (Task 6). Mark it `[Ignore("FormRoot lands in Task 6")]` until Task 6 Step 9 removes the attribute — the checkbox there says so. ⛔ Never leave the Ignore past Task 6: an ignored test is a pass by absence.
 
+> **Execution note (Task 3):** an `[Ignore]` does not stop a missing member from failing the BUILD (CS0117). The committed test therefore keeps the body above in a comment and runs `Assert.Fail(...)` under the Ignore; Task 6 Step 9(f) restores the body.
+
 - [ ] **Step 2: Run — expect a BUILD failure.** Expected: `CS0246: The type or namespace name 'FormEventDef' could not be found`, `CS0103: 'FormEvents'`. Right reason.
 
 - [ ] **Step 3: Create the event model and the seam.** `BasicLang/Forms/FormEvents.cs`:
@@ -2877,7 +2879,7 @@ and after the `UnknownAttributes` loop (`:100-103`) add:
 
 (e) `FormAssetEmitter.cs:106` → `sb.Append($"<title>{Text(form.Text ?? form.Name)}</title>\n");` with a one-line comment: `// Text ?? Name (spec §2.3): the page title follows the caption the user set, or the form's name.`
 
-(f) Restore the Task 1 and Task 3 placeholders: in `WinFormsCatalogParityTests.TheSnapshot_…` put back `.Append(FormControlCatalog.FormRoot.Kind)`; delete the `[Ignore]` on `FormEventsTests.WiredOn_TheFormRoot_…`.
+(f) Restore the Task 1 and Task 3 placeholders: in `WinFormsCatalogParityTests.TheSnapshot_…` put back `.Append(FormControlCatalog.FormRoot.Kind)`; delete the `[Ignore]` on `FormEventsTests.WiredOn_TheFormRoot_…` AND replace its `Assert.Fail` placeholder with the commented-out body above it (execution note, Task 3: `FormRoot` does not exist yet, so the real body cannot compile even under `[Ignore]`; the placeholder fails, so removing only the Ignore goes red rather than passing by absence).
 
 - [ ] **Step 10: Run — green.**
 

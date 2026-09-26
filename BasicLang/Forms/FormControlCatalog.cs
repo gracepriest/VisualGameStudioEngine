@@ -696,9 +696,12 @@ public sealed record FormWebScript(string FieldType, string Construct, FormImpli
 /// <summary>A property and the value the other target's construct implies for it — see <see cref="FormWebScript.Implies"/>.</summary>
 public sealed record FormImpliedProperty(string Name, string Value);
 
-/// <param name="WinFormsEventArgs">
-/// The <c>e</c> type of the default event's handler, qualified; null means <c>EventArgs</c>. A
-/// <c>BackgroundWorker.DoWork</c> handler declared with <c>EventArgs</c> compiles by contravariance
+/// <param name="Events">
+/// The kind's events (spec §2.5). The <see cref="FormEventDef.IsDefault"/> entry is what a double-click
+/// means and what the old single-event fields now DERIVE from — <see cref="WinFormsEvent"/>,
+/// <see cref="WebEvent"/>, <see cref="WinFormsEventArgs"/> — so every reader of those keeps its
+/// behaviour until it is migrated. ⚠ An event's <see cref="FormEventDef.WinFormsArgs"/> is qualified:
+/// a <c>BackgroundWorker.DoWork</c> handler declared with <c>EventArgs</c> compiles by contravariance
 /// but cannot reach <c>e.Argument</c>; the typed stub is the useful one.
 /// </param>
 /// <param name="WebHandlerTakesEvent">
@@ -744,9 +747,7 @@ public sealed record FormControlDef(
     int DefaultWidth = 100,
     int DefaultHeight = 24,
     FormSchematic Schematic = FormSchematic.Input,
-    string? WinFormsEvent = null,
-    string? WebEvent = null,
-    string? WinFormsEventArgs = null,
+    IReadOnlyList<FormEventDef>? Events = null,
     bool WebHandlerTakesEvent = true,
     FormWebScript? WebScript = null,
     FormPlace Place = FormPlace.Positioned,
@@ -761,6 +762,18 @@ public sealed record FormControlDef(
 
     /// <summary>A strip or a menu item — something whose children are items.</summary>
     public bool IsHost => Items != null;
+
+    /// <summary>The event a double-click means — the row's <see cref="FormEventDef.IsDefault"/> entry.</summary>
+    public FormEventDef? DefaultEventDef => Events?.FirstOrDefault(e => e.IsDefault);
+
+    /// <summary>Derived (spec §2.5): the default entry's WinForms name.</summary>
+    public string? WinFormsEvent => DefaultEventDef?.Name;
+
+    /// <summary>Derived: the default entry's DOM event type.</summary>
+    public string? WebEvent => DefaultEventDef?.WebEvent;
+
+    /// <summary>Derived: the default entry's handler <c>e</c> type; null means <c>EventArgs</c>.</summary>
+    public string? WinFormsEventArgs => DefaultEventDef?.WinFormsArgs;
 
     /// <summary>
     /// Whether the kind exists on <paramref name="target"/>. On the web an element has a tag and a
@@ -842,6 +855,16 @@ public static class FormControlCatalog
         own.Concat(new[] { Enabled, Visible, ForeColor, BackColor }).ToList();
 
     /// <summary>
+    /// A row's events when it declares only its DEFAULT one — every row today (the D1 event lists
+    /// arrive in slice 5). Category and Description are filled from the parity run (Task 8).
+    /// ⛔ A static METHOD, not a field, so it is immune to the textual-order initializer trap below.
+    /// </summary>
+    private static IReadOnlyList<FormEventDef> Ev(
+        string winForms, string? web = null, string? args = null,
+        FormEventCategory? category = null, string? description = null) =>
+        new[] { new FormEventDef(winForms, args, web, category, description, IsDefault: true) };
+
+    /// <summary>
     /// The ten kinds of v1. Ten is a deliberate floor, not a ceiling: it is the smallest set that
     /// covers a login form, a settings pane and a list-detail pane — the three shapes the designer
     /// has to handle before it is worth using at all.
@@ -855,7 +878,7 @@ public static class FormControlCatalog
     {
         new("Label",       "Label",       "label",    null,       false, Common(Text, TextAlign),
             DefaultWidth: 100, DefaultHeight: 23, Schematic: FormSchematic.Text,
-            WinFormsEvent: "Click", WebEvent: "click"),
+            Events: Ev("Click", "click")),
         new("TextBox",     "TextBox",     "input",    "text",     false, Common(
             Text,
             new FormPropertyDef("Multiline", FormPropertyType.Bool, "false"),
@@ -867,13 +890,13 @@ public static class FormControlCatalog
             DefaultWidth: 100, DefaultHeight: 23,
             // ⚠ The DOM has no TextChanged. `input` fires per keystroke, which is what TextChanged
             // means; `change` fires on blur and would be a different gesture wearing the same name.
-            WinFormsEvent: "TextChanged", WebEvent: "input"),
+            Events: Ev("TextChanged", "input")),
         new("Button",      "Button",      "button",   null,       false, Common(Text, TextAlign),
             DefaultWidth: 75, DefaultHeight: 23, Schematic: FormSchematic.Button,
-            WinFormsEvent: "Click", WebEvent: "click"),
+            Events: Ev("Click", "click")),
         new("CheckBox",    "CheckBox",    "input",    "checkbox", false, Common(Text, Checked),
             DefaultWidth: 104, DefaultHeight: 24, Schematic: FormSchematic.Check,
-            WinFormsEvent: "CheckedChanged", WebEvent: "change"),
+            Events: Ev("CheckedChanged", "change")),
         new("RadioButton", "RadioButton", "input",    "radio",    false, Common(
             Text,
             Checked,
@@ -882,14 +905,14 @@ public static class FormControlCatalog
             new FormPropertyDef("GroupName", FormPropertyType.String,
                 Targets: new[] { FormTarget.Web })),
             DefaultWidth: 104, DefaultHeight: 24, Schematic: FormSchematic.Radio,
-            WinFormsEvent: "CheckedChanged", WebEvent: "change"),
+            Events: Ev("CheckedChanged", "change")),
         new("ComboBox",    "ComboBox",    "select",   null,       false, Common(
             Text,
             // Items is a get-only collection on WinForms — assigning it is CS0200.
             new FormPropertyDef("Items", FormPropertyType.String, IsItemCollection: true),
             new FormPropertyDef("SelectedIndex", FormPropertyType.Int, "-1")),
             DefaultWidth: 121, DefaultHeight: 23, Schematic: FormSchematic.Dropdown,
-            WinFormsEvent: "SelectedIndexChanged", WebEvent: "change"),
+            Events: Ev("SelectedIndexChanged", "change")),
         new("ListBox",     "ListBox",     "select",   null,       false, Common(
             new FormPropertyDef("Items", FormPropertyType.String, IsItemCollection: true),
             new FormPropertyDef("SelectedIndex", FormPropertyType.Int, "-1"),
@@ -899,7 +922,7 @@ public static class FormControlCatalog
             new FormPropertyDef("MultiSelect", FormPropertyType.Bool, "false",
                 Targets: new[] { FormTarget.Web })),
             DefaultWidth: 120, DefaultHeight: 95, Schematic: FormSchematic.List,
-            WinFormsEvent: "SelectedIndexChanged", WebEvent: "change"),
+            Events: Ev("SelectedIndexChanged", "change")),
         new("Panel",       "Panel",       "div",      null,       true,  Common(
             new FormPropertyDef("BorderStyle", FormPropertyType.Enum, "None",
                 new[] { "None", "FixedSingle", "Fixed3D" },
@@ -908,10 +931,10 @@ public static class FormControlCatalog
             // ⚠ VS opens a Panel on Paint. That handler takes a PaintEventArgs and is for drawing,
             // not for a gesture — Click is the event a double-click in THIS designer can honestly
             // stub, and the Events tab (Task 23) is where the rest will be reachable.
-            WinFormsEvent: "Click", WebEvent: "click"),
+            Events: Ev("Click", "click")),
         new("GroupBox",    "GroupBox",    "fieldset", null,       true,  Common(Text),
             DefaultWidth: 200, DefaultHeight: 100, Schematic: FormSchematic.Group,
-            WinFormsEvent: "Click", WebEvent: "click"),
+            Events: Ev("Click", "click")),
         new("PictureBox",  "PictureBox",  "img",      null,       false, Common(
             // WinForms Image is a System.Drawing.Image, not a path string (CS0029).
             new FormPropertyDef("Image", FormPropertyType.String,
@@ -920,7 +943,7 @@ public static class FormControlCatalog
                 new[] { "Normal", "StretchImage", "AutoSize", "CenterImage", "Zoom" },
                 WinFormsEnumType: "PictureBoxSizeMode")),
             DefaultWidth: 100, DefaultHeight: 50, Schematic: FormSchematic.Image,
-            WinFormsEvent: "Click", WebEvent: "click"),
+            Events: Ev("Click", "click")),
 
         // ==================================================================
         // Task 23 — the rest of the common-controls tier.
@@ -936,7 +959,7 @@ public static class FormControlCatalog
         // form.
         new("LinkLabel",   "LinkLabel",   "a",        null,       false, Common(Text, TextAlign),
             DefaultWidth: 100, DefaultHeight: 23, Schematic: FormSchematic.Link,
-            WinFormsEvent: "LinkClicked", WebEvent: "click"),
+            Events: Ev("LinkClicked", "click")),
 
         new("NumericUpDown", "NumericUpDown", "input", "number",  false, Common(
             // ⛔ These are DECIMAL on WinForms. An Int literal widens implicitly, so the catalog
@@ -951,7 +974,7 @@ public static class FormControlCatalog
             new FormPropertyDef("DecimalPlaces", FormPropertyType.Int, "0",
                 Targets: new[] { FormTarget.WinForms })),
             DefaultWidth: 120, DefaultHeight: 23, Schematic: FormSchematic.Spinner,
-            WinFormsEvent: "ValueChanged", WebEvent: "input"),
+            Events: Ev("ValueChanged", "input")),
 
         new("DateTimePicker", "DateTimePicker", "input", "date",  false, Common(
             // ⛔ All WinForms-only. <input type="date"> renders per the user's locale and has no
@@ -966,7 +989,7 @@ public static class FormControlCatalog
             new FormPropertyDef("ShowUpDown", FormPropertyType.Bool, "false",
                 Targets: new[] { FormTarget.WinForms })),
             DefaultWidth: 200, DefaultHeight: 23, Schematic: FormSchematic.DatePicker,
-            WinFormsEvent: "ValueChanged", WebEvent: "change"),
+            Events: Ev("ValueChanged", "change")),
 
         new("TrackBar",    "TrackBar",    "input",    "range",    false, Common(
             new FormPropertyDef("Minimum", FormPropertyType.Int, "0", HtmlAttribute: "min"),
@@ -979,7 +1002,7 @@ public static class FormControlCatalog
                 WinFormsEnumType: "Orientation",
                 Targets: new[] { FormTarget.WinForms })),
             DefaultWidth: 150, DefaultHeight: 45, Schematic: FormSchematic.Slider,
-            WinFormsEvent: "ValueChanged", WebEvent: "input"),
+            Events: Ev("ValueChanged", "input")),
 
         new("ProgressBar", "ProgressBar", "progress", null,       false, Common(
             new FormPropertyDef("Minimum", FormPropertyType.Int, "0",
@@ -993,7 +1016,7 @@ public static class FormControlCatalog
             DefaultWidth: 150, DefaultHeight: 23, Schematic: FormSchematic.Progress,
             // ⚠ A ProgressBar reports; it does not notify. Click is what Control gives it and the
             // only thing a double-click here can honestly stub.
-            WinFormsEvent: "Click", WebEvent: "click"),
+            Events: Ev("Click", "click")),
 
         // ==================================================================
         // ⛔⛔ WinForms-ONLY, by decision rather than omission. None of these has a single honest
@@ -1008,7 +1031,7 @@ public static class FormControlCatalog
             new FormPropertyDef("SelectedIndex", FormPropertyType.Int, "-1"),
             new FormPropertyDef("CheckOnClick", FormPropertyType.Bool, "false")),
             DefaultWidth: 160, DefaultHeight: 95, Schematic: FormSchematic.CheckList,
-            WinFormsEvent: "SelectedIndexChanged"),
+            Events: Ev("SelectedIndexChanged")),
 
         new("ListView",    "ListView",    null,       null,       false, Common(
             new FormPropertyDef("View", FormPropertyType.Enum, "LargeIcon",
@@ -1018,7 +1041,7 @@ public static class FormControlCatalog
             new FormPropertyDef("GridLines", FormPropertyType.Bool, "false"),
             new FormPropertyDef("MultiSelect", FormPropertyType.Bool, "true")),
             DefaultWidth: 240, DefaultHeight: 120, Schematic: FormSchematic.ListDetail,
-            WinFormsEvent: "SelectedIndexChanged"),
+            Events: Ev("SelectedIndexChanged")),
 
         new("TreeView",    "TreeView",    null,       null,       false, Common(
             new FormPropertyDef("ShowLines", FormPropertyType.Bool, "true"),
@@ -1026,7 +1049,7 @@ public static class FormControlCatalog
             new FormPropertyDef("HideSelection", FormPropertyType.Bool, "true"),
             new FormPropertyDef("Indent", FormPropertyType.Int, "19")),
             DefaultWidth: 180, DefaultHeight: 140, Schematic: FormSchematic.Tree,
-            WinFormsEvent: "AfterSelect"),
+            Events: Ev("AfterSelect")),
 
         new("DataGridView", "DataGridView", null,     null,       false, Common(
             new FormPropertyDef("AllowUserToAddRows", FormPropertyType.Bool, "true"),
@@ -1035,7 +1058,7 @@ public static class FormControlCatalog
             new FormPropertyDef("RowHeadersVisible", FormPropertyType.Bool, "true"),
             new FormPropertyDef("ColumnHeadersVisible", FormPropertyType.Bool, "true")),
             DefaultWidth: 280, DefaultHeight: 150, Schematic: FormSchematic.DataGrid,
-            WinFormsEvent: "CellClick"),
+            Events: Ev("CellClick")),
 
         new("TabControl",  "TabControl",  null,       null,       true,  Common(
             new FormPropertyDef("Alignment", FormPropertyType.Enum, "Top",
@@ -1044,7 +1067,7 @@ public static class FormControlCatalog
             new FormPropertyDef("Multiline", FormPropertyType.Bool, "false"),
             new FormPropertyDef("SelectedIndex", FormPropertyType.Int, "-1")),
             DefaultWidth: 240, DefaultHeight: 160, Schematic: FormSchematic.Tabs,
-            WinFormsEvent: "SelectedIndexChanged"),
+            Events: Ev("SelectedIndexChanged")),
 
         new("SplitContainer", "SplitContainer", null, null,       true,  Common(
             new FormPropertyDef("Orientation", FormPropertyType.Enum, "Vertical",
@@ -1054,7 +1077,7 @@ public static class FormControlCatalog
             new FormPropertyDef("SplitterWidth", FormPropertyType.Int, "4"),
             new FormPropertyDef("IsSplitterFixed", FormPropertyType.Bool, "false")),
             DefaultWidth: 260, DefaultHeight: 140, Schematic: FormSchematic.Split,
-            WinFormsEvent: "SplitterMoved"),
+            Events: Ev("SplitterMoved")),
 
         new("FlowLayoutPanel", "FlowLayoutPanel", null, null,     true,  Common(
             new FormPropertyDef("FlowDirection", FormPropertyType.Enum, "LeftToRight",
@@ -1063,7 +1086,7 @@ public static class FormControlCatalog
             new FormPropertyDef("WrapContents", FormPropertyType.Bool, "true"),
             new FormPropertyDef("AutoScroll", FormPropertyType.Bool, "false")),
             DefaultWidth: 220, DefaultHeight: 120, Schematic: FormSchematic.FlowContainer,
-            WinFormsEvent: "Click"),
+            Events: Ev("Click")),
 
         new("TableLayoutPanel", "TableLayoutPanel", null, null,   true,  Common(
             new FormPropertyDef("ColumnCount", FormPropertyType.Int, "2"),
@@ -1072,7 +1095,7 @@ public static class FormControlCatalog
                 new[] { "None", "Single", "Inset", "Outset" },
                 WinFormsEnumType: "TableLayoutPanelCellBorderStyle")),
             DefaultWidth: 220, DefaultHeight: 120, Schematic: FormSchematic.TableContainer,
-            WinFormsEvent: "Click"),
+            Events: Ev("Click")),
 
         // ==================================================================
         // Task 25 — the component tray. Non-visual: no place on the canvas, no Controls.Add.
@@ -1091,7 +1114,7 @@ public static class FormControlCatalog
                 // ⚠ WinForms only: a JS interval cannot exist disabled — wired means running.
                 new("Enabled", FormPropertyType.Bool, "false", Targets: new[] { FormTarget.WinForms })
             },
-            Schematic: FormSchematic.Clock, WinFormsEvent: "Tick", WebEvent: "tick",
+            Schematic: FormSchematic.Clock, Events: Ev("Tick", "tick"),
             Place: FormPlace.Tray,
             // ⛔ The TYPED call over the Window the init region declares, and a parameterless
             // callback: Window.setInterval takes an Action and refuses Action(Of DomEvent) (M7).
@@ -1113,8 +1136,8 @@ public static class FormControlCatalog
                 new("IsBalloon", FormPropertyType.Bool, "false"),
                 new("ToolTipTitle", FormPropertyType.String)
             },
-            Schematic: FormSchematic.Hint, WinFormsEvent: "Popup",
-            Place: FormPlace.Tray, WinFormsEventArgs: "PopupEventArgs"),
+            Schematic: FormSchematic.Hint, Events: Ev("Popup", args: "PopupEventArgs"),
+            Place: FormPlace.Tray),
 
         new("ErrorProvider", "System.Windows.Forms.ErrorProvider", null, null, false, new List<FormPropertyDef>
             {
@@ -1123,7 +1146,7 @@ public static class FormControlCatalog
                     WinFormsEnumType: "ErrorBlinkStyle"),
                 new("BlinkRate", FormPropertyType.Int, "250")
             },
-            Schematic: FormSchematic.Alert, WinFormsEvent: "RightToLeftChanged",
+            Schematic: FormSchematic.Alert, Events: Ev("RightToLeftChanged"),
             Place: FormPlace.Tray),
 
         new("BackgroundWorker", "System.ComponentModel.BackgroundWorker", null, null, false, new List<FormPropertyDef>
@@ -1131,8 +1154,8 @@ public static class FormControlCatalog
                 new("WorkerReportsProgress", FormPropertyType.Bool, "false"),
                 new("WorkerSupportsCancellation", FormPropertyType.Bool, "false")
             },
-            Schematic: FormSchematic.Worker, WinFormsEvent: "DoWork",
-            Place: FormPlace.Tray, WinFormsEventArgs: "System.ComponentModel.DoWorkEventArgs"),
+            Schematic: FormSchematic.Worker, Events: Ev("DoWork", args: "System.ComponentModel.DoWorkEventArgs"),
+            Place: FormPlace.Tray),
 
         // ==================================================================
         // Task 24 — menus, toolbars and status bars. Strips are Docked (no geometry, a Dock
@@ -1148,7 +1171,7 @@ public static class FormControlCatalog
                 new("Visible", FormPropertyType.Bool, "true")
             },
             DefaultHeight: 24, Schematic: FormSchematic.MenuBar,
-            WinFormsEvent: "ItemClicked", WebEvent: "click", WinFormsEventArgs: "ToolStripItemClickedEventArgs",
+            Events: Ev("ItemClicked", "click", "ToolStripItemClickedEventArgs"),
             Place: FormPlace.Docked,
             Items: new FormItemRule(new[] { "ToolStripMenuItem", "ToolStripSeparator" }, "{parent}.Items.Add({child})"),
             FormProperty: "MainMenuStrip", HtmlChildrenWrapper: "ul",
@@ -1166,7 +1189,7 @@ public static class FormControlCatalog
                 new("Visible", FormPropertyType.Bool, "true")
             },
             DefaultHeight: 25, Schematic: FormSchematic.ToolBar,
-            WinFormsEvent: "ItemClicked", WebEvent: "click", WinFormsEventArgs: "ToolStripItemClickedEventArgs",
+            Events: Ev("ItemClicked", "click", "ToolStripItemClickedEventArgs"),
             Place: FormPlace.Docked,
             Items: new FormItemRule(new[] { "ToolStripButton", "ToolStripSeparator" }, "{parent}.Items.Add({child})"),
             HtmlRole: "toolbar",
@@ -1180,7 +1203,7 @@ public static class FormControlCatalog
                 new("Visible", FormPropertyType.Bool, "true")
             },
             DefaultHeight: 22, Schematic: FormSchematic.StatusBar,
-            WinFormsEvent: "ItemClicked", WebEvent: "click", WinFormsEventArgs: "ToolStripItemClickedEventArgs",
+            Events: Ev("ItemClicked", "click", "ToolStripItemClickedEventArgs"),
             Place: FormPlace.Docked,
             Items: new FormItemRule(new[] { "ToolStripStatusLabel" }, "{parent}.Items.Add({child})"),
             HtmlRole: "status",
@@ -1195,7 +1218,7 @@ public static class FormControlCatalog
                 new("CheckOnClick", FormPropertyType.Bool, "false", Targets: new[] { FormTarget.WinForms }),
                 new("ToolTipText", FormPropertyType.String, HtmlAttribute: "title")
             },
-            Schematic: FormSchematic.MenuItem, WinFormsEvent: "Click", WebEvent: "click",
+            Schematic: FormSchematic.MenuItem, Events: Ev("Click", "click"),
             Place: FormPlace.Item,
             Items: new FormItemRule(new[] { "ToolStripMenuItem", "ToolStripSeparator" }, "{parent}.DropDownItems.Add({child})"),
             HtmlChildrenWrapper: "ul"),
@@ -1204,7 +1227,7 @@ public static class FormControlCatalog
             {
                 new("Visible", FormPropertyType.Bool, "true")
             },
-            Schematic: FormSchematic.Separator, WinFormsEvent: "Click", WebEvent: "click",
+            Schematic: FormSchematic.Separator, Events: Ev("Click", "click"),
             Place: FormPlace.Item, HtmlRole: "separator"),
 
         new("ToolStripButton", "ToolStripButton", "input", "button", false, new List<FormPropertyDef>
@@ -1217,7 +1240,7 @@ public static class FormControlCatalog
                 new("ToolTipText", FormPropertyType.String, HtmlAttribute: "title"),
                 new("DisplayStyle", FormPropertyType.Enum, "Text", new[] { "None", "Text", "Image", "ImageAndText" }, WinFormsEnumType: "ToolStripItemDisplayStyle", Targets: new[] { FormTarget.WinForms })
             },
-            Schematic: FormSchematic.ToolButton, WinFormsEvent: "Click", WebEvent: "click", Place: FormPlace.Item),
+            Schematic: FormSchematic.ToolButton, Events: Ev("Click", "click"), Place: FormPlace.Item),
 
         new("ToolStripStatusLabel", "ToolStripStatusLabel", "span", null, false, new List<FormPropertyDef>
             {
@@ -1227,7 +1250,7 @@ public static class FormControlCatalog
                 new("Spring", FormPropertyType.Bool, "false", Targets: new[] { FormTarget.WinForms }),
                 new("ToolTipText", FormPropertyType.String, HtmlAttribute: "title")
             },
-            Schematic: FormSchematic.StatusLabel, WinFormsEvent: "Click", WebEvent: "click",
+            Schematic: FormSchematic.StatusLabel, Events: Ev("Click", "click"),
             Place: FormPlace.Item),
     };
 

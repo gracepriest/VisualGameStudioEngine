@@ -317,24 +317,15 @@ public static class RegionWriter
     }
 
     /// <summary>
-    /// Every event a catalog row declares on <paramref name="target"/> — the whole vocabulary the
+    /// Every event name a catalog row declares on <paramref name="target"/> — the whole vocabulary the
     /// emitter is allowed to write, and the whole vocabulary <see cref="CheckControlBinds"/> accepts.
     ///
-    /// <para>⚠ Today a row names exactly ONE event per target (<c>WinFormsEvent</c> /
-    /// <c>WebEvent</c>), so this yields one name. It exists as a SEQUENCE because followup 18's
-    /// per-kind event table — the thing that would let a Button name <c>mouseenter</c> as well as
-    /// <c>click</c> — widens the vocabulary here and nowhere else. Both callers then widen with it,
-    /// which is the point: the emitter and the refusal must never disagree about what a row
-    /// declares.</para>
+    /// <para>⛔ Delegates to <see cref="FormEvents.WiredOn"/>, the public seam (spec §5), rather than
+    /// reading the row itself: the grid's Events tab (slice 5) asks the same seam, so the three can
+    /// never disagree about what a row declares. Followup 18's widening happens in the ROWS.</para>
     /// </summary>
-    private static IEnumerable<string> DeclaredEvents(FormControlDef definition, FormTarget target)
-    {
-        var declared = definition.DefaultEvent(target);
-        if (!string.IsNullOrEmpty(declared))
-        {
-            yield return declared;
-        }
-    }
+    private static IEnumerable<string> DeclaredEvents(FormControlDef definition, FormTarget target) =>
+        FormEvents.WiredOn(definition, target).Select(e => FormEvents.NameOn(e, target)!);
 
     /// <summary>
     /// The CATALOG's spelling of the web event <paramref name="bind"/> names, matched ignoring case —
