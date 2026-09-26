@@ -53,8 +53,8 @@ No question here is architecture-altitude (backends, IR, C++ std, engine sync, I
 
 **Files:** none modified.
 
-- [ ] **Step 1: Confirm the base.** `git -C C:\Users\melvi\source\repos\VisualGameStudioEngine log --oneline -1` must print `f2b72dbb …`. `git status` must show only `?? csc.dll` (never stage it).
-- [ ] **Step 2: Build and record the baseline.** In PowerShell, from the repo root:
+- [x] **Step 1: Confirm the base.** `git -C C:\Users\melvi\source\repos\VisualGameStudioEngine log --oneline -1` must print `f2b72dbb …`. `git status` must show only `?? csc.dll` (never stage it).
+- [x] **Step 2: Build and record the baseline.** In PowerShell, from the repo root:
 
 ```powershell
 dotnet build VisualGameStudio.Tests/VisualGameStudio.Tests.csproj -c Release
@@ -65,7 +65,7 @@ cmd /c "dotnet test VisualGameStudio.Tests\VisualGameStudio.Tests.csproj -c Rele
 
 Record: total / passed / failed / skipped and the SORTED failure NAMES of both runs. ⛔ Both streams are captured (`2>&1` inside `cmd`, never on a native exe in PowerShell 5.1). ⛔ A "Passed!" line is not the verdict — read the counts. ⚠ The JS web-build Integration rows fail deterministically on this machine with `ERROR_USER_MAPPED_FILE` (memory: operational rules); they must appear in the baseline failure list so a later gate can compare by NAME.
 
-- [ ] **Step 3: Re-verify every anchor this slice cites** (search by the quoted code). Note any that moved in the task's checkbox before starting it.
+- [x] **Step 3: Re-verify every anchor this slice cites** (search by the quoted code). Note any that moved in the task's checkbox before starting it.
 
 ---
 
@@ -80,7 +80,7 @@ Record: total / passed / failed / skipped and the SORTED failure NAMES of both r
 - Create: `VisualGameStudio.Tests/Compiler/WinFormsMetadata.cs`
 - Create: `VisualGameStudio.Tests/Compiler/WinFormsCatalogParityTests.cs` (first test only; the rest in Task 8)
 
-- [ ] **Step 1: Write the failing completeness test.** `VisualGameStudio.Tests/Compiler/WinFormsCatalogParityTests.cs`:
+- [x] **Step 1: Write the failing completeness test.** `VisualGameStudio.Tests/Compiler/WinFormsCatalogParityTests.cs`:
 
 ```csharp
 using BasicLang.Forms;
@@ -123,7 +123,7 @@ public class WinFormsCatalogParityTests
 }
 ```
 
-- [ ] **Step 2: Run it — expect a BUILD failure.**
+- [x] **Step 2: Run it — expect a BUILD failure.**
 
 ```powershell
 dotnet build VisualGameStudio.Tests/VisualGameStudio.Tests.csproj -c Release
@@ -131,7 +131,7 @@ dotnet build VisualGameStudio.Tests/VisualGameStudio.Tests.csproj -c Release
 
 Expected: `CS0103: The name 'WinFormsMetadata' does not exist` and `CS0117: 'FormControlCatalog' does not contain a definition for 'FormRoot'`. That is the right reason: neither the oracle nor the root definition exists yet. (`FormRoot` lands in Task 6; until then, replace `.Append(FormControlCatalog.FormRoot.Kind)` with `.Append("Form")` and restore the member access in Task 6 Step 9 — the checkbox there says so.)
 
-- [ ] **Step 3: Create the tool project.** `tools/WinFormsMetadataDump/WinFormsMetadataDump.csproj`:
+- [x] **Step 3: Create the tool project.** `tools/WinFormsMetadataDump/WinFormsMetadataDump.csproj`:
 
 ```xml
 <Project Sdk="Microsoft.NET.Sdk">
@@ -151,7 +151,7 @@ Expected: `CS0103: The name 'WinFormsMetadata' does not exist` and `CS0117: 'For
 </Project>
 ```
 
-- [ ] **Step 4: Write the tool.** `tools/WinFormsMetadataDump/Program.cs` — complete:
+- [x] **Step 4: Write the tool.** `tools/WinFormsMetadataDump/Program.cs` — complete:
 
 ```csharp
 using System.Collections;
@@ -489,7 +489,7 @@ internal static class Dump
 }
 ```
 
-- [ ] **Step 5: Document how to run it.** `tools/WinFormsMetadataDump/README.md`:
+- [x] **Step 5: Document how to run it.** `tools/WinFormsMetadataDump/README.md`:
 
 ```markdown
 # WinFormsMetadataDump
@@ -538,7 +538,7 @@ A read that depends on the object being PARENTED or SHOWN (an unparented ToolStr
 Not in `VisualGameStudioEngine.sln`, deliberately.
 ```
 
-- [ ] **Step 6: Generate the oracle.**
+- [x] **Step 6: Generate the oracle.**
 
 ```powershell
 dotnet run --project tools/WinFormsMetadataDump/WinFormsMetadataDump.csproj -c Release -- VisualGameStudio.Tests/Data/winforms-metadata.json
@@ -546,7 +546,7 @@ dotnet run --project tools/WinFormsMetadataDump/WinFormsMetadataDump.csproj -c R
 
 Expected: `Wrote …\winforms-metadata.json (N chars)`, exit 0. Then **spot-check the classifier against facts already measured in output.txt** by opening the JSON (Read tool): `ToolStrip.GripStyle` → `attribute`/`Visible`; `StatusStrip.SizingGrip` → `True`; `Label.TextAlign` → `TopLeft`; `Button.BackColor` → `ambient`; `Button.Enabled` → `reset`/`True`; `DateTimePicker.Value` → `volatile`; `TextBox.BackColor` → NOT ambient (TextBoxBase overrides it; expect `reset`/`Window`); `ToolStripMenuItem.Visible` → `reset`/`False` (the parent-dependent read of claim 2). ⛔ If `Button.BackColor` is not `ambient` or `DateTimePicker.Value` is not `volatile`, STOP — the classifier is wrong and every parity finding would be noise.
 
-- [ ] **Step 7: Copy the oracle to the test output.** In `VisualGameStudio.Tests/VisualGameStudio.Tests.csproj`, inside the `<ItemGroup>` at `:105-116`, after the `main.cpp.txt` line (`:115`), add:
+- [x] **Step 7: Copy the oracle to the test output.** In `VisualGameStudio.Tests/VisualGameStudio.Tests.csproj`, inside the `<ItemGroup>` at `:105-116`, after the `main.cpp.txt` line (`:115`), add:
 
 ```xml
     <!-- Spec 2026-09-25 §2.6: the WinForms oracle WinFormsCatalogParityTests reads. 'Update', not
@@ -554,7 +554,7 @@ Expected: `Wrote …\winforms-metadata.json (N chars)`, exit 0. Then **spot-chec
     <None Update="Data\winforms-metadata.json" CopyToOutputDirectory="PreserveNewest" />
 ```
 
-- [ ] **Step 8: Write the loader.** `VisualGameStudio.Tests/Compiler/WinFormsMetadata.cs`:
+- [x] **Step 8: Write the loader.** `VisualGameStudio.Tests/Compiler/WinFormsMetadata.cs`:
 
 ```csharp
 using System.Text.Json;
@@ -639,7 +639,7 @@ internal sealed class WinFormsEventEntry
 }
 ```
 
-- [ ] **Step 9: Run — green.**
+- [x] **Step 9: Run — green.**
 
 ```powershell
 dotnet build VisualGameStudio.Tests/VisualGameStudio.Tests.csproj -c Release
@@ -648,7 +648,7 @@ dotnet test VisualGameStudio.Tests/VisualGameStudio.Tests.csproj -c Release --no
 
 Expected: 1 passed (with `"Form"` in place of `FormRoot.Kind`, per Step 2).
 
-- [ ] **Step 10: Prove the gate can fail.** Temporarily delete the `("TreeView", typeof(TreeView)),` line from the tool with Edit, regenerate into your SCRATCHPAD (not the committed path), copy that JSON over `VisualGameStudio.Tests\bin\Release\net8.0\Data\winforms-metadata.json`, re-run the test with `--no-build`: expect red naming `TreeView`. Restore the line with Edit, regenerate into the committed path, rebuild, green.
+- [x] **Step 10: Prove the gate can fail.** Temporarily delete the `("TreeView", typeof(TreeView)),` line from the tool with Edit, regenerate into your SCRATCHPAD (not the committed path), copy that JSON over `VisualGameStudio.Tests\bin\Release\net8.0\Data\winforms-metadata.json`, re-run the test with `--no-build`: expect red naming `TreeView`. Restore the line with Edit, regenerate into the committed path, rebuild, green.
 
 ---
 
@@ -668,7 +668,7 @@ Expected: 1 passed (with `"Form"` in place of `FormRoot.Kind`, per Step 2).
 - Create: `BasicLang/Forms/FormSystemColors.cs` (the table; used by Task 4 — created here because `Accepts(value, target)` reads it)
 - Create: `VisualGameStudio.Tests/Compiler/FormPropertyDefTests.cs`
 
-- [ ] **Step 1: Write the failing tests.** `VisualGameStudio.Tests/Compiler/FormPropertyDefTests.cs`:
+- [x] **Step 1: Write the failing tests.** `VisualGameStudio.Tests/Compiler/FormPropertyDefTests.cs`:
 
 ```csharp
 using BasicLang.Forms;
@@ -792,9 +792,9 @@ public class FormPropertyDefTests
 }
 ```
 
-- [ ] **Step 2: Run — expect a BUILD failure.** `dotnet build VisualGameStudio.Tests/VisualGameStudio.Tests.csproj -c Release`. Expected: `CS1739: The best overload for 'FormPropertyDef' does not have a parameter named 'Aliases'` / `'WebDefault'`, `CS1061 … 'Canonical'`, `'DefaultFor'`, `CS0117: 'FormPropertyType' does not contain a definition for 'Size'`. Right reason: none of it exists.
+- [x] **Step 2: Run — expect a BUILD failure.** `dotnet build VisualGameStudio.Tests/VisualGameStudio.Tests.csproj -c Release`. Expected: `CS1739: The best overload for 'FormPropertyDef' does not have a parameter named 'Aliases'` / `'WebDefault'`, `CS1061 … 'Canonical'`, `'DefaultFor'`, `CS0117: 'FormPropertyType' does not contain a definition for 'Size'`. Right reason: none of it exists.
 
-- [ ] **Step 3: Add the Size type and the category/converter enums.** Replace `FormControlCatalog.cs:1-15` (the `namespace` line through the end of `FormPropertyType`) with:
+- [x] **Step 3: Add the Size type and the category/converter enums.** Replace `FormControlCatalog.cs:1-15` (the `namespace` line through the end of `FormPropertyType`) with:
 
 ```csharp
 using System.Globalization;
@@ -858,7 +858,7 @@ public enum FormCssConverter
 }
 ```
 
-- [ ] **Step 4: Replace the `FormPropertyDef` parameter list and doc comment.** Replace the `<param name="WinFormsMemberNames">…</param>` block (`:32-36`) with nothing, and after the `<param name="IsItemCollection">…</param>` block (ends `:58`) add:
+- [x] **Step 4: Replace the `FormPropertyDef` parameter list and doc comment.** Replace the `<param name="WinFormsMemberNames">…</param>` block (`:32-36`) with nothing, and after the `<param name="IsItemCollection">…</param>` block (ends `:58`) add:
 
 ```csharp
 /// <param name="HtmlAttribute">See <see cref="HtmlAttributeName"/>.</param>
@@ -919,7 +919,7 @@ public sealed record FormPropertyDef(
 
 ⚠ `WinFormsMemberNames` is REMOVED (its only user, the shared TextAlign at `:593`, is replaced in Task 5 by `Aliases`). Every other row passes `Targets:` BY NAME (verified across `:615-990`), so the positional shift after `WinFormsEnumType` breaks no row. `FormDocumentTests.cs:134-141` builds a `FormControlDef`/`FormPropertyDef` by name and is unaffected.
 
-- [ ] **Step 5: Replace the value methods.** Replace `WinFormsLiteral` (`:95-112`) with:
+- [x] **Step 5: Replace the value methods.** Replace `WinFormsLiteral` (`:95-112`) with:
 
 ```csharp
     /// <summary>
@@ -1081,7 +1081,7 @@ Replace `Accepts` (`:200-218`) with:
 
 ⚠ `DescribeRefusal`'s second arm is BYTE-FOR-BYTE the message `FormDocumentReader.cs:515-520` builds today, so existing assertions on that text keep passing when Task 6 routes the reader through it.
 
-- [ ] **Step 6: Create the system-colour table.** `BasicLang/Forms/FormSystemColors.cs`:
+- [x] **Step 6: Create the system-colour table.** `BasicLang/Forms/FormSystemColors.cs`:
 
 ```csharp
 namespace BasicLang.Forms;
@@ -1136,7 +1136,7 @@ public static class FormSystemColors
 }
 ```
 
-- [ ] **Step 7: Run — green.**
+- [x] **Step 7: Run — green.**
 
 ```powershell
 dotnet build VisualGameStudio.Tests/VisualGameStudio.Tests.csproj -c Release
@@ -1169,7 +1169,7 @@ Expected: all green. ⚠ The build will FAIL first at `FormControlCatalog.cs:593
 - Modify: `BasicLang/Forms/RegionWriter.cs` — `DeclaredEvents` (`:319-337`)
 - Create: `VisualGameStudio.Tests/Compiler/FormEventsTests.cs`
 
-- [ ] **Step 1: Write the failing tests.** `VisualGameStudio.Tests/Compiler/FormEventsTests.cs`:
+- [x] **Step 1: Write the failing tests.** `VisualGameStudio.Tests/Compiler/FormEventsTests.cs`:
 
 ```csharp
 using BasicLang.Forms;
@@ -1265,9 +1265,9 @@ public class FormEventsTests
 
 > **Execution note (Task 3):** an `[Ignore]` does not stop a missing member from failing the BUILD (CS0117). The committed test therefore keeps the body above in a comment and runs `Assert.Fail(...)` under the Ignore; Task 6 Step 9(f) restores the body.
 
-- [ ] **Step 2: Run — expect a BUILD failure.** Expected: `CS0246: The type or namespace name 'FormEventDef' could not be found`, `CS0103: 'FormEvents'`. Right reason.
+- [x] **Step 2: Run — expect a BUILD failure.** Expected: `CS0246: The type or namespace name 'FormEventDef' could not be found`, `CS0103: 'FormEvents'`. Right reason.
 
-- [ ] **Step 3: Create the event model and the seam.** `BasicLang/Forms/FormEvents.cs`:
+- [x] **Step 3: Create the event model and the seam.** `BasicLang/Forms/FormEvents.cs`:
 
 ```csharp
 namespace BasicLang.Forms;
@@ -1338,7 +1338,7 @@ public static class FormEvents
 }
 ```
 
-- [ ] **Step 4: Migrate `FormControlDef`.** In `FormControlCatalog.cs`: replace the `<param name="WinFormsEventArgs">…</param>` block (`:462-466`) with:
+- [x] **Step 4: Migrate `FormControlDef`.** In `FormControlCatalog.cs`: replace the `<param name="WinFormsEventArgs">…</param>` block (`:462-466`) with:
 
 ```csharp
 /// <param name="Events">
@@ -1383,7 +1383,7 @@ and after `public bool IsHost => Items != null;` (`:526`) add:
 
 `DefaultEvent(target)` (`:550-555`) is unchanged — it already reads `WinFormsEvent`/`WebEvent`, which are now derived.
 
-- [ ] **Step 5: Add the row helper and migrate every row.** Directly after `Common(...)` (`:600-601`) add:
+- [x] **Step 5: Add the row helper and migrate every row.** Directly after `Common(...)` (`:600-601`) add:
 
 ```csharp
     /// <summary>
@@ -1437,7 +1437,7 @@ Then, row by row, replace the old named arguments with `Events: Ev(...)` — mec
 
 ⛔ The `Ev` helper is a static METHOD, not a field, so it is immune to the textual-order initializer trap documented at `:608-611`.
 
-- [ ] **Step 6: Route `DeclaredEvents` through the seam.** Replace `RegionWriter.cs:319-337` (the doc comment and body of `DeclaredEvents`) with:
+- [x] **Step 6: Route `DeclaredEvents` through the seam.** Replace `RegionWriter.cs:319-337` (the doc comment and body of `DeclaredEvents`) with:
 
 ```csharp
     /// <summary>
@@ -1452,7 +1452,7 @@ Then, row by row, replace the old named arguments with `Events: Ev(...)` — mec
         FormEvents.WiredOn(definition, target).Select(e => FormEvents.NameOn(e, target)!);
 ```
 
-- [ ] **Step 7: Run — green, including the behaviour pins that already cover the default events.**
+- [x] **Step 7: Run — green, including the behaviour pins that already cover the default events.**
 
 ```powershell
 dotnet build VisualGameStudio.Tests/VisualGameStudio.Tests.csproj -c Release
@@ -1471,7 +1471,7 @@ Expected: green (one Ignored until Task 6). `FormHandlerPlanTests.cs:45-100` and
 - Modify: `VisualGameStudio.Tests/Compiler/FormPropertyDefTests.cs` (append)
 - Modify: `VisualGameStudio.Tests/Compiler/WinFormsCatalogSweepTests.cs` (append one Integration test)
 
-- [ ] **Step 1: Write the failing tests.** ⚠ **EXECUTION NOTE:** `ASystemColour_IsSystemColorsOnWinForms_NeverColorDot`
+- [x] **Step 1: Write the failing tests.** ⚠ **EXECUTION NOTE:** `ASystemColour_IsSystemColorsOnWinForms_NeverColorDot`
   and `ASystemColourWithNoCssEquivalent_IsRefusedOnTheWebOnly` were PULLED FORWARD into Task 2's review-fix
   commit `c27f0be3` and already exist in `FormPropertyDefTests.cs` — do NOT append them again (CS0111). Append
   only the remaining tests of this step (the reader test and the sweep test); the two below are kept for
@@ -1562,7 +1562,7 @@ Append to `WinFormsCatalogSweepTests` (before the `// Harness` banner at `:359`)
     }
 ```
 
-- [ ] **Step 2: Run — expect RED for the right reason.**
+- [x] **Step 2: Run — expect RED for the right reason.**
 
 ```powershell
 dotnet build VisualGameStudio.Tests/VisualGameStudio.Tests.csproj -c Release
@@ -1571,7 +1571,7 @@ dotnet test VisualGameStudio.Tests/VisualGameStudio.Tests.csproj -c Release --no
 
 Expected: `ASystemColour_…` and `ASystemColourWithNoCss…` are already GREEN (Task 2 built the literal and the target-aware `Accepts`) — record that honestly; `TheReader_DegradesAWebOnlyRefusal_WithItsReason` is RED: `DegradedReason` returns null, because the reader still calls the target-agnostic `Accepts(value)`. That is the right reason.
 
-- [ ] **Step 3: Route the reader through the target-aware check.** Replace `FormDocumentReader.cs:510-521` with:
+- [x] **Step 3: Route the reader through the target-aware check.** Replace `FormDocumentReader.cs:510-521` with:
 
 ```csharp
             // D9 Degraded: the catalog knows the attribute but the value does not parse — or parses and
@@ -1585,9 +1585,9 @@ Expected: `ASystemColour_…` and `ASystemColourWithNoCss…` are already GREEN 
             }
 ```
 
-- [ ] **Step 4: Make the region writer's check target-explicit.** At `RegionWriter.cs:873` change `!property.Accepts(value)` to `!property.Accepts(value, FormTarget.WinForms)` (same answer on WinForms; it states which target is being judged).
+- [x] **Step 4: Make the region writer's check target-explicit.** At `RegionWriter.cs:873` change `!property.Accepts(value)` to `!property.Accepts(value, FormTarget.WinForms)` (same answer on WinForms; it states which target is being judged).
 
-- [ ] **Step 5: Run — green; then the Integration row.**
+- [x] **Step 5: Run — green; then the Integration row.**
 
 ```powershell
 dotnet build VisualGameStudio.Tests/VisualGameStudio.Tests.csproj -c Release
@@ -1616,7 +1616,7 @@ Expected: green. `SystemColors` lives in `System.Drawing`, the same namespace `C
 - Modify: `VisualGameStudio.Tests/Compiler/FormPropertyGridTests.cs` — `AnEnumRowOffersExactlyTheCatalogsAllowedValues` (`:445-464`), plus two new tests
 - Create: `VisualGameStudio.Tests/Compiler/FormCssTests.cs`
 
-- [ ] **Step 1: Write the failing CSS tests.** `VisualGameStudio.Tests/Compiler/FormCssTests.cs`:
+- [x] **Step 1: Write the failing CSS tests.** `VisualGameStudio.Tests/Compiler/FormCssTests.cs`:
 
 ```csharp
 using BasicLang.Forms;
@@ -1730,7 +1730,7 @@ public class FormCssTests
 }
 ```
 
-- [ ] **Step 2: Write the failing grid-safety tests.** In `FormPropertyGridTests.cs`, replace `AnEnumRowOffersExactlyTheCatalogsAllowedValues`' assertion (`:462`) with:
+- [x] **Step 2: Write the failing grid-safety tests.** In `FormPropertyGridTests.cs`, replace `AnEnumRowOffersExactlyTheCatalogsAllowedValues`' assertion (`:462`) with:
 
 ```csharp
             Assert.That(row.Choices, Is.EqualTo(new[]
@@ -1796,9 +1796,9 @@ and add after that test:
     }
 ```
 
-- [ ] **Step 3: Run — expect RED for the right reasons.** Build; run `--filter "FullyQualifiedName~FormCssTests|FullyQualifiedName~FormPropertyGridTests"`. The build succeeds — both files reference only API that already exists. Expected reds: `TextAlign_EmitsOnlyTheHorizontalPart("TopLeft","left")` (the emitter lower-cases verbatim → `topleft`), `AnEightDigitHexColour…` (verbatim), `ASystemColour_BecomesItsCssSystemColour` (verbatim `Control`), `ADegradedValue…` (emits `color: 12345`), the grid's nine-choices assertion and `ALegacyTextAlign…` (`StringValue` returns `Left`; the null push writes). `NoDeclarationIsEmittedTwice` and `VisibleFalse_…` are GREEN today (the hard-coded rules) — they are REGRESSION pins for the move; record that.
+- [x] **Step 3: Run — expect RED for the right reasons.** Build; run `--filter "FullyQualifiedName~FormCssTests|FullyQualifiedName~FormPropertyGridTests"`. The build succeeds — both files reference only API that already exists. Expected reds: `TextAlign_EmitsOnlyTheHorizontalPart("TopLeft","left")` (the emitter lower-cases verbatim → `topleft`), `AnEightDigitHexColour…` (verbatim), `ASystemColour_BecomesItsCssSystemColour` (verbatim `Control`), `ADegradedValue…` (emits `color: 12345`), the grid's nine-choices assertion and `ALegacyTextAlign…` (`StringValue` returns `Left`; the null push writes). `NoDeclarationIsEmittedTwice` and `VisibleFalse_…` are GREEN today (the hard-coded rules) — they are REGRESSION pins for the move; record that.
 
-- [ ] **Step 4: Per-row TextAlign and the CSS-carrying shared rows.** Replace `FormControlCatalog.cs:578-598` (the shared definitions through the old `TextAlign`) with:
+- [x] **Step 4: Per-row TextAlign and the CSS-carrying shared rows.** Replace `FormControlCatalog.cs:578-598` (the shared definitions through the old `TextAlign`) with:
 
 ```csharp
     // Shared property definitions. Declared once so a control kind cannot drift from its peers
@@ -1890,7 +1890,7 @@ In the strip rows replace each row-local `new("Visible", FormPropertyType.Bool, 
                          "state defaults to true, which is what an absent attribute means at run time");
 ```
 
-- [ ] **Step 5: Create `FormCss`.** `BasicLang/Forms/FormCss.cs`:
+- [x] **Step 5: Create `FormCss`.** `BasicLang/Forms/FormCss.cs`:
 
 ```csharp
 using System.Globalization;
@@ -1963,7 +1963,7 @@ public static class FormCss
 }
 ```
 
-- [ ] **Step 6: Move the four rules onto the walk.** Replace `FormAssetEmitter.cs:450-470` (from `if (control.Properties.TryGetValue("ForeColor"` through the `display: none` block) with:
+- [x] **Step 6: Move the four rules onto the walk.** Replace `FormAssetEmitter.cs:450-470` (from `if (control.Properties.TryGetValue("ForeColor"` through the `display: none` block) with:
 
 ```csharp
         // ⛔⛔ Driven from the CATALOG (spec §2.1). The four rules that used to be hard-coded here —
@@ -1991,7 +1991,7 @@ public static class FormCss
         }
 ```
 
-- [ ] **Step 7: Close the grid's alias hazard.** In `FormPropertyRow.cs`: add a field beside `_choices` (`:41`):
+- [x] **Step 7: Close the grid's alias hazard.** In `FormPropertyRow.cs`: add a field beside `_choices` (`:41`):
 
 ```csharp
     /// <summary>The catalog row, for a catalog property; null for an intrinsic row.</summary>
@@ -2033,7 +2033,7 @@ and replace the first statement of `Commit` (`:333-336`) with:
 
 and change the method signature to `private void Commit(string? value)`.
 
-- [ ] **Step 8: Run — green.**
+- [x] **Step 8: Run — green.**
 
 ```powershell
 dotnet build VisualGameStudio.Tests/VisualGameStudio.Tests.csproj -c Release
@@ -2059,7 +2059,7 @@ Expected: green. `FormRegionWriterTests.cs:384-392` (`ContentAlignment.MiddleLef
 - Modify: `VisualGameStudio.Tests/Compiler/FormRegionWriterTests.cs` — fixture `:30`, test `:375-397`, test `:609-622`, plus new tests
 - Modify: `VisualGameStudio.Tests/Compiler/WinFormsCatalogSweepTests.cs` — one csc compile
 
-- [ ] **Step 1: Write the failing tests.** Append to `FormRegionWriterTests` (Edit — the file exists):
+- [x] **Step 1: Write the failing tests.** Append to `FormRegionWriterTests` (Edit — the file exists):
 
 ```csharp
     /// <summary>
@@ -2139,9 +2139,9 @@ Append to `WinFormsCatalogSweepTests` (before `// Harness`):
 
 ⚠ The last two C# assertions assume the C# backend escapes an embedded `"` as `\"`; if it emits a verbatim string instead, adjust the two expected substrings to what it emits — the csc compile is the load-bearing assertion, the substrings only prove the quotes survived.
 
-- [ ] **Step 2: Run — expect RED for the right reason.** Build; `--filter "FullyQualifiedName~FormRegionWriterTests"` then the Integration test. Expected: `APlainCaption_…("New Customer")` red (`btn.Text = New Customer`), `("\"quoted\"")` red (`btn.Text = "quoted"`), `("a \"b\" c")` GREEN (neither prefix — why the shape test hid), `TheFormsCaption_…` GREEN (the pin). The Integration test fails at the REAL CLI with a BasicLang/csc error on `btn0.Text = New Customer`.
+- [x] **Step 2: Run — expect RED for the right reason.** Build; `--filter "FullyQualifiedName~FormRegionWriterTests"` then the Integration test. Expected: `APlainCaption_…("New Customer")` red (`btn.Text = New Customer`), `("\"quoted\"")` red (`btn.Text = "quoted"`), `("a \"b\" c")` GREEN (neither prefix — why the shape test hid), `TheFormsCaption_…` GREEN (the pin). The Integration test fails at the REAL CLI with a BasicLang/csc error on `btn0.Text = New Customer`.
 
-- [ ] **Step 3: Fix at the source.** Replace the String arm of `IsSourceForm` (`FormControlCatalog.cs:190-193`) with:
+- [x] **Step 3: Fix at the source.** Replace the String arm of `IsSourceForm` (`FormControlCatalog.cs:190-193`) with:
 
 ```csharp
         // ⛔⛔ A String has NO source form in the document: `Properties` holds DOCUMENT text, one
@@ -2155,12 +2155,12 @@ Append to `WinFormsCatalogSweepTests` (before `// Harness`):
 
 and in the `IsSourceForm` doc comment (`:160-177`) add: `<para>⚠ A String row always answers false — see the String arm.</para>`. In `RegionWriter.cs` update the `IsAlreadySource` summary (`:1017-1027`) to say the shape fallback applies ONLY to a property with no catalog row, and the `Literal` summary (`:1033-1042`) to drop "The recognizer meanwhile stores already-quoted source text" in favour of "Properties holds document text; a String is always quoted and escaped".
 
-- [ ] **Step 4: Update the three tests that pinned the recognizer convention** (they fed quoted text no production writer produces):
+- [x] **Step 4: Update the three tests that pinned the recognizer convention** (they fed quoted text no production writer produces):
   - `FormRegionWriterTests.cs:30` → `button.Properties["Text"] = "Sign in";` (every test using `WinFormsLoginForm()` still expects `btnLogin.Text = "Sign in"`).
   - `:375-397` `Write_StillEmitsAValueAlreadyInItsSourceForm_…` → keep the TextAlign half (a catalog-decided source form); change `label.Properties["Text"] = "\"Already quoted\"";` to `"Already quoted"` and the expectation at `:393` stays `lbl.Text = "Already quoted"`; add a one-line comment that a String has no source form.
   - `:609-622` `Write_WinForms_LeavesAlreadyQuotedSourceTextAlone` → rename to `Write_WinForms_EscapesACaptionContainingQuotes`, set the caption to `"Sign in"` (with quotes) on a fresh control, and assert `btnLogin.Text = """Sign in"""` — the opposite of what it pinned, because what it pinned was the defect.
 
-- [ ] **Step 5: Run — green.**
+- [x] **Step 5: Run — green.**
 
 ```powershell
 dotnet build VisualGameStudio.Tests/VisualGameStudio.Tests.csproj -c Release
@@ -2186,7 +2186,7 @@ Expected: green. The recognizer fixtures stay green — they assert the recogniz
 - Create: `VisualGameStudio.Tests/Compiler/FormRootTests.cs`
 - Modify: `VisualGameStudio.Tests/Compiler/WinFormsCatalogSweepTests.cs` — `SampleValue` (`:433-441`) + the root csc sweep
 
-- [ ] **Step 1: Write the failing tests.** `VisualGameStudio.Tests/Compiler/FormRootTests.cs`:
+- [x] **Step 1: Write the failing tests.** `VisualGameStudio.Tests/Compiler/FormRootTests.cs`:
 
 ```csharp
 using BasicLang.Forms;
@@ -2416,9 +2416,9 @@ In `WinFormsCatalogSweepTests.cs`: add a Size arm to `SampleValue` (`:433-441`):
     }
 ```
 
-- [ ] **Step 2: Run — expect a BUILD failure.** Expected: `CS0117 'FormControlCatalog' … 'FormRoot'`, `CS0103 'FormRootValues'`, `CS1061 'FormDocument' … 'Binds'`, `CS1061 'FormFile' … 'TierOfRoot'`. Right reason.
+- [x] **Step 2: Run — expect a BUILD failure.** Expected: `CS0117 'FormControlCatalog' … 'FormRoot'`, `CS0103 'FormRootValues'`, `CS1061 'FormDocument' … 'Binds'`, `CS1061 'FormFile' … 'TierOfRoot'`. Right reason.
 
-- [ ] **Step 3: Add `FormRoot`.** In `FormControlCatalog.cs`, after the closing `};` of `All` (`:991`), add:
+- [x] **Step 3: Add `FormRoot`.** In `FormControlCatalog.cs`, after the closing `};` of `All` (`:991`), add:
 
 ```csharp
     /// <summary>
@@ -2470,7 +2470,7 @@ In `WinFormsCatalogSweepTests.cs`: add a Size arm to `SampleValue` (`:433-441`):
         Schematic: FormSchematic.Container);
 ```
 
-- [ ] **Step 4: Create `FormRootValues`.** `BasicLang/Forms/FormRootValues.cs`:
+- [x] **Step 4: Create `FormRootValues`.** `BasicLang/Forms/FormRootValues.cs`:
 
 ```csharp
 namespace BasicLang.Forms;
@@ -2569,7 +2569,7 @@ public static class FormRootValues
 }
 ```
 
-- [ ] **Step 5: `FormDocument` — Text for both targets, and `Binds`.** Replace `FormDocument.cs:55-56` with:
+- [x] **Step 5: `FormDocument` — Text for both targets, and `Binds`.** Replace `FormDocument.cs:55-56` with:
 
 ```csharp
     /// <summary>
@@ -2590,7 +2590,7 @@ and move it out of the `// --- .blform only (D3)` block into `// --- both` (afte
     public List<FormBind> Binds { get; } = new();
 ```
 
-- [ ] **Step 6: The reader.** In `FormDocumentReader.cs`:
+- [x] **Step 6: The reader.** In `FormDocumentReader.cs`:
 
 (a) Replace `:109-121` (the WinForms-only root read) with:
 
@@ -2697,7 +2697,7 @@ and at the top of `Read` (after `var degraded = …` at `:29`) add `var degraded
 
 ⚠ The refusal message for a control is byte-identical to the old one (`'{control.Id}'` → `'{owner}'` with `owner = control.Id`).
 
-- [ ] **Step 7: `FormFile` root tiers.** Change the ctor (`:17-32`) signature to add `IReadOnlyList<DegradedProperty>? degradedRoot = null` as the last parameter, assign `DegradedRoot = degradedRoot ?? Array.Empty<DegradedProperty>();`, and after `TierOf` (`:83`) add:
+- [x] **Step 7: `FormFile` root tiers.** Change the ctor (`:17-32`) signature to add `IReadOnlyList<DegradedProperty>? degradedRoot = null` as the last parameter, assign `DegradedRoot = degradedRoot ?? Array.Empty<DegradedProperty>();`, and after `TierOf` (`:83`) add:
 
 ```csharp
     /// <summary>The FORM's frozen rows — its own list, never a reserved control id (spec §2.3): a
@@ -2722,7 +2722,7 @@ and at the top of `Read` (after `var degraded = …` at `:29`) add `var degraded
     }
 ```
 
-- [ ] **Step 8: The writer.**
+- [x] **Step 8: The writer.**
 
 (a) `Create` — replace `:88-98` with:
 
@@ -2818,7 +2818,7 @@ and after the `UnknownAttributes` loop (`:100-103`) add:
     }
 ```
 
-- [ ] **Step 9: The region writer and the page title.**
+- [x] **Step 9: The region writer and the page title.**
 
 (a) Replace the WinForms root block in `GenerateInit` (`:604-618`, the `else { … }` after the web branch) with:
 
@@ -2890,7 +2890,7 @@ and after the `UnknownAttributes` loop (`:100-103`) add:
 
 (f) Restore the Task 1 and Task 3 placeholders: in `WinFormsCatalogParityTests.TheSnapshot_…` put back `.Append(FormControlCatalog.FormRoot.Kind)`; delete the `[Ignore]` on `FormEventsTests.WiredOn_TheFormRoot_…` AND replace its `Assert.Fail` placeholder with the commented-out body above it (execution note, Task 3: `FormRoot` does not exist yet, so the real body cannot compile even under `[Ignore]`; the placeholder fails, so removing only the Ignore goes red rather than passing by absence).
 
-- [ ] **Step 10: Run — green.**
+- [x] **Step 10: Run — green.**
 
 ```powershell
 dotnet build VisualGameStudio.Tests/VisualGameStudio.Tests.csproj -c Release
@@ -2917,7 +2917,7 @@ Expected: green. `TheFormsOwnCaptionAndSize_ReachTheGeneratedCode` (`WinFormsCat
 - Modify: `VisualGameStudio.Tests/Compiler/FormRetargetTests.cs` — `:102`, `:160-162`, `Sample` (`:1202-1209`)
 - Create: `VisualGameStudio.Tests/Compiler/FormRootRetargetTests.cs`
 
-- [ ] **Step 1: Write the failing tests.** `VisualGameStudio.Tests/Compiler/FormRootRetargetTests.cs`:
+- [x] **Step 1: Write the failing tests.** `VisualGameStudio.Tests/Compiler/FormRootRetargetTests.cs`:
 
 ```csharp
 using BasicLang.Forms;
@@ -3060,9 +3060,9 @@ In `FormRetargetTests.cs`: `:102` → `Assert.That(doc.Text, Is.EqualTo("Sign in
 
 In `Sample` (`:1202-1209`) add `FormPropertyType.Size => "75, 23",`.
 
-- [ ] **Step 2: Run — expect RED for the right reasons.** Build (compiles: every API exists); run `--filter "FullyQualifiedName~FormRootRetargetTests|FullyQualifiedName~FormRetargetTests"`. Expected reds: `TheCaption_CrossesBothWays` (web gets null; WinForms gets the Name), `ARootBind_…` (the reader put nothing in UnknownChildren any more, so the bind vanishes silently with NO finding — the exact silent loss the spec forbids), `ADegradedClientSize_…` (carried as unknown), `ToWeb_KeepsTheSharedSubset` (`:102`). Green today and must stay green: `ACaptionEqualToTheName_…`, `APageWithNoCaption_…`, the round trips.
+- [x] **Step 2: Run — expect RED for the right reasons.** Build (compiles: every API exists); run `--filter "FullyQualifiedName~FormRootRetargetTests|FullyQualifiedName~FormRetargetTests"`. Expected reds: `TheCaption_CrossesBothWays` (web gets null; WinForms gets the Name), `ARootBind_…` (the reader put nothing in UnknownChildren any more, so the bind vanishes silently with NO finding — the exact silent loss the spec forbids), `ADegradedClientSize_…` (carried as unknown), `ToWeb_KeepsTheSharedSubset` (`:102`). Green today and must stay green: `ACaptionEqualToTheName_…`, `APageWithNoCaption_…`, the round trips.
 
-- [ ] **Step 3: Teach `ConvertRoot` the root.** Replace `FormRetarget.cs:189-230` (`ConvertRoot` and `IsRootAttributeModelledOn`) with:
+- [x] **Step 3: Teach `ConvertRoot` the root.** Replace `FormRetarget.cs:189-230` (`ConvertRoot` and `IsRootAttributeModelledOn`) with:
 
 ```csharp
         public void ConvertRoot()
@@ -3166,7 +3166,7 @@ In `Sample` (`:1202-1209`) add `FormPropertyType.Size => "75, 23",`.
         }
 ```
 
-- [ ] **Step 4: The caption no longer "has no meaning".** In `ToCells`, delete `:490` (`if (_source.Text != null) lost.Add(...)`). In `ToPixels`, replace `:555` (`Document.Text = _source.Name;`) with:
+- [x] **Step 4: The caption no longer "has no meaning".** In `ToCells`, delete `:490` (`if (_source.Text != null) lost.Add(...)`). In `ToPixels`, replace `:555` (`Document.Text = _source.Name;`) with:
 
 ```csharp
             // The caption crossed in ConvertRoot; a page with none becomes a window captioned with its
@@ -3174,7 +3174,7 @@ In `Sample` (`:1202-1209`) add `FormPropertyType.Size => "75, 23",`.
             Document.Text ??= _source.Name;
 ```
 
-- [ ] **Step 5: Run — green.**
+- [x] **Step 5: Run — green.**
 
 ```powershell
 dotnet build VisualGameStudio.Tests/VisualGameStudio.Tests.csproj -c Release
@@ -3196,7 +3196,7 @@ Expected: green — including `RoundTrip_AFixedPointWebForm_ComesBackByteIdentic
 
 ⚠ **D4 interpretation, stated:** the failure messages below print paste-ready values (`→ Category: FormPropertyCategory.Behavior`). Copying a value from the oracle's message into a hand-written row is authoring BY HAND against the oracle — the same as reading the reference doc. The snapshot never generates code and nothing reads it at build time.
 
-- [ ] **Step 1: Write the comparer.** `VisualGameStudio.Tests/Compiler/CatalogParity.cs`:
+- [x] **Step 1: Write the comparer.** `VisualGameStudio.Tests/Compiler/CatalogParity.cs`:
 
 ```csharp
 using System.Globalization;
@@ -3395,7 +3395,7 @@ internal static class CatalogParity
 }
 ```
 
-- [ ] **Step 2: Write the parity tests.** Append to `WinFormsCatalogParityTests`:
+- [x] **Step 2: Write the parity tests.** Append to `WinFormsCatalogParityTests`:
 
 ```csharp
     private static IEnumerable<TestCaseData> EveryWinFormsKind() =>
@@ -3500,7 +3500,7 @@ internal static class CatalogParity
     }
 ```
 
-- [ ] **Step 3: RUN FIRST AND RECORD — do not fix anything yet.**
+- [x] **Step 3: RUN FIRST AND RECORD — do not fix anything yet.**
 
 ```powershell
 dotnet build VisualGameStudio.Tests/VisualGameStudio.Tests.csproj -c Release
@@ -3509,7 +3509,7 @@ cmd /c "dotnet test VisualGameStudio.Tests\VisualGameStudio.Tests.csproj -c Rele
 
 Expected: RED across most kinds — every row lacks `Category`/`Description` except the shared ones Task 5 filled, and every default event lacks its category/description. `TheInstrument_…` GREEN. Save the file; count the findings by kind and by type (Category / Description / Default / Type / args / missing). **Paste the Default, Type and args findings (not the Category/Description noise) verbatim into the commit message's "Discovered by the parity run" section in Step 7.** These are the list the spec asked to be discovered.
 
-- [ ] **Step 4: Triage each Default/Type/args finding BEFORE editing.** For each one decide and write down (in the commit message section) which it is:
+- [x] **Step 4: Triage each Default/Type/args finding BEFORE editing.** For each one decide and write down (in the commit message section) which it is:
   1. **The catalog is wrong** → fix the row to WinForms' value. Expected for `GripStyle` (`:923` → `"Visible"`) and `SizingGrip` (`:937` → `"true"`), and for whatever else the run confirms. A changed default is DISPLAY-ONLY: nothing emits from `Default` except the web Timer's `{Interval}` placeholder (grep proved it: `FormControl.cs:133` Dock fallback, `RegionWriter.cs:826-831`, `FormPlacement.cs:90-92`, `FormCatalogShapes.cs:28`) — so no generated program changes. ⛔ A default that was a designer PREFERENCE (VS drops a TableLayoutPanel as 2×2) is NOT re-encoded as a false default and NOT written at placement in slice 1; record it as a slice-3 decision for the owner.
   2. **The measurement is wrong for this row** (a parent-dependent or shown-dependent read like `ItemVisible`) → an `OracleExemption` with the reason, on the row.
   3. **The row's shape is wrong** (Type mismatch, missing property) → fix the row; then its csc sweep row must still compile.
@@ -3519,9 +3519,9 @@ Expected: RED across most kinds — every row lacks `Category`/`Description` exc
      Each kind's row therefore needs its own `SelectedIndex` definition (today they are inline, `:649`, `:654`, `:767`, `:804` — keep them inline, one exemption text each). ⛔ Confirm each one is really non-browsable before exempting: `typeof(ComboBox).GetProperty("SelectedIndex")` carries `BrowsableAttribute(false)` — check it in the tool (a one-off `Console.WriteLine` you do not commit), never assume; a MISSPELLED row would produce the identical finding.
   5. **Args differ** (`LinkClicked` → `LinkLabelLinkClickedEventArgs`, `AfterSelect` → `TreeViewEventArgs`, `CellClick` → `DataGridViewCellEventArgs`, `SplitterMoved` → `SplitterEventArgs` if confirmed) → set `args:` in `Ev(...)`. This CHANGES the generated stub's signature; `TheDefaultEvent_OfEveryControl_WiresIntoCSharpThatCscAccepts` (`WinFormsCatalogSweepTests.cs:217-248`) is what proves each new signature compiles.
 
-- [ ] **Step 5: Fill Category and Description on every row and default event**, from the failure output. Where a SHARED definition's description differs on one kind (e.g. `Checked` on RadioButton — output.txt:316 "Indicates whether the radio button is checked or not." vs CheckBox :254), give that kind its OWN definition (`RadioChecked`) rather than weakening the comparison. Colour rows the run shows as non-ambient on a kind (TextBox `BackColor` = `Window`) get their own definition WITH the same `CssProperty`/`CssConverter` as the shared one — `VisibleFalse_HidesTheElement_ForEveryWebKind` and a grep for `CssProperty:` confirm nothing lost its CSS. Web-only rows (`GroupName`, ListBox `MultiSelect`) and `FormRoot`'s web rows get hand-written categories/descriptions (completeness test).
+- [x] **Step 5: Fill Category and Description on every row and default event**, from the failure output. Where a SHARED definition's description differs on one kind (e.g. `Checked` on RadioButton — output.txt:316 "Indicates whether the radio button is checked or not." vs CheckBox :254), give that kind its OWN definition (`RadioChecked`) rather than weakening the comparison. Colour rows the run shows as non-ambient on a kind (TextBox `BackColor` = `Window`) get their own definition WITH the same `CssProperty`/`CssConverter` as the shared one — `VisibleFalse_HidesTheElement_ForEveryWebKind` and a grep for `CssProperty:` confirm nothing lost its CSS. Web-only rows (`GroupName`, ListBox `MultiSelect`) and `FormRoot`'s web rows get hand-written categories/descriptions (completeness test).
 
-- [ ] **Step 6: Run — green.**
+- [x] **Step 6: Run — green.**
 
 ```powershell
 dotnet build VisualGameStudio.Tests/VisualGameStudio.Tests.csproj -c Release
@@ -3531,7 +3531,7 @@ dotnet test VisualGameStudio.Tests/VisualGameStudio.Tests.csproj -c Release --no
 
 Expected: all green, including the Integration sweep (every changed row and every changed handler signature through csc).
 
-- [ ] **Step 7: Record the discovered list.** In your scratchpad `slice1-commit.txt` (used in the slice commit), add a section `Discovered by the parity run (spec §2.7):` listing each Default/Type/args/missing finding and the decision (catalog wrong / measurement exempt / reshaped / non-browsable exempt / args). Also record the finding COUNT from Step 3.
+- [x] **Step 7: Record the discovered list.** In your scratchpad `slice1-commit.txt` (used in the slice commit), add a section `Discovered by the parity run (spec §2.7):` listing each Default/Type/args/missing finding and the decision (catalog wrong / measurement exempt / reshaped / non-browsable exempt / args). Also record the finding COUNT from Step 3.
 
 ---
 
@@ -3539,23 +3539,23 @@ Expected: all green, including the Integration sweep (every changed row and ever
 
 For each: apply the mutant **with Edit**, rebuild, run the named test(s) with `--no-build`, see RED, revert **with Edit** (⛔ never `Copy-Item`/`git checkout --` — Copy-Item keeps the old mtime and MSBuild keeps the mutant DLL; `git checkout --` destroys uncommitted work on a dirty file), rebuild, see GREEN. Record each red line in `slice1-commit.txt`.
 
-- [ ] **M1 — default equals WinForms.** `FormControlCatalog.cs` GripStyle default `"Visible"` → `"Hidden"`. Red: `WinFormsCatalogParityTests.EveryWinFormsRowAndEvent_MatchesTheSnapshot(ToolStrip)`.
-- [ ] **M2 — alias resolution.** In `FormPropertyDef.Accepts`, delete `|| Aliases?.ContainsKey(value) == true`. Red: `FormPropertyDefTests.ALegacyAlias_IsCanon_…`, and `FormPropertyGridTests.ALegacyTextAlign_ShowsItsCanonicalMember_…` on its `row.IsFrozen, Is.False` line ONLY (the value becomes Degraded → the row freezes; its other assertions still pass because a frozen row writes nothing and `StringValue` still canonicalises — that is why Task 5 Step 2 gave the test the IsFrozen assertion).
-- [ ] **M3 — the WiredOn seam.** In `FormEvents.WiredOn`, return `Array.Empty<FormEventDef>()` when `target == FormTarget.Web`. Red: `FormEventsTests.WiredOn_TheWeb_…` and `FormEventsTests.TheRegionWriter_AcceptsTheCatalogsWebEvent_ThroughTheSeam` (BL8032 fires on a correct bind).
-- [ ] **M4 — the root retarget drop-and-name.** In `ConvertRootBinds`, delete the `Warn(DesignCodes.RetargetBindLost, …)` call. Red: `FormRootRetargetTests.ARootBind_WithNoFormEventOnTheDestination_IsDroppedAndNamed` (both directions).
-- [ ] **M5 — system colour literal.** In `ColorLiteral`, change `"SystemColors." + system` to `"Color." + system`. Red: `FormPropertyDefTests.ASystemColour_IsSystemColorsOnWinForms_NeverColorDot`.
-- [ ] **M6 — the CSS walk owns Visible.** On the shared `Visible`, remove `CssProperty: "display", CssConverter: …`. Red: `FormCssTests.TheFourMovedRules_…` and `VisibleFalse_HidesTheElement_ForEveryWebKind(*)`.
-- [ ] **M7 — the grid's alias no-op.** In `FormPropertyRow.Commit`, delete the canonical-equality early return. Red: `FormPropertyGridTests.ALegacyTextAlign_ShowsItsCanonicalMember_AndIsNotRewritten…`.
-- [ ] **M8 — Text on the web.** In `FormDocumentWriter.ApplyToDocument`, move `SetAttributeIfChanged(root, "Text", model.Text)` back inside the WinForms branch. Red: `FormRootTests.AWebFormsText_IsReadWrittenAndRoundTrips`.
-- [ ] **M9 — root tier.** In `FormDocumentReader`, delete the `degradedRoot.Add(…)`. Red: `FormRootTests.AnUnparseableClientSize_IsDegraded_…`.
-- [ ] **M10 — a String value is always document text (Task 5A).** In `FormPropertyDef.IsSourceForm`, restore the String arm `value.StartsWith("\"", …) || value.StartsWith("New ", …)`. Red (Task 9 runs after Task 6, so the root goes through `Literal` too): `FormRegionWriterTests.APlainCaption_IsAlwaysQuotedAndEscaped` for `New Customer` and `"quoted"` (the `a "b" c` case stays green — it starts with neither prefix, which is exactly why the shape test hid), and `FormRegionWriterTests.TheFormsCaption_IsAlwaysQuoted_EvenWhenItLooksLikeSource`.
+- [x] **M1 — default equals WinForms.** `FormControlCatalog.cs` GripStyle default `"Visible"` → `"Hidden"`. Red: `WinFormsCatalogParityTests.EveryWinFormsRowAndEvent_MatchesTheSnapshot(ToolStrip)`.
+- [x] **M2 — alias resolution.** In `FormPropertyDef.Accepts`, delete `|| Aliases?.ContainsKey(value) == true`. Red: `FormPropertyDefTests.ALegacyAlias_IsCanon_…`, and `FormPropertyGridTests.ALegacyTextAlign_ShowsItsCanonicalMember_…` on its `row.IsFrozen, Is.False` line ONLY (the value becomes Degraded → the row freezes; its other assertions still pass because a frozen row writes nothing and `StringValue` still canonicalises — that is why Task 5 Step 2 gave the test the IsFrozen assertion).
+- [x] **M3 — the WiredOn seam.** In `FormEvents.WiredOn`, return `Array.Empty<FormEventDef>()` when `target == FormTarget.Web`. Red: `FormEventsTests.WiredOn_TheWeb_…` and `FormEventsTests.TheRegionWriter_AcceptsTheCatalogsWebEvent_ThroughTheSeam` (BL8032 fires on a correct bind).
+- [x] **M4 — the root retarget drop-and-name.** In `ConvertRootBinds`, delete the `Warn(DesignCodes.RetargetBindLost, …)` call. Red: `FormRootRetargetTests.ARootBind_WithNoFormEventOnTheDestination_IsDroppedAndNamed` (both directions).
+- [x] **M5 — system colour literal.** In `ColorLiteral`, change `"SystemColors." + system` to `"Color." + system`. Red: `FormPropertyDefTests.ASystemColour_IsSystemColorsOnWinForms_NeverColorDot`.
+- [x] **M6 — the CSS walk owns Visible.** On the shared `Visible`, remove `CssProperty: "display", CssConverter: …`. Red: `FormCssTests.TheFourMovedRules_…` and `VisibleFalse_HidesTheElement_ForEveryWebKind(*)`.
+- [x] **M7 — the grid's alias no-op.** In `FormPropertyRow.Commit`, delete the canonical-equality early return. Red: `FormPropertyGridTests.ALegacyTextAlign_ShowsItsCanonicalMember_AndIsNotRewritten…`.
+- [x] **M8 — Text on the web.** In `FormDocumentWriter.ApplyToDocument`, move `SetAttributeIfChanged(root, "Text", model.Text)` back inside the WinForms branch. Red: `FormRootTests.AWebFormsText_IsReadWrittenAndRoundTrips`.
+- [x] **M9 — root tier.** In `FormDocumentReader`, delete the `degradedRoot.Add(…)`. Red: `FormRootTests.AnUnparseableClientSize_IsDegraded_…`.
+- [x] **M10 — a String value is always document text (Task 5A).** In `FormPropertyDef.IsSourceForm`, restore the String arm `value.StartsWith("\"", …) || value.StartsWith("New ", …)`. Red (Task 9 runs after Task 6, so the root goes through `Literal` too): `FormRegionWriterTests.APlainCaption_IsAlwaysQuotedAndEscaped` for `New Customer` and `"quoted"` (the `a "b" c` case stays green — it starts with neither prefix, which is exactly why the shape test hid), and `FormRegionWriterTests.TheFormsCaption_IsAlwaysQuoted_EvenWhenItLooksLikeSource`.
 
 ---
 
 ### Task 10: Slice 1 gate and commit
 
-- [ ] **Step 1: Build clean.** `dotnet build VisualGameStudio.Shell/VisualGameStudio.Shell.csproj -c Release` and `dotnet build VisualGameStudio.Tests/VisualGameStudio.Tests.csproj -c Release` — zero errors; no NEW warnings in the files this slice touched.
-- [ ] **Step 2: Fast subset, both streams.**
+- [x] **Step 1: Build clean.** `dotnet build VisualGameStudio.Shell/VisualGameStudio.Shell.csproj -c Release` and `dotnet build VisualGameStudio.Tests/VisualGameStudio.Tests.csproj -c Release` — zero errors; no NEW warnings in the files this slice touched.
+- [x] **Step 2: Fast subset, both streams.**
 
 ```powershell
 cmd /c "dotnet test VisualGameStudio.Tests\VisualGameStudio.Tests.csproj -c Release --no-build --filter TestCategory!=Integration > `"$sp\slice1-fast.txt`" 2>&1"
@@ -3563,8 +3563,8 @@ cmd /c "dotnet test VisualGameStudio.Tests\VisualGameStudio.Tests.csproj -c Rele
 
 Compare the SORTED failure NAMES with `baseline-fast.txt` — a count alone hides a regression that lands as another test goes green. New names must be ZERO. State the base (branch + SHA) with every number you record.
 
-- [ ] **Step 3: The named fixtures (fast).** `--filter "FullyQualifiedName~WinFormsCatalogParityTests|FullyQualifiedName~FormPropertyDefTests|FullyQualifiedName~FormEventsTests|FullyQualifiedName~FormCssTests|FullyQualifiedName~FormRootTests|FullyQualifiedName~FormRootRetargetTests|FullyQualifiedName~FormRetargetTests|FullyQualifiedName~FormPropertyGridTests|FullyQualifiedName~FormRegionWriterTests"` — all green. ⚠ A passing test prints NOTHING at normal verbosity; read the counts.
-- [ ] **Step 4: Integration rows that this slice's emission changes touch.**
+- [x] **Step 3: The named fixtures (fast).** `--filter "FullyQualifiedName~WinFormsCatalogParityTests|FullyQualifiedName~FormPropertyDefTests|FullyQualifiedName~FormEventsTests|FullyQualifiedName~FormCssTests|FullyQualifiedName~FormRootTests|FullyQualifiedName~FormRootRetargetTests|FullyQualifiedName~FormRetargetTests|FullyQualifiedName~FormPropertyGridTests|FullyQualifiedName~FormRegionWriterTests"` — all green. ⚠ A passing test prints NOTHING at normal verbosity; read the counts.
+- [x] **Step 4: Integration rows that this slice's emission changes touch.**
 
 ```powershell
 cmd /c "dotnet test VisualGameStudio.Tests\VisualGameStudio.Tests.csproj -c Release --no-build --filter `"FullyQualifiedName~WinFormsCatalogSweepTests|FullyQualifiedName~FormDesignerAcceptanceTests|FullyQualifiedName~FormMenuAcceptanceTests|FullyQualifiedName~FormBuildEmissionTests|FullyQualifiedName~FormComponentAcceptanceTests|FullyQualifiedName~FormAnchorEmissionTests`" > `"$sp\slice1-int.txt`" 2>&1"
@@ -3572,7 +3572,7 @@ cmd /c "dotnet test VisualGameStudio.Tests\VisualGameStudio.Tests.csproj -c Rele
 
 Compare failure NAMES with `baseline-int.txt`. The `ERROR_USER_MAPPED_FILE` JS rows may fail identically on both; a NEW name is a regression until an A/B on the base commit proves otherwise. `FormDesignerAcceptanceTests`/`FormMenuAcceptanceTests` RUN the generated forms — that is the "it compiles was the ceiling" guard for the CSS walk, the page title, the TextAlign aliases and the new handler signatures.
 
-- [ ] **Step 5: Commit.** Write `slice1-commit.txt` in your scratchpad:
+- [x] **Step 5: Commit.** Write `slice1-commit.txt` in your scratchpad:
 
 ```
 feat(form-designer): property grid slice 1 — catalog metadata, FormRoot, events, WinForms oracle
@@ -5974,6 +5974,17 @@ git commit -F "$sp\slice2-commit.txt"
 ---
 
 ## Slice 3 — The D1 property batches, both targets (TASK granularity — expand before starting)
+
+> ⚠ **CARRIED FROM SLICE 1 (culture review, 951fcf46) — backlog, fold into slice 3's first task:**
+> (1) Unreadable control geometry / TabIndex (`X="5\t"`, `X="−5"` from a pre-951fcf46 writer on an sv-SE machine)
+> now reads as 0 with NO diagnostic (`FormDocumentReader.cs` ~:655-675, ~:456; `FormDocument.cs` ~:557-576) — the
+> program places the control at the origin silently. Give it a Degraded tier + warning as ClientSize has (or accept
+> U+2212 on read for legacy files — decide), and tighten `Read_AUnicodeMinus_IsNotANumber…` to assert the value AND
+> the diagnostic. (2) `RegionWriter.ExpandWebScript` splices `{Interval}` as raw text — re-emit from `TryParseInt`.
+> (3) Root `Width`/`Height` no-op check compares TEXT (`FormDocumentWriter.cs` ~:249-257) — a no-op save rewrites
+> `"0400"`; use the parse-then-compare rule of `SetIntAttributeIfChanged` (never overwrite unreadable text).
+> (4) `FormRetarget.cs` ~:216-218: the degraded-row-on-both-targets branch is unreachable until a Properties-stored
+> root row exists — add a test that reaches it (Task 7 review).
 
 > ⚠ **CARRIED FROM SLICE 1 (Task 5 review, 0dbdb63c):** a web value the catalog refuses (Degraded, e.g.
 > `BackColor="ActiveCaption"`) is now silently LEFT OUT of the stylesheet; `RegionWriter` reports BL8009 only for
