@@ -934,10 +934,11 @@ public class DynamicUseSPrimeAggressivePipelineStructuralTests
 /// <para>Every cell here is pinned exactly as the implementer measured it
 /// (S/adr6-d2/probes/matrix-after.txt): L1/L2 are BL7002 on JavaScript (a ByRef parameter — JavaScript
 /// has no reference parameters, unrelated to D2 either way); L5 is correct on JavaScript only
-/// (ADR-0006 D1's interim closure rule), with C++ known-wrong for task #140 (backend lambda
-/// capture-by-copy, present even with no optimizer running) and MSIL known-not-to-build for task
-/// #155 (no lowering for the delegate type a <c>Sub()</c> lambda gets typed as) — both pre-existing
-/// gaps this task neither caused nor closes.</para>
+/// (ADR-0006 D1's closure rule — x is genuinely in bump's capture set, task #122 DISCHARGED),
+/// with C++ known-wrong for task #140 (backend lambda capture-by-copy, present even with no
+/// optimizer running) and MSIL known-not-to-build for task #155 (no lowering for the delegate
+/// type a <c>Sub()</c> lambda gets typed as) — both pre-existing gaps this task neither caused
+/// nor closes.</para>
 /// </summary>
 [TestFixture]
 [Category("Integration")]
@@ -1086,15 +1087,18 @@ public class DynamicUseSPrimeExecutionTests
 
     // ---- L5: JavaScript CORRECT (ADR-0006 D1); C++ #140 and MSIL #155 known-wrong/does-not-build.
 
-    /// <summary>CORRECT under ADR-0006 D1's interim closure rule: <c>bump()</c> is call-visible
-    /// over the captured local <c>x</c>, so LICM does not hoist <c>x * 2</c>. Matches
+    /// <summary>CORRECT under ADR-0006 D1's closure rule: <c>x</c> is genuinely in bump's
+    /// recorded capture set (task #122, DISCHARGED — not merely the coarser "every local"
+    /// interim fallback), so <c>bump()</c> is call-visible over <c>x</c> and LICM does not hoist
+    /// <c>x * 2</c>. Matches
     /// <c>LicmKillVocabularyKnownGapsTask122Tests.L5_LambdaCapturedLocal_JavaScript_AggressivePipeline_CorrectAfterAdr6D1</c>'s
     /// pin, repeated here so this file's own probe-by-probe matrix is self-contained.</summary>
     [Test]
     public void L5_JavaScript_AggressivePipeline_Correct()
         => Assert.That(FourBackends.Norm(FourBackends.RunAggressiveJs(LicmKillVocabularyShapes.L5)),
             Is.EqualTo("seed\n12"),
-            "ADR-0006 D1's interim closure rule closes this for JavaScript under --optimize.");
+            "ADR-0006 D1's closure rule closes this for JavaScript under --optimize (x is in "
+            + "bump's capture set, task #122).");
 
     /// <summary>KNOWN-WRONG, task #140: the C++ backend's own lambda lowering captures BY COPY
     /// (<c>[=]</c>) where BasicLang means by reference — MEASURED present even with NO optimizer

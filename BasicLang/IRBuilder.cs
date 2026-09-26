@@ -2251,9 +2251,6 @@ namespace BasicLang.Compiler.IR
             // produced two `static class Program` declarations and CS0101.
             lambdaFunc.ModuleName = _currentModuleName ?? _module?.Name;
 
-            // Detect captured variables (variables from outer scopes)
-            var capturedVars = new List<(string name, TypeInfo type)>();
-
             // Add parameters
             foreach (var param in node.Parameters)
             {
@@ -2301,20 +2298,26 @@ namespace BasicLang.Compiler.IR
                 }
             }
 
-            // Detect captured variables by checking which outer scope variables were accessed
-            // This is a simplified approach - in a full implementation, we'd track this during body generation
-            foreach (var kvp in savedLocals)
+            // ⭐ THE CAPTURE SET (task #122, ADR-0006 D1's Obligation), read off the lambda's IR
+            // now that its body — and every lambda nested in it, each already recorded on this
+            // one — is built. A structural walk of the IR rather than name resolution tracked in
+            // every visitor: it sees exactly what the IR references, whichever visitor produced
+            // it. The CREATOR records it, because the optimizer asks "which of MY locals can a
+            // call write?" (OptimizationPass.IsCallVisible). Null when the lambda's names cannot be
+            // enumerated (raw inline code, or a nested lambda that was not recorded): the lambda
+            // is then left out of the creator's LambdaCaptureSources, and the creator keeps
+            // ADR-0006 D1's interim rule. (This replaces a loop over `_locals`, which nothing
+            // ever fills, so CapturedVariables was always empty.)
+            var captures = Optimization.OptimizationPass.LambdaCapturesOf(lambdaFunc);
+            lambdaFunc.CapturedVariables = captures?.Select(c => (c.Key, c.Value)).ToList()
+                ?? new List<(string name, TypeInfo type)>();
+            if (captures != null && savedFunction != null)
             {
-                if (!_locals.ContainsKey(kvp.Key))
-                {
-                    // This variable from outer scope was potentially captured
-                    // We'll let the C# backend handle this via closure conversion
-                    capturedVars.Add((kvp.Key, kvp.Value.Type));
-                }
+                (savedFunction.LambdaCapturedNames ??= new HashSet<string>(StringComparer.Ordinal))
+                    .UnionWith(captures.Keys);
+                (savedFunction.LambdaCaptureSources ??= new HashSet<string>(StringComparer.Ordinal))
+                    .Add(lambdaName);
             }
-
-            // Store captured variables in the function metadata
-            lambdaFunc.CapturedVariables = capturedVars;
 
             // Add lambda function to module
             _module.Functions.Add(lambdaFunc);
@@ -5325,8 +5328,9 @@ namespace BasicLang.Compiler.IR
                     // C1 shape above — is NOT caught here; it is caught by the descriptor
                     // cross-check immediately below, which is the AUTHORITATIVE layer for
                     // locals. Do not "simplify away" that check on the strength of this line.
-                    // (Fixing `_locals`, or deleting it, is separate work: it would also revive
-                    // the dead lambda capture-detection loop it feeds.)
+                    // (Fixing `_locals`, or deleting it, is separate work. The lambda
+                    // capture-detection loop it used to feed is gone: a lambda's capture set is
+                    // read off its IR — OptimizationPass.LambdaCapturesOf, task #122.)
                     isStaticCall = (exactClassMatch || isNetType) && !isLocalOrParam;
                 }
 

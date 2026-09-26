@@ -882,28 +882,30 @@ public class MsilRoundTripTests
     }
 
     /// <summary>
-    /// ⚠ <b>The declared number is an element COUNT, not a VB-style upper bound.</b>
-    /// <c>Dim a(3)</c> holds 3 elements at indices 0..2, so <c>a(3)</c> is out of range. That is
-    /// this language's decision, not an off-by-one: the analyzer validates the number as a size
-    /// ("Array size cannot be negative"), and the C# and C++ backends both allocate exactly
-    /// <c>n</c> from the same <c>TypeInfo.ArrayDimensionSizes</c>. Verified against the C#
-    /// backend on this source — it prints <c>1,3</c> too.
+    /// ⚠ <b><c>[n]</c> declares n ELEMENTS; <c>(n)</c> declares UPPER BOUND n (n + 1 elements).</b>
+    /// That is the language rule since 26d8478a (VB's <c>Dim a(3)</c> holds indices 0..3); it
+    /// replaced the older rule this test used to pin, under which <c>(n)</c> was an element count.
+    /// Both forms come from the same <c>TypeInfo.ArrayDimensionSizes</c>, and MSIL must agree with
+    /// C#, C++ and JavaScript on each — measured: all four print <c>1,3,len=3,upper=4</c> on this
+    /// source, on the CLI, the CLI with <c>-O</c> and a Release <c>.blproj</c>.
     /// </summary>
     [Test]
-    public void AnArraysDeclaredSize_IsAnElementCount_NotAnUpperBound()
+    public void ABracketSize_IsAnElementCount_AndAParenSize_IsAnUpperBound()
     {
         Assert.That(RunExpectingSuccess("""
             Module M
              Sub Main()
-              Dim a(3) As Integer
+              Dim a[3] As Integer
+              Dim b(3) As Integer
               a(0) = 1
               a(2) = 3
-              PrintLine(CStr(a(0)) & "," & CStr(a(2)) & ",len=" & CStr(a.Length))
+              PrintLine(CStr(a(0)) & "," & CStr(a(2)) & ",len=" & CStr(a.Length) & ",upper=" & CStr(b.Length))
              End Sub
             End Module
-            """), Is.EqualTo("1,3,len=3\n"),
-            "len=4 would mean this backend read the number as an upper bound and drifted from "
-            + "C#/C++; an IndexOutOfRange on a(2) would mean it allocated one element too few.");
+            """), Is.EqualTo("1,3,len=3,upper=4\n"),
+            "len=4 would mean this backend read [3] as an upper bound; upper=3 would mean it read "
+            + "(3) as an element count (the rule before 26d8478a) and drifted from C#/C++/JavaScript; "
+            + "an IndexOutOfRange on a(2) would mean it allocated one element too few.");
     }
 
     [Test]
@@ -912,7 +914,7 @@ public class MsilRoundTripTests
         Assert.That(RunExpectingSuccess("""
             Module M
              Sub Main()
-              Dim a(4) As Integer
+              Dim a[4] As Integer
               Dim i As Integer
               For i = 0 To a.Length - 1
                a(i) = i * i
@@ -938,7 +940,7 @@ public class MsilRoundTripTests
         Assert.That(RunExpectingSuccess("""
             Module M
              Sub Main()
-              Dim a(3) As Integer
+              Dim a[3] As Integer
               PrintLine(CStr(a.Length))
              End Sub
             End Module
