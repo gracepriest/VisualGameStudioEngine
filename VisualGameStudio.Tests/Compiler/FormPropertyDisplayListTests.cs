@@ -27,7 +27,7 @@ public class FormPropertyDisplayListTests
         list.Items.Select(i => i switch
         {
             FormPropertyCategoryHeader h => "[" + h.Name + "]",
-            FormPropertyRow r => r.Name,
+            IFormDisplayRow r => r.Name,
             _ => "?"
         }).ToList();
 
@@ -165,6 +165,62 @@ public class FormPropertyDisplayListTests
             Assert.That(collapsed, Is.EqualTo(new[] { "[Appearance]", "[Behavior]", "Enabled", "Visible" }));
             Assert.That(Lines(list), Is.EqualTo(before));
             Assert.That(list.Items[0], Is.SameAs(appearance), "the header under the click is not recreated");
+        });
+    }
+
+    /// <summary>Not a FormPropertyRow — what slice 5's Events tab will hand the list.</summary>
+    private sealed record FakeRow(string Name, string Category) : IFormDisplayRow;
+
+    [Test]
+    public void AnyDisplayRow_IsGroupedSearchedAndCollapsed_NotOnlyAPropertyRow()
+    {
+        var click = new FakeRow("Click", "Action");
+        var doubleClick = new FakeRow("DoubleClick", "Action");
+        var keyDown = new FakeRow("KeyDown", "Key");
+        var rows = new IFormDisplayRow[] { keyDown, doubleClick, click };
+        var list = new FormPropertyDisplayList();
+
+        list.Refresh(rows, "", isCategorized: true, selected: null);
+        var grouped = Lines(list);
+
+        list.Refresh(rows, "click", isCategorized: true, selected: null);
+        var searched = Lines(list);
+
+        list.Refresh(rows, "", isCategorized: true, selected: null);
+        Header(list, "Action").IsExpanded = false;
+        var collapsed = Lines(list);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(grouped, Is.EqualTo(new[] { "[Action]", "Click", "DoubleClick", "[Key]", "KeyDown" }));
+            Assert.That(searched, Is.EqualTo(new[] { "[Action]", "Click", "DoubleClick" }));
+            Assert.That(collapsed, Is.EqualTo(new[] { "[Action]", "[Key]", "KeyDown" }),
+                "the collapse removes every row under the header, whatever its type");
+        });
+    }
+
+    /// <summary>
+    /// ⛔ While searching, every matching category is shown expanded REGARDLESS of the remembered collapse, so a
+    /// toggle then is display only — collapse-then-expand during a search must not erase a pre-search collapse.
+    /// </summary>
+    [Test]
+    public void HeaderTogglesWhileSearching_DoNotChangeTheRememberedCollapse()
+    {
+        var list = new FormPropertyDisplayList();
+        list.Refresh(Rows, "", isCategorized: true, selected: null);
+        Header(list, "Behavior").IsExpanded = false;
+        list.Refresh(Rows, "en", isCategorized: true, selected: null);
+
+        Header(list, "Behavior").IsExpanded = false;
+        var collapsedInSearch = Lines(list);
+        Header(list, "Behavior").IsExpanded = true;
+        list.Refresh(Rows, "", isCategorized: true, selected: null);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(collapsedInSearch, Is.EqualTo(new[] { "[Behavior]" }), "the toggle still works on screen");
+            Assert.That(list.IsCollapsed("Behavior"), Is.True, "the pre-search collapse survives");
+            Assert.That(Lines(list), Has.No.Member("Enabled"));
         });
     }
 

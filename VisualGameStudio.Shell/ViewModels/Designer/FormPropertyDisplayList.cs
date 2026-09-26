@@ -8,8 +8,10 @@ namespace VisualGameStudio.Shell.ViewModels.Designer;
 /// Properties view uses it, and slice 5's Events tab is meant to reuse it rather than copy it.
 ///
 /// <para>⚠ A projection only. The rows are the caller's model and are never changed here; the
-/// <see cref="Items"/> it produces are <see cref="FormPropertyCategoryHeader"/>s and
-/// <see cref="FormPropertyRow"/>s.</para>
+/// <see cref="Items"/> it produces are <see cref="FormPropertyCategoryHeader"/>s and the caller's own
+/// <see cref="IFormDisplayRow"/>s — a <see cref="FormPropertyRow"/> today, an Events-tab row in slice 5.
+/// ⛔ So nothing here may test for <see cref="FormPropertyRow"/>: "a row" is "anything that is not a
+/// header".</para>
 ///
 /// <para>⛔ A rebuild clears <see cref="Items"/>, and a list bound to it pushes a null selection when it is
 /// cleared — so <see cref="Refresh"/> takes the item that WAS selected and answers what should be selected
@@ -19,7 +21,7 @@ namespace VisualGameStudio.Shell.ViewModels.Designer;
 public sealed class FormPropertyDisplayList
 {
     private readonly HashSet<string> _collapsed = new(StringComparer.Ordinal);
-    private IReadOnlyList<FormPropertyRow> _rows = Array.Empty<FormPropertyRow>();
+    private IReadOnlyList<IFormDisplayRow> _rows = Array.Empty<IFormDisplayRow>();
     private string _searchText = "";
 
     /// <summary>Headers and rows, in display order.</summary>
@@ -28,13 +30,16 @@ public sealed class FormPropertyDisplayList
     /// <summary>A header was collapsed and rows left <see cref="Items"/> — a selected one may be gone.</summary>
     public event EventHandler? RowsHidden;
 
-    /// <summary>Whether the user collapsed <paramref name="category"/> (a search does not change it).</summary>
+    /// <summary>
+    /// Whether the user collapsed <paramref name="category"/> — outside a search. Neither a search nor a toggle
+    /// made during one changes it.
+    /// </summary>
     public bool IsCollapsed(string category) => _collapsed.Contains(category);
 
     /// <summary>
     /// Rebuilds <see cref="Items"/> and returns what should be selected afterwards (see the class remarks).
     /// </summary>
-    public object? Refresh(IEnumerable<FormPropertyRow> rows, string searchText, bool isCategorized, object? selected)
+    public object? Refresh(IEnumerable<IFormDisplayRow> rows, string searchText, bool isCategorized, object? selected)
     {
         _rows = rows.ToList();
         _searchText = searchText;
@@ -73,19 +78,19 @@ public sealed class FormPropertyDisplayList
 
         return selected switch
         {
-            FormPropertyRow row when Items.Contains(row) => row,
+            IFormDisplayRow row when Items.Contains(row) => row,
             FormPropertyCategoryHeader header =>
                 Items.OfType<FormPropertyCategoryHeader>().FirstOrDefault(h => h.Name == header.Name),
             _ => null
         };
     }
 
-    private IEnumerable<FormPropertyRow> VisibleRows() =>
+    private IEnumerable<IFormDisplayRow> VisibleRows() =>
         _searchText.Length == 0
             ? _rows
             : _rows.Where(r => r.Name.Contains(_searchText, StringComparison.OrdinalIgnoreCase));
 
-    private static IEnumerable<FormPropertyRow> ByName(IEnumerable<FormPropertyRow> rows) =>
+    private static IEnumerable<IFormDisplayRow> ByName(IEnumerable<IFormDisplayRow> rows) =>
         rows.OrderBy(r => r.Name, StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
@@ -94,13 +99,19 @@ public sealed class FormPropertyDisplayList
     /// </summary>
     private void OnHeaderToggled(FormPropertyCategoryHeader header)
     {
-        if (header.IsExpanded)
+        // ⛔ While searching, a toggle is DISPLAY ONLY. Every matching category is shown expanded whatever
+        // the memory says, so recording a toggle here would let collapse-then-expand during a search erase a
+        // collapse the user made before it — and clearing the search would not bring it back.
+        if (_searchText.Length == 0)
         {
-            _collapsed.Remove(header.Name);
-        }
-        else
-        {
-            _collapsed.Add(header.Name);
+            if (header.IsExpanded)
+            {
+                _collapsed.Remove(header.Name);
+            }
+            else
+            {
+                _collapsed.Add(header.Name);
+            }
         }
 
         var at = Items.IndexOf(header);
@@ -112,7 +123,9 @@ public sealed class FormPropertyDisplayList
         if (!header.IsExpanded)
         {
             var removed = false;
-            while (at + 1 < Items.Count && Items[at + 1] is FormPropertyRow)
+            // ⛔ "Up to the next header", never "while it is a FormPropertyRow": any other row type would
+            // stop the loop at once and leave its rows showing under a collapsed header.
+            while (at + 1 < Items.Count && Items[at + 1] is not FormPropertyCategoryHeader)
             {
                 Items.RemoveAt(at + 1);
                 removed = true;

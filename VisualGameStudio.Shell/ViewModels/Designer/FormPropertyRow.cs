@@ -38,7 +38,7 @@ public enum FormRowEditor
 /// present AND different from that default; RESET removes the property. The three rules read ONE
 /// value — <see cref="DefaultValue"/> — so they cannot disagree.</para>
 /// </summary>
-public partial class FormPropertyRow : ObservableObject, ITypedValueRow
+public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDisplayRow
 {
     private readonly FormControl? _control;
     private readonly Action _onChanged;
