@@ -2292,7 +2292,13 @@ namespace BasicLang.Compiler.SemanticAnalysis
             // Handle array types
             if (typeRef.IsArray)
             {
-                var elementType = ResolveTypeName(typeRef.Name);
+                // A GENERIC element (`Dim arr[] As List(Of Integer)`) resolves through the generic
+                // path below: resolving it by bare name dropped the type arguments, and the array
+                // was emitted as `List[]` (CS0305) / `std::shared_ptr<List>` (C++) — an array of
+                // an unnamed generic.
+                var elementType = typeRef.GenericArguments.Count > 0
+                    ? ResolveTypeReference(new TypeReference(typeRef.Name) { GenericArguments = typeRef.GenericArguments })
+                    : ResolveTypeName(typeRef.Name);
                 if (elementType == null)
                 {
                     Error($"Unknown type '{typeRef.Name}'", 0, 0);
@@ -9780,6 +9786,22 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 index.Accept(this);
             }
 
+            // ⛔ The parser folds chained brackets into ONE index list — `a[i][j]` arrives as
+            // `a[i, j]`, which is right for a RANK-2 array (C-style `grid[1][2]`) and wrong for
+            // anything that takes fewer indices: `lst[0][3]` over a List(Of Integer()) became
+            // `lst[0, 3]` (CS1501 on C#). Split off the indices the base actually takes and
+            // index the result with the rest — `(lst[0])[3]`. The base and every index are
+            // already analysed above, so the split re-visits nothing.
+            while (arrayType != null && IndicesTakenBy(arrayType) is int takes && takes > 0 && node.Indices.Count > takes)
+            {
+                var inner = new ArrayAccessExpressionNode(node.Line, node.Column) { Array = node.Array };
+                inner.Indices.AddRange(node.Indices.Take(takes));
+                SetNodeType(inner, ElementTypeOfIndexing(arrayType));
+                node.Array = inner;
+                node.Indices = node.Indices.Skip(takes).ToList();
+                arrayType = GetNodeType(inner);
+            }
+
             // Handle actual arrays
             if (arrayType.Kind == TypeKind.Array)
             {
@@ -9825,6 +9847,27 @@ namespace BasicLang.Compiler.SemanticAnalysis
             // Not an array or known indexable type
             Error($"Cannot index non-array type '{arrayType}'", node.Line, node.Column);
             SetNodeType(node, _typeManager.ObjectType);
+        }
+
+        /// <summary>
+        /// How many indices one bracket pair over <paramref name="type"/> takes: an array's rank,
+        /// one for an indexable collection, or null when the type is not indexable here (the
+        /// caller then reports it as written).
+        /// </summary>
+        private int? IndicesTakenBy(TypeInfo type)
+        {
+            if (type.Kind == TypeKind.Array) return Math.Max(1, type.ArrayRank);
+            if (IsNetType(type.Name) || IsIndexableNetType(type.Name)) return 1;
+            return null;
+        }
+
+        /// <summary>What one index into <paramref name="type"/> yields — the same answers <see cref="Visit(ArrayAccessExpressionNode)"/> gives.</summary>
+        private TypeInfo ElementTypeOfIndexing(TypeInfo type)
+        {
+            if (type.Kind == TypeKind.Array) return type.ElementType ?? _typeManager.ObjectType;
+            if (type.GenericArguments != null && type.GenericArguments.Count > 0)
+                return type.GenericArguments[type.GenericArguments.Count - 1];
+            return _typeManager.ObjectType;
         }
 
         /// <summary>
