@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 
 namespace BasicLang.Forms;
@@ -210,7 +211,7 @@ public static class FormAssetEmitter
         // sort.
         if (definition.Place == FormPlace.Positioned)
         {
-            sb.Append($" tabindex=\"{control.TabIndex}\"");
+            sb.Append($" tabindex=\"{Number(control.TabIndex)}\"");
         }
 
         if (definition.HtmlInputType != null)
@@ -269,6 +270,20 @@ public static class FormAssetEmitter
                 string.IsNullOrEmpty(raw))
             {
                 continue;
+            }
+
+            // ⛔ An Int row (min/max/value/step/maxlength) is re-emitted from the PARSED number, as
+            // WinForms emits it — and a value the catalog refuses is not emitted at all, because
+            // WinForms emits nothing for a Degraded value and the two targets must agree on what the
+            // document says. Verbatim text let "5\r\n" or "−5" reach the page as an attribute.
+            if (property.Type == FormPropertyType.Int)
+            {
+                if (!FormPropertyDef.TryParseInt(raw, out var number))
+                {
+                    continue;
+                }
+
+                raw = Number(number);
             }
 
             sb.Append($" {attribute}=\"{Attr(raw)}\"");
@@ -447,8 +462,10 @@ public static class FormAssetEmitter
             // example puts the first control at Col="0" Row="0"). Off by one here puts every
             // control one cell down and to the right, which looks like a layout bug and is an
             // indexing one.
-            rules.Add($"grid-column: {grid.Col + 1}{(grid.ColSpan > 1 ? $" / span {grid.ColSpan}" : "")}");
-            rules.Add($"grid-row: {grid.Row + 1}{(grid.RowSpan > 1 ? $" / span {grid.RowSpan}" : "")}");
+            //
+            // ⚠ Invariant, like every number this emitter writes: a U+2212 minus is not CSS.
+            rules.Add("grid-column: " + Number(grid.Col + 1) + (grid.ColSpan > 1 ? " / span " + Number(grid.ColSpan) : ""));
+            rules.Add("grid-row: " + Number(grid.Row + 1) + (grid.RowSpan > 1 ? " / span " + Number(grid.RowSpan) : ""));
         }
 
         // ⛔⛔ Driven from the CATALOG (spec §2.1). The four rules that used to be hard-coded here —
@@ -556,4 +573,10 @@ public static class FormAssetEmitter
     /// and property values are user text.
     /// </summary>
     private static string Attr(string value) => Text(value).Replace("\"", "&quot;");
+
+    /// <summary>
+    /// A number as markup/CSS text. ⛔ Invariant: sv-SE/fi-FI/nb-NO spell a negative with U+2212, which
+    /// neither HTML nor CSS reads as a minus.
+    /// </summary>
+    private static string Number(int value) => value.ToString(CultureInfo.InvariantCulture);
 }

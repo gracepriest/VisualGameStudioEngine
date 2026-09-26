@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Xml.Linq;
 
 namespace BasicLang.Forms.Serialization;
@@ -715,6 +716,13 @@ public static class FormDocumentWriter
     ///         AWAY from that default, which is the one case that is a real edit. Renumbering the
     ///         tab order still reaches the document; re-saving an untouched one does not.</item>
     /// </list>
+    ///
+    /// <para>⛔⛔ Culture-INVARIANT both ways, and parsed with the READER's parser
+    /// (<see cref="FormPropertyDef.TryParseInt"/>). <c>value.ToString()</c> wrote X with a U+2212
+    /// minus under sv-SE — a file that round-tripped on its author's machine and fell silently to 0 on
+    /// en-US/CI. And a no-op comparison with a DIFFERENT parser than the reader's would call a value
+    /// "unparseable" that the reader parsed (or the reverse), and a save that changed nothing would
+    /// rewrite the user's text.</para>
     /// </summary>
     private static void SetIntAttributeIfChanged(XElement element, string name, int value, int absentMeans)
     {
@@ -724,17 +732,17 @@ public static class FormDocumentWriter
         {
             if (value != absentMeans)
             {
-                element.SetAttributeValue(name, value.ToString());
+                element.SetAttributeValue(name, Number(value));
             }
 
             return;
         }
 
-        if (int.TryParse(existing.Value, out var current))
+        if (FormPropertyDef.TryParseInt(existing.Value, out var current))
         {
             if (current != value)
             {
-                existing.Value = value.ToString();
+                existing.Value = Number(value);
             }
 
             return;
@@ -742,9 +750,12 @@ public static class FormDocumentWriter
 
         if (value != absentMeans)
         {
-            existing.Value = value.ToString();
+            existing.Value = Number(value);
         }
     }
+
+    /// <summary>A document integer. ⛔ Invariant — see <see cref="SetIntAttributeIfChanged"/>.</summary>
+    private static string Number(int value) => value.ToString(CultureInfo.InvariantCulture);
 
     /// <summary>
     /// The same rule for an attribute whose default means ABSENT — <c>ColSpan</c>, <c>RowSpan</c>.
@@ -766,7 +777,7 @@ public static class FormDocumentWriter
 
         if (existing != null)
         {
-            if (int.TryParse(existing.Value, out var current))
+            if (FormPropertyDef.TryParseInt(existing.Value, out var current))
             {
                 if (current == value)
                 {
@@ -780,7 +791,7 @@ public static class FormDocumentWriter
             }
         }
 
-        SetAttributeIfChanged(element, name, value == defaultValue ? null : value.ToString());
+        SetAttributeIfChanged(element, name, value == defaultValue ? null : Number(value));
     }
 
     private static void SetAttributeIfChanged(XElement element, string name, string? value)

@@ -421,20 +421,61 @@ public class FormAssetEmitterTests
         });
     }
 
+    private static string NumericHtml(string property, string raw)
+    {
+        var form = new FormDocument { Target = FormTarget.Web, Name = "F" };
+        var numeric = new FormControl { Kind = "NumericUpDown", Id = "num", TabIndex = 0 };
+        numeric.Properties[property] = raw;
+        form.Controls.Add(numeric);
+        return FormAssetEmitter.Html(form, "App.js");
+    }
+
+    /// <summary>
+    /// ⛔ An Int row's HTML attribute (min/max/value/step) is re-emitted from the PARSED number, the
+    /// same way WinForms emits it — never the document's text, whatever the parser tolerated around it.
+    /// </summary>
+    [Test]
+    public void AnIntHtmlAttribute_IsEmittedFromTheParsedNumber()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(NumericHtml("Value", " 5 "), Does.Contain(" value=\"5\""));
+            Assert.That(NumericHtml("Value", "+007"), Does.Contain(" value=\"7\""));
+        });
+    }
+
+    /// <summary>
+    /// ⛔ WinForms emits NOTHING for a Degraded Int (the catalog refuses it); the page must not carry
+    /// it either, or the same document means a number on one target and nothing on the other.
+    /// </summary>
+    [TestCase("abc", TestName = "{m}(abc)")]
+    [TestCase("5\r\n", TestName = "{m}(trailing CRLF)")]
+    [TestCase("<MINUS>5", TestName = "{m}(U+2212)")]
+    public void ADegradedIntHtmlAttribute_IsNotEmitted(string marked)
+    {
+        var raw = marked.Replace("<MINUS>", UnicodeMinusCulture.Minus);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(FormControlCatalog.Find("NumericUpDown")!.Property("Value")!.Accepts(raw), Is.False,
+                "precondition: the catalog calls this value Degraded");
+            Assert.That(NumericHtml("Value", raw), Does.Not.Contain(" value="));
+        });
+    }
+
     [Test]
     [SetCulture("sv-SE")]
-    public void ASelectsSelectedIndex_WithAUnicodeMinus_MarksNothing_UnderAnyCulture()
+    public void ANegativeIntHtmlAttribute_UnderAUnicodeMinusCulture_UsesAnAsciiHyphen()
     {
-        // U+2212 built from its code point: sv-SE's own negative sign, which the culture-free reader
-        // refuses on the desktop. The web must refuse it too.
-        var raw = ((char)0x2212) + "1";
-        var form = new FormDocument { Target = FormTarget.Web, Name = "F" };
-        var combo = new FormControl { Kind = "ComboBox", Id = "cmb", TabIndex = 0 };
-        combo.Properties["Items"] = "Alpha, Beta";
-        combo.Properties["SelectedIndex"] = raw;
-        form.Controls.Add(combo);
+        UnicodeMinusCulture.Require();
 
-        Assert.That(FormAssetEmitter.Html(form, "App.js"), Does.Not.Contain("selected"));
+        var html = NumericHtml("Minimum", "-5");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(html, Does.Contain(" min=\"-5\""));
+            Assert.That(html, Does.Not.Contain(UnicodeMinusCulture.Minus));
+        });
     }
 
     [Test]

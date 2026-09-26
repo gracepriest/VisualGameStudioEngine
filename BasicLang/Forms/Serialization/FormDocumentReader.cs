@@ -676,9 +676,15 @@ public static class FormDocumentReader
         };
     }
 
-    /// <summary>An integer attribute, or null when absent OR unparseable. Never throws.</summary>
+    /// <summary>
+    /// An integer attribute, or null when absent OR unparseable. Never throws.
+    ///
+    /// <para>⛔ Culture-free (<see cref="FormPropertyDef.TryParseInt"/>), the same parser the writer's
+    /// no-op comparison uses: a document means the same number on every machine, and U+2212 is not a
+    /// minus in it even under the culture that spells negatives that way.</para>
+    /// </summary>
     private static int? IntAttribute(XElement element, string name) =>
-        int.TryParse((string?)element.Attribute(name), out var value) ? value : null;
+        (string?)element.Attribute(name) is { } text && FormPropertyDef.TryParseInt(text, out var value) ? value : null;
 
     /// <summary>`{res:Key}` — the reserved resource syntax.</summary>
     private static bool LooksLikeResourceReference(string value) =>

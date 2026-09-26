@@ -577,7 +577,10 @@ public static class FormClipboard
         };
     }
 
-    /// <summary>An integer attribute, or null when absent OR unparseable. Never throws.</summary>
+    /// <summary>
+    /// An integer attribute, or null when absent OR unparseable. Never throws. ⛔ Culture-free, exactly
+    /// as <c>FormDocumentReader</c> reads one — a paste means the same position on every machine.
+    /// </summary>
     private static int? IntAttribute(XElement element, string name) =>
-        int.TryParse((string?)element.Attribute(name), out var value) ? value : null;
+        (string?)element.Attribute(name) is { } text && FormPropertyDef.TryParseInt(text, out var value) ? value : null;
 }

@@ -222,6 +222,15 @@ public sealed record FormPropertyDef(
             return flag ? "true" : "false";
         }
 
+        // ⛔ An Int is its parsed number in invariant text, so "007", " 5 " and "+7" compare equal to
+        // the number the editor pushes back — without this the grid's no-op rule saw the numeric
+        // editor's "7" as an EDIT of a document holding "007", and rewrote the user's text for a
+        // selection click. A value TryParseInt refuses is Degraded and returned unchanged.
+        if (Type == FormPropertyType.Int && TryParseInt(value, out var number))
+        {
+            return number.ToString(CultureInfo.InvariantCulture);
+        }
+
         // A system or named colour in its table's spelling, so `control`/`Control` and `red`/`Red` compare
         // equal wherever a caller asks "is this the same value?" (the grid's no-op rule). Other colours —
         // #hex, and a name neither table knows — unchanged.

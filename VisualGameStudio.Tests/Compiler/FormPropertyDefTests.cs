@@ -189,6 +189,7 @@ public class FormPropertyDefTests
     {
         // sv-SE's NegativeSign is U+2212. Parsing it would make a document mean different things on
         // different machines, and FORMATTING with it emits `New Size(−5, 10)` — CS1056 at csc.
+        UnicodeMinusCulture.Require();
         var def = new FormPropertyDef("ClientSize", FormPropertyType.Size);
 
         Assert.Multiple(() =>
@@ -407,6 +408,7 @@ public class FormPropertyDefTests
     [SetCulture("sv-SE")]
     public void Int_IsCultureInvariant_BothWays()
     {
+        UnicodeMinusCulture.Require();
         var def = new FormPropertyDef("MaxLength", FormPropertyType.Int);
 
         Assert.Multiple(() =>
@@ -414,6 +416,29 @@ public class FormPropertyDefTests
             Assert.That(def.Accepts("−5"), Is.False, "U+2212 is not a minus in the document");
             Assert.That(def.WinFormsLiteral("-5"), Is.EqualTo("-5"), "ASCII minus whatever the culture");
         });
+    }
+
+    /// <summary>
+    /// ⛔ The grid's no-op rule compares CANONICAL spellings, so an Int's canonical form is its parsed
+    /// number in invariant text — or <c>"007"</c> pushed back as 7 would count as an edit.
+    /// </summary>
+    [TestCase("007", "7")]
+    [TestCase(" 5 ", "5")]
+    [TestCase("+7", "7")]
+    [TestCase("-5", "-5")]
+    [TestCase("abc", "abc")]
+    [TestCase("5\r\n", "5\r\n")]
+    public void Int_Canonical_IsTheParsedNumber_AndADegradedValueIsUnchanged(string value, string expected)
+    {
+        Assert.That(new FormPropertyDef("MaxLength", FormPropertyType.Int).Canonical(value), Is.EqualTo(expected));
+    }
+
+    [Test]
+    [SetCulture("sv-SE")]
+    public void Int_Canonical_IsCultureInvariant()
+    {
+        UnicodeMinusCulture.Require();
+        Assert.That(new FormPropertyDef("MaxLength", FormPropertyType.Int).Canonical("-5"), Is.EqualTo("-5"));
     }
 
     [TestCase("5, 10\r\n", TestName = "{m}(trailing CRLF)")]

@@ -275,6 +275,102 @@ public class FormDocumentRoundTripTests
         });
     }
 
+    // ==================================================================
+    // Numbers never carry the author's culture into the document
+    // ==================================================================
+
+    private const string NegativeWinForm = """
+        <Form Name="F" Version="1" Width="400" Height="300">
+          <Controls>
+            <Button Id="btn" TabIndex="0" X="-5" Y="-3" Width="75" Height="23"/>
+          </Controls>
+        </Form>
+        """;
+
+    /// <summary>
+    /// ⛔⛔ The writer wrote <c>value.ToString()</c>: under sv-SE the file held <c>X="−5"</c> (U+2212),
+    /// which round-tripped on the author's machine and silently fell to 0 on en-US / CI.
+    /// </summary>
+    [Test]
+    [SetCulture("sv-SE")]
+    public void Write_ANegativeCoordinate_UnderAUnicodeMinusCulture_UsesAnAsciiHyphen()
+    {
+        UnicodeMinusCulture.Require();
+        var form = Read(NegativeWinForm, "F.blform");
+        var pixel = (PixelGeometry)form.Model.FindById("btn")!.Geometry!;
+        pixel.X = -12;
+        pixel.Y = -34;
+
+        var written = FormDocumentWriter.Write(form);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(written, Does.Contain("X=\"-12\""));
+            Assert.That(written, Does.Contain("Y=\"-34\""));
+            Assert.That(written, Does.Not.Contain(UnicodeMinusCulture.Minus));
+        });
+    }
+
+    [Test]
+    [SetCulture("sv-SE")]
+    public void Write_ANewNegativeSpan_UnderAUnicodeMinusCulture_UsesAnAsciiHyphen()
+    {
+        // SetOptionalIntAttribute's path — a span the designer never writes negative, but the writer
+        // must not be the place a culture decides the text.
+        UnicodeMinusCulture.Require();
+        var form = Read(LoginForm);
+        ((GridGeometry)form.Model.FindById("btnLogin")!.Geometry!).ColSpan = -2;
+
+        Assert.That(FormDocumentWriter.Write(form), Does.Contain("ColSpan=\"-2\""));
+    }
+
+    [Test]
+    [SetCulture("sv-SE")]
+    public void Read_AnAsciiNegative_UnderAUnicodeMinusCulture_IsThatNumber()
+    {
+        UnicodeMinusCulture.Require();
+        var pixel = (PixelGeometry)Read(NegativeWinForm, "F.blform").Model.FindById("btn")!.Geometry!;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(pixel.X, Is.EqualTo(-5));
+            Assert.That(pixel.Y, Is.EqualTo(-3));
+        });
+    }
+
+    /// <summary>
+    /// ⛔ The document means the same number on every machine: U+2212 is not a minus in it, even on
+    /// the one machine whose culture spells negatives that way.
+    /// </summary>
+    [Test]
+    [SetCulture("sv-SE")]
+    public void Read_AUnicodeMinus_IsNotANumber_EvenUnderTheCultureThatWritesIt()
+    {
+        UnicodeMinusCulture.Require();
+        var xml = NegativeWinForm.Replace("X=\"-5\"", $"X=\"{UnicodeMinusCulture.Minus}5\"");
+
+        var pixel = (PixelGeometry)Read(xml, "F.blform").Model.FindById("btn")!.Geometry!;
+
+        Assert.That(pixel.X, Is.Not.EqualTo(-5), "read culture-free, exactly as an en-US machine reads it");
+    }
+
+    /// <summary>
+    /// ⛔ The writer's no-op comparison uses the READER's parser, so a save that changed nothing writes
+    /// nothing — for an ASCII negative, a spelled-out one, and a U+2212 one the reader refused alike.
+    /// </summary>
+    [TestCase("X=\"-5\"")]
+    [TestCase("X=\"-005\"")]
+    [TestCase("X=\" -5 \"")]
+    [TestCase("X=\"<MINUS>5\"")]
+    [SetCulture("sv-SE")]
+    public void Algebra_ANoOpSave_UnderAUnicodeMinusCulture_IsByteIdentical(string attribute)
+    {
+        UnicodeMinusCulture.Require();
+        var xml = NegativeWinForm.Replace("X=\"-5\"", attribute.Replace("<MINUS>", UnicodeMinusCulture.Minus));
+
+        Assert.That(FormDocumentWriter.Write(Read(xml, "F.blform")), Is.EqualTo(xml));
+    }
+
     [Test]
     public void Algebra_ReadAfterApply_EqualsApplyAfterRead()
     {

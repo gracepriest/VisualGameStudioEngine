@@ -269,6 +269,29 @@ public class FormRegionWriterTests
         }
     }
 
+    /// <summary>
+    /// ⛔⛔ sv-SE formats a negative with U+2212, so an interpolated <c>New Point({X}, {Y})</c> emitted
+    /// <c>New Point(−5, −3)</c> — CS1056 at csc, from a control the user merely dragged past the left edge.
+    /// </summary>
+    [Test]
+    [SetCulture("sv-SE")]
+    public void Write_WinForms_NegativeGeometry_UnderAUnicodeMinusCulture_UsesAnAsciiHyphen()
+    {
+        UnicodeMinusCulture.Require();
+        var form = WinFormsLoginForm();
+        form.Controls[0].Geometry = new PixelGeometry { X = -5, Y = -3, Width = -7, Height = -9 };
+
+        var result = RegionWriter.Write("LoginForm.bas", ScaffoldedFile(), form, "LoginForm.blform");
+
+        Assert.That(result.Refused, Is.False, string.Join("; ", result.Diagnostics.Select(d => d.Format())));
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Text, Does.Contain("btnLogin.Location = New Point(-5, -3)"));
+            Assert.That(result.Text, Does.Contain("btnLogin.Size = New Size(-7, -9)"));
+            Assert.That(result.Text, Does.Not.Contain(UnicodeMinusCulture.Minus));
+        });
+    }
+
     [Test]
     public void Write_Web_UsesAddressOf_NotALambda()
     {

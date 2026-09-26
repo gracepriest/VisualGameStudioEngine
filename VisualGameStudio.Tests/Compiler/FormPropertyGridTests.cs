@@ -299,6 +299,7 @@ public class FormPropertyGridTests
     [SetCulture("sv-SE")]
     public void ANegativeIntEdit_UnderAUnicodeMinusCulture_IsWrittenWithAnAsciiHyphen_AndStaysEditable()
     {
+        UnicodeMinusCulture.Require();
         var file = Read(WebCombo);
         var grid = new FormPropertyGridViewModel();
         grid.Load(file);
@@ -325,6 +326,7 @@ public class FormPropertyGridTests
     [SetCulture("sv-SE")]
     public void ANegativeIntrinsicEdit_UnderAUnicodeMinusCulture_ShowsAnAsciiHyphen()
     {
+        UnicodeMinusCulture.Require();
         var file = FormDocumentReader.Read("F.blform", WinFormsForm);
         var grid = new FormPropertyGridViewModel();
         grid.Load(file);
@@ -338,6 +340,67 @@ public class FormPropertyGridTests
             Assert.That(((PixelGeometry)grid.SelectedControl!.Geometry!).X, Is.EqualTo(-5));
             Assert.That(x.RawValue, Is.EqualTo("-5"), "an intrinsic row formats invariantly too");
             Assert.That(x.IntValue, Is.EqualTo(-5));
+        });
+    }
+
+    /// <summary>
+    /// ⛔ The same edit one step further: the grid formatting invariantly is worth nothing if the
+    /// document on disk then holds <c>X="−5"</c> — which reads back as a DEFAULT on any machine
+    /// whose culture does not share the sign.
+    /// </summary>
+    [Test]
+    [SetCulture("sv-SE")]
+    public void ANegativeIntrinsicEdit_UnderAUnicodeMinusCulture_ReachesTheDocumentWithAnAsciiHyphen()
+    {
+        UnicodeMinusCulture.Require();
+        var file = FormDocumentReader.Read("F.blform", WinFormsForm);
+        var grid = new FormPropertyGridViewModel();
+        grid.Load(file);
+        grid.SelectedControl = file.Model.FindById("chk");
+
+        grid.Rows.Single(r => r.Name == "X").IntValue = -5;
+        var written = FormDocumentWriter.Write(file);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(written, Does.Contain("X=\"-5\""));
+            Assert.That(written, Does.Not.Contain(UnicodeMinusCulture.Minus));
+        });
+    }
+
+    private const string WebNumeric = """
+        <WebForm Name="F" Version="1">
+          <Controls>
+            <NumericUpDown Id="num" TabIndex="0" Value="007"/>
+          </Controls>
+        </WebForm>
+        """;
+
+    /// <summary>
+    /// ⛔ The editor pushes its value back as <c>"7"</c> the moment the row renders. For a document
+    /// holding <c>"007"</c> that is the SAME number, so it is not an edit — writing it would rewrite the
+    /// user's attribute and dirty the document for a selection click (spec §2.8).
+    /// </summary>
+    [TestCase("007")]
+    [TestCase(" 7 ")]
+    [TestCase("+7")]
+    public void AnIntRow_PushedBackTheSameNumber_IsANoOp_AndKeepsTheSpelling(string spelling)
+    {
+        var file = Read(WebNumeric.Replace("\"007\"", $"\"{spelling}\""));
+        var grid = new FormPropertyGridViewModel();
+        grid.Load(file);
+        grid.SelectedControl = file.Model.FindById("num");
+        var edits = 0;
+        grid.Edited += (_, _) => edits++;
+
+        var row = grid.Rows.Single(r => r.Name == "Value");
+        row.IntValue = 7;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(row.IsFrozen, Is.False, "precondition: the value is Canon");
+            Assert.That(file.Model.FindById("num")!.Properties["Value"], Is.EqualTo(spelling));
+            Assert.That(edits, Is.Zero);
         });
     }
 

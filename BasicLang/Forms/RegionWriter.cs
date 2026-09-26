@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using BasicLang.Forms.Recognizer;
 
@@ -1018,14 +1019,18 @@ public static class RegionWriter
             return;
         }
 
+        // ⛔ Formatted INVARIANTLY: sv-SE/fi-FI/nb-NO spell a negative with U+2212, and
+        // `New Point(−5, −3)` is CS1056 at csc — from a control dragged past the form's left edge.
         if (pixel.X != 0 || pixel.Y != 0)
         {
-            body.Append($"{inner}{control.Id}.Location = New Point({pixel.X}, {pixel.Y})").Append(newline);
+            body.Append(string.Create(CultureInfo.InvariantCulture,
+                $"{inner}{control.Id}.Location = New Point({pixel.X}, {pixel.Y})")).Append(newline);
         }
 
         if (pixel.Width != 0 || pixel.Height != 0)
         {
-            body.Append($"{inner}{control.Id}.Size = New Size({pixel.Width}, {pixel.Height})").Append(newline);
+            body.Append(string.Create(CultureInfo.InvariantCulture,
+                $"{inner}{control.Id}.Size = New Size({pixel.Width}, {pixel.Height})")).Append(newline);
         }
 
         if (!string.IsNullOrWhiteSpace(pixel.Dock))

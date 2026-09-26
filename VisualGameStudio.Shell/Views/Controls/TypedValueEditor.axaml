@@ -13,8 +13,12 @@
                   IsEnabled="{Binding IsEditable}"
                   OnContent="" OffContent="" Padding="0" Margin="0"/>
 
+    <!-- ⚠ The value is an INTEGER: FormatString="0" shows no decimals, and ParsingNumberStyle="Integer"
+         refuses a typed "1.5" or "1,000" rather than letting the control round it into a number the
+         user never wrote. -->
     <NumericUpDown Value="{Binding IntValue}"
                    Minimum="{Binding Minimum}" Maximum="{Binding Maximum}" Increment="{Binding Increment}"
+                   FormatString="0" ParsingNumberStyle="Integer"
                    Width="110" IsVisible="{Binding IsNumericUpDown}"
                    IsEnabled="{Binding IsEditable}"/>
 
