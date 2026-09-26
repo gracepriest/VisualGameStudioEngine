@@ -476,6 +476,10 @@ internal static class Dump
             ? pd.All.ToString(CultureInfo.InvariantCulture)
             : $"{pd.Left}, {pd.Top}, {pd.Right}, {pd.Bottom}",
         Cursor cur => new CursorConverter().ConvertToInvariantString(cur),
+        // ⚠ ADDED DURING EXECUTION (Task 1, 63045744): without this arm a DateTime falls to the general
+        // formatter at whole-second precision, two instances 50ms apart read identically, and
+        // DateTimePicker.Value classified `reset` instead of `volatile` (Step 6's STOP condition fired).
+        DateTime dt => dt.ToString("o", CultureInfo.InvariantCulture),
         bool b => b ? "True" : "False",
         char ch => ch == '\0' ? null : ch.ToString(),
         Enum e => e.ToString(),
@@ -649,6 +653,15 @@ Expected: 1 passed (with `"Form"` in place of `FormRoot.Kind`, per Step 2).
 ---
 
 ### Task 2: `FormPropertyDef` gains its metadata, aliases, the Size type and target defaults
+
+> ⚠ **EXECUTION NOTES (131605ff + review fixes):** between Task 2 and Task 5 two things are knowingly
+> broken on this unpushed branch and Task 5 closes both: (a) `FormPropertyGridTests.AnEnumRowOffersExactlyTheCatalogsAllowedValues`
+> is red (planned); (b) **web text-align regresses** — the grid offers `MiddleLeft/…`, and
+> `FormAssetEmitter.cs:460-462` still emits `text-align: {value lower-cased}` = `middlecenter`, invalid CSS
+> the browser drops silently. Task 5's `ContentAlignmentHorizontal` converter must be verified against
+> exactly this (a web form with `TextAlign="MiddleCenter"` emits `text-align: center`). The system-colour
+> tests `ASystemColour_IsSystemColorsOnWinForms_NeverColorDot` and the web-refusal test were pulled FORWARD
+> into Task 2's fix commit — Task 4 finds them present and must not duplicate them.
 
 **Files:**
 - Modify: `BasicLang/Forms/FormControlCatalog.cs` — `FormPropertyType` (`:7-15`), the `FormPropertyDef` record (`:59-239`: params `:59-69`, `WinFormsLiteral` `:95-112`, `ColorLiteral` `:126-158`, `IsSourceForm` `:178-197`, `Accepts` `:200-218`, `IsColor` `:220-238`)
@@ -1456,7 +1469,11 @@ Expected: green (one Ignored until Task 6). `FormHandlerPlanTests.cs:45-100` and
 - Modify: `VisualGameStudio.Tests/Compiler/FormPropertyDefTests.cs` (append)
 - Modify: `VisualGameStudio.Tests/Compiler/WinFormsCatalogSweepTests.cs` (append one Integration test)
 
-- [ ] **Step 1: Write the failing tests.** Append to `FormPropertyDefTests`:
+- [ ] **Step 1: Write the failing tests.** ⚠ **EXECUTION NOTE:** `ASystemColour_IsSystemColorsOnWinForms_NeverColorDot`
+  and `ASystemColourWithNoCssEquivalent_IsRefusedOnTheWebOnly` were PULLED FORWARD into Task 2's review-fix
+  commit `c27f0be3` and already exist in `FormPropertyDefTests.cs` — do NOT append them again (CS0111). Append
+  only the remaining tests of this step (the reader test and the sweep test); the two below are kept for
+  reference only. Append to `FormPropertyDefTests`:
 
 ```csharp
     [Test]
@@ -3297,6 +3314,12 @@ internal static class CatalogParity
                     ? null
                     : $"Default is '{row.Default ?? "null"}', WinForms says '{s.Default ?? "null"}' ({s.DefaultKind}) → " +
                       $"Default: {(s.Default == null ? "null" : $"\"{s.Default}\"")}";
+
+            // ⚠ ADDED DURING EXECUTION (Task 1 review, bb970e89): the tool now records `unreadable` when a
+            // getter or ShouldSerializeValue threw — the value was NOT measured.
+            case "unreadable":
+                return "the snapshot could not read this default (a getter or ShouldSerializeValue threw) — " +
+                       "it was not measured; give the row an OracleExemption with the reason";
 
             default:
                 return $"unknown defaultKind '{s.DefaultKind}' — regenerate the snapshot with the current tool";
