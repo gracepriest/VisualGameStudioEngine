@@ -3181,6 +3181,13 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         private string UserCallTarget(IRCall call)
         {
             var name = call.FunctionName ?? string.Empty;
+
+            // `Integer.Parse(s)` / `String.Format(...)`: the receiver is a TYPE KEYWORD, spelled as
+            // C#'s own keyword. `Integer` is no C# type (CS0103), and SanitizeName escaped `String`
+            // to `@String`, which only resolves through a `using System;` that may be absent.
+            if (PrimitiveStaticSurface.IsKeywordReceiver(name, out var keywordType, out var keywordMember))
+                return $"{PrimitiveStaticSurface.CSharpKeyword[keywordType]}.{keywordMember}";
+
             var spelled = name.Contains(".")
                 ? string.Join(".", name.Split('.').Select(SanitizeName))
                 : SanitizeName(name);
@@ -3280,6 +3287,11 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                         return EmitConstant(c);
 
                     case IRVariable v:
+                        // A type KEYWORD as a static receiver (`Integer.MaxValue`, `String.Empty`),
+                        // spelled as C#'s keyword. A keyword can never name a user variable.
+                        if (PrimitiveStaticSurface.IsTypeKeyword(v.Name))
+                            return PrimitiveStaticSurface.CSharpKeyword[v.Name];
+
                         // Check if this is a lambda reference
                         if (v.Name != null && v.Name.StartsWith("__lambda_"))
                         {

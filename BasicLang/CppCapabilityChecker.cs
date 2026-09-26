@@ -462,6 +462,13 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                     break;
 
                 case IRFieldAccess fa:
+                    // A type KEYWORD's Shared property (`Integer.MaxValue`, `String.Empty`).
+                    if (fa.Object is IRVariable keywordRecv && PrimitiveStaticSurface.IsTypeKeyword(keywordRecv.Name))
+                    {
+                        CheckPrimitiveStatic(keywordRecv.Name, fa.FieldName, argCount: 0, isCallSyntax: false, funcName, diags);
+                        break;
+                    }
+
                     // Static form: the receiver is an IRVariable literally NAMED after the
                     // type ("DateTime.Now"), unless a value of that name is in scope.
                     if (fa.Object is IRVariable staticRecv
@@ -534,6 +541,13 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             var name = call.FunctionName;
             var argCount = call.Arguments?.Count ?? 0;
 
+            // A type KEYWORD's Shared member (`String.Format(...)`, `Integer.Parse(s)`).
+            if (PrimitiveStaticSurface.IsKeywordReceiver(name, out var keywordType, out var keywordMember))
+            {
+                CheckPrimitiveStatic(keywordType, keywordMember, argCount, isCallSyntax: true, funcName, diags);
+                return;
+            }
+
             var dot = name.LastIndexOf('.');
             if (dot > 0 && dot < name.Length - 1)
             {
@@ -565,6 +579,33 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             if (argCount > 0 && !_moduleFunctionNames.Contains(name)
                 && ConversionIntrinsicTargets.TryGetValue(name, out var intrinsicTarget))
                 CheckNativeConversion(call.Arguments[0]?.Type?.Name, intrinsicTarget, funcName, diags);
+        }
+
+        /// <summary>
+        /// Validate a type keyword's Shared member against <see cref="PrimitiveStaticSurface"/>. A member
+        /// the runtime does not implement used to reach g++ as a flattened name (`StringCompare(...)`)
+        /// and fail there, after "Compilation successful" — or, for a keyword property, as an
+        /// undeclared `Integer`.
+        /// </summary>
+        private void CheckPrimitiveStatic(string typeName, string memberName, int argCount,
+            bool isCallSyntax, string funcName, List<string> diags)
+        {
+            if (!PrimitiveStaticSurface.TryGet(typeName, memberName, out var row))
+            {
+                diags.Add($"'{typeName}.{memberName}' is not implemented on the C++ backend (in '{funcName}'). " +
+                          $"Supported Shared members of '{typeName}': " +
+                          string.Join(", ", PrimitiveStaticSurface.Rows
+                              .Where(r => string.Equals(r.TypeName, typeName, StringComparison.OrdinalIgnoreCase))
+                              .Select(r => r.MemberName)));
+                return;
+            }
+
+            // A property may be written with or without parentheses; a method must be called with an
+            // argument count the runtime has an overload for.
+            if (!row.IsProperty && (!isCallSyntax || !row.AcceptsArgCount(argCount)))
+            {
+                diags.Add($"'{row.TypeName}.{row.MemberName}' does not take {argCount} argument(s) on the C++ backend (in '{funcName}')");
+            }
         }
 
         /// <summary>

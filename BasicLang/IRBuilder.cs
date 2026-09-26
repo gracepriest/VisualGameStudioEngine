@@ -5297,7 +5297,12 @@ namespace BasicLang.Compiler.IR
                                           _locals.ContainsKey(objVar.Name);
 
                     // Check if it's a .NET type (contains dot or is known .NET type name)
-                    bool isNetType = objVar.Name.Contains('.') || IsKnownNetStaticType(objVar.Name);
+                    // A type KEYWORD (`Integer.Parse`, `Char.IsDigit`) is always a static receiver —
+                    // a keyword can name no variable. IsKnownNetStaticType knows `String` but not
+                    // `Integer`, which sent `Integer.Parse(s)` down the INSTANCE arm as a call on a
+                    // variable named Integer.
+                    bool isNetType = objVar.Name.Contains('.') || IsKnownNetStaticType(objVar.Name)
+                        || PrimitiveStaticSurface.IsTypeKeyword(objVar.Name);
 
                     // A declared name is never a type name, so the guard applies to BOTH
                     // sources of type-ness, not just the class-name one. It used to read
