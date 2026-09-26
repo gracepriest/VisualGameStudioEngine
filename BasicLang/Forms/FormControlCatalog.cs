@@ -604,7 +604,7 @@ public sealed record FormPropertyDef(
     /// never written anywhere. Throws for a usable value, as <see cref="DescribeRefusal"/> does.
     /// </summary>
     public string DescribeRefusedEdit(string value, FormTarget target) =>
-        RefusalReason(value, target) + $" It was not applied; {Name} keeps its previous value.";
+        RefusalReason(value, target) + $" It was not applied; {Name} is unchanged.";
 
     /// <summary>The reason alone, shared by both endings — ONE predicate, ONE set of texts.</summary>
     private string RefusalReason(string value, FormTarget target)

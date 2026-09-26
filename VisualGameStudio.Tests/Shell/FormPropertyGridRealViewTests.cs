@@ -5,7 +5,7 @@ using Avalonia.Headless;
 using Avalonia.Headless.NUnit;
 using Avalonia.Input;
 using Avalonia.Media;
-using Avalonia.Media.Immutable;
+using Avalonia.Markup.Xaml.Styling;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using BasicLang.Forms;
@@ -177,24 +177,33 @@ public class FormPropertyGridRealViewTests
         var view = new CodeEditorDocumentView { DataContext = vm };
         var window = new Window { Width = width, Height = height, Content = view };
 
-        // ⚠ The IDE's theme brushes, which the headless app (FluentTheme alone) does not load and the IDE
-        // always does (AppStyles.axaml; ThemeManager only overrides them). Measured: without IdeBg a
-        // category header's presenter has a NULL background, is not hit-testable, and a real click on it
-        // falls through to the list item — a collapse that "does not work" here and works in the IDE.
-        foreach (var key in new[] { "IdeBg", "IdeFg", "IdePanelBg", "IdeBorder", "IdeHeaderBg" })
+        // ⚠ The IDE's OWN styles and theme brushes (App.axaml includes exactly this file), which the headless
+        // app (FluentTheme alone) does not load. Measured: without IdeBg a category header's presenter has a
+        // NULL background, is not hit-testable, and a real click on it falls through to the list item — a
+        // collapse that "does not work" here and works in the IDE.
+        window.Styles.Add(new StyleInclude(new Uri("avares://VisualGameStudio/"))
         {
-            window.Resources[key] = new ImmutableSolidColorBrush(Color.FromRgb(0x20, 0x20, 0x20));
+            Source = new Uri("avares://VisualGameStudio/Resources/Styles/AppStyles.axaml")
+        });
+
+        try
+        {
+            window.Show();
+            window.UpdateLayout();
+            Dispatcher.UIThread.RunJobs();
+
+            var grid = view.FindControl<FormPropertyGridView>("PropertyGridView")
+                       ?? throw new InvalidOperationException("PropertyGridView not found in the real document view");
+            var canvas = view.FindControl<FormCanvasControl>("DesignCanvas")
+                         ?? throw new InvalidOperationException("DesignCanvas not found in the real document view");
+            Assert.That(window.FindResource("IdeBg"), Is.Not.Null, "precondition: the IDE's styles are loaded");
+            return new Rig { Vm = vm, Window = window, Grid = grid, Canvas = canvas, Files = files };
         }
-
-        window.Show();
-        window.UpdateLayout();
-        Dispatcher.UIThread.RunJobs();
-
-        var grid = view.FindControl<FormPropertyGridView>("PropertyGridView")
-                   ?? throw new InvalidOperationException("PropertyGridView not found in the real document view");
-        var canvas = view.FindControl<FormCanvasControl>("DesignCanvas")
-                     ?? throw new InvalidOperationException("DesignCanvas not found in the real document view");
-        return new Rig { Vm = vm, Window = window, Grid = grid, Canvas = canvas, Files = files };
+        catch
+        {
+            window.Close(); // ⛔ never leave a window alive with its bindings live
+            throw;
+        }
     }
 
     /// <summary>Selects through the real canvas: a click on the control's own rectangle.</summary>
@@ -415,6 +424,8 @@ public class FormPropertyGridRealViewTests
         var box = rig.EditorBox(rig.Row("ClientSize"));
         var shown = box.Text;
         var before = rig.Vm.Text;
+        var edits = 0;
+        rig.GridVm.Edited += (_, _) => edits++;
         Assume.That(shown, Is.Not.Empty, "precondition: the form's size is shown");
 
         rig.Click(box);
@@ -431,6 +442,129 @@ public class FormPropertyGridRealViewTests
         {
             Assert.That(box.Text, Is.EqualTo(shown), "the editor snapped back to the form's real size");
             Assert.That(rig.Vm.Text, Is.EqualTo(before), "and the file is unchanged");
+            Assert.That(edits, Is.Zero, "a refusal is not an edit");
+            // ⚠ PINNED SILENCE, deliberately: the catalog ACCEPTS "0, 300" (it parses as a Size) and only the
+            // store refuses it, and a store write returning false also means "the same value" — so there is
+            // no refusal to name. Follow-up in the pre-flight notes: move the positivity rule into the catalog.
+            Assert.That(rig.Row("ClientSize").Refusal, Is.Null, "no reason is given today");
+            Assert.That(rig.GridVm.DescriptionBody, Does.Not.Contain("0, 300"));
+        });
+    }
+
+    // ==================================================================
+    // The natural commit gesture: type in a row, then click ANOTHER control on the canvas
+    // ==================================================================
+
+    /// <summary>
+    /// Type into a row, then click a different control on the canvas: the press moves focus (the LostFocus
+    /// commit) AND the selection (a rebuild that replaces every row and recycles their containers). The
+    /// value must land on the control it was typed for — never lost, never written onto the new selection.
+    /// </summary>
+    [AvaloniaTest]
+    public void TypingAValue_ThenClickingAnotherControlOnTheCanvas_CommitsItToTheFirstControl()
+    {
+        using var rig = Open();
+        SelectOnCanvas(rig, "lbl");
+        var box = rig.EditorBox(rig.Row("Text"));
+
+        rig.Click(box);
+        rig.Window.KeyPress(Key.A, RawInputModifiers.Control);
+        rig.Window.KeyRelease(Key.A, RawInputModifiers.Control);
+        rig.Window.KeyTextInput("World");
+        Dispatcher.UIThread.RunJobs();
+
+        rig.ClickOnCanvas(rig.CanvasCentreOf(rig.Control("btn")));
+        rig.Window.UpdateLayout();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(rig.GridVm.SelectedControl, Is.SameAs(rig.Control("btn")), "precondition: the click selected btn");
+            Assert.That(rig.Control("lbl").Properties.GetValueOrDefault("Text"), Is.EqualTo("World"), "committed to lbl");
+            Assert.That(rig.Vm.Text, Does.Contain("Text=\"World\""), "and to the file");
+            Assert.That(rig.Control("btn").Properties.ContainsKey("Text"), Is.False, "never onto the new selection");
+            Assert.That(rig.Row("Text").StringValue, Is.Empty, "the grid shows btn's own (absent) Text");
+        });
+    }
+
+    /// <summary>
+    /// The same gesture with a REFUSED value. It must not reach either control — and the user must still be
+    /// able to learn why, although the rows it was typed into are gone. Decided behaviour: the refusal is
+    /// CARRIED over the selection change once, titled with the control it belongs to ("lbl.ForeColor"),
+    /// until the next edit, row pick or selection change.
+    /// </summary>
+    [AvaloniaTest]
+    public void ARefusedValue_ThenClickingAnotherControlOnTheCanvas_IsNotWritten_AndItsReasonStaysVisible()
+    {
+        using var rig = Open();
+        SelectOnCanvas(rig, "lbl");
+        var box = rig.EditorBox(rig.Row("ForeColor"));
+        var before = rig.Vm.Text;
+
+        rig.Click(box);
+        rig.Window.KeyTextInput("12345");
+        Dispatcher.UIThread.RunJobs();
+
+        rig.ClickOnCanvas(rig.CanvasCentreOf(rig.Control("btn")));
+        rig.Window.UpdateLayout();
+        TestContext.WriteLine($"[canvas-click] title=\"{rig.GridVm.DescriptionTitle}\" body=\"{rig.GridVm.DescriptionBody}\"");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(rig.GridVm.SelectedControl, Is.SameAs(rig.Control("btn")), "precondition: the click selected btn");
+            Assert.That(rig.Control("lbl").Properties.ContainsKey("ForeColor"), Is.False, "never written to lbl");
+            Assert.That(rig.Control("btn").Properties.ContainsKey("ForeColor"), Is.False, "nor to btn");
+            Assert.That(rig.Vm.Text, Is.EqualTo(before), "the file is unchanged");
+            Assert.That(rig.GridVm.DescriptionTitle, Is.EqualTo("lbl.ForeColor"), "the pane names whose value it was");
+            Assert.That(rig.GridVm.DescriptionBody, Does.Contain("'12345'"), "and why it was refused");
+            Assert.That(rig.EditorBox(rig.Row("ForeColor")).Text, Is.Empty, "btn's ForeColor editor shows btn's value");
+        });
+
+        // Picking a row asks the pane about THAT row: the carried refusal is retracted.
+        rig.GridVm.SelectedItem = rig.Row("Text");
+        Assert.That(rig.GridVm.DescriptionBody, Does.Not.Contain("'12345'"));
+    }
+
+    /// <summary>
+    /// The Int editor's snap-back, through the real NumericUpDown: Width is clamped to at least 1, so with
+    /// Width already 1, typing 0 changes nothing — the store reports no change, and the editor must show
+    /// the 1 the model still holds, not the 0 it was given.
+    /// </summary>
+    [AvaloniaTest]
+    public void AnIntTheStoreClampsBackToTheSameValue_SnapsTheRealNumericUpDownBack()
+    {
+        using var rig = Open();
+        SelectOnCanvas(rig, "lbl");
+        var row = rig.Row("Width");
+        var spinner = rig.Container(row).GetVisualDescendants().OfType<NumericUpDown>().Single(n => n.IsEffectivelyVisible);
+        var text = spinner.GetVisualDescendants().OfType<TextBox>().First();
+
+        void Type(string value, double dx)
+        {
+            rig.Click(text, dx);
+            rig.Window.KeyPress(Key.A, RawInputModifiers.Control);
+            rig.Window.KeyRelease(Key.A, RawInputModifiers.Control);
+            rig.Window.KeyTextInput(value);
+            Dispatcher.UIThread.RunJobs();
+            rig.Click(rig.Search, dx);
+            rig.Window.UpdateLayout();
+        }
+
+        Type("1", 0);
+        Assume.That(((PixelGeometry)rig.Control("lbl").Geometry!).Width, Is.EqualTo(1), "precondition: Width is 1");
+        var before = rig.Vm.Text;
+        var edits = 0;
+        rig.GridVm.Edited += (_, _) => edits++;
+
+        Type("0", 8);
+        TestContext.WriteLine($"[int-snap-back] Value={spinner.Value} Text=\"{text.Text}\"");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(((PixelGeometry)rig.Control("lbl").Geometry!).Width, Is.EqualTo(1), "clamped: still 1");
+            Assert.That(spinner.Value, Is.EqualTo(1m), "the NumericUpDown snapped back to 1");
+            Assert.That(text.Text, Is.EqualTo("1"), "and shows it");
+            Assert.That(rig.Vm.Text, Is.EqualTo(before), "the file is unchanged");
+            Assert.That(edits, Is.Zero, "no change, no edit");
         });
     }
 

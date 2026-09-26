@@ -215,7 +215,7 @@ public class FormPropertyRowDefaultTests
         {
             Assert.That(grid.DescriptionTitle, Is.EqualTo("ForeColor"));
             Assert.That(grid.DescriptionBody, Is.EqualTo(
-                "'12345' is not a valid Color. It was not applied; ForeColor keeps its previous value."));
+                "'12345' is not a valid Color. It was not applied; ForeColor is unchanged."));
             Assert.That(grid.DescriptionBody, Does.Not.Contain("preserved exactly as written"));
             Assert.That(Row(grid, "ForeColor").Refusal, Is.EqualTo(grid.DescriptionBody));
         });
@@ -225,7 +225,7 @@ public class FormPropertyRowDefaultTests
     [TestCase("a good edit on the same row")]
     [TestCase("a good edit on another row")]
     [TestCase("selecting another row")]
-    [TestCase("selecting another control")]
+    // (A selection change CARRIES a standing refusal once: AStandingRefusal_IsCarriedOverOneSelectionChange_….)
     public void ARefusal_IsRetracted_By(string what)
     {
         var (file, grid) = Open(
@@ -238,10 +238,55 @@ public class FormPropertyRowDefaultTests
             case "a good edit on the same row": Row(grid, "ForeColor").StringValue = "Red"; break;
             case "a good edit on another row": Row(grid, "Text").StringValue = "Hi"; break;
             case "selecting another row": grid.SelectedItem = Row(grid, "Text"); break;
-            case "selecting another control": grid.SelectedControl = file.Model.FindById("btn"); break;
         }
 
         Assert.That(grid.DescriptionBody, Does.Not.Contain("'12345'"), what);
+    }
+
+    /// <summary>
+    /// ⛔ A row of the PREVIOUS selection can still be pushed to after the grid rebuilt (a late LostFocus
+    /// from a detached or recycled editor). Its refusal must not appear, unlabelled, over the rows of the
+    /// control now shown — the pane would be describing a property of something else as if it were this.
+    /// </summary>
+    [Test]
+    public void ALateRefusalFromARowOfThePreviousSelection_IsNotShownOverTheNewOne()
+    {
+        var (file, grid) = Open(
+            "<Label Id=\"lbl\" TabIndex=\"0\"/><Button Id=\"btn\" TabIndex=\"1\"/>", "lbl");
+        var orphan = Row(grid, "ForeColor");
+        grid.SelectedControl = file.Model.FindById("btn");
+
+        orphan.StringValue = "12345";
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(grid.DescriptionBody, Does.Not.Contain("'12345'"));
+            Assert.That(grid.DescriptionTitle, Is.Not.EqualTo("ForeColor"));
+        });
+    }
+
+    /// <summary>
+    /// A refusal still standing when the selection moves is CARRIED once, titled with the control it
+    /// belongs to — the natural gesture (type, then click another control) retracted it before anyone
+    /// could read it. The next row pick, edit or selection change retracts it.
+    /// </summary>
+    [Test]
+    public void AStandingRefusal_IsCarriedOverOneSelectionChange_TitledWithItsControl()
+    {
+        var (file, grid) = Open(
+            "<Label Id=\"lbl\" TabIndex=\"0\"/><Button Id=\"btn\" TabIndex=\"1\"/><TextBox Id=\"txt\" TabIndex=\"2\"/>", "lbl");
+        Row(grid, "ForeColor").StringValue = "12345";
+
+        grid.SelectedControl = file.Model.FindById("btn");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(grid.DescriptionTitle, Is.EqualTo("lbl.ForeColor"));
+            Assert.That(grid.DescriptionBody, Does.Contain("'12345'"));
+        });
+
+        grid.SelectedControl = file.Model.FindById("txt");
+        Assert.That(grid.DescriptionBody, Does.Not.Contain("'12345'"), "carried ONCE, not for ever");
     }
 
     /// <summary>A second identical refusal after a retraction still reaches the pane.</summary>

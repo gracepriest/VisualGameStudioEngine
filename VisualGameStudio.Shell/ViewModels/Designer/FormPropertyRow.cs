@@ -538,6 +538,13 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
             return;
         }
 
+        // ⚠ An editor pushing BACK the echoed text (a future ranged NumericUpDown coercing it) must not start
+        // another commit, refusal and echo — that would loop.
+        if (_editorEcho != null)
+        {
+            return;
+        }
+
         // ⛔ The DECISION is the catalog's (FormPropertyDef.Judge — a pure, table-tested function: no-op,
         // reset, refuse or write, with every rule and its reason stated there). This row only carries
         // it out. ⚠ DELIBERATE no-ops, per Judge: a case-only change (`middleleft` → `MiddleLeft`,
@@ -629,9 +636,17 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
     /// last one it read — which is the very value being snapped back to ("" before, "" after). So the
     /// posted step first ECHOES the pushed text (the binding now holds what the box shows: no visible
     /// change), then raises the real value, which now differs and is applied. The same holds for the Int
-    /// editor (Width pushed to 0 and clamped back to the 1 it already was).</para>
+    /// editor (Width pushed to 0 and clamped back to the 1 it already was — measured through the real
+    /// NumericUpDown by <c>AnIntTheStoreClampsBackToTheSameValue_SnapsTheRealNumericUpDownBack</c>).</para>
     ///
     /// <para>The synchronous raise stays for every listener that is not a binding mid-push.</para>
+    ///
+    /// <para>The post runs at Default priority, above Input, so a second edit cannot be processed between the
+    /// refusal and its snap-back; and a post that lands after a rebuild raises on an orphan row that no live
+    /// binding reads any more — harmless.</para>
+    ///
+    /// <para>⚠ View-model [Test]s never drain the dispatcher, so the posted echo is covered ONLY by the
+    /// real-view tests.</para>
     /// </summary>
     /// <param name="pushed">The text the editor pushed, and still shows.</param>
     private void RaiseEditorRefresh(string pushed)

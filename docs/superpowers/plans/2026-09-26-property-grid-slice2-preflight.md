@@ -270,6 +270,20 @@ Follow this document **alongside** the plan. Where the two disagree, this docume
     defines them (AppStyles.axaml), so the rig supplies them — not a product defect.
   - Measured sound: the selector after paste, cut and undo (undo re-syncs through `Load`; the store and
     the grid agree afterwards); selection both ways at zoom 0.53 and 1.0.
+  - **Task 14 review fixes:**
+    - The natural gesture — type into a row, then CLICK ANOTHER CONTROL on the canvas — measured: a good
+      value lands on the control it was typed for (the LostFocus commit runs BEFORE the rebuild; nothing is
+      written onto the new selection). A refused value was refused before the rebuild too, and the
+      rebuild then retracted the reason before anyone could read it. Now a refusal standing at a selection
+      change is CARRIED over that one rebuild, titled with its owner (`lbl.ForeColor`), until the next row
+      pick, edit, refusal or selection change.
+    - `Rebuild` unsubscribes the old rows, and the handler ignores a row no longer in `Rows`: a late push
+      into a row of the previous selection is not described, unlabelled, over another control's rows.
+    - The Int snap-back is now MEASURED through the real NumericUpDown (Width 1, typed 0, clamped to 1).
+    - The rig loads the IDE's real `AppStyles.axaml` (the file App.axaml includes), not a copied brush list.
+    - `DescribeRefusedEdit` ends "…It was not applied; {Name} is unchanged."
+    - **Follow-up:** move ClientSize positivity into the catalog so Accepts/Judge refuse `0, 300` with a
+      reason (today the store refuses it silently — pinned in `AClientSizeTheStoreRefuses_…`).
 
 ## CONFIRMED SOUND
 - Slice 1 has not already implemented anything slice 2 adds: `SameValue`, `IsPresent`/`IsDefaultShown`/`IsBold`/`CanReset`/`ResetCommand`, `Category`/`Description` on the row, `FormRootValues.CanReset`, `DisplayItems`/`Objects`/`SelectionRequested`, and FormRoot-driven form rows. Today's `AddFormRows` is still hand-written, `FormPropertyGridViewModel.cs:228-267`.

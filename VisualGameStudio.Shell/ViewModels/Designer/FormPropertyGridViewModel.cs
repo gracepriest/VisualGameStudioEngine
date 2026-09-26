@@ -126,14 +126,31 @@ public partial class FormPropertyGridViewModel : ObservableObject
 
     /// <summary>
     /// The row whose last typed value was REFUSED (spec §7), while that refusal is the newest thing the
-    /// grid has to say: a successful edit anywhere, a different row selected, or a new selection retracts
-    /// it. ⚠ Not SelectedRow: typing into a row's editor does not select the row.
+    /// grid has to say: a successful edit anywhere or a different row selected retracts it, and a new
+    /// selection turns it into <see cref="_carriedRefusal"/>. ⚠ Not SelectedRow: typing into a row's editor
+    /// does not select the row.
+    ///
+    /// <para>⚠ By design a refusal can outlive its row's VISIBILITY: a search that filters the row out, or a
+    /// collapse, leaves the pane still saying why the value was refused — the refusal is about the edit the
+    /// user just made, not about what the list shows.</para>
     /// </summary>
     private FormPropertyRow? _refusedRow;
 
+    /// <summary>
+    /// A refusal still standing when the SELECTION moved, carried over that one rebuild and titled with the
+    /// control it belongs to (<c>lbl.ForeColor</c>). The natural gesture — type into a row, then click
+    /// another control on the canvas — commits (and refuses) on the press and rebuilds the rows in the same
+    /// press, so without this the reason was retracted before anyone could read it. Retracted by the next
+    /// row pick, edit, refusal or selection change: carried ONCE.
+    /// </summary>
+    private (string Title, string Body)? _carriedRefusal;
+
+    /// <summary>Whose rows are shown — the owner a carried refusal is titled with.</summary>
+    private string? _shownOwner;
+
     /// <summary>The description pane's title: the property's name, or a prompt when nothing is picked.</summary>
     public string DescriptionTitle =>
-        (_refusedRow ?? SelectedRow)?.Name ?? (IsEmpty ? string.Empty : "Properties");
+        _refusedRow?.Name ?? _carriedRefusal?.Title ?? SelectedRow?.Name ?? (IsEmpty ? string.Empty : "Properties");
 
     /// <summary>
     /// The description pane's body (spec §3) — the property's Description (its type when it has none),
@@ -152,6 +169,11 @@ public partial class FormPropertyGridViewModel : ObservableObject
             if (_refusedRow?.Refusal is { } refusal)
             {
                 return refusal;
+            }
+
+            if (_carriedRefusal is { } carried)
+            {
+                return carried.Body;
             }
 
             if (SelectedRow is not { } row)
@@ -174,30 +196,33 @@ public partial class FormPropertyGridViewModel : ObservableObject
     partial void OnSelectedRowChanged(FormPropertyRow? value)
     {
         // Choosing a different row asks the pane about THAT row; the refusal is retracted.
-        if (value != null && !ReferenceEquals(value, _refusedRow))
+        if (value != null)
         {
-            _refusedRow = null;
+            _carriedRefusal = null;
+            if (!ReferenceEquals(value, _refusedRow))
+            {
+                _refusedRow = null;
+            }
         }
 
-        OnPropertyChanged(nameof(DescriptionTitle));
-        OnPropertyChanged(nameof(DescriptionBody));
+        RaiseDescription();
     }
 
     /// <summary>Every row edit reaches the host through here — and retracts a standing refusal.</summary>
     private void RaiseEdited()
     {
-        SetRefusedRow(null);
+        if (_refusedRow != null || _carriedRefusal != null)
+        {
+            _refusedRow = null;
+            _carriedRefusal = null;
+            RaiseDescription();
+        }
+
         Edited?.Invoke(this, EventArgs.Empty);
     }
 
-    private void SetRefusedRow(FormPropertyRow? row)
+    private void RaiseDescription()
     {
-        if (ReferenceEquals(_refusedRow, row))
-        {
-            return;
-        }
-
-        _refusedRow = row;
         OnPropertyChanged(nameof(DescriptionTitle));
         OnPropertyChanged(nameof(DescriptionBody));
     }
@@ -210,15 +235,24 @@ public partial class FormPropertyGridViewModel : ObservableObject
             return;
         }
 
+        // ⛔ A row of a PREVIOUS selection (a late push from a detached or recycled editor) is not described
+        // over the rows now shown. Rebuild unsubscribes old rows; this guards a push already in flight.
+        if (!Rows.Contains(row))
+        {
+            return;
+        }
+
         if (row.Refusal != null)
         {
-            // ⚠ Raised even when the SAME row refuses again — its text may differ.
-            _refusedRow = null;
-            SetRefusedRow(row);
+            // Set and raised even when the SAME row refuses again — its text may differ.
+            _refusedRow = row;
+            _carriedRefusal = null;
+            RaiseDescription();
         }
         else if (ReferenceEquals(_refusedRow, row))
         {
-            SetRefusedRow(null);
+            _refusedRow = null;
+            RaiseDescription();
         }
     }
 
@@ -472,6 +506,19 @@ public partial class FormPropertyGridViewModel : ObservableObject
 
     private void Rebuild()
     {
+        // A refusal still standing is carried over this ONE rebuild, titled with its owner (see
+        // _carriedRefusal); a carried one from the rebuild before is not carried again.
+        var carry = _refusedRow?.Refusal is { } refusal
+            ? (Title: $"{_shownOwner ?? "?"}.{_refusedRow.Name}", Body: refusal)
+            : ((string Title, string Body)?)null;
+
+        // ⛔ Unsubscribed BEFORE the rows go: an editor detached or recycled by this rebuild can still push
+        // into its old row, and that row's refusal must not reach the pane over another control's rows.
+        foreach (var old in Rows)
+        {
+            old.PropertyChanged -= OnRowPropertyChanged;
+        }
+
         Rows.Clear();
 
         var control = SelectedControl;
@@ -520,8 +567,11 @@ public partial class FormPropertyGridViewModel : ObservableObject
         SelectedItem = null;
         SelectedRow = null;
 
-        // A refusal belongs to a row of the previous selection: gone with it. Each new row reports its own.
+        // A refusal belongs to a row of the previous selection: its row is gone, so it survives only as the
+        // carried, owner-titled text. Each new row reports its own.
         _refusedRow = null;
+        _carriedRefusal = carry;
+        _shownOwner = Header;
         foreach (var row in Rows)
         {
             row.PropertyChanged += OnRowPropertyChanged;
