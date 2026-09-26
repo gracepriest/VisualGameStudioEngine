@@ -8569,7 +8569,31 @@ namespace BasicLang.Compiler.SemanticAnalysis
         public void Visit(ExpressionStatementNode node)
         {
             node.Expression.Accept(this);
+
+            // ⛔ A literal or an operator expression on a line of its own does nothing: VB
+            // refuses it ("Expression is not a statement"). MEASURED on master dc949a24:
+            // `42` alone, or `a + b`, reported "Compilation successful!" on every backend and
+            // the value was silently discarded — usually a typo for an assignment or a call.
+            // A bare name or member access is NOT refused: in VB `Foo` / `obj.Method` is a call
+            // to a parameterless Sub. `x++` / `x--` are statements with an effect.
+            if (IsValueOnlyExpression(node.Expression))
+                Error("Expression is not a statement: its value would be discarded. " +
+                      "Assign it, pass it to a call, or remove it.", node.Line, node.Column);
         }
+
+        /// <summary>
+        /// An expression that can never have an effect as a statement: a literal (plain or
+        /// interpolated), a tuple literal, or an operator applied to operands.
+        /// </summary>
+        private static bool IsValueOnlyExpression(ExpressionNode expression) => expression switch
+        {
+            LiteralExpressionNode => true,
+            InterpolatedStringNode => true,
+            TupleLiteralNode => true,
+            BinaryExpressionNode => true,
+            UnaryExpressionNode unary => unary.Operator is not ("++" or "--"),
+            _ => false,
+        };
 
         // ====================================================================
         // Expressions
