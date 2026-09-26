@@ -1601,6 +1601,13 @@ Expected: green. `SystemColors` lives in `System.Drawing`, the same namespace `C
 
 ### Task 5: TextAlign per row with legacy aliases; the catalog-driven CSS walk; the grid's alias safety
 
+> ⚠ **CARRIED FROM TASK 4's REVIEW (56f42db8):** until this task lands, `FormAssetEmitter.cs:450-458` writes
+> `color: {value}` for ANY value — a web form the reader marks Degraded (`ForeColor="ActiveCaption"`) still gets
+> `color: ActiveCaption`, and a Canon `Control` comes out `color: Control` instead of `ButtonFace`. This task's
+> `FormCss.Declaration` (gated on `Accepts(value, FormTarget.Web)`) fixes it. **Add a web-ONLY-refused system
+> colour (`ActiveCaption`) to `ADegradedValue_EmitsNoDeclaration`** (it covers only values refused on every
+> target), and assert `ForeColor="Control"` on the web emits `color: ButtonFace`.
+
 **Files:**
 - Modify: `BasicLang/Forms/FormControlCatalog.cs` — shared defs (`:578-598`), the Label/Button/LinkLabel rows (`:615`, `:630`, `:696`), strip/item `Visible` rows (`:907`, `:925`, `:939`, `:952`, `:964`, `:973`, `:985`)
 - Create: `BasicLang/Forms/FormCss.cs`
@@ -2834,8 +2841,10 @@ and after the `UnknownAttributes` loop (`:100-103`) add:
                 {
                     diagnostics.Add(new DesignDiagnostic(
                         DesignCodes.DegradedProperty,
-                        $"{DesignCodes.DegradedProperty}: 'form.{row.Name}' is '{value}', which is not a valid " +
-                        $"{row.Type}, so it is not written into the generated code. The value is preserved in the document.",
+                        // ⚠ EXECUTION NOTE (Task 4 review, 2048ba32): compose from the ONE refusal text, exactly as
+                        // RegionWriter's control site now does — never a hand-written "is not a valid" copy.
+                        $"{DesignCodes.DegradedProperty}: 'form.{row.Name}': " +
+                        $"{row.DescribeRefusal(value, FormTarget.WinForms)} It is not written into the generated code.",
                         filePath, 0, 0, IsWarning: true));
                     continue;
                 }
@@ -2894,6 +2903,14 @@ Expected: green. `TheFormsOwnCaptionAndSize_ReachTheGeneratedCode` (`WinFormsCat
 ---
 
 ### Task 7: The retarget reads `FormRoot`
+
+> ⚠ **CARRIED FROM TASK 4's REVIEW (56f42db8):** `FormRetarget.ConvertProperties` (`FormRetarget.cs:313-336`)
+> copies a CONTROL property whose value the destination refuses (a `.blform` `ForeColor="ActiveCaption"` →
+> `.blwebform`, where it opens Degraded) with no finding. The value is preserved, but CLAUDE.md's retarget rule
+> is that every loss is NAMED. Add: when `property.Accepts(value, destination)` is false after crossing, warn
+> (BL8024 `RetargetPropertyLost` wording "…crosses but is not usable on the web: <DescribeRefusal>", or a new
+> code if the owner of the wording prefers) — with a test both directions, and include it in the root/control
+> retarget sweep.
 
 **Files:**
 - Modify: `BasicLang/Forms/FormRetarget.cs` — `ConvertRoot` (`:189-227`), `IsRootAttributeModelledOn` (`:229-230`), `ToCells` lost list (`:487-490`), `ToPixels` caption (`:555`)
@@ -5958,6 +5975,13 @@ git commit -F "$sp\slice2-commit.txt"
 
 ## Slice 3 — The D1 property batches, both targets (TASK granularity — expand before starting)
 
+> ⚠ **CARRIED FROM SLICE 1 (Task 5 review, 0dbdb63c):** a web value the catalog refuses (Degraded, e.g.
+> `BackColor="ActiveCaption"`) is now silently LEFT OUT of the stylesheet; `RegionWriter` reports BL8009 only for
+> WinForms. Slice 3 adds many CSS-mapped rows, so add the web counterpart here: a build diagnostic naming each
+> refused web value (reuse BL8009's `DescribeRefusal` composition), with a test. Also: every new String row given a
+> `CssProperty` must use a safe converter — the Task 5 fix commit added a catalog test that refuses a String row
+> with `CssConverter.None`.
+
 **Goal:** the commonly-used ~15–25 properties per control and ~20 on the Form (spec D1, §2.3's list, the reference's "Common" column), emitted on both targets, with the types they need.
 
 - **Task 3.1 — New types: Font, Padding, Point, Cursor** (scope call S1). `FormControlCatalog.cs` (`FormPropertyType`, `Accepts`, `WinFormsLiteral`, `IsSourceForm`, `Canonical`), `FormCss.cs` (named converters: Font → `font-family/-size/-weight/-style/text-decoration`, Padding → `padding`, Cursor → a `Cursors`→CSS mapping table owned in one place). Each type: stored form (§2.2 table), ONE-statement emission (`New Font("Segoe UI", 9F, FontStyle.Bold Or FontStyle.Italic)` — ⚠ measure `Or` on enum flags through BasicLang FIRST: `RegionWriter.AnchorExpression` records that `Or` demands Boolean operands; the fallback is `CType(n, FontStyle)` as Anchor uses), web declaration, D9 Degraded for malformed values. Tests: `FormPropertyDefTests` per type; `WinFormsCatalogSweepTests.SampleValue` arms for each; one csc compile per new shape (spec §8); `FormCssTests` per converter.
@@ -5981,6 +6005,11 @@ git commit -F "$sp\slice2-commit.txt"
 - **Tests:** real-view tests for every editor at two window sizes; binding reflection for each new AXAML; csc/run for Image/Icon; mutation checks (image copy, missing-image warning).
 
 ## Slice 5 — The Events tab (TASK granularity)
+
+> ⚠ **CARRIED FROM SLICE 1 (Task 3 review, f4e00117):** `FormRetarget.ConvertBinds` and `WiredRunState` still
+> read the DEFAULT event directly, not `FormEvents.WiredOn`. Harmless while every row has one event; once 5.1
+> widens the lists, decide how a NON-default bind crosses targets (through the seam: crosses if wired on the
+> destination, else `RetargetBindLost`) and add a retarget sweep over every event of every row.
 
 - **Task 5.1 — Widen the rows:** each control's D1 event list (~8–15) and the Form's (Load, Shown, Activated, FormClosing, FormClosed, Resize, Click, KeyDown, KeyPress, KeyUp) with WinForms args (parity-checked) and web names where they exist. `FormEvents.WiredOn`'s SIGNATURE does not change (fixed in slice 1). ⚠ RE-CHECK `FormEventsTests.WiredOn_TheFormRoot_IsEmpty_UntilFormEventsExist` (becomes non-empty — rewrite it).
 - **Task 5.2 — Root bind emission** REPLACES slice 1's warning (⚠ RE-CHECK `FormRootTests.ARootBind_IsWarned_NotEmitted_UntilFormEventsExist`): WinForms `AddHandler Me.Load, AddressOf LoginForm_Load`; web `Load` as the LAST statement of the generated `InitializeComponent`: `Me.LoginForm_Load()` (⛔ `Me.`-qualified — an unqualified self-call is a runtime `ReferenceError` on the JS backend). The user-facing consequence (on the web, code after `Me.InitializeComponent()` in `New()` runs after Load) goes into the docs.
