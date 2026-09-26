@@ -3452,6 +3452,11 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             if (args.Count != 0) throw NotYet("List.Sort with more than one argument");
 
             var element = mc.Object?.Type?.GenericArguments?.FirstOrDefault();
+            // ⛔ `a - b` is NaN for any pair with a NaN, which Array.prototype.sort treats as
+            // "equal" — an inconsistent comparator, and the NaN stayed wherever it was. MEASURED:
+            // [2.5, NaN, -1, 0.5] sorted to 2.5, NaN, -1, 0.5. .NET sorts NaN FIRST.
+            if (element != null && element.IsFloatingPoint())
+                return $"{receiver}.sort((a, b) => a !== a ? (b !== b ? 0 : -1) : b !== b ? 1 : a - b)";
             if (element != null && element.IsNumeric()) return $"{receiver}.sort((a, b) => a - b)";
             if (element != null && element.Name.Equals("String", StringComparison.OrdinalIgnoreCase))
                 return $"{receiver}.sort()";

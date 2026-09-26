@@ -56,10 +56,40 @@ public:
     void RemoveAt(int32_t i) { _v.erase(_v.begin() + i); }
     void Insert(int32_t i, const T& item) { _v.insert(_v.begin() + i, item); }
     void Clear() { _v.clear(); }
+    /* List.Sort(): the element type's default order, as .NET's Comparer<T>.Default. Numbers
+       ascending with NaN FIRST (a bare `<` is not a strict weak order once a NaN is present,
+       and std::sort is undefined behaviour then); String ORDINAL, as on the JavaScript backend
+       (.NET's default is culture-aware — the two agree unless case or accents differ); a type
+       with CompareTo (DateTime, TimeSpan, Guid...) through it. Anything else — a class, whose
+       shared_ptr would compare by ADDRESS — is refused at compile time. */
+    void Sort() {
+        std::sort(_v.begin(), _v.end(), [](const T& a, const T& b) { return DefaultLess(a, b); });
+    }
+    /* List.Sort(comparison): negative / zero / positive, as a .NET Comparison(Of T). */
+    template <typename C>
+    void Sort(C comparison) {
+        std::sort(_v.begin(), _v.end(), [&](const T& a, const T& b) { return comparison(a, b) < 0; });
+    }
     typename std::vector<T>::iterator begin() { return _v.begin(); }
     typename std::vector<T>::iterator end() { return _v.end(); }
     typename std::vector<T>::const_iterator begin() const { return _v.begin(); }
     typename std::vector<T>::const_iterator end() const { return _v.end(); }
+private:
+    static bool DefaultLess(const T& a, const T& b) {
+        if constexpr (std::is_floating_point_v<T>) {
+            if (a != a) return b == b;   /* NaN sorts before every number, as on .NET */
+            if (b != b) return false;
+            return a < b;
+        } else if constexpr (std::is_arithmetic_v<T> || std::is_same_v<T, std::string>) {
+            return a < b;
+        } else if constexpr (requires { a.CompareTo(b); }) {
+            return a.CompareTo(b) < 0;
+        } else {
+            static_assert(sizeof(T) == 0,
+                ""List.Sort() without a comparison needs an element type with a default order (a number, String, or a type with CompareTo)"");
+            return false;
+        }
+    }
 };
 
 template <typename K, typename V>
