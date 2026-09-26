@@ -1326,6 +1326,56 @@ public static class FormControlCatalog
             Place: FormPlace.Item),
     };
 
+    /// <summary>
+    /// The FORM's own definition (spec §2.3) — ⛔⛔ deliberately NOT in <see cref="All"/>.
+    ///
+    /// <para>FormDocument is not a FormControl, and ~10 consumers enumerate <see cref="All"/> (the
+    /// toolbox, FormCatalogShapes.Canonical and every gate on it, WinFormsCatalogSweepTests, the render
+    /// and coverage distinctness gates, the glyph gate, the reader/writer/clipboard's
+    /// <c>Find(elementName) != null</c>). A Form row there would be offered in the toolbox, drawn as a
+    /// control, and read as a control element. The grid and every root-aware writer ask for this one BY
+    /// NAME instead; it gets its own csc sweep, parity rows and retarget sweep.</para>
+    ///
+    /// <para>⚠ Its values do NOT live in an attribute dictionary: Text, the client size and the web
+    /// layout are typed FormDocument fields. <see cref="FormRootValues"/> is the ONE map from a row to
+    /// its storage. Properties-stored root rows (FormBorderStyle…) arrive in slice 3.</para>
+    ///
+    /// <para>⚠ Below <see cref="All"/> is fine: it reads no shared field (textual init order).</para>
+    /// </summary>
+    public static readonly FormControlDef FormRoot = new(
+        Kind: "Form",
+        WinFormsType: "Form",
+        HtmlTag: "body",
+        HtmlInputType: null,
+        IsContainer: true,
+        Properties: new List<FormPropertyDef>
+        {
+            // ⛔ Both targets (D2): the window caption, and the page <title> (Text ?? Name).
+            new("Text", FormPropertyType.String,
+                Category: FormPropertyCategory.Appearance, Description: "The text associated with the control."),
+
+            // ⚠ CLIENT size, emitted `Me.ClientSize = New Size(w, h)` exactly as before — the form shows
+            // ClientSize, never a second Size (spec §2.3).
+            new("ClientSize", FormPropertyType.Size, Targets: new[] { FormTarget.WinForms },
+                Category: FormPropertyCategory.Layout,
+                Description: "The size of the client area of the form, in pixels.",
+                OracleExemption: "ClientSize is not browsable in WinForms — VS shows Size. The designer " +
+                                 "shows the CLIENT size because that is what its surface draws and what the " +
+                                 "region writer emits (spec §2.3)."),
+
+            // Web only — kept verbatim as CSS track lists; the browser is the renderer (FormGridLayout).
+            new("Cols", FormPropertyType.String, Targets: new[] { FormTarget.Web },
+                Category: FormPropertyCategory.Layout,
+                Description: "The page's column tracks, as a comma-separated CSS grid track list (e.g. 120px,1fr)."),
+            new("Rows", FormPropertyType.String, Targets: new[] { FormTarget.Web },
+                Category: FormPropertyCategory.Layout,
+                Description: "The page's row tracks, as a comma-separated CSS grid track list (e.g. auto,auto)."),
+            new("Gap", FormPropertyType.String, Targets: new[] { FormTarget.Web },
+                Category: FormPropertyCategory.Layout,
+                Description: "The space between the page's grid cells, as a CSS length (e.g. 8px)."),
+        },
+        Schematic: FormSchematic.Container);
+
     public static FormControlDef? Find(string kind) =>
         All.FirstOrDefault(c => string.Equals(c.Kind, kind, StringComparison.OrdinalIgnoreCase));
 

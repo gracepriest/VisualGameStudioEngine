@@ -116,6 +116,7 @@ public static class RegionWriter
         CheckComponentTargets(filePath, form, diagnostics);
         CheckComponentBinds(filePath, form, diagnostics);
         CheckControlBinds(filePath, form, diagnostics);
+        CheckRootBinds(filePath, form, diagnostics);
         CheckHandlerOrdering(filePath, index, form, init, diagnostics);
         if (diagnostics.Any(d => !d.IsWarning))
         {
@@ -409,6 +410,30 @@ public static class RegionWriter
     }
 
     /// <summary>
+    /// Warns about the FORM's own binds (spec §2.3): they are read and written from slice 1, but the
+    /// Form has no catalog events until slice 5, so nothing is generated for them yet. A warning, never
+    /// a refusal — the document is not wrong, and before slice 1 the same bind was an unknown child that
+    /// nothing reported at all. ⚠ Slice 5 REPLACES this with emission.
+    /// </summary>
+    private static void CheckRootBinds(string filePath, FormDocument form, List<DesignDiagnostic> diagnostics)
+    {
+        foreach (var bind in form.Binds)
+        {
+            if (bind.UsesReservedDataBinding || string.IsNullOrEmpty(bind.Handler))
+            {
+                continue;
+            }
+
+            diagnostics.Add(new DesignDiagnostic(
+                DesignCodes.BindNotOnTarget,
+                $"{DesignCodes.BindNotOnTarget}: 'form' wires its '{bind.Event}' event to {bind.Handler}, but " +
+                "the designer does not generate form-event wiring yet, so nothing is written for it. The " +
+                "document keeps the bind.",
+                filePath, 0, 0, IsWarning: true));
+        }
+    }
+
+    /// <summary>
     /// Whether the init region will actually wire this bind — the ONE answer the emitter, the
     /// ordering check and the bind warning share, so a bind cannot be refused over in one place and
     /// never emitted in another. A control's binds all reach <c>addEventListener</c> or
@@ -604,17 +629,34 @@ public static class RegionWriter
         }
         else
         {
-            // The form's own caption and client size, before any control — the order the shipped
-            // VSIX template uses, and the shape Owner decision 3 makes canonical. ClientSize fans
-            // in exactly as a control's Size does, and for the same CS1612 reason.
-            if (form.Text != null)
+            // The form's own properties, from FormRoot (spec §2.3), before any control — the order the
+            // shipped VSIX template uses, and the shape Owner decision 3 makes canonical. ⛔ ONE
+            // `Me.X = …` statement per row: ClientSize fans in exactly as a control's Size does, for
+            // the same CS1612 reason.
+            foreach (var row in FormControlCatalog.FormRoot.Properties.Where(p => p.AppliesTo(FormTarget.WinForms)))
             {
-                body.Append($"{inner}Me.Text = \"{form.Text.Replace("\"", "\"\"")}\"").Append(newline);
-            }
+                var value = FormRootValues.Get(form, row);
+                if (value == null)
+                {
+                    continue;
+                }
 
-            if (form.Width is > 0 && form.Height is > 0)
-            {
-                body.Append($"{inner}Me.ClientSize = New Size({form.Width}, {form.Height})").Append(newline);
+                // ⛔ A Degraded root value never reaches generated source — the control rule, at the
+                // root. DescribeRefusal is reached only for a value truly refused (it throws otherwise).
+                if (!row.Accepts(value, FormTarget.WinForms) && !row.IsSourceForm(value))
+                {
+                    diagnostics.Add(new DesignDiagnostic(
+                        DesignCodes.DegradedProperty,
+                        // Composed from the ONE refusal text, exactly as AppendProperties' control site
+                        // is — never a hand-written "is not a valid" copy.
+                        $"{DesignCodes.DegradedProperty}: 'form.{row.Name}': " +
+                        row.DescribeRefusal(value, FormTarget.WinForms) +
+                        " It is not written into the generated code.",
+                        filePath, 0, 0, IsWarning: true));
+                    continue;
+                }
+
+                body.Append($"{inner}Me.{row.Name} = {Literal(row, value)}").Append(newline);
             }
         }
 
@@ -828,11 +870,12 @@ public static class RegionWriter
                     DesignCodes.DegradedProperty,
                     $"{DesignCodes.DegradedProperty}: '{component.Id}.{property.Name}': " +
                     property.DescribeRefusal(value, FormTarget.Web) +
-                    $" The catalog default '{property.Default}' is written in its place.",
+                    $" The catalog default '{property.DefaultFor(FormTarget.Web)}' is written in its place.",
                     filePath, 0, 0, IsWarning: true));
             }
 
-            return property.Default ?? "";
+            // Spec §2.7: every reader of a default reads the TARGET's — this template is web code.
+            return property.DefaultFor(FormTarget.Web) ?? "";
         });
     }
 
@@ -902,7 +945,7 @@ public static class RegionWriter
                 continue;
             }
 
-            body.Append($"{inner}{control.Id}.{name} = {Literal(control, name, value)}").Append(newline);
+            body.Append($"{inner}{control.Id}.{name} = {Literal(property, value)}").Append(newline);
         }
     }
 
@@ -1053,10 +1096,10 @@ public static class RegionWriter
     /// formatting off the catalog is what lets an Enum/Color/Size row's source form pass through
     /// while a String never does.</para>
     /// </summary>
-    private static string Literal(FormControl control, string name, string value)
+    /// <param name="property">The row — a control's, or a <see cref="FormControlCatalog.FormRoot"/> row.
+    /// Null for a property the catalog does not know.</param>
+    private static string Literal(FormPropertyDef? property, string value)
     {
-        var property = control.Definition?.Property(name);
-
         // Already a source literal — leave it exactly as read. Re-formatting it would produce
         // `ContentAlignment.ContentAlignment.MiddleLeft` for an enum. (Never true for a String row.)
         if (IsAlreadySource(property, value))
@@ -1088,7 +1131,7 @@ public static class RegionWriter
             // CS0029 at csc with BasicLang silent; verbatim would splice unparsed text into source.
             // Both hide a broken invariant as a broken build, so this names the invariant instead.
             FormPropertyType.Size => throw new InvalidOperationException(
-                $"'{control.Id}.{name}' = '{value}' is not a parsable Size and reached the region writer; " +
+                $"'{property.Name}' = '{value}' is not a parsable Size and reached the region writer; " +
                 "a Degraded value must be skipped before Literal is called."),
             _ => "\"" + value.Replace("\"", "\"\"") + "\""
         };

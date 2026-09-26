@@ -146,23 +146,15 @@ public class FormEventsTests
 
     /// <summary>
     /// ⚠ RE-CHECK IN SLICE 5: the Form gains Load/Shown/… then, and this becomes non-empty.
-    ///
-    /// <para>⛔ PLACEHOLDER until plan Task 6 Step 9(f). <c>FormControlCatalog.FormRoot</c> does not exist
-    /// yet, so the real body cannot compile even under <c>[Ignore]</c>. It is kept verbatim in the
-    /// comment below; the active body FAILS, so deleting the Ignore without restoring the body goes red
-    /// rather than passing by absence.</para>
     /// </summary>
     [Test]
-    [Ignore("FormRoot lands in Task 6")]
     public void WiredOn_TheFormRoot_IsEmpty_UntilFormEventsExist()
     {
-        // Task 6 Step 9(f): replace this Assert.Fail with —
-        // Assert.Multiple(() =>
-        // {
-        //     Assert.That(FormEvents.WiredOn(FormControlCatalog.FormRoot, FormTarget.WinForms), Is.Empty);
-        //     Assert.That(FormEvents.WiredOn(FormControlCatalog.FormRoot, FormTarget.Web), Is.Empty);
-        // });
-        Assert.Fail("restore the FormRoot body (plan Task 6 Step 9(f)) before removing the Ignore");
+        Assert.Multiple(() =>
+        {
+            Assert.That(FormEvents.WiredOn(FormControlCatalog.FormRoot, FormTarget.WinForms), Is.Empty);
+            Assert.That(FormEvents.WiredOn(FormControlCatalog.FormRoot, FormTarget.Web), Is.Empty);
+        });
     }
 
     [Test]

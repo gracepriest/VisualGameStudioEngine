@@ -20,7 +20,8 @@ public sealed class FormFile
         string originalText,
         string filePath,
         IReadOnlyList<DesignDiagnostic> diagnostics,
-        IReadOnlyList<DegradedProperty> degraded)
+        IReadOnlyList<DegradedProperty> degraded,
+        IReadOnlyList<DegradedProperty>? degradedRoot = null)
     {
         Model = model;
         Xml = xml;
@@ -29,6 +30,7 @@ public sealed class FormFile
         FilePath = filePath;
         Diagnostics = diagnostics;
         Degraded = degraded;
+        DegradedRoot = degradedRoot ?? Array.Empty<DegradedProperty>();
     }
 
     public FormDocument Model { get; }
@@ -80,5 +82,26 @@ public sealed class FormFile
         var control = Model.FindById(controlId);
         var definition = control?.Definition;
         return definition?.Property(property) != null ? PropertyTier.Canon : PropertyTier.Unknown;
+    }
+
+    /// <summary>The FORM's frozen rows — its own list, never a reserved control id (spec §2.3): a
+    /// control with <c>Id=""</c> is legal to read.</summary>
+    public IReadOnlyList<DegradedProperty> DegradedRoot { get; }
+
+    /// <summary>The frozen reason for one FormRoot row, or null when it is not Degraded.</summary>
+    public string? DegradedReasonOfRoot(string property) =>
+        DegradedRoot.FirstOrDefault(d => string.Equals(d.Property, property, StringComparison.OrdinalIgnoreCase))?.Reason;
+
+    /// <summary>The D9 tier of one FormRoot row on this document's target.</summary>
+    public PropertyTier TierOfRoot(string property)
+    {
+        if (DegradedReasonOfRoot(property) != null)
+        {
+            return PropertyTier.Degraded;
+        }
+
+        return FormControlCatalog.FormRoot.Property(property) is { } row && row.AppliesTo(Model.Target)
+            ? PropertyTier.Canon
+            : PropertyTier.Unknown;
     }
 }

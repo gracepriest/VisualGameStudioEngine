@@ -103,7 +103,8 @@ public static class FormAssetEmitter
         sb.Append("<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n");
         sb.Append("<meta charset=\"utf-8\">\n");
         sb.Append("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n");
-        sb.Append($"<title>{Text(form.Name)}</title>\n");
+        // Text ?? Name (spec §2.3): the page title follows the caption the user set, or the form's name.
+        sb.Append($"<title>{Text(form.Text ?? form.Name)}</title>\n");
         sb.Append($"<link rel=\"stylesheet\" href=\"{Attr(form.Name)}.css\">\n");
         sb.Append("</head>\n");
 

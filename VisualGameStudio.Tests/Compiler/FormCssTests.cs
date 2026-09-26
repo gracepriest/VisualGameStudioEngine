@@ -131,13 +131,14 @@ public class FormCssTests
     /// <c>&lt;/style&gt;</c> straight into the stylesheet. Only a type whose accepted values are
     /// themselves safe may use it.
     ///
-    /// <para>⚠ TASK 6: when <c>FormControlCatalog.FormRoot</c> exists, its rows must be added to this
-    /// source — the root has a stylesheet rule too.</para>
+    /// <para>⚠ <c>FormControlCatalog.FormRoot</c>'s rows are in this source too — it is kept OUT of
+    /// <c>All</c>, and the root has a stylesheet rule as well.</para>
     /// </summary>
     [Test]
     public void EveryVerbatimCssRow_IsIntOrEnum()
     {
         var offenders = FormControlCatalog.All
+            .Append(FormControlCatalog.FormRoot)
             .SelectMany(d => d.Properties.Select(p => (d.Kind, Property: p)))
             .Where(x => x.Property.CssProperty != null && x.Property.CssConverter == FormCssConverter.None &&
                         x.Property.Type is not (FormPropertyType.Int or FormPropertyType.Enum))

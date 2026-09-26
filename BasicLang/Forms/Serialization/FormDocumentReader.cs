@@ -27,6 +27,7 @@ public static class FormDocumentReader
     {
         var diagnostics = new List<DesignDiagnostic>();
         var degraded = new List<DegradedProperty>();
+        var degradedRoot = new List<DegradedProperty>();
 
         // What the FILE NAME claims this is, or null when the path carries neither form extension.
         // Only a claim: the root element is the document's own self-description and wins below.
@@ -106,18 +107,29 @@ public static class FormDocumentReader
         model.Name = (string?)root.Attribute("Name") ?? model.Name;
         model.Version = version;
 
+        // Text is ONE vocabulary on both targets (D2, spec §2.3): the window caption, the page title.
+        model.Text = (string?)root.Attribute("Text");
+
         if (target == FormTarget.WinForms)
         {
-            // The form's own client size and caption. WinForms only — D3 gives the web document a
-            // <Layout> instead, and a page has no window to size.
-            //
-            // ⚠ An unparseable Width/Height is left null here and falls through to UnknownAttributes
-            // below, which is what round-trips it verbatim. It is NOT a Degraded row: Degraded is
-            // per-property on a CONTROL (it freezes one property-grid row), and the form root is not
-            // a control — there is no row to freeze and FormFile.TierOf could not find one.
+            // The form's own client size. WinForms only — D3 gives the web document a <Layout> instead.
             model.Width = IntAttribute(root, "Width");
             model.Height = IntAttribute(root, "Height");
-            model.Text = (string?)root.Attribute("Text");
+
+            // ⚠ An unparseable Width/Height is left null here and still falls through to
+            // UnknownAttributes below — that round trip is what preserves the text byte-for-byte. What
+            // changed (spec §2.3) is the TIER: the ClientSize row is Degraded — frozen, explained — not
+            // Unknown. The storage stayed where it was on purpose: the writer's Width/Height guard
+            // exists to never overwrite text it could not parse.
+            var rawWidth = (string?)root.Attribute("Width");
+            var rawHeight = (string?)root.Attribute("Height");
+            if ((rawWidth != null && model.Width == null) || (rawHeight != null && model.Height == null))
+            {
+                degradedRoot.Add(new DegradedProperty("", "ClientSize",
+                    $"Width=\"{rawWidth}\" Height=\"{rawHeight}\"",
+                    $"the form's client size could not be read — Width=\"{rawWidth}\" and Height=\"{rawHeight}\" " +
+                    "must both be whole numbers. The attributes are preserved exactly as written."));
+            }
         }
 
         foreach (var attribute in root.Attributes())
@@ -175,6 +187,12 @@ public static class FormDocumentReader
                     }
                     break;
 
+                // The FORM's own event wiring (spec §2.3), the same shape a control's is — read through
+                // the same ReadBind, so the reserved-data-binding refusal cannot drift between them.
+                case "Bind":
+                    model.Binds.Add(ReadBind(element, "form", filePath, diagnostics));
+                    break;
+
                 case "Resources":
                     model.Resources.AddRange(element.Elements().Select(e => new XElement(e)));
                     break;
@@ -188,7 +206,7 @@ public static class FormDocumentReader
 
         CheckDuplicateIds(model, filePath, diagnostics, positions);
 
-        return new FormFile(model, xml, text, filePath, diagnostics, degraded);
+        return new FormFile(model, xml, text, filePath, diagnostics, degraded, degradedRoot);
     }
 
     /// <summary>
@@ -254,9 +272,12 @@ public static class FormDocumentReader
     /// True when the root attribute is one this reader models, so it must NOT also be recorded as an
     /// unknown attribute and written back twice.
     ///
-    /// <para>⚠ <paramref name="root"/> is passed because "known" is not purely a matter of spelling:
-    /// on a WinForms document a <c>Width</c> the reader could not parse is left unmodelled, and the
-    /// only thing that then preserves it is the unknown-attribute round trip.</para>
+    /// <para>⛔ Asks <see cref="FormRootValues.RowForAttribute"/> — the one map from a FormRoot row to its
+    /// storage — rather than keeping a list here.</para>
+    ///
+    /// <para>⚠ <paramref name="root"/> is passed because "known" is not purely a matter of spelling: on
+    /// a WinForms document a <c>Width</c> the reader could not parse is left unmodelled, and the only
+    /// thing that then preserves it is the unknown-attribute round trip (its row is Degraded).</para>
     /// </summary>
     private static bool IsKnownRootAttribute(string name, FormTarget target, XElement root)
     {
@@ -265,17 +286,13 @@ public static class FormDocumentReader
             return true;
         }
 
-        if (target != FormTarget.WinForms)
+        var row = FormRootValues.RowForAttribute(name, target);
+        if (row == null)
         {
             return false;
         }
 
-        return name switch
-        {
-            "Width" or "Height" => IntAttribute(root, name) != null,
-            "Text" => true,
-            _ => false
-        };
+        return row.Type == FormPropertyType.Size ? IntAttribute(root, name) != null : true;
     }
 
     // ==================================================================
@@ -522,27 +539,7 @@ public static class FormDocumentReader
         {
             if (child.Name.LocalName == "Bind")
             {
-                var bind = new FormBind
-                {
-                    Event = (string?)child.Attribute("Event") ?? "",
-                    Handler = (string?)child.Attribute("Handler") ?? "",
-                    Property = (string?)child.Attribute("Property"),
-                    Source = (string?)child.Attribute("Source"),
-                    Path = (string?)child.Attribute("Path")
-                };
-
-                // ⛔ Reserved means parsed and round-tripped, never acted on. A populated data
-                // binding is refused rather than ignored: ignoring it leaves the user believing a
-                // binding exists, and nothing in the running page would ever tell them otherwise.
-                if (bind.UsesReservedDataBinding)
-                {
-                    diagnostics.Add(Error(DesignCodes.ReservedBindingPopulated,
-                        $"'{control.Id}' has a <Bind> using the reserved data-binding attributes " +
-                        "(Property/Source/Path). v1 reads only <Bind Event= Handler=>.",
-                        filePath, Line(child), Column(child)));
-                }
-
-                control.Binds.Add(bind);
+                control.Binds.Add(ReadBind(child, control.Id, filePath, diagnostics));
                 continue;
             }
 
@@ -566,6 +563,34 @@ public static class FormDocumentReader
         }
 
         return control;
+    }
+
+    /// <summary>
+    /// One <c>&lt;Bind&gt;</c>, for a control or the form (<paramref name="owner"/> is the Id, or
+    /// <c>form</c>). ⛔ Reserved means parsed and round-tripped, never acted on: a populated data binding
+    /// is refused rather than ignored — ignoring it leaves the user believing a binding exists, and
+    /// nothing in the running page would ever tell them otherwise.
+    /// </summary>
+    private static FormBind ReadBind(XElement element, string owner, string filePath, List<DesignDiagnostic> diagnostics)
+    {
+        var bind = new FormBind
+        {
+            Event = (string?)element.Attribute("Event") ?? "",
+            Handler = (string?)element.Attribute("Handler") ?? "",
+            Property = (string?)element.Attribute("Property"),
+            Source = (string?)element.Attribute("Source"),
+            Path = (string?)element.Attribute("Path")
+        };
+
+        if (bind.UsesReservedDataBinding)
+        {
+            diagnostics.Add(Error(DesignCodes.ReservedBindingPopulated,
+                $"'{owner}' has a <Bind> using the reserved data-binding attributes " +
+                "(Property/Source/Path). v1 reads only <Bind Event= Handler=>.",
+                filePath, Line(element), Column(element)));
+        }
+
+        return bind;
     }
 
     /// <summary>

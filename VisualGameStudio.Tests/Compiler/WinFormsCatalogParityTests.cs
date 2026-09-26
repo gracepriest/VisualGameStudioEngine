@@ -23,12 +23,11 @@ public class WinFormsCatalogParityTests
         var snapshot = WinFormsMetadata.Load();
         var have = snapshot.Types.Select(t => t.Name).ToHashSet(StringComparer.Ordinal);
 
-        // ⚠ Plan Task 6 Step 9 restores `.Append(FormControlCatalog.FormRoot.Kind)` here once
-        // FormRoot exists; until then the Form's kind is spelled literally.
+        // FormRoot is kept OUT of All, so the Form's kind is appended by name.
         var missing = FormControlCatalog.All
             .Where(d => d.SupportsTarget(FormTarget.WinForms))
             .Select(d => d.Kind)
-            .Append("Form")
+            .Append(FormControlCatalog.FormRoot.Kind)
             .Where(k => !have.Contains(k))
             .ToList();
 

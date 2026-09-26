@@ -85,12 +85,14 @@ public static class FormDocumentWriter
             new XAttribute("Name", model.Name),
             new XAttribute("Version", model.Version));
 
+        // Text is ONE vocabulary on both targets (D2). Null writes nothing.
+        root.SetAttributeValue("Text", model.Text);
+
         if (model.Target == FormTarget.WinForms)
         {
-            // The window, not the page: a client size and a caption. D3's divergence, at the root.
+            // The window's client size: D3's divergence, at the root.
             root.SetAttributeValue("Width", model.Width);
             root.SetAttributeValue("Height", model.Height);
-            root.SetAttributeValue("Text", model.Text);
         }
         else if (model.Layout != null)
         {
@@ -100,6 +102,12 @@ public static class FormDocumentWriter
         foreach (var (name, value) in model.UnknownAttributes)
         {
             root.SetAttributeValue(name, value);
+        }
+
+        // The form's own event wiring, before <Controls> — the same place Apply inserts it.
+        foreach (var bind in model.Binds)
+        {
+            root.Add(BindElement(bind));
         }
 
         var controls = new XElement("Controls");
@@ -166,10 +174,14 @@ public static class FormDocumentWriter
         SetAttributeIfMeaningful(root, "Name", model.Name, nameWhenAbsent);
         SetIntAttributeIfChanged(root, "Version", model.Version, FormDocumentReader.SupportedVersion);
 
-        // D3, at the root: a window has a size and a caption, a page has a layout and may carry
-        // literal markup. Each side writes only its own vocabulary — writing both would put a
-        // <Layout> into a .blform on the first save, and the file would then be refused by its own
-        // reader on the next open.
+        // ⛔ Text is written on BOTH targets (D2). Before this, a web form's caption edit reached the
+        // model and never the file — the grid showed it, the next open lost it. Null removes it: a
+        // string cannot be "present but unparseable", so there is nothing to protect by keeping it.
+        SetAttributeIfChanged(root, "Text", model.Text);
+
+        // D3, at the root: a window has a size, a page has a layout and may carry literal markup. Each
+        // side writes only its own vocabulary — writing both would put a <Layout> into a .blform on the
+        // first save, and the file would then be refused by its own reader on the next open.
         if (model.Target == FormTarget.WinForms)
         {
             ApplyFormAttributes(root, model);
@@ -178,6 +190,8 @@ public static class FormDocumentWriter
         {
             ApplyLayout(root, model);
         }
+
+        ApplyBindList(root, model.Binds, insertBefore: root.Element("Controls") ?? root.Element("Components"));
 
         ApplyControls(root, model);
         ApplyComponents(root, model);
@@ -219,14 +233,13 @@ public static class FormDocumentWriter
     }
 
     /// <summary>
-    /// The <c>.blform</c> root's <c>Width</c>/<c>Height</c>/<c>Text</c>.
+    /// The <c>.blform</c> root's <c>Width</c>/<c>Height</c>.
     ///
     /// <para>⛔ A null model value means "the document did not say" — either the attribute was
     /// absent, or it was present and unparseable, in which case the reader left it unmodelled and
-    /// the unknown-attribute round trip is the only thing preserving it. Either way, writing null
-    /// here as a removal would delete an attribute the user wrote and the designer never
-    /// understood. Clearing the caption from the designer sets <c>Text</c> to the empty string,
-    /// which IS written; it is not the same state as null.</para>
+    /// the unknown-attribute round trip is the only thing preserving it (its ClientSize row is
+    /// Degraded). Either way, writing null here as a removal would delete an attribute the user wrote
+    /// and the designer never understood.</para>
     /// </summary>
     private static void ApplyFormAttributes(XElement root, FormDocument model)
     {
@@ -238,11 +251,6 @@ public static class FormDocumentWriter
         if (model.Height != null)
         {
             SetAttributeIfChanged(root, "Height", model.Height.Value.ToString());
-        }
-
-        if (model.Text != null)
-        {
-            SetAttributeIfChanged(root, "Text", model.Text);
         }
     }
 
@@ -470,13 +478,21 @@ public static class FormDocumentWriter
         }
     }
 
-    private static void ApplyBinds(XElement element, FormControl control)
-    {
-        var existing = element.Elements("Bind").ToList();
+    private static void ApplyBinds(XElement element, FormControl control) =>
+        ApplyBindList(element, control.Binds, insertBefore: null);
 
-        for (var i = 0; i < control.Binds.Count; i++)
+    /// <summary>
+    /// Patches <paramref name="owner"/>'s <c>&lt;Bind&gt;</c> children in place — for a control, or for
+    /// the form's root. ONE implementation, so the two cannot drift.
+    /// </summary>
+    /// <param name="insertBefore">Where a NEW bind goes; null appends after the last element (a control's rule).</param>
+    private static void ApplyBindList(XElement owner, IReadOnlyList<FormBind> binds, XElement? insertBefore)
+    {
+        var existing = owner.Elements("Bind").ToList();
+
+        for (var i = 0; i < binds.Count; i++)
         {
-            var bind = control.Binds[i];
+            var bind = binds[i];
             if (i < existing.Count)
             {
                 SetAttributeIfChanged(existing[i], "Event", bind.Event);
@@ -487,11 +503,11 @@ public static class FormDocumentWriter
             }
             else
             {
-                InsertPreservingIndent(element, BindElement(bind), before: null);
+                InsertPreservingIndent(owner, BindElement(bind), before: insertBefore);
             }
         }
 
-        for (var i = control.Binds.Count; i < existing.Count; i++)
+        for (var i = binds.Count; i < existing.Count; i++)
         {
             RemoveWithLeadingWhitespace(existing[i]);
         }

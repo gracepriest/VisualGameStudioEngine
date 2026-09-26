@@ -52,10 +52,7 @@ public sealed class FormDocument
     public int? Width { get; set; }
     public int? Height { get; set; }
 
-    /// <summary>The window caption. WinForms only.</summary>
-    public string? Text { get; set; }
-
-    // --- .blwebform only (D3) ----------------------------------------------
+    // --- .blwebform only (D3)----------------------------------------------
 
     /// <summary>How the page arranges its controls. Web only; null on a WinForms document.</summary>
     public FormLayout? Layout { get; set; }
@@ -68,6 +65,12 @@ public sealed class FormDocument
     public string? Literal { get; set; }
 
     // --- both --------------------------------------------------------------
+
+    /// <summary>
+    /// The window caption on WinForms and the page <c>&lt;title&gt;</c> on the web (spec §2.3, D2 — one
+    /// vocabulary). Null = the document does not say; the page title then falls back to <see cref="Name"/>.
+    /// </summary>
+    public string? Text { get; set; }
 
     /// <summary>Top-level controls, in document order.</summary>
     public List<FormControl> Controls { get; } = new();
@@ -83,6 +86,13 @@ public sealed class FormDocument
     /// <c>Create</c> emitted an empty element and <c>Apply</c> never visited it.</para>
     /// </summary>
     public List<FormControl> Components { get; } = new();
+
+    /// <summary>
+    /// The FORM's own event wiring (spec §2.3) — the same <c>&lt;Bind&gt;</c> shape a control uses,
+    /// written directly under the root element. ⚠ Read and written in slice 1; the region writer WARNS
+    /// rather than emitting until slice 5 gives the Form its events.
+    /// </summary>
+    public List<FormBind> Binds { get; } = new();
 
     /// <summary>Reserved and empty in v1; parsed and re-emitted so a future document round-trips.</summary>
     public List<XElement> Resources { get; } = new();

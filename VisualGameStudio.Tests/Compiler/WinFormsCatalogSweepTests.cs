@@ -442,6 +442,33 @@ public class WinFormsCatalogSweepTests
         WinFormsCompile.AssertCompiles(generated, "a caption is a string, whatever it looks like.");
     }
 
+    /// <summary>Every FormRoot row that exists on WinForms — the root's OWN csc sweep (spec §2.3 Gates).</summary>
+    private static IEnumerable<TestCaseData> EveryWinFormsRootProperty() =>
+        FormControlCatalog.FormRoot.Properties
+            .Where(p => p.AppliesTo(FormTarget.WinForms))
+            .Select(p => new TestCaseData(p.Name).SetName("{m}(" + p.Name + ")"));
+
+    /// <summary>
+    /// ⛔ The Form is not a control and is never smuggled through Canonical or For(target). Each root row is
+    /// emitted as ONE `Me.X = …` statement on a real Form and csc must accept it — the only thing that can
+    /// falsify a root property name, since BasicLang types every Form member as Object.
+    /// </summary>
+    [TestCaseSource(nameof(EveryWinFormsRootProperty))]
+    [Category("Integration")]
+    public void EveryFormRootProperty_EmitsMeDotXThatCscAccepts(string name)
+    {
+        var row = FormControlCatalog.FormRoot.Property(name)!;
+        var form = new FormDocument { Target = FormTarget.WinForms, Name = "SweepForm" };
+
+        Assert.That(FormRootValues.Set(form, row, row.Type == FormPropertyType.Size ? "640, 480" : SampleValue(row)),
+            Is.True, $"the sample for form.{name} must be storable");
+
+        var generated = GenerateCSharp(form);
+
+        Assert.That(generated, Does.Contain($"this.{name} ="), $"form.{name} must be ONE statement on the form itself");
+        WinFormsCompile.AssertCompiles(generated, $"form.{name} emitted as Me.{name} must compile on a real Form.");
+    }
+
     // ==================================================================
     // Harness
     // ==================================================================
@@ -523,6 +550,7 @@ public class WinFormsCatalogSweepTests
         FormPropertyType.Bool => "true",
         FormPropertyType.Color => "Red",
         FormPropertyType.Enum => property.AllowedValues![0],
+        FormPropertyType.Size => "75, 23",
         _ => "sample"
     };
 }
