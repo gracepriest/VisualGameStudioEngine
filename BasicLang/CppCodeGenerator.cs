@@ -411,6 +411,8 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // (split-mode counterpart: EmitRuntimeHeader in CppCodeGenerator.Split.cs). It
             // precedes the BCL bodies because the Decimal runtime THROWS it (division by zero).
             SpliceRuntimeSource(CppNetExceptionRuntime.Source);
+            // Arrays are handles to shared storage (.NET reference semantics) — see CppArrayRuntime.
+            SpliceRuntimeSource(CppArrayRuntime.Source);
             SpliceRuntimeSource(CppBclRuntime.BclBody);
             SpliceRuntimeSource(CppDecimalRuntime.DecimalBody);
 
@@ -629,20 +631,24 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             if (type.NetHandleTypeFullName != null)
                 return "BasicLang::NetRef";
 
-            // VB arrays lower to std::vector<T>: an assignable/copyable value type (unlike a
-            // C array, which cannot be assigned or returned). Route the element type through
-            // the mapper so `Integer` becomes int32_t instead of leaking verbatim into C++.
+            // VB arrays lower to BasicLang::Array<T>: a HANDLE to shared std::vector storage, so
+            // an array has .NET's REFERENCE semantics (CppArrayRuntime). They used to lower to a
+            // bare std::vector<T> — a VALUE — so `b = a`, passing to a Sub, and `lst.Add(a)` each
+            // copied the storage and every write through the copy was lost. Route the element
+            // type through the mapper so `Integer` becomes int32_t.
             //
             // A MULTI-DIMENSIONAL array nests one vector per rank, which is the shape
-            // ElementLValue already renders (`base[i][j]`). ArrayRank is clamped to at least 1
+            // ElementLValue already renders (`base[i][j]`); only the OUTERMOST rank is the
+            // handle, so the whole array is one shared object. ArrayRank is clamped to at least 1
             // because plenty of synthesized array TypeInfos (LINQ results, .NET element types)
             // carry rank 0 and have always meant a single dimension.
             if (type.Kind == TypeKind.Array && type.ElementType != null)
             {
                 var mapped = MapType(type.ElementType);
-                for (var dimension = 0; dimension < Math.Max(1, type.ArrayRank); dimension++)
+                var rank = Math.Max(1, type.ArrayRank);
+                for (var dimension = 1; dimension < rank; dimension++)
                     mapped = $"std::vector<{mapped}>";
-                return mapped;
+                return $"BasicLang::Array<{mapped}>";
             }
             if (type.Kind == TypeKind.Array || type.Kind == TypeKind.Pointer || type.IsPointer)
                 return base.MapType(type);
@@ -2013,7 +2019,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         private string SizedArrayInitializer(TypeInfo type, string mappedType)
         {
             if (type?.Kind != TypeKind.Array) return null;
-            if (mappedType == null || !mappedType.StartsWith("std::vector<", StringComparison.Ordinal))
+            if (mappedType == null || !mappedType.StartsWith("BasicLang::Array<", StringComparison.Ordinal))
                 return null;
 
             var sizes = type.ArrayDimensionSizes;
