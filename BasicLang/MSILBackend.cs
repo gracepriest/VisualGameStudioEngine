@@ -5650,6 +5650,28 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                     EmitLoadLocal(variable.Name);
                     return;
 
+                // ⛔ A guard's AndAlso/OrElse arrives as ONE binary node (IRBuilder keeps a guard an
+                // inline tree), so it must short-circuit HERE: the generic arm below would load
+                // both operands and `and` them, running the right side — `When d <> 0 AndAlso
+                // 10 \ d > 1` would divide by zero. Both paths join with one bool on the stack.
+                case IRBinaryOp shortCircuit
+                    when shortCircuit.Operation is BinaryOpKind.AndAlso or BinaryOpKind.OrElse:
+                {
+                    var decided = NextCaseLabel();
+                    var done = NextCaseLabel();
+                    var isAnd = shortCircuit.Operation == BinaryOpKind.AndAlso;
+                    EmitInlineValue(shortCircuit.Left);
+                    WriteLine($"    {(isAnd ? "brfalse" : "brtrue")} {decided}");
+                    _currentStack--;
+                    EmitInlineValue(shortCircuit.Right);
+                    WriteLine($"    br {done}");
+                    WriteLine($"  {decided}:");
+                    // The decided path's value; the right operand's push already counted this slot.
+                    WriteLine($"    {(isAnd ? "ldc.i4.0" : "ldc.i4.1")}");
+                    WriteLine($"  {done}:");
+                    return;
+                }
+
                 case IRBinaryOp binaryOp:
                 {
                     var operandKind = BinaryOperandKind(binaryOp);

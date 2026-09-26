@@ -3331,10 +3331,25 @@ namespace BasicLang.Compiler.IR
             // Suppress instruction emission so optimization passes won't modify the When guard
             if (result != null && pattern.WhenGuard != null)
             {
+                var blockBefore = _currentBlock;
                 _suppressEmit = true;
                 pattern.WhenGuard.Accept(this);
                 _suppressEmit = false;
                 result.WhenGuard = _expressionResult;
+
+                // A guard is ONE inline expression tree; nothing in it may move the builder to
+                // another block. If something does, everything after the Select Case would be
+                // built into a block no branch reaches — the program silently stops there (how
+                // AndAlso/OrElse in a guard behaved until BuildShortCircuit learned to stay
+                // inline). Refuse instead of truncating.
+                if (!ReferenceEquals(_currentBlock, blockBefore))
+                {
+                    _currentBlock = blockBefore;
+                    throw new InvalidOperationException(
+                        $"Line {pattern.Line}: this 'When' guard needs control flow the compiler "
+                        + "cannot build inside a Case guard. Compute it into a variable before the "
+                        + "Select Case and test the variable in the guard.");
+                }
             }
 
             return result;
@@ -4731,7 +4746,16 @@ namespace BasicLang.Compiler.IR
             if (!IsComparisonOperator(node.Operator))
             {
                 var scKind = MapBinaryOperator(node.Operator);
-                if (scKind == BinaryOpKind.AndAlso || scKind == BinaryOpKind.OrElse)
+                // ⛔ NOT inside a `When` guard. A guard is built with emission suppressed and is
+                // rendered INLINE by every backend (C++ RenderInline, MSIL EmitInlineValue, the
+                // C#/JS expression renderers), so it must stay one expression TREE: here an
+                // AndAlso/OrElse is an IRBinaryOp, which each renderer spells as its own
+                // short-circuit operator. Lowered to control flow instead, the blocks were
+                // created with nothing emitted into them and _currentBlock was left on the
+                // orphan merge block — so every statement AFTER the Select Case landed in a block
+                // no branch reaches, and the program silently stopped at the Select, on every
+                // backend, from a green build.
+                if ((scKind == BinaryOpKind.AndAlso || scKind == BinaryOpKind.OrElse) && !_suppressEmit)
                 {
                     BuildShortCircuit(node, scKind);
                     return;

@@ -840,6 +840,15 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         /// </summary>
         protected override string GetValueName(IRValue value)
         {
+            // Inside RenderGuard, an un-emitted guard node renders as its expression (see there).
+            if (_guardNodes != null && value is not IRVariable && value is not IRConstant
+                && _guardNodes.Contains(value))
+                return RenderInline(value);
+            return GetValueNameCore(value);
+        }
+
+        private string GetValueNameCore(IRValue value)
+        {
             if (value is IRVariable v && v.Name != null && v.Name.StartsWith("__lambda_"))
             {
                 var lambdaFunc = _module?.Functions.FirstOrDefault(f => f.Name == v.Name && f.IsLambda);
@@ -2696,10 +2705,22 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
 
         public override void Visit(IRBinaryOp binaryOp)
         {
+            var result = GetValueName(binaryOp);
+            WriteLine($"{result} = {BinaryOpExpression(binaryOp)};");
+        }
+
+        /// <summary>
+        /// The C++ EXPRESSION for a binary operator, shared by the statement form
+        /// (<see cref="Visit(IRBinaryOp)"/>) and the inline <c>When</c>-guard form
+        /// (<see cref="RenderInline"/>). ⛔ The guard used to spell the operator itself, bare, so
+        /// <c>When "k" &amp; n = "k7"</c> emitted <c>"k" + n</c> — the pointer arithmetic the
+        /// comment below describes — and silently took Case Else.
+        /// </summary>
+        private string BinaryOpExpression(IRBinaryOp binaryOp)
+        {
             var left = GetValueName(binaryOp.Left);
             var right = GetValueName(binaryOp.Right);
             var op = MapBinaryOperator(binaryOp.Operation);
-            var result = GetValueName(binaryOp);
 
             // §VB `&` is CONCATENATION, and it was lowering to a bare `+`. With a const char*
             // on the left that is POINTER ARITHMETIC: `"val=" & True` advanced the literal by 1
@@ -2715,8 +2736,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 var rightText = StringifyForText(binaryOp.Right, right);
                 if (leftText != null && rightText != null)
                 {
-                    WriteLine($"{result} = {leftText} + {rightText};");
-                    return;
+                    return $"{leftText} + {rightText}";
                 }
 
                 // ONE side is enough, and requiring BOTH was a hole. A FOREIGN `::` call has no
@@ -2736,8 +2756,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 // wrong string.
                 if (leftText != null || rightText != null)
                 {
-                    WriteLine($"{result} = {leftText ?? left} + {rightText ?? right};");
-                    return;
+                    return $"{leftText ?? left} + {rightText ?? right}";
                 }
 
                 // Neither side stringifies. Unreachable for Concat today — the analyzer refuses
@@ -2749,11 +2768,10 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
 
             if (DivisionHelper(binaryOp) is { } helper)
             {
-                WriteLine($"{result} = {helper}({left}, {right});");
-                return;
+                return $"{helper}({left}, {right})";
             }
 
-            WriteLine($"{result} = {left} {op} {right};");
+            return $"{left} {op} {right}";
         }
 
         /// <summary>
@@ -3014,18 +3032,36 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 WriteLine("}");
             }
 
-            void EmitCallStatement(string expression)
-            {
+            var expression = CallExpression(call, args, out var isVoidStdLib);
+
+            // Statement-like console calls are emitted WITHOUT a destination even when the IR
+            // types them (the analyzer gives Console.WriteLine an Object result, but assigning a
+            // cout expression to a temp is not valid C++).
+            if (isVoidStdLib)
+                EmitRegion($"{expression};");
+            else
                 EmitRegion(destination != null ? $"{destination} = {expression};" : $"{expression};");
-            }
+        }
+
+        /// <summary>
+        /// The C++ EXPRESSION for a (non-foreign, non-.NET) call whose arguments are already
+        /// rendered as <paramref name="args"/>. Shared by the statement form
+        /// (<see cref="Visit(IRCall)"/>) and the inline <c>When</c>-guard form
+        /// (<see cref="InlineCall"/>), so the two cannot lower the same call differently.
+        /// <paramref name="isVoidStdLib"/> marks a statement-like stdlib call (Console.WriteLine)
+        /// whose expression must never be assigned.
+        /// </summary>
+        private string CallExpression(IRCall call, List<string> args, out bool isVoidStdLib)
+        {
+            isVoidStdLib = false;
+            var functionName = call.FunctionName;
 
             // ReDim's value (IRBuilder.ArrayResizeIntrinsic: array, count, preserve) — the runtime's
             // BasicLang::ReDimArray (CppBclRuntime), which returns the resized std::vector.
             if (functionName == IRBuilder.ArrayResizeIntrinsic && args.Count == 3)
             {
                 var preserve = call.Arguments[2] is IRConstant { Value: true } ? "true" : "false";
-                EmitCallStatement($"BasicLang::ReDimArray({args[0]}, {args[1]}, {preserve})");
-                return;
+                return $"BasicLang::ReDimArray({args[0]}, {args[1]}, {preserve})";
             }
 
             // Check if this is an extern function call
@@ -3035,42 +3071,24 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 if (externDecl != null && externDecl.HasImplementation("Cpp"))
                 {
                     var impl = externDecl.GetImplementation("Cpp");
-                    var argsArr = args.ToArray();
-
-                    string externCall;
-                    if (impl.Contains("{"))
-                    {
-                        externCall = string.Format(impl, argsArr);
-                    }
-                    else
-                    {
-                        externCall = $"{impl}({string.Join(", ", args)})";
-                    }
-
-                    EmitCallStatement(externCall);
-                    return;
+                    return impl.Contains("{")
+                        ? string.Format(impl, args.ToArray())
+                        : $"{impl}({string.Join(", ", args)})";
                 }
             }
 
-            // Handle standard library calls. Statement-like console calls are
-            // emitted WITHOUT a destination even when the IR types them (the
-            // analyzer gives Console.WriteLine an Object result, but assigning
-            // a cout expression to a temp is not valid C++).
+            // Standard library calls.
             var stdlibCall = EmitStdLibCall(functionName, args, call);
             if (stdlibCall != null)
             {
-                if (IsVoidStdLibCall(functionName))
-                    EmitRegion($"{stdlibCall};");
-                else
-                    EmitCallStatement(stdlibCall);
-                return;
+                isVoidStdLib = IsVoidStdLibCall(functionName);
+                return stdlibCall;
             }
 
             // Regular function call
             var sanitizedName = StaticCallTarget(functionName)
                                 ?? SanitizeName(ResolveFlattenedFunctionName(functionName));
-            var argsStr = string.Join(", ", args);
-            EmitCallStatement($"{sanitizedName}({argsStr})");
+            return $"{sanitizedName}({string.Join(", ", args)})";
         }
 
         /// <summary>
@@ -4189,9 +4207,60 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         {
             var match = PatternMatchCondition(value, pc);
             if (pc.WhenGuard != null)
-                return $"({match}) && ({RenderInline(pc.WhenGuard)})";
+                return $"({match}) && ({RenderGuard(pc.WhenGuard)})";
             return match;
         }
+
+        /// <summary>
+        /// The nodes of the guard tree <see cref="RenderGuard"/> is rendering, or null. Every node
+        /// here was built with emission suppressed, so none has a declared temp: while this is set,
+        /// <see cref="GetValueName"/> renders a member of it inline instead of by a temp name.
+        /// </summary>
+        private HashSet<IRValue> _guardNodes;
+
+        /// <summary>
+        /// A <c>When</c> guard as one inline C++ expression.
+        ///
+        /// <para>⛔ The guard's calls, method calls and member reads are rendered by the SAME
+        /// expression builders their statement forms use (<see cref="CallExpression"/>,
+        /// <see cref="InstanceCallExpression"/>, <see cref="FieldReadExpression"/>), not by a copy:
+        /// those carry the stdlib table, the primitive statics, the ToString shims, accessor
+        /// properties and <c>Shared</c> qualifiers, and a second list would drift. They render
+        /// their operands with <see cref="GetValueName"/>, which is why the guard's node set is
+        /// published for the duration — a receiver or argument that is itself an un-emitted call
+        /// renders inline too, however deep, rather than as the undeclared temp every guard call
+        /// used to produce ("'t10' was not declared in this scope", after "Compilation
+        /// successful").</para>
+        /// </summary>
+        private string RenderGuard(IRValue guard)
+        {
+            var saved = _guardNodes;
+            _guardNodes = new HashSet<IRValue>(ReferenceEqualityComparer.Instance);
+            CollectGuardNodes(guard, _guardNodes);
+            try
+            {
+                return RenderInline(guard);
+            }
+            finally
+            {
+                _guardNodes = saved;
+            }
+        }
+
+        private static void CollectGuardNodes(IRValue value, HashSet<IRValue> nodes)
+        {
+            if (value == null || !nodes.Add(value)) return;
+            foreach (var operand in IROperandWalker.EnumerateOperands(value))
+                CollectGuardNodes(operand, nodes);
+        }
+
+        /// <summary>A guard node this backend cannot express inline — refused, never a dangling temp.</summary>
+        private static CppCapabilityException GuardRefusal(string what) =>
+            new CppCapabilityException(new List<string>
+            {
+                $"{what} is not supported inside a 'When' guard on the C++ backend. Compute it into "
+                + "a variable before the Select Case and test the variable in the guard."
+            });
 
         /// <summary>The value/range/comparison test for a single pattern case (no When guard).</summary>
         private string PatternMatchCondition(string value, IRPatternCase pc)
@@ -4238,10 +4307,10 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         /// <summary>
         /// Render an un-emitted expression tree (a suppressed When guard) as an inline C++
         /// expression. The guard is built with IRBuilder._suppressEmit set, so its operand
-        /// instructions never entered a block; GetValueName alone would reference undeclared
-        /// temps. Recurse over the common guard shapes (binary/compare/unary over
-        /// constants/variables); fall back to GetValueName for leaves (variables, already-emitted
-        /// values, inline foreign calls).
+        /// instructions never entered a block; a name would reference an undeclared temp. Each
+        /// value-producing node goes through its statement form's own expression builder; leaves
+        /// (variables, constants, foreign reads) render by name; anything else is REFUSED by name
+        /// (<see cref="GuardRefusal"/>). Called only through <see cref="RenderGuard"/>.
         /// </summary>
         private string RenderInline(IRValue v)
         {
@@ -4249,25 +4318,95 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             {
                 case IRConstant c:
                     return EmitConstant(c);
-                case IRBinaryOp b when DivisionHelper(b) is { } helper:
-                    return $"{helper}({RenderInline(b.Left)}, {RenderInline(b.Right)})";
-                case IRBinaryOp b:
-                    return $"({RenderInline(b.Left)} {MapBinaryOperator(b.Operation)} {RenderInline(b.Right)})";
+                // Through the statement form's own expression (concatenation, the checked
+                // division helpers, fmod); its operands render inline through GetValueName.
+                case IRBinaryOp b when _guardNodes != null:
+                    return $"({BinaryOpExpression(b)})";
                 case IRCompare cmp:
                     return $"({RenderInline(cmp.Left)} {MapCompareOperator(cmp.Comparison)} {RenderInline(cmp.Right)})";
                 case IRUnaryOp u:
                     return $"({MapUnaryOperator(u.Operation)}{RenderInline(u.Operand)})";
-                // ⛔ Without this arm a numeric cast in a guard renders by NAME — an undeclared
-                // temp, because the guard's instructions never entered a block. Nothing put one
-                // there until IRBuilder began converting a floating operand of `\` (ADR-0005 D1);
-                // since then `When y \ 2 = 4` on a Double `y` needs this arm to compile at all.
-                // Decimal and String casts keep the old fallback: their statement forms route
-                // through the engine, not a static_cast.
-                case IRCast c when IsPlainNumericCast(c):
-                    return $"({StaticCastText(c, RenderInline(c.Value))})";
+                // ⛔ Without this arm a cast in a guard renders by NAME — an undeclared temp. It
+                // was once numeric-only (IRBuilder's `\` conversion, ADR-0005 D1); it is now the
+                // statement form's whole CastExpression, so CStr/Decimal casts render too.
+                case IRCast c when _guardNodes != null:
+                    return $"({CastExpression(c)})";
+                case IRCall call when _guardNodes != null:
+                    return InlineCall(call);
+                case IRInstanceMethodCall methodCall when _guardNodes != null:
+                    return InlineInstanceCall(methodCall);
+                case IRFieldAccess fieldAccess when _guardNodes != null:
+                    return InlineFieldRead(fieldAccess);
+                // An element read — the same element lvalue Visit(IRLoad) reads from.
+                case IRLoad load when _guardNodes != null && load.Address is IRGetElementPtr gep:
+                    return ElementLValue(gep);
                 default:
-                    return GetValueName(v);
+                    // Anything else that is an un-emitted guard node has no declared temp, so a
+                    // name would dangle. Refuse it by name instead of handing g++ an undeclared
+                    // identifier. Variables, constants and foreign reads render by name as ever.
+                    if (_guardNodes != null && _guardNodes.Contains(v)
+                        && v is not IRVariable && v is not IRConstant && v.Type?.Kind != TypeKind.Foreign)
+                        throw GuardRefusal($"A '{v.GetType().Name}' expression");
+                    return GetValueNameCore(v);
             }
+        }
+
+        private string InlineCall(IRCall call)
+        {
+            if (call.Type?.Kind == TypeKind.Foreign) return RenderForeignFreeCall(call);
+            if (call.ResolvedNetTarget != null) throw GuardRefusal($"The .NET call '{call.FunctionName}'");
+
+            var args = call.Arguments.Select(GetValueName).ToList();
+            AliasByRefLValueArguments(call.ByRefArguments, call.Arguments, args);
+            RefuseNonLValueByRef(call.ByRefArguments, call.Arguments, args, call.FunctionName);
+
+            var expression = CallExpression(call, args, out var isVoidStdLib);
+            if (isVoidStdLib) throw GuardRefusal($"'{call.FunctionName}', which returns no value,");
+            return expression;
+        }
+
+        private string InlineInstanceCall(IRInstanceMethodCall methodCall)
+        {
+            if (methodCall.Type?.Kind == TypeKind.Foreign) return RenderForeignMethodCall(methodCall);
+            if (methodCall.ResolvedNetTarget != null) throw GuardRefusal($"The .NET call '{methodCall.MethodName}'");
+
+            // Checked BEFORE the expression is built: its argument text is not needed, only which
+            // arguments survive AliasByRefLValueArguments as real storage.
+            var args = methodCall.Arguments.Select(GetValueName).ToList();
+            AliasByRefLValueArguments(methodCall.ByRefArguments, methodCall.Arguments, args);
+            RefuseNonLValueByRef(methodCall.ByRefArguments, methodCall.Arguments, args, methodCall.MethodName);
+            return InstanceCallExpression(methodCall, out _, out _);
+        }
+
+        /// <summary>
+        /// A statement gives a non-lvalue ByRef argument a braced named local
+        /// (<see cref="MaterializeByRefArguments(List{bool}, List{IRValue}, List{string}, Func{List{IRVariable}})"/>);
+        /// an expression has nowhere to put one. <c>NeedsByRefTemp</c> cannot see this case: it
+        /// judges an argument by how a STATEMENT names it, and there <c>n + 1</c> is a declared
+        /// temp — in a guard it renders as the expression itself, and g++ refuses to bind
+        /// <c>int32_t&amp;</c> to it. An argument AliasByRefLValueArguments re-derived as real
+        /// storage (an element, a field) is fine.
+        /// </summary>
+        private void RefuseNonLValueByRef(List<bool> byRefFlags, List<IRValue> arguments, List<string> args, string callee)
+        {
+            if (byRefFlags == null) return;
+            for (int i = 0; i < arguments.Count && i < byRefFlags.Count && i < args.Count; i++)
+            {
+                if (!byRefFlags[i]) continue;
+                var arg = arguments[i];
+                var aliased = args[i] != GetValueName(arg);
+                var inlineExpression = arg is not IRVariable && _guardNodes.Contains(arg);
+                if (!aliased && (NeedsByRefTemp(arg) || inlineExpression))
+                    throw GuardRefusal($"Passing a non-variable ByRef argument to '{callee}'");
+            }
+        }
+
+        private string InlineFieldRead(IRFieldAccess fieldAccess)
+        {
+            if (fieldAccess.Type?.Kind == TypeKind.Foreign) return RenderForeignFieldAccess(fieldAccess);
+            if (!IsCatchMessageRead(fieldAccess) && fieldAccess.ResolvedNetTarget != null)
+                throw GuardRefusal($"The .NET member '{fieldAccess.FieldName}'");
+            return FieldReadExpression(fieldAccess);
         }
         
         public override void Visit(IRPhi phi)
@@ -4339,8 +4478,18 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         
         public override void Visit(IRCast cast)
         {
-            var value = GetValueName(cast.Value);
             var result = GetValueName(cast);
+            WriteLine($"{result} = {CastExpression(cast)};");
+        }
+
+        /// <summary>
+        /// The C++ EXPRESSION for a conversion, shared by the statement form
+        /// (<see cref="Visit(IRCast)"/>) and the inline <c>When</c>-guard form
+        /// (<see cref="RenderInline"/>), so a cast in a guard means what it means anywhere else.
+        /// </summary>
+        private string CastExpression(IRCast cast)
+        {
+            var value = GetValueName(cast.Value);
 
             // P1 Decimal conversions: a raw static_cast to/from the BasicLang::Decimal
             // struct is invalid C++ (the engine deliberately defines no conversion
@@ -4359,14 +4508,12 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 // ctor's 15-significant-digit rule would silently lose digits). Only
                 // Single/Double sources take the converting double ctor's .NET 15-digit rule.
                 if (castSourceIsDecimal)
-                    WriteLine($"{result} = {value};");
+                    return value;
                 else if (IsIntegralTypeName(cast.Value?.Type?.Name))
-                    WriteLine(string.Equals(cast.Value.Type.Name, "ULong", StringComparison.OrdinalIgnoreCase)
-                        ? $"{result} = BasicLang::Decimal(static_cast<uint64_t>({value}));"
-                        : $"{result} = BasicLang::Decimal(static_cast<int64_t>({value}));");
-                else
-                    WriteLine($"{result} = BasicLang::Decimal(static_cast<double>({value}));");
-                return;
+                    return string.Equals(cast.Value.Type.Name, "ULong", StringComparison.OrdinalIgnoreCase)
+                        ? $"BasicLang::Decimal(static_cast<uint64_t>({value}))"
+                        : $"BasicLang::Decimal(static_cast<int64_t>({value}))";
+                return $"BasicLang::Decimal(static_cast<double>({value}))";
             }
             if (castSourceIsDecimal)
             {
@@ -4375,8 +4522,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                     || string.Equals(castTargetName, "Single", StringComparison.OrdinalIgnoreCase))
                 {
                     // .NET's explicit operator double (VarR8FromDec); Single narrows on assignment.
-                    WriteLine($"{result} = ({value}).ToDouble();");
-                    return;
+                    return $"({value}).ToDouble()";
                 }
                 if (IsIntegralTypeName(castTargetName))
                 {
@@ -4385,15 +4531,13 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                     // static_cast has exactly that rule, so ToDouble() + the cast matches.
                     // Precision caveat: ToDouble is the .NET VarR8FromDec formula, exact to
                     // 15 significant digits — a Decimal with more digits narrows approximately.
-                    WriteLine($"{result} = static_cast<{MapType(cast.Type)}>(({value}).ToDouble());");
-                    return;
+                    return $"static_cast<{MapType(cast.Type)}>(({value}).ToDouble())";
                 }
                 if (string.Equals(castTargetName, "String", StringComparison.OrdinalIgnoreCase))
                 {
                     // std::to_string has no Decimal overload; the engine's scale-preserving
                     // ToString() is the .NET-faithful rendering (invariant, trailing zeros kept).
-                    WriteLine($"{result} = ({value}).ToString();");
-                    return;
+                    return $"({value}).ToString()";
                 }
                 if (string.Equals(castTargetName, "Boolean", StringComparison.OrdinalIgnoreCase))
                 {
@@ -4401,8 +4545,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                     // is `value != 0`, and that is the only sane reading of CType(d, Boolean).
                     // (The C# backend emits `(bool)(d)` here, which csc rejects — a
                     // pre-existing C#-backend gap, tracked outside P1.)
-                    WriteLine($"{result} = !({value}).IsZeroMag();");
-                    return;
+                    return $"!({value}).IsZeroMag()";
                 }
             }
 
@@ -4421,12 +4564,11 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 var asText = StringifyForText(cast.Value, value);
                 if (asText != null)
                 {
-                    WriteLine($"{result} = {asText};");
-                    return;
+                    return $"{asText}";
                 }
             }
 
-            WriteLine($"{result} = {StaticCastText(cast, value)};");
+            return StaticCastText(cast, value);
         }
 
         /// <summary>
@@ -4450,17 +4592,6 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 return $"static_cast<{targetType}>(std::nearbyint({value}))";
 
             return $"static_cast<{targetType}>({value})";
-        }
-
-        /// <summary>
-        /// A cast between two numeric primitives that are not Decimal — exactly the casts
-        /// <see cref="Visit(IRCast)"/> renders with <see cref="StaticCastText"/> alone, so
-        /// rendering one inline cannot disagree with its statement form.
-        /// </summary>
-        private static bool IsPlainNumericCast(IRCast cast)
-        {
-            static bool Plain(string name) => IsIntegralTypeName(name) || IsFloatingTypeName(name);
-            return Plain(cast.Value?.Type?.Name) && Plain(cast.Type?.Name);
         }
 
         /// <summary>A floating source, i.e. one a narrowing has something to round from.</summary>
@@ -4672,36 +4803,12 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 return;
             }
 
-            var obj = GetValueName(methodCall.Object);
+            var expression = InstanceCallExpression(methodCall, out var isShim, out var byRefTemps);
 
-            // .NET-surface shim: ToString has no C++ counterpart — lower it by
-            // receiver type (DateTime → runtime formatter, numbers → to_string).
-            if (string.Equals(methodCall.MethodName, "ToString", StringComparison.OrdinalIgnoreCase))
-            {
-                var shim = EmitToStringShim(methodCall, obj);
-                if (shim != null)
-                {
-                    WriteLine($"{GetValueName(methodCall)} = {shim};");
-                    return;
-                }
-            }
-
-            var op = MemberAccessOp(methodCall.Object);
-            var methodName = SanitizeName(methodCall.MethodName);
-            var argList = methodCall.Arguments.Select(a => GetValueName(a)).ToList();
-
-            // Same two ByRef adjustments the free-function path makes: bind to the caller's
-            // real storage for an aliasable argument, and give a non-lvalue one a named local
-            // (braced, so goto-lowered control flow cannot jump across its initialization).
-            AliasByRefLValueArguments(methodCall.ByRefArguments, methodCall.Arguments, argList);
-            var byRefTemps = MaterializeByRefArguments(methodCall.ByRefArguments, methodCall.Arguments,
-                                                       argList, calleeParameters: null);
-
-
-            var args = string.Join(", ", argList);
-            var statement = methodCall.Type == null || methodCall.Type.Name == "Void"
-                ? $"{obj}{op}{methodName}({args});"
-                : $"{GetValueName(methodCall)} = {obj}{op}{methodName}({args});";
+            // A ToString shim always has a value; otherwise a Void method is a bare statement.
+            var statement = !isShim && (methodCall.Type == null || methodCall.Type.Name == "Void")
+                ? $"{expression};"
+                : $"{GetValueName(methodCall)} = {expression};";
 
             if (byRefTemps.Count == 0)
             {
@@ -4714,6 +4821,42 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             WriteLine(statement);
             Unindent();
             WriteLine("}");
+        }
+
+        /// <summary>
+        /// The C++ EXPRESSION for a (non-foreign, non-.NET) instance method call, shared by the
+        /// statement form (<see cref="Visit(IRInstanceMethodCall)"/>) and the inline <c>When</c>-guard
+        /// form (<see cref="InlineInstanceCall"/>). <paramref name="byRefTemps"/> are the copy-in
+        /// declarations a non-lvalue ByRef argument needs ahead of the call — a statement braces
+        /// them around itself; an expression has nowhere to put them.
+        /// </summary>
+        private string InstanceCallExpression(IRInstanceMethodCall methodCall, out bool isShim, out List<string> byRefTemps)
+        {
+            var obj = GetValueName(methodCall.Object);
+
+            // .NET-surface shim: ToString has no C++ counterpart — lower it by
+            // receiver type (DateTime → runtime formatter, numbers → to_string).
+            if (string.Equals(methodCall.MethodName, "ToString", StringComparison.OrdinalIgnoreCase)
+                && EmitToStringShim(methodCall, obj) is { } shim)
+            {
+                isShim = true;
+                byRefTemps = new List<string>();
+                return shim;
+            }
+
+            isShim = false;
+            var op = MemberAccessOp(methodCall.Object);
+            var methodName = SanitizeName(methodCall.MethodName);
+            var argList = methodCall.Arguments.Select(a => GetValueName(a)).ToList();
+
+            // Same two ByRef adjustments the free-function path makes: bind to the caller's
+            // real storage for an aliasable argument, and give a non-lvalue one a named local
+            // (braced, so goto-lowered control flow cannot jump across its initialization).
+            AliasByRefLValueArguments(methodCall.ByRefArguments, methodCall.Arguments, argList);
+            byRefTemps = MaterializeByRefArguments(methodCall.ByRefArguments, methodCall.Arguments,
+                                                   argList, calleeParameters: null);
+
+            return $"{obj}{op}{methodName}({string.Join(", ", argList)})";
         }
 
         /// <summary>
@@ -4849,26 +4992,41 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // Result temps are pre-declared by DeclareLocalsAndTemporaries: assign, don't redeclare.
             var result = GetValueName(fieldAccess);
 
-            // §11.1 `<catchVar>.Message` (collected in InitializeFunctionContext, strictly
-            // scoped to catch variables inside their own clause regions): NetException's
-            // message IS its what(), and the per-clause std::exception/std::runtime_error
-            // bindings carry the message the same way — one lowering serves both copies
-            // of the (twice-emitted) catch body.
-            if (_catchMessageAccesses.Contains(fieldAccess) && fieldAccess.Object is IRVariable catchVar)
-            {
-                WriteLine($"{result} = BasicLang::String({SanitizeName(catchVar.Name)}.what());");
-                return;
-            }
-
             // P2a-2 Task 7a: a resolved .NET property/field READ lowers to the getter-shaped
-            // property slot (§9.2); a STATIC one drops the phantom type-name receiver.
-            if (fieldAccess.ResolvedNetTarget != null
+            // property slot (§9.2); a STATIC one drops the phantom type-name receiver. A catch
+            // variable's Message is tested FIRST (see FieldReadExpression).
+            if (!IsCatchMessageRead(fieldAccess)
+                && fieldAccess.ResolvedNetTarget != null
                 && TryLowerNetInvocation(fieldAccess, fieldAccess.ResolvedNetTarget,
                         fieldAccess.ResolvedNetTargetIsExact, fieldAccess.NetCategory,
                         fieldAccess.Object, Array.Empty<IRValue>()))
             {
                 return;
             }
+
+            WriteLine($"{result} = {FieldReadExpression(fieldAccess)};");
+        }
+
+        /// <summary>
+        /// §11.1 <c>&lt;catchVar&gt;.Message</c> (collected in InitializeFunctionContext, strictly
+        /// scoped to catch variables inside their own clause regions).
+        /// </summary>
+        private bool IsCatchMessageRead(IRFieldAccess fieldAccess) =>
+            _catchMessageAccesses.Contains(fieldAccess) && fieldAccess.Object is IRVariable;
+
+        /// <summary>
+        /// The C++ EXPRESSION for a (non-foreign) member read that is not a resolved .NET member,
+        /// shared by the statement form (<see cref="Visit(IRFieldAccess)"/>) and the inline
+        /// <c>When</c>-guard form (<see cref="InlineFieldRead"/>). The arms are in their original
+        /// order; the .NET arm, which writes statements of its own, stays with the caller.
+        /// </summary>
+        private string FieldReadExpression(IRFieldAccess fieldAccess)
+        {
+            // NetException's message IS its what(), and the per-clause std::exception /
+            // std::runtime_error bindings carry the message the same way — one lowering serves
+            // both copies of the (twice-emitted) catch body.
+            if (IsCatchMessageRead(fieldAccess))
+                return $"BasicLang::String({SanitizeName(((IRVariable)fieldAccess.Object).Name)}.what())";
 
             // P1 static dispatch: a NativeOwned TYPE-NAME receiver (`DateTime.Now`,
             // `DateTime.MinValue`, `Decimal.One`, `TimeSpan.Zero`) with a surface
@@ -4883,8 +5041,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 && (staticMember.Kind == NativeBclMemberKind.StaticProperty
                     || staticMember.Kind == NativeBclMemberKind.StaticMethod))
             {
-                WriteLine($"{result} = BasicLang::{BclCanonicalName(staticRecv.Name)}::{staticMember.CppName ?? staticMember.MemberName}();");
-                return;
+                return $"BasicLang::{BclCanonicalName(staticRecv.Name)}::{staticMember.CppName ?? staticMember.MemberName}()";
             }
 
             // A type keyword's Shared PROPERTY (`Integer.MaxValue`, `String.Empty`, `Double.NaN`):
@@ -4892,8 +5049,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             if (fieldAccess.Object is IRVariable keywordRecv
                 && PrimitiveStaticSurface.TryGet(keywordRecv.Name, fieldAccess.FieldName, out var primitiveProp))
             {
-                WriteLine($"{result} = {PrimitiveRuntimeName(primitiveProp)}();");
-                return;
+                return $"{PrimitiveRuntimeName(primitiveProp)}()";
             }
 
             // §8.5's category marker, tested BEFORE every name/Kind-keyed arm below — the same
@@ -4930,13 +5086,11 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 if (string.Equals(receiverType?.Name, "String", StringComparison.OrdinalIgnoreCase)
                     || _catchMessageAccesses.Contains(fieldAccess.Object))
                 {
-                    WriteLine($"{result} = static_cast<int32_t>({GetValueName(fieldAccess.Object)}.length());");
-                    return;
+                    return $"static_cast<int32_t>({GetValueName(fieldAccess.Object)}.length())";
                 }
                 if (receiverType?.Kind == TypeKind.Array)
                 {
-                    WriteLine($"{result} = static_cast<int32_t>({GetValueName(fieldAccess.Object)}.size());");
-                    return;
+                    return $"static_cast<int32_t>({GetValueName(fieldAccess.Object)}.size())";
                 }
             }
 
@@ -4949,8 +5103,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             {
                 var recv = GetValueName(fieldAccess.Object);
                 var accessOp = MemberAccessOp(fieldAccess.Object);
-                WriteLine($"{result} = {recv}{accessOp}{SanitizeName(fieldAccess.FieldName)}();");
-                return;
+                return $"{recv}{accessOp}{SanitizeName(fieldAccess.FieldName)}()";
             }
 
             // P1 property bridge: a property access
@@ -4965,16 +5118,14 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             {
                 var recv = GetValueName(fieldAccess.Object);
                 var accessOp = MemberAccessOp(fieldAccess.Object);
-                WriteLine($"{result} = {recv}{accessOp}{bclProp.CppName ?? bclProp.MemberName}();");
-                return;
+                return $"{recv}{accessOp}{bclProp.CppName ?? bclProp.MemberName}()";
             }
 
             // A property with a Get body (or Overridable, or read through an interface) has no
             // data member to read — call its getter. See AccessorPropertyOf.
             if (AccessorPropertyOf(fieldAccess.Object, fieldAccess.FieldName) is { } getter)
             {
-                WriteLine($"{result} = {getter.Accessor}get_{getter.Name}();");
-                return;
+                return $"{getter.Accessor}get_{getter.Name}()";
             }
 
             var fieldName = SanitizeName(fieldAccess.FieldName);
@@ -4982,13 +5133,12 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // A `Shared` READ through the class name: `Box.K` is `Box::K`, not `Box->K`.
             if (StaticMemberQualifier(fieldAccess.Object, fieldAccess.FieldName) is string readQualifier)
             {
-                WriteLine($"{result} = {readQualifier}{fieldName};");
-                return;
+                return $"{readQualifier}{fieldName}";
             }
 
             var obj = GetValueName(fieldAccess.Object);
             var op = MemberAccessOp(fieldAccess.Object);
-            WriteLine($"{result} = {obj}{op}{fieldName};");
+            return $"{obj}{op}{fieldName}";
         }
 
         public override void Visit(IRFieldStore fieldStore)

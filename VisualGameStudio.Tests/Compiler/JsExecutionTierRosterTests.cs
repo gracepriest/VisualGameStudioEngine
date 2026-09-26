@@ -224,6 +224,8 @@ public class JsExecutionTierRosterTests
         // The type keywords' Shared members (String.Format, Integer.Parse, …). Named outside the
         // patterns below, so listed by hand; its JS legs spawn Node.
         typeof(PrimitiveStaticSurfaceRunTests),
+        // Select Case When guards: calls, AndAlso/OrElse, casts, a binding pattern.
+        typeof(WhenGuardCallRunTests),
 
         // ADR-0006 D2 (task #137) — the use count Invariant S′ checks is dynamic, not static.
         // Named "...ExecutionTests", so the widened match below WOULD catch it on its own; listed
@@ -297,7 +299,7 @@ public class JsExecutionTierRosterTests
 
     [Test]
     public void RosterIsPinned()
-        => Assert.That(ExecutionTier, Has.Length.EqualTo(67),
+        => Assert.That(ExecutionTier, Has.Length.EqualTo(68),
             "The execution-tier roster changed. That is fine — update the number — but it must " +
             "be a deliberate edit, not a silent shrink.");
 

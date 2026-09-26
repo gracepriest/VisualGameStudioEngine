@@ -356,13 +356,21 @@ public class PrimitiveStaticSurfaceRunTests
             Is.EqualTo(PrimitiveStaticSurfaceTests.NativeExpected));
     }
 
-    /// <summary>A row inside a When guard (emission suppressed, in no block) — JavaScript and C#.</summary>
+    /// <summary>
+    /// A row inside a When guard (emission suppressed, in no block) — every backend. C++ joined
+    /// once a guard's calls rendered inline (WhenGuardCallTests); before, every guard call was an
+    /// undeclared temp.
+    /// </summary>
     [Test]
-    public void Guard_JavaScriptAndCSharp_Run()
+    public void Guard_Runs_OnEveryBackend()
     {
         Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharp(PrimitiveStaticSurfaceTests.GuardProgram)),
             Is.EqualTo(PrimitiveStaticSurfaceTests.GuardExpected));
         Assert.That(FourBackends.Norm(JavaScriptExecutionTests.RunNodeScript(JsTestSupport.CompileAggressive(PrimitiveStaticSurfaceTests.GuardProgram))),
+            Is.EqualTo(PrimitiveStaticSurfaceTests.GuardExpected));
+        Assert.That(FourBackends.Norm(BclE2E.CompileRun(BclE2E.CompileToCppOptimized(PrimitiveStaticSurfaceTests.GuardProgram))),
+            Is.EqualTo(PrimitiveStaticSurfaceTests.GuardExpected));
+        Assert.That(FourBackends.Norm(BclE2E.CompileRun(BclE2E.CompileToCppAggressive(PrimitiveStaticSurfaceTests.GuardProgram))),
             Is.EqualTo(PrimitiveStaticSurfaceTests.GuardExpected));
     }
 }
