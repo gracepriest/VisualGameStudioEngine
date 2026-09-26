@@ -1332,7 +1332,40 @@ namespace BasicLang.Compiler.IR
         public bool IsExtension { get; set; }
         public string ExtendedType { get; set; }
         public bool IsLambda { get; set; }
+
+        /// <summary>
+        /// For a lambda (<see cref="IsLambda"/>): its capture set (task #122), as (name, type)
+        /// pairs, filled by <c>IRBuilder</c> from the lambda's own IR. It is the NAME-based
+        /// over-approximation <see cref="LambdaCapturedNames"/> is built from — every name the
+        /// lambda's IR mentions, including its own locals, temps, members and globals, minus its
+        /// parameters. It is NOT a declared free-variable list a backend could hoist the lambda
+        /// with. The type is that of an <see cref="IRVariable"/> or named value the IR carries
+        /// under the name, and null when the name only appears as a written slot (a For Each,
+        /// Catch or pattern variable, a member store). Empty for a lambda whose IR holds names
+        /// that cannot be enumerated (<see cref="IRInlineCode"/>), and for any other function.
+        /// </summary>
         public List<(string name, TypeInfo type)> CapturedVariables { get; set; }
+
+        /// <summary>
+        /// ⭐ THE CAPTURE SET OF THE LAMBDAS THIS FUNCTION CREATES (task #122, ADR-0006 D1's
+        /// Obligation): every name any of them may read or write, nested lambdas included.
+        /// <c>IRBuilder</c> fills it at the end of each lambda it lowers here, from that lambda's
+        /// IR. <c>OptimizationPass.IsCallVisible</c> reads it: a by-value parameter or a declared
+        /// local of this function is call-visible when its name is in this set (compared ignoring
+        /// case). <b>Null means NOT COMPUTED, never "nothing captured"</b>: a function IRBuilder
+        /// did not record (hand-built IR) falls back to ADR-0006 D1's interim rule, every local
+        /// visible. Names are kept with their exact spelling.
+        /// </summary>
+        public HashSet<string> LambdaCapturedNames { get; set; }
+
+        /// <summary>
+        /// The <c>__lambda_N</c> names whose captures <see cref="LambdaCapturedNames"/> accounts
+        /// for. A lambda this function references that is NOT listed here — hand-built IR, or a
+        /// lambda whose names could not be enumerated — makes
+        /// <c>OptimizationPass.IsCallVisible</c> fall back to the interim rule for the whole
+        /// function. Null means none recorded.
+        /// </summary>
+        public HashSet<string> LambdaCaptureSources { get; set; }
 
         /// <summary>
         /// Source module name for multi-file compilation

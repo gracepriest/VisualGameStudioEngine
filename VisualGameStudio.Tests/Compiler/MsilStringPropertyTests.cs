@@ -206,7 +206,7 @@ End Sub", "1");
     public void ArrayLength_IsAControlOnADifferentPath_NeverBroken()
         => MsilAgreesWithCSharp(@"
 Sub Main()
-    Dim a(2) As Integer
+    Dim a[2] As Integer
     a(0) = 5
     PrintLine(CStr(a.Length))
 End Sub", "2");
