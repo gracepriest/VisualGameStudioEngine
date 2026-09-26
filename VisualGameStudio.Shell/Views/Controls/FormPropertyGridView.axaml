@@ -1,0 +1,209 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:controls="using:VisualGameStudio.Shell.Views.Controls"
+             xmlns:designerVm="using:VisualGameStudio.Shell.ViewModels.Designer"
+             x:Class="VisualGameStudio.Shell.Views.Controls.FormPropertyGridView"
+             x:DataType="designerVm:FormPropertyGridViewModel">
+
+  <!-- Visual Studio's Properties window (spec §3), top to bottom: object selector, toolbar, search,
+       rows (under collapsible category headers, or flat A-Z), description pane.
+       ⛔ Every {Binding} here is a REFLECTION binding (no compiled bindings in this repo): a wrong path
+       binds to NOTHING with no build error. FormPropertyGridViewTests resolves each against the type
+       in scope — this view model at the root, each DataTemplate's DataType inside it. -->
+  <UserControl.Styles>
+    <!-- Bold = present AND different from the target's default (spec §2.7). -->
+    <Style Selector="TextBlock.bold">
+      <Setter Property="FontWeight" Value="Bold"/>
+    </Style>
+    <!-- An absent property shows the target's default, greyed. -->
+    <Style Selector="Panel.inherited">
+      <Setter Property="Opacity" Value="0.6"/>
+    </Style>
+    <Style Selector="ListBoxItem">
+      <Setter Property="Padding" Value="0"/>
+      <Setter Property="MinHeight" Value="0"/>
+    </Style>
+  </UserControl.Styles>
+
+  <Border Background="{DynamicResource IdePanelBg}"
+          BorderBrush="{DynamicResource IdeBorder}" BorderThickness="1,0,0,0">
+    <DockPanel>
+
+      <!-- The object selector: the form, every control, every tray component. Choosing one REQUESTS
+           the selection (SelectionRequested); the document view model answers through its ONE
+           selection store (SelectInDesigner). The grid never selects anything itself. -->
+      <ComboBox x:Name="ObjectSelector" DockPanel.Dock="Top" Margin="4,4,4,2"
+                HorizontalAlignment="Stretch" FontSize="11"
+                ItemsSource="{Binding Objects}"
+                SelectedItem="{Binding SelectedObject, Mode=TwoWay}">
+        <ComboBox.ItemTemplate>
+          <DataTemplate DataType="{x:Type designerVm:FormObjectItem}" x:DataType="designerVm:FormObjectItem">
+            <StackPanel Orientation="Horizontal" Spacing="6">
+              <TextBlock Text="{Binding Name}" FontWeight="SemiBold" FontSize="11"/>
+              <TextBlock Text="{Binding Kind}" FontSize="11" Opacity="0.55"/>
+            </StackPanel>
+          </DataTemplate>
+        </ComboBox.ItemTemplate>
+      </ComboBox>
+
+      <!-- Categorized | Alphabetical. (Properties | Events arrive with the Events tab, slice 5.)
+           ⚠ RadioButtons wearing the ToggleButton theme, not bare ToggleButtons: a ToggleButton
+           UNCHECKS when clicked again, so clicking the mode already shown would flip to the other one.
+           A radio stays checked, and the group unchecks its partner — which writes the same fact
+           (IsAlphabetical is the other face of IsCategorized) back through the other binding.
+           ⛔⛔ NO GroupName. A named group is scoped to the whole visual ROOT, so every grid view in the
+           IDE window (two form tabs, a split) would be ONE group — measured headless: two views sharing
+           a name locked the dispatcher in an endless check/uncheck loop between their bindings.
+           Unnamed radios group by their PARENT panel: one group per view.
+           (FormPropertyGridViewTests.TwoGridViewsInOneWindow_SortIndependently) -->
+      <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="2" Margin="4,0,4,2">
+        <RadioButton x:Name="CategorizedButton"
+                     Theme="{StaticResource {x:Type ToggleButton}}"
+                     Padding="6,1" FontSize="11"
+                     IsChecked="{Binding IsCategorized, Mode=TwoWay}"
+                     ToolTip.Tip="Categorized" Content="Categorized"/>
+        <RadioButton x:Name="AlphabeticalButton"
+                     Theme="{StaticResource {x:Type ToggleButton}}"
+                     Padding="6,1" FontSize="11"
+                     IsChecked="{Binding IsAlphabetical, Mode=TwoWay}"
+                     ToolTip.Tip="Alphabetical" Content="A-Z"/>
+      </StackPanel>
+
+      <!-- Search by name, in both sort modes. -->
+      <TextBox x:Name="SearchBox" DockPanel.Dock="Top" Margin="4,0,4,4" FontSize="11"
+               Watermark="Search properties"
+               Text="{Binding SearchText, Mode=TwoWay}"/>
+
+      <!-- The description pane: the property's name, then its Description; a frozen row adds its
+           Degraded reason, because "why can I not edit this" is the question this pane is for.
+           Docked BOTTOM before the list takes the rest, so a long list cannot push it off. -->
+      <Border DockPanel.Dock="Bottom" Padding="8,6" MinHeight="54"
+              Background="{DynamicResource IdeBg}"
+              BorderBrush="{DynamicResource IdeBorder}" BorderThickness="0,1,0,0">
+        <StackPanel Spacing="2">
+          <TextBlock Text="{Binding DescriptionTitle}" FontWeight="SemiBold" FontSize="11"/>
+          <TextBlock Text="{Binding DescriptionBody}" FontSize="11" Opacity="0.7" TextWrapping="Wrap"/>
+        </StackPanel>
+      </Border>
+
+      <!-- ⛔ SelectedItem, never SelectedRow: DisplayItems carries category headers as well as rows.
+           The view model derives SelectedRow (which drives the description pane) from SelectedItem. -->
+      <ListBox x:Name="PropertyList"
+               ItemsSource="{Binding DisplayItems}"
+               SelectedItem="{Binding SelectedItem, Mode=TwoWay}"
+               Background="Transparent" BorderThickness="0">
+        <ListBox.DataTemplates>
+
+          <!-- A collapsible category header (VS's +/- box). -->
+          <DataTemplate DataType="{x:Type designerVm:FormPropertyCategoryHeader}"
+                        x:DataType="designerVm:FormPropertyCategoryHeader">
+            <ToggleButton IsChecked="{Binding IsExpanded, Mode=TwoWay}"
+                          HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
+                          Padding="2,1" BorderThickness="0"
+                          Background="{DynamicResource IdeBg}"
+                          ToolTip.Tip="Collapse or expand this category">
+              <StackPanel Orientation="Horizontal" Spacing="4">
+                <TextBlock Text="{Binding Glyph}" FontSize="11" Width="10"/>
+                <TextBlock Text="{Binding Name}" FontSize="11" FontWeight="SemiBold"/>
+              </StackPanel>
+            </ToggleButton>
+          </DataTemplate>
+
+          <!-- One property row: name | value, with a rule between them and under each row (VS's grid
+               lines). The name column is fixed so the values line up down the panel. -->
+          <DataTemplate DataType="{x:Type designerVm:FormPropertyRow}" x:DataType="designerVm:FormPropertyRow">
+            <Border BorderBrush="{DynamicResource IdeBorder}" BorderThickness="0,0,0,1" Background="Transparent">
+              <Border.ContextMenu>
+                <ContextMenu>
+                  <!-- Reset (spec §2.7): REMOVE the property from the document. Disabled (CanReset)
+                       on an absent, frozen or intrinsic row. -->
+                  <MenuItem Header="Reset" Command="{Binding ResetCommand}"/>
+                </ContextMenu>
+              </Border.ContextMenu>
+              <Grid ColumnDefinitions="96,1,*" MinHeight="22">
+                <TextBlock Grid.Column="0" Text="{Binding Name}" Classes.bold="{Binding IsBold}"
+                           FontSize="11" VerticalAlignment="Center" Margin="12,0,4,0"
+                           TextTrimming="CharacterEllipsis"/>
+
+                <Border Grid.Column="1" Background="{DynamicResource IdeBorder}"/>
+
+                <Panel Grid.Column="2" Classes.inherited="{Binding IsDefaultShown}">
+                  <!-- Editable: the SAME four editors the Settings dialog uses.
+                       ⛔ Bound to UsesTypedEditor, NOT IsEditable. An Anchor row is editable and typed
+                       String, so IsEditable would render a text box underneath the picker — two
+                       editors for one value, each able to contradict the other. -->
+                  <controls:TypedValueEditor VerticalAlignment="Center" Margin="4,1,4,1"
+                                             IsVisible="{Binding UsesTypedEditor}"/>
+
+                  <!-- ⛔ Task 26: the Anchor box. Four edge bars around a centre — click an edge to
+                       anchor to it. ⚠ Pixel geometry only: the grid never builds this row for a
+                       .blwebform control, so there is no `hide on web` rule here to forget. -->
+                  <Border IsVisible="{Binding IsAnchorPicker}"
+                          Margin="4,2,4,2" HorizontalAlignment="Left" Width="46" Height="46"
+                          Background="{DynamicResource IdeBg}"
+                          BorderBrush="{DynamicResource IdeBorder}" BorderThickness="1">
+                    <Grid RowDefinitions="12,*,12" ColumnDefinitions="12,*,12" Margin="2">
+                      <ToggleButton Grid.Row="0" Grid.Column="1" Padding="0" MinWidth="0" MinHeight="0"
+                                    IsChecked="{Binding AnchorTop, Mode=TwoWay}" ToolTip.Tip="Anchor to the top edge"/>
+                      <ToggleButton Grid.Row="2" Grid.Column="1" Padding="0" MinWidth="0" MinHeight="0"
+                                    IsChecked="{Binding AnchorBottom, Mode=TwoWay}" ToolTip.Tip="Anchor to the bottom edge"/>
+                      <ToggleButton Grid.Row="1" Grid.Column="0" Padding="0" MinWidth="0" MinHeight="0"
+                                    IsChecked="{Binding AnchorLeft, Mode=TwoWay}" ToolTip.Tip="Anchor to the left edge"/>
+                      <ToggleButton Grid.Row="1" Grid.Column="2" Padding="0" MinWidth="0" MinHeight="0"
+                                    IsChecked="{Binding AnchorRight, Mode=TwoWay}" ToolTip.Tip="Anchor to the right edge"/>
+                      <Border Grid.Row="1" Grid.Column="1" Margin="1"
+                              Background="{DynamicResource IdeBorder}" Opacity="0.5"/>
+                    </Grid>
+                  </Border>
+
+                  <!-- ⛔ Task 26: the Dock box. DockStyle is NOT flags — exactly one region at a time —
+                       so these are commands rather than toggles, and "None" is its own button because
+                       un-docking is a thing the user has to be able to say. -->
+                  <StackPanel IsVisible="{Binding IsDockPicker}"
+                              Orientation="Horizontal" Spacing="6" Margin="4,2,4,2">
+                    <Border Width="46" Height="46"
+                            Background="{DynamicResource IdeBg}"
+                            BorderBrush="{DynamicResource IdeBorder}" BorderThickness="1">
+                      <Grid RowDefinitions="12,*,12" ColumnDefinitions="12,*,12" Margin="2">
+                        <ToggleButton Grid.Row="0" Grid.Column="1" Padding="0" MinWidth="0" MinHeight="0"
+                                      IsChecked="{Binding IsDockedTop, Mode=OneWay}"
+                                      Command="{Binding SetDockRegionCommand}" CommandParameter="Top"
+                                      ToolTip.Tip="Dock to the top"/>
+                        <ToggleButton Grid.Row="2" Grid.Column="1" Padding="0" MinWidth="0" MinHeight="0"
+                                      IsChecked="{Binding IsDockedBottom, Mode=OneWay}"
+                                      Command="{Binding SetDockRegionCommand}" CommandParameter="Bottom"
+                                      ToolTip.Tip="Dock to the bottom"/>
+                        <ToggleButton Grid.Row="1" Grid.Column="0" Padding="0" MinWidth="0" MinHeight="0"
+                                      IsChecked="{Binding IsDockedLeft, Mode=OneWay}"
+                                      Command="{Binding SetDockRegionCommand}" CommandParameter="Left"
+                                      ToolTip.Tip="Dock to the left"/>
+                        <ToggleButton Grid.Row="1" Grid.Column="2" Padding="0" MinWidth="0" MinHeight="0"
+                                      IsChecked="{Binding IsDockedRight, Mode=OneWay}"
+                                      Command="{Binding SetDockRegionCommand}" CommandParameter="Right"
+                                      ToolTip.Tip="Dock to the right"/>
+                        <ToggleButton Grid.Row="1" Grid.Column="1" Padding="0" MinWidth="0" MinHeight="0" Margin="1"
+                                      IsChecked="{Binding IsDockedFill, Mode=OneWay}"
+                                      Command="{Binding SetDockRegionCommand}" CommandParameter="Fill"
+                                      ToolTip.Tip="Fill the container"/>
+                      </Grid>
+                    </Border>
+                    <Button Content="None" FontSize="10" Padding="6,2" VerticalAlignment="Center"
+                            Command="{Binding SetDockRegionCommand}" CommandParameter="None"
+                            ToolTip.Tip="Not docked"/>
+                  </StackPanel>
+
+                  <!-- ⛔⛔ D9 Degraded: the raw value, read-only. A typed editor here would coerce the
+                       value the moment it rendered. The REASON is in the description pane. -->
+                  <TextBox Text="{Binding RawValue}" IsReadOnly="True"
+                           FontSize="11" Margin="4,1,4,1" VerticalAlignment="Center"
+                           FontFamily="Cascadia Code, Consolas, monospace"
+                           IsVisible="{Binding IsFrozen}"/>
+                </Panel>
+              </Grid>
+            </Border>
+          </DataTemplate>
+        </ListBox.DataTemplates>
+      </ListBox>
+    </DockPanel>
+  </Border>
+</UserControl>

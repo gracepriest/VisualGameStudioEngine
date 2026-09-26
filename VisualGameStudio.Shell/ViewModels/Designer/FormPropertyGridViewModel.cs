@@ -455,8 +455,8 @@ public partial class FormPropertyGridViewModel : ObservableObject
 
         // ⚠ The selected item is cleared first: it points at a row of the PREVIOUS control, and leaving
         // it would leave the description pane describing a property that is no longer on screen.
-        // (SelectedRow too, directly: today's view still binds it TwoWay, and a row selected there
-        // never went through SelectedItem.)
+        // (SelectedRow too, directly: the view binds SelectedItem, but a caller or test may set
+        // SelectedRow alone, and that never goes through SelectedItem.)
         SelectedItem = null;
         SelectedRow = null;
 
@@ -537,8 +537,8 @@ public partial class FormPropertyGridViewModel : ObservableObject
     private void RefreshDisplay()
     {
         // ⚠ Captured BEFORE the rebuild: clearing a bound list pushes a null selection back into us.
-        // SelectedRow FIRST — today's view binds it directly (Task 13 moves the list to SelectedItem), so a
-        // row picked there never reached SelectedItem, which may still hold an older header.
+        // SelectedRow FIRST — the view binds SelectedItem (FormPropertyGridView), but a row set through
+        // SelectedRow directly never reached SelectedItem, which may still hold an older header.
         var selected = (object?)SelectedRow ?? SelectedItem;
         var keep = _display.Refresh(Rows, SearchText, IsCategorized, selected);
 

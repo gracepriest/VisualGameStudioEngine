@@ -214,6 +214,19 @@ Follow this document **alongside** the plan. Where the two disagree, this docume
   - Mutants run (all killed): identity guard, grid-writes-its-own-selection, the constructor wiring, collapse
     memory, frozen raw text, root same-value, refusal path, `IntRow` change report, search, header clears the
     described row, and M10 (`UnicodeMinusCulture` did NOT self-skip here).
+- **Task 13: the sort toolbar is two `RadioButton`s wearing the ToggleButton theme, NOT the plan's bare
+  `ToggleButton`s.** A ToggleButton unchecks on a second click, so clicking the mode already shown flipped to the
+  other one. ⛔⛔ And **no `GroupName`**: a named group spans the whole visual ROOT, so every grid view in the IDE
+  window (two form tabs, a split) is one group. Measured headless: two views sharing a name LOCKED THE DISPATCHER
+  (an endless check/uncheck loop between their bindings; `--blame-hang-timeout` caught it). Unnamed radios group
+  by parent panel. Pinned by `FormPropertyGridViewTests.TwoGridViewsInOneWindow_SortIndependently` and
+  `TheSortButtons_ClickingTheModeAlreadyShown_KeepsIt`.
+  - ⚠ UNEXPLAINED once: the sort test (then with `GroupName`, and repeat clicks at the SAME point) went red in
+    one full fast run, green alone, and did not reproduce in the next full run. Cause NOT proven — a same-point
+    repeat can be stamped a double-click (FormDesignerRealViewTests measured that), so repeats are now offset.
+    It stayed green in the full run after both changes. Task 14: offset repeat clicks.
+  - The extracted view no longer shows `Header`/`HeaderKind` (the object selector replaces the caption);
+    `Header` stays on the VM for `FormDesignModeTests`.
 
 ## CONFIRMED SOUND
 - Slice 1 has not already implemented anything slice 2 adds: `SameValue`, `IsPresent`/`IsDefaultShown`/`IsBold`/`CanReset`/`ResetCommand`, `Category`/`Description` on the row, `FormRootValues.CanReset`, `DisplayItems`/`Objects`/`SelectionRequested`, and FormRoot-driven form rows. Today's `AddFormRows` is still hand-written, `FormPropertyGridViewModel.cs:228-267`.
