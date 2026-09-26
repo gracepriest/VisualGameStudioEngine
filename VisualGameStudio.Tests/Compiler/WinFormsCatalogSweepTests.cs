@@ -407,6 +407,41 @@ public class WinFormsCatalogSweepTests
             "every SystemColors name the catalog emits must be a member csc knows.");
     }
 
+    /// <summary>⛔ Through csc, not just the region writer: captions that LOOK like source must compile as strings.</summary>
+    [Test]
+    [Category("Integration")]
+    public void CaptionsThatLookLikeSource_CompileAsStrings()
+    {
+        var form = new FormDocument
+        {
+            Target = FormTarget.WinForms, Name = "SweepForm", Width = 800, Height = 450, Text = "New Customer"
+        };
+
+        var i = 0;
+        foreach (var caption in new[] { "New Customer", "\"quoted\"", "a \"b\" c" })
+        {
+            var button = new FormControl
+            {
+                Kind = "Button", Id = $"btn{i}", TabIndex = i,
+                Geometry = new PixelGeometry { X = 8, Y = 8 + i * 30, Width = 120, Height = 24 }
+            };
+            button.Properties["Text"] = caption;
+            form.Controls.Add(button);
+            i++;
+        }
+
+        var generated = GenerateCSharp(form);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(generated, Does.Contain("this.Text = \"New Customer\""));
+            Assert.That(generated, Does.Contain("btn0.Text = \"New Customer\""));
+            Assert.That(generated, Does.Contain("btn1.Text = \"\\\"quoted\\\"\""));
+            Assert.That(generated, Does.Contain("btn2.Text = \"a \\\"b\\\" c\""));
+        });
+        WinFormsCompile.AssertCompiles(generated, "a caption is a string, whatever it looks like.");
+    }
+
     // ==================================================================
     // Harness
     // ==================================================================

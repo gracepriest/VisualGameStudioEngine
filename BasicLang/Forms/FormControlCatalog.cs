@@ -345,6 +345,8 @@ public sealed record FormPropertyDef(
     /// not list is Degraded even though the real enum may have it: the catalog is the single source
     /// of truth, so the fix for a missing member is a catalog row, not a value spliced in
     /// unchecked.</para>
+    ///
+    /// <para>⚠ A String row always answers false — see the String arm.</para>
     /// </summary>
     public bool IsSourceForm(string value) => Type switch
     {
@@ -369,10 +371,13 @@ public sealed record FormPropertyDef(
             value.EndsWith(")", StringComparison.Ordinal) &&
             TryParseSize(value.Substring("New Size(".Length, value.Length - "New Size(".Length - 1), out _, out _),
 
-        // A string arrives from the document unquoted, so quotes mean it is already source.
-        FormPropertyType.String =>
-            value.StartsWith("\"", StringComparison.Ordinal) ||
-            value.StartsWith("New ", StringComparison.Ordinal),
+        // ⛔⛔ A String has NO source form in the document: `Properties` holds DOCUMENT text, one
+        // convention. The old arm (`"…` or `New …` is already source) was a SHAPE test — the thing this
+        // method exists to replace — and it spliced a caption `New Customer` unquoted (build broken) and
+        // `"quoted"` without its quotes. It was added (525aa88b) for the D12 recognizer, which stores raw
+        // source text; nothing feeds recognizer output into Properties, and when the importer is built it
+        // must UNQUOTE string literals into document text at that boundary, never teach this method a shape.
+        FormPropertyType.String => false,
 
         // An Int or a Bool has no source form that differs from its document text.
         _ => false

@@ -1025,13 +1025,17 @@ public static class RegionWriter
     /// <summary>
     /// True when the value is already BasicLang SOURCE rather than a document value.
     ///
-    /// <para>⛔ Two conventions share one <c>Properties</c> dictionary: the document reader stores
-    /// the RAW attribute text (<c>Sign in</c>, unquoted), while a value that came from source keeps
-    /// what was read (<c>"Sign in"</c> with its quotes, <c>ContentAlignment.MiddleLeft</c>). The
-    /// CATALOG decides which is which — see <see cref="FormPropertyDef.IsSourceForm"/> for why the
-    /// shape of the string is not a safe answer. Only a property the catalog does not know falls
-    /// back to a shape, and then only to the two that are unambiguous in any language emitted
-    /// here.</para>
+    /// <para>⛔ <c>Properties</c> holds DOCUMENT text (<c>Sign in</c>, unquoted). An Enum, Color or
+    /// Size row may also hold its catalog-decided source form (<c>ContentAlignment.MiddleLeft</c>,
+    /// <c>SystemColors.Control</c>, <c>New Size(…)</c>), and the CATALOG decides which is which —
+    /// see <see cref="FormPropertyDef.IsSourceForm"/> for why the shape of the string is not a safe
+    /// answer. A String row has no source form at all: it is always quoted and escaped, so a caption
+    /// <c>New Customer</c> or <c>"quoted"</c> is text, never source.</para>
+    ///
+    /// <para>⚠ The shape fallback below applies ONLY to a property with NO catalog row — which only
+    /// an in-memory model can hold, since the reader routes unknown attributes to
+    /// <c>UnknownAttributes</c>. It is left as is on purpose; it never answers for a catalog
+    /// row.</para>
     /// </summary>
     private static bool IsAlreadySource(FormPropertyDef? property, string value) =>
         property?.IsSourceForm(value) ??
@@ -1044,16 +1048,17 @@ public static class RegionWriter
     /// <para>⛔ The same <c>Properties</c> dictionary means two different things to two consumers:
     /// the document reader stores the RAW attribute text (<c>Sign in</c>, unquoted, because XML
     /// attributes are not quoted values), while this writer splices the value into generated source.
-    /// Emitting the raw text produced <c>btnLogin.Text = Sign in</c> — a syntax error. The recognizer
-    /// meanwhile stores already-quoted source text, because that is what it read. Typing the
-    /// formatting off the catalog is what lets both feed the same writer.</para>
+    /// Emitting the raw text produced <c>btnLogin.Text = Sign in</c> — a syntax error. Properties
+    /// holds document text; a String is always quoted and escaped (<c>"</c> → <c>""</c>). Typing the
+    /// formatting off the catalog is what lets an Enum/Color/Size row's source form pass through
+    /// while a String never does.</para>
     /// </summary>
     private static string Literal(FormControl control, string name, string value)
     {
         var property = control.Definition?.Property(name);
 
         // Already a source literal — leave it exactly as read. Re-formatting it would produce
-        // `ContentAlignment.ContentAlignment.MiddleLeft` for an enum and `""Sign in""` for a string.
+        // `ContentAlignment.ContentAlignment.MiddleLeft` for an enum. (Never true for a String row.)
         if (IsAlreadySource(property, value))
         {
             return value;

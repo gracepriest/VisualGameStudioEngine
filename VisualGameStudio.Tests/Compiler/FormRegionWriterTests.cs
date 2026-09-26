@@ -27,7 +27,7 @@ public class FormRegionWriterTests
     {
         var form = new FormDocument { Target = FormTarget.WinForms, Name = "LoginForm" };
         var button = new FormControl { Kind = "Button", Id = "btnLogin", TabIndex = 0 };
-        button.Properties["Text"] = "\"Sign in\"";
+        button.Properties["Text"] = "Sign in";
         button.Binds.Add(new FormBind { Event = "Click", Handler = "btnLogin_Click" });
         form.Controls.Add(button);
         return form;
@@ -384,7 +384,7 @@ public class FormRegionWriterTests
         // strip the property for no reason the user could name.
         var form = new FormDocument { Target = FormTarget.WinForms, Name = "LoginForm" };
         var label = new FormControl { Kind = "Label", Id = "lbl", TabIndex = 0 };
-        label.Properties["Text"] = "\"Already quoted\"";
+        label.Properties["Text"] = "Already quoted";   // a String has no source form: document text, quoted on emit
         label.Properties["TextAlign"] = "ContentAlignment.MiddleLeft";
         form.Controls.Add(label);
 
@@ -611,18 +611,21 @@ public class FormRegionWriterTests
     }
 
     [Test]
-    public void Write_WinForms_LeavesAlreadyQuotedSourceTextAlone()
+    public void Write_WinForms_EscapesACaptionContainingQuotes()
     {
-        // The recognizer's convention: it read `"Sign in"` from source and stores it with quotes.
-        // Double-quoting it would emit `""Sign in""`.
-        var source = ScaffoldedFile().Replace("LoginForm.blwebform", "LoginForm.blform");
-        var result = RegionWriter.Write("LoginForm.bas", source, WinFormsLoginForm(), "LoginForm.blform");
+        // ⛔ The OPPOSITE of what this test used to pin. It fed `"Sign in"` (with quotes) as the
+        // recognizer's convention and asserted it was spliced unquoted — but no production writer
+        // stores source text in Properties, and that same shape test spliced `New Customer` bare and
+        // broke the build. A caption with quotes is document text: its quotes are escaped.
+        var form = new FormDocument { Target = FormTarget.WinForms, Name = "LoginForm" };
+        var button = new FormControl { Kind = "Button", Id = "btnLogin", TabIndex = 0 };
+        button.Properties["Text"] = "\"Sign in\"";
+        form.Controls.Add(button);
 
-        Assert.Multiple(() =>
-        {
-            Assert.That(result.Text, Does.Contain("""btnLogin.Text = "Sign in" """.TrimEnd()));
-            Assert.That(result.Text, Does.Not.Contain("\"\"Sign in\"\""));
-        });
+        var source = ScaffoldedFile().Replace("LoginForm.blwebform", "LoginForm.blform");
+        var result = RegionWriter.Write("LoginForm.bas", source, form, "LoginForm.blform");
+
+        Assert.That(result.Text, Does.Contain("btnLogin.Text = \"\"\"Sign in\"\"\""));
     }
 
     [Test]
@@ -773,5 +776,40 @@ public class FormRegionWriterTests
     public void TheUnknownWebEventRefusal_KeepsTheNumberItClaimed()
     {
         Assert.That(DesignCodes.UnknownWebEvent, Is.EqualTo("BL8032"));
+    }
+
+    /// <summary>
+    /// ⛔ A caption is DOCUMENT text, whatever it looks like. The old shape test spliced `New Customer`
+    /// unquoted (the build broke) and `"quoted"` without its quotes (silent loss).
+    /// </summary>
+    [TestCase("New Customer", "\"New Customer\"")]
+    [TestCase("\"quoted\"", "\"\"\"quoted\"\"\"")]
+    [TestCase("a \"b\" c", "\"a \"\"b\"\" c\"")]
+    public void APlainCaption_IsAlwaysQuotedAndEscaped(string caption, string emitted)
+    {
+        var form = new FormDocument { Target = FormTarget.WinForms, Name = "LoginForm", Width = 400, Height = 300 };
+        var button = new FormControl { Kind = "Button", Id = "btn", TabIndex = 0 };
+        button.Properties["Text"] = caption;
+        form.Controls.Add(button);
+
+        var source = ScaffoldedFile().Replace("LoginForm.blwebform", "LoginForm.blform");
+        var result = RegionWriter.Write("LoginForm.bas", source, form, "LoginForm.blform");
+
+        Assert.That(result.Text, Does.Contain($"btn.Text = {emitted}"));
+    }
+
+    /// <summary>
+    /// The Form's caption takes the same rule. GREEN before Task 6 (GenerateInit quotes form.Text
+    /// unconditionally) — it is the pin that Task 6's move onto Literal(row, value) does not regress it.
+    /// </summary>
+    [Test]
+    public void TheFormsCaption_IsAlwaysQuoted_EvenWhenItLooksLikeSource()
+    {
+        var form = new FormDocument { Target = FormTarget.WinForms, Name = "LoginForm", Width = 400, Height = 300, Text = "New Customer" };
+
+        var source = ScaffoldedFile().Replace("LoginForm.blwebform", "LoginForm.blform");
+        var result = RegionWriter.Write("LoginForm.bas", source, form, "LoginForm.blform");
+
+        Assert.That(result.Text, Does.Contain("Me.Text = \"New Customer\""));
     }
 }
