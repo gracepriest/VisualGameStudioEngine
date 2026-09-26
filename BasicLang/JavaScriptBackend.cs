@@ -3016,14 +3016,19 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         ///
         /// <para><b>Why inline is the only workable route.</b> The alternative — hoist
         /// <c>__lambda_N</c> to a top-level function and pass its captures as parameters —
-        /// depends on <c>IRFunction.CapturedVariables</c>, which is ALWAYS EMPTY: it is
-        /// populated from a list IRBuilder never fills. A hoisted body would therefore
-        /// reference every captured variable as a FREE identifier — a ReferenceError at
-        /// runtime from a build that reported success. Measured: the non-capturing lambda
-        /// tests passed while all three capture tests failed.</para>
+        /// would need a declared free-variable list, and <c>IRFunction.CapturedVariables</c> is
+        /// not one. It was ALWAYS EMPTY when this was measured (populated from a list IRBuilder
+        /// never filled): a hoisted body referenced every captured variable as a FREE
+        /// identifier — a ReferenceError at runtime from a build that reported success, with
+        /// the non-capturing lambda tests passing while all three capture tests failed. Since
+        /// task #122 it holds the lambda's capture SET, which is a name-based OVER-approximation
+        /// built for the optimizer's kill rule (it includes the lambda's own locals, temps,
+        /// members and globals, and some entries carry no type) — still not something a hoisted
+        /// function could take as its parameter list.</para>
         ///
         /// <para>Emitted where the value is used, so JavaScript's lexical scope does the
-        /// capture — and captures by REFERENCE, matching BasicLang.</para>
+        /// capture — and captures by REFERENCE, matching BasicLang. Passing captures as
+        /// parameters would copy them, which is wrong for a lambda that writes one.</para>
         /// </summary>
         private string RenderLambda(IRFunction fn)
         {

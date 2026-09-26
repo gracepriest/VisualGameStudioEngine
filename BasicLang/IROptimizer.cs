@@ -256,25 +256,27 @@ namespace BasicLang.Compiler.IR.Optimization
         protected internal static bool IsCallVisible(string name, IRFunction function)
         {
             if (string.IsNullOrEmpty(name)) return false;
-            // ⭐ ADR-0006 D1's INTERIM CLOSURE RULE, here and nowhere else (every consumer reaches
-            // the declarations through this method): in a function that contains a lambda, every
-            // local is call-visible — a lambda may capture it by reference, and a call may invoke
-            // the lambda. MEASURED before this rule: `Dim bump = Sub() x = x + 1` with `bump()` in
-            // a loop let LICM hoist `x * 2` (L5, JavaScript under --optimize printed 6 for 12), and
+            // ⭐ ADR-0006 D1's CLOSURE RULE, here and nowhere else (every consumer reaches the
+            // declarations through this method): a local a lambda of this function CAPTURES is
+            // call-visible — the lambda may write it by reference, and a call may invoke the
+            // lambda. MEASURED before the rule: `Dim bump = Sub() x = x + 1` with `bump()` in a
+            // loop let LICM hoist `x * 2` (L5, JavaScript under --optimize printed 6 for 12), and
             // `a = p + q : clr() : l(0) = p + q` with `clr = Sub() a = 0` let CSE read the cleared
             // `a` back (A1, JavaScript printed 0,0 for 3,0). A BY-VALUE PARAMETER is a local of the
             // frame for this purpose — a lambda captures it the same way (MEASURED:
             // `Sub Work(p, q) : bump = Sub() p = p + 100 : a = p + q : bump() : l(0) = p + q`
-            // printed 3,3 for 103,3 on JavaScript). Task #122 narrows "every local" to the capture
-            // set; that is a pure precision gain. A Const is still exempt: nothing can write it.
+            // printed 3,3 for 103,3 on JavaScript). WHICH locals are captured is
+            // IsLambdaCaptured's answer: the capture set IRBuilder records (task #122), or, when it
+            // did not record one, D1's INTERIM rule — every local of a function that contains a
+            // lambda. A Const is exempt either way: nothing can write it.
             if (function?.Parameters != null)
                 foreach (var parameter in function.Parameters)
                     if (string.Equals(parameter.Name, name, StringComparison.OrdinalIgnoreCase))
-                        return parameter.IsByRef || ContainsLambda(function);
+                        return parameter.IsByRef || IsLambdaCaptured(name, function);
             if (function?.LocalVariables != null)
                 foreach (var local in function.LocalVariables)
                     if (string.Equals(local.Name, name, StringComparison.OrdinalIgnoreCase))
-                        return !local.IsConst && (local.IsGlobal || ContainsLambda(function));
+                        return !local.IsConst && (local.IsGlobal || IsLambdaCaptured(name, function));
             // Undeclared: a class member read bare, a module variable, or a name whose
             // declaration IRFunction does not carry. The last only costs a merge or a hoist.
             // ⚠ IRBuilder leaves three locals out of LocalVariables: a For Each loop variable
@@ -285,65 +287,213 @@ namespace BasicLang.Compiler.IR.Optimization
         }
 
         /// <summary>
+        /// ⭐ ADR-0006 D1's closure rule, narrowed by task #122: whether a lambda
+        /// <paramref name="function"/> creates may read or write <paramref name="name"/>.
+        /// <list type="bullet">
+        /// <item>No lambda referenced (<see cref="ContainsLambda"/>): no.</item>
+        /// <item>IRBuilder recorded a capture set for EVERY lambda the function references
+        /// (<see cref="IRFunction.LambdaCaptureSources"/>): whether the name is in
+        /// <see cref="IRFunction.LambdaCapturedNames"/>, ignoring case (BasicLang is
+        /// case-insensitive, and a lambda may spell the creator's local differently).</item>
+        /// <item>Otherwise — no set at all (<c>null</c> means NOT computed: hand-built IR), or a
+        /// referenced lambda the set does not account for (one whose IR holds raw
+        /// <see cref="IRInlineCode"/>, or a reference IRBuilder did not write) — the INTERIM rule:
+        /// yes, for every local.</item>
+        /// </list>
+        /// <para>A pure precision gain over the interim rule, by construction: the answer can only
+        /// be "no" where IRBuilder enumerated, for every lambda this function references, every
+        /// name that lambda's IR mentions (<see cref="LambdaCapturesOf"/>).</para>
+        /// </summary>
+        protected internal static bool IsLambdaCaptured(string name, IRFunction function)
+        {
+            var lambdas = LambdaReferences(function);
+            if (lambdas.Count == 0) return false;
+            var captured = function.LambdaCapturedNames;
+            var recorded = function.LambdaCaptureSources;
+            if (captured == null || recorded == null) return true;
+            foreach (var lambda in lambdas)
+                if (!recorded.Contains(lambda)) return true;
+            foreach (var capture in captured)
+                if (string.Equals(capture, name, StringComparison.OrdinalIgnoreCase)) return true;
+            return false;
+        }
+
+        /// <summary>
         /// Whether <paramref name="function"/> creates a lambda — the trigger of ADR-0006 D1's
-        /// interim closure rule (<see cref="IsCallVisible(string, IRFunction)"/>). IRBuilder lowers a
+        /// closure rule (<see cref="IsLambdaCaptured"/>). IRBuilder lowers a
         /// lambda to its own <see cref="IRFunction"/> named <c>__lambda_N</c> and leaves the
         /// enclosing function an <see cref="IRVariable"/> spelled that name wherever the delegate
         /// value is used — the same reference every backend recognises the lambda by
         /// (<c>CppCodeGenerator</c>, <c>JavaScriptBackend.IsLambdaRef</c>, <c>CSharpBackend</c>).
         /// The walk follows every operand slot (<see cref="UsesOf"/>) and descends into operand
         /// instructions, so a reference inside a never-emitted When guard is found too.
-        ///
-        /// <para>Cached per function, because every consumer asks per operand. A YES is kept for
-        /// good (a stale yes only costs a merge). A NO is kept only while the function's
-        /// instruction count is unchanged, and is otherwise re-walked — the hole left is an
-        /// instruction REPLACED in place by one that references a lambda, which nothing does:
-        /// IRBuilder writes every lambda reference before any pass runs, and no pass creates one
-        /// (the one pass that could copy code between functions, FunctionInliningPass, is not
-        /// registered).</para>
         /// </summary>
-        protected internal static bool ContainsLambda(IRFunction function)
+        protected internal static bool ContainsLambda(IRFunction function) => LambdaReferences(function).Count > 0;
+
+        /// <summary>
+        /// The <c>__lambda_N</c> names <paramref name="function"/> references (see
+        /// <see cref="ContainsLambda"/>).
+        ///
+        /// <para>Cached per function, because every consumer asks per operand. The set only GROWS:
+        /// it is re-walked whenever the function's instruction count changes and the new walk is
+        /// added to the old, so a reference a pass deleted stays listed (a stale name only costs a
+        /// merge — the closure rule falls back to the interim one if it is unaccounted for) and a
+        /// reference a pass added is found. The hole left is an instruction REPLACED in place by
+        /// one that references a lambda, which nothing does: IRBuilder writes every lambda
+        /// reference before any pass runs, and no pass creates one (the one pass that could copy
+        /// code between functions, FunctionInliningPass, is not registered).</para>
+        /// </summary>
+        protected internal static IReadOnlyCollection<string> LambdaReferences(IRFunction function)
         {
-            if (function?.Blocks == null) return false;
+            if (function?.Blocks == null) return Array.Empty<string>();
             int count = 0;
             foreach (var block in function.Blocks) count += block?.Instructions?.Count ?? 0;
-            if (LambdaScans.TryGetValue(function, out var cached) && (cached.Found || cached.InstructionCount == count))
-                return cached.Found;
-            bool found = ScanForLambda(function);
-            LambdaScans.AddOrUpdate(function, new LambdaScan(found, count));
-            return found;
+            if (LambdaScans.TryGetValue(function, out var cached) && cached.InstructionCount == count)
+                return cached.Names;
+            var names = ScanForLambdas(function);
+            if (cached != null) names.UnionWith(cached.Names);
+            LambdaScans.AddOrUpdate(function, new LambdaScan(names, count));
+            return names;
         }
 
-        private sealed record LambdaScan(bool Found, int InstructionCount);
+        private sealed record LambdaScan(HashSet<string> Names, int InstructionCount);
 
         private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<IRFunction, LambdaScan> LambdaScans = new();
 
-        private static bool ScanForLambda(IRFunction function)
+        private static bool IsLambdaReference(IRVariable variable) =>
+            variable.Name != null && variable.Name.StartsWith("__lambda_", StringComparison.Ordinal);
+
+        private static HashSet<string> ScanForLambdas(IRFunction function)
         {
+            var found = new HashSet<string>(StringComparer.Ordinal);
             var seen = new HashSet<IRValue>(ReferenceEqualityComparer.Instance);
-            var pending = new Stack<IRValue>();
             foreach (var block in function.Blocks)
+            {
+                if (block?.Instructions == null) continue;
+                foreach (var inst in block.Instructions)
+                    foreach (var value in OperandTree(inst, seen))
+                        if (value is IRVariable variable && IsLambdaReference(variable))
+                            found.Add(variable.Name);
+            }
+            return found;
+        }
+
+        /// <summary>
+        /// Every value <paramref name="inst"/> uses, and every value THOSE use: each operand slot
+        /// (<see cref="UsesOf"/>, When-guard trees included), descending into operand
+        /// instructions, each value once per <paramref name="seen"/>. The one walk
+        /// <see cref="ContainsLambda"/> and <see cref="LambdaCapturesOf"/> share, so a lambda
+        /// reference and a captured name are found in exactly the same places.
+        /// </summary>
+        private static IEnumerable<IRValue> OperandTree(IRInstruction inst, HashSet<IRValue> seen)
+        {
+            if (inst == null) yield break;
+            var pending = new Stack<IRValue>();
+            foreach (var used in UsesOf(inst)) pending.Push(used);
+            while (pending.Count > 0)
+            {
+                var value = pending.Pop();
+                if (value == null || !seen.Add(value)) continue;
+                yield return value;
+                if (value is IRVariable) continue;
+                foreach (var operand in UsesOf(value)) pending.Push(operand);
+            }
+        }
+
+        /// <summary>
+        /// ⭐ THE CAPTURE SET of <paramref name="lambda"/> (task #122, ADR-0006 D1's Obligation),
+        /// computed from its IR by IRBuilder at the end of the lambda, once its body — and every
+        /// lambda nested in it — is built. Name → the type of an <see cref="IRVariable"/> or value
+        /// carrying that name (null when none does), or null when the names cannot be
+        /// enumerated. It is:
+        /// <list type="number">
+        /// <item>every NAME the lambda's IR mentions: every operand, descending operand
+        /// instructions and When-guard trees (<see cref="OperandTree"/>); every value's own name;
+        /// every name <see cref="NamesWrittenBy"/> says an instruction or operand writes (an
+        /// assignment target, a store's variable and an alloca slot's <c>V</c>, a For Each /
+        /// Catch / pattern variable, a member, a ByRef argument); plus the
+        /// <c>V</c> of any <c>V_addr</c> slot it reads;</item>
+        /// <item>plus the captures of every lambda created INSIDE it
+        /// (<see cref="IRFunction.LambdaCapturedNames"/> of the lambda as a creator) — nesting is
+        /// transitive;</item>
+        /// <item>minus its own PARAMETERS, matched by exact spelling.</item>
+        /// </list>
+        /// <para>Over-approximating only costs a merge (a field or global spelled like a creator's
+        /// local); under-approximating miscompiles. So it is null — the creator then keeps the
+        /// interim rule — when an instruction's names cannot be enumerated
+        /// (<see cref="NamesWrittenBy"/> answers Universal: raw <see cref="IRInlineCode"/>, which
+        /// can name any variable, or a kind nobody classified), or when the lambda references a
+        /// nested lambda whose captures were not recorded.</para>
+        /// <para>⚠ The lambda's own LOCALS are NOT subtracted. A lambda body can use the creator's
+        /// <c>n</c> and then declare its own <c>Dim n</c> (MEASURED: the analyzer accepts it, and
+        /// the first <c>n</c> is the creator's), and the C# backend does not declare a lambda's
+        /// locals at all (K6's CS0103), so a lambda local spelled like a creator local IS the
+        /// creator's variable in emitted C#. A parameter is declared by every backend, and IRBuilder
+        /// binds it for the whole body, so a mention spelled EXACTLY like it is it. Matching
+        /// ignoring case would remove the creator's <c>n</c> from a lambda whose parameter is
+        /// <c>N</c>; the exact match keeps it.</para>
+        /// </summary>
+        protected internal static Dictionary<string, TypeInfo> LambdaCapturesOf(IRFunction lambda)
+        {
+            if (lambda?.Blocks == null) return null;
+            var captures = new Dictionary<string, TypeInfo>(StringComparer.Ordinal);
+            var nested = new HashSet<string>(StringComparer.Ordinal);
+            var seen = new HashSet<IRValue>(ReferenceEqualityComparer.Instance);
+
+            void Mention(string name, TypeInfo type)
+            {
+                if (string.IsNullOrEmpty(name)) return;
+                if (!captures.TryGetValue(name, out var known) || known == null) captures[name] = type;
+            }
+
+            // False when the instruction's names cannot be enumerated.
+            bool Mentions(IRInstruction inst)
+            {
+                var writes = NamesWrittenBy(inst, lambda);
+                if (writes.IsUniversal) return false;
+                foreach (var written in writes.Names) Mention(written, null);
+                switch (inst)
+                {
+                    case IRVariable variable:
+                        Mention(variable.Name, variable.Type);
+                        if (IsLambdaReference(variable)) nested.Add(variable.Name);
+                        break;
+                    case IRAlloca slot:
+                        Mention(slot.Name, slot.Type);
+                        if (slot.Name != null && slot.Name.EndsWith("_addr", StringComparison.OrdinalIgnoreCase))
+                            Mention(slot.Name.Substring(0, slot.Name.Length - "_addr".Length), slot.Type);
+                        break;
+                    case IRValue value:
+                        Mention(value.Name, value.Type);
+                        break;
+                    case IRAssignment assignment:
+                        Mention(assignment.Target?.Name, assignment.Target?.Type);
+                        break;
+                }
+                return true;
+            }
+
+            foreach (var block in lambda.Blocks)
             {
                 if (block?.Instructions == null) continue;
                 foreach (var inst in block.Instructions)
                 {
                     if (inst == null) continue;
-                    foreach (var used in UsesOf(inst)) pending.Push(used);
-                    while (pending.Count > 0)
-                    {
-                        var value = pending.Pop();
-                        if (value == null || !seen.Add(value)) continue;
-                        if (value is IRVariable variable)
-                        {
-                            if (variable.Name != null && variable.Name.StartsWith("__lambda_", StringComparison.Ordinal))
-                                return true;
-                            continue;
-                        }
-                        foreach (var operand in UsesOf(value)) pending.Push(operand);
-                    }
+                    if (!Mentions(inst)) return null;
+                    foreach (var value in OperandTree(inst, seen))
+                        if (!Mentions(value)) return null;
                 }
             }
-            return false;
+
+            foreach (var reference in nested)
+                if (lambda.LambdaCaptureSources == null || !lambda.LambdaCaptureSources.Contains(reference))
+                    return null;
+            if (lambda.LambdaCapturedNames != null)
+                foreach (var name in lambda.LambdaCapturedNames) Mention(name, null);
+
+            foreach (var parameter in lambda.Parameters)
+                if (parameter?.Name != null) captures.Remove(parameter.Name);
+            return captures;
         }
 
         /// <summary>
@@ -527,9 +677,11 @@ namespace BasicLang.Compiler.IR.Optimization
         /// <see cref="CollectReads"/>. Its operands are still walked, as before.</para>
         ///
         /// <para>A local captured BY REFERENCE by a lambda that a call then invokes is closed by
-        /// ADR-0006 D1's interim closure rule, inside
-        /// <see cref="IsCallVisible(string, IRFunction)"/>: in a function that creates a lambda
-        /// every local is call-visible — for CSE and, since task #146, for CopyPropagation too
+        /// ADR-0006 D1's closure rule, inside
+        /// <see cref="IsCallVisible(string, IRFunction)"/>: in a function that creates a lambda,
+        /// every local in its lambdas' capture set (<see cref="IsLambdaCaptured"/>, task #122 —
+        /// every local, the interim rule, where IRBuilder recorded no set) is call-visible — for
+        /// CSE and, since task #146, for CopyPropagation too
         /// (MEASURED before #146 on <c>Dim bump = Sub() p = p + 100 : a = p + q : bump() :
         /// l(0) = p + q</c> with <c>p</c> starting as a constant: CopyPropagation plus
         /// ConstantFolding folded <c>p + q</c> to a constant on BOTH sides of <c>bump()</c>, so
@@ -1886,7 +2038,9 @@ namespace BasicLang.Compiler.IR.Optimization
     /// <c>Dim bump = Sub() p = p + 100 : a = p + q : bump() : l(0) = p + q</c>, with <c>p</c>
     /// starting as a constant, printed 3,3 for 103,3 on C# and JavaScript: the fact
     /// <c>p -> 1</c> survived the lambda call (ADR-0006 D1's closure rule makes <c>p</c>
-    /// call-visible in a function that creates a lambda). (C++ prints 3,3 there with no
+    /// call-visible: the lambda captures it — <see cref="OptimizationPass.IsLambdaCaptured"/>,
+    /// the capture set of task #122, or every local where IRBuilder recorded none). A local no
+    /// lambda of the function captures keeps its facts across the call. (C++ prints 3,3 there with no
     /// optimizer pass at all — its lambda captures by copy, task #140.) Every other kind the private rules
     /// missed — a member store, an element store a ByRef parameter may alias, a For Each / Catch /
     /// pattern variable, <c>++x</c>'s operand, a constructor's or base call's variable arguments,
@@ -2589,9 +2743,11 @@ namespace BasicLang.Compiler.IR.Optimization
         /// whose <c>Inc()</c> call bumps <c>K</c> (C++, JavaScript and MSIL).</item>
         /// </list>
         /// <para>A local captured by reference and written inside a lambda counts as call-visible
-        /// under ADR-0006 D1's interim closure rule, so a loop that calls a lambda keeps it
-        /// (MEASURED: L5 now 12 on JavaScript under --optimize, 6 before). Task #122's capture set
-        /// narrows that from "every local" to the captured ones. An instruction that may write
+        /// under ADR-0006 D1's closure rule, so a loop that calls a lambda keeps it (MEASURED: L5
+        /// now 12 on JavaScript under --optimize, 6 before). Since task #122 that is the locals in
+        /// the function's lambdas' capture set (<see cref="OptimizationPass.IsLambdaCaptured"/>),
+        /// not every local — every local only where IRBuilder recorded no set (the interim rule),
+        /// so a value reading only uncaptured locals may still leave a loop that calls a lambda. An instruction that may write
         /// ANY name (<see cref="WriteKind.Universal"/>) leaves nothing in the loop invariant.</para>
         /// </summary>
         private static HashSet<string> VariablesWrittenIn(List<BasicBlock> loop, IRFunction function, out bool writesEverything)
