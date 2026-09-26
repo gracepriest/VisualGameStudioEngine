@@ -71,12 +71,15 @@ End Sub";
     }
 
     [Test]
-    public void LeadingNonStringHole_StartsTheConcatFromAString()
+    public void TwoNonStringHoles_Concatenate_NotAdd()
     {
-        // `{n}{m}` must concatenate, not add: every Concat needs a String on its left.
+        // `{n}{m}` must concatenate, not add: each hole becomes a String (through CStr) before
+        // the Concat, so JavaScript's `+` joins text instead of summing two numbers.
         var js = JsTestSupport.Compile("Sub Main()\nDim n As Integer = 7\nDim m As Integer = 5\n" +
                                        "Console.WriteLine($\"{n}{m}\")\nEnd Sub");
-        Assert.That(js, Does.Contain("(\"\" + n)"), js);
+        Assert.That(js, Does.Contain("String(n)"), js);
+        Assert.That(js, Does.Contain("String(m)"), js);
+        Assert.That(js, Does.Not.Contain("(n + m)"), js);
     }
 }
 

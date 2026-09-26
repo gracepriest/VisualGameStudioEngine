@@ -4965,19 +4965,30 @@ namespace BasicLang.Compiler.IR
                 }
                 else if (part is ExpressionNode expr)
                 {
-                    // A hole lowers exactly as `&` would: the value goes straight into a Concat
-                    // and each backend turns it into text there, the one place it already
-                    // knows how (CppCodeGenerator.StringifyForText, C#'s and JS's `+`).
-                    // ⛔ Not a call to "ToString": no backend defines a free function of that
-                    // name, so every non-String hole used to fail to build, on all of them.
+                    // Expression part - evaluate and convert to string
                     expr.Accept(this);
-                    partValue = _expressionResult;
+                    var exprValue = _expressionResult;
 
-                    // A Concat needs a String on its LEFT: `&` guarantees one (the analyzer
-                    // requires a string operand), and for `{a}{b}` with two Integers C# and
-                    // JS would otherwise ADD them. So a leading hole starts from "".
-                    if (result == null && _semanticAnalyzer.GetNodeType(expr)?.Name != "String")
-                        result = new IRConstant("", stringType);
+                    // If not already a string, convert to string — through CStr, the conversion
+                    // every backend lowers (C# Convert.ToString, C++ StringifyForText, MSIL
+                    // box + Object::ToString, JS String with .NET Boolean spelling).
+                    // ⛔ Not an IRCall named "ToString": that is a free function no backend has,
+                    // so any non-String hole failed — C# CS1501 "No overload for method
+                    // 'ToString' takes 1 arguments", C++ "'ToString' was not declared in this
+                    // scope", JS a call to an undefined ToString.
+                    var exprType = _semanticAnalyzer.GetNodeType(expr);
+                    if (exprType?.Name != "String")
+                    {
+                        var tempName = _currentFunction.GetNextTempName();
+                        var toStringCall = new IRCall(tempName, "CStr", stringType);
+                        toStringCall.Arguments.Add(exprValue);
+                        EmitInstruction(toStringCall);
+                        partValue = toStringCall;
+                    }
+                    else
+                    {
+                        partValue = exprValue;
+                    }
                 }
                 else
                 {
