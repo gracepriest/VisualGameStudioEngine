@@ -321,26 +321,38 @@ internal static class CopyPropagationSharedVocabularyProbes
 [NonParallelizable]         // the C# leg redirects Console.Out (see FourBackends)
 public class CopyPropagationSharedVocabularyExecutionTests
 {
-    // ---- CP2: C# + JavaScript RIGHT; C++ KNOWN-WRONG (task #140); MSIL cannot build (task #155) ----
+    // ---- CP2: C# + JavaScript + MSIL agree; C++ KNOWN-WRONG (task #140) ---------------------
+    //
+    //  MSIL used to have no lowering for the delegate type a Sub() lambda gets typed as
+    //  ("Reference to undefined class 'Action'", task #155) — pinned below as
+    //  CP2_Msil_PinnedForTask155_* while it was red. #155/ADR-0010 (ClosureLowering) closes it:
+    //  MSIL now agrees with C# and JavaScript, so its assertion is FOLDED into this pair's own
+    //  Assert.Multiple rather than kept as a separate pin, matching the fixture's "AllFour/
+    //  ThreeBackends" pattern elsewhere (see DynamicUseSPrimeTests' L1). C++ stays its own
+    //  separate pin below (task #140, unrelated, still wrong).
 
     [Test]
-    public void CP2_StandardPipeline_CSharpAndJavaScript()
+    public void CP2_StandardPipeline_CSharpAndJavaScriptAndMsilAgree()
         => Assert.Multiple(() =>
         {
             Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharp(CopyPropagationSharedVocabularyProbes.CP2)),
                 Is.EqualTo(CopyPropagationSharedVocabularyProbes.CP2Expected), "C#, standard");
             Assert.That(FourBackends.Norm(JavaScriptOptimizedExecutionTests.RunOptimized(CopyPropagationSharedVocabularyProbes.CP2)),
                 Is.EqualTo(CopyPropagationSharedVocabularyProbes.CP2Expected), "JavaScript, standard");
+            Assert.That(FourBackends.Norm(MsilHarness.RunExpectingSuccess(CopyPropagationSharedVocabularyProbes.CP2)),
+                Is.EqualTo(CopyPropagationSharedVocabularyProbes.CP2Expected), "MSIL, standard — was AssembleFailed/'Action' (task #155), now closed by ADR-0010");
         });
 
     [Test]
-    public void CP2_AggressivePipeline_CSharpAndJavaScript()
+    public void CP2_AggressivePipeline_CSharpAndJavaScriptAndMsilAgree()
         => Assert.Multiple(() =>
         {
             Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharpAggressive(CopyPropagationSharedVocabularyProbes.CP2)),
                 Is.EqualTo(CopyPropagationSharedVocabularyProbes.CP2Expected), "C#, aggressive");
             Assert.That(FourBackends.Norm(FourBackends.RunAggressiveJs(CopyPropagationSharedVocabularyProbes.CP2)),
                 Is.EqualTo(CopyPropagationSharedVocabularyProbes.CP2Expected), "JavaScript, aggressive");
+            Assert.That(FourBackends.Norm(MsilHarness.RunAggressiveExpectingSuccess(CopyPropagationSharedVocabularyProbes.CP2)),
+                Is.EqualTo(CopyPropagationSharedVocabularyProbes.CP2Expected), "MSIL, aggressive — was AssembleFailed/'Action' (task #155), now closed by ADR-0010");
         });
 
     /// <summary>C++'s own lambda lowering captures BY COPY (<c>[=]</c>), not by reference — task
@@ -359,27 +371,6 @@ public class CopyPropagationSharedVocabularyExecutionTests
         => Assert.That(FourBackends.Norm(BclE2E.CompileRun(BclE2E.CompileToCppAggressive(CopyPropagationSharedVocabularyProbes.CP2))),
             Is.EqualTo("3,3"),
             "task #140, aggressive pipeline — same backend defect, unrelated to LICM or CopyPropagation.");
-
-    /// <summary>MSIL has no lowering for the delegate type a <c>Sub()</c> lambda gets typed as —
-    /// task #155 ("Reference to undefined class 'Action'", ilasm), a pre-existing gap this pass
-    /// never touches. Matches LicmKillVocabularyTests' identical pin for the same MSIL gap on a
-    /// different probe (there tracked as task #122).</summary>
-    [Test]
-    public void CP2_Msil_CannotBuild_PinnedForTask155_StandardPipeline()
-    {
-        var run = MsilHarness.Run(CopyPropagationSharedVocabularyProbes.CP2, aggressive: false);
-        Assert.That(run.Outcome, Is.EqualTo(MsilHarness.MsilOutcome.AssembleFailed), run.Report);
-        Assert.That(run.Detail, Does.Contain("Action"), "task #155 — MSIL has no lowering for the "
-            + "delegate type a Sub() lambda gets typed as.");
-    }
-
-    [Test]
-    public void CP2_Msil_CannotBuild_PinnedForTask155_AggressivePipeline()
-    {
-        var run = MsilHarness.Run(CopyPropagationSharedVocabularyProbes.CP2, aggressive: true);
-        Assert.That(run.Outcome, Is.EqualTo(MsilHarness.MsilOutcome.AssembleFailed), run.Report);
-        Assert.That(run.Detail, Does.Contain("Action"), "task #155, aggressive pipeline — same gap.");
-    }
 
     // ---- CP5, CP6: all four backends agree, both pipelines --------------------------------------
 
@@ -592,8 +583,10 @@ public class CopyPropagationSharedVocabularyExecutionTests
     // ---- One CLI entry-point leg for C#, one for MSIL (CLAUDE.md: "test both entry points") ------
     //      Matches CseDestinationInvalidationTests.RunThroughEntryPoint's convention: BasicCompiler
     //      with OptimizeAggressive=true is what the CLI's --optimize and a Release .blproj build
-    //      both request (Compiler.cs). CP2 for C# (the flagship closure shape); CP6 for MSIL (CP2
-    //      itself cannot build there — task #155 — so a probe that DOES build stands in).
+    //      both request (Compiler.cs). CP2 for C# (the flagship closure shape); CP6 for MSIL — CP2
+    //      itself now builds and runs there too (task #155/ADR-0010 closed it), but CP6 was
+    //      written as MSIL's CLI-entry-point stand-in while CP2 could not, and stays here rather
+    //      than being swapped for CP2 with nothing else changed.
 
     [Test]
     public void CP2_TheCliSingleFileEntryPoint_CSharp()

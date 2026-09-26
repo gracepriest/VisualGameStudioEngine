@@ -45,11 +45,11 @@ namespace VisualGameStudio.Tests.Compiler;
 //      own convention of a bare pass Run rather than a full OptimizationPipeline (whose
 //      ModificationCount after a fixed point is always zero).
 //   4. LambdaCaptureSetExecutionTests  — real compiled-and-run JavaScript (the AGGRESSIVE
-//      pipeline: FourBackends.RunAggressiveJs). C++ is task #140 (backend capture-by-copy), MSIL
-//      is task #155 (no lowering for the delegate type a Sub() lambda gets typed as), and C#
-//      inlines a single-use lambda body at its call site regardless of the closure rule — so
-//      JavaScript is the only backend where #122's precision gain, or its absence, is
-//      OBSERVABLE at run time. Every probe here is verbatim from S/t122 (probes/, probes2/,
+//      pipeline: FourBackends.RunAggressiveJs), plus MSIL since task #155 (ADR-0010's
+//      ClosureLowering). C++ is task #140 (backend capture-by-copy), and C# inlines a
+//      single-use lambda body at its call site regardless of the closure rule — so JavaScript
+//      and MSIL are the backends where #122's precision gain, or its absence, is OBSERVABLE at
+//      run time. Every probe here is verbatim from S/t122 (probes/, probes2/,
 //      probes4/), each cross-checked against its own .exp and against a fresh run of
 //      probes/probe.py on this exact working tree before being pinned.
 //
@@ -771,14 +771,18 @@ public class LambdaCaptureSetPrecisionStructuralTests
 /// Part 4 — real compiled-and-run JavaScript, the AGGRESSIVE pipeline (FourBackends.RunAggressiveJs
 /// -> JsTestSupport.CompileAggressive -> AggressivePipeline.Apply, the same pipeline --optimize
 /// and a Release .blproj build both run). C++ is task #140 (the backend's own lambda lowering
-/// captures BY COPY, wrong even with zero optimizer passes running); MSIL is task #155 (no
-/// lowering for the delegate type a Sub() lambda gets typed as, "Reference to undefined class
-/// 'Action'"); C# inlines a single-use lambda body at its call site regardless of the closure
-/// rule, so none of the three can OBSERVE #122's precision gain (or its absence) at run time --
-/// JavaScript is the judge, matching this suite's convention throughout the ADR-0006 D1 family.
-/// Every expected string here is each probe's own .exp (S/t122/probes, probes2, probes4),
-/// re-verified with a fresh run of probes/probe.py on this exact working tree before being
-/// pinned.
+/// captures BY COPY, wrong even with zero optimizer passes running); C# inlines a single-use
+/// lambda body at its call site regardless of the closure rule, so neither can OBSERVE #122's
+/// precision gain (or its absence) at run time -- JavaScript is the judge, matching this suite's
+/// convention throughout the ADR-0006 D1 family. Every expected string here is each probe's own
+/// .exp (S/t122/probes, probes2, probes4), re-verified with a fresh run of probes/probe.py on
+/// this exact working tree before being pinned.
+///
+/// <para>MSIL is a second judge since task #155 (ADR-0010's ClosureLowering): its lambdas are
+/// methods on a closure environment and every captured variable is a field of one, so a write
+/// the optimizer wrongly treated as dead would print the stale value there too. Each probe it
+/// can build has an MSIL leg below, with the same expected string; N8m/N8n cannot be built on
+/// MSIL at all (see their own notes).</para>
 /// </summary>
 [TestFixture]
 [Category("Integration")]
@@ -811,6 +815,33 @@ public class LambdaCaptureSetExecutionTests
     [Test]
     public void N1_JavaScript_Aggressive_CapturedAndUncapturedSideBySide()
         => Assert.That(FourBackends.Norm(FourBackends.RunAggressiveJs(LambdaCaptureSetProbes.N1)),
+            Is.EqualTo(LambdaCaptureSetProbes.N1Expected));
+
+    // ---- MSIL, the aggressive pipeline (task #155 / ADR-0010). Same probes, same .exp. ----
+
+    [Test]
+    public void K1_Msil_Aggressive()
+        => Assert.That(FourBackends.Norm(Msil.MsilHarness.RunAggressiveExpectingSuccess(LambdaCaptureSetProbes.K1)),
+            Is.EqualTo(LambdaCaptureSetProbes.K1Expected));
+
+    [Test]
+    public void K8_Msil_Aggressive_NestedCaptureTwoLevelsOut()
+        => Assert.That(FourBackends.Norm(Msil.MsilHarness.RunAggressiveExpectingSuccess(LambdaCaptureSetProbes.K8)),
+            Is.EqualTo(LambdaCaptureSetProbes.K8Expected));
+
+    [Test]
+    public void K11_Msil_Aggressive_LicmLoopWithACapturedLocal()
+        => Assert.That(FourBackends.Norm(Msil.MsilHarness.RunAggressiveExpectingSuccess(LambdaCaptureSetProbes.K11)),
+            Is.EqualTo(LambdaCaptureSetProbes.K11Expected));
+
+    [Test]
+    public void K12_Msil_Aggressive_CapturedByValueParameter()
+        => Assert.That(FourBackends.Norm(Msil.MsilHarness.RunAggressiveExpectingSuccess(LambdaCaptureSetProbes.K12)),
+            Is.EqualTo(LambdaCaptureSetProbes.K12Expected));
+
+    [Test]
+    public void N1_Msil_Aggressive_CapturedAndUncapturedSideBySide()
+        => Assert.That(FourBackends.Norm(Msil.MsilHarness.RunAggressiveExpectingSuccess(LambdaCaptureSetProbes.N1)),
             Is.EqualTo(LambdaCaptureSetProbes.N1Expected));
 
     /// <summary>N8m — C#/C++/MSIL all refuse to build this shape outright (bump's body is
