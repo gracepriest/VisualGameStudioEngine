@@ -51,10 +51,14 @@ public class FormPropertyGridDisplayTests
         Assert.Multiple(() =>
         {
             Assert.That(grid.IsCategorized, Is.True, "Categorized is VS's default view");
-            Assert.That(headers, Is.Ordered, "categories are listed alphabetically");
+            Assert.That(headers, Is.Ordered.Using((IComparer<string>)StringComparer.OrdinalIgnoreCase),
+                "categories are listed alphabetically");
             Assert.That(lines.First(), Does.StartWith("["), "every row sits under a header");
             var behavior = lines.SkipWhile(l => l != "[Behavior]").Skip(1).TakeWhile(l => !l.StartsWith('[')).ToList();
-            Assert.That(behavior, Is.EqualTo(new[] { "Enabled", "TabIndex", "Visible" }));
+            var expected = grid.Rows.Where(r => r.Category == "Behavior").Select(r => r.Name)
+                .OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToList();
+            Assert.That(expected, Has.Count.GreaterThan(1), "fixture premise: Behavior has rows to sort");
+            Assert.That(behavior, Is.EqualTo(expected));
         });
     }
 
@@ -128,6 +132,95 @@ public class FormPropertyGridDisplayTests
         grid.SearchText = "tabindex";
 
         Assert.That(Lines(grid), Is.EqualTo(new[] { "[Behavior]", "TabIndex" }));
+    }
+
+    /// <summary>
+    /// ⛔ A search keystroke or a sort toggle rebuilds the list; the row being described must survive it
+    /// while it is still shown — and must NOT survive being filtered out, or the pane describes a hidden row.
+    /// </summary>
+    [Test]
+    public void TheSelectedRow_SurvivesSearchAndSort_WhileShown_AndIsClearedWhenHidden()
+    {
+        var (_, grid) = Open();
+        var enabled = grid.Rows.Single(r => r.Name == "Enabled");
+        grid.SelectedItem = enabled;
+
+        grid.SearchText = "en";
+        var afterEn = (grid.SelectedItem, grid.SelectedRow, grid.DescriptionTitle);
+
+        grid.SearchText = "";
+        grid.IsAlphabetical = true;
+        var afterSort = (grid.SelectedItem, grid.SelectedRow);
+
+        grid.SearchText = "color";
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(afterEn.SelectedItem, Is.SameAs(enabled), "typing 'en' keeps Enabled");
+            Assert.That(afterEn.SelectedRow, Is.SameAs(enabled));
+            Assert.That(afterEn.DescriptionTitle, Is.EqualTo("Enabled"));
+            Assert.That(afterSort.SelectedItem, Is.SameAs(enabled), "toggling Alphabetical keeps it");
+            Assert.That(afterSort.SelectedRow, Is.SameAs(enabled));
+            Assert.That(grid.SelectedItem, Is.Null, "'color' hides Enabled, so it is not selected");
+            Assert.That(grid.SelectedRow, Is.Null, "and the pane does not describe a hidden row");
+        });
+    }
+
+    [Test]
+    public void CollapsingTheSelectedRowsCategory_ClearsTheDescribedRow()
+    {
+        var (_, grid) = Open();
+        grid.SelectedItem = grid.Rows.Single(r => r.Name == "Enabled");
+
+        grid.DisplayItems.OfType<FormPropertyCategoryHeader>().Single(h => h.Name == "Behavior").IsExpanded = false;
+
+        Assert.That(grid.SelectedRow, Is.Null);
+    }
+
+    /// <summary>A match inside a COLLAPSED category shows the category expanded — never a lone header.</summary>
+    [Test]
+    public void ASearchMatchInACollapsedCategory_IsShown_AndClearingTheSearchRestoresTheCollapse()
+    {
+        var (_, grid) = Open();
+        grid.DisplayItems.OfType<FormPropertyCategoryHeader>().Single(h => h.Name == "Behavior").IsExpanded = false;
+
+        grid.SearchText = "enabled";
+        var searching = Lines(grid);
+        grid.SearchText = "";
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(searching, Is.EqualTo(new[] { "[Behavior]", "Enabled" }));
+            Assert.That(Lines(grid), Does.Contain("[Behavior]").And.No.Member("Enabled"),
+                "the remembered collapse is back once the search is cleared");
+        });
+    }
+
+    /// <summary>
+    /// A control whose kind the catalog does not know still has a name, a place and a tab order — it shows
+    /// those rows, never the FORM's rows as though nothing were selected.
+    /// </summary>
+    [Test]
+    public void AControlWithNoCatalogRow_ShowsItsIntrinsicRows_NotTheForms()
+    {
+        var (file, grid) = Open(select: null);
+        var mystery = new FormControl
+        {
+            Kind = "UnknownWidgetKind",
+            Id = "mystery1",
+            Geometry = new PixelGeometry { X = 1, Y = 2, Width = 3, Height = 4 }
+        };
+        file.Model.Controls.Add(mystery);
+        Assert.That(mystery.Definition, Is.Null, "fixture premise: an unknown Kind has no catalog row");
+
+        grid.SelectedControl = mystery;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(grid.Rows.Select(r => r.Name),
+                Is.EqualTo(new[] { "Name", "X", "Y", "Width", "Height", "Anchor", "Dock", "TabIndex" }));
+            Assert.That(grid.Header, Is.EqualTo("mystery1"));
+        });
     }
 
     [Test]
@@ -414,11 +507,14 @@ public class FormPropertyGridDisplayTests
         };
         vm.SetContent(Doc);
         Assert.That(vm.EnterDesignModeForFormDocument(), Is.True);
+        var requests = 0;
+        vm.PropertyGrid.SelectionRequested += (_, _) => requests++;
 
         vm.PropertyGrid.SelectedObject = vm.PropertyGrid.Objects.Single(o => o.Name == "tmr");
 
         Assert.Multiple(() =>
         {
+            Assert.That(requests, Is.EqualTo(1), "the store's answer is an echo, not a second request");
             Assert.That(vm.Selection.Primary?.Id, Is.EqualTo("tmr"), "the canvas's store selected it");
             Assert.That(vm.PropertyGrid.SelectedControl?.Id, Is.EqualTo("tmr"));
             Assert.That(vm.Tray.Items.Single(i => i.Id == "tmr").IsSelected, Is.True, "and the tray agrees");
@@ -431,6 +527,50 @@ public class FormPropertyGridDisplayTests
             Assert.That(vm.Selection.Primary, Is.Null, "picking the form clears the store");
             Assert.That(vm.PropertyGrid.SelectedControl, Is.Null);
             Assert.That(vm.PropertyGrid.Rows.Select(r => r.Name), Does.Contain("ClientSize"));
+        });
+    }
+
+    [Test]
+    public void LoadingOverASelection_BuildsTheRowsOnce()
+    {
+        var (file, grid) = Open(select: "lbl");
+        var rebuilds = 0;
+        grid.Rows.CollectionChanged += (_, e) =>
+        {
+            if (e.Action == System.Collections.Specialized.NotifyCollectionChangedAction.Reset)
+            {
+                rebuilds++;
+            }
+        };
+
+        grid.Load(file);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(rebuilds, Is.EqualTo(1));
+            Assert.That(grid.Rows.Select(r => r.Name), Does.Contain("ClientSize"), "the form's rows");
+        });
+    }
+
+    [Test]
+    public void PlacingAControl_ThroughTheDocumentViewModel_PutsItInTheSelector()
+    {
+        var vm = new CodeEditorDocumentViewModel(new Mock<IFileService>().Object, new Mock<IEventAggregator>().Object)
+        {
+            FilePath = "/proj/F.blform"
+        };
+        vm.SetContent(Doc);
+        Assert.That(vm.EnterDesignModeForFormDocument(), Is.True);
+        var before = vm.PropertyGrid.Objects.Count;
+
+        Assert.That(vm.PlaceControl("CheckBox", 50, 50), Is.Null, "fixture premise: the drop is accepted");
+
+        var placed = vm.Selection.Primary!;
+        Assert.Multiple(() =>
+        {
+            Assert.That(vm.PropertyGrid.Objects, Has.Count.EqualTo(before + 1));
+            Assert.That(vm.PropertyGrid.Objects.Select(o => o.Control), Has.Member(placed));
+            Assert.That(vm.PropertyGrid.SelectedObject?.Control, Is.SameAs(placed), "and it is the one selected");
         });
     }
 }

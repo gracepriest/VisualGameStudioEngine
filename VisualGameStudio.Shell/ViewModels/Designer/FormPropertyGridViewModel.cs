@@ -32,8 +32,11 @@ public partial class FormPropertyGridViewModel : ObservableObject
 {
     private FormFile? _file;
 
-    /// <summary>The categories the user collapsed — by NAME, so a collapse survives reselection.</summary>
-    private readonly HashSet<string> _collapsed = new(StringComparer.Ordinal);
+    /// <summary>
+    /// The display projection — headers, sort, search, collapse memory, selection kept across a rebuild.
+    /// One instance per grid, so a collapse survives reselection.
+    /// </summary>
+    private readonly FormPropertyDisplayList _display = new();
 
     /// <summary>Set while the grid itself points the selector at the store's selection (an echo).</summary>
     private bool _syncingObjects;
@@ -54,7 +57,20 @@ public partial class FormPropertyGridViewModel : ObservableObject
     public ObservableCollection<FormPropertyRow> Rows { get; } = new();
 
     /// <summary>What the list SHOWS: <see cref="FormPropertyCategoryHeader"/>s and <see cref="FormPropertyRow"/>s.</summary>
-    public ObservableCollection<object> DisplayItems { get; } = new();
+    public ObservableCollection<object> DisplayItems => _display.Items;
+
+    public FormPropertyGridViewModel()
+    {
+        // A collapse that hid the described row: the pane must not describe a row nobody can see.
+        _display.RowsHidden += (_, _) =>
+        {
+            if (SelectedRow != null && !DisplayItems.Contains(SelectedRow))
+            {
+                SelectedItem = null;
+                SelectedRow = null;
+            }
+        };
+    }
 
     /// <summary>The object selector's entries: the form, every control, every tray component.</summary>
     public ObservableCollection<FormObjectItem> Objects { get; } = new();
@@ -179,11 +195,18 @@ public partial class FormPropertyGridViewModel : ObservableObject
     {
         _file = file;
 
-        // ⛔ Rebuild EXPLICITLY. Assigning null over null raises no change, so OnSelectedControlChanged
+        // ⛔ Rebuild EXACTLY ONCE. Assigning null over null raises no change, so OnSelectedControlChanged
         // does not fire — which was harmless while an empty selection meant an empty grid, and stopped
-        // being harmless the moment a form with no selection had rows of its own to show.
-        SelectedControl = null;
-        Rebuild();
+        // being harmless the moment a form with no selection had rows of its own to show. Assigning null
+        // over a control DOES fire it, and a second explicit Rebuild would build every row twice.
+        if (SelectedControl == null)
+        {
+            Rebuild();
+        }
+        else
+        {
+            SelectedControl = null;
+        }
     }
 
     partial void OnSelectedControlChanged(FormControl? value) => Rebuild();
@@ -394,13 +417,15 @@ public partial class FormPropertyGridViewModel : ObservableObject
         var control = SelectedControl;
         var definition = control?.Definition;
 
-        if (control != null && definition != null)
+        if (control != null)
         {
             var target = _file?.Model.Target ?? FormTarget.Web;
 
+            // ⚠ A control whose kind the catalog does not know (null Definition) still has a name, a place
+            // and a tab order: it shows those — never the FORM's rows, as though nothing were selected.
             AddIntrinsicRows(control);
 
-            foreach (var property in definition.Properties)
+            foreach (var property in definition?.Properties ?? Enumerable.Empty<FormPropertyDef>())
             {
 
                 // ⛔ A property the target does not have is not offered. WinForms RadioButton has
@@ -454,9 +479,13 @@ public partial class FormPropertyGridViewModel : ObservableObject
     /// current selection. ⚠ Not cleared on every selection: clearing an ItemsSource while the combo is
     /// mid-change is how a combo pushes a stray null back into the binding.
     ///
-    /// <para>⚠ Runs on every <see cref="Rebuild"/> — a selection change or a load — so a paste or delete
-    /// shows in the selector with the selection change that accompanies it.</para>
+    /// <para>⚠ Runs ONLY from <see cref="Rebuild"/> — a load, or a selection change. A drop and a paste
+    /// select what they added (pinned for a drop: <c>PlacingAControl_ThroughTheDocumentViewModel_…</c>) and
+    /// a delete leaves nothing selected, so each reaches here through that selection change. An edit that
+    /// changes the objects WITHOUT changing the selection does not — today no such edit exists.</para>
     /// </summary>
+    // ⚠ When rename lands (the Name row is frozen today), it must call RefreshObjects: a renamed control
+    // keeps its selection, so nothing else would refresh the selector's "Name  Kind" entry.
     private void RefreshObjects()
     {
         var model = _file?.Model;
@@ -499,81 +528,21 @@ public partial class FormPropertyGridViewModel : ObservableObject
     // What the list shows
     // ==================================================================
 
-    private IEnumerable<FormPropertyRow> VisibleRows() =>
-        SearchText.Length == 0
-            ? Rows
-            : Rows.Where(r => r.Name.Contains(SearchText, StringComparison.OrdinalIgnoreCase));
-
-    private static IEnumerable<FormPropertyRow> ByName(IEnumerable<FormPropertyRow> rows) =>
-        rows.OrderBy(r => r.Name, StringComparer.OrdinalIgnoreCase);
-
-    /// <summary>Headers + rows (Categorized) or rows alone (Alphabetical), filtered by the search.</summary>
+    /// <summary>
+    /// Rebuilds <see cref="DisplayItems"/> through <see cref="FormPropertyDisplayList"/>, keeping the
+    /// selected row (or header) when it is still shown and clearing it DELIBERATELY when it is not — a
+    /// search keystroke or a sort toggle must not reset the description pane, and a row the search hides
+    /// must not stay described.
+    /// </summary>
     private void RefreshDisplay()
     {
-        DisplayItems.Clear();
-        var visible = VisibleRows().ToList();
+        // ⚠ Captured BEFORE the rebuild: clearing a bound list pushes a null selection back into us.
+        // SelectedRow FIRST — today's view binds it directly (Task 13 moves the list to SelectedItem), so a
+        // row picked there never reached SelectedItem, which may still hold an older header.
+        var selected = (object?)SelectedRow ?? SelectedItem;
+        var keep = _display.Refresh(Rows, SearchText, IsCategorized, selected);
 
-        if (!IsCategorized)
-        {
-            foreach (var row in ByName(visible))
-            {
-                DisplayItems.Add(row);
-            }
-
-            return;
-        }
-
-        // ⚠ A category with no visible row gets no header: a search that matches nothing in it hides it.
-        foreach (var group in visible.GroupBy(r => r.Category).OrderBy(g => g.Key, StringComparer.Ordinal))
-        {
-            var header = new FormPropertyCategoryHeader(group.Key, !_collapsed.Contains(group.Key), OnHeaderToggled);
-            DisplayItems.Add(header);
-
-            if (header.IsExpanded)
-            {
-                foreach (var row in ByName(group))
-                {
-                    DisplayItems.Add(row);
-                }
-            }
-        }
-    }
-
-    /// <summary>
-    /// Expands or collapses ONE category in place. ⚠ Incremental, not a full refresh: the header's own
-    /// toggle button is mid-click, and recreating the item under it would drop the gesture.
-    /// </summary>
-    private void OnHeaderToggled(FormPropertyCategoryHeader header)
-    {
-        if (header.IsExpanded)
-        {
-            _collapsed.Remove(header.Name);
-        }
-        else
-        {
-            _collapsed.Add(header.Name);
-        }
-
-        var at = DisplayItems.IndexOf(header);
-        if (at < 0)
-        {
-            return;
-        }
-
-        if (!header.IsExpanded)
-        {
-            while (at + 1 < DisplayItems.Count && DisplayItems[at + 1] is FormPropertyRow)
-            {
-                DisplayItems.RemoveAt(at + 1);
-            }
-
-            return;
-        }
-
-        var insert = at + 1;
-        foreach (var row in ByName(VisibleRows().Where(r => r.Category == header.Name)))
-        {
-            DisplayItems.Insert(insert++, row);
-        }
+        SelectedItem = keep;
+        SelectedRow = keep as FormPropertyRow;
     }
 }
