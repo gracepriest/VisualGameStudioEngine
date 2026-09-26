@@ -356,6 +356,38 @@ public class WinFormsCatalogSweepTests
         WinFormsCompile.AssertCompiles(generated, "one anchor edge is expressible and must work.");
     }
 
+    /// <summary>
+    /// Spec §8 "one control per new value shape": every system colour through csc in ONE compile. The
+    /// name table is the unfalsifiable part — a misspelled SystemColors member is invisible to BasicLang.
+    /// </summary>
+    [Test]
+    [Category("Integration")]
+    public void EverySystemColour_EmitsCSharpThatCscAccepts()
+    {
+        var form = new FormDocument
+        {
+            Target = FormTarget.WinForms, Name = "SweepForm", Width = 800, Height = 450, Text = "Sweep"
+        };
+
+        var i = 0;
+        foreach (var name in FormSystemColors.Names)
+        {
+            var label = new FormControl
+            {
+                Kind = "Label", Id = $"lbl{i}", TabIndex = i,
+                Geometry = new PixelGeometry { X = 0, Y = i * 4, Width = 10, Height = 4 }
+            };
+            label.Properties["ForeColor"] = name;
+            form.Controls.Add(label);
+            i++;
+        }
+
+        var generated = GenerateCSharp(form);
+
+        Assert.That(generated, Does.Contain("SystemColors.Control"));
+        WinFormsCompile.AssertCompiles(generated, "every SystemColors name the catalog emits must be a member csc knows.");
+    }
+
     // ==================================================================
     // Harness
     // ==================================================================

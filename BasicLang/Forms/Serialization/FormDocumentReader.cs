@@ -507,17 +507,14 @@ public static class FormDocumentReader
 
             control.Properties[name] = attribute.Value;
 
-            // D9 Degraded: the catalog knows the attribute but the value does not parse. The row is
-            // frozen with a reason and the value round-trips UNCHANGED — the whole point is that one
-            // bad value costs one row, not the control and not the document.
-            if (!property.Accepts(attribute.Value))
+            // D9 Degraded: the catalog knows the attribute but the value does not parse — or parses and
+            // cannot be used on THIS target (a Windows system colour with no CSS equivalent on a web form,
+            // spec §2.2). The row is frozen with a reason and the value round-trips UNCHANGED — the whole
+            // point is that one bad value costs one row, not the control and not the document.
+            if (!property.Accepts(attribute.Value, target))
             {
                 degraded.Add(new DegradedProperty(control.Id, name, attribute.Value,
-                    $"'{attribute.Value}' is not a valid {property.Type}" +
-                    (property.AllowedValues is { Count: > 0 }
-                        ? $" (expected one of: {string.Join(", ", property.AllowedValues)})"
-                        : "") +
-                    ". The value is preserved exactly as written."));
+                    property.DescribeRefusal(attribute.Value, target)));
             }
         }
 

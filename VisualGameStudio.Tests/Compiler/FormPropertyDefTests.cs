@@ -315,4 +315,21 @@ public class FormPropertyDefTests
                 Is.EqualTo("'Menu' is not a valid Enum (expected one of: A, B). The value is preserved exactly as written."));
         });
     }
+
+    [Test]
+    public void TheReader_DegradesAWebOnlyRefusal_WithItsReason()
+    {
+        var file = BasicLang.Forms.Serialization.FormDocumentReader.Read("F.blwebform", """
+            <WebForm Name="F" Version="1">
+              <Controls><Label Id="lbl" TabIndex="0" ForeColor="ActiveCaption"/></Controls>
+            </WebForm>
+            """);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(file.DegradedReason("lbl", "ForeColor"), Does.Contain("no CSS equivalent"));
+            Assert.That(file.Model.FindById("lbl")!.Properties["ForeColor"], Is.EqualTo("ActiveCaption"),
+                "preserved exactly — never coerced");
+        });
+    }
 }

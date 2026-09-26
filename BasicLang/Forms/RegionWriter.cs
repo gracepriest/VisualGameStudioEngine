@@ -871,7 +871,7 @@ public static class RegionWriter
             // not parse as the designer's `Left`, but it is exactly what emitting `Left`
             // produces, so skipping it would strip the property for no reason. The catalog
             // answers that per row; a shape test cannot (FormPropertyDef.IsSourceForm).
-            if (property != null && !property.Accepts(value) && !property.IsSourceForm(value))
+            if (property != null && !property.Accepts(value, FormTarget.WinForms) && !property.IsSourceForm(value))
             {
                 diagnostics.Add(new DesignDiagnostic(
                     DesignCodes.DegradedProperty,
