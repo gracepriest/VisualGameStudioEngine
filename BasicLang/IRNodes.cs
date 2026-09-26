@@ -78,6 +78,16 @@ namespace BasicLang.Compiler.IR
         // (pretty-printer, LLVM, MSIL) are unaffected; C++ and C# backends override this.
         // TODO(Task 6): LLVM/MSIL silently drop collection indexed writes until ForeignFeatureChecker rejects collections on those backends.
         void Visit(IRIndexerStore indexerStore) { }
+
+        // ⛔ THROWS by default, deliberately (ADR-0010 D1). IRDelegateCreate exists only in the
+        // output of ClosureLowering, which only the MSIL backend runs, on a CLONE of the module.
+        // A C#, JavaScript, C++ or LLVM visitor reaching one means the lowered form leaked into a
+        // backend that must never see it — a silent no-op here would drop the delegate value.
+        void Visit(IRDelegateCreate delegateCreate) =>
+            throw new InvalidOperationException(
+                $"{GetType().Name} reached an IRDelegateCreate. That node is produced only by "
+                + "ClosureLowering, which only the MSIL backend runs, on a clone of the module "
+                + "(ADR-0010 D1); every other backend lowers lambdas itself and must never see it.");
     }
     
     // ============================================================================
@@ -773,6 +783,52 @@ namespace BasicLang.Compiler.IR
         }
     }
     
+    /// <summary>
+    /// ⭐ A delegate VALUE bound to a method: <c>result = delegate DelegateType(Target, Method)</c>
+    /// (ADR-0010 D8). The one node a lambda value and <c>AddressOf</c> both lower to.
+    ///
+    /// <para><b>Produced ONLY by <see cref="ClosureLowering"/></b>, which runs only for a
+    /// backend that opts in (MSIL today), after the optimizer and the verifier, on a clone of
+    /// the module. The optimizer never sees one, and every visitor but MSIL's throws on it
+    /// (<see cref="IIRVisitor.Visit(IRDelegateCreate)"/>).</para>
+    ///
+    /// <list type="bullet">
+    /// <item><see cref="DelegateType"/> is the delegate the value is TARGET-TYPED to (the
+    /// declared type of the slot it is assigned to or passed as, ADR-0010 D7), also this
+    /// value's <see cref="IRInstruction.Type"/>. The lowering has already checked that
+    /// <see cref="Method"/>'s signature matches its <c>Invoke</c> exactly.</item>
+    /// <item><see cref="Target"/> is the receiver the delegate is bound to — a closure
+    /// environment for a lowered lambda, the object for <c>AddressOf obj.M</c> — or null for a
+    /// static method (<c>ldnull</c>).</item>
+    /// <item><see cref="IsVirtual"/> binds through the receiver's vtable
+    /// (<c>dup; ldvirtftn</c>) rather than to <see cref="Method"/> itself (<c>ldftn</c>).</item>
+    /// </list>
+    ///
+    /// <para>Kill vocabulary: a definition of its own name and nothing else — building a
+    /// delegate runs no user code (<c>OptimizationPass.NamesWrittenBy</c>).</para>
+    /// </summary>
+    public class IRDelegateCreate : IRValue
+    {
+        public TypeInfo DelegateType { get; set; }
+        public IRValue Target { get; set; }
+        public IRFunction Method { get; set; }
+        public bool IsVirtual { get; set; }
+
+        public IRDelegateCreate(string resultName, TypeInfo delegateType, IRValue target, IRFunction method, bool isVirtual)
+            : base(resultName, delegateType)
+        {
+            DelegateType = delegateType;
+            Target = target;
+            Method = method;
+            IsVirtual = isVirtual;
+        }
+
+        public override void Accept(IIRVisitor visitor) => visitor.Visit(this);
+
+        public override string ToString() =>
+            $"{Name} = delegate {DelegateType?.Name}({Target?.Name ?? "null"}, {Method?.Name}{(IsVirtual ? ", virtual" : "")})";
+    }
+
     // ============================================================================
     // SSA Operations
     // ============================================================================
@@ -1839,6 +1895,19 @@ namespace BasicLang.Compiler.IR
         /// </summary>
         public bool IsExtern { get; set; }
 
+        /// <summary>
+        /// The name of the class this one is DECLARED INSIDE, or null for a top-level class —
+        /// which is every class the front end builds.
+        ///
+        /// <para>Set only by <see cref="ClosureLowering"/> (ADR-0010), on the environment class
+        /// of a lambda whose creator is a member of <see cref="EnclosingClass"/>. The nesting is
+        /// what lets a lambda reach its creator's PRIVATE members through the captured
+        /// <c>Me</c>: measured on .NET 8, a top-level class reading another class's private field
+        /// dies with FieldAccessException, while a nested one may (ECMA-335: a nested type has
+        /// access to everything its enclosing type has).</para>
+        /// </summary>
+        public string EnclosingClass { get; set; }
+
         public IRClass(string name)
         {
             Name = name;
@@ -2149,6 +2218,21 @@ namespace BasicLang.Compiler.IR
         BoundaryTypeCategory INetCarrying.NetCategory => NetCategory;
         bool INetCarrying.ResolvedNetTargetIsExact => ResolvedNetTargetIsExact;
 
+        /// <summary>
+        /// True when the producer KNOWS this names STORAGE — a plain field, or a plain
+        /// auto-property (ADR-0007's "storage") — so the read runs no user code. The kill
+        /// vocabulary then treats it as a read of <see cref="FieldName"/> rather than as a call
+        /// that may run a Property Get (<c>OptimizationPass.NamesWrittenBy</c>).
+        ///
+        /// <para>False by default, which is every node the front end builds: IRBuilder lowers
+        /// <c>obj.P</c> to this node for a property and a field alike and cannot say which.
+        /// Set only by <see cref="ClosureLowering"/> (ADR-0010), for the closure-environment
+        /// loads it synthesises and for a creator's field that a lambda reads through the
+        /// captured <c>Me</c> — reads that were bare variables (not calls) before lowering, so the
+        /// verifier re-run on the lowered IR must not see a call where none was.</para>
+        /// </summary>
+        internal bool IsStorageAccess { get; set; }
+
         public IRFieldAccess(string resultName, IRValue obj, string fieldName, TypeInfo type)
             : base(resultName, type)
         {
@@ -2194,6 +2278,11 @@ namespace BasicLang.Compiler.IR
         BasicLang.Net.NetMemberDescriptor INetCarrying.ResolvedNetTarget => ResolvedNetTarget;
         BoundaryTypeCategory INetCarrying.NetCategory => NetCategory;
         bool INetCarrying.ResolvedNetTargetIsExact => ResolvedNetTargetIsExact;
+
+        /// <summary>The write twin of <see cref="IRFieldAccess.IsStorageAccess"/>: true when the
+        /// producer knows this writes a plain field, so no Property Set runs. Set only by
+        /// <see cref="ClosureLowering"/>; false for every node the front end builds.</summary>
+        internal bool IsStorageAccess { get; set; }
 
         public IRFieldStore(IRValue obj, string fieldName, IRValue value)
         {

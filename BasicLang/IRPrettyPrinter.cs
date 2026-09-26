@@ -261,6 +261,12 @@ namespace BasicLang.Compiler.IR
             WriteLine(fieldAccess.ToString());
         }
 
+        // Printable, unlike in the backends: the pretty printer is how a lowered module is read.
+        public void Visit(IRDelegateCreate delegateCreate)
+        {
+            WriteLine(delegateCreate.ToString());
+        }
+
         public void Visit(IRFieldStore fieldStore)
         {
             WriteLine(fieldStore.ToString());
