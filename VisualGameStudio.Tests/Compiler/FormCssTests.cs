@@ -120,4 +120,122 @@ public class FormCssTests
         Assert.That(FormAssetEmitter.Css(form), Does.Contain("#c {").And.Contain("display: none"),
             $"'{kind}.Visible' must carry its CSS mapping — the element stays (getElementById needs it) and is hidden");
     }
+
+    // ==================================================================
+    // Review fixes — the walk is generic, so its guards must be too
+    // ==================================================================
+
+    /// <summary>
+    /// ⛔ <see cref="FormCssConverter.None"/> copies the value verbatim, and a String row accepts ANY
+    /// text — the first String row given a CssProperty would write <c>;</c>, <c>}</c> or
+    /// <c>&lt;/style&gt;</c> straight into the stylesheet. Only a type whose accepted values are
+    /// themselves safe may use it.
+    ///
+    /// <para>⚠ TASK 6: when <c>FormControlCatalog.FormRoot</c> exists, its rows must be added to this
+    /// source — the root has a stylesheet rule too.</para>
+    /// </summary>
+    [Test]
+    public void EveryVerbatimCssRow_IsIntOrEnum()
+    {
+        var offenders = FormControlCatalog.All
+            .SelectMany(d => d.Properties.Select(p => (d.Kind, Property: p)))
+            .Where(x => x.Property.CssProperty != null && x.Property.CssConverter == FormCssConverter.None &&
+                        x.Property.Type is not (FormPropertyType.Int or FormPropertyType.Enum))
+            .Select(x => $"{x.Kind}.{x.Property.Name} ({x.Property.Type})")
+            .ToList();
+
+        Assert.That(offenders, Is.Empty, "a verbatim CSS row must have a type whose values cannot break out of a declaration");
+    }
+
+    [TestCase(";")]
+    [TestCase("{")]
+    [TestCase("}")]
+    [TestCase("<")]
+    [TestCase(">")]
+    [TestCase("\"")]
+    [TestCase("'")]
+    [TestCase("\\")]
+    [TestCase("\n")]
+    [TestCase("\r")]
+    public void AVerbatimValue_ThatCouldBreakOutOfItsDeclaration_IsRefused(string character)
+    {
+        // Belt and braces for the row-type rule above: even a String row that slipped past it cannot
+        // write a character that ends the declaration, the rule, or the <style> element.
+        var def = new FormPropertyDef("X", FormPropertyType.String, CssProperty: "content");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(FormCss.Declaration(def, "a" + character + "b"), Is.Null);
+            Assert.That(FormCss.Declaration(def, "ab"), Is.EqualTo(("content", "ab")),
+                "a safe value still passes — the refusal is about the characters, not the row");
+        });
+    }
+
+    /// <summary>
+    /// One accepted sample per converter. ⛔ A converter added to the enum without a sample here fails
+    /// this test (the switch below throws), and without an arm in FormCss it throws there — never a
+    /// silent "no declaration".
+    /// </summary>
+    [TestCaseSource(nameof(EveryConverter))]
+    public void EveryConverter_ProducesADeclaration_ForAnAcceptedValue(FormCssConverter converter)
+    {
+        var (def, value) = converter switch
+        {
+            FormCssConverter.None => (new FormPropertyDef("X", FormPropertyType.Int, CssProperty: "z-index"), "5"),
+            FormCssConverter.Color => (new FormPropertyDef("X", FormPropertyType.Color, CssProperty: "color",
+                CssConverter: converter), "Red"),
+            FormCssConverter.ContentAlignmentHorizontal => (FormControlCatalog.Find("Label")!.Property("TextAlign")!, "MiddleLeft"),
+            FormCssConverter.VisibleToDisplay => (new FormPropertyDef("X", FormPropertyType.Bool, "true",
+                CssProperty: "display", CssConverter: converter), "false"),
+            _ => throw new ArgumentOutOfRangeException(nameof(converter), converter, "add a sample for the new converter")
+        };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(def.CssConverter, Is.EqualTo(converter), "the sample must exercise the converter it names");
+            Assert.That(FormCss.Declaration(def, value), Is.Not.Null);
+        });
+    }
+
+    private static IEnumerable<FormCssConverter> EveryConverter() => Enum.GetValues<FormCssConverter>();
+
+    [Test]
+    public void AnUnknownConverter_Throws_RatherThanEmittingNothing()
+    {
+        var def = new FormPropertyDef("X", FormPropertyType.Int, CssProperty: "z-index",
+            CssConverter: (FormCssConverter)999);
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => FormCss.Declaration(def, "5"));
+    }
+
+    /// <summary>
+    /// ⛔ The gate is <c>Accepts(value, Web)</c>. With the Color converter nothing tells the two apart
+    /// (it has no CSS name for ActiveCaption either), so this uses None, which masks nothing:
+    /// weakened to <c>Accepts(value)</c>, the declaration comes back.
+    /// </summary>
+    [Test]
+    public void AWebRefusedValue_IsRefusedByTheGate_NotOnlyByItsConverter()
+    {
+        var def = new FormPropertyDef("X", FormPropertyType.Color, CssProperty: "color", CssConverter: FormCssConverter.None);
+
+        Assert.That(FormCss.Declaration(def, "ActiveCaption"), Is.Null);
+    }
+
+    private static IEnumerable<TestCaseData> EveryWebKind() =>
+        FormControlCatalog.All
+            .Where(d => d.SupportsTarget(FormTarget.Web))
+            .Select(d => new TestCaseData(d.Kind).SetName("{m}(" + d.Kind + ")"));
+
+    [TestCaseSource(nameof(EveryWebKind))]
+    public void NoWebKind_HasTwoRowsWritingTheSameCssProperty(string kind)
+    {
+        var duplicated = FormControlCatalog.Find(kind)!.Properties
+            .Where(p => p.AppliesTo(FormTarget.Web) && p.CssProperty != null)
+            .GroupBy(p => p.CssProperty, StringComparer.OrdinalIgnoreCase)
+            .Where(g => g.Count() > 1)
+            .Select(g => $"{g.Key}: {string.Join(", ", g.Select(p => p.Name))}")
+            .ToList();
+
+        Assert.That(duplicated, Is.Empty, "two rows writing one CSS property emit conflicting declarations");
+    }
 }

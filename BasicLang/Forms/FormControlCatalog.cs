@@ -912,6 +912,9 @@ public static class FormControlCatalog
     private static readonly FormPropertyDef ButtonTextAlign =
         TextAlignDefaulting("MiddleCenter", "The alignment of the text that will be displayed on the control.");
 
+    // ⚠ Identical to LabelTextAlign today (LinkLabel inherits Label.TextAlign) and kept SEPARATE on
+    // purpose: parity is judged per row, and if Task 8's run finds LinkLabel's default or description
+    // differs, the fix is this one line rather than splitting a shared field under a green suite.
     private static readonly FormPropertyDef LinkLabelTextAlign =
         TextAlignDefaulting("TopLeft", "Determines the position of the text within the label.");
 

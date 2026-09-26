@@ -17,9 +17,6 @@ public static class FormCss
     {
         // ⛔ Accepts(value, WEB), never Accepts(value): a system colour with no CSS equivalent
         // (ActiveCaption) is valid on WinForms and Degraded here, and must not reach the stylesheet.
-        // ⚠ Measured: for THAT refusal the Color converter also answers null (CssFor has no entry), so
-        // weakening this to Accepts(value) survives every test today. The gate is kept because it is
-        // the general rule — the next web-only refusal will not come with a converter that masks it.
         if (property.CssProperty is not { } css || !property.Accepts(value, FormTarget.Web))
         {
             return null;
@@ -27,15 +24,30 @@ public static class FormCss
 
         var converted = property.CssConverter switch
         {
-            FormCssConverter.None => value,
+            FormCssConverter.None => IsSafeVerbatim(value) ? value : null,
             FormCssConverter.Color => ColorToCss(value),
             FormCssConverter.ContentAlignmentHorizontal => HorizontalPart(property.Canonical(value)),
             FormCssConverter.VisibleToDisplay => bool.TryParse(value, out var visible) && !visible ? "none" : null,
-            _ => null
+            // ⛔ Never a silent "no declaration": a converter added to the enum without an arm here
+            // would drop its row from every page with nothing looking wrong.
+            _ => throw new ArgumentOutOfRangeException(nameof(property), property.CssConverter,
+                $"FormCss has no arm for the converter on '{property.Name}'.")
         };
 
         return converted == null ? null : (css, converted);
     }
+
+    /// <summary>
+    /// ⛔ A verbatim value is spliced into <c>#id { prop: VALUE; }</c> inside a <c>&lt;style&gt;</c>.
+    /// Any of these characters could end the declaration, the rule or the element, or open a string or
+    /// escape — so the value is refused (no declaration) rather than escaped. The catalog also keeps
+    /// verbatim rows to Int and Enum (<c>FormCssTests.EveryVerbatimCssRow_IsIntOrEnum</c>); this is the
+    /// second line for a row that slips past it.
+    /// </summary>
+    private static bool IsSafeVerbatim(string value) =>
+        value.IndexOfAny(UnsafeVerbatim) < 0;
+
+    private static readonly char[] UnsafeVerbatim = { ';', '{', '}', '<', '>', '"', '\'', '\\', '\n', '\r' };
 
     /// <summary>
     /// ⛔ <c>#AARRGGBB</c> is WinForms ARGB in the document; CSS reads eight hex digits as RRGGBBAA, so

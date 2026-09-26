@@ -519,6 +519,28 @@ public class FormPropertyGridTests
         Assert.That(file.Model.FindById("lbl")!.Properties["TextAlign"], Is.EqualTo("TopRight"));
     }
 
+    /// <summary>
+    /// ⛔ A FROZEN row shows the document's text exactly. Its refusal quotes <c>'activecaption'</c> and
+    /// says it is "preserved exactly as written"; a value box reading <c>ActiveCaption</c> beside it
+    /// would contradict the reason it is shown with.
+    /// </summary>
+    [Test]
+    public void AFrozenRow_ShowsTheRawText_NotTheCanonicalSpelling()
+    {
+        var grid = GridOver("""
+            <WebForm Name="F" Version="1">
+              <Controls><Label Id="lbl" TabIndex="0" BackColor="activecaption"/></Controls>
+            </WebForm>
+            """, "lbl");
+        var row = grid.Rows.Single(r => r.Name == "BackColor");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(row.IsFrozen, Is.True, "ActiveCaption has no CSS equivalent — Degraded on the web");
+            Assert.That(row.StringValue, Is.EqualTo("activecaption"));
+        });
+    }
+
     // ==================================================================
     // D9 — the Degraded tier, where user data is at stake
     // ==================================================================

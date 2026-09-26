@@ -184,10 +184,13 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow
     /// <summary>
     /// The value as the editor shows it: the CANONICAL spelling (spec §2.8) — a legacy
     /// <c>TextAlign="Left"</c> shows as <c>MiddleLeft</c>, which is what the nine-member combo can match.
+    ///
+    /// <para>⛔ Except when FROZEN: a Degraded row shows the document's text exactly, because its
+    /// reason quotes that text and says it is "preserved exactly as written".</para>
     /// </summary>
     public string StringValue
     {
-        get => _definition != null && RawValue.Length > 0 ? _definition.Canonical(RawValue) : RawValue;
+        get => _definition != null && !IsFrozen && RawValue.Length > 0 ? _definition.Canonical(RawValue) : RawValue;
         set => Commit(value);
     }
 
@@ -347,6 +350,11 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow
         // ⛔ The SAME value in its canonical spelling is not an edit: the combo pushes "MiddleLeft" back
         // for a document holding "Left" the moment the row renders, and writing it would rewrite the
         // user's attribute for a selection click (spec §2.8: round-trips byte-for-byte unless EDITED).
+        //
+        // ⚠ DELIBERATE consequence: a case-only change (`middleleft` → `MiddleLeft`) and picking the
+        // member an alias already means (`Left` → `MiddleLeft`) are no-ops too — neither changes what
+        // the program does. A legacy `Left` stays in the document until the user chooses a genuinely
+        // DIFFERENT value, which is then written in its canonical spelling.
         if (_definition != null && RawValue.Length > 0 &&
             string.Equals(_definition.Canonical(RawValue), _definition.Canonical(value), StringComparison.Ordinal))
         {
