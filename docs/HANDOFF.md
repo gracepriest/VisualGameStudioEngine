@@ -1995,7 +1995,7 @@ fails loudly and forces a re-measure instead of drifting. **The robust form of t
 is `CseInvalidationDecisionTests`' `ConstGlobalAcrossACall` / `ParametersAcrossACall` rows** — a
 self-contained program that compiles. Prefer those.
 
-#### ⛔ The C++ and JavaScript backends DO NOT CASE-FOLD IDENTIFIERS
+#### ⛔ The C++ and JavaScript backends DO NOT CASE-FOLD IDENTIFIERS (task #124)
 
 BasicLang is case-insensitive; the front end accepts `P = Seed(100)` as a write to `p` and the IR
 records `IRCall("P")` alongside `IRVariable("p")`. Measured on that program:
@@ -2006,7 +2006,11 @@ records `IRCall("P")` alongside `IRVariable("p")`. Measured on that program:
 
 Both are live pre-existing backend defects, neither is CSE's, and neither has a fixture. ⚠ The JS
 one is the nastier: `b=4` is the SAME wrong number CSE's defect produced, so a case-differing shape
-cannot attribute a JS failure to either cause. That is why
+cannot attribute a JS failure to either cause. **This is task #124** — task #168 (ADR-0009, "Newest"
+above) hits the identical gap on a case-differing `For Each` reuse; under this suite's strict-mode
+ES-module JS harness the symptom is a `ReferenceError` (the reuse's target was never declared under
+its OWN case), not the silent `b=4`-style stale value a loose, non-strict script would produce. That
+is why
 `Decision_CaseDifferingRedefinition_DoesNotMerge` is asserted **structurally only**.
 
 #### ⛔ A TRAP THE MUTATION SWEEP CAUGHT: `p = p + 10` does NOT test kill-ORDERING
@@ -2076,6 +2080,28 @@ single new failure against the 170-name baseline.
     Whoever picks this up next should start from that commit message and re-measure; the
     guard needs at least `&& !v.NamedAfterVariable`, and the base-constructor-argument uses
     must become visible to `UsesOf`, before it can be switched on.
+- ⭐ **Newest — #168 DONE (ADR-0009, fix committed `a454a8cf`; pins/tests/docs in the next
+  commit).** `For Each x In coll` with no `As` clause, where `x` names an EXISTING variable (a
+  local, a parameter incl. ByRef, a module global, an own or inherited field), now REUSES it —
+  VB's rule, and the owner ruled for it directly. Every iteration assigns the element through the
+  ORDINARY assignment lowering (a hidden loop variable, `x = hidden` visited at the top of the
+  body), so field/global/ByRef stores and the assignment coercion come for free; after the loop
+  `x` holds the LAST element assigned. This REVERSES `5783e642`'s premise (BasicLang's own `For
+  Each` used to SHADOW an existing `x`, silently) and brings `For Each` into agreement with the
+  numeric `For`, which already reused an existing `i`. A constant/property/event control variable
+  is now refused rather than silently shadowed; reusing an ENCLOSING loop's own control variable
+  is refused too (VB's BC30069) — without it, C# (`CS1656`) and JavaScript ("Assignment to
+  constant") do not compile/run once reuse actually writes through the enclosing loop's own
+  iteration variable. `For Each x As T` is untouched (still declares, may still shadow; VB's
+  BC30616 deliberately not added). Sixteen pre-existing pins that encoded the old shadowing were
+  rewritten (`ForEachVariableRenameFixTests.cs`, `MsilForEachTests.cs`), and new coverage lives in
+  `ForEachControlVariableReuseTests.cs`/`ForEachControlVariableDiagnosticsTests.cs`. Known gaps,
+  not fixed here: task #124 (the C++/JavaScript case-folding gap below hits a case-differing
+  reuse the same way it hits a plain assignment); tasks #136/#140/#155 (lambda capture of a `For
+  Each` variable, C++/MSIL); and `Dim c As Char : For Each c In "xyz"` — a bare `For Each` over a
+  `String`'s characters infers the element type as `Object`, not `Char`, which reuse's assignment
+  coercion now refuses where a fresh declaration never had to check it — no task number filed for
+  this one yet.
 - ⭐ **Newest — #122 DONE (ADR-0006 D1's Obligation, committed `22f18284`).** The closure rule
   narrows from "every local is call-visible in a function that creates a lambda" (the interim
   approximation) to the locals a lambda of that function actually CAPTURES, read straight off the
