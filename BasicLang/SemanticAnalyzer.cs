@@ -9,6 +9,47 @@ using BasicLang.Net;
 namespace BasicLang.Compiler.SemanticAnalysis
 {
     /// <summary>
+    /// Task #168 — how a <c>For Each x In coll</c> (no <c>As</c> clause) binds an <c>x</c> that
+    /// ALREADY names a variable: a local, a parameter (ByRef included), a module global or a class
+    /// field read bare. VB REUSES that variable — every iteration stores the element into it, so
+    /// after the loop it holds the last element stored (the one being processed at an
+    /// <c>Exit For</c>; unchanged over an empty collection).
+    ///
+    /// <para>⛔ BasicLang used to declare a FRESH loop-scoped <c>x</c> here, which silently
+    /// SHADOWED the existing one: nothing ever wrote it, on all four backends and at every entry
+    /// point (measured: <c>Dim x = 0 : For Each x In {5, 9} : Next</c> left <c>x</c> at 0).</para>
+    ///
+    /// <para>The loop is lowered ONCE, backend-agnostically: the <c>IRForEach</c> iterates a
+    /// fresh HIDDEN variable (<see cref="HiddenName"/>), and the body begins with the ordinary
+    /// assignment <c>x = hidden</c> (<see cref="Assignment"/>), which this analyzer has already
+    /// analyzed like any written <c>x = expr</c> — so IRBuilder lowers it with the one assignment
+    /// lowering, and the field store, the global store, the ByRef store and the assignment
+    /// coercion (<c>Integer → Double</c>, the narrowing <c>Double → Integer</c>) all come from
+    /// there. No backend knows this construct exists.</para>
+    /// </summary>
+    internal sealed class ForEachControlBinding
+    {
+        public ForEachControlBinding(string hiddenName, AssignmentStatementNode assignment)
+        {
+            HiddenName = hiddenName;
+            Assignment = assignment;
+        }
+
+        /// <summary>
+        /// The element variable the loop really iterates, <c>__foreach_N</c> — the
+        /// <c>__with</c> / <c>__lambda_N</c> convention, and not a temp spelling
+        /// (<c>IsTempDestination</c>). Unique per analyzer, so nested loops never share one.
+        /// </summary>
+        public string HiddenName { get; }
+
+        /// <summary>
+        /// The synthesized <c>x = __foreach_N</c> the body begins with. Not part of the AST's
+        /// statement lists: IRBuilder visits it at the top of the loop body.
+        /// </summary>
+        public AssignmentStatementNode Assignment { get; }
+    }
+
+    /// <summary>
     /// Semantic analyzer for BasicLang - performs type checking and scope resolution
     /// </summary>
     public class SemanticAnalyzer : IASTVisitor
@@ -173,6 +214,29 @@ namespace BasicLang.Compiler.SemanticAnalysis
         /// </summary>
         internal IReadOnlyDictionary<ForEachLoopNode, Compiler.IR.IRNetEnumeration> NetEnumerations =>
             _netAnnotations.NetEnumerations;
+
+        /// <summary>
+        /// Task #168 — the <c>For Each</c> loops whose control variable is an EXISTING variable
+        /// (<c>Dim x … : For Each x In l</c>, no <c>As</c> clause), and how each binds it. See
+        /// <see cref="ForEachControlBinding"/>. Absent for a loop that declares its own variable,
+        /// which is every <c>For Each x As T</c> and every <c>For Each x</c> naming nothing in
+        /// scope. Keyed by node REFERENCE, for the reason <see cref="NetEnumerations"/> is.
+        /// </summary>
+        internal IReadOnlyDictionary<ForEachLoopNode, ForEachControlBinding> ForEachControlBindings =>
+            _forEachControlBindings;
+
+        private readonly Dictionary<ForEachLoopNode, ForEachControlBinding> _forEachControlBindings =
+            new Dictionary<ForEachLoopNode, ForEachControlBinding>(ReferenceEqualityComparer.Instance);
+
+        /// <summary>Numbers the hidden element variables of <see cref="ForEachControlBindings"/>.</summary>
+        private int _forEachHiddenVariableCounter;
+
+        /// <summary>
+        /// The control variables of the <c>For</c> / <c>For Each</c> loops whose bodies are being
+        /// analyzed, innermost last — VB's BC30069 question ("already in use by an enclosing
+        /// loop"), asked only by a <c>For Each</c> that would REUSE a variable.
+        /// </summary>
+        private readonly List<Symbol> _activeLoopControlSymbols = new List<Symbol>();
 
         /// <summary>
         /// P2a-2 Task 8c-3 — spec §8.3's enum row. Enum-member arguments that were folded to
@@ -4910,7 +4974,8 @@ namespace BasicLang.Compiler.SemanticAnalysis
         /// Private is reported as such. All three are stated rather than left to the permissive
         /// .NET-type fallback, which is how a bare cross-module name used to be typed Object.
         /// </summary>
-        private bool TryResolveUnqualifiedModuleMember(string name, int line, int column, out Symbol symbol)
+        private bool TryResolveUnqualifiedModuleMember(string name, int line, int column, out Symbol symbol,
+                                                       bool report = true)
         {
             symbol = null;
             var current = EnclosingModuleName();
@@ -4932,13 +4997,15 @@ namespace BasicLang.Compiler.SemanticAnalysis
             if (visible.Count > 1)
             {
                 var owners = string.Join("', '", visible.Select(v => v.OwningModule).OrderBy(o => o, StringComparer.OrdinalIgnoreCase));
-                Error($"'{name}' is ambiguous between modules '{owners}'. Qualify it with the module name", line, column);
+                if (report)
+                    Error($"'{name}' is ambiguous between modules '{owners}'. Qualify it with the module name", line, column);
                 symbol = visible[0];
                 return true;
             }
             if (hidden != null)
             {
-                Error($"'{name}' is Private to module '{hidden.OwningModule}' and cannot be accessed from here", line, column);
+                if (report)
+                    Error($"'{name}' is Private to module '{hidden.OwningModule}' and cannot be accessed from here", line, column);
                 symbol = hidden;
                 return true;
             }
@@ -8127,7 +8194,16 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 }
             }
 
-            node.Body.Accept(this);
+            // Task #168: a `For Each i` nested in this loop may not REUSE its control variable.
+            _activeLoopControlSymbols.Add(loopVarSymbol);
+            try
+            {
+                node.Body.Accept(this);
+            }
+            finally
+            {
+                _activeLoopControlSymbols.RemoveAt(_activeLoopControlSymbols.Count - 1);
+            }
 
             ExitScope();
         }
@@ -8197,17 +8273,156 @@ namespace BasicLang.Compiler.SemanticAnalysis
             // Set the node type to the element type (used by IRBuilder)
             SetNodeType(node, elementType);
 
+            // Task #168: `For Each x In coll` with NO `As` clause names an EXISTING variable when
+            // there is one, and REUSES it (VB) — see ForEachControlBinding. Asked BEFORE the loop
+            // scope opens, and only without `As`: `For Each x As T` always declares its own `x`
+            // (hiding an outer one, as it did before; VB's BC30616 is deliberately not reported).
+            // Cleared first, so a re-analysis of this node never keeps a stale binding.
+            _forEachControlBindings.Remove(node);
+            var reused = node.VariableType == null ? ExistingForEachControlVariable(node) : null;
+
             EnterScope("ForEachLoop", ScopeKind.Loop);
 
-            var loopVarSymbol = new Symbol(node.Variable, SymbolKind.Variable, elementType, node.Line, node.Column);
-            if (!_currentScope.Define(loopVarSymbol))
+            Symbol controlSymbol;
+            if (reused != null)
             {
-                Error($"Loop variable '{node.Variable}' conflicts with existing symbol", node.Line, node.Column);
+                // The loop iterates a hidden variable of the element type, and the body begins
+                // with `x = hidden` — analyzed here exactly as a written assignment is, in the loop
+                // scope where the hidden name is defined and `x` still resolves outward. Its checks
+                // (type compatibility, the constant-fit rule) and its annotations (the target's
+                // symbol and declared type, which IRBuilder's assignment lowering reads) come from
+                // Visit(AssignmentStatementNode), not from a second copy of them.
+                var hiddenName = $"__foreach_{_forEachHiddenVariableCounter++}";
+                _currentScope.Define(new Symbol(hiddenName, SymbolKind.Variable, elementType, node.Line, node.Column));
+
+                var assignment = new AssignmentStatementNode(node.Line, node.Column)
+                {
+                    Target = new IdentifierExpressionNode(node.Line, node.Column) { Name = node.Variable },
+                    Operator = "=",
+                    Value = new IdentifierExpressionNode(node.Line, node.Column) { Name = hiddenName },
+                };
+                assignment.Accept(this);
+
+                _forEachControlBindings[node] = new ForEachControlBinding(hiddenName, assignment);
+                controlSymbol = reused;
+            }
+            else
+            {
+                var loopVarSymbol = new Symbol(node.Variable, SymbolKind.Variable, elementType, node.Line, node.Column);
+                if (!_currentScope.Define(loopVarSymbol))
+                {
+                    Error($"Loop variable '{node.Variable}' conflicts with existing symbol", node.Line, node.Column);
+                }
+                controlSymbol = loopVarSymbol;
             }
 
-            node.Body.Accept(this);
+            _activeLoopControlSymbols.Add(controlSymbol);
+            try
+            {
+                node.Body.Accept(this);
+            }
+            finally
+            {
+                _activeLoopControlSymbols.RemoveAt(_activeLoopControlSymbols.Count - 1);
+            }
 
             ExitScope();
+        }
+
+        /// <summary>
+        /// Task #168: the EXISTING variable a <c>For Each x In coll</c> (no <c>As</c>) reuses, or
+        /// null when the loop declares its own <c>x</c> (a new loop-scoped variable of the element
+        /// type, as before).
+        ///
+        /// <para>Resolved by the SAME chain a bare read of <c>x</c> uses
+        /// (<see cref="ResolveBareName"/>), silently: "not found" is not an error here, it is the
+        /// declaring form. What it finds decides (<see cref="ClassifyForEachControlName"/>):</para>
+        /// <list type="bullet">
+        /// <item><b>a variable</b> — a local, a parameter (by value or ByRef), a module variable
+        /// (this module's, another's, an imported one's) or a field of the enclosing class or a
+        /// base, read bare — is REUSED;</item>
+        /// <item><b>a constant, a property or an event</b> is refused, naming what it is. Each used
+        /// to be SHADOWED without a word: the loop declared a same-named variable, and after
+        /// <c>Next</c> the name meant the constant again. VB refuses them too (BC30039 for a
+        /// property);</item>
+        /// <item><b>anything else</b> — a type, a module, a namespace, a METHOD — declares a new
+        /// variable, as before. For a type that is VB's own rule (Roslyn declares a fresh local
+        /// when the name binds only to a type). For a method it is a deliberate departure from VB:
+        /// BasicLang's pass 1 flattens EVERY procedure signature, class methods included, into the
+        /// global scope, and the standard library puts <c>Day</c>, <c>Hour</c>, <c>Year</c>,
+        /// <c>Min</c>, <c>Str</c>, <c>Val</c>, <c>Left</c>, … there too — so "resolves to a
+        /// method" is true of ordinary loop-variable names that mean no method at the loop.
+        /// MEASURED: refusing it broke <c>For Each val In d.Values</c>
+        /// (<c>CppCollectionTests.Cpp_DictionaryOperations_CompileAndRun</c>).</item>
+        /// </list>
+        ///
+        /// <para>⛔ A variable that is ALREADY the control variable of an enclosing <c>For</c> /
+        /// <c>For Each</c> is refused too — VB's BC30069. Reusing it is not merely VB-illegal: an
+        /// enclosing <c>For Each</c> DECLARED it, so the backends emit it as that loop's own
+        /// iteration variable, and the inner loop's store into it does not compile or run there.
+        /// MEASURED with this refusal removed: CS1656 ("cannot assign to a foreach iteration
+        /// variable") on C#, and "TypeError: Assignment to constant variable" on JavaScript,
+        /// while C++ and MSIL ran.</para>
+        ///
+        /// <para>After an error the loop declares its own variable, as it did before, so the body
+        /// is analyzed without a cascade.</para>
+        /// </summary>
+        private Symbol ExistingForEachControlVariable(ForEachLoopNode node)
+        {
+            var symbol = ResolveBareName(node.Variable, node.Line, node.Column, report: false);
+            if (symbol == null) return null;
+
+            var kind = ClassifyForEachControlName(symbol, out var what);
+            if (kind == ForEachControlName.DeclaresNew) return null;
+            if (kind == ForEachControlName.Refused)
+            {
+                Error($"'{node.Variable}' is {what} and cannot be used as a For Each control variable. " +
+                      $"Use a variable, or declare a new one with 'For Each {node.Variable} As <type>'",
+                      node.Line, node.Column);
+                return null;
+            }
+
+            if (_activeLoopControlSymbols.Contains(symbol))
+            {
+                Error($"For Each control variable '{node.Variable}' is already in use by an enclosing For or For Each loop",
+                      node.Line, node.Column);
+                return null;
+            }
+
+            return symbol;
+        }
+
+        private enum ForEachControlName { Reused, Refused, DeclaresNew }
+
+        /// <summary>
+        /// What a <c>For Each</c> control name that RESOLVED does — see
+        /// <see cref="ExistingForEachControlVariable"/> for the three answers and why.
+        /// <paramref name="what"/> names a refused symbol for the diagnostic ("'x' is ___"). A
+        /// constant is Constant-kind or anything flagged <see cref="Symbol.IsConstant"/> — the flag
+        /// is what the assignment check asks.
+        /// </summary>
+        private static ForEachControlName ClassifyForEachControlName(Symbol symbol, out string what)
+        {
+            what = null;
+            if (symbol.IsConstant || symbol.Kind == SymbolKind.Constant)
+            {
+                what = "a constant";
+                return ForEachControlName.Refused;
+            }
+            switch (symbol.Kind)
+            {
+                case SymbolKind.Variable:
+                case SymbolKind.Parameter:
+                    return ForEachControlName.Reused;
+                case SymbolKind.Property:
+                    what = "a property";
+                    return ForEachControlName.Refused;
+                case SymbolKind.Event:
+                    what = "an event";
+                    return ForEachControlName.Refused;
+                default:
+                    return ForEachControlName.DeclaresNew;
+            }
         }
 
         // Stack of With object types for nested With blocks
@@ -9108,39 +9323,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 return;
             }
 
-            var symbol = _currentScope.Resolve(node.Name);
-
-            // A member of the class being analyzed, or of one of its BASES, by bare name.
-            // ⛔ BEFORE every channel below. Two things forced that position, both measured:
-            // the .NET-type arm further down is deliberately permissive ("any PascalCase
-            // identifier could be a .NET type"), so an inherited `Total` was swallowed into a
-            // phantom type named Total with NO diagnostic — only a one-character or lowercase
-            // name ever reached "Undefined identifier"; and class scope is NEARER than module
-            // scope, which the IR builder already assumes (IsCurrentClassMember suppresses the
-            // module-global fallback for a name it classifies as a class member), so binding a
-            // module global here would leave the two halves disagreeing about where the value
-            // lives. Lexical resolution still wins: a local, a parameter and the class's own
-            // already-defined members are found above.
-            if (symbol == null)
-            {
-                symbol = ResolveClassMember(node.Name);
-            }
-
-            if (symbol == null)
-            {
-                // Try project symbol table for cross-module references (ModuleName.Symbol or imported symbols)
-                symbol = ResolveQualifiedName(node.Name);
-            }
-
-            // A Public/Friend variable or constant of another Module in this unit, by bare name.
-            // ⛔ BEFORE the .NET-type arm below, which is deliberately permissive ("any PascalCase
-            // identifier could be a .NET type") and used to swallow exactly this reference: it
-            // typed `Value` as a phantom class named Value, no error, and the IR builder then
-            // minted a fresh local of that name. See Symbol.OwningModule.
-            if (symbol == null && TryResolveUnqualifiedModuleMember(node.Name, node.Line, node.Column, out var crossModule))
-            {
-                symbol = crossModule;
-            }
+            var symbol = ResolveBareName(node.Name, node.Line, node.Column, report: true);
 
             // VB's control-character constants (vbCrLf, vbTab, ...). Backslash is not an escape
             // in a string literal, so these are how source spells a newline or tab. Only when
@@ -9201,6 +9384,54 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 ["vbLf"] = "\n",
                 ["vbTab"] = "\t",
             };
+
+        /// <summary>
+        /// What a BARE name denotes at this point — the symbol-resolution chain of a bare
+        /// identifier, in its order, and nothing past it (not the VB string constants, not the
+        /// permissive .NET-type arm). ONE chain with two callers: <see cref="Visit(IdentifierExpressionNode)"/>
+        /// and the <c>For Each</c> control-variable question (task #168), which must agree with
+        /// it about what <c>x</c> means or the loop would reuse one thing and the body read
+        /// another. <paramref name="report"/> false asks silently: the cross-module arm's
+        /// ambiguity / Private diagnostics are left to the read (or assignment) that follows.
+        /// </summary>
+        private Symbol ResolveBareName(string name, int line, int column, bool report)
+        {
+            var symbol = _currentScope.Resolve(name);
+
+            // A member of the class being analyzed, or of one of its BASES, by bare name.
+            // ⛔ BEFORE every channel below. Two things forced that position, both measured:
+            // the .NET-type arm further down is deliberately permissive ("any PascalCase
+            // identifier could be a .NET type"), so an inherited `Total` was swallowed into a
+            // phantom type named Total with NO diagnostic — only a one-character or lowercase
+            // name ever reached "Undefined identifier"; and class scope is NEARER than module
+            // scope, which the IR builder already assumes (IsCurrentClassMember suppresses the
+            // module-global fallback for a name it classifies as a class member), so binding a
+            // module global here would leave the two halves disagreeing about where the value
+            // lives. Lexical resolution still wins: a local, a parameter and the class's own
+            // already-defined members are found above.
+            if (symbol == null)
+            {
+                symbol = ResolveClassMember(name);
+            }
+
+            if (symbol == null)
+            {
+                // Try project symbol table for cross-module references (ModuleName.Symbol or imported symbols)
+                symbol = ResolveQualifiedName(name);
+            }
+
+            // A Public/Friend variable or constant of another Module in this unit, by bare name.
+            // ⛔ BEFORE the .NET-type arm in Visit(IdentifierExpressionNode), which is deliberately
+            // permissive ("any PascalCase identifier could be a .NET type") and used to swallow
+            // exactly this reference: it typed `Value` as a phantom class named Value, no error,
+            // and the IR builder then minted a fresh local of that name. See Symbol.OwningModule.
+            if (symbol == null && TryResolveUnqualifiedModuleMember(name, line, column, out var crossModule, report))
+            {
+                symbol = crossModule;
+            }
+
+            return symbol;
+        }
 
         /// <summary>
         /// The member of the class currently being analyzed — its own, or an inherited one —
