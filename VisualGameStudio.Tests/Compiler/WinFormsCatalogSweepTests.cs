@@ -382,10 +382,29 @@ public class WinFormsCatalogSweepTests
             i++;
         }
 
-        var generated = GenerateCSharp(form);
+        // ⛔ Not GenerateCSharp: a Degraded value is DROPPED with a warning, so a compile that succeeds
+        // proves nothing about the names that never reached it. Every name must be written, as its
+        // own whole statement, with no Degraded diagnostic.
+        var written = RegionWriter.Write("SweepForm.bas", Scaffold(), form, "SweepForm.blform");
+        Assert.That(written.Refused, Is.False,
+            "the region writer refused: " + string.Join("; ", written.Diagnostics.Select(d => d.Format())));
 
-        Assert.That(generated, Does.Contain("SystemColors.Control"));
-        WinFormsCompile.AssertCompiles(generated, "every SystemColors name the catalog emits must be a member csc knows.");
+        Assert.Multiple(() =>
+        {
+            Assert.That(written.Diagnostics.Where(d => d.Code == DesignCodes.DegradedProperty).Select(d => d.Format()),
+                Is.Empty, "every system colour is a valid WinForms value");
+
+            for (var n = 0; n < FormSystemColors.Names.Count; n++)
+            {
+                var statement = $@"^\s*lbl{n}\.ForeColor = SystemColors\.{FormSystemColors.Names[n]}\r?$";
+                Assert.That(System.Text.RegularExpressions.Regex.IsMatch(written.Text, statement,
+                        System.Text.RegularExpressions.RegexOptions.Multiline), Is.True,
+                    $"lbl{n}.ForeColor = SystemColors.{FormSystemColors.Names[n]} must be written as a whole statement");
+            }
+        });
+
+        WinFormsCompile.AssertCompiles(CompileToCSharp(written.Text),
+            "every SystemColors name the catalog emits must be a member csc knows.");
     }
 
     // ==================================================================

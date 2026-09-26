@@ -332,4 +332,37 @@ public class FormPropertyDefTests
                 "preserved exactly — never coerced");
         });
     }
+
+    /// <summary>
+    /// The sibling that makes the test above discriminating: a reader that judged every document as
+    /// if it were a web form would pass it. The SAME value on a WinForms form is Canon, and a system
+    /// colour that HAS a CSS equivalent is Canon on the web.
+    /// </summary>
+    [Test]
+    public void TheReader_JudgesTheDocumentsOwnTarget()
+    {
+        var winForms = BasicLang.Forms.Serialization.FormDocumentReader.Read("F.blform", """
+            <Form Name="F" Version="1" Width="400" Height="300">
+              <Controls><Label Id="lbl" TabIndex="0" X="0" Y="0" Width="10" Height="10" ForeColor="ActiveCaption"/></Controls>
+            </Form>
+            """);
+        var web = BasicLang.Forms.Serialization.FormDocumentReader.Read("F.blwebform", """
+            <WebForm Name="F" Version="1">
+              <Controls><Label Id="lbl" TabIndex="0" ForeColor="Control"/></Controls>
+            </WebForm>
+            """);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(winForms.Model.FindById("lbl"), Is.Not.Null, "the WinForms fixture must load");
+            Assert.That(winForms.TierOf("lbl", "ForeColor"), Is.EqualTo(BasicLang.Forms.Serialization.PropertyTier.Canon),
+                "ActiveCaption is a real SystemColors member on WinForms");
+            Assert.That(winForms.DegradedReason("lbl", "ForeColor"), Is.Null);
+
+            Assert.That(web.Model.FindById("lbl"), Is.Not.Null, "the web fixture must load");
+            Assert.That(web.TierOf("lbl", "ForeColor"), Is.EqualTo(BasicLang.Forms.Serialization.PropertyTier.Canon),
+                "Control maps to the CSS system colour ButtonFace");
+            Assert.That(web.DegradedReason("lbl", "ForeColor"), Is.Null);
+        });
+    }
 }

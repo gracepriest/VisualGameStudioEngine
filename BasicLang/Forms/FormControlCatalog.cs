@@ -427,7 +427,8 @@ public sealed record FormPropertyDef(
 
         if (IsSystemColourRefusedOn(value, target))
         {
-            FormSystemColors.TryCanonical(value, out var system);
+            // The result is known true: IsSystemColourRefusedOn just answered yes by the same lookup.
+            _ = FormSystemColors.TryCanonical(value, out var system);
             return $"'{value}' is the Windows system colour {system}, which has no CSS equivalent, so a " +
                    "web form cannot use it. The value is preserved exactly as written.";
         }

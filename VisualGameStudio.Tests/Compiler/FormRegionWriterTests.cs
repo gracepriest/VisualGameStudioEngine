@@ -369,6 +369,10 @@ public class FormRegionWriterTests
             Assert.That(result.Diagnostics.Select(d => d.Code),
                 Has.Exactly(2).EqualTo(DesignCodes.DegradedProperty),
                 "and the user is told which values did not make it");
+            // The reason is the catalog's own (DescribeRefusal) — the one the grid shows — so it
+            // carries the allowed values, then this site's tail.
+            Assert.That(result.Diagnostics.Single(d => d.Message.Contains("'lbl.TextAlign'")).Message,
+                Does.Contain("expected one of:").And.Contain("It is not written into the generated code."));
         });
     }
 

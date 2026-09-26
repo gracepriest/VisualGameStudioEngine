@@ -816,16 +816,19 @@ public static class RegionWriter
 
             if (component.Properties.TryGetValue(property.Name, out var value))
             {
-                if (property.Accepts(value))
+                // This template is WEB code, so the value is judged as the web would judge it.
+                if (property.Accepts(value, FormTarget.Web))
                 {
                     return value;
                 }
 
+                // ⛔ The reason comes from the catalog (DescribeRefusal) — the same text the reader
+                // freezes the grid row with — so a target refusal is never mislabelled "not a valid X".
                 diagnostics.Add(new DesignDiagnostic(
                     DesignCodes.DegradedProperty,
-                    $"{DesignCodes.DegradedProperty}: '{component.Id}.{property.Name}' is '{value}', " +
-                    $"which is not a valid {property.Type}, so the catalog default '{property.Default}' " +
-                    "is written in its place. The value is preserved in the document.",
+                    $"{DesignCodes.DegradedProperty}: '{component.Id}.{property.Name}': " +
+                    property.DescribeRefusal(value, FormTarget.Web) +
+                    $" The catalog default '{property.Default}' is written in its place.",
                     filePath, 0, 0, IsWarning: true));
             }
 
@@ -871,13 +874,17 @@ public static class RegionWriter
             // not parse as the designer's `Left`, but it is exactly what emitting `Left`
             // produces, so skipping it would strip the property for no reason. The catalog
             // answers that per row; a shape test cannot (FormPropertyDef.IsSourceForm).
+            //
+            // ⛔ DescribeRefusal is reached ONLY for a value that is truly Degraded: the
+            // IsSourceForm test above short-circuits first, and DescribeRefusal throws for a value
+            // the target accepts.
             if (property != null && !property.Accepts(value, FormTarget.WinForms) && !property.IsSourceForm(value))
             {
                 diagnostics.Add(new DesignDiagnostic(
                     DesignCodes.DegradedProperty,
-                    $"{DesignCodes.DegradedProperty}: '{control.Id}.{name}' is '{value}', which " +
-                    $"is not a valid {property.Type}, so it is not written into the generated " +
-                    "code. The value is preserved in the document.",
+                    $"{DesignCodes.DegradedProperty}: '{control.Id}.{name}': " +
+                    property.DescribeRefusal(value, FormTarget.WinForms) +
+                    " It is not written into the generated code.",
                     filePath, 0, 0, IsWarning: true));
                 continue;
             }
