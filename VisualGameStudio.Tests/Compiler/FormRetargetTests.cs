@@ -99,7 +99,7 @@ public class FormRetargetTests
             Assert.That(doc.FindById("btnLogin")!.Binds.Single().Handler, Is.EqualTo("btnLogin_Click"),
                 "a handler name is the user's own Sub and crosses verbatim");
             Assert.That(doc.Width, Is.Null, "a page has no window size");
-            Assert.That(doc.Text, Is.Null, "a page has no caption");
+            Assert.That(doc.Text, Is.EqualTo("Sign in"), "Text is one vocabulary on both targets (D2): it becomes the page title");
         });
     }
 
@@ -158,8 +158,8 @@ public class FormRetargetTests
                 "…and where it LANDED, so the user can review the cell");
 
             var window = crossed.SingleOrDefault(d => d.Message.Contains("400") && d.Message.Contains("300"));
-            Assert.That(window, Is.Not.Null, "the window's size and caption are lost once, for the document");
-            Assert.That(window!.Message, Does.Contain("Sign in"));
+            Assert.That(window, Is.Not.Null, "the window's size is lost once, for the document");
+            Assert.That(window!.Message, Does.Not.Contain("Sign in"), "the caption now CROSSES (D2); it is not lost");
 
             Assert.That(crossed, Has.Count.EqualTo(4), "three controls + the window; nothing else at this edge");
         });
@@ -285,6 +285,75 @@ public class FormRetargetTests
             Assert.That(Of(result, DesignCodes.RetargetPropertyLost).Single().Message,
                 Does.Contain("'rdo.GroupName'").And.Contain("choice"));
         });
+    }
+
+    // ==================================================================
+    // A property that crosses with a VALUE the destination refuses (Task 4 review → slice 1 Task 7)
+    // ==================================================================
+
+    [Test]
+    public void ToWeb_ASystemColourTheWebCannotUse_CrossesPreserved_AndIsNamed()
+    {
+        // ActiveCaption is a Windows system colour with no CSS equivalent: valid on the window, Degraded
+        // on the page. The value is preserved (the user's own text), but the loss of MEANING is named.
+        var source = WinForms("""
+            <Form Name="LoginForm" Version="1">
+              <Controls>
+                <Label Id="lbl" Text="Hi" ForeColor="ActiveCaption" X="8" Y="8" Width="60" Height="23" TabIndex="0"/>
+              </Controls>
+            </Form>
+            """);
+
+        var result = FormRetarget.Convert(source, FormTarget.Web);
+        var property = FormControlCatalog.Find("Label")!.Property("ForeColor")!;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Document.FindById("lbl")!.Properties["ForeColor"], Is.EqualTo("ActiveCaption"),
+                "preserved exactly as written — the page opens it Degraded, never rewritten");
+            var named = Of(result, DesignCodes.RetargetPropertyLost).Single();
+            Assert.That(named.Message, Does.Contain("'lbl.ForeColor'")
+                .And.Contain(property.DescribeRefusal("ActiveCaption", FormTarget.Web)),
+                "the reason is the catalog's own refusal, never a hand-written one");
+        });
+    }
+
+    [Test]
+    public void ToWinForms_ACssColourNameWinFormsDoesNotKnow_CrossesPreserved_AndIsNamed()
+    {
+        // RebeccaPurple is a CSS name System.Drawing.Color lacks: fine on the page, CS0117 on the window.
+        var source = Web("""
+            <WebForm Name="LoginForm" Version="1">
+              <Layout Kind="Grid" Cols="auto" Rows="auto"/>
+              <Controls>
+                <Label Id="lbl" Text="Hi" ForeColor="RebeccaPurple" Col="0" Row="0" TabIndex="0"/>
+              </Controls>
+            </WebForm>
+            """);
+
+        var result = FormRetarget.Convert(source, FormTarget.WinForms);
+        var property = FormControlCatalog.Find("Label")!.Property("ForeColor")!;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Document.FindById("lbl")!.Properties["ForeColor"], Is.EqualTo("RebeccaPurple"));
+            var named = Of(result, DesignCodes.RetargetPropertyLost).Single();
+            Assert.That(named.Message, Does.Contain("'lbl.ForeColor'")
+                .And.Contain(property.DescribeRefusal("RebeccaPurple", FormTarget.WinForms)));
+        });
+    }
+
+    [Test]
+    public void AColourBothTargetsAccept_CrossesWithNoFinding([Values(FormTarget.WinForms, FormTarget.Web)] FormTarget from)
+    {
+        var source = new FormDocument { Target = from, Name = "Sweep" };
+        var label = FormCatalogShapes.Canonical(source, FormControlCatalog.Find("Label")!, "c");
+        label.Properties["ForeColor"] = "Red";
+
+        var result = FormRetarget.Convert(source, Other(from));
+
+        Assert.That(Of(result, DesignCodes.RetargetPropertyLost), Is.Empty,
+            "only a REFUSED value is named — a usable one crossing is not a loss");
     }
 
     // ==================================================================
@@ -1199,12 +1268,70 @@ public class FormRetargetTests
         }
     }
 
+    /// <summary>
+    /// Values usable on one target and refused on the other — the only target-specific refusals the
+    /// catalog makes today (<c>FormPropertyDef.Accepts(value, target)</c>): a system colour with no CSS
+    /// equivalent, and a CSS colour name System.Drawing.Color lacks. The sweep picks, per row, whichever
+    /// one the source accepts and the destination refuses, so a new refusal kind needs only a new entry.
+    /// </summary>
+    private static readonly string[] TargetRefusedSamples = { "ActiveCaption", "RebeccaPurple" };
+
+    /// <summary>
+    /// ⛔ Catalog-driven companion of the sweep above: every property that APPLIES on both targets but
+    /// holds a value the destination refuses crosses PRESERVED (the user's own text, opened Degraded on
+    /// the other side) and is NAMED with the catalog's own refusal reason — never carried silently.
+    /// Asserts it exercised at least one row, so it cannot pass by absence.
+    /// </summary>
+    [Test]
+    public void EveryCatalogProperty_WhoseValueTheDestinationRefuses_CrossesPreserved_AndIsNamed(
+        [Values(FormTarget.WinForms, FormTarget.Web)] FormTarget from)
+    {
+        var to = Other(from);
+        var exercised = 0;
+
+        foreach (var definition in FormControlCatalog.For(from).Where(d => d.SupportsTarget(to)))
+        {
+            foreach (var property in definition.Properties.Where(p => p.AppliesTo(from) && p.AppliesTo(to)))
+            {
+                var value = TargetRefusedSamples.FirstOrDefault(v => property.Accepts(v, from) && !property.Accepts(v, to));
+                if (value == null)
+                {
+                    continue;
+                }
+
+                var source = new FormDocument { Target = from, Name = "Sweep" };
+                FormCatalogShapes.Canonical(source, definition, "c").Properties[property.Name] = value;
+
+                var result = FormRetarget.Convert(source, to);
+                var converted = result.Document.AllControls().Concat(result.Document.AllComponents())
+                    .Single(c => c.Kind == definition.Kind);
+                var named = Of(result, DesignCodes.RetargetPropertyLost)
+                    .Where(d => d.Message.Contains($"'c.{property.Name}'"))
+                    .ToList();
+
+                Assert.Multiple(() =>
+                {
+                    Assert.That(converted.Properties.GetValueOrDefault(property.Name), Is.EqualTo(value),
+                        $"{definition.Kind}.{property.Name} {from}→{to}: preserved exactly as written");
+                    Assert.That(named, Has.Count.EqualTo(1),
+                        $"{definition.Kind}.{property.Name} = \"{value}\" {from}→{to}: must be named once");
+                    Assert.That(named.FirstOrDefault()?.Message, Does.Contain(property.DescribeRefusal(value, to)),
+                        $"{definition.Kind}.{property.Name} {from}→{to}: the catalog's own reason");
+                });
+                exercised++;
+            }
+        }
+
+        Assert.That(exercised, Is.GreaterThan(0), $"{from}→{to}: no row was exercised — the sweep is vacuous");
+    }
+
     private static string Sample(FormPropertyDef property) => property.Type switch
     {
         FormPropertyType.Int => "1",
         FormPropertyType.Bool => "true",
         FormPropertyType.Color => "#ff0000",
         FormPropertyType.Enum => property.AllowedValues![0],
+        FormPropertyType.Size => "75, 23",
         _ => "x"
     };
 }

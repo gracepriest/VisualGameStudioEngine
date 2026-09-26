@@ -6,12 +6,14 @@ namespace BasicLang.Forms;
 /// scar of those twice (FormAssetEmitter.Tracks ↔ FormGridLayout.ParseTracks; the four private "how big
 /// is the form" copies that became FormCanvasTransform.SurfaceSize).
 ///
-/// <para>⚠ What actually reads it TODAY (slice 1, Task 6): the region writer's WinForms root emission
-/// (<see cref="Get"/>), and the reader's "is this root attribute modelled?" test
+/// <para>⚠ What actually reads it TODAY (slice 1, Tasks 6–7): the region writer's WinForms root emission
+/// (<see cref="Get"/>), and the reader's and the retarget's "is this root attribute modelled?" test
 /// (<see cref="RowForAttribute"/>). NOT yet: the reader's typed parse and the writer still spell
 /// <c>Text</c>/<c>Width</c>/<c>Height</c> themselves (typed fields, one per row — slice 3's
-/// Properties-stored rows are where a generic path pays); the retarget arrives in Task 7 and the
-/// property grid in slice 2. Until those land, a new row must be mapped here AND taught to them.</para>
+/// Properties-stored rows are where a generic path pays), and the retarget crosses Text and derives the
+/// layout edge itself; the property grid arrives in slice 2. Until those land, a new row must be mapped
+/// here AND taught to them — FormRootRetargetTests' catalog sweep goes red for a row the retarget
+/// neither crosses nor names.</para>
 /// </summary>
 public static class FormRootValues
 {

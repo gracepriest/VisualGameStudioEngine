@@ -188,18 +188,36 @@ public static class FormRetarget
 
         public void ConvertRoot()
         {
+            // Text is ONE vocabulary on both targets (D2, spec §2.3). ⚠ A caption EQUAL to the name is
+            // written as absence on the page, whose title is Text ?? Name — the page shows the same thing
+            // either way, and a round trip stays byte-identical.
+            Document.Text = _to == FormTarget.Web && string.Equals(_source.Text, _source.Name, StringComparison.Ordinal)
+                ? null
+                : _source.Text;
+
             foreach (var (name, value) in _source.UnknownAttributes)
             {
                 // ⛔ A .blwebform root carrying Width="400" holds it as an unknown attribute; the
                 // WinForms reader would model that as the window's width. Carrying it across would
-                // let a stale number overrule the size this retarget computed — Create() writes
+                // let a stale number overrule the value this retarget derived — Create() writes
                 // unknown attributes AFTER the modelled ones and SetAttributeValue replaces.
-                if (IsRootAttributeModelledOn(name, _to))
+                if (FormRootValues.RowForAttribute(name, _to) is { } modelled)
                 {
                     Warn(DesignCodes.RetargetPropertyLost,
                         $"the form's '{name}=\"{value}\"' attribute is not modelled on a {Describe(_from)} " +
-                        $"document but WOULD be read as the window's {name} on a {Describe(_to)} one. It was " +
-                        "dropped rather than allowed to overrule the size this retarget derived.");
+                        $"document but WOULD be read as 'form.{modelled.Name}' on a {Describe(_to)} one. It was " +
+                        "dropped rather than allowed to overrule the value this retarget derived.");
+                    continue;
+                }
+
+                // ⛔ The SOURCE's own degraded storage (an unparseable Width on a .blform is kept as an
+                // unknown attribute so it round-trips — plan scope call S3). It is a FormRoot row the
+                // destination does not have, not "content we do not model", so it is named, never carried.
+                if (FormRootValues.RowForAttribute(name, _from) is { } row && !row.AppliesTo(_to))
+                {
+                    Warn(DesignCodes.RetargetPropertyLost,
+                        $"'form.{row.Name}' could not be read on the {Describe(_from)} form ('{name}=\"{value}\"') " +
+                        $"and does not exist on a {Describe(_to)} one, so it was dropped.");
                     continue;
                 }
 
@@ -221,13 +239,47 @@ public static class FormRetarget
                 Document.UnknownChildren.Add(new XElement(child));
             }
 
+            ConvertRootBinds();
+
             // Components (Task 25) cross in ConvertComponents, with the same kind/property/bind
             // rules as controls and no geometry pass — see FormRetargetTests.
             Document.Resources.AddRange(_source.Resources.Select(e => new XElement(e)));
         }
 
-        private static bool IsRootAttributeModelledOn(string name, FormTarget target) =>
-            target == FormTarget.WinForms && name is "Width" or "Height" or "Text";
+        /// <summary>
+        /// The form's own binds (spec §2.3): a bind whose event is wired on the destination crosses under
+        /// the destination's name (through the SAME seam the emitter asks); any other is dropped and NAMED.
+        /// ⚠ The Form has no catalog events until slice 5, so today every root bind is named.
+        /// </summary>
+        private void ConvertRootBinds()
+        {
+            foreach (var bind in _source.Binds)
+            {
+                // Reserved data binding is parsed and round-tripped, never interpreted — including here.
+                if (bind.UsesReservedDataBinding)
+                {
+                    Document.Binds.Add(bind.Clone());
+                    continue;
+                }
+
+                var crossing = FormEvents.WiredOn(FormControlCatalog.FormRoot, _from)
+                    .FirstOrDefault(e => string.Equals(FormEvents.NameOn(e, _from), bind.Event, StringComparison.OrdinalIgnoreCase));
+                var toName = crossing != null && FormEvents.WiredOn(FormControlCatalog.FormRoot, _to).Contains(crossing)
+                    ? FormEvents.NameOn(crossing, _to)
+                    : null;
+
+                if (toName != null)
+                {
+                    Document.Binds.Add(new FormBind { Event = toName, Handler = bind.Handler });
+                    continue;
+                }
+
+                Warn(DesignCodes.RetargetBindLost,
+                    $"'form' wires its '{bind.Event}' event to {bind.Handler}, and the catalog knows no " +
+                    $"{Describe(_to)} name for that form event. The wiring was dropped; wire {bind.Handler} " +
+                    "by hand on the other side.");
+            }
+        }
 
         private static bool IsRootElementModelledOn(string name, FormTarget target) =>
             target == FormTarget.Web && name is "Layout" or "Literal";
@@ -334,6 +386,18 @@ public static class FormRetarget
                 }
 
                 control.Properties[name] = value;
+
+                // The property exists on both sides but the destination refuses this VALUE (a system
+                // colour with no CSS equivalent going to the web; a CSS colour name System.Drawing.Color
+                // lacks going to WinForms). Preserved — it is the user's text, and the other side opens
+                // it Degraded — but its meaning is lost, so it is NAMED. ⚠ The reason is the catalog's
+                // own (DescribeRefusal, which throws on an accepted value — hence only after refusal).
+                if (property != null && !property.Accepts(value, _to))
+                {
+                    Warn(DesignCodes.RetargetPropertyLost,
+                        $"'{source.Id}.{name}' = \"{value}\" crosses but is not usable on a {Describe(_to)} " +
+                        $"{source.Kind}: {property.DescribeRefusal(value, _to)}");
+                }
             }
 
             foreach (var (name, value) in source.UnknownAttributes)
@@ -487,7 +551,6 @@ public static class FormRetarget
             var lost = new List<string>();
             if (_source.Width != null) lost.Add($"Width={_source.Width}");
             if (_source.Height != null) lost.Add($"Height={_source.Height}");
-            if (_source.Text != null) lost.Add($"Text=\"{_source.Text}\"");
 
             Warn(DesignCodes.RetargetLayoutCrossed,
                 (lost.Count > 0
@@ -552,7 +615,9 @@ public static class FormRetarget
 
             Document.Width = Math.Max(MinimumWidth, right + Margin);
             Document.Height = Math.Max(MinimumHeight, bottom + Margin);
-            Document.Text = _source.Name;
+            // The caption crossed in ConvertRoot; a page with none becomes a window captioned with its
+            // name — which is what the page's title showed (Text ?? Name).
+            Document.Text ??= _source.Name;
 
             var described = _source.Layout == null
                 ? "the page had no <Layout>, so its controls flowed in document order"
