@@ -1964,8 +1964,10 @@ backends are still wrong, for reasons this ADR does not touch:
   caller's `n` no matter what the optimizer does or does not run (MEASURED wrong even with ZERO
   optimizer passes running — not a kill-vocabulary or CSE/LICM gap this family could ever have
   closed).
-- **MSIL cannot build this shape at all** — "Reference to undefined class 'Action'", task #155 (no
-  IL lowering for the delegate type a `Sub()` lambda gets typed as).
+- ~~**MSIL cannot build this shape at all** — "Reference to undefined class 'Action'", task #155
+  (no IL lowering for the delegate type a `Sub()` lambda gets typed as).~~ **CLOSED 2026-09-26,
+  task #155 / ADR-0010.** MSIL now prints `a=3 b=103` too — see the MSIL lambda/closures section
+  below.
 
 D1's own closure rule first closed this for C#/JavaScript with an INTERIM approximation ("every
 local and by-value parameter is call-visible in a function that creates a lambda" — sound, but
@@ -2102,8 +2104,10 @@ single new failure against the 170-name baseline.
   rewritten (`ForEachVariableRenameFixTests.cs`, `MsilForEachTests.cs`), and new coverage lives in
   `ForEachControlVariableReuseTests.cs`/`ForEachControlVariableDiagnosticsTests.cs`. Known gaps,
   not fixed here: task #124 (the C++/JavaScript case-folding gap below hits a case-differing
-  reuse the same way it hits a plain assignment); tasks #136/#140/#155 (lambda capture of a `For
-  Each` variable, C++/MSIL); and `Dim c As Char : For Each c In "xyz"` — a bare `For Each` over a
+  reuse the same way it hits a plain assignment); tasks #136/#140 (lambda capture of a `For
+  Each` variable, C#/C++ — MSIL's own gap here was task #155, CLOSED 2026-09-26 by ADR-0010: a
+  declaring `For Each`'s captured variable now gets a fresh per-iteration environment); and
+  `Dim c As Char : For Each c In "xyz"` — a bare `For Each` over a
   `String`'s characters infers the element type as `Object`, not `Char`, which reuse's assignment
   coercion now refuses where a fresh declaration never had to check it — no task number filed for
   this one yet.
@@ -4595,6 +4599,64 @@ single new failure against the 170-name baseline.
   synthesized only where a BasicLang program actually writes the member. Measured on a real build
   over `System.Console` and `Regex`: zero `set_` slots. C++ can read such a property but not write
   it. The facade cannot fix this — it can only render slots that exist.
+  ⭐ **MSIL LAMBDAS, CLOSURES AND `AddressOf` ARE SUPPORTED as of 2026-09-26 (task #155,
+  ADR-0010)** — before this, EVERY lambda program failed to build (the local typed as an
+  undefined `class 'Action'`, the lambda body reading the creator's locals as unknown locals,
+  a call through a captured delegate emitted as a call to a static method that does not exist).
+  `BasicLang/ClosureLowering.cs` is a new IR→IR pass, opt-in for MSIL ONLY (C++ may opt in for
+  #140), run at the top of `MSILCodeGenerator.Generate` on a CLONE of the module — C#, JavaScript
+  and C++ never see its output, and it hands back the module ITSELF (no clone) when there is
+  nothing to lower. One env per creator function (captured locals, by-value params copied in,
+  `Me`), plus one per ITERATION of a declaring `For Each` whose variable is captured, chained
+  with `parent`; a lambda's environment is NESTED inside its creator's class (`IRClass.
+  EnclosingClass`) so it can reach the creator's PRIVATE members through `Me` — measured: a
+  top-level environment reading a private field is `FieldAccessException` on .NET 8, a nested one
+  is not. `Action`/`Action(Of …)`/`Func(Of …)` map to the real BCL generic delegates through
+  `[mscorlib]`; the measured arity cap is `Action`1..`8` and `Func`1..`9` (`Action`9`/`Func`10`
+  assemble and then die with `TypeLoadException` — the facade does not forward them — so both are
+  refused at compile time instead). A lambda value or `AddressOf` lowers to the new
+  `IRDelegateCreate` node; a call through a delegate VALUE is `callvirt Invoke`; a call to a name
+  that is neither a declared procedure nor a delegate value is now REFUSED (`ForeignFeatureException`)
+  instead of emitting `call` on a static method nothing defines (which used to assemble — ilasm
+  does not resolve member references — and then die with `MissingMethodException` at RUN time,
+  measured with a plain undeclared call).
+  ⛔ **Refused, naming the construct, never mis-emitted:** a ByRef parameter captured by a lambda;
+  a lambda inside an Iterator/Async function, or an iterator/async lambda; `Me` captured in a
+  Structure's method (untestable today — this front end's `Structure` has no method syntax at
+  all, fields only); a capture set #122 could not enumerate (raw inline code); a lambda that
+  declares a name it also reads from the creator (N9) or one that differs from its own parameter
+  only by case (#169); a captured variable typed by the creator's own generic parameter; a
+  captured variable passed ByRef to another call; `MyBase.M()` inside a lambda; a `Select Case`
+  `When` guard (or pattern variable) that reads a capture; a lambda in a field/module initializer
+  or in `MyBase.New(...)` arguments (no creator function to hold an environment); delegate
+  relaxation or converting a delegate VALUE between delegate types; an arity above the cap. Two
+  shapes that have NEVER run on MSIL, before or after this task, and are unrelated to closures:
+  `RaiseEvent` (no lowering at all) and an engine/native call the stdlib table does not know
+  (e.g. `GameInit` — `SampleGames/Pong` and `SampleGames/SpaceShooter` still do not run on MSIL;
+  the new D8 check just reports it at compile time instead of at `ilasm` or at run time). Follow-
+  ups filed, not done here: #140 (C++'s own capture-by-copy lambda lowering — the second consumer
+  `ClosureLowering` was designed for), #169/#170 (front-end diagnostics), #172/#173/#174 (the
+  extra refusals above, each wants its own diagnostic or a considered decision), and events/engine
+  calls on MSIL.
+  ⛔ **TRAP: `IRDelegateCreate` exists ONLY in `ClosureLowering`'s own output.** Every visitor
+  but MSIL's THROWS on it by default (`IIRVisitor.Visit(IRDelegateCreate)` in `IRNodes.cs`) —
+  correctly, since C#/JavaScript/C++/LLVM lower lambdas their own way and must never be handed
+  the lowered form. If a change ever makes `ClosureLowering` run for a different backend (C++,
+  #140) or makes a shared pass see post-lowering IR, that backend needs its OWN `Visit
+  (IRDelegateCreate)` override — inheriting the throw is the correct default, not a bug to fix
+  by deleting it.
+  Tests: `VisualGameStudio.Tests/Msil/ClosureLoweringTests.cs` (contract, D7/D8, both pipelines,
+  `[Category("Integration")]`) and `ClosureLoweringRefusalTests.cs` (the D9 refusals, D8's throw,
+  D1's isolation contract, the verifier sweep — no `ilasm` needed, fast subset). Filtered
+  `FullyQualifiedName~VisualGameStudio.Tests.Msil`: `Failed: 0, Passed: 245`. Four pre-existing
+  pins that asserted MSIL's lambda failure were promoted (value, not just outcome):
+  `CopyPropagationSharedVocabularyTests.CP2_Msil_*`, `LicmKillVocabularyTests.L5_
+  LambdaCapturedLocal_Msil_CannotBuild_PinnedForTask122`, and `DynamicUseSPrimeTests.
+  L5_Msil_CannotBuild_PinnedForTask155` — each folded into its sibling C#/JavaScript assertion
+  rather than kept as a separate red-then-green pin, since MSIL now agrees with them. MSIL is
+  also a second run-time judge of #122's capture set now: `LambdaCaptureSetExecutionTests` has
+  MSIL legs for K1/K8/K11/K12/N1 (N8m/N8n are `javascript{ }` inline code, JS-only), and
+  `CseDestinationKnownGapsTask133Tests.A1_…_Msil_…` asserts `3,0`.
 - **VS Code extension host** — roughly 24 unimplemented requests, enumerated and enforced by
   `ExtensionHostRequestCoverageTests.KnownUnimplemented` (a second test fails once an entry is
   implemented, so the list must shrink). A missing `sendNotification` handler is a silent
@@ -4607,7 +4669,9 @@ single new failure against the 170-name baseline.
   `For Each … In items.Select(…)` inside a class method failing on C#.
 - **The New Project wizard's JavaScript path has not been clicked through by a human.** Tests
   cover the view model and the template service; nothing here can drive the Avalonia window.
-- Scope decisions already made — **MSIL and LLVM are out of scope** (do not test, fix, or file
+- Scope decisions already made — ~~**MSIL and LLVM are out of scope**~~ **STALE — MSIL has been a
+  MAINTAINED target since 2026-09-15** (see this same list, above); LLVM only is still out of
+  scope (do not test, fix, or file
   bugs on them), and **COM interop is ruled out**.
 
 ---

@@ -136,6 +136,14 @@ public class KillVocabularyReflectionTotalityTests
         [typeof(IRFieldAccess)] = f => new IRFieldAccess("t0", f.P, "K", IntType),
         [typeof(IRFieldStore)] = f => new IRFieldStore(f.P, "K", f.Q),
         [typeof(IRAwait)] = f => new IRAwait("t0", f.P, IntType),
+
+        // ADR-0010 (task #155): produced only by ClosureLowering (MSIL's opt-in pass), never by
+        // IRBuilder or the optimizer — but it is a concrete IRInstruction subclass in this
+        // assembly regardless of who produces it, so the reflection sweep below finds it and
+        // this roster must carry it. A definition of its own name and nothing else: building a
+        // delegate runs no user code (OptimizationPass.NamesWrittenBy: WriteKind.Named, IsCall
+        // false) — see IRDelegateCreate's own doc comment in IRNodes.cs.
+        [typeof(IRDelegateCreate)] = f => new IRDelegateCreate("t0", IntType, f.P, f.Function, false),
     };
 
     /// <summary>
