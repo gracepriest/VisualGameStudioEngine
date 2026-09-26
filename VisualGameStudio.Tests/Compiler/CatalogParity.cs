@@ -12,23 +12,29 @@ namespace VisualGameStudio.Tests.Compiler;
 ///   serialized / collection   → the row's Default must be NULL ("no static default");
 ///   unreadable                → the value was never measured — the row needs an OracleExemption.
 ///
-/// A row carrying OracleExemption is not judged (its reason is printed by the caller). Only the
-/// WinForms Default is compared — WebDefault has no oracle.
+/// An OracleExemption (its reason is printed by the caller) covers exactly what a snapshot can get
+/// WRONG for a row: a missing entry (a [Browsable(false)] property), the Default (a parent-dependent or
+/// unmeasurable read) and the Description (a type with no metadata). It never covers the Type or the
+/// Category — when the snapshot HAS the property those are facts about the real type, a wrong one is a
+/// row defect no reason excuses, and csc cannot see a Category at all. An exemption that suppresses
+/// nothing is stale (WinFormsCatalogParityTests.EveryOracleExemption_StillSuppressesAFinding).
+/// Only the WinForms Default is compared — WebDefault has no oracle.
 /// </summary>
 internal static class CatalogParity
 {
     public static IEnumerable<string> CompareProperty(string kind, FormPropertyDef row, WinFormsPropertyEntry? snap)
     {
-        if (row.OracleExemption != null)
-        {
-            yield break;
-        }
+        var exempt = row.OracleExemption != null;
 
         if (snap == null)
         {
-            yield return $"{kind}.{row.Name}: WinForms has no browsable property of that name — a misspelled " +
-                         "row compiles green through BasicLang — OR a real [Browsable(false)] property (Task 8 triage bucket 4). " +
-                         "Fix the name, or give the row an OracleExemption with a reason.";
+            if (!exempt)
+            {
+                yield return $"{kind}.{row.Name}: WinForms has no browsable property of that name — a misspelled " +
+                             "row compiles green through BasicLang — OR a real [Browsable(false)] property. " +
+                             "Fix the name, or give the row an OracleExemption with a reason.";
+            }
+
             yield break;
         }
 
@@ -43,11 +49,17 @@ internal static class CatalogParity
                          $"{snap.Category} → Category: FormPropertyCategory.{category}";
         }
 
-        if (!TypeFits(row, snap))
+        if (!TypeFits(kind, row, snap))
         {
             yield return $"{kind}.{row.Name}: declared {row.Type}" +
                          (row.WinFormsEnumType != null ? $" ({row.WinFormsEnumType})" : "") +
-                         $", WinForms' type is {snap.TypeFullName}";
+                         $", WinForms' type is {snap.TypeFullName}. Fix the row's type — an exemption does not " +
+                         "cover a type the snapshot measured.";
+        }
+
+        if (exempt)
+        {
+            yield break;
         }
 
         if (CompareDefault(row, snap) is { } defaultFinding)
@@ -61,18 +73,24 @@ internal static class CatalogParity
         }
     }
 
+    /// <summary>
+    /// The event twin of <see cref="CompareProperty"/>: an exemption covers a missing entry (GroupBox.Click
+    /// is [Browsable(false)]) and the Description (BackgroundWorker has no metadata on .NET) — never the
+    /// handler args or the Category, which are facts about the real event.
+    /// </summary>
     public static IEnumerable<string> CompareEvent(string kind, FormEventDef evt, WinFormsEventEntry? snap)
     {
-        // ⚠ ADDED DURING EXECUTION (Task 8's first run): GroupBox.Click is real but [Browsable(false)]
-        // and BackgroundWorker.DoWork carries no metadata on .NET — the event twin of triage bucket 4.
-        if (evt.OracleExemption != null)
-        {
-            yield break;
-        }
+        var exempt = evt.OracleExemption != null;
 
         if (snap == null)
         {
-            yield return $"{kind}.{evt.Name} (event): WinForms has no browsable event of that name.";
+            if (!exempt)
+            {
+                yield return $"{kind}.{evt.Name} (event): WinForms has no browsable event of that name — a " +
+                             "misspelled event compiles green through BasicLang — OR a real [Browsable(false)] event. " +
+                             "Fix the name, or give the event an OracleExemption with a reason.";
+            }
+
             yield break;
         }
 
@@ -81,7 +99,8 @@ internal static class CatalogParity
         if (!string.Equals(lastSegment, snap.ArgsType, StringComparison.Ordinal))
         {
             yield return $"{kind}.{evt.Name} (event): handler args are {args}, WinForms' are {snap.ArgsFullName} " +
-                         $"→ args: \"{snap.ArgsType}\" (qualify it if its namespace is not System.Windows.Forms)";
+                         $"→ args: \"{snap.ArgsType}\" (qualify it if its namespace is not System.Windows.Forms). " +
+                         "Fix the args — an exemption does not cover args the snapshot measured.";
         }
 
         var category = ParseEventCategory(snap.Category);
@@ -94,7 +113,7 @@ internal static class CatalogParity
             yield return $"{kind}.{evt.Name} (event): Category is {evt.Category?.ToString() ?? "null"} → category: FormEventCategory.{category}";
         }
 
-        if (!string.Equals((evt.Description ?? "").Trim(), snap.Description.Trim(), StringComparison.Ordinal))
+        if (!exempt && !string.Equals((evt.Description ?? "").Trim(), snap.Description.Trim(), StringComparison.Ordinal))
         {
             yield return $"{kind}.{evt.Name} (event): Description differs → description: \"{Escape(snap.Description.Trim())}\"";
         }
@@ -106,14 +125,18 @@ internal static class CatalogParity
     public static FormEventCategory? ParseEventCategory(string snapshotCategory) =>
         Enum.TryParse<FormEventCategory>(snapshotCategory.Replace(" ", ""), ignoreCase: false, out var c) ? c : null;
 
-    private static bool TypeFits(FormPropertyDef row, WinFormsPropertyEntry s) => row.Type switch
+    private static bool TypeFits(string kind, FormPropertyDef row, WinFormsPropertyEntry s) => row.Type switch
     {
         FormPropertyType.String when row.IsItemCollection => s.IsCollection,
         FormPropertyType.String when row.WinFormsFactory == "Convert.ToChar" => s.Type == "Char",
         FormPropertyType.String when row.WinFormsFactory == "Image.FromFile" => s.Type == "Image",
         FormPropertyType.String => s.Type == "String",
-        // ⚠ Decimal is deliberate for NumericUpDown's Minimum/Maximum/Value/Increment (FormControlCatalog.cs).
-        FormPropertyType.Int => s.Type is "Int32" or "Decimal",
+        // ⚠ Decimal ONLY for NumericUpDown's Minimum/Maximum/Value/Increment — the deliberate Int-over-Decimal
+        // rows (see their comment in FormControlCatalog). Anywhere else it would be a shape error csc
+        // cannot see, because an int literal widens to decimal.
+        FormPropertyType.Int => s.Type == "Int32" ||
+                                (s.Type == "Decimal" && kind == "NumericUpDown" &&
+                                 row.Name is "Minimum" or "Maximum" or "Value" or "Increment"),
         FormPropertyType.Bool => s.Type == "Boolean",
         FormPropertyType.Color => s.Type == "Color",
         FormPropertyType.Size => s.Type == "Size",
@@ -142,7 +165,7 @@ internal static class CatalogParity
                       $"Default: {(s.Default == null ? "null" : $"\"{s.Default}\"")}";
 
             // ⚠ The tool records `unreadable` when a getter or ShouldSerializeValue threw — the value
-            // was NOT measured, so no comparison can be honest (Task 1 review, bb970e89).
+            // was NOT measured, so no comparison can be honest.
             case "unreadable":
                 return "the snapshot could not read this default (a getter or ShouldSerializeValue threw) — " +
                        "it was not measured; give the row an OracleExemption with the reason";

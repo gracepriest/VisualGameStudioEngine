@@ -142,6 +142,123 @@ public class WinFormsCatalogParityTests
                                        string.Join("\n", missing));
     }
 
+    // ==================================================================
+    // An exemption is a claim about the snapshot — so it must be REFUTABLE. Without this, an exemption
+    // outlives its cause (the tool is fixed, the row is corrected) and silently keeps skipping checks.
+    // ==================================================================
+
+    private static IEnumerable<FormControlDef> WinFormsDefinitions() =>
+        FormControlCatalog.All.Where(d => d.SupportsTarget(FormTarget.WinForms)).Append(FormControlCatalog.FormRoot);
+
+    private static IEnumerable<TestCaseData> EveryExemptRowAndEvent() =>
+        WinFormsDefinitions().SelectMany(d =>
+            d.Properties.Where(p => p.OracleExemption != null && p.AppliesTo(FormTarget.WinForms))
+                .Select(p => new TestCaseData(d.Kind, p.Name, false).SetName($"{{m}}({d.Kind}.{p.Name})"))
+                .Concat((d.Events ?? Array.Empty<FormEventDef>()).Where(e => e.OracleExemption != null)
+                    .Select(e => new TestCaseData(d.Kind, e.Name, true).SetName($"{{m}}({d.Kind}.{e.Name} event)"))));
+
+    /// <summary>
+    /// ⛔ Runs the comparer as if the exemption were ABSENT: the exemption must be suppressing at least
+    /// one finding, or it is stale. Only the findings the exemption SUPPRESSES count — a Category or Type
+    /// finding is reported with or without it, so it cannot keep an exemption alive.
+    /// </summary>
+    [TestCaseSource(nameof(EveryExemptRowAndEvent))]
+    public void EveryOracleExemption_StillSuppressesAFinding(string kind, string name, bool isEvent)
+    {
+        var definition = DefinitionOf(kind);
+        var snap = WinFormsMetadata.Load().Type(kind);
+        Assert.That(snap, Is.Not.Null, $"'{kind}' is not in the snapshot");
+
+        List<string> withIt, without;
+        if (isEvent)
+        {
+            var evt = definition.Events!.Single(e => e.Name == name);
+            withIt = CatalogParity.CompareEvent(kind, evt, snap!.Event(name)).ToList();
+            without = CatalogParity.CompareEvent(kind, evt with { OracleExemption = null }, snap.Event(name)).ToList();
+        }
+        else
+        {
+            var row = definition.Properties.Single(p => p.Name == name && p.AppliesTo(FormTarget.WinForms));
+            withIt = CatalogParity.CompareProperty(kind, row, snap!.Property(name)).ToList();
+            without = CatalogParity.CompareProperty(kind, row with { OracleExemption = null }, snap.Property(name)).ToList();
+        }
+
+        Assert.That(without.Except(withIt).ToList(), Is.Not.Empty,
+            $"the exemption on {kind}.{name}{(isEvent ? " (event)" : "")} is stale — remove it: " +
+            "without it the snapshot agrees with the row");
+    }
+
+    [Test]
+    public void TheExemptionSweep_HasSomethingToSweep()
+    {
+        // A TestCaseSource that yields nothing reports nothing — a pass by absence.
+        Assert.That(EveryExemptRowAndEvent().Count(), Is.GreaterThanOrEqualTo(4));
+    }
+
+    /// <summary>
+    /// An exemption covers only what the snapshot cannot judge — the Default and the Description (and a
+    /// missing entry). The TYPE and the CATEGORY are still checked when the snapshot has the property.
+    /// </summary>
+    [Test]
+    public void AnExemptRow_WithASnapshotEntry_IsStillJudgedOnTypeAndCategory()
+    {
+        var snap = WinFormsMetadata.Load().Type("ToolStripMenuItem")!.Property("Visible")!;
+        var wrongShape = new FormPropertyDef("Visible", FormPropertyType.Int, "1",
+            Category: FormPropertyCategory.Data, Description: "anything",
+            OracleExemption: "a reason");
+
+        var findings = CatalogParity.CompareProperty("ToolStripMenuItem", wrongShape, snap).ToList();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(findings, Has.Some.Contains("Category is Data"), "Category is still judged");
+            Assert.That(findings, Has.Some.Contains("declared Int"), "Type is still judged");
+            Assert.That(findings, Has.None.Contains("Default is"), "the Default is what the exemption covers");
+            Assert.That(findings, Has.None.Contains("Description differs"), "so is the Description");
+        });
+    }
+
+    [Test]
+    public void AnExemptEvent_WithASnapshotEntry_IsStillJudgedOnArgsAndCategory()
+    {
+        var snap = WinFormsMetadata.Load().Type("BackgroundWorker")!.Event("DoWork")!;
+        var wrong = new FormEventDef("DoWork", "EventArgs", Category: FormEventCategory.Mouse,
+            Description: "anything", OracleExemption: "a reason");
+
+        var findings = CatalogParity.CompareEvent("BackgroundWorker", wrong, snap).ToList();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(findings, Has.Some.Contains("handler args are EventArgs"), "args are still judged");
+            Assert.That(findings, Has.Some.Contains("Category is Mouse"), "Category is still judged");
+            Assert.That(findings, Has.None.Contains("Description differs"));
+        });
+    }
+
+    /// <summary>
+    /// ⛔ Decimal is accepted for an Int row ONLY on NumericUpDown, whose Minimum/Maximum/Value/Increment
+    /// are the deliberate Int-over-Decimal rows. Anywhere else an Int row over a Decimal property is a
+    /// shape error the csc sweep would not catch (an int literal widens to decimal).
+    /// </summary>
+    [Test]
+    public void AnIntRow_OverADecimalProperty_FitsOnlyOnNumericUpDown()
+    {
+        var decimalProperty = new WinFormsPropertyEntry
+        {
+            Name = "Value", Category = "Behavior", Type = "Decimal", TypeFullName = "System.Decimal",
+            DefaultKind = "attribute", Default = "0", Description = "d"
+        };
+        var row = new FormPropertyDef("Value", FormPropertyType.Int, "0",
+            Category: FormPropertyCategory.Behavior, Description: "d");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(CatalogParity.CompareProperty("NumericUpDown", row, decimalProperty).ToList(), Is.Empty);
+            Assert.That(CatalogParity.CompareProperty("TrackBar", row, decimalProperty).ToList(),
+                Has.Some.Contains("WinForms' type is System.Decimal"));
+        });
+    }
+
     /// <summary>⛔ Proves the instrument before trusting it: the spec's own known disagreement must be caught.</summary>
     [Test]
     public void TheInstrument_CatchesTheKnownGripStyleDisagreement()

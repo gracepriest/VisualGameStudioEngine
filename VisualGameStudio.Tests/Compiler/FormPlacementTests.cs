@@ -676,7 +676,7 @@ public class FormPlacementTests
     }
 
     // ==================================================================
-    // Property grid slice 1, Task 8 — the parity run moved four defaults to WinForms' own values
+    // Property grid slice 1, Task 8 — the parity run moved six defaults to WinForms' own values
     // (ToolStrip.GripStyle Visible, StatusStrip.SizingGrip true, ToolStripButton.DisplayStyle
     // ImageAndText, SplitContainer.SplitterDistance 50, TableLayoutPanel 0×0, TextBox.MaxLength 32767).
     // ==================================================================
@@ -699,9 +699,11 @@ public class FormPlacementTests
 
             if (definition.Place == FormPlace.Item)
             {
-                var hostDefinition = FormControlCatalog.All.First(d => d.Place == FormPlace.Docked &&
-                                                                       d.Items?.Accepts(definition.Kind) == true);
-                var host = new FormControl { Kind = hostDefinition.Kind, Id = "host1" };
+                var hostDefinition = FormControlCatalog.All.FirstOrDefault(d => d.Place == FormPlace.Docked &&
+                                                                                d.Items?.Accepts(definition.Kind) == true);
+                Assert.That(hostDefinition, Is.Not.Null,
+                    $"item kind '{definition.Kind}' has no Docked strip whose Items rule accepts it — nothing can place it");
+                var host = new FormControl { Kind = hostDefinition!.Kind, Id = "host1" };
                 document.Controls.Add(host);
                 result = FormPlacement.PlaceItem(document, host, definition.Kind, "Caption");
             }

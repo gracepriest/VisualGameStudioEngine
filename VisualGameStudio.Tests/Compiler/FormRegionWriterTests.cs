@@ -553,6 +553,23 @@ public class FormRegionWriterTests
         });
     }
 
+    /// <summary>
+    /// MaxLength's catalog Default is WinForms' 32767 (the parity fix) — a DISPLAY default. An absent
+    /// MaxLength must still emit nothing: writing the default would be a no-op here, but it would make
+    /// the default load-bearing, and a later default change would change the program.
+    /// </summary>
+    [Test]
+    public void Write_ATextBoxWithNoMaxLength_EmitsNoMaxLengthStatement()
+    {
+        var result = WriteTextBoxWith("Text", "hello");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Text, Does.Contain("txt.Text = \"hello\""), "the control was written");
+            Assert.That(result.Text, Does.Not.Contain("MaxLength"));
+        });
+    }
+
     private static RegionWriteResult WriteButtonWith(string name, string value) => WriteOne("Button", "btn", name, value);
 
     private static RegionWriteResult WriteTextBoxWith(string name, string value) => WriteOne("TextBox", "txt", name, value);

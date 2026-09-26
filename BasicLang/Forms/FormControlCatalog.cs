@@ -996,6 +996,9 @@ public static class FormControlCatalog
     // Shared property definitions. Declared once so a control kind cannot drift from its peers
     // in the spelling or the declared type of a property they both carry.
     //
+    // Description strings are reproduced verbatim from dotnet/winforms and dotnet/runtime (MIT, © .NET
+    // Foundation and Contributors) — see THIRD-PARTY-NOTICES.md at the repository root.
+    //
     // ⛔ Category and Description are WinForms' own (the parity test compares them with the
     // snapshot). A row whose Description differs on one kind gets its OWN definition — the parity
     // run is what finds those (Task 8), never a guess here.
@@ -1097,7 +1100,7 @@ public static class FormControlCatalog
 
     private static IReadOnlyList<FormEventDef> StripItemClicked() =>
         Ev("ItemClicked", "click", args: "ToolStripItemClickedEventArgs",
-            category: FormEventCategory.Action, description: "Occurs when the item is clicked.");
+            category: FormEventCategory.Action, description: ItemClickedDescription);
 
     private static FormPropertyDef ItemText() => new("Text", FormPropertyType.String,
         Category: FormPropertyCategory.Appearance, Description: "The text to display on the item.");
@@ -1180,6 +1183,15 @@ public static class FormControlCatalog
     // A ToolStripItem's Click and a strip's ItemClicked share this text in WinForms.
     private const string ItemClickedDescription = "Occurs when the item is clicked.";
 
+    // Shared by ComboBox, ListBox, CheckedListBox and TabControl (ListView words its own differently).
+    private const string SelectedIndexChangedDescription = "Occurs when the value of the SelectedIndex property changes.";
+
+    // ListBox and CheckedListBox (ComboBox says "combo box").
+    private const string ListBoxItemsDescription = "The items in the list box.";
+
+    // DateTimePicker and TrackBar.
+    private const string ControlValueChangedDescription = "Occurs when the value of the control changes.";
+
     /// <summary>
     /// A row's events when it declares only its DEFAULT one — every row today (the D1 event lists
     /// arrive in slice 5). Category and Description are WinForms' own, from the parity run (Task 8).
@@ -1255,10 +1267,10 @@ public static class FormControlCatalog
             SelectedIndex(SelectedIndexForTheWeb)),
             DefaultWidth: 121, DefaultHeight: 23, Schematic: FormSchematic.Dropdown,
             Events: Ev("SelectedIndexChanged", "change", category: FormEventCategory.Behavior,
-                description: "Occurs when the value of the SelectedIndex property changes.")),
+                description: SelectedIndexChangedDescription)),
         new("ListBox",     "ListBox",     "select",   null,       false, CommonColoured(WindowTextForeColor, WindowBackColor,
             new FormPropertyDef("Items", FormPropertyType.String, IsItemCollection: true,
-                Category: FormPropertyCategory.Data, Description: "The items in the list box."),
+                Category: FormPropertyCategory.Data, Description: ListBoxItemsDescription),
             SelectedIndex(SelectedIndexForTheWeb),
             // ⛔ WEB ONLY. WinForms ListBox has no MultiSelect — it has SelectionMode, an enum.
             // Mapping a Bool onto it is a design decision v1 has not made, so the property stays
@@ -1269,7 +1281,7 @@ public static class FormControlCatalog
                 Description: "Allows more than one item to be selected at a time on the page.")),
             DefaultWidth: 120, DefaultHeight: 95, Schematic: FormSchematic.List,
             Events: Ev("SelectedIndexChanged", "change", category: FormEventCategory.Behavior,
-                description: "Occurs when the value of the SelectedIndex property changes.")),
+                description: SelectedIndexChangedDescription)),
         new("Panel",       "Panel",       "div",      null,       true,  Common(
             new FormPropertyDef("BorderStyle", FormPropertyType.Enum, "None",
                 new[] { "None", "FixedSingle", "Fixed3D" },
@@ -1371,7 +1383,7 @@ public static class FormControlCatalog
                 Description: "Indicates whether a spin box rather than a drop-down calendar is displayed for modifying the control value.")),
             DefaultWidth: 200, DefaultHeight: 23, Schematic: FormSchematic.DatePicker,
             Events: Ev("ValueChanged", "change", category: FormEventCategory.Action,
-                description: "Occurs when the value of the control changes.")),
+                description: ControlValueChangedDescription)),
 
         new("TrackBar",    "TrackBar",    "input",    "range",    false, CommonColoured(
             HiddenInWinForms(ForeColor, "TrackBar", onTheWeb: true), BackColor,
@@ -1396,7 +1408,7 @@ public static class FormControlCatalog
                 Description: "The orientation of the control.")),
             DefaultWidth: 150, DefaultHeight: 45, Schematic: FormSchematic.Slider,
             Events: Ev("ValueChanged", "input", category: FormEventCategory.Action,
-                description: "Occurs when the value of the control changes.")),
+                description: ControlValueChangedDescription)),
 
         new("ProgressBar", "ProgressBar", "progress", null,       false, CommonColoured(HighlightForeColor, BackColor,
             new FormPropertyDef("Minimum", FormPropertyType.Int, "0",
@@ -1430,14 +1442,14 @@ public static class FormControlCatalog
 
         new("CheckedListBox", "CheckedListBox", null, null,       false, CommonColoured(WindowTextForeColor, WindowBackColor,
             new FormPropertyDef("Items", FormPropertyType.String, IsItemCollection: true,
-                Category: FormPropertyCategory.Data, Description: "The items in the list box."),
+                Category: FormPropertyCategory.Data, Description: ListBoxItemsDescription),
             SelectedIndex(SelectedIndexWinFormsOnly),
             new FormPropertyDef("CheckOnClick", FormPropertyType.Bool, "false",
                 Category: FormPropertyCategory.Behavior,
                 Description: "Indicates if the check box should be toggled with the first click on an item.")),
             DefaultWidth: 160, DefaultHeight: 95, Schematic: FormSchematic.CheckList,
             Events: Ev("SelectedIndexChanged", category: FormEventCategory.Behavior,
-                description: "Occurs when the value of the SelectedIndex property changes.")),
+                description: SelectedIndexChangedDescription)),
 
         new("ListView",    "ListView",    null,       null,       false, CommonColoured(WindowTextForeColor, WindowBackColor,
             new FormPropertyDef("View", FormPropertyType.Enum, "LargeIcon",
@@ -1513,7 +1525,7 @@ public static class FormControlCatalog
             SelectedIndex(SelectedIndexWinFormsOnly)),
             DefaultWidth: 240, DefaultHeight: 160, Schematic: FormSchematic.Tabs,
             Events: Ev("SelectedIndexChanged", category: FormEventCategory.Behavior,
-                description: "Occurs when the value of the SelectedIndex property changes.")),
+                description: SelectedIndexChangedDescription)),
 
         new("SplitContainer", "SplitContainer", null, null,       true,  Common(
             new FormPropertyDef("Orientation", FormPropertyType.Enum, "Vertical",

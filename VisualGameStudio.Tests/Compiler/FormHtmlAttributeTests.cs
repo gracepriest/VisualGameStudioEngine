@@ -82,6 +82,23 @@ public class FormHtmlAttributeTests
         Assert.That(Html("TextBox", ("MaxLength", "12")), Does.Contain("maxlength=\"12\""));
     }
 
+    /// <summary>
+    /// MaxLength's WinForms Default is 32767 and its WebDefault is "none" — both are DISPLAY defaults.
+    /// An absent MaxLength must emit no attribute: an <c>&lt;input&gt;</c> with no maxlength is
+    /// unlimited, and a written 32767 would cap the page at a WinForms limit nobody set.
+    /// </summary>
+    [Test]
+    public void ATextBoxWithNoMaxLength_EmitsNoMaxlengthAttribute()
+    {
+        var html = Html("TextBox", ("Text", "hello"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(html, Does.Contain("id=\"ctl\""), "the control was emitted");
+            Assert.That(html, Does.Not.Contain("maxlength"));
+        });
+    }
+
     [Test]
     public void ATrackBarBecomesARangeInputCarryingItsBounds()
     {
