@@ -2602,10 +2602,6 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 //     integer                   -> no operator+(std::string, int): a BUILD BREAK
                 // and a build break is the outcome this module already prefers to a plausible
                 // wrong string.
-                //
-                // Single/Double are unaffected: `"v" & aDouble` becomes
-                // `std::string("v") + aDouble`, which has no operator either, so the deliberate
-                // refusal still refuses.
                 if (leftText != null || rightText != null)
                 {
                     WriteLine($"{result} = {leftText ?? left} + {rightText ?? right};");
@@ -2889,6 +2885,15 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             void EmitCallStatement(string expression)
             {
                 EmitRegion(destination != null ? $"{destination} = {expression};" : $"{expression};");
+            }
+
+            // ReDim's value (IRBuilder.ArrayResizeIntrinsic: array, count, preserve) — the runtime's
+            // BasicLang::ReDimArray (CppBclRuntime), which returns the resized std::vector.
+            if (functionName == IRBuilder.ArrayResizeIntrinsic && args.Count == 3)
+            {
+                var preserve = call.Arguments[2] is IRConstant { Value: true } ? "true" : "false";
+                EmitCallStatement($"BasicLang::ReDimArray({args[0]}, {args[1]}, {preserve})");
+                return;
             }
 
             // Check if this is an extern function call
@@ -4634,18 +4639,16 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
 
             switch (receiverTypeName)
             {
+                // Through the shared stringifier, so `x.ToString()` agrees with CStr(x) and `&`.
+                // (It used to say std::to_string for Single/Double too: "2.500000".)
                 case "integer":
                 case "long":
                 case "short":
                 case "byte":
-                    return $"std::to_string({obj})";
-                // Not std::to_string (%f, six decimals) — see StringifyForText.
                 case "single":
-                    return $"BasicLang::FormatSingle({obj})";
                 case "double":
-                    return $"BasicLang::FormatDouble({obj})";
                 case "boolean":
-                    return $"std::string({obj} ? \"True\" : \"False\")";
+                    return StringifyForText(methodCall.Object, obj);
                 case "string":
                     return obj;
                 default:

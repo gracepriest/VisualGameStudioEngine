@@ -84,8 +84,8 @@ public class CppSplitCompileTests
         var r = Split(emitMain: true,
             ("Grid.bas",
                 "Module Grid\n" +
-                "    Dim flat(4) As Integer\n" +
-                "    Dim grid(4, 3) As Integer\n" +
+                "    Dim flat[4] As Integer\n" +
+                "    Dim grid[4, 3] As Integer\n" +
                 "    Sub Fill()\n" +
                 "        flat(3) = 6\n" +
                 "        grid(3, 2) = 11\n" +

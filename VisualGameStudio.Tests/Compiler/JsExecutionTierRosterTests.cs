@@ -97,6 +97,21 @@ public class JsExecutionTierRosterTests
         // JavaScriptOptimizedExecutionTests.RunOptimized.
         typeof(NegativeCaseLabelExecutionTests),
 
+        // Runs one program under Node AND a C++ compiler, and compares both against .NET.
+        typeof(InterpolatedStringExecutionTests),
+        typeof(JavaScriptBooleanTextExecutionTests),
+
+        // Both array spellings, run under Node, a C++ compiler and dotnet.
+        typeof(ArrayBoundsExecutionTests),
+        typeof(ReDimExecutionTests),
+        typeof(SingleLineIfExecutionTests),
+        // C# placement program; its JS leg runs under Node (the `_sel0` fix).
+        typeof(CSharpNestedTerminatorExecutionTests),
+        // Array literals on JavaScript, with C++ and C# legs.
+        typeof(JavaScriptArrayLiteralExecutionTests),
+        // Empty array literals, target-typed; C++ and C# legs too.
+        typeof(EmptyArrayLiteralExecutionTests),
+
         // ADR-0005 D2 — CSE guards a shared value's own destination, not only its operands.
         // CseDestinationInvalidationExecutionTests / DestinationInvalidation_D4_ByRefExecutionTests
         // are four-backend fixtures (FourBackends.RunsOnEveryBackend[Aggressive]); their JS legs
@@ -198,6 +213,10 @@ public class JsExecutionTierRosterTests
         // A Boolean as .NET text ("True"), and x.ToString() on a primitive.
         typeof(JsBooleanTextRunTests),
 
+        // String interpolation with non-String holes. Named outside the patterns below, so listed
+        // by hand; its JS leg spawns Node.
+        typeof(StringInterpolationRunTests),
+
         // ADR-0006 D2 (task #137) — the use count Invariant S′ checks is dynamic, not static.
         // Named "...ExecutionTests", so the widened match below WOULD catch it on its own; listed
         // explicitly anyway, matching every row above. L1/L2's JS legs spawn Node via
@@ -252,6 +271,7 @@ public class JsExecutionTierRosterTests
         "CppExitForExecutionTests",
         // Builds and runs the C# backend's output through the CLI and dotnet — no Node.
         "CSharpFieldAssignmentExecutionTests",
+        "CSharpInlinedOperandExecutionTests",
     };
 
     /// <summary>Counts NUnit cases: a [TestCase]-driven method contributes one per attribute.</summary>
@@ -269,7 +289,7 @@ public class JsExecutionTierRosterTests
 
     [Test]
     public void RosterIsPinned()
-        => Assert.That(ExecutionTier, Has.Length.EqualTo(55),
+        => Assert.That(ExecutionTier, Has.Length.EqualTo(64),
             "The execution-tier roster changed. That is fine — update the number — but it must " +
             "be a deliberate edit, not a silent shrink.");
 

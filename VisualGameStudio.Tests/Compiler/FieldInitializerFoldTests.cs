@@ -133,9 +133,8 @@ public class FieldInitializerFoldTests
     }
 
     /// <summary>
-    /// ⚠ C++ separately, because it spells a Boolean <c>True</c> — a long-recorded divergence,
-    /// pinned as C++ actually behaves. (Its Double was <c>3.500000</c> until C++ got .NET's
-    /// formatter; it is <c>3.5</c> now — CppDoubleFormattingTests.)
+    /// ⚠ C++ separately. It used to spell a Double <c>3.500000</c>; it now prints .NET's
+    /// <c>3.5</c> (see CppFloatFormattingTests).
     /// </summary>
     [Test]
     [Category("Integration")]

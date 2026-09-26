@@ -695,7 +695,16 @@ namespace BasicLang.Compiler
             node.Expression.Accept(this);
             Unindent();
         }
-        
+
+        public void Visit(ArrayResizeExpressionNode node)
+        {
+            WriteLine(node.Preserve ? "ReDim Preserve:" : "ReDim:");
+            Indent();
+            node.Array.Accept(this);
+            node.Size.Accept(this);
+            Unindent();
+        }
+
         public void Visit(TemplateDeclarationNode node)
         {
             WriteLine($"Template <{string.Join(", ", node.TypeParameters)}>");
