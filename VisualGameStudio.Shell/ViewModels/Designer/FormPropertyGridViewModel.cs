@@ -123,6 +123,19 @@ public partial class FormPropertyGridViewModel : ObservableObject
     /// until that exists, a frozen row says so where an editable one would silently produce a
     /// document that no longer compiles. The Degraded tier already renders exactly this shape.</para>
     /// </summary>
+    // The description-pane texts of the intrinsic rows: WinForms' own [Description] where WinForms
+    // has the property (the measured reference beside the spec), ours where it does not (Col/Row).
+    private const string NameDescription = "Indicates the name used in code to identify the object.";
+    private const string LocationDescription =
+        "The coordinates of the upper-left corner of the control relative to the upper-left corner of its container.";
+    private const string SizeDescription = "The size of the control in pixels.";
+    private const string AnchorDescription =
+        "Defines the edges of the container to which a certain control is bound. When a control is anchored to " +
+        "an edge, the distance between the control's closest edge and the specified edge will remain constant.";
+    private const string DockDescription = "Defines which borders of the control are bound to the container.";
+    private const string CellDescription = "The page grid cell the control occupies (0-based).";
+    private const string TabIndexDescription = "Determines the index in the TAB order that this control will occupy.";
+
     private void AddIntrinsicRows(FormControl control)
     {
         void Changed() => Edited?.Invoke(this, EventArgs.Empty);
@@ -132,7 +145,9 @@ public partial class FormPropertyGridViewModel : ObservableObject
             () => control.Id,
             write: null,
             Changed,
-            "The id names the generated field. Renaming is not supported here yet."));
+            "The id names the generated field. Renaming is not supported here yet.",
+            category: "Design",
+            description: NameDescription));
 
         // ⚠ Geometry rows follow the shape the control actually HAS. A web control lives in a grid
         // cell and has no X/Y at all; offering them would let the user set a number the emitter
@@ -140,10 +155,10 @@ public partial class FormPropertyGridViewModel : ObservableObject
         switch (control.Geometry)
         {
             case PixelGeometry pixel:
-                Rows.Add(IntRow("X", () => pixel.X, v => pixel.X = v, Changed));
-                Rows.Add(IntRow("Y", () => pixel.Y, v => pixel.Y = v, Changed));
-                Rows.Add(IntRow("Width", () => pixel.Width, v => pixel.Width = Math.Max(1, v), Changed));
-                Rows.Add(IntRow("Height", () => pixel.Height, v => pixel.Height = Math.Max(1, v), Changed));
+                Rows.Add(IntRow("X", () => pixel.X, v => pixel.X = v, Changed, "Layout", LocationDescription));
+                Rows.Add(IntRow("Y", () => pixel.Y, v => pixel.Y = v, Changed, "Layout", LocationDescription));
+                Rows.Add(IntRow("Width", () => pixel.Width, v => pixel.Width = Math.Max(1, v), Changed, "Layout", SizeDescription));
+                Rows.Add(IntRow("Height", () => pixel.Height, v => pixel.Height = Math.Max(1, v), Changed, "Layout", SizeDescription));
 
                 // ⛔⛔ PIXEL GEOMETRY ONLY, and that is D3 rather than an oversight. Anchor and Dock
                 // are WinForms layout vocabulary; a .blwebform control lives in a grid CELL and has
@@ -158,19 +173,23 @@ public partial class FormPropertyGridViewModel : ObservableObject
                     () => pixel.Anchor ?? "",
                     v => pixel.Anchor = string.IsNullOrWhiteSpace(v) ? null : v,
                     Changed,
-                    editor: FormRowEditor.AnchorPicker));
+                    editor: FormRowEditor.AnchorPicker,
+                    category: "Layout",
+                    description: AnchorDescription));
 
                 Rows.Add(new FormPropertyRow(
                     "Dock", FormPropertyType.String,
                     () => pixel.Dock ?? "",
                     v => pixel.Dock = string.IsNullOrWhiteSpace(v) ? null : v,
                     Changed,
-                    editor: FormRowEditor.DockPicker));
+                    editor: FormRowEditor.DockPicker,
+                    category: "Layout",
+                    description: DockDescription));
                 break;
 
             case GridGeometry grid:
-                Rows.Add(IntRow("Col", () => grid.Col, v => grid.Col = Math.Max(0, v), Changed));
-                Rows.Add(IntRow("Row", () => grid.Row, v => grid.Row = Math.Max(0, v), Changed));
+                Rows.Add(IntRow("Col", () => grid.Col, v => grid.Col = Math.Max(0, v), Changed, "Layout", CellDescription));
+                Rows.Add(IntRow("Row", () => grid.Row, v => grid.Row = Math.Max(0, v), Changed, "Layout", CellDescription));
                 break;
         }
 
@@ -188,7 +207,8 @@ public partial class FormPropertyGridViewModel : ObservableObject
         if (control.Definition?.Place is null or FormPlace.Positioned)
         {
             Rows.Add(IntRow(
-                "TabIndex", () => control.TabIndex, v => control.TabIndex = Math.Max(0, v), Changed));
+                "TabIndex", () => control.TabIndex, v => control.TabIndex = Math.Max(0, v), Changed,
+                "Behavior", TabIndexDescription));
         }
     }
 
@@ -197,7 +217,7 @@ public partial class FormPropertyGridViewModel : ObservableObject
     /// the same object the grid edited rather than from a copy that has to be pushed back.
     /// </summary>
     private static FormPropertyRow IntRow(
-        string name, Func<int> read, Action<int> write, Action changed) =>
+        string name, Func<int> read, Action<int> write, Action changed, string category, string description) =>
         new(name,
             FormPropertyType.Int,
             // ⛔ Invariant, and parsed by the catalog's own reader: see FormPropertyRow.IntValue.
@@ -213,7 +233,9 @@ public partial class FormPropertyGridViewModel : ObservableObject
                     write(parsed);
                 }
             },
-            changed);
+            changed,
+            category: category,
+            description: description);
 
     /// <summary>
     /// The FORM's own properties — what VS shows when nothing on the surface is selected.
@@ -246,8 +268,10 @@ public partial class FormPropertyGridViewModel : ObservableObject
         {
             // ⚠ The CLIENT size, as WinForms' ClientSize is — the same numbers the canvas's own
             // resize grips write, so typing 400 here and dragging to 400 produce one document.
-            Rows.Add(IntRow("Width", () => form.Width ?? 0, v => form.Width = Math.Max(1, v), Changed));
-            Rows.Add(IntRow("Height", () => form.Height ?? 0, v => form.Height = Math.Max(1, v), Changed));
+            // ⚠ Task 12 replaces these two with FormRoot's ClientSize row.
+            const string clientSize = "The size of the client area of the form.";
+            Rows.Add(IntRow("Width", () => form.Width ?? 0, v => form.Width = Math.Max(1, v), Changed, "Layout", clientSize));
+            Rows.Add(IntRow("Height", () => form.Height ?? 0, v => form.Height = Math.Max(1, v), Changed, "Layout", clientSize));
         }
         else if (form.Layout is { } layout)
         {
@@ -294,6 +318,7 @@ public partial class FormPropertyGridViewModel : ObservableObject
                 Rows.Add(new FormPropertyRow(
                     control,
                     property,
+                    target,
                     _file?.DegradedReason(control.Id, property.Name),
                     () => Edited?.Invoke(this, EventArgs.Empty)));
             }

@@ -523,17 +523,14 @@ public static class FormRetarget
                   "bind if it should not.");
         }
 
-        /// <summary>Equality in the property's own terms: <c>True</c> and <c>true</c> are one Bool.</summary>
-        private static bool SameValue(FormPropertyDef? property, string a, string b)
-        {
-            if (property?.Type == FormPropertyType.Bool &&
-                bool.TryParse(a, out var x) && bool.TryParse(b, out var y))
-            {
-                return x == y;
-            }
-
-            return string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
-        }
+        /// <summary>
+        /// Equality in the property's own terms (<c>True</c> and <c>true</c> are one Bool) — the catalog's
+        /// one answer, <see cref="FormPropertyDef.SameValue"/>. ⚠ Both callers compare against a
+        /// <see cref="FormImpliedProperty"/> value, which is a Bool today; a property the catalog does not
+        /// know keeps the old case-insensitive comparison.
+        /// </summary>
+        private static bool SameValue(FormPropertyDef? property, string a, string b) =>
+            property?.SameValue(a, b) ?? string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
 
         private static FormGeometry? Translate(FormGeometry? geometry, (int X, int Y) offset)
         {

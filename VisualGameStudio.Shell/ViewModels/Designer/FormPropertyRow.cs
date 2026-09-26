@@ -33,6 +33,10 @@ public enum FormRowEditor
 /// the document carries — an XML attribute is text. This row parses on read and formats on write
 /// rather than holding a typed copy, so there is exactly one representation of the value and no
 /// second one to fall out of step with the document.</para>
+///
+/// <para>⛔ Spec §2.7: an ABSENT property DISPLAYS the target's default (greyed, not bold); BOLD is
+/// present AND different from that default; RESET removes the property. The three rules read ONE
+/// value — <see cref="DefaultValue"/> — so they cannot disagree.</para>
 /// </summary>
 public partial class FormPropertyRow : ObservableObject, ITypedValueRow
 {
@@ -43,6 +47,15 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow
 
     /// <summary>The catalog row, for a catalog property; null for an intrinsic row.</summary>
     private readonly FormPropertyDef? _definition;
+
+    /// <summary>Whose default an absent row shows — WinForms' and the browser's can differ (spec §2.7).</summary>
+    private readonly FormTarget _target;
+
+    /// <summary>For a non-attribute row that can be absent (a FormRoot row); null = the attribute rule.</summary>
+    private readonly Func<bool>? _isPresent;
+
+    /// <summary>How a non-attribute row removes itself; null = remove the attribute.</summary>
+    private readonly Action? _reset;
 
     /// <summary>
     /// Where an INTRINSIC row's value lives, or null for a catalog row.
@@ -59,7 +72,7 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow
 
     /// <summary>A catalog property of the control — an attribute the document carries as text.</summary>
     public FormPropertyRow(
-        FormControl control, FormPropertyDef definition, string? frozenReason, Action onChanged)
+        FormControl control, FormPropertyDef definition, FormTarget target, string? frozenReason, Action onChanged)
     {
         _control = control;
         _onChanged = onChanged;
@@ -67,13 +80,20 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow
         _type = definition.Type;
         _choices = definition.AllowedValues;
         _definition = definition;
+        _target = target;
         FrozenReason = frozenReason;
+        Category = CategoryName(definition.Category);
+        Description = definition.Description ?? "";
     }
 
     /// <summary>
-    /// An intrinsic row: a field of the control or its geometry, not a document attribute.
+    /// A row whose value lives somewhere other than <see cref="FormControl.Properties"/>: an intrinsic
+    /// field of the control or its geometry (Name, X, TabIndex…), or a form's own value.
     /// Pass <paramref name="write"/> as null for one the designer cannot change yet, and give
     /// <paramref name="frozenReason"/> the reason — the Degraded tier already renders exactly that.
+    /// Pass <paramref name="definition"/> for a catalog-described row, which then shows its default,
+    /// bolds and resets like any other (with <paramref name="isPresent"/> and <paramref name="reset"/>
+    /// saying where its value lives).
     /// </summary>
     public FormPropertyRow(
         string name,
@@ -82,7 +102,13 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow
         Action<string>? write,
         Action onChanged,
         string? frozenReason = null,
-        FormRowEditor editor = FormRowEditor.Default)
+        FormRowEditor editor = FormRowEditor.Default,
+        string category = "Misc",
+        string description = "",
+        FormPropertyDef? definition = null,
+        FormTarget target = FormTarget.WinForms,
+        Func<bool>? isPresent = null,
+        Action? reset = null)
     {
         _onChanged = onChanged;
         Name = name;
@@ -90,15 +116,36 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow
         _read = read;
         _write = write;
         _editor = editor;
+        _definition = definition;
+        _target = target;
+        _isPresent = isPresent;
+        _reset = reset;
+        _choices = definition?.AllowedValues;
         FrozenReason = frozenReason ?? (write == null ? "This value is not editable here." : null);
+        Category = definition != null ? CategoryName(definition.Category) : category;
+        Description = definition?.Description ?? description;
     }
 
     private readonly FormRowEditor _editor = FormRowEditor.Default;
 
     public string Name { get; }
 
+    /// <summary>The Visual Studio group this row is listed under (spec §3).</summary>
+    public string Category { get; }
+
+    /// <summary>The description pane's text (spec §3). Empty when the row has none.</summary>
+    public string Description { get; }
+
     /// <summary>The declared type, shown beside the name so a frozen row is explicable.</summary>
     public string TypeName => _type.ToString();
+
+    /// <summary>"Window Style", not "WindowStyle" — VS's own spelling of its groups.</summary>
+    internal static string CategoryName(FormPropertyCategory? category) => category switch
+    {
+        null => "Misc",
+        FormPropertyCategory.WindowStyle => "Window Style",
+        var c => c.Value.ToString()
+    };
 
     // ==================================================================
     // D9 — which tier this row is in
@@ -147,8 +194,9 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow
 
     public bool IsComboBox => Typed && _type == FormPropertyType.Enum;
 
+    /// <summary>Size is text for now (<c>800, 450</c>); its composite editor arrives in slice 3.</summary>
     public bool IsTextBox => Typed &&
-        _type is FormPropertyType.String or FormPropertyType.Color;
+        _type is FormPropertyType.String or FormPropertyType.Color or FormPropertyType.Size;
 
     /// <summary>The four-edge Anchor box (Task 26).</summary>
     public bool IsAnchorPicker => IsEditable && _editor == FormRowEditor.AnchorPicker;
@@ -173,6 +221,53 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow
     public int Increment => 1;
 
     // ==================================================================
+    // Spec §2.7 — present, default, bold, reset
+    // ==================================================================
+
+    /// <summary>
+    /// Whether the document CARRIES this property. An intrinsic row with no catalog definition (X,
+    /// TabIndex) is always present: it has no default to fall back to.
+    /// </summary>
+    public bool IsPresent =>
+        _isPresent?.Invoke() ?? (_control != null ? _control.Properties.ContainsKey(Name) : true);
+
+    /// <summary>The target's default, canonicalised — what an absent row shows. Null = no static default.</summary>
+    public string? DefaultValue =>
+        _definition?.DefaultFor(_target) is { } d ? _definition.Canonical(d) : null;
+
+    /// <summary>Greyed: the row shows a default the document does not carry.</summary>
+    public bool IsDefaultShown => _definition != null && !IsPresent;
+
+    /// <summary>
+    /// ⛔ Present AND different from the displayed default. A null default DISPLAYS as empty, so a
+    /// present empty Text is not bold while a present "Hi" is.
+    /// </summary>
+    public bool IsBold => _definition != null && IsPresent && !_definition.SameValue(DisplayValue, DefaultValue ?? "");
+
+    /// <summary>Offered on present, editable rows that know how to remove themselves.</summary>
+    public bool CanReset => IsEditable && IsPresent && (_reset != null || (_control != null && _definition != null));
+
+    /// <summary>
+    /// Reset (spec §2.7): REMOVE the property from the document — never write the default, which would
+    /// leave a property the user now has to know is redundant.
+    /// </summary>
+    [RelayCommand(CanExecute = nameof(CanReset))]
+    private void Reset()
+    {
+        if (_reset != null)
+        {
+            _reset();
+        }
+        else
+        {
+            _control!.Properties.Remove(Name);
+        }
+
+        RaiseValueChanged();
+        _onChanged();
+    }
+
+    // ==================================================================
     // The value
     // ==================================================================
 
@@ -183,21 +278,30 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow
             : _control != null && _control.Properties.TryGetValue(Name, out var value) ? value : "";
 
     /// <summary>
-    /// The value as the editor shows it: the CANONICAL spelling (spec §2.8) — a legacy
-    /// <c>TextAlign="Left"</c> shows as <c>MiddleLeft</c>, which is what the nine-member combo can match.
+    /// What the editor shows: the document's value in its CANONICAL spelling (spec §2.8) when present —
+    /// a legacy <c>TextAlign="Left"</c> shows as <c>MiddleLeft</c>, which is what the nine-member combo
+    /// can match — and the target's default when absent (spec §2.7).
     ///
     /// <para>⛔ Except when FROZEN: a Degraded row shows the document's text exactly, because its
     /// reason quotes that text and says it is "preserved exactly as written".</para>
     /// </summary>
+    public string DisplayValue =>
+        IsFrozen ? RawValue
+        : IsPresent ? Canon(RawValue)
+        : DefaultValue ?? "";
+
+    private string Canon(string value) => _definition?.Canonical(value) ?? value;
+
+    /// <summary>The editor's text: <see cref="DisplayValue"/> (frozen → raw; absent → the default).</summary>
     public string StringValue
     {
-        get => _definition != null && !IsFrozen && RawValue.Length > 0 ? _definition.Canonical(RawValue) : RawValue;
+        get => DisplayValue;
         set => Commit(value);
     }
 
     public bool BoolValue
     {
-        get => bool.TryParse(RawValue, out var parsed) && parsed;
+        get => bool.TryParse(DisplayValue, out var parsed) && parsed;
         // ⛔ Lower case, matching the document's own vocabulary — the reader accepts either, but a
         // round trip that rewrote every "true" as "True" would report a change the user never made.
         set => Commit(value ? "true" : "false");
@@ -208,10 +312,13 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow
     /// which <see cref="FormPropertyDef.TryParseInt"/> refuses — so a current-culture write froze
     /// SelectedIndex's own default (-1) the moment the user set it. Read with the same parser the
     /// catalog judges tiers with, so the row and the document can never disagree on a value.
+    ///
+    /// <para>Reads <see cref="DisplayValue"/>, not <see cref="RawValue"/>: an absent row shows the
+    /// target's default (spec §2.7).</para>
     /// </summary>
     public int IntValue
     {
-        get => FormPropertyDef.TryParseInt(RawValue, out var parsed) ? parsed : 0;
+        get => FormPropertyDef.TryParseInt(DisplayValue, out var parsed) ? parsed : 0;
         set => Commit(value.ToString(CultureInfo.InvariantCulture));
     }
 
@@ -349,22 +456,58 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow
     private void Commit(string? value)
     {
         // ⛔ A null push (a combo whose SelectedItem matched nothing) and a frozen row write nothing.
-        if (value == null || IsFrozen || string.Equals(RawValue, value, StringComparison.Ordinal))
+        // (A frozen row returns BEFORE the comparison below, so its raw display never meets it.)
+        if (value == null || IsFrozen)
         {
             return;
         }
 
-        // ⛔ The SAME value in its canonical spelling is not an edit: the combo pushes "MiddleLeft" back
-        // for a document holding "Left" the moment the row renders, and writing it would rewrite the
-        // user's attribute for a selection click (spec §2.8: round-trips byte-for-byte unless EDITED).
+        // ⛔ A value EQUAL TO WHAT THE ROW DISPLAYS is not an edit, compared in the row's own terms
+        // (FormPropertyDef.SameValue — the one answer bold and FormRetarget also ask). That one rule
+        // covers every push nobody made:
+        //  - an ABSENT row's displayed default coming back on LostFocus (spec §2.7) — writing it would
+        //    add an attribute for a selection-and-tab-away;
+        //  - the combo pushing "MiddleLeft" back for a document holding "Left" the moment the row
+        //    renders (spec §2.8: round-trips byte-for-byte unless EDITED);
+        //  - the numeric editor's "7" for a document holding "007";
+        //  - the grid's re-push of every row on a selection change.
         //
-        // ⚠ DELIBERATE consequence: a case-only change (`middleleft` → `MiddleLeft`) and picking the
-        // member an alias already means (`Left` → `MiddleLeft`) are no-ops too — neither changes what
-        // the program does. A legacy `Left` stays in the document until the user chooses a genuinely
-        // DIFFERENT value, which is then written in its canonical spelling.
-        if (_definition != null && RawValue.Length > 0 &&
-            string.Equals(_definition.Canonical(RawValue), _definition.Canonical(value), StringComparison.Ordinal))
+        // ⚠ DELIBERATE consequence: a case-only change (`middleleft` → `MiddleLeft`, `#ff0000` →
+        // `#FF0000`) and picking the member an alias already means (`Left` → `MiddleLeft`) are no-ops
+        // too — neither changes what the program does. A legacy `Left` stays in the document until the
+        // user chooses a genuinely DIFFERENT value, which is then written in its canonical spelling.
+        var display = DisplayValue;
+        if (_definition?.SameValue(value, display) ?? string.Equals(value, display, StringComparison.Ordinal))
         {
+            return;
+        }
+
+        // ⛔ Spec §7: clearing the editor of a catalog row whose type cannot hold "" (Color, Int, Enum,
+        // Bool, Size…) means RESET — remove the property, the SAME operation as the Reset command — never
+        // a refusal: the user emptied the box because they want the default back. (A String row accepts
+        // "", so its empty caption is a real value and is written below.)
+        if (value.Length == 0 && _definition != null && !_definition.Accepts("", _target))
+        {
+            if (CanReset)
+            {
+                Reset();
+            }
+            else
+            {
+                RaiseEditorRefresh();
+            }
+
+            return;
+        }
+
+        // ⛔ Spec §7: a NON-EMPTY invalid typed value is REFUSED in the editor and never written — the
+        // designer must not manufacture a Degraded value of its own (a typed "maybe" in a Bool row froze
+        // it on the next open). The editor is told to re-read, so it snaps back to what the document
+        // holds. ⚠ Accepts is per TARGET: a system colour with no CSS equivalent is refused on the web.
+        // (Intrinsic rows have no definition; IntRow ignores text it cannot parse.)
+        if (_definition != null && !_definition.Accepts(value, _target))
+        {
+            RaiseEditorRefresh();
             return;
         }
 
@@ -381,10 +524,29 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow
             return;
         }
 
-        OnPropertyChanged(nameof(RawValue));
+        RaiseValueChanged();
+        _onChanged();
+    }
+
+    /// <summary>A refused edit: the editor re-reads the value the document still holds.</summary>
+    private void RaiseEditorRefresh()
+    {
         OnPropertyChanged(nameof(StringValue));
         OnPropertyChanged(nameof(BoolValue));
         OnPropertyChanged(nameof(IntValue));
-        _onChanged();
+    }
+
+    private void RaiseValueChanged()
+    {
+        foreach (var name in new[]
+                 {
+                     nameof(RawValue), nameof(DisplayValue), nameof(StringValue), nameof(BoolValue),
+                     nameof(IntValue), nameof(IsPresent), nameof(IsBold), nameof(IsDefaultShown), nameof(CanReset)
+                 })
+        {
+            OnPropertyChanged(name);
+        }
+
+        ResetCommand.NotifyCanExecuteChanged();
     }
 }

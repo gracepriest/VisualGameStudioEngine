@@ -244,6 +244,22 @@ public sealed record FormPropertyDef(
     }
 
     /// <summary>
+    /// Equality in this row's own terms: <c>True</c> and <c>true</c> are one Bool; <c>Left</c> and
+    /// <c>MiddleLeft</c> are one TextAlign; <c>007</c> and <c>7</c> are one Int. ⛔ THE one answer —
+    /// FormRetarget and the property grid's bold and no-op rules all ask it; a private copy in each
+    /// would be a mirrored pair.
+    ///
+    /// <para>⚠ An Enum or Color compares case-insensitively after canonicalising, so a case-only hex
+    /// edit (<c>#ff0000</c> → <c>#FF0000</c>) is the same colour. A String, Int or Size is ordinal:
+    /// a caption's case is the user's text.</para>
+    /// </summary>
+    public bool SameValue(string a, string b) =>
+        string.Equals(Canonical(a), Canonical(b),
+            Type is FormPropertyType.Enum or FormPropertyType.Color
+                ? StringComparison.OrdinalIgnoreCase
+                : StringComparison.Ordinal);
+
+    /// <summary>
     /// The value as WinForms SOURCE — what the region writer splices after the <c>=</c>.
     ///
     /// <para>Returns null when this property has nothing special to say, leaving the caller's
