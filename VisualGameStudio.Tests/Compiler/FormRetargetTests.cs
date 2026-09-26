@@ -356,6 +356,108 @@ public class FormRetargetTests
             "only a REFUSED value is named — a usable one crossing is not a loss");
     }
 
+    [Test]
+    public void ToWeb_AValueTheSourceAlreadyRefused_CrossesPreserved_WithNoFinding()
+    {
+        // Minimum="abc" is Degraded on the window BEFORE the retarget and Degraded on the page after it:
+        // the retarget lost nothing, so it reports nothing — the Degraded row on each side is the finding.
+        var source = WinForms("""
+            <Form Name="LoginForm" Version="1">
+              <Controls>
+                <NumericUpDown Id="num" X="8" Y="8" Width="120" Height="23" Minimum="abc" TabIndex="0"/>
+              </Controls>
+            </Form>
+            """);
+
+        var result = FormRetarget.Convert(source, FormTarget.Web);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Document.FindById("num")!.Properties["Minimum"], Is.EqualTo("abc"),
+                "preserved exactly as written");
+            Assert.That(Of(result, DesignCodes.RetargetPropertyLost), Is.Empty,
+                "a value Degraded before the retarget is not a retarget loss");
+        });
+    }
+
+    /// <summary>
+    /// ⛔ Catalog-driven: for every property on both targets, a value BOTH targets refuse crosses
+    /// preserved and is never reported as a retarget loss. Asserts it exercised rows in each direction.
+    /// </summary>
+    [Test]
+    public void EveryCatalogProperty_WhoseValueBothTargetsRefuse_CrossesPreserved_WithNoFinding(
+        [Values(FormTarget.WinForms, FormTarget.Web)] FormTarget from)
+    {
+        const string bogus = "not a value!";
+        var to = Other(from);
+        var exercised = 0;
+
+        foreach (var definition in FormControlCatalog.For(from).Where(d => d.SupportsTarget(to)))
+        {
+            foreach (var property in definition.Properties.Where(p =>
+                         p.AppliesTo(from) && p.AppliesTo(to) && !p.Accepts(bogus, from) && !p.Accepts(bogus, to)))
+            {
+                var source = new FormDocument { Target = from, Name = "Sweep" };
+                FormCatalogShapes.Canonical(source, definition, "c").Properties[property.Name] = bogus;
+
+                var result = FormRetarget.Convert(source, to);
+                var converted = result.Document.AllControls().Concat(result.Document.AllComponents())
+                    .Single(c => c.Kind == definition.Kind);
+
+                Assert.Multiple(() =>
+                {
+                    Assert.That(converted.Properties.GetValueOrDefault(property.Name), Is.EqualTo(bogus),
+                        $"{definition.Kind}.{property.Name} {from}→{to}: preserved exactly as written");
+                    Assert.That(Of(result, DesignCodes.RetargetPropertyLost).Where(d => d.Message.Contains($"'c.{property.Name}'")),
+                        Is.Empty, $"{definition.Kind}.{property.Name} {from}→{to}: Degraded on both sides is no retarget loss");
+                });
+                exercised++;
+            }
+        }
+
+        Assert.That(exercised, Is.GreaterThan(0), $"{from}→{to}: no row was exercised — the sweep is vacuous");
+    }
+
+    // ==================================================================
+    // The caption round-trips (D2: Text is shared)
+    // ==================================================================
+
+    [Test]
+    public void RoundTrip_AWindowCaptionedWithItsName_KeepsTheCaption()
+    {
+        // WinForms → web writes the caption as absence (the page title is Text ?? Name, so it shows
+        // "Login" either way); web → WinForms captions the window with the name again.
+        var source = new FormDocument { Target = FormTarget.WinForms, Name = "Login", Text = "Login" };
+
+        Assert.That(RoundTrip(source).Text, Is.EqualTo("Login"));
+    }
+
+    [Test]
+    public void RoundTrip_AWindowCaptionDifferentFromItsName_KeepsTheCaption()
+    {
+        var source = new FormDocument { Target = FormTarget.WinForms, Name = "Login", Text = "Welcome" };
+
+        Assert.That(RoundTrip(source).Text, Is.EqualTo("Welcome"));
+    }
+
+    /// <summary>
+    /// ⚠ The ONE known caption normalisation: an explicit web Text equal to the form's Name comes back as
+    /// ABSENCE. The page's title is Text ?? Name, so what the page shows is unchanged.
+    /// </summary>
+    [Test]
+    public void RoundTrip_AnExplicitWebCaptionEqualToTheName_ComesBackAsAbsence_TitleUnchanged()
+    {
+        var source = new FormDocument { Target = FormTarget.Web, Name = "Login", Text = "Login" };
+
+        var back = RoundTrip(source);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(back.Text, Is.Null, "normalised to absence");
+            Assert.That(back.Text ?? back.Name, Is.EqualTo(source.Text ?? source.Name), "the page title is unchanged");
+        });
+    }
+
     // ==================================================================
     // Binds: the event name is the target's vocabulary (D8)
     // ==================================================================
@@ -779,12 +881,17 @@ public class FormRetargetTests
     }
 
     /// <summary>
-    /// The document with its layout vocabulary erased: root size/caption/layout/literal gone,
-    /// every control's geometry gone. What is left is exactly what D2 says the two formats share.
+    /// The document with its layout vocabulary erased: root size/layout/literal gone, every control's
+    /// geometry gone. What is left is exactly what D2 says the two formats share — including the
+    /// caption, which is ONE vocabulary on both targets (compared as the title it shows, Text ?? Name,
+    /// because a caption equal to the name is written as absence on a page).
     /// </summary>
     private static string SharedSubset(FormDocument doc)
     {
-        var copy = new FormDocument { Target = FormTarget.Web, Name = doc.Name, Version = doc.Version };
+        var copy = new FormDocument
+        {
+            Target = FormTarget.Web, Name = doc.Name, Version = doc.Version, Text = doc.Text ?? doc.Name
+        };
         foreach (var control in doc.Controls)
         {
             copy.Controls.Add(Strip(control));

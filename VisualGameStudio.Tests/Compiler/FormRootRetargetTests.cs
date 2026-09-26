@@ -38,7 +38,7 @@ public class FormRootRetargetTests
         }
 
         var result = FormRetarget.Convert(source, to);
-        var messages = result.Diagnostics.Select(d => d.Message).ToList();
+        var all = string.Join("\n", result.Diagnostics.Select(d => d.Message));
 
         Assert.Multiple(() =>
         {
@@ -51,11 +51,41 @@ public class FormRootRetargetTests
                     continue;
                 }
 
-                var pieces = Sample(row).Split(',').Select(p => p.Trim());
-                Assert.That(messages.Any(m => pieces.All(p => m.Contains(p))), Is.True,
-                    $"form.{row.Name} does not exist on {to}; it must be NAMED, never dropped silently. Findings:\n" +
-                    string.Join("\n", messages));
+                // ⛔ The CODE is asserted, not just the text: the pixel⇄cell edge rows are named by the
+                // layout finding (scope call S4); every other row by RetargetPropertyLost 'form.X'.
+                var pieces = Sample(row).Split(',').Select(p => p.Trim()).ToList();
+                var named = IsLayoutEdge(row)
+                    ? result.Diagnostics.Any(d => d.Code == DesignCodes.RetargetLayoutCrossed &&
+                                                  pieces.All(p => d.Message.Contains(p)))
+                    : result.Diagnostics.Any(d => d.Code == DesignCodes.RetargetPropertyLost &&
+                                                  d.Message.Contains($"'form.{row.Name}'") &&
+                                                  pieces.All(p => d.Message.Contains(p)));
+                Assert.That(named, Is.True,
+                    $"form.{row.Name} does not exist on {to}; it must be NAMED with " +
+                    $"{(IsLayoutEdge(row) ? "RetargetLayoutCrossed" : "RetargetPropertyLost 'form." + row.Name + "'")}, " +
+                    $"never dropped silently. Findings:\n{all}");
             }
+        });
+    }
+
+    /// <summary>
+    /// The rows that ARE the pixel⇄cell edge (plan scope call S4). Every OTHER single-target root row —
+    /// slice 3's Properties-stored rows — falls to the RetargetPropertyLost 'form.X' arm of the sweep.
+    /// </summary>
+    private static bool IsLayoutEdge(FormPropertyDef row) => row.Name is "ClientSize" or "Cols" or "Rows" or "Gap";
+
+    [Test]
+    public void EveryFormRootRow_CrossesOrIsNamed_ExercisesBothArmsItHasRowsFor()
+    {
+        // Guards the sweep above from passing by absence: today it must see at least one row that crosses
+        // (Text) and at least one layout-edge row in each direction.
+        var rows = FormControlCatalog.FormRoot.Properties;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(rows.Any(r => r.AppliesTo(FormTarget.WinForms) && r.AppliesTo(FormTarget.Web)), Is.True);
+            Assert.That(rows.Any(r => IsLayoutEdge(r) && r.AppliesTo(FormTarget.WinForms) && !r.AppliesTo(FormTarget.Web)), Is.True);
+            Assert.That(rows.Any(r => IsLayoutEdge(r) && r.AppliesTo(FormTarget.Web) && !r.AppliesTo(FormTarget.WinForms)), Is.True);
         });
     }
 

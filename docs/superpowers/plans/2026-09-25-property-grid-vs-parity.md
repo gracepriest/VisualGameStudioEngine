@@ -6010,6 +6010,13 @@ git commit -F "$sp\slice2-commit.txt"
 > read the DEFAULT event directly, not `FormEvents.WiredOn`. Harmless while every row has one event; once 5.1
 > widens the lists, decide how a NON-default bind crosses targets (through the seam: crosses if wired on the
 > destination, else `RetargetBindLost`) and add a retarget sweep over every event of every row.
+>
+> ⚠ **CARRIED FROM SLICE 1 (Task 7 review):** there are now TWO bind-crossing rules side by side in
+> `FormRetarget` — `ConvertBinds` (controls, DefaultEvent only) and `ConvertRootBinds` (the form, through
+> `FormEvents.WiredOn`/`NameOn`, crossing only when wired on BOTH targets). Both carry a `⚠ SLICE 5` marker.
+> Unify them into ONE crossing rule on `WiredOn` in Task 5.6. ⛔ `ConvertRootBinds`' crossing branch is
+> UNTESTED until 5.1 gives the Form events — today every root bind takes the `RetargetBindLost` arm; 5.6 must
+> add the test that a root `Load` crosses (WinForms `Load` ⇄ web name) and the mutation that kills it.
 
 - **Task 5.1 — Widen the rows:** each control's D1 event list (~8–15) and the Form's (Load, Shown, Activated, FormClosing, FormClosed, Resize, Click, KeyDown, KeyPress, KeyUp) with WinForms args (parity-checked) and web names where they exist. `FormEvents.WiredOn`'s SIGNATURE does not change (fixed in slice 1). ⚠ RE-CHECK `FormEventsTests.WiredOn_TheFormRoot_IsEmpty_UntilFormEventsExist` (becomes non-empty — rewrite it).
 - **Task 5.2 — Root bind emission** REPLACES slice 1's warning (⚠ RE-CHECK `FormRootTests.ARootBind_IsWarned_NotEmitted_UntilFormEventsExist`): WinForms `AddHandler Me.Load, AddressOf LoginForm_Load`; web `Load` as the LAST statement of the generated `InitializeComponent`: `Me.LoginForm_Load()` (⛔ `Me.`-qualified — an unqualified self-call is a runtime `ReferenceError` on the JS backend). The user-facing consequence (on the web, code after `Me.InitializeComponent()` in `New()` runs after Load) goes into the docs.

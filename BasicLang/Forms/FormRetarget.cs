@@ -189,35 +189,45 @@ public static class FormRetarget
         public void ConvertRoot()
         {
             // Text is ONE vocabulary on both targets (D2, spec §2.3). ⚠ A caption EQUAL to the name is
-            // written as absence on the page, whose title is Text ?? Name — the page shows the same thing
-            // either way, and a round trip stays byte-identical.
+            // written as ABSENCE on the page, whose title is Text ?? Name, so the page shows the same thing
+            // either way. Byte-identical round trips this keeps: a page with no Text → window (captioned
+            // with its name, ToPixels) → page with no Text; and a window whose caption is its name →
+            // page → window with the same caption. ⚠ The one normalisation: an EXPLICIT web Text equal to
+            // the name comes back from a round trip as absence (title unchanged) — pinned by
+            // FormRetargetTests.RoundTrip_AnExplicitWebCaptionEqualToTheName_ComesBackAsAbsence_TitleUnchanged.
             Document.Text = _to == FormTarget.Web && string.Equals(_source.Text, _source.Name, StringComparison.Ordinal)
                 ? null
                 : _source.Text;
 
             foreach (var (name, value) in _source.UnknownAttributes)
             {
+                var toRow = FormRootValues.RowForAttribute(name, _to);
+                var fromRow = FormRootValues.RowForAttribute(name, _from);
+
+                // ⛔ The SOURCE's own degraded storage (an unparseable Width on a .blform is kept as an
+                // unknown attribute so it round-trips — plan scope call S3). It is a FormRoot row, not
+                // "content we do not model", so it is named, never carried: on a destination without the
+                // row it would be dead data, and on one with it, a stale value read as the real one.
+                if (fromRow != null)
+                {
+                    Warn(DesignCodes.RetargetPropertyLost,
+                        $"'form.{fromRow.Name}' could not be read on the {Describe(_from)} form ('{name}=\"{value}\"') " +
+                        (fromRow.AppliesTo(_to)
+                            ? $"and was dropped rather than carried as the {Describe(_to)} form's value."
+                            : $"and does not exist on a {Describe(_to)} one, so it was dropped."));
+                    continue;
+                }
+
                 // ⛔ A .blwebform root carrying Width="400" holds it as an unknown attribute; the
                 // WinForms reader would model that as the window's width. Carrying it across would
                 // let a stale number overrule the value this retarget derived — Create() writes
                 // unknown attributes AFTER the modelled ones and SetAttributeValue replaces.
-                if (FormRootValues.RowForAttribute(name, _to) is { } modelled)
+                if (toRow != null)
                 {
                     Warn(DesignCodes.RetargetPropertyLost,
                         $"the form's '{name}=\"{value}\"' attribute is not modelled on a {Describe(_from)} " +
-                        $"document but WOULD be read as 'form.{modelled.Name}' on a {Describe(_to)} one. It was " +
+                        $"document but WOULD be read as 'form.{toRow.Name}' on a {Describe(_to)} one. It was " +
                         "dropped rather than allowed to overrule the value this retarget derived.");
-                    continue;
-                }
-
-                // ⛔ The SOURCE's own degraded storage (an unparseable Width on a .blform is kept as an
-                // unknown attribute so it round-trips — plan scope call S3). It is a FormRoot row the
-                // destination does not have, not "content we do not model", so it is named, never carried.
-                if (FormRootValues.RowForAttribute(name, _from) is { } row && !row.AppliesTo(_to))
-                {
-                    Warn(DesignCodes.RetargetPropertyLost,
-                        $"'form.{row.Name}' could not be read on the {Describe(_from)} form ('{name}=\"{value}\"') " +
-                        $"and does not exist on a {Describe(_to)} one, so it was dropped.");
                     continue;
                 }
 
@@ -249,10 +259,12 @@ public static class FormRetarget
         /// <summary>
         /// The form's own binds (spec §2.3): a bind whose event is wired on the destination crosses under
         /// the destination's name (through the SAME seam the emitter asks); any other is dropped and NAMED.
-        /// ⚠ The Form has no catalog events until slice 5, so today every root bind is named.
+        /// ⚠ The Form has no catalog events until slice 5, so today every root bind is named — and the
+        /// crossing branch below is UNTESTED until then.
         /// </summary>
         private void ConvertRootBinds()
         {
+            // ⚠ SLICE 5: unify with ConvertBinds on FormEvents.WiredOn (one crossing rule).
             foreach (var bind in _source.Binds)
             {
                 // Reserved data binding is parsed and round-tripped, never interpreted — including here.
@@ -392,7 +404,9 @@ public static class FormRetarget
                 // lacks going to WinForms). Preserved — it is the user's text, and the other side opens
                 // it Degraded — but its meaning is lost, so it is NAMED. ⚠ The reason is the catalog's
                 // own (DescribeRefusal, which throws on an accepted value — hence only after refusal).
-                if (property != null && !property.Accepts(value, _to))
+                // ⛔ Only a value the SOURCE could use: one already Degraded before the retarget (Int
+                // "abc", Enum "Bogus") lost nothing here, and its Degraded row on each side says so.
+                if (property != null && property.Accepts(value, _from) && !property.Accepts(value, _to))
                 {
                     Warn(DesignCodes.RetargetPropertyLost,
                         $"'{source.Id}.{name}' = \"{value}\" crosses but is not usable on a {Describe(_to)} " +
@@ -420,6 +434,8 @@ public static class FormRetarget
 
         private void ConvertBinds(FormControl source, FormControl control, FormControlDef definition)
         {
+            // ⚠ SLICE 5: unify with ConvertRootBinds on FormEvents.WiredOn (one crossing rule). Today a
+            // control crosses on its DefaultEvent only; the root asks WiredOn/NameOn.
             var fromEvent = definition.DefaultEvent(_from);
             var toEvent = definition.DefaultEvent(_to);
 
