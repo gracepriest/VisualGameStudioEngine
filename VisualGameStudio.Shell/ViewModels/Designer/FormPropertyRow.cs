@@ -40,6 +40,9 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow
     private readonly FormPropertyType _type;
     private readonly IReadOnlyList<string>? _choices;
 
+    /// <summary>The catalog row, for a catalog property; null for an intrinsic row.</summary>
+    private readonly FormPropertyDef? _definition;
+
     /// <summary>
     /// Where an INTRINSIC row's value lives, or null for a catalog row.
     ///
@@ -62,6 +65,7 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow
         Name = definition.Name;
         _type = definition.Type;
         _choices = definition.AllowedValues;
+        _definition = definition;
         FrozenReason = frozenReason;
     }
 
@@ -177,9 +181,13 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow
             ? _read()
             : _control != null && _control.Properties.TryGetValue(Name, out var value) ? value : "";
 
+    /// <summary>
+    /// The value as the editor shows it: the CANONICAL spelling (spec §2.8) — a legacy
+    /// <c>TextAlign="Left"</c> shows as <c>MiddleLeft</c>, which is what the nine-member combo can match.
+    /// </summary>
     public string StringValue
     {
-        get => RawValue;
+        get => _definition != null && RawValue.Length > 0 ? _definition.Canonical(RawValue) : RawValue;
         set => Commit(value);
     }
 
@@ -328,9 +336,19 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow
     /// still push a value on load, and that is exactly the coercion the Degraded tier exists to
     /// prevent.</para>
     /// </summary>
-    private void Commit(string value)
+    private void Commit(string? value)
     {
-        if (IsFrozen || string.Equals(RawValue, value, StringComparison.Ordinal))
+        // ⛔ A null push (a combo whose SelectedItem matched nothing) and a frozen row write nothing.
+        if (value == null || IsFrozen || string.Equals(RawValue, value, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        // ⛔ The SAME value in its canonical spelling is not an edit: the combo pushes "MiddleLeft" back
+        // for a document holding "Left" the moment the row renders, and writing it would rewrite the
+        // user's attribute for a selection click (spec §2.8: round-trips byte-for-byte unless EDITED).
+        if (_definition != null && RawValue.Length > 0 &&
+            string.Equals(_definition.Canonical(RawValue), _definition.Canonical(value), StringComparison.Ordinal))
         {
             return;
         }

@@ -447,26 +447,29 @@ public static class FormAssetEmitter
             rules.Add($"grid-row: {grid.Row + 1}{(grid.RowSpan > 1 ? $" / span {grid.RowSpan}" : "")}");
         }
 
-        if (control.Properties.TryGetValue("ForeColor", out var fore))
+        // ⛔⛔ Driven from the CATALOG (spec §2.1). The four rules that used to be hard-coded here —
+        // ForeColor, BackColor, TextAlign, Visible — MOVED onto each row's CssProperty in the same
+        // commit: two sources would emit duplicate or conflicting declarations. A row declares its CSS
+        // meaning or it does not reach the stylesheet, exactly as HtmlAttribute works for markup.
+        // (Visible=false stays CSS, not a missing element: getElementById must still find it.)
+        //
+        // ⚠ Order is CATALOG order now (it was fore/back/align/display). No test depends on the order —
+        // FormAssetEmitterTests asserts the exact text only for grid-only rules.
+        if (control.Definition is { } definition)
         {
-            rules.Add($"color: {fore}");
-        }
+            foreach (var property in definition.Properties)
+            {
+                if (!property.AppliesTo(FormTarget.Web) ||
+                    !control.Properties.TryGetValue(property.Name, out var raw))
+                {
+                    continue;
+                }
 
-        if (control.Properties.TryGetValue("BackColor", out var back))
-        {
-            rules.Add($"background-color: {back}");
-        }
-
-        if (control.Properties.TryGetValue("TextAlign", out var align))
-        {
-            rules.Add($"text-align: {align.ToLowerInvariant()}");
-        }
-
-        // Visible=false is CSS, not a missing element: the element must still exist for
-        // getElementById to find it, or the generated InitializeComponent would fail at run time.
-        if (Flag(control, "Visible") == false)
-        {
-            rules.Add("display: none");
+                if (FormCss.Declaration(property, raw) is { } declaration)
+                {
+                    rules.Add($"{declaration.Property}: {declaration.Value}");
+                }
+            }
         }
 
         if (rules.Count == 0)

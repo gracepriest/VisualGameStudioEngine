@@ -459,8 +459,64 @@ public class FormPropertyGridTests
         Assert.Multiple(() =>
         {
             Assert.That(row.IsComboBox, Is.True);
-            Assert.That(row.Choices, Is.EqualTo(new[] { "Left", "Center", "Right" }));
+            Assert.That(row.Choices, Is.EqualTo(new[]
+            {
+                "TopLeft", "TopCenter", "TopRight", "MiddleLeft", "MiddleCenter", "MiddleRight",
+                "BottomLeft", "BottomCenter", "BottomRight"
+            }), "the nine ContentAlignment members; the legacy Left/Center/Right are accepted, never offered (spec §2.8)");
         });
+    }
+
+    /// <summary>
+    /// ⛔ The slice-1 hazard: the combo's items no longer contain "Left", and a SelectedItem binding
+    /// that cannot match pushes back — the canonical member, or null. Either write would rewrite (or
+    /// delete) the user's attribute just because they selected the Label.
+    /// </summary>
+    [Test]
+    public void ALegacyTextAlign_ShowsItsCanonicalMember_AndIsNotRewrittenWhenTheEditorPushesItBack()
+    {
+        var file = Read("""
+            <WebForm Name="F" Version="1">
+              <Controls><Label Id="lbl" TabIndex="0" TextAlign="Left"/></Controls>
+            </WebForm>
+            """);
+        var grid = new FormPropertyGridViewModel();
+        grid.Load(file);
+        grid.SelectedControl = file.Model.FindById("lbl");
+        var edits = 0;
+        grid.Edited += (_, _) => edits++;
+        var row = grid.Rows.Single(r => r.Name == "TextAlign");
+
+        row.StringValue = "MiddleLeft";   // what the combo pushes back for the matched canonical item
+        row.StringValue = null!;          // what a combo with no matching item can push
+
+        Assert.Multiple(() =>
+        {
+            // ⛔ Not frozen: a legacy alias is CANON (spec §2.8). Without this line a broken alias rule
+            // (the value Degraded, the row frozen) would still pass the rest — a frozen row writes nothing.
+            Assert.That(row.IsFrozen, Is.False, "a legacy TextAlign must stay editable, not Degraded");
+            Assert.That(row.StringValue, Is.EqualTo("MiddleLeft"), "the grid shows the canonical member");
+            Assert.That(file.Model.FindById("lbl")!.Properties["TextAlign"], Is.EqualTo("Left"),
+                "the document keeps its legacy spelling until the user EDITS the row");
+            Assert.That(edits, Is.Zero);
+        });
+    }
+
+    [Test]
+    public void ChoosingADifferentAlignment_WritesTheCanonicalMember()
+    {
+        var file = Read("""
+            <WebForm Name="F" Version="1">
+              <Controls><Label Id="lbl" TabIndex="0" TextAlign="Left"/></Controls>
+            </WebForm>
+            """);
+        var grid = new FormPropertyGridViewModel();
+        grid.Load(file);
+        grid.SelectedControl = file.Model.FindById("lbl");
+
+        grid.Rows.Single(r => r.Name == "TextAlign").StringValue = "TopRight";
+
+        Assert.That(file.Model.FindById("lbl")!.Properties["TextAlign"], Is.EqualTo("TopRight"));
     }
 
     // ==================================================================

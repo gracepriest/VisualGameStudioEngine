@@ -835,29 +835,85 @@ public static class FormControlCatalog
 {
     // Shared property definitions. Declared once so a control kind cannot drift from its peers
     // in the spelling or the declared type of a property they both carry.
-    private static readonly FormPropertyDef Text = new("Text", FormPropertyType.String);
-    private static readonly FormPropertyDef Enabled = new("Enabled", FormPropertyType.Bool, "true");
-    private static readonly FormPropertyDef Visible = new("Visible", FormPropertyType.Bool, "true");
-    private static readonly FormPropertyDef ForeColor = new("ForeColor", FormPropertyType.Color);
-    private static readonly FormPropertyDef BackColor = new("BackColor", FormPropertyType.Color);
-    private static readonly FormPropertyDef Checked = new("Checked", FormPropertyType.Bool, "false");
-
-    // ⛔ ContentAlignment has no Left/Center/Right — it is a 3x3 grid of Top/Middle/Bottom by
-    // Left/Center/Right. The designer keeps the simple horizontal vocabulary and maps to the
-    // middle row, which is what a single-line Label or Button actually wants.
     //
-    // ⚠ INTERIM (slice 1 Task 2): the canonical members are the three Middle* ones and the old
-    // Left/Center/Right are ALIASES, so emission is unchanged (Left → ContentAlignment.MiddleLeft).
-    // Task 5 replaces this with per-row TextAlign over all nine ContentAlignment members.
-    private static readonly FormPropertyDef TextAlign = new(
-        "TextAlign", FormPropertyType.Enum, "MiddleLeft", new[] { "MiddleLeft", "MiddleCenter", "MiddleRight" },
-        WinFormsEnumType: "ContentAlignment",
-        Aliases: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+    // ⛔ Category and Description are WinForms' own (the parity test compares them with the
+    // snapshot). A row whose Description differs on one kind gets its OWN definition — the parity
+    // run is what finds those (Task 8), never a guess here.
+    private static readonly FormPropertyDef Text = new("Text", FormPropertyType.String,
+        Category: FormPropertyCategory.Appearance, Description: "The text associated with the control.");
+
+    private static readonly FormPropertyDef Enabled = new("Enabled", FormPropertyType.Bool, "true",
+        Category: FormPropertyCategory.Behavior, Description: "Indicates whether the control is enabled.");
+
+    // ⛔ Visible=false is CSS, not a missing element: the element must still exist for getElementById.
+    private static readonly FormPropertyDef Visible = new("Visible", FormPropertyType.Bool, "true",
+        Category: FormPropertyCategory.Behavior, Description: "Determines whether the control is visible or hidden.",
+        CssProperty: "display", CssConverter: FormCssConverter.VisibleToDisplay);
+
+    // ⚠ A ToolStripItem's own Visible — its description differs from Control's (output.txt:1159), and
+    // an UNPARENTED item reads Visible=False, which is the parent-dependent measurement the tool cannot
+    // judge (spec claim 2 in the plan). The designer's absent-means-visible is WinForms' real default.
+    private static readonly FormPropertyDef ItemVisible = new("Visible", FormPropertyType.Bool, "true",
+        Category: FormPropertyCategory.Behavior, Description: "Determines whether the item is visible or hidden.",
+        CssProperty: "display", CssConverter: FormCssConverter.VisibleToDisplay,
+        OracleExemption: "an unparented ToolStripItem reports Visible=False; the item's own visibility " +
+                         "state defaults to true, which is what an absent attribute means at run time");
+
+    // ⛔ No static default: WinForms' ForeColor/BackColor are AMBIENT (ShouldSerialize, no
+    // [DefaultValue]) — spec §2.7. A kind whose colour is NOT ambient (TextBox's Window) gets its own.
+    private static readonly FormPropertyDef ForeColor = new("ForeColor", FormPropertyType.Color,
+        Category: FormPropertyCategory.Appearance,
+        Description: "The foreground color of this component, which is used to display text.",
+        CssProperty: "color", CssConverter: FormCssConverter.Color);
+
+    private static readonly FormPropertyDef BackColor = new("BackColor", FormPropertyType.Color,
+        Category: FormPropertyCategory.Appearance, Description: "The background color of the component.",
+        CssProperty: "background-color", CssConverter: FormCssConverter.Color);
+
+    private static readonly FormPropertyDef Checked = new("Checked", FormPropertyType.Bool, "false",
+        Category: FormPropertyCategory.Appearance, Description: "Indicates whether the component is in the checked state.");
+
+    // ==================================================================
+    // TextAlign — spec §2.8. ONE definition used to serve Label, Button and LinkLabel with default
+    // Left and a Left/Center/Right vocabulary, while their WinForms defaults DIFFER (TopLeft,
+    // MiddleCenter, TopLeft) — so the grid would have shown a default the program does not run.
+    // Now: per-row definitions over the full nine-member ContentAlignment vocabulary, each with its
+    // type's WinForms default, and the old words kept as ACCEPTED-but-not-offered aliases so every
+    // existing document stays Canon and round-trips byte-for-byte.
+    //
+    // ⛔ These two fields MUST stay above the TextAlign fields that read them (textual init order).
+    // ==================================================================
+    private static readonly string[] ContentAlignments =
+    {
+        "TopLeft", "TopCenter", "TopRight", "MiddleLeft", "MiddleCenter", "MiddleRight",
+        "BottomLeft", "BottomCenter", "BottomRight"
+    };
+
+    private static readonly IReadOnlyDictionary<string, string> LegacyHorizontalAlign =
+        new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
             ["Left"] = "MiddleLeft",
             ["Center"] = "MiddleCenter",
             ["Right"] = "MiddleRight"
-        });
+        };
+
+    private static FormPropertyDef TextAlignDefaulting(string member, string description) => new(
+        "TextAlign", FormPropertyType.Enum, member, ContentAlignments,
+        WinFormsEnumType: "ContentAlignment",
+        Aliases: LegacyHorizontalAlign,
+        Category: FormPropertyCategory.Appearance,
+        Description: description,
+        CssProperty: "text-align",
+        CssConverter: FormCssConverter.ContentAlignmentHorizontal);
+
+    private static readonly FormPropertyDef LabelTextAlign =
+        TextAlignDefaulting("TopLeft", "Determines the position of the text within the label.");
+
+    private static readonly FormPropertyDef ButtonTextAlign =
+        TextAlignDefaulting("MiddleCenter", "The alignment of the text that will be displayed on the control.");
+
+    private static readonly FormPropertyDef LinkLabelTextAlign =
+        TextAlignDefaulting("TopLeft", "Determines the position of the text within the label.");
 
     private static IReadOnlyList<FormPropertyDef> Common(params FormPropertyDef[] own) =>
         own.Concat(new[] { Enabled, Visible, ForeColor, BackColor }).ToList();
@@ -884,7 +940,7 @@ public static class FormControlCatalog
     /// </summary>
     public static readonly IReadOnlyList<FormControlDef> All = new List<FormControlDef>
     {
-        new("Label",       "Label",       "label",    null,       false, Common(Text, TextAlign),
+        new("Label",       "Label",       "label",    null,       false, Common(Text, LabelTextAlign),
             DefaultWidth: 100, DefaultHeight: 23, Schematic: FormSchematic.Text,
             Events: Ev("Click", "click")),
         new("TextBox",     "TextBox",     "input",    "text",     false, Common(
@@ -899,7 +955,7 @@ public static class FormControlCatalog
             // ⚠ The DOM has no TextChanged. `input` fires per keystroke, which is what TextChanged
             // means; `change` fires on blur and would be a different gesture wearing the same name.
             Events: Ev("TextChanged", "input")),
-        new("Button",      "Button",      "button",   null,       false, Common(Text, TextAlign),
+        new("Button",      "Button",      "button",   null,       false, Common(Text, ButtonTextAlign),
             DefaultWidth: 75, DefaultHeight: 23, Schematic: FormSchematic.Button,
             Events: Ev("Click", "click")),
         new("CheckBox",    "CheckBox",    "input",    "checkbox", false, Common(Text, Checked),
@@ -965,7 +1021,7 @@ public static class FormControlCatalog
         // friends are deliberately omitted: they are Color properties whose WinForms defaults are
         // system colours, and a designer that wrote them out would freeze today's theme into the
         // form.
-        new("LinkLabel",   "LinkLabel",   "a",        null,       false, Common(Text, TextAlign),
+        new("LinkLabel",   "LinkLabel",   "a",        null,       false, Common(Text, LinkLabelTextAlign),
             DefaultWidth: 100, DefaultHeight: 23, Schematic: FormSchematic.Link,
             Events: Ev("LinkClicked", "click")),
 
@@ -1176,7 +1232,7 @@ public static class FormControlCatalog
             {
                 new("Dock", FormPropertyType.Enum, "Top", new[] { "Top", "Bottom" }, WinFormsEnumType: "DockStyle"),
                 new("Enabled", FormPropertyType.Bool, "true", Targets: new[] { FormTarget.WinForms }),
-                new("Visible", FormPropertyType.Bool, "true")
+                Visible
             },
             DefaultHeight: 24, Schematic: FormSchematic.MenuBar,
             Events: Ev("ItemClicked", "click", args: "ToolStripItemClickedEventArgs"),
@@ -1194,7 +1250,7 @@ public static class FormControlCatalog
                 new("Dock", FormPropertyType.Enum, "Top", new[] { "Top", "Bottom" }, WinFormsEnumType: "DockStyle"),
                 new("GripStyle", FormPropertyType.Enum, "Hidden", new[] { "Hidden", "Visible" }, WinFormsEnumType: "ToolStripGripStyle", Targets: new[] { FormTarget.WinForms }),
                 new("Enabled", FormPropertyType.Bool, "true", Targets: new[] { FormTarget.WinForms }),
-                new("Visible", FormPropertyType.Bool, "true")
+                Visible
             },
             DefaultHeight: 25, Schematic: FormSchematic.ToolBar,
             Events: Ev("ItemClicked", "click", args: "ToolStripItemClickedEventArgs"),
@@ -1208,7 +1264,7 @@ public static class FormControlCatalog
                 new("Dock", FormPropertyType.Enum, "Bottom", new[] { "Top", "Bottom" }, WinFormsEnumType: "DockStyle"),
                 new("SizingGrip", FormPropertyType.Bool, "false", Targets: new[] { FormTarget.WinForms }),
                 new("Enabled", FormPropertyType.Bool, "true", Targets: new[] { FormTarget.WinForms }),
-                new("Visible", FormPropertyType.Bool, "true")
+                Visible
             },
             DefaultHeight: 22, Schematic: FormSchematic.StatusBar,
             Events: Ev("ItemClicked", "click", args: "ToolStripItemClickedEventArgs"),
@@ -1221,7 +1277,7 @@ public static class FormControlCatalog
             {
                 new("Text", FormPropertyType.String),
                 new("Enabled", FormPropertyType.Bool, "true", Targets: new[] { FormTarget.WinForms }),
-                new("Visible", FormPropertyType.Bool, "true"),
+                ItemVisible,
                 new("Checked", FormPropertyType.Bool, "false", Targets: new[] { FormTarget.WinForms }),
                 new("CheckOnClick", FormPropertyType.Bool, "false", Targets: new[] { FormTarget.WinForms }),
                 new("ToolTipText", FormPropertyType.String, HtmlAttribute: "title")
@@ -1233,7 +1289,7 @@ public static class FormControlCatalog
 
         new("ToolStripSeparator", "ToolStripSeparator", "li", null, false, new List<FormPropertyDef>
             {
-                new("Visible", FormPropertyType.Bool, "true")
+                ItemVisible
             },
             Schematic: FormSchematic.Separator, Events: Ev("Click", "click"),
             Place: FormPlace.Item, HtmlRole: "separator"),
@@ -1242,7 +1298,7 @@ public static class FormControlCatalog
             {
                 new("Text", FormPropertyType.String),
                 new("Enabled", FormPropertyType.Bool, "true"),
-                new("Visible", FormPropertyType.Bool, "true"),
+                ItemVisible,
                 new("Checked", FormPropertyType.Bool, "false", Targets: new[] { FormTarget.WinForms }),
                 new("CheckOnClick", FormPropertyType.Bool, "false", Targets: new[] { FormTarget.WinForms }),
                 new("ToolTipText", FormPropertyType.String, HtmlAttribute: "title"),
@@ -1254,7 +1310,7 @@ public static class FormControlCatalog
             {
                 new("Text", FormPropertyType.String),
                 new("Enabled", FormPropertyType.Bool, "true", Targets: new[] { FormTarget.WinForms }),
-                new("Visible", FormPropertyType.Bool, "true"),
+                ItemVisible,
                 new("Spring", FormPropertyType.Bool, "false", Targets: new[] { FormTarget.WinForms }),
                 new("ToolTipText", FormPropertyType.String, HtmlAttribute: "title")
             },
