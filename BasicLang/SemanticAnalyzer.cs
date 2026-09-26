@@ -5651,6 +5651,17 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     propertyType = _typeManager.ObjectType;
                 }
                 SetNodeType(prop, propertyType);
+
+                // ⛔ AND REGISTER IT AS A MEMBER. Without this a read through an interface-typed
+                // variable (`s.Area` with `Dim s As IShape`) found no member and typed as Object:
+                // `Dim t As String = s.Area` was refused as Object→String, and on C++ the value
+                // landed in a `void*` temp. Accessor-backed by definition — an interface has no
+                // storage, so a read always runs the implementing class's getter.
+                interfaceType.Members[prop.Name] = new Symbol(prop.Name, SymbolKind.Property, propertyType, prop.Line, prop.Column)
+                {
+                    Access = AccessModifier.Public,
+                    IsAccessorBacked = true
+                };
             }
 
             ExitScope();

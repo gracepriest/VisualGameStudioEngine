@@ -26,10 +26,10 @@ namespace VisualGameStudio.Tests.Compiler;
 /// statically. A three-level chain answered the TOPMOST value. JavaScript was right by accident:
 /// JS class members always dispatch dynamically.</para>
 ///
-/// <para>⚠ RUNS ON THREE, NOT FOUR, AND THAT IS PRE-EXISTING. C++ cannot emit a property as a
-/// reachable member at all — <c>CppEmissionOrderTests</c> already pins it, and the control below
-/// proves it fails with ONE class and no inheritance, so it is not an overriding defect. Every
-/// shape here is asserted on JavaScript, MSIL and C#, compiled and run.</para>
+/// <para>Every shape here is asserted on all four backends, compiled and run. C++ used to be
+/// excluded: it lowered every property read to a field access and so could not reach a Get/Set
+/// property at all (task #148). Its accessors now carry <c>virtual</c>/<c>override</c> and every
+/// read and write calls them.</para>
 /// </summary>
 [TestFixture]
 [Category("Integration")]
@@ -41,14 +41,9 @@ public class OverridablePropertyTests
     private static string Msil(string p) => Norm(MsilHarness.RunExpectingSuccess(p));
     private static string Cs(string p) => Norm(FourBackends.RunEmittedCSharp(p));
 
-    /// <summary>JavaScript, MSIL and C# all run <paramref name="program"/> and agree.</summary>
-    private static void RunsOnThree(string program, string expected) =>
-        Assert.Multiple(() =>
-        {
-            Assert.That(Js(program), Is.EqualTo(expected), "JavaScript");
-            Assert.That(Msil(program), Is.EqualTo(expected), "MSIL");
-            Assert.That(Cs(program), Is.EqualTo(expected), "C#");
-        });
+    /// <summary>C++, JavaScript, MSIL and C# all run <paramref name="program"/> and agree.</summary>
+    private static void RunsOnEveryBackend(string program, string expected) =>
+        FourBackends.RunsOnEveryBackend(program, expected);
 
     private static string EmittedCs(string program) => ReturnCoercionTests.EmitCSharpForTest(program);
     private static string EmittedIl(string program) => MsilHarness.CompileToIl(program);
@@ -58,7 +53,7 @@ public class OverridablePropertyTests
     /// <summary>The plainest form: a ReadOnly property overridden once, read through the base.</summary>
     [Test]
     public void AnOverriddenReadOnlyProperty_DispatchesToTheDerived()
-        => RunsOnThree("""
+        => RunsOnEveryBackend("""
             Class Animal
              Public Overridable ReadOnly Property Name As String
               Get
@@ -83,7 +78,7 @@ public class OverridablePropertyTests
     /// <summary>A Get/Set property, which emits through a different arm than the ReadOnly one.</summary>
     [Test]
     public void AnOverriddenGetSetProperty_DispatchesToTheDerived()
-        => RunsOnThree("""
+        => RunsOnEveryBackend("""
             Class Animal
              Protected Store As String = "base"
              Public Overridable Property Tag As String
@@ -120,7 +115,7 @@ public class OverridablePropertyTests
     /// </summary>
     [Test]
     public void AnOverriddenSetter_RunsTheDerivedSetter()
-        => RunsOnThree("""
+        => RunsOnEveryBackend("""
             Class Animal
              Public Store As String = "?"
              Public Overridable Property Tag As String
@@ -158,7 +153,7 @@ public class OverridablePropertyTests
     /// </summary>
     [Test]
     public void ABaseMethodReadingItsOwnOverridableProperty_SeesTheOverride()
-        => RunsOnThree("""
+        => RunsOnEveryBackend("""
             Class Animal
              Public Overridable ReadOnly Property Name As String
               Get
@@ -190,7 +185,7 @@ public class OverridablePropertyTests
     /// </summary>
     [Test]
     public void APropertyOverriddenTwoLevelsDown_ReachesTheDeepestOverride()
-        => RunsOnThree("""
+        => RunsOnEveryBackend("""
             Class A
              Public Overridable ReadOnly Property N As String
               Get
@@ -223,7 +218,7 @@ public class OverridablePropertyTests
     /// <summary>The middle of a chain is both an override AND the base of the next one.</summary>
     [Test]
     public void AChainStoppedAtTheMiddleOverride_ReachesTheMiddle()
-        => RunsOnThree("""
+        => RunsOnEveryBackend("""
             Class A
              Public Overridable ReadOnly Property N As String
               Get
@@ -251,7 +246,7 @@ public class OverridablePropertyTests
     /// <summary>An Integer property, so the fix is not tied to String's emission path.</summary>
     [Test]
     public void AnOverriddenIntegerProperty_DispatchesToTheDerived()
-        => RunsOnThree("""
+        => RunsOnEveryBackend("""
             Class Animal
              Public Overridable ReadOnly Property N As Integer
               Get
@@ -276,7 +271,7 @@ public class OverridablePropertyTests
     /// <summary>An AUTO-property override — a separate emission arm on both backends.</summary>
     [Test]
     public void AnOverriddenAutoProperty_DispatchesToTheDerived()
-        => RunsOnThree("""
+        => RunsOnEveryBackend("""
             Class Animal
              Public Overridable Property V As Integer
             End Class
@@ -325,7 +320,7 @@ public class OverridablePropertyTests
     /// </summary>
     [Test]
     public void AnOverriddenProperty_ThroughABaseTypedParameter_Dispatches()
-        => RunsOnThree(ThroughAParameter, "derived");
+        => RunsOnEveryBackend(ThroughAParameter, "derived");
 
     // ---------------------------------------------------------------- controls
 
@@ -337,7 +332,7 @@ public class OverridablePropertyTests
     /// </summary>
     [Test]
     public void ANonOverriddenOverridableProperty_StillAnswersTheBase()
-        => RunsOnThree("""
+        => RunsOnEveryBackend("""
             Class Animal
              Public Overridable ReadOnly Property Name As String
               Get
@@ -357,7 +352,7 @@ public class OverridablePropertyTests
     /// <summary>⚠ CONTROL: a property with no Overridable anywhere is untouched by the change.</summary>
     [Test]
     public void APlainPropertyOnOneClass_IsUnaffected()
-        => RunsOnThree("""
+        => RunsOnEveryBackend("""
             Class Animal
              Public ReadOnly Property Name As String
               Get
@@ -378,7 +373,7 @@ public class OverridablePropertyTests
     /// </summary>
     [Test]
     public void ASharedProperty_IsUnaffected()
-        => RunsOnThree("""
+        => RunsOnEveryBackend("""
             Class Counter
              Public Shared ReadOnly Property N As Integer
               Get
@@ -555,37 +550,6 @@ public class OverridablePropertyTests
             Assert.That(prop.IsVirtual, Is.False);
             Assert.That(prop.IsOverride, Is.False);
         });
-    }
-
-    // ---------------------------------------------------------------- pinned, pre-existing
-
-    /// <summary>
-    /// ⛔ PINNED, PRE-EXISTING, AND NOT THIS CHANGE'S: C++ cannot emit a property as a reachable
-    /// member. The CONTROL is the point — ONE class, no inheritance, no Overridable anywhere, and
-    /// it still fails. `CppEmissionOrderTests` pins the same gap from the other side. This test
-    /// goes RED when C++ properties start working, which is the signal to promote every
-    /// `RunsOnThree` above to all four.
-    /// </summary>
-    [Test]
-    public void APropertyOnCpp_IsAPreExistingGap_Pinned()
-    {
-        var ex = Assert.Catch(() => BclE2E.CompileRun(BclE2E.CompileToCppOptimized("""
-            Class Animal
-             Public ReadOnly Property Name As String
-              Get
-               Return "base"
-              End Get
-             End Property
-            End Class
-            Sub Main()
-             Dim a As New Animal()
-             PrintLine(a.Name)
-            End Sub
-            """)));
-
-        Assert.That(ex, Is.Not.Null,
-            "C++ now emits a plain property — promote the RunsOnThree cases in this fixture to "
-            + "FourBackends.RunsOnEveryBackend and delete this pin");
     }
 
     /// <summary>
