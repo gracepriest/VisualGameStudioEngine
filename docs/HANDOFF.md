@@ -377,11 +377,16 @@ cleanly, and the real count is N+1. The fast subset catches it every time — re
 `ProjectFile.GetSourceFiles` now walks in `GetFilesInWindowsOrder` — a mirrored pair the merge left
 asymmetric (same order on Windows; may differ on Linux).
 
-Not part of "done" but part of honesty — compiler defects the designer WORKS AROUND, all still open:
-the JS bare-global self-call (`task_fc397dba`; `FormScaffolder` emits `Me.`), `control.Name` never
-emitted (`task_fa51e644`), a class named `F` breaks `Me.` lookup (`task_ef845b99`),
-`RejectImpossibleConversion`'s sibling-file hole (`task_0b7436a5`), a bare literal as a statement
-(`task_2e1de6b3`), the C++ `BasicLang::List` with no `Sort` (`task_e7c50371`).
+Not part of "done" but part of honesty — compiler defects the designer WORKS AROUND, still open:
+`control.Name` never emitted (`task_fa51e644`), `RejectImpossibleConversion`'s sibling-file hole
+(`task_0b7436a5`).
+
+Closed since, re-measured on master `dc949a24` (2026-09-26): the C++ `BasicLang::List` with no
+`Sort` (`task_e7c50371`, #105), and a bare literal as a statement (`task_2e1de6b3`, now refused by
+the analyzer — `ExpressionStatementTests`). Not reproduced there: the JS bare-global self-call
+(`task_fc397dba` — an unqualified call in a constructor emits `this.M()` and runs; `FormScaffolder`'s
+`Me.` is now belt-and-braces) and a class named `F` breaking `Me.` lookup (`task_ef845b99` — runs on
+JavaScript and C++, builds on C#).
 
 ---
 
