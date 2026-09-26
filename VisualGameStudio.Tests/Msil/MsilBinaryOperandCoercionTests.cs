@@ -638,25 +638,15 @@ public class MsilBinaryOperandCoercionTests
     }
 
     /// <summary>
-    /// ⛔ PINNED DIVERGENCE, found while building this fixture, NOT introduced by ADR-0004 D4.
     /// A guard built from a NESTED arithmetic sub-expression (<c>a + b</c>, not a bare
-    /// comparison) gets NO coercion at all, even after this fix: <c>BinaryOperandKind</c> reads
-    /// <c>binaryOp.Type</c>, and for this specific node that type is not the populated
-    /// <c>Double</c> IRBuilder's ordinary <c>Visit(BinaryExpressionNode)</c> path produces —
-    /// measured directly (<c>MsilHarness.CompileToIl</c> on the shape below) as
-    /// <c>ldloc.0 / ldloc.1 / add</c> with NO <c>conv.r8</c> in between, where the equivalent
-    /// non-guard expression correctly emits one. The pre-fix root cause (an unconverted
-    /// int32/float64 pair reaching a primitive opcode) is exactly what D4 fixes everywhere else
-    /// — this is the one shape the fix's own <c>EmitInlineValue</c> copy cannot reach, because
-    /// the coercion has nothing to key off. It does not crash (the CLR's JIT does not verify
-    /// this at runtime), so this pins ONLY the outcome, never the printed branch — the branch
-    /// taken depends on how the JIT happens to reinterpret the mismatched bit pattern, which is
-    /// undefined behavior, not a value this fixture can promise.
+    /// comparison) is coerced like any other. This was a PINNED DIVERGENCE: it emitted
+    /// <c>ldloc.0 / ldloc.1 / add</c> with NO <c>conv.r8</c>, an int32/float64 pair reaching a
+    /// primitive opcode, because <c>BinaryOperandKind</c> reads <c>binaryOp.Type</c> and a guard
+    /// was never semantically analyzed — the analyzer skipped every Case's patterns, so the node
+    /// arrived untyped and the coercion had nothing to key off. Analyzing the patterns
+    /// (<c>WhenGuardCallTests</c>) types it Double, and the <c>conv.r8</c> appears.
     /// </summary>
-    [Test]
-    public void SelectCaseWhenGuard_NestedMixedArithmetic_PinnedDivergence_NoCoercionApplied()
-    {
-        var il = MsilHarness.CompileToIl("""
+    private const string NestedMixedArithmeticGuard = """
             Function VI() As Integer
                 Dim r As Integer = 3
                 Return r
@@ -678,10 +668,17 @@ public class MsilBinaryOperandCoercionTests
                         Console.WriteLine("no")
                 End Select
             End Sub
-            """);
-        Assert.That(il, Does.Match(@"ldloc\.0\s*\r?\n\s*ldloc\.1\s*\r?\n\s*add"),
-            "expected the KNOWN-BROKEN shape (int32 'a' loaded and added with no conv.r8 before "
-            + "it) — if this no longer matches, the guard's nested-arithmetic coercion gap has "
-            + "been fixed and this pin should be promoted to a real value assertion instead.");
+            """;
+
+    [Test]
+    public void SelectCaseWhenGuard_NestedMixedArithmetic_WidensTheIntegerOperand()
+    {
+        var il = MsilHarness.CompileToIl(NestedMixedArithmeticGuard);
+        Assert.That(il, Does.Match(@"ldloc\.0\s*\r?\n\s*conv\.r8\s*\r?\n\s*ldloc\.1\s*\r?\n\s*add"), il);
     }
+
+    /// <summary>3 + 2.5 = 5.5 &gt; 5.0 — the branch the pinned test could not promise.</summary>
+    [Test]
+    public void SelectCaseWhenGuard_NestedMixedArithmetic_TakesTheYesBranch() =>
+        Assert.That(RunExpectingSuccess(NestedMixedArithmeticGuard), Is.EqualTo("yes\n"));
 }
