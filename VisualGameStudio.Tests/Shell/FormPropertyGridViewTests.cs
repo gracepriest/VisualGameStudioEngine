@@ -645,6 +645,45 @@ public class FormPropertyGridViewTests
         Assert.That(host.Grid.SelectedItem, Is.SameAs(header), "the keys never moved the selection");
     }
 
+    /// <summary>The visible text box of a row's typed editor (the frozen read-only box is hidden).</summary>
+    private static TextBox EditorBox(Hosted host, string row) =>
+        host.Container(host.Row(row)).GetVisualDescendants().OfType<TextBox>().First(t => t.IsEffectivelyVisible);
+
+    /// <summary>
+    /// ⛔ The header keys are gated on FOCUS, not on SelectedItem. A header can stay selected while the user
+    /// types in a row's editor (a TextBox takes the press without selecting its row) — and Space there must
+    /// type a space, not fold the category.
+    /// </summary>
+    [AvaloniaTest]
+    public void SpaceInARowsEditor_WhileAHeaderIsSelected_TypesASpace_AndFoldsNothing()
+    {
+        using var host = Host();
+        var header = host.Grid.DisplayItems.OfType<FormPropertyCategoryHeader>().First();
+        host.Grid.SelectedItem = header;
+        Dispatcher.UIThread.RunJobs();
+        var box = EditorBox(host, "Text");
+        box.Focus();
+        box.CaretIndex = box.Text?.Length ?? 0;
+        Dispatcher.UIThread.RunJobs();
+        Assume.That(host.Grid.SelectedItem, Is.SameAs(header), "precondition: focusing the editor kept the header selected");
+
+        bool? handledAtTheBox = null;
+        box.AddHandler(InputElement.KeyDownEvent, (_, e) => handledAtTheBox = e.Handled,
+            Avalonia.Interactivity.RoutingStrategies.Bubble, handledEventsToo: true);
+
+        host.Window.KeyPress(Avalonia.Input.Key.Space, RawInputModifiers.None);
+        host.Window.KeyTextInput(" ");
+        host.Window.KeyRelease(Avalonia.Input.Key.Space, RawInputModifiers.None);
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(header.IsExpanded, Is.True, "the selected header did not fold");
+            Assert.That(handledAtTheBox, Is.False, "the Space key reached the text box unhandled");
+            Assert.That(box.Text, Is.EqualTo("Hi "), "and the space was typed");
+        });
+    }
+
     /// <summary>Left/Right on a selected ROW are not header keys: nothing collapses.</summary>
     [AvaloniaTest]
     public void ARowSelectedInTheList_LeavesItsHeaderAloneOnLeft()
@@ -743,6 +782,22 @@ public class FormPropertyGridViewTests
 
             Assert.That(host.Grid.SelectedItem, Is.SameAs(selected));
             Assert.That(host.List.SelectedItem, Is.SameAs(selected));
+
+            // ⛔ Containers are RECYCLED between rows and headers: a header that inherited a row's container
+            // must not keep its Reset menu, and a row must reset ITS OWN property, not the last one's.
+            foreach (var container in host.List.GetRealizedContainers())
+            {
+                var item = host.List.ItemFromContainer(container);
+                if (item is FormPropertyRow row)
+                {
+                    var reset = container.ContextMenu?.Items.OfType<MenuItem>().SingleOrDefault(m => (string?)m.Header == "Reset");
+                    Assert.That(reset?.Command, Is.SameAs(row.ResetCommand), $"row {row.Name}'s menu resets that row");
+                }
+                else
+                {
+                    Assert.That(container.ContextMenu, Is.Null, $"{item} has no Reset menu");
+                }
+            }
         });
     }
 
@@ -751,6 +806,44 @@ public class FormPropertyGridViewTests
     /// The menu lives on the ListBoxItem container — a menu inside the row template never sees the
     /// request, which is raised on the FOCUSED element and bubbles up, not down. A header has none.
     /// </summary>
+    /// <summary>
+    /// Shift+F10 is raised on the FOCUSED element, as the Menu key is: focus in a row's editor opens the
+    /// EDITOR's own menu (cut/copy/paste), and the row's Reset menu stays shut. The request reaches the row
+    /// container only when nothing below it takes it.
+    /// </summary>
+    [AvaloniaTest]
+    public void ShiftF10_InARowsEditor_OpensTheEditorsOwnMenu_NotReset()
+    {
+        using var host = Host();
+        var row = host.Row("Text");
+        var box = EditorBox(host, "Text");
+        box.Focus();
+        Dispatcher.UIThread.RunJobs();
+        var boxMenuOpened = false;
+        // ⚠ handledEventsToo: the text box's flyout takes (handles) the request before a plain += sees it.
+        box.AddHandler(Control.ContextRequestedEvent,(_, _) => boxMenuOpened = true,
+            Avalonia.Interactivity.RoutingStrategies.Bubble, handledEventsToo: true);
+
+        Press(host.Window, Avalonia.Input.Key.F10, RawInputModifiers.Shift);
+
+        var reset = host.Container(row).ContextMenu;
+        try
+        {
+            Assert.Multiple(() =>
+            {
+                Assert.That(boxMenuOpened, Is.True, "the request was raised on the focused text box");
+                Assert.That(box.ContextFlyout?.IsOpen ?? box.ContextMenu?.IsOpen, Is.True, "the text box's own menu opened");
+                Assert.That(reset?.IsOpen, Is.False, "the row's Reset menu did not");
+            });
+        }
+        finally
+        {
+            box.ContextFlyout?.Hide();
+            box.ContextMenu?.Close();
+            reset?.Close();
+        }
+    }
+
     [AvaloniaTest]
     public void TheFocusedRow_OpensItsResetMenu_OnShiftF10() =>
         OpensTheResetMenu(Avalonia.Input.Key.F10, RawInputModifiers.Shift);

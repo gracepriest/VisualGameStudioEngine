@@ -30,11 +30,16 @@ public partial class FormPropertyGridView : UserControl
     }
 
     /// <summary>
-    /// Shift+F10 opens the focused row's menu — the Windows gesture, beside the Menu key.
+    /// Shift+F10 opens the context menu of whatever has focus — the Windows gesture, beside the Menu key.
     ///
     /// <para>⚠ Measured headless: the platform's <c>OpenContextMenu</c> gestures are the Menu key ALONE, so
     /// Avalonia never raised a context request for Shift+F10. Raised here only when the platform does NOT
     /// map it itself, so a platform that does cannot open the menu twice.</para>
+    ///
+    /// <para>⛔ Raised on the FOCUSED element (the event source) and left to BUBBLE, exactly as the Menu
+    /// key's request is: focus in a row's editor opens the editor's own cut/copy/paste menu, and the row
+    /// container's Reset menu opens only when nothing below it takes the request. Handled only if the
+    /// request was.</para>
     /// </summary>
     private void OnListKeyUp(object? sender, KeyEventArgs e)
     {
@@ -49,11 +54,11 @@ public partial class FormPropertyGridView : UserControl
             return;
         }
 
-        if (e.Source is Visual source &&
-            source.FindAncestorOfType<ListBoxItem>(includeSelf: true) is { ContextMenu: not null } container)
+        if (e.Source is Control focused)
         {
-            container.RaiseEvent(new ContextRequestedEventArgs());
-            e.Handled = true;
+            var request = new ContextRequestedEventArgs();
+            focused.RaiseEvent(request);
+            e.Handled = request.Handled;
         }
     }
 

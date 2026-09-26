@@ -175,6 +175,8 @@ Follow this document **alongside** the plan. Where the two disagree, this docume
   - Paste/cut/undo, then check that the selector lists the new or removed control. `RefreshObjects` runs only on a selection change or `Load`.
   - A web form with no `<Layout>`: set Cols, save, reopen.
   - Type an invalid colour and tab away, and check that the box snaps back.
+  - On real Windows, Shift+F10 on a grid row opens Reset (F10 is a Win32 system key and the IDE has a main
+    menu — headless cannot show this).
 
 ---
 
