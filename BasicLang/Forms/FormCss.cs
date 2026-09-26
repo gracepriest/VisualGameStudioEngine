@@ -40,14 +40,19 @@ public static class FormCss
     /// <summary>
     /// ⛔ A verbatim value is spliced into <c>#id { prop: VALUE; }</c> inside a <c>&lt;style&gt;</c>.
     /// Any of these characters could end the declaration, the rule or the element, or open a string or
-    /// escape — so the value is refused (no declaration) rather than escaped. The catalog also keeps
-    /// verbatim rows to Int and Enum (<c>FormCssTests.EveryVerbatimCssRow_IsIntOrEnum</c>); this is the
-    /// second line for a row that slips past it.
+    /// escape — so the value is refused (no declaration) rather than escaped. <c>/</c> because
+    /// <c>/*</c> opens a comment that swallows the rest of the stylesheet; <c>(</c> because
+    /// <c>url(</c> makes the page fetch an external resource.
+    ///
+    /// <para>This list is a BACKSTOP, not the guard: the primary guard is
+    /// <c>FormCssTests.EveryVerbatimCssRow_IsIntOrEnum</c>, which keeps verbatim rows to types whose
+    /// accepted values cannot contain any of these characters.</para>
     /// </summary>
     private static bool IsSafeVerbatim(string value) =>
         value.IndexOfAny(UnsafeVerbatim) < 0;
 
-    private static readonly char[] UnsafeVerbatim = { ';', '{', '}', '<', '>', '"', '\'', '\\', '\n', '\r' };
+    private static readonly char[] UnsafeVerbatim =
+        { ';', '{', '}', '<', '>', '"', '\'', '\\', '\n', '\r', '/', '(' };
 
     /// <summary>
     /// ⛔ <c>#AARRGGBB</c> is WinForms ARGB in the document; CSS reads eight hex digits as RRGGBBAA, so

@@ -157,6 +157,8 @@ public class FormCssTests
     [TestCase("\\")]
     [TestCase("\n")]
     [TestCase("\r")]
+    [TestCase("/")]   // `/*` opens a comment that swallows the rest of the stylesheet
+    [TestCase("(")]   // `url(` makes the page fetch an external resource
     public void AVerbatimValue_ThatCouldBreakOutOfItsDeclaration_IsRefused(string character)
     {
         // Belt and braces for the row-type rule above: even a String row that slipped past it cannot
