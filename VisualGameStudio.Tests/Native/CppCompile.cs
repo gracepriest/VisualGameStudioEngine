@@ -230,6 +230,39 @@ public static class CppCompile
     }
 
     /// <summary>
+    /// Compile <paramref name="cppSource"/> only, WITHOUT asserting success, for a test whose
+    /// contract is that the source is REFUSED (a static_assert, say). Returns whether the compiler
+    /// exited 0 and its combined output.
+    /// </summary>
+    public static (bool Compiled, string Output) TryCompile(string cppSource, (string exe, string argsTemplate) compiler)
+    {
+        var tmpDir = Path.Combine(Path.GetTempPath(), "blcpp_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tmpDir);
+        try
+        {
+            var srcPath = Path.Combine(tmpDir, "prog.cpp");
+            var exePath = Path.Combine(tmpDir, "prog" + (OperatingSystem.IsWindows() ? ".exe" : ""));
+            File.WriteAllText(srcPath, cppSource);
+            var psi = new ProcessStartInfo(compiler.exe, string.Format(compiler.argsTemplate, srcPath, exePath))
+            {
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                WorkingDirectory = tmpDir
+            };
+            using var proc = Process.Start(psi);
+            var c = RunToCompletion(proc!, 120000);
+            Assert.That(c.Exited, Is.True, $"C++ compiler timed out after 120000 ms:\n{c.StdOut}\n{c.StdErr}");
+            return (c.ExitCode == 0, c.StdOut + "\n" + c.StdErr);
+        }
+        finally
+        {
+            try { Directory.Delete(tmpDir, recursive: true); } catch { /* best effort */ }
+        }
+    }
+
+    /// <summary>
     /// Shared compile+run tail: formats the compiler args template with
     /// (<paramref name="sourcesForTemplate"/>, <paramref name="exePath"/>), compiles in
     /// <paramref name="tmpDir"/> (asserting exit 0 with compiler output plus
