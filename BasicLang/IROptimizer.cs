@@ -1281,6 +1281,11 @@ namespace BasicLang.Compiler.IR.Optimization
                     arrayStore.Index = map(arrayStore.Index);
                     arrayStore.Value = map(arrayStore.Value);
                     break;
+                // A When guard's array carries its elements (IRArrayAlloc.InlineElements).
+                case IRArrayAlloc guardArray when guardArray.InlineElements != null:
+                    for (var i = 0; i < guardArray.InlineElements.Count; i++)
+                        guardArray.InlineElements[i] = map(guardArray.InlineElements[i]);
+                    break;
                 case IRAwait await:
                     await.Expression = map(await.Expression);
                     break;

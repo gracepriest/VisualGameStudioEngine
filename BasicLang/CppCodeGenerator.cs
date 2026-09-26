@@ -4358,6 +4358,10 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 // An element read — the same element lvalue Visit(IRLoad) reads from.
                 case IRLoad load when _guardNodes != null && load.Address is IRGetElementPtr gep:
                     return ElementLValue(gep);
+                // An array literal or a packed ParamArray: the node carries its elements, since
+                // its stores never reached a block. Array<T>'s initializer_list constructor.
+                case IRArrayAlloc alloc when _guardNodes != null && alloc.InlineElements != null:
+                    return $"{MapType(alloc.Type)}{{" + string.Join(", ", alloc.InlineElements.Select(GetValueName)) + "}";
                 default:
                     // Anything else that is an un-emitted guard node has no declared temp, so a
                     // name would dangle. Refuse it by name instead of handing g++ an undeclared

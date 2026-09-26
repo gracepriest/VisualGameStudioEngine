@@ -3286,6 +3286,14 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                     case IRConstant c:
                         return EmitConstant(c);
 
+                    // A When guard's array carries its elements (IRArrayAlloc.InlineElements) — its
+                    // stores never reached a block, so by name it was `Total(t2)`, t2 declared
+                    // nowhere (CS0103).
+                    case IRArrayAlloc guardArray when guardArray.InlineElements != null:
+                        return $"new {MapType(guardArray.ElementType)}[] {{ "
+                               + string.Join(", ", guardArray.InlineElements.Select(e => EmitExpression(e, stack)))
+                               + " }";
+
                     case IRVariable v:
                         // A type KEYWORD as a static receiver (`Integer.MaxValue`, `String.Empty`),
                         // spelled as C#'s keyword. A keyword can never name a user variable.
@@ -3604,6 +3612,11 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 // node kinds, which is ADR-0001's contract, not because C# counts it.
                 case IRDelegateCreate delegateCreate:
                     return delegateCreate.Target != null ? new[] { delegateCreate.Target } : Array.Empty<IRValue>();
+
+                // A When guard's array carries its elements (never in a block, so never counted
+                // here in practice); an emitted allocation's elements belong to its IRArrayStores.
+                case IRArrayAlloc guardArray when guardArray.InlineElements != null:
+                    return guardArray.InlineElements.ToArray();
 
                 // Kinds that read no IRValue. Listed, not defaulted, so the default can throw.
                 // ⚠ IRVariable.DefaultValue / InitialValue are DECLARATION data (a parameter's

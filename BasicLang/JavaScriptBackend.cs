@@ -1118,6 +1118,11 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 case IRArrayAlloc alloc:
                     if (Bound(alloc)) return SanitizeName(alloc.Name);
                     if (alloc.Size == 0) return ArrayAlloc(alloc);
+                    // A guard's allocation carries its elements (IRArrayAlloc.InlineElements): a
+                    // JS array literal is exactly the value. An allocation without them still
+                    // lost its stores and is refused below.
+                    if (alloc.InlineElements != null)
+                        return "[" + string.Join(", ", alloc.InlineElements.Select(Expr)) + "]";
                     throw NotYet(
                         "IRArrayAlloc with unemitted element stores (an array literal inside a "
                         + "`When` guard — IRBuilder suppresses the allocation and its element "

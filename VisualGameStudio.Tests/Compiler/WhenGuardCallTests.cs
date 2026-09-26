@@ -169,6 +169,47 @@ End Sub
 
     internal const string ShapesExpected = "elem 3\nconcat 7\nlambda 8\ntostring 9";
 
+    /// <summary>
+    /// An array built INSIDE a guard: a ParamArray call (packed at the call site since #117, and
+    /// in a guard only since guards are analyzed) and an array literal. Their element stores are
+    /// suppressed with the rest of the guard, so the allocation carries its elements
+    /// (IRArrayAlloc.InlineElements). Before: C# `Total(t2)` with t2 declared nowhere (CS0103), a
+    /// JavaScript refusal, and a C++ refusal.
+    /// </summary>
+    internal const string ArraysProgram = @"
+Function Total(ParamArray xs() As Integer) As Integer
+    Dim s As Integer = 0
+    For Each x As Integer In xs
+        s = s + x
+    Next
+    Return s
+End Function
+
+Function Sum(xs() As Integer) As Integer
+    Dim s As Integer = 0
+    For Each x As Integer In xs
+        s = s + x
+    Next
+    Return s
+End Function
+
+Sub Main()
+    For Each n As Integer In New Integer() {1, 2, 3}
+        Select Case n
+            Case Is > 0 When Total(n, 3, 4) = 9
+                Console.WriteLine(""packed "" & n)
+            Case Is > 0 When Sum(New Integer() {n, 10}) = 13
+                Console.WriteLine(""literal "" & n)
+            Case Else
+                Console.WriteLine(""else "" & n)
+        End Select
+    Next
+    Console.WriteLine(""after"")
+End Sub
+";
+
+    internal const string ArraysExpected = "else 1\npacked 2\nliteral 3\nafter";
+
     /// <summary>Casts through the statement form's own lowering: CStr of a Double, a Double `\`, a Decimal.</summary>
     internal const string CastProgram = @"
 Sub Main()
@@ -337,13 +378,14 @@ End Sub
 [NonParallelizable] // the C# leg redirects Console.Out
 public class WhenGuardCallRunTests
 {
-    private static readonly string[] Programs = { "Calls", "ShortCircuit", "Shapes" };
+    private static readonly string[] Programs = { "Calls", "ShortCircuit", "Shapes", "Arrays" };
 
     private static (string Program, string Expected) Get(string name) => name switch
     {
         "Calls" => (WhenGuardCallTests.CallsProgram, WhenGuardCallTests.CallsExpected),
         "ShortCircuit" => (WhenGuardCallTests.ShortCircuitProgram, WhenGuardCallTests.ShortCircuitExpected),
         "Shapes" => (WhenGuardCallTests.ShapesProgram, WhenGuardCallTests.ShapesExpected),
+        "Arrays" => (WhenGuardCallTests.ArraysProgram, WhenGuardCallTests.ArraysExpected),
         _ => throw new System.ArgumentException(name),
     };
 

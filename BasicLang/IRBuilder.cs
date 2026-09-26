@@ -2375,6 +2375,8 @@ namespace BasicLang.Compiler.IR
             // Create an array allocation IR
             var tempName = _currentFunction.GetNextTempName();
             var arrayAlloc = new IRArrayAlloc(tempName, elementType, elements.Count);
+            // In a When guard the stores below never reach a block; the node carries them.
+            if (_suppressEmit) arrayAlloc.InlineElements = elements;
             EmitInstruction(arrayAlloc);
 
             // Store each element
@@ -4194,11 +4196,16 @@ namespace BasicLang.Compiler.IR
             var packed = arguments.Skip(slot).ToList();
 
             var array = new IRArrayAlloc(_currentFunction.GetNextTempName(), elementType, packed.Count);
+            var coerced = packed.Select(p => CoerceToDeclaredType(p, elementType)).ToList();
+            // ⛔ In a When guard the stores never reach a block, so the node carries its elements
+            // (InlineElements). Without it a ParamArray call in a guard — which packs only since
+            // guards are analyzed — was `Total(t2)` with t2 declared nowhere (C# CS0103).
+            if (_suppressEmit) array.InlineElements = coerced;
             EmitInstruction(array);
-            for (var i = 0; i < packed.Count; i++)
+            for (var i = 0; i < coerced.Count; i++)
                 EmitInstruction(new IRArrayStore(array,
                     new IRConstant(i, new TypeInfo("Integer", TypeKind.Primitive)),
-                    CoerceToDeclaredType(packed[i], elementType)));
+                    coerced[i]));
 
             arguments.RemoveRange(slot, arguments.Count - slot);
             arguments.Add(array);
