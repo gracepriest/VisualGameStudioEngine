@@ -4778,6 +4778,17 @@ namespace BasicLang.Compiler
                 return ParseForeignQualifiedNameExpression();
             }
 
+            // A built-in type keyword naming its TYPE, for a Shared member: `String.Format(...)`,
+            // `Integer.Parse(s)`, `Integer.MaxValue`, `Char.IsDigit(c)`. These lex as keywords, so
+            // every one of them was "Unexpected token in expression: 'String'" — while `Math.Max`,
+            // an ordinary identifier, worked. Only when a `.` follows: a bare `String` is still a
+            // type in a type position and nothing in an expression.
+            if (!IsAtEnd() && IsBuiltInTypeKeyword(Peek().Type) && PeekNext().Type == TokenType.Dot)
+            {
+                var token = Advance();
+                return new IdentifierExpressionNode(token.Line, token.Column) { Name = token.Lexeme };
+            }
+
             // Identifier (soft keywords like First/Take are valid identifiers outside
             // their query-clause positions)
             if (Check(TokenType.Identifier) || (!IsAtEnd() && IsSoftExpressionKeyword(Peek().Type)))
@@ -4836,6 +4847,13 @@ namespace BasicLang.Compiler
                 Peek(),
                 "Expected a value, variable, function call, or operator. Valid expression elements include: literals, identifiers, parentheses, or operators like +, -, *, /.");
         }
+
+        /// <summary>The data-type keywords (the lexer's "Data Types" group).</summary>
+        private static bool IsBuiltInTypeKeyword(TokenType type) => type is
+            TokenType.Integer or TokenType.Long or TokenType.Single or TokenType.Double or
+            TokenType.String or TokenType.Boolean or TokenType.Char or TokenType.Byte or
+            TokenType.Short or TokenType.UByte or TokenType.UShort or TokenType.UInteger or
+            TokenType.ULong;
 
         /// <summary>The brace list of `New T() { … }`, typed by T (spec §9).</summary>
         private CollectionInitializerNode ParseTypedCollectionInitializer(TypeReference elementType)

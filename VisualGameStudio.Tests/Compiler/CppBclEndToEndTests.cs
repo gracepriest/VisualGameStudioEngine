@@ -29,6 +29,7 @@ internal static class CppGeneratedCode
         norm = norm.Replace(CppBclRuntime.BclBody.Replace("\r\n", "\n"), "");
         norm = norm.Replace(CppDecimalRuntime.DecimalBody.Replace("\r\n", "\n"), "");
         norm = norm.Replace(CppIntegerDivisionRuntime.Source.Replace("\r\n", "\n"), "");
+        norm = norm.Replace(CppPrimitiveStaticsRuntime.Source.Replace("\r\n", "\n"), "");
         return norm;
     }
 }
