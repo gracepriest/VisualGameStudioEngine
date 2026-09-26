@@ -124,8 +124,16 @@ public partial class FormPropertyGridViewModel : ObservableObject
     [ObservableProperty]
     private FormPropertyRow? _selectedRow;
 
+    /// <summary>
+    /// The row whose last typed value was REFUSED (spec §7), while that refusal is the newest thing the
+    /// grid has to say: a successful edit anywhere, a different row selected, or a new selection retracts
+    /// it. ⚠ Not SelectedRow: typing into a row's editor does not select the row.
+    /// </summary>
+    private FormPropertyRow? _refusedRow;
+
     /// <summary>The description pane's title: the property's name, or a prompt when nothing is picked.</summary>
-    public string DescriptionTitle => SelectedRow?.Name ?? (IsEmpty ? string.Empty : "Properties");
+    public string DescriptionTitle =>
+        (_refusedRow ?? SelectedRow)?.Name ?? (IsEmpty ? string.Empty : "Properties");
 
     /// <summary>
     /// The description pane's body (spec §3) — the property's Description (its type when it has none),
@@ -139,6 +147,13 @@ public partial class FormPropertyGridViewModel : ObservableObject
     {
         get
         {
+            // ⛔ Spec §7: a refused value is not written, and the editor snaps back — so this pane is the
+            // only place that says what was refused and why.
+            if (_refusedRow?.Refusal is { } refusal)
+            {
+                return refusal;
+            }
+
             if (SelectedRow is not { } row)
             {
                 return IsEmpty
@@ -158,8 +173,53 @@ public partial class FormPropertyGridViewModel : ObservableObject
 
     partial void OnSelectedRowChanged(FormPropertyRow? value)
     {
+        // Choosing a different row asks the pane about THAT row; the refusal is retracted.
+        if (value != null && !ReferenceEquals(value, _refusedRow))
+        {
+            _refusedRow = null;
+        }
+
         OnPropertyChanged(nameof(DescriptionTitle));
         OnPropertyChanged(nameof(DescriptionBody));
+    }
+
+    /// <summary>Every row edit reaches the host through here — and retracts a standing refusal.</summary>
+    private void RaiseEdited()
+    {
+        SetRefusedRow(null);
+        Edited?.Invoke(this, EventArgs.Empty);
+    }
+
+    private void SetRefusedRow(FormPropertyRow? row)
+    {
+        if (ReferenceEquals(_refusedRow, row))
+        {
+            return;
+        }
+
+        _refusedRow = row;
+        OnPropertyChanged(nameof(DescriptionTitle));
+        OnPropertyChanged(nameof(DescriptionBody));
+    }
+
+    /// <summary>A row refused a typed value (or retracted its refusal): the pane follows it.</summary>
+    private void OnRowPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName != nameof(FormPropertyRow.Refusal) || sender is not FormPropertyRow row)
+        {
+            return;
+        }
+
+        if (row.Refusal != null)
+        {
+            // ⚠ Raised even when the SAME row refuses again — its text may differ.
+            _refusedRow = null;
+            SetRefusedRow(row);
+        }
+        else if (ReferenceEquals(_refusedRow, row))
+        {
+            SetRefusedRow(null);
+        }
     }
 
     partial void OnIsCategorizedChanged(bool value)
@@ -240,7 +300,7 @@ public partial class FormPropertyGridViewModel : ObservableObject
 
     private void AddIntrinsicRows(FormControl control)
     {
-        void Changed() => Edited?.Invoke(this, EventArgs.Empty);
+        void Changed() => RaiseEdited();
 
         Rows.Add(new FormPropertyRow(
             "Name", FormPropertyType.String,
@@ -369,7 +429,7 @@ public partial class FormPropertyGridViewModel : ObservableObject
     /// </summary>
     private void AddFormRows(FormDocument form)
     {
-        void Changed() => Edited?.Invoke(this, EventArgs.Empty);
+        void Changed() => RaiseEdited();
 
         Rows.Add(new FormPropertyRow(
             "Name", FormPropertyType.String,
@@ -442,7 +502,7 @@ public partial class FormPropertyGridViewModel : ObservableObject
                     property,
                     target,
                     _file?.DegradedReason(control.Id, property.Name),
-                    () => Edited?.Invoke(this, EventArgs.Empty)));
+                    RaiseEdited));
             }
         }
         else if (_file?.Model is { } form)
@@ -459,6 +519,13 @@ public partial class FormPropertyGridViewModel : ObservableObject
         // SelectedRow alone, and that never goes through SelectedItem.)
         SelectedItem = null;
         SelectedRow = null;
+
+        // A refusal belongs to a row of the previous selection: gone with it. Each new row reports its own.
+        _refusedRow = null;
+        foreach (var row in Rows)
+        {
+            row.PropertyChanged += OnRowPropertyChanged;
+        }
 
         RefreshObjects();
         RefreshDisplay();

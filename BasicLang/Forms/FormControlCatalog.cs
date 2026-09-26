@@ -594,7 +594,20 @@ public sealed record FormPropertyDef(
     /// is nothing to describe, and inventing a reason would put a false one in front of the user — so
     /// it throws.</para>
     /// </summary>
-    public string DescribeRefusal(string value, FormTarget target)
+    public string DescribeRefusal(string value, FormTarget target) =>
+        RefusalReason(value, target) + " The value is preserved exactly as written.";
+
+    /// <summary>
+    /// Why a value TYPED into the property grid was refused (spec §7 "refused in the editor, never
+    /// written") — the same reason as <see cref="DescribeRefusal"/>, with the ending an edit needs: the
+    /// Degraded ending ("preserved exactly as written") would be false here, because the typed value was
+    /// never written anywhere. Throws for a usable value, as <see cref="DescribeRefusal"/> does.
+    /// </summary>
+    public string DescribeRefusedEdit(string value, FormTarget target) =>
+        RefusalReason(value, target) + $" It was not applied; {Name} keeps its previous value.";
+
+    /// <summary>The reason alone, shared by both endings — ONE predicate, ONE set of texts.</summary>
+    private string RefusalReason(string value, FormTarget target)
     {
         if (Accepts(value, target))
         {
@@ -607,19 +620,18 @@ public sealed record FormPropertyDef(
             // The result is known true: IsSystemColourRefusedOn just answered yes by the same lookup.
             _ = FormSystemColors.TryCanonical(value, out var system);
             return $"'{value}' is the Windows system colour {system}, which has no CSS equivalent, so a " +
-                   "web form cannot use it. The value is preserved exactly as written.";
+                   "web form cannot use it.";
         }
 
         if (IsUnknownColourNameRefusedOn(value, target))
         {
             return $"'{value}' is not a named colour WinForms knows (System.Drawing.Color has no such " +
-                   "member, and it is not a system colour), so a WinForms form cannot use it. " +
-                   "The value is preserved exactly as written.";
+                   "member, and it is not a system colour), so a WinForms form cannot use it.";
         }
 
         return $"'{value}' is not a valid {Type}" +
                (AllowedValues is { Count: > 0 } ? $" (expected one of: {string.Join(", ", AllowedValues)})" : "") +
-               ". The value is preserved exactly as written.";
+               ".";
     }
 
     /// <summary>

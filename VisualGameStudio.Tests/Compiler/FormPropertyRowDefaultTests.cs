@@ -189,7 +189,74 @@ public class FormPropertyRowDefaultTests
 
         Row(grid, "ForeColor").StringValue = "ActiveCaption"; // a system colour with no CSS equivalent
 
-        Assert.That(file.Model.FindById("lbl")!.Properties.ContainsKey("ForeColor"), Is.False);
+        Assert.Multiple(() =>
+        {
+            Assert.That(file.Model.FindById("lbl")!.Properties.ContainsKey("ForeColor"), Is.False);
+            Assert.That(grid.DescriptionBody, Does.Contain("no CSS equivalent").And.Contain("not applied"),
+                "the pane gives the TARGET's reason, with the edit's ending");
+        });
+    }
+
+    /// <summary>
+    /// Spec §7 "refused in the editor": the editor snaps back, so the description pane is the only place
+    /// that says WHAT was refused and why — even though typing into a row's editor does not select the row.
+    /// The edit's ending, never the Degraded one: "preserved exactly as written" would be false for a value
+    /// that was never written.
+    /// </summary>
+    [Test]
+    public void ARefusedValue_IsExplainedInTheDescriptionPane_WithTheEditsEnding()
+    {
+        var (_, grid) = Open("<Label Id=\"lbl\" TabIndex=\"0\"/>", "lbl");
+        Assume.That(grid.SelectedRow, Is.Null, "precondition: no row is selected");
+
+        Row(grid, "ForeColor").StringValue = "12345";
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(grid.DescriptionTitle, Is.EqualTo("ForeColor"));
+            Assert.That(grid.DescriptionBody, Is.EqualTo(
+                "'12345' is not a valid Color. It was not applied; ForeColor keeps its previous value."));
+            Assert.That(grid.DescriptionBody, Does.Not.Contain("preserved exactly as written"));
+            Assert.That(Row(grid, "ForeColor").Refusal, Is.EqualTo(grid.DescriptionBody));
+        });
+    }
+
+    /// <summary>The refusal is the NEWEST thing the pane says, and no longer: each of these retracts it.</summary>
+    [TestCase("a good edit on the same row")]
+    [TestCase("a good edit on another row")]
+    [TestCase("selecting another row")]
+    [TestCase("selecting another control")]
+    public void ARefusal_IsRetracted_By(string what)
+    {
+        var (file, grid) = Open(
+            "<Label Id=\"lbl\" TabIndex=\"0\"/><Button Id=\"btn\" TabIndex=\"1\"/>", "lbl");
+        Row(grid, "ForeColor").StringValue = "12345";
+        Assume.That(grid.DescriptionBody, Does.Contain("'12345'"), "precondition: the pane shows the refusal");
+
+        switch (what)
+        {
+            case "a good edit on the same row": Row(grid, "ForeColor").StringValue = "Red"; break;
+            case "a good edit on another row": Row(grid, "Text").StringValue = "Hi"; break;
+            case "selecting another row": grid.SelectedItem = Row(grid, "Text"); break;
+            case "selecting another control": grid.SelectedControl = file.Model.FindById("btn"); break;
+        }
+
+        Assert.That(grid.DescriptionBody, Does.Not.Contain("'12345'"), what);
+    }
+
+    /// <summary>A second identical refusal after a retraction still reaches the pane.</summary>
+    [Test]
+    public void TheSameRefusalTwice_IsShownAgainAfterARetraction()
+    {
+        var (_, grid) = Open("<Label Id=\"lbl\" TabIndex=\"0\"/>", "lbl");
+        var fore = Row(grid, "ForeColor");
+        fore.StringValue = "12345";
+        grid.SelectedItem = Row(grid, "Text");
+        Assume.That(grid.DescriptionBody, Does.Not.Contain("'12345'"));
+
+        fore.StringValue = "12345";
+
+        Assert.That(grid.DescriptionBody, Does.Contain("'12345'"));
     }
 
     [Test]

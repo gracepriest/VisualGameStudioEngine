@@ -354,16 +354,25 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
         : _definition != null ? _definition.Displayed(IsPresent ? RawValue : null, _target)
         : RawValue;
 
+    /// <summary>
+    /// What the three editor properties read: <see cref="DisplayValue"/>, except for the one moment
+    /// <see cref="RaiseEditorRefresh"/> ECHOES a refused value back (see there).
+    /// </summary>
+    private string EditorText => _editorEcho ?? DisplayValue;
+
+    /// <summary>Set only inside <see cref="RaiseEditorRefresh"/>'s posted step; null otherwise.</summary>
+    private string? _editorEcho;
+
     /// <summary>The editor's text: <see cref="DisplayValue"/> (frozen → raw; absent → the default).</summary>
     public string StringValue
     {
-        get => DisplayValue;
+        get => EditorText;
         set => Commit(value);
     }
 
     public bool BoolValue
     {
-        get => bool.TryParse(DisplayValue, out var parsed) && parsed;
+        get => bool.TryParse(EditorText, out var parsed) && parsed;
         // ⛔ Lower case, matching the document's own vocabulary — the reader accepts either, but a
         // round trip that rewrote every "true" as "True" would report a change the user never made.
         set => Commit(value ? "true" : "false");
@@ -385,7 +394,7 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
     /// </summary>
     public int IntValue
     {
-        get => FormPropertyDef.TryParseInt(DisplayValue, out var parsed) ? parsed : 0;
+        get => FormPropertyDef.TryParseInt(EditorText, out var parsed) ? parsed : 0;
         set => Commit(value.ToString(CultureInfo.InvariantCulture));
     }
 
@@ -541,6 +550,16 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
                           ? FormEditVerdict.NoOp
                           : FormEditVerdict.Write);
 
+        // The last refusal is about the LAST commit only: any other outcome retracts it.
+        // ⚠ DescribeRefusedEdit throws for a usable value, so it is asked only on the Refuse verdict,
+        // which Judge gives exactly when the catalog does not accept the value.
+        // Cleared first, so a SECOND identical refusal still raises a change the pane can hear.
+        Refusal = null;
+        if (verdict == FormEditVerdict.Refuse)
+        {
+            Refusal = _definition!.DescribeRefusedEdit(value, _target);
+        }
+
         switch (verdict)
         {
             case FormEditVerdict.NoOp:
@@ -555,14 +574,14 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
                 }
                 else
                 {
-                    RaiseEditorRefresh();
+                    RaiseEditorRefresh(value);
                 }
 
                 return;
 
             case FormEditVerdict.Refuse:
                 // Spec §7: never written; the editor re-reads, so it shows what the document holds.
-                RaiseEditorRefresh();
+                RaiseEditorRefresh(value);
                 return;
         }
 
@@ -573,7 +592,7 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
             // Edited, and the editor re-reads what the model holds.
             if (!_write(value))
             {
-                RaiseEditorRefresh();
+                RaiseEditorRefresh(value);
                 return;
             }
         }
@@ -590,8 +609,51 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
         _onChanged();
     }
 
-    /// <summary>A refused edit: the editor re-reads the value the document still holds.</summary>
-    private void RaiseEditorRefresh()
+    /// <summary>
+    /// Why the last value typed into this row was REFUSED (spec §7 "refused in the editor, never
+    /// written"), or null when the last commit was not a refusal. The grid's description pane shows it:
+    /// without it a refused value simply vanished from the box, with nothing saying why.
+    /// </summary>
+    [ObservableProperty]
+    private string? _refusal;
+
+    /// <summary>
+    /// A refused edit: the editor re-reads the value the document still holds.
+    ///
+    /// <para>⛔⛔ Measured headless on Avalonia 11.3
+    /// (<c>FormPropertyGridRealViewTests.ARefusedValue_SnapsTheRealEditorBack_…</c>): raising
+    /// PropertyChanged(StringValue) alone does NOT snap a real TextBox back — the refused <c>12345</c>
+    /// stayed in the box while the document held nothing. Neither synchronously (the refusal happens
+    /// INSIDE the binding's own LostFocus push) nor posted after it: the typed text lives in the TextBox as
+    /// its CURRENT value, over the binding, and the binding re-applies only a value that DIFFERS from the
+    /// last one it read — which is the very value being snapped back to ("" before, "" after). So the
+    /// posted step first ECHOES the pushed text (the binding now holds what the box shows: no visible
+    /// change), then raises the real value, which now differs and is applied. The same holds for the Int
+    /// editor (Width pushed to 0 and clamped back to the 1 it already was).</para>
+    ///
+    /// <para>The synchronous raise stays for every listener that is not a binding mid-push.</para>
+    /// </summary>
+    /// <param name="pushed">The text the editor pushed, and still shows.</param>
+    private void RaiseEditorRefresh(string pushed)
+    {
+        RaiseEditorProperties();
+        Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+        {
+            _editorEcho = pushed;
+            try
+            {
+                RaiseEditorProperties();
+            }
+            finally
+            {
+                _editorEcho = null;
+            }
+
+            RaiseEditorProperties();
+        });
+    }
+
+    private void RaiseEditorProperties()
     {
         OnPropertyChanged(nameof(StringValue));
         OnPropertyChanged(nameof(BoolValue));

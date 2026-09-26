@@ -247,6 +247,29 @@ Follow this document **alongside** the plan. Where the two disagree, this docume
     virtualisation test through the ScrollViewer (`ScrollToEnd`/`ScrollToHome`).
   - The extracted view no longer shows `Header`/`HeaderKind` (the object selector replaces the caption);
     `Header` stays on the VM for `FormDesignModeTests`.
+- **Task 14 (`FormPropertyGridRealViewTests`, the real document view): one PRODUCT DEFECT found.**
+  - ⛔⛔ **A refused value did NOT snap the real TextBox back** — `12345` typed into ForeColor stayed in
+    the box while the document held nothing (and `0, 300` in the form's ClientSize likewise). Measured:
+    raising `PropertyChanged(StringValue)` is not enough, **neither synchronously nor posted** (a posted
+    raise alone was tried: still red — mutant M-a). The typed text is the TextBox's CURRENT value, over
+    the binding, and the binding re-applies only a value that DIFFERS from the last one it read — which
+    is exactly the value being snapped back to. Fix, inside `FormPropertyRow.RaiseEditorRefresh` only: the
+    posted step first ECHOES the pushed text (no visible change), then raises the real value.
+  - **Refusal feedback (spec §7): the description pane says what was refused and why** — the row's
+    `Refusal` (from the catalog's new `DescribeRefusedEdit`: the `DescribeRefusal` reason with the EDIT's
+    ending, since "preserved exactly as written" is false for a value never written). Shown even though
+    typing into an editor does not select its row; retracted by a good edit anywhere, another row
+    selected, or a new selection. ⚠ Only the catalog's Refuse verdict carries a reason: a value the STORE
+    refuses (`0, 300`) still snaps back silently, because `_write` returning false also means "same value".
+  - The ContextMenu DataContext diagnostic the plan asked for is moot: the Reset menu is on the container
+    with its command bound by reference (Task 13). A REAL right-click opens it — on the NAME cell; on the
+    value cell the TextBox's own menu takes the request, by design — and a real click on "Reset" in the
+    popup (headless hosts it in the Window's own top level) removes the attribute from the file.
+  - ⚠ The headless app has no `Ide*` brushes; without `IdeBg` a category header's presenter has a null
+    background, is not hit-testable, and a real click falls through to the list item. The IDE always
+    defines them (AppStyles.axaml), so the rig supplies them — not a product defect.
+  - Measured sound: the selector after paste, cut and undo (undo re-syncs through `Load`; the store and
+    the grid agree afterwards); selection both ways at zoom 0.53 and 1.0.
 
 ## CONFIRMED SOUND
 - Slice 1 has not already implemented anything slice 2 adds: `SameValue`, `IsPresent`/`IsDefaultShown`/`IsBold`/`CanReset`/`ResetCommand`, `Category`/`Description` on the row, `FormRootValues.CanReset`, `DisplayItems`/`Objects`/`SelectionRequested`, and FormRoot-driven form rows. Today's `AddFormRows` is still hand-written, `FormPropertyGridViewModel.cs:228-267`.
