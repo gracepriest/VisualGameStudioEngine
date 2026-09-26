@@ -188,6 +188,18 @@ Follow this document **alongside** the plan. Where the two disagree, this docume
 
 ---
 
+## EXECUTION NOTES (added while executing slice 2)
+
+- **Task 11 (99e3f6f9): the B2 mutant is EQUIVALENT on every editable row** — every Int a row displays is already
+  invariant ASCII text (Canonical/TryParseInt), and .NET accepts an ASCII hyphen under sv-SE, so `int.TryParse`
+  vs `TryParseInt` in `IntValue` differ only on a FROZEN row's raw text, which no editor shows. Recorded, not tested.
+- **Task 11 review:** carried to Task 12 — the intrinsic constructor's unused `definition/target/isPresent/reset`
+  parameters need a dedicated catalog-row-outside-the-bag constructor/factory with `target` REQUIRED and
+  `isPresent`/`reset` passed together; and an intrinsic write that changes nothing must not raise `Edited` (let the
+  write report whether it changed anything — the same shape as the pre-flight's `tryWrite` for `FormRootValues.Set`).
+  Carried to Task 14 — decide whether a refused value gets a visible message (spec §7 "refused in the editor"),
+  and MEASURE whether Avalonia re-reads a binding during its own push (if not, post the refresh).
+
 ## CONFIRMED SOUND
 - Slice 1 has not already implemented anything slice 2 adds: `SameValue`, `IsPresent`/`IsDefaultShown`/`IsBold`/`CanReset`/`ResetCommand`, `Category`/`Description` on the row, `FormRootValues.CanReset`, `DisplayItems`/`Objects`/`SelectionRequested`, and FormRoot-driven form rows. Today's `AddFormRows` is still hand-written, `FormPropertyGridViewModel.cs:228-267`.
 - All slice-1 APIs slice 2 calls exist with the signatures it assumes: `DefaultFor(target)`, `WebDefault` (`""` means no web default), `Canonical`, `Accepts(value, target)`, `TryParseInt`/`TryParseSize`, `FormControlCatalog.FormRoot` (Text / ClientSize [WinForms] / Cols·Rows·Gap [Web], `:1832-1864`), `FormRootValues.Get/Set`, `FormFile.DegradedReasonOfRoot` (`FormFile.cs:93`).
