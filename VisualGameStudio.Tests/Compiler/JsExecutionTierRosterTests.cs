@@ -111,6 +111,8 @@ public class JsExecutionTierRosterTests
         typeof(JavaScriptArrayLiteralExecutionTests),
         // Empty array literals, target-typed; C++ and C# legs too.
         typeof(EmptyArrayLiteralExecutionTests),
+        // Array types written on the type (`As Integer()`); C++ and C# legs too.
+        typeof(ArrayTypeSuffixExecutionTests),
 
         // ADR-0005 D2 — CSE guards a shared value's own destination, not only its operands.
         // CseDestinationInvalidationExecutionTests / DestinationInvalidation_D4_ByRefExecutionTests
@@ -279,7 +281,7 @@ public class JsExecutionTierRosterTests
 
     [Test]
     public void RosterIsPinned()
-        => Assert.That(ExecutionTier, Has.Length.EqualTo(63),
+        => Assert.That(ExecutionTier, Has.Length.EqualTo(64),
             "The execution-tier roster changed. That is fine — update the number — but it must " +
             "be a deliberate edit, not a silent shrink.");
 
