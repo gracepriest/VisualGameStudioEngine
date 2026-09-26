@@ -703,6 +703,13 @@ public sealed record FormImpliedProperty(string Name, string Value);
 /// behaviour until it is migrated. ⚠ An event's <see cref="FormEventDef.WinFormsArgs"/> is qualified:
 /// a <c>BackgroundWorker.DoWork</c> handler declared with <c>EventArgs</c> compiles by contravariance
 /// but cannot reach <c>e.Argument</c>; the typed stub is the useful one.
+/// <para>⚠ NULL means "declares no events" — exactly what an empty list means, and every reader treats
+/// the two alike (<c>?.</c>, or <see cref="FormEvents.WiredOn"/>, which returns empty for both). It
+/// stays nullable rather than defaulting to empty because a positional record parameter's default
+/// must be a compile-time constant (an empty array is not), and redeclaring the member non-null
+/// beside the parameter risks CS8866/CS8907 on the synthesized <c>Deconstruct</c>. A row that DOES
+/// declare events must name exactly one <see cref="FormEventDef.IsDefault"/> entry
+/// (<c>FormEventsTests</c>).</para>
 /// </param>
 /// <param name="WebHandlerTakesEvent">
 /// False when the web callback is a plain <c>Action</c> rather than an <c>Action(Of DomEvent)</c>.
@@ -1171,7 +1178,7 @@ public static class FormControlCatalog
                 new("Visible", FormPropertyType.Bool, "true")
             },
             DefaultHeight: 24, Schematic: FormSchematic.MenuBar,
-            Events: Ev("ItemClicked", "click", "ToolStripItemClickedEventArgs"),
+            Events: Ev("ItemClicked", "click", args: "ToolStripItemClickedEventArgs"),
             Place: FormPlace.Docked,
             Items: new FormItemRule(new[] { "ToolStripMenuItem", "ToolStripSeparator" }, "{parent}.Items.Add({child})"),
             FormProperty: "MainMenuStrip", HtmlChildrenWrapper: "ul",
@@ -1189,7 +1196,7 @@ public static class FormControlCatalog
                 new("Visible", FormPropertyType.Bool, "true")
             },
             DefaultHeight: 25, Schematic: FormSchematic.ToolBar,
-            Events: Ev("ItemClicked", "click", "ToolStripItemClickedEventArgs"),
+            Events: Ev("ItemClicked", "click", args: "ToolStripItemClickedEventArgs"),
             Place: FormPlace.Docked,
             Items: new FormItemRule(new[] { "ToolStripButton", "ToolStripSeparator" }, "{parent}.Items.Add({child})"),
             HtmlRole: "toolbar",
@@ -1203,7 +1210,7 @@ public static class FormControlCatalog
                 new("Visible", FormPropertyType.Bool, "true")
             },
             DefaultHeight: 22, Schematic: FormSchematic.StatusBar,
-            Events: Ev("ItemClicked", "click", "ToolStripItemClickedEventArgs"),
+            Events: Ev("ItemClicked", "click", args: "ToolStripItemClickedEventArgs"),
             Place: FormPlace.Docked,
             Items: new FormItemRule(new[] { "ToolStripStatusLabel" }, "{parent}.Items.Add({child})"),
             HtmlRole: "status",

@@ -305,11 +305,16 @@ public static class RegionWriter
                     continue;
                 }
 
+                var wired = DeclaredEvents(definition, FormTarget.Web).ToList();
+
                 diagnostics.Add(new DesignDiagnostic(
                     DesignCodes.BindNotOnTarget,
                     $"{DesignCodes.BindNotOnTarget}: '{component.Id}' wires its '{bind.Event}' event to " +
-                    $"{bind.Handler}, but a web {definition.Kind} is wired only through its " +
-                    $"'{definition.DefaultEvent(FormTarget.Web)}' event, so the wiring is not written " +
+                    $"{bind.Handler}, but a web {definition.Kind} is wired only through " +
+                    (wired.Count > 0
+                        ? $"its {string.Join(" and ", wired.Select(e => $"'{e}'"))} event"
+                        : "no event at all") +
+                    ", so the wiring is not written " +
                     "into the generated code. The document keeps it, and WinForms wires it.",
                     filePath, 0, 0, IsWarning: true));
             }
@@ -317,12 +322,16 @@ public static class RegionWriter
     }
 
     /// <summary>
-    /// Every event name a catalog row declares on <paramref name="target"/> — the whole vocabulary the
-    /// emitter is allowed to write, and the whole vocabulary <see cref="CheckControlBinds"/> accepts.
+    /// Every event name a catalog row WIRES on <paramref name="target"/> — the whole vocabulary the
+    /// emitter is allowed to write, the whole vocabulary <see cref="CheckControlBinds"/> accepts, and
+    /// (for a tray component) the whole of what <see cref="IsEmittedBind"/> and the BL8028 warning in
+    /// <see cref="CheckComponentBinds"/> accept.
     ///
     /// <para>⛔ Delegates to <see cref="FormEvents.WiredOn"/>, the public seam (spec §5), rather than
-    /// reading the row itself: the grid's Events tab (slice 5) asks the same seam, so the three can
-    /// never disagree about what a row declares. Followup 18's widening happens in the ROWS.</para>
+    /// reading the row itself — including the web tray rule (template, default event only), which
+    /// lives inside the seam. Every caller here and the grid's Events tab (slice 5) therefore ask the
+    /// same question of the same code, and none restates a rule another could drift from. Followup
+    /// 18's widening happens in the ROWS.</para>
     /// </summary>
     private static IEnumerable<string> DeclaredEvents(FormControlDef definition, FormTarget target) =>
         FormEvents.WiredOn(definition, target).Select(e => FormEvents.NameOn(e, target)!);
@@ -418,8 +427,9 @@ public static class RegionWriter
             return true;
         }
 
-        return definition.WebScript != null &&
-               string.Equals(bind.Event, definition.DefaultEvent(FormTarget.Web), StringComparison.OrdinalIgnoreCase);
+        // ⛔ The template-and-default-event rule is the seam's (FormEvents.WiredOn), not restated here.
+        return DeclaredEvents(definition, FormTarget.Web)
+            .Any(e => string.Equals(e, bind.Event, StringComparison.OrdinalIgnoreCase));
     }
 
     /// <summary>
