@@ -289,6 +289,30 @@ End Sub
         var js = JsTestSupport.CompileAggressive("Sub Main()\n    Console.WriteLine(\"a\")\nEnd Sub\n");
         Assert.That(js, Does.Not.Contain("__blFormat"), js);
     }
+
+    /// <summary>
+    /// The C++ runtime is spliced only for a program that uses a row, in BOTH emission modes. Spliced
+    /// unconditionally it put its own <c>switch (</c>, <c>%</c> and <c>Integer</c> text into every
+    /// program, which four scans aimed at user code (Select Case, floating Mod, interpolation, array
+    /// literals) read as the user's.
+    /// </summary>
+    [TestCase("Console.WriteLine(\"a\")", false)]
+    [TestCase("Console.WriteLine(String.Format(\"{0}\", 1))", true)]
+    [TestCase("Console.WriteLine(Integer.MaxValue)", true)]
+    public void Cpp_RuntimeIsSpliced_OnlyWhenARowIsUsed(string statement, bool expected)
+    {
+        const string guard = "#define BASICLANG_PRIM_RUNTIME";
+        var source = $"Sub Main()\n    {statement}\nEnd Sub\n";
+        Assert.That(BclE2E.CompileToCppOptimized(source).Contains(guard), Is.EqualTo(expected), "combined");
+
+        var ast = new Parser(new Lexer(source).Tokenize()).Parse();
+        var analyzer = new SemanticAnalyzer();
+        Assert.That(analyzer.Analyze(ast), Is.True);
+        var module = new BasicLang.Compiler.IR.IRBuilder(analyzer).Build(ast, "TestModule");
+        var split = new BasicLang.Compiler.CodeGen.CPlusPlus.CppCodeGenerator(new CppCodeGenOptions { GenerateComments = false })
+            .GenerateSplit(module, "TestProj", new[] { module }, emitMain: true);
+        Assert.That(split.Files[CppCodeGenerator.RuntimeHeaderFileName].Contains(guard), Is.EqualTo(expected), "split");
+    }
 }
 
 /// <summary>The programs on each backend, against .NET's own output.</summary>

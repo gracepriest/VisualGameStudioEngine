@@ -128,13 +128,16 @@ public class NetClaimPredicateTests
             + "re-derive the unclaimed count below; do not delete the assertion.");
         Assert.That(withArm, Is.EquivalentTo(new[]
             {
-                "Console", "DateTime", "DateTimeOffset", "Decimal", "Guid", "TimeSpan"
+                "Console", "DateTime", "DateTimeOffset", "Decimal", "Guid", "TimeSpan",
+                // The type keywords with a PrimitiveStaticSurface row (String.Format, Char.IsDigit, …).
+                // The integral keywords other than Byte are not KnownNetStaticTypes entries.
+                "Boolean", "Byte", "Char", "Double", "Single", "String"
             }),
             "The set of KnownNetStaticTypes entries that can produce a non-null EmitStdLibCall "
             + "changed. If a type gained a native emit arm this is expected — update the list. If "
             + "one LOST an arm, that is a regression in CppCodeGenerator, not in this test.");
-        Assert.That(table.Count - withArm.Count, Is.EqualTo(52),
-            "52, not the plan's 22, is the number of KnownNetStaticTypes entries with no "
+        Assert.That(table.Count - withArm.Count, Is.EqualTo(46),
+            "46 (52 before the type keywords' PrimitiveStaticSurface rows), not the plan's 22, is the number of KnownNetStaticTypes entries with no "
             + "EmitStdLibCall arm for any member. The plan's 22 is spec §6.5's list of NOTABLE "
             + "names, which is a correct subset, not the total. Update the number if the table "
             + "changes; do not delete the assertion.");
@@ -151,6 +154,7 @@ public class NetClaimPredicateTests
     private static readonly IReadOnlyList<string> ProbeMembers =
         new[] { "WriteLine", "Write", "ReadKey", "ReadLine", "ReadAllText", "CreateInstance" }
             .Concat(NativeBclSurface.Members.Select(m => m.MemberName))
+            .Concat(PrimitiveStaticSurface.Rows.Select(r => r.MemberName))
             .Distinct(System.StringComparer.OrdinalIgnoreCase)
             .ToList();
 

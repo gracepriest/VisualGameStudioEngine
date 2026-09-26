@@ -217,33 +217,8 @@ function __blParseBool(s) {
         /// <summary>The exception classes the prelude throws; CollectRequired adds them when used.</summary>
         public static readonly string[] ThrownExceptions = { "FormatException", "OverflowException" };
 
-        /// <summary>True when the module uses any row — as a call, a property, or inside a When guard.</summary>
-        public static bool IsUsed(IRModule module)
-        {
-            foreach (var function in module?.Functions ?? Enumerable.Empty<IRFunction>())
-                foreach (var block in function.Blocks ?? Enumerable.Empty<BasicBlock>())
-                    foreach (var instruction in block.Instructions ?? Enumerable.Empty<IRInstruction>())
-                    {
-                        // A When guard is built with emission suppressed, so it is in no block.
-                        if (instruction is IRSwitch sw
-                            && sw.PatternCases?.Any(p => p?.WhenGuard != null && UsesRow(p.WhenGuard)) == true)
-                            return true;
-                        if (instruction is IRValue value && UsesRow(value)) return true;
-                    }
-            return false;
-        }
-
-        private static bool UsesRow(IRValue value) => value switch
-        {
-            IRCall call => PrimitiveStaticSurface.TryGetDotted(call.FunctionName, out _)
-                || call.Arguments.Any(UsesRow),
-            IRFieldAccess fa => fa.Object is IRVariable v && PrimitiveStaticSurface.TryGet(v.Name, fa.FieldName, out _),
-            IRBinaryOp b => UsesRow(b.Left) || UsesRow(b.Right),
-            IRCompare c => UsesRow(c.Left) || UsesRow(c.Right),
-            IRUnaryOp u => UsesRow(u.Operand),
-            IRCast cast => UsesRow(cast.Value),
-            _ => false,
-        };
+        /// <summary>True when the module uses any row (the scan is shared with the C++ splice).</summary>
+        public static bool IsUsed(IRModule module) => PrimitiveStaticSurface.IsUsedBy(module);
 
         /// <summary>The JS type kind of a format argument (see __blText / __blApply).</summary>
         private static string Kind(TypeInfo type) => type?.Name?.ToLowerInvariant() switch

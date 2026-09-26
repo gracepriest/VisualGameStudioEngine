@@ -435,8 +435,10 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // mirroring the combined mode (keep in sync).
             SpliceRuntimeSource(CppIntegerDivisionRuntime.Source);
 
-            // The type keywords' Shared members — mirroring the combined mode (keep in sync).
-            SpliceRuntimeSource(CppPrimitiveStaticsRuntime.Source);
+            // The type keywords' Shared members, on demand over the COMBINED module — mirroring
+            // the combined mode (keep in sync).
+            if (PrimitiveStaticSurface.IsUsedBy(module))
+                SpliceRuntimeSource(CppPrimitiveStaticsRuntime.Source);
 
             // D-P7 NetRef (P2a-2 flip): UNCONDITIONAL, mirroring the combined mode —
             // ManagedOwned declaration positions lower to BasicLang::NetRef even with an

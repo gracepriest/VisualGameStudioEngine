@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using BasicLang.Compiler.IR;
 
 namespace BasicLang
 {
@@ -156,6 +157,47 @@ namespace BasicLang
             if (dot <= 0 || dot >= dottedName.Length - 1) return false;
             return TryGet(dottedName.Substring(0, dot), dottedName.Substring(dot + 1), out row);
         }
+
+        /// <summary>
+        /// True when the module uses any row — as a call, a property, or inside a When guard. Both
+        /// native runtimes (the C++ <c>BasicLang::Prim</c> splice and the JavaScript prelude) are
+        /// emitted only when this is true, so a program that names none of these members carries
+        /// neither — and C++ output scans aimed at user code never see the runtime's own text.
+        /// </summary>
+        public static bool IsUsedBy(IRModule module)
+        {
+            foreach (var function in module?.Functions ?? Enumerable.Empty<IRFunction>())
+                foreach (var block in function.Blocks ?? Enumerable.Empty<BasicBlock>())
+                    foreach (var instruction in block.Instructions ?? Enumerable.Empty<IRInstruction>())
+                    {
+                        // A When guard is built with emission suppressed, so it is in no block.
+                        if (instruction is IRSwitch sw && sw.PatternCases?.Any(GuardUsesRow) == true)
+                            return true;
+                        if (instruction is IRValue value && UsesRow(value)) return true;
+                    }
+            return false;
+        }
+
+        private static bool GuardUsesRow(IRPatternCase pattern) =>
+            pattern != null
+            && ((pattern.WhenGuard != null && UsesRow(pattern.WhenGuard))
+                || pattern switch
+                {
+                    IROrPatternCase or => or.Alternatives?.Any(GuardUsesRow) == true,
+                    IRTuplePatternCase tuple => tuple.Elements?.Any(GuardUsesRow) == true,
+                    _ => false,
+                });
+
+        private static bool UsesRow(IRValue value) => value switch
+        {
+            IRCall call => TryGetDotted(call.FunctionName, out _) || call.Arguments.Any(UsesRow),
+            IRFieldAccess fa => fa.Object is IRVariable v && TryGet(v.Name, fa.FieldName, out _),
+            IRBinaryOp b => UsesRow(b.Left) || UsesRow(b.Right),
+            IRCompare c => UsesRow(c.Left) || UsesRow(c.Right),
+            IRUnaryOp u => UsesRow(u.Operand),
+            IRCast cast => UsesRow(cast.Value),
+            _ => false,
+        };
 
         /// <summary>A dotted name whose receiver is a type keyword, whether or not the member is a row.</summary>
         public static bool IsKeywordReceiver(string dottedName, out string typeName, out string memberName)

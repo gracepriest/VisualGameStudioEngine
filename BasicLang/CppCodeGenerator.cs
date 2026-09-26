@@ -419,9 +419,11 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             SpliceRuntimeSource(CppIntegerDivisionRuntime.Source);
 
             // The type keywords' Shared members (String.Format, Integer.Parse, …) — after the
-            // NetException they throw and the BCL body's FormatDouble they use. UNCONDITIONAL in
-            // both modes (split-mode counterpart: EmitRuntimeHeader in CppCodeGenerator.Split.cs).
-            SpliceRuntimeSource(CppPrimitiveStaticsRuntime.Source);
+            // NetException they throw and the BCL body's FormatDouble they use. ON DEMAND, in
+            // both modes (split-mode counterpart: EmitRuntimeHeader in CppCodeGenerator.Split.cs):
+            // a program naming no row carries none of it.
+            if (PrimitiveStaticSurface.IsUsedBy(module))
+                SpliceRuntimeSource(CppPrimitiveStaticsRuntime.Source);
 
             // D-P7 NetRef (P2a-2 flip): UNCONDITIONAL in both modes — ManagedOwned
             // declaration positions lower to BasicLang::NetRef even with an empty surface,

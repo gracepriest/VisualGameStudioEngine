@@ -19,8 +19,9 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
     /// double's last significant digit and rounded here. <c>C</c>, <c>P</c> (culture-dependent),
     /// <c>G</c>-with-precision, <c>R</c> and custom patterns throw rather than print something .NET would not.</para>
     ///
-    /// <para>Spliced UNCONDITIONALLY after <see cref="CppIntegerDivisionRuntime"/> in BOTH emission modes
-    /// (GenerateHeader / EmitRuntimeHeader — keep in sync): it needs <c>NetException</c> and the BCL
+    /// <para>Spliced ON DEMAND (<see cref="PrimitiveStaticSurface.IsUsedBy"/>) after
+    /// <see cref="CppIntegerDivisionRuntime"/> in BOTH emission modes (GenerateHeader /
+    /// EmitRuntimeHeader — keep in sync): it needs <c>NetException</c> and the BCL
     /// body's <c>FormatDouble</c>/<c>FormatSingle</c>. Include-free: &lt;string&gt;, &lt;limits&gt;,
     /// &lt;cmath&gt;, &lt;charconv&gt;, &lt;cstring&gt;, &lt;vector&gt;, &lt;memory&gt; are in both modes'
     /// unconditional include sets (&lt;cctype&gt; is avoided: the character tests are written out).
