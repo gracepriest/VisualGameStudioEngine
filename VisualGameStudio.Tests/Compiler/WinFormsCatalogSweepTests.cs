@@ -502,7 +502,8 @@ public class WinFormsCatalogSweepTests
         var row = FormControlCatalog.FormRoot.Property(name)!;
         var form = new FormDocument { Target = FormTarget.WinForms, Name = "SweepForm" };
 
-        Assert.That(FormRootValues.Set(form, row, row.Type == FormPropertyType.Size ? "640, 480" : SampleValue(row)),
+        // SampleValue's Size arm ("75, 23") is a valid, positive ClientSize.
+        Assert.That(FormRootValues.Set(form, row, SampleValue(row)),
             Is.True, $"the sample for form.{name} must be storable");
 
         var generated = GenerateCSharp(form);

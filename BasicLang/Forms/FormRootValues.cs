@@ -1,11 +1,17 @@
 namespace BasicLang.Forms;
 
 /// <summary>
-/// ⛔⛔ Where each <see cref="FormControlCatalog.FormRoot"/> row's value LIVES (spec §2.3) — the ONE
-/// answer, shared by the reader, the writer, the region writer, the retarget and the property grid. A
-/// second copy of this mapping anywhere would be a mirrored pair, and this repo carries the scar of
-/// those twice (FormAssetEmitter.Tracks ↔ FormGridLayout.ParseTracks; the four private "how big is the
-/// form" copies that became FormCanvasTransform.SurfaceSize).
+/// ⛔⛔ Where each <see cref="FormControlCatalog.FormRoot"/> row's value LIVES (spec §2.3) — meant to be
+/// the ONE answer. A second copy of this mapping anywhere is a mirrored pair, and this repo carries the
+/// scar of those twice (FormAssetEmitter.Tracks ↔ FormGridLayout.ParseTracks; the four private "how big
+/// is the form" copies that became FormCanvasTransform.SurfaceSize).
+///
+/// <para>⚠ What actually reads it TODAY (slice 1, Task 6): the region writer's WinForms root emission
+/// (<see cref="Get"/>), and the reader's "is this root attribute modelled?" test
+/// (<see cref="RowForAttribute"/>). NOT yet: the reader's typed parse and the writer still spell
+/// <c>Text</c>/<c>Width</c>/<c>Height</c> themselves (typed fields, one per row — slice 3's
+/// Properties-stored rows are where a generic path pays); the retarget arrives in Task 7 and the
+/// property grid in slice 2. Until those land, a new row must be mapped here AND taught to them.</para>
 /// </summary>
 public static class FormRootValues
 {
@@ -78,18 +84,26 @@ public static class FormRootValues
     /// <summary>
     /// The ROOT-ELEMENT attributes that carry a row's value. Empty for a row stored on a child element
     /// (<c>&lt;Layout&gt;</c>'s Cols/Rows/Gap).
+    ///
+    /// <para>⛔ Throws for an unmapped row, exactly as <see cref="Get"/> and <see cref="Set"/> do — never a
+    /// guess. A guessed <c>row.Name</c> would make the reader call that attribute "known" (so it is not
+    /// kept as an unknown attribute) while nothing models it, and the next save would DELETE it.</para>
     /// </summary>
+    /// <exception cref="InvalidOperationException">A FormRoot row this map does not know — map it here.</exception>
     public static IReadOnlyList<string> StorageAttributes(FormPropertyDef row) => row.Name switch
     {
         "Text" => new[] { "Text" },
         "ClientSize" => new[] { "Width", "Height" },
         "Cols" or "Rows" or "Gap" => Array.Empty<string>(),
-        _ => new[] { row.Name }
+        _ => throw new InvalidOperationException(
+            $"FormRoot row '{row.Name}' has no storage in FormRootValues — every root row must be mapped here.")
     };
 
     /// <summary>
-    /// The FormRoot row a root attribute belongs to on <paramref name="target"/>, or null. ⚠ Exact case:
-    /// XML attribute names are case-sensitive and the reader has always matched them exactly.
+    /// The FormRoot row a root attribute belongs to on <paramref name="target"/>, or null. ⚠ Ordinal:
+    /// XML attribute names are case-sensitive and the reader has always matched them exactly — and
+    /// <see cref="Serialization.FormFile.TierOfRoot"/> uses the same comparison, so the tier API and the
+    /// reader cannot disagree about whether <c>text</c> is the Text row.
     /// </summary>
     public static FormPropertyDef? RowForAttribute(string attribute, FormTarget target) =>
         FormControlCatalog.FormRoot.Properties

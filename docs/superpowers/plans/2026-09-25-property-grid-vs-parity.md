@@ -6072,6 +6072,7 @@ Records (`docs/HANDOFF.md`, auto-memory), refresh the `IDE\` drop on Windows (`r
 | `WinFormsCatalogParityTests.TheSnapshot_CoversEveryWinFormsKindInTheCatalog_AndTheForm` | Any new catalog kind forces a regeneration | Every slice adding a kind |
 | `FormPropertyGridTests.Rows_ForAComponent_AreNameAndItsCatalogProperties_…` (exact `Name, Interval, Enabled`) | Timer's D1 set is exactly these; any other component row change breaks it | Slice 3 |
 | `WinFormsCatalogSweepTests.SampleValue` / `FormRetargetTests.Sample` | Must gain an arm per new type or the sweep samples "sample" into a typed row | Slices 3, 4 |
+| `RegionWriter.GenerateInit`'s root-Degraded branch (no test) | UNREACHABLE in slice 1 — Text accepts anything, ClientSize reaches it only as two positive ints; add a test that reaches it | Slice 3 (first Properties-stored root row) |
 
 ## File map (every file created or modified across all six slices)
 

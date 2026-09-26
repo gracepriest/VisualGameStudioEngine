@@ -89,10 +89,18 @@ public sealed class FormFile
     public IReadOnlyList<DegradedProperty> DegradedRoot { get; }
 
     /// <summary>The frozen reason for one FormRoot row, or null when it is not Degraded.</summary>
+    /// <remarks>⚠ Ordinal — see <see cref="TierOfRoot"/>.</remarks>
     public string? DegradedReasonOfRoot(string property) =>
-        DegradedRoot.FirstOrDefault(d => string.Equals(d.Property, property, StringComparison.OrdinalIgnoreCase))?.Reason;
+        DegradedRoot.FirstOrDefault(d => string.Equals(d.Property, property, StringComparison.Ordinal))?.Reason;
 
     /// <summary>The D9 tier of one FormRoot row on this document's target.</summary>
+    /// <remarks>
+    /// ⚠ ORDINAL, deliberately unlike <see cref="TierOf"/>'s case-insensitive control lookup: a root row's
+    /// name is its XML attribute spelling, and <see cref="FormRootValues.RowForAttribute"/> (what the
+    /// reader asks) matches attributes ordinally because XML is case-sensitive. A case-insensitive tier
+    /// would call <c>text</c> Canon while the reader keeps <c>text="x"</c> as an unknown attribute.
+    /// Callers pass <c>row.Name</c>.
+    /// </remarks>
     public PropertyTier TierOfRoot(string property)
     {
         if (DegradedReasonOfRoot(property) != null)
@@ -100,7 +108,8 @@ public sealed class FormFile
             return PropertyTier.Degraded;
         }
 
-        return FormControlCatalog.FormRoot.Property(property) is { } row && row.AppliesTo(Model.Target)
+        return FormControlCatalog.FormRoot.Properties.FirstOrDefault(r => string.Equals(r.Name, property, StringComparison.Ordinal))
+                   is { } row && row.AppliesTo(Model.Target)
             ? PropertyTier.Canon
             : PropertyTier.Unknown;
     }

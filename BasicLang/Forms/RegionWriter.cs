@@ -643,6 +643,10 @@ public static class RegionWriter
 
                 // ⛔ A Degraded root value never reaches generated source — the control rule, at the
                 // root. DescribeRefusal is reached only for a value truly refused (it throws otherwise).
+                //
+                // ⚠ RE-CHECK IN SLICE 3: add a test that reaches this. It is UNREACHABLE today: Text is a
+                // String (accepts anything) and FormRootValues.Get yields ClientSize only for two positive
+                // ints, which always parse. Slice 3's Properties-stored root rows make it reachable.
                 if (!row.Accepts(value, FormTarget.WinForms) && !row.IsSourceForm(value))
                 {
                     diagnostics.Add(new DesignDiagnostic(

@@ -52,7 +52,7 @@ public sealed class FormDocument
     public int? Width { get; set; }
     public int? Height { get; set; }
 
-    // --- .blwebform only (D3)----------------------------------------------
+    // --- .blwebform only (D3) ----------------------------------------------
 
     /// <summary>How the page arranges its controls. Web only; null on a WinForms document.</summary>
     public FormLayout? Layout { get; set; }

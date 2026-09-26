@@ -243,14 +243,16 @@ public static class FormDocumentWriter
     /// </summary>
     private static void ApplyFormAttributes(XElement root, FormDocument model)
     {
+        // ⛔ Invariant: a Degraded non-positive size is kept modelled, and under sv-SE `-5` formats with a
+        // U+2212 minus — a no-op save would rewrite the user's text.
         if (model.Width != null)
         {
-            SetAttributeIfChanged(root, "Width", model.Width.Value.ToString());
+            SetAttributeIfChanged(root, "Width", model.Width.Value.ToString(System.Globalization.CultureInfo.InvariantCulture));
         }
 
         if (model.Height != null)
         {
-            SetAttributeIfChanged(root, "Height", model.Height.Value.ToString());
+            SetAttributeIfChanged(root, "Height", model.Height.Value.ToString(System.Globalization.CultureInfo.InvariantCulture));
         }
     }
 

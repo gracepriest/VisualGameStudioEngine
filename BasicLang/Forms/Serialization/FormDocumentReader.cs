@@ -121,14 +121,27 @@ public static class FormDocumentReader
             // changed (spec §2.3) is the TIER: the ClientSize row is Degraded — frozen, explained — not
             // Unknown. The storage stayed where it was on purpose: the writer's Width/Height guard
             // exists to never overwrite text it could not parse.
+            //
+            // ⚠ A size that parses but is not POSITIVE is Degraded too: FormRootValues.Set refuses it and
+            // the region writer emits nothing for it, so showing it Canon would promise a size the
+            // program never gets. A parsed value stays modelled (and so round-trips through the model).
             var rawWidth = (string?)root.Attribute("Width");
             var rawHeight = (string?)root.Attribute("Height");
-            if ((rawWidth != null && model.Width == null) || (rawHeight != null && model.Height == null))
+            var unusable =
+                (rawWidth != null && model.Width is null or <= 0) ||
+                (rawHeight != null && model.Height is null or <= 0);
+            if (unusable)
             {
+                // Name only the attributes the document CARRIES — never an invented `Height=""`.
+                var present = new List<string>();
+                if (rawWidth != null) present.Add($"Width=\"{rawWidth}\"");
+                if (rawHeight != null) present.Add($"Height=\"{rawHeight}\"");
+
                 degradedRoot.Add(new DegradedProperty("", "ClientSize",
-                    $"Width=\"{rawWidth}\" Height=\"{rawHeight}\"",
-                    $"the form's client size could not be read — Width=\"{rawWidth}\" and Height=\"{rawHeight}\" " +
-                    "must both be whole numbers. The attributes are preserved exactly as written."));
+                    string.Join(" ", present),
+                    $"the form's client size could not be used — {string.Join(" and ", present)} " +
+                    (present.Count == 1 ? "must be a positive whole number" : "must both be positive whole numbers") +
+                    ". The attributes are preserved exactly as written."));
             }
         }
 
