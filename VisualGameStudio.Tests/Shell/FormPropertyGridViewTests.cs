@@ -7,7 +7,9 @@ using Avalonia.Controls.Primitives;
 using Avalonia.Headless;
 using Avalonia.Headless.NUnit;
 using Avalonia.Input;
+using Avalonia.Controls.Presenters;
 using Avalonia.Media;
+using Avalonia.Media.Immutable;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using BasicLang.Forms.Serialization;
@@ -90,10 +92,28 @@ public class FormPropertyGridViewTests
         return property;
     }
 
-    /// <summary>Walks the tree carrying the scope type; a DataTemplate re-scopes to its DataType.</summary>
+    /// <summary>
+    /// Walks the tree carrying the scope type; a DataTemplate re-scopes to its DataType.
+    ///
+    /// <para>⛔ Strict by construction: anything binding-shaped this walker cannot JUDGE is a failure, never a
+    /// skip — an unparsed attribute mentioning Binding (CompiledBinding, ReflectionBinding, a typo), a
+    /// <c>&lt;Binding&gt;</c>/<c>&lt;MultiBinding&gt;</c> element, an element (<c>#name</c>) or relative
+    /// (<c>$parent</c>) source, and a nested <c>DataContext="{Binding …}"</c>, which re-scopes everything
+    /// under it to a type this walker does not track. Each is supportable; none is used today, so the
+    /// first one to arrive must teach the walker about it rather than slip past it. A
+    /// <c>Mode=TwoWay</c> binding also needs a public SETTER — a getter-only target compiles, renders,
+    /// and silently never writes back.</para>
+    /// </summary>
     private static void Walk(XElement element, Type scope, List<string> failures, ref int checkedBindings)
     {
-        if (element.Name.LocalName == "DataTemplate")
+        var local = element.Name.LocalName;
+        if (local is "Binding" or "MultiBinding" or "CompiledBinding" or "ReflectionBinding")
+        {
+            failures.Add($"a <{local}> element — this checker judges only attribute {{Binding}}s; teach it this shape");
+            return;
+        }
+
+        if (local == "DataTemplate")
         {
             var declared = (string?)element.Attribute("DataType") ?? (string?)element.Attribute(XName.Get("DataType", Xaml));
             var type = declared == null ? null : ResolveType(element, declared);
@@ -108,24 +128,46 @@ public class FormPropertyGridViewTests
 
         foreach (var attribute in element.Attributes())
         {
-            var match = BindingPath.Match(attribute.Value.Trim());
+            var value = attribute.Value.Trim();
+            var where = $"<{local} {attribute.Name.LocalName}=\"{attribute.Value}\">";
+            var match = BindingPath.Match(value);
             if (!match.Success)
             {
+                if (value.Contains("Binding", StringComparison.Ordinal))
+                {
+                    failures.Add($"{where}: mentions Binding but is not a {{Binding …}} this checker can parse");
+                }
+
                 continue;
             }
 
-            var path = match.Groups[1].Value.Trim();
-            if (path.Length == 0 || path.StartsWith("#", StringComparison.Ordinal))
+            if (attribute.Name.LocalName == "DataContext")
             {
+                failures.Add($"{where}: a nested DataContext re-scopes everything under it, which this checker does not track");
                 continue;
             }
 
-            path = path.TrimStart('!');
+            var path = match.Groups[1].Value.Trim().TrimStart('!');
+            if (path.Length == 0)
+            {
+                continue; // {Binding}: the scope object itself — nothing to resolve.
+            }
+
+            if (path.StartsWith('#') || path.StartsWith('$') || path.Contains('='))
+            {
+                failures.Add($"{where}: an element, relative or Path= source — not judged by this checker; teach it this shape");
+                continue;
+            }
+
             checkedBindings++;
-            if (Resolve(scope, path, out var failing) == null)
+            var property = Resolve(scope, path, out var failing);
+            if (property == null)
             {
-                failures.Add($"<{element.Name.LocalName} {attribute.Name.LocalName}=\"{attribute.Value}\">: " +
-                             $"'{failing}' is not a public property of {scope.Name} along '{path}'");
+                failures.Add($"{where}: '{failing}' is not a public property of {scope.Name} along '{path}'");
+            }
+            else if (Regex.IsMatch(value, @"\bMode\s*=\s*TwoWay\b") && property.SetMethod is not { IsPublic: true })
+            {
+                failures.Add($"{where}: Mode=TwoWay, but '{path}' on {scope.Name} has no public setter");
             }
         }
 
@@ -149,6 +191,50 @@ public class FormPropertyGridViewTests
         // binding too. The view carries the selector, toolbar, search, description, list, header and row.
         Assert.That(checkedBindings, Is.GreaterThanOrEqualTo(25),
             "the walk checked too few bindings to be a gate on the grid view");
+    }
+
+    /// <summary>
+    /// The walker's own gate: each binding shape it cannot judge FAILS rather than passing unexamined.
+    /// Snippets are scoped to <see cref="FormPropertyGridViewModel"/>, like the real view.
+    /// </summary>
+    [TestCase("<TextBlock Text=\"{CompiledBinding SearchText}\"/>", "not a {Binding")]
+    [TestCase("<TextBlock Text=\"{ReflectionBinding SearchText}\"/>", "not a {Binding")]
+    [TestCase("<TextBlock><TextBlock.Text><Binding Path=\"SearchText\"/></TextBlock.Text></TextBlock>", "<Binding> element")]
+    [TestCase("<TextBlock><TextBlock.Text><MultiBinding/></TextBlock.Text></TextBlock>", "<MultiBinding> element")]
+    [TestCase("<Border DataContext=\"{Binding SelectedRow}\"><TextBlock Text=\"{Binding Name}\"/></Border>", "nested DataContext")]
+    [TestCase("<TextBlock Text=\"{Binding #SearchBox.Text}\"/>", "element, relative or Path=")]
+    [TestCase("<TextBlock Text=\"{Binding $parent.Tag}\"/>", "element, relative or Path=")]
+    [TestCase("<TextBlock Text=\"{Binding Path=SearchText}\"/>", "element, relative or Path=")]
+    [TestCase("<TextBox Text=\"{Binding Header, Mode=TwoWay}\"/>", "no public setter")]
+    [TestCase("<TextBlock Text=\"{Binding NoSuchProperty}\"/>", "is not a public property")]
+    public void TheWalker_FailsOnEveryShapeItCannotJudge(string snippet, string expected)
+    {
+        var root = XElement.Parse(
+            $"<UserControl xmlns=\"https://github.com/avaloniaui\" xmlns:x=\"{Xaml}\">{snippet}</UserControl>");
+        var failures = new List<string>();
+        var checkedBindings = 0;
+
+        Walk(root, typeof(FormPropertyGridViewModel), failures, ref checkedBindings);
+
+        Assert.That(failures, Has.Some.Contains(expected), string.Join("\n", failures));
+    }
+
+    [Test]
+    public void TheWalker_AcceptsAWritableTwoWayBinding()
+    {
+        var root = XElement.Parse(
+            $"<UserControl xmlns=\"https://github.com/avaloniaui\" xmlns:x=\"{Xaml}\">" +
+            "<TextBox Text=\"{Binding SearchText, Mode=TwoWay}\"/></UserControl>");
+        var failures = new List<string>();
+        var checkedBindings = 0;
+
+        Walk(root, typeof(FormPropertyGridViewModel), failures, ref checkedBindings);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(failures, Is.Empty, string.Join("\n", failures));
+            Assert.That(checkedBindings, Is.EqualTo(1));
+        });
     }
 
     [Test]
@@ -196,6 +282,39 @@ public class FormPropertyGridViewTests
         });
     }
 
+    /// <summary>
+    /// A screen reader needs a NAME: "A-Z" says nothing, and the nine anchor/dock edge toggles have no
+    /// content at all. Each carries AutomationProperties.Name; the edge toggles mirror their tooltip.
+    /// </summary>
+    [Test]
+    public void TheToolbarSearchSelectorAndEdgeToggles_CarryAnAutomationName()
+    {
+        var elements = GridView().Descendants().ToList();
+        const string Automation = "AutomationProperties.Name";
+
+        string? NameOf(string xName) =>
+            (string?)elements.Single(e => (string?)e.Attribute(XName.Get("Name", Xaml)) == xName).Attribute(Automation);
+
+        var edgeToggles = elements
+            .Where(e => ((string?)e.Attribute("ToolTip.Tip"))?.StartsWith("Anchor to", StringComparison.Ordinal) == true
+                        || ((string?)e.Attribute("ToolTip.Tip"))?.StartsWith("Dock to", StringComparison.Ordinal) == true
+                        || (string?)e.Attribute("ToolTip.Tip") == "Fill the container")
+            .ToList();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(NameOf("AlphabeticalButton"), Is.EqualTo("Alphabetical"));
+            Assert.That(NameOf("CategorizedButton"), Is.EqualTo("Categorized"));
+            Assert.That(NameOf("SearchBox"), Is.EqualTo("Search properties"));
+            Assert.That(NameOf("ObjectSelector"), Is.Not.Null.And.Not.Empty);
+            Assert.That(edgeToggles, Has.Count.EqualTo(9), "four anchor edges, four dock edges and Fill");
+            foreach (var toggle in edgeToggles)
+            {
+                Assert.That((string?)toggle.Attribute(Automation), Is.EqualTo((string?)toggle.Attribute("ToolTip.Tip")));
+            }
+        });
+    }
+
     [Test]
     public void TheDocumentView_HostsTheGridView_BoundToPropertyGrid()
     {
@@ -238,7 +357,66 @@ public class FormPropertyGridViewTests
         </Form>
         """;
 
-    private static (FormPropertyGridViewModel Grid, FormPropertyGridView View, Window Window) Host()
+    /// <summary>
+    /// The IDE's own brushes, as distinct known colours: the headless app loads FluentTheme alone, so without
+    /// these every <c>{DynamicResource Ide…}</c> resolves to NOTHING — and "two headers draw the same
+    /// background" would pass with both backgrounds null.
+    /// </summary>
+    private static readonly IReadOnlyDictionary<string, IBrush> IdeBrushes = new Dictionary<string, IBrush>
+    {
+        ["IdeBg"] = new ImmutableSolidColorBrush(Color.FromRgb(0x10, 0x20, 0x30)),
+        ["IdePanelBg"] = new ImmutableSolidColorBrush(Color.FromRgb(0x11, 0x21, 0x31)),
+        ["IdeBorder"] = new ImmutableSolidColorBrush(Color.FromRgb(0x12, 0x22, 0x32)),
+        ["IdeHeaderBg"] = new ImmutableSolidColorBrush(Color.FromRgb(0x13, 0x23, 0x33)),
+        ["IdeFg"] = new ImmutableSolidColorBrush(Color.FromRgb(0xE0, 0xE0, 0xE0)),
+    };
+
+    private static Window NewWindow(Control content, double width, double height)
+    {
+        var window = new Window { Width = width, Height = height, Content = content };
+        foreach (var (key, brush) in IdeBrushes)
+        {
+            window.Resources[key] = brush;
+        }
+
+        window.Show();
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+        return window;
+    }
+
+    /// <summary>
+    /// A hosted view. ⛔ DISPOSE it: an unclosed headless Window stays alive for the rest of the run with
+    /// its bindings live, and views piling up across tests is the likelier cause of the one-off flake this
+    /// fixture once had (see the pre-flight's Task 13 execution note).
+    /// </summary>
+    private sealed class Hosted : IDisposable
+    {
+        public required FormPropertyGridViewModel Grid { get; init; }
+        public required FormPropertyGridView View { get; init; }
+        public required Window Window { get; init; }
+
+        public ListBox List => View.FindControl<ListBox>("PropertyList")!;
+
+        public ListBoxItem Container(object item) =>
+            (ListBoxItem?)List.ContainerFromItem(item)
+            ?? throw new InvalidOperationException($"{item} is not realised — scroll it into view first");
+
+        public FormPropertyRow Row(string name) => Grid.Rows.Single(r => r.Name == name);
+
+        public FormPropertyCategoryHeader Header(string name) =>
+            Grid.DisplayItems.OfType<FormPropertyCategoryHeader>().Single(h => h.Name == name);
+
+        /// <summary>The header's toggle, found through its container — never a stale instance.</summary>
+        public ToggleButton HeaderButton(FormPropertyCategoryHeader header) =>
+            Container(header).GetVisualDescendants().OfType<ToggleButton>().First();
+
+        public void Dispose() => Window.Close();
+    }
+
+    /// <param name="height">⚠ The default is tall enough that the ListBox realises EVERY row: a virtualised
+    /// row is not in the visual tree. Pass a short height to test virtualisation itself.</param>
+    private static Hosted Host(double height = 2400)
     {
         var file = FormDocumentReader.Read("F.blform", Doc);
         var grid = new FormPropertyGridViewModel();
@@ -246,12 +424,14 @@ public class FormPropertyGridViewTests
         grid.SelectedControl = file.Model.FindById("lbl");
 
         var view = new FormPropertyGridView { DataContext = grid };
-        // ⚠ Tall enough that the ListBox realises EVERY row: a virtualised row is not in the visual tree.
-        var window = new Window { Width = 320, Height = 2400, Content = view };
-        window.Show();
-        window.UpdateLayout();
+        return new Hosted { Grid = grid, View = view, Window = NewWindow(view, 320, height) };
+    }
+
+    private static void Press(Window window, Key key, RawInputModifiers modifiers = RawInputModifiers.None)
+    {
+        window.KeyPress(key, modifiers);
+        window.KeyRelease(key, modifiers);
         Dispatcher.UIThread.RunJobs();
-        return (grid, view, window);
     }
 
     /// <summary>
@@ -277,7 +457,8 @@ public class FormPropertyGridViewTests
     [AvaloniaTest]
     public void TheSortButtons_ClickingTheModeAlreadyShown_KeepsIt()
     {
-        var (grid, view, window) = Host();
+        using var host = Host();
+        var (grid, view, window) = (host.Grid, host.View, host.Window);
         // ToggleButton, the base both shapes share: the test judges the BEHAVIOUR, not the element name.
         var categorized = view.FindControl<ToggleButton>("CategorizedButton")!;
         var alphabetical = view.FindControl<ToggleButton>("AlphabeticalButton")!;
@@ -320,20 +501,23 @@ public class FormPropertyGridViewTests
         Grid.SetColumn(secondView, 1);
         panel.Children.Add(firstView);
         panel.Children.Add(secondView);
-        var window = new Window { Width = 800, Height = 900, Content = panel };
-        window.Show();
-        window.UpdateLayout();
-        Dispatcher.UIThread.RunJobs();
-
-        Click(window, firstView.FindControl<ToggleButton>("AlphabeticalButton")!);
-        Click(window, secondView.FindControl<ToggleButton>("AlphabeticalButton")!);
-        Click(window, firstView.FindControl<ToggleButton>("CategorizedButton")!);
-
-        Assert.Multiple(() =>
+        var window = NewWindow(panel, 800, 900);
+        try
         {
-            Assert.That(first.IsCategorized, Is.True, "the first grid went back to Categorized");
-            Assert.That(second.IsAlphabetical, Is.True, "…and the second grid STAYED A-Z");
-        });
+            Click(window, firstView.FindControl<ToggleButton>("AlphabeticalButton")!);
+            Click(window, secondView.FindControl<ToggleButton>("AlphabeticalButton")!);
+            Click(window, firstView.FindControl<ToggleButton>("CategorizedButton")!);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(first.IsCategorized, Is.True, "the first grid went back to Categorized");
+                Assert.That(second.IsAlphabetical, Is.True, "…and the second grid STAYED A-Z");
+            });
+        }
+        finally
+        {
+            window.Close();
+        }
     }
 
     /// <summary>
@@ -344,22 +528,268 @@ public class FormPropertyGridViewTests
     [AvaloniaTest]
     public void TheList_ShowsHeadersAndRows_AndBoldsAChangedProperty()
     {
-        var (grid, view, _) = Host();
-        var list = view.FindControl<ListBox>("PropertyList")!;
+        using var host = Host();
+        var list = host.List;
 
         TextBlock NameCell(string name) =>
-            list.GetVisualDescendants().OfType<TextBlock>()
-                .First(t => t.Text == name && t.DataContext is FormPropertyRow);
+            host.Container(host.Row(name)).GetVisualDescendants().OfType<TextBlock>().First(t => t.Text == name);
 
         Assert.Multiple(() =>
         {
-            Assert.That(list.ItemCount, Is.EqualTo(grid.DisplayItems.Count));
+            Assert.That(list.ItemCount, Is.EqualTo(host.Grid.DisplayItems.Count));
             Assert.That(list.GetVisualDescendants().OfType<ToggleButton>()
                     .Count(b => b.DataContext is FormPropertyCategoryHeader), Is.GreaterThan(0),
                 "category headers render through their own template");
             Assert.That(NameCell("Text").FontWeight, Is.EqualTo(FontWeight.Bold));
             Assert.That(NameCell("Enabled").FontWeight, Is.Not.EqualTo(FontWeight.Bold));
         });
+    }
+
+    /// <summary>
+    /// Greyed = the row shows a default the document does not carry (<see cref="FormPropertyRow.IsDefaultShown"/>).
+    /// Enabled is absent on the Label; Text="Hi" is present.
+    /// </summary>
+    [AvaloniaTest]
+    public void AnAbsentRow_IsGreyed_AndAPresentOneIsNot()
+    {
+        using var host = Host();
+
+        Panel ValuePanel(string name) =>
+            host.Container(host.Row(name)).GetVisualDescendants().OfType<Panel>()
+                .First(p => p.GetType() == typeof(Panel) && Grid.GetColumn(p) == 2);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(host.Row("Enabled").IsDefaultShown, Is.True, "precondition: Enabled is absent");
+            Assert.That(ValuePanel("Enabled").Opacity, Is.LessThan(1.0));
+            Assert.That(ValuePanel("Text").Opacity, Is.EqualTo(1.0));
+        });
+    }
+
+    /// <summary>
+    /// ⛔ An EXPANDED header is a checked ToggleButton, and Fluent paints a checked ToggleButton with the
+    /// accent (<c>:checked /template/ ContentPresenter</c>), which beats a local Background. So every
+    /// expanded category drew as a solid accent bar. Expanded and collapsed must draw the SAME background:
+    /// the IDE's own <c>IdeBg</c>.
+    /// </summary>
+    [AvaloniaTest]
+    public void AnExpandedHeader_DrawsTheSameBackgroundAsACollapsedOne()
+    {
+        using var host = Host();
+        var headers = host.Grid.DisplayItems.OfType<FormPropertyCategoryHeader>().ToList();
+        Assume.That(headers, Has.Count.GreaterThanOrEqualTo(2), "precondition: two categories to compare");
+        headers[1].IsExpanded = false;
+        Dispatcher.UIThread.RunJobs();
+        host.Window.UpdateLayout();
+
+        IBrush? Drawn(FormPropertyCategoryHeader header) =>
+            host.HeaderButton(header).GetVisualDescendants().OfType<ContentPresenter>().First().Background;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(host.HeaderButton(headers[0]).IsChecked, Is.True, "precondition: the first is expanded");
+            Assert.That(Drawn(headers[0]), Is.SameAs(IdeBrushes["IdeBg"]), "an expanded header draws IdeBg");
+            Assert.That(Drawn(headers[1]), Is.SameAs(IdeBrushes["IdeBg"]), "a collapsed header draws IdeBg");
+        });
+    }
+
+    /// <summary>Clicking a header collapses it in place; the header stays under the pointer.</summary>
+    [AvaloniaTest]
+    public void ClickingAHeader_CollapsesIt_AndTheHeaderStaysUnderThePointer()
+    {
+        using var host = Host();
+        var header = host.Grid.DisplayItems.OfType<FormPropertyCategoryHeader>().First();
+        var button = host.HeaderButton(header);
+        var at = button.TranslatePoint(new Point(button.Bounds.Width / 2, button.Bounds.Height / 2), host.Window)!.Value;
+        var before = host.Grid.DisplayItems.Count;
+
+        host.Window.MouseDown(at, MouseButton.Left);
+        host.Window.MouseUp(at, MouseButton.Left);
+        Dispatcher.UIThread.RunJobs();
+        host.Window.UpdateLayout();
+
+        var under = host.Window.InputHitTest(at) as Visual;
+        Assert.Multiple(() =>
+        {
+            Assert.That(header.IsExpanded, Is.False);
+            Assert.That(host.Grid.DisplayItems, Has.Count.LessThan(before), "its rows left the list");
+            Assert.That(under?.GetSelfAndVisualAncestors().OfType<ToggleButton>().FirstOrDefault()?.DataContext,
+                Is.SameAs(header), "the same header is still under the pointer");
+        });
+    }
+
+    /// <summary>
+    /// A category collapses from the KEYBOARD, with the header selected in the list (VS: Left collapses,
+    /// Right expands; Enter/Space toggle). The list's own selection is not changed by it.
+    /// </summary>
+    [AvaloniaTest]
+    public void AHeaderSelectedInTheList_CollapsesAndExpandsFromTheKeyboard()
+    {
+        using var host = Host();
+        var header = host.Grid.DisplayItems.OfType<FormPropertyCategoryHeader>().First();
+        host.Grid.SelectedItem = header;
+        Dispatcher.UIThread.RunJobs();
+        host.Container(header).Focus();
+        Dispatcher.UIThread.RunJobs();
+
+        Press(host.Window,Avalonia.Input.Key.Left);
+        Assert.That(header.IsExpanded, Is.False, "Left collapses");
+        Press(host.Window,Avalonia.Input.Key.Left);
+        Assert.That(header.IsExpanded, Is.False, "Left on a collapsed header stays collapsed");
+        Press(host.Window,Avalonia.Input.Key.Right);
+        Assert.That(header.IsExpanded, Is.True, "Right expands");
+        Press(host.Window,Avalonia.Input.Key.Enter);
+        Assert.That(header.IsExpanded, Is.False, "Enter toggles");
+        Press(host.Window,Avalonia.Input.Key.Space);
+        Assert.That(header.IsExpanded, Is.True, "Space toggles");
+        Assert.That(host.Grid.SelectedItem, Is.SameAs(header), "the keys never moved the selection");
+    }
+
+    /// <summary>Left/Right on a selected ROW are not header keys: nothing collapses.</summary>
+    [AvaloniaTest]
+    public void ARowSelectedInTheList_LeavesItsHeaderAloneOnLeft()
+    {
+        using var host = Host();
+        var row = host.Row("Enabled");
+        host.Grid.SelectedItem = row;
+        Dispatcher.UIThread.RunJobs();
+        host.Container(row).Focus();
+        Dispatcher.UIThread.RunJobs();
+
+        Press(host.Window,Avalonia.Input.Key.Left);
+
+        Assert.That(host.Grid.DisplayItems.OfType<FormPropertyCategoryHeader>().All(h => h.IsExpanded), Is.True);
+    }
+
+    [AvaloniaTest]
+    public void TypingInTheSearchBox_FiltersTheList()
+    {
+        using var host = Host();
+        var search = host.View.FindControl<TextBox>("SearchBox")!;
+        search.Focus();
+        Dispatcher.UIThread.RunJobs();
+
+        host.Window.KeyTextInput("Enab");
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(host.Grid.SearchText, Is.EqualTo("Enab"));
+            Assert.That(host.Grid.DisplayItems.OfType<FormPropertyRow>().Select(r => r.Name), Is.EqualTo(new[] { "Enabled" }));
+            Assert.That(host.List.ItemCount, Is.EqualTo(host.Grid.DisplayItems.Count));
+        });
+    }
+
+    /// <summary>A pick in the object selector REQUESTS the selection (the grid never selects).</summary>
+    [AvaloniaTest]
+    public void PickingInTheObjectSelector_RaisesSelectionRequested()
+    {
+        using var host = Host();
+        var requested = new List<object?>();
+        host.Grid.SelectionRequested += (_, control) => requested.Add(control);
+        var selector = host.View.FindControl<ComboBox>("ObjectSelector")!;
+        Assume.That(selector.SelectedItem, Is.SameAs(host.Grid.SelectedObject), "precondition: the selector shows the label");
+        selector.Focus();
+        Dispatcher.UIThread.RunJobs();
+
+        Press(host.Window,Avalonia.Input.Key.Up); // the label → the form, the entry above it
+
+        Assert.That(requested, Is.EqualTo(new object?[] { null }), "one request, for the FORM (null)");
+    }
+
+    /// <summary>
+    /// A short window virtualises the list: rows scroll out and their containers are recycled into other
+    /// items. After scrolling to the end and back, every realised header's toggle still agrees with its
+    /// header, and the selected row is still selected.
+    /// </summary>
+    [AvaloniaTest]
+    public void AShortWindow_ScrolledToTheEndAndBack_KeepsHeadersAndTheSelection()
+    {
+        using var host = Host(height: 300);
+        var headers = host.Grid.DisplayItems.OfType<FormPropertyCategoryHeader>().ToList();
+        // The FIRST collapsed: its header and the next (expanded) one then share the top of the list, so
+        // both states come back through recycled containers.
+        headers[0].IsExpanded = false;
+        var selected = host.Grid.DisplayItems.OfType<FormPropertyRow>().First();
+        host.Grid.SelectedItem = selected;
+        Dispatcher.UIThread.RunJobs();
+
+        // ⚠ Through the ScrollViewer, as the user scrolls — measured: ScrollIntoView(0) after scrolling to the
+        // end stopped part-way (offset 236 of 418) with the first header still unrealised.
+        var scroller = (ScrollViewer)host.List.Scroll!;
+        scroller.ScrollToEnd();
+        Dispatcher.UIThread.RunJobs();
+        host.Window.UpdateLayout();
+        // ⚠ The FIRST HEADER, not the selected row: measured, Avalonia keeps the selected row's container
+        // realised however far the list scrolls, while an unselected item's container is recycled.
+        Assume.That(host.List.ContainerFromIndex(0), Is.Null, "precondition: the first header scrolled OUT");
+        scroller.ScrollToHome();
+        Dispatcher.UIThread.RunJobs();
+        host.Window.UpdateLayout();
+
+        var realised = host.Grid.DisplayItems.OfType<FormPropertyCategoryHeader>()
+            .Select(h => (Header: h, Container: host.List.ContainerFromItem(h)))
+            .Where(p => p.Container != null).ToList();
+        TestContext.Out.WriteLine($"offset={host.List.Scroll?.Offset} realised headers={string.Join(",", realised.Select(p => p.Header.Name))}");
+        Assert.Multiple(() =>
+        {
+            Assert.That(realised.Select(p => p.Header.IsExpanded).Distinct().Count(), Is.EqualTo(2),
+                "a collapsed AND an expanded header are realised after the round trip");
+            foreach (var (header, container) in realised)
+            {
+                Assert.That(container!.GetVisualDescendants().OfType<ToggleButton>().First().IsChecked,
+                    Is.EqualTo(header.IsExpanded), header.Name);
+            }
+
+            Assert.That(host.Grid.SelectedItem, Is.SameAs(selected));
+            Assert.That(host.List.SelectedItem, Is.SameAs(selected));
+        });
+    }
+
+    /// <summary>
+    /// Reset from the KEYBOARD: Shift+F10 (and the Menu key) on the focused row opens its context menu.
+    /// The menu lives on the ListBoxItem container — a menu inside the row template never sees the
+    /// request, which is raised on the FOCUSED element and bubbles up, not down. A header has none.
+    /// </summary>
+    [AvaloniaTest]
+    public void TheFocusedRow_OpensItsResetMenu_OnShiftF10() =>
+        OpensTheResetMenu(Avalonia.Input.Key.F10, RawInputModifiers.Shift);
+
+    [AvaloniaTest]
+    public void TheFocusedRow_OpensItsResetMenu_OnTheMenuKey() =>
+        OpensTheResetMenu(Avalonia.Input.Key.Apps, RawInputModifiers.None);
+
+    private static void OpensTheResetMenu(Key key, RawInputModifiers modifiers)
+    {
+        {
+            using var host = Host();
+            var row = host.Row("Text");
+            host.Grid.SelectedItem = row;
+            Dispatcher.UIThread.RunJobs();
+            var container = host.Container(row);
+            container.Focus();
+            Dispatcher.UIThread.RunJobs();
+
+            Press(host.Window,key, modifiers);
+
+            var menu = container.ContextMenu;
+            Assert.That(menu, Is.Not.Null, "the row's container carries the menu");
+            try
+            {
+                Assert.Multiple(() =>
+                {
+                    Assert.That(menu!.IsOpen, Is.True, "the keyboard opened it");
+                    var reset = menu.Items.OfType<MenuItem>().Single(m => (string?)m.Header == "Reset");
+                    Assert.That(reset.Command, Is.SameAs(row.ResetCommand));
+                    Assert.That(host.Container(host.Grid.DisplayItems.OfType<FormPropertyCategoryHeader>().First()).ContextMenu,
+                        Is.Null, "a header has nothing to reset");
+                });
+            }
+            finally
+            {
+                menu?.Close();
+            }
+        }
     }
 
     /// <summary>

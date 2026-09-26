@@ -225,6 +225,24 @@ Follow this document **alongside** the plan. Where the two disagree, this docume
     one full fast run, green alone, and did not reproduce in the next full run. Cause NOT proven — a same-point
     repeat can be stamped a double-click (FormDesignerRealViewTests measured that), so repeats are now offset.
     It stayed green in the full run after both changes. Task 14: offset repeat clicks.
+    **Likelier cause (review, 13-fix): headless Windows were never CLOSED.** Every test's view stayed alive
+    for the rest of the run with its bindings live — and with the then-named `GroupName`, every one of them
+    was in the group the next test clicked. Every window in `FormPropertyGridViewTests` is now disposed
+    (`Hosted : IDisposable`, try/finally in the two-view test). Task 14's rig must close its windows too.
+- **Task 13 review fixes (headless-measured):**
+  - An expanded category header was a SOLID ACCENT BAR: its ToggleButton is checked, and Fluent's
+    `:checked /template/ ContentPresenter` beats a local Background. A `ToggleButton.categoryHeader` style on
+    the template's ContentPresenter fixes it; a Style outranks the theme's states, so no `:checked` copy is
+    needed (that copy was an equivalent mutant). ⚠ A headless render test must supply the `Ide*` brushes —
+    the headless app loads FluentTheme alone, and two unresolved backgrounds compare EQUAL (null == null).
+  - ⛔ The headless platform's `OpenContextMenu` gestures are the Menu key ALONE: Shift+F10 never raised a
+    context request. The view raises it itself when the platform does not map it. The Reset menu moved from
+    the row template's Border to the ListBoxItem CONTAINER (set on `ContainerPrepared`, command by
+    reference): the keyboard request is raised on the focused container and bubbles UP, so a menu inside
+    the template never heard it.
+  - Avalonia keeps the SELECTED item's container realised however far the list scrolls, and
+    `ScrollIntoView(0)` after scrolling to the end stopped part-way (offset 236 of 418). Scroll a
+    virtualisation test through the ScrollViewer (`ScrollToEnd`/`ScrollToHome`).
   - The extracted view no longer shows `Header`/`HeaderKind` (the object selector replaces the caption);
     `Header` stays on the VM for `FormDesignModeTests`.
 
