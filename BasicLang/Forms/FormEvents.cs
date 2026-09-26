@@ -29,13 +29,19 @@ public enum FormEventCategory
 /// <param name="Category">The Events tab group. Compared with WinForms by the parity test.</param>
 /// <param name="Description">WinForms' own <c>[Description]</c>. Compared with the snapshot.</param>
 /// <param name="IsDefault">The event a double-click means. At most one per row.</param>
+/// <param name="OracleExemption">
+/// Why the WinForms snapshot is NOT the truth for this event — the event twin of
+/// <see cref="FormPropertyDef.OracleExemption"/>, carried on the row so the parity test prints the
+/// reason rather than keeping a hand list. Null for every event the snapshot judges.
+/// </param>
 public sealed record FormEventDef(
     string Name,
     string? WinFormsArgs = null,
     string? WebEvent = null,
     FormEventCategory? Category = null,
     string? Description = null,
-    bool IsDefault = false);
+    bool IsDefault = false,
+    string? OracleExemption = null);
 
 /// <summary>
 /// ⛔⛔ THE one answer to "which events are wired on this target" (spec §5). Every region-writer

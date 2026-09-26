@@ -674,4 +674,75 @@ public class FormPlacementTests
             Assert.That(FormDocument.IsLegalControlId(result.Control.Id), Is.True);
         });
     }
+
+    // ==================================================================
+    // Property grid slice 1, Task 8 — the parity run moved four defaults to WinForms' own values
+    // (ToolStrip.GripStyle Visible, StatusStrip.SizingGrip true, ToolStripButton.DisplayStyle
+    // ImageAndText, SplitContainer.SplitterDistance 50, TableLayoutPanel 0×0, TextBox.MaxLength 32767).
+    // ==================================================================
+
+    /// <summary>
+    /// ⛔ Those changes are DISPLAY-ONLY because placement writes no catalog default but a strip's Dock
+    /// (spec §2.7: a designer preference is written at placement, never encoded as a default). This pins
+    /// it for EVERY kind, placed the way the IDE places it: if a drop ever started writing, say,
+    /// <c>GripStyle</c>, a placed strip's running behaviour would change behind a parity fix.
+    /// </summary>
+    [Test]
+    public void Placement_WritesNoCatalogDefault_ButAStripsDock()
+    {
+        var offenders = new List<string>();
+
+        foreach (var definition in FormControlCatalog.All.Where(d => d.SupportsTarget(FormTarget.WinForms)))
+        {
+            var document = WinFormsDocument();
+            FormPlacementResult result;
+
+            if (definition.Place == FormPlace.Item)
+            {
+                var hostDefinition = FormControlCatalog.All.First(d => d.Place == FormPlace.Docked &&
+                                                                       d.Items?.Accepts(definition.Kind) == true);
+                var host = new FormControl { Kind = hostDefinition.Kind, Id = "host1" };
+                document.Controls.Add(host);
+                result = FormPlacement.PlaceItem(document, host, definition.Kind, "Caption");
+            }
+            else
+            {
+                result = FormPlacement.Place(document, definition.Kind, 10, 10);
+            }
+
+            Assert.That(result.Refusal, Is.Null, $"{definition.Kind}: {result.Refusal}");
+
+            offenders.AddRange(result.Control!.Properties.Keys
+                .Where(k => !string.Equals(k, "Text", StringComparison.OrdinalIgnoreCase) &&
+                            !(definition.Place == FormPlace.Docked && string.Equals(k, "Dock", StringComparison.OrdinalIgnoreCase)))
+                .Select(k => $"{definition.Kind}.{k} = {result.Control.Properties[k]}"));
+        }
+
+        Assert.That(offenders, Is.Empty,
+            "placement wrote a property beyond the caption and a strip's Dock — a default the grid displays " +
+            "would now also be WRITTEN, and a catalog default change would change the program:\n" +
+            string.Join("\n", offenders));
+    }
+
+    /// <summary>
+    /// The two strips whose defaults the parity run corrected, by name: a placed ToolStrip carries no
+    /// GripStyle and a placed StatusStrip no SizingGrip, so each still RUNS WinForms' default — which
+    /// is now also what the grid displays for the absent value.
+    /// </summary>
+    [TestCase("ToolStrip", "GripStyle", "Visible")]
+    [TestCase("StatusStrip", "SizingGrip", "true")]
+    public void APlacedStrip_LeavesItsGripAbsent_AndTheGridsDefaultIsWhatItRuns(string kind, string property, string winFormsDefault)
+    {
+        var document = WinFormsDocument();
+
+        var result = FormPlacement.Place(document, kind, 10, 10);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Control!.Properties.ContainsKey(property), Is.False,
+                "placement writes only Dock — the placed strip's running behaviour is unchanged");
+            Assert.That(FormControlCatalog.Find(kind)!.Property(property)!.DefaultFor(FormTarget.WinForms),
+                Is.EqualTo(winFormsDefault), "the absent value displays what WinForms runs (spec §2.7)");
+        });
+    }
 }
