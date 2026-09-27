@@ -224,6 +224,32 @@ inline std::string FormatSingle(float v) {
     return bcl_detail::format_shortest(buf, 9);
 }
 
+/* VB's String -> number / Boolean conversions (CInt/CDbl/CBool/CType of a String). Surrounding
+   spaces are allowed and the whole rest must be a number (exponent included); anything else is
+   VB's InvalidCastException. A bare static_cast from a string does not compile. */
+inline double VbParseDouble(const std::string& s) {
+    const char* begin = s.c_str();
+    while (*begin == ' ' || *begin == '\t') ++begin;
+    char* end = nullptr;
+    const double value = std::strtod(begin, &end);
+    const char* rest = end;
+    while (*rest == ' ' || *rest == '\t') ++rest;
+    if (end == begin || *rest != '\0')
+        throw std::runtime_error(""InvalidCastException: Conversion from string \"""" + s + ""\"" to type 'Double' is not valid."");
+    return value;
+}
+
+/* CBool of a String: ""True""/""False"" in any case, else a number (non-zero is True). */
+inline bool VbParseBool(const std::string& s) {
+    size_t b = s.find_first_not_of("" \t""), e = s.find_last_not_of("" \t"");
+    std::string t = b == std::string::npos ? std::string() : s.substr(b, e - b + 1);
+    std::string lower = t;
+    for (auto& c : lower) c = (char)std::tolower((unsigned char)c);
+    if (lower == ""true"") return true;
+    if (lower == ""false"") return false;
+    return VbParseDouble(t) != 0;
+}
+
 /* ReDim a[n] / ReDim a(upperBound): the array resized to n elements (the generator has already
    turned an upper bound into a count). Plain ReDim is n fresh default elements; Preserve keeps the
    first min(old, n) and value-initialises the rest. A negative count throws, as .NET's does. */

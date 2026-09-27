@@ -176,6 +176,51 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             return _frameworkStdLib.CanHandle(functionName) || _stdLib.CanHandle(functionName);
         }
 
+        /// <summary>
+        /// The VB conversion rules <c>System.Convert</c> gets wrong, keyed on the argument's SOURCE
+        /// type (<c>CType(x, T)</c> lowers to these same calls — IRBuilder.ConversionBuiltinFor):
+        /// a Boolean converts to a number as <b>True = -1</b> (Convert.ToInt32(true) is 1), and a
+        /// String converts by VB's own parser — <c>Convert.ToBoolean("0")</c> THROWS where VB's
+        /// CBool("0") is False. <c>Microsoft.VisualBasic.CompilerServices.Conversions</c> is that
+        /// parser, shipped in the shared framework every generated project already targets.
+        /// </summary>
+        private string VbConversionText(IRCall call, string[] arguments)
+        {
+            if (call == null || arguments.Length != 1 || call.Arguments.Count != 1) return null;
+            if (_declaredIdentifiers.Contains(call.FunctionName)) return null;
+
+            var source = call.Arguments[0].Type?.Name;
+            var value = arguments[0];
+            const string conversions = "Microsoft.VisualBasic.CompilerServices.Conversions";
+
+            if (string.Equals(source, "Boolean", StringComparison.OrdinalIgnoreCase))
+            {
+                return call.FunctionName switch
+                {
+                    "CInt" => $"({value} ? -1 : 0)",
+                    "CLng" => $"({value} ? -1L : 0L)",
+                    "CDbl" => $"({value} ? -1.0 : 0.0)",
+                    "CSng" => $"({value} ? -1f : 0f)",
+                    _ => null
+                };
+            }
+
+            if (string.Equals(source, "String", StringComparison.OrdinalIgnoreCase))
+            {
+                return call.FunctionName switch
+                {
+                    "CInt" => $"{conversions}.ToInteger({value})",
+                    "CLng" => $"{conversions}.ToLong({value})",
+                    "CDbl" => $"{conversions}.ToDouble({value})",
+                    "CSng" => $"{conversions}.ToSingle({value})",
+                    "CBool" => $"{conversions}.ToBoolean({value})",
+                    _ => null
+                };
+            }
+
+            return null;
+        }
+
         private string StdLibEmitCall(string functionName, string[] arguments)
         {
             if (_frameworkStdLib.CanHandle(functionName))
@@ -3366,6 +3411,9 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                             return $"{calleeExpr}({string.Join(", ", argExprs)})";
                         }
 
+                        if (VbConversionText(call, argExprs) is string vbConversion)
+                            return vbConversion;
+
                         // Check if this is a standard library function
                         if (StdLibCanHandle(call.FunctionName))
                         {
@@ -3882,7 +3930,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             // Check if this is a standard library function
             if (StdLibCanHandle(functionName))
             {
-                var stdLibCall = StdLibEmitCall(functionName, argExprs);
+                var stdLibCall = VbConversionText(call, argExprs) ?? StdLibEmitCall(functionName, argExprs);
 
                 // Add required imports
                 foreach (var import in StdLibGetRequiredImports(functionName))
@@ -4100,6 +4148,12 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 return $"Convert.{narrowing}({valueExpr})";
             }
 
+            // A REFERENCE cast is parenthesised whole: this text is inlined into larger
+            // expressions, and `(Dog)(a).Bark()` binds the call BEFORE the cast — CS1061 "'Animal'
+            // does not contain a definition for 'Bark'" for `CType(a, Dog).Bark()`. (A numeric
+            // cast is never a member-access receiver, so its long-standing text is left alone.)
+            if (cast.Type?.Kind is TypeKind.Class or TypeKind.Interface or TypeKind.Array)
+                return $"(({targetType})({valueExpr}))";
             return $"({targetType})({valueExpr})";
         }
 
