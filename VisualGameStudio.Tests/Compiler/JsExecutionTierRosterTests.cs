@@ -327,10 +327,19 @@ public class JsExecutionTierRosterTests
         // Task #187 — a lambda or AddressOf into a user Delegate type; invoking a user delegate
         // returns its type. Named "...ExecutionTests", so the widened match below WOULD catch it
         // on its own; listed explicitly anyway, matching every row above. Its JS legs run
-        // through FourBackends.RunsOnEveryBackend[Aggressive] (D1-D6) and
-        // JavaScriptExecutionTests.RunJs directly (the edge probes, the C++-excluded probes'
-        // JavaScript leg, E13's own JS-only pass, and the E10/#188 pinned ReferenceError).
+        // through FourBackends.RunsOnEveryBackend[Aggressive] (D1-D6, and — since #188 — E10/J2/
+        // E5/E5b/J1, promoted into that same runner) and JavaScriptExecutionTests.RunJs directly
+        // (the edge probes, E13's own JS-only pass).
         typeof(UserDelegateConversionExecutionTests),
+
+        // Task #188 — invoking a delegate-typed field or property through its MEMBER spelling
+        // (bare, Me., obj., Class.), own or inherited, Shared included. Named "...ExecutionTests",
+        // so the widened match below WOULD catch it on its own; listed explicitly anyway, matching
+        // every row above. Its JS legs run through FourBackends.RunsOnEveryBackend[Aggressive]
+        // (F0-F9 and the G/J2f probes) and JavaScriptExecutionTests.RunJs / RunNodeScript directly
+        // (L1's IIFE, the multi-file project's JS leg, G8's Nothing-raises pin, and G5's
+        // BL7005-by-design refusal check).
+        typeof(DelegateMemberInvocationExecutionTests),
     };
 
     /// <summary>
@@ -379,7 +388,7 @@ public class JsExecutionTierRosterTests
 
     [Test]
     public void RosterIsPinned()
-        => Assert.That(ExecutionTier, Has.Length.EqualTo(81), // + MsilValueToStringExecutionTests (task #183), InterfaceMethodTypingExecutionTests, IsIsNotOperatorExecutionTests (task #185), MeReceiverTypingExecutionTests (task #176), UserDelegateConversionExecutionTests (task #187); + WhenGuardCallRunTests
+        => Assert.That(ExecutionTier, Has.Length.EqualTo(82), // + MsilValueToStringExecutionTests (task #183), InterfaceMethodTypingExecutionTests, IsIsNotOperatorExecutionTests (task #185), MeReceiverTypingExecutionTests (task #176), UserDelegateConversionExecutionTests (task #187), DelegateMemberInvocationExecutionTests (task #188); + WhenGuardCallRunTests
             "The execution-tier roster changed. That is fine — update the number — but it must " +
             "be a deliberate edit, not a silent shrink.");
 

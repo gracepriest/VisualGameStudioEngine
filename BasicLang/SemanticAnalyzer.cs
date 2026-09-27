@@ -169,6 +169,27 @@ namespace BasicLang.Compiler.SemanticAnalysis
             new Dictionary<ASTNode, Symbol>(ReferenceEqualityComparer.Instance);
 
         /// <summary>
+        /// ⭐ #188 — whether <paramref name="call"/> invokes a delegate-typed FIELD or PROPERTY
+        /// member as a delegate VALUE: <c>Callback()</c>, <c>Me.Callback()</c>,
+        /// <c>obj.Op(5)</c>, <c>Registry.Hook()</c>, own or inherited. This analyzer's answer
+        /// (<see cref="DelegateMemberCallee"/>), recorded where it types the call, and the ONE
+        /// answer the IR builder lowers by — it evaluates the member's value through the ordinary
+        /// read path and invokes that value, the form <c>f(a)(b)</c> already takes.
+        ///
+        /// <para>⛔ Before, each backend was handed a METHOD call or a bare NAME and resolved it
+        /// privately: C++ gave a void call a destination (<c>t0 = Callback();</c>), JavaScript
+        /// emitted the name unqualified (<c>Callback is not defined</c>), MSIL called a method
+        /// nothing defines (<c>MissingMethodException: Holder.Callback()</c>) or refused a
+        /// property outright under ADR-0010 D8. A local delegate (<c>cb()</c>) is not recorded
+        /// here: it never reached any of those, and it keeps the form it has.</para>
+        /// </summary>
+        internal bool IsDelegateMemberInvocation(CallExpressionNode call) =>
+            call != null && _delegateMemberInvocations.Contains(call);
+
+        private readonly HashSet<CallExpressionNode> _delegateMemberInvocations =
+            new HashSet<CallExpressionNode>(ReferenceEqualityComparer.Instance);
+
+        /// <summary>
         /// P2a-2 Task 2/7a — the .NET members the probes resolved, keyed by AST node (reference
         /// identity), each carrying the Task-7a exactness bit. <see cref="IRBuilder"/> reads
         /// this while lowering and stamps <c>ResolvedNetTarget</c>/<c>NetCategory</c>/
@@ -1130,6 +1151,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
             _errors.Clear();
             _nodeTypes.Clear();
             _nodeSymbols.Clear();
+            _delegateMemberInvocations.Clear();
             _netNamespaces.Clear();
             _moduleMembers.Clear();
 
@@ -7345,6 +7367,55 @@ namespace BasicLang.Compiler.SemanticAnalysis
         }
 
         /// <summary>
+        /// ⭐ #188 — the delegate-typed FIELD or PROPERTY a call's <paramref name="callee"/> names,
+        /// or null for anything else. The member is the one this analyzer BOUND the callee to
+        /// (<paramref name="calleeSymbol"/>, else the callee node's own symbol), and it must be
+        /// exactly the member its owner resolves by that name — the class being analyzed (or a
+        /// base) for a bare name, the receiver's type for <c>Me.X</c> / <c>obj.X</c> /
+        /// <c>MyBase.X</c> / <c>Class.X</c>. So every other binding keeps its own path: a local, a
+        /// parameter or a module variable (lexical resolution found it, not the class), a method
+        /// (a method of that name shadows, exactly as resolution already decided), a Module's
+        /// member, a .NET member (no symbol).
+        ///
+        /// <para>"Delegate-typed" is the type the callee was given: a <c>Func</c>/<c>Action</c>
+        /// or a user <c>Delegate</c> (<see cref="TypeKind.Delegate"/>), or a bare <c>Action</c>,
+        /// which the type table resolves as a CLASS named Action (<see cref="IsDelegateTypeName"/>).
+        /// A .NET delegate class (<c>EventHandler</c>, <c>Predicate(Of T)</c>) is NOT admitted:
+        /// neither its parameters nor its result are known here, and typing its call Void would
+        /// be wrong for a Predicate.</para>
+        /// </summary>
+        private Symbol DelegateMemberCallee(ExpressionNode callee, Symbol calleeSymbol, TypeInfo calleeType)
+        {
+            if (calleeType == null || calleeType.Kind == TypeKind.Array
+                || !(calleeType.Kind == TypeKind.Delegate || IsDelegateTypeName(calleeType.Name)))
+            {
+                return null;
+            }
+
+            TypeInfo owner;
+            string memberName;
+            switch (callee)
+            {
+                case IdentifierExpressionNode bare when !bare.IsForeignQualified:
+                    owner = _currentScope?.GetClassScope()?.ClassType;
+                    memberName = bare.Name;
+                    break;
+                case MemberAccessExpressionNode access:
+                    owner = GetNodeType(access.Object);
+                    memberName = access.MemberName;
+                    break;
+                default:
+                    return null;
+            }
+
+            var bound = calleeSymbol ?? GetNodeSymbol(callee);
+            if (bound == null || (bound.Kind != SymbolKind.Variable && bound.Kind != SymbolKind.Property))
+                return null;
+
+            return owner != null && ReferenceEquals(owner.ResolveMember(memberName), bound) ? bound : null;
+        }
+
+        /// <summary>
         /// True for the two expressions a delegate TARGET types (#187): a lambda, whose parameters
         /// and return type it supplies, and <c>AddressOf M</c>, which it converts. Every conversion
         /// site hands its slot's type to exactly these, through <see cref="_lambdaTargetType"/>.
@@ -10672,8 +10743,16 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 return;
             }
 
+            // #188: a delegate-typed FIELD or PROPERTY member is invoked as its value — including
+            // a bare `Action`, which the type table resolves as a CLASS, and a property, which the
+            // arm below never admitted. Recorded for the IR builder (IsDelegateMemberInvocation).
+            var invokesDelegateMember = DelegateMemberCallee(node.Callee, calleeSymbol, calleeType) != null;
+            _delegateMemberInvocations.Remove(node);
+            if (invokesDelegateMember) _delegateMemberInvocations.Add(node);
+
             // Check if this is a delegate invocation: f(...) where f is a Func/Action variable
-            if (calleeType != null && calleeType.Kind == TypeKind.Delegate &&
+            if (invokesDelegateMember ||
+                calleeType != null && calleeType.Kind == TypeKind.Delegate &&
                 (calleeSymbol == null || calleeSymbol.Kind == SymbolKind.Variable ||
                  calleeSymbol.Kind == SymbolKind.Parameter))
             {

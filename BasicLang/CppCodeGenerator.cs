@@ -3163,6 +3163,15 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             isVoidStdLib = false;
             var functionName = call.FunctionName;
 
+            // ADR-0010 D8: a call through a delegate VALUE invokes that value, rendered like any
+            // other operand — as IRCall.CalleeValue documents. ⛔ Its FunctionName is only the
+            // value's IR name, and this backend numbers its own temps: `b.Scale.Invoke(4)` read the
+            // field into `t2` and then called `t4(4)`, a name declared as nothing (#187 J1). And a
+            // member's value read bare (#188) must not reach the extern/stdlib lookups below by
+            // the member's NAME.
+            if (call.CalleeValue != null)
+                return $"{GetValueName(call.CalleeValue)}({string.Join(", ", args)})";
+
             // ReDim's value (IRBuilder.ArrayResizeIntrinsic: array, count, preserve) — the runtime's
             // BasicLang::ReDimArray (CppBclRuntime), which returns the resized std::vector.
             if (functionName == IRBuilder.ArrayResizeIntrinsic && args.Count == 3)

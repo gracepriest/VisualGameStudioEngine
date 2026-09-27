@@ -16,17 +16,24 @@ namespace VisualGameStudio.Tests.Compiler;
 ///
 /// <para>Edge probes that fail on ONE backend for a reason UNRELATED to #187 are excluded from
 /// the shared four-backend runner and pinned individually against the task that owns the gap:
-/// E1 on C++ (#140 — a captured local lambda variable is captured BY COPY on this backend); E10
-/// on JavaScript (#188 — a delegate FIELD read unqualified inside its own class emits an
-/// undeclared reference); E5/E5b/J1/E8/E9e on C++ (#201 — filed by this task: a
-/// <c>List(Of D)</c> of user-delegate values throws at RUN time, a capturing lambda added to one
-/// fails to COMPILE, <c>AddressOf</c> an INSTANCE method fails to compile, and a branch that
-/// <c>Return</c>s an <c>AddressOf</c> result on one arm fails to compile — see each pin's own
-/// comment for the measured failure); E13 (#170, #201 — a lambda argument to <c>MyBase.New</c>
-/// has no IL lowering on MSIL and no lambda-hoisting on C#/C++ either, so only JavaScript runs
-/// it); J2 on MSIL (#188 — calling a delegate-typed field directly, <c>b.OnClick("b")</c>, throws
-/// <c>MissingMethodException</c> at runtropme, for a Func/Action field too — a pre-existing gap,
-/// not specific to a user Delegate).</para>
+/// E1 on C++ (#140 — a captured local lambda variable is captured BY COPY on this backend); E8 on
+/// C++ (#201 — <c>AddressOf</c> an INSTANCE method fails to compile) and E9e on C++ (#201 — a
+/// branch that <c>Return</c>s an <c>AddressOf</c> result on one arm fails to compile, see that
+/// pin's own comment for what changed and what did not); E13 (#170, #201 — a lambda argument to
+/// <c>MyBase.New</c> has no IL lowering on MSIL and no lambda-hoisting on C#/C++ either, so only
+/// JavaScript runs it).
+///
+/// <para>⭐ <b>UPDATED for #188 (fix commit 5e82a786):</b> at the time this fixture was written,
+/// invoking a delegate-typed FIELD through its member spelling (not a local copy) was a
+/// pre-existing gap on three backends: E10 (a field read unqualified INSIDE its own class) failed
+/// on JavaScript with a ReferenceError; J2 (calling a delegate-typed field directly,
+/// <c>b.OnClick("b")</c>) failed on MSIL with a MissingMethodException, for a Func/Action field
+/// too, not specific to a user Delegate; and E5/E5b/J1 (a <c>List(Of D)</c> of user-delegate
+/// values, a capturing lambda added to one, and <c>.Invoke</c> on a field) all failed to COMPILE
+/// on C++, because that backend called a delegate VALUE by NAME, which its own temp-renaming
+/// could point at the wrong temp entirely. #188 is now DONE: E10, J2, E5, E5b and J1 are promoted
+/// below, folded into the shared four-backend runners. E8 and E9e stay pinned against #201 — a
+/// SEPARATE gap, <c>AddressOf</c> on an instance receiver, that #188 never touched.</para>
 /// </summary>
 [TestFixture]
 [Category("Integration")]
@@ -375,33 +382,16 @@ public class UserDelegateConversionExecutionTests
     }
 
     /// <summary>
-    /// J2 — calling a delegate-typed FIELD directly (<c>b.OnClick("b")</c>) runs on C#/C++/
-    /// JavaScript but throws <c>MissingMethodException</c> on MSIL — #188's widened scope: the
-    /// SAME failure reproduces for a Func/Action field (<c>S/t187/edge2/J2f_fieldcall_func.bas</c>,
-    /// measured identically), so this is not specific to a user Delegate.
+    /// J2 — calling a delegate-typed FIELD directly (<c>b.OnClick("b")</c>). #188, DONE: MSIL
+    /// used to throw <c>MissingMethodException</c> (calling a delegate-field spelling as a METHOD
+    /// call) — the SAME failure reproduced for a Func/Action field
+    /// (<c>S/t187/edge2/J2f_fieldcall_func.bas</c>, measured identically), so it was never specific
+    /// to a user Delegate. It now runs on all four backends.
     /// </summary>
     [Test]
-    public void J2_FieldCallSyntax_RunsOnCSharpCppJavaScript()
+    public void J2_FieldCallSyntax_RunsOnEveryBackend()
     {
-        Assert.Multiple(() =>
-        {
-            Assert.That(Norm(FourBackends.RunEmittedCSharp(J2)), Is.EqualTo("click b"), "C#");
-            Assert.That(Norm(BclE2E.CompileRun(BclE2E.CompileToCppOptimized(J2))), Is.EqualTo("click b"), "C++");
-            Assert.That(Norm(JavaScriptExecutionTests.RunJs(J2)), Is.EqualTo("click b"), "JavaScript");
-        });
-    }
-
-    [Test]
-    public void J2_FieldCallSyntax_Msil_PinsTodaysMissingMethodException_Against188()
-    {
-        // Skip OUTSIDE Assert.Throws: without ilasm the harness throws its IgnoreException, and
-        // inside the lambda that is caught as the wrong exception type — a FAIL on every Linux
-        // run instead of a skip.
-        Msil.MsilHarness.RequireIlasm();
-        var ex = Assert.Throws<AssertionException>(() => Msil.MsilHarness.RunExpectingSuccess(J2));
-        Assert.That(ex!.Message, Does.Contain("MissingMethodException").And.Contain("Button.OnClick"),
-            "the compile/run failure must still be the delegate-field-call MissingMethodException "
-            + "(#188). A DIFFERENT failure here means this pin is stale.\n" + ex.Message);
+        FourBackends.RunsOnEveryBackend(J2, "click b");
     }
 
     // ============================================================================================
@@ -452,9 +442,11 @@ public class UserDelegateConversionExecutionTests
     }
 
     // ============================================================================================
-    // 4. E5/E5b/E8/E9e/J1 — a user delegate stored in a List(Of D) and invoked, AddressOf an
-    //    instance method, a branch that Returns an AddressOf result on one arm: all run on
-    //    C#/JavaScript/MSIL; all fail on C++ (#201, filed by this task).
+    // 4. E5/E5b/J1 — a user delegate stored in a List(Of D) and invoked, and .Invoke on a field:
+    //    #188, DONE — these now run on ALL FOUR backends (folded into EdgeProbe_RunsOnEveryBackend
+    //    below). E8/E9e — AddressOf an instance method, a branch that Returns an AddressOf result
+    //    on one arm: still run on C#/JavaScript/MSIL only; still fail on C++ (#201, filed by this
+    //    task, untouched by #188).
     // ============================================================================================
 
     private const string E5 = """
@@ -549,11 +541,17 @@ public class UserDelegateConversionExecutionTests
         End Sub
         """;
 
+    /// <summary>#188, DONE — E5/E5b/J1 now run on ALL FOUR backends.</summary>
     [TestCase(E5, "a x\nb x\na y\nb z", "E5")]
     [TestCase(E5b, "b y", "E5b")]
+    [TestCase(J1, "click a\n8", "J1")]
+    public void FormerlyCppExcludedProbe_RunsOnEveryBackend(string source, string expected, string label)
+    {
+        FourBackends.RunsOnEveryBackend(source, expected);
+    }
+
     [TestCase(E8, "hi bob\n40\nhi me", "E8")]
     [TestCase(E9e, "20", "E9e")]
-    [TestCase(J1, "click a\n8", "J1")]
     public void CppExcludedProbe_RunsOnCSharpJavaScriptMsil(string source, string expected, string label)
     {
         Assert.Multiple(() =>
@@ -565,24 +563,6 @@ public class UserDelegateConversionExecutionTests
     }
 
     [Test]
-    public void E5_ListOfUserDelegate_Cpp_PinsTodaysBadFunctionCall_Against201()
-    {
-        var cpp = BclE2E.CompileToCppOptimized(E5);
-        var ex = Assert.Throws<AssertionException>(() => BclE2E.CompileRun(cpp));
-        Assert.That(ex!.Message, Does.Contain("bad_function_call"),
-            "the failure must still be a runtime bad_function_call on a List(Of Notify) element (#201).\n" + ex.Message);
-    }
-
-    [Test]
-    public void E5b_CapturingLambdaAddedToListOfUserDelegate_Cpp_PinsTodaysCompileFailure_Against201()
-    {
-        var cpp = BclE2E.CompileToCppOptimized(E5b);
-        var ex = Assert.Throws<AssertionException>(() => BclE2E.CompileRun(cpp));
-        Assert.That(ex!.Message, Does.Contain("undeclared identifier"),
-            "the failure must still be a C++ compile error over an undeclared identifier (#201).\n" + ex.Message);
-    }
-
-    [Test]
     public void E8_AddressOfInstanceMethod_Cpp_PinsTodaysCompileFailure_Against201()
     {
         var cpp = BclE2E.CompileToCppOptimized(E8);
@@ -591,6 +571,14 @@ public class UserDelegateConversionExecutionTests
             "the failure must still be a C++ compile error over an undeclared identifier (#201).\n" + ex.Message);
     }
 
+    /// <summary>
+    /// #188 fixed the HALF of this shape that was #188's own: the delegate value returned by
+    /// <c>Pick(...)</c> used to be invoked by its raw temp NAME, which C++'s temp-renaming could
+    /// point at the WRONG temp. That half is gone. What remains, unchanged, is #201's own half —
+    /// the <c>AddressOf Inc</c> branch initializes a <c>std::function</c> local (<c>t0</c>) only on
+    /// ONE arm of the <c>If</c>, and the C++ backend's <c>goto</c>-based control flow jumps over
+    /// that initialization on the other arm, which clang refuses outright.
+    /// </summary>
     [Test]
     public void E9e_ReturnAddressOfOnOneBranchArm_Cpp_PinsTodaysCompileFailure_Against201()
     {
@@ -598,15 +586,6 @@ public class UserDelegateConversionExecutionTests
         var ex = Assert.Throws<AssertionException>(() => BclE2E.CompileRun(cpp));
         Assert.That(ex!.Message, Does.Contain("cannot jump from this goto statement"),
             "the failure must still be the branch-return goto-crosses-initialization C++ compile error (#201).\n" + ex.Message);
-    }
-
-    [Test]
-    public void J1_FieldDotInvoke_Cpp_PinsTodaysCompileFailure_Against201()
-    {
-        var cpp = BclE2E.CompileToCppOptimized(J1);
-        var ex = Assert.Throws<AssertionException>(() => BclE2E.CompileRun(cpp));
-        Assert.That(ex!.Message, Does.Contain("not a function"),
-            "the failure must still be the field-typed-as-void*-so-not-callable C++ compile error (#201).\n" + ex.Message);
     }
 
     // ============================================================================================
@@ -632,25 +611,13 @@ public class UserDelegateConversionExecutionTests
         End Sub
         """;
 
+    /// <summary>#188, DONE — JavaScript used to emit the unqualified field as a bare
+    /// <c>ReferenceError</c> ("OnClick is not defined"); it now reads <c>this.OnClick</c> and
+    /// invokes that value, so E10 runs on all four backends.</summary>
     [Test]
-    public void E10_FieldInvokedInsideItsOwnClass_RunsOnCSharpCppMsil()
+    public void E10_FieldInvokedInsideItsOwnClass_RunsOnEveryBackend()
     {
-        const string expected = "clicked";
-        Assert.Multiple(() =>
-        {
-            Assert.That(Norm(FourBackends.RunEmittedCSharp(E10)), Is.EqualTo(expected), "C#");
-            Assert.That(Norm(BclE2E.CompileRun(BclE2E.CompileToCppOptimized(E10))), Is.EqualTo(expected), "C++");
-            Assert.That(Norm(Msil.MsilHarness.RunExpectingSuccess(E10)), Is.EqualTo(expected), "MSIL");
-        });
-    }
-
-    [Test]
-    public void E10_FieldInvokedInsideItsOwnClass_JavaScript_PinsTodaysReferenceError_Against188()
-    {
-        var ex = Assert.Throws<AssertionException>(() => JavaScriptExecutionTests.RunJs(E10));
-        Assert.That(ex!.Message, Does.Contain("OnClick is not defined"),
-            "the failure must still be the unqualified-field ReferenceError (#188). A DIFFERENT "
-            + "failure here means this pin is stale.\n" + ex.Message);
+        FourBackends.RunsOnEveryBackend(E10, "clicked");
     }
 
     // ============================================================================================

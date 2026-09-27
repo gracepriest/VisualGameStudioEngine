@@ -5408,6 +5408,23 @@ namespace BasicLang.Compiler.IR
                 ? _currentFunction.GetNextTempName()
                 : null;
 
+            // ⭐ #188: a delegate-typed FIELD or PROPERTY, invoked — `Callback()`, `Me.Callback()`,
+            // `obj.Op(5)`, `Registry.Hook()`, own or inherited. The ANALYZER decided it
+            // (IsDelegateMemberInvocation: a method of that name, a local or a parameter is never
+            // one), so this is one lowering for every spelling: evaluate the member's value
+            // through the ordinary read path — the bare name through Visit(IdentifierExpressionNode),
+            // which keeps ADR-0007's accessor rule, a qualified one through
+            // Visit(MemberAccessExpressionNode) — and invoke that VALUE, the canonical delegate call
+            // (ADR-0010 D8). A Sub-shaped delegate is typed Void there, so the call has no
+            // destination. ⛔ Before, the bare name reached each backend as a call BY NAME and the
+            // qualified one as a METHOD call — see IsDelegateMemberInvocation for what each did.
+            if (_semanticAnalyzer.IsDelegateMemberInvocation(node))
+            {
+                EmitDelegateValueInvocation(node.Callee, node.Arguments, tempName, returnType,
+                    _semanticAnalyzer.GetNodeSymbol(node.Callee));
+                return;
+            }
+
             // Nested/chained indexer read: `m(0)(1)` (or `d("a")("b")`). The OUTER callee is an
             // arbitrary expression (here the inner `m(0)` indexer), not an identifier/member — so
             // it never reached the identifier-branch indexer check, and fell through to the
@@ -5485,20 +5502,8 @@ namespace BasicLang.Compiler.IR
                         return;
                     }
 
-                    memberExpr.Object.Accept(this);
-                    var invoked = _expressionResult;
-                    var invokeCall = new IRCall(tempName, invoked?.Name ?? "unknown", returnType)
-                    {
-                        CalleeValue = invoked
-                    };
-                    foreach (var arg in node.Arguments)
-                    {
-                        arg.Accept(this);
-                        invokeCall.Arguments.Add(_expressionResult);
-                    }
-
-                    EmitInstruction(invokeCall);
-                    _expressionResult = invokeCall;
+                    EmitDelegateValueInvocation(memberExpr.Object, node.Arguments, tempName, returnType,
+                        delegateSymbol: null);
                     return;
                 }
 
@@ -5897,22 +5902,44 @@ namespace BasicLang.Compiler.IR
                 // e.g. invoking the delegate returned by another call: f(a)(b).
                 // Invoke the callee VALUE rather than treating its temp name as
                 // a function name (which dropped the invocation).
-                node.Callee.Accept(this);
-                var callee = _expressionResult;
-                var call = new IRCall(tempName, callee?.Name ?? "unknown", returnType)
-                {
-                    CalleeValue = callee
-                };
-
-                foreach (var arg in node.Arguments)
-                {
-                    arg.Accept(this);
-                    call.Arguments.Add(_expressionResult);
-                }
-
-                EmitInstruction(call);
-                _expressionResult = call;
+                EmitDelegateValueInvocation(node.Callee, node.Arguments, tempName, returnType,
+                    delegateSymbol: null);
             }
+        }
+
+        /// <summary>
+        /// Invokes the delegate VALUE <paramref name="callee"/> evaluates to: the value first,
+        /// then the arguments, then one <see cref="IRCall"/> whose <see cref="IRCall.CalleeValue"/>
+        /// is that value — ADR-0010 D8's canonical delegate call, which every backend renders as
+        /// <c>(value)(args)</c>. Shared by every site that invokes a value rather than a named
+        /// procedure: <c>f(a)(b)</c>, <c>x.Invoke(…)</c> on a non-name receiver (#187), and a
+        /// delegate-typed field or property (#188).
+        ///
+        /// <para><paramref name="delegateSymbol"/> is the member being invoked, when there is
+        /// one: a <c>Nothing</c> argument is typed from its delegate's parameters, exactly as
+        /// <see cref="EmitProcedureCall"/> types it for a delegate LOCAL (#173). Null for an
+        /// arbitrary callee, whose arguments were never coerced.</para>
+        /// </summary>
+        private void EmitDelegateValueInvocation(ExpressionNode callee, List<ExpressionNode> arguments,
+            string tempName, TypeInfo returnType, Symbol delegateSymbol)
+        {
+            callee.Accept(this);
+            var value = _expressionResult;
+            var call = new IRCall(tempName, value?.Name ?? "unknown", returnType)
+            {
+                CalleeValue = value
+            };
+
+            foreach (var arg in arguments)
+            {
+                arg.Accept(this);
+                call.Arguments.Add(delegateSymbol != null
+                    ? CoerceToParameterType(_expressionResult, delegateSymbol, call.Arguments.Count)
+                    : _expressionResult);
+            }
+
+            EmitInstruction(call);
+            _expressionResult = call;
         }
 
         /// <summary>
