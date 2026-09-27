@@ -92,6 +92,22 @@ public class TypeInfo
         /// </summary>
         public string NetHandleTypeFullName { get; set; }
 
+        /// <summary>
+        /// For a user <c>Delegate Sub</c>/<c>Delegate Function</c> declaration: its signature —
+        /// the declaration's symbol, whose <see cref="Symbol.Parameters"/> and
+        /// <see cref="Symbol.ReturnType"/> (<c>Void</c> for a <c>Delegate Sub</c>) are what a
+        /// lambda, an <c>AddressOf</c> and an invocation are judged against. Null for every other
+        /// type, <c>Func</c>/<c>Action</c> included.
+        ///
+        /// <para>⭐ #187: a user delegate is target-typed EXACTLY as its structural
+        /// <c>Action(Of …)</c>/<c>Func(Of …)</c> equivalent, and
+        /// <c>SemanticAnalyzer.DelegateShapeOf</c> is the one mapping from this to that shape.
+        /// Recorded on the type rather than looked up by name so every consumer holding the
+        /// TYPE — a parameter, a field, a <c>List(Of D)</c> element, the IR builder — reaches the
+        /// same signature without a scope to resolve it in.</para>
+        /// </summary>
+        public Symbol DelegateSignature { get; set; }
+
         public Dictionary<string, Symbol> Members { get; set; }
 
         public TypeInfo(string name, TypeKind kind)

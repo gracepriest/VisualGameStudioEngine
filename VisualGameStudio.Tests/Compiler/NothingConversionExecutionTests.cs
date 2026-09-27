@@ -10,12 +10,16 @@ namespace VisualGameStudio.Tests.Compiler;
 /// (<c>S/t173/rw/*.exp</c>), themselves the VB/C# answer — never copied from MSIL, which the
 /// implementer's brief calls out as a backend whose own semantics can diverge.
 ///
-/// <para>Only the probes that run EVERYWHERE are here: N4/N4b (storing a lambda / AddressOf
-/// result into a user <c>Delegate</c> variable) and N6 (a delegate FIELD invoked from inside its
-/// own class) are pre-existing gaps, unrelated to <c>Nothing</c>, filed as #187/#188 — measured in
-/// <c>matrix-after.txt</c> to fail identically whether or not <c>Nothing</c> is involved (N4c, the
-/// no-lambda-storage control, runs everywhere). X4b (the same shape as X4, without a
-/// <c>Case Is Nothing</c> ON THE ARRAY itself) runs everywhere and is used here.
+/// <para>Only the probes that run EVERYWHERE are here: N6 (a delegate FIELD invoked from inside
+/// its own class) is a pre-existing gap, unrelated to <c>Nothing</c>, filed as #188 — measured in
+/// <c>matrix-after.txt</c> to fail identically whether or not <c>Nothing</c> is involved (N6b,
+/// the same shape read into a local before the switch, runs everywhere). X4b (the same shape as
+/// X4, without a <c>Case Is Nothing</c> ON THE ARRAY itself) runs everywhere and is used here.
+/// ⭐ <b>UPDATED for #187 (fix commit 37faed14):</b> at the time this fixture was written, storing
+/// a lambda or <c>AddressOf</c> result into a user <c>Delegate</c> variable was ALSO a
+/// pre-existing gap (filed as #187 alongside #188, N4/N4b were not run, and N4c — the same shape
+/// with no lambda ever stored — was the only one of the three that did). #187 is now DONE: N4/N4b
+/// are promoted below, run on every backend under both pipelines, alongside N4c.
 /// ⭐ <b>UPDATED for #185 (ADR-0011):</b> at the time this fixture was written, X4's own
 /// <c>Case Is Nothing</c> on the array did not compile on C++ (tracked under #189) — that gap is
 /// now CLOSED: <c>#185</c>'s C++ <c>EmitNullTest</c> helper (D3) makes String/array
@@ -78,9 +82,52 @@ public class NothingConversionExecutionTests
         End Sub
         """;
 
+    /// <summary>#187, DONE — a lambda stored into a <c>Delegate</c>-typed variable previously set
+    /// to <c>Nothing</c>: <c>Nothing</c> and target-typed lambda storage compose correctly.
+    /// Before #187 this was refused outright ("Cannot assign value of type 'Action' to variable
+    /// of type 'Notify'"), independent of <c>Nothing</c>; N4c below is the no-lambda-storage
+    /// control that always ran.</summary>
+    private const string N4 = """
+        Delegate Sub Notify(msg As String)
+
+        Sub Main()
+            Dim d As Notify = Nothing
+            Select Case d
+                Case Is Nothing
+                    Console.WriteLine("empty")
+                Case Else
+                    Console.WriteLine("full")
+            End Select
+            d = Sub(m As String) Console.WriteLine("set " & m)
+            d("go")
+        End Sub
+        """;
+
+    /// <summary>#187, DONE — the <c>AddressOf</c> sibling of <see cref="N4"/>.</summary>
+    private const string N4b = """
+        Delegate Sub Notify(msg As String)
+
+        Sub Handler(m As String)
+            Console.WriteLine("go " & m)
+        End Sub
+
+        Sub Main()
+            Dim d As Notify = Nothing
+            Select Case d
+                Case Is Nothing
+                    Console.WriteLine("empty")
+                Case Else
+                    Console.WriteLine("full")
+            End Select
+            d = AddressOf Handler
+            d("x")
+        End Sub
+        """;
+
     /// <summary>The no-lambda-storage control: a <c>Delegate</c>-typed variable set to <c>Nothing</c>
-    /// twice, no lambda ever stored into it — N4/N4b's storage step (a pre-existing gap, #187) is
-    /// the only thing this probe avoids.</summary>
+    /// twice, no lambda ever stored into it. Ran even before #187, since it avoids the storage
+    /// step #187 fixed; kept alongside the now-promoted N4/N4b as the shape that isolates
+    /// <c>Nothing</c> alone.</summary>
     private const string N4c = """
         Delegate Sub Notify(msg As String)
 
@@ -366,6 +413,8 @@ public class NothingConversionExecutionTests
     [TestCase(N1, "none\nset", "N1")]
     [TestCase(N2, "5\nTrue", "N2")]
     [TestCase(N3, "skip\ngo", "N3")]
+    [TestCase(N4, "empty\nset go", "N4")]
+    [TestCase(N4b, "empty\ngo x", "N4b")]
     [TestCase(N4c, "empty\nempty2", "N4c")]
     [TestCase(N5, "7\nTrue", "N5")]
     [TestCase(N6b, "unset\nfired", "N6b")]

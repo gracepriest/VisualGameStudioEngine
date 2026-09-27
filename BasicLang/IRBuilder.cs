@@ -2045,11 +2045,17 @@ namespace BasicLang.Compiler.IR
 
         public void Visit(DelegateDeclarationNode node)
         {
+            // #187: the signature the analyzer RESOLVED (TypeInfo.DelegateSignature), where it
+            // has one. A bare name stamped Primitive made C++ declare
+            // `std::function<Widget(std::string)>` — a VALUE Widget, where every Widget is a
+            // std::shared_ptr — so a `Delegate Function … As Widget` could hold no lambda and no
+            // AddressOf ("no viable overloaded '='"), and a class-typed parameter likewise.
+            var resolvedReturn = _semanticAnalyzer.GetNodeSymbol(node)?.ReturnType;
             var irDelegate = new IRDelegate(node.Name)
             {
                 Namespace = _currentNamespace,
                 ReturnType = node.ReturnType != null
-                    ? new TypeInfo(node.ReturnType.Name, TypeKind.Primitive)
+                    ? resolvedReturn ?? new TypeInfo(node.ReturnType.Name, TypeKind.Primitive)
                     : new TypeInfo("Void", TypeKind.Void)
             };
 
@@ -2058,6 +2064,7 @@ namespace BasicLang.Compiler.IR
                 irDelegate.Parameters.Add(new IRParameter
                 {
                     Name = param.Name,
+                    Type = _semanticAnalyzer.GetNodeType(param),
                     TypeName = param.Type?.Name ?? "Object",
                     IsOptional = param.IsOptional,
                     IsParamArray = param.IsParamArray,
@@ -2295,14 +2302,17 @@ namespace BasicLang.Compiler.IR
             // wrong function at the call site.
             var lambdaName = $"__lambda_{_lambdaCounter++}";
 
-            // Determine return type from semantic analysis
+            // Determine return type from semantic analysis. A lambda converted to a user Delegate
+            // is typed AS that delegate (#187); its R is read off the delegate's structural
+            // Func shape, the one mapping the analyzer judged it by.
             var lambdaType = _semanticAnalyzer.GetNodeType(node);
+            var lambdaShape = SemanticAnalyzer.DelegateShapeOf(lambdaType);
             TypeInfo returnType;
             if (!node.IsFunction)
             {
                 returnType = new TypeInfo("Void", TypeKind.Primitive);
             }
-            else if (node.StatementBody != null && IsFuncWithReturnType(lambdaType))
+            else if (node.StatementBody != null && IsFuncWithReturnType(lambdaShape))
             {
                 // A multi-line Function lambda (#164) returns exactly what the analyzer checked
                 // its Returns against: the R of the Func it recorded — the `As T`, the target's R
@@ -2310,7 +2320,7 @@ namespace BasicLang.Compiler.IR
                 // statement lambda has no Body: Dictionary.TryGetValue(null) threw, and every
                 // `Function(…) As T … End Function` died as "Error compiling Main: Value cannot be
                 // null. (Parameter 'key')" on every backend and entry point.
-                returnType = lambdaType.GenericArguments[lambdaType.GenericArguments.Count - 1];
+                returnType = lambdaShape.GenericArguments[lambdaShape.GenericArguments.Count - 1];
             }
             else
             {
@@ -5459,6 +5469,39 @@ namespace BasicLang.Compiler.IR
             // Check for different call types
             if (node.Callee is MemberAccessExpressionNode memberExpr)
             {
+                // #187: `d.Invoke(args)` on a user-delegate value is `d(args)`, as the analyzer
+                // types it — lowered to the SAME IR, so no backend has to know a delegate has an
+                // Invoke member (a std::function and a JavaScript function have none: measured,
+                // "no member named 'Invoke'" from clang and "t.Invoke is not a function" from
+                // node). A named receiver takes the exact path `d(args)` takes; any other
+                // receiver is invoked as a VALUE, the form `f(a)(b)` already lowers to.
+                if (string.Equals(memberExpr.MemberName, "Invoke", StringComparison.OrdinalIgnoreCase)
+                    && _semanticAnalyzer.GetNodeType(memberExpr.Object)?.DelegateSignature != null)
+                {
+                    if (memberExpr.Object is IdentifierExpressionNode invokedName)
+                    {
+                        EmitProcedureCall(node, _semanticAnalyzer.GetNodeSymbol(invokedName),
+                            invokedName.Name, tempName, returnType);
+                        return;
+                    }
+
+                    memberExpr.Object.Accept(this);
+                    var invoked = _expressionResult;
+                    var invokeCall = new IRCall(tempName, invoked?.Name ?? "unknown", returnType)
+                    {
+                        CalleeValue = invoked
+                    };
+                    foreach (var arg in node.Arguments)
+                    {
+                        arg.Accept(this);
+                        invokeCall.Arguments.Add(_expressionResult);
+                    }
+
+                    EmitInstruction(invokeCall);
+                    _expressionResult = invokeCall;
+                    return;
+                }
+
                 // Check if this is a MyBase call
                 if (memberExpr.Object is MyBaseExpressionNode)
                 {

@@ -323,6 +323,14 @@ public class JsExecutionTierRosterTests
         // FourBackends.RunAggressiveJs directly (X1/X2, which exclude C++, and X3b's JS leg,
         // which the C#-only #136 pin does not touch).
         typeof(MeReceiverTypingExecutionTests),
+
+        // Task #187 — a lambda or AddressOf into a user Delegate type; invoking a user delegate
+        // returns its type. Named "...ExecutionTests", so the widened match below WOULD catch it
+        // on its own; listed explicitly anyway, matching every row above. Its JS legs run
+        // through FourBackends.RunsOnEveryBackend[Aggressive] (D1-D6) and
+        // JavaScriptExecutionTests.RunJs directly (the edge probes, the C++-excluded probes'
+        // JavaScript leg, E13's own JS-only pass, and the E10/#188 pinned ReferenceError).
+        typeof(UserDelegateConversionExecutionTests),
     };
 
     /// <summary>
@@ -371,7 +379,7 @@ public class JsExecutionTierRosterTests
 
     [Test]
     public void RosterIsPinned()
-        => Assert.That(ExecutionTier, Has.Length.EqualTo(80), // + MsilValueToStringExecutionTests (task #183), InterfaceMethodTypingExecutionTests, IsIsNotOperatorExecutionTests (task #185), MeReceiverTypingExecutionTests (task #176); + WhenGuardCallRunTests
+        => Assert.That(ExecutionTier, Has.Length.EqualTo(81), // + MsilValueToStringExecutionTests (task #183), InterfaceMethodTypingExecutionTests, IsIsNotOperatorExecutionTests (task #185), MeReceiverTypingExecutionTests (task #176), UserDelegateConversionExecutionTests (task #187); + WhenGuardCallRunTests
             "The execution-tier roster changed. That is fine — update the number — but it must " +
             "be a deliberate edit, not a silent shrink.");
 

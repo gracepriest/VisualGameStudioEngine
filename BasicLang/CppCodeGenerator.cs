@@ -577,8 +577,11 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         {
             var delegateName = SanitizeName(irDelegate.Name);
             var returnType = MapType(irDelegate.ReturnType);
+            // The resolved parameter type when the IR builder has it (#187), as the C# and MSIL
+            // backends already prefer: a class parameter by NAME mapped to a value `Widget`.
             var paramTypes = string.Join(", ",
-                irDelegate.Parameters.Select(p => MapTypeName(p.TypeName) + (p.IsByRef ? "&" : "")));
+                irDelegate.Parameters.Select(p =>
+                    (p.Type != null ? MapType(p.Type) : MapTypeName(p.TypeName)) + (p.IsByRef ? "&" : "")));
 
             // Use std::function for delegate types
             WriteLine($"using {delegateName} = std::function<{returnType}({paramTypes})>;");
