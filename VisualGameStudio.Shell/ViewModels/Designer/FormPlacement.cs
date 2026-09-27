@@ -104,7 +104,9 @@ public static class FormPlacement
             return PlaceOnWeb(document, definition, x, y);
         }
 
-        var container = FormCanvasTransform.ContainerAt(document, new Point(x, y));
+        // ONE resolve serves the target search and the clamp below.
+        var docking = FormDockLayout.Resolve(document, FormDockMode.Designer);
+        var container = FormCanvasTransform.ContainerAt(document, new Point(x, y), dock: docking);
         var siblings = container?.Container.Children ?? document.Controls;
 
         // Child coordinates are relative to the CONTAINER, not to the form. Storing form-space
@@ -113,7 +115,7 @@ public static class FormPlacement
         var origin = container?.Origin ?? new Point(0, 0);
         var local = new Point(x - origin.X, y - origin.Y);
 
-        var (surfaceWidth, surfaceHeight) = FormGeometryEdit.SurfaceOf(document, container?.Container);
+        var (surfaceWidth, surfaceHeight) = FormGeometryEdit.SurfaceOf(document, container?.Container, docking);
 
         var control = new FormControl
         {

@@ -109,8 +109,14 @@ public sealed class FormCanvasTransform
         // UNCLIPPED, while the recursive walk tested a container's own bounds before ever looking
         // inside it. A child overflowing its Panel is now hittable where it is PAINTED, rather than
         // being unreachable in the part of itself that hangs outside its parent.
+        //
+        // ⚠ A positioned CONTROL is clipped to the form surface, exactly as it is drawn (an overflowing dock sits
+        // partly outside the form, and WinForms clips it): a point off the surface hits no control. Bands, their
+        // cells and open dropdowns are chrome and are neither clipped nor excluded.
+        var onSurface = OnSurface(document, formPoint);
         return Layout(document, selected)
-            .Where(entry => entry.Control != null && entry.Bounds.Contains(formPoint))
+            .Where(entry => entry.Control != null && entry.Bounds.Contains(formPoint) &&
+                            (onSurface || entry.Role != FormLayoutRole.Control))
             .Select(entry => entry.Control)
             .LastOrDefault();
     }
@@ -173,10 +179,13 @@ public sealed class FormCanvasTransform
         // covers the menu bar's band and (from Task 20) its item cells, and VS band-selects
         // positioned controls only — a bar or a menu item is not something a rubber band picks up,
         // and a group move would have nowhere to move it to.
+        // ⚠ Against the part of each control that is DRAWN — clipped to the form surface (see HitTest).
+        var surface = SurfaceRect(document);
         var hit = Layout(document)
             .Where(entry => entry.Control != null &&
                             entry.Control.Definition?.Place is not (FormPlace.Item or FormPlace.Docked) &&
-                            entry.Bounds.Intersects(formRect))
+                            entry.Bounds.Intersects(surface) &&
+                            entry.Bounds.Intersect(surface).Intersects(formRect))
             .Select(entry => entry.Control!)
             .ToList();
 
@@ -292,15 +301,40 @@ public sealed class FormCanvasTransform
     /// down with no diagnostic, so the illegal targets are excluded from the search rather than
     /// detected after the fact.</para>
     /// </param>
+    /// <param name="dock">
+    /// The document's resolved docking (Designer mode) when the caller already holds it for this gesture — a drop or
+    /// a drag resolves ONCE and hands it to both this search and the clamp; null resolves here.
+    /// </param>
     public static (FormControl Container, Point Origin)? ContainerAt(
-        FormDocument document, Point formPoint, FormControl? ignore = null)
+        FormDocument document, Point formPoint, FormControl? ignore = null, FormDockLayoutResult? dock = null)
     {
         ArgumentNullException.ThrowIfNull(document);
 
+        // ⚠ Outside the form surface there is no container: the canvas CLIPS its controls to the surface (an
+        // overflowing dock is not painted past the form's edge, as WinForms clips it), so nothing hit-tests there.
+        if (!OnSurface(document, formPoint))
+        {
+            return null;
+        }
+
         // ⛔ The SAME resolved picture Layout draws: a docked Panel is a drop target where it is DRAWN.
-        var dock = FormDockLayout.Resolve(document, FormDockMode.Designer);
+        dock ??= FormDockLayout.Resolve(document, FormDockMode.Designer);
         return ContainerAt(document.Controls, formPoint, new Point(0, 0), ignore, dock);
     }
+
+    /// <summary>
+    /// The form surface in FORM units — (0, 0, <see cref="SurfaceSize"/>) — the rectangle every positioned control is
+    /// CLIPPED to: drawn inside it only (FormCanvasControl), hit only inside it (<see cref="HitTest"/>,
+    /// <see cref="ControlsIn"/>, <see cref="ContainerAt"/>).
+    /// </summary>
+    public static Rect SurfaceRect(FormDocument document)
+    {
+        var size = SurfaceSize(document);
+        return new Rect(0, 0, size.Width, size.Height);
+    }
+
+    private static bool OnSurface(FormDocument document, Point formPoint) =>
+        SurfaceRect(document).Contains(formPoint);
 
     private static (FormControl, Point)? ContainerAt(
         IReadOnlyList<FormControl> controls, Point formPoint, Point containerOrigin, FormControl? ignore,

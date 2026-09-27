@@ -180,8 +180,8 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
     /// <param name="frozenText">What a frozen row shows when <paramref name="read"/> has nothing — the
     /// document's own text. Ignored unless <paramref name="frozenReason"/> is given.</param>
     /// <param name="onChanged">Raised after an edit that changed the model.</param>
-    /// <param name="refusal">Names a value the store refuses (shown in the description pane); null for a store that
-    /// refuses nothing.</param>
+    /// <param name="storeRefusal">Names a value the store refuses (shown in the description pane); null for a store
+    /// that refuses nothing.</param>
     public static FormPropertyRow ForStoredValue(
         FormPropertyDef definition,
         FormTarget target,
@@ -191,8 +191,8 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
         Action onChanged,
         string? frozenReason = null,
         string? frozenText = null,
-        Func<string, string?>? refusal = null) =>
-        new(definition, target, read, write, remove, frozenReason, frozenText, onChanged, refusal);
+        Func<string, string?>? storeRefusal = null) =>
+        new(definition, target, read, write, remove, frozenReason, frozenText, onChanged, storeRefusal);
 
     private readonly FormRowEditor _editor = FormRowEditor.Default;
 

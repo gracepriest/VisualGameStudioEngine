@@ -1123,10 +1123,16 @@ public class FormCanvasControl : Control
             // ⚠ Snapped on the RESULT, not on the delta: snapping the delta would carry the
             // control's original off-grid offset forward for ever, so a control that started at 13
             // would land on 21 and never on 16.
+            // ⚠ ONE dock resolve per pointer move, for the primary AND every other member — never one per member.
+            // Valid across the whole loop: a docked control is never moved, and moving (or re-parenting) an
+            // undocked one changes no docked rectangle and no container's client size.
+            var dock = FormDockLayout.Resolve(document, FormDockMode.Designer);
+
             changed = FormGeometryEdit.MoveToForm(
                 document, control,
                 Snap(_dragStartForm.X + dx, e.KeyModifiers),
-                Snap(_dragStartForm.Y + dy, e.KeyModifiers));
+                Snap(_dragStartForm.Y + dy, e.KeyModifiers),
+                dock);
 
             // ⛔ The REST of a multi-selection moves by the same delta, and NOT through MoveToForm.
             // The primary re-parents when the pointer crosses a Panel boundary because the pointer
@@ -1149,7 +1155,7 @@ public class FormCanvasControl : Control
                     continue;
                 }
 
-                changed |= FormGeometryEdit.MoveTo(document, other, x, y);
+                changed |= FormGeometryEdit.MoveTo(document, other, x, y, dock);
             }
         }
         else
@@ -1362,6 +1368,26 @@ public class FormCanvasControl : Control
         return null;
     }
 
+    /// <summary>
+    /// Each control's FIRST rectangle in <paramref name="layout"/> — <see cref="FormBoundsOf"/>'s answer for every
+    /// control at once, from one layout. ⚠ First match (TryAdd), exactly as FormBoundsOf returns at its first hit.
+    /// ⚠ Built per frame from that frame's layout and never kept: the model is mutated in place, so a cached lookup
+    /// would be a staleness bug (pre-flight C8).
+    /// </summary>
+    private static Dictionary<FormControl, Rect> FirstBoundsByControl(IReadOnlyList<FormLayoutEntry> layout)
+    {
+        var first = new Dictionary<FormControl, Rect>(ReferenceEqualityComparer.Instance);
+        foreach (var entry in layout)
+        {
+            if (entry.Control != null)
+            {
+                first.TryAdd(entry.Control, entry.Bounds);
+            }
+        }
+
+        return first;
+    }
+
     private Point? _dragOrigin;
     private Point _dragStartForm;
     private FormResizeHandle _dragHandle;
@@ -1501,9 +1527,23 @@ public class FormCanvasControl : Control
         // captured here and published at the very END of this method. See the assignment there.
         var editedSlot = default(Rect);
 
+        // ⛔ ONE layout per frame (Task 9 review): the draw loop, the selection outlines and the handles all read
+        // this list. Each CanvasBoundsOf call used to run the whole Layout — a dock resolve and a parent map
+        // included — so a select-all of N controls paid N+2 layouts per frame. FirstBoundsByControl keeps
+        // FormBoundsOf's FIRST-match rule, so every rectangle is exactly the one it was.
+        var layout = FormCanvasTransform.Layout(document, SelectedControl).ToList();
+        var formBounds = FirstBoundsByControl(layout);
+        Rect? CanvasBoundsInFrame(FormControl control) =>
+            formBounds.TryGetValue(control, out var b) ? _transform.ToCanvas(b) : null;
+
+        // ⚠ A positioned control is CLIPPED to the form surface, as WinForms clips it: an overflowing dock (negative
+        // X/Y, or past the far edge) is never painted outside the form. Chrome — bands, cells, dropdowns, the Type
+        // Here slot — is not clipped; HitTest applies the same rule.
+        var surfaceClip = SurfaceCanvasRect(document);
+
         // ⚠ Containers before their children — Layout guarantees that order, and drawing a
         // container after its children would paint over them.
-        foreach (var entry in FormCanvasTransform.Layout(document, SelectedControl))
+        foreach (var entry in layout)
         {
             var bounds = _transform.ToCanvas(entry.Bounds);
             var editedRect = EditedRectOf(entry, bounds, typeHereHost, renaming, _transform.Zoom);
@@ -1532,7 +1572,19 @@ public class FormCanvasControl : Control
             // where "&File" should be. Same catalog lookup, one copy of it.
             if (entry.Control != null)
             {
-                var drawn = DrawControl(context, entry.Control, bounds);
+                CaptionDraw? drawn;
+                if (entry.Role == FormLayoutRole.Control)
+                {
+                    using (context.PushClip(surfaceClip))
+                    {
+                        drawn = DrawControl(context, entry.Control, bounds);
+                    }
+                }
+                else
+                {
+                    drawn = DrawControl(context, entry.Control, bounds);
+                }
+
                 _captionLog?.Add(new CaptionRecord(entry.Control, null, bounds, CaptionForTest(entry.Control), drawn));
             }
         }
@@ -1551,17 +1603,17 @@ public class FormCanvasControl : Control
         foreach (var member in SelectedSet)
         {
             if (!ReferenceEquals(member, SelectedControl) &&
-                CanvasBoundsOf(document, member) is { } outline)
+                CanvasBoundsInFrame(member) is { } outline)
             {
                 context.DrawRectangle(null, SecondarySelectionPen, outline);
             }
         }
 
-        if (HasHandles(SelectedControl) && CanvasBoundsOf(document, SelectedControl!) is { } selection)
+        if (HasHandles(SelectedControl) && CanvasBoundsInFrame(SelectedControl!) is { } selection)
         {
             DrawHandles(context, selection);
         }
-        else if (SelectedControl?.Geometry is PixelGeometry && CanvasBoundsOf(document, SelectedControl) is { } docked)
+        else if (SelectedControl?.Geometry is PixelGeometry && CanvasBoundsInFrame(SelectedControl) is { } docked)
         {
             // A DOCKED primary (spec §7a): selected, but not draggable — outlined like a secondary member, never
             // handled. Without this a click on a docked Panel shows nothing at all (pre-flight decision 1).

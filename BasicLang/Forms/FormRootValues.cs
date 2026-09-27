@@ -63,12 +63,12 @@ public static class FormRootValues
                     return true;
                 }
 
-                if (RefusalOf(row, value) != null)
+                // Parsed ONCE: the rule that refuses is the rule that yields the numbers (ClientSizeRefusal).
+                if (ClientSizeRefusal(value, out var width, out var height) != null)
                 {
                     return false;
                 }
 
-                FormPropertyDef.TryParseSize(value, out var width, out var height);
                 form.Width = width;
                 form.Height = height;
                 return true;
@@ -97,12 +97,11 @@ public static class FormRootValues
                 }
 
                 // ⛔ Refused, never coerced (spec §7): the grid cannot manufacture a Degraded value of its own.
-                if (RefusalOf(row, value) != null)
+                if (MobileBreakpointRefusal(value, out var pixels) != null)
                 {
                     return false;
                 }
 
-                FormLayout.TryParseMobileBreakpoint(value, out var pixels);
                 (form.Layout ??= new FormLayout()).MobileBreakpoint =
                     pixels.ToString(System.Globalization.CultureInfo.InvariantCulture);
                 return true;
@@ -127,17 +126,27 @@ public static class FormRootValues
 
         return row.Name switch
         {
-            "ClientSize" when !FormPropertyDef.TryParseSize(value, out var width, out var height) || width <= 0 || height <= 0 =>
-                $"'{value}' is not a usable size — ClientSize needs a width and a height, both greater than 0. " +
-                "It was not applied; ClientSize is unchanged.",
-            "MobileBreakpoint" when !FormLayout.TryParseMobileBreakpoint(value, out _) =>
-                $"'{value}' is not a usable phone breakpoint — MobileBreakpoint must be a whole number of pixels from 0 " +
-                "to 2147483647, where 0 means never stack. It was not applied; MobileBreakpoint is unchanged.",
-            "Text" or "ClientSize" or "Cols" or "Rows" or "Gap" or "MobileBreakpoint" => null,
+            "ClientSize" => ClientSizeRefusal(value, out _, out _),
+            "MobileBreakpoint" => MobileBreakpointRefusal(value, out _),
+            "Text" or "Cols" or "Rows" or "Gap" => null,
             _ => throw new InvalidOperationException(
                 $"FormRoot row '{row.Name}' has no storage in FormRootValues — every root row must be mapped here.")
         };
     }
+
+    /// <summary>ClientSize's rule, parsed once: the refusal, or null with the usable width and height.</summary>
+    private static string? ClientSizeRefusal(string value, out int width, out int height) =>
+        FormPropertyDef.TryParseSize(value, out width, out height) && width > 0 && height > 0
+            ? null
+            : $"'{value}' is not a usable size — ClientSize needs a width and a height, both greater than 0. " +
+              "It was not applied; ClientSize is unchanged.";
+
+    /// <summary>MobileBreakpoint's rule, parsed once: the refusal, or null with the usable pixel count.</summary>
+    private static string? MobileBreakpointRefusal(string value, out int pixels) =>
+        FormLayout.TryParseMobileBreakpoint(value, out pixels)
+            ? null
+            : $"'{value}' is not a usable phone breakpoint — MobileBreakpoint must be a whole number of pixels from 0 " +
+              "to 2147483647, where 0 means never stack. It was not applied; MobileBreakpoint is unchanged.";
 
     /// <summary>
     /// Whether "remove it from the document" is expressible for this row. ⚠ Not ClientSize: the writer
