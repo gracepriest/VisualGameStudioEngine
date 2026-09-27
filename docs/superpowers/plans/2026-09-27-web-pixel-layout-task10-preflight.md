@@ -112,6 +112,9 @@ Follow this document **instead of** the plan's Task 10 section. Where the two di
 - `FormCatalogShapes.Canonical` defaults a web document's control to `GridGeometry` even on a Canvas page (`FormCatalogShapes.cs:47-49`); callers must pass `geometry:`. It should ask `FormVocabulary.IsPixel(document)`.
 - Piece 2's `Visible` setter must write a non-empty `style.display` to show a design-hidden control (B1).
 - C3 (bordered containers), C4 (zero size), C6 (menu bar overflow) are for the harness to measure.
+- (Task 10 review M-7) A CheckBox/RadioButton caption is INVISIBLE on the page: the control emits a bare `<input>`,
+  which cannot carry content, so its `Text` is dropped — on Canvas and, pre-existing, on Grid. Needs a `<label>`
+  pairing (a catalog-driven wrapper), and the Task 13 harness to assert it.
 
 ## Carried to Task 12/13 (write into their pre-flights)
 - **Task 12:** a run-time toggle fixture: after `Show()`, set a docked Panel's `Visible = False`, `PerformLayout()`, read; then `True`, read. Compare with `Resolve(…, Runtime)` of the document with/without that `Visible=False`. Also an anchored sibling in the same container (C5: it must not move).

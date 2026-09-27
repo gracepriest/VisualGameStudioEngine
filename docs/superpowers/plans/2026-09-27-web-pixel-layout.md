@@ -3286,6 +3286,7 @@ Spec §6 (lossless; no layout warning; BL8024 for `MobileBreakpoint`; the retarg
 - DPI virtualisation on the owner's scaled display.
 - Windows clamps an oversized window.
 - A `GroupBox` insets its children (spec-claims #11). Fixtures use Panel; a GroupBox fixture is added only to MEASURE and record the inset, never to pass.
+  - (Task 10 review M-3) On the page a GroupBox is a `<fieldset>`: its children are positioned inside the UA's 2px groove border, its caption is plain text rather than a `<legend>` (so it does not sit in the border as WinForms' caption does), and the UA's `min-inline-size: min-content` can widen it past its design Width. Measure all three against this reference; record, never pass around them.
 - A `Panel` with `BorderStyle` `FixedSingle`/`Fixed3D` also loses 1–2px of client area, like a GroupBox. The resolver takes a container's client area as its bounds. Measure it, and record it; never make a test pass around it.
 - Strip heights are the catalog's `DefaultHeight` at 96 DPI (24/25/22), but real strips `AutoSize`. The driver pins `AutoSize = false`; the harness should also MEASURE an auto-sized strip once and record the difference.
 - A hand-edited strip `Dock="Left"`/`"Fill"`/`"None"` silently resolves to Top (`FormControl.IsDockedToBottom` is Bottom-or-else-Top). Flag it for a later diagnostic; it is not implemented.
@@ -3328,6 +3329,19 @@ Spec §7 (Edge check), §7a (loopback server).
 - `--virtual-time-budget` too small gives empty rects: assert non-empty before comparing.
 - Firewall prompts do not apply to localhost.
 - `100vh` is the iframe height.
+- Task 10 review, recorded (no code yet):
+  - **M-3 GroupBox:** children sit 2px off from the fieldset's groove border; the caption is not a `<legend>`; the
+    fieldset's UA `min-inline-size` can widen it. Measure against Task 12's reference.
+  - **M-5 the reflow script's cost:** its MutationObserver re-walks the whole dock tree on ANY `style`/`class`/`hidden`
+    write under `.vgs-form` (a text-colour change included); a class toggled on `<body>` or `<html>` is not observed;
+    and a viewport resize never re-walks (not needed today: the live rules are insets, which follow the container).
+    Measure a page that animates a style, and decide whether to filter to docked ids.
+  - **M-6 media range syntax:** `@media (width < Npx)` / `(width >= Npx)` needs Chrome/Edge ≥ 104, Safari ≥ 16.4,
+    Firefox ≥ 63. Older browsers ignore the whole block: no phone stacking and no live re-dock rules. Record the
+    support floor; the harness's Edge is well above it.
+  - **M-7 CheckBox caption:** a CheckBox/RadioButton on the page is a bare `<input>`, which has no content, so its
+    `Text` caption is invisible — on a Canvas page and (pre-existing) on a Grid page alike. Assert it in the harness
+    once fixed; tracked as a follow-up.
 
 **Gate:** Windows with Edge; skips elsewhere with the reason.
 

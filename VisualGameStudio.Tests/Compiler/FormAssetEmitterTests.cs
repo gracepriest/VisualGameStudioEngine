@@ -1078,11 +1078,72 @@ public class FormAssetEmitterTests
         page.Controls.Add(StripOf("ToolStrip", "toolStrip1"));
         page.Controls.Add(At("Button", "btn", 10, 200, 75, 23));
 
+        // ⛔ Task 10 review I-2: a SECOND bottom strip, documented after the status strip. The status strip docks first,
+        // so it takes the true bottom edge and the toolbar stacks ABOVE it — on the phone the toolbar comes first.
+        // Document order would put them the other way round (a surviving mutant without this row).
+        var bottomTools = StripOf("ToolStrip", "bottomTools");
+        bottomTools.Properties["Dock"] = "Bottom";
+        page.Controls.Add(bottomTools);
+
         var css = FormAssetEmitter.Css(page);
 
         Assert.That(page.Controls.OrderBy(c => OrderOf(css, c.Id)).Select(c => c.Id),
-            Is.EqualTo(new[] { "menuStrip1", "toolStrip1", "pnlTop", "btn", "statusStrip1" }),
-            "spec §5/§7a: top strips first (as they stack), bottom strips last; the docked panel is an ordinary row");
+            Is.EqualTo(new[] { "menuStrip1", "toolStrip1", "pnlTop", "btn", "bottomTools", "statusStrip1" }),
+            "spec §5/§7a: top strips first (as they stack), bottom strips last in the order they sit from top to " +
+            "bottom; the docked panel is an ordinary row");
+    }
+
+    [Test]
+    public void OnAPhone_ALiteral_ComesAfterEveryControl()
+    {
+        // ⛔ Task 10 review M-4: a <Literal>'s markup is a flex item too; with no order it is order 0 and lands BETWEEN
+        // the stacked controls. On a Canvas page it is wrapped, and the wrapper is ordered after every control.
+        var page = CanvasPage();
+        page.Controls.Add(StripOf("MenuStrip", "menuStrip1"));
+        page.Controls.Add(At("Button", "btn", 10, 40, 75, 23));
+        page.Controls.Add(StripOf("StatusStrip", "statusStrip1"));
+        page.Literal = """<p class="hint">Use your work account.</p>""";
+
+        var html = FormAssetEmitter.Html(page, "App.js");
+        var css = FormAssetEmitter.Css(page);
+        var wrapper = html.IndexOf("<div class=\"vgs-literal\">", StringComparison.Ordinal);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(wrapper, Is.GreaterThan(html.IndexOf("<div class=\"vgs-form\">", StringComparison.Ordinal)));
+            Assert.That(html.IndexOf("<p class=\"hint\">", StringComparison.Ordinal), Is.GreaterThan(wrapper));
+            Assert.That(css.Split("@media (width <")[1], Does.Contain("\n  .vgs-literal { order: 3; }\n"),
+                "after the three controls ordered 0..2 — the bottom strip included");
+            Assert.That(OrderOf(css, "statusStrip1"), Is.EqualTo(2));
+        });
+    }
+
+    [Test]
+    public void AGridPagesLiteral_IsNotWrapped()
+    {
+        Assert.That(FormAssetEmitter.Html(LoginForm(), "App.js"), Does.Not.Contain("vgs-literal"),
+            "the wrapper is a Canvas phone concern; a Grid page's literal stays a direct child of its grid");
+    }
+
+    [Test]
+    public void OnAPhone_ADockedContainersChildren_AreStackedToo()
+    {
+        // ⛔ Task 10 review I-3: a Dock=Fill Panel is an ordinary row on the phone, and its children are stacked inside
+        // it — static and flex-ordered — never left absolutely positioned inside a container that is now a flex column.
+        var a = At("Button", "a", 100, 10, 75, 23);
+        var b = At("Button", "b", 10, 10, 75, 23);
+        var page = CanvasPage();
+        page.Controls.Add(StripOf("MenuStrip", "menuStrip1"));
+        page.Controls.Add(At("Panel", "fill", 0, 0, 1, 1, dock: "Fill", children: new[] { a, b }));
+
+        var css = FormAssetEmitter.Css(page);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(PhoneRule(css, "fill"), Does.Contain("display: flex; flex-direction: column"));
+            Assert.That(PhoneRule(css, "a"), Does.StartWith("position: static; order: 1"));
+            Assert.That(PhoneRule(css, "b"), Does.StartWith("position: static; order: 0"), "reading order inside the panel");
+        });
     }
 
     [Test]

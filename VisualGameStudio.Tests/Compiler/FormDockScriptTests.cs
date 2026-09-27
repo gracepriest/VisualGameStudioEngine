@@ -152,11 +152,14 @@ public class FormDockScriptTests
 
     /// <summary>
     /// Runs the page's OWN reflow script — extracted from <paramref name="html"/> — against a stub DOM: every control
-    /// of <paramref name="model"/> is an element (hidden when designed hidden), the observer is captured, and
-    /// <paramref name="toggleId"/>'s visibility is flipped and then restored, the observer firing after each.
-    /// Null when node is absent.
+    /// of <paramref name="model"/> that the page has an ELEMENT for (a catalog row with an HTML tag — a kind with no web
+    /// row reaches the page as a comment, so it has none here either) is an element, hidden when designed hidden; the
+    /// observer is captured; and <paramref name="toggleId"/>'s visibility is flipped and then restored, the observer
+    /// firing after each ONLY when the attribute written is in its <c>attributeFilter</c>, as a real observer does.
+    /// <paramref name="how"/> is the spelling user code hides with: <c>style</c> (<c>el.style.display</c>),
+    /// <c>hidden</c> (the attribute) or <c>class</c> (a class the user's stylesheet hides). Null when node is absent.
     /// </summary>
-    internal static GlueRun? RunGlue(string dir, string html, FormDocument model, string toggleId)
+    internal static GlueRun? RunGlue(string dir, string html, FormDocument model, string toggleId, string how = "style")
     {
         const string open = "<script data-vgs=\"dock\">";
         var start = html.IndexOf(open, StringComparison.Ordinal);
@@ -164,14 +167,26 @@ public class FormDockScriptTests
         start += open.Length;
         var script = html.Substring(start, html.IndexOf("</script>", start, StringComparison.Ordinal) - start);
 
-        var elements = string.Join("\n", model.AllControls().Select(c =>
+        var elements = string.Join("\n", model.AllControls().Where(c => c.Definition?.HtmlTag != null).Select(c =>
             $"el({JsonSerializer.Serialize(c.Id)}, {(c.IsHidden ? "true" : "false")});"));
         var id = JsonSerializer.Serialize(toggleId);
-        var flip = model.FindById(toggleId)!.IsHidden ? "\"block\"" : "\"none\"";
+        var designHidden = model.FindById(toggleId)!.IsHidden;
+        Assert.That(how == "style" || !designHidden, Is.True,
+            "only a style write can SHOW a design-hidden control: the stylesheet's display:none still applies");
+        var (flipCode, restoreCode) = how switch
+        {
+            "style" => ($"mutate(\"style\", function (e) {{ e.style.display = {(designHidden ? "\"block\"" : "\"none\"")}; }});",
+                "mutate(\"style\", function (e) { e.style.display = \"\"; });"),
+            "hidden" => ("mutate(\"hidden\", function (e) { e.hidden = true; });",
+                "mutate(\"hidden\", function (e) { e.hidden = false; });"),
+            "class" => ("mutate(\"class\", function (e) { e.className = \"vgs-hide\"; });",
+                "mutate(\"class\", function (e) { e.className = \"\"; });"),
+            _ => throw new ArgumentOutOfRangeException(nameof(how), how, null)
+        };
 
         var harness = $$"""
             const els = new Map();
-            function el(id, designHidden) { els.set(id, { id: id, style: {}, hidden: false, designHidden: designHidden }); }
+            function el(id, designHidden) { els.set(id, { id: id, style: {}, hidden: false, className: "", designHidden: designHidden }); }
             {{elements}}
             const form = { className: "vgs-form" };
             let observer = null, options = null, target = null;
@@ -179,9 +194,18 @@ public class FormDockScriptTests
               observer = callback;
               this.observe = function (t, o) { target = t; options = o; };
             };
+            // ".vgs-hide" stands for a rule in the user's own stylesheet: .vgs-hide { display: none; }
             globalThis.getComputedStyle = function (e) {
-              return { display: e.style.display ? e.style.display : (e.hidden || e.designHidden ? "none" : "block") };
+              return { display: e.style.display ? e.style.display
+                : (e.hidden || /\bvgs-hide\b/.test(e.className) || e.designHidden ? "none" : "block") };
             };
+            function mutate(attribute, write) {
+              write(els.get({{id}}));
+              if (observer && options && options.attributes &&
+                  (!options.attributeFilter || options.attributeFilter.indexOf(attribute) >= 0)) {
+                observer([{ type: "attributes", attributeName: attribute }]);
+              }
+            }
             const head = { children: [], appendChild: function (c) { this.children.push(c); return c; } };
             globalThis.document = {
               head: head,
@@ -193,9 +217,9 @@ public class FormDockScriptTests
             {{script}}
             console.log("OPTIONS " + JSON.stringify({ observedForm: target === form, options: options }));
             console.log("BEFORE " + live());
-            els.get({{id}}).style.display = {{flip}}; observer([]);
+            {{flipCode}}
             console.log("FLIPPED " + live());
-            els.get({{id}}).style.display = ""; observer([]);
+            {{restoreCode}}
             console.log("RESTORED " + live());
             """;
 
@@ -374,6 +398,66 @@ public class FormDockScriptTests
                 "non-vacuity: the menu closes the 40px gap");
             Assert.That(run.Restored, Is.EqualTo(LiveCss(FormDockLayout.Resolve(model, FormDockMode.Runtime), 600)));
             Assert.That(run.Restored, Does.Contain("#menuStrip1{left:0px;right:0px;width:calc(100% - 0px);top:40px;height:24px;}"));
+        });
+    }
+
+    [TestCase("hidden")]
+    [TestCase("class")]
+    [Category("Integration")]
+    public void HidingADockedPanel_ByTheHiddenAttribute_OrAClass_ReDocksToo(string how)
+    {
+        // Task 10 review M-2: user code hides a control more ways than style.display. The stub fires the observer only
+        // for an attribute in its filter, so a filter that forgot "hidden" or "class" goes red here.
+        var model = Glued();
+        var run = RunGlue(_dir, FormAssetEmitter.Html(model, "App.js"), model, "pnlTop", how);
+        if (run == null)
+        {
+            Assert.Ignore("node is not on PATH, so the page's reflow script cannot be run here");
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(run!.Flipped, Is.EqualTo(LiveCss(FormDockLayout.Resolve(Glued(panelHidden: true), FormDockMode.Runtime), 600)));
+            Assert.That(run.Flipped, Does.Contain("#menuStrip1{left:0px;right:0px;width:calc(100% - 0px);top:0px;height:24px;}"),
+                "non-vacuity: the menu closes the 40px gap");
+            Assert.That(run.Restored, Is.EqualTo(LiveCss(FormDockLayout.Resolve(model, FormDockMode.Runtime), 600)));
+        });
+    }
+
+    [Test]
+    [Category("Integration")]
+    public void ADockedKindWithNoWebElement_IsJudgedByItsDesignedVisibility()
+    {
+        // Task 10 review M-1: a kind with no web row (TabControl) reaches the page as a COMMENT — there is no element
+        // whose computed display could be read. The script then falls back to the designed Visible, which is exactly
+        // what FormDockLayout's Runtime picture (the page's static CSS) used; the one resolver stays the one answer.
+        var tabs = new FormControl
+        {
+            Kind = "TabControl", Id = "tabs",
+            Geometry = new PixelGeometry { X = 0, Y = 0, Width = 10, Height = 30, Dock = "Top" }
+        };
+        Hidden(tabs);
+        var model = Page(640, 480, "600", tabs, Box("pnlTop", 10, 40, "Top"), Strip("MenuStrip", "menuStrip1"),
+            Box("fill", 1, 1, "Fill"));
+        Assert.That(tabs.Definition!.HtmlTag, Is.Null, "precondition: TabControl has no web element");
+
+        var run = RunGlue(_dir, FormAssetEmitter.Html(model, "App.js"), model, "pnlTop");
+        if (run == null)
+        {
+            Assert.Ignore("node is not on PATH, so the page's reflow script cannot be run here");
+        }
+
+        var expectedModel = Page(640, 480, "600", Hidden(new FormControl
+            {
+                Kind = "TabControl", Id = "tabs",
+                Geometry = new PixelGeometry { X = 0, Y = 0, Width = 10, Height = 30, Dock = "Top" }
+            }), Hidden(Box("pnlTop", 10, 40, "Top")), Strip("MenuStrip", "menuStrip1"), Box("fill", 1, 1, "Fill"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(run!.Flipped, Is.EqualTo(LiveCss(FormDockLayout.Resolve(expectedModel, FormDockMode.Runtime), 600)));
+            Assert.That(run.Flipped, Does.Contain("#menuStrip1{left:0px;right:0px;width:calc(100% - 0px);top:0px;"),
+                "non-vacuity: the design-hidden, element-less TabControl takes no space");
         });
     }
 

@@ -202,8 +202,16 @@ public static class FormAssetEmitter
             AppendControl(sb, control, indent: "  ");
         }
 
-        // <Literal> flows at the form area's top-left, under the positioned controls (spec §3).
-        AppendLiteral(sb, form);
+        // <Literal> flows at the form area's top-left, under the positioned controls (spec §3). ⛔ Wrapped (Task 10
+        // review M-4): below the breakpoint the form area is a flex column, and the literal's markup would be an
+        // unordered flex item (order 0) landing BETWEEN the stacked controls. The wrapper is what the phone query
+        // orders last (AppendStackedQuery). On the desktop an unpositioned div flows exactly where its content did.
+        if (!string.IsNullOrEmpty(form.Literal))
+        {
+            sb.Append("<div class=\"vgs-literal\">\n");
+            AppendLiteral(sb, form);
+            sb.Append("</div>\n");
+        }
 
         sb.Append("</div>\n");
 
@@ -638,7 +646,14 @@ public static class FormAssetEmitter
 
         sb.Append($"@media (width < {Number(breakpoint)}px) {{\n");
         sb.Append("  .vgs-form { display: flex; flex-direction: column; gap: 8px; height: auto; min-width: 0; min-height: 0; }\n");
-        AppendStacked(sb, form.Controls, designer);
+        var ordered = AppendStacked(sb, form.Controls, designer);
+
+        // The <Literal>'s wrapper (AppendCanvasBody) comes after every top-level control, bottom strips included.
+        if (!string.IsNullOrEmpty(form.Literal))
+        {
+            sb.Append($"  .vgs-literal {{ order: {Number(ordered)}; }}\n");
+        }
+
         sb.Append("}\n");
     }
 
@@ -648,8 +663,10 @@ public static class FormAssetEmitter
     /// <para>⚠ Every rectangle here is the DESIGNER picture (a docked control's resolved rect; an undocked control's
     /// stored one). CSS <c>order</c> is static, so ordering by the design keeps it the same whichever controls user
     /// code has hidden; a hidden control stays <c>display:none</c> and its order only matters once shown.</para>
+    ///
+    /// <para>Returns how many of <paramref name="siblings"/> were given an order (0..n−1).</para>
     /// </summary>
-    private static void AppendStacked(
+    private static int AppendStacked(
         StringBuilder sb, IReadOnlyList<FormControl> siblings, FormDockLayoutResult designer)
     {
         FormRect? RectOf(FormControl control) =>
@@ -682,6 +699,8 @@ public static class FormAssetEmitter
         {
             AppendStacked(sb, container.Children, designer);
         }
+
+        return ordered.Count;
     }
 
     private static void AppendStackedRule(StringBuilder sb, FormControl control, int order, FormRect rect)
