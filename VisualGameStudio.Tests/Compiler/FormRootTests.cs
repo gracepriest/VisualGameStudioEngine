@@ -355,6 +355,7 @@ public class FormRootTests
 
     [TestCase("0, 300", true)]
     [TestCase("640, -1", true)]
+    [TestCase("640, 0", true)]
     [TestCase("abc", true)]
     [TestCase("640, 480", false)]
     public void RefusalOf_ClientSize_IsExactlyWhatSetRefuses(string value, bool refused)

@@ -491,6 +491,54 @@ public class FormCanvasTransformTests
         });
     }
 
+    /// <summary>
+    /// Task 9 review: a band beside a Dock=Left control starts at that control's right edge, and so do its item
+    /// cells — never at the form's left edge (they would be drawn, and hit, over the Panel).
+    /// </summary>
+    [Test]
+    public void ABandsItemCells_StartAtTheBandsOwnX_BesideADockLeftControl()
+    {
+        var menu = StripOf("MenuStrip", "menuStrip1");
+        var item = new FormControl { Kind = "ToolStripMenuItem", Id = "fileToolStripMenuItem" };
+        item.Properties["Text"] = "&File";
+        menu.Children.Add(item);
+        var form = DockForm(Panel("left", 300, 300, 100, 40, "Left"), menu);
+
+        var laid = FormCanvasTransform.Layout(form).ToList();
+        var band = laid.Single(e => ReferenceEquals(e.Control, menu)).Bounds;
+        var cell = laid.Single(e => ReferenceEquals(e.Control, item)).Bounds;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(band.X, Is.EqualTo(100), "precondition: the Dock=Left Panel took the left 100px first");
+            Assert.That(cell.X, Is.EqualTo(100), "the first item cell starts where its band does");
+        });
+    }
+
+    /// <summary>
+    /// Task 9 review: an overflowing dock sits partly OUTSIDE the form (a Dock=Left Panel wider than the client), and
+    /// WinForms clips it. The canvas clips it too, so nothing outside the surface is hit, band-selected or dropped into.
+    /// </summary>
+    [Test]
+    public void AnOverflowingDockedControl_IsNotHitOutsideTheForm()
+    {
+        var wide = Panel("wide", 0, 0, 700, 40, "Left"); // 700 wide in a 640-wide client
+        var form = DockForm(wide);
+        var t = new FormCanvasTransform(1.5, new Vector(20, 10));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(FormCanvasTransform.Layout(form).Single().Bounds, Is.EqualTo(new Rect(0, 0, 700, 480)),
+                "precondition: the resolver hands it 700 — it overflows the 640 client");
+            Assert.That(t.HitTest(form, t.ToCanvas(new Point(600, 100)))?.Id, Is.EqualTo("wide"), "inside the form");
+            Assert.That(t.HitTest(form, t.ToCanvas(new Point(670, 100))), Is.Null, "outside the form: clipped");
+            Assert.That(FormCanvasTransform.ContainerAt(form, new Point(600, 100))?.Container, Is.SameAs(wide));
+            Assert.That(FormCanvasTransform.ContainerAt(form, new Point(670, 100)), Is.Null);
+            Assert.That(FormCanvasTransform.ControlsIn(form, new Rect(650, 50, 30, 30)), Is.Empty);
+            Assert.That(FormCanvasTransform.ControlsIn(form, new Rect(620, 50, 30, 30)), Is.EqualTo(new[] { wide }));
+        });
+    }
+
     // ==================================================================
     // Web documents — laid out on the grid, not on pixels
     // ==================================================================

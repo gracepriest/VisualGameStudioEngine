@@ -322,6 +322,53 @@ public class FormCanvasPixelPageTests
         Assert.That((g.X, g.Y), Is.EqualTo((40, 120)), "the drag started on a docked control, so nothing moves");
     }
 
+    /// <summary>
+    /// Task 9 review: an overflowing dock (a Dock=Left Panel 900 wide on an 800-wide form) is CLIPPED to the form
+    /// surface, as WinForms clips it — nothing of it is painted in the canvas gap to the right of the form.
+    /// </summary>
+    [AvaloniaTest]
+    public void AnOverflowingDockedControl_IsNotPaintedOutsideTheForm()
+    {
+        FormDocument Form(bool overflowing)
+        {
+            var doc = AWindow();
+            if (overflowing)
+            {
+                doc.Controls.Add(new FormControl
+                {
+                    Kind = "Panel", Id = "X",
+                    Geometry = new PixelGeometry { X = 0, Y = 0, Width = 900, Height = 40, Dock = "Left" }
+                });
+            }
+
+            return doc;
+        }
+
+        // Right of the form, clear of the right-hand grip (at the surface's vertical centre) and the corner grip.
+        Rect Gap(Surface s) => new(s.SurfaceRect.Right + 8, s.SurfaceRect.Y + 10, 30, 90);
+
+        // Just inside the form's right edge: the empty form shows its alignment dots there; the Panel covers them.
+        Rect Inside(Surface s) => new(s.SurfaceRect.Right - 38, s.SurfaceRect.Y + 10, 30, 90);
+
+        int emptyGap, overflowGap, emptyInside, overflowInside;
+        using (var s = Open(Form(false), 900, 600))
+        {
+            var bg = s.Frame(f => PixelAt(f, Gap(s).TopLeft));
+            emptyGap = s.Frame(f => CountOtherThan(f, Gap(s), bg));
+            emptyInside = s.Frame(f => CountOtherThan(f, Inside(s), Face));
+            using var o = Open(Form(true), 900, 600);
+            overflowGap = o.Frame(f => CountOtherThan(f, Gap(o), bg));
+            overflowInside = o.Frame(f => CountOtherThan(f, Inside(o), Face));
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(emptyGap, Is.Zero, "control: the gap right of an empty form is plain background");
+            Assert.That(overflowInside, Is.Not.EqualTo(emptyInside), "control: the Panel IS drawn inside the form");
+            Assert.That(overflowGap, Is.Zero, "the overflow past the form's right edge is clipped");
+        });
+    }
+
     [AvaloniaTest]
     public void TheArrowKeys_NeitherNudgeNorResizeADockedControl()
     {
