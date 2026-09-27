@@ -247,6 +247,27 @@ is target-gated. In piece 1:
   pre-scan; anchor edges and the centring formula; docking order; strips inside the form area; reading-order grouping;
   the breakpoint query; cross-layout paste refusal.
 
+## 7a. Notes for the plan (from the final spec review)
+
+- **`BoundsOf` through `FormDockLayout` is a WinForms canvas change too.** `BoundsOf(control, containerOrigin)`
+  (`FormCanvasTransform.cs:344-358`) is per-control; a docked control's rect depends on its siblings, so it takes the
+  resolved layout, and its callers (hit testing, handles, drag in `FormCanvasControl`) change with it. Docked controls on
+  `.blform` documents will then MOVE on the canvas to where they run — existing `FormCanvasTransformTests` /
+  `FormCanvasRenderTests` expectations for docked fixtures change INTENTIONALLY; record each as intended.
+  **Decision: a docked control cannot be dragged or resized on the canvas** (Visual Studio's behaviour — its position
+  comes from docking; a drag would write X/Y the runtime ignores): no move/resize handles for it, a drag starting on it
+  selects only.
+- **Loopback server:** on Windows a non-admin `HttpListener` can register `http://localhost:{port}/` but a literal
+  `http://127.0.0.1:{port}/` prefix can fail (access denied without a URL ACL). Register `localhost` and navigate Edge to
+  it (or use a minimal `TcpListener` server); `HttpListener` has no port-0 bind, so probe for a free port and retry on
+  conflict.
+- **The root-row predicate takes values:** `FormRootValues.Applies(row, target, layout)` (the reader has no document
+  yet — same reason as §2.1), with a convenience overload for a document; `RowForAttribute` calls it, never a copy.
+- Phone mode: top strips first, bottom strips last; docked controls, now `position: static`, join the ordinary
+  reading-order grouping.
+- WinForms reference driver: pin strip heights (§7 item 5) before the resize step — anchor distances are captured in
+  `InitializeComponent` and do not depend on the strips.
+
 ## 8. Out of scope (piece 1)
 
 The portable control library (piece 2) and any handler-code change; the Desktop | Web toolbar switch (piece 3);
