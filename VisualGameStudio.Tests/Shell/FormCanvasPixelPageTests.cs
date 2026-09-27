@@ -369,6 +369,79 @@ public class FormCanvasPixelPageTests
         });
     }
 
+    /// <summary>
+    /// A SHORT form (60 high) whose MenuStrip's File menu has four rows: opened, the dropdown hangs far below the
+    /// surface. Returns the form, the File item (select it to open the menu) and its last row.
+    /// </summary>
+    private static (FormDocument Doc, FormControl File, FormControl LastRow) ShortFormWithAMenu()
+    {
+        var doc = new FormDocument { Target = FormTarget.WinForms, Name = "P", Width = 800, Height = 60 };
+        var menu = new FormControl { Kind = "MenuStrip", Id = "menuStrip1" };
+        var file = new FormControl { Kind = "ToolStripMenuItem", Id = "fileToolStripMenuItem" };
+        file.Properties["Text"] = "&File";
+        FormControl last = file;
+        foreach (var caption in new[] { "New", "Open", "Save", "Exit" })
+        {
+            last = new FormControl { Kind = "ToolStripMenuItem", Id = caption.ToLowerInvariant() + "ToolStripMenuItem" };
+            last.Properties["Text"] = caption;
+            file.Children.Add(last);
+        }
+
+        menu.Children.Add(file);
+        doc.Controls.Add(menu);
+        return (doc, file, last);
+    }
+
+    /// <summary>
+    /// ⛔ Task 9 review: only POSITIONED controls are clipped to the form surface. An open dropdown is chrome — it runs
+    /// past a short form's bottom edge and its rows there must still be hit, or pressing one starts a rubber band,
+    /// clears the selection and the menu vanishes.
+    /// </summary>
+    [Test]
+    public void AnOpenDropdownRowBelowTheForm_IsStillHit()
+    {
+        var (doc, file, last) = ShortFormWithAMenu();
+        var t = new FormCanvasTransform(0.8, new Vector(40, 30));
+
+        var row = FormCanvasTransform.Layout(doc, file).Single(e => ReferenceEquals(e.Control, last)).Bounds;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(row.Top, Is.GreaterThan(60), "precondition: the last row is entirely below the 60-high form");
+            Assert.That(t.HitTest(doc, t.ToCanvas(row.Center), file), Is.SameAs(last));
+        });
+    }
+
+    /// <summary>The render half of <see cref="AnOpenDropdownRowBelowTheForm_IsStillHit"/>: that row is PAINTED.</summary>
+    [AvaloniaTest]
+    public void AnOpenDropdownRowBelowTheForm_IsStillPainted()
+    {
+        var (doc, file, last) = ShortFormWithAMenu();
+        var row = FormCanvasTransform.Layout(doc, file).Single(e => ReferenceEquals(e.Control, last)).Bounds;
+
+        // ⚠ The whole row, counted against the canvas background: a row's FILL is white like the headless window
+        // behind the canvas, so a single fill pixel cannot tell a painted row from none — its caption and edges can.
+        int closed, open;
+        using (var s = Open(doc, 900, 600))
+        {
+            // ⚠ Deflated: the dropdown's Type Here slot sits directly under this row and its 1px edge (unclipped chrome
+            // of its own) bleeds into the row's last pixel line — the count must see THIS row, nothing adjacent.
+            var area = new Rect(s.At(row.X, row.Y), s.At(row.Right, row.Bottom)).Deflate(2);
+            var bg = s.Frame(f => PixelAt(f, area.TopLeft));
+            closed = s.Frame(f => CountOtherThan(f, area, bg));
+
+            using var o = Open(doc, 900, 600, selected: file);
+            open = o.Frame(f => CountOtherThan(f, area, bg));
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(row.Top, Is.GreaterThan(60), "precondition: the last row is entirely below the 60-high form");
+            Assert.That(closed, Is.Zero, "control: with the menu closed that area is plain background");
+            Assert.That(open, Is.GreaterThan(0), "the open dropdown's row is painted there, past the form's edge");
+        });
+    }
+
     [AvaloniaTest]
     public void TheArrowKeys_NeitherNudgeNorResizeADockedControl()
     {
