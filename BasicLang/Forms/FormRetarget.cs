@@ -104,7 +104,7 @@ public static class FormRetarget
     /// </summary>
     /// <exception cref="ArgumentException">
     /// The form's name cannot be a class name (<see cref="FormScaffolder.DescribeIllegalName"/>),
-    /// or the source is already on <paramref name="to"/>. Nothing is produced.
+    /// the source is already on <paramref name="to"/>, or <see cref="Refusals"/> refuses it. Nothing is produced.
     /// </exception>
     public static FormRetargetPair ConvertToPair(FormDocument source, FormTarget to)
     {
@@ -114,6 +114,16 @@ public static class FormRetarget
         if (illegal != null)
         {
             throw new ArgumentException(illegal, nameof(source));
+        }
+
+        // A refused source is the CALLER's input, not an impossible state: an argument error carrying the
+        // findings, for a caller that did not ask Refusals first. Both shipping callers do ask.
+        var refusals = Refusals(source, to);
+        if (refusals.Count > 0)
+        {
+            throw new ArgumentException(
+                $"'{source.Name}' cannot be retargeted: " + string.Join("; ", refusals.Select(d => d.Message)),
+                nameof(source));
         }
 
         var result = Convert(source, to);
@@ -156,6 +166,25 @@ public static class FormRetarget
             scaffold.CodeFileName,
             regions.Text,
             result.Diagnostics);
+    }
+
+    /// <summary>
+    /// Why <paramref name="source"/> cannot be retargeted to <paramref name="to"/> at all — errors, each the
+    /// SAME finding the destination's region writer would refuse the pair with. Empty when it can. Callers ask
+    /// this before <see cref="ConvertToPair"/> and report it as they report a reader refusal: nothing written.
+    ///
+    /// <para>⛔ Today one rule (Task 11 review): a Canvas page's Anchor crosses VERBATIM to the window, so an
+    /// unknown edge (<c>Top,Rigth</c>, hand-edited — the reader does not validate Anchor) is refused with the
+    /// region writer's own BL8015, the finding the page's own web build already gives. Going to the web the
+    /// anchor becomes a cell (BL8025) and is never emitted, so there is nothing to refuse.</para>
+    /// </summary>
+    public static IReadOnlyList<DesignDiagnostic> Refusals(FormDocument source, FormTarget to)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+
+        return to == FormTarget.WinForms
+            ? RegionWriter.AnchorRefusals(source.SourcePath, source)
+            : Array.Empty<DesignDiagnostic>();
     }
 
     private static string Describe(FormTarget target) => target == FormTarget.Web ? "web" : "WinForms";

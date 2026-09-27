@@ -1332,6 +1332,85 @@ public class FormRetargetTests
         });
     }
 
+    /// <summary>
+    /// Every scaffolded Canvas page carries the DEFAULT breakpoint explicitly — it is lost on a window too,
+    /// and must be named even though it is the default.
+    /// </summary>
+    [Test]
+    public void CanvasToWinForms_AScaffoldedPagesDefaultBreakpoint_IsNamedToo()
+    {
+        var scaffold = FormScaffolder.Create("LoginForm");
+        var source = Web(scaffold.DocumentText);
+        Assume.That(source.Layout?.MobileBreakpoint, Is.EqualTo("600"), "the scaffold writes the default explicitly");
+
+        var result = FormRetarget.Convert(source, FormTarget.WinForms);
+
+        Assert.That(Of(result, DesignCodes.RetargetPropertyLost).Select(d => d.Message),
+            Has.Some.Contains("'form.MobileBreakpoint'").And.Some.Contains("\"600\""));
+    }
+
+    /// <summary>
+    /// ⛔ A hand-edited unknown Anchor edge. The page already fails its own web build (the region writer's
+    /// CheckAnchors asks IsPixel), and the window's region writer refuses it the same way — so the retarget
+    /// REFUSES with that same BL8015 before producing anything. It must never reach ConvertToPair's
+    /// "cannot happen" InvalidOperationException.
+    /// </summary>
+    [Test]
+    public void ACanvasPageWithAnUnknownAnchorEdge_IsRefusedWithBL8015_NeverAnInternalError()
+    {
+        var source = Web("""
+            <WebForm Name="LoginForm" Version="1" Width="640" Height="400">
+              <Layout Kind="Canvas"/>
+              <Controls><Button Id="btn" X="8" Y="8" Width="75" Height="23" Anchor="Top,Rigth" TabIndex="0"/></Controls>
+            </WebForm>
+            """);
+
+        var refusals = FormRetarget.Refusals(source, FormTarget.WinForms);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(refusals.Select(d => d.Code), Is.EqualTo(new[] { DesignCodes.AnchorNotExpressible }));
+            Assert.That(refusals.Single().IsWarning, Is.False);
+            Assert.That(refusals.Single().Message, Does.Contain("'btn'").And.Contain("Rigth"));
+
+            var thrown = Assert.Throws<ArgumentException>(() => FormRetarget.ConvertToPair(source, FormTarget.WinForms),
+                "a caller that skipped Refusals gets the refusal as an argument error, never an internal one");
+            Assert.That(thrown!.Message, Does.Contain("BL8015"));
+        });
+    }
+
+    [Test]
+    public void AWellFormedCanvasPage_AndEveryOtherDirection_HaveNoRefusals()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(FormRetarget.Refusals(Web(CanvasLogin), FormTarget.WinForms), Is.Empty);
+            // A .blform's bad anchor never reaches a Grid page — it becomes a cell, named by BL8025.
+            Assert.That(FormRetarget.Refusals(WinForms("""
+                <Form Name="LoginForm" Version="1">
+                  <Controls><Button Id="btn" X="8" Y="8" Width="75" Height="23" Anchor="Rigth" TabIndex="0"/></Controls>
+                </Form>
+                """), FormTarget.Web), Is.Empty);
+        });
+    }
+
+    /// <summary>
+    /// Pins pre-flight B2: every web catalog row has a WinForms type, so nothing on a Canvas page is ever
+    /// HOISTED going to WinForms — which is why Hoist may translate by a container's stored X/Y.
+    /// </summary>
+    [Test]
+    public void EveryWebCatalogRow_HasAWinFormsType_SoACanvasPageNeverHoists()
+    {
+        var webOnly = FormControlCatalog.For(FormTarget.Web).Where(d => !d.SupportsTarget(FormTarget.WinForms))
+            .Select(d => d.Kind).ToList();
+
+        Assert.That(webOnly, Is.Empty,
+            "a web-only row now exists, so a Canvas page CAN hoist going to WinForms. FormRetarget.Hoist translates " +
+            "children by the removed container's STORED X/Y — for a docked container that is not where it sits, and " +
+            "its hoisted children would land offset. Translate by FormDockLayout's resolved rect there first " +
+            "(Task 11 pre-flight B2).");
+    }
+
     [Test]
     public void CanvasToWinForms_ANullDesignSize_StaysNull()
     {
@@ -1374,7 +1453,7 @@ public class FormRetargetTests
     {
         var result = FormRetarget.Convert(Web("""
             <WebForm Name="LoginForm" Version="1" Width="640" Height="400">
-              <Layout Kind="Canvas" Cols="120px,1fr" Gap="4px"/>
+              <Layout Kind="Canvas" Cols="120px,1fr" Rows="auto" Gap="4px" Dir="Vertical"/>
               <Controls><Button Id="btn" X="8" Y="8" Width="75" Height="23" TabIndex="0"/></Controls>
             </WebForm>
             """), FormTarget.WinForms);
@@ -1383,7 +1462,8 @@ public class FormRetargetTests
         {
             Assert.That(Of(result, DesignCodes.RetargetLayoutCrossed), Is.Empty);
             Assert.That(Of(result, DesignCodes.RetargetPropertyLost).Single().Message,
-                Does.Contain("Cols=\"120px,1fr\"").And.Contain("Gap=\"4px\""),
+                Does.Contain("Cols=\"120px,1fr\"").And.Contain("Rows=\"auto\"")
+                    .And.Contain("Gap=\"4px\"").And.Contain("Dir=\"Vertical\""),
                 "a Canvas page never read them, but they are the user's text: named, never dropped silently");
         });
     }

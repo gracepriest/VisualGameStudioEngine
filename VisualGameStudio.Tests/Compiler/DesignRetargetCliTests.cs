@@ -122,6 +122,33 @@ public class DesignRetargetCliTests
         });
     }
 
+    /// <summary>
+    /// A Canvas page with a hand-edited unknown Anchor edge: refused with the region writer's own BL8015,
+    /// exit 1 like a reader refusal, nothing written — never "design failed" from an internal error.
+    /// </summary>
+    [Test]
+    [Category("Integration")]
+    public async Task Cli_DesignRetarget_ACanvasPageWithAnUnknownAnchorEdge_IsRefused_ExitsOne_AndWritesNothing()
+    {
+        var source = Write("LoginForm.blwebform", """
+            <WebForm Name="LoginForm" Version="1" Width="640" Height="400">
+              <Layout Kind="Canvas"/>
+              <Controls><Button Id="btn" X="8" Y="8" Width="75" Height="23" Anchor="Top,Rigth" TabIndex="0"/></Controls>
+            </WebForm>
+            """);
+
+        var (exit, stdout, stderr) = await CliTestHarness.RunCli(_dir, "design", "--retarget", source, "--out", Out);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(exit, Is.EqualTo(1), $"stdout:\n{stdout}\nstderr:\n{stderr}");
+            Assert.That(stdout, Does.Contain("BL8015").And.Contain("'btn'").And.Contain("Rigth"));
+            Assert.That(stdout, Does.Contain("nothing was written"));
+            Assert.That(stdout + stderr, Does.Not.Contain("design failed"));
+            Assert.That(Directory.Exists(Out) && Directory.GetFiles(Out).Length > 0, Is.False);
+        });
+    }
+
     [Test]
     [Category("Integration")]
     public async Task Cli_DesignRetarget_WithoutOut_IsAnArgumentError_ThatExplainsThePairing()

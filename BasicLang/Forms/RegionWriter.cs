@@ -163,6 +163,8 @@ public static class RegionWriter
     ///
     /// <para>Asked of every PIXEL document (FormVocabulary.IsPixel): a .blform and a Canvas page.</para>
     /// </summary>
+    /// <remarks>⛔ The ONE anchor refusal: <see cref="AnchorRefusals"/> hands the same findings to a caller
+    /// that must refuse BEFORE writing (the retarget, Task 11 review), so the two cannot disagree.</remarks>
     private static void CheckAnchors(
         string filePath, FormDocument form, List<DesignDiagnostic> diagnostics)
     {
@@ -192,6 +194,18 @@ public static class RegionWriter
                     filePath, 0));
             }
         }
+    }
+
+    /// <summary>
+    /// The refusals <see cref="Write"/> would make for <paramref name="form"/>'s anchors — an unknown edge on a
+    /// pixel document (BL8015) — without writing anything. Empty for a Grid/Flow page.
+    /// </summary>
+    public static IReadOnlyList<DesignDiagnostic> AnchorRefusals(string filePath, FormDocument form)
+    {
+        ArgumentNullException.ThrowIfNull(form);
+        var diagnostics = new List<DesignDiagnostic>();
+        CheckAnchors(filePath, form, diagnostics);
+        return diagnostics;
     }
 
     /// <summary>
