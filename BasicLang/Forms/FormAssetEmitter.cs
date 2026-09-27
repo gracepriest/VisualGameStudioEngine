@@ -610,7 +610,127 @@ public static class FormAssetEmitter
 
         AppendCanvasControls(sb, form.Controls, parent: null, runtime, designer);
         AppendKindCss(sb, form);
+        AppendStackedQuery(sb, form, designer);
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// Below the phone breakpoint (spec §5) the form area is ONE flex column. Every control goes
+    /// <c>position: static</c> (otherwise <c>order</c> does nothing), in <see cref="FormReadingOrder"/>'s order per
+    /// sibling list; top strips first and bottom strips last; a docked control is an ordinary row. HTML order is
+    /// unchanged. ⛔ The breakpoint is <see cref="FormLayout.EffectiveMobileBreakpoint"/> — the one rule; 0 never
+    /// stacks, a Degraded value gives the default.
+    /// </summary>
+    private static void AppendStackedQuery(StringBuilder sb, FormDocument form, FormDockLayoutResult designer)
+    {
+        var breakpoint = form.Layout?.EffectiveMobileBreakpoint ?? FormLayout.DefaultMobileBreakpoint;
+        if (breakpoint == 0)
+        {
+            return;
+        }
+
+        sb.Append($"@media (width < {Number(breakpoint)}px) {{\n");
+        sb.Append("  .vgs-form { display: flex; flex-direction: column; gap: 8px; height: auto; min-width: 0; min-height: 0; }\n");
+        AppendStacked(sb, form.Controls, designer);
+        sb.Append("}\n");
+    }
+
+    /// <summary>
+    /// One sibling list's stacked rules, then each container's children inside it.
+    ///
+    /// <para>⚠ Every rectangle here is the DESIGNER picture (a docked control's resolved rect; an undocked control's
+    /// stored one). CSS <c>order</c> is static, so ordering by the design keeps it the same whichever controls user
+    /// code has hidden; a hidden control stays <c>display:none</c> and its order only matters once shown.</para>
+    /// </summary>
+    private static void AppendStacked(
+        StringBuilder sb, IReadOnlyList<FormControl> siblings, FormDockLayoutResult designer)
+    {
+        FormRect? RectOf(FormControl control) =>
+            designer.TryGet(control, out var docked) ? docked.Bounds
+            : control.Geometry is PixelGeometry pixel ? new FormRect(pixel.X, pixel.Y, pixel.Width, pixel.Height)
+            : null;
+
+        // A strip is always Top or Bottom here (FormDockLayout.EdgeOf); ordered by where it DOCKS, so the first
+        // Top strip comes first and the first-documented Bottom strip (nearest the true bottom edge) comes last.
+        var strips = siblings
+            .Where(c => c.Definition?.Place == FormPlace.Docked && designer.TryGet(c, out _))
+            .ToList();
+        var top = strips.Where(c => FormDockLayout.EdgeOf(c) == FormDockEdge.Top).OrderBy(c => RectOf(c)!.Value.Y);
+        var bottom = strips.Where(c => FormDockLayout.EdgeOf(c) == FormDockEdge.Bottom).OrderBy(c => RectOf(c)!.Value.Y);
+        var positioned = siblings
+            .Where(c => (c.Definition?.Place ?? FormPlace.Positioned) == FormPlace.Positioned && RectOf(c) != null)
+            .ToList();
+
+        var ordered = top
+            .Concat(FormReadingOrder.Order(positioned, c => RectOf(c)!.Value))
+            .Concat(bottom)
+            .ToList();
+
+        for (var i = 0; i < ordered.Count; i++)
+        {
+            AppendStackedRule(sb, ordered[i], i, RectOf(ordered[i])!.Value);
+        }
+
+        foreach (var container in positioned.Where(c => c.Children.Count > 0))
+        {
+            AppendStacked(sb, container.Children, designer);
+        }
+    }
+
+    private static void AppendStackedRule(StringBuilder sb, FormControl control, int order, FormRect rect)
+    {
+        var definition = control.Definition;
+        var isContainer = definition?.IsContainer == true;
+        var rules = new List<string> { "position: static", $"order: {Number(order)}" };
+
+        if (definition?.Place == FormPlace.Docked)
+        {
+            // A strip spans the column, as it spans the form.
+            rules.Add("align-self: stretch");
+        }
+        else if (definition?.StretchesWhenStacked == true)
+        {
+            // ⛔ The catalog's facet (spec §5), never a Kind switch.
+            rules.Add("align-self: stretch");
+            rules.Add("width: auto");
+            if (rect.Height > 0 && !isContainer)
+            {
+                rules.Add($"height: {Number(rect.Height)}px");
+            }
+        }
+        else
+        {
+            // Small controls keep their designed size, left-aligned.
+            rules.Add("align-self: flex-start");
+            if (rect.Width > 0)
+            {
+                rules.Add($"width: {Number(rect.Width)}px");
+            }
+
+            if (rect.Height > 0 && !isContainer)
+            {
+                rules.Add($"height: {Number(rect.Height)}px");
+            }
+        }
+
+        // A control wider than the phone never makes it scroll sideways.
+        rules.Add("max-width: 100%");
+
+        if (isContainer)
+        {
+            rules.Add("height: auto");
+
+            // ⛔ Never write display for a control whose own catalog CSS writes it (Visible=false → display:none):
+            // this later declaration would un-hide it on phones.
+            if (!CatalogDeclarations(control).Any(d => d.StartsWith("display:", StringComparison.Ordinal)))
+            {
+                rules.Add("display: flex");
+                rules.Add("flex-direction: column");
+                rules.Add("gap: 8px");
+            }
+        }
+
+        sb.Append($"  #{control.Id} {{ {string.Join("; ", rules)}; }}\n");
     }
 
     private static void AppendCanvasControls(

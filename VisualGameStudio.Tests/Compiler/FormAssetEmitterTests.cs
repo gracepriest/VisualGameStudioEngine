@@ -976,4 +976,160 @@ public class FormAssetEmitterTests
             Assert.That(DesktopRule(css, "menuStrip1"), Does.Not.Contain("z-index"), "the band itself stays in document order");
         });
     }
+
+    // ==================================================================
+    // Task 10 (spec 2026-09-27 §5) — below the breakpoint: one column, in reading order
+    // ==================================================================
+
+    private static int OrderOf(string css, string id)
+    {
+        var rule = PhoneRule(css, id);
+        Assert.That(rule, Is.Not.Null, $"no phone rule for {id}");
+        var match = Regex.Match(rule!, @"order: (\d+);");
+        Assert.That(match.Success, Is.True, rule);
+        return int.Parse(match.Groups[1].Value, CultureInfo.InvariantCulture);
+    }
+
+    private static FormRect Stored(FormControl control)
+    {
+        var pixel = (PixelGeometry)control.Geometry!;
+        return new FormRect(pixel.X, pixel.Y, pixel.Width, pixel.Height);
+    }
+
+    [TestCase("480", 480)]
+    [TestCase(null, 600)]
+    [TestCase("-1", 600)]
+    [TestCase("wide", 600)]
+    public void ThePhoneQuery_UsesTheEffectiveBreakpoint(string? raw, int expected)
+    {
+        // ⛔ EffectiveMobileBreakpoint is the one rule: a Degraded value gives the page the default (D9).
+        var page = CanvasPage(breakpoint: raw);
+        page.Controls.Add(At("Button", "btn", 10, 10, 75, 23));
+        Assert.That(page.Layout!.EffectiveMobileBreakpoint, Is.EqualTo(expected), "precondition");
+
+        Assert.That(FormAssetEmitter.Css(page), Does.Contain(
+            $"@media (width < {expected}px) {{\n" +
+            "  .vgs-form { display: flex; flex-direction: column; gap: 8px; height: auto; min-width: 0; min-height: 0; }\n"));
+    }
+
+    [Test]
+    public void ABreakpointOfZero_NeverStacks()
+    {
+        var page = CanvasPage(breakpoint: "0");
+        page.Controls.Add(At("Button", "btn", 10, 10, 75, 23));
+
+        Assert.That(FormAssetEmitter.Css(page), Does.Not.Contain("@media"));
+    }
+
+    [Test]
+    public void ThePhoneOrder_IsFormReadingOrders()
+    {
+        // The owner's case (S8): a logo beside two label/box pairs — the pairs stay together.
+        var page = CanvasPage();
+        page.Controls.Add(At("Label", "userLabel", 130, 12, 80, 23));
+        page.Controls.Add(At("PictureBox", "logo", 10, 10, 100, 100));
+        page.Controls.Add(At("TextBox", "userBox", 220, 10, 150, 23));
+        page.Controls.Add(At("Label", "passLabel", 130, 52, 80, 23));
+        page.Controls.Add(At("TextBox", "passBox", 220, 50, 150, 23));
+
+        var css = FormAssetEmitter.Css(page);
+        var expected = FormReadingOrder.Order(page.Controls, Stored).Select(c => c.Id).ToList();
+        var actual = page.Controls.OrderBy(c => OrderOf(css, c.Id)).Select(c => c.Id).ToList();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(actual, Is.EqualTo(expected), "the order is FormReadingOrder's, never re-derived");
+            Assert.That(actual, Is.EqualTo(new[] { "logo", "userLabel", "userBox", "passLabel", "passBox" }),
+                "non-vacuity: S8's worked example");
+        });
+    }
+
+    [Test]
+    public void OnAPhone_TopStripsComeFirst_BottomStripsLast_AndADockedPanelJoinsTheRows()
+    {
+        var page = CanvasPage();
+        page.Controls.Add(At("Panel", "pnlTop", 0, 0, 10, 40, dock: "Top")); // docks ABOVE the menu
+        page.Controls.Add(StripOf("StatusStrip", "statusStrip1"));
+        page.Controls.Add(StripOf("MenuStrip", "menuStrip1"));
+        page.Controls.Add(StripOf("ToolStrip", "toolStrip1"));
+        page.Controls.Add(At("Button", "btn", 10, 200, 75, 23));
+
+        var css = FormAssetEmitter.Css(page);
+
+        Assert.That(page.Controls.OrderBy(c => OrderOf(css, c.Id)).Select(c => c.Id),
+            Is.EqualTo(new[] { "menuStrip1", "toolStrip1", "pnlTop", "btn", "statusStrip1" }),
+            "spec §5/§7a: top strips first (as they stack), bottom strips last; the docked panel is an ordinary row");
+    }
+
+    [Test]
+    public void AContainersChildren_AreOrderedInsideIt_InItsOwnCoordinates()
+    {
+        var c = At("Button", "c", 10, 80, 75, 23);
+        var a = At("Button", "a", 10, 10, 75, 23);
+        var b = At("Button", "b", 100, 10, 75, 23);
+        var page = CanvasPage();
+        page.Controls.Add(At("Panel", "pnl", 50, 50, 300, 200, children: new[] { c, a, b }));
+
+        var css = FormAssetEmitter.Css(page);
+        var panel = page.Controls[0];
+        var expected = FormReadingOrder.Order(panel.Children, Stored).Select(x => x.Id);
+
+        Assert.That(panel.Children.OrderBy(x => OrderOf(css, x.Id)).Select(x => x.Id), Is.EqualTo(expected));
+    }
+
+    private static IEnumerable<TestCaseData> PositionedWebKinds() =>
+        FormControlCatalog.All
+            .Where(d => d.Place == FormPlace.Positioned && d.SupportsTarget(FormTarget.Web))
+            .Select(d => new TestCaseData(d.Kind).SetName($"{{m}}({d.Kind})"));
+
+    [TestCaseSource(nameof(PositionedWebKinds))]
+    public void OnAPhone_OnlyAFlaggedRowStretches(string kind)
+    {
+        var row = FormControlCatalog.Find(kind)!;
+        var page = CanvasPage();
+        FormCatalogShapes.Canonical(page, row, "ctl", geometry: new PixelGeometry { X = 10, Y = 10, Width = 140, Height = 40 });
+
+        var rule = PhoneRule(FormAssetEmitter.Css(page), "ctl");
+
+        Assert.That(rule, row.StretchesWhenStacked
+            ? Does.Contain("align-self: stretch; width: auto")
+            : Does.Contain("align-self: flex-start; width: 140px"));
+    }
+
+    [Test]
+    public void OnAPhone_AHiddenContainerStaysHidden_AndAVisibleOneStacksItsChildren()
+    {
+        var hidden = At("Panel", "hiddenPanel", 10, 10, 200, 100, children: At("Button", "a", 5, 5, 75, 23));
+        hidden.Properties["Visible"] = "False";
+        var page = CanvasPage();
+        page.Controls.Add(hidden);
+        page.Controls.Add(At("Panel", "shownPanel", 10, 150, 200, 100, children: At("Button", "b", 5, 5, 75, 23)));
+
+        var css = FormAssetEmitter.Css(page);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(DesktopRule(css, "hiddenPanel"), Does.Contain("display: none"));
+            Assert.That(PhoneRule(css, "hiddenPanel"), Does.Not.Contain("display"),
+                "⛔ a later display:flex would un-hide it on phones");
+            Assert.That(PhoneRule(css, "shownPanel"), Does.Contain("height: auto; display: flex; flex-direction: column; gap: 8px"));
+            Assert.That(PhoneRule(css, "b"), Does.StartWith("position: static; order: 0"));
+        });
+    }
+
+    [Test]
+    public void OnAPhone_AStripSpansTheColumn_AndEveryControlIsCappedAtItsWidth()
+    {
+        var page = CanvasPage();
+        page.Controls.Add(StripOf("MenuStrip", "menuStrip1"));
+        page.Controls.Add(At("Panel", "wide", 0, 30, 800, 100));
+
+        var css = FormAssetEmitter.Css(page);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(PhoneRule(css, "menuStrip1"), Is.EqualTo("position: static; order: 0; align-self: stretch; max-width: 100%;"));
+            Assert.That(PhoneRule(css, "wide"), Does.Contain("width: 800px; max-width: 100%"));
+        });
+    }
 }
