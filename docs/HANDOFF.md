@@ -2267,6 +2267,63 @@ single new failure against the 170-name baseline.
   parameter should bind case-insensitively to a same-spelled creator local — not fixed here).
   Tests: `VisualGameStudio.Tests/Compiler/LambdaCaptureSetTests.cs`. See also the corrected K1-shape
   example above ("CLOSED on C#/JavaScript").
+- ⭐ **Newest — #183 DONE (fix committed `34ad5c2c`).** MSIL: `&` with a value operand, and
+  `Console.Write`/`WriteLine` of every value type. Before this, `String::Concat(string, string)`
+  received Integer/Long/Short/Byte/Double/Single/Boolean/UInteger/ULong/SByte/UShort raw where a
+  string reference belongs — `"n=" & 5`, `i & "!"`, `acc & k` — `InvalidProgramException` at the
+  CLI, CLI `--optimize` and a Release `.blproj`; `Console.WriteLine`/`Write` had no arm for Short,
+  Byte, SByte, UShort, UInteger or ULong (same exception, and `Console.Write(Short)` named the
+  nonexistent `Write(Int16)` — `MissingMethodException`), and widened Single to
+  `WriteLine(float64)`, printing `0.1F` as `0.10000000149011612`. #171 had fixed the `&` gap for
+  Char only.
+  - `EmitConcatOperandAsString` generalizes #171's Char-only helper: Char keeps
+    `Char::ToString(char)` byte-identical; every other value boxes to its OWN type
+    (`ValueTypeBoxToken`) and calls `Object::ToString()` via `callvirt` — never `box object`, which
+    is a no-op on a value and was the exception. `ConsoleWriteOverload`/`TryEmitConsoleValueWrite`
+    are the one shared table/helper for `Write` and `WriteLine`: int8/int16/uint8/uint16 go to
+    `(int32)` with no conversion (the load already sign/zero-extends); Single goes to `(float32)`,
+    never `(float64)`; an enum or a Structure boxes to its own type token for `(object)`.
+  - Measured with `probe.py`: the five contract probes (`&` with every value type; `Console.Write`/
+    `WriteLine` of every value type) print the C# answer on MSIL in all 15 cells (5 probes × CLI /
+    CLI `-O` / Release `.blproj`), previously `InvalidProgramException`/`MissingMethodException`
+    everywhere. C#, C++ and JavaScript unchanged. Byte-compared 5,230 files: every `.cs`/`.js`/
+    `.cpp`/`.h` identical; the 57 `.il` files that differ are the probes plus #164's E8
+    (Byte/Short, now correct, unrelated task). `BASICLANG_VERIFY_IR` fired 0 times.
+  - **Why the existing MSIL fixtures never caught `"n=" & 5`:** every one wraps a number in
+    `CStr()` before `&` (confirmed by grep — no existing test concatenates a raw numeric/Short/
+    Byte/Single value on MSIL without it), and none prints a small or unsigned integer or a
+    `Single` directly. `CStr(...)` is a separate call path, untouched by this fix.
+  - **Tests:** `VisualGameStudio.Tests/Msil/MsilValueToStringTests.cs` (IL-text pins, fast subset,
+    24 cases — the five mutants below that no running program can distinguish from the fixed
+    behaviour) and `MsilValueToStringExecutionTests.cs` (`[Category("Integration")]`, 21 cases: the
+    five contract probes on both pipelines and all three entry points, plus the edge probes that
+    now run clean: unsigned types, a function/field/array-element/arithmetic `&` operand, and a
+    String `Nothing` operand). `JsExecutionTierRosterTests`' roster grew 75 → 76 (added by hand —
+    the fixture lives in the `Msil` namespace, outside that guard's automatic discovery).
+  - **Mutants:** 15 built and killed for real, in a separate `git worktree --detach` (never the
+    main tree), `BasicLang.dll` rebuilt there and swapped into the test output only between
+    `dotnet test` runs, then the main tree's real DLL restored and md5-verified. Six (c, d, e, f,
+    g, i) change only the emitted IL, not any probe's printed output — an alternate boxed-`ToString()`
+    path happens to print the same text as the correct overload, and the enum/Structure fallback
+    (e, i) does not run on MSIL at all yet (#192) — and are killed only by the IL-text fixture; the
+    other nine are killed by the execution fixture. See both fixtures' doc
+    comments for which test kills which.
+    - ⚠ **The test-writer brief's prose ("value on the LEFT kills b, on the RIGHT kills b2")
+      is BACKWARDS from the measured mutants** — re-verified directly: `b_left_only` (which
+      leaves only the LEFT `&` operand converted) is killed by a probe with the VALUE ON THE
+      RIGHT (`"x=" & i`; the right conversion is what it removed), and `b2_right_only` is killed
+      by a probe with the value on the LEFT (`i & "!"`). The mutants.py diff and the measured
+      kill lists agree with each other; only the summary sentence in the brief was inverted.
+  - **Filed, not fixed here** (left out of the execution fixture on purpose, one comment naming
+    each): **#191** (a user-class `&` operand, and `Console.Write` of a class — pre-existing,
+    unrelated); **#192** (an MSIL enum LOCAL is declared `class 'Shade'` for a type that is itself
+    a value type — TypeLoadException; a default, never-`New`'d Structure local is never
+    initialized — NullReferenceException; `Date`/`DateTime` do not resolve as a type at all on
+    MSIL). `MsilValueToStringTests` pins the enum/Structure fallback's IL shape only (`box
+    'Shade'`/`box 'Pt'`, verified directly against the harness before writing the assertion),
+    never a run. **#129** (Decimal cannot be declared as an MSIL local at all — `MSILBackend`'s
+    type-spec sanitizes `valuetype [System.Runtime]System.Decimal` into an undefined class name;
+    every use fails to assemble, mixing or `&` or not).
 - ⚠ **Two arms of the CSE repair are unreachable from any BasicLang program**, and are pinned by
   direct unit assertions in `CseKeyEncodingUnitTests` rather than by a program, because no program
   can express them:

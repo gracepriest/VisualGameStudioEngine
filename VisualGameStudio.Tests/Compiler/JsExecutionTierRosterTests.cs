@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 using NUnit.Framework;
+using VisualGameStudio.Tests.Msil;
 
 namespace VisualGameStudio.Tests.Compiler;
 
@@ -292,6 +293,16 @@ public class JsExecutionTierRosterTests
         // against #189). NothingConversionTests (front end/IR only, no process spawned, no
         // [Category("Integration")]) is NOT here.
         typeof(NothingConversionExecutionTests),
+
+        // Task #183 — MSIL `&` with a value operand, and Console.Write/WriteLine of every value
+        // type. Lives in the VisualGameStudio.Tests.Msil namespace, NOT
+        // VisualGameStudio.Tests.Compiler, so RosterCoversEveryJavaScriptIntegrationFixture's own
+        // namespace filter below cannot discover it automatically — listed here by hand, same as
+        // every manually-added row above. Its JS legs run through FourBackends.RunsOnEveryBackend
+        // / RunsOnEveryBackendAggressive (C2/C3/W2/E7) and JavaScriptExecutionTests.RunJs directly
+        // (E8's pinned "null" text against #189). MsilValueToStringTests (pure in-process IL-text
+        // fixture, spawns nothing, no [Category("Integration")]) is NOT here.
+        typeof(MsilValueToStringExecutionTests),
     };
 
     /// <summary>
@@ -340,7 +351,7 @@ public class JsExecutionTierRosterTests
 
     [Test]
     public void RosterIsPinned()
-        => Assert.That(ExecutionTier, Has.Length.EqualTo(75), // + NothingConversionExecutionTests, CTypeConversionExecutionTests
+        => Assert.That(ExecutionTier, Has.Length.EqualTo(76), // + MsilValueToStringExecutionTests (task #183)
             "The execution-tier roster changed. That is fine — update the number — but it must " +
             "be a deliberate edit, not a silent shrink.");
 
