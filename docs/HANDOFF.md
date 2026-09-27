@@ -2169,6 +2169,87 @@ single new failure against the 170-name baseline.
     should `Char` widen to `String` on assignment/return/parameter, the way VB allows treating a
     length-1 String literal as source but not a bare Char value? `For Each s As String In "ab"` is
     refused today under the same rule as `As Integer`, deliberately, until #184 is decided).
+- ⭐ **Newest — #173 DONE (fix committed `c0b457d9`).** `Nothing` now converts to any REFERENCE
+  type — a class, an interface, a delegate (user `Delegate`/`Action`/`Func`), `String`, an array, a
+  collection, or an unresolvable .NET handle — at every one of the NINE conversion sites the
+  analyzer has: a `Dim`/field/module-level initializer (one code path), an assignment
+  (variable/field/property-set/array element, one code path), a user-call argument, a
+  delegate-invocation argument (`f(Nothing)` where `f` is itself a delegate VALUE), a `New`
+  argument, a `MyBase.New` argument, `Return`, and an `Optional` default. Before this the `Nothing`
+  literal typed `Object`, and every site's own `IsAssignableFrom` refused it into anything but
+  `Object` — `Dim f As Action = Nothing` (the filed case, #155's L16) was one instance of a refusal
+  that hit all nine sites alike.
+  - `JudgeNothingConversion` is the ONE answer, asked at all nine sites; it is built on
+    `NothingAdviceFor` (the typed array literal's own rule, `CheckTypedLiteralElement`, now routed
+    through the same method) — the ONE-answer invariant is pinned directly
+    (`NothingConversionTests.TypedArrayLiteral_AndDimSite_AgreeOnNothing`).
+  - A value type STAYS refused, with advice ("Nothing has no value of type 'Integer'; write 0").
+    `NothingAdviceFor` gained four new arms once value types started reaching it that used to call
+    a reference type: the P1 native structs (DateTime/TimeSpan/Guid — NativeOwned, reference-typed
+    StringBuilder excepted), a type parameter, a tuple, and `Union`. `Integer?` — the one value type
+    VB itself admits `Nothing` into — is admitted. VB's value-type Nothing-DEFAULT (rather than
+    refusal) is the owner decision **#186**, out of scope here.
+  - **IR:** `CoerceToDeclaredType` re-types an Object-typed null constant to the type it is stored
+    into (the same in-place re-typing a numeric literal already gets); a `Nothing` argument to a
+    `Func`/`Action` INVOCATION is typed from the delegate's own generic arguments
+    (`CoerceToParameterType`'s new arm — a delegate value has no parameter-list Symbol to read).
+  - **C++ divergence, recorded:** `CppCodeGenerator.NothingOf` spells a null constant by its TYPE —
+    `nullptr` for a `shared_ptr` class/interface/collection and for a `std::function` delegate, but
+    the EMPTY value for the three reference-type representations this backend holds by VALUE with
+    no null state: `std::string{}` for `String`, `BasicLang::Array<T>{}` for an array,
+    `BasicLang::NetRef{}` for a .NET handle (already `MapType`'s own DEFAULT-value convention).
+    `Dim s As String = Nothing` therefore behaves exactly like `Dim s As String` (`""`) on C++; VB
+    can tell `Nothing` apart from `""` only through `Is`, which does not parse yet (**#185**), so
+    the divergence is invisible to any BasicLang program today. Verified through the CLI:
+    `Dim s As Stream = Nothing` (an ordinary unresolvable .NET reference type, not NativeOwned) now
+    emits `BasicLang::NetRef s = {}; s = BasicLang::NetRef{};` —
+    `NetGeneratedShimConformanceTests.NothingInAHandleSlot_DoesNotYetCompile_PinnedDivergence`'s
+    doc comment was corrected to say so (its assertions are untouched: the CAST form,
+    `CType(Nothing, Stream)`, is a different code path and still fails to build, C2440).
+  - Measured (probe.py, 4 backends × CLI/CLI-O/Release .blproj): before, every `Nothing` probe
+    failed at compile time; after, N1-N3, N4c, N5, N6b and X1-X8 run correctly on every backend, on
+    both the standard and aggressive optimizer pipelines. Byte-compared 3,991 corpus/probe files
+    across `t118`/`t122`/`t155`/`t164`/`t168`/`t171`/`t175` plus the samples: only `#164`'s E3
+    (`Return Nothing` from a `String` function, 3 files) changed — `return nullptr;` became
+    `return std::string{};` — every other file identical; the IR verifier fired 0 times.
+  - Cells that stay wrong are PRE-EXISTING gaps, unrelated to `Nothing`, each confirmed by a
+    no-`Nothing` control that fails identically:
+    - **#187** — a lambda (or an `AddressOf` result) cannot be stored into a user `Delegate`-typed
+      variable (`Dim d As Notify = Sub(...)` is `Cannot assign value of type 'Action' to 'Notify'`
+      on all four backends, with or without `Nothing` anywhere in the program). N4/N4b are not run
+      by the test fixture for this reason; N4c (the same shape with no lambda ever stored) is, and
+      passes everywhere.
+    - **#188** — a delegate FIELD invoked from inside its OWN class fails on C++ (a `void*` field)
+      and on JavaScript (`ReferenceError: Callback is not defined`). N6 is not run; N6b (the same
+      "callback set to Nothing, then later set", read into a local before the switch) is, and
+      passes everywhere.
+    - **#189** — three C++ gaps and one JavaScript gap, each PINNED rather than silently accepted:
+      a captured `Catch` variable's member access (`ex.Message` → `ex->Message` on a BY-VALUE
+      exception type) fails to compile on C++ (N7, pinned); `Case Is Nothing` on an ARRAY fails to
+      compile on C++ (X4 is not run; X4b, the same shape without that one comparison, is, and
+      passes); JavaScript prints the real `null` rather than `""` when a `String` `Nothing` is
+      concatenated into text (S1-S3's JavaScript legs, pinned).
+  - **Tests:** `VisualGameStudio.Tests/Compiler/NothingConversionTests.cs` (front end + IR, fast
+    subset, 59 cases) and `NothingConversionExecutionTests.cs` (`[Category("Integration")]`, four
+    backends × two pipelines over the 14 probes that run everywhere, plus N7 and the S1-S3
+    JavaScript-null pins and the two C++-spelling assertions — 24 cases). `JsExecutionTierRosterTests`'
+    roster grew 73 → 74; `Msil/ClosureLoweringTests`' and `Blnet/NetGeneratedShimConformanceTests`'
+    stale doc comments (both predating #173, both describing a `Nothing` refusal that no longer
+    holds) were corrected — their assertions were not touched, and the CLI was used to re-verify the
+    new behaviour before writing the correction.
+  - **Mutants:** 14 built and killed for real — source patched in a SEPARATE git worktree,
+    `BasicLang.dll` rebuilt there and swapped into the test output (never during a `dotnet test`
+    run), then the main tree's real DLL restored and md5-verified (`50895fd00942eae00f75d84420c8b371`,
+    identical before and after, confirming this SDK's builds are byte-deterministic given the same
+    source and path). Admission dropped one at a time at each of the eight sites (Dim / assignment /
+    user-argument / delegate-invocation-argument / New / MyBase.New / Return / Optional);
+    `NothingAdviceFor` made to always return null, its NativeOwned arm dropped, its TypeParameter
+    arm dropped; the IR re-type removed; the delegate-argument IR arm removed; `NothingOf` made to
+    always return `nullptr`. All 14 killed on the first try; see `NothingConversionTests`'/
+    `NothingConversionExecutionTests`' doc comments for which test kills which.
+  - Filed, not fixed here: **#185** (`Is`/`IsNot` do not parse — the only source-level way VB tells
+    `Nothing` apart from a real value); **#186** (VB's value-type Nothing-DEFAULT, as opposed to
+    refusal — an owner decision); **#187**/**#188**/**#189** above.
 - ⭐ **Newest — #122 DONE (ADR-0006 D1's Obligation, committed `22f18284`).** The closure rule
   narrows from "every local is call-visible in a function that creates a lambda" (the interim
   approximation) to the locals a lambda of that function actually CAPTURES, read straight off the

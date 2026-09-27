@@ -283,6 +283,15 @@ public class JsExecutionTierRosterTests
         // JavaScriptCodeGenerator (the pinned S1/S5 BL7004 refusal texts). ForEachOverStringTests
         // (front end/IR only, no process spawned, no [Category("Integration")]) is NOT here.
         typeof(ForEachOverStringExecutionTests),
+
+        // Task #173 — Nothing converts to any reference type at every conversion site. Named
+        // "...ExecutionTests", so the widened match below WOULD catch it on its own; listed
+        // explicitly anyway, matching every row above. Its JS legs run through
+        // FourBackends.RunsOnEveryBackend[Aggressive] (the 14 probes that run on every backend)
+        // and JavaScriptExecutionTests.RunJs directly (N7, and the S1-S3 pinned "[null]" rows
+        // against #189). NothingConversionTests (front end/IR only, no process spawned, no
+        // [Category("Integration")]) is NOT here.
+        typeof(NothingConversionExecutionTests),
     };
 
     /// <summary>
@@ -331,7 +340,7 @@ public class JsExecutionTierRosterTests
 
     [Test]
     public void RosterIsPinned()
-        => Assert.That(ExecutionTier, Has.Length.EqualTo(74), // + CTypeConversionExecutionTests
+        => Assert.That(ExecutionTier, Has.Length.EqualTo(75), // + NothingConversionExecutionTests, CTypeConversionExecutionTests
             "The execution-tier roster changed. That is fine — update the number — but it must " +
             "be a deliberate edit, not a silent shrink.");
 

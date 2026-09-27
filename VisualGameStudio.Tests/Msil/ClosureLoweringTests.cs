@@ -315,9 +315,14 @@ internal static class ClosureLoweringProbes
     internal const string L15Expected = "6\n6\n6";
 
     /// <summary>A <c>Catch</c> variable captured and invoked after the <c>Try</c> — L16 itself
-    /// (<c>Dim f As Action = Nothing</c>) fails the front end for an unrelated reason
-    /// ("Cannot assign value of type 'Object' to variable of type 'Action'"); L16b (no
-    /// initializer) is the implementer's re-probe and the one the contract names.</summary>
+    /// (<c>Dim f As Action = Nothing</c>) used to fail the front end for an unrelated reason
+    /// ("Cannot assign value of type 'Object' to variable of type 'Action'"), so L16b (no
+    /// initializer) was the implementer's re-probe and the one the contract names. ⚠ STALE AS OF
+    /// #173 (fix commit c0b457d9): <c>Nothing</c> now converts to any reference type at every
+    /// site, so L16 itself compiles — C#, JavaScript and MSIL print "boom", same as L16b; only
+    /// C++ still fails, for the SAME unrelated reason as before (<c>ex.Message</c> on a
+    /// by-value-held exception type, not a pointer — #189). See
+    /// <c>NothingConversionExecutionTests</c>'s N7 (L16's exact shape).</summary>
     internal const string L16b = """
         Sub Main()
             Dim f As Action
