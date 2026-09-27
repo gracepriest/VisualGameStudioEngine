@@ -9284,6 +9284,23 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     resultType = _typeManager.BooleanType;
                     break;
 
+                case "Is":
+                case "IsNot":
+                    // Reference identity. VB refuses it on a value (BC30020: "'Is' operator does
+                    // not accept operands of type 'Integer'"): the answer would be about boxes,
+                    // not values, and `=` is the operator that compares those.
+                    foreach (var operand in new[] { leftType, rightType })
+                    {
+                        if (!IsReferenceOperand(operand))
+                        {
+                            Error($"'{node.Operator}' compares references and does not accept an operand of type '{operand.Name}'. Use '=' to compare values",
+                                  node.Line, node.Column);
+                            break;
+                        }
+                    }
+                    resultType = _typeManager.BooleanType;
+                    break;
+
                 case "=":
                 case "<>":
                 case "!=":
@@ -10561,6 +10578,19 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 return last.Type;
             return last.Type?.ElementType ?? last.Type;
         }
+
+        /// <summary>
+        /// An operand <c>Is</c>/<c>IsNot</c> accepts: a reference (class, interface, array,
+        /// delegate, String, Object — which is also what <c>Nothing</c> types as), a type
+        /// parameter, or a Nullable, whose <c>Is Nothing</c> VB also allows.
+        /// </summary>
+        private static bool IsReferenceOperand(TypeInfo type) =>
+            type == null
+            || type.Kind is TypeKind.Class or TypeKind.Interface or TypeKind.Array or TypeKind.Delegate
+                or TypeKind.TypeParameter or TypeKind.Nullable or TypeKind.Foreign
+            || type.IsNullable
+            || string.Equals(type.Name, "Object", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(type.Name, "String", StringComparison.OrdinalIgnoreCase);
 
         private static Symbol ResolveConstructor(TypeInfo type, int argumentCount)
         {

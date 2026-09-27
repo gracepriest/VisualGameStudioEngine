@@ -4309,13 +4309,13 @@ namespace BasicLang.Compiler
 
         private ExpressionNode ParseLogicalAnd()
         {
-            var expr = ParseEquality();
+            var expr = ParseLogicalNot();
 
             // AndAlso shares And's precedence level in VB — same reasoning as OrElse above.
             while (Check(TokenType.And) || Check(TokenType.AndAnd) || Check(TokenType.AndAlso))
             {
                 var op = Advance();
-                var right = ParseEquality();
+                var right = ParseLogicalNot();
                 var binary = new BinaryExpressionNode(op.Line, op.Column);
                 binary.Left = expr;
                 binary.Operator = op.Lexeme;
@@ -4326,13 +4326,55 @@ namespace BasicLang.Compiler
             return expr;
         }
 
+        /// <summary>
+        /// VB's <c>Not</c> binds LOOSER than every comparison and tighter than <c>And</c>:
+        /// <c>Not x Is Nothing</c> is <c>Not (x Is Nothing)</c>, and <c>Not n = 5</c> is
+        /// <c>Not (n = 5)</c>. It was parsed at unary precedence only, so both read as
+        /// <c>(Not x) …</c> and were refused ("Logical NOT requires Boolean operand") — which made
+        /// VB's commonest null test unwritable. <see cref="ParseUnary"/> still takes a <c>Not</c>
+        /// in operand position (<c>x = Not b</c>).
+        /// </summary>
+        private ExpressionNode ParseLogicalNot()
+        {
+            if (Check(TokenType.Not))
+            {
+                var op = Advance();
+                return new UnaryExpressionNode(op.Line, op.Column)
+                {
+                    Operator = op.Lexeme,
+                    Operand = ParseLogicalNot(),
+                    IsPostfix = false
+                };
+            }
+
+            return ParseEquality();
+        }
+
         private ExpressionNode ParseEquality()
         {
             var expr = ParseComparison();
 
             while (Check(TokenType.Equal) || Check(TokenType.NotEqual) ||
-                   Check(TokenType.IsEqual) || Check(TokenType.Assignment)) // Include Assignment here
+                   Check(TokenType.IsEqual) || Check(TokenType.Assignment) || // Include Assignment here
+                   Check(TokenType.Is) || IsNotOperatorAhead())
             {
+                // `a Is b` / `a IsNot b`: REFERENCE identity, VB's null test (`x Is Nothing`).
+                // Neither was an operator at all — `If x Is Nothing Then` failed with "Expected
+                // 'Then' after If condition", and as an argument with "Expected ')'". The lexer
+                // has an Is token (for `Case Is`); IsNot arrives as an identifier.
+                if (Check(TokenType.Is) || IsNotOperatorAhead())
+                {
+                    var isToken = Advance();
+                    var isRight = ParseComparison();
+                    expr = new BinaryExpressionNode(isToken.Line, isToken.Column)
+                    {
+                        Left = expr,
+                        Operator = isToken.Type == TokenType.Is ? "Is" : "IsNot",
+                        Right = isRight
+                    };
+                    continue;
+                }
+
                 var op = Advance();
                 // Normalize = to == in expression context
                 if (op.Type == TokenType.Assignment)
@@ -4348,6 +4390,9 @@ namespace BasicLang.Compiler
 
             return expr;
         }
+        private bool IsNotOperatorAhead() =>
+            Check(TokenType.Identifier) && string.Equals(Peek().Lexeme, "IsNot", StringComparison.OrdinalIgnoreCase);
+
         private ExpressionNode ParseComparison()
         {
             var expr = ParseAdditive();

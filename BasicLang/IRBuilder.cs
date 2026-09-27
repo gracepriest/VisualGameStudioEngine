@@ -5972,15 +5972,18 @@ namespace BasicLang.Compiler.IR
         private bool IsComparisonOperator(string op)
         {
             return op == "<" || op == "<=" || op == ">" || op == ">=" ||
-                   op == "=" || op == "<>" || op == "==" || op == "!=" || op == "IsEqual";
+                   op == "=" || op == "<>" || op == "==" || op == "!=" || op == "IsEqual" ||
+                   op == "Is" || op == "IsNot";
         }
 
         private CompareKind MapComparisonOperator(string op)
         {
             return op switch
             {
-                "=" or "==" or "IsEqual" => CompareKind.Eq,
-                "<>" or "!=" => CompareKind.Ne,
+                // `Is`/`IsNot` are reference identity; every backend's == on a reference
+                // (C# class ==, a C++ shared_ptr ==, JS ===) already is exactly that.
+                "=" or "==" or "IsEqual" or "Is" => CompareKind.Eq,
+                "<>" or "!=" or "IsNot" => CompareKind.Ne,
                 "<" => CompareKind.Lt,
                 "<=" => CompareKind.Le,
                 ">" => CompareKind.Gt,
