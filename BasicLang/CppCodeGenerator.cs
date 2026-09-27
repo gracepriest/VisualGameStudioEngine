@@ -5985,9 +5985,9 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         /// </list>
         ///
         /// <para>⚠ A DIVERGENCE, recorded: VB tells <c>Nothing</c> from <c>""</c> or an empty
-        /// array only through <c>Is Nothing</c> (#185 — it does not parse yet) and
-        /// <c>Case Is Nothing</c>, whose C++ lowering <c>x == nullptr</c> does not compile for
-        /// either — as it did not before, for an unassigned one. C#, JavaScript and MSIL keep a
+        /// array only through <c>Is Nothing</c> and <c>Case Is Nothing</c>, which on C++ both go
+        /// through <c>EmitNullTest</c> and test EMPTINESS for these two (ADR-0011 D3), so
+        /// <c>"" Is Nothing</c> is True here and False elsewhere. C#, JavaScript and MSIL keep a
         /// real null. Keyed on the MAPPED spelling, so a registry handle type and a
         /// marker-carrying one (§8.5) cannot take different answers.</para>
         /// </summary>
