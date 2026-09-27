@@ -158,4 +158,11 @@ Fast subset vs `ff415ec5` (8308 / 8302 / 5 / 1; the five known names) + `EdgeLay
 | 8 | **Task 10 N-1 reverted:** no `display: flow-root` | killed — 2 red (`ALiteralStartingWithAParagraph…`, `TheFormArea_StartsAtTheViewportsTopLeft…` for LiteralP and Phone) |
 | 9 | Dropdown lift removed | killed — 1 red (open probe = `under`) |
 
+### Review round 1 (Task 13 quality review)
+- **I-1:** the profile leaked on every failure path (the exit-code assert and `RunProcess`'s timeout `Assert.Fail` both ran before the delete). `WithThrowawayProfile` deletes it in a `finally`. `AFailingRun_StillLeavesNoProfileBehind`: a real Edge writes a real profile (about:blank), then the run throws; the folder is gone. Mutant (no delete on failure): 1 red, and it left exactly one `bl-edge-profile-*` folder (removed by hand).
+- **I-2:** the open-menu step no longer hard-codes `display: flex`. It walks `document.styleSheets` for a `:hover > ul` rule whose owner selector the item matches and applies THAT rule's `display`; with none it throws, and the parser now REFUSES the measuring script's own (`harness:`) errors (`AStepTheMeasuringScriptCouldNotTake_IsRefused_NotCarried`). Mutant B (`li:hover>ul` → `li:active>ul` in the catalog): killed, all 42 Edge rows red (OneTimeSetUp names MenuOver and the missing rule).
+- **M-3:** per-case timeout 10 000 virtual ms, budget = (cases + 1) × that, so a hung case is reported by name. Edge still 1.8 s.
+- **M-4/M-5/M-6:** the Bordered message names Edge's UA style as a possible cause; the phone sort's X tie-break is commented (it never decides on a correct column, so it cannot mask a swap); the Edge version is parsed from the UA and held ≥ 104.
+- Gate: `PixelLayout` 97/97, 0 skipped; fast subset 8321 / 8315 / 5 / 1 (the five known names); no `bl-edge*` folder, no process with it on its command line.
+
 **Red/green:** `EdgeLayoutParsingTests` 12 (red shown by mutants 1, 3, 4); `PixelPageLayoutTests` first run 39/41 — the two red were the RECORD placeholders (Bordered, M-5), filled from the measurement; then 41/41, **0 skipped**. Leftovers after every run: no process with a `bl-edge-profile` command line, no `bl-edge-*` directory (the ReferenceDriver entries listed by CIM are Task 12's zero-thread exited processes from before this session).

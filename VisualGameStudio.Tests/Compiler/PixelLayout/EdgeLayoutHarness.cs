@@ -91,8 +91,15 @@ internal static class EdgeLayoutHarness
     /// <summary>Every Edge comparison's tolerance (spec §7): ±1 CSS px.</summary>
     public const double Tolerance = 1;
 
-    /// <summary>Virtual milliseconds Edge may spend before it dumps (it fast-forwards when idle).</summary>
-    public const int VirtualTimeBudgetMs = 120_000;
+    /// <summary>Virtual milliseconds one case may take before the harness page gives up on it and NAMES it.</summary>
+    public const int PerCaseTimeoutMs = 10_000;
+
+    /// <summary>
+    /// Virtual milliseconds Edge may spend before it dumps (it fast-forwards when idle). ⛔ Room for EVERY case to hit
+    /// its own timeout, plus slack: a budget smaller than that would dump an unfinished run and a hung case would be
+    /// reported as "did not finish" instead of by name (review M-3).
+    /// </summary>
+    public static int VirtualTimeBudgetMs(int cases) => (cases + 1) * PerCaseTimeoutMs;
 
     private static readonly string[] EdgeLocations =
     {
@@ -191,11 +198,10 @@ internal static class EdgeLayoutHarness
 
         File.WriteAllText(Path.Combine(siteDir, "harness.html"), HarnessPage(cases));
 
-        var profile = Path.Combine(Path.GetTempPath(), "bl-edge-profile-" + Guid.NewGuid().ToString("N"));
         var started = DateTime.UtcNow;
-        string dump;
-        using (var server = new WebPreviewServer())
+        var (dump, deleted, profile) = WithThrowawayProfile(profile =>
         {
+            using var server = new WebPreviewServer();
             var url = server.Start(siteDir);
             try
             {
@@ -209,24 +215,47 @@ internal static class EdgeLayoutHarness
                     "--no-default-browser-check",
                     "--disable-extensions",
                     "--window-size=1280,1024",
-                    $"--virtual-time-budget={VirtualTimeBudgetMs}",
+                    $"--virtual-time-budget={VirtualTimeBudgetMs(cases.Count)}",
                     "--dump-dom",
                     url + "harness.html"
                 }, siteDir, timeoutMs: 180_000);
 
                 Assert.That(exit, Is.Zero, $"Edge exited {exit}.\n{stderr}");
-                dump = stdout;
+                return stdout;
             }
             finally
             {
                 server.Stop();
             }
-        }
+        });
 
         var took = DateTime.UtcNow - started;
-        var deleted = DeleteProfile(profile);
         File.WriteAllText(Path.Combine(siteDir, "edge-dump.html"), dump);
         return new EdgeRun(Parse(dump, cases), deleted, profile, took);
+    }
+
+    /// <summary>
+    /// Runs <paramref name="run"/> with a fresh <c>bl-edge-profile-*</c> directory for Edge's
+    /// <c>--user-data-dir</c> and deletes it afterwards — ⛔ in a <c>finally</c>, so a failing run (a non-zero exit, a
+    /// timeout that killed Edge's tree, any exception) leaves no profile behind either (review I-1).
+    /// </summary>
+    internal static (T Result, bool Deleted, string Profile) WithThrowawayProfile<T>(Func<string, T> run)
+    {
+        var profile = Path.Combine(Path.GetTempPath(), "bl-edge-profile-" + Guid.NewGuid().ToString("N"));
+        var completed = false;
+        try
+        {
+            var result = run(profile);
+            completed = true;
+            return (result, DeleteProfile(profile), profile);
+        }
+        finally
+        {
+            if (!completed && !DeleteProfile(profile))
+            {
+                TestContext.Out.WriteLine($"[edge] a failed run could not remove its profile: {profile}");
+            }
+        }
     }
 
     /// <summary>Edge's helpers can hold the profile for a moment after the browser exits: retried, then reported.</summary>
@@ -293,6 +322,15 @@ internal static class EdgeLayoutHarness
             if (!r.TryGetProperty("vw", out var vwElement))
             {
                 throw new InvalidDataException($"'{c.Name}' reported nothing measured: {string.Join("; ", errors)}");
+            }
+
+            // ⛔ The measuring script's OWN failures (a step it could not take — a dropdown no rule opens, a missing
+            // element) are refused here, never carried: the snapshots after them measured a page the step never changed.
+            // The page's errors (App.js) are carried for the test to assert.
+            var harnessErrors = errors.Where(e => e.StartsWith("harness:", StringComparison.Ordinal)).ToList();
+            if (harnessErrors.Count > 0)
+            {
+                throw new InvalidDataException($"'{c.Name}': the measuring script failed: {string.Join("; ", harnessErrors)}");
             }
 
             // ⛔ Measured after load or not at all: before it, an image may still be undecoded — and an <img> that has
@@ -381,7 +419,9 @@ internal static class EdgeLayoutHarness
         }));
 
         // ⚠ JSON inside a <script>: "</" must not close it.
-        return HarnessTemplate.Replace("/*CASES*/", data.Replace("</", "<\\/", StringComparison.Ordinal));
+        return HarnessTemplate
+            .Replace("/*CASES*/", data.Replace("</", "<\\/", StringComparison.Ordinal))
+            .Replace("/*TIMEOUT*/0", PerCaseTimeoutMs.ToString(System.Globalization.CultureInfo.InvariantCulture));
     }
 
     private const string HarnessTemplate = """
@@ -421,7 +461,7 @@ internal static class EdgeLayoutHarness
               results.push({ name: name, errors: ["harness: the case never reported"], snaps: [] });
               current = null;
               next();
-            }, 20000);
+            }, /*TIMEOUT*/0);
             document.body.appendChild(frame);
           }
           next();
@@ -483,8 +523,25 @@ internal static class EdgeLayoutHarness
                 else element(step.id).classList.remove("vgs-harness-hide");
                 break;
               case "open":
-                // B4: the declaration the :hover rule applies, written inline — the real box, stacking and lift.
-                element(step.id).querySelector(":scope > ul").style.display = "flex";
+                // B4: a :hover cannot be sent under --dump-dom, so the page's OWN hover rule is found and its display
+                // applied inline — never a hard-coded value (review I-2: a catalog rule that no longer opens on hover
+                // must turn this red). No rule whose owner matches the item → an error, which the parser refuses.
+                var item = element(step.id), list = item.querySelector(":scope > ul"), opened = null;
+                if (!list) throw new Error("'" + step.id + "' has no dropdown list");
+                var hoverList = /:hover\s*>\s*ul$/;
+                Array.prototype.forEach.call(document.styleSheets, function (sheet) {
+                  var rules;
+                  try { rules = sheet.cssRules; } catch (e) { return; }
+                  Array.prototype.forEach.call(rules, function (rule) {
+                    if (!rule.selectorText || !rule.style.display) return;
+                    rule.selectorText.split(",").forEach(function (part) {
+                      var selector = part.trim();
+                      if (hoverList.test(selector) && item.matches(selector.replace(hoverList, ""))) opened = rule.style.display;
+                    });
+                  });
+                });
+                if (!opened) throw new Error("no stylesheet rule opens '" + step.id + "' on :hover (no ':hover > ul' rule matches it)");
+                list.style.display = opened;
                 break;
               case "hit":
                 var o = origin(), hit = document.elementFromPoint(o.x + step.x, o.y + step.y);

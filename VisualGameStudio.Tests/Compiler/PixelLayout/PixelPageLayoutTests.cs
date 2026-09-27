@@ -191,8 +191,12 @@ public class PixelPageLayoutTests
                 Assert.That((result.ViewportWidth, result.ViewportHeight), Is.EqualTo((result.Case.Width, result.Case.Height)), result.Case.Name);
             }
 
-            // M-6: the media range syntax needs Chromium ≥ 104; record what measured it.
-            Assert.That(first.UserAgent, Does.Contain("Edg/"));
+            // M-6: the page's `@media (width < Npx)` range syntax needs Chromium/Edge ≥ 104; an older browser ignores
+            // the whole block (no phone stacking, no live re-dock rules). The instrument must be above that floor.
+            var version = System.Text.RegularExpressions.Regex.Match(first.UserAgent, @"Edg/(\d+)\.");
+            Assert.That(version.Success, Is.True, $"no Edge version in the user agent: {first.UserAgent}");
+            Assert.That(int.Parse(version.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture),
+                Is.GreaterThanOrEqualTo(104), "Edge is older than the media range syntax floor");
         });
     }
 
@@ -200,6 +204,37 @@ public class PixelPageLayoutTests
     public void TheRun_LeftNoProfileBehind()
     {
         Assert.That(_edge.ProfileDeleted, Is.True, $"the throw-away Edge profile is still there: {_edge.ProfileDirectory}");
+    }
+
+    /// <summary>
+    /// Review I-1: a FAILING run removes its profile too. A real Edge writes a real profile (to about:blank), then the
+    /// run fails — the same path as a non-zero exit, a timeout's kill or a refused dump, which all throw out of the run.
+    /// </summary>
+    [Test]
+    public void AFailingRun_StillLeavesNoProfileBehind()
+    {
+        var edge = EdgeLayoutHarness.EdgePath()!;
+        string? profile = null;
+        var existed = false;
+
+        var thrown = Assert.Throws<InvalidOperationException>(() => EdgeLayoutHarness.WithThrowawayProfile<int>(p =>
+        {
+            profile = p;
+            CliTestHarness.RunProcess(edge, new[]
+            {
+                "--headless=new", $"--user-data-dir={p}", "--no-first-run", "--no-default-browser-check",
+                "--disable-extensions", "--dump-dom", "about:blank"
+            }, _dir, timeoutMs: 60_000);
+            existed = Directory.Exists(p);
+            throw new InvalidOperationException("a failed Edge run");
+        }));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(thrown!.Message, Is.EqualTo("a failed Edge run"), "the run's own failure is what propagates");
+            Assert.That(existed, Is.True, "non-vacuity: Edge created the profile");
+            Assert.That(Directory.Exists(profile), Is.False, $"the failed run left its profile behind: {profile}");
+        });
     }
 
     [Test]
@@ -490,6 +525,10 @@ public class PixelPageLayoutTests
             .Where(id => id != "btnHidden")
             .ToList();
 
+        // The column's order is read back by Y. The X tie-break never decides anything on a correct page (one column:
+        // every control at x=0, each below the last with an 8px gap), so it cannot MASK a swap: two controls
+        // swapped in the column swap their Y, and the sequence differs from the expected one. It only makes the
+        // printed list deterministic if a broken page ever puts two controls on one row.
         var actual = controls.Where(c => c.Value.Visible).OrderBy(c => c.Value.Y).ThenBy(c => c.Value.X).Select(c => c.Key).ToList();
         TestContext.Out.WriteLine($"[phone] expected {string.Join(", ", expected)}\n[phone] measured {string.Join(", ", actual)}");
 
@@ -560,6 +599,9 @@ public class PixelPageLayoutTests
         };
 
         var differences = LayoutComparison.Differences(recorded, edge.Controls, 0);
-        Assert.That(differences, Is.Empty, "the bordered containers no longer lay out as recorded:\n  " + string.Join("\n  ", differences));
+        Assert.That(differences, Is.Empty,
+            "the bordered containers no longer lay out as recorded. Either the emitter changed (a Panel BorderStyle " +
+            "given CSS, a GroupBox inset) or EDGE's default style did (the <fieldset> UA border/padding/min-inline-size) — " +
+            "check which before updating the record:\n  " + string.Join("\n  ", differences));
     }
 }

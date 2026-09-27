@@ -117,6 +117,16 @@ public class EdgeLayoutParsingTests
     }
 
     [Test]
+    public void AStepTheMeasuringScriptCouldNotTake_IsRefused_NotCarried()
+    {
+        var good = Good();
+        good["errors"] = new[] { "harness: Error: no stylesheet rule opens 'mnuFile' on :hover" };
+
+        Assert.That(() => EdgeLayoutHarness.Parse(Dump(new[] { good }), new[] { Case }),
+            Throws.TypeOf<InvalidDataException>().With.Message.Contains("no stylesheet rule opens 'mnuFile'"));
+    }
+
+    [Test]
     public void PageErrors_AreCarried_ForTheTestToAssert()
     {
         var good = Good();
