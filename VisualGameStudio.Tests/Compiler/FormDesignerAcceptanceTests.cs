@@ -111,7 +111,8 @@ public class FormDesignerAcceptanceTests
     private async Task<CodeEditorDocumentViewModel> BuildFormInDesignerAsync(FormTarget target)
     {
         // --- "New Form" in Solution Explorer ---
-        var scaffold = FormScaffolder.Create("LoginForm", target);
+        // ⚠ Pinned to Grid (spec 2026-09-27 §2.5): this path was written against the Grid scaffold; the Canvas twin is Task 14.
+        var scaffold = FormScaffolder.Create("LoginForm", target, FormLayoutKind.Grid);
         Write(scaffold.DocumentFileName, scaffold.DocumentText);
         Write(scaffold.CodeFileName, scaffold.CodeText);
         Log($"[1] new form      -> {scaffold.DocumentFileName} + {scaffold.CodeFileName}");

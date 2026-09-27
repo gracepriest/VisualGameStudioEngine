@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 
 namespace BasicLang.Forms;
@@ -66,6 +67,14 @@ public static class FormScaffolder
     }
 
     /// <summary>
+    /// 800x450 is the size <c>dotnet new winforms</c> gives a new form, so a form created here and one created
+    /// by the shipped template open the same size. ⛔ A new Canvas PAGE takes the same design size (spec
+    /// 2026-09-27 §2.5): one number for "a new form's size", on both targets.
+    /// </summary>
+    private const int DesignWidth = 800;
+    private const int DesignHeight = 450;
+
+    /// <summary>
     /// The pair for a new, empty form.
     ///
     /// <para>The <c>.bas</c> carries both regions <b>already present and already hashed</b>, so the
@@ -89,7 +98,11 @@ public static class FormScaffolder
     /// is an unresolvable .NET member typed as <c>Object</c>, so there is no declared delegate to
     /// mismatch.</para>
     /// </summary>
-    public static FormScaffold Create(string formName, FormTarget target = FormTarget.Web)
+    /// <param name="webLayout">A new web form's layout: Canvas (spec 2026-09-27 D1, the default — designed like a
+    /// WinForms form) or Grid (the pre-piece-1 scaffold, which tests that build their page from a Grid scaffold
+    /// pin). There is no Flow scaffold. Ignored for WinForms.</param>
+    public static FormScaffold Create(
+        string formName, FormTarget target = FormTarget.Web, FormLayoutKind webLayout = FormLayoutKind.Canvas)
     {
         var illegal = DescribeIllegalName(formName);
         if (illegal != null)
@@ -100,19 +113,32 @@ public static class FormScaffolder
         var document = new FormDocument { Target = target, Name = formName };
         if (target == FormTarget.Web)
         {
-            document.Layout = new FormLayout
+            document.Layout = webLayout switch
             {
-                Kind = FormLayoutKind.Grid, Cols = "auto,1fr", Rows = "auto", Gap = "8px"
+                FormLayoutKind.Canvas => new FormLayout
+                {
+                    Kind = FormLayoutKind.Canvas,
+                    MobileBreakpoint = FormLayout.DefaultMobileBreakpoint.ToString(CultureInfo.InvariantCulture)
+                },
+                FormLayoutKind.Grid => new FormLayout
+                {
+                    Kind = FormLayoutKind.Grid, Cols = "auto,1fr", Rows = "auto", Gap = "8px"
+                },
+                _ => throw new ArgumentOutOfRangeException(nameof(webLayout), webLayout,
+                    "a new web form is a Canvas page (the default) or a Grid page; there is no Flow scaffold.")
             };
+
+            if (webLayout == FormLayoutKind.Canvas)
+            {
+                document.Width = DesignWidth;
+                document.Height = DesignHeight;
+            }
         }
         else
         {
-            // D3's other half: a window has a size and a caption where a page has a layout. 800x450
-            // is the size `dotnet new winforms` gives a new form, so a form created here and a form
-            // created by the shipped template open the same size rather than differing for no
-            // reason the user could name.
-            document.Width = 800;
-            document.Height = 450;
+            // D3's other half: a window has a size and a caption where a page has a layout.
+            document.Width = DesignWidth;
+            document.Height = DesignHeight;
             document.Text = formName;
         }
 

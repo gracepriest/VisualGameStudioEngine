@@ -94,8 +94,10 @@ public enum FormLayoutKind
     Flow,
 
     /// <summary>
-    /// The absolute-pixel escape hatch. Explicitly marked on the canvas — hatched border,
-    /// "fixed layout" badge — so a fixed-layout page is a visible choice, never a default.
+    /// Absolute pixels, designed like a WinForms form (spec 2026-09-27 D1): the page stores a design size and
+    /// per-control X/Y/Width/Height/Anchor/Dock, is exact at the design size, follows Anchor/Dock on resize and
+    /// stacks below <see cref="FormLayout.MobileBreakpoint"/>. The DEFAULT for a new web form. The IDE may
+    /// label it "Pixel"; the XML spelling stays <c>Canvas</c>.
     /// </summary>
     Canvas
 }

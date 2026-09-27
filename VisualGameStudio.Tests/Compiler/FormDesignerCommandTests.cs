@@ -509,7 +509,8 @@ public class FormDesignerCommandTests
 
     private static CodeEditorDocumentViewModel OpenWeb()
     {
-        var scaffold = FormScaffolder.Create("WebForm", FormTarget.Web);
+        // ⚠ Pinned to Grid (spec 2026-09-27 §2.5): this path was written against the Grid scaffold; the Canvas twin is Task 14.
+        var scaffold = FormScaffolder.Create("WebForm", FormTarget.Web, FormLayoutKind.Grid);
         var files = new Files();
         files.Contents[Dir + scaffold.DocumentFileName] = scaffold.DocumentText;
         files.Contents[Dir + scaffold.CodeFileName] = scaffold.CodeText;

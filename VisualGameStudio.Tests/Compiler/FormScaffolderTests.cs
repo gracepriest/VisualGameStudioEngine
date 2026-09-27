@@ -115,6 +115,52 @@ public class FormScaffolderTests
         });
     }
 
+    /// <summary>
+    /// ⛔ Spec 2026-09-27 D1: a NEW web form is a Canvas page, designed like a WinForms form — the WinForms
+    /// scaffold's design size and the default phone breakpoint.
+    /// </summary>
+    [Test]
+    public void Create_Web_IsACanvasPage_OfTheWinFormsDesignSize()
+    {
+        var scaffold = FormScaffolder.Create("LoginForm");
+        var file = FormDocumentReader.Read("LoginForm.blwebform", scaffold.DocumentText);
+        var window = FormDocumentReader.Read("LoginForm.blform", FormScaffolder.Create("LoginForm", FormTarget.WinForms).DocumentText);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(file.IsRefused, Is.False, string.Join("; ", file.Diagnostics.Select(d => d.Format())));
+            Assert.That(file.Model.Layout!.Kind, Is.EqualTo(FormLayoutKind.Canvas));
+            Assert.That(file.Model.Layout.MobileBreakpoint, Is.EqualTo(FormLayout.DefaultMobileBreakpoint.ToString()));
+            Assert.That((file.Model.Width, file.Model.Height), Is.EqualTo((window.Model.Width, window.Model.Height)),
+                "the WinForms scaffold's design size (spec §2.5)");
+            Assert.That(file.TierOfRoot("ClientSize"), Is.EqualTo(PropertyTier.Canon));
+            Assert.That(file.TierOfRoot("MobileBreakpoint"), Is.EqualTo(PropertyTier.Canon));
+            Assert.That(scaffold.DocumentText, Does.Contain("<Layout Kind=\"Canvas\" MobileBreakpoint=\"600\" />"));
+        });
+    }
+
+    [Test]
+    public void Create_Web_Grid_IsTheGridScaffold_Unchanged()
+    {
+        var file = FormDocumentReader.Read(
+            "LoginForm.blwebform", FormScaffolder.Create("LoginForm", FormTarget.Web, FormLayoutKind.Grid).DocumentText);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(file.Model.Layout!.Kind, Is.EqualTo(FormLayoutKind.Grid));
+            Assert.That(file.Model.Layout.Cols, Is.EqualTo("auto,1fr"));
+            Assert.That(file.Model.Layout.Rows, Is.EqualTo("auto"));
+            Assert.That(file.Model.Layout.Gap, Is.EqualTo("8px"));
+            Assert.That(file.Model.Width, Is.Null, "a Grid page has no design size");
+        });
+    }
+
+    [Test]
+    public void Create_Web_Flow_IsRefused()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => FormScaffolder.Create("LoginForm", FormTarget.Web, FormLayoutKind.Flow));
+    }
+
     [Test]
     public void Create_ProducesACodeFileWhoseRegionsAreImmediatelyCanon()
     {

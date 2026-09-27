@@ -51,7 +51,8 @@ public class FormMenuAcceptanceTests
     /// </summary>
     private async Task<(CodeEditorDocumentViewModel Vm, FormControl OpenItem)> BuildMenuFormInDesignerAsync(FormTarget target)
     {
-        var scaffold = FormScaffolder.Create("MenuForm", target);
+        // ⚠ Pinned to Grid (spec 2026-09-27 §2.5): this path was written against the Grid scaffold; the Canvas twin is Task 14.
+        var scaffold = FormScaffolder.Create("MenuForm", target, FormLayoutKind.Grid);
         File.WriteAllText(Path_(scaffold.DocumentFileName), scaffold.DocumentText);
         File.WriteAllText(Path_(scaffold.CodeFileName), scaffold.CodeText);
         Log($"[1] new form      -> {scaffold.DocumentFileName} + {scaffold.CodeFileName}");
