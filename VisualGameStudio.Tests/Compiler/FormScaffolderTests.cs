@@ -136,14 +136,29 @@ public class FormScaffolderTests
             Assert.That(file.TierOfRoot("ClientSize"), Is.EqualTo(PropertyTier.Canon));
             Assert.That(file.TierOfRoot("MobileBreakpoint"), Is.EqualTo(PropertyTier.Canon));
             Assert.That(scaffold.DocumentText, Does.Contain("<Layout Kind=\"Canvas\" MobileBreakpoint=\"600\" />"));
+            AssertReadsCleanAndRoundTrips(file, scaffold.DocumentText);
         });
+    }
+
+    /// <summary>
+    /// ⛔ A scaffold is the designer's own output: it must read with no diagnostic, nothing Degraded and
+    /// nothing kept as unknown, and a no-op save must write it back byte-for-byte.
+    /// </summary>
+    private static void AssertReadsCleanAndRoundTrips(FormFile file, string documentText)
+    {
+        Assert.That(file.Diagnostics, Is.Empty, string.Join("; ", file.Diagnostics.Select(d => d.Format())));
+        Assert.That(file.DegradedRoot, Is.Empty, "no root property of a scaffold is Degraded");
+        Assert.That(file.Degraded, Is.Empty, "no control property of a scaffold is Degraded");
+        Assert.That(file.Model.UnknownAttributes, Is.Empty, "the scaffold's root carries no attribute the reader does not model");
+        Assert.That(file.Model.UnknownChildren, Is.Empty, "the scaffold's root carries no element the reader does not model");
+        Assert.That(FormDocumentWriter.Write(file), Is.EqualTo(documentText), "a no-op save rewrites the scaffold");
     }
 
     [Test]
     public void Create_Web_Grid_IsTheGridScaffold_Unchanged()
     {
-        var file = FormDocumentReader.Read(
-            "LoginForm.blwebform", FormScaffolder.Create("LoginForm", FormTarget.Web, FormLayoutKind.Grid).DocumentText);
+        var scaffold = FormScaffolder.Create("LoginForm", FormTarget.Web, FormLayoutKind.Grid);
+        var file = FormDocumentReader.Read("LoginForm.blwebform", scaffold.DocumentText);
 
         Assert.Multiple(() =>
         {
@@ -152,6 +167,7 @@ public class FormScaffolderTests
             Assert.That(file.Model.Layout.Rows, Is.EqualTo("auto"));
             Assert.That(file.Model.Layout.Gap, Is.EqualTo("8px"));
             Assert.That(file.Model.Width, Is.Null, "a Grid page has no design size");
+            AssertReadsCleanAndRoundTrips(file, scaffold.DocumentText);
         });
     }
 

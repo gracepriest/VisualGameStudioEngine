@@ -141,7 +141,11 @@ public class FormCodeBehindWriteTests
     public async Task SavingAWebDocument_GeneratesTheLookupsIntoTheUsersFile()
     {
         // The same call, the other target: on the web the controls are FOUND, not constructed.
-        var (vm, files, _) = Open("LoginForm", FormTarget.Web);
+        // ⚠ Opened on the Grid scaffold explicitly (spec 2026-09-27 §2.5): the default web scaffold is a
+        // Canvas page, and the edit below would otherwise silently switch the page Canvas -> Grid.
+        var (vm, files, _) = Open(
+            "LoginForm", FormTarget.Web,
+            FormScaffolder.Create("LoginForm", FormTarget.Web, FormLayoutKind.Grid).DocumentText);
 
         vm.Text = """
             <WebForm Name="LoginForm" Version="1">

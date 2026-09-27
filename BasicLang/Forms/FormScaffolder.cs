@@ -113,25 +113,29 @@ public static class FormScaffolder
         var document = new FormDocument { Target = target, Name = formName };
         if (target == FormTarget.Web)
         {
-            document.Layout = webLayout switch
+            switch (webLayout)
             {
-                FormLayoutKind.Canvas => new FormLayout
-                {
-                    Kind = FormLayoutKind.Canvas,
-                    MobileBreakpoint = FormLayout.DefaultMobileBreakpoint.ToString(CultureInfo.InvariantCulture)
-                },
-                FormLayoutKind.Grid => new FormLayout
-                {
-                    Kind = FormLayoutKind.Grid, Cols = "auto,1fr", Rows = "auto", Gap = "8px"
-                },
-                _ => throw new ArgumentOutOfRangeException(nameof(webLayout), webLayout,
-                    "a new web form is a Canvas page (the default) or a Grid page; there is no Flow scaffold.")
-            };
+                case FormLayoutKind.Canvas:
+                    // A Canvas page is designed like a window: the same design size, plus the phone breakpoint.
+                    document.Layout = new FormLayout
+                    {
+                        Kind = FormLayoutKind.Canvas,
+                        MobileBreakpoint = FormLayout.DefaultMobileBreakpoint.ToString(CultureInfo.InvariantCulture)
+                    };
+                    document.Width = DesignWidth;
+                    document.Height = DesignHeight;
+                    break;
 
-            if (webLayout == FormLayoutKind.Canvas)
-            {
-                document.Width = DesignWidth;
-                document.Height = DesignHeight;
+                case FormLayoutKind.Grid:
+                    document.Layout = new FormLayout
+                    {
+                        Kind = FormLayoutKind.Grid, Cols = "auto,1fr", Rows = "auto", Gap = "8px"
+                    };
+                    break;
+
+                default:
+                    throw new ArgumentOutOfRangeException(nameof(webLayout), webLayout,
+                        "a new web form is a Canvas page (the default) or a Grid page; there is no Flow scaffold.");
             }
         }
         else
