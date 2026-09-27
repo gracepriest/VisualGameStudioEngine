@@ -1091,7 +1091,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 // looking names up, so patching only the statement form left `a / b` throwing
                 // from RenderBinary the moment the division sat inside a larger expression.
                 // Any cast that is NOT numeric still throws, on both paths.
-                case IRCast c when TryNumericCast(c, out var castRendered):
+                case IRCast c when TryNumericCast(c, out var castRendered) || TryReferenceCast(c, out castRendered):
                     return Bound(c) ? SanitizeName(c.Name) : castRendered;
 
                 // Task 24a. See Visit(IRArrayAlloc). BOUND is the ordinary path — the M4 shape
@@ -2876,6 +2876,9 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             if (TryTextCall(call, rendered, out var text))
                 return text;
 
+            if (TryVbConversion(call, rendered, out var converted))
+                return converted;
+
             // ReDim's value (IRBuilder.ArrayResizeIntrinsic: array, count, preserve). Plain ReDim
             // is a fresh filled array, as a Dim is (see ArrayInitializer on why .fill matters);
             // Preserve copies what still fits, via a one-shot arrow so the array and the count
@@ -2925,6 +2928,45 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             }
         }
 
+        /// <summary>
+        /// The VB conversion rules JavaScript's own coercions get wrong, keyed on the argument's
+        /// SOURCE type (<c>CType(x, T)</c> lowers to these same calls — IRBuilder.ConversionBuiltinFor):
+        /// <list type="bullet">
+        /// <item>A Boolean converts to a number as <b>True = -1</b>, False = 0 (VB's CInt(True) is
+        /// -1; <c>__blCInt(true)</c> and <c>Number(true)</c> both answered 1).</item>
+        /// <item><c>CBool</c> of a String parses: "True"/"False" in any case, else a number, else it
+        /// throws, as VB's InvalidCastException. <c>Boolean("False")</c> is <c>true</c> — any
+        /// non-empty string is — so <c>CBool("False")</c> and <c>CBool("0")</c> printed True.</item>
+        /// </list>
+        /// Rendered inline (an arrow for the String parse) so no prelude scan is needed.
+        /// </summary>
+        private bool TryVbConversion(IRCall call, List<string> rendered, out string result)
+        {
+            result = null;
+            if (rendered.Count != 1 || _userFunctionNames.Contains(call.FunctionName)) return false;
+
+            var source = call.Arguments[0].Type?.Name;
+            var name = call.FunctionName;
+            if (string.Equals(source, "Boolean", StringComparison.OrdinalIgnoreCase)
+                && (name is "CInt" or "CDbl" or "CSng"))
+            {
+                result = $"({rendered[0]} ? -1 : 0)";
+                return true;
+            }
+
+            if (string.Equals(source, "String", StringComparison.OrdinalIgnoreCase) && name == "CBool")
+            {
+                result = "((s) => { const t = String(s).trim(); const l = t.toLowerCase(); "
+                         + "if (l === \"true\") return true; if (l === \"false\") return false; "
+                         + "const n = Number(t); if (t === \"\" || Number.isNaN(n)) "
+                         + "throw new Error(\"InvalidCastException: Conversion from string \\\"\" + s + \"\\\" to type 'Boolean' is not valid.\"); "
+                         + $"return n !== 0; }})({rendered[0]})";
+                return true;
+            }
+
+            return false;
+        }
+
         public void Visit(IRReturn ret) =>
             Line(ret.Value == null ? "return;" : $"return {Expr(ret.Value)};");
         public void Visit(IRBranch branch) => throw NotYet(nameof(IRBranch));
@@ -2947,13 +2989,54 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         // miscompile — the exact trade this file's NotYet() exists to refuse.
         public void Visit(IRCast cast)
         {
-            if (TryNumericCast(cast, out var rendered))
+            if (TryNumericCast(cast, out var rendered) || TryReferenceCast(cast, out rendered))
             {
                 Bind(cast.Name, rendered);
                 return;
             }
 
             throw NotYet(nameof(IRCast));
+        }
+
+        /// <summary>
+        /// A cast between REFERENCES — <c>CType</c>/<c>DirectCast</c>/<c>TryCast</c> to a class, an
+        /// interface or an array. There was no lowering at all ("IRCast lowering is not implemented
+        /// yet"), so any program with one failed its whole build. (A cast to a primitive never gets
+        /// here: IRBuilder lowers it to the matching CInt/CStr/… call.)
+        /// <list type="bullet">
+        /// <item>A user CLASS target is checked with <c>instanceof</c>: <c>TryCast</c> answers
+        /// <c>null</c> for the wrong type, and <c>CType</c>/<c>DirectCast</c> throw VB's
+        /// InvalidCastException for a non-null value of the wrong type — never pass it on to fail
+        /// later somewhere else.</item>
+        /// <item>An interface, an array or an <c>Extern Class</c> target is the value itself: JS has
+        /// no interfaces to test, an array is already an array, and an Extern class may not exist
+        /// as a constructor to test against.</item>
+        /// </list>
+        /// </summary>
+        private bool TryReferenceCast(IRCast cast, out string rendered)
+        {
+            rendered = null;
+            var target = cast.Type;
+            if (target == null) return false;
+            var isReferenceTarget = target.Kind is TypeKind.Class or TypeKind.Interface or TypeKind.Array;
+            var sourceIsReference = cast.SourceType == null
+                || cast.SourceType.Kind is TypeKind.Class or TypeKind.Interface or TypeKind.Array;
+            if (!isReferenceTarget || !sourceIsReference) return false;
+
+            var value = Expr(cast.Value);
+            if (target.Kind == TypeKind.Class
+                && _module?.Classes != null
+                && _module.Classes.TryGetValue(target.Name, out var cls) && cls != null && !cls.IsExtern)
+            {
+                var ctor = SanitizeName(cls.Name);
+                rendered = cast.IsTryCast
+                    ? $"((v) => v instanceof {ctor} ? v : null)({value})"
+                    : $"((v) => {{ if (v != null && !(v instanceof {ctor})) throw new Error(\"InvalidCastException: Unable to cast object to type '{cls.Name}'.\"); return v; }})({value})";
+                return true;
+            }
+
+            rendered = value;
+            return true;
         }
 
         /// <summary>

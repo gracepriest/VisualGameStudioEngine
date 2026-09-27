@@ -7034,10 +7034,38 @@ namespace BasicLang.Compiler.SemanticAnalysis
             }
             else if (node.StatementBody != null)
             {
-                lambdaScope.ReturnType = node.ReturnType != null
-                    ? ResolveTypeReference(node.ReturnType)
-                    : _typeManager.GetType("Void");
+                // A multi-line lambda's return type, in VB's order (#164): a written `As T`; else,
+                // for a Function, the R of the Func(Of …, R) it is target-typed by; else INFERRED
+                // from its own Return expressions. A Sub is Void, so `Return 1` in it stays an error.
+                //
+                // ⛔ A Function with no `As` used to be given Void here, exactly like a Sub: its
+                // `Return c` was refused ("Cannot return a value from a subroutine") and the lambda
+                // typed Func(Of Void), which then failed every Func(Of Integer) it met.
+                TypeInfo targetReturnType;
+                if (node.ReturnType != null)
+                {
+                    lambdaScope.ReturnType = ResolveTypeReference(node.ReturnType);
+                }
+                else if (!node.IsFunction)
+                {
+                    lambdaScope.ReturnType = _typeManager.GetType("Void");
+                }
+                else if ((targetReturnType = TargetedLambdaReturnType(targetType, node.Parameters.Count)) != null)
+                {
+                    lambdaScope.ReturnType = targetReturnType;
+                }
+                else
+                {
+                    lambdaScope.InferredReturnTypes = new List<TypeInfo>();
+                }
+
                 node.StatementBody.Accept(this);
+
+                if (lambdaScope.InferredReturnTypes != null)
+                {
+                    lambdaScope.ReturnType = DominantReturnType(lambdaScope.InferredReturnTypes);
+                    lambdaScope.InferredReturnTypes = null;
+                }
                 bodyType = lambdaScope.ReturnType;
             }
 
@@ -7068,6 +7096,63 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
             SetNodeType(node, delegateType);
             ExitScope();
+        }
+
+        /// <summary>
+        /// The return type a multi-line <c>Function</c> lambda with no <c>As</c> clause takes from
+        /// its TARGET (#164): the R of a <c>Func(Of T1, …, R)</c> whose arity matches the lambda's
+        /// parameter list. Null — so the lambda infers its return type instead — when there is no
+        /// target, the target is not a Func, the arity disagrees (the mismatch is reported where
+        /// the lambda is stored), or R mentions a type parameter: a generic callee's parameter is
+        /// not substituted before its argument is visited, so R there is the callee's own
+        /// <c>T</c>, and it is the lambda's INFERRED type that the call's inference needs.
+        /// </summary>
+        private static TypeInfo TargetedLambdaReturnType(TypeInfo targetType, int parameterCount)
+        {
+            if (targetType == null ||
+                !targetType.Name.Equals("Func", StringComparison.OrdinalIgnoreCase) ||
+                targetType.GenericArguments == null ||
+                targetType.GenericArguments.Count != parameterCount + 1)
+                return null;
+
+            var returnType = targetType.GenericArguments[parameterCount];
+            return MentionsTypeParameter(returnType) ? null : returnType;
+        }
+
+        private static bool MentionsTypeParameter(TypeInfo type, int depth = 0)
+        {
+            if (type == null || depth > 32) return false;
+            if (type.Kind == TypeKind.TypeParameter) return true;
+            return MentionsTypeParameter(type.ElementType, depth + 1) ||
+                   (type.GenericArguments?.Any(a => MentionsTypeParameter(a, depth + 1)) ?? false);
+        }
+
+        /// <summary>
+        /// VB's DOMINANT TYPE of a multi-line <c>Function</c> lambda's returned values, for a lambda
+        /// with neither an <c>As</c> clause nor a Func target (#164): the returned type to which
+        /// every other returned type widens, by the analyzer's own widening rule
+        /// (<see cref="WidensTo"/> — so Integer and Double give Double, Byte and Short give
+        /// Short). <c>Object</c> when no returned type is dominant (String and Integer; two
+        /// unrelated classes) and when nothing is returned — VB's answer without Option Strict,
+        /// which BasicLang does not have. A <c>Return Nothing</c> converts to any type, so it is
+        /// never recorded as a candidate.
+        /// </summary>
+        private TypeInfo DominantReturnType(List<TypeInfo> returnedTypes)
+        {
+            var candidates = new List<TypeInfo>();
+            foreach (var type in returnedTypes)
+            {
+                if (type != null && !candidates.Any(c => c.Equals(type)))
+                    candidates.Add(type);
+            }
+
+            foreach (var candidate in candidates)
+            {
+                if (candidates.All(other => candidate.Equals(other) || WidensTo(other, candidate)))
+                    return candidate;
+            }
+
+            return _typeManager.ObjectType;
         }
 
         /// <summary>
@@ -8291,6 +8376,17 @@ namespace BasicLang.Compiler.SemanticAnalysis
                               node.Line, node.Column);
                     }
                 }
+                else if (elementType != null && IsStringForEachCollection(collectionType)
+                         && !elementType.IsAssignableFrom(_typeManager.CharType))
+                {
+                    // Task #171: a String's element is a Char, so the loop variable must accept one
+                    // — the Array arm's rule, with the element the string enumerates. Before this
+                    // `For Each n As Integer In "ab"` compiled and the backends disagreed, all
+                    // measured: C# printed 97 98, C++ 97 98 0, JavaScript a b, and MSIL died with
+                    // InvalidCastException.
+                    Error($"Cannot assign String element type 'Char' to loop variable of type '{elementType}'",
+                          node.Line, node.Column);
+                }
             }
             else
             {
@@ -8300,6 +8396,15 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     if (collectionType.Kind == TypeKind.Array)
                     {
                         elementType = collectionType.ElementType ?? _typeManager.ObjectType;
+                    }
+                    else if (IsStringForEachCollection(collectionType))
+                    {
+                        // Task #171: a String enumerates as Char (VB's rule; String implements
+                        // IEnumerable(Of Char)). It used to fall to the Object arm below, which
+                        // refused `Dim c As Char : For Each c In s` (Object → Char), typed
+                        // `ch = "a"c` as an Object comparison (CS0019 in C#, a REFERENCE compare
+                        // printing 0 in MSIL), and made `acc & ch` print garbage in MSIL.
+                        elementType = _typeManager.CharType;
                     }
                     else if (collectionType.GenericArguments != null && collectionType.GenericArguments.Count > 0)
                     {
@@ -8385,6 +8490,19 @@ namespace BasicLang.Compiler.SemanticAnalysis
             }
 
             ExitScope();
+        }
+
+        /// <summary>
+        /// Task #171: whether a For Each collection is a String, which enumerates as
+        /// <c>Char</c>. Never an array: a handle <c>System.String[]</c> is
+        /// <c>TypeInfo(Name: "String", Kind: Array)</c> and belongs to the Array arm.
+        /// </summary>
+        private static bool IsStringForEachCollection(TypeInfo collectionType)
+        {
+            if (collectionType == null || collectionType.Kind == TypeKind.Array) return false;
+            return string.Equals(collectionType.Name, "String", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(collectionType.Name, "System.String", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(collectionType.NetHandleTypeFullName, "System.String", StringComparison.Ordinal);
         }
 
         /// <summary>
@@ -8621,6 +8739,14 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 return;
             }
 
+            // A multi-line Function lambda whose return type is being INFERRED (#164) has no
+            // expected type yet: record what is returned instead of checking it.
+            if (functionScope.InferredReturnTypes != null)
+            {
+                VisitReturnInInferringLambda(node, functionScope);
+                return;
+            }
+
             // Inside an Async function declared As Task(Of T), Return expressions
             // type-check against the unwrapped T (VB.NET semantics)
             var expectedReturnType = functionScope.IsAsync
@@ -8669,6 +8795,30 @@ namespace BasicLang.Compiler.SemanticAnalysis
                           node.Line, node.Column);
                 }
             }
+        }
+
+        /// <summary>
+        /// A <c>Return</c> in a multi-line <c>Function</c> lambda whose return type is being
+        /// inferred (#164): the value is analyzed and its type recorded as a candidate for
+        /// <see cref="DominantReturnType"/>. <c>Return Nothing</c> is analyzed but not recorded — it
+        /// converts to any type. A bare <c>Return</c> is refused, as in any Function.
+        /// </summary>
+        private void VisitReturnInInferringLambda(ReturnStatementNode node, Scope lambdaScope)
+        {
+            if (node.Value == null)
+            {
+                Error("Function lambda must return a value", node.Line, node.Column);
+                return;
+            }
+
+            node.Value.Accept(this);
+
+            if (IsNothingLiteral(node.Value))
+                return;
+
+            var returnedType = GetNodeType(node.Value);
+            if (returnedType != null)
+                lambdaScope.InferredReturnTypes.Add(returnedType);
         }
 
         public void Visit(ExitStatementNode node)

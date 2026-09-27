@@ -542,6 +542,17 @@ public class TypeInfo
         // True when the enclosing function/sub is declared Async
         public bool IsAsync { get; set; }
 
+        /// <summary>
+        /// Non-null only while the analyzer is INFERRING the return type of a multi-line
+        /// <c>Function</c> lambda that has neither an <c>As</c> clause nor a <c>Func</c> target
+        /// (#164): the types of the lambda's own <c>Return</c> expressions, collected so VB's
+        /// dominant type can be chosen once the body is analyzed. <see cref="ReturnType"/> is
+        /// unknown (null) for as long as this is set, so a <c>Return</c> is recorded here rather
+        /// than checked against it. A nested lambda has its own function scope, so its
+        /// <c>Return</c> never lands in an enclosing lambda's list.
+        /// </summary>
+        public List<TypeInfo> InferredReturnTypes { get; set; }
+
         // For class scopes
         public TypeInfo ClassType { get; set; }
         

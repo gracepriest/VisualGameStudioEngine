@@ -121,6 +121,8 @@ public class JsExecutionTierRosterTests
         typeof(ArrayReferenceSemanticsExecutionTests),
         // ParamArray packing at the call site; C++ and C# legs too.
         typeof(ParamArrayExecutionTests),
+        // CType/conversions/reference casts with VB rules; C++ and C# legs too.
+        typeof(CTypeConversionExecutionTests),
 
         // ADR-0005 D2 — CSE guards a shared value's own destination, not only its operands.
         // CseDestinationInvalidationExecutionTests / DestinationInvalidation_D4_ByRefExecutionTests
@@ -266,6 +268,23 @@ public class JsExecutionTierRosterTests
         // asks the JS leg at all). ForEachControlVariableDiagnosticsTests is NOT here: pure
         // front-end/IR fixture, spawns nothing, carries no [Category("Integration")].
         typeof(ForEachControlVariableReuseTests),
+
+        // Task #164 — a multi-line `Function(...) [As T] ... End Function` lambda. Named
+        // "...ExecutionTests", so the widened match below WOULD catch it on its own; listed
+        // explicitly anyway, matching every row above. Its JS legs run through
+        // JavaScriptExecutionTests.RunJs (standard pipeline) and FourBackends.RunAggressiveJs
+        // (aggressive), both spawning Node. MultiLineFunctionLambdaTests (front end only, no
+        // process spawned, no [Category("Integration")]) is NOT here.
+        typeof(MultiLineFunctionLambdaExecutionTests),
+
+        // Task #171 — a String For Each collection enumerates as Char (VB's rule). Named
+        // "...ExecutionTests", so the widened match below WOULD catch it on its own; listed
+        // explicitly anyway, matching every row above. Its JS legs run through
+        // FourBackends.RunsOnEveryBackend (S2/S3/S7/E1/E2/E6/E7/E12, which call
+        // JavaScriptExecutionTests.RunJs) and directly via JsTestSupport.BuildModule +
+        // JavaScriptCodeGenerator (the pinned S1/S5 BL7004 refusal texts). ForEachOverStringTests
+        // (front end/IR only, no process spawned, no [Category("Integration")]) is NOT here.
+        typeof(ForEachOverStringExecutionTests),
     };
 
     /// <summary>
@@ -314,7 +333,7 @@ public class JsExecutionTierRosterTests
 
     [Test]
     public void RosterIsPinned()
-        => Assert.That(ExecutionTier, Has.Length.EqualTo(72), // + ParamArrayExecutionTests; + WhenGuardCallRunTests
+        => Assert.That(ExecutionTier, Has.Length.EqualTo(75), // + CTypeConversionExecutionTests; + WhenGuardCallRunTests
             "The execution-tier roster changed. That is fine — update the number — but it must " +
             "be a deliberate edit, not a silent shrink.");
 

@@ -29,8 +29,10 @@ namespace VisualGameStudio.Tests.Compiler;
 /// twice — <c>List(Of String)</c> fails identically); <c>Dim x(n)</c> bounds (C# throws
 /// IndexOutOfRange on the same program); a user <c>Delegate</c> (the FRONT END rejects it —
 /// <c>AddressOf</c> yields 'Func', not the declared delegate type); and an interface PROPERTY,
-/// which is broken on both .NET backends independently — C# emits an accessor-less property
-/// (CS0548) and MSIL lowers the access to a FIELD load (MissingFieldException).</para>
+/// which was broken on both .NET backends independently — C# emitted an accessor-less property
+/// (CS0548) and MSIL lowered the access to a FIELD load (MissingFieldException). Both are fixed:
+/// C# by the ADR-0002 flag fix (<see cref="InterfaceAccessorBatchTests"/>), MSIL by task #175
+/// (<see cref="MsilInterfacePropertyTests"/>).</para>
 ///
 /// <para>⭐ THE LAST FIVE CASES WERE WRITTEN BY MUTATION TESTING, not by inspection. A first
 /// sweep of 20 discriminating mutants left 7 alive. Three were sites no accepted program

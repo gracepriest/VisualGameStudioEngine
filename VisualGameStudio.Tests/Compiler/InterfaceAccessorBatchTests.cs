@@ -20,8 +20,9 @@ namespace VisualGameStudio.Tests.Compiler;
 /// <c>--optimize</c>) a Release build. <see cref="FourBackends.RunsOnEveryBackend"/> and
 /// <see cref="FourBackends.RunsOnEveryBackendAggressive"/> together cover exactly that: the two
 /// pipelines a Release <c>.blproj</c> and the CLI can take. INTERFACE-typed access
-/// (<c>Dim h As IHolder</c>) is explicitly OUT of this batch (own defect, own brief) and is
-/// pinned known-failing here, not fixed.</para>
+/// (<c>Dim h As IHolder</c>) was explicitly OUT of this batch (own defect, own brief) and was
+/// pinned known-failing here, not fixed — closed by task #175; see
+/// <see cref="AccessThroughAnInterfaceTypedVariable_RunsOnMsil"/> below.</para>
 ///
 /// <para><b>Sub-step attribution</b> (measured against the family's own probe matrices,
 /// <c>matrix-base/s1/s2/s3.txt</c> in the session scratchpad) — the three sub-steps this batch
@@ -557,8 +558,8 @@ public class InterfaceAccessorBatchTests
     }
 
     // ====================================================================================
-    // P6 — interface-TYPED access (Dim h As IHolder). C#, JS and C++ pass; MSIL is pinned
-    // known-failing.
+    // P6 — interface-TYPED access (Dim h As IHolder). C#, JS and C++ pass; MSIL now does too
+    // (task #175).
     // ====================================================================================
 
     private const string InterfaceTypedAccess =
@@ -596,18 +597,15 @@ public class InterfaceAccessorBatchTests
             Is.EqualTo("if"));
 
     /// <summary>
-    /// Known-failing on MSIL: the interface's property TYPE is still built as the old
+    /// Fixed by task #175. Previously the interface's property TYPE was built as the old
     /// class-kinded stand-in for field access purposes here (<c>ldfld</c> against a slot the
     /// interface metadata never declares as a field) — measured: <c>MissingFieldException:
-    /// Field not found: 'IHolder.Slot'</c>.
+    /// Field not found: 'IHolder.Slot'</c>. MSIL now calls <c>IHolder</c>'s own
+    /// <c>set_Slot</c>/<c>get_Slot</c>, matching C#/JS above.
     /// </summary>
     [Test]
-    public void AccessThroughAnInterfaceTypedVariable_ThrowsMissingFieldOnMsil()
-    {
-        var run = MsilHarness.Run(InterfaceTypedAccess);
-        Assert.That(run.Outcome, Is.EqualTo(MsilHarness.MsilOutcome.RunFailed));
-        Assert.That(run.Output, Does.Contain("MissingFieldException"));
-    }
+    public void AccessThroughAnInterfaceTypedVariable_RunsOnMsil()
+        => Assert.That(FourBackends.Norm(MsilHarness.RunExpectingSuccess(InterfaceTypedAccess)), Is.EqualTo("if"));
 
     // ====================================================================================
     // The MSIL ReadOnly-auto-property-assigned-in-constructor defect (control C1 — NO

@@ -564,11 +564,18 @@ public class MsilForEachTests
             "xy");
 
     /// <summary>
-    /// A <c>String</c> iterated by its CHARACTERS — the loop variable declared <c>As Char</c> so
-    /// the element type is really Char (not the Object a bare <c>For Each c In s</c> would infer
-    /// here, since String is neither an Array nor carries GenericArguments). Counting iterations
-    /// rather than printing the character avoids the STDLIB's own (unrelated) box-typing arm for
-    /// non-primitive <c>PrintLine</c> arguments, which is not this family's concern.
+    /// A <c>String</c> iterated by its CHARACTERS, with the loop variable declared <c>As Char</c>
+    /// explicitly. Counting iterations rather than printing the character avoids the STDLIB's own
+    /// (unrelated) box-typing arm for non-primitive <c>PrintLine</c> arguments, which is not this
+    /// family's concern.
+    ///
+    /// <para>⚠ Stale before task #171: this comment used to say a BARE <c>For Each c In s</c>
+    /// (no <c>As</c>) would infer <c>Object</c> here, "since String is neither an Array nor
+    /// carries GenericArguments". That was true when written and is not true any more — a bare
+    /// form now ALSO infers <c>Char</c> (<c>SemanticAnalyzer.IsStringForEachCollection</c>, VB's
+    /// rule that String enumerates as Char). The explicit <c>As Char</c> here is kept anyway: it
+    /// pins the DECLARED-type path specifically, which is a different code arm from the inferred
+    /// one — see <c>ForEachOverStringTests</c> for the inferred form's own coverage.</para>
     /// </summary>
     [Test]
     public void OverAStringsCharacters()

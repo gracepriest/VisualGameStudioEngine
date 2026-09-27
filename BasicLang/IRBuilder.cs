@@ -2220,6 +2220,13 @@ namespace BasicLang.Compiler.IR
             _expressionResult = new IRVariable("Me", baseType);
         }
 
+        /// <summary>True for the structural <c>Func(Of …, R)</c> the analyzer types a Function lambda as.</summary>
+        private static bool IsFuncWithReturnType(TypeInfo delegateType) =>
+            delegateType != null &&
+            string.Equals(delegateType.Name, "Func", StringComparison.OrdinalIgnoreCase) &&
+            delegateType.GenericArguments != null &&
+            delegateType.GenericArguments.Count > 0;
+
         public void Visit(LambdaExpressionNode node)
         {
             // Generate a unique name for the lambda function.
@@ -2231,14 +2238,33 @@ namespace BasicLang.Compiler.IR
 
             // Determine return type from semantic analysis
             var lambdaType = _semanticAnalyzer.GetNodeType(node);
-            var returnType = node.IsFunction
-                ? (_semanticAnalyzer.GetNodeType(node.Body) ?? new TypeInfo("Object", TypeKind.Class))
-                : new TypeInfo("Void", TypeKind.Primitive);
-
-            // If explicit return type specified, use it
-            if (node.ReturnType != null)
+            TypeInfo returnType;
+            if (!node.IsFunction)
             {
-                returnType = new TypeInfo(node.ReturnType.Name, TypeKind.Class);
+                returnType = new TypeInfo("Void", TypeKind.Primitive);
+            }
+            else if (node.StatementBody != null && IsFuncWithReturnType(lambdaType))
+            {
+                // A multi-line Function lambda (#164) returns exactly what the analyzer checked
+                // its Returns against: the R of the Func it recorded — the `As T`, the target's R
+                // or the inferred dominant type. ⛔ This path read GetNodeType(node.Body), and a
+                // statement lambda has no Body: Dictionary.TryGetValue(null) threw, and every
+                // `Function(…) As T … End Function` died as "Error compiling Main: Value cannot be
+                // null. (Parameter 'key')" on every backend and entry point.
+                returnType = lambdaType.GenericArguments[lambdaType.GenericArguments.Count - 1];
+            }
+            else
+            {
+                // An expression lambda keeps its long-standing derivation: the body's type,
+                // overridden by an explicit `As T`.
+                returnType = (node.Body != null ? _semanticAnalyzer.GetNodeType(node.Body) : null)
+                    ?? new TypeInfo("Object", TypeKind.Class);
+
+                // If explicit return type specified, use it
+                if (node.ReturnType != null)
+                {
+                    returnType = new TypeInfo(node.ReturnType.Name, TypeKind.Class);
+                }
             }
 
             // Create the lambda function
@@ -2294,7 +2320,10 @@ namespace BasicLang.Compiler.IR
                 // Ensure we have a return for void lambdas
                 if (!_currentBlock.IsTerminated())
                 {
-                    EmitInstruction(new IRReturn(null));
+                    // A Function lambda that falls off its end returns its type's default, exactly
+                    // as a named Function does (Visit(FunctionNode)). A bare `ret` from a non-void
+                    // lambda was an InvalidProgramException on MSIL (#164).
+                    EmitInstruction(new IRReturn(node.IsFunction ? CreateDefaultValue(returnType) : null));
                 }
             }
 
@@ -5871,6 +5900,21 @@ namespace BasicLang.Compiler.IR
             var sourceType = _semanticAnalyzer.GetNodeType(node.Expression);
             var targetType = _semanticAnalyzer.GetNodeType(node);
 
+            // `CType(x, Integer)` IS `CInt(x)` in VB — same rounding (half-to-even), same string
+            // parsing, same Boolean rule. Lowered to the builtin so the two spellings cannot
+            // disagree: as an IRCast it was a bare C++ static_cast (truncating, and a compile
+            // error from a String), CS0030 for `(bool)1` on C#, and no lowering at all on
+            // JavaScript. A primitive target only; class/array casts stay IRCast, and so does
+            // DirectCast/TryCast — they are type checks that never convert.
+            if (!node.IsTryCast && !node.IsDirectCast && ConversionBuiltinFor(targetType) is string builtin)
+            {
+                var conversion = new IRCall(_currentFunction.GetNextTempName(), builtin, targetType);
+                conversion.Arguments.Add(value);
+                EmitInstruction(conversion);
+                _expressionResult = conversion;
+                return;
+            }
+
             var tempName = _currentFunction.GetNextTempName();
             var castKind = DetermineCastKind(sourceType, targetType);
 
@@ -6021,6 +6065,18 @@ namespace BasicLang.Compiler.IR
                 _ => throw new Exception($"Unknown unary operator: {op}")
             };
         }
+
+        /// <summary>The VB conversion function a <c>CType</c> to <paramref name="target"/> means, or null.</summary>
+        private static string ConversionBuiltinFor(TypeInfo target) => target?.Kind == TypeKind.Array ? null : target?.Name switch
+        {
+            "Integer" => "CInt",
+            "Long" => "CLng",
+            "Double" => "CDbl",
+            "Single" => "CSng",
+            "String" => "CStr",
+            "Boolean" => "CBool",
+            _ => null
+        };
 
         private CastKind DetermineCastKind(TypeInfo source, TypeInfo target)
         {

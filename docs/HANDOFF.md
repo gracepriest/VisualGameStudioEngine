@@ -2109,8 +2109,66 @@ single new failure against the 170-name baseline.
   declaring `For Each`'s captured variable now gets a fresh per-iteration environment); and
   `Dim c As Char : For Each c In "xyz"` — a bare `For Each` over a
   `String`'s characters infers the element type as `Object`, not `Char`, which reuse's assignment
-  coercion now refuses where a fresh declaration never had to check it — no task number filed for
-  this one yet.
+  coercion now refuses where a fresh declaration never had to check it — **CLOSED 2026-09-27 by
+  task #171**, below.
+- ⭐ **Newest — #171 DONE (fix committed `5250d519`).** A `String` `For Each` collection now
+  enumerates as `Char` (VB's rule; `String` implements `IEnumerable(Of Char)`) instead of falling
+  through to `Object` — closing the gap #168's own entry above named. Three layers, one commit:
+  - **Analyzer** (`SemanticAnalyzer.IsStringForEachCollection`): a String collection (by name
+    `String`/`System.String`, or a `System.String` .NET handle; NEVER an array — a handle
+    `System.String[]` is `TypeInfo(Name: "String", Kind: Array)` and stays on the Array arm)
+    infers `Char`. #168's hidden reuse variable takes the same type, so
+    `Dim c As Char : For Each c In s` type-checks. An explicit `For Each x As T In s` is refused
+    unless `Char` widens to `T` — the Array arm's own rule, reapplied. Before this,
+    `For Each n As Integer In "ab"` compiled and the backends DISAGREED: C# printed `97 98`, C++
+    `97 98 0`, JavaScript `a b`, MSIL `InvalidCastException`.
+  - **MSIL** (`MSILBackend.cs`): `IRForEach` itself already lowered a String correctly; two
+    Char-consuming arms did not. `Console.WriteLine(c)` fell to a `box object` arm — a no-op box on
+    a raw char where `WriteLine(object)` wants a reference — `InvalidProgramException` for ANY
+    Char local, loop or not. A Char operand of `&` reached `String::Concat(string, string)` raw,
+    same exception. Both now go through dedicated arms (`WriteLine(char)`;
+    `EmitCharConcatOperandAsString` → `Char::ToString`). Char only — every other value-typed `&`
+    operand still reaches `Concat` raw, a wider pre-existing gap left alone on purpose.
+  - **C++** (`CppCodeGenerator.cs`): a String `For Each` now iterates a `std::string` COPY of the
+    collection. A literal rendered as a raw `const char[N]`, and the range-for walked its NUL
+    terminator too — `For Each ch In "abc"` printed a fourth, invisible character. The copy also
+    gives .NET's snapshot semantics: a body that reassigns the String it iterates keeps
+    enumerating the ORIGINAL characters (measured: wrapping only literals, not variables, still
+    prints garbage the moment the loop body reassigns the variable to a DIFFERENT allocation —
+    `E12` in the test fixture below; a same-allocation growing reassignment, `E7`, happens not to
+    need it).
+  - JavaScript keeps its DESIGNED refusals unchanged: a Char local or a Char literal is BL7004
+    ("JavaScript has no character type. Use String."); a bare `For Each ch In s` with an inferred
+    Char still runs.
+  - Tests: `VisualGameStudio.Tests/Compiler/ForEachOverStringTests.cs` (front end/IR, fast subset)
+    and `ForEachOverStringExecutionTests.cs` (Integration; four-backend where all four agree, three
+    of four where JS's refusal is the point). Measured with `probe.py` across 4 backends × 3 entry
+    points before/after; byte-compared 3,436 corpus/probe files with 0 differences outside the
+    String-`For Each` probes themselves; the IR verifier fired 0 times. Eight mutants built and
+    killed for real (source patched, `BasicLang.dll` rebuilt and swapped into the test output,
+    never during a `dotnet test` run, then restored and md5-verified) — see
+    `ForEachOverStringTests`/`ForEachOverStringExecutionTests` doc comments for which test kills
+    which. One CONSTRUCTED mutant did NOT kill: `IsStringForEachCollection`'s own array exclusion
+    is presently dead code — both its call sites already sit behind a sibling
+    `Kind == TypeKind.Array` check in `Visit(ForEachLoopNode)`, so the helper is never even invoked
+    with an array-kind `TypeInfo` today; `StringArray_StillEnumeratesAsString` is kept as a
+    behavior pin (a `String()` array must keep enumerating as String), not a claim that it kills
+    that mutant.
+  - Filed, not fixed here: **#181** (`AscW`/`Asc` are not known intrinsics — measured:
+    `For Each ch In s : total = total + AscW(ch)` fails on EVERY backend, at the front end, with
+    "Arithmetic operator '+' requires numeric operands"; unrelated to this fix, pre-existing, S6 in
+    the probe set); **#182** (C# keyword identifiers — filed as a separate item; not characterized
+    further here, and not reproduced against String `For Each`); **#183** (MSIL: `&` with an
+    Integer or Double operand, and `Console.WriteLine` of a `Short`, both raise
+    `InvalidProgramException` — RE-VERIFIED here with two standalone one-line repros
+    (`"n=" & i`, `Console.WriteLine(shortVar)`), same exception, same "Common Language Runtime
+    detected an invalid program." The SAME class of defect this task fixed for Char, unfixed for
+    every other value type; a basic, pre-existing gap, not opened by this task and not touched by
+    it — `EmitCharConcatOperandAsString`'s own doc comment says so: "Char ONLY … a wider,
+    pre-existing gap of this backend, left for its own change."); **#184** (owner decision needed:
+    should `Char` widen to `String` on assignment/return/parameter, the way VB allows treating a
+    length-1 String literal as source but not a bare Char value? `For Each s As String In "ab"` is
+    refused today under the same rule as `As Integer`, deliberately, until #184 is decided).
 - ⭐ **Newest — #122 DONE (ADR-0006 D1's Obligation, committed `22f18284`).** The closure rule
   narrows from "every local is call-visible in a function that creates a lambda" (the interim
   approximation) to the locals a lambda of that function actually CAPTURES, read straight off the
@@ -3860,9 +3918,10 @@ single new failure against the 170-name baseline.
   ⚠ **TWO MUTANTS SURVIVE AND THE CODE IS KEPT, because they are UNREACHABLE, not untested.**
   A `Delegate` returning a class: the FRONT END does not implement user Delegate types
   (`AddressOf` yields 'Func', not the declared type; calling it types as 'Void'), so no legal
-  program reaches `GenerateDelegate`. An interface PROPERTY: broken on BOTH .NET backends
-  independently — C# emits an accessor-less property (**CS0548**) and MSIL lowers the access to a
-  FIELD load (**MissingFieldException**), both newly characterized here and a different family.
+  program reaches `GenerateDelegate`. An interface PROPERTY: at the time, broken on BOTH .NET
+  backends independently — C# emitted an accessor-less property (**CS0548**) and MSIL lowered the
+  access to a FIELD load (**MissingFieldException**), both newly characterized here and a
+  different family. **Both since fixed** — C# by the ADR-0002 flag fix, MSIL by task #175 (below).
   Both lines are correct and identical to their eight proven siblings; reverting one to the
   spelling known to be wrong, to buy a mutation score, would re-introduce the bug the day either
   feature starts working.
@@ -4327,14 +4386,14 @@ single new failure against the 170-name baseline.
   `s.Chars`, `s.Empty`, `s.ToUpper` (no parentheses) and `s.Trim` (no parentheses) all gave
   `MissingFieldException` at RUN time; they now give a named `GenerateFailed`. ⚠ A
   parenthesis-free String METHOD name reaches this arm too, so the refusal fires for it.
-  ⛔ **THE INTERFACE-PROPERTY READ IS STILL BROKEN and was deliberately NOT widened to.**
-  `h.Slot` on an `IHolder` still gives `MissingFieldException: Field not found: 'IHolder.Slot'`:
-  `TryResolveProperty` (`MSILBackend.cs:3104`) resolves only through `TryFindClass`, so an
-  interface receiver misses every arm. **It needs an interface-property resolver alongside the
-  existing `DeclaredInterfaceMethod` — a different lookup, not a table row**, which is why the
-  String fix does not reach it. ⚠ **C# cannot be its oracle either**: it emits an accessor-less
-  interface property and does not compile (**CS0548** + CS0200). JavaScript answers `5`. On the
-  open list.
+  ⛔ **THE INTERFACE-PROPERTY READ WAS BROKEN here and was deliberately NOT widened to — FIXED
+  2026-09-26 by task #175.** `h.Slot` on an `IHolder` used to give `MissingFieldException: Field
+  not found: 'IHolder.Slot'`: `TryResolveProperty` (`MSILBackend.cs:3104`) resolved only through
+  `TryFindClass`, so an interface receiver missed every arm. #175 added the interface-property
+  resolver this paragraph called for (`TryResolveInterfaceProperty`, alongside the existing
+  `DeclaredInterfaceMethod`) — a different lookup, not a table row, which is why the String fix
+  did not reach it. MSIL now calls `IHolder`'s own `get_Slot`/`set_Slot`. See the #175 entry
+  further down for the contract, the mutants, and the two follow-ups it opened (#176, #177).
   **9 of 10 mutants killed against the committed fixture; 1 survivor, declared EQUIVALENT.**
   `s7-unknown-member-falls-through` survived the scratch sweep and dies against the committed
   fixture on all five refusal shapes — it was UNTESTED, not dead. ⚠ **`s8-call-not-callvirt`
@@ -4354,9 +4413,9 @@ single new failure against the 170-name baseline.
     `Right("abcdef", Len(Ab()) + 1)` printed `[f]` instead of `[def]`. Now
     `({str})[^({length})..]`; pinned in `CSharpRightReceiverTests`. ⚠ A folded receiver
     (`Right("ab" & "cdef", 2)`) cannot see any of this — the optimizer collapses it to a literal.
-  - ⛔ **C# backend: an interface property emits an accessor-less property** —
+  - ~~⛔ **C# backend: an interface property emits an accessor-less property**~~ — FIXED by the
+    ADR-0002 flag fix; C# has compiled and run a bare interface property since. Was
     `CS0548: 'IHolder.Slot': property or indexer must have at least one accessor`, plus CS0200.
-    The program does not compile, so C# is not a valid oracle for any interface-property shape.
   - **C# backend: `Dim s As String` with no initializer then `s.Length` prints `0`** — the local
     is initialised to `""`. MSIL gives `NullReferenceException`; every other backend agrees with
     MSIL that the local is null.
@@ -4376,8 +4435,8 @@ single new failure against the 170-name baseline.
     emit, so it was not done from a backend.
   - ⚠ **`BasicLang/StdLib/MSILStdLib.cs` is dead code** registered in `StdLibRegistry.cs:36`
     and referenced by nothing, with a wrong `EmitMid`. Delete or wire.
-  - **MSIL: an INTERFACE property read is still `MissingFieldException`**, needing an
-    interface-property resolver rather than a table row (above).
+  - ~~**MSIL: an INTERFACE property read is still `MissingFieldException`**~~ — FIXED
+    2026-09-26, task #175: the interface-property resolver this line called for. See that entry.
   **Full suite in place for BOTH families: 195 / 6374 / 203 / 6772 against the `2608272`
   baseline 195 / 6299 / 203 / 6697** — +75 passed, +75 total, +0 failed, +0 skipped, which is
   exactly the two new fixtures (54 + 21) and nothing else. 195 reported = 195 anchored
@@ -4657,6 +4716,94 @@ single new failure against the 170-name baseline.
   also a second run-time judge of #122's capture set now: `LambdaCaptureSetExecutionTests` has
   MSIL legs for K1/K8/K11/K12/N1 (N8m/N8n are `javascript{ }` inline code, JS-only), and
   `CseDestinationKnownGapsTask133Tests.A1_…_Msil_…` asserts `3,0`.
+  ⭐ **MSIL NOW CALLS A PROPERTY'S OWN ACCESSORS THROUGH AN INTERFACE-TYPED RECEIVER, as of
+  2026-09-26 (task #175).** `s.Area` with `s As IShape` used to lower to `ldfld 'IShape'::'Area'`
+  — storage an interface cannot have — which assembled (ilasm does not resolve member references)
+  and died at RUN time with `MissingFieldException`, on both pipelines, at every entry point; see
+  the two corrections above (the String-property and mutation-testing entries both called this
+  gap out and are now stale). `TryResolveInterfaceProperty` is the interface sibling of
+  `TryResolveProperty`: it walks `_module.Interfaces` (base interfaces included, visited set),
+  names the DECLARING interface, and `Visit(IRFieldAccess)`/`Visit(IRFieldStore)` now emit
+  `callvirt get_X`/`set_X` on it — spelled exactly as `GenerateInterface` already declared them —
+  through the SAME `EmitAccessorGet`/`EmitAccessorSet` the class-property arm uses, so class output
+  is unchanged. It boxes across a value/reference gap, and refuses (`ForeignFeatureException`,
+  naming the member) a read of a WriteOnly or a write to a ReadOnly interface property, and a
+  receiver carrying type arguments against a non-generic interface. Measured over the probe suite
+  (I1-I6, both pipelines, all three entry points — CLI, CLI `-O`, Release `.blproj`): 15 of 18
+  cells fixed; the other 3 (I5) hit a separate box gap, #177 below. Byte-compare over 2340 cells:
+  every `.cs`/`.js`/`.cpp` file identical; the only `.il` files that differ are the 30 programs
+  that access a property through an interface. Tests: `VisualGameStudio.Tests/Msil/
+  MsilInterfacePropertyTests.cs` (contract + IL-shape, `[Category("Integration")]`) and
+  `MsilInterfacePropertyCompileTests` (the three refusals, fast subset).
+  ⛔ **Two follow-ups this fix exposed, NOT fixed here, both pre-existing and unrelated to
+  interfaces:**
+  - **#176 — a BARE property write inside a class's own method targets the FIRST class the
+    module declares, not the enclosing class.** `Counter.Probe()` doing `V = 2` (unqualified)
+    emits the write against `Animal` (declared earlier in the same file) instead of `Counter`:
+    `MissingFieldException: Field not found: 'Animal.V'`, at run time. Repro:
+    `S/t175/pin/V6.bas`; fails identically on the pre-#175 compiler, so #175 did not cause it —
+    it was hidden behind the interface gap. Pinned:
+    `PropertyAccessorTests.PropertyAccessorExecutionTests.
+    Msil_BarePropertyWriteInALaterClass_TargetsAnEarlierClass_PinnedForTask176`.
+  - **#177 — MSIL never boxes a value type stored into an `Object` slot** — assignment, an
+    argument, a return, and a class property write all reach it; no interface is involved. `Dim o
+    As Object = <Double>` throws `NullReferenceException` where every other backend prints the
+    value. Repro: `S/t175/edge/B1.bas`.
+  - **#178 — the front end accepts a write to a ReadOnly property or a read of a WriteOnly one**,
+    interface- or class-typed alike (measured on both). Nothing in `SemanticAnalyzer` refuses it,
+    so it reaches every backend; C# only fails once `csc` sees the generated accessor-less
+    assignment (CS0200) or read (CS0154), and on MSIL the interface-property fix above is what
+    stands between such a program and a call to an accessor the interface never declared. The
+    front-end refusal these two constructs are supposed to get has never been implemented.
+- ⭐ **Newest — #164 DONE (fix committed `151a8137`).** A multi-line `Function(...) [As T] ...
+  End Function` lambda used to fail in the front end on EVERY backend and entry point (measured:
+  96/96 cells across probe.py's 4 backends × CLI/CLI `-O`/Release `.blproj` matrix). Two defects:
+  (1) `IRBuilder.Visit(LambdaExpressionNode)` read `GetNodeType(node.Body)` for a Function
+  lambda's return type, and a STATEMENT lambda has no `Body` (its body is `StatementBody`) —
+  `Dictionary.TryGetValue(null)` threw "Value cannot be null. (Parameter 'key')", reported as
+  "Error compiling Main: …" at line 0; (2) a multi-line Function lambda with no `As` clause was
+  analyzed as a Sub (`ReturnType = Void`), so `Return c` inside it was refused ("Cannot return a
+  value from a subroutine") and the lambda was typed `Func(Of Void)`, breaking any caller
+  expecting `Func(Of Integer)` (this broke #155's L10, a closure returned from a Function). Fixed
+  the VB way: a written `As T`; else the R of a `Func(Of …, R)` the lambda is target-typed by
+  (`SemanticAnalyzer.TargetedLambdaReturnType`); else the DOMINANT type of its own `Return`
+  expressions by the analyzer's existing `WidensTo` (`DominantReturnType`), `Object` with none
+  dominant or no `Return` at all; `Return Nothing` is never a candidate; a nested lambda's
+  `Return` stays scoped to ITS OWN function scope (`Scope.InferredReturnTypes`); a bare `Return`
+  while inferring is still refused. `IRBuilder` now takes the IR return type from the analyzer's
+  own recorded `Func` rather than re-deriving it, and a Function lambda that falls off its end
+  returns its type's DEFAULT (a bare `ret` from a non-void function was an
+  `InvalidProgramException` on MSIL). JavaScript and MSIL are 48/48 correct on the F1-F8 probes;
+  C#/C++ have pre-existing, UNRELATED gaps this did not touch and does not fix — see below.
+  Byte-compare over 2340 cells: every file for a program with no multi-line Function lambda is
+  IDENTICAL. Tests: `VisualGameStudio.Tests/Compiler/MultiLineFunctionLambdaTests.cs` (front end,
+  fast subset) and `MultiLineFunctionLambdaExecutionTests` (JS/MSIL both pipelines, C#/C++ where
+  they run correctly, `[Category("Integration")]`); twelve of `S/t164/mut/mutate.py`'s thirteen
+  mutants killed (one, the type-parameter guard on a GENERIC callee's inferred target, survives —
+  it only shows up on a probe outside this fix's contract, E7, which has its own pre-existing,
+  unrelated generic-inference defect).
+  ⛔ Two NEW follow-ups this exposed, NOT fixed here — pre-existing backend gaps (C#, MSIL)
+  unrelated to #164's own front-end fix:
+  - **#179 — the C# backend emits a call statement inside a multi-line lambda body TWICE.** F8's
+    `Return inner() + inner()` inside a nested Function lambda emits
+    `inner(); inner(); return inner() + inner();` — every call in the return expression duplicated
+    as a standalone statement first. Compounds with #165 (a lambda-local `Dim` dropped) on the
+    SAME probe: `inner`'s own `Dim` is dropped too, so all four `inner()` occurrences become
+    `CS0103`, not one — measured directly against Roslyn's own diagnostics (`dotnet build` reports
+    each twice, which is a build-system artifact, not four further errors).
+  - **#180 — an MSIL `Function … As Short` from a Byte/Short expression is `InvalidProgram`.**
+    `E8_byte_short` (`S/t164/edge/E8_byte_short.bas`) has a lambda with no `As` clause returning a
+    `Byte` on one path and a `Short` on the other; `DominantReturnType` correctly infers `Short`
+    (Byte widens to Short) and the lambda is stored into a `Dim k As Short`. JavaScript and C++
+    run it correctly (`197`); MSIL throws `System.InvalidProgramException` on BOTH pipelines,
+    identically on a crash-only patch and on the full #164 fix (`S/t164/edge/m-E8_byte_short.txt`
+    vs `ma-E8_byte_short.txt`) — #164 changing how the Short return type is DETERMINED does not
+    change this MSIL codegen gap. Not a #164
+    regression; filed because #164's probes are what surfaced it.
+  - The `R3_incompatible_returns_object` probe's MSIL leg (`Dim n As Integer = f(True)` where `f`
+    infers `Object`) throws `System.NullReferenceException` — this is the PRE-EXISTING #177 ("MSIL
+    never boxes a value type stored into an `Object` slot", filed under task #175 above), reached
+    here through a lambda's OWN inferred-Object return rather than a `Dim`; not a new gap.
 - **VS Code extension host** — roughly 24 unimplemented requests, enumerated and enforced by
   `ExtensionHostRequestCoverageTests.KnownUnimplemented` (a second test fails once an entry is
   implemented, so the list must shrink). A missing `sendNotification` handler is a silent

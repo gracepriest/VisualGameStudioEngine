@@ -1630,6 +1630,12 @@ namespace BasicLang.Compiler.AST
         /// <summary>True for TryCast(expr, Type) - emits C# 'as' (null on failure)</summary>
         public bool IsTryCast { get; set; }
 
+        /// <summary>
+        /// True for DirectCast(expr, Type): a pure type check that never CONVERTS, unlike CType —
+        /// so it is never lowered to CInt/CStr/… (IRBuilder.ConversionBuiltinFor).
+        /// </summary>
+        public bool IsDirectCast { get; set; }
+
         public CastExpressionNode(int line, int column) : base(line, column) { }
 
         public override void Accept(IASTVisitor visitor) => visitor.Visit(this);

@@ -1402,7 +1402,10 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             bool needsVirtualDestructor = !string.IsNullOrEmpty(irClass.BaseClass) ||
                                          irClass.Interfaces.Count > 0 ||
                                          irClass.Methods.Any(m => m.IsVirtual || m.IsOverride) ||
-                                         irClass.Properties.Any(p => p.IsVirtual || p.IsOverride);
+                                         irClass.Properties.Any(p => p.IsVirtual || p.IsOverride) ||
+                                         // A BASE class must be polymorphic for a downcast from it
+                                         // (CType/DirectCast/TryCast → dynamic_pointer_cast) to compile.
+                                         (_module?.Classes?.Values.Any(c => string.Equals(c?.BaseClass, irClass.Name, StringComparison.OrdinalIgnoreCase)) ?? false);
 
             if (needsVirtualDestructor)
             {
@@ -3601,6 +3604,31 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 && IsNativeOwnedBclType(call.Arguments[0]?.Type?.Name)
                 && call.Arguments[0].Type.Name.Equals("Decimal", StringComparison.OrdinalIgnoreCase);
 
+            // VB's conversion rules where a static_cast is wrong (CType(x, T) lowers to these same
+            // calls — IRBuilder.ConversionBuiltinFor): a Boolean converts to a number as
+            // True = -1 (static_cast gives 1), and a String is PARSED (static_cast from a string
+            // does not compile) — BasicLang::VbParseDouble / VbParseBool, in the BCL runtime.
+            var arg0Type = call != null && call.Arguments.Count > 0 ? call.Arguments[0]?.Type?.Name : null;
+            var arg0IsString = string.Equals(arg0Type, "String", StringComparison.OrdinalIgnoreCase);
+            var arg0IsBoolean = string.Equals(arg0Type, "Boolean", StringComparison.OrdinalIgnoreCase);
+            if (args.Count == 1 && (arg0IsString || arg0IsBoolean))
+            {
+                var vb = (functionName.ToLowerInvariant(), arg0IsString) switch
+                {
+                    ("cint", true) => $"static_cast<int32_t>(std::nearbyint(BasicLang::VbParseDouble({args[0]})))",
+                    ("clng", true) => $"static_cast<int64_t>(std::nearbyint(BasicLang::VbParseDouble({args[0]})))",
+                    ("cdbl", true) => $"BasicLang::VbParseDouble({args[0]})",
+                    ("csng", true) => $"static_cast<float>(BasicLang::VbParseDouble({args[0]}))",
+                    ("cbool", true) => $"BasicLang::VbParseBool({args[0]})",
+                    ("cint", false) => $"(({args[0]}) ? int32_t(-1) : int32_t(0))",
+                    ("clng", false) => $"(({args[0]}) ? int64_t(-1) : int64_t(0))",
+                    ("cdbl", false) => $"(({args[0]}) ? -1.0 : 0.0)",
+                    ("csng", false) => $"(({args[0]}) ? -1.0f : 0.0f)",
+                    _ => null
+                };
+                if (vb != null) return vb;
+            }
+
             return functionName.ToLower() switch
             {
                 // EVERY cout surface widens Byte/SByte the same way (see NumericPrintArg,
@@ -3686,7 +3714,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 // magnitude test (and treats a canonicalized -0 as zero, like .NET).
                 "cbool" => arg0IsDecimal
                     ? $"(!({args[0]}).IsZeroMag())"
-                    : $"static_cast<bool>({args[0]})",
+                    : $"static_cast<bool>({args[0]} != 0)",
                 // ---- VB date/time stdlib (spec §7, P1 Task 12). The analyzer
                 // registrations (Task 5) copied the repo's C# StdLib function table
                 // VERBATIM, and these emissions mirror StdLib/CSharpStdLib.cs's
@@ -4619,6 +4647,25 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // AwayFromZero and answers 9 for 8.5.
             if (IsFloatingTypeName(cast.Value?.Type?.Name) && IsIntegralTypeName(cast.Type?.Name))
                 return $"static_cast<{targetType}>(std::nearbyint({value}))";
+
+            // A cast between CLASS references (CType / DirectCast / TryCast to a class or an
+            // interface): a static_cast between shared_ptrs of different types does not compile
+            // for a downcast ("no matching function for call to shared_ptr<Dog>(shared_ptr<Animal>&)").
+            // dynamic_pointer_cast answers null for the wrong type — TryCast's whole meaning — and
+            // CType/DirectCast throw VB's InvalidCastException on a non-null value that is not the
+            // target type, rather than hand back a null that crashes later.
+            const string sharedPrefix = "std::shared_ptr<";
+            if ((cast.Type?.Kind == TypeKind.Class || cast.Type?.Kind == TypeKind.Interface)
+                && targetType.StartsWith(sharedPrefix, StringComparison.Ordinal)
+                && MapType(cast.Value?.Type).StartsWith(sharedPrefix, StringComparison.Ordinal))
+            {
+                var pointee = targetType.Substring(sharedPrefix.Length, targetType.Length - sharedPrefix.Length - 1);
+                if (cast.IsTryCast)
+                    return $"std::dynamic_pointer_cast<{pointee}>({value})";
+                return $"([&]() {{ auto blSrc = {value}; auto blCast = std::dynamic_pointer_cast<{pointee}>(blSrc); "
+                       + $"if (blSrc && !blCast) throw std::runtime_error(\"InvalidCastException: Unable to cast to type '{cast.Type.Name}'.\"); "
+                       + "return blCast; }())";
+            }
 
             return $"static_cast<{targetType}>({value})";
         }
@@ -5813,6 +5860,19 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // pointee's begin()/end(). A plain array is iterated directly (not a shared_ptr).
             if (IsCollectionType(forEach.Collection?.Type))
                 collection = $"(*{collection})";
+
+            // Task #171: a String is iterated as a std::string it OWNS — a copy. A literal
+            // collection renders as a raw "abc", a `const char[4]`, and the range-for walked its
+            // terminator too: `For Each ch In "abc"` printed a fourth, NUL, character. The copy
+            // also gives .NET's snapshot semantics: a String is immutable, so a body that
+            // reassigns the variable it iterates keeps enumerating the ORIGINAL characters,
+            // where a range-for bound to the variable itself would iterate a string being
+            // reallocated under it.
+            var collectionType = forEach.Collection?.Type;
+            if (collectionType != null && collectionType.Kind != TypeKind.Array
+                && collectionType.NetHandleTypeFullName == null
+                && string.Equals(collectionType.Name, "String", StringComparison.OrdinalIgnoreCase))
+                collection = $"std::string({collection})";
 
             WriteLine($"for ({elemType} {varName} : {collection})");
             WriteLine("{");
