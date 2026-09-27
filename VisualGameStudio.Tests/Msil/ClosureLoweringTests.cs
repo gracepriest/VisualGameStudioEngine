@@ -382,11 +382,18 @@ internal static class ClosureLoweringProbes
     /// <summary>A user <c>Delegate Sub D()</c> with NO parameters — the shape whose
     /// <c>BeginInvoke(, class ...)</c> stray leading comma made ilasm refuse EVERY parameterless
     /// user delegate before this fix, unrelated to #155's lambda work but fixed in the same
-    /// commit. The front end types every lambda/AddressOf expression as 'Action'/'Func' and
-    /// refuses to assign one to a nominal Delegate slot directly (a separate, pre-existing
-    /// front-end gap — measured: `Dim f As D = AddressOf Hi` and `Take(AddressOf Hi)` both fail
-    /// with "cannot convert from 'Action' to 'D'"); `CType` is the front end's own escape hatch
-    /// for exactly this and is not part of what #155 touches.</summary>
+    /// commit. <c>CType</c> is used here as belt-and-braces — this fixture is about the
+    /// parameterless <c>BeginInvoke</c> comma, not target-typing.
+    ///
+    /// <para>⚠ STALE AS OF #187, CORRECTED: this used to say the front end typed every
+    /// lambda/AddressOf expression as 'Action'/'Func' and refused to assign one to a nominal
+    /// Delegate slot directly (measured pre-#187: <c>Dim f As D = AddressOf Hi</c> and
+    /// <c>Take(AddressOf Hi)</c> both failed with "cannot convert from 'Action' to 'D'"), with
+    /// <c>CType</c> as the front end's only escape hatch. #187 target-types a lambda or
+    /// <c>AddressOf</c> to a user <c>Delegate</c> directly (<c>SemanticAnalyzer.ConvertToUserDelegate</c>),
+    /// so <c>Dim f As D = AddressOf Hi</c> now compiles without <c>CType</c> — the escape hatch
+    /// is no longer needed for this shape, only kept here unchanged since it still exercises the
+    /// same IL bug this fixture is pinning.</para></summary>
     internal const string D7UserDelegateParameterless = """
         Delegate Sub D()
 

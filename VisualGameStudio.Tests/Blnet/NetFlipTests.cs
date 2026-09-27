@@ -602,11 +602,32 @@ public class NetFlipTests
     // §12.4's OTHER codegen route: MapTypeName (the name-string one).
     //
     // MapType (above) is keyed on a TypeInfo and is what declarations go through. Delegate
-    // PARAMETERS — and interface-method parameters whose Type is null — go through
-    // CppCodeGenerator.MapTypeName instead, a separate `switch` with its own default arm.
-    // Until now that second route was pinned by ONE hard-coded name (Regex) and had no
-    // negative half at all, so a default arm that stopped answering NetRef would have been
-    // caught for Regex and missed for the other four ManagedOwned names.
+    // PARAMETERS — and interface-method parameters whose Type is null — used to go through
+    // CppCodeGenerator.MapTypeName instead, a separate `switch` with its own default arm, because
+    // IRDelegate/IRParameter never carried a resolved Type for them at all.
+    //
+    // ⚠ STALE AS OF #187, MEASURED: IRBuilder.Visit(DelegateDeclarationNode) now sets
+    // `IRParameter.Type` from the analyzer's own resolution (needed so a lambda/AddressOf
+    // converted to a user Delegate gets the delegate's REAL parameter/return types, not bare
+    // Primitive names — see IRBuilder.cs and CppCodeGenerator.GenerateDelegate's
+    // `p.Type != null ? MapType(p.Type) : MapTypeName(p.TypeName)`). A delegate parameter whose
+    // type resolves — every case below, since ConfigureNetResolution is active — now goes through
+    // MapType, not MapTypeName. Confirmed by instrumenting IRBuilder's output for `Delegate Sub
+    // Handler(p As Regex)`: p.Type is the resolved `Regex` TypeInfo, not null.
+    //
+    // The two sweeps below still pass and still test the real invariant — MapType has its OWN
+    // §12.4 "THE FLIP" check (`Categorize(type.Name) == ManagedOwned` → NetRef), checked before
+    // the native-BCL branch, so it independently reproduces the same alias MapTypeName's default
+    // arm would have produced. The sweep has NOT lost its reason to exist: it still catches a
+    // ManagedOwned name that stops reaching NetRef in delegate-parameter position. What is stale
+    // is the CLAIM that MapTypeName's default arm is the one being exercised here — it no longer
+    // is, for any type that resolves. MapTypeName's own default arm (line ~1175) is now reachable
+    // from this shape only when `p.Type` comes back null (an interface-method parameter still
+    // reaches it the same way, and a delegate parameter would too if net resolution were off, or
+    // the type failed to resolve) — neither is exercised by `EmitDelegateAlias` above, which
+    // always configures a working resolver. A test that wants to pin MapTypeName's default arm
+    // itself, rather than the alias outcome, would need an interface-method parameter or a
+    // deliberately-unresolvable delegate parameter type instead.
     // ------------------------------------------------------------------------------------
 
     /// <summary>
@@ -658,9 +679,16 @@ public class NetFlipTests
     }
 
     /// <summary>
-    /// §12.4, positive half on the MapTypeName route: EVERY ManagedOwned name — not just
-    /// Regex — composes to the NetRef handle in delegate-parameter position, asserted as the
-    /// EXACT emitted alias rather than a substring.
+    /// §12.4: EVERY ManagedOwned name — not just Regex — composes to the NetRef handle in
+    /// delegate-parameter position, asserted as the EXACT emitted alias rather than a substring.
+    ///
+    /// <para>⚠ STALE NAME AS OF #187, KEPT AS MEASURED HISTORY (see the section comment above):
+    /// this no longer runs through <c>MapTypeName</c>'s route. IRBuilder now resolves a delegate
+    /// parameter's <c>Type</c>, so <c>CppCodeGenerator.GenerateDelegate</c> takes the
+    /// <c>MapType</c> branch instead. The assertion still holds because <c>MapType</c> has its
+    /// own independent ManagedOwned → NetRef check, so this sweep still catches a regression in
+    /// either function — it just no longer exercises <c>MapTypeName</c>'s default arm the way its
+    /// own name claims.</para>
     ///
     /// <para>The exact line matters: the always-spliced NetRef runtime declares
     /// <c>class NetRef</c> inside <c>namespace BasicLang</c> and never spells the qualified
@@ -683,25 +711,30 @@ public class NetFlipTests
                 + "ManagedOwned name is legal in every DECLARATION position after the flip "
                 + $"(§11.4). Refused with: {refusal}");
             Assert.That(alias, Is.EqualTo("using Handler = std::function<void(BasicLang::NetRef)>;"),
-                $"ManagedOwned '{name}' must reach the delegate alias as the NetRef handle "
-                + "through CppCodeGenerator.MapTypeName's default arm (the MapType route is a "
-                + "DIFFERENT switch and does not cover this one). Got: " + alias);
+                $"ManagedOwned '{name}' must reach the delegate alias as the NetRef handle — "
+                + "through CppCodeGenerator.MapType's own ManagedOwned check as of #187 (see the "
+                + "section comment above), through MapTypeName's default arm before it. Got: " + alias);
         }
     }
 
     /// <summary>
-    /// §12.4, the negative half the MapTypeName route never had: no NativeOwned, Bridged or
-    /// Rejected name may reach a delegate parameter as the NetRef handle. Asserted on the
-    /// emitted alias, with every REFUSED name pinned by name — a refusal is an outcome to
-    /// record, not a case to skip.
+    /// §12.4, the negative half: no NativeOwned, Bridged or Rejected name may reach a delegate
+    /// parameter as the NetRef handle. Asserted on the emitted alias, with every REFUSED name
+    /// pinned by name — a refusal is an outcome to record, not a case to skip.
     ///
     /// <para><b>What this does NOT claim.</b> The alias spellings themselves are not pinned
-    /// here: <c>MapTypeName</c> has no arm for <c>Char</c>, <c>UByte</c>, <c>UShort</c>,
-    /// <c>UInteger</c> or <c>ULong</c>, so those Bridged names fall to <c>SanitizeName</c> and
-    /// emit a bare, undefined C++ name. That is a real pre-existing gap in the name-string
-    /// route (<c>MapType</c> handles them), and it is NOT this test's invariant — pinning the
-    /// bare spelling as "expected" would pin the gap. The §12.4 claim, and all this asserts,
-    /// is that none of them becomes a NetRef.</para>
+    /// here. Before #187, <c>MapTypeName</c> had no arm for <c>Char</c>, <c>UByte</c>,
+    /// <c>UShort</c>, <c>UInteger</c> or <c>ULong</c>, so those Bridged names fell to
+    /// <c>SanitizeName</c> and emitted a bare, undefined C++ name — a real gap in the
+    /// name-string route that <c>MapType</c> did not share. ⚠ STALE AS OF #187, MEASURED: a
+    /// delegate parameter whose type resolves (every case here) now takes the <c>MapType</c>
+    /// route instead (see the section comment above), so for these five names this sweep no
+    /// longer exercises the gap it was written to route around — <c>Char</c>, for one, now
+    /// reaches <c>MapType</c>'s own <c>_typeMap</c> entry and maps to a real <c>char</c>, not a
+    /// bare undefined name. Not re-measured for every Bridged name; not this test's invariant
+    /// either way — pinning a bare spelling as "expected" would pin the gap. The §12.4 claim, and
+    /// all this still asserts, is that none of the swept names becomes a NetRef, and that
+    /// invariant is unaffected by which switch produces the (non-NetRef) alias.</para>
     /// </summary>
     [Test]
     public void NoOtherRegistryName_ComposesToNetRef_ThroughTheDelegateParameterRoute()
@@ -721,9 +754,12 @@ public class NetFlipTests
 
                 Assert.That(alias, Does.Not.Contain("BasicLang::NetRef"),
                     $"{category} '{name}' reached a delegate parameter as the NetRef handle. "
-                    + "§12.4 scopes the handle representation to ManagedOwned: fix "
-                    + "CppCodeGenerator.MapTypeName's default arm (it must test "
-                    + "Categorize(...) == ManagedOwned, not `!= Unknown`). Got: " + alias);
+                    + "§12.4 scopes the handle representation to ManagedOwned: check both "
+                    + "CppCodeGenerator.MapType's own ManagedOwned check (the route exercised "
+                    + "here as of #187 — see the section comment above) and MapTypeName's "
+                    + "default arm (the route before #187, still reachable when a delegate "
+                    + "parameter's Type fails to resolve) — each must test "
+                    + "Categorize(...) == ManagedOwned, not `!= Unknown`. Got: " + alias);
             }
         }
 

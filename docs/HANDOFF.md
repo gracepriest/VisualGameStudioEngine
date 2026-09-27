@@ -2312,11 +2312,13 @@ single new failure against the 170-name baseline.
     `return std::string{};` — every other file identical; the IR verifier fired 0 times.
   - Cells that stay wrong are PRE-EXISTING gaps, unrelated to `Nothing`, each confirmed by a
     no-`Nothing` control that fails identically:
-    - **#187** — a lambda (or an `AddressOf` result) cannot be stored into a user `Delegate`-typed
-      variable (`Dim d As Notify = Sub(...)` is `Cannot assign value of type 'Action' to 'Notify'`
-      on all four backends, with or without `Nothing` anywhere in the program). N4/N4b are not run
-      by the test fixture for this reason; N4c (the same shape with no lambda ever stored) is, and
-      passes everywhere.
+    - **#187 — now DONE, see its own entry below.** At the time this entry was written, a lambda
+      (or an `AddressOf` result) could not be stored into a user `Delegate`-typed variable
+      (`Dim d As Notify = Sub(...)` was `Cannot assign value of type 'Action' to 'Notify'` on all
+      four backends, with or without `Nothing` anywhere in the program), so N4/N4b were not run by
+      this fixture; N4c (the same shape with no lambda ever stored) was, and passed everywhere.
+      N4/N4b are now promoted into `NothingConversionExecutionTests` alongside N4c, run on every
+      backend under both pipelines.
     - **#188** — a delegate FIELD invoked from inside its OWN class fails on C++ (a `void*` field)
       and on JavaScript (`ReferenceError: Callback is not defined`). N6 is not run; N6b (the same
       "callback set to Nothing, then later set", read into a local before the switch) is, and
@@ -2353,8 +2355,10 @@ single new failure against the 170-name baseline.
   - Filed, not fixed here: **#185** (`Is`/`IsNot` did not parse at all — the only source-level way
     VB tells `Nothing` apart from a real value — **now DONE, see its own entry above**);
     **#186** (VB's value-type Nothing-DEFAULT, as opposed to refusal — an owner decision, still
-    open); **#187**/**#188**/**#189** above (**#189's `Case Is Nothing` C++ row is now closed by
-    #185**; the rest of #187/#188/#189 are still open and unrelated to `Is`/`IsNot`).
+    open); **#187** (a lambda/`AddressOf` into a user `Delegate` — **now DONE, see its own entry
+    below**); **#188**/**#189** above (**#189's `Case Is Nothing` C++ row is now closed by
+    #185**; **#188** is still open and unrelated to `Is`/`IsNot` — see #187's entry below for its
+    widened scope).
 - ⭐ **Newest — #122 DONE (ADR-0006 D1's Obligation, committed `22f18284`).** The closure rule
   narrows from "every local is call-visible in a function that creates a lambda" (the interim
   approximation) to the locals a lambda of that function actually CAPTURES, read straight off the
@@ -5048,7 +5052,7 @@ single new failure against the 170-name baseline.
     infers `Object`) throws `System.NullReferenceException` — this is the PRE-EXISTING #177 ("MSIL
     never boxes a value type stored into an `Object` slot", filed under task #175 above), reached
     here through a lambda's OWN inferred-Object return rather than a `Dim`; not a new gap.
-- ⭐ **Newest — #176 DONE (fix committed `4012905c`).** `Me` inside a class member is now typed
+- ⭐ **#176 DONE (fix committed `4012905c`).** `Me` inside a class member is now typed
   as THAT class, always — one `IRVariable` per `IRFunction`, never shared across classes.
   - **Mechanism, confirmed.** `IRBuilder._variableVersions` is not scoped per function and
     nothing ever popped `"Me"`. Both places that mint `Me` called
@@ -5135,6 +5139,74 @@ single new failure against the 170-name baseline.
   implemented, so the list must shrink). A missing `sendNotification` handler is a silent
   no-op; a missing `sendRequest` handler rejects inside `activate()` and kills the extension.
   Webviews still render as source text.
+- ⭐ **#187 DONE (fix commit `37faed14`).** A lambda or `AddressOf` now target-types to a user
+  `Delegate Sub`/`Delegate Function` at every site Func/Action already convert at (`Dim`, field
+  initializer, assignment, property set, `Return`, call argument, and the two NEW sites —
+  constructor and `MyBase.New` arguments), and invoking a user `Delegate Function` is typed its
+  own return type instead of Void. `TypeInfo.DelegateSignature` carries the declaration;
+  `SemanticAnalyzer.DelegateShapeOf` is the one mapping to the structural Action/Func shape the
+  rest of the machinery already had; `ConvertToUserDelegate` requires an EXACT match (the
+  existing Func/Action rule, unchanged) and names both signatures plus the first difference on a
+  mismatch. `d(args)`/`d.Invoke(args)` on a user delegate take the same path. A delegate VALUE of
+  one type never converts to a different delegate type (`Dim n As Notify = someAction` stays
+  refused, as in C#). Delegate parameters now get their OWN scope (`EnterScope("Delegate …")`),
+  fixing a pre-existing bug where two delegates sharing a parameter name were refused. IRBuilder
+  reads the delegate's resolved parameter/return TYPES (not bare names) so a lambda's own R comes
+  off the shape and a class-typed delegate parameter/return reaches C++ as `shared_ptr<T>`, not a
+  bare value type that could hold no lambda at all.
+  - **Measured** (`S/t187/probes` D1-D6/R1-R12, `S/t187/edge*`, probe.py, 4 backends × CLI/CLI
+    `-O`/Release `.blproj`): D1-D6 go from 0/72 to 72/72 OK; R1-R12 refused everywhere with the
+    named message; 12 of 17 edge probes OK everywhere. Byte compare: 6,399 files identical, 0
+    differ — the only new outputs are 5 programs that store a lambda into a user delegate.
+    `BASICLANG_VERIFY_IR` fired 0 times.
+  - **Tests:** `VisualGameStudio.Tests/Compiler/UserDelegateConversionTests.cs` (front end, fast
+    subset, 43 cases — conversion at every site, untyped-parameter inference, invocation typing,
+    the 10 exact mismatch messages, delegate-parameter scope, the unchanged Func exactness rule,
+    and two C++-codegen-TEXT-only checks for the lambda-shape/IRDelegate-type fixes) and
+    `UserDelegateConversionExecutionTests.cs` (`[Category("Integration")]`, 35 cases — D1-D6 on
+    four backends × both pipelines × the `CompileProjectFiles` project-build entry point, plus
+    the edge probes that pass everywhere and a pinned failure for each that does not). Promoted
+    N4/N4b into `NothingConversionExecutionTests` (were not run before, since storing a lambda
+    into a user delegate was refused regardless of `Nothing`). Corrected stale doc comments in
+    `Msil/ClosureLoweringTests.cs` (D7's `CType` escape hatch is no longer the only way to assign
+    `AddressOf` to a user delegate) and `Blnet/NetFlipTests.cs` (a delegate parameter's resolved
+    type now routes through `CppCodeGenerator.MapType`, not `MapTypeName`'s default arm — the two
+    sweep tests there still pass and still test the real invariant, just through a different
+    function than their own doc comments claimed). `JsExecutionTierRosterTests`' roster grew 79
+    → 80 (unique `typeof` entries; no duplicates in the array either way).
+  - **Mutants:** 16 predicted by the implementer, all built for real in a separate git worktree
+    and killed — see `S/t187/tw/mut-results.txt` for the full table. One pair (untyped-parameter
+    inference / delegate-invocation-argument checking) turned out to be the SAME code
+    (`SemanticAnalyzer.GetDelegateParameterTypes`'s `DelegateSignature` branch feeds both), so
+    that single mutant is recorded once with both rows' killers named. The `.Invoke` IR-lowering
+    mutant is caught ONLY at the execution level — a real .NET delegate genuinely has an `Invoke`
+    method, so the C# backend's ordinary member-call fallback happens to still work; C++/
+    JavaScript/MSIL do not, which is exactly why the fix exists.
+  - **Follow-ups filed, not fixed here** (next in the queue):
+    - **#201** — the C++ backend has several independent gaps specific to a user-delegate VALUE:
+      a `List(Of D)` element invoked through a `For Each`/indexer throws `bad_function_call` at
+      run time (E5); a capturing lambda added to a `List(Of D)` fails to compile over an
+      undeclared identifier (E5b); `AddressOf` an INSTANCE method fails to compile the same way
+      (E8); a function that `Return`s an `AddressOf` result on one branch and a lambda on the
+      other fails with "cannot jump from this goto statement" (E9e); a delegate-typed FIELD's
+      `.Invoke` fails because the field is typed `void*` (J1); and a lambda argument to
+      `MyBase.New` produces an undeclared `__lambda_0` reference on BOTH C# and C++ (E13, shared
+      with #170 below). None of these are new — the SAME shapes fail identically with a plain
+      `Func`/`Action` where a matching control exists (`S/t187/edge-func*`) — #187 only exposed
+      them by making the user-delegate side of these programs compile far enough to reach them.
+    - **#202** — `.Invoke` on a Func/Action value (not a user delegate) still types Object,
+      unchanged by #187: the `.Invoke` redirect is gated on `IsUserDelegate`, so
+      `Dim r As Integer = f.Invoke(5)` (f a `Func(Of Integer, Integer)`) is still refused with
+      "Cannot assign value of type 'Object' to variable of type 'Integer'". Pinned in
+      `UserDelegateConversionTests.DotInvoke_OnFuncAction_StaysTypedObject_PinnedAgainst202`.
+    - **#188** — a delegate FIELD invoked from inside its OWN class: unqualified on JavaScript
+      (`ReferenceError: OnClick is not defined`, E10) and via `b.OnClick("b")` call syntax on
+      MSIL (`MissingMethodException`, J2 — reproduces identically for a `Func`/`Action` field,
+      J2f, so it is not specific to a user delegate). Already filed by #173/#185's entries above;
+      #187 measured it again for the user-delegate shape and widened it with the MSIL row.
+    - **#170** — a lambda argument to `MyBase.New` has no IL lowering at all on MSIL
+      (`ForeignFeatureException`, predates #187, unaffected by it — see #201 above for the
+      cross-backend half of the same probe).
 - **JavaScript backend** — the `lib.dom.d.ts` → `.bli` generator was never built
   (`dom-core.bli` is hand-curated). Known front-end gaps affecting all backends:
   `Inherits ArgumentException`, assigning an inherited field from a derived class,
