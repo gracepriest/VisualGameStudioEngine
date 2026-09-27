@@ -62,6 +62,93 @@ public class FormRootLayoutTests
                 .Select(r => r.Name),
             Is.EqualTo(expected));
 
+    /// <summary>
+    /// ⛔ "The ClientSize row exists" (<see cref="FormRootValues.Applies(FormPropertyDef, FormTarget, FormLayoutKind?)"/>,
+    /// from the catalog's WebLayouts) and "the root speaks pixels" (<see cref="FormVocabulary.IsPixel(FormTarget, FormLayoutKind?)"/>,
+    /// which gates the reader's size parse and the writer's size write) are two tables for ONE fact. This
+    /// sweep is what keeps them one.
+    /// </summary>
+    [Test]
+    public void TheClientSizeRowExists_ExactlyWhereTheRootSpeaksPixels()
+    {
+        var clientSize = Row("ClientSize");
+
+        Assert.Multiple(() =>
+        {
+            foreach (var target in Enum.GetValues<FormTarget>())
+            {
+                foreach (var layout in Enum.GetValues<FormLayoutKind>().Select(k => (FormLayoutKind?)k).Prepend(null))
+                {
+                    Assert.That(FormRootValues.Applies(clientSize, target, layout),
+                        Is.EqualTo(FormVocabulary.IsPixel(target, layout)),
+                        $"{target}/{layout?.ToString() ?? "no layout"}: if the row applied where the root is not " +
+                        "pixel, a parseable Width would be 'known' (never kept as an unknown attribute) but never " +
+                        "modelled, and Create would silently drop it; the other way round, a modelled size would " +
+                        "have no row to show or edit it");
+                }
+            }
+        });
+    }
+
+    [Test]
+    public void TwoLayouts_TheLastOneDecidesTheRootsVocabulary()
+    {
+        const string gridThenCanvas = """
+            <WebForm Name="F" Version="1" Width="640" Height="480">
+              <Layout Kind="Grid" Cols="auto" Rows="auto"/>
+              <Layout Kind="Canvas"/>
+              <Controls/>
+            </WebForm>
+            """;
+        const string canvasThenGrid = """
+            <WebForm Name="F" Version="1" Width="640" Height="480">
+              <Layout Kind="Canvas"/>
+              <Layout Kind="Grid" Cols="auto" Rows="auto"/>
+              <Controls/>
+            </WebForm>
+            """;
+
+        var canvas = FormDocumentReader.Read("F.blwebform", gridThenCanvas).Model;
+        var grid = FormDocumentReader.Read("F.blwebform", canvasThenGrid).Model;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(canvas.Layout?.Kind, Is.EqualTo(FormLayoutKind.Canvas), "the LAST <Layout> wins, as it always did");
+            Assert.That((canvas.Width, canvas.Height), Is.EqualTo((640, 480)), "read as a Canvas page's design size");
+            Assert.That(canvas.UnknownAttributes, Does.Not.ContainKey("Width"));
+
+            Assert.That(grid.Layout?.Kind, Is.EqualTo(FormLayoutKind.Grid));
+            Assert.That(grid.Width, Is.Null, "a Grid page has no design size");
+            Assert.That(grid.UnknownAttributes["Width"], Is.EqualTo("640"));
+        });
+    }
+
+    /// <summary>
+    /// ⛔ A Grid page carries <c>Width="640"</c> as an unknown attribute. Switched to Canvas and given a size,
+    /// the MODELLED size must win: Create wrote the unknown attributes after the modelled ones and
+    /// <c>SetAttributeValue</c> replaces, so the file said 640.
+    /// </summary>
+    [Test]
+    public void AGridPageSwitchedToCanvas_WritesItsModelledSize_NotTheStaleUnknownOne()
+    {
+        var file = FormDocumentReader.Read("F.blwebform", GridPageWithAWidth);
+        file.Model.Layout!.Kind = FormLayoutKind.Canvas;
+        Assert.That(FormRootValues.Set(file.Model, Row("ClientSize"), "800, 600"), Is.True);
+
+        var created = FormDocumentWriter.Create(file.Model);
+        var applied = FormDocumentWriter.Write(file);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(created, Does.Contain("Width=\"800\"").And.Contain("Height=\"600\"").And.Not.Contain("640"), "Create");
+            Assert.That(applied, Does.Contain("Width=\"800\"").And.Contain("Height=\"600\"").And.Not.Contain("640"), "Apply");
+            Assert.That(applied, Does.Contain("Kind=\"Canvas\""),
+                "Apply writes a Canvas page's <Layout> too — a pixel page is still a web page");
+            Assert.That(FormDocumentReader.Read("F.blwebform", created).Model.Width, Is.EqualTo(800));
+            Assert.That(FormDocumentReader.Read("F.blwebform", applied).Model.Width, Is.EqualTo(800));
+        });
+    }
+
     [Test]
     public void TheDocumentOverload_AsksTheSamePredicate()
     {
@@ -295,7 +382,7 @@ public class FormRootLayoutTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(names, Does.Contain("Gap"), "the emitter writes gap for Flow too (FormAssetEmitter.cs:427-430)");
+            Assert.That(names, Does.Contain("Gap"), "the emitter writes gap for Flow too (FormAssetEmitter.Css)");
             Assert.That(names, Does.Not.Contain("Cols").And.Not.Contains("Rows").And.Not.Contains("ClientSize"));
         });
     }

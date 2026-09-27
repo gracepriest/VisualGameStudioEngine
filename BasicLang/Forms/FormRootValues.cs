@@ -14,7 +14,11 @@ namespace BasicLang.Forms;
 /// pays), and the retarget crosses Text and derives the layout edge itself. Until those land, a new row
 /// must be mapped here AND taught to them — FormRootRetargetTests' catalog sweep goes red for a row the
 /// retarget neither crosses nor names. The row's APPLICABILITY is <see cref="Applies(FormPropertyDef, FormTarget, FormLayoutKind?)"/>
-/// — the one predicate the reader, writer, region writer, grid, tier and retarget all call (spec 2026-09-27 §2.3).</para>
+/// — the one predicate the reader's known-attribute test, the region writer, the grid, the tier and the
+/// retarget call (spec 2026-09-27 §2.3). ⚠ The reader's size PARSE and the writer's size WRITE ask
+/// <see cref="FormVocabulary.IsPixel(FormTarget, FormLayoutKind?)"/> instead — a second table for the same
+/// fact ("ClientSize exists" == "the root speaks pixels"). They are kept one fact by
+/// <c>FormRootLayoutTests.TheClientSizeRowExists_ExactlyWhereTheRootSpeaksPixels</c>, not by construction.</para>
 /// </summary>
 public static class FormRootValues
 {

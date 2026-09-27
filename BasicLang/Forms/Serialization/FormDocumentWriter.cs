@@ -102,8 +102,24 @@ public static class FormDocumentWriter
             root.Add(LayoutElement(model.Layout));
         }
 
+        // ⛔ An unknown attribute never overwrites a MODELLED value. SetAttributeValue replaces, and this loop
+        // runs after the modelled writes — so a Grid page's unknown Width="640", switched to Canvas and given
+        // a design size of 800, wrote 640. Skipped only when the model HOLDS a value for the row the
+        // attribute now belongs to: a Degraded Width="12px" has a null model value and still round-trips
+        // from here. (ApplyToDocument has no such loop — the unknown attributes are already in the tree and
+        // ApplyFormAttributes writes over them — so it needs no guard.)
+        // ⚠ Recorded trap, the reverse switch: a Canvas page switched to Grid LOSES its Width/Height here
+        // (modelled, so never an unknown attribute; not pixel, so not written), while Apply KEEPS the
+        // tree's text. Made consistent only by writing a size onto a Grid page, which D3 says it has not.
+        var layout = FormVocabulary.LayoutOf(model);
         foreach (var (name, value) in model.UnknownAttributes)
         {
+            if (FormRootValues.RowForAttribute(name, model.Target, layout) is { } row &&
+                FormRootValues.Get(model, row) != null)
+            {
+                continue;
+            }
+
             root.SetAttributeValue(name, value);
         }
 

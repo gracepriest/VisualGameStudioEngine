@@ -211,8 +211,14 @@ public class FormRootRetargetTests
         {
             Assert.That(result.Document.UnknownAttributes.ContainsKey("Width"), Is.False,
                 "the source's own degraded ClientSize storage must not ride onto a page as dead data");
-            Assert.That(result.Diagnostics.Any(d => d.Code == DesignCodes.RetargetPropertyLost && d.Message.Contains("12px")),
-                Is.True);
+            // ⛔ The exact branch: ClientSize targets the web now, but a WinForms → web retarget produces a
+            // GRID page, where the row does not exist — asked through FormRootValues.Applies with the
+            // destination's layout, never AppliesTo(Web) alone (which would say "carried as the web
+            // form's value").
+            Assert.That(result.Diagnostics.Any(d => d.Code == DesignCodes.RetargetPropertyLost &&
+                                                    d.Message.Contains("12px") &&
+                                                    d.Message.Contains("and does not exist on a web one, so it was dropped.")),
+                Is.True, string.Join("\n", result.Diagnostics.Select(d => d.Message)));
         });
     }
 }
