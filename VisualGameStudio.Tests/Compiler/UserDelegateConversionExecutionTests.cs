@@ -394,6 +394,10 @@ public class UserDelegateConversionExecutionTests
     [Test]
     public void J2_FieldCallSyntax_Msil_PinsTodaysMissingMethodException_Against188()
     {
+        // Skip OUTSIDE Assert.Throws: without ilasm the harness throws its IgnoreException, and
+        // inside the lambda that is caught as the wrong exception type — a FAIL on every Linux
+        // run instead of a skip.
+        Msil.MsilHarness.RequireIlasm();
         var ex = Assert.Throws<AssertionException>(() => Msil.MsilHarness.RunExpectingSuccess(J2));
         Assert.That(ex!.Message, Does.Contain("MissingMethodException").And.Contain("Button.OnClick"),
             "the compile/run failure must still be the delegate-field-call MissingMethodException "
