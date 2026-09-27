@@ -72,6 +72,45 @@ public class FormMobileBreakpointTests
             "⛔ the model holds the RAW text, so nothing can remove it on a save (spec §2.3)");
     }
 
+    /// <summary>
+    /// ⛔ The catalog's culture-free parser, not <c>int.TryParse</c>: the current-culture overload accepts a tab
+    /// and other whitespace the designer's other Int rows refuse. ⚠ The two non-ASCII inputs are built from
+    /// code points — a raw character pasted through an editor tool has been stored wrongly before.
+    /// </summary>
+    [TestCase("+600", true, 600)]
+    [TestCase("0600", true, 600)]
+    [TestCase("0", true, 0)]
+    [TestCase("\t600", false, FormLayout.DefaultMobileBreakpoint)]
+    [TestCase("600.0", false, FormLayout.DefaultMobileBreakpoint)]
+    [TestCase("1e3", false, FormLayout.DefaultMobileBreakpoint)]
+    [TestCase("99999999999", false, FormLayout.DefaultMobileBreakpoint)]
+    [TestCase("arabic-indic 600", false, FormLayout.DefaultMobileBreakpoint)]
+    [TestCase("U+2212 minus 5", false, FormLayout.DefaultMobileBreakpoint)]
+    public void TryParseMobileBreakpoint_IsTheCatalogsCultureFreeParser(string input, bool usable, int pixels)
+    {
+        var text = input switch
+        {
+            "arabic-indic 600" => new string(new[] { (char)0x0666, (char)0x0660, (char)0x0660 }),
+            "U+2212 minus 5" => ((char)0x2212) + "5",
+            _ => input
+        };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(FormLayout.TryParseMobileBreakpoint(text, out var parsed), Is.EqualTo(usable));
+            Assert.That(parsed, Is.EqualTo(pixels));
+        });
+    }
+
+    [Test]
+    public void AnOverflowingValue_IsDegraded_AndTheReasonNamesTheRange()
+    {
+        var file = FormDocumentReader.Read("F.blwebform", Page("99999999999"));
+
+        Assert.That(file.DegradedReasonOfRoot("MobileBreakpoint"),
+            Does.Contain("from 0 to 2147483647").And.Contain("0 means never stack").And.Not.Contain("positive"));
+    }
+
     [Test]
     public void Set_AcceptsZeroAndPositive_RefusesNegativeAndText_AndNullRemoves()
     {

@@ -133,8 +133,8 @@ public static class FormDocumentReader
             !FormLayout.TryParseMobileBreakpoint(rawBreakpoint, out _))
         {
             degradedRoot.Add(new DegradedProperty("", "MobileBreakpoint", rawBreakpoint,
-                $"the page's phone breakpoint could not be used — MobileBreakpoint=\"{rawBreakpoint}\" must be 0 " +
-                "(never stack) or a positive whole number of pixels, so the page stacks below the default " +
+                $"the page's phone breakpoint could not be used — MobileBreakpoint=\"{rawBreakpoint}\" must be a " +
+                "whole number of pixels from 0 to 2147483647, where 0 means never stack, so the page stacks below the default " +
                 $"{FormLayout.DefaultMobileBreakpoint}px. The attribute is preserved exactly as written."));
         }
 
