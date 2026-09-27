@@ -264,12 +264,22 @@ public class NetGeneratedShimConformanceTests
     /// for <c>Nothing</c> in a handle slot: <c>MapType</c> answers a handle DEFAULT with
     /// <c>{}</c> (the empty handle), but a CAST to a handle type has no such arm.</para>
     ///
-    /// <para>Two shapes were rejected before this one, and both are recorded rather than quietly
-    /// swapped: bare <c>Dim s As Stream = Nothing</c> is <b>BL3001</b> (Nothing types as Object,
-    /// so BasicLang demands the cast), and the cast form is the C2440 above. Chipped —
-    /// see the chip for the repro. This test pins the CURRENT behaviour so the day it changes is
-    /// deliberate; when the emission is fixed, replace it with the runtime row §12.3 actually
-    /// asks for rather than deleting it.</para>
+    /// <para>⚠ STALE AS OF #173 (fix commit c0b457d9), CORRECTED: a second shape used to be
+    /// rejected before this one and was recorded here as such — bare <c>Dim s As Stream =
+    /// Nothing</c> was <b>BL3001</b>, because <c>Nothing</c> typed <c>Object</c> and every site
+    /// refused <c>Object</c> into anything but <c>Object</c>. #173 made <c>JudgeNothingConversion</c>
+    /// the one answer at every conversion site, and <c>Stream</c> is an ordinary unresolvable .NET
+    /// reference type (not in <c>BoundaryTypeRegistry</c>'s curated NativeOwned set), so
+    /// <c>NothingAdviceFor</c> admits it: the bare form now COMPILES, and <c>CppCodeGenerator.
+    /// NothingOf</c> spells it <c>BasicLang::NetRef{}</c> (the handle-DEFAULT convention
+    /// <c>MapType</c> already used for an uninitialized handle) — verified 2026-09-27 through the
+    /// real CLI: <c>Dim s As Stream = Nothing</c> emits <c>BasicLang::NetRef s = {}; s =
+    /// BasicLang::NetRef{};</c>. Only the CAST form below (<c>CType(Nothing, Stream)</c>) is
+    /// unaffected: that is a distinct code path (a cast operator, not a store site
+    /// <c>JudgeNothingConversion</c> is asked at) and still emits the bare
+    /// <c>static_cast&lt;NetRef&gt;(nullptr)</c> C2440 this test pins. This test pins the CURRENT
+    /// behaviour of the CAST form so the day it changes is deliberate; when the emission is fixed,
+    /// replace it with the runtime row §12.3 actually asks for rather than deleting it.</para>
     /// </summary>
     [Test]
     public void NothingInAHandleSlot_DoesNotYetCompile_PinnedDivergence()
