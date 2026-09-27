@@ -87,5 +87,9 @@ Follow this document **instead of** the plan's Task 11 section. Where they disag
 8. Literal on Canvas back to BL8025.
 9. Canonical back to Target-keyed.
 
+### Execution notes
+- Red seen first: 11 failures across the five fixtures (99 run, 0 skipped), each for the intended reason (800x450 window, cells derived, BL8025 per control, MobileBreakpoint unnamed).
+- Mutations 1–9 each killed (1: 9 red, 2: 6, 3: 4, 4: 2, 5: 3, 6: 3, 7: 1, 8: 1, stray-attribute finding removed: 1) plus the fixture mutant (Canonical Target-keyed: 1). Not run: "copy a Docked/Item control's geometry too" — EQUIVALENT through the reader, which never gives a strip or an item geometry.
+
 ## F. Gate
 Fast subset vs cfdbe895 (8276 / 8270 / 5 / 1; the five known names); `FormRetargetTests`, `FormRootRetargetTests`, `SolutionExplorerRetargetTests` by name; Integration `FormRetargetPairTests`, `DesignRetargetCliTests`, `WinFormsCatalogSweepTests` (Canonical changed).

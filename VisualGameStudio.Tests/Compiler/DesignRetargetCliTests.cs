@@ -96,6 +96,32 @@ public class DesignRetargetCliTests
         Assert.That(File.ReadAllText(Path.Combine(Out, "LoginForm.bas")), Does.Contain("Inherits Form"));
     }
 
+    /// <summary>
+    /// Task 11 through the CLI: a Canvas page becomes the window it was designed as — exact pixels, exact
+    /// client size — and the only finding is the web-only breakpoint (BL8024), never the layout edge (BL8025).
+    /// </summary>
+    [Test]
+    [Category("Integration")]
+    public async Task Cli_DesignRetarget_ACanvasPage_WritesABlformWithTheExactGeometry_AndNoLayoutWarning()
+    {
+        var source = Write("LoginForm.blwebform", FormRetargetTests.CanvasLogin);
+
+        var (exit, stdout, stderr) = await CliTestHarness.RunCli(_dir, "design", "--retarget", source, "--out", Out);
+
+        Assert.That(exit, Is.Zero, $"stdout:\n{stdout}\nstderr:\n{stderr}");
+        var blform = File.ReadAllText(Path.Combine(Out, "LoginForm.blform"));
+        var code = File.ReadAllText(Path.Combine(Out, "LoginForm.bas"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(blform, Does.Contain("Width=\"640\"").And.Contain("Height=\"400\""));
+            Assert.That(blform, Does.Contain("X=\"540\" Y=\"80\" Width=\"88\" Height=\"30\" Anchor=\"Bottom,Right\""));
+            Assert.That(code, Does.Contain("Me.ClientSize = New Size(640, 400)"));
+            Assert.That(stdout, Does.Not.Contain("BL8025"), "nothing was derived");
+            Assert.That(stdout, Does.Contain("BL8024").And.Contain("MobileBreakpoint"));
+        });
+    }
+
     [Test]
     [Category("Integration")]
     public async Task Cli_DesignRetarget_WithoutOut_IsAnArgumentError_ThatExplainsThePairing()

@@ -181,7 +181,8 @@ public class FormRetargetPairTests
         foreach (var (xml, name, to) in new[]
                  {
                      (WinFormsLogin, "LoginForm.blform", FormTarget.Web),
-                     (WebLogin, "LoginForm.blwebform", FormTarget.WinForms)
+                     (WebLogin, "LoginForm.blwebform", FormTarget.WinForms),
+                     (FormRetargetTests.CanvasLogin, "LoginForm.blwebform", FormTarget.WinForms)
                  })
         {
             var pair = FormRetarget.ConvertToPair(Read(xml, name), to);
@@ -239,6 +240,40 @@ public class FormRetargetPairTests
         var csharp = WinFormsCatalogSweepTests.CompileToCSharp(pair.CodeText);
         WinFormsCompile.AssertCompiles(csharp,
             "the code-behind a retarget produced for a WinForms form must be one csc accepts.");
+    }
+
+    /// <summary>
+    /// Task 11: a Canvas page's pair is the window it was designed as — the exact client size, and each
+    /// control's own Location/Size/Dock/Anchor, in the region the WinForms program runs.
+    /// </summary>
+    [Test]
+    public void ACanvasPair_EmitsTheExactClientSizeAndGeometry()
+    {
+        var pair = FormRetarget.ConvertToPair(Read(FormRetargetTests.CanvasLogin, "LoginForm.blwebform"), FormTarget.WinForms);
+        var code = pair.CodeText;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(pair.DocumentFileName, Is.EqualTo("LoginForm.blform"));
+            Assert.That(code, Does.Contain("Me.ClientSize = New Size(640, 400)"));
+            Assert.That(code, Does.Contain("btnLogin.Location = New Point(540, 80)"));
+            Assert.That(code, Does.Contain("btnLogin.Size = New Size(88, 30)"));
+            Assert.That(code, Does.Contain("pnl.Dock = DockStyle.Top"));
+            Assert.That(code, Does.Contain("btnLogin.Anchor = CType(10, AnchorStyles)"), "Bottom (2) | Right (8)");
+            Assert.That(pair.Diagnostics.Select(d => d.Code), Has.None.EqualTo(DesignCodes.RetargetLayoutCrossed));
+        });
+    }
+
+    /// <summary>⛔ The Canvas pair through the real compiler and csc — the WinForms program Tasks 12/13 compare the page against.</summary>
+    [Test]
+    [Category("Integration")]
+    public void TheRetargetedCanvasPair_CompilesThroughTheRealCompilerAndCsc()
+    {
+        var pair = FormRetarget.ConvertToPair(Read(FormRetargetTests.CanvasLogin, "LoginForm.blwebform"), FormTarget.WinForms);
+
+        var csharp = WinFormsCatalogSweepTests.CompileToCSharp(pair.CodeText);
+        WinFormsCompile.AssertCompiles(csharp,
+            "the code-behind a Canvas page's retarget produced must be one csc accepts.");
     }
 
     /// <summary>

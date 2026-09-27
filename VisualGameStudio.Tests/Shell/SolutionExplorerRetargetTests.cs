@@ -114,6 +114,34 @@ public class SolutionExplorerRetargetTests
         _projectService.Verify(p => p.SaveProjectAsync(It.IsAny<CancellationToken>()), Times.Never);
     }
 
+    /// <summary>
+    /// Task 11 through the IDE's own command: a Canvas page becomes the window it was designed as, and the
+    /// Error List hears only the web-only breakpoint — nothing at the layout edge.
+    /// </summary>
+    [Test]
+    public async Task RetargetFormCommand_ACanvasPage_WritesTheExactGeometry_AndPublishesNoLayoutWarning()
+    {
+        SelectDocument("LoginForm.blwebform", VisualGameStudio.Tests.Compiler.FormRetargetTests.CanvasLogin);
+        var winOut = Path.Combine(_dir, "win");
+        ChooseFolder(winOut);
+
+        await _vm.RetargetFormCommand.ExecuteAsync(null);
+
+        var blform = File.ReadAllText(Path.Combine(winOut, "LoginForm.blform"));
+        Assert.Multiple(() =>
+        {
+            Assert.That(blform, Does.Contain("Width=\"640\"").And.Contain("Height=\"400\""));
+            Assert.That(blform, Does.Contain("X=\"12\" Y=\"10\" Width=\"300\" Height=\"23\" Anchor=\"Top,Left,Right\""));
+        });
+
+        _events.Verify(e => e.Publish(It.Is<DesignerDiagnosticsEvent>(ev =>
+                ev.FilePath == Path.Combine(winOut, "LoginForm.bas") &&
+                ev.Diagnostics.Any(d => d.Id == "BL8024" && d.Message.Contains("MobileBreakpoint")) &&
+                ev.Diagnostics.All(d => d.Id != "BL8025"))),
+            Times.Once,
+            "a Canvas page crosses with no layout finding; only the breakpoint is lost");
+    }
+
     [Test]
     public async Task RetargetFormCommand_PublishesEveryLoss_ToTheErrorList_AgainstTheNewCodeBehind()
     {
