@@ -7,7 +7,9 @@ namespace BasicLang.Forms;
 /// <c>&lt;Layout Kind="Canvas"&gt;</c> says so, and cells (Grid) or document order (Flow) otherwise.
 /// Every site that decides a vocabulary asks HERE: the reader's root size and control geometry, the
 /// writer, <see cref="FormControlCatalog.IsStructural(string, FormTarget, FormLayoutKind?)"/> and the
-/// clipboard already do; the canvas and placement move onto it in piece 1's Task 9. Before this existed,
+/// clipboard already do; the canvas's layout, chrome and grips (<c>FormCanvasTransform.Layout</c>,
+/// <c>FormCanvasControl</c>) and placement (<c>FormPlacement.Place</c>) ask it too (Task 9); the canvas's title bar
+/// alone stays target-only, because it is about being a WINDOW. Before this existed,
 /// each of them asked <c>Target == WinForms</c>, which silently routed every web document down the Grid
 /// path.</para>
 ///

@@ -358,9 +358,10 @@ public partial class FormPropertyGridViewModel : ObservableObject
                 Rows.Add(IntRow("Width", () => pixel.Width, v => pixel.Width = Math.Max(1, v), Changed, "Layout", SizeDescription));
                 Rows.Add(IntRow("Height", () => pixel.Height, v => pixel.Height = Math.Max(1, v), Changed, "Layout", SizeDescription));
 
-                // ⛔⛔ PIXEL GEOMETRY ONLY, and that is D3 rather than an oversight. Anchor and Dock
-                // are WinForms layout vocabulary; a .blwebform control lives in a grid CELL and has
-                // no edges to anchor to. Offering them on the web would let the user set a value the
+                // ⛔⛔ PIXEL GEOMETRY ONLY, and that is D3 rather than an oversight: Anchor and Dock
+                // are the PIXEL vocabulary — a .blform's, and a Canvas page's (spec 2026-09-27) — and
+                // a Grid/Flow page's control lives in a CELL with no edges to anchor to. Offering them
+                // there would let the user set a value the
                 // emitter cannot use — the designer/runtime divergence D9 exists to prevent — and
                 // Task 21's retarget reports the loss when a form crosses formats.
                 //

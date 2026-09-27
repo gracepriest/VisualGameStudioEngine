@@ -23,11 +23,10 @@ public enum FormArrangeKind
 /// first in document order wins — makes the result depend on something the user cannot see, and
 /// pressing the same command twice can give two different answers.</para>
 ///
-/// <para>⛔⛔ <b>Pixel geometry only (D3).</b> A <c>.blwebform</c> is laid out by CELL: its controls
-/// have no X, Y, Width or Height, and the grid is an approximation of a page the browser renders.
-/// Unifying the two layout vocabularies into pixels is precisely what D3 rejects, so these commands
-/// refuse on a web form rather than inventing coordinates that the document cannot express and the
-/// page would not honour.</para>
+/// <para>⛔⛔ <b>Pixel geometry only (D3).</b> A Grid/Flow page is laid out by CELL: its controls have
+/// no X, Y, Width or Height, so these commands do nothing there (the PixelGeometry test below). A Canvas
+/// page's controls are pixels and align like a .blform's. ⚠ A DOCKED control is not excluded yet
+/// (pre-flight follow-up): its X/Y are ignored at run time.</para>
 ///
 /// <para>⛔⛔ <b>X and Y are PARENT-RELATIVE</b>, so only controls sharing the primary's container can
 /// be aligned to it. Setting a control inside a Panel and one outside it to the same X puts them in
