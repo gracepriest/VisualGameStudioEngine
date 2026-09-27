@@ -144,6 +144,18 @@ public class KillVocabularyReflectionTotalityTests
         // delegate runs no user code (OptimizationPass.NamesWrittenBy: WriteKind.Named, IsCall
         // false) — see IRDelegateCreate's own doc comment in IRNodes.cs.
         [typeof(IRDelegateCreate)] = f => new IRDelegateCreate("t0", IntType, f.P, f.Function, false),
+
+        // Task #185 (ADR-0011 D5): `Is` / `IsNot` — reference identity, its own node, never a
+        // BinaryOpKind/CompareKind (a user Operator=, Delegate.op_Equality or String value
+        // equality could answer those; this node runs no user code on any backend). Pure
+        // (ADR-0006): a read of both operands and a definition of its own name — the SAME
+        // classification IRCompare gets (OptimizationPass.NamesWrittenBy folds it into the
+        // IRCompare/IRBinaryOp/... arm) — and no kills. Added here because the roster is a
+        // reflection totality pin: a new IRInstruction subclass with no entry fails
+        // Roster_CoversEveryConcreteIRInstructionSubclass by NAME, which is exactly what the fix
+        // commit's own message calls out as the expected failure until this test lands.
+        [typeof(IRIdentityCompare)] = f =>
+            new IRIdentityCompare("t0", f.P, f.Q, false, new TypeInfo("Boolean", TypeKind.Primitive)),
     };
 
     /// <summary>

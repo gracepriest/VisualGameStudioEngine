@@ -2169,6 +2169,101 @@ single new failure against the 170-name baseline.
     should `Char` widen to `String` on assignment/return/parameter, the way VB allows treating a
     length-1 String literal as source but not a bare Char value? `For Each s As String In "ab"` is
     refused today under the same rule as `As Integer`, deliberately, until #184 is decided).
+- ⭐ **Newest — #185 DONE (`Is`/`IsNot` reference identity, fix committed `ffed9fc1`, ADR-0011).**
+  `x Is Nothing`, `x IsNot Nothing` and `a Is b` did not parse anywhere except `Case Is Nothing`
+  before this. The architect's ruling is
+  `docs/superpowers/decisions/0011-is-isnot-reference-identity.md`.
+  - **D1 (grammar):** `Is`/`IsNot` are binary operators at the `=`/`<>` level in BOTH expression
+    parsers (the recursive-descent chain AND the precedence-climbing continuation); `IsNot` is now
+    a lexer keyword. `Case Is Nothing` keeps its dispatch and is now marked `WrittenWithIs`
+    (`NothingPatternNode`), which separates it from VB's value comparison `Case Nothing`. A
+    `Not`-shaped left operand (`Not x Is Nothing`) is refused, naming `x IsNot Nothing` — `Not`
+    itself stays at unary precedence (moving it is filed separately as **#195**).
+  - **D2 (operand rule, `VisitIdentityComparison`):** an operand is `Nothing` or a type #173's
+    `NothingAdviceFor` admits `Nothing` into — the ONE classification, no parallel list; value
+    types are refused BC30020-style, each refusal naming its own fix. A nullable is admitted only
+    against `Nothing` (naming `.HasValue` otherwise). Two non-`Nothing` operands must be related
+    (one converts to the other, or one is `Object`) or the comparison is refused as always-False.
+    `Case Is Nothing` follows the SAME rule (`CheckCaseIsNothingOperand`).
+  - **D3 (C++ `Is Nothing` on String/array):** ONE C++ null test, `EmitNullTest`, shared by the new
+    identity node and `IRNothingPatternCase` — String and array test EMPTINESS there (no null
+    state on C++). This CLOSES **#189**'s C++ `Case Is Nothing` rows on String/array, which
+    previously failed to compile (`x == nullptr` on a `std::string`/`BasicLang::Array<T>`).
+    **The divergence is deliberate and MEASURED:** `"" Is Nothing` and an empty array `Is Nothing`
+    are True on C++ only, False on C#/JavaScript/MSIL — pinned by name,
+    `IsIsNotOperatorExecutionTests.CppStringAndArrayNothingIsEmptiness_DivergesFromDotNet`. It
+    flips for arrays (only) when `Array<T>` gains a real null state — **#196**, filed separately.
+  - **D4 (non-portable identity):** the front end refuses, on EVERY backend, `Is`/`IsNot` where
+    either non-`Nothing` operand is statically String or a delegate type — a user `Delegate`,
+    `Action`/`Func`, OR a resolved **.NET** delegate (`EventHandler`, `Predicate(Of T)`, …, via the
+    analyzer's own .NET resolver, `IsNetDelegateType` — never a name list). `s Is Nothing` /
+    `d IsNot Nothing` stay legal. `Object Is Object` is admitted (the Object hatch). Proven with a
+    class whose user `Operator =` always returns True (`System.Version`, since a BasicLang
+    user-declared `Operator =` does not exist yet — **#198**): `a Is b` on two distinct instances
+    is False on C# while `a = b` is True — emission never reaches a value-equality operator.
+  - **D5 (IR shape):** a new node, `IRIdentityCompare { Left, Right, Negated }` — deliberately NOT
+    a `BinaryOpKind`/`CompareKind` (either would fall into an existing `default:` arm and silently
+    emit `==`, and could be answered by a user `Operator =`/`Delegate.op_Equality`/String value
+    equality). Every walker that must see it does: `NamesWrittenBy` (pure — a read of both
+    operands, a definition of its own name, no kills, per ADR-0006), `UsesOf`/`ReplaceUses`,
+    `CollectReads`/`CollectNames`, the IR verifier, replicability, the C++ capability checker, the
+    ClosureLowering clone, the interpreter, CopyProp (with a LAMBDA-REFERENCE exclusion — a lambda
+    renders as its own expression at its use site, so `(() => {…}) === null` is not valid on any
+    target), CSE (keyed so it is NEVER merged with an `IRCompare Eq` of the same operands, which
+    may run user code) and LICM. `ConstantFoldingPass` folds ONLY `Nothing Is/IsNot Nothing`
+    (never `x Is x`, never rewritten to/from `Eq`/`Ne`).
+  - **Emission:** C# `(object)(a) == (object)(b)`; MSIL `ceq`; JavaScript `===` plus the SAME
+    null/undefined test `Case Is Nothing` already used; C++ `shared_ptr ==` (`Me` via `.get()`) or
+    the D3 helper, with a lambda literal wrapped `std::function(...)` first (a bare closure has no
+    `== nullptr`); LLVM `icmp`.
+  - Measured (probe.py, 4 backends × CLI/CLI-O/Release .blproj, 38 programs): every refusal (R1-R9,
+    plus R10/R10b for the .NET-delegate classification added after the initial pass) refused on
+    every backend; every other row RAN OK except the pre-existing, unrelated gaps below. Byte
+    compare: the 9 files that changed are all C++ `Case Is Nothing` on a String or array, going
+    from a compile failure to `(x).empty()`. `BASICLANG_VERIFY_IR` fired 0 times.
+  - Pre-existing gaps, unrelated to `Is`/`IsNot`, each confirmed by a no-`Is` control that fails
+    identically: a captured lambda's C++ variable mutation (**#140** — E3 vs its E3b control, both
+    "RAN WRONG" identically on C++); `Integer?` has no lowering on C++/MSIL/JavaScript at all
+    (**#193** — undeclared identifier 'Integer' / BL7007, unrelated to `Is`); `Object` has no C++
+    mapping (pre-existing, unrelated); `System.Version` (P11/P11b's D4 (1) proof) has no
+    C++/JavaScript mapping and no MSIL lowering (**#194** — ordinary .NET types on MSIL — names
+    the MSIL row; C++/JavaScript's "no mapping" is the same pre-existing gap other unresolvable
+    .NET types hit), so P11/P11b run on C# only.
+  - **Tests:** `VisualGameStudio.Tests/Compiler/IsIsNotOperatorTests.cs` (front end + IR, fast
+    subset) and `IsIsNotOperatorExecutionTests.cs` (`[Category("Integration")]`, four backends ×
+    two pipelines over the kind table, two-operand identity, the promoted #189 C1/C2/E7 rows, the
+    named C++ divergence, D4 (1)'s operator-overload proof, `Me`/lambda-reference identity, and the
+    fold). `JsExecutionTierRosterTests`' roster grew 76 → 77. `NothingConversionExecutionTests`'
+    and `docs/superpowers/specs/2026-07-07-cpp-backend-preexisting-gaps.md`'s stale
+    "`Is` does not parse" claims were corrected — their assertions were not touched.
+  - **Mutants:** the implementer's list (18 distinct edits once its "String and delegate arms
+    separately" and "JS / C++ wrap" bullets are each split, per their own wording) plus the ONE
+    genuinely new mutant this session's dispatch added once the .NET-delegate classification
+    landed, the `System.Delegate`/`MulticastDelegate` root check — **19 total, all 19 KILLED**
+    (the dispatch's OTHER "extra" mutant, "the `IsNetDelegateType` call removed", is the SAME edit
+    as the implementer list's ".NET-delegate classification" bullet, so it was tested once, not
+    twice), built and run for real in a separate `git worktree` (never during a `dotnet test` run;
+    `BasicLang.dll` swapped into the test output, then the main tree's real DLL restored and
+    md5-verified identical, `4719426f477afb155e69a8a2461538f4`, before and after). The
+    `System.Delegate`/`MulticastDelegate` root-check removal needed a `System.Delegate`-typed
+    operand pair — NOT obviously constructible (the bare keyword `Delegate` cannot be a type
+    name), but IS constructible via the DOTTED spelling `System.Delegate`: `BasicLangLexer`'s
+    "after a dot, treat everything as an identifier" rule lexes it as a plain qualified name,
+    confirmed by tokenizing it directly rather than assumed from the keyword table. Four of the 19
+    needed the KILLING TEST fixed first, not the mutant re-picked: two C++-text and one JS-text
+    assertion were vacuous against the SPLICED BCL RUNTIME's own unrelated `.empty()`/`.get()`
+    text or NullTest's own leading paren, until narrowed to the exact call site; the "precedence-
+    climbing path" TestCase was actually still going through recursive descent (`b = x Is y` is an
+    ASSIGNMENT, which parses its RHS via `ParseExpression`) — the real climbing path is a BARE
+    expression statement (`x Is x` alone, no assignment, no call), found by mutating each parser
+    table independently and observing which shapes stopped parsing. See
+    `IsIsNotOperatorTests.cs`'s and `IsIsNotOperatorExecutionTests.cs`'s doc comments for which
+    test kills which.
+  - Follow-ups filed, not fixed here: **#195** (`Not` to VB precedence); **#196** (`Array<T>` a
+    real null state, which flips the C++ divergence for arrays); **#197** (`TypeOf`, not touched
+    by this task); **#198** (BasicLang cannot declare a user `Operator =` yet, so D4 (1)'s
+    four-backend proof waits on it); **#193** (`Integer?` on C++/MSIL/JavaScript, pre-existing);
+    **#194** (ordinary .NET types, `System.Version` included, on MSIL — pre-existing).
 - ⭐ **Newest — #173 DONE (fix committed `c0b457d9`).** `Nothing` now converts to any REFERENCE
   type — a class, an interface, a delegate (user `Delegate`/`Action`/`Func`), `String`, an array, a
   collection, or an unresolvable .NET handle — at every one of the NINE conversion sites the
@@ -2199,8 +2294,11 @@ single new failure against the 170-name baseline.
     no null state: `std::string{}` for `String`, `BasicLang::Array<T>{}` for an array,
     `BasicLang::NetRef{}` for a .NET handle (already `MapType`'s own DEFAULT-value convention).
     `Dim s As String = Nothing` therefore behaves exactly like `Dim s As String` (`""`) on C++; VB
-    can tell `Nothing` apart from `""` only through `Is`, which does not parse yet (**#185**), so
-    the divergence is invisible to any BasicLang program today. Verified through the CLI:
+    can tell `Nothing` apart from `""` only through `Is`. At the time this entry was written `Is`
+    did not parse at all (**#185**), so the divergence was invisible to any BasicLang program.
+    **#185 is now DONE (see its own entry above)** — `Is`/`IsNot` parse everywhere, and this
+    divergence is directly observable and measured: `"" Is Nothing` is True on C++, False on
+    C#/JavaScript/MSIL (same for an empty array). Verified through the CLI:
     `Dim s As Stream = Nothing` (an ordinary unresolvable .NET reference type, not NativeOwned) now
     emits `BasicLang::NetRef s = {}; s = BasicLang::NetRef{};` —
     `NetGeneratedShimConformanceTests.NothingInAHandleSlot_DoesNotYetCompile_PinnedDivergence`'s
@@ -2223,12 +2321,17 @@ single new failure against the 170-name baseline.
       and on JavaScript (`ReferenceError: Callback is not defined`). N6 is not run; N6b (the same
       "callback set to Nothing, then later set", read into a local before the switch) is, and
       passes everywhere.
-    - **#189** — three C++ gaps and one JavaScript gap, each PINNED rather than silently accepted:
-      a captured `Catch` variable's member access (`ex.Message` → `ex->Message` on a BY-VALUE
-      exception type) fails to compile on C++ (N7, pinned); `Case Is Nothing` on an ARRAY fails to
-      compile on C++ (X4 is not run; X4b, the same shape without that one comparison, is, and
-      passes); JavaScript prints the real `null` rather than `""` when a `String` `Nothing` is
-      concatenated into text (S1-S3's JavaScript legs, pinned).
+    - **#189** — at the time of THIS entry, three C++ gaps and one JavaScript gap, each PINNED
+      rather than silently accepted: a captured `Catch` variable's member access
+      (`ex.Message` → `ex->Message` on a BY-VALUE exception type) fails to compile on C++ (N7,
+      pinned, STILL OPEN); `Case Is Nothing` on a String or an ARRAY failed to compile on C++ (X4
+      was not run; X4b, the same shape without that one comparison, ran and passed) —
+      **this row is now CLOSED by #185** (ADR-0011 D3's one `EmitNullTest` helper), see #185's own
+      entry above; the promoted, passing pin is `IsIsNotOperatorExecutionTests
+      .CaseIsNothing_189_RunsOnEveryBackend_BothPipelines` (probes C1/C2/E7), not X4/X4b, which
+      were never renamed; JavaScript prints the real `null` rather than `""` when a `String`
+      `Nothing` is concatenated into text (S1-S3's JavaScript legs, pinned, STILL OPEN —
+      unrelated to `Is`/`IsNot`).
   - **Tests:** `VisualGameStudio.Tests/Compiler/NothingConversionTests.cs` (front end + IR, fast
     subset, 59 cases) and `NothingConversionExecutionTests.cs` (`[Category("Integration")]`, four
     backends × two pipelines over the 14 probes that run everywhere, plus N7 and the S1-S3
@@ -2247,9 +2350,11 @@ single new failure against the 170-name baseline.
     arm dropped; the IR re-type removed; the delegate-argument IR arm removed; `NothingOf` made to
     always return `nullptr`. All 14 killed on the first try; see `NothingConversionTests`'/
     `NothingConversionExecutionTests`' doc comments for which test kills which.
-  - Filed, not fixed here: **#185** (`Is`/`IsNot` do not parse — the only source-level way VB tells
-    `Nothing` apart from a real value); **#186** (VB's value-type Nothing-DEFAULT, as opposed to
-    refusal — an owner decision); **#187**/**#188**/**#189** above.
+  - Filed, not fixed here: **#185** (`Is`/`IsNot` did not parse at all — the only source-level way
+    VB tells `Nothing` apart from a real value — **now DONE, see its own entry above**);
+    **#186** (VB's value-type Nothing-DEFAULT, as opposed to refusal — an owner decision, still
+    open); **#187**/**#188**/**#189** above (**#189's `Case Is Nothing` C++ row is now closed by
+    #185**; the rest of #187/#188/#189 are still open and unrelated to `Is`/`IsNot`).
 - ⭐ **Newest — #122 DONE (ADR-0006 D1's Obligation, committed `22f18284`).** The closure rule
   narrows from "every local is call-visible in a function that creates a lambda" (the interim
   approximation) to the locals a lambda of that function actually CAPTURES, read straight off the

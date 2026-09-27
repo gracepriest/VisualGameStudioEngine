@@ -1403,6 +1403,22 @@ namespace BasicLang.Compiler.CodeGen.LLVM
             WriteLine($"  {result} = {cmpInst} {cmpOp} {type} {leftVal}, {rightVal}");
         }
 
+        /// <summary>
+        /// <c>Is</c> / <c>IsNot</c> (ADR-0011): a POINTER comparison — <c>icmp eq</c>/<c>ne</c>
+        /// on the two references (a class, an interface, an array or a String is a pointer here),
+        /// <c>null</c> for Nothing. Typed from the operand that is not Nothing.
+        /// </summary>
+        public override void Visit(IRIdentityCompare identity)
+        {
+            var typed = IRIdentityCompare.IsNothing(identity.Left) ? identity.Right : identity.Left;
+            var type = MapType(typed.Type);
+            var leftVal = LoadIfNeeded(identity.Left, GetLLVMName(identity.Left));
+            var rightVal = LoadIfNeeded(identity.Right, GetLLVMName(identity.Right));
+            var result = GetLLVMName(identity);
+
+            WriteLine($"  {result} = icmp {(identity.Negated ? "ne" : "eq")} {type} {leftVal}, {rightVal}");
+        }
+
         public override void Visit(IRAssignment assignment)
         {
             var value = GetLLVMName(assignment.Value);

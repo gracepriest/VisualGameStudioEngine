@@ -194,6 +194,7 @@ namespace BasicLang
             IRFieldAccess fa => fa.Object is IRVariable v && TryGet(v.Name, fa.FieldName, out _),
             IRBinaryOp b => UsesRow(b.Left) || UsesRow(b.Right),
             IRCompare c => UsesRow(c.Left) || UsesRow(c.Right),
+            IRIdentityCompare identity => UsesRow(identity.Left) || UsesRow(identity.Right),
             IRUnaryOp u => UsesRow(u.Operand),
             IRCast cast => UsesRow(cast.Value),
             _ => false,

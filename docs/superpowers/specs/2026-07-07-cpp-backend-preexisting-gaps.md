@@ -58,11 +58,17 @@ backend tests should exercise the optimizer (or drive the CLI) so they test what
    A non-constant `int * powerOf2` is strength-reduced to a shift but the optimizer/codegen wires
    the result to an undeclared temp (`t1` vs declared `t0`) → non-compiling C++. Optimizer bug.
 
-7. **`Is Nothing` / `IsNot Nothing` do not parse (IMPORTANT).**
-   Only `= Nothing` works; `x Is Nothing` fails to parse. This is a general parser gap (not
-   collection-specific). Note: the std-lib spec's promise of `collection Is Nothing` null checks
-   is blocked by this — collections DO lower null correctly (nullptr), but the `Is Nothing`
-   *syntax* is unavailable until the parser supports it. Use `= Nothing` meanwhile.
+7. **`Is Nothing` / `IsNot Nothing` do not parse (IMPORTANT). — CLOSED by task #185 (fix
+   `ffed9fc1`, ADR-0011).** ~~Only `= Nothing` works; `x Is Nothing` fails to parse.~~ `Is`/`IsNot`
+   are now binary operators at the `=`/`<>` level in both expression parsers, `IsNot` is a lexer
+   keyword, and `Case Is Nothing` keeps its dispatch. The std-lib spec's promise of
+   `collection Is Nothing` null checks is unblocked; a two-operand `a Is b` is admitted only for
+   related, non-String/non-delegate operands (ADR-0011 D2/D4). See
+   `docs/superpowers/decisions/0011-is-isnot-reference-identity.md` for the full ruling, including
+   the C++-specific divergence this closure surfaces: on C++, String/array have no null state, so
+   `Is Nothing` there is an EMPTINESS test — `"" Is Nothing` and an empty array `Is Nothing` are
+   True on C++ only, False on C#/JavaScript/MSIL (deliberate, until `Array<T>` gets a real null
+   state).
 
 8. **`Boolean.ToString` / printing a Boolean shows `1`/`0` instead of `True`/`False` (IMPORTANT).**
    `Console.WriteLine(someBool)` prints `1`/`0` on C++ (raw `<<` of a bool) rather than .NET's

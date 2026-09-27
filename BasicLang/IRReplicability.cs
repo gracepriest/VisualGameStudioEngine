@@ -69,6 +69,11 @@ namespace BasicLang.Compiler.IR
                     return IsReplicable(compare.Left, consumerOverride)
                         && IsReplicable(compare.Right, consumerOverride);
 
+                // ADR-0011 D5: reference identity is a pure operator too.
+                case IRIdentityCompare identity:
+                    return IsReplicable(identity.Left, consumerOverride)
+                        && IsReplicable(identity.Right, consumerOverride);
+
                 case IRCast cast:
                     return IsReplicable(cast.Value, consumerOverride);
 

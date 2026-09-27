@@ -162,6 +162,13 @@ namespace BasicLang.Compiler.CodeGen
         public abstract void Visit(IRGetElementPtr gep);
         public abstract void Visit(IRCast cast);
         public abstract void Visit(IRCompare compare);
+
+        /// <summary>
+        /// ABSTRACT, deliberately (ADR-0011 D5): `Is` / `IsNot` is reference identity, and a
+        /// backend that has not implemented it must not compile — never inherit a no-op or a
+        /// value comparison.
+        /// </summary>
+        public abstract void Visit(IRIdentityCompare identityCompare);
         public abstract void Visit(IRSwitch switchInst);
         public abstract void Visit(IRLabel label);
         public abstract void Visit(IRComment comment);

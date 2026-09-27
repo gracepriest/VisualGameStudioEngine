@@ -704,7 +704,8 @@ namespace BasicLang.Compiler.IR.Optimization
         // two measured exclusions (IRAlloca, IRConstant) this file used to keep privately.
 
         private static bool IsPureOperator(IRValue value) =>
-            value is IRBinaryOp || value is IRUnaryOp || value is IRCompare || value is IRCast;
+            value is IRBinaryOp || value is IRUnaryOp || value is IRCompare || value is IRCast
+            || value is IRIdentityCompare; // ADR-0011 D5
 
         /// <summary>One name in Guard(v): whether it is v's own destination, and whether a call
         /// can write it (<see cref="OptimizationPass.IsCallVisible(IRVariable, IRFunction)"/>).</summary>
