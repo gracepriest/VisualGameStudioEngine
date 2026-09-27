@@ -95,18 +95,117 @@ public class FormReadingOrderTests
     /// <summary>
     /// Added on the Task 8 mutation pass: <see cref="AZeroHeightControl_StillJoinsARow"/> gives the same answer with
     /// or without the 1px rule (two one-control rows come out left, right too). Here a zero-height control OPENS
-    /// the row: with 1px, the field at the same top joins it and the later, lower-left control joins too.
+    /// the row: with 1px, the field at the same top joins it, and so do the controls overlapping the field. No member
+    /// spans the row (each misses some top), so the row is plain left to right and the low control comes first.
+    /// Without 1px the rule would be a row of its own, first. (Fixture rewritten for the spanning rule, owner
+    /// decision 2026-09-27: the previous one had a spanning field, under which both variants agree.)
     /// </summary>
     [Test]
     public void AZeroHeightControl_OpensARowThatOthersJoin()
     {
         Assert.That(Order(
-                new Box("rule", 10, 10, 200, 0),
-                new Box("field", 100, 10, 50, 20),
-                new Box("label", 5, 15, 50, 20)),
-            Is.EqualTo(new[] { "label", "rule", "field" }),
-            "the rule counts as 10..11, so the field (top 10) joins it, and the label (top 15 < 30) joins too");
+                new Box("rule", 100, 10, 50, 0),
+                new Box("field", 200, 10, 50, 20),
+                new Box("deep", 300, 25, 50, 30),
+                new Box("low", 10, 40, 50, 20)),
+            Is.EqualTo(new[] { "low", "rule", "field", "deep" }),
+            "the rule counts as 10..11, so the field (top 10) joins it; deep (25 < 30) and low (40 < 55) join too");
     }
+
+    /// <summary>
+    /// Owner decision 2026-09-27: a tall sibling must not turn the controls beside it into columns. The logo's
+    /// span holds every other top, so it is placed by X (first, it is leftmost) and the rest form their OWN rows.
+    /// Before the rule: logo, userLabel, passLabel, userBox, passBox, ok.
+    /// </summary>
+    [Test]
+    public void ATallLogoBesideLabelBoxPairs_KeepsEachPairTogether()
+    {
+        Assert.That(Order(
+                new Box("logo", 10, 10, 100, 200),
+                new Box("userLabel", 120, 22, 60, 18),
+                new Box("userBox", 190, 20, 150, 23),
+                new Box("passLabel", 120, 62, 60, 18),
+                new Box("passBox", 190, 60, 150, 23),
+                new Box("ok", 190, 100, 75, 23)),
+            Is.EqualTo(new[] { "logo", "userLabel", "userBox", "passLabel", "passBox", "ok" }));
+    }
+
+    [Test]
+    public void ATallListOnTheRight_ComesAfterThePairsBesideIt_ByX()
+    {
+        Assert.That(Order(
+                new Box("list", 400, 10, 100, 200),
+                new Box("userLabel", 10, 22, 60, 18),
+                new Box("userBox", 80, 20, 150, 23),
+                new Box("passLabel", 10, 62, 60, 18),
+                new Box("passBox", 80, 60, 150, 23)),
+            Is.EqualTo(new[] { "userLabel", "userBox", "passLabel", "passBox", "list" }));
+    }
+
+    [Test]
+    public void AFullHeightLeftBandAtXZero_ComesFirst_ThenThePairsRowByRow()
+    {
+        Assert.That(Order(
+                new Box("userBox", 180, 20, 150, 23),
+                new Box("band", 0, 0, 100, 300),
+                new Box("userLabel", 110, 22, 60, 18),
+                new Box("passBox", 180, 60, 150, 23),
+                new Box("passLabel", 110, 62, 60, 18)),
+            Is.EqualTo(new[] { "band", "userLabel", "userBox", "passLabel", "passBox" }));
+    }
+
+    [Test]
+    public void TwoTallMembersSideBySide_BothPlacedByX_BeforeThePairsToTheirRight()
+    {
+        Assert.That(Order(
+                new Box("userLabel", 240, 22, 60, 18),
+                new Box("userBox", 310, 20, 150, 23),
+                new Box("tallB", 120, 10, 100, 200),
+                new Box("passLabel", 240, 62, 60, 18),
+                new Box("passBox", 310, 60, 150, 23),
+                new Box("tallA", 10, 10, 100, 200)),
+            Is.EqualTo(new[] { "tallA", "tallB", "userLabel", "userBox", "passLabel", "passBox" }));
+    }
+
+    [Test]
+    public void TallMembersOnBothSides_SplitThePairsBetweenThemByX()
+    {
+        Assert.That(Order(
+                new Box("right", 400, 10, 100, 200),
+                new Box("box", 180, 20, 150, 23),
+                new Box("left", 10, 10, 100, 200),
+                new Box("label", 120, 22, 50, 18)),
+            Is.EqualTo(new[] { "left", "label", "box", "right" }));
+    }
+
+    /// <summary>
+    /// A row with NO spanning member (a's span misses low's top; nothing else holds a's) is plain X, then top, then
+    /// document order — so of two controls at the same X, the higher comes first even when written second.
+    /// </summary>
+    [Test]
+    public void ARowWithNoSpanningMember_AtEqualX_TheHigherComesFirst()
+    {
+        Assert.That(Order(
+                new Box("low", 10, 40, 50, 20),
+                new Box("mid", 100, 25, 50, 20),
+                new Box("high", 10, 10, 50, 20)),
+            Is.EqualTo(new[] { "high", "low", "mid" }));
+    }
+
+    [Test]
+    public void AMemberAtTheSpanningMembersOwnX_ComesAfterIt()
+    {
+        Assert.That(Order(
+                new Box("caption", 10, 120, 100, 20),
+                new Box("picture", 10, 10, 200, 150)),
+            Is.EqualTo(new[] { "picture", "caption" }),
+            "the caption's top is inside the picture's span, at the same X: the tie goes AFTER the spanning member");
+    }
+
+    [Test]
+    public void NegativeTops_OrderAboveZero() =>
+        Assert.That(Order(new Box("below", 10, 0, 50, 20), new Box("above", 10, -20, 50, 20)),
+            Is.EqualTo(new[] { "above", "below" }));
 
     [Test]
     public void AContainerStacksAsOneBlock_ItsChildrenOrderedTheSameWay()
