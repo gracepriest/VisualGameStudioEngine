@@ -7034,10 +7034,38 @@ namespace BasicLang.Compiler.SemanticAnalysis
             }
             else if (node.StatementBody != null)
             {
-                lambdaScope.ReturnType = node.ReturnType != null
-                    ? ResolveTypeReference(node.ReturnType)
-                    : _typeManager.GetType("Void");
+                // A multi-line lambda's return type, in VB's order (#164): a written `As T`; else,
+                // for a Function, the R of the Func(Of …, R) it is target-typed by; else INFERRED
+                // from its own Return expressions. A Sub is Void, so `Return 1` in it stays an error.
+                //
+                // ⛔ A Function with no `As` used to be given Void here, exactly like a Sub: its
+                // `Return c` was refused ("Cannot return a value from a subroutine") and the lambda
+                // typed Func(Of Void), which then failed every Func(Of Integer) it met.
+                TypeInfo targetReturnType;
+                if (node.ReturnType != null)
+                {
+                    lambdaScope.ReturnType = ResolveTypeReference(node.ReturnType);
+                }
+                else if (!node.IsFunction)
+                {
+                    lambdaScope.ReturnType = _typeManager.GetType("Void");
+                }
+                else if ((targetReturnType = TargetedLambdaReturnType(targetType, node.Parameters.Count)) != null)
+                {
+                    lambdaScope.ReturnType = targetReturnType;
+                }
+                else
+                {
+                    lambdaScope.InferredReturnTypes = new List<TypeInfo>();
+                }
+
                 node.StatementBody.Accept(this);
+
+                if (lambdaScope.InferredReturnTypes != null)
+                {
+                    lambdaScope.ReturnType = DominantReturnType(lambdaScope.InferredReturnTypes);
+                    lambdaScope.InferredReturnTypes = null;
+                }
                 bodyType = lambdaScope.ReturnType;
             }
 
@@ -7068,6 +7096,63 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
             SetNodeType(node, delegateType);
             ExitScope();
+        }
+
+        /// <summary>
+        /// The return type a multi-line <c>Function</c> lambda with no <c>As</c> clause takes from
+        /// its TARGET (#164): the R of a <c>Func(Of T1, …, R)</c> whose arity matches the lambda's
+        /// parameter list. Null — so the lambda infers its return type instead — when there is no
+        /// target, the target is not a Func, the arity disagrees (the mismatch is reported where
+        /// the lambda is stored), or R mentions a type parameter: a generic callee's parameter is
+        /// not substituted before its argument is visited, so R there is the callee's own
+        /// <c>T</c>, and it is the lambda's INFERRED type that the call's inference needs.
+        /// </summary>
+        private static TypeInfo TargetedLambdaReturnType(TypeInfo targetType, int parameterCount)
+        {
+            if (targetType == null ||
+                !targetType.Name.Equals("Func", StringComparison.OrdinalIgnoreCase) ||
+                targetType.GenericArguments == null ||
+                targetType.GenericArguments.Count != parameterCount + 1)
+                return null;
+
+            var returnType = targetType.GenericArguments[parameterCount];
+            return MentionsTypeParameter(returnType) ? null : returnType;
+        }
+
+        private static bool MentionsTypeParameter(TypeInfo type, int depth = 0)
+        {
+            if (type == null || depth > 32) return false;
+            if (type.Kind == TypeKind.TypeParameter) return true;
+            return MentionsTypeParameter(type.ElementType, depth + 1) ||
+                   (type.GenericArguments?.Any(a => MentionsTypeParameter(a, depth + 1)) ?? false);
+        }
+
+        /// <summary>
+        /// VB's DOMINANT TYPE of a multi-line <c>Function</c> lambda's returned values, for a lambda
+        /// with neither an <c>As</c> clause nor a Func target (#164): the returned type to which
+        /// every other returned type widens, by the analyzer's own widening rule
+        /// (<see cref="WidensTo"/> — so Integer and Double give Double, Byte and Short give
+        /// Short). <c>Object</c> when no returned type is dominant (String and Integer; two
+        /// unrelated classes) and when nothing is returned — VB's answer without Option Strict,
+        /// which BasicLang does not have. A <c>Return Nothing</c> converts to any type, so it is
+        /// never recorded as a candidate.
+        /// </summary>
+        private TypeInfo DominantReturnType(List<TypeInfo> returnedTypes)
+        {
+            var candidates = new List<TypeInfo>();
+            foreach (var type in returnedTypes)
+            {
+                if (type != null && !candidates.Any(c => c.Equals(type)))
+                    candidates.Add(type);
+            }
+
+            foreach (var candidate in candidates)
+            {
+                if (candidates.All(other => candidate.Equals(other) || WidensTo(other, candidate)))
+                    return candidate;
+            }
+
+            return _typeManager.ObjectType;
         }
 
         /// <summary>
@@ -8590,6 +8675,14 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 return;
             }
 
+            // A multi-line Function lambda whose return type is being INFERRED (#164) has no
+            // expected type yet: record what is returned instead of checking it.
+            if (functionScope.InferredReturnTypes != null)
+            {
+                VisitReturnInInferringLambda(node, functionScope);
+                return;
+            }
+
             // Inside an Async function declared As Task(Of T), Return expressions
             // type-check against the unwrapped T (VB.NET semantics)
             var expectedReturnType = functionScope.IsAsync
@@ -8638,6 +8731,30 @@ namespace BasicLang.Compiler.SemanticAnalysis
                           node.Line, node.Column);
                 }
             }
+        }
+
+        /// <summary>
+        /// A <c>Return</c> in a multi-line <c>Function</c> lambda whose return type is being
+        /// inferred (#164): the value is analyzed and its type recorded as a candidate for
+        /// <see cref="DominantReturnType"/>. <c>Return Nothing</c> is analyzed but not recorded — it
+        /// converts to any type. A bare <c>Return</c> is refused, as in any Function.
+        /// </summary>
+        private void VisitReturnInInferringLambda(ReturnStatementNode node, Scope lambdaScope)
+        {
+            if (node.Value == null)
+            {
+                Error("Function lambda must return a value", node.Line, node.Column);
+                return;
+            }
+
+            node.Value.Accept(this);
+
+            if (IsNothingLiteral(node.Value))
+                return;
+
+            var returnedType = GetNodeType(node.Value);
+            if (returnedType != null)
+                lambdaScope.InferredReturnTypes.Add(returnedType);
         }
 
         public void Visit(ExitStatementNode node)

@@ -4697,6 +4697,55 @@ single new failure against the 170-name baseline.
     assignment (CS0200) or read (CS0154), and on MSIL the interface-property fix above is what
     stands between such a program and a call to an accessor the interface never declared. The
     front-end refusal these two constructs are supposed to get has never been implemented.
+- ⭐ **Newest — #164 DONE (fix committed `151a8137`).** A multi-line `Function(...) [As T] ...
+  End Function` lambda used to fail in the front end on EVERY backend and entry point (measured:
+  96/96 cells across probe.py's 4 backends × CLI/CLI `-O`/Release `.blproj` matrix). Two defects:
+  (1) `IRBuilder.Visit(LambdaExpressionNode)` read `GetNodeType(node.Body)` for a Function
+  lambda's return type, and a STATEMENT lambda has no `Body` (its body is `StatementBody`) —
+  `Dictionary.TryGetValue(null)` threw "Value cannot be null. (Parameter 'key')", reported as
+  "Error compiling Main: …" at line 0; (2) a multi-line Function lambda with no `As` clause was
+  analyzed as a Sub (`ReturnType = Void`), so `Return c` inside it was refused ("Cannot return a
+  value from a subroutine") and the lambda was typed `Func(Of Void)`, breaking any caller
+  expecting `Func(Of Integer)` (this broke #155's L10, a closure returned from a Function). Fixed
+  the VB way: a written `As T`; else the R of a `Func(Of …, R)` the lambda is target-typed by
+  (`SemanticAnalyzer.TargetedLambdaReturnType`); else the DOMINANT type of its own `Return`
+  expressions by the analyzer's existing `WidensTo` (`DominantReturnType`), `Object` with none
+  dominant or no `Return` at all; `Return Nothing` is never a candidate; a nested lambda's
+  `Return` stays scoped to ITS OWN function scope (`Scope.InferredReturnTypes`); a bare `Return`
+  while inferring is still refused. `IRBuilder` now takes the IR return type from the analyzer's
+  own recorded `Func` rather than re-deriving it, and a Function lambda that falls off its end
+  returns its type's DEFAULT (a bare `ret` from a non-void function was an
+  `InvalidProgramException` on MSIL). JavaScript and MSIL are 48/48 correct on the F1-F8 probes;
+  C#/C++ have pre-existing, UNRELATED gaps this did not touch and does not fix — see below.
+  Byte-compare over 2340 cells: every file for a program with no multi-line Function lambda is
+  IDENTICAL. Tests: `VisualGameStudio.Tests/Compiler/MultiLineFunctionLambdaTests.cs` (front end,
+  fast subset) and `MultiLineFunctionLambdaExecutionTests` (JS/MSIL both pipelines, C#/C++ where
+  they run correctly, `[Category("Integration")]`); twelve of `S/t164/mut/mutate.py`'s thirteen
+  mutants killed (one, the type-parameter guard on a GENERIC callee's inferred target, survives —
+  it only shows up on a probe outside this fix's contract, E7, which has its own pre-existing,
+  unrelated generic-inference defect).
+  ⛔ Two NEW follow-ups this exposed, NOT fixed here — pre-existing backend gaps (C#, MSIL)
+  unrelated to #164's own front-end fix:
+  - **#179 — the C# backend emits a call statement inside a multi-line lambda body TWICE.** F8's
+    `Return inner() + inner()` inside a nested Function lambda emits
+    `inner(); inner(); return inner() + inner();` — every call in the return expression duplicated
+    as a standalone statement first. Compounds with #165 (a lambda-local `Dim` dropped) on the
+    SAME probe: `inner`'s own `Dim` is dropped too, so all four `inner()` occurrences become
+    `CS0103`, not one — measured directly against Roslyn's own diagnostics (`dotnet build` reports
+    each twice, which is a build-system artifact, not four further errors).
+  - **#180 — an MSIL `Function … As Short` from a Byte/Short expression is `InvalidProgram`.**
+    `E8_byte_short` (`S/t164/edge/E8_byte_short.bas`) has a lambda with no `As` clause returning a
+    `Byte` on one path and a `Short` on the other; `DominantReturnType` correctly infers `Short`
+    (Byte widens to Short) and the lambda is stored into a `Dim k As Short`. JavaScript and C++
+    run it correctly (`197`); MSIL throws `System.InvalidProgramException` on BOTH pipelines,
+    identically on a crash-only patch and on the full #164 fix (`S/t164/edge/m-E8_byte_short.txt`
+    vs `ma-E8_byte_short.txt`) — #164 changing how the Short return type is DETERMINED does not
+    change this MSIL codegen gap. Not a #164
+    regression; filed because #164's probes are what surfaced it.
+  - The `R3_incompatible_returns_object` probe's MSIL leg (`Dim n As Integer = f(True)` where `f`
+    infers `Object`) throws `System.NullReferenceException` — this is the PRE-EXISTING #177 ("MSIL
+    never boxes a value type stored into an `Object` slot", filed under task #175 above), reached
+    here through a lambda's OWN inferred-Object return rather than a `Dim`; not a new gap.
 - **VS Code extension host** — roughly 24 unimplemented requests, enumerated and enforced by
   `ExtensionHostRequestCoverageTests.KnownUnimplemented` (a second test fails once an entry is
   implemented, so the list must shrink). A missing `sendNotification` handler is a silent
