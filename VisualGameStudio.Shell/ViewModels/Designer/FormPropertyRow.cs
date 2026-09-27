@@ -407,30 +407,33 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
     /// ⚠ Not alphabetical: writing "Bottom,Left,Right,Top" would round-trip correctly and read as
     /// though the designer had scrambled it.
     /// </summary>
-    private static readonly string[] EdgeOrder = { "Top", "Bottom", "Left", "Right" };
+    private static readonly FormAnchorEdges[] EdgeOrder =
+    {
+        FormAnchorEdges.Top, FormAnchorEdges.Bottom, FormAnchorEdges.Left, FormAnchorEdges.Right
+    };
 
     public bool AnchorTop
     {
-        get => HasEdge("Top");
-        set => SetEdge("Top", value);
+        get => HasEdge(FormAnchorEdges.Top);
+        set => SetEdge(FormAnchorEdges.Top, value);
     }
 
     public bool AnchorBottom
     {
-        get => HasEdge("Bottom");
-        set => SetEdge("Bottom", value);
+        get => HasEdge(FormAnchorEdges.Bottom);
+        set => SetEdge(FormAnchorEdges.Bottom, value);
     }
 
     public bool AnchorLeft
     {
-        get => HasEdge("Left");
-        set => SetEdge("Left", value);
+        get => HasEdge(FormAnchorEdges.Left);
+        set => SetEdge(FormAnchorEdges.Left, value);
     }
 
     public bool AnchorRight
     {
-        get => HasEdge("Right");
-        set => SetEdge("Right", value);
+        get => HasEdge(FormAnchorEdges.Right);
+        set => SetEdge(FormAnchorEdges.Right, value);
     }
 
     /// <summary>
@@ -441,29 +444,30 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
     ///
     /// <para>⚠ Reading the default does not WRITE it: the document keeps its null until the user
     /// actually toggles an edge, so opening a form and closing it changes nothing.</para>
+    ///
+    /// <para>⛔ Read through <see cref="FormAnchor.Parse"/>, the ONE Anchor parser (plan 2026-09-27 scope
+    /// call S10) — its absent-means-Top|Left default is the one described above. A second split here would
+    /// be a picker showing edges the region writer and the page do not read.</para>
     /// </summary>
-    private bool HasEdge(string edge)
-    {
-        var raw = RawValue;
-        if (string.IsNullOrWhiteSpace(raw))
-        {
-            return edge is "Top" or "Left";
-        }
+    private bool HasEdge(FormAnchorEdges edge) => Edges.HasFlag(edge);
 
-        return raw.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                  .Any(e => string.Equals(e, edge, StringComparison.OrdinalIgnoreCase));
-    }
+    private FormAnchorEdges Edges => FormAnchor.Parse(RawValue, out _);
 
-    private void SetEdge(string edge, bool on)
+    /// <summary>
+    /// Rewrites the whole set, in <see cref="EdgeOrder"/>, one spelling per edge. ⚠ An unknown edge name
+    /// in the old value is DROPPED: the picker writes only edges it has. Such a document was already
+    /// refused by the region writer (<c>AnchorNotExpressible</c>), so nothing that built is lost.
+    /// </summary>
+    private void SetEdge(FormAnchorEdges edge, bool on)
     {
-        if (HasEdge(edge) == on)
+        var current = Edges;
+        if (current.HasFlag(edge) == on)
         {
             return;
         }
 
-        var edges = EdgeOrder
-            .Where(e => string.Equals(e, edge, StringComparison.OrdinalIgnoreCase) ? on : HasEdge(e))
-            .ToList();
+        var next = on ? current | edge : current & ~edge;
+        var edges = EdgeOrder.Where(e => next.HasFlag(e)).Select(e => e.ToString()).ToList();
 
         // ⚠ No edges is a real, expressible state — AnchorStyles.None — and it is NOT the same as
         // unset. A control the user has explicitly un-anchored moves half the distance the form is
