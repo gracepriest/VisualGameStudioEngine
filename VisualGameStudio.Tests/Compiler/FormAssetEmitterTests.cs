@@ -846,7 +846,31 @@ public class FormAssetEmitterTests
 
             Assert.That(DesktopRule(css, "menuStrip1"), Does.Contain("top: 40px; height: 24px"),
                 "non-vacuity: under the Dock=Top panel that precedes it (spec §4)");
-            Assert.That(DesktopRule(css, "fill"), Does.Contain("left: 0px; right: 0px; top: 64px; bottom: 22px"));
+            Assert.That(DesktopRule(css, "fill"), Does.Contain(
+                "left: 0px; right: 0px; width: calc(100% - 0px); top: 64px; bottom: 22px; height: calc(100% - 86px)"));
+        });
+    }
+
+    [Test]
+    public void APictureBox_StretchedOrDocked_WritesItsSizeOnEveryStretchedAxis()
+    {
+        // ⛔ Task 10 review I-1, measured in Chromium 152: an <img> with a LOADED src under position:absolute and
+        // left+right (or top+bottom) but no width keeps its intrinsic size; an <img> without src stretches, which
+        // hides the bug from any test that has no image. The size is written explicitly on every stretched axis.
+        var page = CanvasPage();
+        var stretched = At("PictureBox", "logo", 10, 30, 200, 100, "Top,Left,Right");
+        stretched.Properties["Image"] = "logo.png";
+        var filled = At("PictureBox", "photo", 0, 0, 1, 1, dock: "Fill");
+        filled.Properties["Image"] = "photo.png";
+        page.Controls.Add(stretched);
+        page.Controls.Add(filled);
+
+        var css = FormAssetEmitter.Css(page);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(DesktopRule(css, "logo"), Does.Contain("left: 10px; right: 430px; width: calc(100% - 440px); top: 30px; height: 100px"));
+            Assert.That(DesktopRule(css, "photo"), Does.Contain("width: calc(100% - 0px)").And.Contain("height: calc(100% - 0px)"));
         });
     }
 

@@ -370,10 +370,10 @@ public class FormDockScriptTests
             Assert.That(run.Before, Is.EqualTo("(none)"),
                 "the page's first state is its stylesheet (Runtime); the script runs only on a change");
             Assert.That(run.Flipped, Is.EqualTo(LiveCss(FormDockLayout.Resolve(Glued(panelHidden: true), FormDockMode.Runtime), 600)));
-            Assert.That(run.Flipped, Does.Contain("#menuStrip1{left:0px;right:0px;top:0px;height:24px;}"),
+            Assert.That(run.Flipped, Does.Contain("#menuStrip1{left:0px;right:0px;width:calc(100% - 0px);top:0px;height:24px;}"),
                 "non-vacuity: the menu closes the 40px gap");
             Assert.That(run.Restored, Is.EqualTo(LiveCss(FormDockLayout.Resolve(model, FormDockMode.Runtime), 600)));
-            Assert.That(run.Restored, Does.Contain("#menuStrip1{left:0px;right:0px;top:40px;height:24px;}"));
+            Assert.That(run.Restored, Does.Contain("#menuStrip1{left:0px;right:0px;width:calc(100% - 0px);top:40px;height:24px;}"));
         });
     }
 

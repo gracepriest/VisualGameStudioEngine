@@ -73,7 +73,8 @@ public static class FormAnchor
 /// Anchor and Dock → CSS for a Canvas page (spec 2026-09-27 §4) — a PURE function; the emitter only consumes it.
 ///
 /// <para>Per axis, with W the container's design size: near edge only → <c>near:offset; size</c>; far edge only
-/// → <c>far:(W−offset−size); size</c>; both → <c>near:offset; far:(W−offset−size)</c> (the size follows);
+/// → <c>far:(W−offset−size); size</c>; both → <c>near:offset; far:(W−offset−size); size:calc(100% − (near+far))</c>
+/// (the size follows the container, and is WRITTEN because an <c>&lt;img&gt;</c> ignores the two insets alone);
 /// neither → centred relative to its original offset, as WinForms does:
 /// new offset = offset + (W′−W)/2 → <c>calc(50% ± (offset − W/2)px)</c>.</para>
 ///
@@ -116,14 +117,31 @@ public static class FormAnchorCss
         var right = Px(docked.ContainerWidth - b.Right);
         var bottom = Px(docked.ContainerHeight - b.Bottom);
 
+        // Near + far inset on a stretched axis is the container size minus the control's (see Stretched).
+        var width = Stretched(docked.ContainerWidth - b.Width);
+        var height = Stretched(docked.ContainerHeight - b.Height);
+
         return docked.Edge switch
         {
-            FormDockEdge.Top => new[] { ("left", Px(b.X)), ("right", right), ("top", Px(b.Y)), ("height", Px(b.Height)) },
-            FormDockEdge.Bottom => new[] { ("left", Px(b.X)), ("right", right), ("bottom", bottom), ("height", Px(b.Height)) },
-            FormDockEdge.Left => new[] { ("left", Px(b.X)), ("width", Px(b.Width)), ("top", Px(b.Y)), ("bottom", bottom) },
-            FormDockEdge.Right => new[] { ("right", right), ("width", Px(b.Width)), ("top", Px(b.Y)), ("bottom", bottom) },
-            _ => new[] { ("left", Px(b.X)), ("right", right), ("top", Px(b.Y)), ("bottom", bottom) }
+            FormDockEdge.Top => new[] { ("left", Px(b.X)), ("right", right), ("width", width), ("top", Px(b.Y)), ("height", Px(b.Height)) },
+            FormDockEdge.Bottom => new[] { ("left", Px(b.X)), ("right", right), ("width", width), ("bottom", bottom), ("height", Px(b.Height)) },
+            FormDockEdge.Left => new[] { ("left", Px(b.X)), ("width", Px(b.Width)), ("top", Px(b.Y)), ("bottom", bottom), ("height", height) },
+            FormDockEdge.Right => new[] { ("right", right), ("width", Px(b.Width)), ("top", Px(b.Y)), ("bottom", bottom), ("height", height) },
+            _ => new[] { ("left", Px(b.X)), ("right", right), ("width", width), ("top", Px(b.Y)), ("bottom", bottom), ("height", height) }
         };
+    }
+
+    /// <summary>
+    /// ⛔ The size of an axis pinned to BOTH edges: <c>calc(100% - (near + far)px)</c>. Written even though the two
+    /// insets already imply it, because an <c>&lt;img&gt;</c> with a loaded src ignores left+right (top+bottom) and keeps
+    /// its intrinsic size (Task 10 review, measured in Chromium 152); under <c>box-sizing: border-box</c> this is the
+    /// same box for every element. ⚠ The sum is negative when the control is larger than its container (or after a
+    /// dock overflow): <c>calc(100% - -5px)</c> is not CSS, so the sign goes outside. Invariant digits.
+    /// </summary>
+    public static string Stretched(int insets)
+    {
+        var magnitude = Math.Abs((long)insets).ToString(CultureInfo.InvariantCulture);
+        return insets < 0 ? $"calc(100% + {magnitude}px)" : $"calc(100% - {magnitude}px)";
     }
 
     /// <summary>
@@ -149,6 +167,7 @@ public static class FormAnchorCss
         {
             declarations.Add((near, Px(offset)));
             declarations.Add((far, Px(farInset)));
+            declarations.Add((size, Stretched(offset + farInset)));
             return;
         }
 

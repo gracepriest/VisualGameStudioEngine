@@ -3318,7 +3318,10 @@ Spec §7 (Edge check), §7a (loopback server).
   - a Fill between strips;
   - a nested Panel with a docked child;
   - an overflowing `Dock=Top` then a `Dock=Bottom`, and an overflowing `Dock=Left` then a `Dock=Right` (S9, far-edge docking; compared with the Task 12 reference);
-  - a `Visible=false` docked control before another (the page is `FormDockMode.Runtime`).
+  - a `Visible=false` docked control before another (the page is `FormDockMode.Runtime`);
+  - ⛔ a PictureBox with a LOADED image (a real `src` the harness serves), anchored `Left,Right`, and another docked
+    `Fill` (Task 10 review I-1: an `<img>` with a loaded src ignores left+right/top+bottom without an explicit size, and
+    an `<img>` WITHOUT a src stretches — so a fixture with no image passes with the defect present).
 
 **Risks:**
 - The generated page's module script loads and runs BasicLang's JS. A script error must not abort measurement, so the harness measures on `load`, independent of the script.

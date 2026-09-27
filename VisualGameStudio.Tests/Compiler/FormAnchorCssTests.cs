@@ -70,7 +70,13 @@ public class FormAnchorCssTests
     [Test]
     public void LeftAndRight_StretchesTheWidth()
     {
-        Assert.That(Css(At("Top,Left,Right")).Take(2), Is.EqualTo(new List<(string, string)> { ("left", "10px"), ("right", "315px") }));
+        // ⛔ Task 10 review I-1 (measured in Chromium 152): an <img> with a loaded src under left+right and NO width
+        // keeps its intrinsic width — every other element stretches. So a stretched axis ALSO writes its size,
+        // 100% minus both insets (border-box), which is the same box for every element.
+        Assert.That(Css(At("Top,Left,Right")).Take(3), Is.EqualTo(new List<(string, string)>
+        {
+            ("left", "10px"), ("right", "315px"), ("width", "calc(100% - 325px)")
+        }));
     }
 
     [Test]
@@ -82,7 +88,41 @@ public class FormAnchorCssTests
     [Test]
     public void TopAndBottom_StretchesTheHeight()
     {
-        Assert.That(Css(At("Top,Bottom,Left")).Skip(2), Is.EqualTo(new List<(string, string)> { ("top", "20px"), ("bottom", "257px") }));
+        Assert.That(Css(At("Top,Bottom,Left")).Skip(2), Is.EqualTo(new List<(string, string)>
+        {
+            ("top", "20px"), ("bottom", "257px"), ("height", "calc(100% - 277px)")
+        }));
+    }
+
+    [Test]
+    public void AStretchedAxis_AtTheDesignSize_IsTheDesignedSize()
+    {
+        // calc(100% - (near + far)) at 100% = W is W − (offset + W − offset − size) = size.
+        var css = Css(At("Top,Bottom,Left,Right", x: 10, y: 20, width: 75, height: 23));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(css.Single(d => d.Property == "width").Value, Is.EqualTo("calc(100% - 325px)"), "400 − 75");
+            Assert.That(css.Single(d => d.Property == "height").Value, Is.EqualTo("calc(100% - 277px)"), "300 − 23");
+        });
+    }
+
+    [Test]
+    [SetCulture("sv-SE")]
+    public void AStretchedAxisWiderThanItsContainer_WritesAValidCalc_Invariantly()
+    {
+        // ⛔ Near + far is NEGATIVE when the control is larger than its container (and after a dock overflow).
+        // "calc(100% - -5px)" is not CSS; the sign goes outside, and sv-SE must not spell it U+2212.
+        UnicodeMinusCulture.Require();
+        var css = Css(At("Left,Right,Top", x: 0, width: 405), w: 400);
+        var docked = FormAnchorCss.Docked(Docked(FormDockEdge.Top, new FormRect(0, 0, 400, 330)));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(css.Single(d => d.Property == "width").Value, Is.EqualTo("calc(100% + 5px)"));
+            Assert.That(docked.Single(d => d.Property == "width").Value, Is.EqualTo("calc(100% - 0px)"));
+            Assert.That(string.Concat(css.Concat(docked).Select(d => d.Value)), Does.Not.Contain(((char)0x2212).ToString()));
+        });
     }
 
     [Test]
@@ -106,7 +146,7 @@ public class FormAnchorCssTests
 
     private static string[] Axis(bool near, bool far, string nearName, string farName, string size) => (near, far) switch
     {
-        (true, true) => new[] { nearName, farName },
+        (true, true) => new[] { nearName, farName, size },
         (false, true) => new[] { farName, size },
         _ => new[] { nearName, size }
     };
@@ -212,11 +252,12 @@ public class FormAnchorCssTests
     private static FormDockedBounds Docked(FormDockEdge edge, FormRect bounds) =>
         new(new FormControl { Kind = "Panel", Id = "p" }, edge, bounds, 400, 300);
 
-    [TestCase(FormDockEdge.Top, "left:0px right:0px top:24px height:50px")]
-    [TestCase(FormDockEdge.Bottom, "left:0px right:0px bottom:22px height:50px")]
-    [TestCase(FormDockEdge.Left, "left:0px width:50px top:24px bottom:22px")]
-    [TestCase(FormDockEdge.Right, "right:0px width:50px top:24px bottom:22px")]
-    [TestCase(FormDockEdge.Fill, "left:0px right:0px top:24px bottom:22px")]
+    // ⛔ Task 10 review I-1: every stretched axis also writes its size (an <img> ignores left+right without it).
+    [TestCase(FormDockEdge.Top, "left:0px right:0px width:calc(100% - 0px) top:24px height:50px")]
+    [TestCase(FormDockEdge.Bottom, "left:0px right:0px width:calc(100% - 0px) bottom:22px height:50px")]
+    [TestCase(FormDockEdge.Left, "left:0px width:50px top:24px bottom:22px height:calc(100% - 46px)")]
+    [TestCase(FormDockEdge.Right, "right:0px width:50px top:24px bottom:22px height:calc(100% - 46px)")]
+    [TestCase(FormDockEdge.Fill, "left:0px right:0px width:calc(100% - 0px) top:24px bottom:22px height:calc(100% - 46px)")]
     public void EachDockEdge_BecomesFixedInsets(FormDockEdge edge, string expected)
     {
         var bounds = edge switch

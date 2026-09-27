@@ -62,12 +62,14 @@ public static class FormDockScript
         function vgsDockCss(d) {
           var b = d.b;
           function px(v) { return v + "px"; }
+          function st(v) { return v < 0 ? "calc(100% + " + (-v) + "px)" : "calc(100% - " + v + "px)"; }
           var right = px(d.cw - (b[0] + b[2])), bottom = px(d.ch - (b[1] + b[3]));
-          if (d.e === "Top") return [["left", px(b[0])], ["right", right], ["top", px(b[1])], ["height", px(b[3])]];
-          if (d.e === "Bottom") return [["left", px(b[0])], ["right", right], ["bottom", bottom], ["height", px(b[3])]];
-          if (d.e === "Left") return [["left", px(b[0])], ["width", px(b[2])], ["top", px(b[1])], ["bottom", bottom]];
-          if (d.e === "Right") return [["right", right], ["width", px(b[2])], ["top", px(b[1])], ["bottom", bottom]];
-          return [["left", px(b[0])], ["right", right], ["top", px(b[1])], ["bottom", bottom]];
+          var width = st(d.cw - b[2]), height = st(d.ch - b[3]);
+          if (d.e === "Top") return [["left", px(b[0])], ["right", right], ["width", width], ["top", px(b[1])], ["height", px(b[3])]];
+          if (d.e === "Bottom") return [["left", px(b[0])], ["right", right], ["width", width], ["bottom", bottom], ["height", px(b[3])]];
+          if (d.e === "Left") return [["left", px(b[0])], ["width", px(b[2])], ["top", px(b[1])], ["bottom", bottom], ["height", height]];
+          if (d.e === "Right") return [["right", right], ["width", px(b[2])], ["top", px(b[1])], ["bottom", bottom], ["height", height]];
+          return [["left", px(b[0])], ["right", right], ["width", width], ["top", px(b[1])], ["bottom", bottom], ["height", height]];
         }
 
         """.ReplaceLineEndings("\n");

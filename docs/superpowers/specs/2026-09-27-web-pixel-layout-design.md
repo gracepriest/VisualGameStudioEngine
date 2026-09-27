@@ -155,10 +155,18 @@ Per control, with `W`/`H` the container's design width/height (Anchor default `T
 |---|---|
 | Top, Left (default) | `left:X; top:Y; width; height` |
 | Right (not Left) | `right:(W−X−width); width` |
-| Left + Right | `left:X; right:(W−X−width)`; width follows |
+| Left + Right | `left:X; right:(W−X−width); width:calc(100% − (W−width)px)`; width follows |
 | Bottom (not Top) | `bottom:(H−Y−height); height` |
-| Top + Bottom | `top:Y; bottom:(H−Y−height)`; height follows |
+| Top + Bottom | `top:Y; bottom:(H−Y−height); height:calc(100% − (H−height)px)`; height follows |
 | neither on an axis | **centred relative to its original offset, as WinForms does**: new left = X + (W′−W)/2 → `left: calc(50% + (X − W/2)px)`; same for top with H |
+
+⛔ **A stretched axis WRITES its size** (Task 10 review, measured in Chromium 152): an `<img>` with a loaded `src` under
+`position:absolute` with left+right (or top+bottom) and no width KEEPS ITS INTRINSIC SIZE, while inputs, selects,
+buttons, textareas and divs stretch — and an `<img>` without a `src` stretches too, which hides the defect from any
+test with no image. So both insets are followed by `size: calc(100% − (near+far)px)`, the same box for every element
+under `box-sizing: border-box`; a negative sum (a control larger than its container) is written `calc(100% + Npx)`.
+The same rule applies to every docked axis that spans the container (Top/Bottom → width, Left/Right → height,
+Fill → both), in `FormAnchorCss` and its JavaScript mirror alike.
 
 **Dock** is resolved ONCE at the design size, by the shared `FormDockLayout` (§3), into edges with fixed insets. It takes
 strips (their `Dock` property) and docked controls (`PixelGeometry.Dock`: Top/Bottom/Left/Right/Fill) as ONE sequence.
@@ -166,7 +174,8 @@ strips (their `Dock` property) and docked controls (`PixelGeometry.Dock`: Top/Bo
 docks first)** — stated in these terms on purpose, given this repo's z-order inversion history. So a `Dock=Top` Panel that
 precedes the MenuStrip in the document takes the top edge and the menu sits below it, on the canvas, on the page and in
 WinForms alike. Example (strips first in the document): a Fill between a 24px menu and a 22px status strip →
-`top:24; left:0; right:0; bottom:22`. The resolver is a pure function (§7).
+`top:24; left:0; right:0; bottom:22` (plus the written `width`/`height` of the rule above). The resolver is a pure
+function (§7).
 
 ## 5. Phones: stacking below the breakpoint
 
