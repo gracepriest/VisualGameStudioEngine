@@ -331,9 +331,23 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// through <see cref="TextHelperName"/>, a runtime check emitted in the prelude. Everything
         /// else keeps the conversion it had: <paramref name="mustBeString"/> false leaves it to
         /// JS's <c>+</c> / <c>console.log</c>, true wraps it in <c>String(...)</c>.</para>
+        ///
+        /// <para>⛔ <paramref name="nothingIsEmpty"/>: at <c>&amp;</c> and <c>Console.Write</c>/<c>WriteLine</c>
+        /// a <c>Nothing</c> String is <c>""</c>, as VB and C# have it. JavaScript's own conversion
+        /// spells it <c>null</c>: <c>"[" &amp; s &amp; "]"</c> printed <c>[null]</c>, a bare
+        /// <c>WriteLine(s)</c> printed <c>null</c>, and — silently worse — <c>acc = acc &amp; i</c>
+        /// from a Nothing <c>acc</c> was <c>null + 1</c>, NUMERIC addition, so the loop summed
+        /// 1+2+3 and printed <c>6</c> where VB prints <c>123</c>. Only a value that CAN hold Nothing
+        /// is wrapped (<see cref="MayHoldNothing"/>); a literal, another <c>&amp;</c> and a number are
+        /// emitted exactly as before. <c>CStr</c> and <c>.ToString()</c> keep their old spelling.</para>
         /// </summary>
-        private string TextOf(IRValue value, string rendered, bool mustBeString)
+        private string TextOf(IRValue value, string rendered, bool mustBeString, bool nothingIsEmpty = false)
         {
+            // The optimizer propagates a Nothing constant straight into the operand (J1's
+            // `"[" + null`), whatever the constant's own static type.
+            if (nothingIsEmpty && value is IRConstant { Value: null })
+                return "\"\"";
+
             if (IsBooleanValue(value))
             {
                 if (value is IRConstant { Value: bool constant })
@@ -351,8 +365,55 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 return $"{TextHelperName}({rendered})";
             }
 
+            if (nothingIsEmpty && IsStringValue(value) && MayHoldNothing(value))
+                return $"({rendered} ?? \"\")";
+
             return mustBeString ? $"String({rendered})" : rendered;
         }
+
+        /// <summary>
+        /// VB's <c>&amp;</c>: each operand as its text (<see cref="TextOf"/>, Nothing as <c>""</c>),
+        /// joined by JS <c>+</c>.
+        ///
+        /// <para>⛔ JS <c>+</c> concatenates only when a side IS a string at run time — <c>null + 1</c>
+        /// is <c>1</c>. TextOf now spells every String, Object, Boolean and Nothing operand as a
+        /// real string, and the front end refuses an <c>&amp;</c> with no String operand, so one
+        /// side always qualifies; should neither (an operand whose static type was lost), the left
+        /// is forced through <c>String(...)</c> rather than trusted.</para>
+        /// </summary>
+        private string ConcatText(IRBinaryOp op, string l, string r)
+        {
+            var left = TextOf(op.Left, l, mustBeString: false, nothingIsEmpty: true);
+            var right = TextOf(op.Right, r, mustBeString: false, nothingIsEmpty: true);
+            if (!ConcatSpellsString(op.Left) && !ConcatSpellsString(op.Right))
+                left = $"String({left})";
+            return $"({left} + {right})";
+        }
+
+        /// <summary>Whether <see cref="ConcatText"/>'s spelling of an operand is certainly a JS string.</summary>
+        private static bool ConcatSpellsString(IRValue value) =>
+            value is IRConstant { Value: null or string }
+            || IsBooleanValue(value) || NeedsRuntimeTextCheck(value) || IsStringValue(value)
+            || string.Equals(value?.Type?.Name, "Char", StringComparison.OrdinalIgnoreCase);
+
+        private static bool IsStringValue(IRValue value) =>
+            string.Equals(value?.Type?.Name, "String", StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// Whether a String-typed value can be <c>Nothing</c> at run time. A string literal cannot,
+        /// and neither can the result of another <c>&amp;</c> (TextOf makes every one a real
+        /// string) or of <c>CStr</c> (<c>String(...)</c> / the text helper). Everything else — a
+        /// variable, a parameter, a field, a call's result — can.
+        /// </summary>
+        private bool MayHoldNothing(IRValue value) => value switch
+        {
+            IRConstant { Value: string } => false,
+            IRBinaryOp { Operation: BinaryOpKind.Concat } => false,
+            IRCall call when call.CalleeValue == null
+                && string.Equals(call.FunctionName, "CStr", StringComparison.OrdinalIgnoreCase)
+                && !_userFunctionNames.Contains(call.FunctionName) => false,
+            _ => true,
+        };
 
         private static bool IsBooleanValue(IRValue value) =>
             string.Equals(value?.Type?.Name, "Boolean", StringComparison.OrdinalIgnoreCase);
@@ -417,9 +478,10 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             if (_textHelperEmitted)
             {
                 // Only for a value typed Object, whose runtime type is unknown here: see TextOf.
+                // `x == null` is Nothing (null or undefined), which VB and C# print as "".
                 Line($"function {TextHelperName}(x) {{");
                 _indentLevel++;
-                Line("return typeof x === \"boolean\" ? (x ? \"True\" : \"False\") : String(x);");
+                Line("return x == null ? \"\" : typeof x === \"boolean\" ? (x ? \"True\" : \"False\") : String(x);");
                 _indentLevel--;
                 Line("}");
                 Line();
@@ -1273,10 +1335,9 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 case BinaryOpKind.Mod when IsCheckedMod(op): return $"{ModHelperName}({l}, {r})";
                 case BinaryOpKind.Mod: return $"({l} % {r})";
 
-                // String concatenation is its own kind, so `+` here is never numeric addition
-                // in disguise.
-                case BinaryOpKind.Concat:
-                    return $"({TextOf(op.Left, l, mustBeString: false)} + {TextOf(op.Right, r, mustBeString: false)})";
+                // String concatenation is its own kind; ConcatText makes sure the `+` it emits
+                // is never numeric addition in disguise.
+                case BinaryOpKind.Concat: return ConcatText(op, l, r);
 
                 case BinaryOpKind.Eq: return $"({l} === {r})";
                 case BinaryOpKind.Ne: return $"({l} !== {r})";
@@ -2968,10 +3029,10 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             switch (name)
             {
                 case "Console.WriteLine":
-                    result = $"console.log({TextOf(arg, rendered[0], mustBeString: false)})";
+                    result = $"console.log({TextOf(arg, rendered[0], mustBeString: false, nothingIsEmpty: true)})";
                     return true;
                 case "Console.Write":
-                    result = $"process.stdout.write({TextOf(arg, rendered[0], mustBeString: true)})";
+                    result = $"process.stdout.write({TextOf(arg, rendered[0], mustBeString: true, nothingIsEmpty: true)})";
                     return true;
                 default: // CStr — unless the program declares its own, which must win.
                     if (_userFunctionNames.Contains(name)) return false;
