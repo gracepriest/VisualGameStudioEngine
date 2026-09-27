@@ -5831,6 +5831,52 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             return _declaredIdentifiers.Contains(value.Name);
         }
 
+        /// <summary>
+        /// The C++ spelling of a <c>Nothing</c> constant of <paramref name="type"/> (#173):
+        /// <c>nullptr</c>, except for the three reference-type representations this backend holds
+        /// as VALUES with no conversion from <c>nullptr</c>, which get their EMPTY value — the
+        /// value <see cref="GetDefaultValue"/> already gives an unassigned declaration of the same
+        /// type. In VB <c>Dim s As String</c> IS <c>Dim s As String = Nothing</c>, and this
+        /// backend lowers the first to <c>""</c> (IRBuilder.CreateDefaultValue likewise returns
+        /// <c>""</c> from a String Function that falls off its end, on every backend).
+        /// <list type="bullet">
+        /// <item><description><c>std::string</c>: <c>std::string s = nullptr</c> compiles and is
+        /// undefined behaviour — the typed literal <c>New String() {"a", Nothing}</c> segfaulted
+        /// on it, measured — and <c>"[" + nullptr</c> does not compile.</description></item>
+        /// <item><description><c>BasicLang::Array&lt;T&gt;</c> (CppArrayRuntime): a shared
+        /// handle whose default is an EMPTY array, never null.</description></item>
+        /// <item><description><c>BasicLang::NetRef</c>: <c>{}</c> is the empty handle, which is
+        /// what Nothing crosses as (spec §8.2's handle 0) — GetDefaultValue's own
+        /// answer.</description></item>
+        /// </list>
+        ///
+        /// <para>⚠ A DIVERGENCE, recorded: VB tells <c>Nothing</c> from <c>""</c> or an empty
+        /// array only through <c>Is Nothing</c> (#185 — it does not parse yet) and
+        /// <c>Case Is Nothing</c>, whose C++ lowering <c>x == nullptr</c> does not compile for
+        /// either — as it did not before, for an unassigned one. C#, JavaScript and MSIL keep a
+        /// real null. Keyed on the MAPPED spelling, so a registry handle type and a
+        /// marker-carrying one (§8.5) cannot take different answers.</para>
+        /// </summary>
+        private string NothingOf(TypeInfo type)
+        {
+            // An untyped Nothing (Object — no store site re-typed it) never reaches MapType.
+            if (type == null || type.Kind == TypeKind.Void
+                || string.Equals(type.Name, "Object", StringComparison.OrdinalIgnoreCase))
+            {
+                return "nullptr";
+            }
+
+            var mapped = MapType(type);
+            if (mapped.StartsWith("BasicLang::Array<", StringComparison.Ordinal)
+                || string.Equals(mapped, "std::string", StringComparison.Ordinal)
+                || string.Equals(mapped, "BasicLang::NetRef", StringComparison.Ordinal))
+            {
+                return mapped + "{}";
+            }
+
+            return "nullptr";
+        }
+
         private string GetDefaultValue(TypeInfo type)
         {
             if (type == null) return "{}";
@@ -5870,7 +5916,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         protected override string EmitConstant(IRConstant constant)
         {
             if (constant.Value == null)
-                return "nullptr";
+                return NothingOf(constant.Type);
 
             if (constant.Value is string str)
                 return $"\"{EscapeString(str)}\"";

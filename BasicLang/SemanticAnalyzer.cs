@@ -6097,7 +6097,12 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 node.DefaultValue.Accept(this);
                 var defaultType = GetNodeType(node.DefaultValue);
 
-                if (!paramType.IsAssignableFrom(defaultType))
+                // `Optional c As C = Nothing` (#173)
+                if (JudgeNothingConversion(node.DefaultValue, paramType, node.Line, node.Column))
+                {
+                    // admitted into a reference type, or refused with advice
+                }
+                else if (!paramType.IsAssignableFrom(defaultType))
                 {
                     Error($"Default value type '{defaultType}' is not compatible with parameter type '{paramType}'",
                           node.Line, node.Column);
@@ -6190,7 +6195,13 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 // A `::` foreign VALUE converts to whatever it is declared as — `Dim v As Integer
                 // = ::getValue()` used to die here ("Cannot assign value of type '::getValue' to
                 // variable of type 'Integer'"), the first wall a `::` user hit. Plan 2 Task 7.
-                if (initType != null && initType.Kind != TypeKind.Foreign && !varType.IsAssignableFrom(initType)
+                // `= Nothing` is judged on its own (#173) — a class field's and a module-level
+                // Dim's initializer come through here too.
+                if (JudgeNothingConversion(node.Initializer, varType, node.Line, node.Column))
+                {
+                    // admitted into a reference type, or refused with advice
+                }
+                else if (initType != null && initType.Kind != TypeKind.Foreign && !varType.IsAssignableFrom(initType)
                     && !IsNumericLiteralAssignable(node.Initializer, varType, initType))
                 {
                     var errorMsg = $"Cannot assign value of type '{initType.Name}' to variable of type '{varType.Name}'";
@@ -6764,6 +6775,9 @@ namespace BasicLang.Compiler.SemanticAnalysis
                             {
                                 var expectedType = ArgumentTargetType(baseCtorSymbol, i, argTypes.Count, argTypes[i]);
                                 if (expectedType == null) continue;
+                                if (JudgeNothingConversion(node.BaseConstructorArgs[i], expectedType,
+                                        node.BaseConstructorArgs[i].Line, node.BaseConstructorArgs[i].Column))
+                                    continue;   // `MyBase.New(Nothing)` (#173)
                                 var actualType = argTypes[i];
                                 if (expectedType != null && actualType != null && !expectedType.IsAssignableFrom(actualType))
                                 {
@@ -7158,9 +7172,10 @@ namespace BasicLang.Compiler.SemanticAnalysis
         /// <summary>
         /// Extracts the parameter types from a Func/Action delegate type.
         /// For Func(Of T1, ..., TResult) the last generic argument is the return type.
-        /// Returns null if the type is not a known delegate type.
+        /// Returns null if the type is not a known delegate type. Internal: the IR builder reads it
+        /// to type a Nothing argument to a delegate invocation (#173).
         /// </summary>
-        private static List<TypeInfo> GetDelegateParameterTypes(TypeInfo delegateType)
+        internal static List<TypeInfo> GetDelegateParameterTypes(TypeInfo delegateType)
         {
             if (delegateType == null || delegateType.GenericArguments == null ||
                 delegateType.GenericArguments.Count == 0)
@@ -7339,16 +7354,11 @@ namespace BasicLang.Compiler.SemanticAnalysis
         {
             var elementType = GetNodeType(element);
 
-            if (IsNothingLiteral(element))
+            // Admitted without a check into any reference or unresolvable .NET T (csc takes null);
+            // refused into a value type, with advice that names a value OF that type — "write 0"
+            // for an enum sends the user straight into the non-literal arm's second refusal.
+            if (JudgeNothingConversion(element, target, element.Line, element.Column))
             {
-                // Admitted without a check into any reference or unresolvable .NET T (csc takes null);
-                // refused into a value type, with advice that names a value OF that type — "write 0"
-                // for an enum sends the user straight into the non-literal arm's second refusal.
-                var advice = NothingAdviceFor(target);
-                if (advice != null)
-                {
-                    Error($"Nothing has no value of type '{target.Name}'; {advice}", element.Line, element.Column);
-                }
                 return;
             }
 
@@ -7399,20 +7409,80 @@ namespace BasicLang.Compiler.SemanticAnalysis
         }
 
         /// <summary>
-        /// The advice half of the typed literal's <c>Nothing</c> refusal, per value-type kind; null for
-        /// a reference (or unresolvable .NET) target, which admits <c>Nothing</c>.
+        /// The advice half of the <c>Nothing</c> refusal, per value-type kind; null for a reference
+        /// (or unresolvable .NET) target, which admits <c>Nothing</c>. THE answer to "does Nothing
+        /// convert to T" — every conversion site asks it through <see cref="JudgeNothingConversion"/>.
+        ///
+        /// <para>⚠ The Union, tuple, type-parameter and P1-struct arms arrived with #173, when
+        /// <c>Nothing</c> began reaching Dim, assignment, argument and Return targets: each is a
+        /// type this list used to call a reference type, and each was MEASURED refused-or-wrong on
+        /// the backends once admitted (Union and tuple fail on every backend with or without
+        /// Nothing, so for them the arm only keeps the refusal they had). The P1 structs are typed as
+        /// synthetic CLASSES, so no kind test sees them — <c>Dim d As DateTime = Nothing</c> was
+        /// CS0037 on C#, a clang error on C++ and a silent <c>null</c> on JavaScript (a TypeError at
+        /// the first member read). A type parameter may be instantiated with a value type:
+        /// <c>Dim x As T = Nothing</c> was CS0403 on C# and <c>null</c> for <c>T = Integer</c> on
+        /// JavaScript (VB gives <c>default(T)</c>, which is the value-type default of #186). A
+        /// tuple and a Union are value types that the Structure arm did not name. A NULLABLE
+        /// (<c>Integer?</c>) is deliberately absent: it is the one value type VB admits Nothing into.</para>
         /// </summary>
         private static string NothingAdviceFor(TypeInfo target)
         {
             if (target.IsNumeric()) return "write 0";
             if (target.Name == "Boolean") return "write False";
             if (target.Name == "Char") return "write a character literal";
-            if (target.Kind == TypeKind.Structure || target.Kind == TypeKind.UserDefinedType)
+            if (target.Kind == TypeKind.Structure || target.Kind == TypeKind.UserDefinedType
+                || target.Kind == TypeKind.Union)
             {
                 return $"write New {target.Name}()";   // `Type … End Type` is a value type too (CS0037 otherwise)
             }
             if (target.Kind == TypeKind.Enum) return $"write a member of '{target.Name}'";
+            if (target.Kind == TypeKind.Tuple) return "write a tuple literal";
+            if (target.Kind == TypeKind.TypeParameter)
+            {
+                return $"'{target.Name}' is a type parameter and may be a value type";
+            }
+            // The P1 native structs; StringBuilder is the one NativeOwned reference type, and
+            // Decimal already took the numeric arm. (EndsWith: Categorize strips a `System.` path.)
+            if (BoundaryTypeRegistry.Categorize(target.Name) == BoundaryTypeCategory.NativeOwned
+                && !target.Name.EndsWith("StringBuilder", StringComparison.OrdinalIgnoreCase))
+            {
+                return $"'{target.Name}' is a value type; write a {target.Name} value";
+            }
             return null;
+        }
+
+        /// <summary>
+        /// The <c>Nothing</c> literal at a conversion site (#173). It is typed <c>Object</c>
+        /// (<c>Visit(LiteralExpressionNode)</c>'s default), so every site's own
+        /// <c>IsAssignableFrom</c> refused it into anything but <c>Object</c> — <c>Dim f As Action =
+        /// Nothing</c>, <c>Take(Nothing)</c>, <c>Return Nothing</c>, <c>o = Nothing</c> were all
+        /// "cannot convert 'Object' to …". VB converts it to any REFERENCE type; into a value type it
+        /// stays refused, with the typed array literal's advice (VB's value-type default is #186).
+        ///
+        /// <para>⚠ ONE answer to "does Nothing convert to T": <see cref="NothingAdviceFor"/>, which
+        /// the typed array literal (<see cref="CheckTypedLiteralElement"/>) asks through this same
+        /// method. A second list here would let the two sites disagree about a type.</para>
+        ///
+        /// <para>True when <paramref name="value"/> is the Nothing literal and has been JUDGED —
+        /// admitted, or refused with the advice reported at (<paramref name="line"/>,
+        /// <paramref name="column"/>) — so the caller skips its own type check. False for anything
+        /// else, and for a null <paramref name="target"/> (an unresolved one reports itself).</para>
+        /// </summary>
+        private bool JudgeNothingConversion(ExpressionNode value, TypeInfo target, int line, int column)
+        {
+            if (target == null || !IsNothingLiteral(value))
+            {
+                return false;
+            }
+
+            var advice = NothingAdviceFor(target);
+            if (advice != null)
+            {
+                Error($"Nothing has no value of type '{target.Name}'; {advice}", line, column);
+            }
+
+            return true;
         }
 
         /// <summary>
@@ -8750,6 +8820,10 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 {
                     // Type parameters are checked at instantiation time
                 }
+                else if (JudgeNothingConversion(node.Value, expectedReturnType, node.Line, node.Column))
+                {
+                    // `Return Nothing` (#173): admitted into a reference type, or refused with advice
+                }
                 else if (!expectedReturnType.IsAssignableFrom(returnType))
                 {
                     Error($"Cannot return type '{returnType}' from function expecting '{expectedReturnType}'",
@@ -8880,6 +8954,11 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 else if (targetType.Kind == TypeKind.Foreign || valueType.Kind == TypeKind.Foreign)
                 {
                     // Opaque on both sides; the backend renders the member verbatim.
+                }
+                // `x = Nothing` (#173) — a variable, a field, a property set and an element alike.
+                else if (JudgeNothingConversion(node.Value, targetType, node.Line, node.Column))
+                {
+                    // admitted into a reference type, or refused with advice
                 }
                 else if (!targetType.IsAssignableFrom(valueType))
                 {
@@ -10022,6 +10101,12 @@ namespace BasicLang.Compiler.SemanticAnalysis
                                 continue;
                             }
 
+                            if (JudgeNothingConversion(node.Arguments[i], paramType,
+                                    node.Arguments[i].Line, node.Arguments[i].Column))
+                            {
+                                continue;   // `f(Nothing)` (#173)
+                            }
+
                             if (argType != null && paramType != null && !paramType.IsAssignableFrom(argType))
                             {
                                 Error($"Argument {i + 1}: cannot convert from '{argType}' to '{paramType}'. Expected: {signature}",
@@ -10133,6 +10218,12 @@ namespace BasicLang.Compiler.SemanticAnalysis
                         {
                             // Type checking deferred to instantiation time
                             continue;
+                        }
+
+                        if (JudgeNothingConversion(node.Arguments[i], paramType,
+                                node.Arguments[i].Line, node.Arguments[i].Column))
+                        {
+                            continue;   // `Take(Nothing)`, `obj.M(Nothing)` (#173)
                         }
 
                         if (argType != null && paramType != null && !paramType.IsAssignableFrom(argType))
@@ -10558,6 +10649,9 @@ namespace BasicLang.Compiler.SemanticAnalysis
                             // function-call path.
                             if (TryRetypeLiteralToDecimal(node.Arguments[i], expectedType))
                                 argTypes[i] = GetNodeType(node.Arguments[i]);
+                            if (JudgeNothingConversion(node.Arguments[i], expectedType,
+                                    node.Arguments[i].Line, node.Arguments[i].Column))
+                                continue;   // `New H(Nothing)` (#173)
                             var actualType = argTypes[i];
                             if (expectedType != null && actualType != null && !expectedType.IsAssignableFrom(actualType))
                             {
