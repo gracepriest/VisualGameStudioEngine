@@ -4984,14 +4984,15 @@ single new failure against the 170-name baseline.
   `MsilInterfacePropertyCompileTests` (the three refusals, fast subset).
   ⛔ **Two follow-ups this fix exposed, NOT fixed here, both pre-existing and unrelated to
   interfaces:**
-  - **#176 — a BARE property write inside a class's own method targets the FIRST class the
-    module declares, not the enclosing class.** `Counter.Probe()` doing `V = 2` (unqualified)
-    emits the write against `Animal` (declared earlier in the same file) instead of `Counter`:
-    `MissingFieldException: Field not found: 'Animal.V'`, at run time. Repro:
-    `S/t175/pin/V6.bas`; fails identically on the pre-#175 compiler, so #175 did not cause it —
-    it was hidden behind the interface gap. Pinned:
-    `PropertyAccessorTests.PropertyAccessorExecutionTests.
-    Msil_BarePropertyWriteInALaterClass_TargetsAnEarlierClass_PinnedForTask176`.
+  - **#176 — CLOSED, 2026-09-27.** ~~a BARE property write inside a class's own method targets
+    the FIRST class the module declares, not the enclosing class~~ — see the dedicated "Newest —
+    #176 DONE" entry further down this list for the mechanism, the nested-class fix that rode
+    along, and the three follow-ups IT opened (#199, #200, #136 widened). The pin named here no
+    longer exists under that name: `PropertyAccessorTests.PropertyAccessorExecutionTests.
+    Msil_BarePropertyWriteInALaterClass_TargetsAnEarlierClass_PinnedForTask176` is now
+    `Msil_BarePropertyWriteInALaterClass_TargetsItsOwnClass`, asserting SUCCESS, and MSIL is
+    folded back into `StandardPipeline_RunsOnAllFourBackends`/`AggressivePipeline_
+    RunsOnAllFourBackends` for this same Program.
   - **#177 — MSIL never boxes a value type stored into an `Object` slot** — assignment, an
     argument, a return, and a class property write all reach it; no interface is involved. `Dim o
     As Object = <Double>` throws `NullReferenceException` where every other backend prints the
@@ -5051,7 +5052,89 @@ single new failure against the 170-name baseline.
     infers `Object`) throws `System.NullReferenceException` — this is the PRE-EXISTING #177 ("MSIL
     never boxes a value type stored into an `Object` slot", filed under task #175 above), reached
     here through a lambda's OWN inferred-Object return rather than a `Dim`; not a new gap.
-- **VS Code extension host** — roughly 24 unimplemented requests, enumerated and enforced by
+- ⭐ **Newest — #176 DONE (fix committed `4012905c`).** `Me` inside a class member is now typed
+  as THAT class, always — one `IRVariable` per `IRFunction`, never shared across classes.
+  - **Mechanism, confirmed.** `IRBuilder._variableVersions` is not scoped per function and
+    nothing ever popped `"Me"`. Both places that mint `Me` called
+    `GetOrCreateVariable("Me", …)` — the receiver a bare accessor-backed property lowers onto
+    (`AccessorMemberReceiver`) and an explicit `Me`/`Me.X` (`Visit(IdentifierExpressionNode)`) —
+    and `GetOrCreateVariable` returns the EXISTING `_variableVersions["Me"]` whenever one exists,
+    ignoring the type argument. So the FIRST class in a file to use `Me`, implicitly (a bare
+    property) or explicitly, fixed its type for every class built after it. MSIL spells a member
+    token from the receiver's IR type, so a later class's bare `V = 2` became
+    `stfld int32 'Animal'::'V'` and died with `MissingFieldException: Field not found:
+    'Animal.V'`; C#, JavaScript and C++ print `this` and never read the type, which is why only
+    MSIL showed it — and why the suite never caught it: no existing MSIL fixture had a SECOND
+    class use a bare property after an earlier one had touched `Me` at all.
+  - **The fix, one answer.** `IRBuilder.MeOfCurrentMember()` is now the only place either call
+    site reaches: it keeps one `Me` per `IRFunction` (`_meByFunction`, keyed by reference), typed
+    as the class currently being built, and — the load-bearing choice — never puts it in
+    `_variableVersions` at all, so nothing to leak exists. A lambda body is its own `IRFunction`
+    and gets its OWN `Me` (typed as its CREATOR's class, since `_currentClassName` is untouched
+    while visiting a lambda); the #155/ADR-0010 closure-environment capture of `Me` keeps
+    working unchanged. `MyBase` stays the deliberate exception — `Visit(MyBaseExpressionNode)`
+    mints a fresh base-typed `IRVariable` of the same name each time, outside
+    `_meByFunction` too, because it is the SAME object seen as its base class, not the class
+    being built.
+  - **Rode along: the nested-class restore.** `Visit(ClassNode)` used to NULL `_currentClassName`/
+    `_currentClassMethodNames` on the way out; a class nested inside another is visited from the
+    OUTER class's own member loop, so nulling left every outer member declared AFTER the nested
+    class with no enclosing class at all. Measured before, for an outer property declared after a
+    nested class: C# failed `CS0103` on the backing field, JavaScript and MSIL printed `3` for
+    `21`, C++ failed to compile, and Invariant F fired (a bare property lowered back to a plain
+    variable once `_currentClassName` went missing — `AccessorMemberOf` early-returns null
+    without it). Now saved and RESTORED instead.
+  - **Measured** (`S/t176/probes/V6*.bas` + `.exp`, `S/t176/matrix-base.txt` →
+    `matrix-final.txt`, 4 backends × CLI / CLI `-O` / Release `.blproj`): V6, V6b, V6c and V6g go
+    from MSIL `MissingFieldException` to OK; the V6d/V6e/V6f controls (a field, a method, classes
+    reversed) were unaffected throughout. Twelve edge probes (`S/t176/edge/X*.bas`) go from MSIL
+    RUN-FAIL to OK: `Me` as an argument, `Me Is`/`IsNot`, a lambda capturing `Me` (both a
+    Function and a Sub lambda), an inherited bare property, Shared + instance on one class, a
+    `Structure` sandwiched between two classes, interleaved `Module`s, explicit `Me.`, a
+    constructor, and nested classes (both with and without constructing the nested type). Byte
+    compare over 6,361 files: 54 differ, ALL `.il`, ALL in #176 programs — zero `.cs`/`.js`/`.cpp`
+    diffs anywhere in the corpus, the other tasks' probes, or the samples; the nested-class hunk
+    touches C#/C++ too, but only for a program with a nested class, and none of those existed in
+    the scanned set. `BASICLANG_VERIFY_IR` fired zero times.
+  - **Tests.** IR-level (fast subset): `MeReceiverTypingTests.cs` — every method of every class
+    typed as its OWN class for both a bare and an explicit receiver, on both pipelines; one `Me`
+    per FUNCTION (same instance, checked by reference); a lambda in a later class gets its own,
+    correctly-typed `Me`; `MyBase.X` keeps the base type as a DIFFERENT instance; the nested-class
+    shape holds Invariant F. Execution (`[Category("Integration")]`):
+    `MeReceiverTypingExecutionTests.cs` — the V6 family and every edge probe above, four backends
+    × both pipelines where they apply (X1/X2 exclude C++ — task #200 below; X3b excludes C# —
+    task #136, widened; X6d excludes JavaScript — a pre-existing, UNRELATED refusal of any
+    `Structure` declaration on that backend, BL7005; X12b, which also CONSTRUCTS the nested class,
+    excludes C++ — a pre-existing, unrelated nested-class emission-order defect), plus a Release
+    `.blproj` MSIL leg. `PropertyAccessorExecutionTests`' three-backend split (task #175's own fix)
+    is folded back to `StandardPipeline_RunsOnAllFourBackends`/`AggressivePipeline_
+    RunsOnAllFourBackends`, and its `..._PinnedForTask176` pin is promoted to
+    `Msil_BarePropertyWriteInALaterClass_TargetsItsOwnClass`, asserting success on both pipelines
+    — kept under its own name (redundant with the fold-back by design) as the dedicated regression
+    pin for the exact historical repro. Mutants (`S/t176/mut/mut.py`): M1 (both call sites
+    reverted), M2 (only the accessor/bare-property site reverted), M3 (only the explicit site
+    reverted) and M5 (one `Me` per PROGRAM, not per function) are all killed; M6 (a FRESH `Me` per
+    use, never cached) is EQUIVALENT — nothing in the suite or the probe corpus can observe the
+    difference between one `Me` reused within a function and a new one minted at every use, since
+    every use within one function is typed identically either way; M7 (`Me` typed from a null
+    class when uncached) is killed.
+  - ⛔ **Three follow-ups this exposed, NOT fixed here:**
+    - **#199 — the SAME `_variableVersions`-never-scoped-per-function leak, for every other
+      name.** `MeOfCurrentMember`/`_meByFunction` closes it for `"Me"` alone; the implementer's
+      own brief asked whether `MyBase`, `MyClass`, a parameter shadowing an earlier function's
+      local, or a `For` control variable share the same hazard, and that walk was not done. Filed
+      to track it, not measured.
+    - **#200 — the C++ backend cannot pass `Me` where a value (not the implicit receiver) is
+      expected.** `Me` as an ordinary argument, or as an `Is`/`IsNot` operand, fails to COMPILE:
+      `error: no viable conversion from 'Counter *' to 'std::shared_ptr<Counter>'`. `this` is a
+      raw pointer; every other place a `Counter` value is needed gets a `shared_ptr<Counter>`, and
+      nothing converts between them at a call/comparison site. Repro: `S/t176/edge/X1_me_arg.bas`,
+      `X2_me_is.bas`. Unrelated to #176 — measured unchanged before and after its fix.
+    - **#136, WIDENED — a Sub lambda's write to a bare property is not observed by a later
+      Function lambda's read, on C# only.** Previously scoped to a `For Each` variable capture;
+      `S/t176/edge/X3b_sub_lambda_store.bas` (`Dim f = Function() V + 1 : Dim g = Sub() V = 3`)
+      prints `1021` where C++/JavaScript/MSIL all print the correct `31021`. Same closure-capture
+      family as #136's original shape, not investigated further here.
   `ExtensionHostRequestCoverageTests.KnownUnimplemented` (a second test fails once an entry is
   implemented, so the list must shrink). A missing `sendNotification` handler is a silent
   no-op; a missing `sendRequest` handler rejects inside `activate()` and kills the extension.

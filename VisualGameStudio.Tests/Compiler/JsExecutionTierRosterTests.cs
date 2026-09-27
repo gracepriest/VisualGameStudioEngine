@@ -314,6 +314,14 @@ public class JsExecutionTierRosterTests
         // directly (P12's named C++ divergence and E11's parentheses-wrap mutant check).
         typeof(IsIsNotOperatorExecutionTests),
         typeof(NotPrecedenceExecutionTests),
+
+        // Task #176 — one `Me` per member, typed as its own class. Named "...ExecutionTests", so
+        // the widened match below WOULD catch it on its own; listed explicitly anyway, matching
+        // every row above. Its JS legs run through FourBackends.RunsOnEveryBackend[Aggressive]
+        // (the V6 family and most edge probes) and JavaScriptExecutionTests.RunJs /
+        // FourBackends.RunAggressiveJs directly (X1/X2, which exclude C++, and X3b's JS leg,
+        // which the C#-only #136 pin does not touch).
+        typeof(MeReceiverTypingExecutionTests),
     };
 
     /// <summary>
@@ -362,7 +370,7 @@ public class JsExecutionTierRosterTests
 
     [Test]
     public void RosterIsPinned()
-        => Assert.That(ExecutionTier, Has.Length.EqualTo(79), // + MsilValueToStringExecutionTests (task #183), InterfaceMethodTypingExecutionTests, IsIsNotOperatorExecutionTests (task #185), NotPrecedenceExecutionTests (#195)
+        => Assert.That(ExecutionTier, Has.Length.EqualTo(80), // + MsilValueToStringExecutionTests (task #183), InterfaceMethodTypingExecutionTests, IsIsNotOperatorExecutionTests (task #185), MeReceiverTypingExecutionTests (task #176), NotPrecedenceExecutionTests (#195)
             "The execution-tier roster changed. That is fine — update the number — but it must " +
             "be a deliberate edit, not a silent shrink.");
 
