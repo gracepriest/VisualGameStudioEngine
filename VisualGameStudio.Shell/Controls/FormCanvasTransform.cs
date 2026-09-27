@@ -296,11 +296,15 @@ public sealed class FormCanvasTransform
         FormDocument document, Point formPoint, FormControl? ignore = null)
     {
         ArgumentNullException.ThrowIfNull(document);
-        return ContainerAt(document.Controls, formPoint, new Point(0, 0), ignore);
+
+        // ⛔ The SAME resolved picture Layout draws: a docked Panel is a drop target where it is DRAWN.
+        var dock = FormDockLayout.Resolve(document, FormDockMode.Designer);
+        return ContainerAt(document.Controls, formPoint, new Point(0, 0), ignore, dock);
     }
 
     private static (FormControl, Point)? ContainerAt(
-        IReadOnlyList<FormControl> controls, Point formPoint, Point containerOrigin, FormControl? ignore)
+        IReadOnlyList<FormControl> controls, Point formPoint, Point containerOrigin, FormControl? ignore,
+        FormDockLayoutResult dock)
     {
         // Topmost first, exactly as HitTest does — document order is z-order.
         for (var i = controls.Count - 1; i >= 0; i--)
@@ -321,7 +325,7 @@ public sealed class FormCanvasTransform
                 continue;
             }
 
-            var bounds = BoundsOf(control, containerOrigin);
+            var bounds = BoundsOf(control, containerOrigin, dock);
             if (bounds == null || !bounds.Value.Contains(formPoint))
             {
                 continue;
@@ -332,7 +336,7 @@ public sealed class FormCanvasTransform
                 return null;
             }
 
-            var nested = ContainerAt(control.Children, formPoint, bounds.Value.TopLeft, ignore);
+            var nested = ContainerAt(control.Children, formPoint, bounds.Value.TopLeft, ignore, dock);
             return nested ?? (control, bounds.Value.TopLeft);
         }
 
@@ -342,17 +346,31 @@ public sealed class FormCanvasTransform
     /// <summary>
     /// A control's rectangle in FORM space, or null when it carries no pixel geometry.
     ///
-    /// <para>⚠ Null rather than an empty rect: a control with no geometry has no position, and an
-    /// empty rect at the origin would silently make it a zero-size target sitting in the corner.
-    /// Web documents use grid geometry, which this canvas does not place.</para>
+    /// <para>⛔ A DOCKED control's rectangle is <paramref name="dock"/>'s — where it RUNS — never its stored X/Y, which
+    /// docking ignores and which are stale by design (spec 2026-09-27 §3, §7a). Its place depends on its siblings,
+    /// which is why this takes the pass's one resolved layout rather than resolving per control.</para>
+    ///
+    /// <para>⚠ Null rather than an empty rect: a control with no geometry has no position, and an empty rect at the
+    /// origin would silently make it a zero-size target sitting in the corner. A strip carries no pixel geometry, so it
+    /// never comes through here — Bands places it; a Grid page's cell geometry is WebLayout's.</para>
+    ///
+    /// <para>⚠ The rectangle may lie partly or wholly OUTSIDE its container: an overflowing dock gives a negative X/Y
+    /// (<see cref="FormRect"/>). Nothing here clips it, and hit-testing must not assume it is inside.</para>
     /// </summary>
-    public static Rect? BoundsOf(FormControl control, Point containerOrigin)
+    public static Rect? BoundsOf(FormControl control, Point containerOrigin, FormDockLayoutResult dock)
     {
         ArgumentNullException.ThrowIfNull(control);
+        ArgumentNullException.ThrowIfNull(dock);
 
         if (control.Geometry is not PixelGeometry pixel)
         {
             return null;
+        }
+
+        if (dock.TryGet(control, out var docked))
+        {
+            var b = docked.Bounds;
+            return new Rect(containerOrigin.X + b.X, containerOrigin.Y + b.Y, b.Width, b.Height);
         }
 
         return new Rect(
@@ -377,11 +395,25 @@ public sealed class FormCanvasTransform
     {
         ArgumentNullException.ThrowIfNull(document);
 
-        // ⚠ Bands LAST, so a band paints over — and out-hit-tests — anything that overlaps it.
-        // Document order is z-order everywhere in this class, and chrome is on top of the surface.
-        return document.Target == FormTarget.Web
-            ? WebLayout(document, selected)
-            : Layout(document.Controls, new Point(0, 0)).Concat(Bands(document, selected));
+        // ⛔⛔ ONE dock resolve per layout pass (spec 2026-09-27 §3, §7a), shared by the control walk (a docked
+        // control's rectangle) and Bands (every strip's band, at every depth) — never a second stacking loop here.
+        // Designer mode: a Visible=false control is still drawn, and still docks.
+        var dock = FormDockLayout.Resolve(document, FormDockMode.Designer);
+
+        // ⚠ MATERIALISED, not lazy: Bands reads each container's drawn client origin, which the control walk records
+        // as it goes. A lazy Concat happens to run the walk first; a consumer that stopped at its first match, or a
+        // reordering, would hand Bands an empty map and drop every nested strip with nothing failing.
+        var origins = new Dictionary<FormControl, Point>(ReferenceEqualityComparer.Instance);
+        var placed = FormVocabulary.IsPixel(document)
+            ? Layout(document.Controls, new Point(0, 0), dock, origins).ToList()
+            : WebLayout(document).ToList();
+
+        // ⚠ Bands LAST, so a band paints over — and out-hit-tests — anything that overlaps it. Document order is
+        // z-order everywhere in this class, and chrome is on top of the surface. ⚠ Scope call S12, recorded and NOT
+        // changed: the page and WinForms paint a strip in DOCUMENT order, so an UNDOCKED control overlapping a band
+        // (or a later root sibling over a nested strip) is drawn differently here. Docked controls no longer overlap
+        // a band at all — the resolver stacks them.
+        return placed.Concat(Bands(document, selected, dock, origins));
     }
 
     /// <summary>
@@ -393,17 +425,15 @@ public sealed class FormCanvasTransform
     /// rect at the origin: a phantom control in the corner with a resize grip nobody dropped, and
     /// the menu bar itself invisible and unclickable, with nothing else on screen looking wrong.</para>
     ///
-    /// <para>⛔ Top strips stack DOWNWARD in document order and Bottom strips stack UPWARD from the
-    /// edge, so the first-documented bottom bar is the one ON the edge — the same order
-    /// <c>FormAssetEmitter.Html</c> emits the page's bottom chrome in (reversed, for the same
-    /// reason). Which edge each one is on is <see cref="FormControl.IsDockedToBottom"/>, shared with
-    /// that emitter: two copies of that lookup would let this canvas draw the status band on one
-    /// edge while the page puts its <c>&lt;footer&gt;</c> on the other, from ONE document.</para>
+    /// <para>⛔ Where each band sits — which edge, and in what order — is <see cref="FormDockLayout.Resolve"/>'s, the
+    /// one resolver the page emitter asks too. The strip's edge comes from <see cref="FormControl.IsDockedToBottom"/>,
+    /// called inside the resolver: two copies of either would let this canvas draw the status band on one edge while
+    /// the page puts its footer on the other.</para>
     ///
     /// <para>⛔⛔ <b>The item CELLS, the Type Here slot and the open dropdowns are yielded from
     /// INSIDE this walk, and that is the whole reason there is no <c>Cells(document, selected)</c>
-    /// beside it.</b> This loop uniquely owns where each band SITS — the stacking from each edge is
-    /// derived here and nowhere else — and a cell's rectangle is that band's own Y and Height. A
+    /// beside it.</b> This loop is where each band's RESOLVED rectangle becomes an entry, and a cell's rectangle is
+    /// that band's own Y and Height. A
     /// separate method would have to re-derive the stacking from the same document, which is the
     /// <see cref="SurfaceSize"/> / <c>Tracks</c>-vs-<c>ParseTracks</c> / <c>DockOf</c> lesson
     /// arriving a fourth time in this one file. Worse, the drift would be INVISIBLE: every Item row
@@ -414,11 +444,10 @@ public sealed class FormCanvasTransform
     /// <c>band.Height</c> off the entry this same iteration just produced, and NOTHING here ever
     /// reads an item's own <c>DefaultHeight</c>.</para>
     /// </summary>
-    private static IEnumerable<FormLayoutEntry> Bands(FormDocument document, FormControl? selected)
+    private static IEnumerable<FormLayoutEntry> Bands(
+        FormDocument document, FormControl? selected, FormDockLayoutResult dock,
+        IReadOnlyDictionary<FormControl, Point> origins)
     {
-        var surface = SurfaceSize(document);
-        double top = 0, bottom = surface.Height;
-
         var parents = ParentMap(document);
         var activeStrip = ActiveStrip(selected, parents);
         var expanded = ExpansionPath(selected, parents);
@@ -429,28 +458,43 @@ public sealed class FormCanvasTransform
         // is always populated before it is read, and no rectangle is computed twice.
         var cellOf = new Dictionary<FormControl, Rect>();
 
-        foreach (var strip in document.Controls.Where(c => c.Definition?.Place == FormPlace.Docked))
+        // ⛔⛔ Where each band SITS is FormDockLayout's answer (spec 2026-09-27 §3), read here and never re-derived.
+        // The resolver docks strips AND docked controls in ONE document-ordered sequence, in ANY sibling list (a strip
+        // inside a Panel too), so a Dock=Top Panel before the MenuStrip pushes the band down exactly as WinForms and
+        // the page place it. Its All is breadth-per-list: every root band comes before any nested one.
+        foreach (var docked in dock.All)
         {
-            var height = strip.Definition!.DefaultHeight;
-            Rect band;
+            var strip = docked.Control;
 
-            if (strip.IsDockedToBottom)
+            // A docked CONTROL is drawn by the control walk (BoundsOf); only a strip is a band.
+            if (strip.Definition?.Place != FormPlace.Docked)
             {
-                bottom -= height;
-                band = new Rect(0, bottom, surface.Width, height);
+                continue;
             }
-            else
+
+            // The resolver's rectangle is relative to its container's CLIENT origin: the form's at the root, the
+            // container's drawn origin (recorded by the control walk) inside one.
+            Point origin;
+            if (!parents.TryGetValue(strip, out var container))
             {
-                band = new Rect(0, top, surface.Width, height);
-                top += height;
+                origin = new Point(0, 0);
             }
+            else if (!origins.TryGetValue(container, out origin))
+            {
+                // Its container is not drawn (no pixel geometry), so neither is the strip inside it.
+                continue;
+            }
+
+            var b = docked.Bounds;
+            var band = new Rect(origin.X + b.X, origin.Y + b.Y, b.Width, b.Height);
 
             yield return new FormLayoutEntry(strip, band, FormLayoutRole.Band);
 
             // The strip's own items, left to right along the band. ⛔ band.Y and band.Height — see
             // the method summary; the item's inherited DefaultHeight agrees with a MenuStrip by
-            // coincidence and with nothing else.
-            double x = 0;
+            // coincidence and with nothing else. ⚠ From band.X, not 0: a band inside a Panel, or one
+            // beside a Dock=Left control, does not start at the form's left edge.
+            var x = band.X;
             foreach (var item in strip.Children)
             {
                 var cell = new Rect(x, band.Y, CellWidth(item), band.Height);
@@ -824,57 +868,46 @@ public sealed class FormCanvasTransform
     }
 
     /// <summary>
-    /// A web page's controls, each in the grid cell it names.
+    /// A Grid page's controls, each in the grid cell it names. (Its strips are Bands, which Layout appends for EVERY
+    /// document: a band is page chrome, not a cell, so a Flow page's menu bar is laid out too.)
     ///
     /// <para>⚠ TOP LEVEL only, and that is the model's limit rather than a shortcut:
     /// <see cref="FormLayout"/> is a property of the DOCUMENT, so a Panel's children carry Col/Row
     /// against a grid that is not described anywhere. Laying them out would mean inventing one.</para>
     ///
-    /// <para>⚠ Grid only. <c>Flow</c> positions by document order and <c>Canvas</c> is the
-    /// unimplemented pixel escape hatch; for both, there is no cell a point could mean, and drawing
-    /// a guess is exactly the preview this canvas must not pretend to be.</para>
+    /// <para>⚠ Grid only. <c>Flow</c> positions by document order, so there is no cell a point could mean, and drawing a
+    /// guess is exactly the preview this canvas must not pretend to be. A <c>Canvas</c> page never comes here: it
+    /// speaks pixels (<see cref="FormVocabulary.IsPixel(FormDocument)"/>) and takes the pixel walk.</para>
     /// </summary>
-    private static IEnumerable<FormLayoutEntry> WebLayout(FormDocument document, FormControl? selected)
+    private static IEnumerable<FormLayoutEntry> WebLayout(FormDocument document)
     {
-        if (document.Layout?.Kind == FormLayoutKind.Grid)
+        if (document.Layout?.Kind != FormLayoutKind.Grid)
         {
-            var surface = SurfaceSize(document);
-            foreach (var control in document.Controls)
-            {
-                if (control.Geometry is GridGeometry grid)
-                {
-                    yield return new FormLayoutEntry(
-                        control,
-                        FormGridLayout.CellRect(
-                            document.Layout, surface, grid.Col, grid.Row, grid.ColSpan, grid.RowSpan),
-                        FormLayoutRole.Control);
-                }
-            }
+            yield break;
         }
 
-        // ⛔ ALWAYS, deliberately OUTSIDE the Grid branch. A band is page CHROME, not a cell: the
-        // emitter puts a strip's <nav>/<footer> outside <div class="vgs-form"> precisely because it
-        // occupies no track the user declared. Gating it on the layout kind would make a Flow page's
-        // menu bar — which the emitted page certainly has — invisible and unclickable in the
-        // designer, from a document the canvas otherwise lays out correctly.
-        //
-        // ⚠ `selected` goes through unchanged: a page's menu is edited with the same cells, the
-        // same dropdowns and the same Type Here slot as a form's. Dropping it here would make the
-        // designer read-only for web chrome, with the bar still drawn and clicks still landing.
-        foreach (var band in Bands(document, selected))
+        var surface = SurfaceSize(document);
+        foreach (var control in document.Controls)
         {
-            yield return band;
+            if (control.Geometry is GridGeometry grid)
+            {
+                yield return new FormLayoutEntry(
+                    control,
+                    FormGridLayout.CellRect(document.Layout, surface, grid.Col, grid.Row, grid.ColSpan, grid.RowSpan),
+                    FormLayoutRole.Control);
+            }
         }
     }
 
     private static IEnumerable<FormLayoutEntry> Layout(
-        IReadOnlyList<FormControl> controls, Point containerOrigin)
+        IReadOnlyList<FormControl> controls, Point containerOrigin, FormDockLayoutResult dock,
+        Dictionary<FormControl, Point> origins)
     {
         foreach (var control in controls)
         {
             // ⛔ A Docked strip is yielded by Bands() and by nothing else — never through BoundsOf,
             // which knows only pixel geometry and would drop it silently (or, if one ever acquired
-            // geometry, yield it TWICE, once as a Control and once as a Band). Skipping the root
+            // geometry, yield it TWICE, once as a Control and once as a Band). Skipping the strip
             // also skips its ITEMS, which carry no pixel geometry either: Bands() places them, as
             // cells derived from the band's own rectangle, and that is their only route here.
             if (control.Definition?.Place == FormPlace.Docked)
@@ -882,15 +915,18 @@ public sealed class FormCanvasTransform
                 continue;
             }
 
-            var bounds = BoundsOf(control, containerOrigin);
+            var bounds = BoundsOf(control, containerOrigin, dock);
             if (bounds == null)
             {
                 continue;
             }
 
+            // Its CLIENT origin, for Bands: a strip docked inside this control is placed from here.
+            origins[control] = bounds.Value.TopLeft;
+
             yield return new FormLayoutEntry(control, bounds.Value, FormLayoutRole.Control);
 
-            foreach (var nested in Layout(control.Children, bounds.Value.TopLeft))
+            foreach (var nested in Layout(control.Children, bounds.Value.TopLeft, dock, origins))
             {
                 yield return nested;
             }
