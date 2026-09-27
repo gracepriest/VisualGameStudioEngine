@@ -36,6 +36,9 @@ public class WinFormsReferenceHarnessTests
             new ReferenceFixture(PixelLayoutFixtures.HiddenDock(),
                 new VisibilityStep("showA", "pnlA", true), new VisibilityStep("hideA", "pnlA", false)),
             new ReferenceFixture(PixelLayoutFixtures.Bordered()),
+            new ReferenceFixture(PixelLayoutFixtures.HiddenBox()),
+            new ReferenceFixture(PixelLayoutFixtures.DockedBox(), new ResizeStep("grow", 500, 360)),
+            new ReferenceFixture(PixelLayoutFixtures.DockedAnchor(), new ResizeStep("grow", 500, 360)),
             new ReferenceFixture(PixelLayoutFixtures.Strips("StripsPinned")),
             new ReferenceFixture(PixelLayoutFixtures.Strips("StripsAuto"), Array.Empty<ReferenceStep>(), PinStrips: false));
     }
@@ -63,12 +66,16 @@ public class WinFormsReferenceHarnessTests
         }
     }
 
-    /// <summary>The window against the model at one size, exactly.</summary>
-    private void AssertMatchesModel(string form, string label, FormDocument modelAtThatSize)
+    /// <summary>
+    /// The window against the model, exactly. <paramref name="clientSize"/> null: the model at its own design size;
+    /// otherwise re-docked and re-anchored at that size (<see cref="PixelLayoutModel.Rects"/>).
+    /// </summary>
+    private void AssertMatchesModel(string form, string label, FormDocument model, (int Width, int Height)? clientSize = null)
     {
         var snapshot = Snap(form, label);
         Record(form, snapshot);
-        var differences = LayoutComparison.Differences(PixelLayoutModel.Rects(modelAtThatSize), snapshot.Controls, 0);
+        var differences = LayoutComparison.Differences(
+            PixelLayoutModel.Rects(model, FormDockMode.Runtime, clientSize), snapshot.Controls, 0);
         Assert.That(differences, Is.Empty,
             $"{form} '{label}': the WinForms window disagrees with the model:\n  " + string.Join("\n  ", differences));
     }
@@ -106,64 +113,33 @@ public class WinFormsReferenceHarnessTests
     // ================================================================== anchors (spec §4's table)
 
     /// <summary>
-    /// Spec §4, per axis with d = the container's growth: near only → offset; far only → offset + d; both → offset,
-    /// size + d; neither → offset + d/2 (a HALF pixel for an odd d, which WinForms must round one way — recorded).
+    /// Every combination, held at 0px to the model re-anchored at that size — spec §4's table through
+    /// <see cref="PixelLayoutModel.AnchorAxis"/>. ⚠ MEASURED: a centred axis lands on a half pixel for an odd growth
+    /// and WinForms FLOORS it (−59 → −30, not −29); the page's calc(50% …) keeps the half, so the two differ by
+    /// exactly 0.5px there — inside Task 13's ±1. Each such row is printed.
     /// </summary>
-    private static (double Offset, double Size, bool Centred) SpecAxis(int offset, int size, int d, bool near, bool far) =>
-        (near, far) switch
-        {
-            (true, true) => (offset, size + d, false),
-            (false, true) => (offset + d, size, false),
-            (true, false) => (offset, size, false),
-            _ => (offset + d / 2.0, size, true)
-        };
-
     [TestCase("design", 400, 300)]
     [TestCase("grow", 601, 401)]
     [TestCase("shrink", 341, 251)]
     public void EveryAnchorCombination_FollowsTheSpecTable(string label, int width, int height)
     {
-        var snapshot = Snap("Anchors", label);
-        Record("Anchors", snapshot);
+        AssertMatchesModel("Anchors", label, PixelLayoutFixtures.Anchors(), (width, height));
 
-        var problems = new List<string>();
         for (var n = 0; n < 16; n++)
         {
             var edges = PixelLayoutFixtures.AnchorFlags(n);
             var (x, y, w, h) = PixelLayoutFixtures.AnchorCell(n);
-            var across = SpecAxis(x, w, width - 400, edges.HasFlag(FormAnchorEdges.Left), edges.HasFlag(FormAnchorEdges.Right));
-            var down = SpecAxis(y, h, height - 300, edges.HasFlag(FormAnchorEdges.Top), edges.HasFlag(FormAnchorEdges.Bottom));
-            var box = snapshot.Controls[$"a{n}"];
-            if (!box.Visible)
+            var across = PixelLayoutModel.AnchorAxis(x, w, width - 400, edges.HasFlag(FormAnchorEdges.Left), edges.HasFlag(FormAnchorEdges.Right));
+            var down = PixelLayoutModel.AnchorAxis(y, h, height - 300, edges.HasFlag(FormAnchorEdges.Top), edges.HasFlag(FormAnchorEdges.Bottom));
+            foreach (var (what, axis) in new[] { ("X", across), ("Y", down) })
             {
-                // A hidden control reports its parent-relative Location, which would pass for a placed one.
-                problems.Add($"a{n} was not visible, so its numbers are not a measured placement");
-                continue;
-            }
-
-            // ⚠ MEASURED: a centred axis lands on a half pixel for an odd growth, and WinForms FLOORS it —
-            // offset + floor(d/2), toward −∞ on a shrink too (−59 → −30, not −29). The page's calc(50% …) keeps the
-            // half, so the two differ by exactly 0.5px there: inside Task 13's ±1, and recorded here exactly.
-            void Check(string what, double want, double got, bool centred)
-            {
-                var winForms = centred ? Math.Floor(want) : want;
-                if (got != winForms)
+                if (axis.Centred && axis.SpecOffset != axis.WinFormsOffset)
                 {
-                    problems.Add($"a{n} ({PixelLayoutFixtures.AnchorText(n)}) {what}: spec {want}, expected WinForms {winForms}, measured {got}");
-                }
-                else if (centred && want != got)
-                {
-                    TestContext.Out.WriteLine($"    [centring] a{n} ({PixelLayoutFixtures.AnchorText(n)}) {what}: spec {want}, WinForms {got}");
+                    TestContext.Out.WriteLine(
+                        $"    [centring] a{n} ({PixelLayoutFixtures.AnchorText(n)}) {what}: spec {axis.SpecOffset}, WinForms {axis.WinFormsOffset}");
                 }
             }
-
-            Check("X", across.Offset, box.X, across.Centred);
-            Check("Width", across.Size, box.Width, false);
-            Check("Y", down.Offset, box.Y, down.Centred);
-            Check("Height", down.Size, box.Height, false);
         }
-
-        Assert.That(problems, Is.Empty, "WinForms disagrees with spec §4's anchor table:\n  " + string.Join("\n  ", problems));
     }
 
     // ================================================================== docking (FormDockLayout is on trial)
@@ -214,6 +190,97 @@ public class WinFormsReferenceHarnessTests
     public void HidingItAgain_ClosesTheGap()
     {
         AssertMatchesModel("HiddenDock", "hideA", PixelLayoutFixtures.HiddenDock(pnlAVisible: false));
+    }
+
+    [Test]
+    public void AHiddenContainer_HidesItsChildren()
+    {
+        AssertMatchesModel("HiddenBox", "design", PixelLayoutFixtures.HiddenBox());
+    }
+
+    [Test]
+    public void ADockedContainersChildren_AreOffsetByWhereItDocks_NotItsStoredPosition()
+    {
+        AssertMatchesModel("DockedBox", "design", PixelLayoutFixtures.DockedBox());
+    }
+
+    [Test]
+    public void ADockedContainersChildren_ReDockAndReAnchor_WhenTheFormGrows()
+    {
+        AssertMatchesModel("DockedBox", "grow", PixelLayoutFixtures.DockedBox(), (500, 360));
+    }
+
+    /// <summary>
+    /// ⚠ OPEN — WinForms DISAGREES with the model here (see <see cref="PixelLayoutFixtures.DockedAnchor"/>). Pinned
+    /// to the MEASURED window, with the model's answer beside it, until the coordinator decides which side moves
+    /// (the region writer emitting a docked container's resolved size, or the model/page anchoring against the
+    /// stored size). Not a pass-around: the assertion fails the day either the window or the model changes.
+    /// </summary>
+    [Test]
+    public void OPEN_AnAnchoredChildOfADockedContainer_IsAnchoredToTheContainersStoredSize()
+    {
+        var design = Snap("DockedAnchor", "design");
+        var grow = Snap("DockedAnchor", "grow");
+        Record("DockedAnchor", design);
+        Record("DockedAnchor", grow);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(design.Controls["side"], Is.EqualTo(new LayoutBox(0, 0, 120, 300)));
+            Assert.That(design.Controls["sideBR"], Is.EqualTo(new LayoutBox(60, 500, 50, 30)), "measured WinForms");
+            Assert.That(grow.Controls["sideBR"], Is.EqualTo(new LayoutBox(60, 560, 50, 30)), "measured WinForms");
+            Assert.That(PixelLayoutModel.Rects(PixelLayoutFixtures.DockedAnchor())["sideBR"],
+                Is.EqualTo(new LayoutBox(60, 250, 50, 30)), "the model's answer (anchored to the docked 300)");
+        });
+    }
+
+    [Test]
+    public void TheModel_ReDocksAtAnotherSize_AsTheDocumentRebuiltAtThatSizeDoes()
+    {
+        // The two ways of asking for a resized expectation must agree (re-anchoring aside, which only the
+        // clientSize form can do): the rebuilt document, and the design document laid out at that size.
+        var differences = LayoutComparison.Differences(
+            PixelLayoutModel.Rects(PixelLayoutFixtures.DockStrips(600, 400)),
+            PixelLayoutModel.Rects(PixelLayoutFixtures.DockStrips(), FormDockMode.Runtime, (600, 400)), 0);
+        Assert.That(differences, Is.Empty, string.Join("\n", differences));
+    }
+
+    /// <summary>
+    /// Review I-4: an exception inside a WINDOW PROCEDURE (here a Resize handler, raised from inside the
+    /// <c>ClientSize</c> setter's SetWindowPos) must come back as the driver's ERROR line, fast. Without
+    /// <c>SetUnhandledExceptionMode(ThrowException)</c> WinForms shows a modal ThreadExceptionDialog and the run
+    /// hangs to the 120 s timeout. The handler is user code patched into the retargeted pair — no designer
+    /// document can express it (a Panel's only catalog event is Click and the form root takes no binds).
+    /// ⚠ Its own build and run (~30 s).
+    /// </summary>
+    [Test]
+    public void AnExceptionInAWindowProcedure_IsTheDriversError_NotAHang()
+    {
+        var dir = Path.Combine(_dir, "boom");
+        Directory.CreateDirectory(dir);
+
+        static string Boom(string code)
+        {
+            const string init = "Me.InitializeComponent()";
+            var at = code.IndexOf(init, StringComparison.Ordinal);
+            Assert.That(at, Is.GreaterThanOrEqualTo(0), "the scaffold no longer calls Me.InitializeComponent()");
+            code = code.Insert(at + init.Length, "\n        AddHandler Me.Resize, AddressOf ThrowOnResize");
+
+            var end = code.LastIndexOf("End Class", StringComparison.Ordinal);
+            return code.Insert(end,
+                "    Private Sub ThrowOnResize(sender As Object, e As EventArgs)\n" +
+                "        Throw New InvalidOperationException(\"boom from a Resize handler\")\n" +
+                "    End Sub\n");
+        }
+
+        var started = DateTime.UtcNow;
+        var error = Assert.Throws<InvalidDataException>(() => WinFormsReferenceHarness.Measure(dir,
+            new ReferenceFixture(PixelLayoutFixtures.Read("Boom", 400, 300, """<Panel Id="p" X="10" Y="10" Width="50" Height="50"/>"""),
+                new ReferenceStep[] { new ResizeStep("grow", 500, 300) }, EditCode: Boom)));
+        var took = DateTime.UtcNow - started;
+        TestContext.Out.WriteLine($"[boom] {took.TotalSeconds:0.#} s: {error!.Message}");
+
+        Assert.That(error.Message, Does.Contain("boom from a Resize handler"));
     }
 
     // ================================================================== recorded gaps

@@ -20,7 +20,7 @@ public class WinFormsReferenceParsingTests
     private static readonly string[] Good =
     {
         "SCREEN 1280 1920 0 0 1280 672",
-        "FORM SelfTest 96",
+        "FORM SelfTest 96 DpiUnaware",
         "SNAP SelfTest design 400 300",
         "RECT SelfTest design p1 1 20 20 100 50",
         "RECT SelfTest design p2 1 280 20 100 50",
@@ -89,11 +89,26 @@ public class WinFormsReferenceParsingTests
     [Test]
     public void AScaledForm_IsRefused_BecauseItsNumbersAreNotCssPixels()
     {
-        var lines = Good.Select(l => l == "FORM SelfTest 96" ? "FORM SelfTest 144" : l).ToArray();
+        var lines = Good.Select(l => l == "FORM SelfTest 96 DpiUnaware" ? "FORM SelfTest 144 DpiUnaware" : l).ToArray();
 
         var error = Assert.Throws<InvalidDataException>(() => WinFormsReferenceHarness.Parse(Output(lines), new[] { Plan }));
 
         Assert.That(error!.Message, Does.Contain("144"));
+    }
+
+    /// <summary>
+    /// ⛔ On a 100% display a DPI-AWARE process also reports 96, so the DPI alone cannot see a lost pin there
+    /// (review I-2: dropping SetHighDpiMode survived as mutant 12). The mode in force is refused too.
+    /// </summary>
+    [TestCase("SystemAware")]
+    [TestCase("PerMonitorV2")]
+    public void AnAwareProcess_IsRefused_EvenAt96Dpi(string mode)
+    {
+        var lines = Good.Select(l => l == "FORM SelfTest 96 DpiUnaware" ? "FORM SelfTest 96 " + mode : l).ToArray();
+
+        var error = Assert.Throws<InvalidDataException>(() => WinFormsReferenceHarness.Parse(Output(lines), new[] { Plan }));
+
+        Assert.That(error!.Message, Does.Contain(mode).And.Contain("DpiUnaware"));
     }
 
     [Test]

@@ -46,7 +46,10 @@ internal sealed record VisibilityStep(string Label, string Id, bool Visible) : R
 /// <summary>A Canvas page to measure, and what to do to it.</summary>
 /// <param name="PinStrips">Pin every strip <c>AutoSize = false</c> at its catalog <c>DefaultHeight</c> (spec §7
 /// item 5). False measures the strips' real content height, to record the difference.</param>
-internal sealed record ReferenceFixture(FormDocument Document, IReadOnlyList<ReferenceStep> Steps, bool PinStrips = true)
+/// <param name="EditCode">Applied to the retargeted pair's <c>.bas</c> before it is compiled — for a test that needs
+/// user code in the form (a handler that throws). Null for every layout fixture.</param>
+internal sealed record ReferenceFixture(
+    FormDocument Document, IReadOnlyList<ReferenceStep> Steps, bool PinStrips = true, Func<string, string>? EditCode = null)
 {
     public ReferenceFixture(FormDocument document, params ReferenceStep[] steps) : this(document, steps, true) { }
 
@@ -120,6 +123,9 @@ internal static class WinFormsReferenceHarness
     /// <summary>The only DeviceDpi whose numbers are CSS pixels.</summary>
     public const int ExpectedDpi = 96;
 
+    /// <summary>The only <c>Application.HighDpiMode</c> the driver may run in.</summary>
+    public const string ExpectedDpiMode = "DpiUnaware";
+
     private static readonly Regex Token = new("^[A-Za-z_][A-Za-z0-9_-]*$", RegexOptions.CultureInvariant);
 
     /// <summary>
@@ -148,7 +154,7 @@ internal static class WinFormsReferenceHarness
         {
             var pair = FormRetarget.ConvertToPair(fixture.Document, FormTarget.WinForms);
             var bas = Path.Combine(workDir, pair.CodeFileName);
-            File.WriteAllText(bas, pair.CodeText);
+            File.WriteAllText(bas, fixture.EditCode?.Invoke(pair.CodeText) ?? pair.CodeText);
 
             var (exit, stdout, stderr) = CliTestHarness.RunProcess(
                 CliTestHarness.CliPath(), new[] { bas, "--target=csharp" }, workDir, timeoutMs: 180_000);
@@ -183,9 +189,11 @@ internal static class WinFormsReferenceHarness
 
         var (runExit, runOut, runErr) = CliTestHarness.RunProcess(exe!, Array.Empty<string>(), app, timeoutMs: 120_000);
         TestContext.Out.WriteLine("[reference driver output]\n" + runOut + runErr);
-        Assert.That(runExit, Is.Zero, $"the reference driver failed (exit {runExit}).\n{runOut}\n{runErr}");
 
+        // Parsed FIRST: a driver that caught an exception printed it as its ERROR line, and Parse throws that as
+        // the reason — more useful than the exit code alone.
         var references = Parse(runOut, fixtures.Select(f => f.Plan()).ToList());
+        Assert.That(runExit, Is.Zero, $"the reference driver failed (exit {runExit}).\n{runOut}\n{runErr}");
         foreach (var reference in references.Values)
         {
             File.WriteAllText(Path.Combine(workDir, reference.FormName + ".reference.json"), reference.ToJson());
@@ -220,6 +228,7 @@ internal static class WinFormsReferenceHarness
         var scale = Int(screen[2]) / (double)Int(screen[1]);
 
         var dpi = new Dictionary<string, int>();
+        var dpiMode = new Dictionary<string, string>();
         var sizes = new Dictionary<(string, string), (int, int)>();
         var rects = new Dictionary<(string, string), Dictionary<string, LayoutBox>>();
 
@@ -229,6 +238,7 @@ internal static class WinFormsReferenceHarness
             {
                 case "FORM":
                     dpi[parts[1]] = Int(parts[2]);
+                    dpiMode[parts[1]] = parts.Length > 3 ? parts[3] : "(not printed)";
                     break;
                 case "SNAP":
                     sizes[(parts[1], parts[2])] = (Int(parts[3]), Int(parts[4]));
@@ -258,6 +268,15 @@ internal static class WinFormsReferenceHarness
                 throw new InvalidDataException(
                     $"{plan.FormName} reported DeviceDpi {formDpi}: the DpiUnaware pin was lost, so its numbers are " +
                     $"not {ExpectedDpi}-DPI pixels and cannot be compared with CSS pixels");
+            }
+
+            // ⛔ Checked separately from the DPI: on a 100% display an AWARE process also reports 96, so the DPI
+            // alone cannot see a lost pin there — the mode in force can.
+            if (dpiMode[plan.FormName] != ExpectedDpiMode)
+            {
+                throw new InvalidDataException(
+                    $"{plan.FormName} ran with Application.HighDpiMode {dpiMode[plan.FormName]}, not {ExpectedDpiMode}: " +
+                    "the pin did not take, so on a scaled display its numbers would not be CSS pixels");
             }
 
             var snapshots = new List<LayoutSnapshot>();
@@ -351,7 +370,22 @@ internal static class WinFormsReferenceHarness
             [STAThread]
             private static int Main()
             {
-                // ⛔ Before any window: every number below is a 96-DPI logical pixel (spec §7 item 4).
+                // ⛔ Before any window: an exception inside a window procedure (Load, Resize, a DoEvents pump)
+                // must reach the catch below as this driver's ERROR line. The default shows a MODAL
+                // ThreadExceptionDialog, which hangs the run until the harness's 120 s timeout.
+                Application.SetUnhandledExceptionMode(UnhandledExceptionMode.ThrowException);
+
+                // ⚠ MEASURED: rethrown from a window procedure, the exception does NOT reach the catch below —
+                // it escapes through the native frames and ends the process as "Unhandled exception" (fast, no
+                // dialog). So it is printed as the ERROR line here, before the runtime ends the process.
+                AppDomain.CurrentDomain.UnhandledException += (sender, e) =>
+                {
+                    Console.WriteLine("ERROR " + e.ExceptionObject.ToString().Replace("\r", " ").Replace("\n", " "));
+                    Console.Out.Flush();
+                };
+
+                // ⛔ Before any window: every number below is a 96-DPI logical pixel (spec §7 item 4). The mode
+                // actually in force is printed on each FORM line and the parser refuses anything but DpiUnaware.
                 Application.SetHighDpiMode(HighDpiMode.DpiUnaware);
                 Application.EnableVisualStyles();
                 Application.SetCompatibleTextRenderingDefault(false);
@@ -423,7 +457,7 @@ internal static class WinFormsReferenceHarness
                 _form.Show();
                 Settle();
 
-                Console.WriteLine("FORM " + _name + " " + _form.DeviceDpi);
+                Console.WriteLine("FORM " + _name + " " + _form.DeviceDpi + " " + Application.HighDpiMode);
                 Snapshot("design");
             }
 

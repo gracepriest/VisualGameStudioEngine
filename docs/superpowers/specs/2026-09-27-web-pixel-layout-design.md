@@ -223,8 +223,12 @@ is target-gated. In piece 1:
   with what that driver lacks:
   1. **The WinForms program** comes from the §6 Canvas → WinForms retarget (`FormRetarget.ConvertToPair`) — so §6 lands
      first.
-  2. **A recursive walk in FORM-CLIENT coordinates** on both sides: WinForms `form.PointToClient(c.PointToScreen(Point.Empty))`
-     + `Size` for every control at every depth; Edge rect minus the form area's rect.
+  2. **A recursive walk in FORM-CLIENT coordinates** on both sides, each control's BORDER box: WinForms
+     `form.PointToClient(c.Parent.PointToScreen(c.Location))` + `Size` for every control at every depth; Edge
+     `getBoundingClientRect()` minus the form area's CLIENT origin (its rect's left/top + `clientLeft`/`clientTop`).
+     ⚠ Corrected by Task 12 (measured): `c.PointToScreen(Point.Empty)` is the control's own CLIENT origin, 1px
+     (FixedSingle) / 2px (Fixed3D) inside a bordered Panel's box; and the form area's border-box rect would put every
+     control off by the form area's own border.
   3. **A resize step**: after `Show()`, set `ClientSize` to W′×H′, `PerformLayout()`, `Application.DoEvents()`, then read.
      Keep W′ inside the screen's working area (Windows clamps an oversized window).
   4. **Pinned DPI**: `Application.SetHighDpiMode(HighDpiMode.DpiUnaware)` (or pinned in the test csproj) to match Edge's

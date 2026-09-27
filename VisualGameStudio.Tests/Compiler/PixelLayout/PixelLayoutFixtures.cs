@@ -128,6 +128,43 @@ internal static class PixelLayoutFixtures
         </GroupBox>
         """);
 
+    /// <summary>
+    /// A container hidden at startup holding a child: the child is not visible either (review I-1 — a model that
+    /// took visibility from the child alone would show it).
+    /// </summary>
+    public static FormDocument HiddenBox(int width = 400, int height = 300) => Read("HiddenBox", width, height, """
+        <Panel Id="box" X="20" Y="20" Width="150" Height="100" Visible="false">
+          <Panel Id="boxKid" X="10" Y="10" Width="40" Height="30"/>
+        </Panel>
+        <Panel Id="shownBox" X="200" Y="20" Width="150" Height="100">
+          <Panel Id="shownKid" X="10" Y="10" Width="40" Height="30"/>
+        </Panel>
+        """);
+
+    /// <summary>
+    /// A Dock=Left container whose STORED X/Y (200,100) are nowhere near where it docks (0,0): its children must be
+    /// offset by the docked rectangle (review I-1). Holds a positioned (Top,Left) child and a Dock=Top child.
+    /// </summary>
+    public static FormDocument DockedBox(int width = 400, int height = 300) => Read("DockedBox", width, height, """
+        <Panel Id="side" X="200" Y="100" Width="120" Height="50" Dock="Left">
+          <Panel Id="sideTop" X="0" Y="0" Width="120" Height="20" Dock="Top"/>
+          <Panel Id="sideSub" X="10" Y="40" Width="50" Height="30"/>
+        </Panel>
+        """);
+
+    /// <summary>
+    /// ⚠ OPEN (Task 12 review round, measured): a Bottom,Right child in a Dock=Left container whose STORED height
+    /// (50) is not its docked height (300). WinForms captures the child's anchor distances against the container's
+    /// size when the child is ADDED — the stored 120×50, since the container is docked only when it is itself added
+    /// to the form — so the child lands at Y = 300 − (50 − 250 − 30) − 30 = 500. The model (and the page, which
+    /// anchors against <c>ClientSizeOf</c> = the docked bounds) says 250.
+    /// </summary>
+    public static FormDocument DockedAnchor(int width = 400, int height = 300) => Read("DockedAnchor", width, height, """
+        <Panel Id="side" X="200" Y="100" Width="120" Height="50" Dock="Left">
+          <Panel Id="sideBR" X="60" Y="250" Width="50" Height="30" Anchor="Bottom,Right"/>
+        </Panel>
+        """);
+
     /// <summary>All three strips, each with one item, and a Fill — measured pinned and auto-sized.</summary>
     public static FormDocument Strips(string name, int width = 400, int height = 300) => Read(name, width, height, """
         <MenuStrip Id="menu" Dock="Top"><ToolStripMenuItem Id="mnuFile" Text="File"/></MenuStrip>
