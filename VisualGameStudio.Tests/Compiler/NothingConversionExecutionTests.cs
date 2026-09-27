@@ -14,9 +14,15 @@ namespace VisualGameStudio.Tests.Compiler;
 /// result into a user <c>Delegate</c> variable) and N6 (a delegate FIELD invoked from inside its
 /// own class) are pre-existing gaps, unrelated to <c>Nothing</c>, filed as #187/#188 — measured in
 /// <c>matrix-after.txt</c> to fail identically whether or not <c>Nothing</c> is involved (N4c, the
-/// no-lambda-storage control, runs everywhere). X4 (<c>Case Is Nothing</c> on an array) fails to
-/// compile on C++ for the same pre-existing reason as N7 below and is tracked under #189; X4b (no
-/// <c>Case Is Nothing</c> on the array) runs everywhere and is used instead.</para>
+/// no-lambda-storage control, runs everywhere). X4b (the same shape as X4, without a
+/// <c>Case Is Nothing</c> ON THE ARRAY itself) runs everywhere and is used here.
+/// ⭐ <b>UPDATED for #185 (ADR-0011):</b> at the time this fixture was written, X4's own
+/// <c>Case Is Nothing</c> on the array did not compile on C++ (tracked under #189) — that gap is
+/// now CLOSED: <c>#185</c>'s C++ <c>EmitNullTest</c> helper (D3) makes String/array
+/// <c>Case Is Nothing</c> an emptiness test on C++ instead of the bare <c>== nullptr</c> that
+/// failed to compile. The promoted, now-passing pin lives in
+/// <see cref="IsIsNotOperatorExecutionTests.CaseIsNothing_189_RunsOnEveryBackend_BothPipelines"/>
+/// (probes C1/C2), not here — X4b stays as it was, a control that never depended on #189.</para>
 /// </summary>
 [TestFixture]
 [Category("Integration")]
@@ -430,7 +436,11 @@ public class NothingConversionExecutionTests
     // ============================================================================================
     // 3. S1-S3 — a String Nothing. VB semantics: `Dim s As String = Nothing` behaves like "",
     //    because C++ represents String by VALUE (std::string) with no null state — the recorded
-    //    divergence (Nothing is distinguishable from "" only through `Is`, #185, not yet parsed).
+    //    divergence (Nothing is distinguishable from "" only through `Is`). #185 (ADR-0011) has
+    //    since made `Is`/`IsNot` parse everywhere; the divergence itself is now directly
+    //    observable and measured — see IsIsNotOperatorExecutionTests
+    //    .CppStringAndArrayNothingIsEmptiness_DivergesFromDotNet (probe P12): `"" Is Nothing` and
+    //    an empty array `Is Nothing` are True on C++ only, False on C#/JS/MSIL.
     // ============================================================================================
 
     private const string S1 = """

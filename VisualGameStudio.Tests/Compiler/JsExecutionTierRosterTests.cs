@@ -126,8 +126,6 @@ public class JsExecutionTierRosterTests
         typeof(CTypeConversionExecutionTests),
         // Method calls through an interface, typed; C++ and C# legs too.
         typeof(InterfaceMethodTypingExecutionTests),
-        // Is / IsNot and Not precedence; C++ and C# legs too.
-        typeof(IsOperatorExecutionTests),
 
         // ADR-0005 D2 — CSE guards a shared value's own destination, not only its operands.
         // CseDestinationInvalidationExecutionTests / DestinationInvalidation_D4_ByRefExecutionTests
@@ -307,6 +305,14 @@ public class JsExecutionTierRosterTests
         // (E8's pinned "null" text against #189). MsilValueToStringTests (pure in-process IL-text
         // fixture, spawns nothing, no [Category("Integration")]) is NOT here.
         typeof(MsilValueToStringExecutionTests),
+
+        // Task #185 — `Is` / `IsNot` reference identity (ADR-0011). Named "...ExecutionTests", so
+        // the widened match below WOULD catch it on its own; listed explicitly anyway, matching
+        // every row above. Its JS legs run through FourBackends.RunsOnEveryBackend[Aggressive]
+        // (the kind-table/two-operand/E-series probes, C1/C2/E7's promoted #189 rows, E10/E11's
+        // lambda rows, P13's fold) and JavaScriptExecutionTests.RunJs / JsTestSupport.CompileOptimized
+        // directly (P12's named C++ divergence and E11's parentheses-wrap mutant check).
+        typeof(IsIsNotOperatorExecutionTests),
     };
 
     /// <summary>
@@ -355,7 +361,7 @@ public class JsExecutionTierRosterTests
 
     [Test]
     public void RosterIsPinned()
-        => Assert.That(ExecutionTier, Has.Length.EqualTo(78), // + IsOperatorExecutionTests
+        => Assert.That(ExecutionTier, Has.Length.EqualTo(78), // + MsilValueToStringExecutionTests (task #183), InterfaceMethodTypingExecutionTests, IsIsNotOperatorExecutionTests (task #185)
             "The execution-tier roster changed. That is fine — update the number — but it must " +
             "be a deliberate edit, not a silent shrink.");
 

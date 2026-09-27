@@ -3636,10 +3636,11 @@ namespace BasicLang.Compiler
             // Case Is > 10, Case Is Integer, Case Is Nothing
             if (Match(TokenType.Is))
             {
-                // Case Is Nothing
+                // Case Is Nothing — the identity test (ADR-0011 D2 (2)), marked so the analyzer
+                // can hold it to `x Is Nothing`'s operand rule; `Case Nothing` above is not one.
                 if (Match(TokenType.Nothing))
                 {
-                    var pattern = new NothingPatternNode(token.Line, token.Column);
+                    var pattern = new NothingPatternNode(token.Line, token.Column) { WrittenWithIs = true };
                     return ParseWhenGuard(pattern);
                 }
 
@@ -4235,12 +4236,26 @@ namespace BasicLang.Compiler
 
                 var binary = new BinaryExpressionNode(op.Line, op.Column);
                 binary.Left = left;
-                binary.Operator = op.Lexeme;
+                binary.Operator = BinaryOperatorSpelling(op);
                 binary.Right = right;
                 left = binary;
             }
             return left;
         }
+
+        /// <summary>
+        /// The operator string a <see cref="BinaryExpressionNode"/> carries. The raw lexeme,
+        /// except for the reference-identity operators, which are stored in ONE canonical
+        /// spelling (<c>Is</c> / <c>IsNot</c>) whatever case the source used — BOTH expression
+        /// parsers go through here, so the two can never hand the analyzer different strings for
+        /// the same source (ADR-0011 D1).
+        /// </summary>
+        private static string BinaryOperatorSpelling(Token op) => op.Type switch
+        {
+            TokenType.Is => "Is",
+            TokenType.IsNot => "IsNot",
+            _ => op.Lexeme
+        };
 
         private bool IsBinaryOperator(Token token)
         {
@@ -4251,7 +4266,9 @@ namespace BasicLang.Compiler
                 TokenType.AndAlso or TokenType.OrElse or
                 TokenType.AndAnd or TokenType.OrOr or TokenType.Assignment or
                 TokenType.Equal or TokenType.NotEqual or TokenType.LessThan or
-                TokenType.LessThanOrEqual or TokenType.GreaterThan or TokenType.GreaterThanOrEqual => true,
+                TokenType.LessThanOrEqual or TokenType.GreaterThan or TokenType.GreaterThanOrEqual or
+                // ADR-0011 D1: reference identity, in THIS table and in ParseEquality's.
+                TokenType.Is or TokenType.IsNot => true,
                 _ => false
             };
         }
@@ -4268,7 +4285,9 @@ namespace BasicLang.Compiler
                 // `r = a AndAlso b` would not.
                 TokenType.OrOr or TokenType.Or or TokenType.OrElse => 1,
                 TokenType.AndAnd or TokenType.And or TokenType.AndAlso => 2,
-                TokenType.Assignment or TokenType.Equal or TokenType.NotEqual => 3,
+                // `Is` / `IsNot` sit at VB's level: the same as `=` / `<>` (ADR-0011 D1).
+                TokenType.Assignment or TokenType.Equal or TokenType.NotEqual or
+                TokenType.Is or TokenType.IsNot => 3,
                 TokenType.LessThan or TokenType.LessThanOrEqual or
                 TokenType.GreaterThan or TokenType.GreaterThanOrEqual => 4,
                 TokenType.Plus or TokenType.Minus => 5,
@@ -4309,13 +4328,13 @@ namespace BasicLang.Compiler
 
         private ExpressionNode ParseLogicalAnd()
         {
-            var expr = ParseLogicalNot();
+            var expr = ParseEquality();
 
             // AndAlso shares And's precedence level in VB — same reasoning as OrElse above.
             while (Check(TokenType.And) || Check(TokenType.AndAnd) || Check(TokenType.AndAlso))
             {
                 var op = Advance();
-                var right = ParseLogicalNot();
+                var right = ParseEquality();
                 var binary = new BinaryExpressionNode(op.Line, op.Column);
                 binary.Left = expr;
                 binary.Operator = op.Lexeme;
@@ -4326,55 +4345,18 @@ namespace BasicLang.Compiler
             return expr;
         }
 
-        /// <summary>
-        /// VB's <c>Not</c> binds LOOSER than every comparison and tighter than <c>And</c>:
-        /// <c>Not x Is Nothing</c> is <c>Not (x Is Nothing)</c>, and <c>Not n = 5</c> is
-        /// <c>Not (n = 5)</c>. It was parsed at unary precedence only, so both read as
-        /// <c>(Not x) …</c> and were refused ("Logical NOT requires Boolean operand") — which made
-        /// VB's commonest null test unwritable. <see cref="ParseUnary"/> still takes a <c>Not</c>
-        /// in operand position (<c>x = Not b</c>).
-        /// </summary>
-        private ExpressionNode ParseLogicalNot()
-        {
-            if (Check(TokenType.Not))
-            {
-                var op = Advance();
-                return new UnaryExpressionNode(op.Line, op.Column)
-                {
-                    Operator = op.Lexeme,
-                    Operand = ParseLogicalNot(),
-                    IsPostfix = false
-                };
-            }
-
-            return ParseEquality();
-        }
-
         private ExpressionNode ParseEquality()
         {
             var expr = ParseComparison();
 
+            // `Is` / `IsNot` (reference identity) share this level with `=` / `<>`, as in VB —
+            // and the precedence-climbing table (GetPrecedence) says the same (ADR-0011 D1).
+            // ⚠ `Not` stays at UNARY precedence here, so `Not x Is Nothing` parses as
+            // `(Not x) Is Nothing`; the analyzer refuses that shape and names `x IsNot Nothing`.
             while (Check(TokenType.Equal) || Check(TokenType.NotEqual) ||
                    Check(TokenType.IsEqual) || Check(TokenType.Assignment) || // Include Assignment here
-                   Check(TokenType.Is) || IsNotOperatorAhead())
+                   Check(TokenType.Is) || Check(TokenType.IsNot))
             {
-                // `a Is b` / `a IsNot b`: REFERENCE identity, VB's null test (`x Is Nothing`).
-                // Neither was an operator at all — `If x Is Nothing Then` failed with "Expected
-                // 'Then' after If condition", and as an argument with "Expected ')'". The lexer
-                // has an Is token (for `Case Is`); IsNot arrives as an identifier.
-                if (Check(TokenType.Is) || IsNotOperatorAhead())
-                {
-                    var isToken = Advance();
-                    var isRight = ParseComparison();
-                    expr = new BinaryExpressionNode(isToken.Line, isToken.Column)
-                    {
-                        Left = expr,
-                        Operator = isToken.Type == TokenType.Is ? "Is" : "IsNot",
-                        Right = isRight
-                    };
-                    continue;
-                }
-
                 var op = Advance();
                 // Normalize = to == in expression context
                 if (op.Type == TokenType.Assignment)
@@ -4383,16 +4365,13 @@ namespace BasicLang.Compiler
                 var right = ParseComparison();
                 var binary = new BinaryExpressionNode(op.Line, op.Column);
                 binary.Left = expr;
-                binary.Operator = op.Lexeme;
+                binary.Operator = BinaryOperatorSpelling(op);
                 binary.Right = right;
                 expr = binary;
             }
 
             return expr;
         }
-        private bool IsNotOperatorAhead() =>
-            Check(TokenType.Identifier) && string.Equals(Peek().Lexeme, "IsNot", StringComparison.OrdinalIgnoreCase);
-
         private ExpressionNode ParseComparison()
         {
             var expr = ParseAdditive();

@@ -613,6 +613,11 @@ namespace BasicLang.Compiler.IR.Optimization
                         Walk(compare.Left);
                         Walk(compare.Right);
                         return;
+                    // ADR-0011 D5: reference identity is pure — a read of both operands.
+                    case IRIdentityCompare identity:
+                        Walk(identity.Left);
+                        Walk(identity.Right);
+                        return;
                     case IRCast cast:
                         Walk(cast.Value);
                         return;
@@ -930,6 +935,10 @@ namespace BasicLang.Compiler.IR.Optimization
                 case IRVariable:
                 case IRBinaryOp:
                 case IRCompare:
+                // ADR-0011 D5: `Is` / `IsNot` runs no user code on any backend — every rendering
+                // is a reference compare or a null/emptiness test — so, like IRCompare, it is a
+                // definition of its own name and nothing else.
+                case IRIdentityCompare:
                 case IRCast:
                 case IRLoad:
                 case IRAlloca:
@@ -1147,6 +1156,9 @@ namespace BasicLang.Compiler.IR.Optimization
                 case IRCompare c:
                     CollectNames(c.Left, into); CollectNames(c.Right, into);
                     break;
+                case IRIdentityCompare identity:
+                    CollectNames(identity.Left, into); CollectNames(identity.Right, into);
+                    break;
                 case IRCast cast:
                     CollectNames(cast.Value, into);
                     break;
@@ -1235,6 +1247,10 @@ namespace BasicLang.Compiler.IR.Optimization
                 case IRCompare cmp:
                     cmp.Left = map(cmp.Left);
                     cmp.Right = map(cmp.Right);
+                    break;
+                case IRIdentityCompare identity:
+                    identity.Left = map(identity.Left);
+                    identity.Right = map(identity.Right);
                     break;
                 case IRLoad load:
                     load.Address = map(load.Address);
@@ -1567,7 +1583,46 @@ namespace BasicLang.Compiler.IR.Optimization
                         ReportModification();
                     }
                 }
+                else if (instruction is IRIdentityCompare identity)
+                {
+                    var folded = TryFoldIdentity(identity);
+                    if (folded != null)
+                    {
+                        ReplaceAllReferences(block, identity, folded);
+
+                        if (IsNamedVariable(identity))
+                        {
+                            var targetVar = new IRVariable(identity.Name, identity.Type);
+                            block.Instructions[i] = new IRAssignment(targetVar, folded);
+                        }
+                        else
+                        {
+                            block.Instructions[i] = folded;
+                        }
+                        ReportModification();
+                    }
+                }
             }
+        }
+
+        /// <summary>
+        /// ADR-0011 D5 (1): the ONLY identity fold — <c>Nothing Is Nothing</c> is True and
+        /// <c>Nothing IsNot Nothing</c> is False, on every backend.
+        ///
+        /// <para>⛔ Nothing wider. <c>x Is x</c> is not folded (the ruling says only
+        /// <c>Nothing</c>/<c>Nothing</c>), a non-null constant is never treated as Nothing — on C++
+        /// <c>"" Is Nothing</c> is True and on the other three it is False, so no single
+        /// compile-time answer exists for it — and the node is never rewritten to or from an
+        /// <see cref="IRCompare"/> / <c>Eq</c> / <c>Ne</c>, which a user operator could
+        /// answer.</para>
+        /// </summary>
+        private static IRConstant TryFoldIdentity(IRIdentityCompare identity)
+        {
+            if (!IRIdentityCompare.IsNothing(identity.Left) || !IRIdentityCompare.IsNothing(identity.Right))
+                return null;
+
+            return new IRConstant(!identity.Negated,
+                identity.Type ?? new TypeInfo("Boolean", TypeKind.Primitive));
         }
 
         /// <summary>
@@ -2039,6 +2094,12 @@ namespace BasicLang.Compiler.IR.Optimization
                     block.Instructions.RemoveAt(i);
                     ReportModification();
                 }
+                // Pure (ADR-0011 D5), so an unused one is dead exactly as an unused IRCompare is.
+                else if (inst is IRIdentityCompare identity && !used.Contains(identity))
+                {
+                    block.Instructions.RemoveAt(i);
+                    ReportModification();
+                }
                 else if (inst is IRLoad load && !used.Contains(load))
                 {
                     block.Instructions.RemoveAt(i);
@@ -2251,6 +2312,8 @@ namespace BasicLang.Compiler.IR.Optimization
                     return MentionsPastTheWalk(u.Operand, name);
                 case IRCompare c:
                     return MentionsPastTheWalk(c.Left, name) || MentionsPastTheWalk(c.Right, name);
+                case IRIdentityCompare identity:
+                    return MentionsPastTheWalk(identity.Left, name) || MentionsPastTheWalk(identity.Right, name);
                 case IRCast cast:
                     return MentionsPastTheWalk(cast.Value, name);
                 case IRNewObject n:
@@ -2329,7 +2392,30 @@ namespace BasicLang.Compiler.IR.Optimization
                     ReportModification();
                 }
             }
+            else if (inst is IRIdentityCompare identity)
+            {
+                // ⚠ A LAMBDA reference is never propagated into `Is`: every backend renders one as
+                // the lambda EXPRESSION itself, at its use site, and `(() => {…}) === null` /
+                // `[=]() {…} == nullptr` is not an operand either language accepts (MEASURED:
+                // `x = Sub() … : x Is Nothing` was a JavaScript SyntaxError and a clang error).
+                // The variable holding it is tested instead, which is the same answer.
+                if (identity.Left is IRVariable leftVar && copies.TryGetValue(leftVar, out var leftCopy)
+                    && !IsLambdaReferenceValue(leftCopy))
+                {
+                    identity.Left = leftCopy;
+                    ReportModification();
+                }
+                if (identity.Right is IRVariable rightVar && copies.TryGetValue(rightVar, out var rightCopy)
+                    && !IsLambdaReferenceValue(rightCopy))
+                {
+                    identity.Right = rightCopy;
+                    ReportModification();
+                }
+            }
         }
+
+        private static bool IsLambdaReferenceValue(IRValue value) =>
+            value is IRVariable { Name: { } name } && name.StartsWith("__lambda_", StringComparison.Ordinal);
     }
     
     /// <summary>
@@ -2827,6 +2913,11 @@ namespace BasicLang.Compiler.IR.Optimization
                 case IRCompare compare:
                     return IsValueInvariant(compare.Left, loop, knownInvariants, written) &&
                            IsValueInvariant(compare.Right, loop, knownInvariants, written);
+                // Pure and non-trapping on every backend (a reference compare or a null/emptiness
+                // test), so it moves exactly when its operands are invariant.
+                case IRIdentityCompare identity:
+                    return IsValueInvariant(identity.Left, loop, knownInvariants, written) &&
+                           IsValueInvariant(identity.Right, loop, knownInvariants, written);
                 default:
                     return false;
             }
@@ -4852,6 +4943,10 @@ namespace BasicLang.Compiler.IR.Optimization
                 case IRCompare compare:
                     if (compare.Left is IRVariable cmpLeft) used.Add(cmpLeft.Name);
                     if (compare.Right is IRVariable cmpRight) used.Add(cmpRight.Name);
+                    break;
+                case IRIdentityCompare identity:
+                    if (identity.Left is IRVariable idLeft) used.Add(idLeft.Name);
+                    if (identity.Right is IRVariable idRight) used.Add(idRight.Name);
                     break;
                 case IRGetElementPtr gep:
                     if (gep.BasePointer is IRVariable gepVar) used.Add(gepVar.Name);
