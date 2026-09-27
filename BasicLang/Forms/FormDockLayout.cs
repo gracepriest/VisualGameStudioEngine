@@ -1,6 +1,11 @@
 namespace BasicLang.Forms;
 
-/// <summary>A rectangle in form pixels, relative to its container's client origin.</summary>
+/// <summary>
+/// A rectangle in form pixels, relative to its container's client origin. Width and Height are never negative.
+/// ⚠ X and Y CAN be negative, or lie past the container's far edge, after an overflow (a far-edge dock after an
+/// overflowing one measures from the unclamped remainder, scope call S9) — hit-testing and clipping must not
+/// assume the rectangle lies inside its container.
+/// </summary>
 public readonly record struct FormRect(int X, int Y, int Width, int Height)
 {
     public int Right => X + Width;
@@ -18,7 +23,8 @@ public enum FormDockEdge
 }
 
 /// <summary>One docked thing, resolved.</summary>
-/// <param name="Bounds">Where it sits, relative to its container's client origin.</param>
+/// <param name="Bounds">Where it sits, relative to its container's client origin. ⚠ After an overflow its X/Y may
+/// be negative or past the container's far edge (see <see cref="FormRect"/>); its size never is.</param>
 /// <param name="ContainerWidth">The client width it was docked within — the reference for its CSS insets.</param>
 /// <param name="ContainerHeight">The client height it was docked within.</param>
 public readonly record struct FormDockedBounds(
@@ -112,6 +118,11 @@ public sealed class FormDockLayoutResult
 /// overflow is 0-sized, never negative). ⚠ A container's client area is taken to be its bounds — a GroupBox's
 /// caption inset and a bordered Panel's 1–2px are recorded gaps (plan spec-claims #11, Task 12 risks). The
 /// WinForms reference harness is the arbiter of all of these (scope call S9: as read, not yet run).</para>
+///
+/// <para>⚠ Only a POSITIONED control with <see cref="PixelGeometry"/> has a client area, so only such a container's
+/// children are resolved. A container with no pixel geometry (a Grid/Flow page's cell-placed Panel) does NOT have
+/// its children resolved and has no <c>ClientSizeOf</c>. That is deliberate (changed on Task 6 review): its size
+/// is not a number of pixels, and resolving its docked children against 0×0 gave meaningless bounds.</para>
 /// </summary>
 public static class FormDockLayout
 {

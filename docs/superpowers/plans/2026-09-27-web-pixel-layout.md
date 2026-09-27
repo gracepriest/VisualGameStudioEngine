@@ -3222,6 +3222,10 @@ Spec §3, §4, §5. Scope call S12.
 - `100vh` inside the Edge iframe is the iframe's height (intended).
 - S12: overlap drawn differently on the canvas and the page (recorded).
 - Every number goes through invariant formatting.
+- ⛔ **Toggling `Visible` at run time (decision DEFERRED to this task's pre-flight, to be put to the owner).** WinForms re-lays out docked controls whenever user code toggles `Visible`: the next docked control closes the gap, and reopens it when the control is shown again. The static page's fixed insets cannot do that. `FormDockMode.Runtime` gives a hidden docked control, and every child of a hidden container, NO bounds. So this task must STATE the rule for their CSS, knowing that one state is wrong either way:
+  - **Designer-mode insets** for everything: correct once shown, but a gap while hidden;
+  - **Runtime-mode insets**: correct while hidden, but overlap and stale stored X/Y once shown.
+  Choose the rule, write it in the emitter's comment and the commit, and test the chosen state.
 
 **Gate:** fast subset; `FormAssetEmitterTests`, `FormCssTests`, `FormBuildEmissionTests` (Integration), `FormDesignerAcceptanceTests`/`FormMenuAcceptanceTests`/`FormComponentAcceptanceTests` (Integration, Grid-pinned; must be unchanged by name).
 

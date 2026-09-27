@@ -373,6 +373,25 @@ public class FormDockLayoutTests
     }
 
     [Test]
+    public void InRuntimeMode_AHiddenTop_InsideAVisiblePanel_IsSkipped_AndTheNextTopTakesItsPlace()
+    {
+        // The mode reaches every depth, not only the root's sibling list.
+        var panel = Box("pnl", 200, 100, null, x: 10, y: 10);
+        var ghost = Hidden(Box("ghost", 10, 40, "Top"));
+        var top = Box("top", 10, 30, "Top");
+        panel.Children.Add(ghost);
+        panel.Children.Add(top);
+        var layout = FormDockLayout.Resolve(Window(panel), FormDockMode.Runtime);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(layout.TryGet(ghost, out _), Is.False);
+            Assert.That(layout.TryGet(top, out var resolved), Is.True);
+            Assert.That(resolved.Bounds, Is.EqualTo(new FormRect(0, 0, 200, 30)));
+        });
+    }
+
+    [Test]
     public void AVisibleTrue_OrAnUnparseableVisible_IsNotHidden_InRuntimeMode()
     {
         var shown = Box("shown", 10, 10, "Top");
