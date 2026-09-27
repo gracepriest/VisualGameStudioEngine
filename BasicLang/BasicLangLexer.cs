@@ -67,6 +67,9 @@ namespace BasicLang.Compiler
         Select,
         Case,
         Is,
+        // ⚠ Reference NON-identity (`x IsNot Nothing`, task #185 / ADR-0011 D1). A keyword, not an
+        // identifier: no .bas in the repo used it as a name, so claiming it was free.
+        IsNot,
         TypeOf,
         EndSelect,
         For,
@@ -420,6 +423,7 @@ namespace BasicLang.Compiler
             { "Select", TokenType.Select },
             { "Case", TokenType.Case },
             { "Is", TokenType.Is },
+            { "IsNot", TokenType.IsNot },
             { "TypeOf", TokenType.TypeOf },
             { "End Select", TokenType.EndSelect },
             { "For", TokenType.For },

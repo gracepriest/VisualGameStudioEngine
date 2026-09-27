@@ -141,6 +141,11 @@ namespace BasicLang.Compiler.IR
         {
             WriteLine(compare.ToString());
         }
+
+        public void Visit(IRIdentityCompare identityCompare)
+        {
+            WriteLine(identityCompare.ToString());
+        }
         
         public void Visit(IRAssignment assignment)
         {

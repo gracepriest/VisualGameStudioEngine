@@ -608,6 +608,7 @@ namespace BasicLang.Compiler.IR
                         case IRBinaryOp:
                         case IRUnaryOp:
                         case IRCompare:
+                        case IRIdentityCompare: // two operand slots, rewritten by MapOperands below
                         case IRLoad:
                         case IRStore:
                         case IRAlloca:

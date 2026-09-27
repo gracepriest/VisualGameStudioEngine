@@ -8296,6 +8296,11 @@ namespace BasicLang.Compiler.SemanticAnalysis
             {
                 caseClause.Accept(this);
 
+                // ADR-0011 D2 (2): `Case Is Nothing` obeys `x Is Nothing`'s operand rule.
+                if (exprType != null && caseClause.Patterns != null)
+                    foreach (var pattern in caseClause.Patterns)
+                        CheckCaseIsNothingOperand(pattern, exprType);
+
                 // Check case values are compatible with expression
                 foreach (var value in caseClause.Values)
                 {
@@ -9088,12 +9093,23 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 "isequal" => "IsEqual",
                 "notequal" => "NotEqual",
                 "addressof" => "AddressOf",
+                "is" => "Is",
+                "isnot" => "IsNot",
                 _ => op
             };
         }
 
         public void Visit(BinaryExpressionNode node)
         {
+            // `Is` / `IsNot` are typed by their own rule (ADR-0011), before either operand is
+            // visited: a `Not`-shaped left operand must be judged as a whole, not first reported
+            // as "Logical NOT requires Boolean operand" (D1 (3)).
+            if (NormalizeOperator(node.Operator) is "Is" or "IsNot")
+            {
+                VisitIdentityComparison(node);
+                return;
+            }
+
             node.Left.Accept(this);
             node.Right.Accept(this);
 
@@ -9350,6 +9366,257 @@ namespace BasicLang.Compiler.SemanticAnalysis
             }
 
             SetNodeType(node, resultType);
+        }
+
+        /// <summary>
+        /// <c>a Is b</c> / <c>a IsNot b</c> — REFERENCE IDENTITY (task #185, ADR-0011). Always
+        /// typed Boolean, refused or not, so a refusal never cascades into a second error.
+        ///
+        /// <para>The operand rule (D2, D4), in order — each refusal names its fix:</para>
+        /// <list type="number">
+        /// <item>a <c>Not</c>-shaped LEFT operand: BasicLang parses <c>Not</c> at unary precedence,
+        /// so <c>Not x Is Nothing</c> is <c>(Not x) Is Nothing</c>, never VB's
+        /// <c>Not (x Is Nothing)</c>. Refused as a whole, naming <c>x IsNot Nothing</c> (D1 (3)) —
+        /// it can never be right: <c>Not</c> yields a Boolean, a value type;</item>
+        /// <item>each operand is the <c>Nothing</c> literal or a type <c>Nothing</c> converts to.
+        /// ⛔ The predicate IS <see cref="NothingAdviceFor"/> — #173's ONE answer, never a second
+        /// list (D2 (1)). A value type is refused BC30020-style;</item>
+        /// <item>against the <c>Nothing</c> literal, every admitted type is legal — a String, a
+        /// delegate, a nullable included (D4 (2));</item>
+        /// <item>two non-<c>Nothing</c> operands: a nullable is admitted only against
+        /// <c>Nothing</c> (VB BC32127); a String or a delegate is refused on EVERY backend — String
+        /// identity depends on interning on .NET and is a value comparison on JavaScript and C++,
+        /// and a C++ <c>std::function</c> has no identity at all (D4); and the two types must be
+        /// RELATED — one converts to the other, or one is <c>Object</c> — or the result would
+        /// always be False (and unrelated <c>shared_ptr</c>s do not compile on C++).</item>
+        /// </list>
+        /// </summary>
+        private void VisitIdentityComparison(BinaryExpressionNode node)
+        {
+            var op = NormalizeOperator(node.Operator);
+
+            if (node.Left is UnaryExpressionNode unary && !unary.IsPostfix
+                && NormalizeOperator(unary.Operator) is "Not" or "!")
+            {
+                unary.Operand.Accept(this);
+                node.Right.Accept(this);
+                SetNodeType(unary, _typeManager.BooleanType);
+                SetNodeType(node, _typeManager.BooleanType);
+
+                var subject = DescribeIdentityOperand(unary.Operand);
+                var other = DescribeIdentityOperand(node.Right);
+                var negation = op == "Is" ? "IsNot" : "Is";
+                Error($"'Not {subject} {op} {other}' parses as '(Not {subject}) {op} {other}': 'Not' binds " +
+                      $"tighter than '{op}' in BasicLang. Write '{subject} {negation} {other}' " +
+                      $"(or 'Not ({subject} {op} {other})')", node.Line, node.Column);
+                return;
+            }
+
+            node.Left.Accept(this);
+            node.Right.Accept(this);
+            SetNodeType(node, _typeManager.BooleanType);
+
+            var leftType = GetNodeType(node.Left);
+            var rightType = GetNodeType(node.Right);
+            if (leftType == null || rightType == null)
+            {
+                return;   // an unresolved operand has already reported itself
+            }
+
+            var leftIsNothing = IsNothingLiteral(node.Left);
+            var rightIsNothing = IsNothingLiteral(node.Right);
+
+            // `Nothing Is Nothing` is legal; the optimizer folds it (D5).
+            if (leftIsNothing && rightIsNothing)
+            {
+                return;
+            }
+
+            if ((!leftIsNothing && !CheckIdentityOperand(op, node.Left, leftType, node))
+                || (!rightIsNothing && !CheckIdentityOperand(op, node.Right, rightType, node)))
+            {
+                return;
+            }
+
+            // A Nothing test: every type the operand check admitted is legal here.
+            if (leftIsNothing || rightIsNothing)
+            {
+                return;
+            }
+
+            if (leftType.Kind == TypeKind.Nullable || rightType.Kind == TypeKind.Nullable)
+            {
+                var nullable = leftType.Kind == TypeKind.Nullable ? leftType : rightType;
+                Error($"'{op}' compares a nullable ('{nullable.Name}') only with Nothing. " +
+                      "Test '.HasValue' to ask whether it holds a value, or compare values with '='",
+                      node.Line, node.Column);
+                return;
+            }
+
+            if (IsStringForIdentity(leftType) || IsStringForIdentity(rightType))
+            {
+                Error($"'{op}' between String operands is refused: String identity is not portable " +
+                      "(it depends on interning on .NET, and is a value comparison on JavaScript and " +
+                      "C++). Compare values with '=', or test a String against Nothing " +
+                      $"('s {op} Nothing')", node.Line, node.Column);
+                return;
+            }
+
+            if (IsDelegateForIdentity(leftType) || IsDelegateForIdentity(rightType))
+            {
+                var delegateType = IsDelegateForIdentity(leftType) ? leftType : rightType;
+                Error($"'{op}' between delegate operands ('{delegateType.Name}') is refused: delegate " +
+                      "identity is not portable (a C++ delegate has none). Test a delegate against " +
+                      $"Nothing instead ('f {op} Nothing')", node.Line, node.Column);
+                return;
+            }
+
+            if (!AreRelatedForIdentity(leftType, rightType))
+            {
+                Error($"'{op}' compares '{leftType.Name}' and '{rightType.Name}', unrelated types: neither " +
+                      $"converts to the other, so '{op}' could never be {(op == "Is" ? "True" : "False")}. " +
+                      "Compare values with '=' if that is what you meant", node.Line, node.Column);
+            }
+        }
+
+        /// <summary>
+        /// One non-<c>Nothing</c> operand of <c>Is</c> / <c>IsNot</c>: legal exactly when
+        /// <c>Nothing</c> converts to its type — <see cref="NothingAdviceFor"/>, the one answer
+        /// (ADR-0011 D2 (1)). Refused BC30020-style otherwise, naming <c>=</c> (D2 (3)).
+        /// </summary>
+        private bool CheckIdentityOperand(string op, ExpressionNode operand, TypeInfo type, ExpressionNode node)
+        {
+            if (NothingAdviceFor(type) == null)
+            {
+                return true;
+            }
+
+            var what = type.Kind == TypeKind.TypeParameter
+                ? $"'{type.Name}', a type parameter that may be a value type"
+                : $"'{type.Name}', a value type";
+            Error($"'{op}' requires operands of a reference or nullable type, but " +
+                  $"'{DescribeIdentityOperand(operand)}' is {what}. Compare values with '=' instead",
+                  node.Line, node.Column);
+            return false;
+        }
+
+        /// <summary>A scalar String — the type whose identity D4 refuses as not portable.</summary>
+        private static bool IsStringForIdentity(TypeInfo type) =>
+            type.Kind != TypeKind.Array && type.ArrayRank == 0
+            && (string.Equals(type.Name, "String", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(type.Name, "System.String", StringComparison.OrdinalIgnoreCase));
+
+        /// <summary>
+        /// A delegate type (ADR-0011 D4):
+        /// <list type="bullet">
+        /// <item>a user <c>Delegate</c> or a typed <c>Action(Of …)</c> / <c>Func(Of …)</c>
+        /// (<see cref="TypeKind.Delegate"/>);</item>
+        /// <item>a bare <c>Action</c>, which the type table resolves as a CLASS named Action
+        /// (<see cref="IsDelegateTypeName"/>);</item>
+        /// <item>a .NET delegate — <c>EventHandler</c>, <c>Predicate(Of T)</c>, … — which the type
+        /// table ALSO types as a class. It is asked of its CLR type through the analyzer's own .NET
+        /// resolver (<see cref="IsNetDelegateType"/>), never a list of names.</item>
+        /// </list>
+        /// </summary>
+        private bool IsDelegateForIdentity(TypeInfo type) =>
+            type.Kind == TypeKind.Delegate
+            || (type.Kind != TypeKind.Array && IsDelegateTypeName(type.Name))
+            || IsNetDelegateType(type);
+
+        /// <summary>
+        /// Whether <paramref name="type"/> names a .NET type whose CLR type is a delegate — one that
+        /// derives from <c>System.MulticastDelegate</c> (Roslyn's <c>TypeKind.Delegate</c>, carried as
+        /// <see cref="NetTypeCategory.Delegate"/>), or is one of the two delegate roots
+        /// <c>System.Delegate</c> / <c>System.MulticastDelegate</c> themselves.
+        ///
+        /// <para>Resolved exactly as every other .NET name in this analyzer is
+        /// (<see cref="ResolveNetType"/>: the unit's <c>Using</c>s, the ambient namespaces, generic
+        /// arity). ⚠ When there is no resolver — a WinForms/WPF project, the LSP, an analyzer
+        /// constructed without <c>ConfigureNetResolution</c> — or the name does not resolve, the
+        /// answer is FALSE: the type is admitted and the target compiler decides, the same
+        /// admit-and-defer rule <see cref="AreRelatedForIdentity"/> applies to an unresolvable .NET
+        /// type. A user type shadowing a .NET name is never asked.</para>
+        /// </summary>
+        private bool IsNetDelegateType(TypeInfo type)
+        {
+            if (type == null || type.Kind != TypeKind.Class || string.IsNullOrEmpty(type.Name)
+                || IsUserDefinedTypeName(type.Name))
+            {
+                return false;
+            }
+
+            if (ResolveNetType(type.Name, type.GenericArguments?.Count ?? 0, out var fullName)
+                    != NetTypeLookupOutcome.Resolved)
+            {
+                return false;
+            }
+
+            if (string.Equals(fullName, "System.Delegate", StringComparison.Ordinal)
+                || string.Equals(fullName, "System.MulticastDelegate", StringComparison.Ordinal))
+            {
+                return true;
+            }
+
+            return NetResolver()?.ResolveType(fullName)?.Kind == NetTypeCategory.Delegate;
+        }
+
+        /// <summary>
+        /// Whether two non-<c>Nothing</c> identity operands can denote the same object: one converts
+        /// to the other (<see cref="TypeInfo.IsAssignableFrom"/>, the rule <c>Dim</c> and assignment
+        /// use), or one is <c>Object</c>. An opaque <c>::</c> C++ type or an unresolvable .NET type
+        /// is admitted: the target compiler decides, as it does for every other use of one.
+        /// </summary>
+        private bool AreRelatedForIdentity(TypeInfo left, TypeInfo right)
+        {
+            if (IsScalarObject(left) || IsScalarObject(right)) return true;
+            if (left.Kind == TypeKind.Foreign || right.Kind == TypeKind.Foreign) return true;
+            if (IsUnresolvableNetType(left) || IsUnresolvableNetType(right)) return true;
+            return left.IsAssignableFrom(right) || right.IsAssignableFrom(left);
+        }
+
+        private static bool IsScalarObject(TypeInfo type) =>
+            type.Kind != TypeKind.Array && type.ArrayRank == 0
+            && string.Equals(type.Name, "Object", StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>A short source-like rendering of an identity operand, for diagnostics.</summary>
+        private static string DescribeIdentityOperand(ExpressionNode operand) => operand switch
+        {
+            IdentifierExpressionNode identifier => identifier.Name,
+            LiteralExpressionNode literal when literal.LiteralType == TokenType.Nothing => "Nothing",
+            MemberAccessExpressionNode member when member.Object is IdentifierExpressionNode owner
+                => $"{owner.Name}.{member.MemberName}",
+            _ => "x"
+        };
+
+        /// <summary>
+        /// ADR-0011 D2 (2): <c>Case Is Nothing</c> is an identity test, held to the SAME operand
+        /// rule as <c>x Is Nothing</c> — the Select Case value must be a type <c>Nothing</c>
+        /// converts to (<see cref="NothingAdviceFor"/>). On a value type it compiled to four
+        /// different things (CS0037 on C#, a clang error on C++, never-matches on JavaScript,
+        /// matches-zero on MSIL). <c>Case Nothing</c> (no <c>Is</c>) is VB's VALUE comparison with
+        /// the type's default and is not judged here.
+        /// </summary>
+        private void CheckCaseIsNothingOperand(PatternNode pattern, TypeInfo selectType)
+        {
+            switch (pattern)
+            {
+                case NothingPatternNode { WrittenWithIs: true } nothing:
+                    var advice = NothingAdviceFor(selectType);
+                    if (advice != null)
+                    {
+                        var what = selectType.Kind == TypeKind.TypeParameter
+                            ? $"'{selectType.Name}', a type parameter that may be a value type"
+                            : $"'{selectType.Name}', a value type";
+                        Error($"'Case Is Nothing' requires a Select Case value of a reference or nullable " +
+                              $"type, but it is {what}. Compare values instead ('Case …' / 'Case Is = …')",
+                              nothing.Line, nothing.Column);
+                    }
+                    break;
+                case OrPatternNode or:
+                    foreach (var alternative in or.Alternatives)
+                        CheckCaseIsNothingOperand(alternative, selectType);
+                    break;
+            }
         }
 
         /// <summary>

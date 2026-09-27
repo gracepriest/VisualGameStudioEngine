@@ -4377,6 +4377,38 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             }
         }
 
+        public override void Visit(IRIdentityCompare identity)
+        {
+            EmitIdentityCompare(identity, EmitLoadValue);
+
+            if (!string.IsNullOrEmpty(identity.Name) && _declaredIdentifiers.Contains(identity.Name))
+            {
+                EmitStoreLocal(identity.Name);
+            }
+            else
+            {
+                var tempIdx = GetTempIndex(identity);
+                EmitStloc(tempIdx);
+            }
+        }
+
+        /// <summary>
+        /// <c>Is</c> / <c>IsNot</c> (ADR-0011): both operands loaded as they are — object
+        /// references, <c>ldnull</c> for Nothing — and compared with <c>ceq</c>, IL's REFERENCE
+        /// comparison on two O values. No <c>op_Equality</c> is ever called, so neither a user
+        /// <c>Operator =</c> nor <c>Delegate.op_Equality</c> nor String value equality can answer
+        /// (D4 (1)). <c>IsNot</c> negates with <c>ldc.i4.0; ceq</c>, as <c>&lt;&gt;</c> does.
+        /// Leaves one int32 (0/1) on the stack. <paramref name="load"/> is the ordinary loader
+        /// for a statement and the in-place rebuilder for a <c>When</c> guard.
+        /// </summary>
+        private void EmitIdentityCompare(IRIdentityCompare identity, Action<IRValue> load)
+        {
+            load(identity.Left);
+            load(identity.Right);
+            EmitCompareOpcodes(identity.Negated ? CompareKind.Ne : CompareKind.Eq);
+            _currentStack--; // two in, one out
+        }
+
         public override void Visit(IRAssignment assignment)
         {
             EmitLoadValue(assignment.Value);
@@ -6268,6 +6300,10 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                     _currentStack--;
                     return;
                 }
+
+                case IRIdentityCompare identity:
+                    EmitIdentityCompare(identity, EmitInlineValue);
+                    return;
 
                 case IRUnaryOp unaryOp:
                     EmitInlineValue(unaryOp.Operand);
