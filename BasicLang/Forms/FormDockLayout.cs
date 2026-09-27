@@ -80,7 +80,7 @@ public sealed class FormDockLayoutResult
     /// <summary>
     /// ⛔ THE one answer to "how big is the area this container lays its children out in": its resolved bounds
     /// when it docks, else its stored size. The resolver docks children in it, and the page emitter anchors
-    /// children against it (Task 10) — one source, filled while resolving. False for a control that is not a
+    /// children against it (<c>FormAssetEmitter.CanvasPlacement</c>) — one source, filled while resolving. False for a control that is not a
     /// pixel-positioned control of this document, or that Runtime mode skipped as hidden.
     /// </summary>
     public bool TryGetClientSize(FormControl container, out (int Width, int Height) size) =>

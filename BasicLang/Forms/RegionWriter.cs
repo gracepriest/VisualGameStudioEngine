@@ -160,11 +160,15 @@ public static class RegionWriter
     /// <para>⛔ An UNKNOWN edge name is still refused. Summing it as zero would silently anchor the
     /// control to nothing — the designer/runtime divergence D9 exists to prevent — and the whole
     /// reason this check survives rather than being deleted.</para>
+    ///
+    /// <para>Asked of every PIXEL document (FormVocabulary.IsPixel): a .blform and a Canvas page.</para>
     /// </summary>
     private static void CheckAnchors(
         string filePath, FormDocument form, List<DesignDiagnostic> diagnostics)
     {
-        if (form.Target != FormTarget.WinForms)
+        // ⛔ By VOCABULARY (spec 2026-09-27 §4): a Canvas page reads Anchor too (FormAnchorCss), and would otherwise
+        // anchor an unknown edge to less than written — a misspelt "Rigth" alone CENTRES the control on the page.
+        if (!FormVocabulary.IsPixel(form))
         {
             return;
         }

@@ -991,4 +991,42 @@ public class FormRegionWriterTests
 
         Assert.That(result.Text, Does.Contain("Me.Text = \"New Customer\""));
     }
+
+    // ==================================================================
+    // Task 10 (spec 2026-09-27 §4) — a Canvas page reads Anchor too, so an unknown edge is refused there as well
+    // ==================================================================
+
+    private static FormDocument CanvasLoginFormAnchored(string anchor)
+    {
+        var form = WebLoginForm();
+        form.Layout = new FormLayout { Kind = FormLayoutKind.Canvas, MobileBreakpoint = "600" };
+        form.Width = 640;
+        form.Height = 480;
+        form.Controls[0].Geometry = new PixelGeometry { X = 10, Y = 10, Width = 75, Height = 23, Anchor = anchor };
+        return form;
+    }
+
+    [Test]
+    public void ACanvasPagesUnknownAnchorEdge_IsRefused()
+    {
+        // ⛔ Before Task 10, CheckAnchors returned early off WinForms, and FormAnchorCss silently dropped the unknown
+        // edge: "Left,Rigth" anchored the control Left only, and "Rigth" alone CENTRED it — from a green build.
+        var result = WriteWeb(CanvasLoginFormAnchored("Left,Rigth"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Refused, Is.True);
+            Assert.That(result.Changed, Is.False, "a refused write leaves the user's file alone");
+            Assert.That(result.Diagnostics.Select(d => d.Code), Does.Contain(DesignCodes.AnchorNotExpressible));
+            Assert.That(string.Join("\n", result.Diagnostics.Select(d => d.Message)), Does.Contain("Rigth"));
+        });
+    }
+
+    [Test]
+    public void ACanvasPagesMultiEdgeAnchor_IsWritten()
+    {
+        var result = WriteWeb(CanvasLoginFormAnchored("Top,Right"));
+
+        Assert.That(result.Refused, Is.False, string.Join("; ", result.Diagnostics.Select(d => d.Format())));
+    }
 }

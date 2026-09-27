@@ -105,8 +105,9 @@ public sealed class FormControl
 
     /// <summary>
     /// ⛔⛔ <b>THE one answer to "which edge is this strip docked to".</b> Every consumer asks it
-    /// here — the web emitter (<c>FormAssetEmitter.Html</c>, which puts a Bottom strip's
-    /// <c>&lt;footer&gt;</c> after the form div) and the designer canvas
+    /// here — the web emitter on a Grid/Flow page (<c>FormAssetEmitter.Html</c>, which puts a Bottom
+    /// strip's <c>&lt;footer&gt;</c> after the form div; a Canvas page places strips through
+    /// <c>FormDockLayout</c>, which calls this) and the designer canvas
     /// (<c>FormCanvasTransform.Bands</c>, which draws its band at the bottom of the surface).
     ///
     /// <para>⛔ Those two were written as a MIRRORED PAIR and consolidated here the moment the

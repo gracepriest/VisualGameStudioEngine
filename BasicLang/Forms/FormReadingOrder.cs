@@ -36,8 +36,9 @@ namespace BasicLang.Forms;
 /// block; the caller orders its children with this same function, in the container's coordinates.</para>
 ///
 /// <para>⚠ The caller chooses WHAT is ordered and by WHICH rectangle: this function never looks at Dock, strips or
-/// visibility. Top strips first / bottom strips last, and a docked control's resolved rect (spec §7a), are the
-/// emitter's to apply before and around this call (Task 10).</para>
+/// visibility. Top strips first / bottom strips last, and a docked control's resolved rect (spec §7a), are applied
+/// around this call by the emitter (<c>FormAssetEmitter.AppendStacked</c>), which orders by the DESIGNER picture so
+/// the order does not depend on what user code has hidden.</para>
 /// </summary>
 public static class FormReadingOrder
 {
