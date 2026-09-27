@@ -246,6 +246,44 @@ public class FormReadingOrderTests
             Is.EqualTo(new[] { "logo", "a", "b", "c", "list" }));
     }
 
+    /// <summary>
+    /// Re-review probe (1): a STAGGERED two-column form. Left column L1..L3 at X=10, Y=10/40/70, 100×20; right
+    /// column R1..R3 at X=200, Y=25/55/85, 100×20 — each right control overlaps two left ones, so all six chain
+    /// into ONE row. R2 is a 1px-taller ComboBox (100×21), so it is removed first and the rest splits; but its span
+    /// [55,76) wholly contains neither remaining row ([10,60) and [70,105)), so it is NOT spanning and the row is
+    /// plain X order. Without that guard: L1, L2, L3, R2, R1, R3.
+    /// </summary>
+    [Test]
+    public void AStaggeredTwoColumnForm_WithAOnePixelTallerControl_IsColumnOrder()
+    {
+        Assert.That(Order(
+                new Box("L1", 10, 10, 100, 20),
+                new Box("L2", 10, 40, 100, 20),
+                new Box("L3", 10, 70, 100, 20),
+                new Box("R1", 200, 25, 100, 20),
+                new Box("R2", 200, 55, 100, 21),
+                new Box("R3", 200, 85, 100, 20)),
+            Is.EqualTo(new[] { "L1", "L2", "L3", "R1", "R2", "R3" }));
+    }
+
+    /// <summary>
+    /// Re-review probe (2): the same staggered form (L1..L3 at X=10, Y=10/40/70; R1..R3 at X=200, Y=25/55/85; all
+    /// 100×20) with L2 written FIRST, so equal heights remove L2 first and the rest splits; its span [40,60) wholly
+    /// contains no remaining row, so it is not spanning. Without the guard: L2, L1, R1, L3, R2, R3.
+    /// </summary>
+    [Test]
+    public void AStaggeredTwoColumnForm_WrittenOutOfOrder_IsColumnOrder()
+    {
+        Assert.That(Order(
+                new Box("L2", 10, 40, 100, 20),
+                new Box("L1", 10, 10, 100, 20),
+                new Box("L3", 10, 70, 100, 20),
+                new Box("R1", 200, 25, 100, 20),
+                new Box("R2", 200, 55, 100, 20),
+                new Box("R3", 200, 85, 100, 20)),
+            Is.EqualTo(new[] { "L1", "L2", "L3", "R1", "R2", "R3" }));
+    }
+
     [Test]
     public void NegativeTops_OrderAboveZero() =>
         Assert.That(Order(new Box("below", 10, 0, 50, 20), new Box("above", 10, -20, 50, 20)),

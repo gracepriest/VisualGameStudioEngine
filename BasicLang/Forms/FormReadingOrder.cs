@@ -14,8 +14,11 @@ namespace BasicLang.Forms;
 /// new one.</item>
 /// <item><b>Spanning members (greedy).</b> Within a row, remove members one at a time, TALLEST first (equal
 /// heights: document order, earliest first), until the members left fall into two or more rows under rule 1.
-/// The removed members are the row's SPANNING members — a tall logo or list that was holding the controls beside
-/// it together as one row. If the members left never split (down to one), the row has NO spanning member.</item>
+/// The removed members are CANDIDATES, and a candidate is a SPANNING member only if its span wholly contains at
+/// least one row of the members left (that row's lowest top ≥ its top and highest bottom ≤ its bottom) — a tall
+/// logo or list that was holding the controls beside it together as one row, not one link in a staggered
+/// two-column chain. A candidate that does not qualify goes back among the others. If the members left never split
+/// (down to one), or no candidate qualifies, the row has NO spanning member.</item>
 /// <item><b>A row with no spanning member</b> is ordered left to right, then top, then document order.</item>
 /// <item><b>A row with spanning members:</b> the spanning members are sorted by X, then top, then document order.
 /// Every OTHER member is put in the gap its X falls in — before the first spanning member whose X is greater
@@ -24,9 +27,10 @@ namespace BasicLang.Forms;
 /// spanning 1, gap 1, spanning 2, … . So a tall control on the LEFT comes before the fields beside it, one on
 /// the RIGHT after them, and two side by side are both placed by X.</item>
 /// </list>
-/// <para>This terminates: spanning members exist only when the members left split into two or more rows, so at
-/// least one member was removed and each gap holds strictly fewer members than the row it came from (and a row
-/// never holds more than the list being ordered). Every recursion orders strictly fewer controls.</para>
+/// <para>This terminates: rule 4 recurses only when at least one member is KEPT as spanning, and the gaps hold the
+/// row minus the kept members, so each gap holds strictly fewer members than the row it came from (and a row never
+/// holds more than the list being ordered). With none kept, rule 3 applies and nothing recurses. Every recursion
+/// orders strictly fewer controls.</para>
 ///
 /// <para>⚠ Per sibling list. A container is ordered among its siblings by its own rectangle and stacks as one
 /// block; the caller orders its children with this same function, in the container's coordinates.</para>
@@ -119,27 +123,35 @@ public static class FormReadingOrder
         return ordered;
     }
 
-    /// <summary>Rule 2: remove tallest-first (document order on ties) until the rest splits into 2+ rows.</summary>
+    /// <summary>Rule 2: remove tallest-first (document order on ties) until the rest splits into 2+ rows, then keep
+    /// only the removed members whose span wholly contains at least one of the remaining rows.</summary>
     private static HashSet<int> SpanningIndices<T>(List<Entry<T>> row)
     {
         var removalOrder = row.OrderByDescending(e => HeightOf(e.Bounds)).ThenBy(e => e.Index).ToList();
-        var removed = new HashSet<int>();
+        var removed = new List<Entry<T>>();
 
         foreach (var candidate in removalOrder)
         {
-            removed.Add(candidate.Index);
-            var left = row.Where(e => !removed.Contains(e.Index)).ToList();
+            removed.Add(candidate);
+            var left = row.Where(e => !removed.Any(r => r.Index == e.Index)).ToList();
             if (left.Count < 2)
             {
                 break;
             }
 
-            if (Rows(left).Count >= 2)
+            var rows = Rows(left);
+            if (rows.Count >= 2)
             {
-                return removed;
+                return removed
+                    .Where(r => rows.Any(leftRow => ContainsRow(r.Bounds, leftRow)))
+                    .Select(r => r.Index)
+                    .ToHashSet();
             }
         }
 
         return new HashSet<int>();
     }
+
+    private static bool ContainsRow<T>(FormRect span, List<Entry<T>> leftRow) =>
+        leftRow.Min(e => e.Bounds.Y) >= span.Y && leftRow.Max(e => Extent(e.Bounds)) <= Extent(span);
 }

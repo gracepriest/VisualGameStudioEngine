@@ -177,8 +177,9 @@ Below `MobileBreakpoint` (default 600px; 0 disables), one media query switches t
   bottom; left to right within a row; a container stacks as one block with its children stacked inside it the same way.
   Applied with CSS `order` inside the media query; HTML order unchanged.
   **Owner decision 2026-09-27: a tall sibling must not turn the controls beside it into columns.** Within a row, members
-  are removed tallest first (equal heights in document order) until the rest falls into two or more rows; the removed
-  members (a logo or list beside a column of fields) are SPANNING. Spanning members are placed by X, and the other
+  are removed tallest first (equal heights in document order) until the rest falls into two or more rows; a removed
+  member whose span wholly contains at least one of those rows (a logo or list beside a column of fields) is SPANNING,
+  and one that does not (a link in a staggered two-column chain) is not. Spanning members are placed by X, and the other
   members of that row are ordered by the same rule again, in the gaps between them by X, so they form their own rows
   (label/box pairs stay together; a tall control on the right comes after them). Exact rule: plan scope call S8 and
   `FormReadingOrder`'s summary.
