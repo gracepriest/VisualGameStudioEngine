@@ -2885,10 +2885,30 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             return false;
         }
 
+        /// <summary>A callee that needs no parentheses in front of an argument list: a name, or a
+        /// dotted chain of names (<c>t2</c>, <c>this.Callback</c>, <c>Registry.Hook</c>).</summary>
+        private static readonly System.Text.RegularExpressions.Regex SimpleCalleeText =
+            new(@"^[A-Za-z_$][A-Za-z0-9_$]*(\.[A-Za-z_$][A-Za-z0-9_$]*)*$",
+                System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
         /// <summary>Renders a call WITHOUT emitting it, for inline use.</summary>
         private string CallExpr(IRCall call)
         {
             var rendered = call.Arguments.ConvertAll(Expr);
+
+            // ADR-0010 D8: a call through a delegate VALUE invokes that value, rendered like any
+            // other operand — as IRCall.CalleeValue documents — and never its FunctionName, which
+            // is only the value's IR name. ⛔ A delegate-typed field read bare (#188) is named
+            // after the FIELD, and CallTarget spells a bare name unqualified: `Callback()`,
+            // "Callback is not defined", where the value is `this.Callback`. Anything that is not
+            // a plain name or member chain (an inline arrow function, above all) is parenthesised,
+            // or `(x) => {…}(5)` would not even parse.
+            if (call.CalleeValue != null)
+            {
+                var callee = Expr(call.CalleeValue);
+                if (!SimpleCalleeText.IsMatch(callee)) callee = $"({callee})";
+                return $"{callee}({string.Join(", ", rendered)})";
+            }
 
             // A type keyword's Shared member (`String.Format(...)`, `Integer.Parse(s)`): the prelude
             // helper for its row. A keyword member outside the table is refused, never emitted as a

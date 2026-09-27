@@ -2323,10 +2323,14 @@ single new failure against the 170-name baseline.
       this fixture; N4c (the same shape with no lambda ever stored) was, and passed everywhere.
       N4/N4b are now promoted into `NothingConversionExecutionTests` alongside N4c, run on every
       backend under both pipelines.
-    - **#188** — a delegate FIELD invoked from inside its OWN class fails on C++ (a `void*` field)
-      and on JavaScript (`ReferenceError: Callback is not defined`). N6 is not run; N6b (the same
-      "callback set to Nothing, then later set", read into a local before the switch) is, and
-      passes everywhere.
+    - **#188 — now DONE, see its own entry below.** At the time this entry was written, a delegate
+      FIELD invoked from inside its OWN class failed on C++ (a `void*` field) and on JavaScript
+      (`ReferenceError: Callback is not defined`), so N6 (that exact shape — this task's own F0
+      probe) was not run by this fixture; N6b (the same "callback set to Nothing, then later set",
+      read into a local before the switch) was, and passed everywhere. N6/F0 now runs on every
+      backend too — see `DelegateMemberInvocationExecutionTests`' F0 case, not a promotion here
+      (this fixture never carried a test of its own for N6, only the note explaining why it was
+      excluded).
     - **#189** — at the time of THIS entry, three C++ gaps and one JavaScript gap, each PINNED
       rather than silently accepted: a captured `Catch` variable's member access
       (`ex.Message` → `ex->Message` on a BY-VALUE exception type) fails to compile on C++ (N7,
@@ -2361,8 +2365,8 @@ single new failure against the 170-name baseline.
     **#186** (VB's value-type Nothing-DEFAULT, as opposed to refusal — an owner decision, still
     open); **#187** (a lambda/`AddressOf` into a user `Delegate` — **now DONE, see its own entry
     below**); **#188**/**#189** above (**#189's `Case Is Nothing` C++ row is now closed by
-    #185**; **#188** is still open and unrelated to `Is`/`IsNot` — see #187's entry below for its
-    widened scope).
+    #185**; **#188 is now DONE too, see its own entry below** — unrelated to `Is`/`IsNot`; see
+    #187's entry below for its widened scope).
 - ⭐ **Newest — #122 DONE (ADR-0006 D1's Obligation, committed `22f18284`).** The closure rule
   narrows from "every local is call-visible in a function that creates a lambda" (the interim
   approximation) to the locals a lambda of that function actually CAPTURES, read straight off the
@@ -5203,14 +5207,102 @@ single new failure against the 170-name baseline.
       `Dim r As Integer = f.Invoke(5)` (f a `Func(Of Integer, Integer)`) is still refused with
       "Cannot assign value of type 'Object' to variable of type 'Integer'". Pinned in
       `UserDelegateConversionTests.DotInvoke_OnFuncAction_StaysTypedObject_PinnedAgainst202`.
-    - **#188** — a delegate FIELD invoked from inside its OWN class: unqualified on JavaScript
-      (`ReferenceError: OnClick is not defined`, E10) and via `b.OnClick("b")` call syntax on
-      MSIL (`MissingMethodException`, J2 — reproduces identically for a `Func`/`Action` field,
-      J2f, so it is not specific to a user delegate). Already filed by #173/#185's entries above;
-      #187 measured it again for the user-delegate shape and widened it with the MSIL row.
+    - **#188 — now DONE, see its own entry below.** At the time this entry was written, a delegate
+      FIELD invoked from inside its OWN class failed unqualified on JavaScript (`ReferenceError:
+      OnClick is not defined`, E10) and via `b.OnClick("b")` call syntax on MSIL
+      (`MissingMethodException`, J2 — reproduced identically for a `Func`/`Action` field, J2f, so
+      it was never specific to a user delegate). Already filed by #173/#185's entries above; #187
+      measured it again for the user-delegate shape and widened it with the MSIL row.
     - **#170** — a lambda argument to `MyBase.New` has no IL lowering at all on MSIL
       (`ForeignFeatureException`, predates #187, unaffected by it — see #201 above for the
       cross-backend half of the same probe).
+- ⭐ **#188 DONE (fix commit `5e82a786`).** Invoking a delegate-typed FIELD or PROPERTY through its
+  MEMBER spelling — bare `Callback()`, `Me.Callback()`, `obj.Op(5)`, `Class.Hook()`, own or
+  inherited, Shared included — now works on all four backends. 54 of 120 matrix cells failed
+  before: C++ gave a Sub-shaped delegate a result destination (`t0 = Callback();`, "assigning to
+  'void *' from 'void'"); JavaScript emitted the bare name unqualified (`ReferenceError: Callback
+  is not defined`); MSIL lowered a qualified call as a METHOD call (`MissingMethodException:
+  Holder.Callback()`) and refused a delegate-typed PROPERTY outright under ADR-0010 D8. Copying the
+  member into a local first (#173's N6b) always worked — the delegate-VALUE invocation path was
+  sound; the member spelling never reached it.
+  - **ONE lowering.** `SemanticAnalyzer.DelegateMemberCallee` is the single answer to "is this
+    callee a delegate-typed field or property?" — the bound symbol must be a Variable or Property
+    and must be EXACTLY the member its owner resolves (the current class or a base for a bare
+    name; the receiver's type for `Me.`/`obj.`/`MyBase.`/`Class.`), typed as a delegate including a
+    bare `Action`/`Func` (which resolves as a class). A method of the same name, a local or
+    parameter that shadows the field, a module variable, and a module Sub sharing the field's name
+    all keep their own path (measured directly: `DelegateMemberInvocationTests`' FALSE cases).
+    `IRBuilder.EmitDelegateValueInvocation` reads the member through the ordinary read path
+    (ADR-0007's accessor rule kept — a bare accessor-backed property still lowers to the same
+    `IRFieldAccess` its `Me.` form does) and invokes that VALUE through the SAME `IRCall.CalleeValue`
+    node the `f(a)(b)` chain-call and #187's `.Invoke` branches already used. A Sub-shaped call gets
+    NO result destination.
+  - **C++ and JS now render `IRCall.CalleeValue`**, exactly as the node's own doc comment and
+    ADR-0010 D8 already described — both used to call by NAME instead, which on C++ let its own
+    temp-renaming point at the WRONG temp entirely (the root cause behind #187's E5/E5b/J1 C++
+    pins, now promoted — see below). JavaScript reads the member into a value first (`const t0 =
+    this.Callback; t0();`) and parenthesises a callee that is not a plain name/member chain (an
+    inline lambda IIFE — `S/t188/iife/L1`). MSIL is UNCHANGED: ADR-0010 D8 now admits these calls
+    because they arrive as ordinary `CalleeValue` calls, and admits nothing else.
+  - **Measured** (probe.py, 4 backends × CLI/CLI `-O`/Release `.blproj`): F0-F9 go from 66/120 to
+    120/120; 21 edge probes OK everywhere (a `Func` result in an expression, call arguments that
+    are themselves calls, a method beside a field, a user `Delegate Function`, a `List(Of Action)`
+    field, a base-typed receiver, `MyBase`/`Me`/bare spellings, an interface property, an accessor
+    property, Shared through every spelling, a same-named module Sub, a `Nothing` argument,
+    shadowing locals/parameters, and a field declared below its use); a multi-file `.blproj` was OK
+    only on C# before and is OK on all four now; a `Nothing` field invoked raises on every backend
+    (never a silent success). Byte compare: 6,966 files, 78 differ — none are C#, the `t118` corpus
+    or the samples; every diff is a program that invokes a delegate member. `BASICLANG_VERIFY_IR`
+    fired 0 times.
+  - ⚠ **The P8/#140 caveat.** `S/t155edge/P8` (a bare field call, once directly and once from
+    inside a lambda in the same method) used to fail to COMPILE on C++; #188 makes it compile for
+    the first time, which exposes **#140** (a C++ lambda captures its enclosing object BY COPY, not
+    by reference) as a SILENT WRONG ANSWER — it prints `0` where `2` is expected, not a build
+    failure. Pinned as `DelegateMemberInvocationExecutionTests
+    .P8_FieldCalledDirectlyAndFromALambda_Cpp_PinsTodaysWrongCount_Against140`.
+  - **Tests:** `DelegateMemberInvocationTests.cs` (front end/IR/codegen-text, fast subset, 19
+    cases — the TRUE/FALSE decision for every spelling and every excluded shape, Sub-vs-Func
+    typing, survival through the standard optimizer, and the C++/JS codegen-text assertions) and
+    `DelegateMemberInvocationExecutionTests.cs` (`[Category("Integration")]`, 33 cases — F0-F9 and
+    every edge probe that runs everywhere on four backends × both pipelines × the
+    `CompileProjectFiles` project entry point, the multi-file project, the L1 IIFE on C++/
+    JavaScript, G8's Nothing-raises-everywhere, and the P8/#140, G2b/#203, G5/#192 and G6c/#204
+    pins). Promoted five tests that pinned #187/#188/#201 exceptions in
+    `UserDelegateConversionExecutionTests.cs`: E10 (JavaScript), J2 (MSIL) and J1/E5/E5b (C++) all
+    now run, folded into that fixture's four-backend runners (35 cases → 30: five separate pin
+    tests became four-backend rows on the tests they already shared). Corrected `#173`'s N6 note in
+    `NothingConversionExecutionTests.cs` (N6 IS this task's own F0 probe; it runs everywhere now,
+    proven in `DelegateMemberInvocationExecutionTests`, not promoted in that older fixture since it
+    was never pinned there as a test of its own). `JsExecutionTierRosterTests`' roster grew 80 → 81
+    (unique `typeof` entries).
+  - **Mutants:** 11 predicted by the implementer, all built for real in a separate git worktree and
+    killed against real NUnit — see `S/t188/tw/mut-results.txt` for the full table (which test
+    kills which).
+  - **Follow-ups filed, not fixed here** (next in the queue):
+    - **#203** — the BARE spelling of a delegate-member call evaluates its callee's value AFTER its
+      own argument runs, when that argument reassigns the same field (`Handler(Swap(1))` inside the
+      declaring class prints "new 1" where C# prints "old 1"). The `Me.`-qualified and externally-
+      qualified spellings are unaffected — they snapshot the field into a temp BEFORE the arguments
+      run; the bare spelling's `CalleeValue` is an `IRVariable` read INLINE at the call site
+      (ADR-0007's bare-name rule), with no such snapshot. Pinned as `DelegateMemberInvocation
+      ExecutionTests.G2b_BareSpellingEvaluatesTheCalleeAfterItsArgument_PinsTodaysWrongOrder_Against203`.
+    - **#204** — a `List(Of Action)` FIELD (not a local) indexed with VB's paren syntax through an
+      EXTERNAL, qualified receiver (`b.Items(0)`) fails to build on EVERY backend, C# included
+      (`CS1955: Non-invocable member`) — a pre-existing codegen gap #188 never touched. The SAME
+      indexer called BARE from a method of the declaring class (`Items(0)()`) runs everywhere, so
+      the gap is specific to the qualified-receiver spelling of a List-typed field. Pinned as
+      `DelegateMemberInvocationExecutionTests.G6c_ListFieldIndexedThroughAnExternalReceiver_PinsTodaysCSharpCompileFailure_Against204`.
+    - **#192** — a `Structure` (value type) with a delegate FIELD, called through a bare identifier
+      after a member-access write (`s.F = ...; s.F(41)`), throws a `NullReferenceException` on MSIL
+      where C#/C++ both run it correctly; JavaScript refuses the whole `Structure` at compile time
+      by DESIGN (BL7005), unrelated. Pinned as `DelegateMemberInvocationExecutionTests
+      .G5_StructureDelegateField_Msil_PinsTodaysNullReferenceException_Against192`.
+    - **#201's AddressOf half, still open.** #188 fixed the temp-NAMING half of what broke E5/E5b/J1
+      on C++ (promoted, now run everywhere) — those failed because C++ called a delegate value by
+      NAME, which its own temp-renaming could point at the wrong temp. E8 (`AddressOf` an INSTANCE
+      method) and E9e (a branch that `Return`s an `AddressOf` result on one arm) are UNTOUCHED by
+      this fix and still fail to compile on C++; #201 remains open for that half. See
+      `UserDelegateConversionExecutionTests`' own updated doc comment and E9e's pin.
 - **JavaScript backend** — the `lib.dom.d.ts` → `.bli` generator was never built
   (`dom-core.bli` is hand-curated). Known front-end gaps affecting all backends:
   `Inherits ArgumentException`, assigning an inherited field from a derived class,
