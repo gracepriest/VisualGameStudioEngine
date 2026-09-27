@@ -4289,9 +4289,9 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             if (binaryOp.Operation == BinaryOpKind.Concat)
             {
                 EmitLoadValue(binaryOp.Left);
-                EmitCharConcatOperandAsString(binaryOp.Left);
+                EmitConcatOperandAsString(binaryOp.Left);
                 EmitLoadValue(binaryOp.Right);
-                EmitCharConcatOperandAsString(binaryOp.Right);
+                EmitConcatOperandAsString(binaryOp.Right);
                 WriteLine("    call string [mscorlib]System.String::Concat(string, string)");
                 _currentStack--; // Two pops, one push = net -1
 
@@ -5363,39 +5363,18 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                     if (args.Count > 0)
                     {
                         EmitLoadValue(args[0]);
-                        var argType = MapType(args[0].Type);
 
-                        if (argType == "string")
+                        // A string or any VALUE: its own overload, or boxed to its OWN type
+                        // (task #171 for Char, #183 for the rest — Short, Byte, SByte, UShort,
+                        // UInteger and ULong had no arm and fell to the `box object` below, a
+                        // no-op on a value and an InvalidProgramException; Single was widened to
+                        // WriteLine(float64) and printed 0.1F as 0.10000000149011612).
+                        if (!TryEmitConsoleValueWrite("WriteLine", args[0]))
                         {
-                            WriteLine("    call void [mscorlib]System.Console::WriteLine(string)");
-                        }
-                        else if (argType == "int32")
-                        {
-                            WriteLine("    call void [mscorlib]System.Console::WriteLine(int32)");
-                        }
-                        else if (argType == "int64")
-                        {
-                            WriteLine("    call void [mscorlib]System.Console::WriteLine(int64)");
-                        }
-                        else if (argType == "float64" || argType == "float32")
-                        {
-                            WriteLine("    call void [mscorlib]System.Console::WriteLine(float64)");
-                        }
-                        else if (argType == "bool")
-                        {
-                            WriteLine("    call void [mscorlib]System.Console::WriteLine(bool)");
-                        }
-                        else if (argType == "char")
-                        {
-                            // Task #171: a Char fell to the arm below, whose `box object` names a
-                            // REFERENCE type — a no-op box that leaves the raw char where
-                            // WriteLine(object) wants a reference. InvalidProgramException,
-                            // measured on `Console.WriteLine(c)` for any Char local, and on every
-                            // `For Each ch In s` body once a String enumerated as Char.
-                            WriteLine("    call void [mscorlib]System.Console::WriteLine(char)");
-                        }
-                        else
-                        {
+                            // A REFERENCE only (object, a class, an array). `box object` on a
+                            // reference returns it unchanged (ECMA-335 III.4.1) — a no-op kept so
+                            // this arm's output is byte-identical for the programs it already ran.
+                            // ⛔ A value never reaches here: it would be the #183 crash again.
                             WriteLine("    box object");
                             WriteLine("    call void [mscorlib]System.Console::WriteLine(object)");
                         }
@@ -5411,8 +5390,17 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                     if (args.Count > 0)
                     {
                         EmitLoadValue(args[0]);
-                        var argType = MapType(args[0].Type);
-                        WriteLine($"    call void [mscorlib]System.Console::Write({argType})");
+
+                        // The SAME overload choice as WriteLine (task #183): the raw spelling
+                        // below named `Write(int16)`, which does not exist — MissingMethodException
+                        // for every Short, Byte, SByte and UShort.
+                        if (!TryEmitConsoleValueWrite("Write", args[0]))
+                        {
+                            // A REFERENCE only, spelled as it always was. ⚠ A user class here still
+                            // names a `Write(Foo)` that does not exist — a separate, pre-existing gap.
+                            var argType = MapType(args[0].Type);
+                            WriteLine($"    call void [mscorlib]System.Console::Write({argType})");
+                        }
                         _currentStack--;
                     }
                     return true;
@@ -6105,20 +6093,118 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             value?.Type != null && IlTypeSpec(value.Type) == "string";
 
         /// <summary>
-        /// Task #171: turns a <c>char</c> operand of <c>&amp;</c>, already on the stack, into the
-        /// <c>string</c> that <c>String::Concat(string, string)</c> takes. Without it the raw
-        /// char reached Concat as a reference: InvalidProgramException, measured on
-        /// <c>acc &amp; ch</c> in a <c>For Each ch In s</c> body and on <c>"a" &amp; c</c> for
-        /// any Char local.
+        /// Turns a VALUE-typed operand of <c>&amp;</c>, already on the stack, into the
+        /// <c>string</c> that <c>String::Concat(string, string)</c> takes — the value type's own
+        /// <c>ToString()</c>, which is what C#'s <c>"n=" + 5</c> calls. A string, an object and a
+        /// class reference are left as they are.
         ///
-        /// <para>⚠ Char ONLY. Every other value-typed operand (<c>"n=" &amp; 5</c>) reaches
-        /// Concat raw today too — a wider, pre-existing gap of this backend, left for its own
-        /// change so this one moves only programs that concatenate a Char.</para>
+        /// <para>⛔ Without it the raw value reached Concat where a string REFERENCE belongs:
+        /// InvalidProgramException for every <c>"n=" &amp; 5</c>, <c>i &amp; "!"</c>,
+        /// <c>"x=" &amp; d</c> and <c>acc &amp; k</c> (task #183, measured on Integer, Long, Short,
+        /// Byte, Double, Single, Boolean, UInteger, ULong, SByte and UShort, at the CLI, the
+        /// CLI with <c>--optimize</c> and a Release <c>.blproj</c>). Task #171 had closed the same
+        /// hole for Char alone.</para>
+        ///
+        /// <para>Char keeps #171's <c>Char::ToString(char)</c> — the same text, no box. Everything
+        /// else boxes to its OWN type (<see cref="ValueTypeBoxToken"/>) and calls
+        /// <c>Object::ToString()</c> virtually, so Boolean prints <c>True</c>, Double <c>2.5</c> and
+        /// an enum its member name, exactly as C# prints them on the same machine. Net stack
+        /// effect zero: <c>box</c> and the <c>callvirt</c> each pop one and push one.</para>
         /// </summary>
-        private void EmitCharConcatOperandAsString(IRValue operand)
+        private void EmitConcatOperandAsString(IRValue operand)
         {
-            if (operand?.Type == null || IlTypeSpec(operand.Type) != "char") return;
-            WriteLine("    call string [mscorlib]System.Char::ToString(char)");
+            if (operand?.Type == null) return;
+
+            if (IlTypeSpec(operand.Type) == "char")
+            {
+                WriteLine("    call string [mscorlib]System.Char::ToString(char)");
+                return;
+            }
+
+            var boxToken = ValueTypeBoxToken(operand.Type);
+            if (boxToken == null) return;
+
+            WriteLine($"    box {boxToken}");
+            WriteLine("    callvirt instance string [mscorlib]System.Object::ToString()");
+        }
+
+        /// <summary>
+        /// The token a VALUE of <paramref name="type"/> boxes to — its OWN type — or null when the
+        /// value is a reference already (a string, an object, a class, an array), which is left
+        /// alone. Shared by <c>&amp;</c> (<see cref="EmitConcatOperandAsString"/>) and the
+        /// Console.Write/WriteLine fallback (<see cref="TryEmitConsoleValueWrite"/>), so the two
+        /// cannot disagree about what is a value.
+        ///
+        /// <para>⛔ Never <c>box object</c> for a value: <c>object</c> is a reference type, so that
+        /// box is a no-op and leaves the raw value where a reference belongs —
+        /// InvalidProgramException, measured on <c>Console.WriteLine(sh)</c> for a Short.</para>
+        ///
+        /// <para>The IL primitives come from <see cref="PrimitiveTokens"/>; an enum or a Structure
+        /// by its kind, through <see cref="IlTypeToken(TypeInfo)"/>. ⚠ Decimal and Date do not reach
+        /// here as values: this backend cannot declare a local of either (ilasm refuses the
+        /// <c>.locals</c> line), which is a type-mapping gap of its own.</para>
+        ///
+        /// <para>The primitive test reads <c>MapType</c>, which names every primitive exactly as
+        /// <see cref="IlTypeSpec(TypeInfo)"/> does but never throws — IlTypeSpec refuses a delegate
+        /// type whose arguments were lost, and <c>Console.WriteLine(f)</c> did not ask it
+        /// before.</para>
+        /// </summary>
+        private string ValueTypeBoxToken(TypeInfo type)
+        {
+            if (type == null) return null;
+
+            var spec = MapType(type);
+            if (BoxableSpecs.Contains(spec) && PrimitiveTokens.TryGetValue(spec, out var token)) return token;
+
+            if (type.Kind == TypeKind.Enum || type.Kind == TypeKind.Structure) return IlTypeToken(type);
+
+            return null;
+        }
+
+        /// <summary>
+        /// The <c>Console.Write</c>/<c>WriteLine</c> overload a value of IL type
+        /// <paramref name="spec"/> is passed to, or null when there is none and the value must be
+        /// boxed to its own type for the <c>(object)</c> overload instead.
+        ///
+        /// <para>⛔ Short, SByte, Byte and UShort have NO overload — <c>Write(int16)</c> assembled
+        /// and died with MissingMethodException (task #183). They go to <c>(int32)</c> with no
+        /// conversion instruction: a load of a small integer already sign- or zero-extends it to
+        /// int32 on the evaluation stack (ECMA-335 III.1.1.1), so the value arrives right.</para>
+        ///
+        /// <para>⛔ Single is <c>(float32)</c>, never <c>(float64)</c>: widening first printed
+        /// <c>0.1F</c> as <c>0.10000000149011612</c> where C# prints <c>0.1</c>.</para>
+        /// </summary>
+        private static string ConsoleWriteOverload(string spec) => spec switch
+        {
+            "string" or "bool" or "char" or "int32" or "uint32" or "int64" or "uint64"
+                or "float32" or "float64" => spec,
+            "int8" or "int16" or "uint8" or "uint16" => "int32",
+            _ => null,
+        };
+
+        /// <summary>
+        /// <c>Console.<paramref name="method"/>(arg)</c> for a string or a VALUE argument already
+        /// on the stack: its own overload when one exists (<see cref="ConsoleWriteOverload"/>),
+        /// otherwise boxed to its OWN type (<see cref="ValueTypeBoxToken"/>) for the
+        /// <c>(object)</c> overload — an enum, a Structure. Returns false, having emitted nothing,
+        /// for a reference argument, which each caller handles as it always has. Pops nothing
+        /// from <c>_currentStack</c>: the caller accounts for the call.
+        /// </summary>
+        private bool TryEmitConsoleValueWrite(string method, IRValue argument)
+        {
+            var overload = ConsoleWriteOverload(MapType(argument?.Type));
+            if (overload != null)
+            {
+                WriteLine($"    call void [mscorlib]System.Console::{method}({overload})");
+                return true;
+            }
+
+            var boxToken = ValueTypeBoxToken(argument?.Type);
+            if (boxToken == null) return false;
+
+            WriteLine($"    box {boxToken}");
+            WriteLine($"    call void [mscorlib]System.Console::{method}(object)");
+            return true;
         }
 
         /// <summary>
