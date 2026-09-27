@@ -264,6 +264,14 @@ public class JsExecutionTierRosterTests
         // asks the JS leg at all). ForEachControlVariableDiagnosticsTests is NOT here: pure
         // front-end/IR fixture, spawns nothing, carries no [Category("Integration")].
         typeof(ForEachControlVariableReuseTests),
+
+        // Task #164 — a multi-line `Function(...) [As T] ... End Function` lambda. Named
+        // "...ExecutionTests", so the widened match below WOULD catch it on its own; listed
+        // explicitly anyway, matching every row above. Its JS legs run through
+        // JavaScriptExecutionTests.RunJs (standard pipeline) and FourBackends.RunAggressiveJs
+        // (aggressive), both spawning Node. MultiLineFunctionLambdaTests (front end only, no
+        // process spawned, no [Category("Integration")]) is NOT here.
+        typeof(MultiLineFunctionLambdaExecutionTests),
     };
 
     /// <summary>
@@ -312,7 +320,7 @@ public class JsExecutionTierRosterTests
 
     [Test]
     public void RosterIsPinned()
-        => Assert.That(ExecutionTier, Has.Length.EqualTo(71), // + ParamArrayExecutionTests
+        => Assert.That(ExecutionTier, Has.Length.EqualTo(72), // + MultiLineFunctionLambdaExecutionTests
             "The execution-tier roster changed. That is fine — update the number — but it must " +
             "be a deliberate edit, not a silent shrink.");
 
