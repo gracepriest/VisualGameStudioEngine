@@ -10,9 +10,12 @@ namespace VisualGameStudio.Tests.Compiler;
 
 /// <summary>
 /// Spec 2026-09-27 §2.1 / §2.5 — a Canvas page's CONTROLS are read, written, judged structural and pasted in
-/// the pixel vocabulary; a paste between layouts is refused and SAID.
+/// the pixel vocabulary; a paste between VOCABULARIES (pixels vs cells) is refused and SAID.
+///
+/// <para>⚠ NonParallelizable: the command tests share the view model's STATIC designer clipboard.</para>
 /// </summary>
 [TestFixture]
+[NonParallelizable]
 public class FormPixelVocabularyTests
 {
     private const string CanvasPage = """
@@ -269,6 +272,70 @@ public class FormPixelVocabularyTests
             Is.TypeOf<GridGeometry>());
     }
 
+    // ⛔ The refusal is by VOCABULARY, not by layout name (review of Task 3): Grid and Flow both read
+    // Col/Row into a GridGeometry, so a paste between them is lossless and was accepted before layouts
+    // were recorded. Refusing it would be a regression with a false reason.
+    [TestCase(FormLayoutKind.Grid, FormLayoutKind.Flow)]
+    [TestCase(FormLayoutKind.Flow, FormLayoutKind.Grid)]
+    public void APasteBetweenTwoCellLayouts_Lands_AndKeepsItsCell(FormLayoutKind from, FormLayoutKind into)
+    {
+        var xml = FormClipboard.SerializeSubtree(FormTarget.Web, new[] { CellButton("btn") }, from);
+
+        var paste = FormClipboard.Paste(xml, FormTarget.Web, into, _ => false);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(paste.Refusal, Is.Null);
+            Assert.That(paste.Controls, Has.Count.EqualTo(1));
+            var cell = paste.Controls.Single().Geometry as GridGeometry;
+            Assert.That(cell, Is.Not.Null);
+            Assert.That((cell!.Col, cell.Row), Is.EqualTo((1, 0)));
+        });
+    }
+
+    [TestCase(FormLayoutKind.Canvas, FormLayoutKind.Flow)]
+    [TestCase(FormLayoutKind.Flow, FormLayoutKind.Canvas)]
+    public void APasteBetweenCanvasAndFlow_IsRefused_NamingBoth(FormLayoutKind from, FormLayoutKind into)
+    {
+        var control = from == FormLayoutKind.Canvas ? PixelButton("btn") : CellButton("btn");
+        var xml = FormClipboard.SerializeSubtree(FormTarget.Web, new[] { control }, from);
+
+        var paste = FormClipboard.Paste(xml, FormTarget.Web, into, _ => false);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(paste.Controls, Is.Empty);
+            Assert.That(paste.Refusal, Does.Contain("Canvas").And.Contain("Flow"));
+        });
+    }
+
+    private const string NestedCanvasFragment = """
+        <FormSubtree Target="Web" Version="1" Layout="Canvas">
+          <Panel Id="pnl" TabIndex="0" X="16" Y="40" Width="300" Height="200" Anchor="Top,Left">
+            <Button Id="btn" TabIndex="1" X="8" Y="8" Width="75" Height="23" Dock="Bottom" Text="Go" />
+          </Panel>
+        </FormSubtree>
+        """;
+
+    [Test]
+    public void ANestedCanvasFragment_PastesPixelsAtEveryDepth_WithNothingLeftOverAsUnknown()
+    {
+        var paste = FormClipboard.Paste(NestedCanvasFragment, FormTarget.Web, FormLayoutKind.Canvas, _ => false);
+
+        var panel = paste.Controls.Single();
+        var button = panel.Children.Single();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(paste.Refusal, Is.Null);
+            Assert.That(panel.Geometry, Is.TypeOf<PixelGeometry>());
+            Assert.That(button.Geometry, Is.TypeOf<PixelGeometry>(), "the layout reaches the NESTED control too");
+            Assert.That(((PixelGeometry?)button.Geometry)?.Dock, Is.EqualTo("Bottom"));
+            Assert.That(panel.UnknownAttributes, Is.Empty, "X/Width/Anchor are geometry on a Canvas paste");
+            Assert.That(button.UnknownAttributes, Is.Empty, "X/Width/Dock are geometry on a Canvas paste");
+        });
+    }
+
     // ==================================================================
     // Through the real command (who calls it in a shipping build: the Paste command)
     // ==================================================================
@@ -372,5 +439,44 @@ public class FormPixelVocabularyTests
 
         var copy = canvas.DesignDocument!.Controls.Single(c => c.Id != "btnPixel");
         Assert.That(((PixelGeometry)copy.Geometry!).X, Is.EqualTo(48));
+    }
+
+    private const string NestedPixelPageDoc = """
+        <WebForm Name="PixelPage" Version="1" Width="640" Height="480">
+          <Layout Kind="Canvas"/>
+          <Controls>
+            <Panel Id="pnl" X="16" Y="40" Width="300" Height="200" TabIndex="0">
+              <Button Id="btn" X="8" Y="8" Width="75" Height="23" TabIndex="1" Text="Go"/>
+            </Panel>
+          </Controls>
+        </WebForm>
+        """;
+
+    // ⚠ Relies on serial execution: goes through the static designer clipboard (see DesignerClipboard).
+    [Test]
+    public void PastingANestedPanelWithinACanvasPage_WritesTheOffsetPosition_AndPixelsAtEveryDepth()
+    {
+        var (canvas, _) = OpenVm("PixelPage", NestedPixelPageDoc);
+        canvas.Selection.Set(canvas.DesignDocument!.FindById("pnl")!);
+        canvas.CopyControlsCommand.Execute(null);
+
+        canvas.PasteControlsCommand.Execute(null);
+
+        // What reached the FILE: the pasted panel's element, read as raw XML so a stale X carried as an
+        // unknown attribute (and written over the offset one) is visible.
+        var written = System.Xml.Linq.XDocument.Parse(canvas.Text);
+        var pastedPanel = written.Descendants("Panel").Single(e => (string?)e.Attribute("Id") != "pnl");
+        var pastedButton = pastedPanel.Elements("Button").Single();
+        var copy = canvas.DesignDocument!.Controls.Single(c => c.Id != "pnl");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That((string?)pastedPanel.Attribute("X"), Is.EqualTo("24"), "16 + the paste offset of 8, not the stale 16");
+            Assert.That((string?)pastedPanel.Attribute("Y"), Is.EqualTo("48"), "40 + the paste offset of 8, not the stale 40");
+            Assert.That((string?)pastedButton.Attribute("X"), Is.EqualTo("8"), "a child keeps its position in its parent");
+            Assert.That(copy.Children.Single().Geometry, Is.TypeOf<PixelGeometry>());
+            Assert.That(copy.UnknownAttributes, Is.Empty);
+            Assert.That(copy.Children.Single().UnknownAttributes, Is.Empty);
+        });
     }
 }

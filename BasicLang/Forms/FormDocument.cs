@@ -296,8 +296,10 @@ public static class FormClipboard
     }
 
     /// <summary>
-    /// The pre-layout entry point, kept for its callers: a web destination is taken to be Grid, which every
-    /// web form was when this signature was written. New code calls <see cref="Paste"/>.
+    /// The pre-layout entry point. A web destination is taken to be Grid, i.e. a CELL page — which is how this
+    /// signature always read a web paste (Grid and Flow alike), before Canvas pages had pixel controls. ⚠ Its
+    /// remaining callers are TESTS; no shipping code calls it (the Paste command calls <see cref="Paste"/>).
+    /// New code calls <see cref="Paste"/>.
     /// </summary>
     public static IReadOnlyList<FormControl> DeserializeSubtree(
         string xml, FormTarget target, Func<string, bool> isTaken) =>
@@ -306,11 +308,16 @@ public static class FormClipboard
     /// <summary>
     /// Reads a fragment produced by <see cref="SerializeSubtree"/> into a document of (<paramref name="target"/>,
     /// <paramref name="layout"/>), renaming every control whose id is already taken and retargeting the binds
-    /// that named it — or REFUSES, with a reason, a fragment from another target or another layout.
+    /// that named it — or REFUSES, with a reason, a fragment from another target or another VOCABULARY.
     ///
-    /// <para>⛔ A paste between layouts is refused, never converted (spec 2026-09-27 §2.1): a grid cell has no
-    /// pixel position and a pixel position has no cell, so every pasted control would land somewhere nobody
-    /// designed. Converting is piece 4's job.</para>
+    /// <para>⛔ A paste between pixels (Canvas) and cells (Grid/Flow) is refused, never converted (spec
+    /// 2026-09-27 §2.1, "Canvas ↔ Grid"): a grid cell has no pixel position and a pixel position has no cell,
+    /// so every pasted control would land somewhere nobody designed. Converting is piece 4's job.</para>
+    ///
+    /// <para>⚠ By VOCABULARY — <see cref="FormVocabulary.IsPixel(FormTarget, FormLayoutKind?)"/> on each side
+    /// — never by layout NAME. Grid and Flow both read Col/Row into a <see cref="GridGeometry"/>, so a paste
+    /// between them is lossless and was always accepted; refusing it by name would be a regression with a
+    /// false reason (Task 3 review).</para>
     /// </summary>
     /// <param name="layout">The destination web document's layout; null means Grid. Ignored for WinForms.</param>
     /// <param name="isTaken">
@@ -336,7 +343,10 @@ public static class FormClipboard
             return FormPasteResult.Nothing;
         }
 
-        // A web fragment written before layouts were recorded names none — and every web form then was Grid.
+        // A web fragment that names no layout is a CELL fragment: before layouts were recorded, every web paste
+        // was read as cells (Grid and Flow alike), so Grid stands for both. ⚠ Defensive, not a migration path:
+        // the designer's clipboard is process-static, so no fragment written before this change can reach a
+        // process running it — only hand-built or test text omits the attribute.
         FormLayoutKind? sourceLayout = null;
         if (sourceTarget == FormTarget.Web)
         {
@@ -357,7 +367,8 @@ public static class FormClipboard
 
         FormLayoutKind? destination = target == FormTarget.Web ? layout ?? FormLayoutKind.Grid : null;
 
-        if (sourceTarget != target || sourceLayout != destination)
+        if (sourceTarget != target ||
+            FormVocabulary.IsPixel(sourceTarget, sourceLayout) != FormVocabulary.IsPixel(target, destination))
         {
             return new FormPasteResult(Array.Empty<FormControl>(),
                 $"These controls were copied from a {Describe(sourceTarget, sourceLayout)} and this is a " +
@@ -388,6 +399,11 @@ public static class FormClipboard
     /// <summary>
     /// ⛔ By NAME only. <c>Enum.TryParse</c> accepts a numeric string ("2" is Canvas), and a fragment is
     /// unvetted text — a number is not a layout name.
+    ///
+    /// <para>⚠ Deliberately STRICTER than the reader's <c>Enum.TryParse(ignoreCase: true)</c> for
+    /// <c>&lt;Layout Kind=&gt;</c>: a document is hand-edited text, but a fragment's <c>Layout=</c> is written
+    /// only by <see cref="SerializeSubtree"/>, which always writes the exact <c>ToString()</c> — so anything
+    /// else is not one of ours.</para>
     /// </summary>
     private static bool TryLayoutName(string text, out FormLayoutKind kind)
     {
