@@ -52,8 +52,9 @@ Decisions (owner, 2026-09-27, as revised by review):
 ## 2. The document and the code that decides by target
 
 ### 2.1 Vocabulary is decided by (target, layout)
-One rule, one helper (e.g. `FormVocabulary.IsPixel(document)` = WinForms, or web with `Layout.Kind == Canvas`), used by
-every site that today decides by target alone:
+One rule, one helper — signature `FormVocabulary.IsPixel(FormTarget target, FormLayoutKind? layout)` (true for
+WinForms, or web with `Canvas`; it takes values, not a document, because the reader calls it before any model exists) —
+used by every site that today decides by target alone:
 - `FormDocumentReader`: root `Width`/`Height` (`:113`, gated on WinForms today), known-root-attribute filtering
   (`:148-154`), `ReadGeometry` (`:643-677`), `IsStructural` use (`:506`).
 - `FormDocumentWriter`: `Create` and `Apply` root size vs `<Layout>` (`:92-101`, `:186-193`).
@@ -77,12 +78,17 @@ evaluated together with the target through ONE predicate (e.g. `FormRootValues.A
 writer, region writer, grid (`FormPropertyGridViewModel.cs:479`, `:489`) and retarget all call:
 - `ClientSize` → WinForms, or web Canvas. ⚠ `RegionWriter` (`:637`) must keep emitting `Me.ClientSize` for WinForms only
   — the web code-behind emits no geometry.
-- `Cols`/`Rows`/`Gap` → web Grid only; flow's `Dir` → web Flow only.
-- **New `MobileBreakpoint`** → web Canvas only. Int, default `600`, `0` = never stack, negative → Degraded (frozen,
-  preserved, explained, via the existing root-tier path). **Stored on the `<Layout>` element**
+- `Cols`/`Rows` → web Grid only; `Gap` → web Grid AND Flow (the emitter writes `gap` for both, `FormAssetEmitter.cs:427-430`).
+  (No `Dir` row exists in `FormRoot` today; none is added.)
+- **New `MobileBreakpoint`** → web Canvas only. Int, default `600`, `0` = never stack, negative or unparseable →
+  Degraded (frozen, preserved, explained, via the existing root-tier path). **Stored on the `<Layout>` element**
   (`<Layout Kind="Canvas" MobileBreakpoint="600"/>`), like Cols/Rows/Gap — `FormRootValues.StorageAttributes` answers
-  that, and round-trip placement follows. Needs a WinForms-oracle exemption (web-only row) in the parity test and a
-  cross-or-name entry in the retarget sweep.
+  that, and round-trip placement follows. Needs: `FormLayout` field + `Clone` (`FormGeometry.cs:124-127`), `ReadLayout`
+  (`FormDocumentReader.cs:315-331`), `LayoutElement`/`ApplyLayout` (`FormDocumentWriter.cs:555-563`, `:260-285`).
+  ⛔ Mirror the ClientSize preservation rule: an unparseable value keeps its RAW text and the writer NEVER removes the
+  attribute because the model holds null (today `ApplyLayout`'s `SetAttributeIfChanged` removes on null — that would
+  delete `MobileBreakpoint="abc"` on the first save). Needs a WinForms-oracle exemption (web-only row) in the parity test
+  and a cross-or-name entry in the retarget sweep.
 
 ### 2.4 Sites that route every web document down the Grid path (all become layout-aware)
 - `FormCanvasTransform.Layout` → `WebLayout` for every web document (`:377-379`); `WebLayout` places controls only for
@@ -114,9 +120,19 @@ writer, region writer, grid (`FormPropertyGridViewModel.cs:479`, `:489`) and ret
 - **Coordinate space = the WinForms client area, strips INCLUDED.** In WinForms a docked strip sits inside the client
   area (a control at Y=30 is 6px below a 24px menu), and the canvas draws strips over the surface
   (`FormCanvasTransform.cs:375-379`). So on a Canvas page the strips are rendered INSIDE the form area as absolutely
-  positioned bands (top strips at the top edge in document order, bottom strips at the bottom edge, full width), NOT as
-  page chrome outside it — every control's `X`/`Y` then lands exactly where it was designed. (Grid/Flow keep strips as
-  chrome, unchanged.)
+  positioned bands, NOT as page chrome outside it (a real change to `FormAssetEmitter.Html`, `:116-176`, whose comment
+  then describes Grid/Flow only) — every control's `X`/`Y` then lands exactly where it was designed. (Grid/Flow keep
+  strips as chrome, unchanged.)
+- **Band height = the strip row's `DefaultHeight`** (MenuStrip 24, ToolStrip 25, StatusStrip 22 — the heights the canvas
+  already draws, `FormControlCatalog.cs:1808/1833/1854`), applied with `box-sizing: border-box`; the strip rows' CSS
+  (`:1813`, `:1838`, `:1859`) must not override it on a Canvas page. Without this the page's content-sized strips drift
+  1–3px from the canvas and every control under them follows.
+- **ONE shared layout function in BasicLang** — e.g. `FormDockLayout.Resolve(document)` — owns where every DOCKED thing
+  sits: strips (their `Dock` property) AND docked controls (`PixelGeometry.Dock`), resolved in ONE document-ordered
+  sequence exactly as WinForms docks them (§4). The canvas's `FormCanvasTransform.Bands` (`:398-420`, which today "uniquely
+  owns where each band SITS") and the page emitter BOTH call it — never two copies of the stacking algebra (the
+  `Tracks`/`ParseTracks` mirrored-pair trap). The canvas's `BoundsOf` (`:344-358`, which ignores Dock today) also uses it,
+  so a docked control is DRAWN where it will run.
 - Every positioned control is absolutely positioned at `X`/`Y` with `Width`/`Height`.
 - A container (`IsContainer`) is its own positioned box; its children use coordinates relative to it.
 - **Stacking order**: the model's document order is WinForms' back-to-front ("last in the list is in front",
@@ -144,11 +160,13 @@ Per control, with `W`/`H` the container's design width/height (Anchor default `T
 | Top + Bottom | `top:Y; bottom:(H−Y−height)`; height follows |
 | neither on an axis | **centred relative to its original offset, as WinForms does**: new left = X + (W′−W)/2 → `left: calc(50% + (X − W/2)px)`; same for top with H |
 
-**Dock** (`PixelGeometry.Dock`: Top/Bottom/Left/Right/Fill — not the strips' `Dock` property) is resolved ONCE at the
-design size into edges with fixed insets. **Docking order in model terms: WinForms docks back-most first, which is the
-model's DOCUMENT order (first in the list docks first)** — stated in these terms on purpose, given this repo's z-order
-inversion history. Because the strips are inside the form area (§3), their heights are real insets, e.g. a Fill between
-a 24px menu and a 22px status strip → `top:24; left:0; right:0; bottom:22`. The resolver is a pure function (§7).
+**Dock** is resolved ONCE at the design size, by the shared `FormDockLayout` (§3), into edges with fixed insets. It takes
+strips (their `Dock` property) and docked controls (`PixelGeometry.Dock`: Top/Bottom/Left/Right/Fill) as ONE sequence.
+**Docking order in model terms: WinForms docks back-most first, which is the model's DOCUMENT order (first in the list
+docks first)** — stated in these terms on purpose, given this repo's z-order inversion history. So a `Dock=Top` Panel that
+precedes the MenuStrip in the document takes the top edge and the menu sits below it, on the canvas, on the page and in
+WinForms alike. Example (strips first in the document): a Fill between a 24px menu and a 22px status strip →
+`top:24; left:0; right:0; bottom:22`. The resolver is a pure function (§7).
 
 ## 5. Phones: stacking below the breakpoint
 
@@ -168,34 +186,54 @@ Below `MobileBreakpoint` (default 600px; 0 disables), one media query switches t
 "Retarget Form…" and `design --retarget` accept any web source, and `ToPixels` places controls by cell/flow
 (`FormRetarget.cs:624-739`), discarding a Canvas form's exact positions; root `Width`/`Height` handling in `ConvertRoot`
 is target-gated. In piece 1:
-- **Canvas web → WinForms copies geometry and the design size exactly** (lossless; no BL8025 for those controls);
-  `MobileBreakpoint` is web-only and dropped-and-named (BL8024).
+- **Canvas web → WinForms copies geometry and the design size exactly** (lossless). It emits NO layout warning (today's
+  "layout dropped" BL8025 text, `FormRetarget.cs:635-641`, does not apply) — the only finding is BL8024 for
+  `MobileBreakpoint`, which is web-only and dropped-and-named. This retarget is also what produces the WinForms program
+  for the §7 reference test.
 - WinForms → web keeps producing Grid (unchanged) — piece 4 replaces retarget.
 - The retarget catalog sweep and the root retarget sweep cover the new row.
 
 ## 7. Testing
 
 - **The WinForms window is the reference for resize behaviour.** For the same pixel document, a test builds and RUNS the
-  WinForms form (the acceptance harness: csc + a driver), sets its ClientSize to W′×H′ (larger, and at the design size),
-  and prints every control's `Bounds`. The Edge check (below) at the same viewport must match those bounds (±1px) —
-  anchors, docking order and the no-anchor centring are then proven against WinForms itself, not against our reading of
-  it.
+  WinForms form and compares it with Edge (±1px) — anchors, docking order and the no-anchor centring are then proven
+  against WinForms itself, not our reading of it. It extends the acceptance driver (`FormDesignerAcceptanceTests.cs:408-456`)
+  with what that driver lacks:
+  1. **The WinForms program** comes from the §6 Canvas → WinForms retarget (`FormRetarget.ConvertToPair`) — so §6 lands
+     first.
+  2. **A recursive walk in FORM-CLIENT coordinates** on both sides: WinForms `form.PointToClient(c.PointToScreen(Point.Empty))`
+     + `Size` for every control at every depth; Edge rect minus the form area's rect.
+  3. **A resize step**: after `Show()`, set `ClientSize` to W′×H′, `PerformLayout()`, `Application.DoEvents()`, then read.
+     Keep W′ inside the screen's working area (Windows clamps an oversized window).
+  4. **Pinned DPI**: `Application.SetHighDpiMode(HighDpiMode.DpiUnaware)` (or pinned in the test csproj) to match Edge's
+     `--force-device-scale-factor=1` on a scaled display.
+  5. **Content-sized controls pinned**: WinForms strips are AutoSize (content-sized); the driver sets each strip
+     `AutoSize = false` with the row's `DefaultHeight`, and fixtures avoid other AutoSize rows. (Shipping WinForms strips
+     stay AutoSize, so a real WinForms menu may be 1–3px off the design — accepted and documented.)
+  6. **Gates**: `[Category("Integration")]` + the Windows check the WinForms walkthrough already uses (`:366-369`).
+  Docked controls are compared ONLY against this reference; undocked controls also against their stored geometry (below).
 - **Edge headless layout check** (`msedge.exe`, present at `C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe`):
-  - one HARNESS page iframes the generated form page at each width (design size, wider, narrower, phone) — media queries
-    evaluate against the iframe; one launch, deterministic;
-  - the test injects its own CLASSIC measuring script into a COPY of the page (the generated `<script type="module">`
-    fails under `file://` — harmless for layout) that writes every control's `getBoundingClientRect()` into the DOM;
+  - the generated site is SERVED from a loopback `HttpListener` on `127.0.0.1` (ephemeral port) — NOT opened as
+    `file://`, whose opaque per-file origins stop a harness page reading its iframes and stop the generated module script
+    loading; served, both work;
+  - one HARNESS page iframes the form page at each width (design size, wider, narrower, phone) — media queries evaluate
+    against the iframe; one launch, deterministic; the harness reads each iframe's rects (same origin) and writes them
+    into its own DOM for `--dump-dom`;
+  - a small measuring script (added to a served copy of the page) records every control's `getBoundingClientRect()`;
   - flags: `--headless=new --user-data-dir=<fresh temp dir>` (mandatory — without it a launch can hand off to the
     owner's running Edge and exit) `--hide-scrollbars --force-device-scale-factor=1 --virtual-time-budget=<ms>
     --dump-dom`;
   - kill with `Process.Kill(entireProcessTree: true)` on the test's own PID (Edge spawns children); never by name;
   - where Edge is absent (Linux/cloud) the tests SKIP with a reason (the repo's rule; never a pass-by-absence).
-  Assertions: at the design size every control within 1px of `X`/`Y`/`Width`/`Height` (strips included, per §3); wider
-  matches the WinForms reference; narrower-than-design scrolls (form keeps its size); below the breakpoint the order is
-  the reading order, inputs span the width, strips first/last.
+  Assertions: at the design size every UNDOCKED control within 1px of its `X`/`Y`/`Width`/`Height` (form-client
+  coordinates, strips inside per §3) and every strip at its `DefaultHeight`; docked controls and every control at the
+  wider size match the WinForms reference; narrower-than-design scrolls (form keeps its size); below the breakpoint the
+  order is the reading order, inputs span the width, strips first/last.
 - **Pure functions, table-tested:** reading-order grouping (overlapping rows, a label slightly higher than its box,
-  nested containers, ties); the Dock resolver (each value, document-order docking, nesting); Anchor → CSS (every
-  combination, including the centring formula).
+  nested containers, ties); `FormDockLayout` (each dock value, strips + docked controls in one document-ordered
+  sequence — incl. a `Dock=Top` Panel before a MenuStrip — band heights, nesting); Anchor → CSS (every combination,
+  including the centring formula). The canvas's `Bands` and `BoundsOf` are tested to agree with `FormDockLayout` (one
+  answer, two consumers).
 - **Documents:** Canvas round trip byte-for-byte; Grid/Flow unchanged; the `<Layout>` pre-scan (Layout after
   Controls); `IsStructural`/`RowForAttribute`/clipboard by (target, layout); a cross-layout paste refused; the root rows'
   layout applicability via the one predicate (catalog-driven sweep); `MobileBreakpoint` storage + Degraded negative.
