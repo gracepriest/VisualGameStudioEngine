@@ -167,6 +167,8 @@ public class SolutionExplorerRetargetTests
                 It.IsAny<DialogButtons>(), It.IsAny<DialogIcon>()),
             Times.Once,
             "the refusal reaches the user through the retarget's own refusal dialog");
+        _dialogService.Verify(d => d.ShowFolderDialogAsync(It.IsAny<FolderDialogOptions>()), Times.Never,
+            "a form that cannot be retargeted must not ask for a folder first");
     }
 
     [Test]
