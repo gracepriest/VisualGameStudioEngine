@@ -291,20 +291,29 @@ public class IsIsNotOperatorTests
     }
 
     // ============================================================================================
-    // D1 (3): `Not x Is Nothing` is refused, naming `x IsNot Nothing` — never silently
-    // `(Not x) Is Nothing`.
+    // D1 (3): `Not x Is Nothing` is never silently `(Not x) Is Nothing`. Since #195 it is VB's
+    // `Not (x Is Nothing)`; the explicit tight shape is refused, naming `x IsNot Nothing`.
     // ============================================================================================
 
     [Test]
-    public void D1_3_NotXIsNothing_IsRefused_NamingTheIsNotForm()
+    public void D1_3_NotXIsNothing_IsVbsNotOfTheIdentityTest()
     {
         var (ok, errors, _, _) = Analyze(
             "Sub Main()\nDim x As Foo = New Foo()\nIf Not x Is Nothing Then\n" +
             "Console.WriteLine(\"set\")\nEnd If\nEnd Sub", ClassPrelude);
+        Assert.That(ok, Is.True, string.Join("; ", errors));
+    }
+
+    [Test]
+    public void D1_3_ParenthesisedNotX_IsNothing_IsRefused_NamingTheIsNotForm()
+    {
+        var (ok, errors, _, _) = Analyze(
+            "Sub Main()\nDim x As Foo = New Foo()\nIf (Not x) Is Nothing Then\n" +
+            "Console.WriteLine(\"set\")\nEnd If\nEnd Sub", ClassPrelude);
         Assert.That(ok, Is.False, "expected a refusal");
         Assert.That(errors, Has.Some.Contains(
-            "'Not x Is Nothing' parses as '(Not x) Is Nothing': 'Not' binds tighter than 'Is' in " +
-            "BasicLang. Write 'x IsNot Nothing' (or 'Not (x Is Nothing)')"));
+            "'(Not x) Is Nothing' applies 'Is' to a Boolean, which is a value and never Nothing. " +
+            "Write 'x IsNot Nothing' (or 'Not x Is Nothing')"));
     }
 
     // ============================================================================================

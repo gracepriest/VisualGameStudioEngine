@@ -313,6 +313,7 @@ public class JsExecutionTierRosterTests
         // lambda rows, P13's fold) and JavaScriptExecutionTests.RunJs / JsTestSupport.CompileOptimized
         // directly (P12's named C++ divergence and E11's parentheses-wrap mutant check).
         typeof(IsIsNotOperatorExecutionTests),
+        typeof(NotPrecedenceExecutionTests),
     };
 
     /// <summary>
@@ -361,7 +362,7 @@ public class JsExecutionTierRosterTests
 
     [Test]
     public void RosterIsPinned()
-        => Assert.That(ExecutionTier, Has.Length.EqualTo(78), // + MsilValueToStringExecutionTests (task #183), InterfaceMethodTypingExecutionTests, IsIsNotOperatorExecutionTests (task #185)
+        => Assert.That(ExecutionTier, Has.Length.EqualTo(79), // + MsilValueToStringExecutionTests (task #183), InterfaceMethodTypingExecutionTests, IsIsNotOperatorExecutionTests (task #185), NotPrecedenceExecutionTests (#195)
             "The execution-tier roster changed. That is fine — update the number — but it must " +
             "be a deliberate edit, not a silent shrink.");
 
