@@ -33,5 +33,9 @@ public static class FormVocabulary
     }
 
     /// <summary><see cref="IsPixel(FormTarget, FormLayoutKind?)"/> for a document.</summary>
-    public static bool IsPixel(FormDocument document) => IsPixel(document.Target, LayoutOf(document));
+    public static bool IsPixel(FormDocument document)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        return IsPixel(document.Target, LayoutOf(document));
+    }
 }

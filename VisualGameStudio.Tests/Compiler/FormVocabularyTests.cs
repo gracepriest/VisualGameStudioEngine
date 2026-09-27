@@ -62,4 +62,14 @@ public class FormVocabularyTests
             Assert.That(FormVocabulary.IsPixel(window), Is.True);
         });
     }
+
+    [Test]
+    public void IsPixel_AndLayoutOf_RefuseANullDocument_WithArgumentNullException()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.Throws<ArgumentNullException>(() => FormVocabulary.IsPixel((FormDocument)null!));
+            Assert.Throws<ArgumentNullException>(() => FormVocabulary.LayoutOf(null!));
+        });
+    }
 }
