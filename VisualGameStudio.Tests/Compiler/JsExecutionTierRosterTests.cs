@@ -272,6 +272,15 @@ public class JsExecutionTierRosterTests
         // (aggressive), both spawning Node. MultiLineFunctionLambdaTests (front end only, no
         // process spawned, no [Category("Integration")]) is NOT here.
         typeof(MultiLineFunctionLambdaExecutionTests),
+
+        // Task #171 — a String For Each collection enumerates as Char (VB's rule). Named
+        // "...ExecutionTests", so the widened match below WOULD catch it on its own; listed
+        // explicitly anyway, matching every row above. Its JS legs run through
+        // FourBackends.RunsOnEveryBackend (S2/S3/S7/E1/E2/E6/E7/E12, which call
+        // JavaScriptExecutionTests.RunJs) and directly via JsTestSupport.BuildModule +
+        // JavaScriptCodeGenerator (the pinned S1/S5 BL7004 refusal texts). ForEachOverStringTests
+        // (front end/IR only, no process spawned, no [Category("Integration")]) is NOT here.
+        typeof(ForEachOverStringExecutionTests),
     };
 
     /// <summary>
@@ -320,7 +329,7 @@ public class JsExecutionTierRosterTests
 
     [Test]
     public void RosterIsPinned()
-        => Assert.That(ExecutionTier, Has.Length.EqualTo(72), // + MultiLineFunctionLambdaExecutionTests
+        => Assert.That(ExecutionTier, Has.Length.EqualTo(73), // + ForEachOverStringExecutionTests
             "The execution-tier roster changed. That is fine — update the number — but it must " +
             "be a deliberate edit, not a silent shrink.");
 

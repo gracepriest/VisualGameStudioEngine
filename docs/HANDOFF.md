@@ -2109,8 +2109,66 @@ single new failure against the 170-name baseline.
   declaring `For Each`'s captured variable now gets a fresh per-iteration environment); and
   `Dim c As Char : For Each c In "xyz"` — a bare `For Each` over a
   `String`'s characters infers the element type as `Object`, not `Char`, which reuse's assignment
-  coercion now refuses where a fresh declaration never had to check it — no task number filed for
-  this one yet.
+  coercion now refuses where a fresh declaration never had to check it — **CLOSED 2026-09-27 by
+  task #171**, below.
+- ⭐ **Newest — #171 DONE (fix committed `5250d519`).** A `String` `For Each` collection now
+  enumerates as `Char` (VB's rule; `String` implements `IEnumerable(Of Char)`) instead of falling
+  through to `Object` — closing the gap #168's own entry above named. Three layers, one commit:
+  - **Analyzer** (`SemanticAnalyzer.IsStringForEachCollection`): a String collection (by name
+    `String`/`System.String`, or a `System.String` .NET handle; NEVER an array — a handle
+    `System.String[]` is `TypeInfo(Name: "String", Kind: Array)` and stays on the Array arm)
+    infers `Char`. #168's hidden reuse variable takes the same type, so
+    `Dim c As Char : For Each c In s` type-checks. An explicit `For Each x As T In s` is refused
+    unless `Char` widens to `T` — the Array arm's own rule, reapplied. Before this,
+    `For Each n As Integer In "ab"` compiled and the backends DISAGREED: C# printed `97 98`, C++
+    `97 98 0`, JavaScript `a b`, MSIL `InvalidCastException`.
+  - **MSIL** (`MSILBackend.cs`): `IRForEach` itself already lowered a String correctly; two
+    Char-consuming arms did not. `Console.WriteLine(c)` fell to a `box object` arm — a no-op box on
+    a raw char where `WriteLine(object)` wants a reference — `InvalidProgramException` for ANY
+    Char local, loop or not. A Char operand of `&` reached `String::Concat(string, string)` raw,
+    same exception. Both now go through dedicated arms (`WriteLine(char)`;
+    `EmitCharConcatOperandAsString` → `Char::ToString`). Char only — every other value-typed `&`
+    operand still reaches `Concat` raw, a wider pre-existing gap left alone on purpose.
+  - **C++** (`CppCodeGenerator.cs`): a String `For Each` now iterates a `std::string` COPY of the
+    collection. A literal rendered as a raw `const char[N]`, and the range-for walked its NUL
+    terminator too — `For Each ch In "abc"` printed a fourth, invisible character. The copy also
+    gives .NET's snapshot semantics: a body that reassigns the String it iterates keeps
+    enumerating the ORIGINAL characters (measured: wrapping only literals, not variables, still
+    prints garbage the moment the loop body reassigns the variable to a DIFFERENT allocation —
+    `E12` in the test fixture below; a same-allocation growing reassignment, `E7`, happens not to
+    need it).
+  - JavaScript keeps its DESIGNED refusals unchanged: a Char local or a Char literal is BL7004
+    ("JavaScript has no character type. Use String."); a bare `For Each ch In s` with an inferred
+    Char still runs.
+  - Tests: `VisualGameStudio.Tests/Compiler/ForEachOverStringTests.cs` (front end/IR, fast subset)
+    and `ForEachOverStringExecutionTests.cs` (Integration; four-backend where all four agree, three
+    of four where JS's refusal is the point). Measured with `probe.py` across 4 backends × 3 entry
+    points before/after; byte-compared 3,436 corpus/probe files with 0 differences outside the
+    String-`For Each` probes themselves; the IR verifier fired 0 times. Eight mutants built and
+    killed for real (source patched, `BasicLang.dll` rebuilt and swapped into the test output,
+    never during a `dotnet test` run, then restored and md5-verified) — see
+    `ForEachOverStringTests`/`ForEachOverStringExecutionTests` doc comments for which test kills
+    which. One CONSTRUCTED mutant did NOT kill: `IsStringForEachCollection`'s own array exclusion
+    is presently dead code — both its call sites already sit behind a sibling
+    `Kind == TypeKind.Array` check in `Visit(ForEachLoopNode)`, so the helper is never even invoked
+    with an array-kind `TypeInfo` today; `StringArray_StillEnumeratesAsString` is kept as a
+    behavior pin (a `String()` array must keep enumerating as String), not a claim that it kills
+    that mutant.
+  - Filed, not fixed here: **#181** (`AscW`/`Asc` are not known intrinsics — measured:
+    `For Each ch In s : total = total + AscW(ch)` fails on EVERY backend, at the front end, with
+    "Arithmetic operator '+' requires numeric operands"; unrelated to this fix, pre-existing, S6 in
+    the probe set); **#182** (C# keyword identifiers — filed as a separate item; not characterized
+    further here, and not reproduced against String `For Each`); **#183** (MSIL: `&` with an
+    Integer or Double operand, and `Console.WriteLine` of a `Short`, both raise
+    `InvalidProgramException` — RE-VERIFIED here with two standalone one-line repros
+    (`"n=" & i`, `Console.WriteLine(shortVar)`), same exception, same "Common Language Runtime
+    detected an invalid program." The SAME class of defect this task fixed for Char, unfixed for
+    every other value type; a basic, pre-existing gap, not opened by this task and not touched by
+    it — `EmitCharConcatOperandAsString`'s own doc comment says so: "Char ONLY … a wider,
+    pre-existing gap of this backend, left for its own change."); **#184** (owner decision needed:
+    should `Char` widen to `String` on assignment/return/parameter, the way VB allows treating a
+    length-1 String literal as source but not a bare Char value? `For Each s As String In "ab"` is
+    refused today under the same rule as `As Integer`, deliberately, until #184 is decided).
 - ⭐ **Newest — #122 DONE (ADR-0006 D1's Obligation, committed `22f18284`).** The closure rule
   narrows from "every local is call-visible in a function that creates a lambda" (the interim
   approximation) to the locals a lambda of that function actually CAPTURES, read straight off the

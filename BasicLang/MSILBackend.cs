@@ -4289,7 +4289,9 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             if (binaryOp.Operation == BinaryOpKind.Concat)
             {
                 EmitLoadValue(binaryOp.Left);
+                EmitCharConcatOperandAsString(binaryOp.Left);
                 EmitLoadValue(binaryOp.Right);
+                EmitCharConcatOperandAsString(binaryOp.Right);
                 WriteLine("    call string [mscorlib]System.String::Concat(string, string)");
                 _currentStack--; // Two pops, one push = net -1
 
@@ -5383,6 +5385,15 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                         {
                             WriteLine("    call void [mscorlib]System.Console::WriteLine(bool)");
                         }
+                        else if (argType == "char")
+                        {
+                            // Task #171: a Char fell to the arm below, whose `box object` names a
+                            // REFERENCE type — a no-op box that leaves the raw char where
+                            // WriteLine(object) wants a reference. InvalidProgramException,
+                            // measured on `Console.WriteLine(c)` for any Char local, and on every
+                            // `For Each ch In s` body once a String enumerated as Char.
+                            WriteLine("    call void [mscorlib]System.Console::WriteLine(char)");
+                        }
                         else
                         {
                             WriteLine("    box object");
@@ -6092,6 +6103,23 @@ namespace BasicLang.Compiler.CodeGen.MSIL
         /// <summary>True when the value is typed as an IL <c>string</c>.</summary>
         private bool IsStringOperand(IRValue value) =>
             value?.Type != null && IlTypeSpec(value.Type) == "string";
+
+        /// <summary>
+        /// Task #171: turns a <c>char</c> operand of <c>&amp;</c>, already on the stack, into the
+        /// <c>string</c> that <c>String::Concat(string, string)</c> takes. Without it the raw
+        /// char reached Concat as a reference: InvalidProgramException, measured on
+        /// <c>acc &amp; ch</c> in a <c>For Each ch In s</c> body and on <c>"a" &amp; c</c> for
+        /// any Char local.
+        ///
+        /// <para>⚠ Char ONLY. Every other value-typed operand (<c>"n=" &amp; 5</c>) reaches
+        /// Concat raw today too — a wider, pre-existing gap of this backend, left for its own
+        /// change so this one moves only programs that concatenate a Char.</para>
+        /// </summary>
+        private void EmitCharConcatOperandAsString(IRValue operand)
+        {
+            if (operand?.Type == null || IlTypeSpec(operand.Type) != "char") return;
+            WriteLine("    call string [mscorlib]System.Char::ToString(char)");
+        }
 
         /// <summary>
         /// True for the IL primitives whose ordering needs the <c>.un</c> compare forms.
