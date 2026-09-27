@@ -93,28 +93,25 @@ public class FormReadingOrderTests
     }
 
     /// <summary>
-    /// Added on the Task 8 mutation pass: <see cref="AZeroHeightControl_StillJoinsARow"/> gives the same answer with
-    /// or without the 1px rule (two one-control rows come out left, right too). Here a zero-height control OPENS
-    /// the row: with 1px, the field at the same top joins it, and so do the controls overlapping the field. No member
-    /// spans the row (each misses some top), so the row is plain left to right and the low control comes first.
-    /// Without 1px the rule would be a row of its own, first. (Fixture rewritten for the spanning rule, owner
-    /// decision 2026-09-27: the previous one had a spanning field, under which both variants agree.)
+    /// The 1px rule on its own: a zero-height control WRITTEN FIRST opens the row (equal tops keep document order),
+    /// and the box at its top must be able to join it, so the row is ordered by X and the box, leftmost, comes
+    /// first. Without 1px the rule's row would end at its own top (10), the box would start a new row, and the rule
+    /// would come first. (Fixture history: two earlier fixtures stopped telling the variants apart as the spanning
+    /// rule changed — under the greedy rule the four-control one came out rule, field, low, deep either way.)
     /// </summary>
     [Test]
     public void AZeroHeightControl_OpensARowThatOthersJoin()
     {
         Assert.That(Order(
                 new Box("rule", 100, 10, 50, 0),
-                new Box("field", 200, 10, 50, 20),
-                new Box("deep", 300, 25, 50, 30),
-                new Box("low", 10, 40, 50, 20)),
-            Is.EqualTo(new[] { "low", "rule", "field", "deep" }),
-            "the rule counts as 10..11, so the field (top 10) joins it; deep (25 < 30) and low (40 < 55) join too");
+                new Box("box", 10, 10, 50, 20)),
+            Is.EqualTo(new[] { "box", "rule" }),
+            "the rule counts as 10..11, so the box (top 10) joins its row and is leftmost");
     }
 
     /// <summary>
     /// Owner decision 2026-09-27: a tall sibling must not turn the controls beside it into columns. The logo's
-    /// span holds every other top, so it is placed by X (first, it is leftmost) and the rest form their OWN rows.
+    /// removal splits the rest into rows, so it is placed by X (first, it is leftmost) and the rest form their OWN rows.
     /// Before the rule: logo, userLabel, passLabel, userBox, passBox, ok.
     /// </summary>
     [Test]
@@ -128,6 +125,34 @@ public class FormReadingOrderTests
                 new Box("passBox", 190, 60, 150, 23),
                 new Box("ok", 190, 100, 75, 23)),
             Is.EqualTo(new[] { "logo", "userLabel", "userBox", "passLabel", "passBox", "ok" }));
+    }
+
+    /// <summary>Re-review probe (a): the logo starts 4px BELOW the first box, so its span does not hold every top.</summary>
+    [Test]
+    public void ATallLogoStartingBelowTheFirstBox_StillKeepsEachPairTogether()
+    {
+        Assert.That(Order(
+                new Box("logo", 10, 24, 100, 200),
+                new Box("userLabel", 120, 22, 60, 18),
+                new Box("userBox", 190, 20, 150, 23),
+                new Box("passLabel", 120, 62, 60, 18),
+                new Box("passBox", 190, 60, 150, 23),
+                new Box("ok", 190, 100, 75, 23)),
+            Is.EqualTo(new[] { "logo", "userLabel", "userBox", "passLabel", "passBox", "ok" }));
+    }
+
+    /// <summary>Re-review probe (b): a heading above the fields starts ABOVE the logo, so the logo holds no top.</summary>
+    [Test]
+    public void AHeadingAboveTheFields_DoesNotStopTheLogoSpanning()
+    {
+        Assert.That(Order(
+                new Box("logo", 10, 10, 100, 200),
+                new Box("heading", 120, 5, 200, 20),
+                new Box("userLabel", 120, 22, 60, 18),
+                new Box("userBox", 190, 20, 150, 23),
+                new Box("passLabel", 120, 62, 60, 18),
+                new Box("passBox", 190, 60, 150, 23)),
+            Is.EqualTo(new[] { "logo", "heading", "userLabel", "userBox", "passLabel", "passBox" }));
     }
 
     [Test]
@@ -196,10 +221,29 @@ public class FormReadingOrderTests
     public void AMemberAtTheSpanningMembersOwnX_ComesAfterIt()
     {
         Assert.That(Order(
-                new Box("caption", 10, 120, 100, 20),
+                new Box("note", 10, 100, 100, 20),
+                new Box("caption", 10, 20, 100, 20),
                 new Box("picture", 10, 10, 200, 150)),
-            Is.EqualTo(new[] { "picture", "caption" }),
-            "the caption's top is inside the picture's span, at the same X: the tie goes AFTER the spanning member");
+            Is.EqualTo(new[] { "picture", "caption", "note" }),
+            "removing the picture splits caption and note into two rows, so it spans; both sit at its X, and the "
+            + "tie goes AFTER the spanning member");
+    }
+
+    /// <summary>
+    /// Pins the greedy removal's tie-break: equal heights are removed in DOCUMENT order. The logo (written first)
+    /// goes first, and without it the rest already splits ([a, b] above [list, c]), so only the logo spans and the
+    /// list is ordered inside its row. Removing the list first would make both span, giving logo, a, c, list, b.
+    /// </summary>
+    [Test]
+    public void EqualHeightTallMembers_AreRemovedInDocumentOrder()
+    {
+        Assert.That(Order(
+                new Box("logo", 10, 10, 100, 200),
+                new Box("list", 400, 50, 100, 200),
+                new Box("a", 150, 20, 50, 20),
+                new Box("b", 450, 20, 50, 15),
+                new Box("c", 150, 60, 50, 20)),
+            Is.EqualTo(new[] { "logo", "a", "b", "c", "list" }));
     }
 
     [Test]

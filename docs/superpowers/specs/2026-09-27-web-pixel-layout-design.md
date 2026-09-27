@@ -176,11 +176,12 @@ Below `MobileBreakpoint` (default 600px; 0 disables), one media query switches t
 - **Reading order** (pure function, computed at build time): controls grouped into ROWS by vertical overlap; rows top to
   bottom; left to right within a row; a container stacks as one block with its children stacked inside it the same way.
   Applied with CSS `order` inside the media query; HTML order unchanged.
-  **Owner decision 2026-09-27: a tall sibling must not turn the controls beside it into columns.** A row member whose
-  vertical span contains every other member's top (a logo or list beside a column of fields) is SPANNING: spanning
-  members are placed by X, and the other members of that row are ordered by the same rule again, in the gaps between
-  them by X, so they form their own rows (label/box pairs stay together; a tall control on the right comes after
-  them). Exact rule: plan scope call S8 and `FormReadingOrder`'s summary.
+  **Owner decision 2026-09-27: a tall sibling must not turn the controls beside it into columns.** Within a row, members
+  are removed tallest first (equal heights in document order) until the rest falls into two or more rows; the removed
+  members (a logo or list beside a column of fields) are SPANNING. Spanning members are placed by X, and the other
+  members of that row are ordered by the same rule again, in the gaps between them by X, so they form their own rows
+  (label/box pairs stay together; a tall control on the right comes after them). Exact rule: plan scope call S8 and
+  `FormReadingOrder`'s summary.
 - Inputs stretch to full width (TextBox, ComboBox, ListBox, multi-line text, PictureBox — from a per-row CATALOG flag,
   never a `control.Kind` switch); small controls keep their designed size, left-aligned.
 - Top strips first, bottom strips last; anchors/Dock ignored; hidden controls stay hidden; a small fixed gap.
