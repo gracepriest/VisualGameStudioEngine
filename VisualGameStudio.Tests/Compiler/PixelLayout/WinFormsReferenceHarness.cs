@@ -272,7 +272,8 @@ internal static class WinFormsReferenceHarness
                 {
                     throw new InvalidDataException(
                         $"{plan.FormName} '{label}': asked for a {width}x{height} client area and got " +
-                        $"{actual.Item1}x{actual.Item2} — Windows clamped the window; pick a size inside the working area");
+                        $"{actual.Item1}x{actual.Item2}: either Windows clamped the window (pick a size inside the " +
+                        "working area) or the driver measured before the resize took effect");
                 }
 
                 var boxes = rects.GetValueOrDefault((plan.FormName, label)) ?? new Dictionary<string, LayoutBox>();

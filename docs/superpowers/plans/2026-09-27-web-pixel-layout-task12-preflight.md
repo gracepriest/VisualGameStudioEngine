@@ -101,3 +101,57 @@ internal sealed record WinFormsReference(string FormName, int DeviceDpi, double 
 
 ## F. Gate
 Fast subset vs `0c7657b9` (8292 / 8286 / 5 / 1; the five known names) + `WinFormsReferenceParsingTests`; Integration `WinFormsReferenceHarnessTests` (must RUN on this machine, 0 skipped) and `FormRetargetPairTests` by name.
+
+---
+
+### Execution notes (measured on the owner's Windows 11 machine, `feat/web-pixel-layout` @ `1bb8789f`)
+
+**Machine:** `DeviceDpi` 96, display scale 1.0 (physical ÷ logical screen width) — the primary display runs at 100%, so the DpiUnaware pin could not be exercised against a scaled display here; the parser's DPI refusal is what guards a scaled machine. One build + one run of all 10 forms: ~17 s warm.
+
+**B8 (correction found by running, wins over spec §7 item 2).** `form.PointToClient(c.PointToScreen(Point.Empty))` is the control's CLIENT origin. For a bordered Panel that is 1px (FixedSingle) / 2px (Fixed3D) inside its own box — the first run read a Panel at (200,10) as (201,11). The driver maps the control's `Location` from its PARENT's client area (`form.PointToClient(c.Parent.PointToScreen(c.Location))`), i.e. the window rectangle — what Edge's `getBoundingClientRect` (border box) reports. Task 13 must compare border boxes.
+
+**FormDockLayout: AGREES with the real window on every docked case, at 0px.** S9 is now "as run". No FormDockLayout/FormDockScript change.
+
+| Case | WinForms (form-client X, Y, W×H) | Model |
+|---|---|---|
+| Fill between MenuStrip + StatusStrip, 400×300 | menu (0,0,400×24), status (0,278,400×22), fill (0,24,400×254) | = |
+| same at 600×400 | menu (0,0,600×24), status (0,378,600×22), fill (0,24,600×354) | = (Resolve at 600×400) |
+| Dock=Top Panel h40 BEFORE the MenuStrip | band (0,0,400×40), menu (0,40,400×24) | = |
+| S9 overflow: Top h400, Bottom h50, Fill | top (0,0,400×400), bottom (0,250,400×50), fill (0,400,400×0) | = |
+| S9 overflow: Left w500, Right w50, Fill | left (0,0,500×300), right (350,0,50×300), fill (500,0,0×300) | = |
+| Visible=false docked A (Top h40) before B (Top h60), startup | A hidden, B (0,0,400×60) | = (Runtime) |
+| A shown at run time | A (0,0,400×40), B (0,40,400×60); anchored C (10,150) and D Bottom,Right (300,240) unmoved | = |
+| A hidden again | B back at (0,0) | = |
+
+**Anchors (spec §4 table), all 16 combinations, 80×60 Panels:** at 601×401 (+201,+101) and 341×251 (−59,−49) every near/far/stretch axis is exactly the table. A CENTRED axis (neither edge) is `offset + floor(d/2)` — floored toward −∞: +201 → +100, −59 → −30 (e.g. `a0` None: (110,60) grown, (−20,−15) shrunk; spec 110.5/60.5 and −19.5/−14.5). The page's `calc(50% …)` keeps the half: a 0.5px difference, inside Task 13's ±1, recorded exactly in the test. Stretched sizes shrink without clamping here (80−59 = 21, 60−49 = 11).
+
+**Recorded gaps (measured, NOT fixed — the model takes a container's client area as its bounds):**
+
+| Container at (x,y) 180×100 | Dock=Top child | Positioned child stored (10,40) |
+|---|---|---|
+| Panel, BorderStyle None (10,10) | (10,10,180×20) = model | (20,50) = model |
+| Panel FixedSingle (200,10) | (201,11,178×20) — +1 each side | (211,51) — +1,+1 |
+| Panel Fixed3D (10,130) | (12,132,176×20) — +2 each side | (22,172) — +2,+2 |
+| GroupBox "Group" (200,130) | (203,149,174×20) — DisplayRectangle: +3 sides, +19 top | (210,170) — NOT inset |
+
+**Strip heights at 96 DPI** (.NET 8 default font, one item each): auto-sized MenuStrip/ToolStrip/StatusStrip = 24/25/22 — exactly the catalog's `DefaultHeight`. Pinned: the same. The pin is kept (a different font or DPI would differ).
+
+**Red/green.** Parser/comparison tests: 11 written with the harness (red shown by mutants 4–8 below, not by a pre-implementation run). Integration first run against the MODEL: 16 passed / 1 failed (Bordered: the B8 client-origin defect plus the real insets); after B8 and recording the insets: 28/28 (17 Integration + 11 fast), **0 skipped**.
+
+**Mutations (apply, rebuild, run, restore):**
+
+| # | Mutant | Result |
+|---|---|---|
+| 1 | Snapshot after `ClientSize =` but before `Settle()` | SURVIVED — equivalent: WinForms lays out synchronously inside the ClientSize setter |
+| 1b | Snapshot BEFORE the resize | killed — 17 red (parser's size refusal in OneTimeSetUp); message now names both causes (clamp, or measured before the resize) |
+| 2 | Driver never `Show`s the form | killed — 13 red; it exposed the anchor test passing with every control hidden → the anchor test now requires `Visible`; re-run: 16 red |
+| 3 | Harness ids = top-level only | killed — 1 red (`BorderedContainers_…`) |
+| 4 | Parser skips an id with no RECT | killed — 1 red (`AControlTheDriverDidNotReport_IsRefused_NeverSkipped`) |
+| 5 | `Differences` ignores a control missing from `actual` | killed — 1 red (`Differences_AMissingControl_OnEitherSide_IsReported`) |
+| 6 | Tolerance `> tolerance + 1` | killed — 1 red (`Differences_WithinTheTolerance_…`) |
+| 7 | Parser drops the clamp check | killed — 1 red (`AClampedWindow_IsRefused`) |
+| 8 | Parser drops the DPI check | killed — 1 red (`AScaledForm_IsRefused_…`) |
+| 9 | Driver stops pinning strips | SURVIVED — equivalent on this machine (auto heights = catalog) |
+| 11 | Measure with `c.PointToScreen(Point.Empty)` (spec §7's formula) | killed — 1 red (`BorderedContainers_…`) |
+| 12 | Drop `SetHighDpiMode(DpiUnaware)` | SURVIVED — equivalent at display scale 1.0; mutant 8's refusal guards a scaled display |
+| — | Driver skips a missing FIELD (`continue` instead of throw) | not run: every fixture control has its field; if one were skipped the driver prints no RECT for it and mutant 4's refusal fires |

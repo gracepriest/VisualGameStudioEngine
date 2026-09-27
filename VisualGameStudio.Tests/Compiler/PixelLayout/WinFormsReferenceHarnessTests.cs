@@ -134,6 +134,12 @@ public class WinFormsReferenceHarnessTests
             var across = SpecAxis(x, w, width - 400, edges.HasFlag(FormAnchorEdges.Left), edges.HasFlag(FormAnchorEdges.Right));
             var down = SpecAxis(y, h, height - 300, edges.HasFlag(FormAnchorEdges.Top), edges.HasFlag(FormAnchorEdges.Bottom));
             var box = snapshot.Controls[$"a{n}"];
+            if (!box.Visible)
+            {
+                // A hidden control reports its parent-relative Location, which would pass for a placed one.
+                problems.Add($"a{n} was not visible, so its numbers are not a measured placement");
+                continue;
+            }
 
             // ⚠ MEASURED: a centred axis lands on a half pixel for an odd growth, and WinForms FLOORS it —
             // offset + floor(d/2), toward −∞ on a shrink too (−59 → −30, not −29). The page's calc(50% …) keeps the
