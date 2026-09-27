@@ -56,6 +56,13 @@ namespace BasicLang.Compiler.IR
         /// class. See <see cref="IsCurrentClassMethod"/> for why this exists.
         /// </summary>
         private HashSet<string> _currentClassMethodNames;
+
+        /// <summary>
+        /// The one <c>Me</c> of each function built inside a class, keyed by the function itself.
+        /// Read and written only by <see cref="MeOfCurrentMember"/>.
+        /// </summary>
+        private readonly Dictionary<IRFunction, IRVariable> _meByFunction =
+            new Dictionary<IRFunction, IRVariable>(ReferenceEqualityComparer.Instance);
         private string _currentNamespace;
         private string _currentModuleName;  // Track current module for constants/globals
         private string _sourceFilePath;
@@ -367,15 +374,54 @@ namespace BasicLang.Compiler.IR
         }
 
         /// <summary>
-        /// The receiver the QUALIFIED form of <paramref name="member"/> evaluates to — the same
-        /// <see cref="GetOrCreateVariable"/> call visiting its receiver identifier makes:
-        /// <c>Me</c> (typed as the class being built) for an instance property, the declaring
-        /// class's name for a Shared one (<c>Box.P</c>).
+        /// The receiver the QUALIFIED form of <paramref name="member"/> evaluates to — exactly
+        /// what visiting its receiver identifier produces: <see cref="MeOfCurrentMember"/> for an
+        /// instance property, the declaring class's name for a Shared one (<c>Box.P</c>).
         /// </summary>
         private IRValue AccessorMemberReceiver(BareAccessorMember member) =>
             member.IsShared
                 ? GetOrCreateVariable(member.DeclaringType.Name, member.DeclaringType)
-                : GetOrCreateVariable("Me", _semanticAnalyzer.LookupType(_currentClassName));
+                : MeOfCurrentMember();
+
+        /// <summary>
+        /// ⭐ THE ONE ANSWER to "what is <c>Me</c> here": the receiver of the member being built,
+        /// typed as THE CLASS BEING BUILT — one <see cref="IRVariable"/> per function, shared by
+        /// every use in it. Both sites that produce <c>Me</c> ask this: an explicit <c>Me</c> /
+        /// <c>Me.X</c> (<see cref="Visit(IdentifierExpressionNode)"/>) and the receiver a bare
+        /// accessor-backed property lowers onto (<see cref="AccessorMemberReceiver"/>), so the two
+        /// spellings of one member reference cannot disagree about its receiver.
+        ///
+        /// <para>⛔ Both used to call <c>GetOrCreateVariable("Me", …)</c>, and
+        /// <c>_variableVersions</c> is NOT scoped per function — nothing ever popped "Me" — so the
+        /// FIRST class in the file to use <c>Me</c>, implicitly or explicitly, fixed its type for
+        /// every class after it. MSIL spells a member token from the receiver's IR type, so a
+        /// later class's bare property became <c>stfld int32 'Animal'::'V'</c> and died with
+        /// <c>MissingFieldException: Field not found: 'Animal.V'</c> (#176); C#, JavaScript and C++
+        /// print <c>this</c> and never read the type, which is why only MSIL showed it.</para>
+        ///
+        /// <para>⚠ Kept OUT of <c>_variableVersions</c> altogether, because that stack is exactly
+        /// how a binding outlives its function. Keyed by the function, not cleared on entry: a
+        /// lambda body is its own function and gets its own <c>Me</c>, while the method enclosing
+        /// it keeps the SAME one before and after the lambda is visited. One instance per function
+        /// is what the IR always had within a function; it is kept for that, not because anything
+        /// is measured to need it — a fresh <c>Me</c> per USE ran every #176 probe identically.</para>
+        ///
+        /// <para>⚠ <c>MyBase</c> is the deliberate exception: the same object seen as its BASE
+        /// class, so <see cref="Visit(MyBaseExpressionNode)"/> mints its own base-typed variable of
+        /// the same name. It never enters <c>_variableVersions</c> either.</para>
+        /// </summary>
+        private IRVariable MeOfCurrentMember()
+        {
+            var classType = _semanticAnalyzer.LookupType(_currentClassName);
+            if (_currentFunction == null) return CreateVariable("Me", classType);
+
+            if (!_meByFunction.TryGetValue(_currentFunction, out var me))
+            {
+                me = CreateVariable("Me", classType);
+                _meByFunction[_currentFunction] = me;
+            }
+            return me;
+        }
 
         /// <summary>
         /// The global that a resolved module member reference binds to: the declared one when
@@ -1391,6 +1437,16 @@ namespace BasicLang.Compiler.IR
             }
 
             _module.Classes[node.Name] = irClass;
+
+            // ⛔ Saved and RESTORED, not cleared at the end: a class nested inside another is
+            // visited from the outer class's member loop below, and clearing left every outer
+            // member declared AFTER it built with no class at all. Measured before, with a
+            // property declared after a nested class: CS0103 on its backing field on C#, `3` for
+            // `21` on JavaScript and MSIL, "use of undeclared identifier '_v'" on C++; and a bare
+            // property used after one lowered to a variable (Invariant F). It would also leave
+            // `Me` typed as nothing — MeOfCurrentMember's one answer is only as good as this name.
+            var enclosingClassName = _currentClassName;
+            var enclosingClassMethodNames = _currentClassMethodNames;
             _currentClassName = node.Name;
 
             // ⛔ Taken from the AST, BEFORE the loop below, and not from irClass.Methods — that list
@@ -1565,8 +1621,8 @@ namespace BasicLang.Compiler.IR
 
             SynthesizeImplicitConstructor(node, irClass);
 
-            _currentClassName = null;
-            _currentClassMethodNames = null;
+            _currentClassName = enclosingClassName;
+            _currentClassMethodNames = enclosingClassMethodNames;
         }
 
         /// <summary>
@@ -2216,6 +2272,9 @@ namespace BasicLang.Compiler.IR
             // JavaScript, CS0103 on C# and an InvalidProgramException on MSIL — `MyBase.Field`
             // was broken on all four, measured. Only `MyBase.Method(...)` escaped it, through the
             // IRBaseMethodCall arm that intercepts the call before the receiver is ever visited.
+            //
+            // ⚠ The one deliberate exception to MeOfCurrentMember: a DIFFERENT variable of the
+            // same name, because its type is the base, not the class being built.
             var baseType = _semanticAnalyzer.GetNodeType(node);
             _expressionResult = new IRVariable("Me", baseType);
         }
@@ -5195,6 +5254,15 @@ namespace BasicLang.Compiler.IR
             if (node.IsForeignQualified)
             {
                 _expressionResult = new IRVariable(node.Name, _semanticAnalyzer.GetNodeType(node));
+                return;
+            }
+
+            // `Me` is the receiver of the member being built, never a variable lookup — see
+            // MeOfCurrentMember. Recognised by the analyzer's own rule (Visit(IdentifierExpressionNode)
+            // there): the parser spells the keyword "Me" whatever the source casing.
+            if (string.Equals(node.Name, "Me", StringComparison.OrdinalIgnoreCase))
+            {
+                _expressionResult = MeOfCurrentMember();
                 return;
             }
 
