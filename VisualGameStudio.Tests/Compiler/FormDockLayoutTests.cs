@@ -152,6 +152,21 @@ public class FormDockLayoutTests
         Assert.That(At(document, "fill").Height, Is.Zero);
     }
 
+    // One row per edge: the first docked box overflows what is left on its axis, and the Fill after it must be
+    // handed a 0-size remainder on that axis, never a negative one (S9: what is left clamps at 0).
+    [TestCase("Top", 10, 400, 0, 400, 400, 0)]
+    [TestCase("Bottom", 10, 400, 0, 0, 400, 0)]
+    [TestCase("Left", 500, 10, 500, 0, 0, 300)]
+    [TestCase("Right", 500, 10, 0, 0, 0, 300)]
+    public void Overflow_OnEachEdge_LeavesAZeroRemainder_NeverANegativeOne(
+        string dock, int width, int height, int x, int y, int fillWidth, int fillHeight)
+    {
+        var document = Window(Box("big", width, height, dock), Box("fill", 10, 10, "Fill"));
+
+        Assert.That(At(document, "fill"), Is.EqualTo(new FormRect(x, y, fillWidth, fillHeight)),
+            $"a Dock={dock} box larger than the form leaves nothing — clamped at 0 on its axis");
+    }
+
     [Test]
     public void ADockedChild_DocksInsideItsContainer_AtTheContainersResolvedSize()
     {
@@ -219,6 +234,30 @@ public class FormDockLayoutTests
             }
 
             Assert.That(documents[1].DesignSize, Is.EqualTo((FormDocument.DefaultDesignWidth, FormDocument.DefaultDesignHeight)));
+        });
+    }
+
+    // The fallback's VALUE, per axis and independently: the comparison above agrees by construction (SurfaceSize
+    // delegates), so it cannot see a changed fallback on its own.
+    [TestCase(null, 200, 400, 200)]
+    [TestCase(0, 200, 400, 200)]
+    [TestCase(-5, 200, 400, 200)]
+    [TestCase(200, null, 200, 300)]
+    [TestCase(200, 0, 200, 300)]
+    [TestCase(200, -5, 200, 300)]
+    [TestCase(null, null, 400, 300)]
+    [TestCase(1, 1, 1, 1)]
+    public void TheDesignSize_FallsBackTo400By300_OnlyOnTheAxisThatIsMissingOrNotPositive(
+        int? width, int? height, int expectedWidth, int expectedHeight)
+    {
+        var document = new FormDocument { Target = FormTarget.WinForms, Name = "F", Width = width, Height = height };
+        var surface = FormCanvasTransform.SurfaceSize(document);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(document.DesignSize, Is.EqualTo((expectedWidth, expectedHeight)));
+            Assert.That((surface.Width, surface.Height), Is.EqualTo(((double)expectedWidth, (double)expectedHeight)),
+                "the canvas surface reports the same number");
         });
     }
 
