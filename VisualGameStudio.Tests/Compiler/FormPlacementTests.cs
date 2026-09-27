@@ -537,6 +537,88 @@ public class FormPlacementTests
     }
 
     // ==================================================================
+    // Task 9 — a Canvas page places like a WinForms form (spec 2026-09-27 §2.4)
+    // ==================================================================
+
+    private static FormDocument CanvasPage(int width = 800, int height = 450) => new()
+    {
+        Target = FormTarget.Web,
+        Name = "LoginForm",
+        Width = width,
+        Height = height,
+        Layout = new FormLayout { Kind = FormLayoutKind.Canvas, MobileBreakpoint = "600" }
+    };
+
+    [Test]
+    public void ADropOnACanvasPage_LandsInPixels_AtThePoint()
+    {
+        var document = CanvasPage();
+        var row = FormControlCatalog.Find("Button")!;
+
+        var result = FormPlacement.Place(document, "Button", 96, 80);
+
+        Assert.That(result.Refusal, Is.Null, "a Canvas page used to be refused as a page with no cells");
+        var pixel = result.Control!.Geometry as PixelGeometry;
+        Assert.Multiple(() =>
+        {
+            Assert.That(pixel, Is.Not.Null, "a Canvas page speaks pixels, never cells");
+            Assert.That((pixel!.X, pixel.Y, pixel.Width, pixel.Height),
+                Is.EqualTo((96, 80, row.DefaultWidth, row.DefaultHeight)));
+            Assert.That(result.Control.TabIndex, Is.EqualTo(0));
+            Assert.That(result.Control.Properties["Text"], Is.EqualTo("Button1"));
+            Assert.That(document.Controls, Is.EqualTo(new[] { result.Control }));
+        });
+    }
+
+    [Test]
+    public void ADropNearACanvasPagesEdge_IsPulledBackOntoTheDesignSize()
+    {
+        var document = CanvasPage();
+        var row = FormControlCatalog.Find("Button")!;
+
+        var pixel = (PixelGeometry)FormPlacement.Place(document, "Button", 795, 445).Control!.Geometry!;
+
+        Assert.That((pixel.X, pixel.Y), Is.EqualTo((800 - row.DefaultWidth, 450 - row.DefaultHeight)));
+    }
+
+    [Test]
+    public void ADropInsideAPanelOnACanvasPage_IsAChild_PositionedRelativeToIt()
+    {
+        var document = CanvasPage();
+        var panel = Existing("Panel", "pnl", 100, 100, 300, 200);
+        document.Controls.Add(panel);
+
+        var result = FormPlacement.Place(document, "Button", 150, 140);
+
+        var pixel = (PixelGeometry)result.Control!.Geometry!;
+        Assert.Multiple(() =>
+        {
+            Assert.That(panel.Children, Is.EqualTo(new[] { result.Control }));
+            Assert.That((pixel.X, pixel.Y), Is.EqualTo((50, 40)));
+        });
+    }
+
+    [Test]
+    public void ADropIntoADockedFillPanel_IsRelativeToWhereItIsDrawn_AndClampedToItsResolvedSize()
+    {
+        var document = WinFormsDocument(640, 480);
+        document.Controls.Add(new FormControl { Kind = "MenuStrip", Id = "menuStrip1" });
+        var fill = Existing("Panel", "fill", 7, 7, 10, 10);
+        ((PixelGeometry)fill.Geometry!).Dock = "Fill";
+        document.Controls.Add(fill);
+
+        var result = FormPlacement.Place(document, "Button", 104, 200);
+
+        var pixel = (PixelGeometry)result.Control!.Geometry!;
+        Assert.Multiple(() =>
+        {
+            Assert.That(fill.Children, Is.EqualTo(new[] { result.Control }), "the Panel is drawn under the point");
+            Assert.That((pixel.X, pixel.Y), Is.EqualTo((104, 176)),
+                "relative to (0, 24), and not clamped to the stale 10x10 (B3)");
+        });
+    }
+
+    // ==================================================================
     // Task 18 (commit 24c) — a Docked strip, an Item's refusal, and PlaceItem
     // ==================================================================
 
