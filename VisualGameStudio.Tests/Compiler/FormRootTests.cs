@@ -38,6 +38,7 @@ public class FormRootTests
         {
             [FormPropertyType.String] = "sample",
             [FormPropertyType.Size] = "75, 23",
+            [FormPropertyType.Int] = "600",
         };
 
         Assert.Multiple(() =>

@@ -1983,6 +1983,15 @@ public static class FormControlCatalog
                 Category: FormPropertyCategory.Layout,
                 Description: "The space between the page's grid cells or flow items, as a CSS length (e.g. 8px).",
                 WebLayouts: new[] { FormLayoutKind.Grid, FormLayoutKind.Flow }),
+            // ⛔ Web CANVAS only (spec 2026-09-27 §2.3, §5): below this page width the controls stack into one
+            // column. 0 = never stack. Stored on <Layout> as raw text (FormLayout.MobileBreakpoint);
+            // FormRootValues.StorageAttributes says so. ⚠ The default is FormLayout's constant, never a second copy.
+            new("MobileBreakpoint", FormPropertyType.Int,
+                FormLayout.DefaultMobileBreakpoint.ToString(CultureInfo.InvariantCulture),
+                Targets: new[] { FormTarget.Web },
+                Category: FormPropertyCategory.Layout,
+                Description: "Below this page width, in pixels, the controls stack into one column for phones. 0 never stacks.",
+                WebLayouts: new[] { FormLayoutKind.Canvas }),
         },
         Schematic: FormSchematic.Container);
 

@@ -302,6 +302,9 @@ public static class FormDocumentWriter
         SetAttributeIfChanged(element, "Rows", model.Layout.Rows);
         SetAttributeIfChanged(element, "Gap", model.Layout.Gap);
         SetAttributeIfChanged(element, "Dir", model.Layout.Dir);
+        // ⛔ Remove-on-null is correct here (plan scope call S1): null means ABSENT in this storage — an
+        // unusable value is non-null raw text, so no save can delete what the user wrote.
+        SetAttributeIfChanged(element, "MobileBreakpoint", model.Layout.MobileBreakpoint);
     }
 
     private static void ApplyControls(XElement root, FormDocument model)
@@ -579,6 +582,7 @@ public static class FormDocumentWriter
         element.SetAttributeValue("Rows", layout.Rows);
         element.SetAttributeValue("Gap", layout.Gap);
         element.SetAttributeValue("Dir", layout.Dir);
+        element.SetAttributeValue("MobileBreakpoint", layout.MobileBreakpoint);
         return element;
     }
 

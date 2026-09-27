@@ -123,6 +123,21 @@ public static class FormDocumentReader
 
         var layout = FormVocabulary.LayoutOf(model);
 
+        // The Canvas page's phone breakpoint (spec 2026-09-27 §2.3). Stored as RAW text, so an unusable value
+        // is preserved by construction; the tier is what says it cannot be used. ⚠ Judged only where the ROW
+        // exists — asked through FormRootValues.Applies, the one predicate, never a second `layout == Canvas`
+        // table beside it. On a Grid/Flow page it is not a row, and it round-trips untouched.
+        if (FormControlCatalog.FormRoot.Property("MobileBreakpoint") is { } breakpointRow &&
+            FormRootValues.Applies(breakpointRow, target.Value, layout) &&
+            model.Layout?.MobileBreakpoint is { } rawBreakpoint &&
+            !FormLayout.TryParseMobileBreakpoint(rawBreakpoint, out _))
+        {
+            degradedRoot.Add(new DegradedProperty("", "MobileBreakpoint", rawBreakpoint,
+                $"the page's phone breakpoint could not be used — MobileBreakpoint=\"{rawBreakpoint}\" must be 0 " +
+                "(never stack) or a positive whole number of pixels, so the page stacks below the default " +
+                $"{FormLayout.DefaultMobileBreakpoint}px. The attribute is preserved exactly as written."));
+        }
+
         if (FormVocabulary.IsPixel(target.Value, layout))
         {
             // The form's own client size: a window's, or a Canvas page's design size (spec 2026-09-27 D2).
@@ -334,7 +349,8 @@ public static class FormDocumentReader
             Cols = (string?)element.Attribute("Cols"),
             Rows = (string?)element.Attribute("Rows"),
             Gap = (string?)element.Attribute("Gap"),
-            Dir = (string?)element.Attribute("Dir")
+            Dir = (string?)element.Attribute("Dir"),
+            MobileBreakpoint = (string?)element.Attribute("MobileBreakpoint")
         };
 
         if (Enum.TryParse<FormLayoutKind>((string?)element.Attribute("Kind"), ignoreCase: true, out var kind))

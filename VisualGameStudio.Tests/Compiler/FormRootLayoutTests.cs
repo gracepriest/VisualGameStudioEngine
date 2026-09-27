@@ -37,8 +37,7 @@ public class FormRootLayoutTests
 
     private static FormPropertyDef Row(string name) => FormControlCatalog.FormRoot.Property(name)!;
 
-    // ⚠ These expected sets are the SPEC's decisions (§2.3), not a list of catalog kinds. ⚠ RE-CHECK IN
-    // TASK 4: MobileBreakpoint joins the Canvas row.
+    // ⚠ These expected sets are the SPEC's decisions (§2.3), not a list of catalog kinds.
     private static IEnumerable<TestCaseData> Documents()
     {
         yield return new TestCaseData(FormTarget.WinForms, null, new[] { "Text", "ClientSize" })
@@ -49,7 +48,7 @@ public class FormRootLayoutTests
             .SetName("{m}(Web Grid)");
         yield return new TestCaseData(FormTarget.Web, FormLayoutKind.Flow, new[] { "Text", "Gap" })
             .SetName("{m}(Web Flow)");
-        yield return new TestCaseData(FormTarget.Web, FormLayoutKind.Canvas, new[] { "Text", "ClientSize" })
+        yield return new TestCaseData(FormTarget.Web, FormLayoutKind.Canvas, new[] { "Text", "ClientSize", "MobileBreakpoint" })
             .SetName("{m}(Web Canvas)");
     }
 

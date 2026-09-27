@@ -37,6 +37,7 @@ public static class FormRootValues
         "Cols" => form.Layout?.Cols,
         "Rows" => form.Layout?.Rows,
         "Gap" => form.Layout?.Gap,
+        "MobileBreakpoint" => form.Layout?.MobileBreakpoint,
         _ => throw new InvalidOperationException(
             $"FormRoot row '{row.Name}' has no storage in FormRootValues — every root row must be mapped here.")
     };
@@ -82,6 +83,27 @@ public static class FormRootValues
                 (form.Layout ??= new FormLayout()).Gap = value;
                 return true;
 
+            case "MobileBreakpoint":
+                if (value == null)
+                {
+                    if (form.Layout != null)
+                    {
+                        form.Layout.MobileBreakpoint = null;
+                    }
+
+                    return true;
+                }
+
+                // ⛔ Refused, never coerced (spec §7): the grid cannot manufacture a Degraded value of its own.
+                if (!FormLayout.TryParseMobileBreakpoint(value, out var pixels))
+                {
+                    return false;
+                }
+
+                (form.Layout ??= new FormLayout()).MobileBreakpoint =
+                    pixels.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                return true;
+
             default:
                 throw new InvalidOperationException(
                     $"FormRoot row '{row.Name}' has no storage in FormRootValues — every root row must be mapped here.");
@@ -97,7 +119,7 @@ public static class FormRootValues
 
     /// <summary>
     /// The ROOT-ELEMENT attributes that carry a row's value. Empty for a row stored on a child element
-    /// (<c>&lt;Layout&gt;</c>'s Cols/Rows/Gap).
+    /// (<c>&lt;Layout&gt;</c>'s Cols/Rows/Gap/MobileBreakpoint).
     ///
     /// <para>⛔ Throws for an unmapped row, exactly as <see cref="Get"/> and <see cref="Set"/> do — never a
     /// guess. A guessed <c>row.Name</c> would make the reader call that attribute "known" (so it is not
@@ -108,7 +130,7 @@ public static class FormRootValues
     {
         "Text" => new[] { "Text" },
         "ClientSize" => new[] { "Width", "Height" },
-        "Cols" or "Rows" or "Gap" => Array.Empty<string>(),
+        "Cols" or "Rows" or "Gap" or "MobileBreakpoint" => Array.Empty<string>(),
         _ => throw new InvalidOperationException(
             $"FormRoot row '{row.Name}' has no storage in FormRootValues — every root row must be mapped here.")
     };
