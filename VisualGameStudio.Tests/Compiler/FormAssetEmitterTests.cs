@@ -758,7 +758,10 @@ public class FormAssetEmitterTests
         {
             Assert.That(css, Does.Contain("body { margin: 0; }"));
             Assert.That(css, Does.Contain(
-                ".vgs-form {\n  position: relative;\n  width: 100%;\n" +
+                // ⛔ display: flow-root (Task 10 review N-1, measured in Chromium): without its own block formatting
+                // context a Literal's first <p>/<h1> top margin collapses through .vgs-form and moves EVERY control
+                // down (a button at Y=30 rendered at 46). The phone query's display:flex overrides it.
+                ".vgs-form {\n  position: relative;\n  display: flow-root;\n  width: 100%;\n" +
                 $"  min-width: {w}px;\n  height: 100vh;\n  min-height: {h}px;\n  box-sizing: border-box;\n}}"));
             Assert.That(css, Does.Contain(".vgs-form [hidden] { display: none !important; }"),
                 "B7: a phone's display:flex must not un-hide a control user code hid");

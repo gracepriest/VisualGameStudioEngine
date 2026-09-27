@@ -3322,7 +3322,10 @@ Spec §7 (Edge check), §7a (loopback server).
   - a `Visible=false` docked control before another (the page is `FormDockMode.Runtime`);
   - ⛔ a PictureBox with a LOADED image (a real `src` the harness serves), anchored `Left,Right`, and another docked
     `Fill` (Task 10 review I-1: an `<img>` with a loaded src ignores left+right/top+bottom without an explicit size, and
-    an `<img>` WITHOUT a src stretches — so a fixture with no image passes with the defect present).
+    an `<img>` WITHOUT a src stretches — so a fixture with no image passes with the defect present);
+  - a `<Literal>` that starts with a `<p>` (a top margin): every control's position must be UNCHANGED from the
+    same form without it (Task 10 review N-1: the margin collapsed through `.vgs-form` and moved the whole form area
+    down 16px until the form area became `display: flow-root`).
 
 **Risks:**
 - The generated page's module script loads and runs BasicLang's JS. A script error must not abort measurement, so the harness measures on `load`, independent of the script.

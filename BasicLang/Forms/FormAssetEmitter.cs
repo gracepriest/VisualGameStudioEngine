@@ -612,6 +612,12 @@ public static class FormAssetEmitter
         sb.Append("body { margin: 0; }\n");
         sb.Append(".vgs-form {\n");
         sb.Append("  position: relative;\n");
+
+        // ⛔ Its own block formatting context (Task 10 review N-1, measured in Chromium): otherwise a <Literal> whose
+        // first element has a top margin (<p>, <h1>, <ul>) collapses that margin through .vgs-literal and .vgs-form,
+        // and the WHOLE form area — every positioned control with it — moves down. The phone query's display:flex
+        // overrides this below the breakpoint.
+        sb.Append("  display: flow-root;\n");
         sb.Append("  width: 100%;\n");
         sb.Append($"  min-width: {Number(width)}px;\n");
         sb.Append("  height: 100vh;\n");

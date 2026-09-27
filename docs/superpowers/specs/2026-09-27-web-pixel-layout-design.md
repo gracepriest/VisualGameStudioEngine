@@ -141,7 +141,13 @@ writer, region writer, grid (`FormPropertyGridViewModel.cs:479`, `:489`) and ret
   page needs none.)
 - `<Literal>` markup, if any, flows at the form area's top-left under the positioned controls (documented; not reordered).
 - Styling from the catalog CSS walk (`FormCss`), unchanged; tray components emit no markup, unchanged.
-- A non-positive `Width`/`Height` is read as a `.blform` reads it (no new strictness); the emitter writes no size for it.
+- A non-positive `Width`/`Height` is read as a `.blform` reads it (no new strictness); the emitter writes no pixel size
+  for it (it counts as 0 in the far-edge inset). ⚠ Exception (Task 10 review): on an axis anchored to BOTH edges the
+  size is always written as `calc(100% − (near+far)px)` (§4), which for a non-positive extent is 0 at the design size
+  and grows with the container.
+- The Canvas form area is its own block formatting context (`display: flow-root`; Task 10 review, measured in
+  Chromium): otherwise a `<Literal>` whose first element has a top margin collapses it through the form area and moves
+  every control down.
 
 ## 4. Resizing: Anchor and Dock → CSS
 
