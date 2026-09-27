@@ -5660,6 +5660,19 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             if (IsCollectionType(forEach.Collection?.Type))
                 collection = $"(*{collection})";
 
+            // Task #171: a String is iterated as a std::string it OWNS — a copy. A literal
+            // collection renders as a raw "abc", a `const char[4]`, and the range-for walked its
+            // terminator too: `For Each ch In "abc"` printed a fourth, NUL, character. The copy
+            // also gives .NET's snapshot semantics: a String is immutable, so a body that
+            // reassigns the variable it iterates keeps enumerating the ORIGINAL characters,
+            // where a range-for bound to the variable itself would iterate a string being
+            // reallocated under it.
+            var collectionType = forEach.Collection?.Type;
+            if (collectionType != null && collectionType.Kind != TypeKind.Array
+                && collectionType.NetHandleTypeFullName == null
+                && string.Equals(collectionType.Name, "String", StringComparison.OrdinalIgnoreCase))
+                collection = $"std::string({collection})";
+
             WriteLine($"for ({elemType} {varName} : {collection})");
             WriteLine("{");
             Indent();

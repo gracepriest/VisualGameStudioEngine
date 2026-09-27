@@ -8345,6 +8345,17 @@ namespace BasicLang.Compiler.SemanticAnalysis
                               node.Line, node.Column);
                     }
                 }
+                else if (elementType != null && IsStringForEachCollection(collectionType)
+                         && !elementType.IsAssignableFrom(_typeManager.CharType))
+                {
+                    // Task #171: a String's element is a Char, so the loop variable must accept one
+                    // — the Array arm's rule, with the element the string enumerates. Before this
+                    // `For Each n As Integer In "ab"` compiled and the backends disagreed, all
+                    // measured: C# printed 97 98, C++ 97 98 0, JavaScript a b, and MSIL died with
+                    // InvalidCastException.
+                    Error($"Cannot assign String element type 'Char' to loop variable of type '{elementType}'",
+                          node.Line, node.Column);
+                }
             }
             else
             {
@@ -8354,6 +8365,15 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     if (collectionType.Kind == TypeKind.Array)
                     {
                         elementType = collectionType.ElementType ?? _typeManager.ObjectType;
+                    }
+                    else if (IsStringForEachCollection(collectionType))
+                    {
+                        // Task #171: a String enumerates as Char (VB's rule; String implements
+                        // IEnumerable(Of Char)). It used to fall to the Object arm below, which
+                        // refused `Dim c As Char : For Each c In s` (Object → Char), typed
+                        // `ch = "a"c` as an Object comparison (CS0019 in C#, a REFERENCE compare
+                        // printing 0 in MSIL), and made `acc & ch` print garbage in MSIL.
+                        elementType = _typeManager.CharType;
                     }
                     else if (collectionType.GenericArguments != null && collectionType.GenericArguments.Count > 0)
                     {
@@ -8439,6 +8459,19 @@ namespace BasicLang.Compiler.SemanticAnalysis
             }
 
             ExitScope();
+        }
+
+        /// <summary>
+        /// Task #171: whether a For Each collection is a String, which enumerates as
+        /// <c>Char</c>. Never an array: a handle <c>System.String[]</c> is
+        /// <c>TypeInfo(Name: "String", Kind: Array)</c> and belongs to the Array arm.
+        /// </summary>
+        private static bool IsStringForEachCollection(TypeInfo collectionType)
+        {
+            if (collectionType == null || collectionType.Kind == TypeKind.Array) return false;
+            return string.Equals(collectionType.Name, "String", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(collectionType.Name, "System.String", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(collectionType.NetHandleTypeFullName, "System.String", StringComparison.Ordinal);
         }
 
         /// <summary>
