@@ -436,11 +436,11 @@ End Sub");
     /// routes (CType via IRCast, C* intrinsics via EmitStdLibCall). A raw
     /// <c>static_cast</c>/<c>std::to_string</c> on the BasicLang::Decimal struct is
     /// invalid C++, so each target has an explicit engine-backed lowering.
-    /// NOTE — the <c>CInt</c> value pinned here (19, truncating) is the C++ backend's
-    /// LONG-STANDING C*-intrinsic convention, shared with Double/Single; the C#
-    /// backend emits Convert.ToInt32 (which rounds → 20). That divergence is
-    /// PRE-EXISTING and not Decimal-specific; the cross-backend parity oracle
-    /// (Task 13) must use CType, not CInt, for integral narrowing.
+    /// ⚠ <c>CType(d, Integer)</c> IS <c>CInt(d)</c> and ROUNDS half-to-even — VB's rule, and
+    /// what the C# backend prints for this program. It used to be pinned at 19 (truncating,
+    /// "matching .NET's (int)decimal") while the <c>CInt</c> line beside it said 20: one
+    /// language, two answers for the same conversion. CType now lowers to the conversion
+    /// function (IRBuilder.ConversionBuiltinFor), so the two cannot disagree.
     /// </summary>
     [Test, Category("Integration")]
     public void DecimalConversions_ToIntegralStringAndBoolean_LowerThroughTheEngine()
@@ -475,9 +475,9 @@ End Sub");
             "Decimal→Boolean must route through the engine's zero test:\n" + output);
 
         AssertLines(
-            // truncate-toward-zero (matching .NET's (int)decimal), scale-preserving
-            // ToString, VarR8FromDec ToDouble, and Convert.ToBoolean's `!= 0`.
-            "19\n19\n19.99\n20\n19.99\n19.99\n-2\nnonzero\nzero\n",
+            // VB's rounding (19.99 → 20, -2.9 → -3), scale-preserving ToString,
+            // VarR8FromDec ToDouble, and Convert.ToBoolean's `!= 0`.
+            "20\n20\n19.99\n20\n19.99\n19.99\n-3\nnonzero\nzero\n",
             CompileRun(output));
     }
 

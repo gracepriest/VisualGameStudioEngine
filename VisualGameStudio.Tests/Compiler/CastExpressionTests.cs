@@ -129,11 +129,13 @@ End Sub";
 
         Assert.That(errors, Is.Empty, string.Join("; ", errors));
         Assert.That(output, Is.Not.Null);
-        Assert.That(output, Does.Contain("(double)"));
+        // CType(x, Double) IS CDbl(x) (IRBuilder.ConversionBuiltinFor): one lowering for both
+        // spellings, so they cannot disagree on any backend.
+        Assert.That(output, Does.Contain("Convert.ToDouble(i)"));
     }
 
     // ========================================================================
-    // CType - String conversions use Convert.*
+    // CType - String conversions use VB's own parser
     // ========================================================================
 
     [Test]
@@ -149,7 +151,9 @@ End Sub";
 
         Assert.That(errors, Is.Empty, string.Join("; ", errors));
         Assert.That(output, Is.Not.Null);
-        Assert.That(output, Does.Contain("Convert.ToInt32"));
+        // VB's parser, not Convert.ToInt32: the two disagree on "3.5" (VB rounds it to 4,
+        // Convert throws) and Convert.ToBoolean("0") throws where VB's CBool("0") is False.
+        Assert.That(output, Does.Contain("Microsoft.VisualBasic.CompilerServices.Conversions.ToInteger(s)"));
     }
 
     [Test]
@@ -173,7 +177,7 @@ End Sub";
     // ========================================================================
 
     [Test]
-    public void Compile_CType_ObjectToString_EmitsReferenceCast()
+    public void Compile_CType_ObjectToString_Converts()
     {
         var source = @"
 Sub Main()
@@ -185,7 +189,9 @@ End Sub";
 
         Assert.That(errors, Is.Empty, string.Join("; ", errors));
         Assert.That(output, Is.Not.Null);
-        Assert.That(output, Does.Contain("(string)"));
+        // CType CONVERTS (it is CStr here): an Object holding 5 gives "5", where a `(string)`
+        // reference cast would throw InvalidCastException. DirectCast is the cast — see below.
+        Assert.That(output, Does.Contain("Convert.ToString(o)"));
     }
 
     [Test]
