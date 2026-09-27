@@ -2194,7 +2194,29 @@ namespace BasicLang.Compiler.SemanticAnalysis
             if (fromType.Name == "Object")
                 return $"Use CType(value, {toType.Name}) or DirectCast()";
 
-            return null;
+            return DelegateValueConversionHint(fromType, toType);
+        }
+
+        /// <summary><see cref="DelegateValueConversionHint"/> as a sentence to append to a
+        /// refusal, or nothing.</summary>
+        private static string WithDelegateValueHint(TypeInfo fromType, TypeInfo toType) =>
+            DelegateValueConversionHint(fromType, toType) is { } hint ? $". {hint}" : "";
+
+        /// <summary>
+        /// #187's stated boundary: a delegate VALUE of one type never converts to a different
+        /// delegate type — <c>Dim n As Notify = someAction</c> stays refused, as in C# (VB itself
+        /// needs <c>AddressOf a.Invoke</c>, ADR-0010 D7). Only a lambda or <c>AddressOf</c> is
+        /// target-typed. Said in the message when either side is a user <c>Delegate</c>; null
+        /// otherwise, so no other refusal's wording moves.
+        /// </summary>
+        private static string DelegateValueConversionHint(TypeInfo fromType, TypeInfo toType)
+        {
+            if (fromType?.Kind != TypeKind.Delegate || toType?.Kind != TypeKind.Delegate) return null;
+            if (!IsUserDelegate(fromType) && !IsUserDelegate(toType)) return null;
+
+            return $"A delegate value does not convert to a different delegate type ('{FormatTypeForMessage(fromType)}' " +
+                   $"to '{FormatTypeForMessage(toType)}'), as in C#. Assign a lambda or AddressOf instead — " +
+                   "a lambda that calls the value works";
         }
 
         /// <summary>
@@ -2236,6 +2258,19 @@ namespace BasicLang.Compiler.SemanticAnalysis
         /// </summary>
         private static string FormatDelegateSignature(TypeInfo delegateType)
         {
+            // A user Delegate reads as it was declared: `Notify(msg As String)`,
+            // `Transform(n As Integer) As Integer` (#187).
+            if (delegateType.DelegateSignature is { } signature)
+            {
+                var parameters = signature.Parameters.Select(p => $"{p.Name} As {FormatTypeForMessage(p.Type)}");
+                var text = $"{delegateType.Name}({string.Join(", ", parameters)})";
+                var returnType = signature.ReturnType;
+                if (returnType != null && returnType.Kind != TypeKind.Void &&
+                    !returnType.Name.Equals("Void", StringComparison.OrdinalIgnoreCase))
+                    text += $" As {FormatTypeForMessage(returnType)}";
+                return text;
+            }
+
             if (delegateType.GenericArguments.Count == 0)
                 return delegateType.Name;
 
@@ -6189,8 +6224,9 @@ namespace BasicLang.Compiler.SemanticAnalysis
             // Check initializer type
             if (node.Initializer != null && !node.IsAuto)
             {
-                // Let lambdas infer their parameter types from the declared type
-                if (node.Initializer is LambdaExpressionNode)
+                // Let lambdas infer their parameter types from the declared type, and a lambda
+                // or AddressOf convert to a user Delegate (#187)
+                if (IsDelegateTargetedExpression(node.Initializer))
                     _lambdaTargetType = varType;
 
                 node.Initializer.Accept(this);
@@ -6406,14 +6442,33 @@ namespace BasicLang.Compiler.SemanticAnalysis
             var symbol = new Symbol(node.Name, SymbolKind.Class, delegateType, node.Line, node.Column);
             symbol.ReturnType = returnType;
 
-            foreach (var param in node.Parameters)
+            // ⛔ The parameters are the DECLARATION's own, so they get a scope of their own. They
+            // used to be defined in the ENCLOSING scope — the global one, for a top-level
+            // Delegate — so `msg` of `Delegate Sub Notify(msg As String)` leaked as a name every
+            // procedure could read, and a second delegate with a parameter of the same name was
+            // refused ("Parameter 'msg' is already defined"). Measured on the pre-#187 compiler.
+            EnterScope($"Delegate {node.Name}", ScopeKind.Function);
+            try
             {
-                param.Accept(this);
-                if (_nodeSymbols.TryGetValue(param, out var paramSymbol))
+                foreach (var param in node.Parameters)
                 {
-                    symbol.Parameters.Add(paramSymbol);
+                    param.Accept(this);
+                    if (_nodeSymbols.TryGetValue(param, out var paramSymbol))
+                    {
+                        symbol.Parameters.Add(paramSymbol);
+                    }
                 }
             }
+            finally
+            {
+                ExitScope();
+            }
+
+            // #187: the signature a lambda, an AddressOf and an invocation are judged against —
+            // see TypeInfo.DelegateSignature and DelegateShapeOf. On the node too, for the IR
+            // builder's IRDelegate, which declared its types from bare names.
+            delegateType.DelegateSignature = symbol;
+            SetNodeSymbol(node, symbol);
 
             if (!_currentScope.Define(symbol))
             {
@@ -6757,11 +6812,17 @@ namespace BasicLang.Compiler.SemanticAnalysis
             // Validate base constructor call if present
             if (node.BaseConstructorArgs.Count > 0)
             {
-                // Analyze arguments first to get their types
+                // Analyze arguments first to get their types — a lambda or AddressOf one
+                // target-typed by the base constructor's parameter, as `New` does (#187)
+                var targetBaseConstructor = classScope?.ClassType?.BaseType != null
+                    ? ResolveConstructor(classScope.ClassType.BaseType, node.BaseConstructorArgs.Count)
+                    : null;
                 var argTypes = new List<TypeInfo>();
-                foreach (var arg in node.BaseConstructorArgs)
+                for (int i = 0; i < node.BaseConstructorArgs.Count; i++)
                 {
-                    arg.Accept(this);
+                    var arg = node.BaseConstructorArgs[i];
+                    VisitWithDelegateTarget(arg,
+                        ArgumentTargetType(targetBaseConstructor, i, node.BaseConstructorArgs.Count, null));
                     var argType = GetNodeType(arg);
                     argTypes.Add(argType ?? _typeManager.ObjectType);
                 }
@@ -7005,9 +7066,15 @@ namespace BasicLang.Compiler.SemanticAnalysis
             var targetType = _lambdaTargetType;
             _lambdaTargetType = null;
 
+            // #187: a user Delegate target supplies what its structural Func/Action would —
+            // parameters, a curried lambda's target, a multi-line lambda's R — and the lambda is
+            // then converted to it (ConvertToUserDelegate, below).
+            var targetShape = DelegateShapeOf(targetType);
+
             var lambdaScope = EnterScope("Lambda", ScopeKind.Function);
 
-            // Parameter types supplied by the target delegate type (Func/Action)
+            // Parameter types supplied by the target delegate type (Func/Action, or a user
+            // Delegate's own list — known even when empty)
             var targetParamTypes = GetDelegateParameterTypes(targetType);
 
             // Register parameters in the lambda scope and analyze their types
@@ -7024,6 +7091,13 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 {
                     // Infer the parameter type from the target delegate type
                     paramType = targetParamTypes[i];
+                }
+                else if (IsUserDelegate(targetType))
+                {
+                    // More parameters than the user delegate takes: the conversion below names
+                    // the arity, which is the actual mistake — "cannot infer … or assign the
+                    // lambda to a typed delegate variable" would be advice already followed.
+                    paramType = _typeManager.ObjectType;
                 }
                 else
                 {
@@ -7045,11 +7119,11 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 // If the body is itself a lambda (curried form: Function(x) Function(y) ...),
                 // propagate the target delegate's RETURN type (last Func generic argument)
                 // so the inner lambda's parameters can be inferred too
-                if (node.Body is LambdaExpressionNode && targetType != null &&
-                    targetType.Name.Equals("Func", StringComparison.OrdinalIgnoreCase) &&
-                    targetType.GenericArguments.Count > 0)
+                if (node.Body is LambdaExpressionNode && targetShape != null &&
+                    targetShape.Name.Equals("Func", StringComparison.OrdinalIgnoreCase) &&
+                    targetShape.GenericArguments.Count > 0)
                 {
-                    _lambdaTargetType = targetType.GenericArguments[targetType.GenericArguments.Count - 1];
+                    _lambdaTargetType = targetShape.GenericArguments[targetShape.GenericArguments.Count - 1];
                 }
                 node.Body.Accept(this);
                 bodyType = GetNodeType(node.Body) ?? _typeManager.GetType("Object");
@@ -7072,7 +7146,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 {
                     lambdaScope.ReturnType = _typeManager.GetType("Void");
                 }
-                else if ((targetReturnType = TargetedLambdaReturnType(targetType, node.Parameters.Count)) != null)
+                else if ((targetReturnType = TargetedLambdaReturnType(targetShape, node.Parameters.Count)) != null)
                 {
                     lambdaScope.ReturnType = targetReturnType;
                 }
@@ -7114,6 +7188,15 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 // Sub lambda - returns void
                 delegateType = new TypeInfo("Action", TypeKind.Delegate);
                 delegateType.GenericArguments.AddRange(paramTypes);
+            }
+
+            // #187: converted to a user Delegate target, the lambda IS of that type.
+            if (IsUserDelegate(targetType))
+            {
+                delegateType = ConvertToUserDelegate(
+                    delegateType, targetType,
+                    $"lambda '{FormatLambdaSignature(node, paramTypes, delegateType)}'",
+                    node.Line, node.Column);
             }
 
             SetNodeType(node, delegateType);
@@ -7185,6 +7268,12 @@ namespace BasicLang.Compiler.SemanticAnalysis
         /// </summary>
         internal static List<TypeInfo> GetDelegateParameterTypes(TypeInfo delegateType)
         {
+            // #187: a user Delegate's parameter list is always known — EMPTY for `Delegate Sub
+            // D()`, which its structural shape (a bare `Action`) cannot say: the null below means
+            // "unknown", and a bare Action is also the placeholder some callers build.
+            if (delegateType?.DelegateSignature is { } signature)
+                return signature.Parameters.Select(p => p.Type).ToList();
+
             if (delegateType == null || delegateType.GenericArguments == null ||
                 delegateType.GenericArguments.Count == 0)
                 return null;
@@ -7208,6 +7297,175 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     name.Equals("Action", StringComparison.OrdinalIgnoreCase));
         }
 
+        /// <summary>True for a type declared with <c>Delegate Sub</c>/<c>Delegate Function</c>.</summary>
+        private static bool IsUserDelegate(TypeInfo type) => type?.DelegateSignature != null;
+
+        /// <summary>
+        /// ⭐ #187 — THE one mapping from a user <c>Delegate</c> to the machinery <c>Func</c>/<c>Action</c>
+        /// already have: <c>Action(Of T1, …)</c> for a <c>Delegate Sub D(p1 As T1, …)</c>,
+        /// <c>Func(Of T1, …, R)</c> for a <c>Delegate Function … As R</c>, built from its signature
+        /// (<see cref="TypeInfo.DelegateSignature"/>) exactly as a lambda's own type is built
+        /// (<see cref="Visit(LambdaExpressionNode)"/>). A user delegate is target-typed EXACTLY as
+        /// this shape is — its parameters inferred, its R handed to a multi-line lambda, its
+        /// signature compared with <see cref="TypeInfo.Equals(TypeInfo)"/> — so the two cannot
+        /// drift. Every other type, <c>Func</c>/<c>Action</c> included, is returned unchanged, so a
+        /// caller maps unconditionally. Internal: the IR builder reads it for a lambda's return type.
+        /// </summary>
+        internal static TypeInfo DelegateShapeOf(TypeInfo type)
+        {
+            var signature = type?.DelegateSignature;
+            if (signature == null) return type;
+
+            var returnType = signature.ReturnType;
+            var isSub = returnType == null ||
+                        returnType.Kind == TypeKind.Void ||
+                        returnType.Name.Equals("Void", StringComparison.OrdinalIgnoreCase);
+
+            var shape = new TypeInfo(isSub ? "Action" : "Func", TypeKind.Delegate);
+            foreach (var parameter in signature.Parameters)
+                shape.GenericArguments.Add(parameter.Type ?? new TypeInfo("Object", TypeKind.Class));
+            if (!isSub) shape.GenericArguments.Add(returnType);
+            return shape;
+        }
+
+        /// <summary>
+        /// The result of invoking a value of a delegate type: a user delegate's R (Void for a
+        /// <c>Delegate Sub</c>), a <c>Func(Of …, R)</c>'s R, otherwise Void. ⛔ Invoking a user
+        /// <c>Delegate Function</c> was typed Void — the name is not "Func" — so
+        /// <c>Return f(x, y)</c> from an Integer function was refused (#187 D3).
+        /// </summary>
+        private TypeInfo DelegateInvocationResultType(TypeInfo delegateType)
+        {
+            var shape = DelegateShapeOf(delegateType);
+            return shape != null &&
+                   shape.Name.Equals("Func", StringComparison.OrdinalIgnoreCase) &&
+                   shape.GenericArguments.Count > 0
+                ? shape.GenericArguments[shape.GenericArguments.Count - 1]
+                : _typeManager.VoidType;
+        }
+
+        /// <summary>
+        /// True for the two expressions a delegate TARGET types (#187): a lambda, whose parameters
+        /// and return type it supplies, and <c>AddressOf M</c>, which it converts. Every conversion
+        /// site hands its slot's type to exactly these, through <see cref="_lambdaTargetType"/>.
+        /// </summary>
+        private static bool IsDelegateTargetedExpression(ExpressionNode expression) =>
+            expression is LambdaExpressionNode ||
+            expression is UnaryExpressionNode { Operator: "AddressOf" };
+
+        /// <summary>
+        /// #187 — a lambda or <c>AddressOf</c> whose target is the user delegate
+        /// <paramref name="target"/>. <paramref name="structural"/> is the expression's own
+        /// Func/Action type; it must EQUAL the delegate's shape (<see cref="DelegateShapeOf"/>) —
+        /// the rule a Func/Action target already applies through <c>IsAssignableFrom</c>: a Sub only
+        /// into a <c>Delegate Sub</c>, a Function only into a <c>Delegate Function</c>, the same
+        /// arity, each parameter the SAME type (no widening), and a Function's R the same type.
+        /// (A multi-line Function lambda is handed R as its return type before its body is
+        /// analysed, so its <c>Return</c>s are judged by the ordinary Return rule; a single-line
+        /// lambda's body type must be R itself — both exactly as for Func.)
+        ///
+        /// <para>The expression is then typed AS THE DELEGATE, as VB and C# type a converted
+        /// lambda, so the site's own check passes D to D and every backend sees the slot's
+        /// type on the value. On a mismatch it is typed D too, after the error here names both
+        /// signatures and the first difference: the site must not add the generic
+        /// "Cannot assign value of type 'Action'" on top.</para>
+        /// </summary>
+        private TypeInfo ConvertToUserDelegate(TypeInfo structural, TypeInfo target, string source,
+                                               int line, int column)
+        {
+            var shape = DelegateShapeOf(target);
+            if (structural != null && !shape.Equals(structural))
+            {
+                Error($"Cannot convert {source} to delegate '{FormatDelegateSignature(target)}': " +
+                      DescribeDelegateMismatch(structural, target),
+                      line, column);
+            }
+
+            return target;
+        }
+
+        /// <summary>
+        /// The first difference between a lambda's or method's structural Func/Action type and a
+        /// user delegate's signature, for <see cref="ConvertToUserDelegate"/>'s message.
+        /// </summary>
+        private string DescribeDelegateMismatch(TypeInfo structural, TypeInfo target)
+        {
+            var shape = DelegateShapeOf(target);
+            var targetIsSub = shape.Name.Equals("Action", StringComparison.OrdinalIgnoreCase);
+            var sourceIsSub = structural.Name.Equals("Action", StringComparison.OrdinalIgnoreCase);
+            var targetReturn = targetIsSub ? null : shape.GenericArguments[shape.GenericArguments.Count - 1];
+            var sourceReturn = sourceIsSub || structural.GenericArguments.Count == 0
+                ? null
+                : structural.GenericArguments[structural.GenericArguments.Count - 1];
+
+            if (sourceIsSub && !targetIsSub)
+                return $"it is a Sub, which returns no value; the delegate is a Function returning {FormatTypeForMessage(targetReturn)}";
+            if (!sourceIsSub && targetIsSub)
+                return $"it is a Function returning {FormatTypeForMessage(sourceReturn)}; the delegate is a Sub";
+
+            var expected = GetDelegateParameterTypes(target) ?? new List<TypeInfo>();
+            var actual = GetDelegateParameterTypes(structural) ?? new List<TypeInfo>();
+            if (expected.Count != actual.Count)
+                return $"it takes {actual.Count} parameter(s), the delegate takes {expected.Count}";
+
+            for (var i = 0; i < expected.Count; i++)
+            {
+                if (actual[i] == null || !actual[i].Equals(expected[i]))
+                    return $"parameter {i + 1} is {FormatTypeForMessage(actual[i])}, the delegate takes {FormatTypeForMessage(expected[i])}";
+            }
+
+            if (sourceReturn != null && targetReturn != null && !sourceReturn.Equals(targetReturn))
+                return $"it returns {FormatTypeForMessage(sourceReturn)}, the delegate returns {FormatTypeForMessage(targetReturn)}";
+
+            return "the signatures differ";
+        }
+
+        /// <summary>The operand of an <c>AddressOf</c> as written, for a message: <c>Handler</c>,
+        /// <c>obj.Handler</c>, <c>Me.Handler</c> (<c>Me</c> is an identifier); otherwise the
+        /// method's own name.</summary>
+        private static string DescribeAddressOfOperand(ExpressionNode operand, Symbol method)
+        {
+            switch (operand)
+            {
+                case IdentifierExpressionNode identifier:
+                    return identifier.Name;
+                case MemberAccessExpressionNode member when member.Object is IdentifierExpressionNode receiver:
+                    return $"{receiver.Name}.{member.MemberName}";
+                default:
+                    return method?.Name ?? "?";
+            }
+        }
+
+        /// <summary>A lambda as its source reads, for a message: <c>Sub(m As Integer)</c>,
+        /// <c>Function(n As Integer) As Long</c>.</summary>
+        private static string FormatLambdaSignature(LambdaExpressionNode lambda, IReadOnlyList<TypeInfo> parameterTypes,
+                                                    TypeInfo structural)
+        {
+            var parameters = new List<string>();
+            for (var i = 0; i < lambda.Parameters.Count; i++)
+            {
+                var type = i < parameterTypes.Count ? parameterTypes[i] : null;
+                parameters.Add($"{lambda.Parameters[i].Name} As {FormatTypeForMessage(type)}");
+            }
+
+            var text = $"{(lambda.IsFunction ? "Function" : "Sub")}({string.Join(", ", parameters)})";
+            if (lambda.IsFunction && structural?.GenericArguments.Count > 0)
+                text += $" As {FormatTypeForMessage(structural.GenericArguments[structural.GenericArguments.Count - 1])}";
+            return text;
+        }
+
+        /// <summary>A type as BasicLang source spells it, for a message: <c>Func(Of Integer, Long)</c>,
+        /// <c>Integer()</c>, <c>Notify</c>.</summary>
+        private static string FormatTypeForMessage(TypeInfo type)
+        {
+            if (type == null) return "Object";
+            if (type.Kind == TypeKind.Array && type.ElementType != null)
+                return FormatTypeForMessage(type.ElementType) + "(" + new string(',', Math.Max(0, type.ArrayRank - 1)) + ")";
+            if (type.GenericArguments != null && type.GenericArguments.Count > 0)
+                return $"{type.Name}(Of {string.Join(", ", type.GenericArguments.Select(FormatTypeForMessage))})";
+            return type.Name;
+        }
+
         /// <summary>
         /// Visits a call argument, target-typing it when the argument is a lambda and
         /// the corresponding parameter type is a Func/Action delegate. This lets
@@ -7219,17 +7477,28 @@ namespace BasicLang.Compiler.SemanticAnalysis
         /// </summary>
         private void VisitArgumentWithLambdaTarget(ExpressionNode argument, TypeInfo parameterType)
         {
+            VisitWithDelegateTarget(argument, parameterType);
+            TargetTypeEmptyArrayLiteral(argument, parameterType);
+        }
+
+        /// <summary>
+        /// Visits <paramref name="expression"/> with <paramref name="targetType"/> as its delegate
+        /// target when it is a lambda or <c>AddressOf</c> (<see cref="IsDelegateTargetedExpression"/>)
+        /// and the target is a delegate — a Func/Action, or a user <c>Delegate</c> (#187). The
+        /// previous target is saved and restored, so a nested lambda or call sees only its own.
+        /// </summary>
+        private void VisitWithDelegateTarget(ExpressionNode expression, TypeInfo targetType)
+        {
             var savedTarget = _lambdaTargetType;
-            _lambdaTargetType = (argument is LambdaExpressionNode &&
-                                 parameterType != null &&
-                                 parameterType.Kind == TypeKind.Delegate &&
-                                 IsDelegateTypeName(parameterType.Name))
-                ? parameterType
+            _lambdaTargetType = (IsDelegateTargetedExpression(expression) &&
+                                 targetType != null &&
+                                 targetType.Kind == TypeKind.Delegate &&
+                                 (IsDelegateTypeName(targetType.Name) || IsUserDelegate(targetType)))
+                ? targetType
                 : null;
             try
             {
-                argument.Accept(this);
-                TargetTypeEmptyArrayLiteral(argument, parameterType);
+                expression.Accept(this);
             }
             finally
             {
@@ -8807,8 +9076,9 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
             if (node.Value != null)
             {
-                // Let lambdas infer their parameter types from the function return type
-                if (node.Value is LambdaExpressionNode)
+                // Let lambdas infer their parameter types from the function return type, and a
+                // lambda or AddressOf convert to a user Delegate (#187)
+                if (IsDelegateTargetedExpression(node.Value))
                     _lambdaTargetType = functionScope.ReturnType;
 
                 node.Value.Accept(this);
@@ -8839,7 +9109,8 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 }
                 else if (!expectedReturnType.IsAssignableFrom(returnType))
                 {
-                    Error($"Cannot return type '{returnType}' from function expecting '{expectedReturnType}'",
+                    Error($"Cannot return type '{returnType}' from function expecting '{expectedReturnType}'" +
+                          WithDelegateValueHint(returnType, expectedReturnType),
                           node.Line, node.Column);
                 }
             }
@@ -8911,8 +9182,9 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
             var targetType = GetNodeType(node.Target);
 
-            // Let lambdas infer their parameter types from the assignment target
-            if (node.Value is LambdaExpressionNode)
+            // Let lambdas infer their parameter types from the assignment target, and a lambda
+            // or AddressOf convert to a user Delegate (#187)
+            if (IsDelegateTargetedExpression(node.Value))
                 _lambdaTargetType = targetType;
 
             node.Value.Accept(this);
@@ -9659,6 +9931,15 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
         public void Visit(UnaryExpressionNode node)
         {
+            // #187: an AddressOf's delegate target, set by the conversion site and consumed here,
+            // before the operand is visited, exactly as a lambda consumes its own.
+            TypeInfo delegateTarget = null;
+            if (node.Operator == "AddressOf")
+            {
+                delegateTarget = _lambdaTargetType;
+                _lambdaTargetType = null;
+            }
+
             node.Operand.Accept(this);
             var operandType = GetNodeType(node.Operand);
 
@@ -9730,9 +10011,22 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     // un-punctuated name typed as Object, the symbol lookup returned null, and the
                     // ungated pointer fallback below accepted it. D8 wires every generated handler
                     // through AddressOf, so that silence is a handler that never fires.
-                    var handlerDelegate = DelegateTypeOf(GetNodeSymbol(node.Operand));
+                    var handlerSymbol = GetNodeSymbol(node.Operand);
+                    var handlerDelegate = DelegateTypeOf(handlerSymbol);
 
-                    if (handlerDelegate != null)
+                    if (handlerDelegate != null && IsUserDelegate(delegateTarget))
+                    {
+                        // #187: `AddressOf M` into a user Delegate — M's signature judged by the
+                        // rule a lambda's is, and the expression typed as the delegate.
+                        var kind = handlerDelegate.Name.Equals("Action", StringComparison.OrdinalIgnoreCase)
+                            ? "Sub" : "Function";
+                        resultType = ConvertToUserDelegate(
+                            handlerDelegate, delegateTarget,
+                            $"'AddressOf {DescribeAddressOfOperand(node.Operand, handlerSymbol)}' " +
+                            $"({kind} {FormatFunctionSignature(handlerSymbol)})",
+                            node.Line, node.Column);
+                    }
+                    else if (handlerDelegate != null)
                     {
                         resultType = handlerDelegate;
                     }
@@ -10268,6 +10562,18 @@ namespace BasicLang.Compiler.SemanticAnalysis
             else if (node.Callee is MemberAccessExpressionNode memberExpr)
             {
                 calleeSymbol = GetNodeSymbol(memberExpr);
+
+                // #187: `d.Invoke(args)` on a user-delegate value IS `d(args)` — the same
+                // argument checks, the same result type — so it takes the delegate-invocation
+                // path below with the RECEIVER as the callee. The member itself resolves to
+                // nothing (a user delegate declares no members), which typed the call Object.
+                if (string.Equals(memberExpr.MemberName, "Invoke", StringComparison.OrdinalIgnoreCase)
+                    && GetNodeType(memberExpr.Object) is { } invokedType
+                    && IsUserDelegate(invokedType))
+                {
+                    calleeType = invokedType;
+                    calleeSymbol = null;
+                }
             }
 
             // `f(args)` is a CALL, not an index, whenever f is itself callable (a Function or
@@ -10340,7 +10646,8 @@ namespace BasicLang.Compiler.SemanticAnalysis
                  calleeSymbol.Kind == SymbolKind.Parameter))
             {
                 // Compute parameter types first so lambda arguments can be target-typed
-                // (Func(Of T1, ..., TResult) excludes the trailing return type; Action(Of T1, ...) uses all)
+                // (Func(Of T1, ..., TResult) excludes the trailing return type; Action(Of T1, ...) uses all;
+                // a user Delegate its declared list, #187)
                 var delegateParamTypes = GetDelegateParameterTypes(calleeType);
 
                 for (int i = 0; i < node.Arguments.Count; i++)
@@ -10386,19 +10693,17 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
                             if (argType != null && paramType != null && !paramType.IsAssignableFrom(argType))
                             {
-                                Error($"Argument {i + 1}: cannot convert from '{argType}' to '{paramType}'. Expected: {signature}",
+                                Error($"Argument {i + 1}: cannot convert from '{argType}' to '{paramType}'. Expected: {signature}" +
+                                      WithDelegateValueHint(argType, paramType),
                                       node.Arguments[i].Line, node.Arguments[i].Column);
                             }
                         }
                     }
                 }
 
-                // Func(Of T1, ..., TResult): last generic argument is the return type
-                var delegateReturnType = calleeType.Name.Equals("Func", StringComparison.OrdinalIgnoreCase) &&
-                                         calleeType.GenericArguments.Count > 0
-                    ? calleeType.GenericArguments[calleeType.GenericArguments.Count - 1]
-                    : _typeManager.VoidType;
-                SetNodeType(node, delegateReturnType);
+                // Func(Of T1, ..., TResult): last generic argument is the return type; a user
+                // Delegate Function's R through its shape (#187 — it was typed Void)
+                SetNodeType(node, DelegateInvocationResultType(calleeType));
                 return;
             }
 
@@ -10505,7 +10810,8 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
                         if (argType != null && paramType != null && !paramType.IsAssignableFrom(argType))
                         {
-                            Error($"Argument {i + 1}: cannot convert from '{argType}' to '{paramType}'",
+                            Error($"Argument {i + 1}: cannot convert from '{argType}' to '{paramType}'" +
+                                  WithDelegateValueHint(argType, paramType),
                                   node.Arguments[i].Line, node.Arguments[i].Column);
                         }
                     }
@@ -10897,11 +11203,17 @@ namespace BasicLang.Compiler.SemanticAnalysis
                       "returns one, or a javascript{ } block).", node.Line, node.Column);
             }
 
-            // Analyze arguments first to get their types
+            // Analyze arguments first to get their types. A lambda or AddressOf argument is
+            // target-typed by its constructor parameter, exactly as a call argument is (#187) —
+            // ResolveConstructor needs only the argument COUNT, so the constructor is known here.
+            var targetConstructor = type != null && type.Kind == TypeKind.Class && type.Members != null
+                ? ResolveConstructor(type, node.Arguments.Count)
+                : null;
             var argTypes = new List<TypeInfo>();
-            foreach (var arg in node.Arguments)
+            for (int i = 0; i < node.Arguments.Count; i++)
             {
-                arg.Accept(this);
+                var arg = node.Arguments[i];
+                VisitWithDelegateTarget(arg, ArgumentTargetType(targetConstructor, i, node.Arguments.Count, null));
                 var argType = GetNodeType(arg);
                 argTypes.Add(argType ?? _typeManager.ObjectType);
             }
@@ -10932,7 +11244,8 @@ namespace BasicLang.Compiler.SemanticAnalysis
                             var actualType = argTypes[i];
                             if (expectedType != null && actualType != null && !expectedType.IsAssignableFrom(actualType))
                             {
-                                Error($"Argument {i + 1} of type '{actualType.Name}' is not compatible with parameter '{ctorSymbol.Parameters[Math.Min(i, ctorSymbol.Parameters.Count - 1)].Name}' of type '{expectedType.Name}'",
+                                Error($"Argument {i + 1} of type '{actualType.Name}' is not compatible with parameter '{ctorSymbol.Parameters[Math.Min(i, ctorSymbol.Parameters.Count - 1)].Name}' of type '{expectedType.Name}'" +
+                                    WithDelegateValueHint(actualType, expectedType),
                                     node.Arguments[i].Line, node.Arguments[i].Column);
                             }
                         }
