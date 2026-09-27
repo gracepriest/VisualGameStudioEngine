@@ -878,9 +878,9 @@ public class FormCanvasControl : Control
 
         // ⚠ AFTER the control's handles, before selection. A control sitting against the form's
         // right edge puts its own grips on top of the form's; the control's win, because that is
-        // what the user was looking at when they selected it. Pixel forms only — a web page has no
-        // client size to drag.
-        if (handle == FormResizeHandle.None && document.Target == FormTarget.WinForms)
+        // what the user was looking at when they selected it. Pixel documents only
+        // (`FormVocabulary.IsPixel` — a .blform or a Canvas page): a Grid/Flow page has no design size to drag.
+        if (handle == FormResizeHandle.None && FormVocabulary.IsPixel(document))
         {
             var grip = FormGripAt(SurfaceCanvasRect(document), point);
             if (grip != FormResizeHandle.None)
@@ -980,7 +980,9 @@ public class FormCanvasControl : Control
             _dragChanged = false;
             e.Pointer.Capture(this);
         }
-        else if (SelectedControl?.Geometry is PixelGeometry pixel)
+        // ⛔ Not for a DOCKED primary (spec §7a, pre-flight B4): "a drag starting on it selects only". FormGeometryEdit
+        // refuses to move it anyway, but a drag armed here would still carry every OTHER selected control along.
+        else if (SelectedControl?.Geometry is PixelGeometry pixel && FormDockLayout.EdgeOf(SelectedControl) == null)
         {
             _dragHandle = handle;
             _dragOrigin = point;
@@ -1269,14 +1271,22 @@ public class FormCanvasControl : Control
         // and since the canvas now lays web controls out, CanvasBoundsOf returns a rectangle for
         // them too. Without this guard a click near a cell edge would arm a resize that can never
         // do anything AND swallow the move the user was starting.
-        if (SelectedControl?.Geometry is not PixelGeometry ||
-            CanvasBoundsOf(document, SelectedControl) is not { } bounds)
+        if (!HasHandles(SelectedControl) || CanvasBoundsOf(document, SelectedControl!) is not { } bounds)
         {
             return FormResizeHandle.None;
         }
 
         return FormCanvasTransform.HandleAt(bounds, point);
     }
+
+    /// <summary>
+    /// ⛔ ONE predicate for "does this control get resize handles", asked by <see cref="HandleUnder"/> (the gesture)
+    /// and by Render (the picture), so the two can never disagree. Pixel geometry only — a Grid page's control IS its
+    /// cell — and never a DOCKED control (spec 2026-09-27 §7a): its rectangle comes from docking, and
+    /// <c>FormGeometryEdit</c> refuses to move or resize it.
+    /// </summary>
+    private static bool HasHandles(FormControl? control) =>
+        control?.Geometry is PixelGeometry && FormDockLayout.EdgeOf(control) == null;
 
     /// <summary>The form's client rectangle in CANVAS space.</summary>
     private Rect SurfaceCanvasRect(FormDocument document)
@@ -1547,10 +1557,15 @@ public class FormCanvasControl : Control
             }
         }
 
-        if (SelectedControl?.Geometry is PixelGeometry &&
-            CanvasBoundsOf(document, SelectedControl) is { } selection)
+        if (HasHandles(SelectedControl) && CanvasBoundsOf(document, SelectedControl!) is { } selection)
         {
             DrawHandles(context, selection);
+        }
+        else if (SelectedControl?.Geometry is PixelGeometry && CanvasBoundsOf(document, SelectedControl) is { } docked)
+        {
+            // A DOCKED primary (spec §7a): selected, but not draggable — outlined like a secondary member, never
+            // handled. Without this a click on a docked Panel shows nothing at all (pre-flight decision 1).
+            context.DrawRectangle(null, SecondarySelectionPen, docked);
         }
 
         // The rubber band, over everything — it is transient and must never be hidden behind a
@@ -1561,9 +1576,10 @@ public class FormCanvasControl : Control
             context.DrawRectangle(MarqueeBrush, MarqueePen, band);
         }
 
-        // The form's own grips, last of all. Unlike the title-bar buttons these are REAL: they
-        // resize the form, so drawing them is a promise the canvas keeps.
-        if (document.Target == FormTarget.WinForms)
+        // The form's own grips — on every document that has a design size (a .blform or a Canvas page) — last of
+        // all. Unlike the title-bar buttons these are REAL: they resize the form, so drawing them is a promise the
+        // canvas keeps.
+        if (FormVocabulary.IsPixel(document))
         {
             var surface = SurfaceCanvasRect(document);
             var reach = FormCanvasTransform.HandleReach;
@@ -1761,8 +1777,8 @@ public class FormCanvasControl : Control
     }
 
     /// <summary>
-    /// The form itself, drawn the way VB6 draws it: a real window with a title bar and a raised
-    /// frame, its client area dotted with the alignment grid.
+    /// The form itself: a WINDOW is drawn the way VB6 draws it (title bar, raised frame, alignment grid); a Canvas
+    /// PAGE gets the alignment grid and an outline, and no frame (spec 2026-09-27 §2.4).
     ///
     /// <para>⚠ The title bar sits ABOVE the surface rectangle because the form's coordinate space is
     /// its CLIENT area — <c>Width</c>/<c>Height</c> are the client size, exactly as WinForms'
@@ -1773,10 +1789,21 @@ public class FormCanvasControl : Control
         var size = FormCanvasTransform.SurfaceSize(document);
         var surface = _transform.ToCanvas(new Rect(0, 0, size.Width, size.Height));
 
-        // ⚠ WinForms only. A .blwebform is a PAGE — it has no title bar, no window frame and no
-        // alignment grid, and dressing one up as a window would claim a shape the browser will
-        // never give it.
+        // ⛔ TARGET-only, deliberately (plan Traps): the title bar and frame say "this is a WINDOW", which a page never
+        // is, however it is laid out — dressing one up as a window would claim a shape the browser will never give it.
+        // Every other decision below is about the VOCABULARY.
         var isWindow = document.Target == FormTarget.WinForms;
+
+        // A document that speaks PIXELS (a .blform, or a Canvas page — FormVocabulary) is designed on the alignment
+        // grid (spec 2026-09-27 §2.4).
+        var isPixel = FormVocabulary.IsPixel(document);
+
+        // Cells are a Grid-only idea.
+        var isGrid = !isWindow && document.Layout?.Kind == FormLayoutKind.Grid;
+
+        // A PAGE is outlined and captioned ABOVE its surface — never given a title bar. ⚠ A Flow page keeps what it had
+        // (neither): unchanged by this task.
+        var isOutlinedPage = !isWindow && (isGrid || isPixel);
 
         if (isWindow)
         {
@@ -1805,22 +1832,28 @@ public class FormCanvasControl : Control
 
         context.FillRectangle(SurfaceBrush, surface);
 
-        if (isWindow)
+        if (isPixel)
         {
             DrawAlignmentGrid(context, size, surface);
         }
 
-        // ⛔ The web cell guides, UNDER the controls. Without them a page is a blank rectangle with
-        // no clue where a drop will land — the cells are the only thing on screen that says what a
-        // .blwebform's geometry even means, because its controls are placed by cell, not by pixel.
-        if (document.Target == FormTarget.Web && document.Layout?.Kind == FormLayoutKind.Grid)
+        if (isOutlinedPage)
         {
             context.DrawRectangle(null, ShadowPen, surface);
-            foreach (var (_, _, cell) in FormGridLayout.Cells(document.Layout, size))
+        }
+
+        // ⛔ The web cell guides, UNDER the controls. Without them a Grid page is a blank rectangle with no clue where
+        // a drop will land — the cells are the only thing on screen that says what its geometry even means.
+        if (isGrid)
+        {
+            foreach (var (_, _, cell) in FormGridLayout.Cells(document.Layout!, size))
             {
                 context.DrawRectangle(null, GridPen, _transform.ToCanvas(cell));
             }
+        }
 
+        if (isOutlinedPage)
+        {
             var pageCaption = document.Text ?? document.Name;
             if (!string.IsNullOrEmpty(pageCaption))
             {
