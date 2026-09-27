@@ -5899,6 +5899,21 @@ namespace BasicLang.Compiler.IR
             var sourceType = _semanticAnalyzer.GetNodeType(node.Expression);
             var targetType = _semanticAnalyzer.GetNodeType(node);
 
+            // `CType(x, Integer)` IS `CInt(x)` in VB — same rounding (half-to-even), same string
+            // parsing, same Boolean rule. Lowered to the builtin so the two spellings cannot
+            // disagree: as an IRCast it was a bare C++ static_cast (truncating, and a compile
+            // error from a String), CS0030 for `(bool)1` on C#, and no lowering at all on
+            // JavaScript. A primitive target only; class/array casts stay IRCast, and so does
+            // DirectCast/TryCast — they are type checks that never convert.
+            if (!node.IsTryCast && !node.IsDirectCast && ConversionBuiltinFor(targetType) is string builtin)
+            {
+                var conversion = new IRCall(_currentFunction.GetNextTempName(), builtin, targetType);
+                conversion.Arguments.Add(value);
+                EmitInstruction(conversion);
+                _expressionResult = conversion;
+                return;
+            }
+
             var tempName = _currentFunction.GetNextTempName();
             var castKind = DetermineCastKind(sourceType, targetType);
 
@@ -6049,6 +6064,18 @@ namespace BasicLang.Compiler.IR
                 _ => throw new Exception($"Unknown unary operator: {op}")
             };
         }
+
+        /// <summary>The VB conversion function a <c>CType</c> to <paramref name="target"/> means, or null.</summary>
+        private static string ConversionBuiltinFor(TypeInfo target) => target?.Kind == TypeKind.Array ? null : target?.Name switch
+        {
+            "Integer" => "CInt",
+            "Long" => "CLng",
+            "Double" => "CDbl",
+            "Single" => "CSng",
+            "String" => "CStr",
+            "Boolean" => "CBool",
+            _ => null
+        };
 
         private CastKind DetermineCastKind(TypeInfo source, TypeInfo target)
         {

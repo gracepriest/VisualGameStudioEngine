@@ -4759,6 +4759,7 @@ namespace BasicLang.Compiler
                 castNode.TargetType = ParseTypeReference();
                 Consume(TokenType.RightParen, $"Expected ')' after target type in '{castToken.Lexeme}(value, Type)'");
                 castNode.IsTryCast = castToken.Lexeme.Equals("TryCast", StringComparison.OrdinalIgnoreCase);
+                castNode.IsDirectCast = castToken.Lexeme.Equals("DirectCast", StringComparison.OrdinalIgnoreCase);
 
                 return castNode;
             }

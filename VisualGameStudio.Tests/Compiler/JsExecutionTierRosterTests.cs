@@ -121,6 +121,8 @@ public class JsExecutionTierRosterTests
         typeof(ArrayReferenceSemanticsExecutionTests),
         // ParamArray packing at the call site; C++ and C# legs too.
         typeof(ParamArrayExecutionTests),
+        // CType/conversions/reference casts with VB rules; C++ and C# legs too.
+        typeof(CTypeConversionExecutionTests),
 
         // ADR-0005 D2 — CSE guards a shared value's own destination, not only its operands.
         // CseDestinationInvalidationExecutionTests / DestinationInvalidation_D4_ByRefExecutionTests
@@ -338,7 +340,7 @@ public class JsExecutionTierRosterTests
 
     [Test]
     public void RosterIsPinned()
-        => Assert.That(ExecutionTier, Has.Length.EqualTo(74), // + NothingConversionExecutionTests
+        => Assert.That(ExecutionTier, Has.Length.EqualTo(75), // + NothingConversionExecutionTests, CTypeConversionExecutionTests
             "The execution-tier roster changed. That is fine — update the number — but it must " +
             "be a deliberate edit, not a silent shrink.");
 
