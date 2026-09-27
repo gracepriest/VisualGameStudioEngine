@@ -163,7 +163,10 @@
                        ⛔ Bound to UsesTypedEditor, NOT IsEditable. An Anchor row is editable and typed
                        String, so IsEditable would render a text box underneath the picker — two
                        editors for one value, each able to contradict the other. -->
-                  <controls:TypedValueEditor VerticalAlignment="Center" Margin="4,1,4,1"
+                  <!-- ⛔ Classes="compact": the editors' Settings-dialog minimum widths (200/170) are
+                       wider than this column, and an over-wide child is CENTRED over its slot — the
+                       value's first characters vanished under the name cell. See TypedValueEditor. -->
+                  <controls:TypedValueEditor Classes="compact" VerticalAlignment="Center" Margin="4,1,4,1"
                                              IsVisible="{Binding UsesTypedEditor}"/>
 
                   <!-- ⛔ Task 26: the Anchor box. Four edge bars around a centre — click an edge to
