@@ -141,30 +141,8 @@ public static class RegionWriter
     }
 
     /// <summary>
-    /// ⛔⛔ D8's ordering rule. An <c>AddressOf</c> naming a <c>Sub</c> declared LATER in the file
-    /// erases its parameter types to <c>Action(Of Object)</c> and then hard-errors against the
-    /// expected delegate — measured, in both a Class and a Module. So a handler must be declared
-    /// before the region that wires it.
-    ///
-    /// <para>⚠ The spec's own worked example in D1 violates this: it shows the <c>init</c> region
-    /// above <c>Private Sub btnLogin_Click</c>. The example is illustrating the marker shape rather
-    /// than the ordering, but a reader copying its layout gets a file that does not build on the web
-    /// target. This check turns that into a diagnostic instead of a confusing compile error.</para>
-    /// </summary>
-    /// <summary>
-    /// The <c>AnchorStyles</c> flag values, verified against the official enum documentation.
-    ///
-    /// <para>⛔ <c>DockStyle</c> numbers DIFFERENTLY — its <c>Left</c> is 3, not 4 — and is not a
-    /// flags enum at all. The two must never share a conversion; Dock keeps its named member.</para>
-    /// </summary>
-    private static readonly Dictionary<string, int> AnchorFlags =
-        new(StringComparer.OrdinalIgnoreCase)
-        {
-            ["None"] = 0, ["Top"] = 1, ["Bottom"] = 2, ["Left"] = 4, ["Right"] = 8
-        };
-
-    /// <summary>
-    /// Checks that every named anchor edge exists. Multi-edge anchors are EMITTABLE.
+    /// Checks that every named anchor edge exists (through <see cref="FormAnchor.Parse"/>, the one
+    /// Anchor parser — plan scope call S10). Multi-edge anchors are EMITTABLE.
     ///
     /// <para>⛔⛔ <b>This used to refuse anything with more than one edge</b>, and
     /// <c>docs/HANDOFF.md</c> carried that as an open decision: BasicLang had no way to write a
@@ -199,7 +177,7 @@ public static class RegionWriter
                 continue;
             }
 
-            var unknown = SplitAnchor(anchor).Where(e => !AnchorFlags.ContainsKey(e)).ToList();
+            FormAnchor.Parse(anchor, out var unknown);
             if (unknown.Count > 0)
             {
                 diagnostics.Add(Error(DesignCodes.AnchorNotExpressible,
@@ -211,9 +189,6 @@ public static class RegionWriter
             }
         }
     }
-
-    private static string[] SplitAnchor(string anchor) =>
-        anchor.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
     /// <summary>
     /// Warns about properties the document carries that the target does not have, which
@@ -1062,15 +1037,15 @@ public static class RegionWriter
     /// </summary>
     private static string AnchorExpression(string anchor)
     {
-        var edges = SplitAnchor(anchor);
+        var edges = FormAnchor.Split(anchor);
         if (edges.Length == 1)
         {
             return $"AnchorStyles.{edges[0]}";
         }
 
-        // Unknown names are refused by CheckAnchors before this runs, so a miss here would be a
-        // bug in that check rather than bad input — sum defensively rather than throwing mid-write.
-        var value = edges.Sum(e => AnchorFlags.TryGetValue(e, out var flag) ? flag : 0);
+        // Unknown names are refused by CheckAnchors before this runs. ⚠ Flags are OR-ed, not summed: the old
+        // sum turned "Left,Left" into 8 — AnchorStyles.Right (plan scope call S10).
+        var value = (int)FormAnchor.Parse(anchor, out _);
         return $"CType({value}, AnchorStyles)   ' {string.Join(", ", edges)}";
     }
 
