@@ -153,7 +153,8 @@ public class FormDockLayoutTests
     }
 
     // One row per edge: the first docked box overflows what is left on its axis, and the Fill after it must be
-    // handed a 0-size remainder on that axis, never a negative one (S9: what is left clamps at 0).
+    // handed a 0-size rectangle on that axis, never a negative one (S9: the remainder itself stays unclamped, so
+    // a later far-edge dock measures from the true edge; only the size HANDED to a control clamps at 0).
     [TestCase("Top", 10, 400, 0, 400, 400, 0)]
     [TestCase("Bottom", 10, 400, 0, 0, 400, 0)]
     [TestCase("Left", 500, 10, 500, 0, 0, 300)]
@@ -258,6 +259,202 @@ public class FormDockLayoutTests
             Assert.That(document.DesignSize, Is.EqualTo((expectedWidth, expectedHeight)));
             Assert.That((surface.Width, surface.Height), Is.EqualTo(((double)expectedWidth, (double)expectedHeight)),
                 "the canvas surface reports the same number");
+        });
+    }
+
+    // ---- Task 6 review: far-edge docking (the remainder is NOT clamped; only a size handed out is) ----
+
+    [Test]
+    public void AnOverflowingTop_ThenABottom_TheBottomMeasuresFromTheTrueFarEdge()
+    {
+        // WinForms' DefaultLayout: remainingBounds.Height -= element.Bounds.Height, unclamped — so the Bottom
+        // is placed from the form's real bottom edge (300 - 50), not from where the overflowing Top ended.
+        var document = Window(Box("tall", 10, 400, "Top"), Box("foot", 10, 50, "Bottom"));
+
+        Assert.That(At(document, "foot"), Is.EqualTo(new FormRect(0, 250, 400, 50)));
+    }
+
+    [Test]
+    public void AnOverflowingLeft_ThenARight_TheRightMeasuresFromTheTrueFarEdge()
+    {
+        var document = Window(Box("wide", 500, 10, "Left"), Box("side", 50, 10, "Right"));
+
+        Assert.That(At(document, "side"), Is.EqualTo(new FormRect(350, 0, 50, 300)));
+    }
+
+    // A second far-edge dock after an overflowing one keeps measuring from the unclamped remainder: its
+    // position may go negative (off the form), its size never does.
+    [TestCase("Bottom", 10, 400, 0, -140, 400, 40)]
+    [TestCase("Right", 500, 10, -150, 0, 50, 300)]
+    public void ASecondFarEdgeDock_AfterAnOverflowingOne_MeasuresFromTheUnclampedRemainder(
+        string dock, int firstWidth, int firstHeight, int x, int y, int width, int height)
+    {
+        var document = Window(Box("big", firstWidth, firstHeight, dock), Box("next", 50, 40, dock));
+
+        Assert.That(At(document, "next"), Is.EqualTo(new FormRect(x, y, width, height)));
+    }
+
+    [TestCase("Left", 500, 10, "Top", 500, 0, 0, 40)]
+    [TestCase("Right", 500, 10, "Bottom", 0, 260, 0, 40)]
+    [TestCase("Top", 10, 400, "Left", 0, 400, 50, 0)]
+    [TestCase("Bottom", 10, 400, "Right", 350, 0, 50, 0)]
+    public void AfterAnOverflowOnOneAxis_TheSizeHandedAcrossIt_IsZero_NeverNegative(
+        string firstDock, int firstWidth, int firstHeight, string secondDock, int x, int y, int width, int height)
+    {
+        var document = Window(Box("big", firstWidth, firstHeight, firstDock), Box("next", 50, 40, secondDock));
+
+        Assert.That(At(document, "next"), Is.EqualTo(new FormRect(x, y, width, height)));
+    }
+
+    // ---- Task 6 review: Visible=false in Runtime mode ----
+
+    private static FormControl Hidden(FormControl control)
+    {
+        control.Properties["Visible"] = "False";
+        return control;
+    }
+
+    [Test]
+    public void InDesignerMode_AHiddenTop_IsStillDocked_AndTheNextTopSitsBelowIt()
+    {
+        var document = Window(Hidden(Box("ghost", 10, 40, "Top")), Box("top", 10, 30, "Top"));
+        var layout = FormDockLayout.Resolve(document);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(layout.TryGet(document.Controls[0], out var ghost), Is.True, "the canvas shows hidden controls");
+            Assert.That(ghost.Bounds, Is.EqualTo(new FormRect(0, 0, 400, 40)));
+            Assert.That(At(document, "top"), Is.EqualTo(new FormRect(0, 40, 400, 30)));
+        });
+    }
+
+    [Test]
+    public void InRuntimeMode_AHiddenTop_IsSkipped_AndTheNextTopTakesItsPlace()
+    {
+        var document = Window(Hidden(Box("ghost", 10, 40, "Top")), Box("top", 10, 30, "Top"));
+        var layout = FormDockLayout.Resolve(document, FormDockMode.Runtime);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(layout.TryGet(document.Controls[0], out _), Is.False,
+                "WinForms skips a hidden control when docking (ParticipatesInLayout); the page emits display:none");
+            Assert.That(layout.TryGet(document.Controls[1], out var top), Is.True);
+            Assert.That(top.Bounds, Is.EqualTo(new FormRect(0, 0, 400, 30)));
+        });
+    }
+
+    [Test]
+    public void InRuntimeMode_AHiddenStrip_IsSkipped_AndConsumesNothing()
+    {
+        var document = Window(Hidden(Strip("MenuStrip", "menu")), Box("fill", 10, 10, "Fill"));
+        var layout = FormDockLayout.Resolve(document, FormDockMode.Runtime);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(layout.TryGet(document.Controls[0], out _), Is.False);
+            Assert.That(layout.TryGet(document.Controls[1], out var fill), Is.True);
+            Assert.That(fill.Bounds, Is.EqualTo(new FormRect(0, 0, 400, 300)));
+        });
+    }
+
+    [Test]
+    public void InRuntimeMode_AHiddenContainersChildren_AreNotResolved()
+    {
+        var panel = Hidden(Box("pnl", 200, 100, null));
+        var child = Box("c", 10, 20, "Top");
+        panel.Children.Add(child);
+        var layout = FormDockLayout.Resolve(Window(panel), FormDockMode.Runtime);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(layout.TryGet(child, out _), Is.False, "an invisible container's children are invisible too");
+            Assert.That(layout.TryGetClientSize(panel, out _), Is.False);
+        });
+    }
+
+    [Test]
+    public void AVisibleTrue_OrAnUnparseableVisible_IsNotHidden_InRuntimeMode()
+    {
+        var shown = Box("shown", 10, 10, "Top");
+        shown.Properties["Visible"] = "True";
+        var junk = Box("junk", 10, 10, "Top");
+        junk.Properties["Visible"] = "nope";
+        var layout = FormDockLayout.Resolve(Window(shown, junk), FormDockMode.Runtime);
+
+        Assert.That(layout.All.Select(d => d.Control.Id), Is.EqualTo(new[] { "shown", "junk" }),
+            "the same Bool rule the page's display:none uses — only a parsed false hides");
+    }
+
+    // ---- Task 6 review: a container's client size, one source ----
+
+    [Test]
+    public void ClientSizeOf_ADockedPanel_IsItsResolvedSize()
+    {
+        var panel = Box("pnl", 10, 10, "Fill");
+        panel.Children.Add(Box("c", 10, 10, null));
+        var layout = FormDockLayout.Resolve(Window(Strip("MenuStrip", "menu"), panel));
+
+        Assert.That(layout.ClientSizeOf(panel), Is.EqualTo((400, 276)));
+    }
+
+    [Test]
+    public void ClientSizeOf_AnUndockedPanel_IsItsStoredSize()
+    {
+        var panel = Box("pnl", 200, 100, null, x: 10, y: 10);
+        panel.Children.Add(Box("c", 10, 10, null));
+        var layout = FormDockLayout.Resolve(Window(panel));
+
+        Assert.That(layout.ClientSizeOf(panel), Is.EqualTo((200, 100)));
+    }
+
+    [Test]
+    public void TheRootsClientSize_IsTheDesignSize()
+    {
+        var document = new FormDocument { Target = FormTarget.WinForms, Name = "F", Width = 640, Height = null };
+
+        Assert.That(FormDockLayout.Resolve(document).RootClientSize, Is.EqualTo(document.DesignSize));
+    }
+
+    // ---- Task 6 review: the common shape, order of All, the public entry's client clamp ----
+
+    [Test]
+    public void ADockedChild_InsideAnUndockedPanel_DocksAgainstThePanelsStoredSize()
+    {
+        var panel = Box("pnl", 200, 100, null, x: 20, y: 20);
+        panel.Children.Add(new FormControl
+        {
+            Kind = "Button", Id = "ok",
+            Geometry = new PixelGeometry { X = 3, Y = 3, Width = 75, Height = 30, Dock = "Bottom" }
+        });
+        var ok = FormDockLayout.Resolve(Window(panel)).All.Single(d => d.Control.Id == "ok");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ok.Bounds, Is.EqualTo(new FormRect(0, 70, 200, 30)));
+            Assert.That((ok.ContainerWidth, ok.ContainerHeight), Is.EqualTo((200, 100)));
+        });
+    }
+
+    [Test]
+    public void All_ListsASiblingListsDockedControls_BeforeAnyContainersChildren()
+    {
+        var panel = Box("pnl", 10, 50, "Top");
+        panel.Children.Add(Box("child", 10, 10, "Bottom"));
+        var document = Window(panel, Box("second", 10, 20, "Top"));
+
+        Assert.That(FormDockLayout.Resolve(document).All.Select(d => d.Control.Id),
+            Is.EqualTo(new[] { "pnl", "second", "child" }));
+    }
+
+    [Test]
+    public void ResolveSiblings_ANegativeClientSize_IsTreatedAsZero()
+    {
+        var fill = FormDockLayout.ResolveSiblings(new[] { Box("fill", 10, 10, "Fill") }, -10, -20).Single();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(fill.Bounds, Is.EqualTo(new FormRect(0, 0, 0, 0)));
+            Assert.That((fill.ContainerWidth, fill.ContainerHeight), Is.EqualTo((0, 0)));
         });
     }
 

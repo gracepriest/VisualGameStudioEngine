@@ -72,7 +72,7 @@ Stage **by name** (`git add <each file>`, never `git add -A`, never `csc.dll`), 
 | S6 | "A paste between documents of DIFFERENT layout is REFUSED with a message naming both layouts" (§2.1) | New `FormClipboard.Paste(xml, target, layout, isTaken)` returns `FormPasteResult(Controls, Refusal)`. It refuses across VOCABULARY (`FormVocabulary.IsPixel` differs: Canvas ↔ Grid/Flow), not across layout name. ⚠ Changed on Task 3 review: Grid ↔ Flow stays allowed (both are cells, lossless, accepted before). Fragments record `Layout=` for the web. The 3-argument `DeserializeSubtree` stays as a shim (13 existing call sites in tests). The VM reports the refusal through its existing `ReportPlacementRefusal`. A cross-TARGET paste, silently empty today, is now reported too. | The refusal needs a way back to the user. `DeserializeSubtree` returns only a list, and an empty list already means "malformed fragment". `FormDesignerCommandTests.PastingAWinFormsSubtreeIntoAWebFormIsRefused` stays green: it asserts nothing landed and the text is unchanged. |
 | S7 | The tests to pin to Grid are `FormDesignerLayoutRealViewTests`, `FormCodeBehindWriteTests`, `FormHandlerGestureTests`, and drop-into-cell acceptance paths (§2.5) | Pinned: `FormDesignerAcceptanceTests.cs:114`, `FormComponentAcceptanceTests.cs:58`, `FormMenuAcceptanceTests.cs:54`, `FormDesignerCommandTests.cs:512`. | Measured (spec-claims #6). The three named files already carry explicit Grid documents and take only `CodeText`/file names from the scaffold. The four above build their web page FROM the scaffold. The first drops Label/TextBox/Button, which `PlaceOnWeb` refuses on Canvas until Task 9. The other three are web acceptance paths whose page would otherwise go through the half-built Canvas emitter arm. |
 | S8 | Reading order "grouped into ROWS by vertical overlap; left to right within a row" (§5) | A control joins the current row when its top is above the row's running bottom (the union of the row so far). Within a row: X, then Y, then document order. A zero-height control counts as 1px tall. | This had to be pinned exactly for the table tests. The union rule keeps a label slightly higher than its box in the box's row. A tall list beside a column of fields becomes one row, ordered list-then-fields top-to-bottom, which is the right phone order. |
-| S9 | "exactly as WinForms docks them" (§4) | `Fill` takes the remaining rectangle and does **not** consume it, as WinForms' `DefaultLayout` does. The remaining width/height clamp at 0. | These are the WinForms semantics as known. **The §7 reference harness (Task 12/13) is the arbiter.** If it disagrees, the harness wins and the Task 6 table row changes (Traps). |
+| S9 | "exactly as WinForms docks them" (§4) | `Fill` takes the remaining rectangle and does **not** consume it, as WinForms' `DefaultLayout` does. ⚠ Changed on Task 6 review: the remaining rectangle is **not** clamped. Each docked control's height/width is subtracted from it with no floor (`remainingBounds.Height -= element.Bounds.Height`), so after an overflowing Top a Bottom still sits on the container's real bottom edge (300px form, Top 400, Bottom 50 → Bottom at Y=250), and likewise Left then Right. Only a size **handed to a control** is clamped at 0: a Fill's two sizes, and the across-axis size of a Top/Bottom/Left/Right. A position may go negative. `FormDockMode.Runtime` skips a `Visible=false` control (`ParticipatesInLayout`); `Designer` docks it. | This follows WinForms' `DefaultLayout` **as read in its source, not yet run**. **The §7 reference harness (Task 12/13) is the arbiter.** It must include "an overflowing Top, then a Bottom" and "an overflowing Left, then a Right". If it disagrees, the harness wins and the Task 6 table row changes (Traps). |
 | S10 | (not in spec) | `FormAnchor.Parse`/`Split` (Task 7) becomes the ONE anchor parser. `RegionWriter`'s private `AnchorFlags`/`SplitAnchor` move onto it. | The page reads Anchor too, and two parsers of one attribute is a mirrored pair. Side effect: `"Left,Left"` now ORs to Left (4). The old sum (8) was AnchorStyles.Right, a latent defect. |
 | S11 | (not in spec) | `FormDockLayout.EdgeOf` reads `PixelGeometry.Dock` trimmed and case-insensitively. | The region writer emits `DockStyle.{Dock.Trim()}` verbatim, so a lowercase value is a pre-existing csc failure on WinForms (Traps). The page and canvas are both served by the one resolver, so they cannot disagree with each other. |
 | S12 | Stacking order: emit in document order (§3) | Strips are emitted in document order too (WinForms z-order: a strip first in the document is at the back). | The canvas paints bands LAST, on top (`FormCanvasTransform.cs:375-376`). For a control overlapping a strip, the canvas and the page/WinForms therefore disagree. This is pre-existing canvas behaviour and is recorded (Risks, Task 10), not changed here. |
@@ -3162,6 +3162,8 @@ Spec §2.4, §7a (BoundsOf through `FormDockLayout`; a docked control cannot be 
 
 **Risks:**
 - ⛔ `Bands` computing its own stacking again (the mirrored pair). The agreement test is the guard, and mutation M5 targets it.
+- ⚠ `Bands` must not assume strips exist only at the ROOT. `FormDockLayout.ResolveSiblings` resolves a strip in any sibling list (inside a Panel too), so the canvas reads bands from the result at every depth, relative to their container's client origin.
+- ⚠ The canvas asks for `FormDockMode.Designer` (the default: hidden controls are shown and docked). The page (Task 10) asks for `FormDockMode.Runtime`. A container's client size for anchoring is `FormDockLayoutResult.ClientSizeOf`, never a re-derived "resolved bounds or stored size".
 - The docked control's stored X/Y is stale by design. Anything that reads `PixelGeometry` directly for drawing (selection outline, the Type Here overlay, marquee `ControlsIn` at `:168-193`) must go through the resolved bounds.
 - Test at more than zoom 1.0 (`ToForm` is the identity at 1.0).
 - Never change a bound property inside `Render`.
@@ -3273,11 +3275,16 @@ Spec §6 (lossless; no layout warning; BL8024 for `MobileBreakpoint`; the retarg
 **Tests each must add:**
 - `WinFormsReferenceHarnessTests` (self-test, Integration): a two-control fixture (one Top|Left, one Right-anchored) at the design size reports the stored geometry within 0px, and at W+200 the Right-anchored control moved by 200. This proves the harness before anything is compared against it.
 - A Panel `Dock=Fill` between a MenuStrip and a StatusStrip reports the resolver's rect.
+- **Overflow at the far edges (S9):** an overflowing `Dock=Top` Panel, then a `Dock=Bottom` Panel; and an overflowing `Dock=Left`, then a `Dock=Right`. Both must report `FormDockLayout.Resolve`'s rects (the far-edge dock on the real edge, unclamped remainder).
+- A `Visible=false` docked Panel before a second one reports `Resolve(…, FormDockMode.Runtime)`'s rects (the second closes the gap).
 
 **Risks:**
 - DPI virtualisation on the owner's scaled display.
 - Windows clamps an oversized window.
 - A `GroupBox` insets its children (spec-claims #11). Fixtures use Panel; a GroupBox fixture is added only to MEASURE and record the inset, never to pass.
+- A `Panel` with `BorderStyle` `FixedSingle`/`Fixed3D` also loses 1–2px of client area, like a GroupBox. The resolver takes a container's client area as its bounds. Measure it, and record it; never make a test pass around it.
+- Strip heights are the catalog's `DefaultHeight` at 96 DPI (24/25/22), but real strips `AutoSize`. The driver pins `AutoSize = false`; the harness should also MEASURE an auto-sized strip once and record the difference.
+- A hand-edited strip `Dock="Left"`/`"Fill"`/`"None"` silently resolves to Top (`FormControl.IsDockedToBottom` is Bottom-or-else-Top). Flag it for a later diagnostic; it is not implemented.
 - The generated form is in `namespace GeneratedCode`.
 - `PerformClick` needs a shown form (not used here).
 - **The harness is the arbiter of Task 6's table (S9).** If Fill-then-Top or overflow disagrees, fix `FormDockLayout` and its table, and say so in the commit.
@@ -3305,7 +3312,9 @@ Spec §7 (Edge check), §7a (loopback server).
   - the no-anchor centring;
   - a `Dock=Top` Panel before a MenuStrip;
   - a Fill between strips;
-  - a nested Panel with a docked child.
+  - a nested Panel with a docked child;
+  - an overflowing `Dock=Top` then a `Dock=Bottom`, and an overflowing `Dock=Left` then a `Dock=Right` (S9, far-edge docking; compared with the Task 12 reference);
+  - a `Visible=false` docked control before another (the page is `FormDockMode.Runtime`).
 
 **Risks:**
 - The generated page's module script loads and runs BasicLang's JS. A script error must not abort measurement, so the harness measures on `load`, independent of the script.
@@ -3407,7 +3416,7 @@ A mutant that turns nothing red is a finding: add the missing test, or record wh
 - ⛔ **Stage by name; never `git add -A`; never `csc.dll`; commit via `-F`**; never round-trip a repo file through `Get-Content`/`Set-Content`; never type a backslash-u escape into code (build characters from code points, e.g. `(char)0x2212`).
 - ⛔ **No IDE drop before Task 16.** From Task 5 a new web form is Canvas, but the canvas cannot place on Canvas until Task 9.
 - ⚠ **`Control.Name` is never set by the generated WinForms code** (chip `task_fa51e644`). Identify controls by their generated field.
-- ⚠ **WinForms semantics this plan assumes, for the harness to confirm:** Fill does not consume; the remaining rect clamps at 0; containers' client area = bounds (GroupBox is the known exception); the region writer emits `Anchor`/`Dock` names verbatim, so a lowercase value is a csc failure the canvas/page tolerate (S11).
+- ⚠ **WinForms semantics this plan assumes, for the harness to confirm:** Fill does not consume; the remaining rect is NOT clamped (only sizes handed to controls are — S9, changed on Task 6 review); a hidden control does not dock at run time (`FormDockMode.Runtime`); containers' client area = bounds (GroupBox is the known exception); the region writer emits `Anchor`/`Dock` names verbatim, so a lowercase value is a csc failure the canvas/page tolerate (S11).
 - ⚠ **The JS web-build Integration rows may fail with `ERROR_USER_MAPPED_FILE` on this machine.** Compare by NAME against the baseline, and A/B on the base commit before calling one a regression.
 - ⚠ **PowerShell 5.1:** no `&&`; `2>&1` on a native exe wraps stderr in ErrorRecords (use `cmd /c`). The Bash tool is banned (hook; wsl.exe).
 

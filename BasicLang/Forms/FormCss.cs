@@ -27,7 +27,8 @@ public static class FormCss
             FormCssConverter.None => IsSafeVerbatim(value) ? value : null,
             FormCssConverter.Color => ColorToCss(value),
             FormCssConverter.ContentAlignmentHorizontal => HorizontalPart(property.Canonical(value)),
-            FormCssConverter.VisibleToDisplay => bool.TryParse(value, out var visible) && !visible ? "none" : null,
+            // ⛔ The one hidden rule, shared with the run-time dock resolver (FormControl.IsHidden).
+            FormCssConverter.VisibleToDisplay => FormControl.IsHiddenValue(value) ? "none" : null,
             // ⛔ Never a silent "no declaration": a converter added to the enum without an arm here
             // would drop its row from every page with nothing looking wrong.
             _ => throw new ArgumentOutOfRangeException(nameof(property), property.CssConverter,
