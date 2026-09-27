@@ -915,6 +915,9 @@ public sealed class FormCanvasTransform
     /// </summary>
     private static IEnumerable<FormLayoutEntry> WebLayout(FormDocument document)
     {
+        // ⚠ DELIBERATELY `Layout?.Kind`, not FormVocabulary.LayoutOf: LayoutOf reads a missing <Layout> as Grid for
+        // VOCABULARY purposes, but a cell rectangle needs the page's actual Cols/Rows, and a layout-less page has
+        // none — so it lays out no cells. Such a page is legacy; piece 4 retires .blwebform.
         if (document.Layout?.Kind != FormLayoutKind.Grid)
         {
             yield break;

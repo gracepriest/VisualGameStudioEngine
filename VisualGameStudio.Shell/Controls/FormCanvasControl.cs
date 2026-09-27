@@ -1850,7 +1850,10 @@ public class FormCanvasControl : Control
         // grid (spec 2026-09-27 §2.4).
         var isPixel = FormVocabulary.IsPixel(document);
 
-        // Cells are a Grid-only idea.
+        // Cells are a Grid-only idea. ⚠ DELIBERATELY `Layout?.Kind`, not FormVocabulary.LayoutOf: LayoutOf reads a
+        // missing <Layout> as Grid for VOCABULARY purposes, but drawing cells needs the page's actual Cols/Rows, and a
+        // layout-less page has none — so it draws no cells (and PlaceOnWeb refuses drops on it). Such a page is
+        // legacy; piece 4 retires .blwebform.
         var isGrid = !isWindow && document.Layout?.Kind == FormLayoutKind.Grid;
 
         // A PAGE is outlined and captioned ABOVE its surface — never given a title bar. ⚠ A Flow page keeps what it had
