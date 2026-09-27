@@ -11,10 +11,18 @@ namespace VisualGameStudio.Tests.Compiler;
 /// implementer's brief calls out as a backend whose own semantics can diverge.
 ///
 /// <para>Only the probes that run EVERYWHERE are here: N6 (a delegate FIELD invoked from inside
-/// its own class) is a pre-existing gap, unrelated to <c>Nothing</c>, filed as #188 — measured in
-/// <c>matrix-after.txt</c> to fail identically whether or not <c>Nothing</c> is involved (N6b,
-/// the same shape read into a local before the switch, runs everywhere). X4b (the same shape as
-/// X4, without a <c>Case Is Nothing</c> ON THE ARRAY itself) runs everywhere and is used here.
+/// its own class) WAS a pre-existing gap, unrelated to <c>Nothing</c> itself, filed as #188 —
+/// measured in this task's own <c>matrix-base.txt</c> to fail identically whether or not
+/// <c>Nothing</c> was involved (N6b, the same shape read into a local before the switch, ran
+/// everywhere even then). ⭐ <b>UPDATED for #188 (fix commit 5e82a786):</b> N6 IS this task's own
+/// F0 probe (<c>Case Is Nothing</c>, then a bare <c>Callback()</c>) — #188 is now DONE, and N6
+/// runs everywhere too. It was never promoted to a test HERE (this fixture recorded only the
+/// exclusion, not a pinned failure of its own), so there is nothing to flip in this file; the
+/// probe itself is pinned as
+/// <see cref="DelegateMemberInvocationExecutionTests.Probe_RunsOnEveryBackend_BothPipelines_AndProjectEntryPoint"/>'s
+/// F0 case, run on every backend under both pipelines plus the Release <c>.blproj</c> entry point.
+/// X4b (the same shape as X4, without a <c>Case Is Nothing</c> ON THE ARRAY itself) runs everywhere
+/// and is used here.
 /// ⭐ <b>UPDATED for #187 (fix commit 37faed14):</b> at the time this fixture was written, storing
 /// a lambda or <c>AddressOf</c> result into a user <c>Delegate</c> variable was ALSO a
 /// pre-existing gap (filed as #187 alongside #188, N4/N4b were not run, and N4c — the same shape
