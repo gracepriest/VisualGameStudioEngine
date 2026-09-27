@@ -49,7 +49,22 @@ Gate (feat/property-grid @ e0a645eb, clean build): fast subset 7806 / 5 failed =
 (JS prints `True`), which FAILS IDENTICALLY on the slice base 12e975c3 (A/B'd) — inherited, not ours. Slice-1
 mutation pass: 11/11 killed.
 
-**NEXT: slice 2 (the grid itself), then the owner's click-through in the IDE.** Four owner questions are open for
+**Slice 2 (the grid itself) — done, every task spec- + quality-reviewed, all findings fixed.** Its steps were
+re-anchored first by a pre-flight (`docs/superpowers/plans/2026-09-26-property-grid-slice2-preflight.md` — 4 blockers
+where the plan would have silently undone slice-1 fixes; its EXECUTION NOTES record every carried item). Delivered:
+absent properties display the target's default greyed; bold = changed; Reset removes the attribute; clear-means-reset;
+invalid values refused (`FormPropertyDef.Judge`), with the reason in the description pane; categories, Categorized/A-Z,
+search, collapse (`FormPropertyDisplayList`, reusable by slice 5's Events tab); the object selector (asks the ONE selection
+store); the Form's rows from `FormRoot` (ClientSize); the grid extracted into `FormPropertyGridView`. REAL-VIEW TESTS found
+live defects the piece-level tests passed over: a refused value did not snap back in the real TextBox (Avalonia skips
+re-applying an equal value — fixed by a posted two-step echo), and a refusal's reason vanished in the same canvas click
+(carried over one rebuild). Task 13 found a HANG: a named RadioButton `GroupName` spans the whole window, so two grid views
+unchecked each other forever — no GroupName now, pinned. Gate (feat/property-grid @ 4e7cccd6, clean build): fast subset
+7941 / 5 failed = the same known machine rows as slice 1; touched Integration rows 148/148. Mutation pass: 19/19 killed.
+IDE drop refreshed.
+
+**NEXT: the owner's click-through of the new grid in the IDE, then slice 3** (expand it first; its top notes carry the
+slice-1/2 review backlog and four owner questions). Four owner questions are open for
 slice 3 (TableLayoutPanel 2×2 on drop; drop the colour rows WinForms hides; GroupBox's default event `Enter` vs
 `Click`; BackgroundWorker's hand-written descriptions) — see the plan's slice-3 notes, which also carry a backlog
 from slice 1's reviews.

@@ -3646,7 +3646,7 @@ git commit -F "$sp\slice1-commit.txt"
 - Modify: `BasicLang/Forms/FormRetarget.cs` — `SameValue` (`:446-456`) delegates to the catalog's
 - Create: `VisualGameStudio.Tests/Compiler/FormPropertyRowDefaultTests.cs`
 
-- [ ] **Step 1: Write the failing tests.** `VisualGameStudio.Tests/Compiler/FormPropertyRowDefaultTests.cs`:
+- [x] **Step 1: Write the failing tests.** `VisualGameStudio.Tests/Compiler/FormPropertyRowDefaultTests.cs`:
 
 ```csharp
 using BasicLang.Forms;
@@ -3886,9 +3886,9 @@ public class FormPropertyRowDefaultTests
 }
 ```
 
-- [ ] **Step 2: Run — expect a BUILD failure.** Expected: `CS1061 'FormPropertyRow' … 'IsPresent'`, `'IsDefaultShown'`, `'IsBold'`, `'CanReset'`, `'ResetCommand'`, `'Category'`, `'Description'`, and `CS1729` for the 5-argument ctor (`target`). Right reason.
+- [x] **Step 2: Run — expect a BUILD failure.** Expected: `CS1061 'FormPropertyRow' … 'IsPresent'`, `'IsDefaultShown'`, `'IsBold'`, `'CanReset'`, `'ResetCommand'`, `'Category'`, `'Description'`, and `CS1729` for the 5-argument ctor (`target`). Right reason.
 
-- [ ] **Step 3: `FormPropertyDef.SameValue`.** In `FormControlCatalog.cs`, after `Canonical`, add:
+- [x] **Step 3: `FormPropertyDef.SameValue`.** In `FormControlCatalog.cs`, after `Canonical`, add:
 
 ```csharp
     /// <summary>
@@ -3911,7 +3911,7 @@ and replace `FormRetarget.cs:446-456` (`SameValue`) with:
             property?.SameValue(a, b) ?? string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
 ```
 
-- [ ] **Step 4: Replace `FormPropertyRow.cs` wholesale** with:
+- [x] **Step 4: Replace `FormPropertyRow.cs` wholesale** with:
 
 ```csharp
 using System.Globalization;
@@ -4360,9 +4360,9 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow
 
 ⚠ Each `[RelayCommand]` sits DIRECTLY above its method, with the doc comment ABOVE the attribute — an attribute binds to the next declaration and a doc comment between them is trivia (the `AddNewFormCommand` defect, CLAUDE.md).
 
-- [ ] **Step 5: Adapt the grid VM's row construction** (the rest of the VM is Task 12). In `FormPropertyGridViewModel.Rebuild` (`:292-296`) pass the target: `new FormPropertyRow(control, property, target, _file?.DegradedReason(control.Id, property.Name), () => Edited?.Invoke(this, EventArgs.Empty))`. In `AddIntrinsicRows` (`:125-192`) add a `category:`/`description:` argument to each intrinsic row: Name → `category: "Design", description: "Indicates the name used in code to identify the object."`; X/Y → Layout, `"The coordinates of the upper-left corner of the control relative to the upper-left corner of its container."`; Width/Height → Layout, `"The size of the control in pixels."`; Anchor → Layout, `"Defines the edges of the container to which a certain control is bound. When a control is anchored to an edge, the distance between the control's closest edge and the specified edge will remain constant."`; Dock → Layout, `"Defines which borders of the control are bound to the container."`; Col/Row → Layout, `"The page grid cell the control occupies (0-based)."`; TabIndex → Behavior, `"Determines the index in the TAB order that this control will occupy."` (texts from output.txt:171, :176, :168, :170, :159). `IntRow` gains `string category, string description` parameters and forwards them.
+- [x] **Step 5: Adapt the grid VM's row construction** (the rest of the VM is Task 12). In `FormPropertyGridViewModel.Rebuild` (`:292-296`) pass the target: `new FormPropertyRow(control, property, target, _file?.DegradedReason(control.Id, property.Name), () => Edited?.Invoke(this, EventArgs.Empty))`. In `AddIntrinsicRows` (`:125-192`) add a `category:`/`description:` argument to each intrinsic row: Name → `category: "Design", description: "Indicates the name used in code to identify the object."`; X/Y → Layout, `"The coordinates of the upper-left corner of the control relative to the upper-left corner of its container."`; Width/Height → Layout, `"The size of the control in pixels."`; Anchor → Layout, `"Defines the edges of the container to which a certain control is bound. When a control is anchored to an edge, the distance between the control's closest edge and the specified edge will remain constant."`; Dock → Layout, `"Defines which borders of the control are bound to the container."`; Col/Row → Layout, `"The page grid cell the control occupies (0-based)."`; TabIndex → Behavior, `"Determines the index in the TAB order that this control will occupy."` (texts from output.txt:171, :176, :168, :170, :159). `IntRow` gains `string category, string description` parameters and forwards them.
 
-- [ ] **Step 6: Run — green.**
+- [x] **Step 6: Run — green.**
 
 ```powershell
 dotnet build VisualGameStudio.Tests/VisualGameStudio.Tests.csproj -c Release
@@ -4384,7 +4384,7 @@ Expected: green. `ANoOpWrite_RaisesNothing` (`FormPropertyGridTests.cs:554`) and
 - Modify: `VisualGameStudio.Tests/Compiler/FormPropertyGridTests.cs` — `:291-309`, `:369-383`
 - Create: `VisualGameStudio.Tests/Compiler/FormPropertyGridDisplayTests.cs`
 
-- [ ] **Step 1: Write the failing tests.** `VisualGameStudio.Tests/Compiler/FormPropertyGridDisplayTests.cs`:
+- [x] **Step 1: Write the failing tests.** `VisualGameStudio.Tests/Compiler/FormPropertyGridDisplayTests.cs`:
 
 ```csharp
 using BasicLang.Forms;
@@ -4656,9 +4656,9 @@ public class FormPropertyGridDisplayTests
 
 In `FormPropertyGridTests.cs`: `:301-302` → `Assert.That(names, Does.Contain("Name").And.Contains("Text").And.Contains("ClientSize"));` and `:381` → `Does.Contain("Text").And.Contains("ClientSize")`.
 
-- [ ] **Step 2: Run — expect a BUILD failure.** Expected: `CS0246 'FormPropertyCategoryHeader'`, `CS1061 … 'DisplayItems'`, `'Objects'`, `'SelectedObject'`, `'SelectionRequested'`, `'IsCategorized'`, `'IsAlphabetical'`, `'SearchText'`, `'SelectedItem'`. Right reason.
+- [x] **Step 2: Run — expect a BUILD failure.** Expected: `CS0246 'FormPropertyCategoryHeader'`, `CS1061 … 'DisplayItems'`, `'Objects'`, `'SelectedObject'`, `'SelectionRequested'`, `'IsCategorized'`, `'IsAlphabetical'`, `'SearchText'`, `'SelectedItem'`. Right reason.
 
-- [ ] **Step 3: The two small view-model types.** `VisualGameStudio.Shell/ViewModels/Designer/FormPropertyCategoryHeader.cs`:
+- [x] **Step 3: The two small view-model types.** `VisualGameStudio.Shell/ViewModels/Designer/FormPropertyCategoryHeader.cs`:
 
 ```csharp
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -4724,7 +4724,7 @@ public sealed class FormObjectItem
 }
 ```
 
-- [ ] **Step 4: `FormRootValues.CanReset`.** Append to `FormRootValues`:
+- [x] **Step 4: `FormRootValues.CanReset`.** Append to `FormRootValues`:
 
 ```csharp
     /// <summary>
@@ -4735,7 +4735,7 @@ public sealed class FormObjectItem
     public static bool CanReset(FormPropertyDef row) => row.Type != FormPropertyType.Size;
 ```
 
-- [ ] **Step 5: Replace `FormPropertyGridViewModel.cs` wholesale** with:
+- [x] **Step 5: Replace `FormPropertyGridViewModel.cs` wholesale** with:
 
 ```csharp
 using System.Collections.ObjectModel;
@@ -5192,7 +5192,7 @@ public partial class FormPropertyGridViewModel : ObservableObject
 }
 ```
 
-- [ ] **Step 6: Wire the selector into the one store.** In `CodeEditorDocumentViewModel.cs`, at the end of the constructor (before its closing brace at `:1124`), add:
+- [x] **Step 6: Wire the selector into the one store.** In `CodeEditorDocumentViewModel.cs`, at the end of the constructor (before its closing brace at `:1124`), add:
 
 ```csharp
         // ⛔⛔ The grid's object selector (spec §3) never writes PropertyGrid.SelectedControl — it asks,
@@ -5200,7 +5200,7 @@ public partial class FormPropertyGridViewModel : ObservableObject
         PropertyGrid.SelectionRequested += (_, control) => SelectInDesigner(control);
 ```
 
-- [ ] **Step 7: Run — green.**
+- [x] **Step 7: Run — green.**
 
 ```powershell
 dotnet build VisualGameStudio.Tests/VisualGameStudio.Tests.csproj -c Release
@@ -5221,7 +5221,7 @@ Expected: green (`FormComponentAcceptanceTests` is Integration — run it here a
 
 **Existing tests that look for the grid inside the document view (measured, spec §3):** none assert the grid's own elements. `FormTrayViewTests.cs:115` pins the tray Delete's `CommandParameter="{Binding PropertyGrid.SelectedControl}"` (`CodeEditorDocumentView.axaml:276`) and `FormDesignerRealViewTests` reads the canvas's `SelectedControl` binding (`:240`) — both stay in the document view, untouched. `FormStripViewTests`, `FormToolboxDragTests`, `FormHandlerReachabilityTests` read the document view for the canvas/toolbox/Type Here only.
 
-- [ ] **Step 1: Write the failing binding tests.** `VisualGameStudio.Tests/Shell/FormPropertyGridViewTests.cs`:
+- [x] **Step 1: Write the failing binding tests.** `VisualGameStudio.Tests/Shell/FormPropertyGridViewTests.cs`:
 
 ```csharp
 using System.Reflection;
@@ -5411,9 +5411,9 @@ public class FormPropertyGridViewTests
 }
 ```
 
-- [ ] **Step 2: Run — expect RED for the right reason.** Build succeeds (the test references only existing VM types). Expected: every test FAILS at `Assert.Fail("…FormPropertyGridView.axaml not found…")`, except `TheDocumentView_NoLongerCarriesTheGridsOwnBindings` and `TheDocumentView_HostsTheGridView_…`, which fail on their assertions — the grid has not moved yet.
+- [x] **Step 2: Run — expect RED for the right reason.** Build succeeds (the test references only existing VM types). Expected: every test FAILS at `Assert.Fail("…FormPropertyGridView.axaml not found…")`, except `TheDocumentView_NoLongerCarriesTheGridsOwnBindings` and `TheDocumentView_HostsTheGridView_…`, which fail on their assertions — the grid has not moved yet.
 
-- [ ] **Step 3: Create the view.** `VisualGameStudio.Shell/Views/Controls/FormPropertyGridView.axaml`:
+- [x] **Step 3: Create the view.** `VisualGameStudio.Shell/Views/Controls/FormPropertyGridView.axaml`:
 
 ```xml
 <UserControl xmlns="https://github.com/avaloniaui"
@@ -5617,7 +5617,7 @@ public partial class FormPropertyGridView : UserControl
 }
 ```
 
-- [ ] **Step 4: Replace the grid in the document view.** In `CodeEditorDocumentView.axaml`, replace `:313-444` — from the comment `<!-- Property window, shaped like Visual Studio's:` through the `</Border>` that closes `Grid.Column="2"` — with:
+- [x] **Step 4: Replace the grid in the document view.** In `CodeEditorDocumentView.axaml`, replace `:313-444` — from the comment `<!-- Property window, shaped like Visual Studio's:` through the `</Border>` that closes `Grid.Column="2"` — with:
 
 ```xml
         <!-- The Properties window (spec §3) — extracted into its own view, bound to the same
@@ -5628,7 +5628,7 @@ public partial class FormPropertyGridView : UserControl
                                        DataContext="{Binding PropertyGrid}"/>
 ```
 
-- [ ] **Step 5: Clean build (AXAML changed), then run.**
+- [x] **Step 5: Clean build (AXAML changed), then run.**
 
 ```powershell
 dotnet clean VisualGameStudio.Shell/VisualGameStudio.Shell.csproj -c Release
@@ -5646,7 +5646,7 @@ Expected: green. ⛔ After an AXAML change, `dotnet clean` first — a stale bui
 **Files:**
 - Create: `VisualGameStudio.Tests/Shell/FormPropertyGridRealViewTests.cs`
 
-- [ ] **Step 1: Write the tests.** They host the REAL `CodeEditorDocumentView` (the `FormDesignerRealViewTests` rig), under `[AvaloniaTest]` with Skia (`DesignerHeadlessApp.cs:31` sets `UseHeadlessDrawing = false` assembly-wide). Every fixture control uses the same id-bearing shape; these tests assert the GRID, not canvas pixels, so the "same id" render-hash rule does not bite, but the ids stay stable across tests.
+- [x] **Step 1: Write the tests.** They host the REAL `CodeEditorDocumentView` (the `FormDesignerRealViewTests` rig), under `[AvaloniaTest]` with Skia (`DesignerHeadlessApp.cs:31` sets `UseHeadlessDrawing = false` assembly-wide). Every fixture control uses the same id-bearing shape; these tests assert the GRID, not canvas pixels, so the "same id" render-hash rule does not bite, but the ids stay stable across tests.
 
 ```csharp
 using Avalonia;
@@ -5921,13 +5921,13 @@ public class FormPropertyGridRealViewTests
 }
 ```
 
-- [ ] **Step 1a: Run the ContextMenu DataContext diagnostic FIRST, alone** (`--filter "FullyQualifiedName~TheRowsContextMenu_CarriesTheRowAsItsDataContext"`), and read its `[diag]` line. If it is green, run the rest. If `DataContext` is null or not the row after opening, that is a DataContext GAP, not a binding defect: fix it in the VIEW. **First suggestion — the PlacementTarget route:** bind the MenuItem's `Command` through `{Binding $parent[ContextMenu].PlacementTarget.DataContext.ResetCommand}` (the ContextMenu is an ancestor of its MenuItem inside the popup, and its `PlacementTarget` is the row's Border). Fallback only if that does not resolve: `DataContext="{Binding $parent[Border].DataContext}"` on the ContextMenu — ⚠ likely NOT to resolve, because the ContextMenu lives in a popup OUTSIDE the Border's visual tree, so `$parent[Border]` has no Border to find. Measure which one Avalonia 11.3 resolves headless, keep that one, and make `FormPropertyGridViewTests`' resolver skip `$parent[…]` paths explicitly with a comment rather than failing on them. Record which route held in the task checkbox.
+- [x] **Step 1a: Run the ContextMenu DataContext diagnostic FIRST, alone** (`--filter "FullyQualifiedName~TheRowsContextMenu_CarriesTheRowAsItsDataContext"`), and read its `[diag]` line. If it is green, run the rest. If `DataContext` is null or not the row after opening, that is a DataContext GAP, not a binding defect: fix it in the VIEW. **First suggestion — the PlacementTarget route:** bind the MenuItem's `Command` through `{Binding $parent[ContextMenu].PlacementTarget.DataContext.ResetCommand}` (the ContextMenu is an ancestor of its MenuItem inside the popup, and its `PlacementTarget` is the row's Border). Fallback only if that does not resolve: `DataContext="{Binding $parent[Border].DataContext}"` on the ContextMenu — ⚠ likely NOT to resolve, because the ContextMenu lives in a popup OUTSIDE the Border's visual tree, so `$parent[Border]` has no Border to find. Measure which one Avalonia 11.3 resolves headless, keep that one, and make `FormPropertyGridViewTests`' resolver skip `$parent[…]` paths explicitly with a comment rather than failing on them. Record which route held in the task checkbox.
 
 **If `IsOpen` is false** (the headless right-click did not open the menu): that is an input-routing fact about headless, not a grid defect. Then BOTH tests open the menu explicitly with `border.ContextMenu.Open(border)` after the right-click — the diagnostic test keeps its `IsOpen` assertion (asserted AFTER the explicit open, so it still proves the menu can open and carry the row) and its summary and the Reset test's summary both say "headless right-click does not open a ContextMenu; opened explicitly — the DataContext and binding are what is tested". Never delete the `IsOpen` assertion: without it the DataContext assertions could run against a menu that never opened.
 
 ⚠ Before running, check `FormCanvasTransform.Layout`'s entry type exposes `Control` and `Bounds` and that a Button entry exists without a `Role` filter — `FormDesignerRealViewTests.cs:66-72` uses `e.Control`/`e.Role`/`e.Bounds`; add `&& e.Role == FormLayoutRole.<the positioned role>` if Layout yields more than one entry per control (read `FormCanvasTransform` for the role name).
 
-- [ ] **Step 2: Run.**
+- [x] **Step 2: Run.**
 
 ```powershell
 dotnet build VisualGameStudio.Tests/VisualGameStudio.Tests.csproj -c Release
@@ -5936,7 +5936,7 @@ dotnet test VisualGameStudio.Tests/VisualGameStudio.Tests.csproj -c Release --no
 
 Expected: green (Tasks 11–13 built everything). If a test is red, it is a REAL defect in the extracted view (a binding the reflection test resolved but that does not behave) — fix the view, never the assertion. `FormDesignerRealViewTests` must stay green: it pins that the canvas's `SelectedControl` TwoWay binding (still in the document view) is unaffected.
 
-- [ ] **Step 3: Prove the real-view gate can fail.** In `FormPropertyGridView.axaml` temporarily change `SelectedItem="{Binding SelectedObject, Mode=TwoWay}"` to `SelectedItem="{Binding SelectedObjekt, Mode=TwoWay}"` (Edit), `dotnet clean` + build, run `PickingInTheObjectSelector_…` and `EveryBindingInTheGridView_…`: both red. Revert with Edit, clean + build, green.
+- [x] **Step 3: Prove the real-view gate can fail.** In `FormPropertyGridView.axaml` temporarily change `SelectedItem="{Binding SelectedObject, Mode=TwoWay}"` to `SelectedItem="{Binding SelectedObjekt, Mode=TwoWay}"` (Edit), `dotnet clean` + build, run `PickingInTheObjectSelector_…` and `EveryBindingInTheGridView_…`: both red. Revert with Edit, clean + build, green.
 
 ---
 
@@ -5944,24 +5944,24 @@ Expected: green (Tasks 11–13 built everything). If a test is red, it is a REAL
 
 Same procedure as Task 9 (Edit to mutate, rebuild, red, Edit to revert, rebuild, green; never Copy-Item). Record each red line in `slice2-commit.txt`.
 
-- [ ] **M1 — the bold rule.** `IsBold => _definition != null && IsPresent;`. Red: `FormPropertyRowDefaultTests.APresentValueEqualToTheDefault_IsNotBold`, `…ButAnEmptyTextIsNot`, `FormPropertyGridDisplayTests.TheFormsRows_ComeFromFormRoot` stays green (Text differs) — record which went red.
-- [ ] **M2 — reset removes.** In `Reset`, replace `_control!.Properties.Remove(Name);` with `_control!.Properties[Name] = DefaultValue ?? "";`. Red: `Reset_RemovesThePropertyFromTheDocument_AndRaisesEditedOnce`, `ResetFromTheRowsContextMenu_RemovesTheAttributeFromTheFile`.
-- [ ] **M3 — the displayed-default no-op.** In `Commit`, compare with `RawValue` instead of `DisplayValue`. Red: `PushingTheDisplayedDefaultBack_WritesNothing`.
-- [ ] **M4 — the selector asks, never writes.** In `OnSelectedObjectChanged`, replace the event invocation with `SelectedControl = value.Control;`. Red: `PickingAnObject_RequestsTheSelection_AndNeverWritesSelectedControlItself`, `TheDocumentViewModel_RoutesTheSelectorThroughTheOneSelectionStore` (`Selection.Primary` unchanged, tray not highlighted), `PickingInTheObjectSelector_SelectsOnTheCanvas_AtTwoWindowSizes`.
-- [ ] **M5 — search.** In `VisibleRows`, return `Rows` unconditionally. Red: `Search_FiltersByName_InBothModes`, `TypingInTheSearchBox_FiltersTheRows`.
-- [ ] **M6 — RETARGETED to the identity guard** (the review showed deleting `_syncingObjects = true` turns nothing red: by the time `RefreshObjects` sets `SelectedObject`, `SelectedControl` already holds the new control, so the `ReferenceEquals(value.Control, SelectedControl)` guard returns first; and the combo's null push is caught by the null guard). Mutant: in `OnSelectedObjectChanged`, delete `|| ReferenceEquals(value.Control, SelectedControl)`. Red: `FormPropertyGridDisplayTests.ReselectingWhatIsAlreadySelected_RequestsNothing`. ⚠ `_syncingObjects` is KEPT as defence-in-depth against a view push during an items rebuild, but it has no view-model-observable effect behind the other two guards, so no mutation check claims it — stated here so nobody believes it is tested.
-- [ ] **M7 — spec §7 refusal.** In `Commit`, delete the `!_definition.Accepts(value, _target)` block. Red: `FormPropertyRowDefaultTests.AnInvalidTypedValue_IsRefused_NeverWritten_AndTheEditorSnapsBack`, `AValueUnusableOnThisTarget_IsRefused`.
-- [ ] **M8 — clearing is reset.** In `Commit`, delete the `value.Length == 0 && … Accepts("", _target)` block. Red: `FormPropertyRowDefaultTests.ClearingAPresentTypedValue_ResetsIt` (the empty value then hits the refusal and the property stays). Second mutant: remove `&& !_definition.Accepts("", _target)` from that block's condition. Red: `ClearingAStringValue_WritesTheEmptyString` (an empty caption would be reset instead of written).
+- [x] **M1 — the bold rule.** `IsBold => _definition != null && IsPresent;`. Red: `FormPropertyRowDefaultTests.APresentValueEqualToTheDefault_IsNotBold`, `…ButAnEmptyTextIsNot`, `FormPropertyGridDisplayTests.TheFormsRows_ComeFromFormRoot` stays green (Text differs) — record which went red.
+- [x] **M2 — reset removes.** In `Reset`, replace `_control!.Properties.Remove(Name);` with `_control!.Properties[Name] = DefaultValue ?? "";`. Red: `Reset_RemovesThePropertyFromTheDocument_AndRaisesEditedOnce`, `ResetFromTheRowsContextMenu_RemovesTheAttributeFromTheFile`.
+- [x] **M3 — the displayed-default no-op.** In `Commit`, compare with `RawValue` instead of `DisplayValue`. Red: `PushingTheDisplayedDefaultBack_WritesNothing`.
+- [x] **M4 — the selector asks, never writes.** In `OnSelectedObjectChanged`, replace the event invocation with `SelectedControl = value.Control;`. Red: `PickingAnObject_RequestsTheSelection_AndNeverWritesSelectedControlItself`, `TheDocumentViewModel_RoutesTheSelectorThroughTheOneSelectionStore` (`Selection.Primary` unchanged, tray not highlighted), `PickingInTheObjectSelector_SelectsOnTheCanvas_AtTwoWindowSizes`.
+- [x] **M5 — search.** In `VisibleRows`, return `Rows` unconditionally. Red: `Search_FiltersByName_InBothModes`, `TypingInTheSearchBox_FiltersTheRows`.
+- [x] **M6 — RETARGETED to the identity guard** (the review showed deleting `_syncingObjects = true` turns nothing red: by the time `RefreshObjects` sets `SelectedObject`, `SelectedControl` already holds the new control, so the `ReferenceEquals(value.Control, SelectedControl)` guard returns first; and the combo's null push is caught by the null guard). Mutant: in `OnSelectedObjectChanged`, delete `|| ReferenceEquals(value.Control, SelectedControl)`. Red: `FormPropertyGridDisplayTests.ReselectingWhatIsAlreadySelected_RequestsNothing`. ⚠ `_syncingObjects` is KEPT as defence-in-depth against a view push during an items rebuild, but it has no view-model-observable effect behind the other two guards, so no mutation check claims it — stated here so nobody believes it is tested.
+- [x] **M7 — spec §7 refusal.** In `Commit`, delete the `!_definition.Accepts(value, _target)` block. Red: `FormPropertyRowDefaultTests.AnInvalidTypedValue_IsRefused_NeverWritten_AndTheEditorSnapsBack`, `AValueUnusableOnThisTarget_IsRefused`.
+- [x] **M8 — clearing is reset.** In `Commit`, delete the `value.Length == 0 && … Accepts("", _target)` block. Red: `FormPropertyRowDefaultTests.ClearingAPresentTypedValue_ResetsIt` (the empty value then hits the refusal and the property stays). Second mutant: remove `&& !_definition.Accepts("", _target)` from that block's condition. Red: `ClearingAStringValue_WritesTheEmptyString` (an empty caption would be reset instead of written).
 
 ---
 
 ### Task 16: Slice 2 gate, commit, and the owner's click-through
 
-- [ ] **Step 1: Clean build** (AXAML changed): `dotnet clean` both projects, then `dotnet build VisualGameStudio.Shell/VisualGameStudio.Shell.csproj -c Release` and the test project.
-- [ ] **Step 2: Fast subset** into `$sp\slice2-fast.txt` (both streams); compare failure NAMES against the slice-1 commit's run. Zero new names.
-- [ ] **Step 3: Named fixtures:** `FormPropertyRowDefaultTests`, `FormPropertyGridDisplayTests`, `FormPropertyGridViewTests`, `FormPropertyGridRealViewTests`, `FormPropertyGridTests`, `FormDesignerRealViewTests`, `FormStripViewTests`, `FormTrayViewTests`, `FormDesignModeTests`, `FormAnchorDockPickerTests`.
-- [ ] **Step 4: Integration** — slice 2 changes no emission, so run only the rows that drive the grid through the VM: `FormComponentAcceptanceTests`, `FormDesignerAcceptanceTests`. Say in the commit that the emission Integration rows were NOT re-run and why (proportional re-gate; slice 2 touches no generator).
-- [ ] **Step 5: Commit** with `slice2-commit.txt` (`feat(form-designer): property grid slice 2 — extracted view, categories, sort, search, default display, bold, reset, object selector`, the mutation lines, the gates with their base, the attribution line `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`). Stage by name:
+- [x] **Step 1: Clean build** (AXAML changed): `dotnet clean` both projects, then `dotnet build VisualGameStudio.Shell/VisualGameStudio.Shell.csproj -c Release` and the test project.
+- [x] **Step 2: Fast subset** into `$sp\slice2-fast.txt` (both streams); compare failure NAMES against the slice-1 commit's run. Zero new names.
+- [x] **Step 3: Named fixtures:** `FormPropertyRowDefaultTests`, `FormPropertyGridDisplayTests`, `FormPropertyGridViewTests`, `FormPropertyGridRealViewTests`, `FormPropertyGridTests`, `FormDesignerRealViewTests`, `FormStripViewTests`, `FormTrayViewTests`, `FormDesignModeTests`, `FormAnchorDockPickerTests`.
+- [x] **Step 4: Integration** — slice 2 changes no emission, so run only the rows that drive the grid through the VM: `FormComponentAcceptanceTests`, `FormDesignerAcceptanceTests`. Say in the commit that the emission Integration rows were NOT re-run and why (proportional re-gate; slice 2 touches no generator).
+- [x] **Step 5: Commit** with `slice2-commit.txt` (`feat(form-designer): property grid slice 2 — extracted view, categories, sort, search, default display, bold, reset, object selector`, the mutation lines, the gates with their base, the attribution line `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`). Stage by name:
 
 ```powershell
 git add VisualGameStudio.Shell/Views/Controls/FormPropertyGridView.axaml VisualGameStudio.Shell/Views/Controls/FormPropertyGridView.axaml.cs
@@ -5976,7 +5976,7 @@ git status
 git commit -F "$sp\slice2-commit.txt"
 ```
 
-- [ ] **Step 6: The owner's click-through (spec §9 — required before slice 3).** Build the IDE (`dotnet build VisualGameStudio.Shell/VisualGameStudio.Shell.csproj -c Release`) and ask the owner to run `VisualGameStudio.Shell\bin\Release\net8.0\VisualGameStudio.exe` (⛔ NOT `IDE\*.exe` — stale). The script to hand them: open a `.blform`; pick objects in the selector (form, a control, the Timer) and watch the canvas and tray follow; toggle Categorized/A-Z; collapse a category and reselect; search "color"; confirm an unset Enabled reads True and greyed; set Text and see it bold; right-click → Reset and see the attribute leave Code view; repeat on a `.blwebform` and edit its Text, save, reopen (the slice-1 web-caption fix). Record their findings; each reported defect gets a failing real-view test before its fix.
+- [x] **Step 6: The owner's click-through (spec §9 — required before slice 3).** Build the IDE (`dotnet build VisualGameStudio.Shell/VisualGameStudio.Shell.csproj -c Release`) and ask the owner to run `VisualGameStudio.Shell\bin\Release\net8.0\VisualGameStudio.exe` (⛔ NOT `IDE\*.exe` — stale). The script to hand them: open a `.blform`; pick objects in the selector (form, a control, the Timer) and watch the canvas and tray follow; toggle Categorized/A-Z; collapse a category and reselect; search "color"; confirm an unset Enabled reads True and greyed; set Text and see it bold; right-click → Reset and see the attribute leave Code view; repeat on a `.blwebform` and edit its Text, save, reopen (the slice-1 web-caption fix). Record their findings; each reported defect gets a failing real-view test before its fix.
 
 ---
 
