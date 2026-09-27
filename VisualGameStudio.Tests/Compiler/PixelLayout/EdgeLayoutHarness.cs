@@ -258,7 +258,9 @@ internal static class EdgeLayoutHarness
 
     /// <summary>
     /// The dump → one result per case. ⛔ Refuses (throws <see cref="InvalidDataException"/>), never skips: no
-    /// <c>#out</c>, an unfinished run, a case with no result, a viewport other than asked, a <c>devicePixelRatio</c>
+    /// <c>#out</c>, an unfinished run, a case with no result, a measurement taken before <c>load</c> (mutation M1: a
+    /// harness that measured at script run still read the same numbers here, so only this refusal can see it), a
+    /// viewport other than asked, a <c>devicePixelRatio</c>
     /// other than 1, a snapshot missing, and a requested control with no rectangle.
     /// </summary>
     public static IReadOnlyDictionary<string, EdgeCaseResult> Parse(string dump, IReadOnlyList<EdgeCase> cases)
@@ -291,6 +293,15 @@ internal static class EdgeLayoutHarness
             if (!r.TryGetProperty("vw", out var vwElement))
             {
                 throw new InvalidDataException($"'{c.Name}' reported nothing measured: {string.Join("; ", errors)}");
+            }
+
+            // ⛔ Measured after load or not at all: before it, an image may still be undecoded — and an <img> that has
+            // not loaded stretches under two insets, which hides the very defect the Picture case exists for.
+            var readyState = r.GetProperty("rs").GetString();
+            if (readyState != "complete")
+            {
+                throw new InvalidDataException(
+                    $"'{c.Name}' was measured with document.readyState '{readyState}', before the page's load event");
             }
 
             var (vw, vh) = (vwElement.GetInt32(), r.GetProperty("vh").GetInt32());
@@ -499,6 +510,7 @@ internal static class EdgeLayoutHarness
             try {
               await turn(); await turn();
               var f = formArea(), r = f.getBoundingClientRect();
+              result.rs = document.readyState;
               result.vw = window.innerWidth; result.vh = window.innerHeight;
               result.dpr = window.devicePixelRatio; result.ua = navigator.userAgent;
               result.form = { x: r.left, y: r.top, w: r.width, h: r.height, cl: f.clientLeft, ct: f.clientTop };

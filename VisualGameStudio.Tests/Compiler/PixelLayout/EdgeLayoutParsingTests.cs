@@ -15,12 +15,13 @@ public class EdgeLayoutParsingTests
     private static readonly EdgeCase Case = new("SelfTest@400x300", "SelfTest", 400, 300, new[] { "p1", "p2" },
         new[] { EdgeStep.Display("showP2", "p2", "block") });
 
-    private static Dictionary<string, object?> Good(string name = "SelfTest@400x300", int vw = 400, int vh = 300, double dpr = 1)
+    private static Dictionary<string, object?> Good(
+        string name = "SelfTest@400x300", int vw = 400, int vh = 300, double dpr = 1, string readyState = "complete")
     {
         object Box(double x, double y, double w, double h, bool v = true) => new { x, y, w, h, v };
         return new Dictionary<string, object?>
         {
-            ["name"] = name, ["vw"] = vw, ["vh"] = vh, ["dpr"] = dpr, ["ua"] = "Edg/154.0.0.0",
+            ["name"] = name, ["rs"] = readyState, ["vw"] = vw, ["vh"] = vh, ["dpr"] = dpr, ["ua"] = "Edg/154.0.0.0",
             ["form"] = new { x = 0, y = 0, w = 400, h = 300, cl = 0, ct = 0 },
             ["sw"] = 400, ["sh"] = 300,
             ["images"] = new Dictionary<string, object>(), ["literal"] = null,
@@ -89,6 +90,14 @@ public class EdgeLayoutParsingTests
     {
         Assert.That(() => EdgeLayoutHarness.Parse(Dump(new[] { Good(vw: 300, vh: 150) }), new[] { Case }),
             Throws.TypeOf<InvalidDataException>().With.Message.Contains("300x150"));
+    }
+
+    [TestCase("loading")]
+    [TestCase("interactive")]
+    public void AMeasurementTakenBeforeLoad_IsRefused(string readyState)
+    {
+        Assert.That(() => EdgeLayoutHarness.Parse(Dump(new[] { Good(readyState: readyState) }), new[] { Case }),
+            Throws.TypeOf<InvalidDataException>().With.Message.Contains("before the page's load event"));
     }
 
     [Test]

@@ -111,3 +111,51 @@ Cases (label = WinForms snapshot compared, tolerance 1 unless recorded):
 
 ## G. Gate
 Fast subset vs `ff415ec5` (8308 / 8302 / 5 / 1; the five known names) + `EdgeLayoutParsingTests`; Integration `FullyQualifiedName~PixelLayout` (both harnesses; must RUN here, 0 skipped), `FormBuildEmissionTests`, `FormDockScriptTests`.
+
+---
+
+### Execution notes (measured on the owner's Windows 11 machine, Edge 154.0.4258.37, display scale 1.0)
+
+**Run cost:** CLI build of the 18-page project 0.6 s; Edge 2.0 s for all 27 cases (one process); the WinForms reference (17 forms, one build + one run) 23 s. Whole fixture ≈ 30 s.
+
+**No disagreement outside the recorded gaps.** Every case below agrees with the model AND the WinForms window within ±1px; nothing needed a production change and nothing went to the coordinator.
+
+| Case | Edge vs model | Edge vs WinForms |
+|---|---|---|
+| SelfTest 400×300 / 600×300 | = (p2 at 480 when wider) | = |
+| Anchors, 16 combinations, 400×300 / 601×401 | = | = except the centred half pixel (recorded) |
+| Anchors 341×251 (narrower) | form area stays 400×300, scroll size ≥ 400×300, controls at their design rects | n/a by design (B2) |
+| DockStrips 400×300 / 600×400; TopBeforeMenu; OverflowV; OverflowH; HiddenBox; StripsPinned (24/25/22 exactly) | = | = |
+| DockedBox, DockedAnchor, NestedDock 400×300 / 500×360 | = | = |
+| HiddenSiblingAnchor design / `showHid` (real reflow script) | = | = |
+| HiddenDock design; `showA`/`hideA` (style.display), `hideB`/`showB` (hidden), `hideBc`/`showBc` (class) | — | = the window's `showA`/`hideA`/`hideB`/`showB` |
+| Picture 400×300 / 600×400 (every image loaded, 1×1 intrinsic) | = | = |
+| LiteralP (vs the LiteralPlain twin) | =, form area at (0,0) | = |
+| MenuOver | = ; closed: the point (20,40) is `under`; open: `mnuOpen` | = |
+| Phone 640×480 | = | not compared (TextBox/ListBox auto-sizing on WinForms; the page is the subject) |
+| Phone 400×900 | one column at x=0 in `FormReadingOrder` order (menu, lblUser, txtUser, lblPass, txtPass, chkRemember, lstRecent, btnGo, pnlFoot, status); txt/lst/menu/status 400 wide; btnGo 75; btnHidden hidden; Literal after everything | — |
+
+**Recorded gaps (asserted exactly, so a change is visible):**
+- Centring half pixel at 601×401: Edge keeps the spec's value (a0 110.5/60.5, a1 X 205.5, a2 300.5, a3 395.5, a4 Y 130.5, a8 200.5, a12 270.5); WinForms floors (110/60, 205, …).
+- Bordered: web Panels draw no `BorderStyle` (the row has no CSS), so pSingle/p3D children are at the model; WinForms insets them 1/2px. The GroupBox `<fieldset>` insets EVERY child 2px: grpTop (202,132) 176 wide, grpSub (212,172); WinForms (203,149) 174 wide and (210,170). The fieldset's min-inline-size did not widen it.
+- CheckBox caption: not rendered on the page ("Remember me" absent from the form area's text; a Label's "Password" present).
+- M-5: 4 `getComputedStyle` calls per unrelated colour write on HiddenDock = one full dock walk per observed attribute write (no DOM write when the CSS is unchanged). Filtering is the coordinator's call.
+- Observed, not a gap in the spec's terms: on a phone an EMPTY docked Panel (`pnlFoot`) is 0 tall (containers are `height: auto` below the breakpoint, Task 10 decision 5).
+
+**Mutations (apply, rebuild, run, restore):**
+
+| # | Mutant | Result |
+|---|---|---|
+| 1 | Measure at script run instead of on `load` | first SURVIVED: two task turns later the numbers and the image states were the same. The parser now refuses a measurement whose `document.readyState` is not `complete` (`AMeasurementTakenBeforeLoad_IsRefused` ×2); re-run: killed, 41 red (it measured at `loading`) |
+| 2 | No task turn after a step | SURVIVED — equivalent: `await apply()` already yields after the observer's microtask |
+| 2b | Snapshot synchronously after the step (no await at all) | killed — 3 red (`showA`, `showHid`, M-5) |
+| 3 | Edge tolerance +5 | killed — 1 red (`TheEdgeTolerance_IsOnePixel`) |
+| 4 | Parser skips a control with no rect | killed — 1 red (`AControlThePageDidNotHave_…`) |
+| 5 | The iframe's width/height never applied | killed — 41 red (viewport refusal: 300×150) |
+| 6 | `--force-device-scale-factor=2` | killed — 41 red (DPR refusal) |
+| 6b | The flag dropped | SURVIVED — equivalent on this 100% display; mutant 6 proves the refusal |
+| 7 | **Task 10 I-1 reverted:** `Stretched` (C#) and `st` (JS) write `auto` | killed — 2 red (Picture both sizes: picLR 60 wide, picTB 60 tall, picFill 1×1) |
+| 8 | **Task 10 N-1 reverted:** no `display: flow-root` | killed — 2 red (`ALiteralStartingWithAParagraph…`, `TheFormArea_StartsAtTheViewportsTopLeft…` for LiteralP and Phone) |
+| 9 | Dropdown lift removed | killed — 1 red (open probe = `under`) |
+
+**Red/green:** `EdgeLayoutParsingTests` 12 (red shown by mutants 1, 3, 4); `PixelPageLayoutTests` first run 39/41 — the two red were the RECORD placeholders (Bordered, M-5), filled from the measurement; then 41/41, **0 skipped**. Leftovers after every run: no process with a `bl-edge-profile` command line, no `bl-edge-*` directory (the ReferenceDriver entries listed by CIM are Task 12's zero-thread exited processes from before this session).
