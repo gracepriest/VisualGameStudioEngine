@@ -1021,6 +1021,12 @@ public sealed record FormImpliedProperty(string Name, string Value);
 /// A stylesheet block appended ONCE per kind present on the page — the horizontal bar, the hidden
 /// submenu shown on hover. Per KIND, not per control: two menus must not emit the rules twice.
 /// </param>
+/// <param name="StretchesWhenStacked">
+/// Below a Canvas page's phone breakpoint (spec 2026-09-27 §5), the control spans the column instead of keeping its
+/// designed width — inputs and pictures (TextBox, which covers multi-line text, ComboBox, ListBox, PictureBox). Only
+/// on a Positioned row the web has (FormAssetEmitterTests pins it). ⛔ The emitter reads this; it never switches on
+/// the kind.
+/// </param>
 public sealed record FormControlDef(
     string Kind,
     string? WinFormsType,
@@ -1039,7 +1045,8 @@ public sealed record FormControlDef(
     string? FormProperty = null,
     string? HtmlChildrenWrapper = null,
     string? HtmlRole = null,
-    string? WebCss = null)
+    string? WebCss = null,
+    bool StretchesWhenStacked = false)
 {
     /// <summary>Task 25's flag, now derived: the eleven sites that read it keep reading it.</summary>
     public bool IsComponent => Place == FormPlace.Tray;
@@ -1355,7 +1362,8 @@ public static class FormControlCatalog
             // ⚠ The DOM has no TextChanged. `input` fires per keystroke, which is what TextChanged
             // means; `change` fires on blur and would be a different gesture wearing the same name.
             Events: Ev("TextChanged", "input", category: FormEventCategory.PropertyChanged,
-                description: "Event raised when the value of the Text property is changed on Control.")),
+                description: "Event raised when the value of the Text property is changed on Control."),
+            StretchesWhenStacked: true),
         new("Button",      "Button",      "button",   null,       false, Common(Text, ButtonTextAlign),
             DefaultWidth: 75, DefaultHeight: 23, Schematic: FormSchematic.Button,
             Events: Ev("Click", "click", category: FormEventCategory.Action, description: ClickedDescription)),
@@ -1383,7 +1391,8 @@ public static class FormControlCatalog
             SelectedIndex(SelectedIndexForTheWeb)),
             DefaultWidth: 121, DefaultHeight: 23, Schematic: FormSchematic.Dropdown,
             Events: Ev("SelectedIndexChanged", "change", category: FormEventCategory.Behavior,
-                description: SelectedIndexChangedDescription)),
+                description: SelectedIndexChangedDescription),
+            StretchesWhenStacked: true),
         new("ListBox",     "ListBox",     "select",   null,       false, CommonColoured(WindowTextForeColor, WindowBackColor,
             new FormPropertyDef("Items", FormPropertyType.String, IsItemCollection: true,
                 Category: FormPropertyCategory.Data, Description: ListBoxItemsDescription),
@@ -1397,7 +1406,8 @@ public static class FormControlCatalog
                 Description: "Allows more than one item to be selected at a time on the page.")),
             DefaultWidth: 120, DefaultHeight: 95, Schematic: FormSchematic.List,
             Events: Ev("SelectedIndexChanged", "change", category: FormEventCategory.Behavior,
-                description: SelectedIndexChangedDescription)),
+                description: SelectedIndexChangedDescription),
+            StretchesWhenStacked: true),
         new("Panel",       "Panel",       "div",      null,       true,  Common(
             new FormPropertyDef("BorderStyle", FormPropertyType.Enum, "None",
                 new[] { "None", "FixedSingle", "Fixed3D" },
@@ -1431,7 +1441,8 @@ public static class FormControlCatalog
                 Category: FormPropertyCategory.Behavior,
                 Description: "Controls how the PictureBox will handle image placement and control sizing.")),
             DefaultWidth: 100, DefaultHeight: 50, Schematic: FormSchematic.Image,
-            Events: Ev("Click", "click", category: FormEventCategory.Action, description: ClickedDescription)),
+            Events: Ev("Click", "click", category: FormEventCategory.Action, description: ClickedDescription),
+            StretchesWhenStacked: true),
 
         // ==================================================================
         // Task 23 — the rest of the common-controls tier.

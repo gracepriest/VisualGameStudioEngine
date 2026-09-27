@@ -166,7 +166,7 @@ public static class FormDockLayout
                 continue;
             }
 
-            var (ownWidth, ownHeight) = OwnSize(control);
+            var (ownWidth, ownHeight) = OwnSizeOf(control);
             var acrossWidth = Math.Max(0, remaining.Width);
             var acrossHeight = Math.Max(0, remaining.Height);
             FormRect bounds;
@@ -256,9 +256,7 @@ public static class FormDockLayout
             // Only a POSITIONED pixel control has a client area: a strip's children are items, placed by the
             // canvas's band layout and by the page's markup, never docked. A hidden control at run time has
             // none either — nothing inside it can be seen.
-            if (control.Definition?.Place is not (null or FormPlace.Positioned) ||
-                control.Geometry is not PixelGeometry ||
-                !Participates(control, mode))
+            if (!HasClientArea(control) || !Participates(control, mode))
             {
                 continue;
             }
@@ -268,7 +266,7 @@ public static class FormDockLayout
             var own = docked.FirstOrDefault(d => ReferenceEquals(d.Control, control));
             var inner = own.Control != null
                 ? (own.Bounds.Width, own.Bounds.Height)
-                : OwnSize(control);
+                : OwnSizeOf(control);
             clientSizes[control] = inner;
 
             if (control.Children.Count > 0)
@@ -278,11 +276,29 @@ public static class FormDockLayout
         }
     }
 
-    /// <summary>A strip's band height (its row's DefaultHeight — spec §3), or a control's stored size.</summary>
-    private static (int Width, int Height) OwnSize(FormControl control) =>
-        control.Definition?.Place == FormPlace.Docked
+    /// <summary>
+    /// ⛔ The one answer to "what size does this thing dock at": a strip's band height (its row's
+    /// <see cref="FormControlDef.DefaultHeight"/> — spec §3), or a control's stored size floored at 0. Public because
+    /// the page's run-time reflow script (<c>FormDockScript</c>) must dock exactly what this resolver docks.
+    /// </summary>
+    public static (int Width, int Height) OwnSizeOf(FormControl control)
+    {
+        ArgumentNullException.ThrowIfNull(control);
+        return control.Definition?.Place == FormPlace.Docked
             ? (0, control.Definition.DefaultHeight)
             : control.Geometry is PixelGeometry pixel
                 ? (Math.Max(0, pixel.Width), Math.Max(0, pixel.Height))
                 : (0, 0);
+    }
+
+    /// <summary>
+    /// ⛔ The one answer to "does this control lay children out in pixels": a POSITIONED control with
+    /// <see cref="PixelGeometry"/>. A strip's children are items and a cell-placed Panel has no pixel size (Task 6
+    /// review). Visibility is NOT part of it — <see cref="FormDockMode.Runtime"/> adds that.
+    /// </summary>
+    public static bool HasClientArea(FormControl control)
+    {
+        ArgumentNullException.ThrowIfNull(control);
+        return (control.Definition?.Place is null or FormPlace.Positioned) && control.Geometry is PixelGeometry;
+    }
 }

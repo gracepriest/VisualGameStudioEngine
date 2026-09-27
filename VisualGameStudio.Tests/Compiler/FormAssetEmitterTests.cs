@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using BasicLang.Forms;
 using NUnit.Framework;
 
@@ -313,6 +315,77 @@ public class FormAssetEmitterTests
     }
 
     // ==================================================================
+    // Task 10 guard (spec 2026-09-27 §3 "Grid/Flow paths unchanged"): the Grid, Flow and layout-less pages are
+    // BYTE-identical to the emitter before Task 10. Hashes captured at e1c3de72.
+    // ==================================================================
+
+    private static FormDocument FlowWithStrips()
+    {
+        var form = new FormDocument
+        {
+            Target = FormTarget.Web, Name = "FlowPage",
+            Layout = new FormLayout { Kind = FormLayoutKind.Flow, Dir = "Horizontal", Gap = "4px" }
+        };
+        var menu = new FormControl { Kind = "MenuStrip", Id = "menuStrip1" };
+        var file = new FormControl { Kind = "ToolStripMenuItem", Id = "fileItem" };
+        file.Properties["Text"] = "&File";
+        menu.Children.Add(file);
+        form.Controls.Add(menu);
+
+        var button = new FormControl { Kind = "Button", Id = "btn", TabIndex = 0 };
+        button.Properties["Visible"] = "False";
+        button.Properties["BackColor"] = "#FF112233";
+        form.Controls.Add(button);
+
+        form.Controls.Add(new FormControl { Kind = "StatusStrip", Id = "statusStrip1" });
+        var tool = new FormControl { Kind = "ToolStrip", Id = "toolStrip1" };
+        tool.Properties["Dock"] = "Bottom";
+        form.Controls.Add(tool);
+        return form;
+    }
+
+    private static FormDocument LayoutlessWithPanel()
+    {
+        var form = new FormDocument { Target = FormTarget.Web, Name = "Bare" };
+        var panel = new FormControl
+        {
+            Kind = "Panel", Id = "pnl", TabIndex = 0, Geometry = new GridGeometry { Col = 1, Row = 2, ColSpan = 2 }
+        };
+        panel.Children.Add(new FormControl { Kind = "Label", Id = "lbl", TabIndex = 0, Geometry = new GridGeometry() });
+        form.Controls.Add(panel);
+        form.Controls.Add(new FormControl { Kind = "MenuStrip", Id = "menuStrip1" });
+        return form;
+    }
+
+    // ⚠ Captured by running this test at the BASE (e1c3de72). Never re-capture after a red: diff against the base.
+    private static readonly Dictionary<string, string> PreTask10Hashes = new()
+    {
+        ["GridLogin"] = "A7EA8AFD116895DA4190FF8E582454E333F4F4D06FB87F8570969F948BB292D1",
+        ["FlowWithStrips"] = "43C59E8EC54CA8AC971B34AC887C89A2C7955A3F27684D967F505CF99802CEB7",
+        ["LayoutlessWithPanel"] = "3E3874F015FDEDDE21CB3FD1F906B0D89FD249E55912BB02C04E9ABF43AD1AFA"
+    };
+
+    [TestCase("GridLogin")]
+    [TestCase("FlowWithStrips")]
+    [TestCase("LayoutlessWithPanel")]
+    public void AGridOrFlowPage_IsByteIdenticalToThePreTask10Emitter(string fixture)
+    {
+        var form = fixture switch
+        {
+            "GridLogin" => LoginForm(),
+            "FlowWithStrips" => FlowWithStrips(),
+            _ => LayoutlessWithPanel()
+        };
+
+        var text = (FormAssetEmitter.Html(form, "App.js") + "\n/* CSS */\n" + FormAssetEmitter.Css(form))
+            .Replace("\r\n", "\n");
+        var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text)));
+
+        Assert.That(hash, Is.EqualTo(PreTask10Hashes[fixture]),
+            $"the {fixture} page changed. Task 10 must not touch a Grid/Flow page. The output was:\n{text}");
+    }
+
+    // ==================================================================
     // The Main() dispatch (D7)
     // ==================================================================
 
@@ -552,6 +625,27 @@ public class FormAssetEmitterTests
             Assert.That(source, Does.Contain("End Sub"));
             Assert.That(source, Does.Not.Contain("End If"),
                 "an If that was never opened must not be closed");
+        });
+    }
+
+    // ==================================================================
+    // Task 10 (spec 2026-09-27 §5) — the phone stretch flag is a CATALOG facet, never a Kind switch
+    // ==================================================================
+
+    [Test]
+    public void StretchesWhenStacked_IsOnlyOnPositionedRowsTheWebHas()
+    {
+        var wrong = FormControlCatalog.All
+            .Where(d => d.StretchesWhenStacked &&
+                        (d.Place != FormPlace.Positioned || !d.SupportsTarget(FormTarget.Web)))
+            .Select(d => d.Kind)
+            .ToList();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(wrong, Is.Empty, "a phone never stacks a strip, an item, a tray component or a WinForms-only row");
+            Assert.That(FormControlCatalog.Find("TextBox")!.StretchesWhenStacked, Is.True, "spec §5: inputs stretch");
+            Assert.That(FormControlCatalog.Find("Button")!.StretchesWhenStacked, Is.False, "spec §5: small controls keep their size");
         });
     }
 }
