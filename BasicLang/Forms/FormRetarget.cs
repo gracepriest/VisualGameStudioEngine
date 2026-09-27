@@ -34,6 +34,10 @@ public sealed record FormRetargetPair(
 /// Anything cleverer (tolerances, span inference, auto-placement emulation) would be a guess the
 /// user could not review, which is the silent loss the task forbids.</para>
 ///
+/// <para>⚠ A <b>Canvas</b> page is on the pixel side of that edge (spec 2026-09-27 §6): going to
+/// WinForms it crosses EXACTLY — geometry and design size copied, no BL8025 at all. WinForms → web
+/// still produces a Grid page (piece 4 replaces the retarget).</para>
+///
 /// <para>⚠ The DOCUMENT only. The code-behind is the user's own class, whose base type and handler
 /// signatures differ by target; the pair-producing entry point scaffolds a fresh one beside the new
 /// document and never rewrites the original.</para>
@@ -351,6 +355,13 @@ public static class FormRetarget
         /// order, at its position among its siblings — so a TabControl's worth of buttons is not
         /// lost with the TabControl.
         /// </summary>
+        /// <remarks>
+        /// ⚠ The offset is the container's STORED X/Y. For a DOCKED container on a pixel source that is not
+        /// where it sits — its rect is resolved by <see cref="FormDockLayout"/>. Unreachable from the reader
+        /// today (every web row has a WinForms type, so nothing on a Canvas page is hoisted going to
+        /// WinForms; Task 11 pre-flight B2); the day a web-only container row lands, translate by the
+        /// resolved rect here.
+        /// </remarks>
         private void Hoist(FormControl source, List<FormControl> into, string where, (int X, int Y) offset)
         {
             var childOffset = source.Geometry is PixelGeometry pixel
@@ -630,6 +641,14 @@ public static class FormRetarget
 
         public void ToPixels()
         {
+            // ⛔ A Canvas page already speaks pixels (spec 2026-09-27 §6): nothing is DERIVED, so nothing is
+            // reported at the pixel⇄cell edge — no BL8025 for the page or for any control.
+            if (FormVocabulary.LayoutOf(_source) == FormLayoutKind.Canvas)
+            {
+                CopyPixels();
+                return;
+            }
+
             var layout = _source.Layout ?? new FormLayout();
             var (right, bottom) = Place(Document.Controls, layout);
 
@@ -657,12 +676,79 @@ public static class FormRetarget
 
         private static string DescribeLayout(FormLayout layout)
         {
+            var parts = GridAttributes(layout);
+            // The reader keeps MobileBreakpoint on ANY <Layout>; on a Grid/Flow page it is not a row, but it is
+            // the user's text and it is lost with the layout, so it is named with it.
+            if (layout.MobileBreakpoint != null) parts.Add($"MobileBreakpoint=\"{layout.MobileBreakpoint}\"");
+            return parts.Count == 0 ? "no attributes" : string.Join(" ", parts);
+        }
+
+        /// <summary>The cell/flow vocabulary on a <c>&lt;Layout&gt;</c>, verbatim, in document-attribute form.</summary>
+        private static List<string> GridAttributes(FormLayout layout)
+        {
             var parts = new List<string>();
             if (layout.Cols != null) parts.Add($"Cols=\"{layout.Cols}\"");
             if (layout.Rows != null) parts.Add($"Rows=\"{layout.Rows}\"");
             if (layout.Gap != null) parts.Add($"Gap=\"{layout.Gap}\"");
             if (layout.Dir != null) parts.Add($"Dir=\"{layout.Dir}\"");
-            return parts.Count == 0 ? "no attributes" : string.Join(" ", parts);
+            return parts;
+        }
+
+        // ==============================================================
+        // Canvas web → WinForms: the page's own pixels, exactly (spec 2026-09-27 §6)
+        // ==============================================================
+
+        /// <summary>
+        /// A Canvas page crosses LOSSLESSLY: every Positioned control's geometry (X/Y/Width/Height/Anchor/Dock,
+        /// at every depth — a child's is already relative to its container on both sides) and the design size
+        /// are copied as they are. ⚠ A null size stays null — the page never had one, and inventing the
+        /// scaffolder's 800x450 would be a value nobody chose. A Docked strip or an Item keeps NO geometry, the
+        /// Task 26 rule <see cref="Place"/> applies too. What a window cannot hold is dropped and NAMED
+        /// (BL8024): the phone breakpoint, stray cell/flow attributes, and pass-through markup.
+        /// </summary>
+        private void CopyPixels()
+        {
+            CopyPixels(Document.Controls);
+
+            Document.Width = _source.Width;
+            Document.Height = _source.Height;
+            // The caption crossed in ConvertRoot; a page with none becomes a window captioned with its name.
+            Document.Text ??= _source.Name;
+
+            var layout = _source.Layout!;
+            if (layout.MobileBreakpoint != null)
+            {
+                Warn(DesignCodes.RetargetPropertyLost,
+                    $"'form.MobileBreakpoint' = \"{layout.MobileBreakpoint}\" is the page's phone breakpoint, which a " +
+                    "window does not have, so it was dropped. The window keeps the page's desktop layout at every size.");
+            }
+
+            var stray = GridAttributes(layout);
+            if (stray.Count > 0)
+            {
+                Warn(DesignCodes.RetargetPropertyLost,
+                    $"the page's <Layout> carries {string.Join(" ", stray)}, which a Canvas page does not read and a " +
+                    "window has no place for, so they were dropped.");
+            }
+
+            if (_source.Literal != null)
+            {
+                Warn(DesignCodes.RetargetPropertyLost,
+                    $"the page's <Literal> markup ({_source.Literal.Length} character(s)) has no place in a " +
+                    "window and was dropped.");
+            }
+        }
+
+        private void CopyPixels(List<FormControl> siblings)
+        {
+            foreach (var control in siblings)
+            {
+                control.Geometry = control.Definition?.Place is null or FormPlace.Positioned
+                    ? _sourceGeometry.GetValueOrDefault(control) as PixelGeometry
+                    : null;
+
+                CopyPixels(control.Children);
+            }
         }
 
         /// <returns>The extent the placed siblings reach: the largest right edge and bottom edge.</returns>

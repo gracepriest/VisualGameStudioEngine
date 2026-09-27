@@ -16,26 +16,28 @@ public class FormRootRetargetTests
     private static string Sample(FormPropertyDef row) => row.Type switch
     {
         FormPropertyType.Size => "641, 481",
+        // ⚠ Not 600: MobileBreakpoint's default, which a sweep could satisfy by accident.
+        FormPropertyType.Int => "480",
         _ => "sample" + row.Name
     };
 
     /// <summary>
-    /// The sweep's source documents. ⚠ RE-CHECK IN TASK 11: Web Canvas joins then (spec 2026-09-27 §6) —
-    /// until the Canvas → WinForms retarget copies the design size, ClientSize would not cross exactly and
-    /// MobileBreakpoint (Task 4) would not be named.
+    /// The sweep's source documents. Web Canvas (spec 2026-09-27 §6, Task 11): its design size crosses to the
+    /// window EXACTLY, and MobileBreakpoint — web Canvas only — is dropped and named.
     /// </summary>
     private static IEnumerable<TestCaseData> Sources()
     {
         yield return new TestCaseData(FormTarget.WinForms, null).SetName("{m}(WinForms)");
         yield return new TestCaseData(FormTarget.Web, FormLayoutKind.Grid).SetName("{m}(Web Grid)");
         yield return new TestCaseData(FormTarget.Web, FormLayoutKind.Flow).SetName("{m}(Web Flow)");
+        yield return new TestCaseData(FormTarget.Web, FormLayoutKind.Canvas).SetName("{m}(Web Canvas)");
     }
 
     /// <summary>
     /// ⛔ Catalog-driven: a new FormRoot row is covered the day it is added. A row that does not apply to
     /// the destination must be NAMED in some finding — RetargetLayoutCrossed for the pixel⇄cell rows
-    /// (ClientSize/Cols/Rows/Gap, plan scope call S4), RetargetPropertyLost 'form.X' for every other.
-    /// ⚠ RE-CHECK IN SLICE 3: the RetargetPropertyLost arm has no row until Properties-stored rows exist.
+    /// (ClientSize/Cols/Rows/Gap, plan scope call S4), RetargetPropertyLost 'form.X' for every other
+    /// (MobileBreakpoint from a Canvas page today).
     /// </summary>
     [TestCaseSource(nameof(Sources))]
     public void EveryFormRootRow_CrossesOrIsNamed(FormTarget from, FormLayoutKind? layout)
@@ -106,6 +108,12 @@ public class FormRootRetargetTests
                                       !FormRootValues.Applies(r, FormTarget.Web, FormLayoutKind.Grid)), Is.True);
             Assert.That(rows.Any(r => IsLayoutEdge(r) && FormRootValues.Applies(r, FormTarget.Web, FormLayoutKind.Grid) &&
                                       !FormRootValues.Applies(r, FormTarget.WinForms, null)), Is.True);
+            // The RetargetPropertyLost arm (Task 11): a row that is not the layout edge and does not cross.
+            Assert.That(rows.Any(r => !IsLayoutEdge(r) && FormRootValues.Applies(r, FormTarget.Web, FormLayoutKind.Canvas) &&
+                                      !FormRootValues.Applies(r, FormTarget.WinForms, null)), Is.True);
+            // …and a Canvas row that crosses EXACTLY (ClientSize), so the Canvas case exercises both arms.
+            Assert.That(rows.Any(r => IsLayoutEdge(r) && FormRootValues.Applies(r, FormTarget.Web, FormLayoutKind.Canvas) &&
+                                      FormRootValues.Applies(r, FormTarget.WinForms, null)), Is.True);
         });
     }
 
