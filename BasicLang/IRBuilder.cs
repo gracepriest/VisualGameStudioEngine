@@ -4869,6 +4869,25 @@ namespace BasicLang.Compiler.IR
 
         public void Visit(BinaryExpressionNode node)
         {
+            // `Is` / `IsNot`: reference identity, its OWN node (ADR-0011 D5) — never an
+            // IRCompare/IRBinaryOp Eq/Ne, which a user `Operator =`, Delegate.op_Equality or String
+            // value equality could answer. `x Is Nothing` is the same node with the Nothing
+            // literal (an Object-typed null IRConstant) as an operand.
+            if (IsIdentityOperator(node.Operator, out var negated))
+            {
+                node.Left.Accept(this);
+                var identityLeft = _expressionResult;
+                node.Right.Accept(this);
+                var identityRight = _expressionResult;
+
+                var identity = new IRIdentityCompare(_currentFunction.GetNextTempName(),
+                    identityLeft, identityRight, negated,
+                    _semanticAnalyzer.GetNodeType(node) ?? new TypeInfo("Boolean", TypeKind.Primitive));
+                EmitInstruction(identity);
+                _expressionResult = identity;
+                return;
+            }
+
             // ⛔ SHORT-CIRCUIT FIRST, before the right operand is touched. AndAlso/OrElse are
             // CONTROL FLOW, not operators with two ready values — see BuildShortCircuit.
             if (!IsComparisonOperator(node.Operator))
@@ -5998,6 +6017,16 @@ namespace BasicLang.Compiler.IR
                 return new IRConstant("", type);
 
             return new IRConstant(null, type);
+        }
+
+        /// <summary>
+        /// <c>Is</c> / <c>IsNot</c>, in any case (the parser stores the canonical spelling; the
+        /// test is case-insensitive anyway, as every word operator here is).
+        /// </summary>
+        private static bool IsIdentityOperator(string op, out bool negated)
+        {
+            negated = string.Equals(op, "IsNot", StringComparison.OrdinalIgnoreCase);
+            return negated || string.Equals(op, "Is", StringComparison.OrdinalIgnoreCase);
         }
 
         private bool IsComparisonOperator(string op)

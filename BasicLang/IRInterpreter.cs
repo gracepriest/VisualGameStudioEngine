@@ -393,6 +393,11 @@ namespace BasicLang.Compiler.Interpreter
                 case IRUnaryOp unaryOp:
                     return EvaluateUnaryOp(unaryOp, frame);
 
+                // `Is` / `IsNot` (ADR-0011): reference identity, never value equality.
+                case IRIdentityCompare identity:
+                    return ReferenceEquals(EvaluateValue(identity.Left, frame),
+                                           EvaluateValue(identity.Right, frame)) != identity.Negated;
+
                 case IRCall call:
                     return ExecuteCall(call, frame);
 

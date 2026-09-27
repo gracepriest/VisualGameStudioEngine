@@ -305,6 +305,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             IRCall call => IsCIntCall(call) || call.Arguments.Any(TreeUsesRoundingHelper),
             IRBinaryOp binary => TreeUsesRoundingHelper(binary.Left) || TreeUsesRoundingHelper(binary.Right),
             IRCompare compare => TreeUsesRoundingHelper(compare.Left) || TreeUsesRoundingHelper(compare.Right),
+            IRIdentityCompare identity => TreeUsesRoundingHelper(identity.Left) || TreeUsesRoundingHelper(identity.Right),
             IRUnaryOp unary => TreeUsesRoundingHelper(unary.Operand),
             _ => false,
         };
@@ -489,6 +490,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             IRCast cast => TreeUsesIntegerDivision(cast.Value),
             IRCall call => call.Arguments.Any(TreeUsesIntegerDivision),
             IRCompare compare => TreeUsesIntegerDivision(compare.Left) || TreeUsesIntegerDivision(compare.Right),
+            IRIdentityCompare identity => TreeUsesIntegerDivision(identity.Left) || TreeUsesIntegerDivision(identity.Right),
             IRUnaryOp unary => TreeUsesIntegerDivision(unary.Operand),
             _ => false,
         };
@@ -1024,6 +1026,8 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                     return Bound(b) ? SanitizeName(b.Name) : BinaryExprInline(b);
                 case IRCompare c2:
                     return Bound(c2) ? SanitizeName(c2.Name) : CompareExprInline(c2);
+                case IRIdentityCompare identity:
+                    return Bound(identity) ? SanitizeName(identity.Name) : IdentityText(identity, ExprInline);
                 case IRUnaryOp u:
                     return Bound(u) ? SanitizeName(u.Name) : UnaryText(u, ExprInline(u.Operand));
                 case IRCall call:
@@ -1166,6 +1170,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 case IRVariable v: return SanitizeName(v.Name);
                 case IRBinaryOp b: return BinaryExprInline(b);
                 case IRCompare cm: return CompareExprInline(cm);
+                case IRIdentityCompare identity: return IdentityText(identity, ExprInline);
                 case IRUnaryOp u: return UnaryText(u, ExprInline(u.Operand));
                 default:
                     // A call inside a guard WAS emitted (only the guard's own operator tree is
@@ -1467,6 +1472,38 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
         private string CompareExpr(IRCompare op) => RenderCompare(op, Expr);
         private string CompareExprInline(IRCompare op) => RenderCompare(op, ExprInline);
+
+        /// <summary>
+        /// <c>Is</c> / <c>IsNot</c> (ADR-0011). Two operands compare with <c>===</c> — reference
+        /// identity for an object, which is every operand the analyzer admits here (a String or a
+        /// delegate is refused against anything but Nothing, D4). A Nothing test is the SAME test
+        /// <c>Case Is Nothing</c> makes (<see cref="NullTest"/>), so the two can never disagree
+        /// about <c>undefined</c>.
+        /// </summary>
+        private static string IdentityText(IRIdentityCompare identity, Func<IRValue, string> render)
+        {
+            if (identity.GetNullTestSubject() is IRValue subject)
+            {
+                // A lambda reference renders as the arrow function itself, and `() => {…} === null`
+                // is a SyntaxError: an arrow body swallows what follows it. Parenthesised, it is a
+                // value like any other.
+                var rendered = render(subject);
+                if (subject is IRVariable { Name: { } name } && name.StartsWith("__lambda_", StringComparison.Ordinal))
+                    rendered = $"({rendered})";
+                var test = NullTest(rendered);
+                return identity.Negated ? $"(!{test})" : test;
+            }
+            var l = render(identity.Left);
+            var r = render(identity.Right);
+            return identity.Negated ? $"({l} !== {r})" : $"({l} === {r})";
+        }
+
+        /// <summary>
+        /// THE JavaScript null test, shared by <c>Case Is Nothing</c> (<see cref="PatternTest"/>)
+        /// and <c>x Is Nothing</c> (<see cref="IdentityText"/>): a BasicLang Nothing reaches
+        /// JavaScript as <c>null</c>, and an unassigned slot as <c>undefined</c>.
+        /// </summary>
+        private static string NullTest(string subject) => $"({subject} === null || {subject} === undefined)";
 
         private string RenderCompare(IRCompare op, Func<IRValue, string> render)
         {
@@ -2598,7 +2635,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                     break;
 
                 case IRNothingPatternCase:
-                    test = $"({subject} === null || {subject} === undefined)";
+                    test = NullTest(subject);
                     break;
 
                 case IROrPatternCase or:
@@ -3099,6 +3136,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             return false;
         }
         public void Visit(IRCompare compare) => Bind(compare, CompareExpr(compare));
+        public void Visit(IRIdentityCompare identityCompare) => Bind(identityCompare, IdentityText(identityCompare, Expr));
         public void Visit(IRSwitch switchInst) => throw NotYet(nameof(IRSwitch));
         public void Visit(IRLabel label) => throw NotYet(nameof(IRLabel));
         public void Visit(IRComment comment) => throw NotYet(nameof(IRComment));

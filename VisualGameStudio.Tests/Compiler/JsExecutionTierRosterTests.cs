@@ -307,6 +307,14 @@ public class JsExecutionTierRosterTests
         // (E8's pinned "null" text against #189). MsilValueToStringTests (pure in-process IL-text
         // fixture, spawns nothing, no [Category("Integration")]) is NOT here.
         typeof(MsilValueToStringExecutionTests),
+
+        // Task #185 — `Is` / `IsNot` reference identity (ADR-0011). Named "...ExecutionTests", so
+        // the widened match below WOULD catch it on its own; listed explicitly anyway, matching
+        // every row above. Its JS legs run through FourBackends.RunsOnEveryBackend[Aggressive]
+        // (the kind-table/two-operand/E-series probes, C1/C2/E7's promoted #189 rows, E10/E11's
+        // lambda rows, P13's fold) and JavaScriptExecutionTests.RunJs / JsTestSupport.CompileOptimized
+        // directly (P12's named C++ divergence and E11's parentheses-wrap mutant check).
+        typeof(IsIsNotOperatorExecutionTests),
     };
 
     /// <summary>
@@ -355,7 +363,7 @@ public class JsExecutionTierRosterTests
 
     [Test]
     public void RosterIsPinned()
-        => Assert.That(ExecutionTier, Has.Length.EqualTo(78), // + MsilValueToStringExecutionTests (task #183), InterfaceMethodTypingExecutionTests; + WhenGuardCallRunTests
+        => Assert.That(ExecutionTier, Has.Length.EqualTo(79), // + MsilValueToStringExecutionTests (task #183), InterfaceMethodTypingExecutionTests, IsIsNotOperatorExecutionTests (task #185); + WhenGuardCallRunTests
             "The execution-tier roster changed. That is fine — update the number — but it must " +
             "be a deliberate edit, not a silent shrink.");
 

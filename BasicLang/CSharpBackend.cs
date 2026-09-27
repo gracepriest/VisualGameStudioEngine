@@ -3405,6 +3405,12 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                         return needsParens ? $"({expr})" : expr;
                     }
 
+                    case IRIdentityCompare identity:
+                    {
+                        var expr = IdentityText(identity, v => EmitExpression(v, stack, true));
+                        return needsParens ? $"({expr})" : expr;
+                    }
+
                     case IRCall call:
                     {
                         var argExprs = call.Arguments.Select(a => EmitExpression(a, stack, false)).ToArray();
@@ -3587,6 +3593,8 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                     return new[] { un.Operand };
                 case IRCompare cmp:
                     return new[] { cmp.Left, cmp.Right };
+                case IRIdentityCompare identity:
+                    return new[] { identity.Left, identity.Right };
                 case IRCast cast:
                     return new[] { cast.Value };
                 case IRCall call:
@@ -3768,6 +3776,32 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
             var target = GetValueName(compare);
             WriteLine($"{target} = {left} {op} {right};");
+        }
+
+        public void Visit(IRIdentityCompare identity)
+        {
+            if (!IsNamedDestination(identity))
+                return;
+
+            var target = GetValueName(identity);
+            WriteLine($"{target} = {IdentityText(identity, v => EmitExpression(v, new HashSet<IRValue>(), needsParens: true))};");
+        }
+
+        /// <summary>
+        /// <c>Is</c> / <c>IsNot</c> as C# (ADR-0011): both operands cast to <c>object</c>, so the
+        /// <c>==</c> is C#'s REFERENCE comparison whatever the static types are. A plain
+        /// <c>a == b</c> would reach a user <c>Operator =</c> (BasicLang has operator overloading),
+        /// <c>Delegate.op_Equality</c> (value equality over the invocation list) or
+        /// <c>string ==</c> (value equality) — each a different answer from VB's <c>Is</c>
+        /// (D4 (1)). A Nothing test casts its subject alone and compares with <c>null</c>, which
+        /// also boxes a nullable to null when it holds no value.
+        /// </summary>
+        private static string IdentityText(IRIdentityCompare identity, Func<IRValue, string> render)
+        {
+            var op = identity.Negated ? "!=" : "==";
+            if (identity.GetNullTestSubject() is IRValue subject)
+                return $"(object)({render(subject)}) {op} null";
+            return $"(object)({render(identity.Left)}) {op} (object)({render(identity.Right)})";
         }
 
         public void Visit(IRAssignment assignment)

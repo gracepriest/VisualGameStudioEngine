@@ -88,6 +88,16 @@ namespace BasicLang.Compiler.IR
                 $"{GetType().Name} reached an IRDelegateCreate. That node is produced only by "
                 + "ClosureLowering, which only the MSIL backend runs, on a clone of the module "
                 + "(ADR-0010 D1); every other backend lowers lambdas itself and must never see it.");
+
+        // ⛔ THROWS by default, deliberately (ADR-0011 D5). `Is` / `IsNot` must never degrade to a
+        // value comparison or to nothing at all: a visitor that has not implemented reference
+        // identity fails LOUDLY here. CodeGeneratorBase makes it abstract, so the C++, MSIL and
+        // LLVM backends cannot compile without an implementation.
+        void Visit(IRIdentityCompare identityCompare) =>
+            throw new InvalidOperationException(
+                $"{GetType().Name} has no lowering for IRIdentityCompare (`Is` / `IsNot`, "
+                + "ADR-0011). Reference identity must be implemented explicitly — never by "
+                + "falling back to a value comparison.");
     }
     
     // ============================================================================
@@ -308,6 +318,72 @@ namespace BasicLang.Compiler.IR
         Ge   // Greater or equal
     }
     
+    /// <summary>
+    /// Reference identity: <c>result = Left Is Right</c>, or <c>Left IsNot Right</c> when
+    /// <see cref="Negated"/> (task #185, ADR-0011 D5). <c>x Is Nothing</c> is this node with the
+    /// <c>Nothing</c> literal (an <see cref="IRConstant"/> whose value is null) as an operand.
+    ///
+    /// <para>⛔ DELIBERATELY NOT a <see cref="BinaryOpKind"/> or <see cref="CompareKind"/>.
+    /// <c>Eq</c>/<c>Ne</c> are VALUE comparisons: a user <c>Operator =</c>,
+    /// <c>Delegate.op_Equality</c> or String value equality may answer them, and every existing
+    /// <c>default:</c> arm over those enums would have rendered a new member as <c>==</c> —
+    /// silently. A new node reaches no backend that has not implemented it
+    /// (<see cref="IIRVisitor.Visit(IRIdentityCompare)"/> throws by default). The optimizer never
+    /// rewrites this node to or from an <c>Eq</c>/<c>Ne</c>, and folds it only when BOTH operands
+    /// are <c>Nothing</c>.</para>
+    ///
+    /// <para>Kill vocabulary (ADR-0006): PURE — a read of both operands and a definition of its
+    /// own name, nothing else. No backend's rendering of it can run user code.</para>
+    ///
+    /// <para>⚠ The C++ backend has no null state for a String or an array (#173 writes Nothing as
+    /// the EMPTY value), so there a Nothing test is an EMPTINESS test — one helper,
+    /// <c>CppCodeGenerator.EmitNullTest</c>, shared with <see cref="IRNothingPatternCase"/>
+    /// (ADR-0011 D3).</para>
+    /// </summary>
+    public class IRIdentityCompare : IRValue
+    {
+        public IRValue Left { get; set; }
+        public IRValue Right { get; set; }
+
+        /// <summary>True for <c>IsNot</c>.</summary>
+        public bool Negated { get; set; }
+
+        public IRIdentityCompare(string resultName, IRValue left, IRValue right, bool negated, TypeInfo type)
+            : base(resultName, type)
+        {
+            Left = left;
+            Right = right;
+            Negated = negated;
+        }
+
+        /// <summary>
+        /// Whether <paramref name="value"/> is <c>Nothing</c>: a null constant, whatever type a
+        /// store site or the optimizer gave it (the literal itself is typed Object; a propagated
+        /// one keeps the type of the variable it was stored into).
+        /// </summary>
+        public static bool IsNothing(IRValue value) => value is IRConstant { Value: null };
+
+        /// <summary>
+        /// The operand a Nothing test is ABOUT — the one that is not <c>Nothing</c> — or null when
+        /// neither operand is <c>Nothing</c> (a two-operand identity) or both are.
+        /// <para>⚠ A METHOD, not a property: <c>OperandWalkerTotalityTests</c> treats every public
+        /// <see cref="IRValue"/>-typed property as an operand SLOT that every walker must rewrite,
+        /// and this is a view of <see cref="Left"/>/<see cref="Right"/>, not a third slot.</para>
+        /// </summary>
+        public IRValue GetNullTestSubject() =>
+            IsNothing(Right) && !IsNothing(Left) ? Left
+            : IsNothing(Left) && !IsNothing(Right) ? Right
+            : null;
+
+        public override void Accept(IIRVisitor visitor) => visitor.Visit(this);
+
+        public override string ToString() =>
+            $"{Name} = {(Negated ? "isnot" : "is")} {Operand(Left)}, {Operand(Right)}";
+
+        // A null IRConstant prints as an empty string; spell it.
+        private static string Operand(IRValue value) => IsNothing(value) ? "nothing" : value?.ToString();
+    }
+
     // ============================================================================
     // Memory Operations
     // ============================================================================

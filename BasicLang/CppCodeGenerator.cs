@@ -2862,6 +2862,89 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             
             WriteLine($"{result} = {left} {op} {right};");
         }
+
+        public override void Visit(IRIdentityCompare identity)
+        {
+            var result = GetValueName(identity);
+            WriteLine($"{result} = {IdentityText(identity, GetValueName)};");
+        }
+
+        /// <summary>
+        /// <c>Is</c> / <c>IsNot</c> as C++ (ADR-0011). A Nothing test goes through the ONE null
+        /// test, <see cref="EmitNullTest"/>, shared with <c>Case Is Nothing</c>. Two operands
+        /// compare as REFERENCES: <c>shared_ptr ==</c> compares the pointers it holds (a class, an
+        /// interface, a collection), and <c>BasicLang::Array</c>'s <c>==</c> compares its shared
+        /// storage — never an element or a value. <c>Me</c> is the raw <c>this</c> pointer here, so
+        /// against <c>Me</c> the other operand is compared by its <c>.get()</c>.
+        /// </summary>
+        private string IdentityText(IRIdentityCompare identity, Func<IRValue, string> render)
+        {
+            if (IRIdentityCompare.IsNothing(identity.Left) && IRIdentityCompare.IsNothing(identity.Right))
+                return identity.Negated ? "false" : "true";   // Nothing Is Nothing (unfolded: no -O)
+
+            if (identity.GetNullTestSubject() is IRValue subject)
+            {
+                // A lambda reference renders as the closure expression itself, whose type has no
+                // `== nullptr`; as the std::function it is stored as (CTAD), it compares like any
+                // delegate value.
+                var rendered = render(subject);
+                if (subject is IRVariable { Name: { } name } && name.StartsWith("__lambda_", StringComparison.Ordinal))
+                    rendered = $"std::function({rendered})";
+                var test = EmitNullTest(rendered, subject.Type);
+                return identity.Negated ? $"!({test})" : $"({test})";
+            }
+
+            var left = render(identity.Left);
+            var right = render(identity.Right);
+            var leftIsSelf = IsSelfReference(identity.Left);
+            var rightIsSelf = IsSelfReference(identity.Right);
+            if (leftIsSelf && !rightIsSelf) right = $"({right}).get()";
+            else if (rightIsSelf && !leftIsSelf) left = $"({left}).get()";
+            return $"({left} {(identity.Negated ? "!=" : "==")} {right})";
+        }
+
+        /// <summary><c>Me</c> — rendered as the raw <c>this</c> pointer, not a shared_ptr.</summary>
+        private static bool IsSelfReference(IRValue value) =>
+            value is IRVariable v
+            && (string.Equals(v.Name, "Me", StringComparison.OrdinalIgnoreCase) || v.Name == "this");
+
+        /// <summary>
+        /// ⭐ THE C++ NULL TEST (ADR-0011 D3): whether <paramref name="expr"/>, of
+        /// <paramref name="type"/>, is <c>Nothing</c>. ONE helper, used by BOTH
+        /// <c>x Is Nothing</c> (<see cref="IdentityText"/>) and <c>Case Is Nothing</c>
+        /// (<see cref="PatternMatchCondition"/>), so the two can never disagree.
+        ///
+        /// <para>The read side of #173's write side (<see cref="NothingOf"/>), keyed on the SAME
+        /// mapped spelling:</para>
+        /// <list type="bullet">
+        /// <item><c>std::string</c> and <c>BasicLang::Array&lt;T&gt;</c> hold no null state —
+        /// <c>NothingOf</c> writes Nothing as the EMPTY value — so the test is EMPTINESS.
+        /// ⚠ A DIVERGENCE, measured and deliberate: <c>"" Is Nothing</c> and an empty array
+        /// <c>Is Nothing</c> are True here and False on C#, JavaScript and MSIL. It flips for arrays
+        /// when <c>Array&lt;T&gt;</c> gets a real null state (D3(c)), in this one place.</item>
+        /// <item><c>BasicLang::NetRef</c>: <c>NothingOf</c> writes the empty handle, which has no
+        /// <c>==</c> but an <c>explicit operator bool</c>, so the test is <c>!x</c>.</item>
+        /// <item>Everything else — a <c>shared_ptr</c> (class, interface, collection), a
+        /// <c>std::function</c> (delegate, where <c>== nullptr</c> means "empty") — compares with
+        /// <c>nullptr</c>, as <c>Case Is Nothing</c> always did.</item>
+        /// </list>
+        /// <para>⚠ A String operand the optimizer propagated to a CONSTANT renders as a C++ string
+        /// LITERAL (a <c>const char[]</c>, the only expression that starts with a quote), which has
+        /// no <c>.empty()</c>; it is wrapped in a <c>std::string</c> first.</para>
+        /// </summary>
+        private string EmitNullTest(string expr, TypeInfo type)
+        {
+            var mapped = type == null ? null : MapType(type);
+            if (mapped != null && mapped.StartsWith("BasicLang::Array<", StringComparison.Ordinal))
+                return $"({expr}).empty()";
+            if (string.Equals(mapped, "std::string", StringComparison.Ordinal))
+                return expr.StartsWith("\"", StringComparison.Ordinal)
+                    ? $"std::string({expr}).empty()"
+                    : $"({expr}).empty()";
+            if (string.Equals(mapped, "BasicLang::NetRef", StringComparison.Ordinal))
+                return $"!({expr})";
+            return $"{expr} == nullptr";
+        }
         
         public override void Visit(IRAssignment assignment)
         {
@@ -4236,7 +4319,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
 
             foreach (var patternCase in switchInst.PatternCases)
             {
-                var cond = PatternCaseCondition(value, patternCase);
+                var cond = PatternCaseCondition(value, switchInst.Value?.Type, patternCase);
                 WriteLine($"if ({cond}) {{ goto {GotoLabel(patternCase.Target)}; }}");
             }
 
@@ -4249,9 +4332,9 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         /// guard. Type/tuple/binding patterns are rejected by CppCapabilityChecker and never reach
         /// here.
         /// </summary>
-        private string PatternCaseCondition(string value, IRPatternCase pc)
+        private string PatternCaseCondition(string value, TypeInfo valueType, IRPatternCase pc)
         {
-            var match = PatternMatchCondition(value, pc);
+            var match = PatternMatchCondition(value, valueType, pc);
             if (pc.WhenGuard != null)
                 return $"({match}) && ({RenderGuard(pc.WhenGuard)})";
             return match;
@@ -4309,7 +4392,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             });
 
         /// <summary>The value/range/comparison test for a single pattern case (no When guard).</summary>
-        private string PatternMatchCondition(string value, IRPatternCase pc)
+        private string PatternMatchCondition(string value, TypeInfo valueType, IRPatternCase pc)
         {
             switch (pc)
             {
@@ -4319,11 +4402,13 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                     return $"({value} >= {ValueText(r.LowerBound)} && {value} <= {ValueText(r.UpperBound)})";
                 case IRComparisonPatternCase cmp:
                     return $"{value} {MapCasePatternOperator(cmp.Operator)} {ValueText(cmp.CompareValue)}";
+                // ADR-0011 D3 (1): the ONE C++ null test, shared with `x Is Nothing`. On a String or
+                // an array it is an emptiness test — `x == nullptr` did not compile for either (#189).
                 case IRNothingPatternCase:
-                    return $"{value} == nullptr";
+                    return EmitNullTest(value, valueType);
                 case IROrPatternCase or:
                     if (or.Alternatives.Count == 0) return "false";
-                    return "(" + string.Join(" || ", or.Alternatives.Select(a => PatternMatchCondition(value, a))) + ")";
+                    return "(" + string.Join(" || ", or.Alternatives.Select(a => PatternMatchCondition(value, valueType, a))) + ")";
                 default:
                     // Unreachable: CppCapabilityChecker rejects type/tuple/binding patterns before
                     // emission. Fail loudly rather than silently drop if that guard is ever bypassed.
@@ -4370,6 +4455,8 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                     return $"({BinaryOpExpression(b)})";
                 case IRCompare cmp:
                     return $"({RenderInline(cmp.Left)} {MapCompareOperator(cmp.Comparison)} {RenderInline(cmp.Right)})";
+                case IRIdentityCompare identity:
+                    return IdentityText(identity, RenderInline);
                 case IRUnaryOp u:
                     return $"({MapUnaryOperator(u.Operation)}{RenderInline(u.Operand)})";
                 // ⛔ Without this arm a cast in a guard renders by NAME — an undeclared temp. It
@@ -6052,9 +6139,9 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         /// </list>
         ///
         /// <para>⚠ A DIVERGENCE, recorded: VB tells <c>Nothing</c> from <c>""</c> or an empty
-        /// array only through <c>Is Nothing</c> (#185 — it does not parse yet) and
-        /// <c>Case Is Nothing</c>, whose C++ lowering <c>x == nullptr</c> does not compile for
-        /// either — as it did not before, for an unassigned one. C#, JavaScript and MSIL keep a
+        /// array only through <c>Is Nothing</c> and <c>Case Is Nothing</c>, which on C++ both go
+        /// through <c>EmitNullTest</c> and test EMPTINESS for these two (ADR-0011 D3), so
+        /// <c>"" Is Nothing</c> is True here and False elsewhere. C#, JavaScript and MSIL keep a
         /// real null. Keyed on the MAPPED spelling, so a registry handle type and a
         /// marker-carrying one (§8.5) cannot take different answers.</para>
         /// </summary>

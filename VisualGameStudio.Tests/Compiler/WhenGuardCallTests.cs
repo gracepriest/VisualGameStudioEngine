@@ -302,7 +302,9 @@ Sub Main()
     End Select
 End Sub
 ");
-        Assert.That(errors, Has.Some.Contains("nope"), string.Join("\n", errors));
+        // Exactly ONE: Visit(SelectStatementNode) visits each clause once. A second visit (a merge
+        // of the Is/IsNot work re-added one) reports every guard error twice.
+        Assert.That(errors.Count(e => e.Contains("nope")), Is.EqualTo(1), string.Join("\n", errors));
     }
 
     [Test]

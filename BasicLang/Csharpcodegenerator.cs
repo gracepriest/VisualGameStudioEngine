@@ -49,6 +49,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         public void Visit(IRGetElementPtr gep) => _generator.Visit(gep);
         public void Visit(IRCast cast) => _generator.Visit(cast);
         public void Visit(IRCompare compare) => _generator.Visit(compare);
+        public void Visit(IRIdentityCompare identityCompare) => _generator.Visit(identityCompare);
         public void Visit(IRSwitch switchInst) => _generator.Visit(switchInst);
         public void Visit(IRLabel label) => _generator.Visit(label);
         public void Visit(IRComment comment) => _generator.Visit(comment);
