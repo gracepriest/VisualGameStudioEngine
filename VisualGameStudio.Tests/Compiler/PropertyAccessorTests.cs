@@ -188,58 +188,51 @@ public class PropertyAccessorExecutionTests
     // the inner counter's first hit; V: 0 + 1 -> set 10; Probe: V = 2 -> 20, plus the 3rd hit.
     private const string Expected = "Woof\nWoof!\n17\nbox!\n5\n3\n1\n10\n23";
 
-    // ⚠ Three backends, not four, STILL. Task #175 fixed the gap this comment used to describe —
-    // MSIL now calls IShape's own get_Area()/set_Label() instead of lowering `s.Area`/`s.Label` to
-    // a field load — but this Program cannot go on MSIL anyway: `Counter.Probe()` does a BARE
-    // (unqualified) property write, `V = 2`, and MSIL emits that write against the FIRST class
-    // declared in the module (`Animal`) instead of the enclosing class (`Counter`) — a separate,
-    // pre-existing MSIL defect, task #176, with NO interface involved. Measured: the run now gets
-    // past every interface access and dies later, inside `Probe()`, with "MissingFieldException:
-    // Field not found: 'Animal.V'". See Msil_BarePropertyWriteInALaterClass_TargetsAnEarlierClass_
-    // PinnedForTask176 below, and its repro S/t175/pin/V6.bas.
+    // ⭐ FOUR backends, as of task #176's fix (2026-09-27) — this comment used to say three.
+    // Task #175 fixed the interface gap it originally described — MSIL now calls IShape's own
+    // get_Area()/set_Label() instead of lowering `s.Area`/`s.Label` to a field load — and that fix
+    // exposed a SEPARATE, pre-existing MSIL defect, task #176: `Counter.Probe()` does a BARE
+    // (unqualified) property write, `V = 2`, and MSIL used to emit that write against the FIRST
+    // class declared in the module (`Animal`) instead of the enclosing class (`Counter`) — a
+    // `MissingFieldException: Field not found: 'Animal.V'`, no interface involved. #176's fix
+    // (`IRBuilder.MeOfCurrentMember`, one `Me` per function, typed as the class being built) makes
+    // this Program's MSIL leg correct too, so it is folded back into both pipelines below. See
+    // `Msil_BarePropertyWriteInALaterClass_TargetsItsOwnClass` further down for the dedicated
+    // regression pin on the ORIGINAL repro shape (`S/t175/pin/V6.bas` / `S/t176/probes/V6.bas`) —
+    // kept alongside this fold-back rather than deleted, since it documents the exact historical
+    // failure text this Program's own MSIL leg no longer produces.
 
     [Test]
-    public void StandardPipeline_RunsOnCSharpCppAndJavaScript()
-        => Assert.Multiple(() =>
-        {
-            Assert.That(FourBackends.Norm(BclE2E.CompileRun(BclE2E.CompileToCppOptimized(Program))), Is.EqualTo(Expected), "C++");
-            Assert.That(FourBackends.Norm(JavaScriptExecutionTests.RunJs(Program)), Is.EqualTo(Expected), "JavaScript");
-            Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharp(Program)), Is.EqualTo(Expected), "C#");
-        });
+    public void StandardPipeline_RunsOnAllFourBackends()
+        => FourBackends.RunsOnEveryBackend(Program, Expected);
 
     [Test]
-    public void AggressivePipeline_RunsOnCSharpCppAndJavaScript()
-        => Assert.Multiple(() =>
-        {
-            Assert.That(FourBackends.Norm(BclE2E.CompileRun(BclE2E.CompileToCppAggressive(Program))), Is.EqualTo(Expected), "C++");
-            Assert.That(FourBackends.Norm(FourBackends.RunAggressiveJs(Program)), Is.EqualTo(Expected), "JavaScript");
-            Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharpAggressive(Program)), Is.EqualTo(Expected), "C#");
-        });
+    public void AggressivePipeline_RunsOnAllFourBackends()
+        => FourBackends.RunsOnEveryBackendAggressive(Program, Expected);
 
     /// <summary>
-    /// ⛔ PINNED KNOWN GAP, task #176 (re-pinned from task #175, now fixed — see the comment
-    /// above): a BARE property write inside a class's own method is emitted against the FIRST
-    /// class the module declares, not the class the method belongs to. `Counter.Probe()` does
-    /// `V = 2`, unqualified, and MSIL targets `Animal` (declared before `Counter`) instead of
-    /// `Counter` itself — a `MissingFieldException` naming the wrong class's field, at run time.
-    /// No interface is involved. Asserts today's failure so it goes RED the day MSIL fixes the
-    /// bare-write target — then delete this pin and assert MSIL in the two tests above.
-    ///
-    /// <para>⚠ Checked on <c>MsilRun.Output</c> (the raw process text), not on the message of an
-    /// exception caught around <see cref="Msil.MsilHarness.RunExpectingSuccess"/>: this Program
-    /// prints eight lines before the crash, so <c>MsilRun.Detail</c> — the harness's "first line
-    /// of output" summary, meant for a program that fails before printing anything — is just
-    /// "Woof", and a report built from it never shows the exception at all.</para>
+    /// ⭐ PROMOTED, task #176 DONE (fix committed `4012905c`, `IRBuilder.MeOfCurrentMember`):
+    /// this used to be <c>Msil_BarePropertyWriteInALaterClass_TargetsAnEarlierClass_
+    /// PinnedForTask176</c>, asserting the FAILURE below as a known gap. A bare property write
+    /// inside a class's own method used to be emitted against the FIRST class the module
+    /// declares, not the class the method belongs to: `Counter.Probe()`'s unqualified `V = 2`
+    /// targeted `Animal` (declared before `Counter`) instead of `Counter` itself —
+    /// `MissingFieldException: Field not found: 'Animal.V'`, at run time, no interface involved.
+    /// Now asserts the Program's own <see cref="Expected"/> text, on MSIL, on BOTH pipelines —
+    /// redundant with the fold-back into <see cref="StandardPipeline_RunsOnAllFourBackends"/> /
+    /// <see cref="AggressivePipeline_RunsOnAllFourBackends"/> above by design: this is the
+    /// dedicated regression pin for the EXACT historical repro shape, kept under its own name
+    /// rather than deleted.
     /// </summary>
     [Test]
-    public void Msil_BarePropertyWriteInALaterClass_TargetsAnEarlierClass_PinnedForTask176()
+    public void Msil_BarePropertyWriteInALaterClass_TargetsItsOwnClass()
     {
         // Skip, not fail, where ilasm is absent.
         Msil.MsilHarness.RequireIlasm();
-        var run = Msil.MsilHarness.Run(Program);
-        Assert.That(run.Outcome, Is.EqualTo(Msil.MsilHarness.MsilOutcome.RunFailed), run.Output);
-        Assert.That(run.Output, Does.Contain("MissingFieldException").And.Contain("Animal.V"),
-            "task #176 — if MSIL no longer targets the wrong class here, the bare-write gap is "
-            + "fixed: delete this pin and add MSIL back to both pipelines above.");
+        Assert.Multiple(() =>
+        {
+            Assert.That(FourBackends.Norm(Msil.MsilHarness.RunExpectingSuccess(Program)), Is.EqualTo(Expected), "MSIL, standard");
+            Assert.That(FourBackends.Norm(Msil.MsilHarness.RunAggressiveExpectingSuccess(Program)), Is.EqualTo(Expected), "MSIL, aggressive");
+        });
     }
 }
