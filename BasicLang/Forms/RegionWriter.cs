@@ -664,8 +664,11 @@ public static class RegionWriter
             AppendComponentInit(body, form, component, inner, newline, filePath, diagnostics);
         }
 
+        // Resolved ONCE per write: a docked control's Size is the size it docks at (AppendPixelGeometry).
+        var docks = form.Target == FormTarget.WinForms ? FormDockLayout.Resolve(form, FormDockMode.Designer) : null;
+
         AppendSiblings(
-            body, form, form.Controls, parent: "Me", parentControl: null, inner, newline, filePath, diagnostics);
+            body, form, form.Controls, parent: "Me", parentControl: null, inner, newline, filePath, diagnostics, docks);
 
         if (form.Target == FormTarget.WinForms)
         {
@@ -718,11 +721,11 @@ public static class RegionWriter
     private static void AppendSiblings(
         StringBuilder body, FormDocument form, IReadOnlyList<FormControl> controls, string parent,
         FormControl? parentControl, string inner, string newline, string filePath,
-        List<DesignDiagnostic> diagnostics)
+        List<DesignDiagnostic> diagnostics, FormDockLayoutResult? docks)
     {
         foreach (var control in controls)
         {
-            AppendControlInit(body, form, control, parent, inner, newline, filePath, diagnostics);
+            AppendControlInit(body, form, control, parent, inner, newline, filePath, diagnostics, docks);
         }
 
         if (form.Target != FormTarget.WinForms)
@@ -765,7 +768,7 @@ public static class RegionWriter
     /// </summary>
     private static void AppendControlInit(
         StringBuilder body, FormDocument form, FormControl control, string parent, string inner,
-        string newline, string filePath, List<DesignDiagnostic> diagnostics)
+        string newline, string filePath, List<DesignDiagnostic> diagnostics, FormDockLayoutResult? docks)
     {
         if (form.Target == FormTarget.Web)
         {
@@ -775,7 +778,7 @@ public static class RegionWriter
         {
             body.Append($"{inner}{control.Id} = New {DeclaredType(form, control)}()").Append(newline);
 
-            AppendPixelGeometry(body, form, control, inner, newline);
+            AppendPixelGeometry(body, control, inner, newline, docks);
             AppendProperties(body, control, inner, newline, filePath, diagnostics);
         }
 
@@ -784,7 +787,7 @@ public static class RegionWriter
         // ⚠ The container's own children, parented to IT — and their adds happen here, so a
         // container is fully populated before the caller adds it to its own parent, which is the
         // order the shipped template uses.
-        AppendSiblings(body, form, control.Children, control.Id, control, inner, newline, filePath, diagnostics);
+        AppendSiblings(body, form, control.Children, control.Id, control, inner, newline, filePath, diagnostics, docks);
     }
 
     /// <summary>
@@ -1014,8 +1017,9 @@ public static class RegionWriter
     /// children the size is overridden by docking anyway, so writing it is harmless. Location stays as stored:
     /// docking overrides it and nothing reads it.</para>
     /// </summary>
+    /// <param name="docks">The form resolved ONCE in Designer mode for this write (null on the web).</param>
     private static void AppendPixelGeometry(
-        StringBuilder body, FormDocument form, FormControl control, string inner, string newline)
+        StringBuilder body, FormControl control, string inner, string newline, FormDockLayoutResult? docks)
     {
         if (control.Geometry is not PixelGeometry stored)
         {
@@ -1023,14 +1027,19 @@ public static class RegionWriter
         }
 
         var pixel = stored;
-        if (FormDockLayout.EdgeOf(control) != null &&
-            FormDockLayout.Resolve(form, FormDockMode.Designer).TryGet(control, out var docked))
+
+        // ⛔ A docked control's resolved size is written even when it is 0×0 (a Fill after an overflow on both
+        // axes): skipping it would leave WinForms' own default Size (a Panel's 200×100), and the children would
+        // capture their anchor distances against THAT.
+        var writeSize = pixel.Width != 0 || pixel.Height != 0;
+        if (docks != null && FormDockLayout.EdgeOf(control) != null && docks.TryGet(control, out var docked))
         {
             pixel = new PixelGeometry
             {
                 X = stored.X, Y = stored.Y, Width = docked.Bounds.Width, Height = docked.Bounds.Height,
                 Anchor = stored.Anchor, Dock = stored.Dock
             };
+            writeSize = true;
         }
 
         // ⛔ Formatted INVARIANTLY: sv-SE/fi-FI/nb-NO spell a negative with U+2212, and
@@ -1041,7 +1050,7 @@ public static class RegionWriter
                 $"{inner}{control.Id}.Location = New Point({pixel.X}, {pixel.Y})")).Append(newline);
         }
 
-        if (pixel.Width != 0 || pixel.Height != 0)
+        if (writeSize)
         {
             body.Append(string.Create(CultureInfo.InvariantCulture,
                 $"{inner}{control.Id}.Size = New Size({pixel.Width}, {pixel.Height})")).Append(newline);

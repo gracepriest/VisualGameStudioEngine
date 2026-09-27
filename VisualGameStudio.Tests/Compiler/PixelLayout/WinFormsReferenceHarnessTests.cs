@@ -40,6 +40,7 @@ public class WinFormsReferenceHarnessTests
             new ReferenceFixture(PixelLayoutFixtures.DockedBox(), new ResizeStep("grow", 500, 360)),
             new ReferenceFixture(PixelLayoutFixtures.DockedAnchor(), new ResizeStep("grow", 500, 360)),
             new ReferenceFixture(PixelLayoutFixtures.HiddenSiblingAnchor(), new VisibilityStep("showHid", "hid", true)),
+            new ReferenceFixture(PixelLayoutFixtures.NestedDock(), new ResizeStep("grow", 500, 360)),
             new ReferenceFixture(PixelLayoutFixtures.Strips("StripsPinned")),
             new ReferenceFixture(PixelLayoutFixtures.Strips("StripsAuto"), Array.Empty<ReferenceStep>(), PinStrips: false));
     }
@@ -228,6 +229,18 @@ public class WinFormsReferenceHarnessTests
         AssertMatchesModel("DockedAnchor", "grow", PixelLayoutFixtures.DockedAnchor(), (500, 360));
     }
 
+    [Test]
+    public void ANestedDockedContainersAnchoredChild_IsAnchoredToTheSizeItDocksAt()
+    {
+        AssertMatchesModel("NestedDock", "design", PixelLayoutFixtures.NestedDock());
+    }
+
+    [Test]
+    public void ANestedDockedContainersAnchoredChild_FollowsItWhenTheFormGrows()
+    {
+        AssertMatchesModel("NestedDock", "grow", PixelLayoutFixtures.NestedDock(), (500, 360));
+    }
+
     /// <summary>
     /// ⛔ Anchor distances are captured at the DESIGNER size (all siblings visible). A hidden docked sibling makes the
     /// container 300 tall at run time instead of 260, and its anchored children move as WinForms moves them.
@@ -257,9 +270,9 @@ public class WinFormsReferenceHarnessTests
 
     /// <summary>
     /// Review I-4: an exception inside a WINDOW PROCEDURE (here a Resize handler, raised from inside the
-    /// <c>ClientSize</c> setter's SetWindowPos) must come back as the driver's ERROR line, fast. Without
-    /// <c>SetUnhandledExceptionMode(ThrowException)</c> WinForms shows a modal ThreadExceptionDialog and the run
-    /// hangs to the 120 s timeout. The handler is user code patched into the retargeted pair — no designer
+    /// <c>ClientSize</c> setter's SetWindowPos) must come back as the driver's ERROR line, fast, and as a CLEAN exit
+    /// (no crash, no dump). Without the driver's <c>Application.ThreadException</c> handler WinForms shows a modal
+    /// ThreadExceptionDialog and the run hangs to the 120 s timeout. The handler is user code patched into the retargeted pair — no designer
     /// document can express it (a Panel's only catalog event is Click and the form root takes no binds).
     /// ⚠ Its own build and run (~30 s).
     /// </summary>

@@ -3415,6 +3415,10 @@ A mutant that turns nothing red is a finding: add the missing test, or record wh
   6. Build the web project and open the page in Edge. At the design size it matches the canvas. Widen the window: the Button follows the right edge and the Panel fills. Narrow below 600: one column in reading order.
   7. Retarget Form… Canvas → WinForms: identical positions, and one BL8024 for MobileBreakpoint.
   8. Record the findings. Each reported defect gets a failing real-view test before its fix.
+- **Follow-ups to record (no code in piece 1):**
+  - (Task 12 re-review) The property grid shows a docked control's STORED Size, while the canvas and the generated
+    code use its RESOLVED size (the region writer writes `FormDockLayout.Resolve(…, Designer)`'s bounds). Visual Studio
+    shows the actual size. Make the grid show, and edit, the resolved size for a docked control.
 
 ---
 

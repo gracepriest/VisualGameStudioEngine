@@ -181,6 +181,20 @@ internal static class PixelLayoutFixtures
             </Panel>
             """);
 
+    /// <summary>
+    /// A docked container INSIDE a docked container (review N-2). The outer is Dock=Left, stored 120×50, and docks
+    /// 120×300. The inner is Dock=Bottom, stored 60×100 at (5,5), and docks (0,200) 120×100. The inner holds a
+    /// Bottom,Right child. The region writer's resolved Size must reach the NESTED docked control too. With the inner
+    /// at its stored 60 wide, the child's right distance is captured as −40 and it lands 60px right of its design.
+    /// </summary>
+    public static FormDocument NestedDock(int width = 400, int height = 300) => Read("NestedDock", width, height, """
+        <Panel Id="outer" X="200" Y="100" Width="120" Height="50" Dock="Left">
+          <Panel Id="inner" X="5" Y="5" Width="60" Height="100" Dock="Bottom">
+            <Panel Id="innerBR" X="60" Y="70" Width="40" Height="20" Anchor="Bottom,Right"/>
+          </Panel>
+        </Panel>
+        """);
+
     /// <summary>All three strips, each with one item, and a Fill — measured pinned and auto-sized.</summary>
     public static FormDocument Strips(string name, int width = 400, int height = 300) => Read(name, width, height, """
         <MenuStrip Id="menu" Dock="Top"><ToolStripMenuItem Id="mnuFile" Text="File"/></MenuStrip>

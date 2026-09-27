@@ -333,6 +333,38 @@ public class FormRegionWriterTests
         });
     }
 
+    /// <summary>
+    /// ⛔ A docked control that resolves to 0×0 (a Fill after an overflowing Top AND an overflowing Left) still gets
+    /// <c>Size = New Size(0, 0)</c>. Skipping the zero size, as the stored-geometry rule does, would leave WinForms'
+    /// default (a Panel's 200×100), and the Fill's children would capture their anchor distances against that.
+    /// </summary>
+    [Test]
+    public void Write_WinForms_ADockedControlResolvedToZero_StillWritesItsZeroSize()
+    {
+        var form = BasicLang.Forms.Serialization.FormDocumentReader.Read("Zero.blform", """
+            <Form Name="Zero" Version="1" Width="400" Height="300">
+              <Controls>
+                <Panel Id="top" X="0" Y="0" Width="400" Height="400" Dock="Top"/>
+                <Panel Id="left" X="0" Y="0" Width="500" Height="300" Dock="Left"/>
+                <Panel Id="fill" X="0" Y="0" Width="100" Height="100" Dock="Fill"/>
+              </Controls>
+              <Components/>
+              <Resources/>
+            </Form>
+            """).Model;
+
+        var result = RegionWriter.Write("Zero.bas", ScaffoldedFile(), form, "Zero.blform");
+
+        Assert.That(result.Refused, Is.False, string.Join("; ", result.Diagnostics.Select(d => d.Format())));
+        Assert.Multiple(() =>
+        {
+            Assert.That(FormDockLayout.Resolve(form, FormDockMode.Designer).ClientSizeOf(form.Controls[2]), Is.EqualTo((0, 0)),
+                "precondition: the Fill resolves to 0x0");
+            Assert.That(result.Text, Does.Contain("fill.Size = New Size(0, 0)"));
+            Assert.That(result.Text, Does.Not.Contain("fill.Size = New Size(100, 100)"));
+        });
+    }
+
     [Test]
     public void Write_Web_UsesAddressOf_NotALambda()
     {

@@ -371,17 +371,24 @@ internal static class WinFormsReferenceHarness
             private static int Main()
             {
                 // ⛔ Before any window: an exception inside a window procedure (Load, Resize, a DoEvents pump)
-                // must reach the catch below as this driver's ERROR line. The default shows a MODAL
+                // becomes this driver's ERROR line and a CLEAN exit. Without a handler WinForms shows a MODAL
                 // ThreadExceptionDialog, which hangs the run until the harness's 120 s timeout.
-                Application.SetUnhandledExceptionMode(UnhandledExceptionMode.ThrowException);
+                // ⛔ NOT SetUnhandledExceptionMode(ThrowException): measured, the rethrown exception escapes through
+                // the native frames and CRASHES the process (0xe0434352 → 0xc000041d), leaving a WER report and a
+                // crash dump per run. With a handler attached WinForms shows no dialog and nothing crashes.
+                Application.ThreadException += (sender, e) =>
+                {
+                    Console.WriteLine("ERROR " + e.Exception.ToString().Replace("\r", " ").Replace("\n", " "));
+                    Console.Out.Flush();
+                    Environment.Exit(3);
+                };
 
-                // ⚠ MEASURED: rethrown from a window procedure, the exception does NOT reach the catch below —
-                // it escapes through the native frames and ends the process as "Unhandled exception" (fast, no
-                // dialog). So it is printed as the ERROR line here, before the runtime ends the process.
+                // Any other thread: printed, then a clean exit rather than the runtime's crash.
                 AppDomain.CurrentDomain.UnhandledException += (sender, e) =>
                 {
                     Console.WriteLine("ERROR " + e.ExceptionObject.ToString().Replace("\r", " ").Replace("\n", " "));
                     Console.Out.Flush();
+                    Environment.Exit(3);
                 };
 
                 // ⛔ Before any window: every number below is a 96-DPI logical pixel (spec §7 item 4). The mode
