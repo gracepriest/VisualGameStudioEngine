@@ -180,7 +180,7 @@ public static class FormDocumentReader
                 case "Controls":
                     foreach (var child in element.Elements())
                     {
-                        var control = ReadControl(child, target.Value, filePath, diagnostics, degraded, positions);
+                        var control = ReadControl(child, target.Value, layout, filePath, diagnostics, degraded, positions);
                         if (control != null)
                         {
                             model.Controls.Add(control);
@@ -206,7 +206,7 @@ public static class FormDocumentReader
                     foreach (var child in element.Elements())
                     {
                         var component = ReadControl(
-                            child, target.Value, filePath, diagnostics, degraded, positions, isComponent: true);
+                            child, target.Value, layout, filePath, diagnostics, degraded, positions, isComponent: true);
                         if (component != null)
                         {
                             model.Components.Add(component);
@@ -345,6 +345,9 @@ public static class FormDocumentReader
         return layout;
     }
 
+    /// <param name="layout">
+    /// The document's layout (the §2.2 pre-scan's) — with the target, it picks the geometry vocabulary.
+    /// </param>
     /// <param name="isComponent">
     /// True when the element sits under <c>&lt;Components&gt;</c>. A component is a control with no
     /// place: it never acquires geometry or a tab index — a stray <c>X=</c> or <c>TabIndex=</c> on
@@ -357,7 +360,7 @@ public static class FormDocumentReader
     /// carrying two halves of one parent are two parameters that can disagree.
     /// </param>
     private static FormControl? ReadControl(
-        XElement element, FormTarget target, string filePath,
+        XElement element, FormTarget target, FormLayoutKind? layout, string filePath,
         List<DesignDiagnostic> diagnostics, List<DegradedProperty> degraded,
         Dictionary<FormControl, XElement> positions, bool isComponent = false,
         FormControl? parent = null)
@@ -469,7 +472,7 @@ public static class FormDocumentReader
             // component rule), never to geometry — which would otherwise fire, because Dock is one
             // of ReadGeometry's six trigger attributes.
             TabIndex = place == FormPlace.Positioned ? IntAttribute(element, "TabIndex") ?? 0 : 0,
-            Geometry = place == FormPlace.Positioned ? ReadGeometry(element, target) : null
+            Geometry = place == FormPlace.Positioned ? ReadGeometry(element, target, layout) : null
         };
 
         // Where this control came from, for the checks that run over the finished MODEL and would
@@ -500,7 +503,7 @@ public static class FormDocumentReader
         {
             var name = attribute.Name.LocalName;
 
-            // ⛔ Target-aware, because the two vocabularies overlap in spelling and not in meaning.
+            // ⛔ (target, layout)-aware, because the two vocabularies overlap in spelling and not in meaning.
             // A flat "structural" list would swallow a .blwebform's Width="200" — neither a property
             // nor an unknown attribute, so absent from the model entirely, and Create would not
             // reproduce it. Each format treats only its OWN layout vocabulary as structural; the
@@ -518,7 +521,7 @@ public static class FormDocumentReader
             // and FormDocumentWriter's "a catalog property the model dropped" sweep then DELETED
             // Dock="Top" from every strip on the first save.
             if (place == FormPlace.Positioned
-                    ? FormControlCatalog.IsStructural(name, target)
+                    ? FormControlCatalog.IsStructural(name, target, layout)
                     : string.Equals(name, "Id", StringComparison.OrdinalIgnoreCase))
             {
                 continue;
@@ -578,7 +581,7 @@ public static class FormDocumentReader
             if (place != FormPlace.Tray && FormControlCatalog.Find(child.Name.LocalName) != null)
             {
                 var nested = ReadControl(
-                    child, target, filePath, diagnostics, degraded, positions, parent: control);
+                    child, target, layout, filePath, diagnostics, degraded, positions, parent: control);
                 if (nested != null)
                 {
                     control.Children.Add(nested);
@@ -650,14 +653,15 @@ public static class FormDocumentReader
     /// <summary>
     /// The control's position, in the vocabulary of the document's own format (D3).
     ///
-    /// <para>⛔ Selected by the TARGET, not by sniffing which attributes are present. Sniffing reads
-    /// a stray <c>Col</c> on a <c>.blform</c> control as a grid cell, and the writer then emits grid
-    /// geometry into a document whose every other control is absolute — a document that is half one
-    /// format and half the other, produced by a save the user did not know was a conversion.</para>
+    /// <para>⛔ Selected by (target, layout) — <see cref="FormVocabulary.IsPixel(FormTarget, FormLayoutKind?)"/>
+    /// — not by sniffing which attributes are present. Sniffing reads a stray <c>Col</c> on a pixel
+    /// control as a grid cell, and the writer then emits grid geometry into a document whose every other
+    /// control is absolute — a document that is half one vocabulary and half the other, produced by a save
+    /// the user did not know was a conversion.</para>
     /// </summary>
-    private static FormGeometry? ReadGeometry(XElement element, FormTarget target)
+    private static FormGeometry? ReadGeometry(XElement element, FormTarget target, FormLayoutKind? layout)
     {
-        if (target == FormTarget.WinForms)
+        if (FormVocabulary.IsPixel(target, layout))
         {
             if (element.Attribute("X") == null && element.Attribute("Y") == null &&
                 element.Attribute("Width") == null && element.Attribute("Height") == null &&

@@ -13,7 +13,7 @@ public enum FormTarget
     /// <summary>A <c>.blform</c> — WinForms desktop, absolute pixel layout (D3).</summary>
     WinForms,
 
-    /// <summary>A <c>.blwebform</c> — browser page, Grid/Flow layout (D3).</summary>
+    /// <summary>A <c>.blwebform</c> — browser page, Grid/Flow cells or (Canvas) pixels (D3; spec 2026-09-27 D1).</summary>
     Web
 }
 
@@ -31,11 +31,16 @@ public abstract class FormGeometry
 }
 
 /// <summary>
-/// <c>.blform</c> geometry: absolute <c>X</c>/<c>Y</c>/<c>Width</c>/<c>Height</c> plus
-/// <c>Anchor</c>/<c>Dock</c>. The target's real idiom, and what the shipped template writes.
+/// Pixel geometry: absolute <c>X</c>/<c>Y</c>/<c>Width</c>/<c>Height</c> plus <c>Anchor</c>/<c>Dock</c> —
+/// a <c>.blform</c>'s, and a Canvas page's (spec 2026-09-27 D2). The WinForms idiom, and what the shipped
+/// template writes.
 /// </summary>
 public sealed class PixelGeometry : FormGeometry
 {
+    /// <summary>
+    /// The target whose NATIVE vocabulary this is. ⚠ A Canvas page borrows it — never decide a document's
+    /// vocabulary from this; ask <see cref="FormVocabulary.IsPixel(FormTarget, FormLayoutKind?)"/>.
+    /// </summary>
     public override FormTarget Target => FormTarget.WinForms;
 
     public int X { get; set; }
@@ -58,11 +63,9 @@ public sealed class PixelGeometry : FormGeometry
 /// <summary>
 /// <c>.blwebform</c> geometry: a cell in the document's <see cref="FormLayout"/>.
 ///
-/// <para>⚠ Absolute pixels are NOT the web default and are not modeled here. D3 demotes them to an
-/// explicitly marked <c>Canvas</c> layout, which is a property of the document, not of a control —
-/// pixel-per-control is exactly what VS 2002/2003 emitted under <c>MS_POSITIONING="GridLayout"</c>
-/// and what Microsoft flipped away from in VS 2005 because those pages broke on text resize,
-/// different fonts and localisation.</para>
+/// <para>⚠ A cell. A web page laid out in pixels is a Canvas page, and its controls carry
+/// <see cref="PixelGeometry"/> (spec 2026-09-27 D1) — pixels are a property of the DOCUMENT's layout,
+/// never of one control.</para>
 /// </summary>
 public sealed class GridGeometry : FormGeometry
 {

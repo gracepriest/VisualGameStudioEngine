@@ -2035,16 +2035,20 @@ public static class FormControlCatalog
         StructuralAttributes.Any(a => string.Equals(a, attributeName, StringComparison.OrdinalIgnoreCase));
 
     /// <summary>
-    /// Structural in <paramref name="target"/>'s own vocabulary.
+    /// Structural in the vocabulary a document of (<paramref name="target"/>, <paramref name="layout"/>)
+    /// speaks (spec 2026-09-27 §2.1).
     ///
     /// <para>⛔ The two vocabularies overlap in spelling and not in meaning, so "structural" is not a
-    /// property of the attribute name alone. <c>Width</c> is a <c>.blform</c> control's pixel width
-    /// and is read into its geometry; on a <c>.blwebform</c> control nothing reads it, so calling it
-    /// structural there would make it neither a property nor an unknown attribute — absent from the
-    /// model entirely, and silently dropped by any path that rebuilds the document from the
-    /// model.</para>
+    /// property of the attribute name alone. <c>Width</c> is a pixel control's width and is read into its
+    /// geometry; on a Grid page's control nothing reads it, so calling it structural there would make it
+    /// neither a property nor an unknown attribute — absent from the model entirely, and silently dropped
+    /// by any path that rebuilds the document from the model.</para>
+    ///
+    /// <para>⛔ By LAYOUT too, through <see cref="FormVocabulary.IsPixel(FormTarget, FormLayoutKind?)"/>: a
+    /// Canvas page's control is laid out in pixels exactly as a .blform's is. Asking by target alone put its
+    /// X/Width in UnknownAttributes, and the control had a position nothing read.</para>
     /// </summary>
-    public static bool IsStructural(string attributeName, FormTarget target)
+    public static bool IsStructural(string attributeName, FormTarget target, FormLayoutKind? layout)
     {
         if (string.Equals(attributeName, "Id", StringComparison.OrdinalIgnoreCase) ||
             string.Equals(attributeName, "TabIndex", StringComparison.OrdinalIgnoreCase))
@@ -2052,7 +2056,7 @@ public static class FormControlCatalog
             return true;
         }
 
-        var vocabulary = target == FormTarget.WinForms ? PixelAttributes : GridAttributes;
+        var vocabulary = FormVocabulary.IsPixel(target, layout) ? PixelAttributes : GridAttributes;
         return vocabulary.Any(a => string.Equals(a, attributeName, StringComparison.OrdinalIgnoreCase));
     }
 }

@@ -5,10 +5,11 @@ namespace BasicLang.Forms;
 ///
 /// <para>A <c>.blform</c> always speaks pixels. A <c>.blwebform</c> speaks pixels when its
 /// <c>&lt;Layout Kind="Canvas"&gt;</c> says so, and cells (Grid) or document order (Flow) otherwise.
-/// Every site that decides a vocabulary asks HERE: the reader's root size and geometry, the writer,
-/// <see cref="FormControlCatalog.IsStructural(string, FormTarget)"/>, the clipboard, the canvas and
-/// placement. Before this existed, each of them asked <c>Target == WinForms</c>, which silently
-/// routed every web document down the Grid path.</para>
+/// Every site that decides a vocabulary asks HERE: the reader's root size and control geometry, the
+/// writer, <see cref="FormControlCatalog.IsStructural(string, FormTarget, FormLayoutKind?)"/> and the
+/// clipboard already do; the canvas and placement move onto it in piece 1's Task 9. Before this existed,
+/// each of them asked <c>Target == WinForms</c>, which silently routed every web document down the Grid
+/// path.</para>
 ///
 /// <para>⚠ It takes VALUES, not a document: the reader decides the vocabulary of the root
 /// attributes before any model exists (§2.2's pre-scan hands it the layout).</para>

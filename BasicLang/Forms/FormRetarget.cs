@@ -426,7 +426,7 @@ public static class FormRetarget
                 // ⛔ The other format's layout vocabulary. A .blform control carrying a stray Col="2"
                 // holds it as an unknown attribute; carried onto the web control, Create() would write
                 // it over the cell this retarget derived. Dropped and named, never silently honoured.
-                if (FormControlCatalog.IsStructural(name, _to))
+                if (FormControlCatalog.IsStructural(name, _to, _toLayout))
                 {
                     Warn(DesignCodes.RetargetPropertyLost,
                         $"'{source.Id}.{name}' = \"{value}\" is not a {source.Kind} property, and a " +
