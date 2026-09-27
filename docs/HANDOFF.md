@@ -17,7 +17,48 @@ facade (all five tasks of `2026-09-13-blnet-cpp-facade.md`).
 
 ---
 
-## 🧩 NEWEST — 2026-09-26: property grid → Visual Studio parity, branch `feat/property-grid`, SLICE 1 DONE
+## 🌐 NEWEST — 2026-09-27: web forms laid out in pixels (piece 1 of "one form, either target"), branch `feat/web-pixel-layout`
+
+Branch `feat/web-pixel-layout` @ `9ffb4dd2` (pushed; based on `feat/property-grid` @ `6af0bea1`, NOT
+on master — master has moved since; do a real merge in a `git worktree add --detach` before any PR).
+Spec `docs/superpowers/specs/2026-09-27-web-pixel-layout-design.md` · plan
+`docs/superpowers/plans/2026-09-27-web-pixel-layout.md` · per-task pre-flights (they WIN over the plan)
+`…-task9-preflight.md`, `…-task10-preflight.md`, `…-task11-preflight.md`.
+
+**Programme decisions (owner, do not relitigate):** design every form in pixels; the web page is
+desktop-exact, follows Anchor/Dock on resize, stacks on phones (secondary); a portable control library
+(piece 2); a Desktop|Web toolbar switch (piece 3); retire `.blwebform` with convert-on-open (piece 4);
+desktop-only controls badged. **Piece-1 owner decisions 2026-09-27:** phone order = "tall item, then
+pairs" (`FormReadingOrder`: greedy spanning + containment guard); a run-time `Visible` toggle re-docks
+through a small reflow script the page carries (`FormDockScript`, MutationObserver, JS mirror of
+`FormDockLayout` kept in lock-step by `FormDockScriptTests` under node).
+
+**Done (each task: implementer + spec review + quality review + mutation checks):** Tasks 0–11 —
+`FormVocabulary` (one pixels-or-cells answer), root rows via `FormRootValues.Applies` + `WebLayouts`,
+pixel geometry + vocabulary-based paste refusal, `MobileBreakpoint`, Canvas scaffold default,
+`FormDockLayout` (Designer/Runtime) + `FormDocument.DesignSize`, `FormAnchor`/`FormAnchorCss`,
+`FormReadingOrder`, canvas/placement (Task 9), the page emitter + reflow script (Task 10), lossless
+Canvas→WinForms retarget with polite BL8015 refusal (Task 11). Fast gate at `9ffb4dd2`: 8292 total,
+the 5 known machine failures only. **Left:** Task 12 (WinForms reference harness), 13 (Edge harness),
+14 (acceptance twin), 15 (mutations), 16 (gate, IDE drop, owner click-through). No IDE drop yet — the
+`IDE\` folder still predates this branch.
+
+**Carried into Tasks 12/13 (measure, don't guess):** WinForms run-time Visible toggle + an anchored
+sibling that must not move; overflowing Top-then-Bottom and Left-then-Right; hidden-control docking;
+bordered Panel/GroupBox client area (1–2px, fieldset legend/min-inline-size); strip AutoSize vs
+DefaultHeight at 96 DPI; PictureBox with a LOADED image anchored Left+Right and docked Fill (img ignores
+left+right without an explicit size — fixed with calc sizes, Task 10); a Literal starting with `<p>`
+(fixed with `display:flow-root`); Edge flips `style.display` so the real reflow script runs; a MenuStrip
+dropdown over a later control (z-order); 0.5px resize drift vs WinForms' floored halves.
+**Click-through list for Task 16:** the three Task 9 decisions (dashed outline on a selected docked
+control; Canvas page = outline + caption, no title bar; strips inside Panels drawn) and the 11 in the
+Task 10 pre-flight's "Decisions taken".
+**Follow-ups recorded:** `FormArrange` writes a docked control's X/Y; `design --check` runs neither
+CheckAnchors nor a Dock check (chip: unknown-Dock diagnostic); CheckBox/RadioButton caption invisible on
+Canvas; WinForms→web retarget still produces Grid (piece 4); a Canvas→Grid layout switch drops Width in
+Create but keeps it in Apply (piece 4); flaky row seen once: `FormDesignerRealViewTests.F2_WithAWindowLevelKeyBinding…`.
+
+## 🧩 2026-09-26: property grid → Visual Studio parity, branch `feat/property-grid`, SLICE 1 DONE
 
 The form designer merged to master (PR #4). This is the next feature: spec
 `docs/superpowers/specs/2026-09-25-property-grid-vs-parity-design.md` (+ the measured WinForms reference beside
