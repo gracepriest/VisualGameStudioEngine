@@ -5697,6 +5697,14 @@ namespace BasicLang.Compiler.SemanticAnalysis
             {
                 method.Accept(this);
 
+                // ⛔ REGISTER IT AS A MEMBER, as the properties below are. Without this a call
+                // through an interface-typed variable found no member and typed as Object:
+                // `Dim t As String = s.Name()` was refused as Object→String and `s.Area() + 1` as
+                // "Arithmetic operator '+' requires numeric operands" — the interface was usable
+                // only by casting back to the class.
+                if (GetNodeSymbol(method) is Symbol methodSymbol)
+                    interfaceType.Members[method.Name] = methodSymbol;
+
                 // Validate default implementations
                 if (!method.IsAbstract && method.Body != null)
                 {
