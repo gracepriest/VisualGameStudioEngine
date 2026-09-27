@@ -106,7 +106,10 @@ public static class FormAnchorCss
         return declarations;
     }
 
-    /// <summary>The fixed insets for a docked thing, from its resolved rectangle and container.</summary>
+    /// <summary>
+    /// The fixed insets for a docked thing, from its resolved rectangle and container. ⛔ MIRRORED by vgsDockCss in
+    /// <see cref="FormDockScript.Core"/>; FormDockScriptTests gates the pair.
+    /// </summary>
     public static IReadOnlyList<(string Property, string Value)> Docked(FormDockedBounds docked)
     {
         var b = docked.Bounds;

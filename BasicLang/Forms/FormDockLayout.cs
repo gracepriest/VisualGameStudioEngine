@@ -123,6 +123,10 @@ public sealed class FormDockLayoutResult
 /// children are resolved. A container with no pixel geometry (a Grid/Flow page's cell-placed Panel) does NOT have
 /// its children resolved and has no <c>ClientSizeOf</c>. That is deliberate (changed on Task 6 review): its size
 /// is not a number of pixels, and resolving its docked children against 0×0 gave meaningless bounds.</para>
+///
+/// <para>⛔⛔ MIRRORED in JavaScript by <see cref="FormDockScript.Core"/> (the page's run-time re-docking):
+/// ResolveSiblings and Walk in Runtime mode. FormDockScriptTests runs both over one table under node — change them in
+/// the SAME commit.</para>
 /// </summary>
 public static class FormDockLayout
 {
@@ -279,7 +283,7 @@ public static class FormDockLayout
     /// <summary>
     /// ⛔ The one answer to "what size does this thing dock at": a strip's band height (its row's
     /// <see cref="FormControlDef.DefaultHeight"/> — spec §3), or a control's stored size floored at 0. Public because
-    /// the page's run-time reflow script (<c>FormDockScript</c>) must dock exactly what this resolver docks.
+    /// the page's run-time reflow script (<see cref="FormDockScript"/>) must dock exactly what this resolver docks.
     /// </summary>
     public static (int Width, int Height) OwnSizeOf(FormControl control)
     {

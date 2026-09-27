@@ -206,6 +206,13 @@ public static class FormAssetEmitter
         AppendLiteral(sb, form);
 
         sb.Append("</div>\n");
+
+        // ⛔ Owner decision 2026-09-27: the page re-docks when user code shows or hides a docked control. A CLASSIC
+        // script after the form area (the elements exist) and before the module (it observes InitializeComponent).
+        if (FormDockScript.PageScript(form) is { } dock)
+        {
+            sb.Append(dock);
+        }
     }
 
     private static void AppendLiteral(StringBuilder sb, FormDocument form)
@@ -579,7 +586,7 @@ public static class FormAssetEmitter
     /// <para>⛔ The page's FIRST state is <see cref="FormDockMode.Runtime"/> (owner decision 2026-09-27): a hidden
     /// control takes no space, so the next docked control closes the gap. Where Runtime has no answer — a hidden docked
     /// control, a child of a hidden container — the Designer answer is written instead, and the page's reflow script
-    /// (<c>FormDockScript</c>) overwrites it the moment that control is shown.</para>
+    /// (<see cref="FormDockScript"/>) overwrites it the moment that control is shown.</para>
     ///
     /// <para>⚠ A non-positive Width/Height writes no size (spec §3), so such a control is CONTENT-sized here and
     /// invisible on WinForms — an accepted divergence. ⚠ Children are positioned against their container's PADDING
