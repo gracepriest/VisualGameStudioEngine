@@ -110,9 +110,23 @@ public static class FormDocumentReader
         // Text is ONE vocabulary on both targets (D2, spec §2.3): the window caption, the page title.
         model.Text = (string?)root.Attribute("Text");
 
-        if (target == FormTarget.WinForms)
+        // ⛔ PRE-SCAN (spec 2026-09-27 §2.2). The root attributes and every control are read in the
+        // vocabulary the LAYOUT picks — a Canvas page stores Width/Height and X/Y exactly as a .blform does —
+        // but <Layout> is an ordinary child element and may come AFTER <Controls>. So it is read here,
+        // before anything that depends on it. ⚠ The LAST one, exactly as the element loop below always
+        // behaved (each <Layout> overwrote the one before); that loop now skips it.
+        if (target == FormTarget.Web &&
+            root.Elements().LastOrDefault(e => e.Name.LocalName == "Layout") is { } layoutElement)
         {
-            // The form's own client size. WinForms only — D3 gives the web document a <Layout> instead.
+            model.Layout = ReadLayout(layoutElement);
+        }
+
+        var layout = FormVocabulary.LayoutOf(model);
+
+        if (FormVocabulary.IsPixel(target.Value, layout))
+        {
+            // The form's own client size: a window's, or a Canvas page's design size (spec 2026-09-27 D2).
+            // A Grid/Flow page has none — D3 gives it a <Layout> instead.
             model.Width = IntAttribute(root, "Width");
             model.Height = IntAttribute(root, "Height");
 
@@ -147,7 +161,7 @@ public static class FormDocumentReader
 
         foreach (var attribute in root.Attributes())
         {
-            if (!IsKnownRootAttribute(attribute.Name.LocalName, target.Value, root))
+            if (!IsKnownRootAttribute(attribute.Name.LocalName, target.Value, layout, root))
             {
                 model.UnknownAttributes[attribute.Name.LocalName] = attribute.Value;
             }
@@ -157,10 +171,10 @@ public static class FormDocumentReader
         {
             switch (element.Name.LocalName)
             {
-                // Web only (D3). On a .blform it is not a layout — it is an element this designer
-                // does not model, and it round-trips untouched like any other.
+                // Web only (D3), and already READ by the pre-scan above — skipped here so it is neither
+                // read twice nor mistaken for an unknown element. On a .blform it is not a layout — it is
+                // an element this designer does not model, and it round-trips untouched like any other.
                 case "Layout" when target == FormTarget.Web:
-                    model.Layout = ReadLayout(element);
                     break;
 
                 case "Controls":
@@ -285,21 +299,22 @@ public static class FormDocumentReader
     /// True when the root attribute is one this reader models, so it must NOT also be recorded as an
     /// unknown attribute and written back twice.
     ///
-    /// <para>⛔ Asks <see cref="FormRootValues.RowForAttribute"/> — the one map from a FormRoot row to its
-    /// storage — rather than keeping a list here.</para>
+    /// <para>⛔ Asks <see cref="FormRootValues.RowForAttribute"/> by (target, layout) — the one map from a
+    /// FormRoot row to its storage, filtered by the one applicability predicate — rather than keeping a
+    /// list here.</para>
     ///
     /// <para>⚠ <paramref name="root"/> is passed because "known" is not purely a matter of spelling: on
-    /// a WinForms document a <c>Width</c> the reader could not parse is left unmodelled, and the only
+    /// a pixel document a <c>Width</c> the reader could not parse is left unmodelled, and the only
     /// thing that then preserves it is the unknown-attribute round trip (its row is Degraded).</para>
     /// </summary>
-    private static bool IsKnownRootAttribute(string name, FormTarget target, XElement root)
+    private static bool IsKnownRootAttribute(string name, FormTarget target, FormLayoutKind? layout, XElement root)
     {
         if (name is "Name" or "Version")
         {
             return true;
         }
 
-        var row = FormRootValues.RowForAttribute(name, target);
+        var row = FormRootValues.RowForAttribute(name, target, layout);
         if (row == null)
         {
             return false;

@@ -93,7 +93,10 @@ public sealed class FormFile
     public string? DegradedReasonOfRoot(string property) =>
         DegradedRoot.FirstOrDefault(d => string.Equals(d.Property, property, StringComparison.Ordinal))?.Reason;
 
-    /// <summary>The D9 tier of one FormRoot row on this document's target.</summary>
+    /// <summary>
+    /// The D9 tier of one FormRoot row on this document's (target, layout) — through
+    /// <see cref="FormRootValues.Applies(FormPropertyDef, FormDocument)"/>, the one applicability predicate.
+    /// </summary>
     /// <remarks>
     /// ⚠ ORDINAL, deliberately unlike <see cref="TierOf"/>'s case-insensitive control lookup: a root row's
     /// name is its XML attribute spelling, and <see cref="FormRootValues.RowForAttribute"/> (what the
@@ -109,7 +112,7 @@ public sealed class FormFile
         }
 
         return FormControlCatalog.FormRoot.Properties.FirstOrDefault(r => string.Equals(r.Name, property, StringComparison.Ordinal))
-                   is { } row && row.AppliesTo(Model.Target)
+                   is { } row && FormRootValues.Applies(row, Model)
             ? PropertyTier.Canon
             : PropertyTier.Unknown;
     }

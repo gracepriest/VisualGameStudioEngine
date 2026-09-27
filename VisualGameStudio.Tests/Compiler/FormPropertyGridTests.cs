@@ -463,7 +463,8 @@ public class FormPropertyGridTests
         Assert.Multiple(() =>
         {
             Assert.That(names, Does.Contain("Cols").And.Contains("Rows").And.Contains("Gap"));
-            Assert.That(names, Does.Not.Contain("Width").And.Not.Contains("Height"));
+            Assert.That(names, Does.Not.Contain("Width").And.Not.Contains("Height").And.Not.Contains("ClientSize"),
+                "ClientSize targets the web now (a Canvas page's design size), and a Grid page must not show it");
         });
     }
 

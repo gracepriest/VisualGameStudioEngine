@@ -89,13 +89,15 @@ public static class FormDocumentWriter
         // Text is ONE vocabulary on both targets (D2). Null writes nothing.
         root.SetAttributeValue("Text", model.Text);
 
-        if (model.Target == FormTarget.WinForms)
+        // The client size of a PIXEL document — a window, or a Canvas page (spec 2026-09-27 D2). ⛔ Asked of
+        // FormVocabulary, never of the target: a Canvas page has a size AND a <Layout>.
+        if (FormVocabulary.IsPixel(model))
         {
-            // The window's client size: D3's divergence, at the root.
             root.SetAttributeValue("Width", model.Width);
             root.SetAttributeValue("Height", model.Height);
         }
-        else if (model.Layout != null)
+
+        if (model.Target == FormTarget.Web && model.Layout != null)
         {
             root.Add(LayoutElement(model.Layout));
         }
@@ -180,14 +182,16 @@ public static class FormDocumentWriter
         // string cannot be "present but unparseable", so there is nothing to protect by keeping it.
         SetAttributeIfChanged(root, "Text", model.Text);
 
-        // D3, at the root: a window has a size, a page has a layout and may carry literal markup. Each
-        // side writes only its own vocabulary — writing both would put a <Layout> into a .blform on the
-        // first save, and the file would then be refused by its own reader on the next open.
-        if (model.Target == FormTarget.WinForms)
+        // D3, at the root: a pixel document has a size — the pixel root's Width/Height, a .blform's or a
+        // Canvas page's — and a page has a layout and may carry literal markup.
+        // ⛔ A Canvas page has BOTH: a size (pixel vocabulary, FormVocabulary) and a <Layout> (web). A .blform
+        // never gets a <Layout> — its own reader would read it as an unknown element on the next open.
+        if (FormVocabulary.IsPixel(model))
         {
             ApplyFormAttributes(root, model);
         }
-        else
+
+        if (model.Target == FormTarget.Web)
         {
             ApplyLayout(root, model);
         }
@@ -234,7 +238,7 @@ public static class FormDocumentWriter
     }
 
     /// <summary>
-    /// The <c>.blform</c> root's <c>Width</c>/<c>Height</c>.
+    /// The pixel root's <c>Width</c>/<c>Height</c> — a <c>.blform</c>'s or a Canvas page's.
     ///
     /// <para>⛔ A null model value means "the document did not say" — either the attribute was
     /// absent, or it was present and unparseable, in which case the reader left it unmodelled and

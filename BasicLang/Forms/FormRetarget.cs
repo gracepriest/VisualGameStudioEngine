@@ -164,6 +164,12 @@ public static class FormRetarget
         private readonly FormTarget _to;
 
         /// <summary>
+        /// The layout the DESTINATION document gets: WinForms → web produces Grid (ToCells; spec 2026-09-27 §6 —
+        /// unchanged in piece 1, piece 4 replaces the retarget); a window has none.
+        /// </summary>
+        private readonly FormLayoutKind? _toLayout;
+
+        /// <summary>
         /// The geometry each NEW control was converted from, in the source vocabulary — kept apart
         /// from the control because the destination geometry replaces it, and because a hoisted child
         /// carries a TRANSLATED copy (its container's offset added), not its own.
@@ -175,6 +181,7 @@ public static class FormRetarget
             _source = source;
             _from = source.Target;
             _to = to;
+            _toLayout = to == FormTarget.Web ? FormLayoutKind.Grid : null;
             Document = new FormDocument { Target = to, Name = source.Name, Version = source.Version };
         }
 
@@ -201,8 +208,8 @@ public static class FormRetarget
 
             foreach (var (name, value) in _source.UnknownAttributes)
             {
-                var toRow = FormRootValues.RowForAttribute(name, _to);
-                var fromRow = FormRootValues.RowForAttribute(name, _from);
+                var toRow = FormRootValues.RowForAttribute(name, _to, _toLayout);
+                var fromRow = FormRootValues.RowForAttribute(name, _from, FormVocabulary.LayoutOf(_source));
 
                 // ⛔ The SOURCE's own degraded storage (an unparseable Width on a .blform is kept as an
                 // unknown attribute so it round-trips — plan scope call S3). It is a FormRoot row, not
@@ -212,7 +219,7 @@ public static class FormRetarget
                 {
                     Warn(DesignCodes.RetargetPropertyLost,
                         $"'form.{fromRow.Name}' could not be read on the {Describe(_from)} form ('{name}=\"{value}\"') " +
-                        (fromRow.AppliesTo(_to)
+                        (FormRootValues.Applies(fromRow, _to, _toLayout)
                             ? $"and was dropped rather than carried as the {Describe(_to)} form's value."
                             : $"and does not exist on a {Describe(_to)} one, so it was dropped."));
                     continue;

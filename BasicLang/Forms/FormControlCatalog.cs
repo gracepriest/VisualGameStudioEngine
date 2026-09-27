@@ -143,6 +143,14 @@ public enum FormEditVerdict
 /// Why the WinForms snapshot is NOT the truth for this row — a stated reason, carried on the row so
 /// the parity test prints it rather than keeping a hand list. Null for every row the snapshot judges.
 /// </param>
+/// <param name="WebLayouts">
+/// On the web, the page layouts this row exists on (spec 2026-09-27 §2.3); null = every layout. Read by
+/// <see cref="FormRootValues.Applies(FormPropertyDef, FormTarget, FormLayoutKind?)"/> and by NOTHING else —
+/// ⛔ a FormRoot row's applicability is never <see cref="AppliesTo"/> alone: ClientSize targets the web (a
+/// Canvas page has a design size) and does not exist on a Grid page. A catalog gate
+/// (<c>FormRootLayoutTests.WebLayouts_IsDeclaredOnlyOnFormRootRows_ThatExistOnTheWeb</c>) refuses it on a
+/// control row, where no consumer reads it.
+/// </param>
 public sealed record FormPropertyDef(
     string Name,
     FormPropertyType Type,
@@ -159,7 +167,8 @@ public sealed record FormPropertyDef(
     FormCssConverter CssConverter = FormCssConverter.None,
     string? WebDefault = null,
     IReadOnlyDictionary<string, string>? Aliases = null,
-    string? OracleExemption = null)
+    string? OracleExemption = null,
+    IReadOnlyList<FormLayoutKind>? WebLayouts = null)
 {
     // ⛔ Normalised to OrdinalIgnoreCase whatever comparer the caller built the dictionary with —
     // Accepts and Canonical are case-insensitive for members, and an alias lookup that silently
@@ -1949,24 +1958,31 @@ public static class FormControlCatalog
                 Category: FormPropertyCategory.Appearance, Description: "The text associated with the control."),
 
             // ⚠ CLIENT size, emitted `Me.ClientSize = New Size(w, h)` exactly as before — the form shows
-            // ClientSize, never a second Size (spec §2.3).
-            new("ClientSize", FormPropertyType.Size, Targets: new[] { FormTarget.WinForms },
+            // ClientSize, never a second Size (spec §2.3). ⛔ Also a Canvas PAGE's design size (spec 2026-09-27
+            // D2): stored as the root's Width/Height exactly as a .blform stores them. The web code-behind
+            // emits no geometry (RegionWriter emits root rows on the WinForms branch only).
+            new("ClientSize", FormPropertyType.Size, Targets: new[] { FormTarget.WinForms, FormTarget.Web },
                 Category: FormPropertyCategory.Layout,
                 Description: "The size of the client area of the form, in pixels.",
                 OracleExemption: "ClientSize is not browsable in WinForms — VS shows Size. The designer " +
                                  "shows the CLIENT size because that is what its surface draws and what the " +
-                                 "region writer emits (spec §2.3)."),
+                                 "region writer emits (spec §2.3).",
+                WebLayouts: new[] { FormLayoutKind.Canvas }),
 
             // Web only — kept verbatim as CSS track lists; the browser is the renderer (FormGridLayout).
             new("Cols", FormPropertyType.String, Targets: new[] { FormTarget.Web },
                 Category: FormPropertyCategory.Layout,
-                Description: "The page's column tracks, as a comma-separated CSS grid track list (e.g. 120px,1fr)."),
+                Description: "The page's column tracks, as a comma-separated CSS grid track list (e.g. 120px,1fr).",
+                WebLayouts: new[] { FormLayoutKind.Grid }),
             new("Rows", FormPropertyType.String, Targets: new[] { FormTarget.Web },
                 Category: FormPropertyCategory.Layout,
-                Description: "The page's row tracks, as a comma-separated CSS grid track list (e.g. auto,auto)."),
+                Description: "The page's row tracks, as a comma-separated CSS grid track list (e.g. auto,auto).",
+                WebLayouts: new[] { FormLayoutKind.Grid }),
+            // ⚠ Grid AND Flow: the emitter writes `gap` for both (FormAssetEmitter.Css).
             new("Gap", FormPropertyType.String, Targets: new[] { FormTarget.Web },
                 Category: FormPropertyCategory.Layout,
-                Description: "The space between the page's grid cells, as a CSS length (e.g. 8px)."),
+                Description: "The space between the page's grid cells or flow items, as a CSS length (e.g. 8px).",
+                WebLayouts: new[] { FormLayoutKind.Grid, FormLayoutKind.Flow }),
         },
         Schematic: FormSchematic.Container);
 

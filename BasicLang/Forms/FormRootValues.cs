@@ -13,7 +13,8 @@ namespace BasicLang.Forms;
 /// themselves (typed fields, one per row — slice 3's Properties-stored rows are where a generic path
 /// pays), and the retarget crosses Text and derives the layout edge itself. Until those land, a new row
 /// must be mapped here AND taught to them — FormRootRetargetTests' catalog sweep goes red for a row the
-/// retarget neither crosses nor names.</para>
+/// retarget neither crosses nor names. The row's APPLICABILITY is <see cref="Applies(FormPropertyDef, FormTarget, FormLayoutKind?)"/>
+/// — the one predicate the reader, writer, region writer, grid, tier and retarget all call (spec 2026-09-27 §2.3).</para>
 /// </summary>
 public static class FormRootValues
 {
@@ -109,13 +110,44 @@ public static class FormRootValues
     };
 
     /// <summary>
-    /// The FormRoot row a root attribute belongs to on <paramref name="target"/>, or null. ⚠ Ordinal:
-    /// XML attribute names are case-sensitive and the reader has always matched them exactly — and
-    /// <see cref="Serialization.FormFile.TierOfRoot"/> uses the same comparison, so the tier API and the
-    /// reader cannot disagree about whether <c>text</c> is the Text row.
+    /// ⛔⛔ Whether <paramref name="row"/> exists on a document of <paramref name="target"/> laid out
+    /// <paramref name="layout"/> (spec 2026-09-27 §2.3) — THE one predicate for a FormRoot row. Never call
+    /// <see cref="FormPropertyDef.AppliesTo"/> on a root row directly: ClientSize targets the web (a Canvas
+    /// page's design size) and does not exist on a Grid page, and <c>AppliesTo(Web)</c> alone says it does.
     /// </summary>
-    public static FormPropertyDef? RowForAttribute(string attribute, FormTarget target) =>
+    /// <param name="layout">
+    /// The web document's layout; ignored for WinForms. Null on the web means Grid — the default a page
+    /// with no <c>&lt;Layout&gt;</c> has (<see cref="FormVocabulary.LayoutOf"/>).
+    /// </param>
+    public static bool Applies(FormPropertyDef row, FormTarget target, FormLayoutKind? layout)
+    {
+        ArgumentNullException.ThrowIfNull(row);
+
+        if (!row.AppliesTo(target))
+        {
+            return false;
+        }
+
+        return target != FormTarget.Web || row.WebLayouts == null ||
+               row.WebLayouts.Contains(layout ?? FormLayoutKind.Grid);
+    }
+
+    /// <summary><see cref="Applies(FormPropertyDef, FormTarget, FormLayoutKind?)"/> for a document.</summary>
+    public static bool Applies(FormPropertyDef row, FormDocument form)
+    {
+        ArgumentNullException.ThrowIfNull(form);
+        return Applies(row, form.Target, FormVocabulary.LayoutOf(form));
+    }
+
+    /// <summary>
+    /// The FormRoot row a root attribute belongs to on a document of (<paramref name="target"/>,
+    /// <paramref name="layout"/>), or null — through <see cref="Applies(FormPropertyDef, FormTarget, FormLayoutKind?)"/>,
+    /// never a copy of it. ⚠ Ordinal: XML attribute names are case-sensitive and the reader has always matched
+    /// them exactly — and <see cref="Serialization.FormFile.TierOfRoot"/> uses the same comparison, so the
+    /// tier API and the reader cannot disagree about whether <c>text</c> is the Text row.
+    /// </summary>
+    public static FormPropertyDef? RowForAttribute(string attribute, FormTarget target, FormLayoutKind? layout) =>
         FormControlCatalog.FormRoot.Properties
-            .Where(r => r.AppliesTo(target))
+            .Where(r => Applies(r, target, layout))
             .FirstOrDefault(r => StorageAttributes(r).Contains(attribute, StringComparer.Ordinal));
 }

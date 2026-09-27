@@ -634,7 +634,7 @@ public static class RegionWriter
             // shipped VSIX template uses, and the shape Owner decision 3 makes canonical. ⛔ ONE
             // `Me.X = …` statement per row: ClientSize fans in exactly as a control's Size does, for
             // the same CS1612 reason.
-            foreach (var row in FormControlCatalog.FormRoot.Properties.Where(p => p.AppliesTo(FormTarget.WinForms)))
+            foreach (var row in FormControlCatalog.FormRoot.Properties.Where(p => FormRootValues.Applies(p, FormTarget.WinForms, null)))
             {
                 var value = FormRootValues.Get(form, row);
                 if (value == null)

@@ -27,8 +27,9 @@ public class FormRootTests
     /// <summary>
     /// Every accessor of the one storage map, for every FormRoot row, on BOTH targets. ⚠ Get/Set/
     /// StorageAttributes are a STORAGE map and deliberately target-agnostic (the typed fields exist on
-    /// every document); the target filter is <see cref="FormRootValues.RowForAttribute"/>'s, which must
-    /// answer a row exactly on the targets it applies to.
+    /// every document); the (target, layout) filter is <see cref="FormRootValues.Applies(FormPropertyDef, FormTarget, FormLayoutKind?)"/>,
+    /// which <see cref="FormRootValues.RowForAttribute"/> asks, and which must answer a row exactly on the
+    /// (target, layout) pairs it applies to.
     /// </summary>
     [Test]
     public void EveryFormRootRow_HasStorage_OnBothTargets()
@@ -58,9 +59,14 @@ public class FormRootTests
                     var attributes = FormRootValues.StorageAttributes(row);
                     foreach (var attribute in attributes)
                     {
-                        Assert.That(FormRootValues.RowForAttribute(attribute, target),
-                            row.AppliesTo(target) ? Is.SameAs(row) : Is.Null,
-                            $"{where}: attribute '{attribute}' belongs to the row exactly where the row applies");
+                        foreach (var layout in target == FormTarget.WinForms
+                                     ? new FormLayoutKind?[] { null }
+                                     : new FormLayoutKind?[] { null, FormLayoutKind.Grid, FormLayoutKind.Flow, FormLayoutKind.Canvas })
+                        {
+                            Assert.That(FormRootValues.RowForAttribute(attribute, target, layout),
+                                FormRootValues.Applies(row, target, layout) ? Is.SameAs(row) : Is.Null,
+                                $"{where} ({layout?.ToString() ?? "no layout"}): attribute '{attribute}' belongs to the row exactly where the row applies");
+                        }
                     }
                 }
             }
@@ -278,7 +284,7 @@ public class FormRootTests
         Assert.Multiple(() =>
         {
             Assert.That(file.TierOfRoot("text"), Is.EqualTo(PropertyTier.Unknown));
-            Assert.That(FormRootValues.RowForAttribute("text", FormTarget.WinForms), Is.Null);
+            Assert.That(FormRootValues.RowForAttribute("text", FormTarget.WinForms, null), Is.Null);
         });
     }
 

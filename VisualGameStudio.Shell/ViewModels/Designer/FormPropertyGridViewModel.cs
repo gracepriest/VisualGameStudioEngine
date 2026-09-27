@@ -476,7 +476,7 @@ public partial class FormPropertyGridViewModel : ObservableObject
             category: "Design",
             description: NameDescription));
 
-        foreach (var row in FormControlCatalog.FormRoot.Properties.Where(p => p.AppliesTo(form.Target)))
+        foreach (var row in FormControlCatalog.FormRoot.Properties.Where(p => FormRootValues.Applies(p, form)))
         {
             var definition = row;
 

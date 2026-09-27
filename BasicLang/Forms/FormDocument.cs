@@ -46,9 +46,9 @@ public sealed class FormDocument
     /// <summary>The file extension this document is persisted under, including the dot.</summary>
     public string FileExtension => Target == FormTarget.WinForms ? ".blform" : ".blwebform";
 
-    // --- .blform only (D3) -------------------------------------------------
+    // --- pixel documents: .blform, and a web Canvas page (spec 2026-09-27 D2) ---
 
-    /// <summary>The form's client size. WinForms only; null on a web document.</summary>
+    /// <summary>The form's client size — a window's, or a Canvas page's design size. Null on a Grid/Flow page.</summary>
     public int? Width { get; set; }
     public int? Height { get; set; }
 

@@ -20,17 +20,34 @@ public class FormRootRetargetTests
     };
 
     /// <summary>
+    /// The sweep's source documents. ⚠ RE-CHECK IN TASK 11: Web Canvas joins then (spec 2026-09-27 §6) —
+    /// until the Canvas → WinForms retarget copies the design size, ClientSize would not cross exactly and
+    /// MobileBreakpoint (Task 4) would not be named.
+    /// </summary>
+    private static IEnumerable<TestCaseData> Sources()
+    {
+        yield return new TestCaseData(FormTarget.WinForms, null).SetName("{m}(WinForms)");
+        yield return new TestCaseData(FormTarget.Web, FormLayoutKind.Grid).SetName("{m}(Web Grid)");
+        yield return new TestCaseData(FormTarget.Web, FormLayoutKind.Flow).SetName("{m}(Web Flow)");
+    }
+
+    /// <summary>
     /// ⛔ Catalog-driven: a new FormRoot row is covered the day it is added. A row that does not apply to
     /// the destination must be NAMED in some finding — RetargetLayoutCrossed for the pixel⇄cell rows
     /// (ClientSize/Cols/Rows/Gap, plan scope call S4), RetargetPropertyLost 'form.X' for every other.
     /// ⚠ RE-CHECK IN SLICE 3: the RetargetPropertyLost arm has no row until Properties-stored rows exist.
     /// </summary>
-    [Test]
-    public void EveryFormRootRow_CrossesOrIsNamed([Values(FormTarget.WinForms, FormTarget.Web)] FormTarget from)
+    [TestCaseSource(nameof(Sources))]
+    public void EveryFormRootRow_CrossesOrIsNamed(FormTarget from, FormLayoutKind? layout)
     {
         var to = Other(from);
-        var source = new FormDocument { Target = from, Name = "Sweep" };
-        var rows = FormControlCatalog.FormRoot.Properties.Where(r => r.AppliesTo(from)).ToList();
+        FormLayoutKind? toLayout = to == FormTarget.Web ? FormLayoutKind.Grid : null;   // what the retarget produces
+        var source = new FormDocument
+        {
+            Target = from, Name = "Sweep",
+            Layout = layout is { } kind ? new FormLayout { Kind = kind } : null
+        };
+        var rows = FormControlCatalog.FormRoot.Properties.Where(r => FormRootValues.Applies(r, from, layout)).ToList();
 
         foreach (var row in rows)
         {
@@ -44,7 +61,7 @@ public class FormRootRetargetTests
         {
             foreach (var row in rows)
             {
-                if (row.AppliesTo(to))
+                if (FormRootValues.Applies(row, to, toLayout))
                 {
                     Assert.That(FormRootValues.Get(result.Document, row), Is.EqualTo(Sample(row)),
                         $"form.{row.Name} applies on both targets and must cross {from}→{to}");
@@ -83,9 +100,12 @@ public class FormRootRetargetTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(rows.Any(r => r.AppliesTo(FormTarget.WinForms) && r.AppliesTo(FormTarget.Web)), Is.True);
-            Assert.That(rows.Any(r => IsLayoutEdge(r) && r.AppliesTo(FormTarget.WinForms) && !r.AppliesTo(FormTarget.Web)), Is.True);
-            Assert.That(rows.Any(r => IsLayoutEdge(r) && r.AppliesTo(FormTarget.Web) && !r.AppliesTo(FormTarget.WinForms)), Is.True);
+            Assert.That(rows.Any(r => FormRootValues.Applies(r, FormTarget.WinForms, null) &&
+                                      FormRootValues.Applies(r, FormTarget.Web, FormLayoutKind.Grid)), Is.True);
+            Assert.That(rows.Any(r => IsLayoutEdge(r) && FormRootValues.Applies(r, FormTarget.WinForms, null) &&
+                                      !FormRootValues.Applies(r, FormTarget.Web, FormLayoutKind.Grid)), Is.True);
+            Assert.That(rows.Any(r => IsLayoutEdge(r) && FormRootValues.Applies(r, FormTarget.Web, FormLayoutKind.Grid) &&
+                                      !FormRootValues.Applies(r, FormTarget.WinForms, null)), Is.True);
         });
     }
 
