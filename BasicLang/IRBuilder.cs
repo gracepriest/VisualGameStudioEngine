@@ -4098,6 +4098,19 @@ namespace BasicLang.Compiler.IR
         {
             var actual = value?.Type;
 
+            // #173: the Nothing literal is an Object-typed null constant (the analyzer types it
+            // Object and then admits it into any reference type), so it is re-typed in place to the
+            // type it is stored into — the same in-place re-typing a numeric literal gets below.
+            // A null is a null to C#, JavaScript and MSIL; the type is for a backend that holds a
+            // reference type as a VALUE with no null state, which cannot spell it untyped: C++'s
+            // `std::string s = nullptr` is undefined behaviour, and `BasicLang::Array<T> a =
+            // nullptr` does not compile (see CppCodeGenerator.EmitConstant).
+            if (value is IRConstant { Value: null } && IsObjectTyped(actual)
+                && declared != null && declared.Kind != TypeKind.Void && !IsObjectTyped(declared))
+            {
+                return new IRConstant(null, declared);
+            }
+
             // ⚠ ONE guard, not two. An earlier version also tested a broad
             // `IsNumericPrimitive` (any integral or floating type) before this; it is redundant,
             // because every type this admits is one that would admit — and a mutation removing it
@@ -4129,6 +4142,11 @@ namespace BasicLang.Compiler.IR
             return cast;
         }
 
+        /// <summary>The scalar <c>Object</c> type — what the analyzer types the Nothing literal as.</summary>
+        private static bool IsObjectTyped(TypeInfo type) =>
+            type != null && type.Kind != TypeKind.Array &&
+            string.Equals(type.Name, "Object", StringComparison.OrdinalIgnoreCase);
+
         /// <summary>
         /// Coerces one ARGUMENT to the declared type of the parameter it fills.
         ///
@@ -4155,6 +4173,18 @@ namespace BasicLang.Compiler.IR
         /// </summary>
         private IRValue CoerceToParameterType(IRValue value, Symbol callee, int index)
         {
+            // #173: invoking a Func/Action VALUE (`f(Nothing)`) has no parameter list on its
+            // symbol — the types live in the delegate's generic arguments. Only the Nothing
+            // literal is typed from them: a numeric argument to a delegate was never coerced, and
+            // coercing it now would change what every such call already emits.
+            if (value is IRConstant { Value: null } && callee != null
+                && callee.Kind != SymbolKind.Function && callee.Kind != SymbolKind.Subroutine
+                && SemanticAnalyzer.GetDelegateParameterTypes(callee.Type) is { } delegateParameters
+                && index >= 0 && index < delegateParameters.Count)
+            {
+                return CoerceToDeclaredType(value, delegateParameters[index]);
+            }
+
             var parameters = callee?.Parameters;
             if (parameters == null || index < 0 || index >= parameters.Count) return value;
 
