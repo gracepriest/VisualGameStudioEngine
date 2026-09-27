@@ -826,6 +826,36 @@ public class FormAssetEmitterTests
         });
     }
 
+    /// <summary>
+    /// ⛔ An anchored child's insets are DISTANCES captured at the DESIGNER size (all siblings visible), as WinForms
+    /// captures them when the child is added — measured by the Task 12 harness (<c>HiddenSiblingAnchor</c>). They
+    /// differ from the Runtime size only when a hidden docked sibling changes the container's run-time size: here a
+    /// hidden 40px Top strip-panel makes the Dock=Left container 260 tall at design and 300 at run time. The child's
+    /// bottom inset is 260 − 200 − 30 = 30px, so on the 300-tall run-time container it sits 40px lower, as WinForms
+    /// puts it; a Runtime base (300 − 200 − 30 = 70px) would leave it at its design Y.
+    /// </summary>
+    [Test]
+    public void AnAnchoredChild_IsAnchoredAgainstItsContainersDesignerClientSize_NotItsRunTimeSize()
+    {
+        var hidden = At("Panel", "hid", 0, 0, 400, 40, dock: "Top");
+        hidden.Properties["Visible"] = "false";
+        var kid = At("Panel", "kid", 60, 200, 50, 30, "Bottom,Right");
+        var side = At("Panel", "side", 200, 100, 120, 50, dock: "Left", children: kid);
+        var page = CanvasPage(400, 300);
+        page.Controls.Add(hidden);
+        page.Controls.Add(side);
+
+        var css = FormAssetEmitter.Css(page);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(FormDockLayout.Resolve(page, FormDockMode.Designer).ClientSizeOf(side), Is.EqualTo((120, 260)));
+            Assert.That(FormDockLayout.Resolve(page, FormDockMode.Runtime).ClientSizeOf(side), Is.EqualTo((120, 300)));
+            Assert.That(DesktopRule(css, "kid"), Does.Contain("right: 10px; width: 50px; bottom: 30px; height: 30px"),
+                "120 - 60 - 50 across; 260 - 200 - 30 down (the designer size)");
+        });
+    }
+
     [Test]
     public void DockedThings_AreWhereFormDockLayoutPutsThem()
     {

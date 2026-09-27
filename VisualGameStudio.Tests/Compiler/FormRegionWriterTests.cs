@@ -292,6 +292,47 @@ public class FormRegionWriterTests
         });
     }
 
+    /// <summary>
+    /// ⛔ A DOCKED control's Size is written as the size it docks at (<c>FormDockLayout.Resolve(…, Designer)</c>),
+    /// not its stored size — coordinator decision after the Task 12 harness measured it. WinForms captures a child's
+    /// anchor distances when the child is ADDED, against the container's size at that moment; the container is docked
+    /// only when it is itself added to the form, so with its stored 120×50 a Bottom,Right child at Y=250 landed at
+    /// Y=500 in a 300-tall dock. Visual Studio's own designer serialises a docked control's actual size for the same
+    /// reason. Location stays as stored (docking overrides it; nothing reads it).
+    /// </summary>
+    [Test]
+    public void Write_WinForms_ADockedControl_WritesTheSizeItDocksAt()
+    {
+        var form = BasicLang.Forms.Serialization.FormDocumentReader.Read("Docked.blform", """
+            <Form Name="Docked" Version="1" Width="400" Height="300">
+              <Controls>
+                <Panel Id="hid" X="0" Y="0" Width="400" Height="40" Dock="Top" Visible="false"/>
+                <Panel Id="side" X="200" Y="100" Width="120" Height="50" Dock="Left">
+                  <Panel Id="kid" X="60" Y="200" Width="50" Height="30" Anchor="Bottom,Right"/>
+                </Panel>
+                <Panel Id="free" X="200" Y="100" Width="120" Height="50"/>
+              </Controls>
+              <Components/>
+              <Resources/>
+            </Form>
+            """).Model;
+
+        var result = RegionWriter.Write("Docked.bas", ScaffoldedFile(), form, "Docked.blform");
+
+        Assert.That(result.Refused, Is.False, string.Join("; ", result.Diagnostics.Select(d => d.Format())));
+        Assert.Multiple(() =>
+        {
+            // Designer mode: the hidden Top sibling takes its 40px, so side docks 120×260 — the size its children
+            // were designed in, all siblings visible.
+            Assert.That(result.Text, Does.Contain("side.Size = New Size(120, 260)"));
+            Assert.That(result.Text, Does.Not.Contain("side.Size = New Size(120, 50)"));
+            Assert.That(result.Text, Does.Contain("side.Location = New Point(200, 100)"), "Location stays as stored");
+            Assert.That(result.Text, Does.Contain("hid.Size = New Size(400, 40)"));
+            Assert.That(result.Text, Does.Contain("free.Size = New Size(120, 50)"), "an undocked control keeps its own size");
+            Assert.That(result.Text, Does.Contain("kid.Size = New Size(50, 30)"));
+        });
+    }
+
     [Test]
     public void Write_Web_UsesAddressOf_NotALambda()
     {

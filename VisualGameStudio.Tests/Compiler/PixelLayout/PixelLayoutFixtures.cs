@@ -153,17 +153,33 @@ internal static class PixelLayoutFixtures
         """);
 
     /// <summary>
-    /// ⚠ OPEN (Task 12 review round, measured): a Bottom,Right child in a Dock=Left container whose STORED height
-    /// (50) is not its docked height (300). WinForms captures the child's anchor distances against the container's
-    /// size when the child is ADDED — the stored 120×50, since the container is docked only when it is itself added
-    /// to the form — so the child lands at Y = 300 − (50 − 250 − 30) − 30 = 500. The model (and the page, which
-    /// anchors against <c>ClientSizeOf</c> = the docked bounds) says 250.
+    /// A Bottom,Right child in a Dock=Left container whose STORED height (50) is not its docked height (300).
+    /// WinForms captures the child's anchor distances when the child is ADDED, against the container's size at that
+    /// moment. Before the fix that was the stored 120×50 (the container docks only when it is itself added to the
+    /// form), so the child landed at Y=500. Since the coordinator's decision the region writer writes a docked
+    /// control's RESOLVED size (Designer mode), so the child is at its designed Y=250, as the model and page say.
     /// </summary>
     public static FormDocument DockedAnchor(int width = 400, int height = 300) => Read("DockedAnchor", width, height, """
         <Panel Id="side" X="200" Y="100" Width="120" Height="50" Dock="Left">
           <Panel Id="sideBR" X="60" Y="250" Width="50" Height="30" Anchor="Bottom,Right"/>
         </Panel>
         """);
+
+    /// <summary>
+    /// A hidden-at-startup Dock=Top sibling changes a Dock=Left container's size: 120×260 at design (all siblings
+    /// visible), 120×300 at run time. The container holds a Bottom,Right child, a Top,Bottom,Left (stretched) child
+    /// and an unanchored (centred) child. Their anchor distances are captured at the DESIGNER size. The container is
+    /// stored 120×50 on purpose, so the region writer's resolved size is exercised too.
+    /// </summary>
+    public static FormDocument HiddenSiblingAnchor(bool hidVisible = false, int width = 400, int height = 300) =>
+        Read("HiddenSiblingAnchor", width, height, $"""
+            <Panel Id="hid" X="0" Y="0" Width="400" Height="40" Dock="Top" Visible="{(hidVisible ? "true" : "false")}"/>
+            <Panel Id="box" X="200" Y="100" Width="120" Height="50" Dock="Left">
+              <Panel Id="boxBR" X="60" Y="200" Width="50" Height="30" Anchor="Bottom,Right"/>
+              <Panel Id="boxTB" X="10" Y="10" Width="30" Height="150" Anchor="Top,Bottom,Left"/>
+              <Panel Id="boxC" X="70" Y="100" Width="20" Height="20" Anchor="None"/>
+            </Panel>
+            """);
 
     /// <summary>All three strips, each with one item, and a Fill — measured pinned and auto-sized.</summary>
     public static FormDocument Strips(string name, int width = 400, int height = 300) => Read(name, width, height, """

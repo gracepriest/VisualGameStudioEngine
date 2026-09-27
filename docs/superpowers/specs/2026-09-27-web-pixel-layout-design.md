@@ -174,6 +174,16 @@ under `box-sizing: border-box`; a negative sum (a control larger than its contai
 The same rule applies to every docked axis that spans the container (Top/Bottom → width, Left/Right → height,
 Fill → both), in `FormAnchorCss` and its JavaScript mirror alike.
 
+⛔ **The container size an anchored control's insets are computed against is its container's DESIGNER client size**
+(`FormDockLayout.Resolve(…, Designer)`, every sibling visible), never its run-time size. The insets are DISTANCES,
+and WinForms captures its anchor distances when a child is ADDED, at the container's size at that moment. The WinForms
+region writer therefore writes a DOCKED control's `Size` as the size it docks at in Designer mode, not its stored
+Width/Height, as Visual Studio's designer serialises a docked control's actual size. With the stored size, a Bottom,Right
+child of a Dock=Left Panel stored 120×50 and docked 120×300 ran 250px below its design (measured, Task 12 harness). A
+hidden docked sibling makes a container's run-time size differ from its designer size, and its anchored children then
+MOVE by the difference, in WinForms and on the page alike (measured: `HiddenSiblingAnchor`). The docked controls' OWN
+bounds are Runtime; the reflow script rewrites only those.
+
 **Dock** is resolved ONCE at the design size, by the shared `FormDockLayout` (§3), into edges with fixed insets. It takes
 strips (their `Dock` property) and docked controls (`PixelGeometry.Dock`: Top/Bottom/Left/Right/Fill) as ONE sequence.
 **Docking order in model terms: WinForms docks back-most first, which is the model's DOCUMENT order (first in the list
@@ -293,6 +303,9 @@ is target-gated. In piece 1:
   reading-order grouping.
 - WinForms reference driver: pin strip heights (§7 item 5) before the resize step — anchor distances are captured in
   `InitializeComponent` and do not depend on the strips.
+- **Anchor distances are captured at the DESIGNER size (Task 12, measured; coordinator decision).** The region writer
+  writes a docked control's Designer-resolved `Size`. The page anchors a child against its container's Designer client
+  size. The WinForms reference and `PixelLayoutModel` agree at 0px (`DockedAnchor`, `HiddenSiblingAnchor`).
 
 ## 8. Out of scope (piece 1)
 

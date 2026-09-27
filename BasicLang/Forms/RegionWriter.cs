@@ -775,7 +775,7 @@ public static class RegionWriter
         {
             body.Append($"{inner}{control.Id} = New {DeclaredType(form, control)}()").Append(newline);
 
-            AppendPixelGeometry(body, control, inner, newline);
+            AppendPixelGeometry(body, form, control, inner, newline);
             AppendProperties(body, control, inner, newline, filePath, diagnostics);
         }
 
@@ -1003,13 +1003,34 @@ public static class RegionWriter
     /// 2026-09-13; the plan says not to assert the code without measuring it, so that is the
     /// measurement. BasicLang itself catches none of this — WinForms member access degrades to
     /// <c>Object</c> with no diagnostic — so the per-statement shape here is load-bearing.</para>
+    ///
+    /// <para>⛔⛔ <b>A DOCKED control's Size is the size it docks at</b>, i.e. its bounds from
+    /// <see cref="FormDockLayout.Resolve"/> in <see cref="FormDockMode.Designer"/> mode (every sibling visible: the size
+    /// its children were designed in). It is NOT its stored Width/Height. WinForms captures a child's anchor distances
+    /// when the child is ADDED, against the container's size at that moment. A container is docked only when it is
+    /// itself added to its parent, AFTER its children, so with the stored size a Bottom,Right child designed at Y=250
+    /// in a 300-tall dock ran at Y=500 (measured, Task 12 harness). Visual Studio's designer serialises a docked
+    /// control's actual size for the same reason. One rule for every docked positioned control: for one with no
+    /// children the size is overridden by docking anyway, so writing it is harmless. Location stays as stored:
+    /// docking overrides it and nothing reads it.</para>
     /// </summary>
     private static void AppendPixelGeometry(
-        StringBuilder body, FormControl control, string inner, string newline)
+        StringBuilder body, FormDocument form, FormControl control, string inner, string newline)
     {
-        if (control.Geometry is not PixelGeometry pixel)
+        if (control.Geometry is not PixelGeometry stored)
         {
             return;
+        }
+
+        var pixel = stored;
+        if (FormDockLayout.EdgeOf(control) != null &&
+            FormDockLayout.Resolve(form, FormDockMode.Designer).TryGet(control, out var docked))
+        {
+            pixel = new PixelGeometry
+            {
+                X = stored.X, Y = stored.Y, Width = docked.Bounds.Width, Height = docked.Bounds.Height,
+                Anchor = stored.Anchor, Dock = stored.Dock
+            };
         }
 
         // ⛔ Formatted INVARIANTLY: sv-SE/fi-FI/nb-NO spell a negative with U+2212, and

@@ -39,6 +39,7 @@ public class WinFormsReferenceHarnessTests
             new ReferenceFixture(PixelLayoutFixtures.HiddenBox()),
             new ReferenceFixture(PixelLayoutFixtures.DockedBox(), new ResizeStep("grow", 500, 360)),
             new ReferenceFixture(PixelLayoutFixtures.DockedAnchor(), new ResizeStep("grow", 500, 360)),
+            new ReferenceFixture(PixelLayoutFixtures.HiddenSiblingAnchor(), new VisibilityStep("showHid", "hid", true)),
             new ReferenceFixture(PixelLayoutFixtures.Strips("StripsPinned")),
             new ReferenceFixture(PixelLayoutFixtures.Strips("StripsAuto"), Array.Empty<ReferenceStep>(), PinStrips: false));
     }
@@ -211,27 +212,36 @@ public class WinFormsReferenceHarnessTests
     }
 
     /// <summary>
-    /// ⚠ OPEN — WinForms DISAGREES with the model here (see <see cref="PixelLayoutFixtures.DockedAnchor"/>). Pinned
-    /// to the MEASURED window, with the model's answer beside it, until the coordinator decides which side moves
-    /// (the region writer emitting a docked container's resolved size, or the model/page anchoring against the
-    /// stored size). Not a pass-around: the assertion fails the day either the window or the model changes.
+    /// A docked container's anchored child is anchored to the size the container DOCKS at. This became true once the
+    /// region writer wrote a docked control's resolved size (coordinator decision). With the stored size WinForms put
+    /// this child at Y=500 (560 grown), 250px off the design.
     /// </summary>
     [Test]
-    public void OPEN_AnAnchoredChildOfADockedContainer_IsAnchoredToTheContainersStoredSize()
+    public void AnAnchoredChildOfADockedContainer_IsAnchoredToTheSizeItDocksAt()
     {
-        var design = Snap("DockedAnchor", "design");
-        var grow = Snap("DockedAnchor", "grow");
-        Record("DockedAnchor", design);
-        Record("DockedAnchor", grow);
+        AssertMatchesModel("DockedAnchor", "design", PixelLayoutFixtures.DockedAnchor());
+    }
 
-        Assert.Multiple(() =>
-        {
-            Assert.That(design.Controls["side"], Is.EqualTo(new LayoutBox(0, 0, 120, 300)));
-            Assert.That(design.Controls["sideBR"], Is.EqualTo(new LayoutBox(60, 500, 50, 30)), "measured WinForms");
-            Assert.That(grow.Controls["sideBR"], Is.EqualTo(new LayoutBox(60, 560, 50, 30)), "measured WinForms");
-            Assert.That(PixelLayoutModel.Rects(PixelLayoutFixtures.DockedAnchor())["sideBR"],
-                Is.EqualTo(new LayoutBox(60, 250, 50, 30)), "the model's answer (anchored to the docked 300)");
-        });
+    [Test]
+    public void AnAnchoredChildOfADockedContainer_FollowsItWhenTheFormGrows()
+    {
+        AssertMatchesModel("DockedAnchor", "grow", PixelLayoutFixtures.DockedAnchor(), (500, 360));
+    }
+
+    /// <summary>
+    /// ⛔ Anchor distances are captured at the DESIGNER size (all siblings visible). A hidden docked sibling makes the
+    /// container 300 tall at run time instead of 260, and its anchored children move as WinForms moves them.
+    /// </summary>
+    [Test]
+    public void AHiddenDockedSibling_MovesTheContainersAnchoredChildren_FromTheirDesignerDistances()
+    {
+        AssertMatchesModel("HiddenSiblingAnchor", "design", PixelLayoutFixtures.HiddenSiblingAnchor(hidVisible: false));
+    }
+
+    [Test]
+    public void ShowingTheSibling_PutsThemBackWhereTheyWereDesigned()
+    {
+        AssertMatchesModel("HiddenSiblingAnchor", "showHid", PixelLayoutFixtures.HiddenSiblingAnchor(hidVisible: true));
     }
 
     [Test]

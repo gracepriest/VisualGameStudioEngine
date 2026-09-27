@@ -11,7 +11,7 @@ namespace VisualGameStudio.Tests.Compiler.PixelLayout;
 ///   not a copy of it), re-docked in each container's CURRENT client area — WinForms re-docks at every size, and
 ///   the Task 12 harness measured the resolver's answer at 400×300 and 600×400.</description></item>
 ///   <item><description>Undocked positioned controls: their stored geometry, re-anchored against the growth of
-///   their container's client area by <see cref="AnchorAxis"/> — spec §4's table with the MEASURED WinForms
+///   their container's client area NOW over its DESIGNER client area (all siblings visible) by <see cref="AnchorAxis"/> — spec §4's table with the MEASURED WinForms
 ///   rounding (a centred axis floors the half pixel).</description></item>
 ///   <item><description>A container's children are offset by the container's rectangle: the model takes a
 ///   container's client area to be its bounds. ⚠ The bordered-Panel and GroupBox insets are the recorded gaps
@@ -27,9 +27,11 @@ internal static class PixelLayoutModel
     {
         ArgumentNullException.ThrowIfNull(document);
 
-        // At the design size, for each container's DESIGN client area — the reference its children's anchors
-        // were captured against.
-        var design = FormDockLayout.Resolve(document, mode);
+        // ⛔ Each container's DESIGNER client area (every sibling visible) is the reference its children's anchor
+        // distances were captured against: the region writer writes a docked container's Designer size, and WinForms
+        // captures anchors when a child is added (measured, HiddenSiblingAnchor). Never the Runtime size: a hidden
+        // docked sibling changes that, and the children then MOVE by the difference.
+        var design = FormDockLayout.Resolve(document, FormDockMode.Designer);
         var boxes = new Dictionary<string, LayoutBox>();
         var now = clientSize ?? design.RootClientSize;
         Walk(document.Controls, 0, 0, design.RootClientSize, now, shown: true);

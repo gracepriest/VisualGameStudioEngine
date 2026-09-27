@@ -829,12 +829,19 @@ public static class FormAssetEmitter
 
         // ⛔ The container's size is FormDockLayoutResult's — ClientSizeOf's one answer (a docked Panel's RESOLVED
         // bounds), never re-derived here and never the stored size of a docked container.
+        // ⛔⛔ The DESIGNER answer (every sibling visible), never the Runtime one. The insets written below are
+        // DISTANCES, and WinForms captures its anchor distances when a child is added, at the size the region writer
+        // gives a docked container: its Designer size. The two differ only when a hidden docked sibling changes the
+        // container's run-time size, and then the child must MOVE with the container's far edge, as it does in
+        // WinForms (measured, Task 12 harness HiddenSiblingAnchor). The docked controls' OWN bounds stay
+        // Runtime-first (above). The reflow script rewrites only docked insets, and these distances are constant
+        // in WinForms too, so a run-time re-dock needs nothing here.
         (int Width, int Height) client;
         if (parent == null)
         {
-            client = runtime.RootClientSize;
+            client = designer.RootClientSize;
         }
-        else if (!runtime.TryGetClientSize(parent, out client) && !designer.TryGetClientSize(parent, out client))
+        else if (!designer.TryGetClientSize(parent, out client))
         {
             return null;
         }
