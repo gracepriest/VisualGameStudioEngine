@@ -201,13 +201,18 @@ public sealed class FormCanvasTransform
     /// the grid a web page's cells are computed from. A second copy that drifts puts the grid lines
     /// somewhere other than the page they are supposed to divide — and a drop then lands in a cell
     /// the user did not aim at, with nothing on screen looking wrong.</para>
+    ///
+    /// <para>⚠ Since spec 2026-09-27 this adapts FormDocument.DesignSize (the page emitter needs the same
+    /// number and cannot call a Shell method).</para>
     /// </summary>
     public static Size SurfaceSize(FormDocument document)
     {
         ArgumentNullException.ThrowIfNull(document);
-        return new Size(
-            document.Width is > 0 ? document.Width.Value : 400,
-            document.Height is > 0 ? document.Height.Value : 300);
+
+        // ⛔ Adapts FormDocument.DesignSize — the answer now lives in BasicLang, where the page emitter and
+        // FormDockLayout can reach it too. Never re-derive the fallback here.
+        var (width, height) = document.DesignSize;
+        return new Size(width, height);
     }
 
     /// <summary>

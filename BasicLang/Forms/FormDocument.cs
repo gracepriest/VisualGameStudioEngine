@@ -52,6 +52,19 @@ public sealed class FormDocument
     public int? Width { get; set; }
     public int? Height { get; set; }
 
+    /// <summary>The design size a pixel document is given when it carries none (or a non-positive one).</summary>
+    public const int DefaultDesignWidth = 400;
+    public const int DefaultDesignHeight = 300;
+
+    /// <summary>
+    /// ⛔⛔ THE one answer to "how big is the form" (spec 2026-09-27 §2.4, scope call S3): the client size, or
+    /// <see cref="DefaultDesignWidth"/>×<see cref="DefaultDesignHeight"/>. The canvas surface
+    /// (<c>FormCanvasTransform.SurfaceSize</c>), the dock resolver and the page emitter all read it — a second
+    /// copy of the fallback puts the page's anchors somewhere other than the surface the user designed on.
+    /// </summary>
+    public (int Width, int Height) DesignSize =>
+        (Width is > 0 ? Width.Value : DefaultDesignWidth, Height is > 0 ? Height.Value : DefaultDesignHeight);
+
     // --- .blwebform only (D3) ----------------------------------------------
 
     /// <summary>How the page arranges its controls. Web only; null on a WinForms document.</summary>
