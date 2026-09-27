@@ -396,6 +396,62 @@ public class FormPropertyGridDisplayTests
         });
     }
 
+    private const string CanvasPageDoc = """
+        <WebForm Name="F" Version="1" Width="640" Height="480">
+          <Layout Kind="Canvas" MobileBreakpoint="600"/>
+          <Controls/>
+        </WebForm>
+        """;
+
+    /// <summary>
+    /// ⛔ Plan 2026-09-27 Task 9 (pre-flight B1): a value the STORE refuses used to snap back with no reason — the
+    /// catalog accepted it, so no refusal was ever named. The store's own rule (FormRootValues.RefusalOf) names it now.
+    /// </summary>
+    [Test]
+    public void ANonPositiveClientSize_IsRefused_AndTheRowSaysWhy()
+    {
+        var (_, grid) = Open(select: null);
+        var row = grid.Rows.Single(r => r.Name == "ClientSize");
+
+        row.StringValue = "0, 300";
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(row.Refusal, Does.Contain("'0, 300'").And.Contain("greater than 0").And.Contain("not applied"));
+            Assert.That(grid.DescriptionTitle, Is.EqualTo("ClientSize"));
+            Assert.That(grid.DescriptionBody, Does.Contain("'0, 300'"));
+        });
+    }
+
+    [Test]
+    public void ANegativeMobileBreakpoint_IsRefused_ChangesNothing_AndTheRowSaysWhy()
+    {
+        var (file, grid) = Open(select: null, doc: CanvasPageDoc, name: "F.blwebform");
+        var edits = 0;
+        grid.Edited += (_, _) => edits++;
+        var row = grid.Rows.Single(r => r.Name == "MobileBreakpoint");
+
+        row.IntValue = -5;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(edits, Is.Zero, "a refusal is not an edit");
+            Assert.That(file.Model.Layout!.MobileBreakpoint, Is.EqualTo("600"), "never written");
+            Assert.That(row.Refusal, Does.Contain("'-5'").And.Contain("0 means never stack").And.Contain("not applied"));
+        });
+    }
+
+    [Test]
+    public void ARespellingTheStoreIgnores_IsNotARefusal()
+    {
+        var (_, grid) = Open(select: null);
+        var row = grid.Rows.Single(r => r.Name == "ClientSize");
+
+        row.StringValue = "400,300";
+
+        Assert.That(row.Refusal, Is.Null, "the same size again changed nothing, and nothing is wrong with it");
+    }
+
     /// <summary>A ClientSize that writes the numbers the document already holds changed nothing.</summary>
     [Test]
     public void AClientSizeRespelling_ThatChangesNoNumber_RaisesNoEdit()

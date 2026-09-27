@@ -415,7 +415,7 @@ public class FormPropertyGridRealViewTests
     /// <summary>
     /// The OTHER refusal route: a value the catalog accepts but the store refuses (the pre-flight's case,
     /// <c>0, 300</c> parses as a Size and <see cref="FormRootValues.Set"/> rejects a non-positive width).
-    /// The form's real ClientSize box must snap back to the size the form still has.
+    /// The form's real ClientSize box must snap back to the size the form still has, and the pane must say why.
     /// </summary>
     [AvaloniaTest]
     public void AClientSizeTheStoreRefuses_SnapsTheRealEditorBack()
@@ -443,11 +443,10 @@ public class FormPropertyGridRealViewTests
             Assert.That(box.Text, Is.EqualTo(shown), "the editor snapped back to the form's real size");
             Assert.That(rig.Vm.Text, Is.EqualTo(before), "and the file is unchanged");
             Assert.That(edits, Is.Zero, "a refusal is not an edit");
-            // ⚠ PINNED SILENCE, deliberately: the catalog ACCEPTS "0, 300" (it parses as a Size) and only the
-            // store refuses it, and a store write returning false also means "the same value" — so there is
-            // no refusal to name. Follow-up in the pre-flight notes: move the positivity rule into the catalog.
-            Assert.That(rig.Row("ClientSize").Refusal, Is.Null, "no reason is given today");
-            Assert.That(rig.GridVm.DescriptionBody, Does.Not.Contain("0, 300"));
+            // ⛔ Plan 2026-09-27 Task 9 (pre-flight B1): the store's refusal is NAMED now — this pinned silence was the
+            // follow-up slice 2 recorded, and naming MobileBreakpoint's refusal names this one on the same route.
+            Assert.That(rig.Row("ClientSize").Refusal, Does.Contain("'0, 300'").And.Contain("not applied"));
+            Assert.That(rig.GridVm.DescriptionBody, Does.Contain("'0, 300'"), "the pane says why");
         });
     }
 

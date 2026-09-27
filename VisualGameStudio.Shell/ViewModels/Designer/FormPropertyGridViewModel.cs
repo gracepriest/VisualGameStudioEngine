@@ -502,7 +502,8 @@ public partial class FormPropertyGridViewModel : ObservableObject
                     : null,
                 Changed,
                 frozenReason: degraded?.Reason,
-                frozenText: degraded?.Value));
+                frozenText: degraded?.Value,
+                refusal: value => FormRootValues.RefusalOf(definition, value)));
         }
     }
 

@@ -76,6 +76,13 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
     /// </summary>
     private readonly Func<string, bool>? _write;
 
+    /// <summary>
+    /// Why the STORE refused a value, for a stored-value row (<see cref="ForStoredValue"/>), or null. ⛔ Asked only when
+    /// <see cref="_write"/> returns false, which also means "the same value again" — so it answers null for that, and
+    /// non-null only for a genuine refusal (<c>FormRootValues.RefusalOf</c>).
+    /// </summary>
+    private readonly Func<string, string?>? _storeRefusal;
+
     /// <summary>A catalog property of the control — an attribute the document carries as text.</summary>
     public FormPropertyRow(
         FormControl control, FormPropertyDef definition, FormTarget target, string? frozenReason, Action onChanged)
@@ -130,7 +137,8 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
         Action? remove,
         string? frozenReason,
         string? frozenText,
-        Action onChanged)
+        Action onChanged,
+        Func<string, string?>? storeRefusal)
     {
         _onChanged = onChanged;
         Name = definition.Name;
@@ -148,6 +156,7 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
         _isPresent = () => read() != null || carried != null;
         _read = () => read() ?? carried ?? "";
         _write = write;
+        _storeRefusal = storeRefusal;
         _reset = remove;
         FrozenReason = frozenReason;
         Category = CategoryName(definition.Category);
@@ -171,6 +180,8 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
     /// <param name="frozenText">What a frozen row shows when <paramref name="read"/> has nothing — the
     /// document's own text. Ignored unless <paramref name="frozenReason"/> is given.</param>
     /// <param name="onChanged">Raised after an edit that changed the model.</param>
+    /// <param name="refusal">Names a value the store refuses (shown in the description pane); null for a store that
+    /// refuses nothing.</param>
     public static FormPropertyRow ForStoredValue(
         FormPropertyDef definition,
         FormTarget target,
@@ -179,8 +190,9 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
         Action? remove,
         Action onChanged,
         string? frozenReason = null,
-        string? frozenText = null) =>
-        new(definition, target, read, write, remove, frozenReason, frozenText, onChanged);
+        string? frozenText = null,
+        Func<string, string?>? refusal = null) =>
+        new(definition, target, read, write, remove, frozenReason, frozenText, onChanged, refusal);
 
     private readonly FormRowEditor _editor = FormRowEditor.Default;
 
@@ -603,6 +615,10 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
             // Edited, and the editor re-reads what the model holds.
             if (!_write(value))
             {
+                // ⛔ A store refusal is SAID (plan 2026-09-27 Task 9): a value the catalog accepts and the store refuses
+                // (ClientSize "0, 300", MobileBreakpoint -5) used to vanish with no reason. "The same value again"
+                // has none, so this stays null for it.
+                Refusal = _storeRefusal?.Invoke(value);
                 RaiseEditorRefresh(value);
                 return;
             }

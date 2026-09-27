@@ -352,4 +352,43 @@ public class FormRootTests
                 Does.Contain("'form'").And.Contain("F_Load"));
         });
     }
+
+    [TestCase("0, 300", true)]
+    [TestCase("640, -1", true)]
+    [TestCase("abc", true)]
+    [TestCase("640, 480", false)]
+    public void RefusalOf_ClientSize_IsExactlyWhatSetRefuses(string value, bool refused)
+    {
+        var row = FormControlCatalog.FormRoot.Property("ClientSize")!;
+        var form = new FormDocument { Target = FormTarget.WinForms, Name = "F", Width = 400, Height = 300 };
+
+        var reason = FormRootValues.RefusalOf(row, value);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(reason != null, Is.EqualTo(refused));
+            Assert.That(FormRootValues.Set(form, row, value), Is.EqualTo(!refused), "ONE rule: Set asks RefusalOf");
+            if (refused)
+            {
+                Assert.That(reason, Does.Contain($"'{value}'").And.EndWith("It was not applied; ClientSize is unchanged."));
+            }
+        });
+    }
+
+    [Test]
+    public void RefusalOf_AnswersForEveryFormRootRow_AndNeverRefusesFreeText()
+    {
+        Assert.Multiple(() =>
+        {
+            foreach (var row in FormControlCatalog.FormRoot.Properties)
+            {
+                Assert.DoesNotThrow(() => FormRootValues.RefusalOf(row, "1"), $"{row.Name} is mapped in RefusalOf");
+            }
+
+            foreach (var name in new[] { "Text", "Cols", "Rows", "Gap" })
+            {
+                Assert.That(FormRootValues.RefusalOf(FormControlCatalog.FormRoot.Property(name)!, "anything at all"), Is.Null, name);
+            }
+        });
+    }
 }

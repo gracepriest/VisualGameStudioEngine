@@ -132,6 +132,27 @@ public class FormMobileBreakpointTests
         });
     }
 
+    [TestCase("-1", true)]
+    [TestCase("wide", true)]
+    [TestCase("0", false)]
+    [TestCase("0720", false)]
+    public void RefusalOf_IsExactlyWhatSetRefuses(string value, bool refused)
+    {
+        var file = FormDocumentReader.Read("F.blwebform", Page("480"));
+
+        var reason = FormRootValues.RefusalOf(Row, value);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(reason != null, Is.EqualTo(refused));
+            Assert.That(FormRootValues.Set(file.Model, Row, value), Is.EqualTo(!refused), "ONE rule: Set asks RefusalOf");
+            if (refused)
+            {
+                Assert.That(reason, Does.Contain($"'{value}'").And.EndWith("It was not applied; MobileBreakpoint is unchanged."));
+            }
+        });
+    }
+
     /// <summary>
     /// ⛔ The writer's APPLY path on a Canvas page (carried from Task 2's review: ApplyLayout on a Canvas page
     /// was only weakly pinned). An edit updates the existing attribute in place, a Reset removes it, and an

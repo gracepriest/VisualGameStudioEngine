@@ -8,7 +8,8 @@ namespace BasicLang.Forms;
 ///
 /// <para>⚠ What actually reads it TODAY: the region writer's WinForms root emission (<see cref="Get"/>),
 /// the reader's and the retarget's "is this root attribute modelled?" test (<see cref="RowForAttribute"/>),
-/// and the property grid's Form rows (slice 2: <see cref="Get"/>, <see cref="Set"/>, <see cref="CanReset"/>).
+/// and the property grid's Form rows (slice 2: <see cref="Get"/>, <see cref="Set"/>, <see cref="CanReset"/>; Task 9:
+/// <see cref="RefusalOf"/>, the reason the grid shows when <see cref="Set"/> refuses).
 /// NOT yet: the reader's typed parse and the writer still spell <c>Text</c>/<c>Width</c>/<c>Height</c>
 /// themselves (typed fields, one per row — slice 3's Properties-stored rows are where a generic path
 /// pays), and the retarget crosses Text and derives the layout edge itself. Until those land, a new row
@@ -62,11 +63,12 @@ public static class FormRootValues
                     return true;
                 }
 
-                if (!FormPropertyDef.TryParseSize(value, out var width, out var height) || width <= 0 || height <= 0)
+                if (RefusalOf(row, value) != null)
                 {
                     return false;
                 }
 
+                FormPropertyDef.TryParseSize(value, out var width, out var height);
                 form.Width = width;
                 form.Height = height;
                 return true;
@@ -95,11 +97,12 @@ public static class FormRootValues
                 }
 
                 // ⛔ Refused, never coerced (spec §7): the grid cannot manufacture a Degraded value of its own.
-                if (!FormLayout.TryParseMobileBreakpoint(value, out var pixels))
+                if (RefusalOf(row, value) != null)
                 {
                     return false;
                 }
 
+                FormLayout.TryParseMobileBreakpoint(value, out var pixels);
                 (form.Layout ??= new FormLayout()).MobileBreakpoint =
                     pixels.ToString(System.Globalization.CultureInfo.InvariantCulture);
                 return true;
@@ -108,6 +111,32 @@ public static class FormRootValues
                 throw new InvalidOperationException(
                     $"FormRoot row '{row.Name}' has no storage in FormRootValues — every root row must be mapped here.");
         }
+    }
+
+    /// <summary>
+    /// Why <see cref="Set"/> would refuse <paramref name="value"/> for <paramref name="row"/>, or null when it would store
+    /// it. ⛔ THE one rule: <see cref="Set"/> asks it, and the property grid shows its text (plan 2026-09-27 Task 9 — a
+    /// store refusal used to snap the editor back with no reason, because the catalog accepts the parse). The ending
+    /// matches <see cref="FormPropertyDef.DescribeRefusedEdit"/>'s.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">A FormRoot row this map does not know — map it here.</exception>
+    public static string? RefusalOf(FormPropertyDef row, string value)
+    {
+        ArgumentNullException.ThrowIfNull(row);
+        ArgumentNullException.ThrowIfNull(value);
+
+        return row.Name switch
+        {
+            "ClientSize" when !FormPropertyDef.TryParseSize(value, out var width, out var height) || width <= 0 || height <= 0 =>
+                $"'{value}' is not a usable size — ClientSize needs a width and a height, both greater than 0. " +
+                "It was not applied; ClientSize is unchanged.",
+            "MobileBreakpoint" when !FormLayout.TryParseMobileBreakpoint(value, out _) =>
+                $"'{value}' is not a usable phone breakpoint — MobileBreakpoint must be a whole number of pixels from 0 " +
+                "to 2147483647, where 0 means never stack. It was not applied; MobileBreakpoint is unchanged.",
+            "Text" or "ClientSize" or "Cols" or "Rows" or "Gap" or "MobileBreakpoint" => null,
+            _ => throw new InvalidOperationException(
+                $"FormRoot row '{row.Name}' has no storage in FormRootValues — every root row must be mapped here.")
+        };
     }
 
     /// <summary>
