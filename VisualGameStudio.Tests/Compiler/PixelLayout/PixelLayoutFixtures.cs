@@ -195,6 +195,64 @@ internal static class PixelLayoutFixtures
         </Panel>
         """);
 
+    /// <summary>
+    /// Task 13 (Task 10 review I-1): PictureBoxes showing a REAL image (<c>pic.png</c>, which the harnesses put beside
+    /// the page and beside the WinForms driver) on a stretched axis — anchored Left,Right; anchored Top,Bottom; docked
+    /// Fill inside a Panel. An <c>&lt;img&gt;</c> with a loaded src keeps its intrinsic size under two insets alone.
+    /// </summary>
+    public static FormDocument Picture(int width = 400, int height = 300) => Read("Picture", width, height, """
+        <PictureBox Id="picLR" X="20" Y="20" Width="200" Height="60" Image="pic.png" Anchor="Left,Right"/>
+        <PictureBox Id="picTB" X="300" Y="20" Width="60" Height="200" Image="pic.png" Anchor="Top,Bottom"/>
+        <Panel Id="frame" X="20" Y="120" Width="200" Height="150">
+          <PictureBox Id="picFill" X="0" Y="0" Width="10" Height="10" Image="pic.png" Dock="Fill"/>
+        </Panel>
+        """);
+
+    /// <summary>
+    /// Task 13 (Task 10 B4): a MenuStrip whose File item has a dropdown, and a Panel AFTER it in the document that the
+    /// open dropdown lies over. Strips are in document order, so without the lift the Panel paints over the dropdown.
+    /// </summary>
+    public static FormDocument MenuOver(int width = 400, int height = 300) => Read("MenuOver", width, height, """
+        <MenuStrip Id="menu" Dock="Top">
+          <ToolStripMenuItem Id="mnuFile" Text="File">
+            <ToolStripMenuItem Id="mnuOpen" Text="Open"/>
+            <ToolStripMenuItem Id="mnuExit" Text="Exit"/>
+          </ToolStripMenuItem>
+        </MenuStrip>
+        <Panel Id="under" X="4" Y="26" Width="200" Height="80"/>
+        """);
+
+    /// <summary>
+    /// Task 13 (Task 10 review N-1): a menu and three anchored Panels. The web twin carries a <c>&lt;Literal&gt;</c>
+    /// starting with a <c>&lt;p&gt;</c> (a top margin); a Literal does not exist on WinForms, so the twin without it is
+    /// the reference for both.
+    /// </summary>
+    public static FormDocument Literal(string name, int width = 400, int height = 300) => Read(name, width, height, """
+        <MenuStrip Id="menu" Dock="Top"><ToolStripMenuItem Id="mnuFile" Text="File"/></MenuStrip>
+        <Panel Id="tl" X="20" Y="40" Width="100" Height="50"/>
+        <Panel Id="br" X="280" Y="230" Width="100" Height="50" Anchor="Bottom,Right"/>
+        <Panel Id="mid" X="150" Y="120" Width="100" Height="60" Anchor="None"/>
+        """);
+
+    /// <summary>
+    /// Task 13 (spec §5): a realistic 640×480 page with the DEFAULT 600px breakpoint — label/box pairs (each label 2px
+    /// above its box), a tall list beside them, a CheckBox with a caption, a hidden Button, a docked Panel, a menu and
+    /// a status strip. The harness adds a Literal to the web copy.
+    /// </summary>
+    public static FormDocument Phone(int width = 640, int height = 480) => Read("Phone", width, height, """
+        <MenuStrip Id="menu" Dock="Top"><ToolStripMenuItem Id="mnuFile" Text="File"/></MenuStrip>
+        <Label Id="lblUser" Text="User" X="20" Y="40" Width="80" Height="20"/>
+        <TextBox Id="txtUser" X="110" Y="42" Width="200" Height="23"/>
+        <Label Id="lblPass" Text="Password" X="20" Y="80" Width="80" Height="20"/>
+        <TextBox Id="txtPass" X="110" Y="82" Width="200" Height="23"/>
+        <ListBox Id="lstRecent" X="340" Y="40" Width="200" Height="120"/>
+        <CheckBox Id="chkRemember" Text="Remember me" X="110" Y="120" Width="150" Height="20"/>
+        <Button Id="btnHidden" Text="Hidden" X="20" Y="200" Width="75" Height="23" Visible="false"/>
+        <Button Id="btnGo" Text="Sign in" X="110" Y="160" Width="75" Height="23"/>
+        <Panel Id="pnlFoot" X="0" Y="0" Width="640" Height="40" Dock="Bottom"/>
+        <StatusStrip Id="status" Dock="Bottom"><ToolStripStatusLabel Id="lblReady" Text="Ready"/></StatusStrip>
+        """);
+
     /// <summary>All three strips, each with one item, and a Fill — measured pinned and auto-sized.</summary>
     public static FormDocument Strips(string name, int width = 400, int height = 300) => Read(name, width, height, """
         <MenuStrip Id="menu" Dock="Top"><ToolStripMenuItem Id="mnuFile" Text="File"/></MenuStrip>
