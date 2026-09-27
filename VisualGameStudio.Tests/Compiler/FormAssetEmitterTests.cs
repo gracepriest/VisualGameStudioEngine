@@ -1,5 +1,7 @@
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.RegularExpressions;
 using BasicLang.Forms;
 using NUnit.Framework;
 
@@ -646,6 +648,332 @@ public class FormAssetEmitterTests
             Assert.That(wrong, Is.Empty, "a phone never stacks a strip, an item, a tray component or a WinForms-only row");
             Assert.That(FormControlCatalog.Find("TextBox")!.StretchesWhenStacked, Is.True, "spec §5: inputs stretch");
             Assert.That(FormControlCatalog.Find("Button")!.StretchesWhenStacked, Is.False, "spec §5: small controls keep their size");
+        });
+    }
+
+    // ==================================================================
+    // Task 10 (spec 2026-09-27 §3, §4) — a Canvas page: the WinForms client area, in pixels
+    // ==================================================================
+
+    private static FormDocument CanvasPage(int? width = 640, int? height = 480, string? breakpoint = "600") => new()
+    {
+        Target = FormTarget.Web, Name = "Page", Width = width, Height = height,
+        Layout = new FormLayout { Kind = FormLayoutKind.Canvas, MobileBreakpoint = breakpoint }
+    };
+
+    private static FormControl At(string kind, string id, int x, int y, int width, int height,
+        string? anchor = null, string? dock = null, params FormControl[] children)
+    {
+        var control = new FormControl
+        {
+            Kind = kind, Id = id,
+            Geometry = new PixelGeometry { X = x, Y = y, Width = width, Height = height, Anchor = anchor, Dock = dock }
+        };
+        control.Children.AddRange(children);
+        return control;
+    }
+
+    private static FormControl StripOf(string kind, string id) => new() { Kind = kind, Id = id };
+
+    private const string PositionedPrefix = "position: absolute; box-sizing: border-box; margin: 0; ";
+
+    /// <summary>The declarations of <c>#id { … }</c> OUTSIDE the phone query, or null. Rules start at a line start.</summary>
+    private static string? DesktopRule(string css, string id) =>
+        RuleIn(css.Split("@media (width <")[0], "\n#" + id + " { ");
+
+    /// <summary>The declarations of <c>#id { … }</c> INSIDE the phone query, or null.</summary>
+    private static string? PhoneRule(string css, string id)
+    {
+        var parts = css.Split("@media (width <");
+        return parts.Length < 2 ? null : RuleIn(parts[1], "\n  #" + id + " { ");
+    }
+
+    private static string? RuleIn(string text, string opener)
+    {
+        var at = text.IndexOf(opener, StringComparison.Ordinal);
+        if (at < 0)
+        {
+            return null;
+        }
+
+        at += opener.Length;
+        return text.Substring(at, text.IndexOf(" }", at, StringComparison.Ordinal) - at);
+    }
+
+    private static string Declarations(IEnumerable<(string Property, string Value)> declarations) =>
+        string.Join("; ", declarations.Select(d => $"{d.Property}: {d.Value}"));
+
+    [Test]
+    public void ACanvasPage_PutsItsStripsInsideTheFormArea_InDocumentOrder()
+    {
+        // ⛔ Spec §3: the coordinate space is the WinForms CLIENT AREA, strips included — a control at Y=30 is 6px
+        // below a 24px menu. On a Grid/Flow page the strips stay chrome outside the div (FormStripEmissionTests).
+        var page = CanvasPage();
+        page.Controls.Add(StripOf("StatusStrip", "statusStrip1"));
+        page.Controls.Add(StripOf("MenuStrip", "menuStrip1"));
+        page.Controls.Add(At("Button", "btn", 10, 40, 75, 23));
+        page.Controls.Add(StripOf("ToolStrip", "toolStrip1"));
+
+        var html = FormAssetEmitter.Html(page, "App.js");
+        var open = html.IndexOf("<div class=\"vgs-form\">", StringComparison.Ordinal);
+        var close = html.LastIndexOf("</div>", StringComparison.Ordinal);
+        int Where(string id) => html.IndexOf($"id=\"{id}\"", StringComparison.Ordinal);
+        var ids = new[] { "statusStrip1", "menuStrip1", "btn", "toolStrip1" };
+
+        Assert.Multiple(() =>
+        {
+            foreach (var id in ids)
+            {
+                Assert.That(Where(id), Is.GreaterThan(open).And.LessThan(close), $"{id} is inside the form area");
+            }
+
+            Assert.That(ids.Select(Where), Is.Ordered,
+                "DOCUMENT order (S12): absolutely positioned siblings paint later-on-top, WinForms' z-order");
+        });
+    }
+
+    [Test]
+    public void ACanvasPagesLiteral_FlowsInsideTheFormArea()
+    {
+        var page = CanvasPage();
+        page.Literal = """<p class="hint">Use your work account.</p>""";
+
+        var html = FormAssetEmitter.Html(page, "App.js");
+
+        Assert.That(html.IndexOf("<p class=\"hint\">", StringComparison.Ordinal),
+            Is.GreaterThan(html.IndexOf("<div class=\"vgs-form\">", StringComparison.Ordinal))
+              .And.LessThan(html.LastIndexOf("</div>", StringComparison.Ordinal)));
+    }
+
+    [TestCase(640, 480, 640, 480)]
+    [TestCase(null, null, 400, 300)]
+    public void TheFormArea_FillsTheWindow_WithTheDesignSizeAsItsMinimum(int? width, int? height, int w, int h)
+    {
+        var page = CanvasPage(width, height);
+        Assert.That(page.DesignSize, Is.EqualTo((w, h)), "precondition: DesignSize is the one form size");
+
+        var css = FormAssetEmitter.Css(page);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(css, Does.Contain("body { margin: 0; }"));
+            Assert.That(css, Does.Contain(
+                ".vgs-form {\n  position: relative;\n  width: 100%;\n" +
+                $"  min-width: {w}px;\n  height: 100vh;\n  min-height: {h}px;\n  box-sizing: border-box;\n}}"));
+            Assert.That(css, Does.Contain(".vgs-form [hidden] { display: none !important; }"),
+                "B7: a phone's display:flex must not un-hide a control user code hid");
+        });
+    }
+
+    [TestCase(null)]
+    [TestCase("Top,Left")]
+    [TestCase("Right")]
+    [TestCase("Left,Right")]
+    [TestCase("Bottom")]
+    [TestCase("Top,Bottom")]
+    [TestCase("None")]
+    [TestCase("Top,Bottom,Left,Right")]
+    public void APositionedControl_IsWhereFormAnchorCssPutsIt(string? anchor)
+    {
+        var page = CanvasPage();
+        var button = At("Button", "btn", 500, 400, 100, 30, anchor);
+        page.Controls.Add(button);
+
+        Assert.That(DesktopRule(FormAssetEmitter.Css(page), "btn"), Does.StartWith(
+            PositionedPrefix + Declarations(FormAnchorCss.Positioned((PixelGeometry)button.Geometry!, 640, 480))));
+    }
+
+    [Test]
+    public void ARightAnchoredControl_KeepsItsDistanceFromTheRightEdge()
+    {
+        var page = CanvasPage();
+        page.Controls.Add(At("Button", "btn", 500, 400, 100, 30, "Top,Right"));
+
+        Assert.That(DesktopRule(FormAssetEmitter.Css(page), "btn"),
+            Does.Contain("right: 40px; width: 100px; top: 400px; height: 30px"), "non-vacuity: 640 - 500 - 100");
+    }
+
+    [Test]
+    public void ANestedControl_IsAnchoredAgainstItsContainersClientSize_FromFormDockLayout()
+    {
+        // ⛔ C2: a container's size is FormDockLayoutResult's — a docked Panel's RESOLVED bounds, never its stale
+        // stored 10x10, and never the form's.
+        var inner = At("Button", "inner", 200, 10, 50, 20, "Top,Right");
+        var fill = At("Panel", "fill", 7, 7, 10, 10, dock: "Fill", children: inner);
+        var boxed = At("Button", "boxed", 200, 10, 50, 20, "Top,Right");
+        var panel = At("Panel", "pnl", 20, 300, 300, 150, children: boxed);
+        var page = CanvasPage();
+        page.Controls.Add(StripOf("MenuStrip", "menuStrip1"));
+        page.Controls.Add(fill);
+        page.Controls.Add(panel);
+
+        var runtime = FormDockLayout.Resolve(page, FormDockMode.Runtime);
+        var client = runtime.ClientSizeOf(fill);
+        var css = FormAssetEmitter.Css(page);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(client, Is.EqualTo((640, 456)), "precondition: a Fill under a 24px menu");
+            Assert.That(DesktopRule(css, "inner"), Does.Contain(
+                Declarations(FormAnchorCss.Positioned((PixelGeometry)inner.Geometry!, client.Width, client.Height))));
+            Assert.That(DesktopRule(css, "inner"), Does.Contain("right: 390px"), "640 - 200 - 50");
+            Assert.That(DesktopRule(css, "boxed"), Does.Contain(
+                Declarations(FormAnchorCss.Positioned((PixelGeometry)boxed.Geometry!, 300, 150))),
+                "an undocked Panel's client size is its stored size");
+        });
+    }
+
+    [Test]
+    public void DockedThings_AreWhereFormDockLayoutPutsThem()
+    {
+        var page = CanvasPage();
+        page.Controls.Add(At("Panel", "pnlTop", 300, 300, 10, 40, dock: "Top")); // stored X/Y/Width are stale by design
+        page.Controls.Add(StripOf("MenuStrip", "menuStrip1"));
+        // ⚠ The status strip BEFORE the Fill: a Fill takes what is left WHEN IT DOCKS, so a later Bottom would overlap it.
+        page.Controls.Add(StripOf("StatusStrip", "statusStrip1"));
+        page.Controls.Add(At("Panel", "fill", 0, 0, 1, 1, dock: "Fill"));
+
+        var css = FormAssetEmitter.Css(page);
+        var runtime = FormDockLayout.Resolve(page, FormDockMode.Runtime);
+
+        Assert.Multiple(() =>
+        {
+            foreach (var docked in runtime.All)
+            {
+                Assert.That(DesktopRule(css, docked.Control.Id),
+                    Does.StartWith(PositionedPrefix + Declarations(FormAnchorCss.Docked(docked))), docked.Control.Id);
+            }
+
+            Assert.That(DesktopRule(css, "menuStrip1"), Does.Contain("top: 40px; height: 24px"),
+                "non-vacuity: under the Dock=Top panel that precedes it (spec §4)");
+            Assert.That(DesktopRule(css, "fill"), Does.Contain("left: 0px; right: 0px; top: 64px; bottom: 22px"));
+        });
+    }
+
+    [Test]
+    public void EveryStrip_IsItsRowsDefaultHeight()
+    {
+        var rows = FormControlCatalog.All
+            .Where(d => d.Place == FormPlace.Docked && d.SupportsTarget(FormTarget.Web))
+            .ToList();
+        Assert.That(rows, Is.Not.Empty);
+
+        Assert.Multiple(() =>
+        {
+            foreach (var row in rows)
+            {
+                var page = CanvasPage();
+                FormCatalogShapes.Canonical(page, row, "strip");
+                Assert.That(DesktopRule(FormAssetEmitter.Css(page), "strip"),
+                    Does.Contain($"height: {row.DefaultHeight}px"), row.Kind);
+            }
+        });
+    }
+
+    [Test]
+    public void AHiddenDockedPanel_GivesUpItsEdge_InThePagesFirstState()
+    {
+        // ⛔ Owner decision 2026-09-27: the page OPENS in FormDockMode.Runtime (a hidden control takes no space); the
+        // reflow script (Part 4) re-docks on a change. The hidden panel keeps its DESIGNER insets (B3).
+        var page = CanvasPage();
+        var hidden = At("Panel", "pnlTop", 0, 0, 10, 40, dock: "Top");
+        hidden.Properties["Visible"] = "False";
+        page.Controls.Add(hidden);
+        page.Controls.Add(StripOf("MenuStrip", "menuStrip1"));
+
+        var css = FormAssetEmitter.Css(page);
+        Assert.That(FormDockLayout.Resolve(page, FormDockMode.Designer).TryGet(hidden, out var designed), Is.True);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(DesktopRule(css, "menuStrip1"), Does.Contain("top: 0px; height: 24px"),
+                "the menu closes the gap while the panel is hidden");
+            Assert.That(DesktopRule(css, "pnlTop"),
+                Does.Contain(Declarations(FormAnchorCss.Docked(designed))).And.Contain("display: none"));
+        });
+    }
+
+    [Test]
+    public void AChildOfAHiddenPanel_IsStillPositioned()
+    {
+        // B3: Runtime does not walk a hidden container, and ClientSizeOf would THROW for it.
+        var child = At("Button", "child", 10, 10, 75, 23, "Top,Right");
+        var hidden = At("Panel", "pnl", 20, 20, 300, 200, children: child);
+        hidden.Properties["Visible"] = "False";
+        var page = CanvasPage();
+        page.Controls.Add(hidden);
+
+        Assert.That(DesktopRule(FormAssetEmitter.Css(page), "child"), Does.StartWith(
+            PositionedPrefix + Declarations(FormAnchorCss.Positioned((PixelGeometry)child.Geometry!, 300, 200))));
+    }
+
+    [Test]
+    public void ANonPositiveSize_WritesNoSize()
+    {
+        // Spec §3 / C4: content-sized on the page, invisible on WinForms — an accepted divergence.
+        var page = CanvasPage();
+        page.Controls.Add(At("Label", "lbl", 10, 12, 0, -5));
+
+        var rule = DesktopRule(FormAssetEmitter.Css(page), "lbl");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(rule, Does.Not.Contain("width:"));
+            Assert.That(rule, Does.Not.Contain("height:"));
+            Assert.That(rule, Does.Contain("left: 10px; top: 12px"));
+        });
+    }
+
+    [Test]
+    public void AnItem_AndATrayComponent_AreNeverPositioned()
+    {
+        var page = CanvasPage();
+        var menu = StripOf("MenuStrip", "menuStrip1");
+        var item = new FormControl { Kind = "ToolStripMenuItem", Id = "fileItem" };
+        item.Properties["Visible"] = "False"; // so the item HAS a rule to inspect
+        menu.Children.Add(item);
+        page.Controls.Add(menu);
+        page.Components.Add(new FormControl { Kind = "Timer", Id = "tmr" });
+
+        var css = FormAssetEmitter.Css(page);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(DesktopRule(css, "fileItem"), Is.EqualTo("display: none;"), "an item keeps only its catalog CSS");
+            Assert.That(css, Does.Not.Contain("#tmr"), "a tray component has no element");
+        });
+    }
+
+    [Test]
+    public void TheCatalogsCss_IsStillEmitted_AfterTheGeometry()
+    {
+        var page = CanvasPage();
+        var button = At("Button", "btn", 10, 10, 75, 23);
+        button.Properties["BackColor"] = "#FF112233";
+        page.Controls.Add(button);
+        var expected = FormCss.Declaration(FormControlCatalog.Find("Button")!.Property("BackColor")!, "#FF112233")!.Value;
+
+        Assert.That(DesktopRule(FormAssetEmitter.Css(page), "btn"),
+            Does.EndWith($"height: 23px; {expected.Property}: {expected.Value};"));
+    }
+
+    [Test]
+    public void AMenuStripsDropdowns_AreLiftedAboveTheControlsAfterIt()
+    {
+        // ⛔ B4: bands are in DOCUMENT order (S12), so a control after the strip paints over its open dropdown.
+        // WinForms opens a dropdown as its own window. Only the row's children-wrapper lists are lifted: the bar's
+        // own list is static (z-index does nothing there), every nested one is absolutely positioned.
+        var page = CanvasPage();
+        page.Controls.Add(StripOf("MenuStrip", "menuStrip1"));
+        page.Controls.Add(StripOf("ToolStrip", "toolStrip1"));
+
+        var css = FormAssetEmitter.Css(page);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(css, Does.Contain("\n#menuStrip1 ul { z-index: 1; }\n"));
+            Assert.That(css, Does.Not.Contain("#toolStrip1 ul"), "a ToolStrip's row declares no children wrapper");
+            Assert.That(DesktopRule(css, "menuStrip1"), Does.Not.Contain("z-index"), "the band itself stays in document order");
         });
     }
 }

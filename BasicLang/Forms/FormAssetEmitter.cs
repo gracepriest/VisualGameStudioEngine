@@ -113,10 +113,30 @@ public static class FormAssetEmitter
         // naming itself, with a single shared script.
         sb.Append($"<body data-form=\"{Attr(form.Name)}\">\n");
 
-        // ⛔ A Docked strip is PAGE CHROME, not form content (spec §4). It sits OUTSIDE
-        // <div class="vgs-form"> because that div is the layout container — a Grid or Flow box whose
-        // tracks the user authored for their own controls. A <nav> placed inside it would consume a
-        // cell nobody declared and push every control one place along, from a green build.
+        // ⛔ ONE vocabulary test (spec 2026-09-27 §2.1): a Canvas page speaks pixels, Grid/Flow speak cells.
+        if (FormVocabulary.IsPixel(form))
+        {
+            AppendCanvasBody(sb, form);
+        }
+        else
+        {
+            AppendGridOrFlowBody(sb, form);
+        }
+
+        sb.Append($"<script type=\"module\" src=\"{Attr(scriptFileName)}\"></script>\n");
+        sb.Append("</body>\n</html>\n");
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// A Grid/Flow page's body. ⛔ A Docked strip is PAGE CHROME, not form content (spec §4) — on a Grid/Flow page.
+    /// It sits OUTSIDE <c>&lt;div class="vgs-form"&gt;</c> because that div is the layout container — a Grid or Flow
+    /// box whose tracks the user authored for their own controls. A <c>&lt;nav&gt;</c> placed inside it would consume
+    /// a cell nobody declared and push every control one place along, from a green build. (A Canvas page puts strips
+    /// INSIDE: <see cref="AppendCanvasBody"/>.)
+    /// </summary>
+    private static void AppendGridOrFlowBody(StringBuilder sb, FormDocument form)
+    {
         var top = new List<FormControl>();
         var bottom = new List<FormControl>();
         var rest = new List<FormControl>();
@@ -151,17 +171,7 @@ public static class FormAssetEmitter
             AppendControl(sb, control, indent: "  ");
         }
 
-        if (!string.IsNullOrEmpty(form.Literal))
-        {
-            // ⛔ Passes through UNTOUCHED — the runat="server" inversion (D9). Not escaped, because
-            // it is markup the user wrote to be markup; the canvas shows it read-only for the same
-            // reason.
-            sb.Append(form.Literal);
-            if (!form.Literal.EndsWith("\n", StringComparison.Ordinal))
-            {
-                sb.Append('\n');
-            }
-        }
+        AppendLiteral(sb, form);
 
         sb.Append("</div>\n");
 
@@ -174,10 +184,43 @@ public static class FormAssetEmitter
         {
             AppendControl(sb, bottom[i], indent: "");
         }
+    }
 
-        sb.Append($"<script type=\"module\" src=\"{Attr(scriptFileName)}\"></script>\n");
-        sb.Append("</body>\n</html>\n");
-        return sb.ToString();
+    /// <summary>
+    /// A Canvas page's body (spec 2026-09-27 §3). ⛔ The coordinate space is the WinForms CLIENT AREA, strips
+    /// included: every strip is an absolutely positioned band INSIDE <c>.vgs-form</c> at
+    /// <see cref="FormDockLayout"/>'s rectangle (written by <see cref="CanvasCss"/>), so a control at Y=30 sits 6px
+    /// below a 24px menu exactly as in WinForms. Everything — strips too — in DOCUMENT order: absolutely positioned
+    /// siblings paint later-on-top, which is WinForms' "last in the list is in front" (scope call S12).
+    /// </summary>
+    private static void AppendCanvasBody(StringBuilder sb, FormDocument form)
+    {
+        sb.Append("<div class=\"vgs-form\">\n");
+
+        foreach (var control in form.Controls)
+        {
+            AppendControl(sb, control, indent: "  ");
+        }
+
+        // <Literal> flows at the form area's top-left, under the positioned controls (spec §3).
+        AppendLiteral(sb, form);
+
+        sb.Append("</div>\n");
+    }
+
+    private static void AppendLiteral(StringBuilder sb, FormDocument form)
+    {
+        if (!string.IsNullOrEmpty(form.Literal))
+        {
+            // ⛔ Passes through UNTOUCHED — the runat="server" inversion (D9). Not escaped, because
+            // it is markup the user wrote to be markup; the canvas shows it read-only for the same
+            // reason.
+            sb.Append(form.Literal);
+            if (!form.Literal.EndsWith("\n", StringComparison.Ordinal))
+            {
+                sb.Append('\n');
+            }
+        }
     }
 
     private static void AppendControl(StringBuilder sb, FormControl control, string indent)
@@ -385,11 +428,17 @@ public static class FormAssetEmitter
     // ==================================================================
 
     /// <summary>
-    /// The layout, as CSS. Grid and Flow are the primary vocabularies (D3); <c>Canvas</c> is the
-    /// explicitly-marked absolute-pixel escape.
+    /// The layout, as CSS. Grid and Flow are the CELL vocabularies (D3); a <c>Canvas</c> page speaks PIXELS (spec
+    /// 2026-09-27) and takes <see cref="CanvasCss"/>. ⛔ The one vocabulary test is
+    /// <see cref="FormVocabulary.IsPixel(FormDocument)"/>, asked first — never the target, never the switch below.
     /// </summary>
     public static string Css(FormDocument form)
     {
+        if (FormVocabulary.IsPixel(form))
+        {
+            return CanvasCss(form);
+        }
+
         var sb = new StringBuilder();
         var layout = form.Layout ?? new FormLayout();
 
@@ -418,10 +467,6 @@ public static class FormAssetEmitter
                 sb.Append($"  flex-direction: {(string.Equals(layout.Dir, "Vertical", StringComparison.OrdinalIgnoreCase) ? "column" : "row")};\n");
                 sb.Append("  flex-wrap: wrap;\n");
                 break;
-
-            case FormLayoutKind.Canvas:
-                sb.Append("  position: relative;\n");
-                break;
         }
 
         if (!string.IsNullOrEmpty(layout.Gap))
@@ -436,11 +481,19 @@ public static class FormAssetEmitter
             AppendControlCss(sb, control, layout);
         }
 
-        // Per-KIND chrome styling, appended ONCE however many controls of that kind the page has
-        // (spec §4). A menu is the one control whose appearance is not optional — an unstyled <ul>
-        // of <li>s is a bulleted vertical list, not a menu bar, and its submenus are all open at
-        // once. Distinct() on the block itself, because the rule is "one block per kind present"
-        // and two ToolStrips are one kind.
+        AppendKindCss(sb, form);
+
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// Per-KIND chrome styling, appended ONCE however many controls of that kind the page has (spec §4). A menu is the
+    /// one control whose appearance is not optional — an unstyled <c>&lt;ul&gt;</c> of <c>&lt;li&gt;</c>s is a
+    /// bulleted vertical list, not a menu bar, and its submenus are all open at once. Distinct() on the block itself,
+    /// because the rule is "one block per kind present" and two ToolStrips are one kind.
+    /// </summary>
+    private static void AppendKindCss(StringBuilder sb, FormDocument form)
+    {
         foreach (var css in form.AllControls()
                      .Select(c => c.Definition?.WebCss)
                      .Where(s => s != null)
@@ -448,8 +501,6 @@ public static class FormAssetEmitter
         {
             sb.Append(css).Append('\n');
         }
-
-        return sb.ToString();
     }
 
     private static void AppendControlCss(StringBuilder sb, FormControl control, FormLayout layout)
@@ -476,22 +527,7 @@ public static class FormAssetEmitter
         //
         // ⚠ Order is CATALOG order now (it was fore/back/align/display). No test depends on the order —
         // FormAssetEmitterTests asserts the exact text only for grid-only rules.
-        if (control.Definition is { } definition)
-        {
-            foreach (var property in definition.Properties)
-            {
-                if (!property.AppliesTo(FormTarget.Web) ||
-                    !control.Properties.TryGetValue(property.Name, out var raw))
-                {
-                    continue;
-                }
-
-                if (FormCss.Declaration(property, raw) is { } declaration)
-                {
-                    rules.Add($"{declaration.Property}: {declaration.Value}");
-                }
-            }
-        }
+        rules.AddRange(CatalogDeclarations(control));
 
         if (rules.Count == 0)
         {
@@ -499,6 +535,159 @@ public static class FormAssetEmitter
         }
 
         sb.Append($"#{control.Id} {{ {string.Join("; ", rules)}; }}\n");
+    }
+
+    /// <summary>
+    /// The row-driven declarations for <paramref name="control"/> (spec §2.1), as <c>property: value</c>, in CATALOG
+    /// order — the one walk both vocabularies use. <see cref="FormCss"/> converts each value.
+    /// </summary>
+    private static List<string> CatalogDeclarations(FormControl control)
+    {
+        var declarations = new List<string>();
+        if (control.Definition is not { } definition)
+        {
+            return declarations;
+        }
+
+        foreach (var property in definition.Properties)
+        {
+            if (!property.AppliesTo(FormTarget.Web) ||
+                !control.Properties.TryGetValue(property.Name, out var raw))
+            {
+                continue;
+            }
+
+            if (FormCss.Declaration(property, raw) is { } declaration)
+            {
+                declarations.Add($"{declaration.Property}: {declaration.Value}");
+            }
+        }
+
+        return declarations;
+    }
+
+    // ==================================================================
+    // A Canvas page (spec 2026-09-27 §3, §4, §5)
+    // ==================================================================
+
+    /// <summary>
+    /// A Canvas page's stylesheet. The form area fills the window with the DESIGN SIZE as its minimum (larger →
+    /// controls follow their anchors; smaller → the page scrolls, never squashes). Every positioned control and strip
+    /// is absolutely placed by the pure deciders — <see cref="FormAnchorCss"/> for anchors,
+    /// <see cref="FormDockLayout"/> for everything docked — and nothing here re-derives either.
+    ///
+    /// <para>⛔ The page's FIRST state is <see cref="FormDockMode.Runtime"/> (owner decision 2026-09-27): a hidden
+    /// control takes no space, so the next docked control closes the gap. Where Runtime has no answer — a hidden docked
+    /// control, a child of a hidden container — the Designer answer is written instead, and the page's reflow script
+    /// (<c>FormDockScript</c>) overwrites it the moment that control is shown.</para>
+    ///
+    /// <para>⚠ A non-positive Width/Height writes no size (spec §3), so such a control is CONTENT-sized here and
+    /// invisible on WinForms — an accepted divergence. ⚠ Children are positioned against their container's PADDING
+    /// box, i.e. inside any CSS border (a GroupBox's fieldset), as WinForms positions them inside its
+    /// DisplayRectangle; the amounts differ and the Task 12/13 harness measures them.</para>
+    /// </summary>
+    private static string CanvasCss(FormDocument form)
+    {
+        var sb = new StringBuilder();
+        var runtime = FormDockLayout.Resolve(form, FormDockMode.Runtime);
+        var designer = FormDockLayout.Resolve(form, FormDockMode.Designer);
+        var (width, height) = runtime.RootClientSize;
+
+        sb.Append($"/* Generated from {form.Name}{form.FileExtension}. Edits here are overwritten on build. */\n");
+        sb.Append("body { margin: 0; }\n");
+        sb.Append(".vgs-form {\n");
+        sb.Append("  position: relative;\n");
+        sb.Append("  width: 100%;\n");
+        sb.Append($"  min-width: {Number(width)}px;\n");
+        sb.Append("  height: 100vh;\n");
+        sb.Append($"  min-height: {Number(height)}px;\n");
+        sb.Append("  box-sizing: border-box;\n");
+        sb.Append("}\n");
+
+        // ⛔ The UA's [hidden]{display:none} loses to the phone query's display:flex on a container, so a control
+        // user code hid with `el.hidden = True` would reappear below the breakpoint.
+        sb.Append(".vgs-form [hidden] { display: none !important; }\n");
+
+        AppendCanvasControls(sb, form.Controls, parent: null, runtime, designer);
+        AppendKindCss(sb, form);
+        return sb.ToString();
+    }
+
+    private static void AppendCanvasControls(
+        StringBuilder sb, IReadOnlyList<FormControl> siblings, FormControl? parent,
+        FormDockLayoutResult runtime, FormDockLayoutResult designer)
+    {
+        foreach (var control in siblings)
+        {
+            var rules = new List<string>();
+
+            if (CanvasPlacement(control, parent, runtime, designer) is { } placement)
+            {
+                // ⛔ margin: 0 — an absolutely positioned box is placed by its MARGIN edge, and the UA gives a
+                // checkbox/radio `margin: 3px 3px 0 5px` and a fieldset `0 2px`: the control would land off its X/Y.
+                // box-sizing: the outer box IS the design Width x Height, WinForms' Size.
+                rules.Add("position: absolute");
+                rules.Add("box-sizing: border-box");
+                rules.Add("margin: 0");
+                rules.AddRange(placement.Select(d => $"{d.Property}: {d.Value}"));
+            }
+
+            rules.AddRange(CatalogDeclarations(control));
+
+            if (rules.Count > 0)
+            {
+                sb.Append($"#{control.Id} {{ {string.Join("; ", rules)}; }}\n");
+            }
+
+            // ⛔ A strip's OPEN dropdown must not open under the controls after it (strips are in document order,
+            // S12): WinForms opens it as its own window. Its row's children-wrapper lists are lifted — the bar's own
+            // list is static, where z-index does nothing; every nested one is absolutely positioned.
+            if (control.Definition is { Place: FormPlace.Docked, HtmlChildrenWrapper: { } wrapper })
+            {
+                sb.Append($"#{control.Id} {wrapper} {{ z-index: 1; }}\n");
+            }
+
+            AppendCanvasControls(sb, control.Children, control, runtime, designer);
+        }
+    }
+
+    /// <summary>
+    /// Where <paramref name="control"/> sits, or null when it has no pixel place (an item, a tray component, a
+    /// positioned control with no pixel geometry, or a control inside something with no client area).
+    /// </summary>
+    private static IReadOnlyList<(string Property, string Value)>? CanvasPlacement(
+        FormControl control, FormControl? parent, FormDockLayoutResult runtime, FormDockLayoutResult designer)
+    {
+        var place = control.Definition?.Place ?? FormPlace.Positioned;
+        if (place is not (FormPlace.Positioned or FormPlace.Docked))
+        {
+            return null;
+        }
+
+        // Runtime first: the page opens as the running form. Designer only where Runtime has no answer.
+        if (runtime.TryGet(control, out var docked) || designer.TryGet(control, out docked))
+        {
+            return FormAnchorCss.Docked(docked);
+        }
+
+        if (place == FormPlace.Docked || control.Geometry is not PixelGeometry pixel)
+        {
+            return null;
+        }
+
+        // ⛔ The container's size is FormDockLayoutResult's — ClientSizeOf's one answer (a docked Panel's RESOLVED
+        // bounds), never re-derived here and never the stored size of a docked container.
+        (int Width, int Height) client;
+        if (parent == null)
+        {
+            client = runtime.RootClientSize;
+        }
+        else if (!runtime.TryGetClientSize(parent, out client) && !designer.TryGetClientSize(parent, out client))
+        {
+            return null;
+        }
+
+        return FormAnchorCss.Positioned(pixel, client.Width, client.Height);
     }
 
     // ==================================================================
