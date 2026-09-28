@@ -19,9 +19,10 @@ namespace VisualGameStudio.Tests.Msil;
 /// <c>EmitInterfacePropertySet</c>, and the shared <c>EmitAccessorGet</c>/<c>EmitAccessorSet</c>.</para>
 ///
 /// <para>The programs below are the probes from the fix's own measurement (S/t175/probes,
-/// S/t175/edge): I5 itself is NOT run here because it hits the separate, pre-existing #177 box
-/// gap (MSIL never boxes a value type into an <c>Object</c> slot) — I5b is I5 with the
-/// <c>Object</c> local removed, isolating the interface fix from #177.</para>
+/// S/t175/edge). I5b is I5 with the <c>Object</c> local removed, isolating the interface fix
+/// from task #177's own (separate) box-into-Object gap; I5 itself was excluded here for that
+/// reason until #177 DONE (2026-09-28: MSIL now boxes a value type into an <c>Object</c> slot),
+/// after which it was promoted alongside I5b rather than left out.</para>
 /// </summary>
 [TestFixture]
 [Category("Integration")]   // FourBackends/MsilHarness.Run compile+assemble+spawn ilasm and dotnet
@@ -269,9 +270,57 @@ public class MsilInterfacePropertyTests
     public void I6_TwoImplementorsBehindOneInterfaceParameter_RunsOnEveryBackendAggressive() =>
         FourBackends.RunsOnEveryBackendAggressive(I6, I6Expected);
 
-    // I5b — I5 (Double; a WriteOnly write; a ReadOnly read) WITHOUT the `Dim o As Object = s.Area`
-    // local that drags in the unrelated #177 box gap. I5 itself is deliberately not run here —
-    // see the fixture summary.
+    // I5 — a WriteOnly write, a ReadOnly read, and the read boxed into an Object local through
+    // the interface property getter (EmitInterfacePropertyGet -> EmitCoerceToSlot). Task #177
+    // DONE, 2026-09-28: this used to hit the (then unrelated, pre-existing) MSIL box-into-Object
+    // gap and was deliberately excluded from this fixture — see I5b below, still kept as the
+    // isolated interface-only control. #177's fix makes I5 itself pass too, at both pipelines,
+    // so it is promoted here rather than staying a pin of a failure.
+    private const string I5 = """
+        Interface IShape
+            ReadOnly Property Area As Double
+            WriteOnly Property Scale As Double
+        End Interface
+
+        Class Circle
+            Implements IShape
+            Private _r As Double = 1.0
+            Public ReadOnly Property Area As Double
+                Get
+                    Return _r * _r * 3.0
+                End Get
+            End Property
+            Public WriteOnly Property Scale As Double
+                Set(value As Double)
+                    _r = _r * value
+                End Set
+            End Property
+        End Class
+
+        Sub Main()
+            Dim s As IShape = New Circle()
+            s.Scale = 2.0
+            Console.WriteLine(s.Area)
+            Dim o As Object = s.Area
+            Console.WriteLine(o)
+        End Sub
+        """;
+
+    private const string I5Expected = "12\n12";
+
+    // C++ refuses (Object has no C++ mapping), so this cannot go through FourBackends — MSIL
+    // only, both pipelines, matching E1's own idiom below. C#/JS already agreed before #177.
+    [Test]
+    public void I5_ReadOnlyReadBoxedIntoAnObjectLocal_RunsOnMsil() =>
+        Assert.That(FourBackends.Norm(RunExpectingSuccess(I5)), Is.EqualTo(I5Expected));
+
+    [Test]
+    public void I5_ReadOnlyReadBoxedIntoAnObjectLocal_RunsOnMsilAggressive() =>
+        Assert.That(FourBackends.Norm(RunAggressiveExpectingSuccess(I5)), Is.EqualTo(I5Expected));
+
+    // I5b — the same shape WITHOUT the `Dim o As Object = s.Area` local, isolating the interface
+    // property fix (#175) from #177's own box-into-Object gap. Kept as the interface-only
+    // control even now that I5 itself also passes.
     private const string I5b = """
         Interface IShape
             ReadOnly Property Area As Double

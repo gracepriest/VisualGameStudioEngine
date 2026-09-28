@@ -561,6 +561,8 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             _output.Clear();
             _stringConstants.Clear();
             _labelCounter = 0;
+            _usesVbRuntime = false;
+            _vbRuntimeExternAt = -1;
 
             // ⛔ Both of these must be set BEFORE the first type is emitted, not inside
             // GenerateClass where the module class is built LAST. A method on a user class can
@@ -603,6 +605,11 @@ namespace BasicLang.Compiler.CodeGen.MSIL
 
             // Generate main module class with standalone methods
             GenerateClass(module);
+
+            // A late-bound comparison was emitted somewhere above: declare the VB runtime it
+            // calls, beside mscorlib. Only now is that known (see _vbRuntimeExternAt).
+            if (_usesVbRuntime && _vbRuntimeExternAt >= 0)
+                _output.Insert(_vbRuntimeExternAt, VbRuntimeExtern());
 
             return _output.ToString();
         }
@@ -1037,15 +1044,6 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             "int8", "uint8", "int16", "uint16", "int32", "uint32", "int64", "uint64",
             "float32", "float64", "bool", "char", "string", "object", "void", "native int",
         };
-
-        /// <summary>
-        /// True for an IL keyword that denotes a VALUE type — the ones that need boxing to sit in
-        /// a reference slot. ⚠ NOT the same as <see cref="IlPrimitives"/>: that set carries
-        /// <c>string</c>, <c>object</c> and <c>void</c> too, which are not value types, and using
-        /// it as a boxing test silently never fires.
-        /// </summary>
-        private static bool IsIlValueType(string spec) =>
-            IlPrimitives.Contains(spec) && spec != "string" && spec != "object" && spec != "void";
 
         /// <summary>
         /// IL keyword → the BCL type it denotes, for token positions. <c>string</c> and
@@ -1735,12 +1733,10 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                     + "(it emits `: base(t0)`, CS0103).");
             }
 
-            foreach (var arg in args)
-            {
-                EmitLoadValue(arg);
-            }
+            var baseParams = DeclaredCtorParams(baseClassName, args.Count);
+            EmitArgumentsIntoSlots(args, baseParams?.Select(p => IlTypeSpec(p?.Type)).ToList());
 
-            var paramTypes = DeclaredParamList(DeclaredCtorParams(baseClassName, args.Count), args);
+            var paramTypes = DeclaredParamList(baseParams, args);
             WriteLine($"    call instance void {baseClass}::.ctor({paramTypes})");
         }
 
@@ -1873,6 +1869,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             _tempIndices.Clear();
             _tempNameIndices.Clear();
             _declaredIdentifiers.Clear();
+            _localSlotSpecs.Clear();
             _localCounter = 0;
             _maxStack = 8;
             _currentStack = 0;
@@ -2109,6 +2106,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             WriteLine("  .ver 4:0:0:0");
             WriteLine("}");
             WriteLine();
+            _vbRuntimeExternAt = _output.Length; // see VbRuntimeExtern
             WriteLine($".assembly {SanitizeName(module.Name)}");
             WriteLine("{");
             WriteLine("  .ver 1:0:0:0");
@@ -2287,6 +2285,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             _tempIndices.Clear();
             _tempNameIndices.Clear();
             _declaredIdentifiers.Clear();
+            _localSlotSpecs.Clear();
             _maxStack = 8;
             _currentStack = 0;
 
@@ -2301,6 +2300,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 {
                     EmitInlineValue(global.InitialValue);
                     EmitNumericCoercion(global.InitialValue, global.Type);
+                    EmitCoerceToSlot(global.InitialValue.Type, IlTypeSpec(global.Type));
                 }
                 else if (TryArrayAllocation(global.Type, out var elementToken, out var length))
                 {
@@ -2352,6 +2352,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             _tempIndices.Clear();
             _tempNameIndices.Clear();
             _declaredIdentifiers.Clear();
+            _localSlotSpecs.Clear();
             _currentMethodIsInstance = false;
             _currentClassFields.Clear();
             _maxStack = 8;
@@ -2370,6 +2371,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 {
                     EmitInlineValue(field.Initializer);
                     EmitNumericCoercion(field.Initializer, field.Type);
+                    EmitCoerceToSlot(field.Initializer.Type, IlTypeSpec(field.Type));
                 }
                 else if (TryArrayAllocation(field.Type, out var elementToken, out var length))
                 {
@@ -2439,6 +2441,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             _tempIndices.Clear();
             _tempNameIndices.Clear();
             _declaredIdentifiers.Clear();
+            _localSlotSpecs.Clear();
             _localCounter = 0;
 
             // ⛔ A MODULE-level function is not a class member, and the class-member context of
@@ -2788,6 +2791,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                     _currentStack++;
                     EmitInlineValue(field.Initializer);
                     EmitNumericCoercion(field.Initializer, field.Type);
+                    EmitCoerceToSlot(field.Initializer.Type, IlTypeSpec(field.Type));
                 }
                 else if (TryArrayAllocation(field.Type, out var elementToken, out var length))
                 {
@@ -2986,23 +2990,31 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             // silently declares the wrong type for a slot.
             var slots = new List<(int Index, string Text)>();
 
+            // Every slot's spec is also RECORDED, by index, for LocalSlotSpec: a store is fitted to
+            // exactly what its `stloc` lands in (task #177). The same text, the same place.
+            _localSlotSpecs.Clear();
+            void Declare(int index, string spec, string name)
+            {
+                _localSlotSpecs[index] = spec;
+                slots.Add((index, $"      [{index}] {spec} {name}"));
+            }
+
             // Declared local variables
             foreach (var local in function.LocalVariables)
             {
-                var index = _localIndices[local.Name];
-                slots.Add((index, $"      [{index}] {IlTypeSpec(local.Type)} {SanitizeName(local.Name)}"));
+                Declare(_localIndices[local.Name], IlTypeSpec(local.Type), SanitizeName(local.Name));
             }
 
             // Catch-clause exception variables and the lowered-return result slot
             foreach (var (index, spec, name) in _syntheticLocals)
             {
-                slots.Add((index, $"      [{index}] {spec} {name}"));
+                Declare(index, spec, name);
             }
 
             // Temporary variables
             foreach (var (temp, index) in _tempIndices)
             {
-                slots.Add((index, $"      [{index}] {TempSlotSpec(temp)} V_{index}"));
+                Declare(index, TempSlotSpec(temp), $"V_{index}");
             }
 
             var locals = slots.OrderBy(s => s.Index).Select(s => s.Text).ToList();
@@ -3477,6 +3489,13 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 else
                 {
                     EmitLoadValue(arguments[i]);
+
+                    // A by-value argument is a slot of the parameter's declared type (task #177):
+                    // `Show(s.Area)` into `o As Object` pushed a raw int32 where the signature this
+                    // call spells says `object` — InvalidProgramException. Only where the
+                    // DECLARATION spells the signature; otherwise it names the argument's own type.
+                    if (declarationDecides && i < declared.Count && declared[i] != null)
+                        EmitCoerceToSlot(arguments[i]?.Type, IlTypeSpec(declared[i].Type));
                 }
             }
         }
@@ -3650,8 +3669,8 @@ namespace BasicLang.Compiler.CodeGen.MSIL
 
             if (hasReturn && !string.IsNullOrEmpty(node.Name))
             {
-                if (_declaredIdentifiers.Contains(node.Name)) EmitStoreLocal(node.Name);
-                else EmitStloc(GetTempIndex(node));
+                // What was pushed is the DECLARATION's return, spelled above — not the node's type.
+                EmitStoreResult(node, method.ReturnType);
             }
             else if (hasReturn)
             {
@@ -3907,14 +3926,15 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             // the IR slot, which a caller may have typed differently (Object).
             var propType = IlTypeSpec(prop.Type);
             EmitAccessorGet(SanitizeName(iface.Name), propType, RawName(prop.Name), isStatic: false);
-            if (NeedsBoxingInto(slotSpec, propType, out var boxToken)) WriteLine($"    box {boxToken}");
+            EmitCoerceToSlot(prop.Type, slotSpec);
         }
 
         /// <summary>
         /// An interface property WRITE: the receiver and then the value are on the stack; this
         /// boxes the value if the property is a reference slot and calls the interface's setter.
+        /// The box is the one every other store takes (<see cref="EmitCoerceToSlot"/>, task #177).
         /// </summary>
-        private void EmitInterfacePropertySet(IRInterface iface, IRInterfaceProperty prop, string valueSpec)
+        private void EmitInterfacePropertySet(IRInterface iface, IRInterfaceProperty prop, TypeInfo valueType)
         {
             if (!prop.HasSetter)
             {
@@ -3924,7 +3944,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             }
 
             var propType = IlTypeSpec(prop.Type);
-            if (NeedsBoxingInto(propType, valueSpec, out var boxToken)) WriteLine($"    box {boxToken}");
+            EmitCoerceToSlot(valueType, propType);
             EmitAccessorSet(SanitizeName(iface.Name), propType, RawName(prop.Name), isStatic: false);
         }
 
@@ -3970,11 +3990,24 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             string.Equals(name, "Me", StringComparison.OrdinalIgnoreCase)
             || string.Equals(name, "this", StringComparison.OrdinalIgnoreCase);
 
-        private void EmitStoreLocal(string name)
+        /// <summary>
+        /// Stores the value on top of the stack into the storage <paramref name="name"/> resolves
+        /// to — a local, a parameter (through its pointer when ByRef), a field or property of the
+        /// enclosing instance, a Shared field, or a module global — walking the same ladder
+        /// <see cref="EmitLoadLocal"/> reads through.
+        ///
+        /// <para>⭐ <paramref name="valueType"/> is REQUIRED: it is the type of what is on the stack,
+        /// and every arm fits it to the type its own store instruction names
+        /// (<see cref="EmitCoerceToSlot"/>, task #177) BEFORE anything else — before the value is
+        /// parked in a scratch slot, which is typed like the destination. A caller that could not
+        /// say what it pushed is exactly the caller that stored a raw Double into an Object local.</para>
+        /// </summary>
+        private void EmitStoreLocal(string name, TypeInfo valueType)
         {
             var idx = GetLocalIndex(name);
             if (idx >= 0)
             {
+                EmitCoerceToSlot(valueType, LocalSlotSpec(idx));
                 EmitStloc(idx);
                 return;
             }
@@ -3997,6 +4030,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                     // reason: IL has no swap.
                     if (_byRefStoreScratch.TryGetValue(name, out var byRefScratch))
                     {
+                        EmitCoerceToSlot(valueType, IlTypeSpec(pointee));
                         EmitStloc(byRefScratch);
                         EmitLdarg(paramIdx);
                         EmitLdloc(byRefScratch);
@@ -4016,6 +4050,8 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                         + "would overwrite the pointer instead of the caller's variable.");
                 }
 
+                var declaredParam = DeclaredStorageType(_currentFunction?.Parameters, name);
+                if (declaredParam != null) EmitCoerceToSlot(valueType, IlTypeSpec(declaredParam));
                 EmitStarg(paramIdx);
                 return;
             }
@@ -4028,6 +4064,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 && _currentClassFields.TryGetValue(name, out var fieldType)
                 && _fieldStoreScratch.TryGetValue(name, out var scratch))
             {
+                EmitCoerceToSlot(valueType, IlTypeSpec(fieldType));
                 EmitStloc(scratch);
                 EmitLdarg(0);
                 EmitLdloc(scratch);
@@ -4045,12 +4082,14 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             {
                 if (ownSetProperty.IsStatic)
                 {
+                    EmitCoerceToSlot(valueType, IlTypeSpec(ownSetProperty.Type));
                     EmitPropertySet(_currentClassOwner, ownSetProperty);
                     return;
                 }
 
                 if (_currentMethodIsInstance && _fieldStoreScratch.TryGetValue(name, out var propScratch))
                 {
+                    EmitCoerceToSlot(valueType, IlTypeSpec(ownSetProperty.Type));
                     EmitStloc(propScratch);
                     EmitLdarg(0);
                     _currentStack++;
@@ -4065,6 +4104,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             // unlike the instance `stfld` above, `stsfld` needs no scratch slot.
             if (TryFindStaticField(_currentClass, name, out var ownStaticOwner, out var ownStatic))
             {
+                EmitCoerceToSlot(valueType, IlTypeSpec(ownStatic.Type));
                 WriteLine($"    stsfld {IlTypeSpec(ownStatic.Type)} {SanitizeName(ownStaticOwner.Name)}::{SanitizeName(ownStatic.Name)}");
                 _currentStack--;
                 return;
@@ -4074,12 +4114,34 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             // the value alone, with no object reference under it.
             if (_moduleGlobals.TryGetValue(name, out var global))
             {
+                EmitCoerceToSlot(valueType, IlTypeSpec(global.Type));
                 WriteLine($"    stsfld {IlTypeSpec(global.Type)} {_moduleName}::{SanitizeName(global.Name)}");
                 _currentStack--;
                 return;
             }
 
             WriteLine($"    // WARNING: Cannot store to '{name}'");
+        }
+
+        /// <summary>
+        /// Parks the value an instruction just produced: into the variable it is NAMED after when
+        /// that name is declared storage (<see cref="EmitStoreLocal"/> — how <c>Dim p As Object =
+        /// F()</c> arrives, as a call whose result is named <c>p</c>), else into the node's own
+        /// temporary. <paramref name="stackType"/> is what the instruction really pushed, and both
+        /// arms fit it to their slot (<see cref="EmitCoerceToSlot"/>, task #177) — a temporary the
+        /// IR typed Object receiving a Double is the same gap as a local that was.
+        /// </summary>
+        private void EmitStoreResult(IRValue node, TypeInfo stackType)
+        {
+            if (!string.IsNullOrEmpty(node.Name) && _declaredIdentifiers.Contains(node.Name))
+            {
+                EmitStoreLocal(node.Name, stackType);
+                return;
+            }
+
+            var tempIdx = GetTempIndex(node);
+            EmitCoerceToSlot(stackType, LocalSlotSpec(tempIdx));
+            EmitStloc(tempIdx);
         }
 
         private void EmitLdloc(int index)
@@ -4296,15 +4358,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 _currentStack--; // Two pops, one push = net -1
 
                 // Store result
-                if (!string.IsNullOrEmpty(binaryOp.Name) && _declaredIdentifiers.Contains(binaryOp.Name))
-                {
-                    EmitStoreLocal(binaryOp.Name);
-                }
-                else
-                {
-                    var tempIdx = GetTempIndex(binaryOp);
-                    EmitStloc(tempIdx);
-                }
+                EmitStoreResult(binaryOp, binaryOp.Type);
                 return;
             }
 
@@ -4321,17 +4375,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             _currentStack--; // Two pops, one push = net -1
 
             // Store result
-            if (!string.IsNullOrEmpty(binaryOp.Name) && _declaredIdentifiers.Contains(binaryOp.Name))
-            {
-                // Store to declared variable
-                EmitStoreLocal(binaryOp.Name);
-            }
-            else
-            {
-                // Store to temp
-                var tempIdx = GetTempIndex(binaryOp);
-                EmitStloc(tempIdx);
-            }
+            EmitStoreResult(binaryOp, binaryOp.Type);
         }
 
         public override void Visit(IRUnaryOp unaryOp)
@@ -4342,54 +4386,23 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             WriteLine($"    {op}");
 
             // Store result
-            if (!string.IsNullOrEmpty(unaryOp.Name) && _declaredIdentifiers.Contains(unaryOp.Name))
-            {
-                EmitStoreLocal(unaryOp.Name);
-            }
-            else
-            {
-                var tempIdx = GetTempIndex(unaryOp);
-                EmitStloc(tempIdx);
-            }
+            EmitStoreResult(unaryOp, unaryOp.Type);
         }
 
         public override void Visit(IRCompare compare)
         {
-            var operandKind = WiderNumericKind(compare.Left, compare.Right);
-            EmitLoadValue(compare.Left);
-            EmitNumericCoercion(compare.Left, operandKind);
-            EmitLoadValue(compare.Right);
-            EmitNumericCoercion(compare.Right, operandKind);
-
-            EmitCompareOpcodes(compare.Comparison);
+            EmitComparison(compare.Left, compare.Right, compare.Comparison, EmitLoadValue);
 
             _currentStack--; // Net effect
 
             // Store result
-            if (!string.IsNullOrEmpty(compare.Name) && _declaredIdentifiers.Contains(compare.Name))
-            {
-                EmitStoreLocal(compare.Name);
-            }
-            else
-            {
-                var tempIdx = GetTempIndex(compare);
-                EmitStloc(tempIdx);
-            }
+            EmitStoreResult(compare, compare.Type);
         }
 
         public override void Visit(IRIdentityCompare identity)
         {
             EmitIdentityCompare(identity, EmitLoadValue);
-
-            if (!string.IsNullOrEmpty(identity.Name) && _declaredIdentifiers.Contains(identity.Name))
-            {
-                EmitStoreLocal(identity.Name);
-            }
-            else
-            {
-                var tempIdx = GetTempIndex(identity);
-                EmitStloc(tempIdx);
-            }
+            EmitStoreResult(identity, identity.Type);
         }
 
         /// <summary>
@@ -4412,7 +4425,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
         public override void Visit(IRAssignment assignment)
         {
             EmitLoadValue(assignment.Value);
-            EmitStoreLocal(assignment.Target.Name);
+            EmitStoreLocal(assignment.Target.Name, assignment.Value?.Type);
         }
 
         public override void Visit(IRLoad load)
@@ -4459,7 +4472,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             if (store.Address is IRVariable variable)
             {
                 EmitLoadValue(store.Value);
-                EmitStoreLocal(variable.Name);
+                EmitStoreLocal(variable.Name, store.Value?.Type);
             }
             else if (store.Address is IRAlloca alloca)
             {
@@ -4470,14 +4483,24 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 // {10, 20, 30}` died with NullReferenceException after building the array
                 // correctly. Store to the slot instead.
                 EmitLoadValue(store.Value);
-                EmitStloc(GetTempIndex(alloca));
+                var allocaIdx = GetTempIndex(alloca);
+                EmitCoerceToSlot(store.Value?.Type, LocalSlotSpec(allocaIdx));
+                EmitStloc(allocaIdx);
             }
             else
             {
                 // Indirect store
                 EmitLoadValue(store.Address);
                 EmitLoadValue(store.Value);
-                var suffix = GetIndirectSuffix(store.Value.Type);
+
+                // ⛔ An array ELEMENT is a slot like any other (task #177): `arr(0) = 5` into an
+                // `Object()` took the address with `ldelema object` and then wrote the raw int32
+                // through it with `stind.i4` — InvalidProgramException. The element type is the one
+                // Visit(IRGetElementPtr) took the address with; once the value is boxed the store is
+                // a reference store, so the suffix follows the ELEMENT, not the value.
+                var pointee = store.Address is IRGetElementPtr elementPtr ? elementPtr.BasePointer?.Type?.ElementType : null;
+                var boxed = pointee != null && EmitCoerceToSlot(store.Value?.Type, MapType(pointee));
+                var suffix = GetIndirectSuffix(boxed ? pointee : store.Value.Type);
                 WriteLine($"    stind.{suffix}");
                 _currentStack -= 2;
             }
@@ -4519,15 +4542,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                     // Store result if needed
                     if (hasReturn && !string.IsNullOrEmpty(call.Name))
                     {
-                        if (_declaredIdentifiers.Contains(call.Name))
-                        {
-                            EmitStoreLocal(call.Name);
-                        }
-                        else
-                        {
-                            var tempIdx = GetTempIndex(call);
-                            EmitStloc(tempIdx);
-                        }
+                        EmitStoreResult(call, call.Type);
                     }
                     else if (hasReturn)
                     {
@@ -4549,21 +4564,9 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                     // The arm and the IR can disagree about what is on the stack — see
                     // _stdLibResultSpec. Box across the gap before the store, exactly as the
                     // .NET-static arm below does, so the slot holds what its declared type says.
-                    if (_stdLibResultSpec != null
-                        && NeedsBoxingInto(IlTypeSpec(call.Type), _stdLibResultSpec, out var stdBoxToken))
-                    {
-                        WriteLine($"    box {stdBoxToken}");
-                    }
+                    if (_stdLibResultSpec != null) EmitCoerceSpecToSlot(_stdLibResultSpec, IlTypeSpec(call.Type));
 
-                    if (_declaredIdentifiers.Contains(call.Name))
-                    {
-                        EmitStoreLocal(call.Name);
-                    }
-                    else
-                    {
-                        var tempIdx = GetTempIndex(call);
-                        EmitStloc(tempIdx);
-                    }
+                    EmitStoreResult(call, call.Type);
                 }
                 return;
             }
@@ -4598,15 +4601,11 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                     // mismatch the CLR follows into a NullReferenceException at the first use.
                     // Box across that gap — the slot's declared type is what the rest of the
                     // method reads it back as.
-                    if (NeedsBoxingInto(IlTypeSpec(call.Type), netOverload.ReturnSpec, out var boxToken))
-                    {
-                        WriteLine($"    box {boxToken}");
-                    }
+                    EmitCoerceSpecToSlot(netOverload.ReturnSpec, IlTypeSpec(call.Type));
 
                     if (!string.IsNullOrEmpty(call.Name))
                     {
-                        if (_declaredIdentifiers.Contains(call.Name)) EmitStoreLocal(call.Name);
-                        else EmitStloc(GetTempIndex(call));
+                        EmitStoreResult(call, call.Type);
                     }
                 }
                 return;
@@ -4679,18 +4678,11 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             _currentStack -= call.Arguments.Count;
             if (hasReturn) _currentStack++;
 
-            // Store result if needed
+            // Store result if needed. The signature above spells its return from call.Type, so
+            // that is what was pushed.
             if (hasReturn && !string.IsNullOrEmpty(call.Name))
             {
-                if (_declaredIdentifiers.Contains(call.Name))
-                {
-                    EmitStoreLocal(call.Name);
-                }
-                else
-                {
-                    var tempIdx = GetTempIndex(call);
-                    EmitStloc(tempIdx);
-                }
+                EmitStoreResult(call, call.Type);
             }
             else if (hasReturn)
             {
@@ -4741,10 +4733,10 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             }
 
             EmitLoadValue(call.CalleeValue);
-            foreach (var argument in call.Arguments)
-            {
-                EmitLoadValue(argument);
-            }
+
+            // Each argument fitted to the Invoke parameter it fills (task #177) — CLOSED, so a
+            // `Func(Of Object, Integer)` given an Integer boxes it into `!0`, which is `object`.
+            EmitArgumentsIntoSlots(call.Arguments, ClosedInvokeParams(delegateType, parameterSpecs));
 
             WriteLine($"    callvirt instance {returnSpec} {receiver}::Invoke({string.Join(", ", parameterSpecs)})");
             _currentStack -= 1 + call.Arguments.Count;
@@ -4762,13 +4754,9 @@ namespace BasicLang.Compiler.CodeGen.MSIL
 
             // A value type into a slot the IR declared as a reference: box across the gap, exactly
             // as the .NET-static arm does.
-            if (NeedsBoxingInto(IlTypeSpec(call.Type), closedReturn, out var boxToken))
-            {
-                WriteLine($"    box {boxToken}");
-            }
+            EmitCoerceSpecToSlot(closedReturn, IlTypeSpec(call.Type));
 
-            if (_declaredIdentifiers.Contains(call.Name)) EmitStoreLocal(call.Name);
-            else EmitStloc(GetTempIndex(call));
+            EmitStoreResult(call, call.Type);
         }
 
         /// <summary>
@@ -4862,7 +4850,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             }
             else if (_declaredIdentifiers.Contains(create.Name))
             {
-                EmitStoreLocal(create.Name);
+                EmitStoreLocal(create.Name, create.Type);
             }
             else
             {
@@ -5095,18 +5083,6 @@ namespace BasicLang.Compiler.CodeGen.MSIL
 
         private static bool TryLosslessWidening(string from, string to, out string opcode) =>
             LosslessWidenings.TryGetValue((from, to), out opcode);
-
-        /// <summary>
-        /// True when a value of <paramref name="valueSpec"/> has to be boxed to live in a slot
-        /// declared <paramref name="slotSpec"/>, with the token <c>box</c> needs.
-        /// </summary>
-        private static bool NeedsBoxingInto(string slotSpec, string valueSpec, out string boxToken)
-        {
-            boxToken = null;
-            if (!BoxableSpecs.Contains(valueSpec)) return false;
-            if (BoxableSpecs.Contains(slotSpec)) return false;   // value into value: no bridge
-            return PrimitiveTokens.TryGetValue(valueSpec, out boxToken);
-        }
 
         /// <summary>
         /// The .NET STATIC members this backend can emit, and the exact IL signature of each.
@@ -5669,6 +5645,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 // answer 9007199254740992 through float64.
                 case "cint":
                     EmitLoadValue(args[0]);
+                    if (EmitConvertFromObject(args[0], "ToInt32", "int32")) return true;
                     if (IsFloatingArgument(args[0]))
                     {
                         WriteLine("    conv.r8");
@@ -5682,6 +5659,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
 
                 case "clng":
                     EmitLoadValue(args[0]);
+                    if (EmitConvertFromObject(args[0], "ToInt64", "int64")) return true;
                     if (IsFloatingArgument(args[0]))
                     {
                         WriteLine("    conv.r8");
@@ -5695,16 +5673,30 @@ namespace BasicLang.Compiler.CodeGen.MSIL
 
                 case "cdbl":
                     EmitLoadValue(args[0]);
+                    if (EmitConvertFromObject(args[0], "ToDouble", "float64")) return true;
                     WriteLine("    conv.r8");
                     return true;
 
                 case "csng":
                     EmitLoadValue(args[0]);
+                    if (EmitConvertFromObject(args[0], "ToSingle", "float32")) return true;
                     WriteLine("    conv.r4");
+                    return true;
+
+                // ⚠ An Object argument ONLY. CBool had no arm on this backend at all, so every other
+                // argument still falls through to the refusal it always reached ("neither a
+                // procedure this program declares nor a delegate value") — widening CBool to the
+                // value types is its own job (VB's nonzero rule, and C#'s VB parser for a String).
+                // Returning false here emits nothing, so that fall-through is unchanged.
+                case "cbool":
+                    if (args.Count != 1 || !IsObjectOperand(args[0]?.Type)) return false;
+                    EmitLoadValue(args[0]);
+                    EmitConvertFromObject(args[0], "ToBoolean", "bool");
                     return true;
 
                 case "cstr":
                     EmitLoadValue(args[0]);
+                    if (EmitConvertFromObject(args[0], "ToString", "string")) return true;
                     var srcType = MapType(args[0].Type);
                     if (srcType != "string")
                     {
@@ -5728,11 +5720,17 @@ namespace BasicLang.Compiler.CodeGen.MSIL
 
         public override void Visit(IRReturn ret)
         {
+            // ⛔ The method's return is a slot like any other (task #177): `Return s.Area` or
+            // `Return 42` from `Function … As Object` left a raw int32 where the signature says
+            // `object` — InvalidProgramException. Fitted to what the method DECLARES it returns.
+            var returnSpec = _currentFunction?.ReturnType != null ? MapType(_currentFunction.ReturnType) : null;
+
             if (_regionBlocks == null)
             {
                 if (ret.Value != null)
                 {
                     EmitLoadValue(ret.Value);
+                    EmitCoerceToSlot(ret.Value.Type, returnSpec);
                 }
                 WriteLine("    ret");
                 return;
@@ -5762,6 +5760,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                         + "non-void function containing a Try.");
                 }
                 EmitLoadValue(ret.Value);
+                EmitCoerceToSlot(ret.Value.Type, LocalSlotSpec(_methodExitResultLocal));
                 EmitStloc(_methodExitResultLocal);
             }
 
@@ -5958,8 +5957,8 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                     EmitCaseRelationalTest(subject, comparisonCase.CompareValue, comparisonCase.Operator, noMatch);
                     break;
 
-                case IRNothingPatternCase:
-                    EmitNothingTest(subject, noMatch);
+                case IRNothingPatternCase nothingCase:
+                    EmitNothingTest(subject, nothingCase, noMatch);
                     break;
 
                 case IROrPatternCase orCase:
@@ -6003,10 +6002,18 @@ namespace BasicLang.Compiler.CodeGen.MSIL
         /// when the two strings happened to be the same interned object — true for literals the
         /// runtime interned together, false for a string that was built or read at run time. That
         /// is a wrong answer that passes every test written with literals. Numeric and reference
-        /// cases use <c>beq</c>/<c>bne.un</c>, bit-exact for integers and NaN-correct for floats.</para>
+        /// cases use <c>beq</c>/<c>bne.un</c>, bit-exact for integers and NaN-correct for floats.
+        /// An Object operand takes neither path. It gets VB's late-bound comparison
+        /// (<see cref="EmitLateBoundCaseTest"/>).</para>
         /// </summary>
         private void EmitCaseEqualityTest(IRValue subject, IRValue value, string branchTo, bool branchWhenEqual = false)
         {
+            if (IsLateBoundComparison(subject, value))
+            {
+                EmitLateBoundCaseTest(subject, value, CompareKind.Eq, branchTo, branchWhenTrue: branchWhenEqual);
+                return;
+            }
+
             EmitLoadValue(subject);
             EmitLoadValue(value);
 
@@ -6050,6 +6057,26 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             if (op == "<>")
             {
                 EmitCaseEqualityTest(subject, value, noMatch, branchWhenEqual: true);
+                return;
+            }
+
+            // An Object operand is compared by VB's runtime, whatever the other operand is. A
+            // String is included: the refusal below is about IL's ordering opcodes, which this
+            // path does not use.
+            if (IsLateBoundComparison(subject, value))
+            {
+                var kind = op switch
+                {
+                    ">" => CompareKind.Gt,
+                    "<" => CompareKind.Lt,
+                    ">=" => CompareKind.Ge,
+                    "<=" => CompareKind.Le,
+                    _ => throw new ForeignFeatureException(
+                        $"MSIL: unknown Select Case comparison operator '{op}'. The parser emits "
+                        + "=, <>, >, <, >= and <=; anything else would fall through untested and "
+                        + "silently match, so it is refused here instead."),
+                };
+                EmitLateBoundCaseTest(subject, value, kind, noMatch, branchWhenTrue: false);
                 return;
             }
 
@@ -6098,13 +6125,30 @@ namespace BasicLang.Compiler.CodeGen.MSIL
         }
 
         /// <summary>
-        /// <c>Case Nothing</c>. <c>brtrue</c> is right for both shapes VB gives this: a null
-        /// reference and a zero integer both fall through to the match, anything else branches
-        /// away. Floating-point subjects are refused — <c>brtrue</c> is not defined for an F
-        /// operand and produces an unverifiable method.
+        /// <c>Case Nothing</c> and <c>Case Is Nothing</c>. <c>brtrue</c> is right for both shapes VB
+        /// gives this: a null reference and a zero integer both fall through to the match, anything
+        /// else branches away. Floating-point subjects are refused — <c>brtrue</c> is not defined for
+        /// an F operand and produces an unverifiable method. An Object subject under
+        /// <c>Case Nothing</c> is the exception: it gets the late-bound comparison (below).
         /// </summary>
-        private void EmitNothingTest(IRValue subject, string noMatch)
+        private void EmitNothingTest(IRValue subject, IRNothingPatternCase pattern, string noMatch)
         {
+            // An Object subject: `Case Nothing` is VB's `subject = Nothing`, late-bound, so an
+            // Object holding 0, "" or False matches as well as one holding Nothing. `brtrue` below
+            // tests the REFERENCE. It matched a boxed 0 only while the slot held a raw int32, and
+            // once the slot holds a box it answers Case Else.
+            //
+            // ⛔ Not `Case Is Nothing`. That is the reference-IDENTITY test (ADR-0011 D2 (2)), the
+            // same question as `subject Is Nothing`, and `brtrue` on the reference is exactly that:
+            // an Object holding 0 is not Nothing. The two spellings reach here as the same node
+            // and differ only by WrittenWithIs.
+            if (!pattern.WrittenWithIs && IsLateBoundComparison(subject, null))
+            {
+                EmitLateBoundCaseTest(subject, new IRConstant(null, subject.Type), CompareKind.Eq,
+                    noMatch, branchWhenTrue: false);
+                return;
+            }
+
             var spec = subject?.Type != null ? IlTypeSpec(subject.Type) : "object";
             if (spec == "float32" || spec == "float64")
             {
@@ -6117,6 +6161,23 @@ namespace BasicLang.Compiler.CodeGen.MSIL
 
             EmitLoadValue(subject);
             WriteLine($"    brtrue {noMatch}");
+            _currentStack--;
+        }
+
+        /// <summary>
+        /// One link of a Select Case chain with an Object operand: <c>subject kind value</c> through
+        /// <see cref="EmitComparison"/>, the same late-bound comparison an <c>If</c> gets (see
+        /// <see cref="IsLateBoundComparison"/>). Then it branches to <paramref name="branchTo"/>
+        /// when the result is <paramref name="branchWhenTrue"/>. <c>Case x</c>, <c>Case Is op x</c>,
+        /// each bound of <c>Case a To b</c> and <c>Case Nothing</c> all come here once an operand is
+        /// Object. The <c>beq</c>/<c>clt</c>/<c>brtrue</c> forms in the callers compare what is on
+        /// the stack, which for an Object is the reference.
+        /// </summary>
+        private void EmitLateBoundCaseTest(IRValue subject, IRValue value, CompareKind kind, string branchTo, bool branchWhenTrue)
+        {
+            EmitComparison(subject, value, kind, EmitLoadValue);
+            _currentStack--;
+            WriteLine($"    {(branchWhenTrue ? "brtrue" : "brfalse")} {branchTo}");
             _currentStack--;
         }
 
@@ -6146,6 +6207,13 @@ namespace BasicLang.Compiler.CodeGen.MSIL
         private void EmitConcatOperandAsString(IRValue operand)
         {
             if (operand?.Type == null) return;
+
+            // ⛔ An OBJECT operand (task #177) now holds a BOX, and handing a boxed Int32 to
+            // Concat(string, string) as if it were a string reads the box as string storage —
+            // garbage or a crash. C# writes `"a" + o`, i.e. Concat(object, object), which is
+            // `o?.ToString() ?? ""`; Convert.ToString(object) is the same text, Nothing included,
+            // and is the conversion CStr(o) takes here too.
+            if (EmitConvertFromObject(operand, "ToString", "string")) return;
 
             if (IlTypeSpec(operand.Type) == "char")
             {
@@ -6191,6 +6259,227 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             if (type.Kind == TypeKind.Enum || type.Kind == TypeKind.Structure) return IlTypeToken(type);
 
             return null;
+        }
+
+        // ================================================================================
+        // ⭐ VALUE → SLOT (task #177). THE ONE PLACE a value already on the stack is fitted to the
+        // storage it is about to land in.
+        // ================================================================================
+
+        /// <summary>
+        /// ⭐ <b>The one coercion (task #177).</b> The value on top of the stack, whose IR type is
+        /// <paramref name="valueType"/>, is about to be stored into — or passed as, or returned as —
+        /// a slot whose IL spec is <paramref name="slotSpec"/>. When the value is a VALUE type and
+        /// the slot is <c>object</c>, this emits <c>box</c> to the value's OWN type
+        /// (<see cref="ValueTypeBoxToken"/>, the one answer to "what does this box to"). Anything
+        /// else is left exactly as it was. Returns true when it boxed, so a caller whose opcode
+        /// depends on what is on the stack (<c>stind.ref</c> rather than <c>stind.i4</c>) can say so.
+        ///
+        /// <para>⛔ <b>What was wrong.</b> IL does NOT box on a store. <c>IRBuilder</c> leaves a value
+        /// flowing into an <c>Object</c> slot with its OWN type — there is no conversion to lower,
+        /// C# boxes implicitly — and this backend emitted it raw: <c>ldloc d; stloc o</c> for
+        /// <c>Dim o As Object = d</c> put a float64's bits where a reference belongs. ilasm accepts
+        /// that and the CLR follows it into a NullReferenceException at the first use, or rejects
+        /// the method outright (InvalidProgramException) where the verifier-lite in the JIT sees an
+        /// int32 meet an O. Measured on every probe of task #177 at the CLI, the CLI with
+        /// <c>--optimize</c> and a Release <c>.blproj</c>: a Dim initializer, an assignment to a
+        /// local, a field, a class property, an array element and a <c>List(Of Object)</c>, an
+        /// argument to an Object parameter, and a <c>Return</c> from <c>As Object</c> — every one
+        /// failed, and C# and JavaScript printed the value.</para>
+        ///
+        /// <para>⛔ <b>ONE decision, every site.</b> A named store (<see cref="EmitStoreLocal"/>), an
+        /// indirect store, <c>stelem</c>, <c>stfld</c>/<c>stsfld</c>, a property or indexer setter, a
+        /// call argument, a constructor argument, a <c>Return</c> and a field initializer all ask
+        /// here, and so do the five places that bridged a declaration's value type into an IR slot
+        /// the front end had typed Object before this (a .NET static result, an intrinsic's result,
+        /// a delegate's result, an interface method's result, and #175's interface property read
+        /// and write). They used to carry two rules of their own — <c>NeedsBoxingInto</c> over IL
+        /// specs, and an <c>IsIlValueType</c> test inline in the interface-method arm — both gone:
+        /// a site that boxes by a rule of its own is how five sites drift into five answers.</para>
+        ///
+        /// <para>⚠ <b>Only an <c>object</c> slot receives a box.</b> That is every slot the front
+        /// end lets a value flow into unconverted: it refuses a value into a String or a class
+        /// ("Cannot assign value of type…") and converts a numeric into a numeric itself. The
+        /// earlier rule boxed into ANY non-primitive slot, a String or a class included, which put a
+        /// boxed Int32 where a String reference belongs — no program reaches that shape, so the
+        /// narrower rule changes no emitted IL (measured by byte-compare over every corpus program),
+        /// and it cannot box a Structure into a slot of its own type, which the wider rule would
+        /// have done the day a Structure became a real value type here (#192).</para>
+        /// </summary>
+        private bool EmitCoerceToSlot(TypeInfo valueType, string slotSpec) =>
+            EmitBoxIntoSlot(ValueTypeBoxToken(valueType), slotSpec);
+
+        /// <summary>
+        /// <see cref="EmitCoerceToSlot(TypeInfo, string)"/> for an operand whose IR node is in
+        /// hand. It makes the same decision, except for a CONSTANT that has no value type of its
+        /// own (untyped, or typed Object). Such a constant is judged by the CLR value
+        /// <see cref="EmitLoadConstant"/> actually pushes: <c>ldc.i4</c> for an int, <c>ldc.r8</c>
+        /// for a double.
+        ///
+        /// <para>⛔ Measured: every <c>Select Case</c> value reaches the IR as a constant with
+        /// NO type. The analyzer's <c>Visit(CaseClauseNode)</c> walks <c>Values</c>, and the parser
+        /// puts every case value in <c>Patterns</c>, so no literal there is ever typed. Judged by
+        /// type alone, <c>Case 1</c> under an Object subject passed a raw int32 where the late-bound
+        /// comparison takes an object.</para>
+        /// </summary>
+        private bool EmitCoerceToSlot(IRValue value, string slotSpec) =>
+            (value?.Type == null || IsObjectOperand(value.Type)) && value is IRConstant { Value: { } clr }
+                ? EmitCoerceSpecToSlot(ClrConstantSpec(clr), slotSpec)
+                : EmitCoerceToSlot(value?.Type, slotSpec);
+
+        /// <summary>
+        /// The IL spec <see cref="EmitLoadConstant"/> pushes for a constant's CLR value, or null
+        /// for one it pushes as a reference (a string) or cannot push.
+        /// </summary>
+        private static string ClrConstantSpec(object value) => value switch
+        {
+            int => "int32",
+            long => "int64",
+            float => "float32",
+            double => "float64",
+            bool => "bool",
+            char => "char",
+            _ => null,
+        };
+
+        /// <summary>
+        /// <see cref="EmitCoerceToSlot"/> for a value known only by the IL spec that was pushed —
+        /// the return spec of a declaration, where the IR's type for the node says something else.
+        /// Same decision, same token table: an IL primitive boxes to its BCL type, and a spec that
+        /// is not a value (<c>string</c>, <c>object</c>, a class) never boxes.
+        /// </summary>
+        private bool EmitCoerceSpecToSlot(string valueSpec, string slotSpec) =>
+            EmitBoxIntoSlot(
+                valueSpec != null && BoxableSpecs.Contains(valueSpec) && PrimitiveTokens.TryGetValue(valueSpec, out var token)
+                    ? token : null,
+                slotSpec);
+
+        /// <summary>
+        /// The decision itself, shared by both entry points above. <paramref name="boxToken"/> is
+        /// null for a reference value, which is left alone.
+        ///
+        /// <para>⛔ Never <c>box object</c>: see <see cref="ValueTypeBoxToken"/>. The token is the
+        /// VALUE's own type, which is what a later <c>unbox.any</c>, <c>Convert.ToXxx(object)</c>,
+        /// <c>Object::ToString()</c> and <c>Console.WriteLine(object)</c> all dispatch on — a
+        /// Double boxed as Double prints 12, not a bit pattern.</para>
+        /// </summary>
+        private bool EmitBoxIntoSlot(string boxToken, string slotSpec)
+        {
+            if (boxToken == null || !ReceivesBox(slotSpec)) return false;
+
+            WriteLine($"    box {boxToken}");
+            return true;
+        }
+
+        /// <summary>True for a slot that holds a value only BOXED: an <c>object</c>.</summary>
+        private static bool ReceivesBox(string slotSpec) => slotSpec == "object";
+
+        /// <summary>
+        /// True when a value of <paramref name="type"/> is an <c>Object</c> REFERENCE — what a box
+        /// arrives as, and so what a conversion to a value type must look inside rather than
+        /// reinterpret. Null is not Object: an untyped value is not claimed.
+        /// </summary>
+        private bool IsObjectOperand(TypeInfo type) => type != null && MapType(type) == "object";
+
+        /// <summary>
+        /// ⭐ <b>OBJECT → VALUE (task #177), the other direction of the one coercion.</b> When
+        /// <paramref name="argument"/> — already on the stack — is an <c>Object</c>, converts the
+        /// OBJECT with <c>System.Convert.<paramref name="convertMethod"/>(object)</c>, leaving a
+        /// <paramref name="resultSpec"/>, and returns true; otherwise emits nothing and returns
+        /// false, and the caller's own lowering for a value argument runs as it always did.
+        ///
+        /// <para>⛔ <b>What was wrong.</b> Every conversion intrinsic lowered as if its argument
+        /// were already a number: <c>CDbl(d)</c> with <c>d As Object = 1.5</c> was <c>ldloc d;
+        /// conv.r8</c>, which converts the REFERENCE — the box's address read as an integer —
+        /// and printed <b>9.218868437227405E+18</b> for <c>CDbl(d) * 2</c>. A silent wrong answer.
+        /// <c>CInt(o)</c> answered right only by accident: the store before it had not boxed, so
+        /// the slot held the raw int32 and <c>conv.i4</c> read it back. Boxing the store turned
+        /// that accident into the same wrong answer, which is why the two directions ship
+        /// together.</para>
+        ///
+        /// <para>⚠ <c>Convert.ToXxx(object)</c> is the C# backend's own text for these six
+        /// (<c>CSharpStdLibProvider.EmitCInt</c> and friends, and <c>CType(o, T)</c> to the same six
+        /// types lowers to the same intrinsics), so MSIL answers what C# answers: a boxed Double
+        /// through CInt ROUNDS half-to-even, a boxed String PARSES, <c>CStr(Nothing)</c> is "" —
+        /// and a value that cannot convert THROWS (FormatException, InvalidCastException), never
+        /// reads bits. <c>CType(o, Short)</c> and <c>DirectCast</c> are not conversions but
+        /// unboxings — see <see cref="EmitCastConversion"/>.</para>
+        /// </summary>
+        private bool EmitConvertFromObject(IRValue argument, string convertMethod, string resultSpec)
+        {
+            if (!IsObjectOperand(argument?.Type)) return false;
+
+            WriteLine($"    call {resultSpec} [mscorlib]System.Convert::{convertMethod}(object)");
+            return true;
+        }
+
+        /// <summary>
+        /// The IL spec of LOCAL slot <paramref name="index"/> as <c>.locals init</c> declared it,
+        /// or null for a slot this method never declared. Filled by
+        /// <see cref="GenerateLocalsDeclaration"/>, the one place that writes the declaration, so a
+        /// store is coerced to exactly the type its <c>stloc</c> lands in — a declared local, a
+        /// temporary, or a synthetic slot (a catch variable, a For Each variable rebound by name,
+        /// a field-store scratch slot) alike.
+        /// </summary>
+        private string LocalSlotSpec(int index) =>
+            _localSlotSpecs.TryGetValue(index, out var spec) ? spec : null;
+
+        /// <summary>
+        /// The declared IL spec of every local slot of the method being emitted, by index. See
+        /// <see cref="LocalSlotSpec"/>.
+        /// </summary>
+        private readonly Dictionary<int, string> _localSlotSpecs = new();
+
+        /// <summary>
+        /// The per-position slot specs of a collection member's parameters, CLOSED over the
+        /// receiver's own type arguments: <c>!0</c> of a <c>List(Of Object)</c> is <c>object</c>,
+        /// which is what decides whether <c>l.Add(7)</c> boxes. The signature itself keeps the
+        /// generic definition's spelling (<see cref="CollectionMembers"/>); this is only what each
+        /// argument is fitted to.
+        /// </summary>
+        private List<string> ClosedCollectionParams(TypeInfo receiver, CollectionMember signature) =>
+            string.IsNullOrEmpty(signature?.Params)
+                ? new List<string>()
+                : signature.Params.Split(',').Select(raw => CloseGenericSpec(receiver, raw.Trim())).ToList();
+
+        /// <summary>
+        /// The same closing for a delegate's <c>Invoke</c> (<see cref="TryInvokeShape"/>): a BCL
+        /// <c>Func</c>/<c>Action</c> spells its parameters <c>!0</c>, <c>!1</c>…, a user
+        /// <c>Delegate</c> spells its declared types, which pass through unchanged.
+        /// </summary>
+        private List<string> ClosedInvokeParams(TypeInfo delegateType, List<string> parameterSpecs) =>
+            parameterSpecs?.Select(spec => CloseGenericSpec(delegateType, spec)).ToList();
+
+        /// <summary>
+        /// A generic-definition position <c>!n</c> as the spec of <paramref name="instantiation"/>'s
+        /// n-th type argument; any other spec unchanged.
+        /// </summary>
+        private string CloseGenericSpec(TypeInfo instantiation, string spec)
+        {
+            if (spec != null
+                && spec.StartsWith("!", StringComparison.Ordinal)
+                && int.TryParse(spec.Substring(1), out var position)
+                && instantiation?.GenericArguments != null
+                && position >= 0 && position < instantiation.GenericArguments.Count)
+            {
+                return IlTypeSpec(instantiation.GenericArguments[position]);
+            }
+            return spec;
+        }
+
+        /// <summary>
+        /// Loads each argument by VALUE and fits it to the slot at its position
+        /// (<see cref="EmitCoerceToSlot"/>). A position with no slot spec — a call spelled from its
+        /// arguments rather than a declaration — is loaded as it is, because then the signature
+        /// names the argument's own type and there is nothing to fit.
+        /// </summary>
+        private void EmitArgumentsIntoSlots(IReadOnlyList<IRValue> arguments, IReadOnlyList<string> slotSpecs)
+        {
+            for (var i = 0; i < arguments.Count; i++)
+            {
+                EmitLoadValue(arguments[i]);
+                if (slotSpecs != null && i < slotSpecs.Count) EmitCoerceToSlot(arguments[i]?.Type, slotSpecs[i]);
+            }
         }
 
         /// <summary>
@@ -6312,16 +6601,9 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 }
 
                 case IRCompare compare:
-                {
-                    var compareKind = WiderNumericKind(compare.Left, compare.Right);
-                    EmitInlineValue(compare.Left);
-                    EmitNumericCoercion(compare.Left, compareKind);
-                    EmitInlineValue(compare.Right);
-                    EmitNumericCoercion(compare.Right, compareKind);
-                    EmitCompareOpcodes(compare.Comparison);
+                    EmitComparison(compare.Left, compare.Right, compare.Comparison, EmitInlineValue);
                     _currentStack--;
                     return;
-                }
 
                 case IRIdentityCompare identity:
                     EmitIdentityCompare(identity, EmitInlineValue);
@@ -6401,6 +6683,171 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             }
         }
 
+        // ================================================================================
+        // ⭐ LATE-BOUND COMPARISON (task #177). THE ONE PLACE an `=` `<>` `<` `>` `<=` `>=` with an
+        // Object operand is decided.
+        // ================================================================================
+
+        /// <summary>
+        /// Loads <paramref name="left"/> and <paramref name="right"/> with <paramref name="load"/>
+        /// and leaves the int32 (0/1) of <c>left <paramref name="kind"/> right</c> on the stack. The
+        /// ordinary comparison (<see cref="Visit(IRCompare)"/>) and the <c>When</c>-guard rebuild
+        /// (<see cref="EmitInlineValue"/>) both come through here, so a statement and a guard
+        /// cannot disagree about which comparison an operand pair gets.
+        ///
+        /// <para>With no Object operand this is exactly the text those two sites emitted
+        /// before: both operands brought to the wider numeric kind, then
+        /// <see cref="EmitCompareOpcodes"/>.</para>
+        /// </summary>
+        private void EmitComparison(IRValue left, IRValue right, CompareKind kind, Action<IRValue> load)
+        {
+            if (IsLateBoundComparison(left, right))
+            {
+                EmitLateBoundOperand(left, load);
+                EmitLateBoundOperand(right, load);
+                EmitLateBoundCompareOpcodes(kind);
+                return;
+            }
+
+            var operandKind = WiderNumericKind(left, right);
+            load(left);
+            EmitNumericCoercion(left, operandKind);
+            load(right);
+            EmitNumericCoercion(right, operandKind);
+            EmitCompareOpcodes(kind);
+        }
+
+        /// <summary>
+        /// ⭐ <b>True when a comparison is VB's LATE-BOUND comparison</b>: when either operand is
+        /// statically <c>Object</c>. BasicLang has no <c>Option Strict</c> and follows VB without it,
+        /// so <c>o = 20</c> with <c>o As Object</c> compares the VALUES. It does not compare the
+        /// reference against an int32.
+        ///
+        /// <para>⛔ <b>What was wrong.</b> IL's <c>ceq</c>/<c>clt</c>/<c>cgt</c> compare what is on
+        /// the stack. Once the Object slot holds a BOX (the store half of task #177),
+        /// <c>ldloc o; ldc.i4.s 20; ceq</c> compares a reference with 20. That silently answered
+        /// <c>ne</c> and <c>other</c> for <c>If o = 20</c> and <c>Select Case o : Case 20</c> where
+        /// JavaScript and VB answer <c>eq</c> and <c>twenty</c>. Before boxing, the slot held the raw
+        /// int32 and <c>ceq</c> was right only by accident. An Object holding a Double (<c>d = 2.5</c>)
+        /// answered False even then, and <c>Case Is &gt; 100</c> matched every Object.</para>
+        ///
+        /// <para>⚠ <b>The <c>Nothing</c> literal does not make a comparison late-bound.</b> The IR
+        /// types it Object (an Object-typed null <c>IRConstant</c>), but in VB it has no type of its
+        /// own: <c>i = Nothing</c> on an Integer is an Integer comparison, and it keeps the
+        /// comparison it had. <c>o = Nothing</c> on an Object is late-bound because of <c>o</c>, as
+        /// VB makes it (an Object holding 0 equals Nothing).</para>
+        ///
+        /// <para>⛔ <c>Is</c> / <c>IsNot</c> never come here. They are
+        /// <see cref="IRIdentityCompare"/>, reference identity (ADR-0011), and
+        /// <see cref="EmitIdentityCompare"/> keeps them on <c>ceq</c>.</para>
+        /// </summary>
+        private bool IsLateBoundComparison(IRValue left, IRValue right) =>
+            IsObjectComparand(left) || IsObjectComparand(right);
+
+        /// <summary>An operand statically typed Object that is not the <c>Nothing</c> literal.</summary>
+        private bool IsObjectComparand(IRValue value) =>
+            IsObjectOperand(value?.Type) && !(value is IRConstant { Value: null });
+
+        /// <summary>
+        /// One operand of a late-bound comparison: loaded, then brought to <c>object</c> by
+        /// <see cref="EmitCoerceToSlot"/>. That is the same decision a store into an Object slot
+        /// makes, so a value boxes to its own type (<c>20</c> as Int32, <c>20.0</c> as Double) and
+        /// VB's runtime sees what the program wrote.
+        /// </summary>
+        private void EmitLateBoundOperand(IRValue operand, Action<IRValue> load)
+        {
+            load(operand);
+            EmitCoerceToSlot(operand, "object");
+        }
+
+        /// <summary>
+        /// The drop-in for <see cref="EmitCompareOpcodes"/> when the two operands on the stack are
+        /// <c>object</c>s. It has the same stack contract (two operands in, one int32 0/1 out). It
+        /// pushes <c>TextCompare = False</c> (<c>Option Compare Binary</c>, VB's default, so two
+        /// Strings compare ordinally) and calls
+        /// <c>Microsoft.VisualBasic.CompilerServices.Operators::ConditionalCompareObject*</c>, the
+        /// helpers the VB compiler itself calls for a late-bound comparison in a condition. They
+        /// return bool.
+        ///
+        /// <para>That is VB's answer, not C#'s. C# refuses <c>o == 20</c> outright (CS0019), so it
+        /// cannot be the oracle here. JavaScript gives the VB answer for every mix measured, and
+        /// the runtime itself defines the rest: Integer vs Double compares numerically
+        /// (<c>o = 20.0</c> is True when <c>o</c> holds 20), and a String in an Object compares
+        /// ordinally. <c>Nothing</c> converts to the other operand's default (<c>Nothing = 0</c>,
+        /// <c>Nothing = ""</c> and <c>Nothing = False</c> are all True). Two Objects compare their
+        /// VALUES, not their references.</para>
+        ///
+        /// <para>⚠ It sets <see cref="_usesVbRuntime"/>, which adds the
+        /// <c>.assembly extern Microsoft.VisualBasic.Core</c> declaration to the file. A program
+        /// with no late-bound comparison gets no such reference, and its IL is unchanged.</para>
+        /// </summary>
+        private void EmitLateBoundCompareOpcodes(CompareKind kind)
+        {
+            var helper = kind switch
+            {
+                CompareKind.Eq => "Equal",
+                CompareKind.Ne => "NotEqual",
+                CompareKind.Lt => "Less",
+                CompareKind.Le => "LessEqual",
+                CompareKind.Gt => "Greater",
+                CompareKind.Ge => "GreaterEqual",
+                _ => throw new ForeignFeatureException(
+                    $"MSIL: unknown comparison '{kind}' with an Object operand. A comparison this "
+                    + "backend cannot name would otherwise be emitted as nothing and unbalance the "
+                    + "stack, so it is refused here instead."),
+            };
+
+            _usesVbRuntime = true;
+            WriteLine("    ldc.i4.0"); // TextCompare = False: Option Compare Binary
+            WriteLine($"    call bool {VbOperatorsToken}::ConditionalCompareObject{helper}(object, object, bool)");
+        }
+
+        /// <summary>The type token of VB's late-binding operators, in the VB runtime assembly.</summary>
+        private const string VbOperatorsToken =
+            "[Microsoft.VisualBasic.Core]Microsoft.VisualBasic.CompilerServices.Operators";
+
+        /// <summary>
+        /// True once this module has emitted a call into the VB runtime
+        /// (<see cref="EmitLateBoundCompareOpcodes"/>). <see cref="Generate"/> then declares the
+        /// assembly at <see cref="_vbRuntimeExternAt"/>. It is reset for every module.
+        /// </summary>
+        private bool _usesVbRuntime;
+
+        /// <summary>
+        /// Where in <see cref="_output"/> the header ends, just after the <c>mscorlib</c> extern.
+        /// That is where the <c>Microsoft.VisualBasic.Core</c> extern is inserted when the module
+        /// turned out to need it. That is only known after every method has been emitted, and the
+        /// header is written first.
+        /// </summary>
+        private int _vbRuntimeExternAt = -1;
+
+        /// <summary>
+        /// The <c>.assembly extern</c> for <see cref="VbOperatorsToken"/>, declared the way the
+        /// <c>mscorlib</c> one is, with the key token of Microsoft.VisualBasic.Core (read from the
+        /// .NET 8 shared framework's copy: <c>b03f5f7f11d50a3a</c>).
+        ///
+        /// <para>⚠ <c>.ver 10:0:0:0</c> is deliberately low, as <c>mscorlib 4:0:0:0</c> is. .NET Core
+        /// binds a reference to a framework assembly of that version or higher, and .NET 8 carries
+        /// 13.0.0.0. That is measured: the call resolves at run time through the CLI, the CLI with
+        /// <c>--optimize</c> and a Release <c>.blproj</c>. This is a .NET Core assembly. A .NET
+        /// Framework host has none, and this backend's output already assumes a .NET Core host
+        /// (<c>[System.Runtime]</c> for Decimal, and the test harness's <c>Microsoft.NETCore.App</c>
+        /// runtimeconfig).</para>
+        ///
+        /// <para>⚠ Also measured: CoreCLR's ilasm on Linux assembles and runs the call WITHOUT
+        /// this declaration, inferring the reference itself. So no run-time test can hold it, only
+        /// a test that reads the emitted text. It is written anyway so that the reference carries
+        /// the key and version rather than whatever an assembler infers. The .NET Framework ilasm
+        /// the Windows harness uses has not been measured without it.</para>
+        /// </summary>
+        private static string VbRuntimeExtern() =>
+            ".assembly extern Microsoft.VisualBasic.Core" + Environment.NewLine
+            + "{" + Environment.NewLine
+            + "  .publickeytoken = (B0 3F 5F 7F 11 D5 0A 3A)" + Environment.NewLine
+            + "  .ver 10:0:0:0" + Environment.NewLine
+            + "}" + Environment.NewLine
+            + Environment.NewLine;
+
         public override void Visit(IRPhi phi)
         {
             // Phi nodes are handled during SSA deconstruction
@@ -6444,7 +6891,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             // Store to temp
             if (!string.IsNullOrEmpty(cast.Name) && _declaredIdentifiers.Contains(cast.Name))
             {
-                EmitStoreLocal(cast.Name);
+                EmitStoreLocal(cast.Name, cast.Type);
             }
             else if (_tempIndices.ContainsKey(cast))
             {
@@ -6461,6 +6908,27 @@ namespace BasicLang.Compiler.CodeGen.MSIL
         private void EmitCastConversion(IRCast cast)
         {
             var targetType = cast.Type?.Name?.ToLower() ?? "";
+
+            // ⭐ Across the Object boundary (task #177) — the two directions a numeric conv
+            // cannot express. What is on the stack is the operand's own type.
+            var operandType = cast.Value?.Type ?? cast.SourceType;
+
+            // An Object → a VALUE type: `CType(o, Short)`, `DirectCast(o, Integer)`. The conv below
+            // would narrow the REFERENCE — the box's address read as a number, a silent wrong
+            // answer. `unbox.any` takes the value out of the box and THROWS InvalidCastException
+            // when the box holds another type, which is exactly C#'s `(short)(o)`, the text the C#
+            // backend emits for this cast. (CInt/CLng/CDbl/CSng/CBool/CStr, and CType to those six
+            // types, are calls to the intrinsics, which CONVERT: see EmitConvertFromObject.)
+            if (IsObjectOperand(operandType) && ValueTypeBoxToken(cast.Type) is string unboxToken)
+            {
+                WriteLine($"    unbox.any {unboxToken}");
+                return;
+            }
+
+            // A VALUE → Object: `CType(n, Object)`. No conv exists for it; it is a box, and the
+            // same one every other value-into-Object slot takes. A reference operand falls through
+            // to the switch exactly as it always did.
+            if (MapType(cast.Type) == "object" && EmitCoerceToSlot(operandType, "object")) return;
 
             // ⛔ A FLOATING -> INTEGRAL narrowing ROUNDS HALF-TO-EVEN before the conv, because
             // `conv.i4` alone TRUNCATES. `Dim i As Integer = 7.5` answered 7 on all four backends
@@ -6544,6 +7012,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             EmitLoadValue(arrayStore.Array);
             EmitLoadValue(arrayStore.Index);
             EmitLoadValue(arrayStore.Value);
+            EmitCoerceToSlot(arrayStore.Value?.Type, MapType(elementType));
             WriteLine($"    stelem {IlTypeToken(elementType)}");
             _currentStack -= 3;
         }
@@ -6607,15 +7076,14 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 ? "class " + collectionToken
                 : IlTypeToken(newObj.ClassName);
 
-            // Load arguments first
-            foreach (var arg in newObj.Arguments)
-            {
-                EmitLoadValue(arg);
-            }
+            // Load arguments first, each fitted to the constructor parameter it fills (task #177)
+            // where the DECLARATION spells the signature. ⚠ By value, as this arm always loaded
+            // them — a ByRef constructor parameter is a separate gap, not this one.
+            var ctorParams = DeclaredCtorParams(newObj.ClassName, newObj.Arguments.Count);
+            EmitArgumentsIntoSlots(newObj.Arguments, ctorParams?.Select(p => IlTypeSpec(p?.Type)).ToList());
 
             // Build constructor signature with parameter types
-            var paramTypes = DeclaredParamList(
-                DeclaredCtorParams(newObj.ClassName, newObj.Arguments.Count), newObj.Arguments);
+            var paramTypes = DeclaredParamList(ctorParams, newObj.Arguments);
 
             // Emit newobj with proper constructor signature
             WriteLine($"    newobj instance void {className}::.ctor({paramTypes})");
@@ -6625,15 +7093,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             // Store result if needed
             if (!string.IsNullOrEmpty(newObj.Name))
             {
-                if (_declaredIdentifiers.Contains(newObj.Name))
-                {
-                    EmitStoreLocal(newObj.Name);
-                }
-                else
-                {
-                    var tempIdx = GetTempIndex(newObj);
-                    EmitStloc(tempIdx);
-                }
+                EmitStoreResult(newObj, newObj.Type);
             }
         }
 
@@ -6663,21 +7123,41 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             // Load 'this' reference (the object on which the method is called)
             EmitLoadValue(methodCall.Object);
 
+            // The declaration that decides the signature, looked up BEFORE the arguments are
+            // loaded, because it is also what each argument is fitted to (task #177): `l.Add(7)` on
+            // a `List(Of Object)` passes into `!0`, which is `object` — the raw int32 it pushed was
+            // an InvalidProgramException. Neither lookup emits anything.
+            var isCollectionMember = TryCollectionMember(
+                methodCall.Object?.Type, methodCall.MethodName, out var collToken, out var collSig);
+            var ifaceMethod = isCollectionMember
+                ? null
+                : DeclaredInterfaceMethod(methodCall.Object?.Type?.Name, methodCall.MethodName);
+
             // Load arguments — an ADDRESS for each one the DECLARATION takes ByRef. An interface
             // receiver has no IRVariable parameter list to read IsByRef from, so a ByRef through
             // an interface stays by-value here and is caught by the signature check below.
-            EmitCallArguments(
-                methodCall.Arguments,
-                DeclaredMethodParams(
-                    TryFindClass(methodCall.Object?.Type?.Name, out var declaringForArgs) ? declaringForArgs : null,
-                    methodCall.MethodName),
-                methodCall.MethodName);
+            if (isCollectionMember)
+            {
+                EmitArgumentsIntoSlots(methodCall.Arguments, ClosedCollectionParams(methodCall.Object?.Type, collSig));
+            }
+            else if (ifaceMethod != null)
+            {
+                EmitArgumentsIntoSlots(methodCall.Arguments,
+                    (ifaceMethod.Parameters ?? new List<IRParameter>()).Select(pp => IlTypeSpec(pp.Type)).ToList());
+            }
+            else
+            {
+                EmitCallArguments(
+                    methodCall.Arguments,
+                    DeclaredMethodParams(
+                        TryFindClass(methodCall.Object?.Type?.Name, out var declaringForArgs) ? declaringForArgs : null,
+                        methodCall.MethodName),
+                    methodCall.MethodName);
+            }
 
             // Build method signature
             string returnType, paramTypes, className, methodName;
-            string boxInterfaceReturn = null;
-            if (TryCollectionMember(
-                    methodCall.Object?.Type, methodCall.MethodName, out var collToken, out var collSig))
+            if (isCollectionMember)
             {
                 // Generic definition signature, per the table — not the substituted types.
                 className = "class " + collToken;
@@ -6689,7 +7169,6 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             {
                 // The DECLARATION decides the signature — an interface first, because an
                 // interface receiver is not a class and every class-side lookup misses it.
-                var ifaceMethod = DeclaredInterfaceMethod(methodCall.Object?.Type?.Name, methodCall.MethodName);
                 if (ifaceMethod != null)
                 {
                     returnType = IlTypeSpec(ifaceMethod.ReturnType);
@@ -6703,11 +7182,8 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                     // that into an object local UNBOXED hands the runtime a raw integer as a
                     // reference — measured: NullReferenceException inside Console.WriteLine, with a
                     // stack trace pointing at the print rather than at the call. Box to put the
-                    // stack back in step with what the IR believes it is holding.
-                    if (IsIlValueType(returnType) && !IsIlValueType(MapType(methodCall.Type)))
-                    {
-                        boxInterfaceReturn = IlTypeToken(ifaceMethod.ReturnType);
-                    }
+                    // stack back in step with what the IR believes it is holding — the box every
+                    // other slot takes (EmitCoerceToSlot, task #177), emitted after the call below.
 
                     // ⛔ THE SAME DISAGREEMENT IN THE OTHER DIRECTION — a Sub. The front end types
                     // an interface call Object whatever the member returns, so hasReturn came out
@@ -6734,7 +7210,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             // For non-virtual calls, the backend should use 'call instance' instead, but callvirt is safer as default
             var callInstruction = methodCall.IsVirtual || !methodCall.IsVirtual ? "callvirt" : "call";
             WriteLine($"    {callInstruction} instance {returnType} {className}::{methodName}({paramTypes})");
-            if (boxInterfaceReturn != null) WriteLine($"    box {boxInterfaceReturn}");
+            if (ifaceMethod != null && returnType != "void") EmitCoerceToSlot(ifaceMethod.ReturnType, MapType(methodCall.Type));
 
             // Update stack: pop 'this' + args, push return value if any
             _currentStack -= (1 + methodCall.Arguments.Count);
@@ -6743,15 +7219,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             // Store result if needed
             if (hasReturn && !string.IsNullOrEmpty(methodCall.Name))
             {
-                if (_declaredIdentifiers.Contains(methodCall.Name))
-                {
-                    EmitStoreLocal(methodCall.Name);
-                }
-                else
-                {
-                    var tempIdx = GetTempIndex(methodCall);
-                    EmitStloc(tempIdx);
-                }
+                EmitStoreResult(methodCall, methodCall.Type);
             }
             else if (hasReturn)
             {
@@ -6794,15 +7262,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             // Store result if needed
             if (hasReturn && !string.IsNullOrEmpty(baseCall.Name))
             {
-                if (_declaredIdentifiers.Contains(baseCall.Name))
-                {
-                    EmitStoreLocal(baseCall.Name);
-                }
-                else
-                {
-                    var tempIdx = GetTempIndex(baseCall);
-                    EmitStloc(tempIdx);
-                }
+                EmitStoreResult(baseCall, baseCall.Type);
             }
             else if (hasReturn)
             {
@@ -6831,7 +7291,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
 
                 WriteLine($"    ldsfld {IlTypeSpec(readField.Type)} {SanitizeName(readOwner.Name)}::{SanitizeName(readField.Name)}");
                 _currentStack++;
-                EmitFieldAccessResult(fieldAccess);
+                EmitFieldAccessResult(fieldAccess, readField.Type);
                 return;
             }
 
@@ -6856,7 +7316,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 }
 
                 EmitPropertyGet(readPropOwner, readProp);
-                EmitFieldAccessResult(fieldAccess);
+                EmitFieldAccessResult(fieldAccess, readProp.Type);
                 return;
             }
 
@@ -6959,14 +7419,13 @@ namespace BasicLang.Compiler.CodeGen.MSIL
         /// the stack. Shared so the collection-property arm cannot drift from the field arm —
         /// both push exactly one value and both have to store it the same way.
         /// </summary>
-        private void EmitFieldAccessResult(IRFieldAccess fieldAccess)
+        private void EmitFieldAccessResult(IRFieldAccess fieldAccess, TypeInfo stackType = null)
         {
             if (string.IsNullOrEmpty(fieldAccess.Name)) return;
 
-            if (_declaredIdentifiers.Contains(fieldAccess.Name))
-                EmitStoreLocal(fieldAccess.Name);
-            else
-                EmitStloc(GetTempIndex(fieldAccess));
+            // What was pushed: the DECLARED type where an arm read it from a declaration (a Shared
+            // field, a class property), else the access's own type.
+            EmitStoreResult(fieldAccess, stackType ?? fieldAccess.Type);
         }
 
         public override void Visit(IRFieldStore fieldStore)
@@ -6985,6 +7444,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 }
 
                 EmitLoadValue(fieldStore.Value);
+                EmitCoerceToSlot(fieldStore.Value?.Type, IlTypeSpec(storeField.Type));
                 WriteLine($"    stsfld {IlTypeSpec(storeField.Type)} {SanitizeName(storeOwner.Name)}::{SanitizeName(storeField.Name)}");
                 _currentStack--;
                 return;
@@ -7009,6 +7469,11 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 }
 
                 EmitLoadValue(fieldStore.Value);
+
+                // ⛔ `b.Tag = 5` into a class's Object property (task #177): the setter takes
+                // `object`, and the raw int32 was an InvalidProgramException. #175's interface arm
+                // below already boxed; both now ask the same helper.
+                EmitCoerceToSlot(fieldStore.Value?.Type, IlTypeSpec(storeProp.Type));
                 EmitPropertySet(storePropOwner, storeProp);
                 return;
             }
@@ -7019,7 +7484,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             {
                 EmitLoadValue(fieldStore.Object);
                 EmitLoadValue(fieldStore.Value);
-                EmitInterfacePropertySet(storeIface, storeIfaceProp, IlTypeSpec(fieldStore.Value?.Type));
+                EmitInterfacePropertySet(storeIface, storeIfaceProp, fieldStore.Value?.Type);
                 return;
             }
 
@@ -7029,9 +7494,11 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             // Load value to store
             EmitLoadValue(fieldStore.Value);
 
-            // Store value to field
+            // Store value to field — fitted to the field's DECLARED type (task #177): `b.O = 3.5`
+            // into `Public O As Object` wrote a raw float64 with `stfld object`.
             var fieldType = IlTypeSpec(
                 DeclaredFieldType(fieldStore.Object?.Type, fieldStore.FieldName) ?? fieldStore.Value?.Type);
+            EmitCoerceToSlot(fieldStore.Value?.Type, fieldType);
             var className = fieldStore.Object?.Type?.Name != null
                 ? DeclaringFieldToken(fieldStore.Object.Type, fieldStore.FieldName)
                 : "object";
@@ -7546,16 +8013,16 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             // Load collection
             EmitLoadValue(indexer.Collection);
 
-            // Load indices
-            foreach (var index in indexer.Indices)
-            {
-                EmitLoadValue(index);
-            }
+            // Load indices — each fitted to the key slot it fills (task #177), which needs the
+            // receiver's signature first; the lookup emits nothing.
+            var isCollection = TryCollectionMember(indexer.Collection?.Type, "get_Item", out var collToken, out var collSig);
+            EmitArgumentsIntoSlots(indexer.Indices,
+                isCollection ? ClosedCollectionParams(indexer.Collection?.Type, collSig) : null);
 
             // Call the indexer on the RECEIVER's own type. This used to be hard-coded to
             // IList`1<resultType>, which is wrong for a Dictionary in both positions: it named
             // the VALUE type as the list's element and passed the KEY as an integer index.
-            if (TryCollectionMember(indexer.Collection?.Type, "get_Item", out var collToken, out var collSig))
+            if (isCollection)
             {
                 WriteLine($"    callvirt instance {collSig.Ret} class {collToken}::get_Item({collSig.Params})");
             }
@@ -7577,10 +8044,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             // ran, printed garbage, and corrupted the collection for every later use.
             if (!string.IsNullOrEmpty(indexer.Name))
             {
-                if (_declaredIdentifiers.Contains(indexer.Name))
-                    EmitStoreLocal(indexer.Name);
-                else
-                    EmitStloc(GetTempIndex(indexer));
+                EmitStoreResult(indexer, indexer.Type);
                 _currentStack--;
             }
         }
@@ -7631,14 +8095,15 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             // Receiver, then indices, then value — the argument order of the accessor.
             EmitLoadValue(indexerStore.Collection);
 
-            foreach (var index in indexerStore.Indices)
-            {
-                EmitLoadValue(index);
-            }
+            // Every index and the value are arguments of set_Item, each fitted to the slot it
+            // fills (task #177): `d("k") = 5` into a `Dictionary(Of String, Object)` passes the 5
+            // as `!1`, which is `object`. The lookup emits nothing, so it can come first.
+            var isCollection = TryCollectionMember(indexerStore.Collection?.Type, "set_Item", out var collToken, out var collSig);
+            var setterArguments = new List<IRValue>(indexerStore.Indices) { indexerStore.Value };
+            EmitArgumentsIntoSlots(setterArguments,
+                isCollection ? ClosedCollectionParams(indexerStore.Collection?.Type, collSig) : null);
 
-            EmitLoadValue(indexerStore.Value);
-
-            if (TryCollectionMember(indexerStore.Collection?.Type, "set_Item", out var collToken, out var collSig))
+            if (isCollection)
             {
                 // ⚠ The IL NAME comes from the table too, not from the string that was looked
                 // up. Re-spelling it here made `CollectionMember.Il` dead on this path: a

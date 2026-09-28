@@ -349,6 +349,18 @@ public class JsExecutionTierRosterTests
         // pre-existing E10 List-bounds note). NothingStringTextTests (pure codegen-text fixture,
         // spawns nothing, no [Category("Integration")]) is NOT here.
         typeof(NothingStringTextExecutionTests),
+
+        // Task #177 — MSIL boxes a value into an Object slot, converts out of one, and compares
+        // Objects late-bound. Lives in the VisualGameStudio.Tests.Msil namespace, NOT
+        // VisualGameStudio.Tests.Compiler, so RosterCoversEveryJavaScriptIntegrationFixture's own
+        // namespace filter cannot discover it automatically — listed here by hand, same as
+        // MsilValueToStringExecutionTests above. Its JS legs run through
+        // JavaScriptExecutionTests.RunJs directly (most O/E/C/L probes) and
+        // JavaScriptOptimizedExecutionTests.RunOptimized (L11's #214 pin, which needs the
+        // STANDARD-pipeline runner — JavaScriptExecutionTests.RunJs runs no optimizer at all and
+        // would silently miss the mixed-type constant fold this pin is about, the same trap
+        // BarePropertyLoweringExecutionTests' own note above names).
+        typeof(MsilObjectBoxingExecutionTests),
     };
 
     /// <summary>
@@ -397,7 +409,7 @@ public class JsExecutionTierRosterTests
 
     [Test]
     public void RosterIsPinned()
-        => Assert.That(ExecutionTier, Has.Length.EqualTo(83), // + MsilValueToStringExecutionTests (task #183), InterfaceMethodTypingExecutionTests, IsIsNotOperatorExecutionTests (task #185), MeReceiverTypingExecutionTests (task #176), UserDelegateConversionExecutionTests (task #187), DelegateMemberInvocationExecutionTests (task #188), NothingStringTextExecutionTests (task #189); + WhenGuardCallRunTests
+        => Assert.That(ExecutionTier, Has.Length.EqualTo(84), // + MsilValueToStringExecutionTests (task #183), InterfaceMethodTypingExecutionTests, IsIsNotOperatorExecutionTests (task #185), MeReceiverTypingExecutionTests (task #176), UserDelegateConversionExecutionTests (task #187), DelegateMemberInvocationExecutionTests (task #188), NothingStringTextExecutionTests (task #189), MsilObjectBoxingExecutionTests (task #177); + WhenGuardCallRunTests
             "The execution-tier roster changed. That is fine — update the number — but it must " +
             "be a deliberate edit, not a silent shrink.");
 

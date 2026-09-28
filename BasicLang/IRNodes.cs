@@ -610,6 +610,20 @@ namespace BasicLang.Compiler.IR
     public class IRNothingPatternCase : IRPatternCase
     {
         public IRNothingPatternCase(BasicBlock target) : base(target) { }
+
+        /// <summary>
+        /// True for <c>Case Is Nothing</c>, the reference-IDENTITY test (ADR-0011 D2 (2)). False
+        /// for <c>Case Nothing</c>, VB's VALUE comparison <c>subject = Nothing</c>. Carried from
+        /// <c>NothingPatternNode.WrittenWithIs</c>.
+        ///
+        /// <para>The two spellings answer differently only when the subject is an Object holding a
+        /// value that equals its type's default: an Object holding 0 is <c>= Nothing</c> but is not
+        /// <c>Is Nothing</c>. The MSIL backend reads this flag to give an Object subject VB's
+        /// late-bound comparison for <c>Case Nothing</c> and keep the null test for
+        /// <c>Case Is Nothing</c> (task #177). No other backend reads it. A pattern clone copies it
+        /// with the rest of the node (<c>ClosureLowering</c>'s memberwise <c>Shallow</c>).</para>
+        /// </summary>
+        public bool WrittenWithIs { get; set; }
     }
 
     /// <summary>
