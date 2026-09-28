@@ -62,8 +62,19 @@ origin/master worktree: `AClassUsingALaterClassMember_IsAnOrderingGapOnCpp_Pinne
 `E9e_ReturnAddressOfOnOneBranchArm_Cpp_PinsTodaysCompileFailure_Against201`, `Cpp_Runs`, `Cpp_Aggressive_Runs`,
 `CSharp_Runs`. Plus the older inherited `CppDoubleFormattingTests.Expected_IsWhatDotNetPrints` and
 `AFoldedComparison_ReachesEveryBackend_ModuloBooleanFormatting`, and the flaky
-`NonEx_variants_marshal_and_are_screen_size_dependent`. Full-suite record for the merged tree: see the
-gate line below.
+`NonEx_variants_marshal_and_are_screen_size_dependent`.
+
+**Full-suite gate on the merged tree `758f1e0d` (Windows, clean Release build, `--blame`, both streams):**
+12094 total / 12074 passed / 18 failed / 2 skipped, 6 h 18 m, stderr empty (no abort/crash). Every failure
+is by NAME on a known list: 12 of the 14 master-alone rows above (`StringNothing_AllFourBackends_…` and
+`E9b_EveryValueTypeThroughWriteAndWriteLine_…` PASSED here, as did `AFoldedComparison_…`), plus
+`CppDoubleFormattingTests.Expected_IsWhatDotNetPrints`, the flaky
+`NonEx_variants_marshal_and_are_screen_size_dependent`, and the machine rows
+`Emit_ReplacesAnImportedModuleThatAnotherHandleHasMapped`, `Emit_ReplacesAScriptThatAnotherHandleHasMapped`,
+`SearchSnippets_EmptyQuery_ReturnsAll`, `SearchSnippets_WhitespaceQuery_ReturnsAll`. No new failure. Re-run by
+name afterwards (PixelLayout, WebMainStartup, FormDesignerAcceptance, FormBuildEmission, FormDockScript,
+FormRetargetPair, WinFormsCatalogSweep, JavaScriptProjectBuild): 262/262 passed, 0 skipped (the Edge and
+WinForms-window harnesses ran).
 Spec `docs/superpowers/specs/2026-09-27-web-pixel-layout-design.md` · plan
 `docs/superpowers/plans/2026-09-27-web-pixel-layout.md` · per-task pre-flights (they WIN over the plan)
 `…-task9-preflight.md` … `…-task14-preflight.md`; mutation record `…-task15-mutations.md` (20/20 killed).
