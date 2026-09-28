@@ -392,19 +392,22 @@ namespace BasicLang.Compiler.IR
         /// spellings of one member reference cannot disagree about its receiver.
         ///
         /// <para>⛔ Both used to call <c>GetOrCreateVariable("Me", …)</c>, and
-        /// <c>_variableVersions</c> is NOT scoped per function — nothing ever popped "Me" — so the
+        /// <c>_variableVersions</c> was not scoped per function until #199
+        /// (<see cref="EnterProcedureScope"/>) — nothing ever popped "Me" — so the
         /// FIRST class in the file to use <c>Me</c>, implicitly or explicitly, fixed its type for
         /// every class after it. MSIL spells a member token from the receiver's IR type, so a
         /// later class's bare property became <c>stfld int32 'Animal'::'V'</c> and died with
         /// <c>MissingFieldException: Field not found: 'Animal.V'</c> (#176); C#, JavaScript and C++
         /// print <c>this</c> and never read the type, which is why only MSIL showed it.</para>
         ///
-        /// <para>⚠ Kept OUT of <c>_variableVersions</c> altogether, because that stack is exactly
-        /// how a binding outlives its function. Keyed by the function, not cleared on entry: a
-        /// lambda body is its own function and gets its own <c>Me</c>, while the method enclosing
-        /// it keeps the SAME one before and after the lambda is visited. One instance per function
-        /// is what the IR always had within a function; it is kept for that, not because anything
-        /// is measured to need it — a fresh <c>Me</c> per USE ran every #176 probe identically.</para>
+        /// <para>⚠ Kept OUT of <c>_variableVersions</c> altogether, because that stack was exactly
+        /// how a binding outlived its function — and a method still shares it with the lambdas
+        /// built inside it, which each need their own <c>Me</c>. Keyed by the function, not
+        /// cleared on entry: a lambda body is its own function and gets its own <c>Me</c>, while
+        /// the method enclosing it keeps the SAME one before and after the lambda is visited. One
+        /// instance per function is what the IR always had within a function; it is kept for
+        /// that, not because anything is measured to need it — a fresh <c>Me</c> per USE ran
+        /// every #176 probe identically.</para>
         ///
         /// <para>⚠ <c>MyBase</c> is the deliberate exception: the same object seen as its BASE
         /// class, so <see cref="Visit(MyBaseExpressionNode)"/> mints its own base-typed variable of
@@ -773,6 +776,86 @@ namespace BasicLang.Compiler.IR
             }
         }
 
+        /// <summary>
+        /// What <see cref="_variableVersions"/> and <see cref="_locals"/> held when a procedure
+        /// body was entered — the enclosing scope, which <see cref="ExitProcedureScope"/> puts
+        /// back exactly.
+        /// </summary>
+        private sealed class ProcedureScope
+        {
+            public ProcedureScope(Dictionary<string, IRVariable[]> versions, Dictionary<string, IRAlloca> locals)
+            {
+                Versions = versions;
+                Locals = locals;
+            }
+
+            public Dictionary<string, IRVariable[]> Versions { get; }
+            public Dictionary<string, IRAlloca> Locals { get; }
+        }
+
+        /// <summary>
+        /// Opens the name scope of ONE procedure body — a Sub, Function, constructor (declared
+        /// or synthesized), property accessor, operator or interface default implementation.
+        /// Paired with <see cref="ExitProcedureScope"/> at the body's end (#199, ADR D4).
+        ///
+        /// <para>⛔ Neither map was ever scoped: a local's <c>PushVariableVersion</c> was never
+        /// popped, nor a constructor's parameters, a setter's <c>value</c>, or a name
+        /// <see cref="GetOrCreateVariable"/> minted — so every binding outlived its procedure and
+        /// the NEXT procedure's same-named reference bound it. Measured on master 53633acf:
+        /// <list type="bullet">
+        /// <item><c>Sub A() : Dim i As String</c> then <c>Sub B() : For i = 1 To 3</c> — B's loop
+        /// took A's String <c>i</c> as existing storage and declared none of its own: CS0103 on
+        /// C#, an undeclared identifier on C++, InvalidProgramException on MSIL.</item>
+        /// <item>A file-scope <c>Dim g As Integer</c> read in <c>Main</c> after <c>Sub A</c>
+        /// declared <c>Dim g As String</c> — Main's <c>g</c> bound A's String local, and MSIL
+        /// fed <c>ldsfld int32 g</c> to <c>WriteLine(string)</c>: InvalidProgramException.</item>
+        /// <item>A constructor parameter <c>n</c> — class B's field write <c>n = 4</c> bound it
+        /// and JavaScript emitted a bare <c>n = 4;</c>: ReferenceError.</item>
+        /// </list>
+        /// #176 fixed the same leak for <c>Me</c> alone.</para>
+        ///
+        /// <para>⚠ A LAMBDA BODY IS NOT A SCOPE. It is built inside its creator's scope,
+        /// because it captures the creator's names; its own parameters are pushed and popped
+        /// explicitly (<see cref="Visit(LambdaExpressionNode)"/>).</para>
+        ///
+        /// <para>⚠ Module globals are untouched: they live in <see cref="_moduleGlobals"/> and
+        /// <see cref="_globalVariables"/>, never here. A name pushed OUTSIDE any procedure (a
+        /// module-scope initializer's scratch lowering) belongs to the enclosing scope and stays
+        /// visible, as it always was.</para>
+        /// </summary>
+        private ProcedureScope EnterProcedureScope()
+        {
+            var versions = new Dictionary<string, IRVariable[]>(StringComparer.Ordinal);
+            foreach (var entry in _variableVersions)
+            {
+                if (entry.Value.Count > 0)
+                    versions[entry.Key] = entry.Value.ToArray();
+            }
+            return new ProcedureScope(versions, new Dictionary<string, IRAlloca>(_locals));
+        }
+
+        /// <summary>
+        /// Closes a scope <see cref="EnterProcedureScope"/> opened: every name the body bound is
+        /// dropped and the enclosing scope's versions are restored as they were — restored, not
+        /// popped by count, so an unbalanced push or pop inside the body cannot shift what the
+        /// enclosing scope sees.
+        /// </summary>
+        private void ExitProcedureScope(ProcedureScope scope)
+        {
+            _variableVersions.Clear();
+            foreach (var entry in scope.Versions)
+            {
+                // ToArray lists a stack top-first; the constructor pushes in enumeration order.
+                _variableVersions[entry.Key] = new Stack<IRVariable>(entry.Value.Reverse());
+            }
+
+            _locals.Clear();
+            foreach (var entry in scope.Locals)
+            {
+                _locals[entry.Key] = entry.Value;
+            }
+        }
+
         private void EmitInstruction(IRInstruction instruction)
         {
             // Skip emission when building When guard expressions to prevent optimization passes
@@ -878,6 +961,7 @@ namespace BasicLang.Compiler.IR
         {
             var returnType = _semanticAnalyzer.GetNodeType(node) ?? new TypeInfo("Void", TypeKind.Void);
 
+            var scope = EnterProcedureScope();
             _currentFunction = _module.CreateFunction(ProcedureIrName(node.Name), returnType);
 
             // Set module name for multi-file compilation
@@ -949,6 +1033,7 @@ namespace BasicLang.Compiler.IR
             {
                 PopVariableVersion(param.Name);
             }
+            ExitProcedureScope(scope);
 
             _currentFunction = null;
             _currentBlock = null;
@@ -958,6 +1043,7 @@ namespace BasicLang.Compiler.IR
         {
             var voidType = new TypeInfo("Void", TypeKind.Void);
 
+            var scope = EnterProcedureScope();
             _currentFunction = _module.CreateFunction(ProcedureIrName(node.Name), voidType);
 
             // Set module name for multi-file compilation
@@ -1019,6 +1105,7 @@ namespace BasicLang.Compiler.IR
             {
                 PopVariableVersion(param.Name);
             }
+            ExitProcedureScope(scope);
 
             _currentFunction = null;
             _currentBlock = null;
@@ -1684,6 +1771,7 @@ namespace BasicLang.Compiler.IR
             if (!_semanticAnalyzer.ConstructorBindings.TryGetValue(node, out var implicitBase)) return;
             if (implicitBase?.Parameters == null || implicitBase.Parameters.Count == 0) return;
 
+            var scope = EnterProcedureScope();
             _currentFunction = _module.CreateFunction(
                 $"{node.Name}__ctor", new TypeInfo("Void", TypeKind.Void));
             _currentFunction.SourceFilePath = _sourceFilePath;
@@ -1696,6 +1784,7 @@ namespace BasicLang.Compiler.IR
             {
                 EmitInstruction(new IRReturn());
             }
+            ExitProcedureScope(scope);
 
             // ⚠ Cleared, not save/restored. Measured with a diagnostic: `_currentFunction` is
             // NULL every time this runs — a class is never visited while a function is current,
@@ -1884,6 +1973,7 @@ namespace BasicLang.Compiler.IR
                     var implFunctionName = $"{node.Name}.{method.Name}_DefaultImpl";
                     var savedFunction = _currentFunction;
                     var savedBlock = _currentBlock;
+                    var scope = EnterProcedureScope();
 
                     _currentFunction = _module.CreateFunction(implFunctionName, new TypeInfo(method.ReturnType?.Name ?? "Void", TypeKind.Primitive));
                     _currentFunction.SourceFilePath = _sourceFilePath;
@@ -1915,6 +2005,7 @@ namespace BasicLang.Compiler.IR
                     {
                         PopVariableVersion(param.Name);
                     }
+                    ExitProcedureScope(scope);
 
                     irMethod.DefaultImplementation = _currentFunction;
 
@@ -2129,6 +2220,9 @@ namespace BasicLang.Compiler.IR
             var constructorName = _currentClassName != null ? $"{_currentClassName}__ctor" : "Constructor";
             var returnType = new TypeInfo("Void", TypeKind.Void);
 
+            // ⛔ This path never popped its parameters, so a constructor's `n` bound every later
+            // same-named reference in the file — see EnterProcedureScope.
+            var scope = EnterProcedureScope();
             _currentFunction = _module.CreateFunction(constructorName, returnType);
             _currentFunction.SourceFilePath = _sourceFilePath;
             _currentBlock = _currentFunction.CreateBlock("entry");
@@ -2187,6 +2281,7 @@ namespace BasicLang.Compiler.IR
             {
                 EmitInstruction(new IRReturn());
             }
+            ExitProcedureScope(scope);
 
             _currentFunction = null;
             _currentBlock = null;
@@ -2227,6 +2322,7 @@ namespace BasicLang.Compiler.IR
                     ? $"{_currentClassName}.get_{node.Name}"
                     : $"get_{node.Name}";
 
+                var getterScope = EnterProcedureScope();
                 _currentFunction = _module.CreateFunction(getterName, propertyType);
                 _currentFunction.SourceFilePath = _sourceFilePath;
                 _currentBlock = _currentFunction.CreateBlock("entry");
@@ -2237,6 +2333,7 @@ namespace BasicLang.Compiler.IR
                 {
                     EmitInstruction(new IRReturn());
                 }
+                ExitProcedureScope(getterScope);
             }
 
             // Generate setter method
@@ -2247,11 +2344,13 @@ namespace BasicLang.Compiler.IR
                     : $"set_{node.Name}";
 
                 var voidType = new TypeInfo("Void", TypeKind.Void);
+                var setterScope = EnterProcedureScope();
                 _currentFunction = _module.CreateFunction(setterName, voidType);
                 _currentFunction.SourceFilePath = _sourceFilePath;
                 _currentBlock = _currentFunction.CreateBlock("entry");
 
-                // Add value parameter
+                // Add value parameter. ⚠ Never popped explicitly — the scope drops it; before
+                // #199 every setter's `value` outlived it.
                 var valueParam = new IRVariable("value", propertyType) { IsParameter = true };
                 _currentFunction.Parameters.Add(valueParam);
                 PushVariableVersion("value", valueParam);
@@ -2262,6 +2361,7 @@ namespace BasicLang.Compiler.IR
                 {
                     EmitInstruction(new IRReturn());
                 }
+                ExitProcedureScope(setterScope);
             }
 
             _currentFunction = savedFunction;
@@ -2358,16 +2458,17 @@ namespace BasicLang.Compiler.IR
                 lambdaFunc.Parameters.Add(paramVar);
             }
 
-            // Save current context
+            // Save current context. ⚠ NOT a name scope (#199, ADR D4): the body is built inside
+            // its creator's scope because it captures the creator's names, so neither
+            // `_variableVersions` nor `_locals` is saved here — only the parameters below are
+            // pushed and popped.
             var savedFunction = _currentFunction;
             var savedBlock = _currentBlock;
-            var savedLocals = new Dictionary<string, IRAlloca>(_locals);
 
             // Set up lambda function context
             _currentFunction = lambdaFunc;
             _currentFunction.SourceFilePath = _sourceFilePath;
             _currentBlock = lambdaFunc.CreateBlock("entry");
-            _locals.Clear();
 
             // Make parameters visible to the lambda body (they're declared by the
             // lambda itself, so no allocas are emitted for them)
@@ -2423,11 +2524,6 @@ namespace BasicLang.Compiler.IR
             // Restore context
             _currentFunction = savedFunction;
             _currentBlock = savedBlock;
-            _locals.Clear();
-            foreach (var kvp in savedLocals)
-            {
-                _locals[kvp.Key] = kvp.Value;
-            }
 
             // Remove lambda parameters from the visible variable versions
             foreach (var paramVar in lambdaFunc.Parameters)
@@ -2527,6 +2623,10 @@ namespace BasicLang.Compiler.IR
             var opFunc = _module.CreateFunction(funcName, returnType);
             // Operators are always static (handled at code generation)
 
+            // The scope also saves `_locals`, which this path used to save, clear and restore
+            // by hand.
+            var scope = EnterProcedureScope();
+
             // Add parameters
             foreach (var param in node.Parameters)
             {
@@ -2539,12 +2639,10 @@ namespace BasicLang.Compiler.IR
             // Save context and switch to operator function
             var savedFunction = _currentFunction;
             var savedBlock = _currentBlock;
-            var savedLocals = new Dictionary<string, IRAlloca>(_locals);
 
             _currentFunction = opFunc;
             _currentFunction.SourceFilePath = _sourceFilePath;
             _currentBlock = opFunc.CreateBlock("entry");
-            _locals.Clear();
 
             // Generate body
             if (node.Body != null)
@@ -2563,6 +2661,7 @@ namespace BasicLang.Compiler.IR
             {
                 PopVariableVersion(param.Name);
             }
+            ExitProcedureScope(scope);
 
             // If inside a class, also add as an IRMethod
             if (_currentClassName != null && _module.Classes.TryGetValue(_currentClassName, out var irClass))
@@ -2583,11 +2682,6 @@ namespace BasicLang.Compiler.IR
             // Restore context
             _currentFunction = savedFunction;
             _currentBlock = savedBlock;
-            _locals.Clear();
-            foreach (var kvp in savedLocals)
-            {
-                _locals[kvp.Key] = kvp.Value;
-            }
         }
 
         private string GetOperatorMethodName(string operatorSymbol)
@@ -5606,8 +5700,8 @@ namespace BasicLang.Compiler.IR
                     //
                     // ⚠ HOW MUCH THIS LINE ACTUALLY COVERS, measured — do not overestimate it:
                     // `_locals` IS VESTIGIAL. Nothing ever adds an entry for a declared
-                    // variable; its only writes are the two lambda-context restore loops, each
-                    // fed by a `savedLocals` copy of the (empty) dictionary. So
+                    // variable; its only write is ExitProcedureScope's restore, fed by a copy
+                    // of the (empty) dictionary. So
                     // `_locals.ContainsKey(...)` is permanently false and isLocalOrParam
                     // reduces to "is a PARAMETER of the current function". A DIM'D LOCAL — the
                     // C1 shape above — is NOT caught here; it is caught by the descriptor
