@@ -253,6 +253,43 @@ namespace BasicLang.Compiler.SemanticAnalysis
         private int _forEachHiddenVariableCounter;
 
         /// <summary>
+        /// #169 — the range variables each LINQ clause declares, in declaration order, for the
+        /// IR builder to register where the clause brings them into scope (ADR-0013 D5). Only the
+        /// ones the query scope accepted: a duplicate name is refused by <c>Define</c> and every
+        /// reference resolves to the first. Keyed by clause REFERENCE and overwritten on
+        /// re-analysis, like <see cref="ForEachControlBindings"/>.
+        /// </summary>
+        internal IReadOnlyDictionary<LinqClause, IReadOnlyList<Symbol>> LinqRangeVariables =>
+            _linqRangeVariables;
+
+        private readonly Dictionary<LinqClause, IReadOnlyList<Symbol>> _linqRangeVariables =
+            new Dictionary<LinqClause, IReadOnlyList<Symbol>>(ReferenceEqualityComparer.Instance);
+
+        /// <summary>
+        /// #169 — every lambda parameter symbol, so a reference to one records
+        /// <see cref="NameBindingKind.LambdaParameter"/> rather than Parameter. By reference.
+        /// </summary>
+        private readonly HashSet<Symbol> _lambdaParameterSymbols =
+            new HashSet<Symbol>(ReferenceEqualityComparer.Instance);
+
+        /// <summary>
+        /// #169 — declarations the analyzer SYNTHESIZED rather than read from source (the
+        /// <c>For Each</c> hidden element variable). A reference to one records no
+        /// <see cref="NameBinding"/> (ADR-0013 D5): the IR builder registers it at its synthesis site
+        /// and binds it by its own name. By reference.
+        /// </summary>
+        private readonly HashSet<Symbol> _synthesizedSymbols =
+            new HashSet<Symbol>(ReferenceEqualityComparer.Instance);
+
+        /// <summary>
+        /// #169 (ADR-0013 D8) — how many references resolved to a symbol whose name does NOT equal the
+        /// written name under OrdinalIgnoreCase, and so were left with no
+        /// <see cref="IdentifierExpressionNode.Binding"/>. Diagnostic only, for #124 to size;
+        /// each one is also written to <see cref="System.Diagnostics.Debug"/>.
+        /// </summary>
+        internal int UnboundByNameMismatch { get; private set; }
+
+        /// <summary>
         /// The control variables of the <c>For</c> / <c>For Each</c> loops whose bodies are being
         /// analyzed, innermost last — VB's BC30069 question ("already in use by an enclosing
         /// loop"), asked only by a <c>For Each</c> that would REUSE a variable.
@@ -1183,6 +1220,8 @@ namespace BasicLang.Compiler.SemanticAnalysis
             _errors.Clear();
             _nodeTypes.Clear();
             _nodeSymbols.Clear();
+            _lambdaParameterSymbols.Clear();
+            _synthesizedSymbols.Clear();
             _delegateMemberInvocations.Clear();
             _netNamespaces.Clear();
             _moduleMembers.Clear();
@@ -1245,6 +1284,91 @@ namespace BasicLang.Compiler.SemanticAnalysis
         private void SetNodeSymbol(ASTNode node, Symbol symbol)
         {
             _nodeSymbols[node] = symbol;
+
+            // ⭐ #169: THE ONE PLACE an identifier reference's NameBinding is recorded — here,
+            // where its resolved symbol is, so the two can never disagree (the call site that
+            // re-binds a callee to a module procedure writes through here too). Cleared at the
+            // top of Visit(IdentifierExpressionNode), so a re-analysis that resolves nothing
+            // leaves none behind.
+            if (node is IdentifierExpressionNode reference)
+                reference.Binding = BindingOf(reference, symbol);
+        }
+
+        /// <summary>
+        /// The <see cref="NameBinding"/> a reference written <paramref name="reference"/> records
+        /// for <paramref name="symbol"/>, or null for a synthesized declaration, an Event (ADR-0013
+        /// D7), or a symbol whose name differs from the written one other than by case (ADR-0013 D8).
+        /// </summary>
+        private NameBinding? BindingOf(IdentifierExpressionNode reference, Symbol symbol)
+        {
+            if (symbol == null || _synthesizedSymbols.Contains(symbol)) return null;
+
+            var kind = BindingKindOf(symbol);
+            if (kind == null) return null;
+
+            if (!string.Equals(symbol.Name, reference.Name, StringComparison.OrdinalIgnoreCase))
+            {
+                UnboundByNameMismatch++;
+                System.Diagnostics.Debug.WriteLine(
+                    $"#169 D8: '{reference.Name}' (line {reference.Line}) resolved to {symbol.Kind} " +
+                    $"'{symbol.Name}'; no binding recorded.");
+                return null;
+            }
+
+            return new NameBinding(symbol.Name, kind.Value, symbol);
+        }
+
+        private NameBindingKind? BindingKindOf(Symbol symbol)
+        {
+            switch (symbol.Kind)
+            {
+                case SymbolKind.Parameter:
+                    return _lambdaParameterSymbols.Contains(symbol)
+                        ? NameBindingKind.LambdaParameter
+                        : NameBindingKind.Parameter;
+                case SymbolKind.Variable:
+                case SymbolKind.Constant:
+                    return StorageBindingKindOf(symbol);
+                case SymbolKind.Property:
+                    return NameBindingKind.Property;
+                case SymbolKind.Function:
+                case SymbolKind.Subroutine:
+                    return NameBindingKind.Method;
+                case SymbolKind.Event:
+                    return null;   // ADR-0013 D7: unbound until #124 consumes it
+                default:
+                    return NameBindingKind.Type;
+            }
+        }
+
+        /// <summary>
+        /// Where a variable or constant lives, by the scope that declared it: a procedure, block
+        /// or loop scope holds a Local; a class scope a Field; the file, a Module or a Namespace a
+        /// ModuleGlobal. A symbol with no declaring scope was found through a member table — a
+        /// class's (a Field) or another module's or file's (a ModuleGlobal).
+        /// </summary>
+        private static NameBindingKind StorageBindingKindOf(Symbol symbol)
+        {
+            switch (symbol.DeclaringScope?.Kind)
+            {
+                case ScopeKind.Function:
+                case ScopeKind.Subroutine:
+                case ScopeKind.Block:
+                case ScopeKind.Loop:
+                    return NameBindingKind.Local;
+                case ScopeKind.Class:
+                case ScopeKind.Interface:
+                    return NameBindingKind.Field;
+                case ScopeKind.Global:
+                case ScopeKind.Namespace:
+                case ScopeKind.Module:
+                    return NameBindingKind.ModuleGlobal;
+                default:
+                    return !string.IsNullOrEmpty(symbol.OwningModule) || symbol.IsImported
+                           || !string.IsNullOrEmpty(symbol.SourceModule)
+                        ? NameBindingKind.ModuleGlobal
+                        : NameBindingKind.Field;
+            }
         }
 
         /// <summary>
@@ -5145,6 +5269,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 case ClassNode cls:
                     PopulateClassMemberSignatures(
                         cls, _typeManager.GetType(cls.Name), includeConstructors: false);
+                    RegisterUserOperators(cls);
                     foreach (var member in cls.Members)
                         RegisterClassMemberSignatures(member);
                     break;
@@ -5157,6 +5282,158 @@ namespace BasicLang.Compiler.SemanticAnalysis
                         RegisterClassMemberSignatures(member);
                     break;
             }
+        }
+
+        /// <summary>
+        /// Each class's <c>Operator</c> declarations, by class name — recorded in pass 1 so a
+        /// use ahead of the class still binds. See <see cref="TryBindUserOperator"/>.
+        /// </summary>
+        private readonly Dictionary<string, List<OperatorDeclarationNode>> _userOperators =
+            new Dictionary<string, List<OperatorDeclarationNode>>(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// The binary operators a class may declare. Each lowers to a static <c>op_*</c> function
+        /// the IR builder calls; C# renders the call back as the infix operator, so the set is
+        /// what C# can declare. VB's <c>\</c>, <c>^</c>, <c>&amp;</c> and <c>Like</c> have no C#
+        /// operator (C# would emit <c>operator Exponent</c>, which does not compile).
+        /// </summary>
+        private static readonly HashSet<string> SupportedBinaryUserOperators = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "+", "-", "*", "/", "Mod", "=", "<>", "<", ">", "<=", ">=", "And", "Or", "Xor"
+        };
+
+        /// <summary>VB (BC33033) and C# (CS0216) both require these to be declared in pairs.</summary>
+        private static readonly (string, string)[] PairedUserOperators = { ("=", "<>"), ("<", ">"), ("<=", ">=") };
+
+        /// <summary>
+        /// Pass 1: record <paramref name="cls"/>'s operators and check each declaration — a
+        /// supported symbol, two parameters, one of them the containing class, and the pairs
+        /// VB and C# require. Every refusal names its fix.
+        /// </summary>
+        private void RegisterUserOperators(ClassNode cls)
+        {
+            if (!string.IsNullOrEmpty(cls.BaseClass))
+                _declaredBaseClass[cls.Name] = cls.BaseClass;
+
+            var operators = cls.Members.OfType<OperatorDeclarationNode>().ToList();
+            if (operators.Count == 0) return;
+            _userOperators[cls.Name] = operators;
+
+            foreach (var op in operators)
+            {
+                var symbol = op.OperatorSymbol;
+                if (!SupportedBinaryUserOperators.Contains(symbol))
+                {
+                    Error($"'Operator {symbol}' is not supported yet: only the binary operators " +
+                          $"{string.Join(" ", SupportedBinaryUserOperators)} can be declared. " +
+                          "Declare a Shared Function instead and call it by name",
+                          op.Line, op.Column);
+                    continue;
+                }
+                if (op.Parameters.Count != 2)
+                {
+                    Error($"'Operator {symbol}' must take exactly two parameters " +
+                          $"(unary operators are not supported yet); it takes {op.Parameters.Count}",
+                          op.Line, op.Column);
+                    continue;
+                }
+                if (!op.Parameters.Any(p => string.Equals(p.Type?.Name, cls.Name, StringComparison.OrdinalIgnoreCase)))
+                {
+                    Error($"At least one parameter of 'Operator {symbol}' must be of the containing type '{cls.Name}'",
+                          op.Line, op.Column);
+                }
+            }
+
+            foreach (var (a, b) in PairedUserOperators)
+            {
+                var hasA = operators.Any(o => o.OperatorSymbol == a);
+                var hasB = operators.Any(o => o.OperatorSymbol == b);
+                if (hasA == hasB) continue;
+                var (present, missing) = hasA ? (a, b) : (b, a);
+                var decl = operators.First(o => o.OperatorSymbol == present);
+                Error($"'Operator {present}' requires a matching 'Operator {missing}' in class '{cls.Name}'",
+                      decl.Line, decl.Column);
+            }
+        }
+
+        /// <summary>
+        /// The VB operator symbol a binary expression's operator spells, for matching against a
+        /// user <c>Operator</c> declaration; null for an operator a class cannot declare.
+        /// </summary>
+        private static string UserOperatorSymbolFor(string op) => NormalizeOperator(op) switch
+        {
+            "=" or "==" or "IsEqual" => "=",
+            "<>" or "!=" or "NotEqual" => "<>",
+            "%" or "Mod" => "Mod",
+            var s when SupportedBinaryUserOperators.Contains(s) => s,
+            _ => null
+        };
+
+        /// <summary>
+        /// <c>a op b</c> where a CLASS operand declares <c>Operator op</c> taking both operands:
+        /// types the expression as the operator's return type and records the binding on the
+        /// node for the IR builder. Without it `Box = Box` compared REFERENCES on C++ and
+        /// JavaScript (silently wrong) and `Box + Box` was refused as non-numeric.
+        /// </summary>
+        private bool TryBindUserOperator(BinaryExpressionNode node, TypeInfo leftType, TypeInfo rightType)
+        {
+            var symbol = UserOperatorSymbolFor(node.Operator);
+            if (symbol == null) return false;
+
+            foreach (var candidate in DeclaringClassesOf(leftType).Concat(DeclaringClassesOf(rightType)))
+            {
+                if (!_userOperators.TryGetValue(candidate, out var declared)) continue;
+
+                foreach (var op in declared)
+                {
+                    if (op.OperatorSymbol != symbol || op.Parameters.Count != 2) continue;
+                    var p0 = ResolveTypeReference(op.Parameters[0].Type);
+                    var p1 = ResolveTypeReference(op.Parameters[1].Type);
+                    if (!OperandFits(p0, leftType) || !OperandFits(p1, rightType))
+                        continue;
+
+                    node.UserOperatorClass = candidate;
+                    node.UserOperatorSymbol = symbol;
+                    SetNodeType(node, ResolveTypeReference(op.ReturnType) ?? _typeManager.ObjectType);
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// An operand converts to an operator parameter: the ordinary rule, or — for a class the
+        /// ordinary rule cannot see through yet (see <see cref="DeclaringClassesOf"/>) — the
+        /// parameter's class is one of the operand's declared bases.
+        /// </summary>
+        private bool OperandFits(TypeInfo parameter, TypeInfo operand) =>
+            parameter != null && operand != null
+            && (parameter.IsAssignableFrom(operand)
+                || (parameter.Kind == TypeKind.Class
+                    && DeclaringClassesOf(operand).Contains(parameter.Name, StringComparer.OrdinalIgnoreCase)));
+
+        /// <summary>Each class's <c>Inherits</c> name, recorded in pass 1 — see <see cref="DeclaringClassesOf"/>.</summary>
+        private readonly Dictionary<string, string> _declaredBaseClass =
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// A class operand's name and its base classes' names, nearest first: VB finds an operator
+        /// a BASE declares (`Derived = Derived` calls Base's `Operator =`), and missing it falls
+        /// through to a reference comparison — silently, on C++.
+        ///
+        /// <para>⚠ Walked by NAME through <see cref="_declaredBaseClass"/>, not through
+        /// <c>TypeInfo.BaseType</c>: that is set when the derived class's own body is visited, so
+        /// for a class declared below the code using it, it was still null — measured,
+        /// `Tip = Tip` compared references on C++ while C# (which resolves the operator itself)
+        /// printed True.</para>
+        /// </summary>
+        private IEnumerable<string> DeclaringClassesOf(TypeInfo type)
+        {
+            if (type?.Kind != TypeKind.Class || type.Name == null) yield break;
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            for (var name = type.Name; name != null && seen.Add(name);
+                 name = _declaredBaseClass.TryGetValue(name, out var baseName) ? baseName : null)
+                yield return name;
         }
 
         /// <summary>
@@ -7202,6 +7479,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 }
                 var paramSymbol = new Symbol(param.Name, SymbolKind.Parameter, paramType, param.Line, param.Column);
                 _currentScope.Define(paramSymbol);
+                _lambdaParameterSymbols.Add(paramSymbol);
                 SetNodeSymbol(param, paramSymbol);
                 SetNodeType(param, paramType);
                 paramTypes.Add(paramType);
@@ -8350,6 +8628,10 @@ namespace BasicLang.Compiler.SemanticAnalysis
             // Analyze each clause
             foreach (var clause in node.Clauses)
             {
+                // #169: what this clause brings into scope, for the IR builder (ADR-0013 D5).
+                var declared = new List<Symbol>();
+                _linqRangeVariables[clause] = declared;
+
                 switch (clause)
                 {
                     case FromClause from:
@@ -8367,7 +8649,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
                         // Define the range variable with inferred type
                         var symbol = new Symbol(from.VariableName, SymbolKind.Variable, elementType, from.Line, from.Column);
-                        _currentScope.Define(symbol);
+                        DefineRangeVariable(symbol, declared);
                         currentResultType = elementType;
                         break;
 
@@ -8402,7 +8684,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                             // The into variable represents IGrouping<TKey, TElement>
                             var groupingType = _typeManager.ObjectType;  // Simplified
                             var intoSymbol = new Symbol(groupBy.IntoVariable, SymbolKind.Variable, groupingType, groupBy.Line, groupBy.Column);
-                            _currentScope.Define(intoSymbol);
+                            DefineRangeVariable(intoSymbol, declared);
                         }
                         break;
 
@@ -8422,7 +8704,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                         }
 
                         var joinSymbol = new Symbol(join.VariableName, SymbolKind.Variable, joinElementType, join.Line, join.Column);
-                        _currentScope.Define(joinSymbol);
+                        DefineRangeVariable(joinSymbol, declared);
 
                         // Validate key types match
                         var outerKeyType = GetNodeType(join.OuterKeySelector);
@@ -8437,7 +8719,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                         {
                             var groupJoinType = _typeManager.ObjectType;  // Simplified: should be IEnumerable<joinElementType>
                             var intoSymbol = new Symbol(join.IntoVariable, SymbolKind.Variable, groupJoinType, join.Line, join.Column);
-                            _currentScope.Define(intoSymbol);
+                            DefineRangeVariable(intoSymbol, declared);
                         }
                         break;
 
@@ -8458,12 +8740,12 @@ namespace BasicLang.Compiler.SemanticAnalysis
                         }
 
                         var aggSymbol = new Symbol(aggregate.VariableName, SymbolKind.Variable, aggElementType, aggregate.Line, aggregate.Column);
-                        _currentScope.Define(aggSymbol);
+                        DefineRangeVariable(aggSymbol, declared);
 
                         if (!string.IsNullOrEmpty(aggregate.IntoVariable))
                         {
                             var intoSymbol = new Symbol(aggregate.IntoVariable, SymbolKind.Variable, _typeManager.ObjectType, aggregate.Line, aggregate.Column);
-                            _currentScope.Define(intoSymbol);
+                            DefineRangeVariable(intoSymbol, declared);
                         }
                         break;
 
@@ -8471,7 +8753,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                         let.Value?.Accept(this);
                         var letType = GetNodeType(let.Value) ?? _typeManager.ObjectType;
                         var letSymbol = new Symbol(let.VariableName, SymbolKind.Variable, letType, let.Line, let.Column);
-                        _currentScope.Define(letSymbol);
+                        DefineRangeVariable(letSymbol, declared);
                         break;
 
                     case TakeClause take:
@@ -8505,6 +8787,16 @@ namespace BasicLang.Compiler.SemanticAnalysis
             SetNodeType(node, resultArrayType);
 
             ExitScope();
+        }
+
+        /// <summary>
+        /// Defines one LINQ range variable in the query scope and, when the scope accepts it,
+        /// records it among <paramref name="declared"/> — the clause's entry in
+        /// <see cref="LinqRangeVariables"/>.
+        /// </summary>
+        private void DefineRangeVariable(Symbol symbol, List<Symbol> declared)
+        {
+            if (_currentScope.Define(symbol)) declared.Add(symbol);
         }
 
         public void Visit(InlineCodeNode node)
@@ -8935,7 +9227,9 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 // symbol and declared type, which IRBuilder's assignment lowering reads) come from
                 // Visit(AssignmentStatementNode), not from a second copy of them.
                 var hiddenName = $"__foreach_{_forEachHiddenVariableCounter++}";
-                _currentScope.Define(new Symbol(hiddenName, SymbolKind.Variable, elementType, node.Line, node.Column));
+                var hiddenSymbol = new Symbol(hiddenName, SymbolKind.Variable, elementType, node.Line, node.Column);
+                _currentScope.Define(hiddenSymbol);
+                _synthesizedSymbols.Add(hiddenSymbol);   // #169: no NameBinding (ADR-0013 D5)
 
                 var assignment = new AssignmentStatementNode(node.Line, node.Column)
                 {
@@ -9724,6 +10018,11 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 return;
             }
 
+            // A class operand's own `Operator` answers first (#198) — before any built-in rule,
+            // which would compare references (`=`) or refuse non-numeric operands (`+`).
+            if (TryBindUserOperator(node, leftType, rightType))
+                return;
+
             // Spec 6.1: operand position is a Decimal context when the OTHER
             // operand is Decimal — 'd * 1.08' converts the literal from its
             // source text; 'd * x' (non-literal Double) stays the CType-hinted
@@ -10460,6 +10759,10 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
         public void Visit(IdentifierExpressionNode node)
         {
+            // #169: recorded afresh on every pass, by SetNodeSymbol below; every early return in
+            // this method (Me, a foreign name, a VB constant, an unresolved name) leaves none.
+            node.Binding = null;
+
             // A ::-qualified foreign C++ name (free function / global) in expression position
             // is opaque: type it Foreign as a WHOLE. Short-circuit BEFORE scope resolution so
             // the namespace head (e.g. 'mathlib' in mathlib::kAnswer) is never looked up as a

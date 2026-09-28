@@ -1493,7 +1493,17 @@ namespace BasicLang.Compiler.AST
         public ExpressionNode Left { get; set; }
         public string Operator { get; set; }
         public ExpressionNode Right { get; set; }
-        
+
+        /// <summary>
+        /// Set by the analyzer when a class operand declares this operator (<c>Operator =</c>,
+        /// <c>Operator +</c>, …): the declaring class. The IR builder lowers the expression to a
+        /// call of that class's <c>op_*</c> function; null for every built-in operator.
+        /// </summary>
+        public string UserOperatorClass { get; set; }
+
+        /// <summary>The VB spelling of the bound user operator (<c>=</c>, <c>&lt;&gt;</c>, <c>+</c>, <c>Mod</c>, …).</summary>
+        public string UserOperatorSymbol { get; set; }
+
         public BinaryExpressionNode(int line, int column) : base(line, column) { }
         
         public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
@@ -1570,10 +1580,57 @@ namespace BasicLang.Compiler.AST
         /// </summary>
         public string BuiltinConstantValue { get; set; }
 
+        /// <summary>
+        /// ⭐ #169 (ADR-0013): the declaration the semantic analyzer resolved this reference to, recorded
+        /// where it records the node's symbol (<c>SemanticAnalyzer.SetNodeSymbol</c>) and
+        /// overwritten on every analysis pass. <see cref="Name"/> is never rewritten: it stays
+        /// the source spelling, and <see cref="NameBinding.DeclaredName"/> is the declaration's.
+        ///
+        /// <para>BasicLang is case-insensitive, but the IR builder keys its variables by name,
+        /// Ordinal. It binds a Local, Parameter or LambdaParameter reference by
+        /// <see cref="NameBinding.DeclaredName"/>, so <c>n</c> reaches the parameter declared
+        /// <c>N</c> instead of minting a second variable called <c>n</c>.</para>
+        ///
+        /// <para>Null when there is nothing to bind: <c>Me</c>, a <c>::</c> foreign name, a VB
+        /// string constant, a .NET name with no BasicLang symbol, an unresolved name, an Event,
+        /// a compiler-synthesized declaration (the <c>For Each</c> hidden element variable), and
+        /// a symbol whose name does not match this spelling case-insensitively.</para>
+        /// </summary>
+        public NameBinding? Binding { get; set; }
+
         public IdentifierExpressionNode(int line, int column) : base(line, column) { }
 
         public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
     }
+
+    /// <summary>
+    /// What kind of declaration a <see cref="NameBinding"/> names — and therefore which store
+    /// the IR builder looks it up in. #169 consumes Local, Parameter and LambdaParameter (the
+    /// declarations the IR builder's version stack holds); the other kinds are recorded for
+    /// #124.
+    /// </summary>
+    public enum NameBindingKind
+    {
+        Local,
+        Parameter,
+        LambdaParameter,
+        Field,
+        ModuleGlobal,
+        Property,
+        Method,
+        Type,
+    }
+
+    /// <summary>
+    /// The declaration an identifier reference resolved to (#169): its spelling as DECLARED
+    /// (verbatim), its kind, and the analyzer's symbol itself, which is compared by reference,
+    /// never by name. Invariant: <see cref="DeclaredName"/> equals the reference's written name
+    /// under OrdinalIgnoreCase.
+    /// </summary>
+    public sealed record NameBinding(
+        string DeclaredName,
+        NameBindingKind Kind,
+        BasicLang.Compiler.SemanticAnalysis.Symbol Declaration);
 
     /// <summary>
     /// Represents the MyBase keyword for accessing base class members

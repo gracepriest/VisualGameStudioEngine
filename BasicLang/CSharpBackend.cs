@@ -1699,7 +1699,52 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             _currentFunction = null;
         }
 
+        /// <summary>
+        /// Emits a lambda inline, with its parameters' names meaning the PARAMETERS inside its
+        /// body (#169).
+        ///
+        /// <para>⛔ <see cref="_variableNameMap"/> folds names case-insensitively, and the
+        /// enclosing function's locals and parameters are already in it. So a parameter spelled
+        /// like one of them in another case — <c>Sub(N As Integer)</c> inside a function with a
+        /// local <c>n</c> — was declared <c>(int N)</c> while every use of it in the body was
+        /// looked up as <c>N</c>, found <c>n</c>, and emitted as the ENCLOSING variable: the
+        /// lambda wrote the caller's <c>n</c> (K1 printed 101, not 1) or read it (K6 printed 3,
+        /// not 7). The IR names the parameter exactly (IRBuilder binds every reference to its
+        /// declaration), so the backend only has to stop folding it onto something else.</para>
+        ///
+        /// <para>⚠ SCOPED both ways: whatever the map held for each parameter's name is put back
+        /// when the body is done, and an entry the lambda ADDED is removed. The second half
+        /// matters as much as the first — a parameter <c>G</c> read in the body used to leave
+        /// <c>G</c> in the map, and the module global <c>g</c> read after the lambda then
+        /// emitted as <c>G</c> (CS0103). A name spelled exactly like the parameter maps to the
+        /// same text either way, so a program with no case collision is emitted as before.</para>
+        /// </summary>
         private string GenerateLambdaExpression(IRFunction lambdaFunc)
+        {
+            var saved = new List<(string Key, bool Had, string Value)>();
+            foreach (var param in lambdaFunc.Parameters)
+            {
+                if (string.IsNullOrEmpty(param?.Name)) continue;
+                var had = _variableNameMap.TryGetValue(param.Name, out var outer);
+                saved.Add((param.Name, had, outer));
+                _variableNameMap[param.Name] = SanitizeName(param.Name);
+            }
+
+            try
+            {
+                return GenerateLambdaExpressionCore(lambdaFunc);
+            }
+            finally
+            {
+                for (var i = saved.Count - 1; i >= 0; i--)
+                {
+                    if (saved[i].Had) _variableNameMap[saved[i].Key] = saved[i].Value;
+                    else _variableNameMap.Remove(saved[i].Key);
+                }
+            }
+        }
+
+        private string GenerateLambdaExpressionCore(IRFunction lambdaFunc)
         {
             var sb = new StringBuilder();
 
@@ -3405,6 +3450,15 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
                     case IRCall call:
                     {
+                        if (call.UserOperatorSymbol != null)
+                        {
+                            // ⚠ Always parenthesised, whatever `needsParens` says: every other
+                            // call renders as `f(…)`, so a receiver never asks — measured,
+                            // `(x + z).V` came out as `x + z.V` (CS0019).
+                            return "(" + UserOperatorText(call,
+                                call.Arguments.Select(a => EmitExpression(a, stack, true)).ToArray()) + ")";
+                        }
+
                         var argExprs = call.Arguments.Select(a => EmitExpression(a, stack, false)).ToArray();
 
                         if (TryRenderArrayResize(call, argExprs, out var resized))
@@ -3845,9 +3899,40 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             return true;
         }
 
+        /// <summary>
+        /// A user <c>Operator</c> call (#198) as C# infix: C# declares the operator
+        /// (<see cref="GenerateOperator"/>) and forbids calling it by its <c>op_*</c> name
+        /// (CS0571), so <c>Box.op_Equality(a, b)</c> is written <c>a == b</c>.
+        /// </summary>
+        private static string UserOperatorText(IRCall call, IReadOnlyList<string> operands)
+        {
+            var op = call.UserOperatorSymbol switch
+            {
+                "=" => "==",
+                "<>" => "!=",
+                "Mod" => "%",
+                "And" => "&",
+                "Or" => "|",
+                "Xor" => "^",
+                var s => s
+            };
+            return $"{operands[0]} {op} {operands[1]}";
+        }
+
         public void Visit(IRCall call)
         {
             var functionName = call.FunctionName;
+
+            if (call.UserOperatorSymbol != null)
+            {
+                var operatorExpr = UserOperatorText(call,
+                    call.Arguments.Select(a => EmitExpression(a, new HashSet<IRValue>(), true)).ToArray());
+                if (IsNamedDestination(call))
+                    WriteLine($"{GetValueName(call)} = {operatorExpr};");
+                else if (GetUseCount(call) == 0)
+                    WriteLine($"_ = {operatorExpr};");
+                return;
+            }
 
             // A ReDim that assigns straight into its variable (IRBuilder names the call after it).
             if (TryRenderArrayResize(call, call.Arguments.Select(a => EmitExpression(a)).ToList(), out var resizedArray))
