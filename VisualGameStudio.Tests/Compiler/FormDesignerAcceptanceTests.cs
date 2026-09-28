@@ -264,7 +264,8 @@ public class FormDesignerAcceptanceTests
 
     /// <summary>
     /// Loads the emitted page's script with a minimal DOM, clicks the button, and returns everything
-    /// it printed. Returns null when node is absent.
+    /// it printed. Returns null when a shell-resolved node reports itself missing on stderr; a node that cannot be
+    /// started at all skips the test (below).
     ///
     /// <para>⚠ <c>internal static</c> so <c>FormRetargetPairTests</c> runs a RETARGETED page through
     /// the same harness rather than a second DOM stub that could drift from this one. It assumes a
@@ -275,8 +276,13 @@ public class FormDesignerAcceptanceTests
     /// exactly as before. A non-null id clicks ONLY that element — and if the page never registered an
     /// element under that id, prints <c>NO ELEMENT &lt;clickId&gt;</c> so a miss is visible rather than
     /// silently clicking nothing.</para>
+    ///
+    /// <para>⛔ Node absent SKIPS the test (<see cref="TestSkip.IgnoreEvenInsideMultiple"/>), never errors: when the
+    /// executable is missing, <c>Process.Start</c> throws <see cref="System.ComponentModel.Win32Exception"/> before any
+    /// "not recognized" text could reach stderr (Task 14 review). <paramref name="node"/> is the seam that proves it.</para>
     /// </summary>
-    internal static string? RunPageUnderNode(string outDir, string formName = "LoginForm", string? clickId = null)
+    internal static string? RunPageUnderNode(
+        string outDir, string formName = "LoginForm", string? clickId = null, string node = "node")
     {
         var script = Directory.GetFiles(outDir, "*.js").FirstOrDefault();
         if (script == null)
@@ -336,8 +342,18 @@ public class FormDesignerAcceptanceTests
             {{clickScript}}
             """);
 
-        var (exit, stdout, stderr) = CliTestHarness.RunProcess(
-            "node", new[] { "harness.mjs" }, outDir, timeoutMs: 60_000);
+        int exit;
+        string stdout, stderr;
+        try
+        {
+            (exit, stdout, stderr) = CliTestHarness.RunProcess(
+                node, new[] { "harness.mjs" }, outDir, timeoutMs: 60_000);
+        }
+        catch (System.ComponentModel.Win32Exception e)
+        {
+            TestSkip.IgnoreEvenInsideMultiple($"'{node}' could not be started ({e.Message}), so the emitted page cannot be executed here");
+            throw; // unreachable
+        }
 
         if (exit != 0 && (stderr.Contains("not recognized") || stderr.Contains("not found")))
         {
@@ -450,6 +466,15 @@ public class FormDesignerAcceptanceTests
         var saved = FormDocumentReader.Read(vm.FilePath!, File.ReadAllText(vm.FilePath!)).Model;
         Log("[5] saved form    ->\n" + File.ReadAllText(vm.FilePath!));
 
+        // ⛔ The grid's Text edits reached the file (review: a page that dropped every caption stayed green).
+        Assert.Multiple(() =>
+        {
+            Assert.That(saved.FindById("Label1")?.Properties.GetValueOrDefault("Text"), Is.EqualTo("User name"),
+                "the Label's grid-set Text is not in the saved form");
+            Assert.That(saved.FindById("Button1")?.Properties.GetValueOrDefault("Text"), Is.EqualTo("Sign in"),
+                "the Button's grid-set Text is not in the saved form");
+        });
+
         // --- a real CLI build of a JavaScript project ---
         Write("App.blproj", """
             <BasicLangProject Version="1.0">
@@ -475,6 +500,12 @@ public class FormDesignerAcceptanceTests
 
         var outDir = Path.Combine(_dir, "bin", "Debug", "net8.0");
         Assert.That(File.Exists(Path.Combine(outDir, "LoginForm.html")), Is.True, $"no page was emitted.\n{stdout}");
+        var html = File.ReadAllText(Path.Combine(outDir, "LoginForm.html"));
+        Assert.Multiple(() =>
+        {
+            Assert.That(html, Does.Contain("User name"), "the Label's text is not on the built page");
+            Assert.That(html, Does.Contain("Sign in"), "the Button's text is not on the built page");
+        });
 
         // --- ⛔ RUN it (before Edge writes its own .js here — pre-flight B1) ---
         var ran = RunPageUnderNode(outDir, clickId: "Button1");
@@ -496,7 +527,8 @@ public class FormDesignerAcceptanceTests
         // --- ⛔ LAY IT OUT in a real browser: the design size, and wider ---
         var edge = EdgeLayoutHarness.Measure(outDir, new[]
         {
-            EdgeCase.Of(saved, DesignW, DesignH),
+            EdgeCase.Of(saved, DesignW, DesignH,
+                EdgeStep.HasText("labelText", "User name"), EdgeStep.HasText("buttonText", "Sign in")),
             EdgeCase.Of(saved, WideW, WideH)
         });
         var atDesign = edge.Results[$"LoginForm@{DesignW}x{DesignH}"];
@@ -537,6 +569,8 @@ public class FormDesignerAcceptanceTests
             }
 
             Assert.That(edge.ProfileDeleted, Is.True, $"the throw-away Edge profile is still there: {edge.ProfileDirectory}");
+            Assert.That(atDesign.Probes["labelText"], Is.EqualTo("true"), "Edge rendered no 'User name' in the form area");
+            Assert.That(atDesign.Probes["buttonText"], Is.EqualTo("true"), "Edge rendered no 'Sign in' in the form area");
 
             // Against the model and the window, at both sizes (spec §7).
             Agrees("design vs model", PixelLayoutModel.Rects(saved, FormDockMode.Runtime, (DesignW, DesignH)), atDesign["initial"]);
@@ -555,6 +589,31 @@ public class FormDesignerAcceptanceTests
             Assert.That(wide["TextBox1"], Is.EqualTo(new LayoutBox(120, 48, 100 + WideW - DesignW, 23)), "Top,Left,Right: stretches");
             Assert.That(wide["Button1"], Is.EqualTo(new LayoutBox(120 + WideW - DesignW, 96, 75, 23)), "Top,Right: follows the right edge");
         });
+    }
+
+    /// <summary>
+    /// Task 14 review: an executable that does not exist makes <c>Process.Start</c> THROW (Win32Exception), so the
+    /// old "not recognized" check never saw it and every node-running test ERRORED where node was absent. Now it
+    /// skips. (Fast: nothing is started.)
+    /// </summary>
+    [Test]
+    public void RunPageUnderNode_WithoutNode_SkipsTheTest_RatherThanErroring()
+    {
+        File.WriteAllText(Path_("App.js"), "console.log('never run');\n");
+        var missing = "bl-no-such-node-" + Guid.NewGuid().ToString("N");
+
+        Exception? thrown = null;
+        try
+        {
+            RunPageUnderNode(_dir, node: missing);
+        }
+        catch (Exception e)
+        {
+            thrown = e;
+        }
+
+        Assert.That(thrown, Is.InstanceOf<IgnoreException>(), $"a missing node must skip; got: {thrown}");
+        Assert.That(thrown!.Message, Does.Contain(missing));
     }
 
     // ==================================================================
