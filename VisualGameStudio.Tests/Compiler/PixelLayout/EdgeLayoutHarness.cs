@@ -27,6 +27,13 @@ internal sealed record EdgeStep(string Label, string Kind, string Id = "", strin
     public static EdgeStep HitTest(string label, double x, double y) => new(label, "hit", X: x, Y: y);
     public static EdgeStep HasText(string label, string text) => new(label, "text", Value: text);
     public static EdgeStep StyleCost(string label, string id, int writes) => new(label, "cost", id, writes.ToString(System.Globalization.CultureInfo.InvariantCulture));
+
+    /// <summary>
+    /// Is the element <paramref name="id"/> — anywhere on the page, not only in the form area — rendered wholly inside
+    /// the VIEWPORT (non-empty, within innerWidth × innerHeight, before any scrolling)? Probe: <c>true</c>, or
+    /// <c>false {rect}</c> naming where it was.
+    /// </summary>
+    public static EdgeStep InViewport(string label, string id) => new(label, "inview", id);
 }
 
 /// <summary>One page loaded into an iframe of exactly <see cref="Width"/>×<see cref="Height"/> CSS px.</summary>
@@ -550,6 +557,13 @@ internal static class EdgeLayoutHarness
                 break;
               case "text":
                 probes[step.label] = String(formArea().innerText.indexOf(step.value) >= 0);
+                break;
+              case "inview":
+                var v = element(step.id).getBoundingClientRect();
+                var inside = v.width > 0 && v.height > 0 && v.left >= 0 && v.top >= 0 &&
+                             v.right <= window.innerWidth && v.bottom <= window.innerHeight;
+                probes[step.label] = inside ? "true"
+                  : "false " + JSON.stringify({ x: v.left, y: v.top, w: v.width, h: v.height, vw: window.innerWidth, vh: window.innerHeight });
                 break;
               case "cost":
                 var writes = parseInt(step.value, 10), before = styleCalls, el = element(step.id);

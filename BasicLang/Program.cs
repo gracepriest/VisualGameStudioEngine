@@ -823,13 +823,10 @@ namespace BasicLang.Compiler.Driver
                     webForms, Path.Combine(projectDir, "obj", configuration),
                     m => Console.Error.WriteLine($"  Warning: {m}"));
 
+                // ⛔ No "is it called?" warning (BL8018, retired): the JavaScript entry point starts the
+                // form after Main by itself (FormAssetEmitter.IsStartupDispatch), once per page.
                 if (dispatchPath != null)
                 {
-                    if (!Forms.FormDispatch.IsCalled(sourceFiles))
-                    {
-                        Console.Error.WriteLine($"  Warning: {Forms.FormDispatch.NotCalledMessage}");
-                    }
-
                     sourceFiles.Add(dispatchPath);
                 }
             }

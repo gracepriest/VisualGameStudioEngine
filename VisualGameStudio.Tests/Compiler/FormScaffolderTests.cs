@@ -194,6 +194,53 @@ public class FormScaffolderTests
         });
     }
 
+    /// <summary>
+    /// ⛔⛔ Owner report 2026-09-28. The constructor calls <c>Me.InitializeComponent()</c>, and a scaffold whose regions
+    /// were EMPTY declared no such method until the designer's first save wrote one. A form added and built without
+    /// ever being opened in the designer died on load with <c>TypeError: this.InitializeComponent is not a
+    /// function</c> — and BasicLang reported nothing. The scaffold now carries the designer's own output for the empty
+    /// form, so the method exists from the start and the regions are still Canon.
+    /// </summary>
+    [TestCase(FormTarget.Web)]
+    [TestCase(FormTarget.WinForms)]
+    public void Create_TheInitRegionAlreadyDeclaresInitializeComponent(FormTarget target)
+    {
+        var scaffold = FormScaffolder.Create("LoginForm", target);
+        var regions = RegionMarkers.Scan(scaffold.CodeText);
+        var init = RegionMarkers.Find(regions, RegionMarkers.Init);
+
+        Assert.That(init, Is.Not.Null, "the scaffold has no init region");
+        var region = scaffold.CodeText.Substring(init!.StartOffset, init.EndOffset - init.StartOffset);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(region, Does.Contain("Private Sub InitializeComponent()"),
+                "the method the constructor calls must exist before any designer save");
+            Assert.That(region, Does.Contain("End Sub"));
+            Assert.That(regions, Has.All.Property(nameof(FormRegion.State)).EqualTo(RegionState.Canon),
+                "and the first designer save must still find the regions its own");
+        });
+    }
+
+    /// <summary>
+    /// The scaffold IS the designer's output for the empty form: a save of the untouched document writes nothing.
+    /// </summary>
+    [TestCase(FormTarget.Web)]
+    [TestCase(FormTarget.WinForms)]
+    public void Create_ASaveOfTheUntouchedForm_ChangesNothing(FormTarget target)
+    {
+        var scaffold = FormScaffolder.Create("LoginForm", target);
+        var document = FormDocumentReader.Read(scaffold.DocumentFileName, scaffold.DocumentText);
+
+        var write = RegionWriter.Write(scaffold.CodeFileName, scaffold.CodeText, document.Model, scaffold.DocumentFileName);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(write.Refused, Is.False, string.Join("; ", write.Diagnostics.Select(d => d.Format())));
+            Assert.That(write.Changed, Is.False, "the scaffold already says what the designer would write");
+        });
+    }
+
     [Test]
     public void Create_Web_PutsTheInitRegionAfterTheHandlerArea()
     {

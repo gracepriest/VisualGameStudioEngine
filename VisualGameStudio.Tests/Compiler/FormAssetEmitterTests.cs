@@ -625,8 +625,12 @@ public class FormAssetEmitterTests
         {
             Assert.That(source, Does.Contain($"Sub {FormAssetEmitter.DispatchSubName}()"));
             Assert.That(source, Does.Contain("End Sub"));
-            Assert.That(source, Does.Not.Contain("End If"),
+            // ⚠ Balanced, not absent: since 2026-09-28 the dispatch opens (and closes) its once-per-page guard If even
+            // with no forms. What must never happen is an End If for the form chain that was never opened.
+            var lines = source.Split('\n').Select(l => l.Trim()).ToList();
+            Assert.That(lines.Count(l => l == "End If"), Is.EqualTo(lines.Count(l => l.StartsWith("If ", StringComparison.Ordinal))),
                 "an If that was never opened must not be closed");
+            Assert.That(source, Does.Not.Contain("ElseIf"));
         });
     }
 
@@ -756,13 +760,16 @@ public class FormAssetEmitterTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(css, Does.Contain("body { margin: 0; }"));
+            // ⛔⛔ Owner decision 2026-09-28 (Sub Main is startup): the body is a column and the form area takes what is
+            // LEFT — never `height: 100vh`, which put everything Main appended to the body one viewport down.
+            Assert.That(css, Does.Contain("body { margin: 0; display: flex; flex-direction: column; min-height: 100vh; }"));
+            Assert.That(css, Does.Not.Contain("\n  height: 100vh"), "the form area is not the viewport; it is what is left of it");
             Assert.That(css, Does.Contain(
                 // ⛔ display: flow-root (Task 10 review N-1, measured in Chromium): without its own block formatting
                 // context a Literal's first <p>/<h1> top margin collapses through .vgs-form and moves EVERY control
                 // down (a button at Y=30 rendered at 46). The phone query's display:flex overrides it.
-                ".vgs-form {\n  position: relative;\n  display: flow-root;\n  width: 100%;\n" +
-                $"  min-width: {w}px;\n  height: 100vh;\n  min-height: {h}px;\n  box-sizing: border-box;\n}}"));
+                ".vgs-form {\n  position: relative;\n  display: flow-root;\n  flex: 1 0 auto;\n  width: 100%;\n" +
+                $"  min-width: {w}px;\n  min-height: {h}px;\n  box-sizing: border-box;\n}}"));
             Assert.That(css, Does.Contain(".vgs-form [hidden] { display: none !important; }"),
                 "B7: a phone's display:flex must not un-hide a control user code hid");
         });

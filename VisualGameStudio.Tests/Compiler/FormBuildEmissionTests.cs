@@ -239,19 +239,32 @@ public class FormBuildEmissionTests
     }
 
     [Test]
-    public void AProjectWhoseMainNeverCallsTheDispatch_IsWarnedAbout()
+    public void AProjectWhoseMainNeverCallsTheDispatch_StartsTheFormAfterMain_AndIsNotWarned()
     {
-        // ⚠ Generating the helper is only half the job — the backend emits one invocation, for
-        // Main. A helper nobody calls is a page that loads a script and does nothing, from a build
-        // that succeeded in every visible way.
+        // ⛔⛔ This used to assert the BL8018 WARNING — the backend emitted one invocation, for Main, so
+        // a helper nobody called was a page that loaded and did nothing. Owner decision 2026-09-28:
+        // Sub Main is startup, like WinForms, and the entry point starts the form itself after Main.
+        // BL8018 is retired: there is nothing left to warn about.
         WriteProject("Main.bas", "LoginForm.blwebform", "LoginForm.bas");
         Write("LoginForm.blwebform", LoginForm);
         WriteCodeBehind("LoginForm");
 
         var (exit, stdout, stderr) = Build();
 
-        Assert.That(exit, Is.Zero, "it is a warning, not a failure");
-        Assert.That(stdout + stderr, Does.Contain(BasicLang.Forms.DesignCodes.DispatchNotCalled));
+        Assert.That(exit, Is.Zero, $"STDOUT:\n{stdout}\nSTDERR:\n{stderr}");
+        Assert.That(stdout + stderr, Does.Not.Contain(BasicLang.Forms.DesignCodes.DispatchNotCalled));
+
+        // ONE rule, in the entry point: Main, THEN the dispatch — in that order, each once.
+        var js = File.ReadAllText(Path.Combine(OutputDir, "App.js"));
+        var main = js.IndexOf("\nMain();", StringComparison.Ordinal);
+        var dispatch = js.IndexOf($"\n{BasicLang.Forms.FormAssetEmitter.DispatchCall};", StringComparison.Ordinal);
+        Assert.Multiple(() =>
+        {
+            Assert.That(main, Is.GreaterThan(0), "the entry point runs Main");
+            Assert.That(dispatch, Is.GreaterThan(main), "and then starts the page's form");
+        });
+
+        Assert.That(RunEmittedScript("LoginForm"), Is.Empty.Or.Null, "and the page runs without throwing");
     }
 
     [Test]

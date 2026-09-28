@@ -873,16 +873,40 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// <summary>
         /// A module that defines Main runs it. Unlike C#, JS has no implicit entry point —
         /// without this the emitted file declares functions and does nothing.
+        ///
+        /// <para>⛔⛔ Then the page's FORM starts (owner decision 2026-09-28: Sub Main in a web
+        /// project with forms is STARTUP, like WinForms — Main first, so what it adds to the page
+        /// is there, then the form, as <c>Application.Run(New Form1)</c>). The rule is
+        /// <see cref="global::BasicLang.Forms.FormAssetEmitter.IsStartupDispatch"/>; the generated dispatch exists
+        /// only in a build with forms, and it dispatches once per page, so a user's own earlier
+        /// call is not repeated. With no Main the form starts on load. Before this, nothing called
+        /// the dispatch unless Main did, the build said so only as warning BL8018, and the owner's
+        /// page loaded blank.</para>
+        ///
+        /// <para>⚠ After Main RETURNS: an <c>Async Sub Main</c> returns at its first Await, and
+        /// the form starts there — as it would after the startup code of a WinForms Main that does
+        /// not await.</para>
         /// </summary>
         private void EmitEntryPoint(IRModule module)
         {
             if (!_options.GenerateMainMethod) return;
 
-            foreach (var function in module.Functions)
+            var main = module.Functions.FirstOrDefault(
+                f => string.Equals(f.Name, "Main", StringComparison.OrdinalIgnoreCase));
+            if (main != null)
             {
-                if (string.Equals(function.Name, "Main", StringComparison.OrdinalIgnoreCase))
+                Line($"{SanitizeName(main.Name)}();");
+            }
+
+            foreach (var irClass in module.Classes.Values)
+            {
+                if (irClass.IsExtern) continue;
+
+                var dispatch = irClass.Methods.FirstOrDefault(
+                    m => global::BasicLang.Forms.FormAssetEmitter.IsStartupDispatch(irClass.Name, m.Name, m.IsStatic));
+                if (dispatch != null)
                 {
-                    Line($"{SanitizeName(function.Name)}();");
+                    Line($"{SanitizeName(irClass.Name)}.{SanitizeName(dispatch.Name)}();");
                     return;
                 }
             }
