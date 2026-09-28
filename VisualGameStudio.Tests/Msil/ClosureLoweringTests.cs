@@ -319,10 +319,13 @@ internal static class ClosureLoweringProbes
     /// ("Cannot assign value of type 'Object' to variable of type 'Action'"), so L16b (no
     /// initializer) was the implementer's re-probe and the one the contract names. ⚠ STALE AS OF
     /// #173 (fix commit c0b457d9): <c>Nothing</c> now converts to any reference type at every
-    /// site, so L16 itself compiles — C#, JavaScript and MSIL print "boom", same as L16b; only
-    /// C++ still fails, for the SAME unrelated reason as before (<c>ex.Message</c> on a
-    /// by-value-held exception type, not a pointer — #189). See
-    /// <c>NothingConversionExecutionTests</c>'s N7 (L16's exact shape).</summary>
+    /// site, so L16 itself compiles — C#, JavaScript and MSIL print "boom", same as L16b.
+    /// ⛔ <b>#189 DONE (fix commit 381b95ff):</b> C++ used to still fail here — the captured
+    /// <c>Catch</c> variable's <c>ex.Message</c> lowered to <c>ex-&gt;Message</c>, a shared_ptr
+    /// field access, against an exception representation C++ holds by VALUE. C++ now takes the
+    /// captured variable by init-capture and reads it through the same <c>.what()</c> spelling the
+    /// Catch clause's own body uses, so L16b (and L16's exact shape, N7 in
+    /// <c>NothingConversionExecutionTests</c>) now runs on all four backends.</summary>
     internal const string L16b = """
         Sub Main()
             Dim f As Action
@@ -575,8 +578,10 @@ public class ClosureLoweringContractTests
     public void L7_NestedLambdaTwoLevelsOut_AggressivePipeline_JavaScriptAndMsilAgree()
         => JsMsilAggressive(ClosureLoweringProbes.L7, ClosureLoweringProbes.L7Expected);
 
-    // ---- L13/L13b/L13c/L14/L15/L16b: C#, JS, MSIL agree; C++ COMPILE-FAILS all of these -------
-    // ---- entirely (pre-existing, unrelated to #155) -------------------------------------------
+    // ---- L13/L13b/L13c/L14/L15: C#, JS, MSIL agree; C++ COMPILE-FAILS all of these entirely ----
+    // ---- (pre-existing, unrelated to #155) ------------------------------------------------------
+    // ---- L16b: was in that same group; #189 DONE (fix commit 381b95ff) fixed C++'s captured- ---
+    // ---- Catch-variable rendering, so L16b now runs on all four backends (see its own doc). ----
 
     [Test]
     public void L13_DeclaringForEachCapture_StandardPipeline_CSharpJavaScriptMsilAgree()
@@ -619,12 +624,12 @@ public class ClosureLoweringContractTests
         => CSharpJsMsilAggressive(ClosureLoweringProbes.L15, ClosureLoweringProbes.L15Expected);
 
     [Test]
-    public void L16b_CatchVariableCapture_StandardPipeline_CSharpJavaScriptMsilAgree()
-        => CSharpJsMsilStandard(ClosureLoweringProbes.L16b, ClosureLoweringProbes.L16bExpected);
+    public void L16b_CatchVariableCapture_StandardPipeline_AllFourBackendsAgree()
+        => FourBackends.RunsOnEveryBackend(ClosureLoweringProbes.L16b, ClosureLoweringProbes.L16bExpected);
 
     [Test]
-    public void L16b_CatchVariableCapture_AggressivePipeline_CSharpJavaScriptMsilAgree()
-        => CSharpJsMsilAggressive(ClosureLoweringProbes.L16b, ClosureLoweringProbes.L16bExpected);
+    public void L16b_CatchVariableCapture_AggressivePipeline_AllFourBackendsAgree()
+        => FourBackends.RunsOnEveryBackendAggressive(ClosureLoweringProbes.L16b, ClosureLoweringProbes.L16bExpected);
 
     // ---- (c) D8: invocation ---------------------------------------------------------------
 

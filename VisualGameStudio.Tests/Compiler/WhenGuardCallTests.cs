@@ -210,6 +210,29 @@ End Sub
 
     internal const string ArraysExpected = "else 1\npacked 2\nliteral 3\nafter";
 
+    /// <summary>
+    /// A catch variable's Message in a guard inside its catch clause. C++ marks Message reads by
+    /// scanning the clause's blocks, and a guard is in none, so it rendered `ex->Message` (a g++
+    /// error) until the guard consulted the catch variables in scope.
+    /// </summary>
+    internal const string CatchMessageProgram = @"
+Sub Main()
+    Try
+        Throw New ArgumentException(""bad input"")
+    Catch ex As ArgumentException
+        Dim k As Integer = 1
+        Select Case k
+            Case Is > 0 When ex.Message = ""bad input""
+                Console.WriteLine(""matched "" & ex.Message)
+            Case Else
+                Console.WriteLine(""other"")
+        End Select
+    End Try
+End Sub
+";
+
+    internal const string CatchMessageExpected = "matched bad input";
+
     /// <summary>Casts through the statement form's own lowering: CStr of a Double, a Double `\`, a Decimal.</summary>
     internal const string CastProgram = @"
 Sub Main()
@@ -380,7 +403,7 @@ End Sub
 [NonParallelizable] // the C# leg redirects Console.Out
 public class WhenGuardCallRunTests
 {
-    private static readonly string[] Programs = { "Calls", "ShortCircuit", "Shapes", "Arrays" };
+    private static readonly string[] Programs = { "Calls", "ShortCircuit", "Shapes", "Arrays", "CatchMessage" };
 
     private static (string Program, string Expected) Get(string name) => name switch
     {
@@ -388,6 +411,7 @@ public class WhenGuardCallRunTests
         "ShortCircuit" => (WhenGuardCallTests.ShortCircuitProgram, WhenGuardCallTests.ShortCircuitExpected),
         "Shapes" => (WhenGuardCallTests.ShapesProgram, WhenGuardCallTests.ShapesExpected),
         "Arrays" => (WhenGuardCallTests.ArraysProgram, WhenGuardCallTests.ArraysExpected),
+        "CatchMessage" => (WhenGuardCallTests.CatchMessageProgram, WhenGuardCallTests.CatchMessageExpected),
         _ => throw new System.ArgumentException(name),
     };
 

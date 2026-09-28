@@ -292,10 +292,10 @@ public class JsExecutionTierRosterTests
         // Task #173 — Nothing converts to any reference type at every conversion site. Named
         // "...ExecutionTests", so the widened match below WOULD catch it on its own; listed
         // explicitly anyway, matching every row above. Its JS legs run through
-        // FourBackends.RunsOnEveryBackend[Aggressive] (the 14 probes that run on every backend)
-        // and JavaScriptExecutionTests.RunJs directly (N7, and the S1-S3 pinned "[null]" rows
-        // against #189). NothingConversionTests (front end/IR only, no process spawned, no
-        // [Category("Integration")]) is NOT here.
+        // FourBackends.RunsOnEveryBackend[Aggressive] (the 15 probes that run on every backend,
+        // N7 included since #189) and JavaScriptExecutionTests.RunJs directly (the S1-S3 rows,
+        // which since #189 assert the SAME "" text every other backend does). NothingConversionTests
+        // (front end/IR only, no process spawned, no [Category("Integration")]) is NOT here.
         typeof(NothingConversionExecutionTests),
 
         // Task #183 — MSIL `&` with a value operand, and Console.Write/WriteLine of every value
@@ -303,8 +303,8 @@ public class JsExecutionTierRosterTests
         // VisualGameStudio.Tests.Compiler, so RosterCoversEveryJavaScriptIntegrationFixture's own
         // namespace filter below cannot discover it automatically — listed here by hand, same as
         // every manually-added row above. Its JS legs run through FourBackends.RunsOnEveryBackend
-        // / RunsOnEveryBackendAggressive (C2/C3/W2/E7) and JavaScriptExecutionTests.RunJs directly
-        // (E8's pinned "null" text against #189). MsilValueToStringTests (pure in-process IL-text
+        // / RunsOnEveryBackendAggressive (C2/C3/W2/E7, and E8 too since #189 made JS agree with
+        // the other three backends there). MsilValueToStringTests (pure in-process IL-text
         // fixture, spawns nothing, no [Category("Integration")]) is NOT here.
         typeof(MsilValueToStringExecutionTests),
 
@@ -340,6 +340,15 @@ public class JsExecutionTierRosterTests
         // (L1's IIFE, the multi-file project's JS leg, G8's Nothing-raises pin, and G5's
         // BL7005-by-design refusal check).
         typeof(DelegateMemberInvocationExecutionTests),
+
+        // Task #189 — a Nothing String in `&`/Write (JS, C#); a Catch variable captured by a
+        // lambda (C++). Named "...ExecutionTests", so the widened match below WOULD catch it on
+        // its own; listed explicitly anyway, matching every row above. Its JS legs run through
+        // FourBackends.RunsOnEveryBackend[Aggressive] (J1-J6/C1-C3 and the edge probes that run
+        // everywhere) and JavaScriptExecutionTests.RunJs directly (J6's silent-6-vs-123 pin, the
+        // pre-existing E10 List-bounds note). NothingStringTextTests (pure codegen-text fixture,
+        // spawns nothing, no [Category("Integration")]) is NOT here.
+        typeof(NothingStringTextExecutionTests),
     };
 
     /// <summary>
@@ -388,7 +397,7 @@ public class JsExecutionTierRosterTests
 
     [Test]
     public void RosterIsPinned()
-        => Assert.That(ExecutionTier, Has.Length.EqualTo(82), // + MsilValueToStringExecutionTests (task #183), InterfaceMethodTypingExecutionTests, IsIsNotOperatorExecutionTests (task #185), MeReceiverTypingExecutionTests (task #176), UserDelegateConversionExecutionTests (task #187), DelegateMemberInvocationExecutionTests (task #188); + WhenGuardCallRunTests
+        => Assert.That(ExecutionTier, Has.Length.EqualTo(83), // + MsilValueToStringExecutionTests (task #183), InterfaceMethodTypingExecutionTests, IsIsNotOperatorExecutionTests (task #185), MeReceiverTypingExecutionTests (task #176), UserDelegateConversionExecutionTests (task #187), DelegateMemberInvocationExecutionTests (task #188), NothingStringTextExecutionTests (task #189); + WhenGuardCallRunTests
             "The execution-tier roster changed. That is fine — update the number — but it must " +
             "be a deliberate edit, not a silent shrink.");
 
