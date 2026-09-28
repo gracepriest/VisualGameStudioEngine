@@ -52,7 +52,11 @@ namespace BasicLang.Compiler.IR.Optimization
         /// dynamically repeated, which is what made a single anonymous use shared.</summary>
         public bool UseRepeats { get; init; }
 
-        public override string ToString() => Invariant == "V"
+        public override string ToString() => Invariant == "B"
+            ? $"Invariant B violated in {Function}: the loop body {WriterBlock} lists '{Variable}' in its "
+              + $"BodyLocals, and {UseBlock} (ADR-0014 D1: every entry is one of the function's "
+              + "LocalVariables, in exactly one loop, on a loop's body entry block)."
+            : Invariant == "V"
             ? $"Invariant V violated in {Function}: {Writer?.GetType().Name} in {WriterBlock} is an instruction "
               + "kind the kill vocabulary (OptimizationPass.NamesWrittenBy) does not classify, so every pass "
               + "treats it as writing everything. Give it an arm there, stating what it writes."
@@ -264,7 +268,7 @@ namespace BasicLang.Compiler.IR.Optimization
             if (mode == IRVerifierMode.Off || module == null) return;
 
             var violations = CheckInvariantV(module).Concat(CheckInvariantF(module))
-                .Concat(CheckInvariantSPrime(module)).ToList();
+                .Concat(CheckInvariantSPrime(module)).Concat(CheckInvariantB(module)).ToList();
             if (violations.Count == 0) return;
 
             if (mode == IRVerifierMode.Log)
@@ -279,6 +283,54 @@ namespace BasicLang.Compiler.IR.Optimization
             }
 
             throw new IRVerificationException(violations);
+        }
+
+        /// <summary>
+        /// Every breach of Invariant B (ADR-0014 D1) in <paramref name="module"/>: every entry of a
+        /// block's <see cref="BasicBlock.BodyLocals"/> is one of its function's
+        /// <see cref="IRFunction.LocalVariables"/> (by identity), no variable is listed by two loops
+        /// (or twice by one), and only a loop's body entry block lists any. <c>IROptimizer</c> never
+        /// removes a local (no pass writes <c>LocalVariables</c>), so the first half is what would
+        /// catch one that started to without dropping its entry. Reads the IR only.
+        /// </summary>
+        public static IReadOnlyList<InvariantViolation> CheckInvariantB(IRModule module)
+        {
+            var violations = new List<InvariantViolation>();
+            if (module?.Functions == null) return violations;
+            foreach (var function in module.Functions)
+            {
+                if (function?.Blocks == null || !function.Blocks.Any(b => b?.BodyLocals?.Count > 0)) continue;
+
+                var locals = new HashSet<IRVariable>(function.LocalVariables ?? new List<IRVariable>(), ReferenceEqualityComparer.Instance);
+                var loopBodies = new HashSet<BasicBlock>(IRLoops.Of(function).Select(l => l.Body), ReferenceEqualityComparer.Instance);
+                var owner = new Dictionary<IRVariable, BasicBlock>(ReferenceEqualityComparer.Instance);
+
+                void Breach(BasicBlock block, IRVariable variable, string what) => violations.Add(new InvariantViolation
+                {
+                    Invariant = "B",
+                    Function = function.Name,
+                    WriterBlock = block.Name,
+                    Variable = variable?.Name,
+                    UseBlock = what,
+                });
+
+                foreach (var block in function.Blocks)
+                {
+                    if (block?.BodyLocals == null || block.BodyLocals.Count == 0) continue;
+                    if (!loopBodies.Contains(block))
+                        Breach(block, block.BodyLocals[0], "that block is no loop's body entry");
+                    foreach (var variable in block.BodyLocals)
+                    {
+                        if (variable == null || !locals.Contains(variable))
+                            Breach(block, variable, "that variable is not in the function's LocalVariables");
+                        else if (owner.TryGetValue(variable, out var other))
+                            Breach(block, variable, $"the loop body {other.Name} lists it too");
+                        else
+                            owner[variable] = block;
+                    }
+                }
+            }
+            return violations;
         }
 
         /// <summary>

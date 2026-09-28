@@ -1428,7 +1428,28 @@ namespace BasicLang.Compiler.IR
         public HashSet<BasicBlock> Dominators { get; set; }
         public BasicBlock ImmediateDominator { get; set; }
         public HashSet<BasicBlock> DominanceFrontier { get; set; }
-        
+
+        /// <summary>
+        /// ⭐ ADR-0014 D1: the function-level locals whose <c>Dim</c> executes in the body of the
+        /// loop this block is the BODY ENTRY of — innermost loop only (D3). Empty on every other
+        /// block, and empty means inert.
+        ///
+        /// <para><b>Why a block.</b> Only <c>For Each</c> is an IR node; a counted <c>For</c>, a
+        /// <c>While</c> and both <c>Do</c> forms are branches between blocks IRBuilder names
+        /// <c>forN.body</c>, <c>whileN.body</c>, <c>doN.body</c> — the blocks every backend already
+        /// recognises its loops by (see <see cref="IRLoops"/>). The body entry block stands for the
+        /// loop node for all five kinds, For Each included (<see cref="IRForEach.BodyBlock"/>), so the
+        /// fact has one home. The variables stay in <see cref="IRFunction.LocalVariables"/>; the IR is
+        /// still flat.</para>
+        ///
+        /// <para>Written only by IRBuilder. Consumers act on
+        /// <c>BodyLocals ∩ captureSet(function)</c> and only on that: C# and JavaScript declare such a
+        /// variable at the top of the body from a carrier, ClosureLowering gives the loop one
+        /// per-iteration environment. C++ ignores it until #140. The IR verifier checks every entry
+        /// is in its function's <see cref="IRFunction.LocalVariables"/> and appears in one loop only.</para>
+        /// </summary>
+        public List<IRVariable> BodyLocals { get; set; }
+
         public BasicBlock(string name)
         {
             Name = name;
@@ -1437,6 +1458,7 @@ namespace BasicLang.Compiler.IR
             Successors = new List<BasicBlock>();
             Dominators = new HashSet<BasicBlock>();
             DominanceFrontier = new HashSet<BasicBlock>();
+            BodyLocals = new List<IRVariable>();
         }
         
         public void AddInstruction(IRInstruction instruction)
