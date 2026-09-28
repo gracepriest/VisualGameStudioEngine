@@ -304,6 +304,48 @@ public class WebMainStartupTests
         });
     }
 
+    /// <summary>
+    /// ⛔ Re-review of 4d064773: a dispatch the user hands out by REFERENCE — <c>AddressOf VgsForms.VgsDispatchForm</c>
+    /// wired to a button — is as much "the user decides when" as a call, but it is an AddressOf node in the IR, not a
+    /// call, so the form auto-started on load and the click then did nothing (the guard).
+    /// </summary>
+    [Test]
+    public void AnAddressOfTheDispatchWiredToAButton_DoesNotAutoStart_AndTheClickStartsTheFormOnce()
+    {
+        WriteOwnerProject("""
+            Sub Main()
+                Dim doc As Document = ::document
+                Dim button As Element = doc.createElement("button")
+                button.textContent = "Start"
+                doc.body.appendChild(button)
+                Dim start As Action = AddressOf VgsForms.VgsDispatchForm
+                button.addEventListener("click", Sub(e As DomEvent) start())
+                Console.WriteLine("MAIN RAN")
+            End Sub
+
+            """);
+        BuildWithTheRealCli();
+
+        var loaded = FormDesignerAcceptanceTests.RunPageUnderNode(OutputDir, clickId: "vgsNothing");
+        if (loaded == null)
+        {
+            Assert.Ignore("node is not on PATH, so the emitted page cannot be executed here");
+        }
+
+        var clicked = FormDesignerAcceptanceTests.RunPageUnderNode(OutputDir, clickId: "created");
+        TestContext.Out.WriteLine("[node load] " + loaded!.Trim() + "\n[node click] " + clicked!.Trim());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(loaded, Does.Contain("MAIN RAN"));
+            Assert.That(loaded, Does.Not.Contain("LOAD ERROR"));
+            Assert.That(Count(loaded, "FORM SHOWN"), Is.Zero,
+                "the form started on load although the user hands the dispatch to a button by AddressOf");
+            Assert.That(clicked, Does.Not.Contain("CLICK ERROR"));
+            Assert.That(Count(clicked, "FORM SHOWN"), Is.EqualTo(1), "one click, one form");
+        });
+    }
+
     /// <summary>A project with forms and NO Main (a site that is all forms) still starts its form, on load.</summary>
     [Test]
     public void AProjectWithNoMain_StartsItsFormOnLoad()

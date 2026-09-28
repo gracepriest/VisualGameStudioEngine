@@ -941,10 +941,20 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 (string.Equals(name, methodName, StringComparison.OrdinalIgnoreCase) ||
                  name.EndsWith("." + methodName, StringComparison.OrdinalIgnoreCase));
 
+            // ⛔ A REFERENCE counts as a call (re-review of 4d064773): `AddressOf VgsForms.VgsDispatchForm`
+            // handed to a button or stored in an Action is the user deciding when, exactly as a call is —
+            // but it lowers to an AddressOf unary over the method's name, not a call node. Missed, the form
+            // auto-started on load and the user's click was a no-op under the once-per-page guard.
             bool Calls(IRValue? value) => value switch
             {
                 IRCall call => Names(call.FunctionName) || (call.Arguments?.Any(Calls) ?? false),
                 IRInstanceMethodCall call => Names(call.MethodName) || (call.Arguments?.Any(Calls) ?? false),
+                IRUnaryOp { Operation: UnaryOpKind.AddressOf } reference => reference.Operand switch
+                {
+                    IRVariable v => Names(v.Name),
+                    IRFieldAccess f => Names(f.FieldName),
+                    _ => false,
+                },
                 _ => false,
             };
 
@@ -954,8 +964,17 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
                 foreach (var block in function.Blocks ?? Enumerable.Empty<BasicBlock>())
                     foreach (var instruction in block.Instructions ?? Enumerable.Empty<IRInstruction>())
-                        if (instruction is IRValue value && Calls(value))
-                            return true;
+                    {
+                        var found = instruction switch
+                        {
+                            IRValue value => Calls(value),
+                            IRAssignment assignment => Calls(assignment.Value),
+                            IRStore store => Calls(store.Value),
+                            _ => false,
+                        };
+
+                        if (found) return true;
+                    }
             }
 
             return false;
