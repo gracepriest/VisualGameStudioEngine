@@ -452,6 +452,42 @@ public class TypeInfo
         /// </summary>
         public bool IsShared { get; set; }
 
+        /// <summary>
+        /// For a <see cref="SymbolKind.Property"/> declared in BasicLang source — a class's or an
+        /// INTERFACE's: declared <c>ReadOnly</c> / <c>WriteOnly</c>. False for every other symbol,
+        /// a built-in or .NET property included (task #178, rule 5: those are left to csc unless
+        /// the .NET resolver positively knows, and it does not carry the fact).
+        ///
+        /// <para>⭐ Read by the analyzer's two access judgments: a write of a ReadOnly property is
+        /// VB's BC30526 (<c>SemanticAnalyzer.CheckPropertyWrite</c>) and a read of a WriteOnly one
+        /// is BC30524 (<c>SemanticAnalyzer.CheckPropertyRead</c>). Recorded on the SYMBOL, not
+        /// looked up from the declaration, because the symbol is what a use binds to — the
+        /// receiver's STATIC type picks it, which is VB's rule: a property ReadOnly on an interface
+        /// is ReadOnly through that interface even when the implementing class adds a setter.</para>
+        ///
+        /// <para>⚠ Every site that makes a property symbol from a <c>PropertyNode</c> sets these:
+        /// <c>Visit(PropertyNode)</c>, the pass-1/sibling signature
+        /// (<c>PopulateClassMemberSignatures</c> — what a use binds to when the class is declared
+        /// below it or in another file), the interface member in <c>Visit(InterfaceNode)</c>, and
+        /// the LSP's cross-file member tables (<c>LspProjectContext</c>). A site that forgot them
+        /// makes the property silently writable from exactly one declaration order.</para>
+        /// </summary>
+        public bool IsReadOnly { get; set; }
+
+        /// <summary>The WriteOnly half of <see cref="IsReadOnly"/>.</summary>
+        public bool IsWriteOnly { get; set; }
+
+        /// <summary>
+        /// For a class <see cref="SymbolKind.Property"/>: AUTO-implemented (<c>PropertyNode.IsAuto</c>
+        /// — no Get/Set block, so the property IS its storage). False for every other symbol.
+        ///
+        /// <para>Read by VB's one exception to BC30526: a ReadOnly auto-property may be assigned
+        /// in a constructor of its own class, because the assignment stores the backing field
+        /// (<c>SemanticAnalyzer.IsReadOnlyAutoPropertyInitialization</c>). A ReadOnly property
+        /// with a Get body has no storage to initialize, so the exception never covers it.</para>
+        /// </summary>
+        public bool IsAutoProperty { get; set; }
+
         // For extern declarations
         public bool IsExtern { get; set; }
         public Dictionary<string, string> ExternImplementations { get; set; }

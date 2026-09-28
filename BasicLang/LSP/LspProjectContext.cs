@@ -691,7 +691,11 @@ namespace BasicLang.Compiler.LSP
                         var symbol = new Symbol(propNode.Name, SymbolKind.Property,
                             ConvertTypeReference(propNode.PropertyType), propNode.Line, propNode.Column)
                         {
-                            Access = access
+                            Access = access,
+                            // Task #178: the editor judges BC30526/BC30524 the way the CLI does.
+                            IsReadOnly = propNode.IsReadOnly,
+                            IsWriteOnly = propNode.IsWriteOnly,
+                            IsAutoProperty = propNode.IsAuto
                         };
                         symbol.SourceFilePath = filePath;
                         target.AddSymbol(symbol, access);
@@ -749,7 +753,11 @@ namespace BasicLang.Compiler.LSP
                         memberSymbol = new Symbol(prop.Name, SymbolKind.Property,
                             ConvertTypeReference(prop.PropertyType), prop.Line, prop.Column)
                         {
-                            Access = prop.Access
+                            Access = prop.Access,
+                            // Task #178: the editor judges BC30526/BC30524 the way the CLI does.
+                            IsReadOnly = prop.IsReadOnly,
+                            IsWriteOnly = prop.IsWriteOnly,
+                            IsAutoProperty = prop.IsAuto
                         };
                         break;
 

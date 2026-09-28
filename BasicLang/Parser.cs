@@ -1002,6 +1002,7 @@ namespace BasicLang.Compiler
                 {
                     var ctor = ParseConstructor();
                     ctor.Access = access;
+                    ctor.IsShared = isStatic;
                     return ctor;
                 }
 

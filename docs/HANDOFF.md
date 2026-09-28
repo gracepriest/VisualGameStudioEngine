@@ -5129,12 +5129,55 @@ single new failure against the 170-name baseline.
     slot~~ — see the dedicated "Newest — #177 DONE" entry further down this list for the
     mechanism (`EmitCoerceToSlot`, the one boxing/unboxing/late-bound-comparison coercion) and
     the follow-ups it opened (#211-#216). Repro was `S/t175/edge/B1.bas`.
-  - **#178 — the front end accepts a write to a ReadOnly property or a read of a WriteOnly one**,
-    interface- or class-typed alike (measured on both). Nothing in `SemanticAnalyzer` refuses it,
-    so it reaches every backend; C# only fails once `csc` sees the generated accessor-less
-    assignment (CS0200) or read (CS0154), and on MSIL the interface-property fix above is what
-    stands between such a program and a call to an accessor the interface never declared. The
-    front-end refusal these two constructs are supposed to get has never been implemented.
+  - **#178 — CLOSED, 2026-09-28 (fix commit `5a75a862`).** ~~the front end accepts a write to a
+    ReadOnly property or a read of a WriteOnly one~~ — `SemanticAnalyzer` now reports VB's own
+    BC30526 ("Property 'P' is 'ReadOnly'.") and BC30524 ("Property 'W' is 'WriteOnly'."). ONE
+    write site, `VisitWriteTarget` → `CheckPropertyWrite`, covers every statement that stores
+    into an existing property (`=`, every compound operator, `++`/`--`, `With .P`, `ReDim`, a bare
+    `For P = …`) regardless of spelling (`Me.`/`MyBase.`/`obj.`/`Class.`/bare); ONE read site,
+    `CheckPropertyRead`, sits at the three visitors that bind a member name (identifier,
+    `x.M`, a `With` block's `.M`), so every rvalue position is covered without listing them. An
+    interface receiver is judged by the INTERFACE's own declaration, never the implementing
+    class's (A6b stays refused; L6, the same class through a CLASS receiver, stays legal). The
+    one carve-out is VB's own: a ReadOnly AUTO-property (no Get body) may be assigned bare or
+    `Me.` inside a constructor of its DECLARING class, matching Shared-ness — never a derived
+    class, another method, or a lambda written inside the constructor.
+    `IsReadOnlyAutoPropertyInitialization` / `IsGetterReturnVariable` are the two exemptions;
+    `Symbol.IsReadOnly`/`IsWriteOnly`/`IsAutoProperty` are set wherever a property becomes a
+    symbol (the declaration, `PopulateClassMemberSignatures`, an interface member, and the LSP's
+    `LspProjectContext`). MSIL's `EmitPropertySet` now stores that one carve-out assignment to the
+    auto-property's BACKING FIELD (`stfld`/`stsfld`) instead of calling a setter that does not
+    exist — probe L1, `set_P` `MissingMethodException`, now prints `42 43` on all three entry
+    points. MSIL's own `ForeignFeatureException` backstop for a WriteOnly-interface-read/
+    ReadOnly-interface-write (`EmitInterfacePropertyGet`/`Set`) is UNCHANGED and still there, but
+    a checked front end never reaches it any more — only unanalysed IR can
+    (`MsilInterfacePropertyCompileTests.E3_BackstopStillThrows_WhenFedUncheckedIr`/
+    `E4_BackstopStillThrows_WhenFedUncheckedIr`). Tests:
+    `VisualGameStudio.Tests/Compiler/PropertyAccessDiagnosticsTests.cs` (fast subset — code,
+    property name and line, off the analyzer directly, plus the LSP diagnostics path) and
+    `PropertyAccessExecutionTests.cs` (`[Category("Integration")]` — L1 on all four backends both
+    pipelines plus a Release MSIL leg, E12b/E16/E24/E27 promoted on MSIL, the CLI-and-Release-
+    .blproj refusal, the follow-up pins below). `JsExecutionTierRosterTests`' roster grew 83 → 84.
+    **Follow-ups filed, not fixed here** (each pinned with a comment naming its task):
+    - **#218** — a SILENT WRONG ANSWER on C++: E16/E27 (a compound-assignment chain, an If/Else
+      then a For loop, each writing a ReadOnly auto-property in its own constructor) run to
+      completion and print `2`/`0` where every other backend prints `22`/`7`.
+    - **#219** — E09 (the accessor's own implicit GET RETURN VARIABLE, `P = …` inside its own
+      `Get`) is legal per the front end's own carve-out, but no backend implements that return
+      variable, so every one of them still fails to RUN it.
+    - **#220** — `Exception.Message = x` is accepted: the .NET resolver does not carry
+      `Message`'s real ReadOnly-ness into a fact the analyzer can see (rule 5's own silence,
+      applied to one more member the resolver's accessor metadata does not reach).
+    - **#221** — a bare `For P = …` over a ReadWrite property is accepted and DRIVES it, same as
+      before this fix; VB itself refuses every property here (BC30039, a different code than
+      either of #178's own two).
+    - **#222** — N1/N2 (a .NET ReadOnly property, `String.Length`/`List(Of T).Count`) are not
+      refused either, same rule-5 reason as #220; on JavaScript N1 throws (a JS string is a
+      primitive, not extensible — `TypeError: Cannot create property 'Length'`) and N2 prints
+      `1` (a List is a real object, so the write is accepted and simply ignored).
+    - **#223** — the native C++ `.blproj` build's own error text DUPLICATES the code
+      (`error BC30526: BC30526: Property 'P' is 'ReadOnly'.`) — BasicLang's message already
+      starts with the code and the C++ project builder's formatter prepends it again.
 - ⭐ **#177 DONE (fix commit `a8e23aed`).** MSIL: box a value into an Object slot, convert out of
   one, and compare Objects late-bound (ADR-0012).
   - **The one boxing coercion.** `EmitCoerceToSlot` is the ONE place a value already on the stack
