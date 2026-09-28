@@ -369,6 +369,15 @@ public class JsExecutionTierRosterTests
         // FourBackends.RunsOnEveryBackend[Aggressive] (L1) and JavaScriptExecutionTests.RunJs
         // directly (the N1/N2 #222 pins).
         typeof(PropertyAccessExecutionTests),
+
+        // Task #169 (plus #199), ADR-0013 — case-insensitive name binding between the front end
+        // and the IR. Named "...ExecutionTests", so the widened match below WOULD catch it on
+        // its own; listed explicitly anyway, matching every row above. Its JS legs run through
+        // FourBackends.RunsOnEveryBackend[Aggressive] (the K/leak/X1/edge probes and E18's pin)
+        // and JavaScriptExecutionTests.RunJs/RunNodeScript directly (the K4/K9 pins' JS leg and
+        // E19's multi-file project-entry-point leg). NameBindingTests (front end/IR only, no
+        // process spawned, no [Category("Integration")]) is NOT here.
+        typeof(NameBindingExecutionTests),
     };
 
     /// <summary>
@@ -420,7 +429,7 @@ public class JsExecutionTierRosterTests
 
     [Test]
     public void RosterIsPinned()
-        => Assert.That(ExecutionTier, Has.Length.EqualTo(86), // + MsilValueToStringExecutionTests (task #183), InterfaceMethodTypingExecutionTests, IsIsNotOperatorExecutionTests (task #185), MeReceiverTypingExecutionTests (task #176), UserDelegateConversionExecutionTests (task #187), DelegateMemberInvocationExecutionTests (task #188), NothingStringTextExecutionTests (task #189), MsilObjectBoxingExecutionTests (task #177), NotPrecedenceExecutionTests (#195), PropertyAccessExecutionTests (task #178); + WhenGuardCallRunTests
+        => Assert.That(ExecutionTier, Has.Length.EqualTo(87), // + MsilValueToStringExecutionTests (task #183), InterfaceMethodTypingExecutionTests, IsIsNotOperatorExecutionTests (task #185), MeReceiverTypingExecutionTests (task #176), UserDelegateConversionExecutionTests (task #187), DelegateMemberInvocationExecutionTests (task #188), NothingStringTextExecutionTests (task #189), MsilObjectBoxingExecutionTests (task #177), NotPrecedenceExecutionTests (#195), PropertyAccessExecutionTests (task #178), NameBindingExecutionTests (task #169/#199); + WhenGuardCallRunTests
             "The execution-tier roster changed. That is fine — update the number — but it must " +
             "be a deliberate edit, not a silent shrink.");
 

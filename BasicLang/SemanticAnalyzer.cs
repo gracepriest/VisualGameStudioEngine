@@ -253,6 +253,43 @@ namespace BasicLang.Compiler.SemanticAnalysis
         private int _forEachHiddenVariableCounter;
 
         /// <summary>
+        /// #169 — the range variables each LINQ clause declares, in declaration order, for the
+        /// IR builder to register where the clause brings them into scope (ADR-0013 D5). Only the
+        /// ones the query scope accepted: a duplicate name is refused by <c>Define</c> and every
+        /// reference resolves to the first. Keyed by clause REFERENCE and overwritten on
+        /// re-analysis, like <see cref="ForEachControlBindings"/>.
+        /// </summary>
+        internal IReadOnlyDictionary<LinqClause, IReadOnlyList<Symbol>> LinqRangeVariables =>
+            _linqRangeVariables;
+
+        private readonly Dictionary<LinqClause, IReadOnlyList<Symbol>> _linqRangeVariables =
+            new Dictionary<LinqClause, IReadOnlyList<Symbol>>(ReferenceEqualityComparer.Instance);
+
+        /// <summary>
+        /// #169 — every lambda parameter symbol, so a reference to one records
+        /// <see cref="NameBindingKind.LambdaParameter"/> rather than Parameter. By reference.
+        /// </summary>
+        private readonly HashSet<Symbol> _lambdaParameterSymbols =
+            new HashSet<Symbol>(ReferenceEqualityComparer.Instance);
+
+        /// <summary>
+        /// #169 — declarations the analyzer SYNTHESIZED rather than read from source (the
+        /// <c>For Each</c> hidden element variable). A reference to one records no
+        /// <see cref="NameBinding"/> (ADR-0013 D5): the IR builder registers it at its synthesis site
+        /// and binds it by its own name. By reference.
+        /// </summary>
+        private readonly HashSet<Symbol> _synthesizedSymbols =
+            new HashSet<Symbol>(ReferenceEqualityComparer.Instance);
+
+        /// <summary>
+        /// #169 (ADR-0013 D8) — how many references resolved to a symbol whose name does NOT equal the
+        /// written name under OrdinalIgnoreCase, and so were left with no
+        /// <see cref="IdentifierExpressionNode.Binding"/>. Diagnostic only, for #124 to size;
+        /// each one is also written to <see cref="System.Diagnostics.Debug"/>.
+        /// </summary>
+        internal int UnboundByNameMismatch { get; private set; }
+
+        /// <summary>
         /// The control variables of the <c>For</c> / <c>For Each</c> loops whose bodies are being
         /// analyzed, innermost last — VB's BC30069 question ("already in use by an enclosing
         /// loop"), asked only by a <c>For Each</c> that would REUSE a variable.
@@ -1183,6 +1220,8 @@ namespace BasicLang.Compiler.SemanticAnalysis
             _errors.Clear();
             _nodeTypes.Clear();
             _nodeSymbols.Clear();
+            _lambdaParameterSymbols.Clear();
+            _synthesizedSymbols.Clear();
             _delegateMemberInvocations.Clear();
             _netNamespaces.Clear();
             _moduleMembers.Clear();
@@ -1245,6 +1284,91 @@ namespace BasicLang.Compiler.SemanticAnalysis
         private void SetNodeSymbol(ASTNode node, Symbol symbol)
         {
             _nodeSymbols[node] = symbol;
+
+            // ⭐ #169: THE ONE PLACE an identifier reference's NameBinding is recorded — here,
+            // where its resolved symbol is, so the two can never disagree (the call site that
+            // re-binds a callee to a module procedure writes through here too). Cleared at the
+            // top of Visit(IdentifierExpressionNode), so a re-analysis that resolves nothing
+            // leaves none behind.
+            if (node is IdentifierExpressionNode reference)
+                reference.Binding = BindingOf(reference, symbol);
+        }
+
+        /// <summary>
+        /// The <see cref="NameBinding"/> a reference written <paramref name="reference"/> records
+        /// for <paramref name="symbol"/>, or null for a synthesized declaration, an Event (ADR-0013
+        /// D7), or a symbol whose name differs from the written one other than by case (ADR-0013 D8).
+        /// </summary>
+        private NameBinding? BindingOf(IdentifierExpressionNode reference, Symbol symbol)
+        {
+            if (symbol == null || _synthesizedSymbols.Contains(symbol)) return null;
+
+            var kind = BindingKindOf(symbol);
+            if (kind == null) return null;
+
+            if (!string.Equals(symbol.Name, reference.Name, StringComparison.OrdinalIgnoreCase))
+            {
+                UnboundByNameMismatch++;
+                System.Diagnostics.Debug.WriteLine(
+                    $"#169 D8: '{reference.Name}' (line {reference.Line}) resolved to {symbol.Kind} " +
+                    $"'{symbol.Name}'; no binding recorded.");
+                return null;
+            }
+
+            return new NameBinding(symbol.Name, kind.Value, symbol);
+        }
+
+        private NameBindingKind? BindingKindOf(Symbol symbol)
+        {
+            switch (symbol.Kind)
+            {
+                case SymbolKind.Parameter:
+                    return _lambdaParameterSymbols.Contains(symbol)
+                        ? NameBindingKind.LambdaParameter
+                        : NameBindingKind.Parameter;
+                case SymbolKind.Variable:
+                case SymbolKind.Constant:
+                    return StorageBindingKindOf(symbol);
+                case SymbolKind.Property:
+                    return NameBindingKind.Property;
+                case SymbolKind.Function:
+                case SymbolKind.Subroutine:
+                    return NameBindingKind.Method;
+                case SymbolKind.Event:
+                    return null;   // ADR-0013 D7: unbound until #124 consumes it
+                default:
+                    return NameBindingKind.Type;
+            }
+        }
+
+        /// <summary>
+        /// Where a variable or constant lives, by the scope that declared it: a procedure, block
+        /// or loop scope holds a Local; a class scope a Field; the file, a Module or a Namespace a
+        /// ModuleGlobal. A symbol with no declaring scope was found through a member table — a
+        /// class's (a Field) or another module's or file's (a ModuleGlobal).
+        /// </summary>
+        private static NameBindingKind StorageBindingKindOf(Symbol symbol)
+        {
+            switch (symbol.DeclaringScope?.Kind)
+            {
+                case ScopeKind.Function:
+                case ScopeKind.Subroutine:
+                case ScopeKind.Block:
+                case ScopeKind.Loop:
+                    return NameBindingKind.Local;
+                case ScopeKind.Class:
+                case ScopeKind.Interface:
+                    return NameBindingKind.Field;
+                case ScopeKind.Global:
+                case ScopeKind.Namespace:
+                case ScopeKind.Module:
+                    return NameBindingKind.ModuleGlobal;
+                default:
+                    return !string.IsNullOrEmpty(symbol.OwningModule) || symbol.IsImported
+                           || !string.IsNullOrEmpty(symbol.SourceModule)
+                        ? NameBindingKind.ModuleGlobal
+                        : NameBindingKind.Field;
+            }
         }
 
         /// <summary>
@@ -7355,6 +7479,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 }
                 var paramSymbol = new Symbol(param.Name, SymbolKind.Parameter, paramType, param.Line, param.Column);
                 _currentScope.Define(paramSymbol);
+                _lambdaParameterSymbols.Add(paramSymbol);
                 SetNodeSymbol(param, paramSymbol);
                 SetNodeType(param, paramType);
                 paramTypes.Add(paramType);
@@ -8500,6 +8625,10 @@ namespace BasicLang.Compiler.SemanticAnalysis
             // Analyze each clause
             foreach (var clause in node.Clauses)
             {
+                // #169: what this clause brings into scope, for the IR builder (ADR-0013 D5).
+                var declared = new List<Symbol>();
+                _linqRangeVariables[clause] = declared;
+
                 switch (clause)
                 {
                     case FromClause from:
@@ -8517,7 +8646,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
                         // Define the range variable with inferred type
                         var symbol = new Symbol(from.VariableName, SymbolKind.Variable, elementType, from.Line, from.Column);
-                        _currentScope.Define(symbol);
+                        DefineRangeVariable(symbol, declared);
                         currentResultType = elementType;
                         break;
 
@@ -8552,7 +8681,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                             // The into variable represents IGrouping<TKey, TElement>
                             var groupingType = _typeManager.ObjectType;  // Simplified
                             var intoSymbol = new Symbol(groupBy.IntoVariable, SymbolKind.Variable, groupingType, groupBy.Line, groupBy.Column);
-                            _currentScope.Define(intoSymbol);
+                            DefineRangeVariable(intoSymbol, declared);
                         }
                         break;
 
@@ -8572,7 +8701,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                         }
 
                         var joinSymbol = new Symbol(join.VariableName, SymbolKind.Variable, joinElementType, join.Line, join.Column);
-                        _currentScope.Define(joinSymbol);
+                        DefineRangeVariable(joinSymbol, declared);
 
                         // Validate key types match
                         var outerKeyType = GetNodeType(join.OuterKeySelector);
@@ -8587,7 +8716,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                         {
                             var groupJoinType = _typeManager.ObjectType;  // Simplified: should be IEnumerable<joinElementType>
                             var intoSymbol = new Symbol(join.IntoVariable, SymbolKind.Variable, groupJoinType, join.Line, join.Column);
-                            _currentScope.Define(intoSymbol);
+                            DefineRangeVariable(intoSymbol, declared);
                         }
                         break;
 
@@ -8608,12 +8737,12 @@ namespace BasicLang.Compiler.SemanticAnalysis
                         }
 
                         var aggSymbol = new Symbol(aggregate.VariableName, SymbolKind.Variable, aggElementType, aggregate.Line, aggregate.Column);
-                        _currentScope.Define(aggSymbol);
+                        DefineRangeVariable(aggSymbol, declared);
 
                         if (!string.IsNullOrEmpty(aggregate.IntoVariable))
                         {
                             var intoSymbol = new Symbol(aggregate.IntoVariable, SymbolKind.Variable, _typeManager.ObjectType, aggregate.Line, aggregate.Column);
-                            _currentScope.Define(intoSymbol);
+                            DefineRangeVariable(intoSymbol, declared);
                         }
                         break;
 
@@ -8621,7 +8750,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                         let.Value?.Accept(this);
                         var letType = GetNodeType(let.Value) ?? _typeManager.ObjectType;
                         var letSymbol = new Symbol(let.VariableName, SymbolKind.Variable, letType, let.Line, let.Column);
-                        _currentScope.Define(letSymbol);
+                        DefineRangeVariable(letSymbol, declared);
                         break;
 
                     case TakeClause take:
@@ -8655,6 +8784,16 @@ namespace BasicLang.Compiler.SemanticAnalysis
             SetNodeType(node, resultArrayType);
 
             ExitScope();
+        }
+
+        /// <summary>
+        /// Defines one LINQ range variable in the query scope and, when the scope accepts it,
+        /// records it among <paramref name="declared"/> — the clause's entry in
+        /// <see cref="LinqRangeVariables"/>.
+        /// </summary>
+        private void DefineRangeVariable(Symbol symbol, List<Symbol> declared)
+        {
+            if (_currentScope.Define(symbol)) declared.Add(symbol);
         }
 
         public void Visit(InlineCodeNode node)
@@ -9122,7 +9261,9 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 // symbol and declared type, which IRBuilder's assignment lowering reads) come from
                 // Visit(AssignmentStatementNode), not from a second copy of them.
                 var hiddenName = $"__foreach_{_forEachHiddenVariableCounter++}";
-                _currentScope.Define(new Symbol(hiddenName, SymbolKind.Variable, elementType, node.Line, node.Column));
+                var hiddenSymbol = new Symbol(hiddenName, SymbolKind.Variable, elementType, node.Line, node.Column);
+                _currentScope.Define(hiddenSymbol);
+                _synthesizedSymbols.Add(hiddenSymbol);   // #169: no NameBinding (ADR-0013 D5)
 
                 var assignment = new AssignmentStatementNode(node.Line, node.Column)
                 {
@@ -10652,6 +10793,10 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
         public void Visit(IdentifierExpressionNode node)
         {
+            // #169: recorded afresh on every pass, by SetNodeSymbol below; every early return in
+            // this method (Me, a foreign name, a VB constant, an unresolved name) leaves none.
+            node.Binding = null;
+
             // A ::-qualified foreign C++ name (free function / global) in expression position
             // is opaque: type it Foreign as a WHOLE. Short-circuit BEFORE scope resolution so
             // the namespace head (e.g. 'mathlib' in mathlib::kAnswer) is never looked up as a
