@@ -3148,6 +3148,15 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 return true;
             }
 
+            // ⛔ A TypeOf test must TEST. Passing the value through (right for a cast to an
+            // interface, which JS cannot check) would make `TypeOf x Is IShape` True for every
+            // non-null object — a green build with the wrong branch taken.
+            if (cast.IsTypeOfTest)
+                throw new ForeignFeatureException(
+                    $"BL7013: 'TypeOf … Is {target.Name}' cannot be tested on JavaScript — it has no " +
+                    "interfaces (and no class to test for an Extern type), so every object would " +
+                    "match. Test for a class instead, or add a method to the interface that answers.");
+
             rendered = value;
             return true;
         }

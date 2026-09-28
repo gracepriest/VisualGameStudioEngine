@@ -1665,6 +1665,13 @@ namespace BasicLang.Compiler.AST
         /// </summary>
         public bool IsDirectCast { get; set; }
 
+        /// <summary>
+        /// True for the TryCast the parser builds from <c>TypeOf x Is T</c> (#197): judged by
+        /// TypeOf's rules in the analyzer, and refused on JavaScript for an interface target,
+        /// where a TryCast cannot test anything.
+        /// </summary>
+        public bool IsTypeOfTest { get; set; }
+
         public CastExpressionNode(int line, int column) : base(line, column) { }
 
         public override void Accept(IASTVisitor visitor) => visitor.Visit(this);

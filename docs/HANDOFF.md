@@ -2264,8 +2264,9 @@ single new failure against the 170-name baseline.
     test kills which.
   - Follow-ups filed, not fixed here: **#195** (`Not` to VB precedence — since done, see D1
     above); **#196** (`Array<T>` a
-    real null state, which flips the C++ divergence for arrays); **#197** (`TypeOf`, not touched
-    by this task); **#198** (a user `Operator =` — since done: a class's operators now parse,
+    real null state, which flips the C++ divergence for arrays); **#197** (`TypeOf` — since done:
+    the parser desugars `TypeOf x Is T` to `TryCast(x, T) IsNot Nothing`, the analyzer judges
+    it by TypeOf's rules, JavaScript refuses an interface target, BL7013); **#198** (a user `Operator =` — since done: a class's operators now parse,
     bind and run on C# and C++, and `UserOperatorExecutionTests` pins `a = b` True where
     `a Is b` is False; JavaScript still refuses them, BL7006); **#193** (`Integer?` on C++/MSIL/JavaScript, pre-existing);
     **#194** (ordinary .NET types, `System.Version` included, on MSIL — pre-existing).

@@ -4169,6 +4169,7 @@ namespace BasicLang.Compiler
                 TokenType.LeftParen => true,
                 TokenType.New => true,
                 TokenType.Not => true,
+                TokenType.TypeOf => true,
                 TokenType.Minus => true,
                 TokenType.AddressOf => true,
                 TokenType.Me => true,
@@ -4640,6 +4641,44 @@ namespace BasicLang.Compiler
             return expr;
         }
 
+        /// <summary>
+        /// <c>TypeOf x Is T</c> / <c>TypeOf x IsNot T</c> (#197). The lexer had the token and
+        /// nothing parsed it: "Unexpected token in expression: 'TypeOf'".
+        ///
+        /// <para>Desugared here to <c>TryCast(x, T) IsNot Nothing</c> (<c>Is Nothing</c> for
+        /// <c>IsNot T</c>) — the same test, built from two forms every backend already lowers:
+        /// TryCast (C# <c>as</c>, C++ <c>dynamic_pointer_cast</c>, JavaScript <c>instanceof</c>)
+        /// and the ADR-0011 identity node. The cast is flagged <c>IsTypeOfTest</c> so the analyzer
+        /// judges it by TypeOf's rules and speaks about TypeOf, not TryCast.</para>
+        /// </summary>
+        private ExpressionNode ParseTypeOfExpression()
+        {
+            var typeOf = Consume(TokenType.TypeOf, "Expected 'TypeOf'");
+            var operand = ParsePostfix();
+
+            bool negated;
+            if (Match(TokenType.Is)) negated = false;
+            else if (Match(TokenType.IsNot)) negated = true;
+            else throw new ParseException("Expected 'Is' or 'IsNot' after 'TypeOf' expression", Peek());
+
+            var cast = new CastExpressionNode(typeOf.Line, typeOf.Column)
+            {
+                Expression = operand,
+                TargetType = ParseTypeReference(),
+                IsTryCast = true,
+                IsTypeOfTest = true
+            };
+            return new BinaryExpressionNode(typeOf.Line, typeOf.Column)
+            {
+                Left = cast,
+                Operator = negated ? "Is" : "IsNot",
+                Right = new LiteralExpressionNode(typeOf.Line, typeOf.Column)
+                {
+                    Value = null, LiteralType = TokenType.Nothing, Text = "Nothing"
+                }
+            };
+        }
+
         private ExpressionNode ParsePrimary()
         {
             // Implicit With member access: .Member inside a With block
@@ -4676,6 +4715,9 @@ namespace BasicLang.Compiler
                 literal.Text = token.Lexeme;
                 return literal;
             }
+
+            if (Check(TokenType.TypeOf))
+                return ParseTypeOfExpression();
 
             // Interpolated string: $"Hello {name}"
             if (Check(TokenType.InterpolatedStringLiteral))
