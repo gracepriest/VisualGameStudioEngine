@@ -2285,9 +2285,12 @@ single new failure against the 170-name baseline.
   - **D1 (grammar):** `Is`/`IsNot` are binary operators at the `=`/`<>` level in BOTH expression
     parsers (the recursive-descent chain AND the precedence-climbing continuation); `IsNot` is now
     a lexer keyword. `Case Is Nothing` keeps its dispatch and is now marked `WrittenWithIs`
-    (`NothingPatternNode`), which separates it from VB's value comparison `Case Nothing`. A
-    `Not`-shaped left operand (`Not x Is Nothing`) is refused, naming `x IsNot Nothing` — `Not`
-    itself stays at unary precedence (moving it is filed separately as **#195**).
+    (`NothingPatternNode`), which separates it from VB's value comparison `Case Nothing`.
+    **#195 (done):** `Not` is at VB precedence in both parsers (`ParseLogicalNot` /
+    `ParseNotContinuation`) — looser than every comparison, tighter than `And` — so
+    `Not x Is Nothing` is `Not (x Is Nothing)` and `Not n = 5` is `Not (n = 5)`. A `Not` in
+    operand position (`x = Not b`) is still the unary. Only an explicit `(Not x) Is Nothing` still
+    reaches D1 (3)'s refusal, which names `x IsNot Nothing`.
   - **D2 (operand rule, `VisitIdentityComparison`):** an operand is `Nothing` or a type #173's
     `NothingAdviceFor` admits `Nothing` into — the ONE classification, no parallel list; value
     types are refused BC30020-style, each refusal naming its own fix. A nullable is admitted only
@@ -2368,7 +2371,8 @@ single new failure against the 170-name baseline.
     table independently and observing which shapes stopped parsing. See
     `IsIsNotOperatorTests.cs`'s and `IsIsNotOperatorExecutionTests.cs`'s doc comments for which
     test kills which.
-  - Follow-ups filed, not fixed here: **#195** (`Not` to VB precedence); **#196** (`Array<T>` a
+  - Follow-ups filed, not fixed here: **#195** (`Not` to VB precedence — since done, see D1
+    above); **#196** (`Array<T>` a
     real null state, which flips the C++ divergence for arrays); **#197** (`TypeOf`, not touched
     by this task); **#198** (BasicLang cannot declare a user `Operator =` yet, so D4 (1)'s
     four-backend proof waits on it); **#193** (`Integer?` on C++/MSIL/JavaScript, pre-existing);
@@ -2638,12 +2642,17 @@ single new failure against the 170-name baseline.
       an MSIL closure/catch-message inconsistency, so this is a new number. (Measured, separately:
       the C++ init-capture mutant — a plain `[=]` copy instead of the init-capture — reproduces
       this EXACT symptom on C++ too, `same=False`, confirming the mechanism.)
-    - **#191, WIDENED.** An `Object` field holding a boxed Boolean, concatenated (E13): C#/JS agree
-      (`T=False`); MSIL prints `T=` — the Boolean's text is LOST through `&`. #191 already covers a
-      user-class `&` operand and `Console.Write` of a class on MSIL; a boxed Boolean losing its
-      text is a new instance of the same class of gap. (E13's C++ leg does not compile at all —
-      `Object` has no C++ mapping, a much older, unrelated gap, measured as a fact in the pin but
-      not filed under a new number here.)
+    - **#191, WIDENED then CORRECTED, 2026-09-28 (task #177).** An `Object` field holding a boxed
+      Boolean, concatenated (E13): this used to say C#/JS agreed (`T=False`) while MSIL printed
+      `T=` — the Boolean's text LOST through `&` — and filed the MSIL half under #191, widened.
+      That was a MIS-FILING: the real mechanism was #177's own box-into-Object gap (the field
+      store never boxed, so `&` concatenated an unboxed value's text away), not #191's user-class
+      `&`/`Console.Write` gap. #177's fix makes MSIL agree with C#/JS (`T=False`) too, so this is
+      no longer a pin of a wrong answer —
+      `NothingStringTextExecutionTests.E13_ObjectFieldHoldingBoolean_AgreesOnCSharpJavaScriptAndMsil`
+      now asserts the SAME text on all three. (E13's C++ leg still does not compile at all —
+      `Object` has no C++ mapping, a much older, unrelated gap, measured as a fact but not filed
+      under a new number.)
     - **#206, left alone (semantic question, not a bug).** `Nothing = ""`: VB says True, every
       backend here says False (E4, constant-folded: False/False/True everywhere). Forced through a
       run-time comparison instead of a fold (E4b), C#/JS/MSIL still agree with their own E4 answer,
@@ -5224,16 +5233,134 @@ single new failure against the 170-name baseline.
     `Msil_BarePropertyWriteInALaterClass_TargetsItsOwnClass`, asserting SUCCESS, and MSIL is
     folded back into `StandardPipeline_RunsOnAllFourBackends`/`AggressivePipeline_
     RunsOnAllFourBackends` for this same Program.
-  - **#177 — MSIL never boxes a value type stored into an `Object` slot** — assignment, an
-    argument, a return, and a class property write all reach it; no interface is involved. `Dim o
-    As Object = <Double>` throws `NullReferenceException` where every other backend prints the
-    value. Repro: `S/t175/edge/B1.bas`.
-  - **#178 — the front end accepts a write to a ReadOnly property or a read of a WriteOnly one**,
-    interface- or class-typed alike (measured on both). Nothing in `SemanticAnalyzer` refuses it,
-    so it reaches every backend; C# only fails once `csc` sees the generated accessor-less
-    assignment (CS0200) or read (CS0154), and on MSIL the interface-property fix above is what
-    stands between such a program and a call to an accessor the interface never declared. The
-    front-end refusal these two constructs are supposed to get has never been implemented.
+  - **#177 — CLOSED, 2026-09-28.** ~~MSIL never boxes a value type stored into an `Object`
+    slot~~ — see the dedicated "Newest — #177 DONE" entry further down this list for the
+    mechanism (`EmitCoerceToSlot`, the one boxing/unboxing/late-bound-comparison coercion) and
+    the follow-ups it opened (#211-#216). Repro was `S/t175/edge/B1.bas`.
+  - **#178 — CLOSED, 2026-09-28 (fix commit `5a75a862`).** ~~the front end accepts a write to a
+    ReadOnly property or a read of a WriteOnly one~~ — `SemanticAnalyzer` now reports VB's own
+    BC30526 ("Property 'P' is 'ReadOnly'.") and BC30524 ("Property 'W' is 'WriteOnly'."). ONE
+    write site, `VisitWriteTarget` → `CheckPropertyWrite`, covers every statement that stores
+    into an existing property (`=`, every compound operator, `++`/`--`, `With .P`, `ReDim`, a bare
+    `For P = …`) regardless of spelling (`Me.`/`MyBase.`/`obj.`/`Class.`/bare); ONE read site,
+    `CheckPropertyRead`, sits at the three visitors that bind a member name (identifier,
+    `x.M`, a `With` block's `.M`), so every rvalue position is covered without listing them. An
+    interface receiver is judged by the INTERFACE's own declaration, never the implementing
+    class's (A6b stays refused; L6, the same class through a CLASS receiver, stays legal). The
+    one carve-out is VB's own: a ReadOnly AUTO-property (no Get body) may be assigned bare or
+    `Me.` inside a constructor of its DECLARING class, matching Shared-ness — never a derived
+    class, another method, or a lambda written inside the constructor.
+    `IsReadOnlyAutoPropertyInitialization` / `IsGetterReturnVariable` are the two exemptions;
+    `Symbol.IsReadOnly`/`IsWriteOnly`/`IsAutoProperty` are set wherever a property becomes a
+    symbol (the declaration, `PopulateClassMemberSignatures`, an interface member, and the LSP's
+    `LspProjectContext`). MSIL's `EmitPropertySet` now stores that one carve-out assignment to the
+    auto-property's BACKING FIELD (`stfld`/`stsfld`) instead of calling a setter that does not
+    exist — probe L1, `set_P` `MissingMethodException`, now prints `42 43` on all three entry
+    points. MSIL's own `ForeignFeatureException` backstop for a WriteOnly-interface-read/
+    ReadOnly-interface-write (`EmitInterfacePropertyGet`/`Set`) is UNCHANGED and still there, but
+    a checked front end never reaches it any more — only unanalysed IR can
+    (`MsilInterfacePropertyCompileTests.E3_BackstopStillThrows_WhenFedUncheckedIr`/
+    `E4_BackstopStillThrows_WhenFedUncheckedIr`). Tests:
+    `VisualGameStudio.Tests/Compiler/PropertyAccessDiagnosticsTests.cs` (fast subset — code,
+    property name and line, off the analyzer directly, plus the LSP diagnostics path) and
+    `PropertyAccessExecutionTests.cs` (`[Category("Integration")]` — L1 on all four backends both
+    pipelines plus a Release MSIL leg, E12b/E16/E24/E27 promoted on MSIL, the CLI-and-Release-
+    .blproj refusal, the follow-up pins below). `JsExecutionTierRosterTests`' roster grew 83 → 84.
+    **Follow-ups filed, not fixed here** (each pinned with a comment naming its task):
+    - **#218** — a SILENT WRONG ANSWER on C++: E16/E27 (a compound-assignment chain, an If/Else
+      then a For loop, each writing a ReadOnly auto-property in its own constructor) run to
+      completion and print `2`/`0` where every other backend prints `22`/`7`.
+    - **#219** — E09 (the accessor's own implicit GET RETURN VARIABLE, `P = …` inside its own
+      `Get`) is legal per the front end's own carve-out, but no backend implements that return
+      variable, so every one of them still fails to RUN it.
+    - **#220** — `Exception.Message = x` is accepted: the .NET resolver does not carry
+      `Message`'s real ReadOnly-ness into a fact the analyzer can see (rule 5's own silence,
+      applied to one more member the resolver's accessor metadata does not reach).
+    - **#221** — a bare `For P = …` over a ReadWrite property is accepted and DRIVES it, same as
+      before this fix; VB itself refuses every property here (BC30039, a different code than
+      either of #178's own two).
+    - **#222** — N1/N2 (a .NET ReadOnly property, `String.Length`/`List(Of T).Count`) are not
+      refused either, same rule-5 reason as #220; on JavaScript N1 throws (a JS string is a
+      primitive, not extensible — `TypeError: Cannot create property 'Length'`) and N2 prints
+      `1` (a List is a real object, so the write is accepted and simply ignored).
+    - **#223** — the native C++ `.blproj` build's own error text DUPLICATES the code
+      (`error BC30526: BC30526: Property 'P' is 'ReadOnly'.`) — BasicLang's message already
+      starts with the code and the C++ project builder's formatter prepends it again.
+- ⭐ **#177 DONE (fix commit `a8e23aed`).** MSIL: box a value into an Object slot, convert out of
+  one, and compare Objects late-bound (ADR-0012).
+  - **The one boxing coercion.** `EmitCoerceToSlot` is the ONE place a value already on the stack
+    is fitted to the slot it is about to land in: when the value is a VALUE type
+    (`ValueTypeBoxToken`, reused from #183) and the slot is `object`, it emits `box <own type
+    token>`; anything else is left exactly as it was. Every store funnel routes through it —
+    locals, parameters, ByRef, fields, properties (including Shared) and globals; array and
+    collection elements; call/constructor/`MyBase.New`/interface arguments; `Return`;
+    initializers — and #175's interface-property arms above now use it too, closing that entry's
+    own "the other 3 (I5)" gap. Before this, IL never boxed on a store at all (`ldloc d; stloc o`
+    put a `float64`'s raw bits where a reference belongs), which was `NullReferenceException` or
+    `InvalidProgramException` depending on whether the JIT's verifier-lite noticed. The slot must
+    be EXACTLY `object` — a String or a class slot never receives a box, which changes no emitted
+    IL over the whole corpus, because no program reaches a boxable value flowing into either.
+  - **Conversion out of an Object.** `CInt`/`CLng`/`CDbl`/`CSng`/`CStr`/`CBool` of an Object
+    operand call `Convert.To*(object)` — the C# backend's own text for the same six intrinsics —
+    so a boxed String parses, a boxed Double rounds half-to-even through `CInt`, and a value that
+    cannot convert throws (`FormatException`/`InvalidCastException`), never reads bits. Before
+    this, `CDbl(d) * 2` with `d As Object = 1.5` printed `9.218868437227405E+18` — the box's
+    address read as a raw `float64`. `CType(o, T)`/`DirectCast` to a value type are a DIFFERENT
+    operation — `unbox.any`, which throws `InvalidCastException` on a mismatched box rather than
+    converting.
+  - **Late-bound comparison (ADR-0012).** BasicLang has no `Option Strict`
+    (`SymbolTable.cs:197`), so `=`/`<>`/`<`/`<=`/`>`/`>=` with a statically Object operand is VB's
+    late-bound comparison: both operands box, then
+    `Microsoft.VisualBasic.CompilerServices.Operators.ConditionalCompareObject*(a, b,
+    TextCompare:=False)` is called from `Microsoft.VisualBasic.Core`, declared via a
+    `.assembly extern` that is emitted ONLY when at least one late-bound comparison exists in the
+    module. Without this, boxing the store alone turned a right-BY-ACCIDENT `ceq` (comparing the
+    raw int32 that used to live in the slot) into a silently WRONG `ceq` (comparing a reference
+    against a constant) — `If o = 20` answered `ne` instead of `eq`. `Select Case` values, ranges,
+    `Case Is op` and `When` guards share the same `EmitComparison`. The `Nothing` LITERAL never
+    makes a comparison late-bound on its own (`i = Nothing` on an Integer stays Integer equality);
+    `Is`/`IsNot`/`Case Is Nothing` stay reference identity (ADR-0011 D2(2)) unconditionally;
+    `Case Nothing` on an Object subject IS late-bound (VB's `subject = Nothing`), which differs
+    from `Case Is Nothing` for an Object holding `0`, `""` or `False`.
+  - **`IRNothingPatternCase.WrittenWithIs`** carries the AST flag through to MSIL, the only
+    backend that reads it — `Case Nothing` and `Case Is Nothing` lower to the same node and differ
+    only by this bit.
+  - Byte-compared: every `.cs`/`.js`/`.cpp` file identical; the `.il` files that differ are only
+    where a value flows into or out of an Object slot, or a comparison has an Object operand.
+    `BASICLANG_VERIFY_IR` never fired. Tests: `VisualGameStudio.Tests/Msil/
+    MsilObjectBoxingTests.cs` (fast subset — IL text, both pipelines) and
+    `MsilObjectBoxingExecutionTests.cs` (`[Category("Integration")]` — O1-O7, the edge probes,
+    C1/C2 and the L01-L12 late-bound probes, all three entry points). `JsExecutionTierRosterTests`'
+    roster grew 82 → 83.
+  - **Follow-ups filed, not fixed here** (each pinned with a comment naming its task):
+    - **#192** — a Structure or Enum boxed into an Object slot: MSIL cannot run either yet (a
+      Structure is not a real value type on this backend; an Enum's own `.field … int32 value__`
+      declaration is a ilasm syntax error), independent of anything #177 touches. (E05, E17)
+    - **#136** — a `Sub` lambda's write to a captured Object variable is lost on C# (the '99' line
+      never prints). (E07)
+    - **#216** — an `Optional` parameter typed Object with a non-`Nothing` default refuses to
+      compile on C# (CS1763: a reference-typed default other than `string`/`null`). (E16)
+    - **#211** — a comparison with a statically Object operand refuses to compile on C# at all
+      (CS0019, or CS8781 for a string relational `Case` pattern); C# owes MSIL's own ADR-0012
+      ruling. (E02, C1, L01, L03-L08, L10)
+    - **#214** — the optimizer's mixed-type Object constant fold is WRONG on every backend that
+      reaches it (C#, JavaScript, MSIL) — a silent wrong answer, pinned visibly as today's
+      `False | False` rather than left undiscovered. (L11)
+    - **#215** — JavaScript disagrees with VB on `= Nothing`, `Case Nothing` and a boxed `Is`.
+      (L05, L08, L09)
+    - **#213** — `MyBase.Show(5)` into a Base method typed `o As Object` names the WRONG call-site
+      signature on MSIL (`Show(int32)` where `Show` is declared `(object)`) — the boxing coercion
+      does not reach a `MyBase` method-call's arguments, a call site outside #177's own contract —
+      and throws `MissingMethodException` at run time. (C# drops the `MyBase.Show(5)` call
+      ENTIRELY, for any parameter type — that is the existing #139.)
+    - **#212** — `CInt` of a boxed `True` prints `1` on both C# and MSIL, where VB's own answer is
+      `-1` (`True` widens to Integer as all bits set, which `Convert.ToInt32(object)` does not do
+      for a boxed Boolean).
+    - #208-#210 were filed while briefing #178 (ReadOnly/WriteOnly diagnostics), not by #177:
+      **#208** `Shared Sub New` never runs on any backend (a Shared field it sets reads 0);
+      **#209** a property passed ByRef loses VB's copy-back (C++ silently, C# CS0206, MSIL
+      refuses); **#210** an auto-property initializer (`Property P As Integer = 7`) does not
+      parse.
 - ⭐ **Newest — #164 DONE (fix committed `151a8137`).** A multi-line `Function(...) [As T] ...
   End Function` lambda used to fail in the front end on EVERY backend and entry point (measured:
   96/96 cells across probe.py's 4 backends × CLI/CLI `-O`/Release `.blproj` matrix). Two defects:
@@ -5279,10 +5406,15 @@ single new failure against the 170-name baseline.
     vs `ma-E8_byte_short.txt`) — #164 changing how the Short return type is DETERMINED does not
     change this MSIL codegen gap. Not a #164
     regression; filed because #164's probes are what surfaced it.
-  - The `R3_incompatible_returns_object` probe's MSIL leg (`Dim n As Integer = f(True)` where `f`
-    infers `Object`) throws `System.NullReferenceException` — this is the PRE-EXISTING #177 ("MSIL
-    never boxes a value type stored into an `Object` slot", filed under task #175 above), reached
-    here through a lambda's OWN inferred-Object return rather than a `Dim`; not a new gap.
+  - ⛔ **Corrected, 2026-09-28 (task #177).** This used to say the `R3_incompatible_returns_object`
+    probe's MSIL leg (`Dim n As Integer = f(True)` where `f` infers `Object`) threw
+    `System.NullReferenceException`, filed as #177's own box gap reached through a lambda's
+    inferred-Object return. DOUBLY STALE: (1) that shape is `R3b`
+    (`MultiLineFunctionLambdaTests.R3b_ObjectInferredLambdaResult_IntoIntegerTarget_IsRefused`),
+    which the FRONT END refuses outright — it never reaches MSIL codegen at all, so it was never
+    actually measuring #177's gap; (2) #177 itself is fixed regardless (see the dedicated
+    "#177 DONE" entry above) — a value flowing into or out of an Object slot now boxes/converts
+    correctly on MSIL.
 - ⭐ **#176 DONE (fix committed `4012905c`).** `Me` inside a class member is now typed
   as THAT class, always — one `IRVariable` per `IRFunction`, never shared across classes.
   - **Mechanism, confirmed.** `IRBuilder._variableVersions` is not scoped per function and

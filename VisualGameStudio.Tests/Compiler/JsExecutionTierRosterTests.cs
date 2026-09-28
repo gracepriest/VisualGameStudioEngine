@@ -313,6 +313,7 @@ public class JsExecutionTierRosterTests
         // lambda rows, P13's fold) and JavaScriptExecutionTests.RunJs / JsTestSupport.CompileOptimized
         // directly (P12's named C++ divergence and E11's parentheses-wrap mutant check).
         typeof(IsIsNotOperatorExecutionTests),
+        typeof(NotPrecedenceExecutionTests),
 
         // Task #176 — one `Me` per member, typed as its own class. Named "...ExecutionTests", so
         // the widened match below WOULD catch it on its own; listed explicitly anyway, matching
@@ -347,6 +348,25 @@ public class JsExecutionTierRosterTests
         // pre-existing E10 List-bounds note). NothingStringTextTests (pure codegen-text fixture,
         // spawns nothing, no [Category("Integration")]) is NOT here.
         typeof(NothingStringTextExecutionTests),
+
+        // Task #177 — MSIL boxes a value into an Object slot, converts out of one, and compares
+        // Objects late-bound. Lives in the VisualGameStudio.Tests.Msil namespace, NOT
+        // VisualGameStudio.Tests.Compiler, so RosterCoversEveryJavaScriptIntegrationFixture's own
+        // namespace filter cannot discover it automatically — listed here by hand, same as
+        // MsilValueToStringExecutionTests above. Its JS legs run through
+        // JavaScriptExecutionTests.RunJs directly (most O/E/C/L probes) and
+        // JavaScriptOptimizedExecutionTests.RunOptimized (L11's #214 pin, which needs the
+        // STANDARD-pipeline runner — JavaScriptExecutionTests.RunJs runs no optimizer at all and
+        // would silently miss the mixed-type constant fold this pin is about, the same trap
+        // BarePropertyLoweringExecutionTests' own note above names).
+        typeof(MsilObjectBoxingExecutionTests),
+
+        // Task #178 — BC30526 (write to a ReadOnly property) / BC30524 (read of a WriteOnly one).
+        // Named "...ExecutionTests", so the widened match below WOULD catch it on its own; listed
+        // explicitly anyway, matching every row above. Its JS legs run through
+        // FourBackends.RunsOnEveryBackend[Aggressive] (L1) and JavaScriptExecutionTests.RunJs
+        // directly (the N1/N2 #222 pins).
+        typeof(PropertyAccessExecutionTests),
     };
 
     /// <summary>
@@ -395,7 +415,7 @@ public class JsExecutionTierRosterTests
 
     [Test]
     public void RosterIsPinned()
-        => Assert.That(ExecutionTier, Has.Length.EqualTo(82), // + MsilValueToStringExecutionTests (task #183), InterfaceMethodTypingExecutionTests, IsIsNotOperatorExecutionTests (task #185), MeReceiverTypingExecutionTests (task #176), UserDelegateConversionExecutionTests (task #187), DelegateMemberInvocationExecutionTests (task #188), NothingStringTextExecutionTests (task #189)
+        => Assert.That(ExecutionTier, Has.Length.EqualTo(85), // + MsilValueToStringExecutionTests (task #183), InterfaceMethodTypingExecutionTests, IsIsNotOperatorExecutionTests (task #185), MeReceiverTypingExecutionTests (task #176), UserDelegateConversionExecutionTests (task #187), DelegateMemberInvocationExecutionTests (task #188), NothingStringTextExecutionTests (task #189), MsilObjectBoxingExecutionTests (task #177), NotPrecedenceExecutionTests (#195), PropertyAccessExecutionTests (task #178)
             "The execution-tier roster changed. That is fine — update the number — but it must " +
             "be a deliberate edit, not a silent shrink.");
 

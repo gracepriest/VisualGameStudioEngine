@@ -1,5 +1,10 @@
+using System.Linq;
 using NUnit.Framework;
+using BasicLang.Compiler;
 using BasicLang.Compiler.CodeGen;
+using BasicLang.Compiler.CodeGen.MSIL;
+using BasicLang.Compiler.IR;
+using BasicLang.Compiler.SemanticAnalysis;
 using VisualGameStudio.Tests.Compiler;
 using static VisualGameStudio.Tests.Msil.MsilHarness;
 
@@ -19,9 +24,10 @@ namespace VisualGameStudio.Tests.Msil;
 /// <c>EmitInterfacePropertySet</c>, and the shared <c>EmitAccessorGet</c>/<c>EmitAccessorSet</c>.</para>
 ///
 /// <para>The programs below are the probes from the fix's own measurement (S/t175/probes,
-/// S/t175/edge): I5 itself is NOT run here because it hits the separate, pre-existing #177 box
-/// gap (MSIL never boxes a value type into an <c>Object</c> slot) — I5b is I5 with the
-/// <c>Object</c> local removed, isolating the interface fix from #177.</para>
+/// S/t175/edge). I5b is I5 with the <c>Object</c> local removed, isolating the interface fix
+/// from task #177's own (separate) box-into-Object gap; I5 itself was excluded here for that
+/// reason until #177 DONE (2026-09-28: MSIL now boxes a value type into an <c>Object</c> slot),
+/// after which it was promoted alongside I5b rather than left out.</para>
 /// </summary>
 [TestFixture]
 [Category("Integration")]   // FourBackends/MsilHarness.Run compile+assemble+spawn ilasm and dotnet
@@ -269,9 +275,57 @@ public class MsilInterfacePropertyTests
     public void I6_TwoImplementorsBehindOneInterfaceParameter_RunsOnEveryBackendAggressive() =>
         FourBackends.RunsOnEveryBackendAggressive(I6, I6Expected);
 
-    // I5b — I5 (Double; a WriteOnly write; a ReadOnly read) WITHOUT the `Dim o As Object = s.Area`
-    // local that drags in the unrelated #177 box gap. I5 itself is deliberately not run here —
-    // see the fixture summary.
+    // I5 — a WriteOnly write, a ReadOnly read, and the read boxed into an Object local through
+    // the interface property getter (EmitInterfacePropertyGet -> EmitCoerceToSlot). Task #177
+    // DONE, 2026-09-28: this used to hit the (then unrelated, pre-existing) MSIL box-into-Object
+    // gap and was deliberately excluded from this fixture — see I5b below, still kept as the
+    // isolated interface-only control. #177's fix makes I5 itself pass too, at both pipelines,
+    // so it is promoted here rather than staying a pin of a failure.
+    private const string I5 = """
+        Interface IShape
+            ReadOnly Property Area As Double
+            WriteOnly Property Scale As Double
+        End Interface
+
+        Class Circle
+            Implements IShape
+            Private _r As Double = 1.0
+            Public ReadOnly Property Area As Double
+                Get
+                    Return _r * _r * 3.0
+                End Get
+            End Property
+            Public WriteOnly Property Scale As Double
+                Set(value As Double)
+                    _r = _r * value
+                End Set
+            End Property
+        End Class
+
+        Sub Main()
+            Dim s As IShape = New Circle()
+            s.Scale = 2.0
+            Console.WriteLine(s.Area)
+            Dim o As Object = s.Area
+            Console.WriteLine(o)
+        End Sub
+        """;
+
+    private const string I5Expected = "12\n12";
+
+    // C++ refuses (Object has no C++ mapping), so this cannot go through FourBackends — MSIL
+    // only, both pipelines, matching E1's own idiom below. C#/JS already agreed before #177.
+    [Test]
+    public void I5_ReadOnlyReadBoxedIntoAnObjectLocal_RunsOnMsil() =>
+        Assert.That(FourBackends.Norm(RunExpectingSuccess(I5)), Is.EqualTo(I5Expected));
+
+    [Test]
+    public void I5_ReadOnlyReadBoxedIntoAnObjectLocal_RunsOnMsilAggressive() =>
+        Assert.That(FourBackends.Norm(RunAggressiveExpectingSuccess(I5)), Is.EqualTo(I5Expected));
+
+    // I5b — the same shape WITHOUT the `Dim o As Object = s.Area` local, isolating the interface
+    // property fix (#175) from #177's own box-into-Object gap. Kept as the interface-only
+    // control even now that I5 itself also passes.
     private const string I5b = """
         Interface IShape
             ReadOnly Property Area As Double
@@ -431,10 +485,31 @@ public class MsilInterfacePropertyTests
 [TestFixture]
 public class MsilInterfacePropertyCompileTests
 {
-    // E3 — a read of a WriteOnly interface property. The front end should refuse this itself
-    // (task #178: it currently does not — see docs/HANDOFF.md), so the backend's own refusal is
-    // the only thing standing between this program and a call to an accessor the interface never
-    // declares.
+    /// <summary>
+    /// <see cref="MsilHarness.CompileToIl"/>, WITHOUT the front end's own gate
+    /// (<c>Assert.That(analyzer.Analyze(ast), Is.True, …)</c>) — the analyzer runs and its errors
+    /// are still THERE (nothing suppresses <c>SemanticAnalyzer.CheckPropertyRead</c>/
+    /// <c>CheckPropertyWrite</c>, task #178), but a refused program is still handed to
+    /// <c>IRBuilder</c>/<c>MSILCodeGenerator</c> regardless, the way E3/E4 reached the backend's
+    /// own refusal BEFORE #178 existed. This is the one path left, post-#178, that can still
+    /// exercise <c>EmitInterfacePropertyGet</c>/<c>Set</c>'s own <c>ForeignFeatureException</c>
+    /// backstop (MSILBackend.cs:3949/3970) — a checked front end never reaches it any more.
+    /// </summary>
+    private static string CompileToIlFromUncheckedIr(string source, string moduleName = "MsilProbe")
+    {
+        var parser = new Parser(new Lexer(source).Tokenize());
+        var ast = parser.Parse();
+        Assert.That(parser.Errors, Is.Empty,
+            "parse errors:\n" + string.Join("\n", parser.Errors.Select(e => e.Message)));
+
+        var analyzer = new SemanticAnalyzer();
+        analyzer.Analyze(ast);   // errors intentionally IGNORED — see the summary above
+
+        var module = new IRBuilder(analyzer).Build(ast, moduleName);
+        return new MSILCodeGenerator().Generate(module);
+    }
+
+    // E3 — a read of a WriteOnly interface property.
     private const string E3ReadOfWriteOnly = """
         Interface IShape
             WriteOnly Property Scale As Double
@@ -454,14 +529,45 @@ public class MsilInterfacePropertyCompileTests
         End Sub
         """;
 
+    /// <summary>
+    /// Task #178 MOVED this pin: the front end now refuses E3 itself, with BC30524 naming
+    /// 'Scale' — the MSIL <c>ForeignFeatureException</c> this used to assert is no longer what a
+    /// checked compile of this program reaches at all. Asserted through
+    /// <see cref="MsilHarness.CompileToIl"/> (the same front-end seam the CLI's own
+    /// <c>--target=msil</c> uses — see its own <c>Assert.That(analyzer.Analyze(ast), Is.True, …)</c>),
+    /// which is what the shift from "the backend refuses" to "the front end refuses first" means
+    /// operationally: <c>CompileToIl</c> now throws on the semantic-error assertion, not on
+    /// <c>MSILCodeGenerator</c>. <see cref="E3_BackstopStillThrows_WhenFedUncheckedIr"/> below
+    /// keeps the backend's OWN refusal covered, from the one place left that can still reach it.
+    /// </summary>
     [Test]
-    public void E3_ReadOfAWriteOnlyInterfaceProperty_ThrowsForeignFeatureNamingTheMember()
+    public void E3_ReadOfAWriteOnlyInterfaceProperty_RefusedByTheFrontEnd_WithBC30524()
     {
-        var ex = Assert.Throws<ForeignFeatureException>(() => CompileToIl(E3ReadOfWriteOnly));
+        var parser = new Parser(new Lexer(E3ReadOfWriteOnly).Tokenize());
+        var ast = parser.Parse();
+        Assert.That(parser.Errors, Is.Empty, "parse errors:\n" + string.Join("\n", parser.Errors.Select(e => e.Message)));
+
+        var analyzer = new SemanticAnalyzer();
+        analyzer.Analyze(ast);
+
+        var match = analyzer.Errors.FirstOrDefault(e => e.ErrorCode == "BC30524");
+        Assert.That(match, Is.Not.Null,
+            "expected BC30524; got: " + string.Join(" | ", analyzer.Errors.Select(e => $"{e.ErrorCode}:{e.Message}")));
+        Assert.That(match!.Message, Does.Contain("'Scale'"));
+    }
+
+    /// <summary>The MSIL backend's own WriteOnly-interface-read refusal (MSILBackend.cs:3949) is
+    /// still THERE and still throws — only reachable, post-#178, from IR the front end's own gate
+    /// was bypassed for (<see cref="CompileToIlFromUncheckedIr"/>), never from a checked
+    /// compile.</summary>
+    [Test]
+    public void E3_BackstopStillThrows_WhenFedUncheckedIr()
+    {
+        var ex = Assert.Throws<ForeignFeatureException>(() => CompileToIlFromUncheckedIr(E3ReadOfWriteOnly));
         Assert.That(ex!.Message, Does.Contain("IShape").And.Contain("Scale"));
     }
 
-    // E4 — a write to a ReadOnly interface property. Same front-end gap (#178) as E3.
+    // E4 — a write to a ReadOnly interface property.
     private const string E4WriteToReadOnly = """
         Interface IShape
             ReadOnly Property Area As Integer
@@ -483,10 +589,30 @@ public class MsilInterfacePropertyCompileTests
         End Sub
         """;
 
+    /// <summary>Task #178 MOVED this pin the same way as E3's above: the front end now refuses
+    /// E4 itself, with BC30526 naming 'Area'.</summary>
     [Test]
-    public void E4_WriteToAReadOnlyInterfaceProperty_ThrowsForeignFeatureNamingTheMember()
+    public void E4_WriteToAReadOnlyInterfaceProperty_RefusedByTheFrontEnd_WithBC30526()
     {
-        var ex = Assert.Throws<ForeignFeatureException>(() => CompileToIl(E4WriteToReadOnly));
+        var parser = new Parser(new Lexer(E4WriteToReadOnly).Tokenize());
+        var ast = parser.Parse();
+        Assert.That(parser.Errors, Is.Empty, "parse errors:\n" + string.Join("\n", parser.Errors.Select(e => e.Message)));
+
+        var analyzer = new SemanticAnalyzer();
+        analyzer.Analyze(ast);
+
+        var match = analyzer.Errors.FirstOrDefault(e => e.ErrorCode == "BC30526");
+        Assert.That(match, Is.Not.Null,
+            "expected BC30526; got: " + string.Join(" | ", analyzer.Errors.Select(e => $"{e.ErrorCode}:{e.Message}")));
+        Assert.That(match!.Message, Does.Contain("'Area'"));
+    }
+
+    /// <summary>The MSIL backend's own ReadOnly-interface-write refusal (MSILBackend.cs:3970),
+    /// same idiom as <see cref="E3_BackstopStillThrows_WhenFedUncheckedIr"/>.</summary>
+    [Test]
+    public void E4_BackstopStillThrows_WhenFedUncheckedIr()
+    {
+        var ex = Assert.Throws<ForeignFeatureException>(() => CompileToIlFromUncheckedIr(E4WriteToReadOnly));
         Assert.That(ex!.Message, Does.Contain("IShape").And.Contain("Area"));
     }
 

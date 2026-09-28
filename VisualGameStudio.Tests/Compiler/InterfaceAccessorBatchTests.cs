@@ -608,9 +608,12 @@ public class InterfaceAccessorBatchTests
         => Assert.That(FourBackends.Norm(MsilHarness.RunExpectingSuccess(InterfaceTypedAccess)), Is.EqualTo("if"));
 
     // ====================================================================================
-    // The MSIL ReadOnly-auto-property-assigned-in-constructor defect (control C1 — NO
-    // interface involved at all). Pinned per the task: a pre-existing MSIL defect this batch
-    // does not fix, distinct from the interface-flag work.
+    // The MSIL ReadOnly-auto-property-assigned-in-constructor shape (control C1 — NO interface
+    // involved at all). Was a PRE-EXISTING MSIL defect this batch did not fix, distinct from the
+    // interface-flag work — see the struck-through summary below. Task #178 (2026-09-28) made
+    // MSIL store the constructor assignment to the auto-property's BACKING FIELD instead of
+    // calling the setter that does not exist, so this now runs everywhere; folded into the
+    // run-on-every-backend set like every other shape in this file.
     // ====================================================================================
 
     private const string ReadOnlyAutoPropertyAssignedInCtor =
@@ -627,34 +630,26 @@ public class InterfaceAccessorBatchTests
         "    End Sub\n" +
         "End Module";
 
-    [Test]
-    public void AReadOnlyAutoPropertyAssignedInTheConstructor_RunsOnCSharp() // C1
-        => Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharp(ReadOnlyAutoPropertyAssignedInCtor)), Is.EqualTo("ro"));
-
-    [Test]
-    public void AReadOnlyAutoPropertyAssignedInTheConstructor_RunsOnCpp() // C1
-        => Assert.That(
-            FourBackends.Norm(BclE2E.CompileRun(BclE2E.CompileToCppOptimized(ReadOnlyAutoPropertyAssignedInCtor))),
-            Is.EqualTo("ro"));
-
-    [Test]
-    public void AReadOnlyAutoPropertyAssignedInTheConstructor_RunsOnJavaScript() // C1
-        => Assert.That(FourBackends.Norm(JavaScriptExecutionTests.RunJs(ReadOnlyAutoPropertyAssignedInCtor)), Is.EqualTo("ro"));
-
     /// <summary>
-    /// Control: NO interface anywhere in this program. Pins that the MSIL
+    /// ~~Control: NO interface anywhere in this program. Pins that the MSIL
     /// <c>MissingMethodException: Method not found: 'Void Holder.set_Slot(...)'</c> seen on
     /// several interface-property shapes is a PRE-EXISTING, more general MSIL defect (a ReadOnly
     /// auto-property assigned from inside the constructor emits no callable setter at all, on
     /// MSIL, whether or not an interface is involved) — not something the ADR-0004 D1 batch
-    /// introduced or is scoped to fix.
+    /// introduced or is scoped to fix.~~ CLOSED by task #178 (fix commit `5a75a862`):
+    /// <c>MSILBackend.EmitPropertySet</c> now recognises a store into a ReadOnly auto-property
+    /// and emits <c>stfld</c>/<c>stsfld</c> to its backing field, the same thing VB/C# compile it
+    /// to — there is no setter to call. C#, C++ and JavaScript already ran this; MSIL now does
+    /// too, on both pipelines, so this promotes to <see cref="FourBackends.RunsOnEveryBackend"/> /
+    /// <see cref="FourBackends.RunsOnEveryBackendAggressive"/> like the rest of this file, in
+    /// place of the four separate per-backend assertions (three passing, one pinning MSIL's
+    /// failure) this used to need.
     /// </summary>
     [Test]
-    public void AReadOnlyAutoPropertyAssignedInTheConstructor_ThrowsMissingMethodOnMsil() // C1
-    {
-        var run = MsilHarness.Run(ReadOnlyAutoPropertyAssignedInCtor);
-        Assert.That(run.Outcome, Is.EqualTo(MsilHarness.MsilOutcome.RunFailed));
-        Assert.That(run.Output, Does.Contain("MissingMethodException"));
-        Assert.That(run.Output, Does.Contain("set_Slot"));
-    }
+    public void AReadOnlyAutoPropertyAssignedInTheConstructor_RunsOnEveryBackend() // C1
+        => FourBackends.RunsOnEveryBackend(ReadOnlyAutoPropertyAssignedInCtor, "ro");
+
+    [Test]
+    public void AReadOnlyAutoPropertyAssignedInTheConstructor_RunsOnEveryBackendAggressive() // C1
+        => FourBackends.RunsOnEveryBackendAggressive(ReadOnlyAutoPropertyAssignedInCtor, "ro");
 }

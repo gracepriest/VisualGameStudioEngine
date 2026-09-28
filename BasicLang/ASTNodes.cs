@@ -639,6 +639,16 @@ namespace BasicLang.Compiler.AST
         public BlockNode Body { get; set; }
         public List<ExpressionNode> BaseConstructorArgs { get; set; }  // For MyBase.New(args)
 
+        /// <summary>
+        /// Declared <c>Shared Sub New</c>. The parser used to read the modifier and drop it.
+        ///
+        /// <para>⚠ Read ONLY by the analyzer's BC30526 exception (task #178): a Shared ReadOnly
+        /// auto-property may be assigned in a <c>Shared Sub New</c> of its class, an instance one
+        /// in an instance <c>Sub New</c>, and not the other way round. No backend reads it yet,
+        /// so a <c>Shared Sub New</c> is still emitted as an instance constructor (task #208).</para>
+        /// </summary>
+        public bool IsShared { get; set; }
+
         public ConstructorNode(int line, int column) : base(line, column)
         {
             Access = AccessModifier.Public;
@@ -1259,7 +1269,8 @@ namespace BasicLang.Compiler.AST
         /// True when written <c>Case Is Nothing</c> — the reference-IDENTITY test, governed by the
         /// same operand rule as <c>x Is Nothing</c> (ADR-0011 D2 (2)). False for <c>Case Nothing</c>,
         /// which is VB's VALUE comparison against the type's default (<c>Case 0</c> on an Integer)
-        /// and is not an identity test at all. Both lower to the same IR today.
+        /// and is not an identity test at all. Both lower to <c>IRNothingPatternCase</c>, which carries
+        /// this flag as its own <c>WrittenWithIs</c>.
         /// </summary>
         public bool WrittenWithIs { get; set; }
 
