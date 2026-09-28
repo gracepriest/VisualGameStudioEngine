@@ -44,3 +44,31 @@ Follow this document **instead of** the plan's Task 14 section where the two dis
 2. Add `Web_Canvas_DesignedForm_BuildsRunsAndLaysOut` (`[Category("Integration")]`) to `FormDesignerAcceptanceTests`; build; run it; read counts AND skips.
 3. Mutations (Edit, rebuild, run, restore): (a) scaffold default → Grid; (b) `FormPlacement.Place` refuses Canvas (sends it down the Grid path); (c) the emitter's Canvas arm dropped; (d) `Dock=Fill` ignored in the emitted CSS. Each must turn the twin red.
 4. Gate: fast subset vs 01f1db30 (8321; the five known names) + `FormDesignerAcceptanceTests`, `FormComponentAcceptanceTests`, `FormMenuAcceptanceTests`, `FullyQualifiedName~PixelLayout`; compare sorted failure NAMES.
+
+---
+
+### Execution notes (owner's Windows 11 machine, Edge 154, display scale 1.0)
+
+**First run green, 0 skipped, 7 s** (design + CLI build + node + Edge + one WinForms build/run). No production change was needed. Edge, the model and the WinForms window agree EXACTLY (0px), at both sizes:
+
+| Control | 800×450 (design) | 1000×600 (wider) |
+|---|---|---|
+| MenuStrip1 | (0, 0, 800×24) | (0, 0, 1000×24) |
+| Panel1 (Fill) | (0, 24, 800×426) | (0, 24, 1000×576) |
+| Label1 | (24, 48, 100×23) | (24, 48, 100×23) |
+| TextBox1 (Top,Left,Right) | (120, 48, 100×23) | (120, 48, 300×23) |
+| Button1 (Top,Right) | (120, 96, 75×23) | (320, 96, 75×23) |
+
+node: `App loaded`, `HANDLER FIRED`; no LOAD/CLICK ERROR. Edge: no page error; form area at (0,0).
+The WinForms TextBox's auto-height at Segoe UI 9pt is 23, the catalog's default — so, unlike the Phone fixture, the TextBox is comparable.
+
+**Mutations (Edit, rebuild, run, restore; `git diff` empty of production files after):**
+
+| # | Mutant | Result |
+|---|---|---|
+| a | `FormScaffolder.Create` default `webLayout` → Grid | killed — "the property grid has no 'Dock' row for 'Panel1'" |
+| b | `FormPlacement.Place`: `!FormVocabulary.IsPixel(document)` → `document.Target == FormTarget.Web` (the pre-Task-9 rule) | killed — "placing the Panel was refused" |
+| c | `FormAssetEmitter.Css`: the Canvas arm skipped (`false &&`) | killed — 16 failures (form area at (8,8), every rect) |
+| d | `FormAnchorCss.Docked`: the Fill arm writes no declarations | killed — 11 failures (Panel1 at its stored 200×100, its children with it, all four comparisons). ⚠ So the reflow script does NOT re-dock on load; the static CSS is what lays a Fill out. |
+
+**Gate (clean rebuild after every mutant was restored):** fast subset 8321 / 8315 passed / 5 failed / 1 skipped, which is the same total as base 01f1db30 because the twin is Integration. The five failures are the known names: `Emit_ReplacesAnImportedModuleThatAnotherHandleHasMapped`, `Emit_ReplacesAScriptThatAnotherHandleHasMapped`, `Emit_ReplacingAnImportedModule_LeavesNoTempFileBehind`, `SearchSnippets_EmptyQuery_ReturnsAll`, `SearchSnippets_WhitespaceQuery_ReturnsAll`. Integration `FormDesignerAcceptanceTests | FormComponentAcceptanceTests | FormMenuAcceptanceTests | ~PixelLayout`: 104/104 passed, 0 skipped.
