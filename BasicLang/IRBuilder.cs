@@ -5082,6 +5082,29 @@ namespace BasicLang.Compiler.IR
                 return;
             }
 
+            // A class's own `Operator` (#198), bound by the analyzer: a call to the class's static
+            // op_* function — never an IRCompare/IRBinaryOp, which C++ renders as a shared_ptr
+            // comparison or arithmetic on pointers.
+            if (node.UserOperatorClass != null)
+            {
+                node.Left.Accept(this);
+                var operatorLeft = _expressionResult;
+                node.Right.Accept(this);
+                var operatorRight = _expressionResult;
+
+                var operatorCall = new IRCall(_currentFunction.GetNextTempName(),
+                    $"{node.UserOperatorClass}.op_{GetOperatorMethodName(node.UserOperatorSymbol)}",
+                    _semanticAnalyzer.GetNodeType(node) ?? new TypeInfo("Object", TypeKind.Class))
+                {
+                    UserOperatorSymbol = node.UserOperatorSymbol
+                };
+                operatorCall.Arguments.Add(operatorLeft);
+                operatorCall.Arguments.Add(operatorRight);
+                EmitInstruction(operatorCall);
+                _expressionResult = operatorCall;
+                return;
+            }
+
             // ⛔ SHORT-CIRCUIT FIRST, before the right operand is touched. AndAlso/OrElse are
             // CONTROL FLOW, not operators with two ready values — see BuildShortCircuit.
             if (!IsComparisonOperator(node.Operator))

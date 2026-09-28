@@ -420,6 +420,9 @@ public class IsIsNotOperatorExecutionTests
     //    user-declared): reference identity must be False on two distinct, value-equal instances,
     //    proving emission never reaches a value-equality operator. The four-backend version of
     //    this invariant (a USER Operator=) waits on #198.
+    //    ⚠ #198 has since landed for C# and C++: UserOperatorExecutionTests pins a user
+    //    `Operator =` answering `a = b` True while `a Is b` stays False. JavaScript refuses user
+    //    operators (BL7006), so the proof is two backends, not four.
     // ============================================================================================
 
     private const string P11_Overload = """
