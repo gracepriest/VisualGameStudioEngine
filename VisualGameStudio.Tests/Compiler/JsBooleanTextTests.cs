@@ -59,9 +59,20 @@ End Sub
         });
     }
 
-    /// <summary>Type-directed: a String or number operand of <c>&amp;</c> is emitted as before.</summary>
+    /// <summary>
+    /// Type-directed: a String or number operand of <c>&amp;</c> is never routed through the
+    /// Boolean text path.
+    ///
+    /// <para>⛔ RE-PINNED for #189 (fix commit 381b95ff) — this used to assert the concat was
+    /// emitted byte-for-byte unchanged (<c>(s + t1)</c>). <c>s</c> is a local that can hold
+    /// <c>Nothing</c> at run time (<see cref="MayHoldNothing"/> in the JS backend has no
+    /// data-flow memory of what was ever assigned to it), so <c>&amp;</c>'s own
+    /// <c>nothingIsEmpty</c> guard now wraps it: <c>((s ?? "") + t1)</c>. The INTENT this test
+    /// pins is unchanged — no Boolean spelling anywhere in a Boolean-free concat — the SHAPE of
+    /// the non-Boolean spelling is not.</para>
+    /// </summary>
     [Test]
-    public void NonBooleanConcat_IsUnchanged()
+    public void NonBooleanConcat_SkipsBooleanText_GuardedOnlyWhereNothingIsPossible()
     {
         var js = JsTestSupport.Compile(
             "Function N() As Integer\n    Return 5\nEnd Function\n" +
@@ -69,7 +80,8 @@ End Sub
         Assert.Multiple(() =>
         {
             Assert.That(js, Does.Not.Contain("\"True\""), js);
-            Assert.That(js, Does.Match(@"\(s \+ \w+\)"), js);
+            Assert.That(js, Does.Not.Contain("\"False\""), js);
+            Assert.That(js, Does.Match(@"\(\(s \?\? """"\) \+ \w+\)"), js);
         });
     }
 }

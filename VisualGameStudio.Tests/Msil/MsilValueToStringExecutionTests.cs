@@ -18,12 +18,15 @@ namespace VisualGameStudio.Tests.Msil;
 ///
 /// <para><b>Why some probes skip the JavaScript leg.</b> C1 and W1 use <c>Long</c>, which
 /// JavaScript refuses by design (BL7003 — a JS number is a double, exact only to 2^53). E1, E9b
-/// use <c>ULong</c> for the same reason. E8 and E10 DO run on JavaScript, but print a different
-/// (pre-existing, unrelated) answer: E8's String-<c>Nothing</c> prints the real word <c>null</c>
-/// on JS where every other backend prints "" (task #189, left alone per that task's own fixture);
-/// E10's Single precision differs because JavaScript has no float32 type at all. None of that is
-/// what task #183 touches, so those three legs are pinned separately, not folded into a 4-way
-/// comparison that would silently pin someone else's known gap under this task's name.</para>
+/// use <c>ULong</c> for the same reason. E10 DOES run on JavaScript, but prints a different
+/// (pre-existing, unrelated) answer: Single precision differs because JavaScript has no float32
+/// type at all. That is not what task #183 touches, so that leg is pinned separately, not folded
+/// into a 4-way comparison that would silently pin someone else's known gap under this task's
+/// name. ⛔ <b>#189 DONE (fix commit 381b95ff):</b> E8 USED to be in this same boat — its
+/// String-<c>Nothing</c> printed the real word <c>null</c> on JS where every other backend
+/// printed "" — but that was exactly task #189's own gap (a <c>Nothing</c> String in <c>&amp;</c>
+/// printing JS's own <c>null</c> spelling instead of VB's ""), and #189 fixed it: JS now agrees
+/// with C#/C++/MSIL on E8, so E8 is folded into a 4-way comparison below like C2/C3/E7/W2.</para>
 ///
 /// <para><b>What is deliberately NOT here</b> (see docs/HANDOFF.md): Decimal on MSIL is a
 /// pre-existing, total gap (#129 — <c>MSILBackend</c> cannot even declare a Decimal local; every
@@ -334,8 +337,9 @@ public class MsilValueToStringExecutionTests
     public void E7_FunctionFieldArrayArithmeticOperands_AllFourBackendsAgree() =>
         FourBackends.RunsOnEveryBackend(E7, E7Expected);
 
-    // E8 — a String Nothing operand of `&`. JavaScript prints the real word "null" here (a
-    // pre-existing, unrelated divergence — task #189, left alone) where the other three print "".
+    // E8 — a String Nothing operand of `&`. #189 DONE (fix commit 381b95ff): JavaScript used to
+    // print the real word "null" here where the other three printed "" — that divergence WAS
+    // task #189's own gap, now fixed, so all four backends agree.
     private const string E8 = """
         Sub Main()
             Dim s As String = Nothing
@@ -347,16 +351,8 @@ public class MsilValueToStringExecutionTests
     private const string E8Expected = "n=\nn=\n|5";
 
     [Test]
-    public void E8_StringNothingOperand_CSharpCppMsilAgree() => RunOnCSharpCppMsil(E8, E8Expected);
-
-    [Test]
-    public void E8_JavaScript_PinsTodaysNullText_Against189()
-    {
-        // Not this task's concern (#189) — pinned so a change there is deliberate, matching
-        // NothingConversionExecutionTests' own StringNothing_JavaScript_PinsTodaysNullText_Against189.
-        Assert.That(FourBackends.Norm(JavaScriptExecutionTests.RunJs(E8)),
-            Is.EqualTo("n=null\nn=null\nnull|5"));
-    }
+    public void E8_StringNothingOperand_AllFourBackendsAgree() =>
+        FourBackends.RunsOnEveryBackend(E8, E8Expected);
 
     // E9b — SByte, UShort, UInteger, ULong, Single, Byte, Short, Char, Boolean, Double, Long
     // through both WriteLine and Write, plus two compound &= assignments. No Decimal (that leg is
