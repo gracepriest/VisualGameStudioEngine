@@ -362,6 +362,13 @@ public class JsExecutionTierRosterTests
         // would silently miss the mixed-type constant fold this pin is about, the same trap
         // BarePropertyLoweringExecutionTests' own note above names).
         typeof(MsilObjectBoxingExecutionTests),
+
+        // Task #178 — BC30526 (write to a ReadOnly property) / BC30524 (read of a WriteOnly one).
+        // Named "...ExecutionTests", so the widened match below WOULD catch it on its own; listed
+        // explicitly anyway, matching every row above. Its JS legs run through
+        // FourBackends.RunsOnEveryBackend[Aggressive] (L1) and JavaScriptExecutionTests.RunJs
+        // directly (the N1/N2 #222 pins).
+        typeof(PropertyAccessExecutionTests),
     };
 
     /// <summary>
@@ -410,7 +417,7 @@ public class JsExecutionTierRosterTests
 
     [Test]
     public void RosterIsPinned()
-        => Assert.That(ExecutionTier, Has.Length.EqualTo(85), // + MsilValueToStringExecutionTests (task #183), InterfaceMethodTypingExecutionTests, IsIsNotOperatorExecutionTests (task #185), MeReceiverTypingExecutionTests (task #176), UserDelegateConversionExecutionTests (task #187), DelegateMemberInvocationExecutionTests (task #188), NothingStringTextExecutionTests (task #189), MsilObjectBoxingExecutionTests (task #177), NotPrecedenceExecutionTests (#195); + WhenGuardCallRunTests
+        => Assert.That(ExecutionTier, Has.Length.EqualTo(86), // + MsilValueToStringExecutionTests (task #183), InterfaceMethodTypingExecutionTests, IsIsNotOperatorExecutionTests (task #185), MeReceiverTypingExecutionTests (task #176), UserDelegateConversionExecutionTests (task #187), DelegateMemberInvocationExecutionTests (task #188), NothingStringTextExecutionTests (task #189), MsilObjectBoxingExecutionTests (task #177), NotPrecedenceExecutionTests (#195), PropertyAccessExecutionTests (task #178); + WhenGuardCallRunTests
             "The execution-tier roster changed. That is fine — update the number — but it must " +
             "be a deliberate edit, not a silent shrink.");
 

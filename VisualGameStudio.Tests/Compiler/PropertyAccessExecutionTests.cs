@@ -1,0 +1,550 @@
+using System;
+using System.IO;
+using System.Linq;
+using NUnit.Framework;
+using BasicLang.Compiler;
+using BasicLang.Compiler.ProjectSystem;
+using BasicLang.Compiler.SemanticAnalysis;
+using VisualGameStudio.Tests.Msil;
+
+namespace VisualGameStudio.Tests.Compiler;
+
+/// <summary>
+/// Task #178, execution — BC30526/BC30524 taken all the way to a running program (or a refused
+/// build) at every entry point: the CLI (standard pipeline), the CLI <c>--optimize</c> (aggressive
+/// pipeline), and a Release <c>.blproj</c> build (<c>CompileProjectFiles</c> — a different code
+/// path than the CLI's, per CLAUDE.md's "test both entry points"). <see cref="PropertyAccessDiagnosticsTests"/>
+/// is the fast-subset sibling that pins the diagnostic's code, message and line directly off the
+/// analyzer.
+///
+/// <para>Probe sources and expected values are the implementer's own measured ones
+/// (<c>S/t178/probes2</c>, <c>S/t178/edge</c>, <c>S/t178/edge/vb-edge.txt</c> for VB's verdict) —
+/// never re-derived from what a backend under test prints.</para>
+/// </summary>
+[TestFixture]
+[Category("Integration")]
+[NonParallelizable] // FourBackends' C# leg redirects Console.Out
+public class PropertyAccessExecutionTests
+{
+    // ====================================================================================
+    // L1 — a ReadOnly auto-property assigned bare and via Me. in its own constructor. This was
+    // the MSIL `set_P` MissingMethodException (probe L1, S/t178/probes2/L1.bas / L1.exp).
+    // ====================================================================================
+
+    private const string L1 = """
+        Class Ctx
+            Public ReadOnly Property P As Integer
+            Public ReadOnly Property Q As Integer
+            Public Sub New(a As Integer)
+                P = a
+                Me.Q = a + 1
+            End Sub
+        End Class
+        Sub Main()
+            Dim o As New Ctx(42)
+            Console.WriteLine(o.P & " " & o.Q)
+        End Sub
+        """;
+
+    private const string L1Expected = "42 43";
+
+    [Test]
+    public void L1_ReadOnlyAutoPropertyInitializedInOwnCtor_RunsOnEveryBackend() =>
+        FourBackends.RunsOnEveryBackend(L1, L1Expected);
+
+    [Test]
+    public void L1_ReadOnlyAutoPropertyInitializedInOwnCtor_RunsOnEveryBackendAggressive() =>
+        FourBackends.RunsOnEveryBackendAggressive(L1, L1Expected);
+
+    [Test]
+    public void L1_ReadOnlyAutoPropertyInitializedInOwnCtor_RunsOnMsilReleaseBlproj() =>
+        Assert.That(FourBackends.Norm(BuildReleaseAndRun(L1, "MSIL")), Is.EqualTo(L1Expected));
+
+    // ====================================================================================
+    // E12b, E16, E24, E27 — went from MSIL RUN-FAIL (MissingMethodException: set_P) to the
+    // correct value, both pipelines. Asserted against the implementer's .exp / VB's own verdict
+    // (S/t178/edge/vb-edge.txt), never re-derived from MSIL's own output.
+    // ====================================================================================
+
+    // E12b — MyBase.New() then a bare write in the SAME constructor.
+    private const string E12b = """
+        Class Ctx
+            Public ReadOnly Property P As Integer
+            Public Sub New()
+                MyBase.New()
+                P = 4
+            End Sub
+        End Class
+        Sub Main()
+            Dim c As New Ctx()
+            Console.WriteLine(c.P)
+        End Sub
+        """;
+
+    [Test]
+    public void E12b_MyBaseNewThenBareWrite_Msil() =>
+        Assert.That(FourBackends.Norm(MsilHarness.RunExpectingSuccess(E12b)), Is.EqualTo("4"));
+
+    [Test]
+    public void E12b_MyBaseNewThenBareWrite_MsilAggressive() =>
+        Assert.That(FourBackends.Norm(MsilHarness.RunAggressiveExpectingSuccess(E12b)), Is.EqualTo("4"));
+
+    // E16 — a compound assignment chain on the ReadOnly auto-property, inside its own
+    // constructor: bare +=, then Me. *=. Both the write (carve-out) and the read half of each
+    // compound (ReadOnly allows reading) are legal.
+    private const string E16 = """
+        Class Ctx
+            Public ReadOnly Property P As Integer
+            Public Sub New(a As Integer)
+                P = a
+                P += 10
+                Me.P *= 2
+            End Sub
+        End Class
+        Sub Main()
+            Dim c As New Ctx(1)
+            Console.WriteLine(c.P)
+        End Sub
+        """;
+
+    [Test]
+    public void E16_CompoundAssignmentChainInOwnCtor_Msil() =>
+        Assert.That(FourBackends.Norm(MsilHarness.RunExpectingSuccess(E16)), Is.EqualTo("22"));
+
+    [Test]
+    public void E16_CompoundAssignmentChainInOwnCtor_MsilAggressive() =>
+        Assert.That(FourBackends.Norm(MsilHarness.RunAggressiveExpectingSuccess(E16)), Is.EqualTo("22"));
+
+    // E24 — the SAME shape as L1's single-property case, but the property is Overridable.
+    private const string E24 = """
+        Class Ctx
+            Public Overridable ReadOnly Property P As Integer
+            Public Sub New(a As Integer)
+                P = a
+            End Sub
+        End Class
+        Sub Main()
+            Dim c As New Ctx(9)
+            Console.WriteLine(c.P)
+        End Sub
+        """;
+
+    [Test]
+    public void E24_OverridableReadOnlyAutoProperty_Msil() =>
+        Assert.That(FourBackends.Norm(MsilHarness.RunExpectingSuccess(E24)), Is.EqualTo("9"));
+
+    [Test]
+    public void E24_OverridableReadOnlyAutoProperty_MsilAggressive() =>
+        Assert.That(FourBackends.Norm(MsilHarness.RunAggressiveExpectingSuccess(E24)), Is.EqualTo("9"));
+
+    // E27 — an If/Else block, then a counted For loop, both writing the SAME ReadOnly
+    // auto-property inside its own constructor: -4 -> If/Else -> 4 -> +1 -> +2 -> 7.
+    private const string E27 = """
+        Class Ctx
+            Public ReadOnly Property P As Integer
+            Public Sub New(a As Integer)
+                If a > 0 Then
+                    P = a
+                Else
+                    P = -a
+                End If
+                For i As Integer = 1 To 2
+                    P = P + i
+                Next
+            End Sub
+        End Class
+        Sub Main()
+            Dim c As New Ctx(-4)
+            Console.WriteLine(c.P)
+        End Sub
+        """;
+
+    [Test]
+    public void E27_IfElseThenForLoopInOwnCtor_Msil() =>
+        Assert.That(FourBackends.Norm(MsilHarness.RunExpectingSuccess(E27)), Is.EqualTo("7"));
+
+    [Test]
+    public void E27_IfElseThenForLoopInOwnCtor_MsilAggressive() =>
+        Assert.That(FourBackends.Norm(MsilHarness.RunAggressiveExpectingSuccess(E27)), Is.EqualTo("7"));
+
+    // ====================================================================================
+    // Pins — each names the task it belongs to. Not fixed here; #178's own scope is the
+    // diagnostic, not these pre-existing backend gaps its probes surfaced.
+    // ====================================================================================
+
+    /// <summary>#218 — a SILENT WRONG ANSWER, not a refusal: the C++ backend runs E16's
+    /// compound-assignment chain to completion and prints the WRONG number. Pinned visibly
+    /// (VB/every other backend answer "22") rather than left undiscovered.</summary>
+    [Test]
+    public void E16_CompoundAssignmentChainInOwnCtor_Cpp_PinsSilentWrongAnswer_Against218()
+    {
+        Assert.That(
+            FourBackends.Norm(BclE2E.CompileRun(BclE2E.CompileToCppOptimized(E16))),
+            Is.EqualTo("2"),
+            "task #218 (pre-existing, unrelated to #178's own front-end fix): C++ prints '2', not "
+            + "VB's/every other backend's '22', for a compound-assignment chain on a ReadOnly "
+            + "auto-property inside its own constructor. A different answer here (including '22') "
+            + "means #218 moved — update this pin, do not just delete it.");
+    }
+
+    /// <summary>#218's second probe — same silent-wrong-answer shape, an If/Else block then a
+    /// counted For loop instead of a compound chain.</summary>
+    [Test]
+    public void E27_IfElseThenForLoopInOwnCtor_Cpp_PinsSilentWrongAnswer_Against218()
+    {
+        Assert.That(
+            FourBackends.Norm(BclE2E.CompileRun(BclE2E.CompileToCppOptimized(E27))),
+            Is.EqualTo("0"),
+            "task #218 (pre-existing, unrelated to #178's own front-end fix): C++ prints '0', not "
+            + "VB's/every other backend's '7', for an If/Else block then a For loop writing a "
+            + "ReadOnly auto-property inside its own constructor. A different answer here "
+            + "(including '7') means #218 moved — update this pin, do not just delete it.");
+    }
+
+    /// <summary>#219 — E09 (the accessor's implicit GET RETURN VARIABLE, task #178's own carve-out
+    /// exempts it from BC30526 — see <c>PropertyAccessDiagnosticsTests.
+    /// Legal_AssignmentToPInsideItsOwnGet_IsTheGetterReturnVariable</c>). BasicLang does not
+    /// implement that return variable at all, so every backend still fails to RUN it — a
+    /// pre-existing gap #178's front-end fix does not touch (front-end acceptance was never the
+    /// problem here). Pinned on MSIL, the same MissingMethodException shape as before this fix.</summary>
+    private const string E09 = """
+        Class Ctx
+            Private _v As Integer = 42
+            Public ReadOnly Property P As Integer
+                Get
+                    P = _v + 1
+                End Get
+            End Property
+        End Class
+        Sub Main()
+            Dim o As New Ctx()
+            Console.WriteLine(o.P)
+        End Sub
+        """;
+
+    [Test]
+    public void E09_GetterReturnVariableWrite_Msil_PinsPreExistingMissingMethod_Against219()
+    {
+        var run = MsilHarness.Run(E09);
+        Assert.That(run.Outcome, Is.EqualTo(MsilHarness.MsilOutcome.RunFailed),
+            "task #219 (pre-existing, unrelated to #178): BasicLang does not implement a getter's "
+            + "implicit return variable at all, so E09 must still fail to RUN on MSIL. A different "
+            + "outcome (including Ran, with VB's own '43') means #219 moved — update this pin, do "
+            + "not just delete it.\n" + run.Report);
+        Assert.That(run.Output, Does.Contain("MissingMethodException"), run.Report);
+        Assert.That(run.Output, Does.Contain("set_P"), run.Report);
+    }
+
+    /// <summary>#220 — <c>Exception.Message</c> is a real .NET ReadOnly property, but the .NET
+    /// resolver does not carry that fact into a <see cref="Symbol.IsReadOnly"/> the analyzer can
+    /// see (task #178's own rule 5: silence, never a guess, when the resolver does not positively
+    /// know). So BasicLang's OWN front end accepts the write — the same shape as N1/N2 below, one
+    /// more member the resolver's accessor metadata does not reach.</summary>
+    [Test]
+    public void ExceptionMessageWrite_FrontEndAccepts_PinsPreExistingGap_Against220()
+    {
+        const string source = """
+            Sub Main()
+                Try
+                    Throw New Exception("boom")
+                Catch ex As Exception
+                    ex.Message = "changed"
+                    Console.WriteLine("done")
+                End Try
+            End Sub
+            """;
+        var parser = new Parser(new Lexer(source).Tokenize());
+        var ast = parser.Parse();
+        Assert.That(parser.Errors, Is.Empty, "parse errors:\n" + string.Join("\n", parser.Errors.Select(e => e.Message)));
+        var analyzer = new SemanticAnalyzer();
+        analyzer.Analyze(ast);
+
+        Assert.That(analyzer.Errors.Where(e => e.ErrorCode is "BC30526" or "BC30524"), Is.Empty,
+            "task #220 (pre-existing, unrelated to #178): BasicLang's front end must still accept "
+            + "`ex.Message = ...` — the .NET resolver does not carry Exception.Message's real "
+            + "ReadOnly-ness. A BC30526 here means the resolver now DOES carry that fact for at "
+            + "least this member — update this pin (and check whether #220 is now closed), do not "
+            + "just delete it.\nerrors: " + string.Join(" | ", analyzer.Errors.Select(e => e.ToString())));
+    }
+
+    /// <summary>#221 — a bare <c>For P = …</c> loop over a ReadWrite property DRIVES it (as it
+    /// did before #178), which is accepted here; VB itself refuses every property as a For
+    /// loop's control variable, ReadWrite included (BC30039 — a different code than either of
+    /// #178's own two, and #178's contract never claimed this shape).</summary>
+    [Test]
+    public void BareForLoop_OverAReadWriteProperty_FrontEndAccepts_PinsPreExistingGap_Against221()
+    {
+        const string source = """
+            Class C
+                Public Property P As Integer
+                Public Sub Loop3()
+                    For P = 1 To 3
+                        Console.WriteLine(P)
+                    Next
+                End Sub
+            End Class
+            """;
+        var parser = new Parser(new Lexer(source).Tokenize());
+        var ast = parser.Parse();
+        Assert.That(parser.Errors, Is.Empty, "parse errors:\n" + string.Join("\n", parser.Errors.Select(e => e.Message)));
+        var analyzer = new SemanticAnalyzer();
+        analyzer.Analyze(ast);
+
+        Assert.That(analyzer.Errors, Is.Empty,
+            "task #221 (pre-existing, unrelated to #178): BasicLang must still accept a bare `For "
+            + "P = …` over a ReadWrite property — VB itself refuses this (BC30039, a DIFFERENT "
+            + "code than #178's own BC30526/BC30524). A diagnostic here means #221 moved — update "
+            + "this pin, do not just delete it.\nerrors: "
+            + string.Join(" | ", analyzer.Errors.Select(e => e.ToString())));
+
+        const string program = "Class C\n Public Property P As Integer\n Public Sub Loop3()\n"
+            + "  For P = 1 To 3\n   Console.WriteLine(P)\n  Next\n End Sub\nEnd Class\n"
+            + "Sub Main()\n Dim o As New C()\n o.Loop3()\nEnd Sub\n";
+        Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharp(program)), Is.EqualTo("1\n2\n3"),
+            "task #221: the property really is DRIVEN like an ordinary loop variable (C# is the "
+            + "oracle for what BasicLang itself does here, since VB refuses the shape outright).");
+    }
+
+    // N1 / N2 — a .NET ReadOnly property (String.Length, List(Of T).Count): the resolver does
+    // not positively know either is ReadOnly, so BasicLang's front end accepts both, and #222
+    // pins JavaScript's own silent behavior: the write is dropped (N1, string is immutable) or
+    // overwritten back by nothing meaningful (N2, Count stays the real count).
+
+    private const string N1 = """
+        Sub Main()
+            Dim s As String = "abc"
+            s.Length = 3
+            Console.WriteLine(s)
+        End Sub
+        """;
+
+    /// <summary>#222 — N1: BasicLang does not refuse this (rule 5: the resolver never carries
+    /// .NET's own ReadOnly fact). A JS string is a PRIMITIVE, not extensible, so the emitted
+    /// <c>s.Length = 3;</c> throws a real <c>TypeError</c> under Node's ES-module (always strict)
+    /// semantics — measured here, not re-derived from the implementer's own separate probe
+    /// runner, which invokes node in SCRIPT mode (sloppy) and silently no-ops the same write
+    /// instead: the two harnesses genuinely disagree, and this fixture's own
+    /// <c>JavaScriptExecutionTests.RunNodeScript</c>/<c>.mjs</c> convention is what every OTHER
+    /// JS execution test in this suite is measured against, so it is the one trusted here too.
+    /// (C# and MSIL fail differently — CS0200 from real csc, MissingFieldException from the CLR —
+    /// each already caught by their own real compiler/runtime, not by BasicLang.)</summary>
+    [Test]
+    public void N1_DotNetStringLengthWrite_NotRefused_JavaScriptThrowsTypeError_PinnedForTask222()
+    {
+        var (exitCode, _, stderr) = JavaScriptExecutionTests.RunNodeScriptForOutcome(JsTestSupport.Compile(N1));
+        Assert.That(exitCode, Is.Not.EqualTo(0),
+            "task #222 (pre-existing, unrelated to #178): a JS string is a primitive, so this "
+            + "write must still throw under Node. A zero exit here (including one that prints "
+            + "'abc') means #222 moved — update this pin, do not just delete it.\n" + stderr);
+        Assert.That(stderr, Does.Contain("Cannot create property 'Length'"),
+            "task #222: a different error message means #222 moved — update this pin, do not "
+            + "just delete it.\n" + stderr);
+    }
+
+    private const string N2 = """
+        Sub Main()
+            Dim l As New List(Of Integer)()
+            l.Add(1)
+            l.Count = 5
+            Console.WriteLine(l.Count)
+        End Sub
+        """;
+
+    /// <summary>#222 — N2: the same gap, a List(Of Integer).Count write. JavaScript prints the
+    /// REAL count (1), meaning the write to Count never actually resized anything.</summary>
+    [Test]
+    public void N2_DotNetListCountWrite_NotRefused_JavaScriptPrintsRealCount_PinnedForTask222() =>
+        Assert.That(FourBackends.Norm(JavaScriptExecutionTests.RunJs(N2)), Is.EqualTo("1"),
+            "task #222 (pre-existing, unrelated to #178): a different answer here means the "
+            + "JavaScript backend's handling of a .NET ReadOnly property write moved — update "
+            + "this pin, do not just delete it.");
+
+    // ====================================================================================
+    // #223 — the native C++ .blproj build's own error text DUPLICATES the code: BasicLang's
+    // message already starts with "BC30526: " (PropertyAccessError), and the C++ project
+    // builder's diagnostic formatter prepends "error BC30526: " again, so the build output reads
+    // "error BC30526: BC30526: Property 'P' is 'ReadOnly'." — cosmetic, but a finding surfaced by
+    // this task's own probes, not fixed here. Skips (not fails) without a C++ toolchain.
+    // ====================================================================================
+
+    [Test]
+    public void CppReleaseBuild_DuplicatesTheDiagnosticCode_PinnedForTask223()
+    {
+        if (CppToolchain.Find() == null)
+            Assert.Ignore("No C++ toolchain available (clang++/g++/MSVC) — cannot see the native "
+                + "build's own error text on this machine.");
+
+        var (exitCode, stdOut, stdErr) = BuildRelease("""
+            Class C
+                Public ReadOnly Property P As Integer
+                    Get
+                        Return 1
+                    End Get
+                End Property
+            End Class
+            Sub Main()
+                Dim o As New C()
+                o.P = 99
+            End Sub
+            """, "Cpp");
+        var output = stdOut + "\n" + stdErr;
+
+        Assert.That(exitCode, Is.Not.EqualTo(0), "the Release C++ build must still refuse this program.\n" + output);
+        Assert.That(output, Does.Contain("BC30526: BC30526:"),
+            "task #223 (pre-existing, unrelated to #178's own diagnostic): the native C++ "
+            + ".blproj build output must still duplicate the code. If it no longer does "
+            + "(including printing the code only once), #223 is fixed — update this pin, do not "
+            + "just delete it.\nOUTPUT:\n" + output);
+    }
+
+    // ====================================================================================
+    // The CLI refuses A1, B1 and A6b on every --target, and the Release .blproj build refuses
+    // them too — both entry points, per CLAUDE.md.
+    // ====================================================================================
+
+    private const string A1 = """
+        Class C
+            Public ReadOnly Property P As Integer
+                Get
+                    Return 42
+                End Get
+            End Property
+        End Class
+        Sub Main()
+            Dim o As New C()
+            o.P = 99
+        End Sub
+        """;
+
+    private const string B1 = """
+        Class C
+            Public WriteOnly Property W As Integer
+                Set(value As Integer)
+                End Set
+            End Property
+        End Class
+        Sub Main()
+            Dim o As New C()
+            Dim x As Integer = o.W
+        End Sub
+        """;
+
+    private const string A6b = """
+        Interface IShape
+            ReadOnly Property P As Integer
+        End Interface
+        Class C
+            Implements IShape
+            Public Property P As Integer
+        End Class
+        Sub Main()
+            Dim o As IShape = New C()
+            o.P = 99
+        End Sub
+        """;
+
+    private static readonly string[] AllCliTargets = { "csharp", "cpp", "javascript", "msil" };
+
+    [TestCase(nameof(A1), "BC30526")]
+    [TestCase(nameof(B1), "BC30524")]
+    [TestCase(nameof(A6b), "BC30526")]
+    public void SingleFileCli_RefusesOnEveryTarget(string which, string code)
+    {
+        var source = which switch { nameof(A1) => A1, nameof(B1) => B1, nameof(A6b) => A6b,
+            _ => throw new ArgumentOutOfRangeException(nameof(which)) };
+
+        var dir = Path.Combine(Path.GetTempPath(), "bl-propaccess-cli-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var basFile = Path.Combine(dir, "Program.bas");
+            File.WriteAllText(basFile, source);
+
+            Assert.Multiple(() =>
+            {
+                foreach (var target in AllCliTargets)
+                {
+                    var (exitCode, stdOut, stdErr) = CliTestHarness.RunProcess(
+                        CliTestHarness.CliPath(), new[] { basFile, "--target=" + target }, dir, timeoutMs: 60_000);
+                    var output = stdOut + "\n" + stdErr;
+                    Assert.That(exitCode, Is.Not.EqualTo(0), $"--target={target} must refuse.\n{output}");
+                    Assert.That(output, Does.Contain(code), $"--target={target} must name {code}.\n{output}");
+                }
+            });
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch { /* best-effort temp cleanup */ }
+        }
+    }
+
+    [Test]
+    public void ReleaseBlprojBuild_AlsoRefuses_TheSameProgramTheCliRefuses()
+    {
+        var (exitCode, stdOut, stdErr) = BuildRelease(A1, "MSIL");
+        var output = stdOut + "\n" + stdErr;
+
+        Assert.That(exitCode, Is.Not.EqualTo(0), "a Release .blproj build must refuse this too.\n" + output);
+        Assert.That(output, Does.Contain("BC30526"), output);
+    }
+
+    // ====================================================================================
+    // Shared Release .blproj helper — the CLI's "-c Release" -> OptimizeAggressive mapping
+    // (Program.cs), a genuinely different code path than MsilHarness.CompileToIl's direct
+    // AggressivePipeline.Apply call. Same idiom as MsilObjectBoxingExecutionTests.
+    // BuildReleaseMsilAndRun / MeReceiverTypingExecutionTests.BuildReleaseMsilAndRun.
+    // ====================================================================================
+
+    private string _projectDir = null!;
+
+    [SetUp]
+    public void SetUp()
+    {
+        _projectDir = Path.Combine(Path.GetTempPath(), "bl-propaccess-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(_projectDir);
+    }
+
+    [TearDown]
+    public void TearDown()
+    {
+        try { Directory.Delete(_projectDir, recursive: true); } catch { /* best-effort temp cleanup */ }
+    }
+
+    private (int ExitCode, string StdOut, string StdErr) BuildRelease(string basSource, string targetBackend)
+    {
+        File.WriteAllText(Path.Combine(_projectDir, "Main.bas"), basSource);
+        File.WriteAllText(Path.Combine(_projectDir, "App.blproj"),
+            $"""
+            <?xml version="1.0" encoding="utf-8"?>
+            <BasicLangProject Version="1.0">
+              <PropertyGroup>
+                <ProjectName>App</ProjectName>
+                <OutputType>Exe</OutputType>
+                <TargetBackend>{targetBackend}</TargetBackend>
+              </PropertyGroup>
+              <ItemGroup>
+                <Compile Include="Main.bas" />
+              </ItemGroup>
+            </BasicLangProject>
+            """);
+
+        return CliTestHarness.RunProcess(
+            CliTestHarness.CliPath(),
+            new[] { "build", Path.Combine(_projectDir, "App.blproj"), "-c", "Release" },
+            _projectDir,
+            timeoutMs: 120_000);
+    }
+
+    private string BuildReleaseAndRun(string basSource, string targetBackend)
+    {
+        var (buildExit, buildOut, buildErr) = BuildRelease(basSource, targetBackend);
+        Assert.That(buildExit, Is.EqualTo(0),
+            $"CLI Release {targetBackend} build failed.\nSTDOUT:\n{buildOut}\nSTDERR:\n{buildErr}");
+
+        var ilFiles = Directory.GetFiles(_projectDir, "App.il", SearchOption.AllDirectories);
+        Assert.That(ilFiles, Is.Not.Empty,
+            $"CLI build claimed success but produced no App.il.\nSTDOUT:\n{buildOut}");
+
+        return MsilHarness.RunIlExpectingSuccess(File.ReadAllText(ilFiles[0]), "App");
+    }
+}

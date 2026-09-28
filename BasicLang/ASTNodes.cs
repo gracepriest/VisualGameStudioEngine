@@ -639,6 +639,16 @@ namespace BasicLang.Compiler.AST
         public BlockNode Body { get; set; }
         public List<ExpressionNode> BaseConstructorArgs { get; set; }  // For MyBase.New(args)
 
+        /// <summary>
+        /// Declared <c>Shared Sub New</c>. The parser used to read the modifier and drop it.
+        ///
+        /// <para>⚠ Read ONLY by the analyzer's BC30526 exception (task #178): a Shared ReadOnly
+        /// auto-property may be assigned in a <c>Shared Sub New</c> of its class, an instance one
+        /// in an instance <c>Sub New</c>, and not the other way round. No backend reads it yet,
+        /// so a <c>Shared Sub New</c> is still emitted as an instance constructor (task #208).</para>
+        /// </summary>
+        public bool IsShared { get; set; }
+
         public ConstructorNode(int line, int column) : base(line, column)
         {
             Access = AccessModifier.Public;

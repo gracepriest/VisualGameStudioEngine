@@ -3802,8 +3802,37 @@ namespace BasicLang.Compiler.CodeGen.MSIL
         /// A property WRITE as its accessor call. The receiver (for an instance property) and then
         /// the value are already on the stack, which is the order <c>callvirt</c> wants.
         /// </summary>
-        private void EmitPropertySet(IRClass owner, IRProperty prop) =>
+        private void EmitPropertySet(IRClass owner, IRProperty prop)
+        {
+            // ⛔ A ReadOnly AUTO-property has NO setter (GenerateProperty emits none), so
+            // `callvirt set_P` assembled and then died with MissingMethodException. The only store
+            // into one a checked program can contain is VB's constructor exception (task #178: the
+            // analyzer refuses every other as BC30526), and that store is to the BACKING FIELD —
+            // which is what VB and C# compile it to. Same operands, same stack effect as the call:
+            // the receiver and the value for an instance property, the value alone for a Shared one.
+            // Both store paths reach it — the qualified `Me.P = v` (Visit(IRFieldStore)) and the bare
+            // `P = v` of a plain auto-property (EmitStoreLocal) — and in both `owner` is the
+            // declaring class, because the exception holds only inside that class's own Sub New.
+            if (prop.IsReadOnly && IsAutoProperty(prop))
+            {
+                var token = SanitizeName(owner.Name);
+                var type = IlTypeSpec(prop.Type);
+                var field = BackingFieldName(RawName(prop.Name));
+                if (prop.IsStatic)
+                {
+                    WriteLine($"    stsfld {type} {token}::{field}");
+                    _currentStack--;
+                }
+                else
+                {
+                    WriteLine($"    stfld {type} {token}::{field}");
+                    _currentStack -= 2;
+                }
+                return;
+            }
+
             EmitAccessorSet(SanitizeName(owner.Name), IlTypeSpec(prop.Type), RawName(prop.Name), prop.IsStatic);
+        }
 
         /// <summary>
         /// The getter call itself, shared by the class and interface property arms so the two
