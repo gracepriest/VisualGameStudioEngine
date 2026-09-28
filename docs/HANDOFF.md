@@ -2331,17 +2331,18 @@ single new failure against the 170-name baseline.
       backend too — see `DelegateMemberInvocationExecutionTests`' F0 case, not a promotion here
       (this fixture never carried a test of its own for N6, only the note explaining why it was
       excluded).
-    - **#189** — at the time of THIS entry, three C++ gaps and one JavaScript gap, each PINNED
-      rather than silently accepted: a captured `Catch` variable's member access
-      (`ex.Message` → `ex->Message` on a BY-VALUE exception type) fails to compile on C++ (N7,
-      pinned, STILL OPEN); `Case Is Nothing` on a String or an ARRAY failed to compile on C++ (X4
-      was not run; X4b, the same shape without that one comparison, ran and passed) —
-      **this row is now CLOSED by #185** (ADR-0011 D3's one `EmitNullTest` helper), see #185's own
+    - **#189 — now DONE too, see its own entry below.** At the time of THIS entry, three C++ gaps
+      and one JavaScript gap, each PINNED rather than silently accepted: a captured `Catch`
+      variable's member access (`ex.Message` → `ex->Message` on a BY-VALUE exception type) failed
+      to compile on C++ (N7, pinned); `Case Is Nothing` on a String or an ARRAY failed to compile
+      on C++ (X4 was not run; X4b, the same shape without that one comparison, ran and passed) —
+      **this row was CLOSED by #185** (ADR-0011 D3's one `EmitNullTest` helper), see #185's own
       entry above; the promoted, passing pin is `IsIsNotOperatorExecutionTests
       .CaseIsNothing_189_RunsOnEveryBackend_BothPipelines` (probes C1/C2/E7), not X4/X4b, which
-      were never renamed; JavaScript prints the real `null` rather than `""` when a `String`
-      `Nothing` is concatenated into text (S1-S3's JavaScript legs, pinned, STILL OPEN —
-      unrelated to `Is`/`IsNot`).
+      were never renamed; JavaScript printed the real `null` rather than `""` when a `String`
+      `Nothing` was concatenated into text (S1-S3's JavaScript legs, pinned). **All of it is now
+      CLOSED — fix commit 381b95ff, #189's own entry below** — N7 is folded into the run-everywhere
+      set and S1-S3's JavaScript legs now assert the same "" text as every other backend.
   - **Tests:** `VisualGameStudio.Tests/Compiler/NothingConversionTests.cs` (front end + IR, fast
     subset, 59 cases) and `NothingConversionExecutionTests.cs` (`[Category("Integration")]`, four
     backends × two pipelines over the 14 probes that run everywhere, plus N7 and the S1-S3
@@ -2441,6 +2442,123 @@ single new failure against the 170-name baseline.
     never a run. **#129** (Decimal cannot be declared as an MSIL local at all — `MSILBackend`'s
     type-spec sanitizes `valuetype [System.Runtime]System.Decimal` into an undefined class name;
     every use fails to assemble, mixing or `&` or not).
+- ⭐ **Newest — #189 DONE (fix commit 381b95ff).** A `Nothing` String in `&`/`Console.Write`/
+  `WriteLine` (JavaScript, C#); a `Catch` variable captured by a lambda (C++). What remained of
+  #189 after #185 closed its C++ `Case Is Nothing` rows (see that entry's correction above).
+  - **JavaScript:** `TextOf` takes a `nothingIsEmpty` flag, passed only at `&` and
+    `Console.Write`/`WriteLine` (`CStr`/`.ToString()` unchanged, on purpose). A null CONSTANT
+    operand becomes `""` directly; a String value that CAN hold Nothing at run time (a variable,
+    parameter, field or call result — `MayHoldNothing` has no data-flow memory of what was ever
+    assigned) becomes `(x ?? "")`; a literal, a Concat result or a CStr result stays bare, since
+    none of those three can be Nothing (`MayHoldNothing`'s three `false` arms). `ConcatText` would
+    force the LEFT operand through `String(...)` when NEITHER operand is certainly a string — kept
+    as a defensive no-op, not deleted: the front end's own `&` legality rule
+    (`SemanticAnalyzer.cs:9595-9606`, `leftType.Name=="String" || rightType.Name=="String"`) is the
+    EXACT condition `IsStringValue`/`ConcatSpellsString` test, so one operand is always spelled as
+    a certain string by the time codegen sees it — confirmed unreachable by running the full fast
+    subset (7,594 cases) against a mutant that deletes it: 0 failures, byte-identical to baseline.
+    `__blStr` (the Object-typed runtime check) now returns `""` for null/undefined instead of JS's
+    own `String(null)` → `"null"` spelling. Before this fix, `"[" & s & "]"` printed `[null]`,
+    `Console.WriteLine(s)` printed the bare word `null`, and — silently worse —
+    `acc = Nothing : acc = acc & i` in a loop did NUMERIC addition (JS `+` is not guaranteed string
+    concatenation unless a side certainly already is one) and printed `6` where VB prints `123`.
+    Churn, measured: 288 of 1,116 `.js` files in the byte-compare corpus changed (96 programs):
+    ~300 `&` operands gained a guard, ~120 `Write`/`WriteLine` arguments, 24 `__blStr` bodies —
+    every changed line guards an operand that can hold Nothing, no unrelated JS output moved.
+  - **C#:** `ConcatOperand` emits a `Nothing` CONSTANT operand of `&` as `(string)null` unless the
+    OTHER operand is already a non-null String (C# already picks string `+` there regardless).
+    Reachable ONLY after the optimizer's `CopyPropagationPass` (a STANDARD pass, unconditional on
+    every shipping route) folds a `Nothing`-initialized String local into the literal the Concat
+    sees: `Dim s As String = Nothing : t = s & 5` types fine as `string + int` while `s` is still a
+    variable (its own declared type is `string`), and turns into C#'s LIFTED `int?` arithmetic —
+    CS0029, "Cannot implicitly convert type 'int?' to 'string'" — only once propagation replaces
+    `s` with a bare `null`. Measured directly: the non-optimizing path emits `t = s + 5;` (no cast,
+    no error); the optimizer-running path emits `t = (string)null + 5;`. 0 `.cs` files changed in
+    the corpus.
+  - **C++:** `IsCatchMessageRead`/`CatchMessageText` are the ONE predicate/spelling for "is this a
+    read of catch variable X's Message" / "what is its `.what()` text", shared by the Catch
+    clause's own body (`EmitCatchBody`, which now pushes the catch variable into
+    `_catchVariablesInScope`) and any lambda written inside it. A lambda takes each catch variable
+    it reads by INIT-CAPTURE — `[=, ex = std::runtime_error(ex.what())]` — never a plain `[=]`
+    copy, which would copy the binding's STATIC type and SLICE a by-value
+    `const std::exception&`/`const BasicLang::NetException&`. `GenerateLambdaExpression` also
+    resets the region label suffix, region blocks and Finally frames on lambda entry: a lambda body
+    is its OWN C++ function scope, so none of the enclosing region's `_nex`/`_fex` label-suffix
+    state applies inside it. Measured before the reset: a `Try` inside a lambda written in a Catch
+    declared `try1_end_nex:` but jumped to the unsuffixed `try1_end` — "use of undeclared label" —
+    and a lambda written inside a `Try`/`Finally` wrapped each of its own exits in a copy of the
+    enclosing `Finally`. 15 `.cpp` files changed in 5 programs (all catch captures); the reset
+    itself changed no corpus file.
+  - **Measured** (probe.py, 4 backends × CLI / CLI `--optimize` / Release `.blproj`): J1-J6, C1-C2
+    moved 27/108 → 108/108 (C3, the control — `ex.Message` read directly, no lambda — stayed OK
+    throughout). `BASICLANG_VERIFY_IR` fired 0 times.
+  - **Tests:** `VisualGameStudio.Tests/Compiler/NothingStringTextTests.cs` (fast subset, pure
+    codegen-text, 17 cases across the JS/C#/C++ legs — `JsNothingStringConcatTextTests`,
+    `CSharpNullConstantCastTests`, `CppCatchLambdaTextTests`) and
+    `NothingStringTextExecutionTests.cs` (`[Category("Integration")]`, 33 cases: J1-J6/C1-C3 on all
+    four backends × both pipelines plus J6 pinned separately by name, a Release `.blproj` leg
+    through MSIL for all 9 probes — the one backend #134 already established as the real
+    aggressive-pipeline entry point on Linux, since a native C++ Release build always needs MSVC
+    and BL6015-skips here — seven edge probes (E1-E3/E7-E9/E11) and the pre-existing failures
+    below). `JsExecutionTierRosterTests`' roster grew 81 → 82.
+  - **Moved pins (6, all promoted, none deleted):** `JsBooleanTextTests.NonBooleanConcat_IsUnchanged`
+    (renamed `..._SkipsBooleanText_GuardedOnlyWhereNothingIsPossible`, re-pinned to the `?? ""`
+    guard, intent unchanged); `NothingConversionExecutionTests`' N7 Cpp compile-failure pin (folded
+    into the run-everywhere `TestCase` set, since C++ runs it now) and its S1-S3 JavaScript
+    `[null]` pins (folded into the same C#/C++/MSIL assertion — one 4-way check now, not two);
+    `MsilValueToStringExecutionTests.E8_JavaScript_PinsTodaysNullText_Against189` (folded into E8's
+    existing 3-backend check, now 4-way). `Msil/ClosureLoweringTests`' L16b doc comment (STALE
+    claim that C++ "still fails, for the SAME unrelated reason as before" — corrected; its two
+    tests now call `FourBackends.RunsOnEveryBackend[Aggressive]` instead of the 3-backend
+    `CSharpJsMsil*` helpers).
+  - **Follow-ups pinned as pre-existing, unrelated failures** (each with its own comment naming the
+    task, so a fix anywhere is a deliberate, noticed change to `NothingStringTextExecutionTests.cs`):
+    - **#136, WIDENED.** A `Try` nested inside a multi-statement `Sub` lambda's body, itself
+      written inside a `Catch` clause (edge probe E6): the emitted C# lambda body is `() => { ; };`
+      — the ENTIRE nested Try/Catch and the trailing `WriteLine` are dropped, not merely reordered,
+      so the program prints NOTHING (measured: empty string). #136's original shape was narrower
+      (a Sub lambda's write to a bare property not observed later); this is a broader instance of
+      the same C# lambda-body-lowering gap.
+    - **#201, WIDENED.** A lambda capturing a Catch variable, stored in a `List(Of Action)` (E5):
+      compiles on C#/JS/MSIL, fails to COMPILE on C++ — `List(Of Action)`'s element type lowers to
+      a bare `void*` rather than `std::function<void()>`, so invoking an element read back out
+      (`a()`) is "assigning to 'void *' from incompatible type 'void'" (clang) / "void value not
+      ignored" (g++). The catch-capture fix itself is fine in isolation (C1/C2, E5's own lambdas
+      all compile); this is a generic-collection-of-delegate gap, filed alongside #201's existing
+      user-delegate-value C++ gaps.
+    - **#205, NEW.** A native (List-index-out-of-range) exception's message, read once directly and
+      once through a lambda captured in the same Catch (E10): C#/C++ agree (`same=True`); MSIL says
+      `same=False` — its captured Catch variable's `Message`, read from inside the lambda,
+      disagrees with the direct read taken before the lambda existed. No prior HANDOFF mention of
+      an MSIL closure/catch-message inconsistency, so this is a new number. (Measured, separately:
+      the C++ init-capture mutant — a plain `[=]` copy instead of the init-capture — reproduces
+      this EXACT symptom on C++ too, `same=False`, confirming the mechanism.)
+    - **#191, WIDENED.** An `Object` field holding a boxed Boolean, concatenated (E13): C#/JS agree
+      (`T=False`); MSIL prints `T=` — the Boolean's text is LOST through `&`. #191 already covers a
+      user-class `&` operand and `Console.Write` of a class on MSIL; a boxed Boolean losing its
+      text is a new instance of the same class of gap. (E13's C++ leg does not compile at all —
+      `Object` has no C++ mapping, a much older, unrelated gap, measured as a fact in the pin but
+      not filed under a new number here.)
+    - **#206, left alone (semantic question, not a bug).** `Nothing = ""`: VB says True, every
+      backend here says False (E4, constant-folded: False/False/True everywhere). Forced through a
+      run-time comparison instead of a fold (E4b), C#/JS/MSIL still agree with their own E4 answer,
+      but C++ FLIPS to True/True/False/True — because C++ represents String by VALUE
+      (`std::string`) with no null state, so at RUN TIME `Nothing` IS `""` on C++ (same root cause
+      as `IsIsNotOperatorExecutionTests.CppStringAndArrayNothingIsEmptiness_DivergesFromDotNet`'s
+      P12). C++'s own answer is internally inconsistent between fold time and run time — exactly
+      why this needs a deliberate owner decision, not a quick fix.
+    - **Filed as #207.** JavaScript reads past the end of a `List` without throwing:
+      `Dim a As New List(Of Integer)() : a(3)` returns `undefined` rather than raising, so E10's
+      own JS leg never enters its `Catch` at all and crashes later with an uncaught
+      `TypeError: f is not a function` when the (never-assigned) `f` is invoked. Measured in
+      `NothingStringTextExecutionTests.E10_JavaScript_ReadingPastEndOfList_DoesNotThrow_Against207`.
+  - **Mutants:** 9 attempted, 8 killed for real — source patched in a SEPARATE
+    `git worktree --detach`, `BasicLang.dll` rebuilt there and swapped into the test output only
+    between `dotnet test` runs (never during one), then the main tree's real DLL restored and
+    md5-verified (`62daf0493f9908f64be546319d00fff2`, identical before and after). The `ConcatText`
+    `String(...)` fallback mutant is UNREACHABLE by construction (see above), confirmed by running
+    the full fast subset against it (0 failures). See `NothingStringTextTests.cs`/
+    `NothingStringTextExecutionTests.cs` doc comments for which test kills which mutant.
 - ⚠ **Two arms of the CSE repair are unreachable from any BasicLang program**, and are pinned by
   direct unit assertions in `CseKeyEncodingUnitTests` rather than by a program, because no program
   can express them:

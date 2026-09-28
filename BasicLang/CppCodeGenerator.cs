@@ -53,6 +53,13 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         // Visit(IRFieldAccess) lowers members of this set to BasicLang::String(v.what()).
         // Strictly catch-variable-scoped: no general exception-object model exists.
         private readonly HashSet<IRValue> _catchMessageAccesses = new HashSet<IRValue>();
+
+        /// <summary>
+        /// The catch variables visible where code is being written: the clause bodies
+        /// <see cref="Visit(IRTryCatch)"/> is inside, innermost last. A lambda written in one
+        /// captures them (<see cref="GenerateLambdaExpression"/>, task #189).
+        /// </summary>
+        private readonly List<string> _catchVariablesInScope = new List<string>();
         private bool _usesFramework;
         private readonly HashSet<string> _frameworkFunctionsUsed;
         private IRModule _module;
@@ -915,27 +922,49 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             var savedDeclared = new HashSet<string>(_declaredIdentifiers, StringComparer.OrdinalIgnoreCase);
             var savedTemps = new HashSet<IRValue>(_allTemporaries);
             var savedCatchMessageAccesses = new HashSet<IRValue>(_catchMessageAccesses);
+            var savedCatchScope = new List<string>(_catchVariablesInScope);
             var savedSuppress = _suppressLineDirectives;
+            // ⛔ A lambda body is its OWN C++ function scope, so none of the enclosing region's
+            // emit state applies inside it: its labels are the lambda's (no `_nex`/`_fex` copy
+            // suffix, no enclosing region to jump out of) and it leaves no enclosing Finally.
+            // MEASURED before this was reset (#189): a Try inside a lambda written in a Catch
+            // defined `try1_end_nex:` and jumped to `try1_end` — "use of undeclared label" — and a
+            // lambda written inside a Try/Finally wrapped each of its own exits in a copy of the
+            // enclosing Finally.
+            var savedSuffix = _regionLabelSuffix;
+            var savedRegionBlocks = _currentRegionBlocks;
+            var savedFinallyFrames = new List<(IRTryCatch Try, HashSet<BasicBlock> Owned)>(_finallyFrames);
 
             try
             {
                 _output = new StringBuilder();
                 _indentLevel = 0;
+                _regionLabelSuffix = "";
+                _currentRegionBlocks = null;
+                _finallyFrames.Clear();
                 // A #line directive inside an inlined lambda body would land mid-expression
                 // and break the compile — suppress for the whole capture (nesting-safe).
                 _suppressLineDirectives = true;
 
+                // #189: the enclosing catch variables this lambda reads, each taken by an
+                // init-capture (see CatchVariableCapture). They are the only catch variables in
+                // scope inside the body, so a lambda nested in this one sees them too.
+                var capturedCatch = CapturedCatchVariables(lambda);
+                _catchVariablesInScope.Clear();
+                _catchVariablesInScope.AddRange(capturedCatch);
+                var captures = string.Concat(capturedCatch.Select(n => ", " + CatchVariableCapture(n)));
+
                 var ps = string.Join(", ",
                     lambda.Parameters.Select(p => $"{MapType(p.Type)} {SanitizeName(p.Name)}"));
                 var ret = MapType(lambda.ReturnType);
-                var header = ret == "void" ? $"[=]({ps})" : $"[=]({ps}) -> {ret}";
+                var header = ret == "void" ? $"[={captures}]({ps})" : $"[={captures}]({ps}) -> {ret}";
 
                 _output.Append(header);
                 _output.Append(" {\n");
                 _indentLevel = 1;
 
                 _currentFunction = lambda;
-                InitializeFunctionContext(lambda);
+                InitializeFunctionContext(lambda, capturedCatch);
                 DeclareLocalsAndTemporaries(lambda);
                 GenerateFunctionBody(lambda);
 
@@ -957,6 +986,12 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 foreach (var t in savedTemps) _allTemporaries.Add(t);
                 _catchMessageAccesses.Clear();
                 foreach (var t in savedCatchMessageAccesses) _catchMessageAccesses.Add(t);
+                _catchVariablesInScope.Clear();
+                _catchVariablesInScope.AddRange(savedCatchScope);
+                _regionLabelSuffix = savedSuffix;
+                _currentRegionBlocks = savedRegionBlocks;
+                _finallyFrames.Clear();
+                _finallyFrames.AddRange(savedFinallyFrames);
             }
         }
 
@@ -1830,7 +1865,10 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             WriteLine();
         }
 
-        private void InitializeFunctionContext(IRFunction function)
+        /// <param name="capturedCatchVariables">
+        /// For a lambda, the enclosing catch variables it reads (<see cref="CapturedCatchVariables"/>).
+        /// </param>
+        private void InitializeFunctionContext(IRFunction function, IReadOnlyCollection<string> capturedCatchVariables = null)
         {
             _valueNames.Clear();
             _declaredIdentifiers.Clear();
@@ -1971,13 +2009,94 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                         if (string.IsNullOrEmpty(cc.VariableName) || cc.Block == null) continue;
                         foreach (var regionBlock in ComputeInlineRegion(cc.Block, tc.EndBlock))
                             foreach (var inst in regionBlock.Instructions)
-                                if (inst is IRFieldAccess fa
-                                    && string.Equals(fa.FieldName, "Message", StringComparison.OrdinalIgnoreCase)
-                                    && fa.Object is IRVariable fv
-                                    && string.Equals(fv.Name, cc.VariableName, StringComparison.OrdinalIgnoreCase))
-                                    _catchMessageAccesses.Add(fa);
+                                if (IsCatchMessageRead(inst, cc.VariableName))
+                                    _catchMessageAccesses.Add((IRValue)inst);
                     }
                 }
+
+            // #189: a LAMBDA written inside a catch clause reads the clause's variable anywhere in
+            // its own body, which is a separate IRFunction with no IRTryCatch of its own — so the
+            // region walk above never saw those reads, and `ex.Message` in the lambda fell through
+            // to the shared_ptr member access `ex->Message`, which does not compile against the
+            // catch binding. The same predicate marks them, so both contexts lower one way.
+            if (capturedCatchVariables != null)
+                foreach (var block in function.Blocks)
+                    foreach (var inst in block.Instructions)
+                        foreach (var name in capturedCatchVariables)
+                            if (IsCatchMessageRead(inst, name))
+                                _catchMessageAccesses.Add((IRValue)inst);
+        }
+
+        /// <summary>
+        /// §11.1 / #189: THE one answer to "is this a read of catch variable
+        /// <paramref name="catchVariable"/>'s <c>Message</c>", shared by the clause's own body and
+        /// by a lambda that captures the variable. <see cref="Visit(IRFieldAccess)"/> lowers every
+        /// read it marks to <see cref="CatchMessageText"/>.
+        /// </summary>
+        private static bool IsCatchMessageRead(IRInstruction instruction, string catchVariable) =>
+            instruction is IRFieldAccess fa
+            && string.Equals(fa.FieldName, "Message", StringComparison.OrdinalIgnoreCase)
+            && fa.Object is IRVariable fv
+            && string.Equals(fv.Name, catchVariable, StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// A catch variable's <c>Message</c>: its <c>what()</c>. It holds for every binding the
+        /// variable has — the ladder's <c>const BasicLang::NetException&amp;</c>, a per-clause
+        /// <c>const std::exception&amp;</c> / <c>std::runtime_error&amp;</c>, and a lambda's
+        /// by-value capture (<see cref="CatchVariableCapture"/>).
+        /// </summary>
+        private string CatchMessageText(string catchVariable) =>
+            $"BasicLang::String({SanitizeName(catchVariable)}.what())";
+
+        /// <summary>
+        /// The init-capture a lambda takes a catch variable by (#189). ⛔ NOT the plain <c>[=]</c>
+        /// copy: that copies the binding's STATIC type, and a per-clause <c>const std::exception&amp;</c>
+        /// copied by value is SLICED — libstdc++'s <c>std::exception::what()</c> then answers
+        /// "std::exception", not the message. Nor by reference: C1's lambda runs after the Try,
+        /// when the exception object is gone. A <c>std::runtime_error</c> built from the message
+        /// owns it, and <c>what()</c> reads it back, so <see cref="CatchMessageText"/> is unchanged.
+        /// </summary>
+        private string CatchVariableCapture(string catchVariable)
+        {
+            var name = SanitizeName(catchVariable);
+            return $"{name} = std::runtime_error({name}.what())";
+        }
+
+        /// <summary>
+        /// The catch variables in scope that <paramref name="lambda"/> reads the <c>Message</c> of,
+        /// in its own body or a lambda nested in it (the outer one must hold the capture for the
+        /// inner to copy). A name the lambda declares itself — a parameter or a local — shadows
+        /// the catch variable and is left out.
+        /// </summary>
+        private List<string> CapturedCatchVariables(IRFunction lambda)
+        {
+            var captured = new List<string>();
+            foreach (var name in _catchVariablesInScope)
+                if (!captured.Contains(name, StringComparer.OrdinalIgnoreCase)
+                    && LambdaReadsCatchMessage(lambda, name, new HashSet<IRFunction>()))
+                    captured.Add(name);
+            return captured;
+        }
+
+        private bool LambdaReadsCatchMessage(IRFunction lambda, string name, HashSet<IRFunction> visiting)
+        {
+            if (!visiting.Add(lambda)) return false;
+            if (lambda.Parameters.Any(p => string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase))
+                || lambda.LocalVariables.Any(l => string.Equals(l.Name, name, StringComparison.OrdinalIgnoreCase)))
+                return false;
+
+            foreach (var block in lambda.Blocks)
+                foreach (var inst in block.Instructions)
+                {
+                    if (IsCatchMessageRead(inst, name)) return true;
+                    foreach (var operand in IROperandWalker.EnumerateOperands(inst))
+                        if (operand is IRVariable { Name: { } lambdaName } && lambdaName.StartsWith("__lambda_", StringComparison.Ordinal)
+                            && _module?.Functions.FirstOrDefault(f => f.Name == lambdaName && f.IsLambda) is IRFunction nested
+                            && LambdaReadsCatchMessage(nested, name, visiting))
+                            return true;
+                }
+
+            return false;
         }
 
         /// <summary>
@@ -5030,7 +5149,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // of the (twice-emitted) catch body.
             if (_catchMessageAccesses.Contains(fieldAccess) && fieldAccess.Object is IRVariable catchVar)
             {
-                WriteLine($"{result} = BasicLang::String({SanitizeName(catchVar.Name)}.what());");
+                WriteLine($"{result} = {CatchMessageText(catchVar.Name)};");
                 return;
             }
 
@@ -5213,6 +5332,25 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             WriteLine($"{type} {SanitizeName(tupleElement.Name)} = std::get<{tupleElement.Index}>({tuple});");
         }
 
+        /// <summary>
+        /// A catch clause's body, with its variable in scope (<see cref="_catchVariablesInScope"/>)
+        /// for any lambda written inside it (#189). Each copy of the body — the §11.1 ladder arm
+        /// and the per-clause handler — goes through here.
+        /// </summary>
+        private void EmitCatchBody(IRCatchClause catchClause, IRTryCatch tryCatch, string afterCatchLabel)
+        {
+            var named = !string.IsNullOrEmpty(catchClause.VariableName);
+            if (named) _catchVariablesInScope.Add(catchClause.VariableName);
+            try
+            {
+                EmitInlineRegion(catchClause.Block, tryCatch.EndBlock, RegionEnd.GotoEnd, afterCatchLabel);
+            }
+            finally
+            {
+                if (named) _catchVariablesInScope.RemoveAt(_catchVariablesInScope.Count - 1);
+            }
+        }
+
         public override void Visit(IRTryCatch tryCatch)
         {
             // C++ exception handling with try-catch. The try/catch/finally BODIES are emitted as
@@ -5369,7 +5507,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                     // next block's label — MEASURED as an infinite loop, compiling cleanly. See
                     // EmitRegionEnd. With no Finally, endLabel IS the end label, so the emission
                     // is byte-identical to before the finally-entry label existed.
-                    EmitInlineRegion(catchClause.Block, tryCatch.EndBlock, RegionEnd.GotoEnd, afterCatchLabel);
+                    EmitCatchBody(catchClause, tryCatch, afterCatchLabel);
                     Unindent();
                     WriteLine("}");
                 }
@@ -5426,7 +5564,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 // Measured before this: the caught case printed 2 instead of 12. It gets there
                 // by JUMPING to the finally-entry label, not by falling out — see EmitRegionEnd
                 // for why falling out loses a mid-region exit.
-                EmitInlineRegion(catchClause.Block, tryCatch.EndBlock, RegionEnd.GotoEnd, afterCatchLabel);
+                EmitCatchBody(catchClause, tryCatch, afterCatchLabel);
                 Unindent();
                 WriteLine("}");
             }
