@@ -4227,7 +4227,11 @@ namespace BasicLang.Compiler
             {
                 var op = Advance();
                 int prec = GetPrecedence(op);
-                var right = ParseUnary();
+                // After And/Or, `Not` takes a comparison-level operand (#195); after a tighter
+                // operator it is the operand-position unary, as in ParseUnary.
+                var right = prec < NotOperandPrecedence && Check(TokenType.Not)
+                    ? ParseNotContinuation()
+                    : ParseUnary();
 
                 while (IsBinaryOperator(Peek()) && GetPrecedence(Peek()) > prec)
                 {
@@ -4328,13 +4332,13 @@ namespace BasicLang.Compiler
 
         private ExpressionNode ParseLogicalAnd()
         {
-            var expr = ParseEquality();
+            var expr = ParseLogicalNot();
 
             // AndAlso shares And's precedence level in VB — same reasoning as OrElse above.
             while (Check(TokenType.And) || Check(TokenType.AndAnd) || Check(TokenType.AndAlso))
             {
                 var op = Advance();
-                var right = ParseEquality();
+                var right = ParseLogicalNot();
                 var binary = new BinaryExpressionNode(op.Line, op.Column);
                 binary.Left = expr;
                 binary.Operator = op.Lexeme;
@@ -4345,14 +4349,58 @@ namespace BasicLang.Compiler
             return expr;
         }
 
+        /// <summary>
+        /// <c>Not</c> at VB's precedence: looser than every comparison, tighter than <c>And</c>
+        /// (#195). <c>Not x Is Nothing</c> is <c>Not (x Is Nothing)</c> and <c>Not n = 5</c> is
+        /// <c>Not (n = 5)</c> — at unary precedence both read as <c>(Not x) …</c>. A <c>Not</c>
+        /// in operand position (<c>x = Not b</c>) still goes through <see cref="ParseUnary"/>.
+        /// The continuation parser mirrors this in <see cref="ParseNotContinuation"/>.
+        /// </summary>
+        private ExpressionNode ParseLogicalNot()
+        {
+            if (Check(TokenType.Not))
+            {
+                var op = Advance();
+                return new UnaryExpressionNode(op.Line, op.Column)
+                {
+                    Operator = op.Lexeme,
+                    Operand = ParseLogicalNot(),
+                    IsPostfix = false
+                };
+            }
+            return ParseEquality();
+        }
+
+        /// <summary>
+        /// The precedence-climbing twin of <see cref="ParseLogicalNot"/>: a <c>Not</c> that is the
+        /// right operand of <c>And</c>/<c>Or</c> takes a whole comparison-level operand, so
+        /// <c>r = a AndAlso Not x Is Nothing</c> parses as it does after <c>Dim r =</c>.
+        /// </summary>
+        private ExpressionNode ParseNotContinuation()
+        {
+            var op = Advance();
+            var operand = Check(TokenType.Not)
+                ? ParseNotContinuation()
+                : ParseBinaryExpressionContinuation(ParseUnary(), NotOperandPrecedence);
+            return new UnaryExpressionNode(op.Line, op.Column)
+            {
+                Operator = op.Lexeme,
+                Operand = operand,
+                IsPostfix = false
+            };
+        }
+
+        /// <summary>The loosest level a <c>Not</c> operand takes: comparisons (= GetPrecedence of <c>=</c>).</summary>
+        private const int NotOperandPrecedence = 3;
+
         private ExpressionNode ParseEquality()
         {
             var expr = ParseComparison();
 
             // `Is` / `IsNot` (reference identity) share this level with `=` / `<>`, as in VB —
             // and the precedence-climbing table (GetPrecedence) says the same (ADR-0011 D1).
-            // ⚠ `Not` stays at UNARY precedence here, so `Not x Is Nothing` parses as
-            // `(Not x) Is Nothing`; the analyzer refuses that shape and names `x IsNot Nothing`.
+            // `Not` sits one level looser (ParseLogicalNot, #195), so `Not x Is Nothing` is
+            // `Not (x Is Nothing)`.
             while (Check(TokenType.Equal) || Check(TokenType.NotEqual) ||
                    Check(TokenType.IsEqual) || Check(TokenType.Assignment) || // Include Assignment here
                    Check(TokenType.Is) || Check(TokenType.IsNot))

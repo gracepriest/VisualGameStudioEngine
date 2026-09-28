@@ -315,6 +315,7 @@ public class JsExecutionTierRosterTests
         // lambda rows, P13's fold) and JavaScriptExecutionTests.RunJs / JsTestSupport.CompileOptimized
         // directly (P12's named C++ divergence and E11's parentheses-wrap mutant check).
         typeof(IsIsNotOperatorExecutionTests),
+        typeof(NotPrecedenceExecutionTests),
 
         // Task #176 — one `Me` per member, typed as its own class. Named "...ExecutionTests", so
         // the widened match below WOULD catch it on its own; listed explicitly anyway, matching
@@ -409,7 +410,7 @@ public class JsExecutionTierRosterTests
 
     [Test]
     public void RosterIsPinned()
-        => Assert.That(ExecutionTier, Has.Length.EqualTo(84), // + MsilValueToStringExecutionTests (task #183), InterfaceMethodTypingExecutionTests, IsIsNotOperatorExecutionTests (task #185), MeReceiverTypingExecutionTests (task #176), UserDelegateConversionExecutionTests (task #187), DelegateMemberInvocationExecutionTests (task #188), NothingStringTextExecutionTests (task #189), MsilObjectBoxingExecutionTests (task #177); + WhenGuardCallRunTests
+        => Assert.That(ExecutionTier, Has.Length.EqualTo(85), // + MsilValueToStringExecutionTests (task #183), InterfaceMethodTypingExecutionTests, IsIsNotOperatorExecutionTests (task #185), MeReceiverTypingExecutionTests (task #176), UserDelegateConversionExecutionTests (task #187), DelegateMemberInvocationExecutionTests (task #188), NothingStringTextExecutionTests (task #189), MsilObjectBoxingExecutionTests (task #177), NotPrecedenceExecutionTests (#195); + WhenGuardCallRunTests
             "The execution-tier roster changed. That is fine — update the number — but it must " +
             "be a deliberate edit, not a silent shrink.");
 
