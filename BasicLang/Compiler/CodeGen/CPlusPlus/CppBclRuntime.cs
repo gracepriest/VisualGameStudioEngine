@@ -44,6 +44,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
 #include <ostream>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 ";
 
@@ -221,6 +222,45 @@ inline std::string FormatSingle(float v) {
     auto r = std::to_chars(buf, buf + sizeof(buf) - 1, v, std::chars_format::scientific);
     *r.ptr = '\0';
     return bcl_detail::format_shortest(buf, 9);
+}
+
+/* VB's String -> number / Boolean conversions (CInt/CDbl/CBool/CType of a String). Surrounding
+   spaces are allowed and the whole rest must be a number (exponent included); anything else is
+   VB's InvalidCastException. A bare static_cast from a string does not compile. */
+inline double VbParseDouble(const std::string& s) {
+    const char* begin = s.c_str();
+    while (*begin == ' ' || *begin == '\t') ++begin;
+    char* end = nullptr;
+    const double value = std::strtod(begin, &end);
+    const char* rest = end;
+    while (*rest == ' ' || *rest == '\t') ++rest;
+    if (end == begin || *rest != '\0')
+        throw std::runtime_error(""InvalidCastException: Conversion from string \"""" + s + ""\"" to type 'Double' is not valid."");
+    return value;
+}
+
+/* CBool of a String: ""True""/""False"" in any case, else a number (non-zero is True). */
+inline bool VbParseBool(const std::string& s) {
+    size_t b = s.find_first_not_of("" \t""), e = s.find_last_not_of("" \t"");
+    std::string t = b == std::string::npos ? std::string() : s.substr(b, e - b + 1);
+    std::string lower = t;
+    for (auto& c : lower) c = (char)std::tolower((unsigned char)c);
+    if (lower == ""true"") return true;
+    if (lower == ""false"") return false;
+    return VbParseDouble(t) != 0;
+}
+
+/* ReDim a[n] / ReDim a(upperBound): the array resized to n elements (the generator has already
+   turned an upper bound into a count). Plain ReDim is n fresh default elements; Preserve keeps the
+   first min(old, n) and value-initialises the rest. A negative count throws, as .NET's does. */
+template <typename T>
+inline std::vector<T> ReDimArray(const std::vector<T>& array, int64_t count, bool preserve) {
+    if (count < 0) throw std::out_of_range(""ReDim size cannot be negative"");
+    if (!preserve) return std::vector<T>((size_t)count);
+    const size_t keep = array.size() < (size_t)count ? array.size() : (size_t)count;
+    std::vector<T> resized(array.begin(), array.begin() + (std::ptrdiff_t)keep);
+    resized.resize((size_t)count);
+    return resized;
 }
 
 /* ---- TimeSpan: one int64 ticks (100ns). Spec §3. ---- */
@@ -427,7 +467,7 @@ public:
     std::shared_ptr<StringBuilder> Append(int32_t v) { buf_ += std::to_string(v); return shared_from_this(); }  /* REQUIRED: without it, Append(Integer) is ambiguous (int32->int64 and int32->double are both rank Conversion) */
     std::shared_ptr<StringBuilder> Append(int64_t v) { buf_ += std::to_string(v); return shared_from_this(); }
     std::shared_ptr<StringBuilder> Append(bool v) { buf_ += (v ? ""True"" : ""False""); return shared_from_this(); } /* else bool promotes to int and prints 1/0 vs .NET True/False */
-    std::shared_ptr<StringBuilder> Append(double v);   /* invariant formatting, matches the backend's existing double->string style */
+    std::shared_ptr<StringBuilder> Append(double v);   /* invariant formatting via FormatDouble, as .NET's v.ToString() */
     std::shared_ptr<StringBuilder> AppendLine(const std::string& s = """") { buf_ += s; buf_ += ""\n""; return shared_from_this(); }
     std::shared_ptr<StringBuilder> AppendFormat(const std::string& fmt, const std::string& a0); /* {0} only, v1 */
     std::shared_ptr<StringBuilder> Insert(int32_t index, const std::string& s);   /* byte index; range-checked throw */

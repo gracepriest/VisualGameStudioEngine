@@ -53,11 +53,10 @@ namespace VisualGameStudio.Tests.Compiler;
 /// docstring names the leg that actually detects the defect, because a fixture that asserted only
 /// the green legs would be a test that cannot fail.</para>
 ///
-/// <para>⚠ Two cross-backend splits appear below and are NOT regressions. They were confirmed
-/// against a control program (<c>ShowB(True)</c> / <c>ShowD(CDbl(3))</c>) that no pass touches:
-/// C++ renders <c>CStr(Double)</c> as <c>3.000000</c>, and JavaScript renders <c>CStr(Boolean)</c>
-/// in lower case. They are pinned as explicit per-backend expectations rather than normalised
-/// away.</para>
+/// <para>⚠ Cross-backend splits were once pinned here as explicit per-backend expectations:
+/// C++ rendered <c>CStr(Double)</c> as <c>3.000000</c> and JavaScript rendered
+/// <c>CStr(Boolean)</c> in lower case. Both now print what .NET prints (C++ through
+/// <c>BasicLang::FormatDouble</c>), so every backend is held to the same string.</para>
 /// </summary>
 [TestFixture]
 [Category("Integration")]   // compiles and runs C++, spawns node, assembles and runs IL
@@ -390,9 +389,9 @@ public class CseAndPeepholeDanglingOperandTests
     /// ⛔ The NOT-NOT arm. Listed separately from double negation because the two arms are
     /// independent code: a fixture covering only <c>Neg</c> leaves <c>Not</c> open.
     ///
-    /// <para>⚠ JavaScript prints <c>B=true</c> where the other three print <c>B=True</c>. A
-    /// PRE-EXISTING <c>CStr(Boolean)</c> casing difference, reproduced on a control program with
-    /// nothing optimizable in it; pinned per-backend rather than normalised away.</para>
+    /// <para>JavaScript used to print <c>B=true</c> here, a <c>CStr(Boolean)</c> casing difference
+    /// unrelated to the optimizer. Master's #102 made JavaScript spell a Boolean as .NET does, so
+    /// all four backends now print <c>B=True</c>.</para>
     /// </summary>
     [Test]
     public void ThePeepholeNotNotArm_LeavesNoUndeclaredTemp()
@@ -406,7 +405,7 @@ public class CseAndPeepholeDanglingOperandTests
             Sub Main()
              Run(True)
             End Sub
-            """, "B=True", jsExpected: "B=true");
+            """, "B=True");
 
     /// <summary>
     /// ⛔ CONTROLS: <c>x * 1</c> and <c>x / 1</c> NEVER REACH the peephole pass.

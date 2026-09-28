@@ -9,6 +9,47 @@ using BasicLang.Net;
 namespace BasicLang.Compiler.SemanticAnalysis
 {
     /// <summary>
+    /// Task #168 — how a <c>For Each x In coll</c> (no <c>As</c> clause) binds an <c>x</c> that
+    /// ALREADY names a variable: a local, a parameter (ByRef included), a module global or a class
+    /// field read bare. VB REUSES that variable — every iteration stores the element into it, so
+    /// after the loop it holds the last element stored (the one being processed at an
+    /// <c>Exit For</c>; unchanged over an empty collection).
+    ///
+    /// <para>⛔ BasicLang used to declare a FRESH loop-scoped <c>x</c> here, which silently
+    /// SHADOWED the existing one: nothing ever wrote it, on all four backends and at every entry
+    /// point (measured: <c>Dim x = 0 : For Each x In {5, 9} : Next</c> left <c>x</c> at 0).</para>
+    ///
+    /// <para>The loop is lowered ONCE, backend-agnostically: the <c>IRForEach</c> iterates a
+    /// fresh HIDDEN variable (<see cref="HiddenName"/>), and the body begins with the ordinary
+    /// assignment <c>x = hidden</c> (<see cref="Assignment"/>), which this analyzer has already
+    /// analyzed like any written <c>x = expr</c> — so IRBuilder lowers it with the one assignment
+    /// lowering, and the field store, the global store, the ByRef store and the assignment
+    /// coercion (<c>Integer → Double</c>, the narrowing <c>Double → Integer</c>) all come from
+    /// there. No backend knows this construct exists.</para>
+    /// </summary>
+    internal sealed class ForEachControlBinding
+    {
+        public ForEachControlBinding(string hiddenName, AssignmentStatementNode assignment)
+        {
+            HiddenName = hiddenName;
+            Assignment = assignment;
+        }
+
+        /// <summary>
+        /// The element variable the loop really iterates, <c>__foreach_N</c> — the
+        /// <c>__with</c> / <c>__lambda_N</c> convention, and not a temp spelling
+        /// (<c>IsTempDestination</c>). Unique per analyzer, so nested loops never share one.
+        /// </summary>
+        public string HiddenName { get; }
+
+        /// <summary>
+        /// The synthesized <c>x = __foreach_N</c> the body begins with. Not part of the AST's
+        /// statement lists: IRBuilder visits it at the top of the loop body.
+        /// </summary>
+        public AssignmentStatementNode Assignment { get; }
+    }
+
+    /// <summary>
     /// Semantic analyzer for BasicLang - performs type checking and scope resolution
     /// </summary>
     public class SemanticAnalyzer : IASTVisitor
@@ -128,6 +169,27 @@ namespace BasicLang.Compiler.SemanticAnalysis
             new Dictionary<ASTNode, Symbol>(ReferenceEqualityComparer.Instance);
 
         /// <summary>
+        /// ⭐ #188 — whether <paramref name="call"/> invokes a delegate-typed FIELD or PROPERTY
+        /// member as a delegate VALUE: <c>Callback()</c>, <c>Me.Callback()</c>,
+        /// <c>obj.Op(5)</c>, <c>Registry.Hook()</c>, own or inherited. This analyzer's answer
+        /// (<see cref="DelegateMemberCallee"/>), recorded where it types the call, and the ONE
+        /// answer the IR builder lowers by — it evaluates the member's value through the ordinary
+        /// read path and invokes that value, the form <c>f(a)(b)</c> already takes.
+        ///
+        /// <para>⛔ Before, each backend was handed a METHOD call or a bare NAME and resolved it
+        /// privately: C++ gave a void call a destination (<c>t0 = Callback();</c>), JavaScript
+        /// emitted the name unqualified (<c>Callback is not defined</c>), MSIL called a method
+        /// nothing defines (<c>MissingMethodException: Holder.Callback()</c>) or refused a
+        /// property outright under ADR-0010 D8. A local delegate (<c>cb()</c>) is not recorded
+        /// here: it never reached any of those, and it keeps the form it has.</para>
+        /// </summary>
+        internal bool IsDelegateMemberInvocation(CallExpressionNode call) =>
+            call != null && _delegateMemberInvocations.Contains(call);
+
+        private readonly HashSet<CallExpressionNode> _delegateMemberInvocations =
+            new HashSet<CallExpressionNode>(ReferenceEqualityComparer.Instance);
+
+        /// <summary>
         /// P2a-2 Task 2/7a — the .NET members the probes resolved, keyed by AST node (reference
         /// identity), each carrying the Task-7a exactness bit. <see cref="IRBuilder"/> reads
         /// this while lowering and stamps <c>ResolvedNetTarget</c>/<c>NetCategory</c>/
@@ -173,6 +235,29 @@ namespace BasicLang.Compiler.SemanticAnalysis
         /// </summary>
         internal IReadOnlyDictionary<ForEachLoopNode, Compiler.IR.IRNetEnumeration> NetEnumerations =>
             _netAnnotations.NetEnumerations;
+
+        /// <summary>
+        /// Task #168 — the <c>For Each</c> loops whose control variable is an EXISTING variable
+        /// (<c>Dim x … : For Each x In l</c>, no <c>As</c> clause), and how each binds it. See
+        /// <see cref="ForEachControlBinding"/>. Absent for a loop that declares its own variable,
+        /// which is every <c>For Each x As T</c> and every <c>For Each x</c> naming nothing in
+        /// scope. Keyed by node REFERENCE, for the reason <see cref="NetEnumerations"/> is.
+        /// </summary>
+        internal IReadOnlyDictionary<ForEachLoopNode, ForEachControlBinding> ForEachControlBindings =>
+            _forEachControlBindings;
+
+        private readonly Dictionary<ForEachLoopNode, ForEachControlBinding> _forEachControlBindings =
+            new Dictionary<ForEachLoopNode, ForEachControlBinding>(ReferenceEqualityComparer.Instance);
+
+        /// <summary>Numbers the hidden element variables of <see cref="ForEachControlBindings"/>.</summary>
+        private int _forEachHiddenVariableCounter;
+
+        /// <summary>
+        /// The control variables of the <c>For</c> / <c>For Each</c> loops whose bodies are being
+        /// analyzed, innermost last — VB's BC30069 question ("already in use by an enclosing
+        /// loop"), asked only by a <c>For Each</c> that would REUSE a variable.
+        /// </summary>
+        private readonly List<Symbol> _activeLoopControlSymbols = new List<Symbol>();
 
         /// <summary>
         /// P2a-2 Task 8c-3 — spec §8.3's enum row. Enum-member arguments that were folded to
@@ -1066,6 +1151,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
             _errors.Clear();
             _nodeTypes.Clear();
             _nodeSymbols.Clear();
+            _delegateMemberInvocations.Clear();
             _netNamespaces.Clear();
             _moduleMembers.Clear();
 
@@ -2130,7 +2216,29 @@ namespace BasicLang.Compiler.SemanticAnalysis
             if (fromType.Name == "Object")
                 return $"Use CType(value, {toType.Name}) or DirectCast()";
 
-            return null;
+            return DelegateValueConversionHint(fromType, toType);
+        }
+
+        /// <summary><see cref="DelegateValueConversionHint"/> as a sentence to append to a
+        /// refusal, or nothing.</summary>
+        private static string WithDelegateValueHint(TypeInfo fromType, TypeInfo toType) =>
+            DelegateValueConversionHint(fromType, toType) is { } hint ? $". {hint}" : "";
+
+        /// <summary>
+        /// #187's stated boundary: a delegate VALUE of one type never converts to a different
+        /// delegate type — <c>Dim n As Notify = someAction</c> stays refused, as in C# (VB itself
+        /// needs <c>AddressOf a.Invoke</c>, ADR-0010 D7). Only a lambda or <c>AddressOf</c> is
+        /// target-typed. Said in the message when either side is a user <c>Delegate</c>; null
+        /// otherwise, so no other refusal's wording moves.
+        /// </summary>
+        private static string DelegateValueConversionHint(TypeInfo fromType, TypeInfo toType)
+        {
+            if (fromType?.Kind != TypeKind.Delegate || toType?.Kind != TypeKind.Delegate) return null;
+            if (!IsUserDelegate(fromType) && !IsUserDelegate(toType)) return null;
+
+            return $"A delegate value does not convert to a different delegate type ('{FormatTypeForMessage(fromType)}' " +
+                   $"to '{FormatTypeForMessage(toType)}'), as in C#. Assign a lambda or AddressOf instead — " +
+                   "a lambda that calls the value works";
         }
 
         /// <summary>
@@ -2172,6 +2280,19 @@ namespace BasicLang.Compiler.SemanticAnalysis
         /// </summary>
         private static string FormatDelegateSignature(TypeInfo delegateType)
         {
+            // A user Delegate reads as it was declared: `Notify(msg As String)`,
+            // `Transform(n As Integer) As Integer` (#187).
+            if (delegateType.DelegateSignature is { } signature)
+            {
+                var parameters = signature.Parameters.Select(p => $"{p.Name} As {FormatTypeForMessage(p.Type)}");
+                var text = $"{delegateType.Name}({string.Join(", ", parameters)})";
+                var returnType = signature.ReturnType;
+                if (returnType != null && returnType.Kind != TypeKind.Void &&
+                    !returnType.Name.Equals("Void", StringComparison.OrdinalIgnoreCase))
+                    text += $" As {FormatTypeForMessage(returnType)}";
+                return text;
+            }
+
             if (delegateType.GenericArguments.Count == 0)
                 return delegateType.Name;
 
@@ -2292,7 +2413,13 @@ namespace BasicLang.Compiler.SemanticAnalysis
             // Handle array types
             if (typeRef.IsArray)
             {
-                var elementType = ResolveTypeName(typeRef.Name);
+                // A GENERIC element (`Dim arr[] As List(Of Integer)`) resolves through the generic
+                // path below: resolving it by bare name dropped the type arguments, and the array
+                // was emitted as `List[]` (CS0305) / `std::shared_ptr<List>` (C++) — an array of
+                // an unnamed generic.
+                var elementType = typeRef.GenericArguments.Count > 0
+                    ? ResolveTypeReference(new TypeReference(typeRef.Name) { GenericArguments = typeRef.GenericArguments })
+                    : ResolveTypeName(typeRef.Name);
                 if (elementType == null)
                 {
                     Error($"Unknown type '{typeRef.Name}'", 0, 0);
@@ -2392,9 +2519,8 @@ namespace BasicLang.Compiler.SemanticAnalysis
         /// <c>a[0] = 1</c> (NullReferenceException under C#). Both compiled clean.</para>
         ///
         /// <para>A size expression that will not fold is therefore REFUSED rather than dropped.
-        /// There is no run-time-sizing fallback to fall back to: <c>ReDim</c> is not implemented
-        /// (it lowers to a call to a function that does not exist), so an unfoldable size has no
-        /// correct lowering at all and a diagnostic is the only honest answer.</para>
+        /// A declaration's size is baked into its allocation; a size known only at run time
+        /// belongs to <c>ReDim</c> (ArrayResizeExpressionNode), which the diagnostic points to.</para>
         /// </summary>
         /// <param name="report">
         /// False on the sibling-signature path, which must never accuse the current unit.
@@ -2433,8 +2559,9 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 if (report && _reportedNonConstantArraySizes.Add(dimension))
                 {
                     Error("Array size must be a compile-time constant (an integer literal, a "
-                          + "Const, or arithmetic over them). A size computed at run time cannot "
-                          + "be declared this way, and ReDim is not supported.",
+                          + "Const, or arithmetic over them). For a size computed at run time, "
+                          + "declare the array unsized (Dim a[] As Integer) and ReDim it: "
+                          + "ReDim a[n].",
                           dimension.Line, dimension.Column);
                 }
                 sizes.Add(0);
@@ -2711,6 +2838,15 @@ namespace BasicLang.Compiler.SemanticAnalysis
             if (NativeBclSurface.TryGetMemberReturnType(typeName, memberName, out var surfaceReturnType))
             {
                 return ResolveNetTypeName(surfaceReturnType);
+            }
+
+            // The Shared members of the type keywords (String.Empty, Integer.Parse, Integer.MaxValue,
+            // Double.IsNaN, Char.IsDigit, …) — typed from the table every native backend implements,
+            // so `Dim n As Integer = Integer.Parse(s)` is an Integer and not an Object no typed store
+            // accepts.
+            if (PrimitiveStaticSurface.TryGet(typeName, memberName, out var primitiveStatic))
+            {
+                return ResolveNetTypeName(primitiveStatic.ReturnTypeName);
             }
 
             // First try the TypeRegistry for loaded .NET assemblies
@@ -4670,6 +4806,10 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     case "insert":
                     case "removeat":
                         return _typeManager.VoidType;
+                    // ⛔ Unlisted, List.Sort was Object, and the C++ backend stored its void
+                    // result in a temp ("void value not ignored as it ought to be").
+                    case "sort" when lowerTypeName == "list":
+                        return _typeManager.VoidType;
                     case "count":
                     case "indexof":
                         return _typeManager.IntegerType;
@@ -4906,7 +5046,8 @@ namespace BasicLang.Compiler.SemanticAnalysis
         /// Private is reported as such. All three are stated rather than left to the permissive
         /// .NET-type fallback, which is how a bare cross-module name used to be typed Object.
         /// </summary>
-        private bool TryResolveUnqualifiedModuleMember(string name, int line, int column, out Symbol symbol)
+        private bool TryResolveUnqualifiedModuleMember(string name, int line, int column, out Symbol symbol,
+                                                       bool report = true)
         {
             symbol = null;
             var current = EnclosingModuleName();
@@ -4928,13 +5069,15 @@ namespace BasicLang.Compiler.SemanticAnalysis
             if (visible.Count > 1)
             {
                 var owners = string.Join("', '", visible.Select(v => v.OwningModule).OrderBy(o => o, StringComparer.OrdinalIgnoreCase));
-                Error($"'{name}' is ambiguous between modules '{owners}'. Qualify it with the module name", line, column);
+                if (report)
+                    Error($"'{name}' is ambiguous between modules '{owners}'. Qualify it with the module name", line, column);
                 symbol = visible[0];
                 return true;
             }
             if (hidden != null)
             {
-                Error($"'{name}' is Private to module '{hidden.OwningModule}' and cannot be accessed from here", line, column);
+                if (report)
+                    Error($"'{name}' is Private to module '{hidden.OwningModule}' and cannot be accessed from here", line, column);
                 symbol = hidden;
                 return true;
             }
@@ -5611,6 +5754,14 @@ namespace BasicLang.Compiler.SemanticAnalysis
             {
                 method.Accept(this);
 
+                // ⛔ REGISTER IT AS A MEMBER, as the properties below are. Without this a call
+                // through an interface-typed variable found no member and typed as Object:
+                // `Dim t As String = s.Name()` was refused as Object→String and `s.Area() + 1` as
+                // "Arithmetic operator '+' requires numeric operands" — the interface was usable
+                // only by casting back to the class.
+                if (GetNodeSymbol(method) is Symbol methodSymbol)
+                    interfaceType.Members[method.Name] = methodSymbol;
+
                 // Validate default implementations
                 if (!method.IsAbstract && method.Body != null)
                 {
@@ -5647,6 +5798,17 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     propertyType = _typeManager.ObjectType;
                 }
                 SetNodeType(prop, propertyType);
+
+                // ⛔ AND REGISTER IT AS A MEMBER. Without this a read through an interface-typed
+                // variable (`s.Area` with `Dim s As IShape`) found no member and typed as Object:
+                // `Dim t As String = s.Area` was refused as Object→String, and on C++ the value
+                // landed in a `void*` temp. Accessor-backed by definition — an interface has no
+                // storage, so a read always runs the implementing class's getter.
+                interfaceType.Members[prop.Name] = new Symbol(prop.Name, SymbolKind.Property, propertyType, prop.Line, prop.Column)
+                {
+                    Access = AccessModifier.Public,
+                    IsAccessorBacked = true
+                };
             }
 
             ExitScope();
@@ -6000,7 +6162,12 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 node.DefaultValue.Accept(this);
                 var defaultType = GetNodeType(node.DefaultValue);
 
-                if (!paramType.IsAssignableFrom(defaultType))
+                // `Optional c As C = Nothing` (#173)
+                if (JudgeNothingConversion(node.DefaultValue, paramType, node.Line, node.Column))
+                {
+                    // admitted into a reference type, or refused with advice
+                }
+                else if (!paramType.IsAssignableFrom(defaultType))
                 {
                     Error($"Default value type '{defaultType}' is not compatible with parameter type '{paramType}'",
                           node.Line, node.Column);
@@ -6079,20 +6246,28 @@ namespace BasicLang.Compiler.SemanticAnalysis
             // Check initializer type
             if (node.Initializer != null && !node.IsAuto)
             {
-                // Let lambdas infer their parameter types from the declared type
-                if (node.Initializer is LambdaExpressionNode)
+                // Let lambdas infer their parameter types from the declared type, and a lambda
+                // or AddressOf convert to a user Delegate (#187)
+                if (IsDelegateTargetedExpression(node.Initializer))
                     _lambdaTargetType = varType;
 
                 node.Initializer.Accept(this);
                 // Spec 6.1: a Dim initializer is a Decimal context — a numeric
                 // literal converts from its source text and retypes to Decimal.
                 TryRetypeLiteralToDecimal(node.Initializer, varType);
+                TargetTypeEmptyArrayLiteral(node.Initializer, varType);
                 var initType = GetNodeType(node.Initializer);
 
                 // A `::` foreign VALUE converts to whatever it is declared as — `Dim v As Integer
                 // = ::getValue()` used to die here ("Cannot assign value of type '::getValue' to
                 // variable of type 'Integer'"), the first wall a `::` user hit. Plan 2 Task 7.
-                if (initType != null && initType.Kind != TypeKind.Foreign && !varType.IsAssignableFrom(initType)
+                // `= Nothing` is judged on its own (#173) — a class field's and a module-level
+                // Dim's initializer come through here too.
+                if (JudgeNothingConversion(node.Initializer, varType, node.Line, node.Column))
+                {
+                    // admitted into a reference type, or refused with advice
+                }
+                else if (initType != null && initType.Kind != TypeKind.Foreign && !varType.IsAssignableFrom(initType)
                     && !IsNumericLiteralAssignable(node.Initializer, varType, initType))
                 {
                     var errorMsg = $"Cannot assign value of type '{initType.Name}' to variable of type '{varType.Name}'";
@@ -6289,14 +6464,33 @@ namespace BasicLang.Compiler.SemanticAnalysis
             var symbol = new Symbol(node.Name, SymbolKind.Class, delegateType, node.Line, node.Column);
             symbol.ReturnType = returnType;
 
-            foreach (var param in node.Parameters)
+            // ⛔ The parameters are the DECLARATION's own, so they get a scope of their own. They
+            // used to be defined in the ENCLOSING scope — the global one, for a top-level
+            // Delegate — so `msg` of `Delegate Sub Notify(msg As String)` leaked as a name every
+            // procedure could read, and a second delegate with a parameter of the same name was
+            // refused ("Parameter 'msg' is already defined"). Measured on the pre-#187 compiler.
+            EnterScope($"Delegate {node.Name}", ScopeKind.Function);
+            try
             {
-                param.Accept(this);
-                if (_nodeSymbols.TryGetValue(param, out var paramSymbol))
+                foreach (var param in node.Parameters)
                 {
-                    symbol.Parameters.Add(paramSymbol);
+                    param.Accept(this);
+                    if (_nodeSymbols.TryGetValue(param, out var paramSymbol))
+                    {
+                        symbol.Parameters.Add(paramSymbol);
+                    }
                 }
             }
+            finally
+            {
+                ExitScope();
+            }
+
+            // #187: the signature a lambda, an AddressOf and an invocation are judged against —
+            // see TypeInfo.DelegateSignature and DelegateShapeOf. On the node too, for the IR
+            // builder's IRDelegate, which declared its types from bare names.
+            delegateType.DelegateSignature = symbol;
+            SetNodeSymbol(node, symbol);
 
             if (!_currentScope.Define(symbol))
             {
@@ -6640,11 +6834,17 @@ namespace BasicLang.Compiler.SemanticAnalysis
             // Validate base constructor call if present
             if (node.BaseConstructorArgs.Count > 0)
             {
-                // Analyze arguments first to get their types
+                // Analyze arguments first to get their types — a lambda or AddressOf one
+                // target-typed by the base constructor's parameter, as `New` does (#187)
+                var targetBaseConstructor = classScope?.ClassType?.BaseType != null
+                    ? ResolveConstructor(classScope.ClassType.BaseType, node.BaseConstructorArgs.Count)
+                    : null;
                 var argTypes = new List<TypeInfo>();
-                foreach (var arg in node.BaseConstructorArgs)
+                for (int i = 0; i < node.BaseConstructorArgs.Count; i++)
                 {
-                    arg.Accept(this);
+                    var arg = node.BaseConstructorArgs[i];
+                    VisitWithDelegateTarget(arg,
+                        ArgumentTargetType(targetBaseConstructor, i, node.BaseConstructorArgs.Count, null));
                     var argType = GetNodeType(arg);
                     argTypes.Add(argType ?? _typeManager.ObjectType);
                 }
@@ -6662,13 +6862,17 @@ namespace BasicLang.Compiler.SemanticAnalysis
                         // Validate argument types
                         if (baseCtorSymbol.Parameters != null)
                         {
-                            for (int i = 0; i < Math.Min(argTypes.Count, baseCtorSymbol.Parameters.Count); i++)
+                            for (int i = 0; i < argTypes.Count; i++)
                             {
-                                var expectedType = baseCtorSymbol.Parameters[i].Type;
+                                var expectedType = ArgumentTargetType(baseCtorSymbol, i, argTypes.Count, argTypes[i]);
+                                if (expectedType == null) continue;
+                                if (JudgeNothingConversion(node.BaseConstructorArgs[i], expectedType,
+                                        node.BaseConstructorArgs[i].Line, node.BaseConstructorArgs[i].Column))
+                                    continue;   // `MyBase.New(Nothing)` (#173)
                                 var actualType = argTypes[i];
                                 if (expectedType != null && actualType != null && !expectedType.IsAssignableFrom(actualType))
                                 {
-                                    Error($"Base constructor argument {i + 1} of type '{actualType.Name}' is not compatible with parameter '{baseCtorSymbol.Parameters[i].Name}' of type '{expectedType.Name}'",
+                                    Error($"Base constructor argument {i + 1} of type '{actualType.Name}' is not compatible with parameter '{baseCtorSymbol.Parameters[Math.Min(i, baseCtorSymbol.Parameters.Count - 1)].Name}' of type '{expectedType.Name}'",
                                         node.BaseConstructorArgs[i].Line, node.BaseConstructorArgs[i].Column);
                                 }
                             }
@@ -6884,9 +7088,15 @@ namespace BasicLang.Compiler.SemanticAnalysis
             var targetType = _lambdaTargetType;
             _lambdaTargetType = null;
 
+            // #187: a user Delegate target supplies what its structural Func/Action would —
+            // parameters, a curried lambda's target, a multi-line lambda's R — and the lambda is
+            // then converted to it (ConvertToUserDelegate, below).
+            var targetShape = DelegateShapeOf(targetType);
+
             var lambdaScope = EnterScope("Lambda", ScopeKind.Function);
 
-            // Parameter types supplied by the target delegate type (Func/Action)
+            // Parameter types supplied by the target delegate type (Func/Action, or a user
+            // Delegate's own list — known even when empty)
             var targetParamTypes = GetDelegateParameterTypes(targetType);
 
             // Register parameters in the lambda scope and analyze their types
@@ -6903,6 +7113,13 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 {
                     // Infer the parameter type from the target delegate type
                     paramType = targetParamTypes[i];
+                }
+                else if (IsUserDelegate(targetType))
+                {
+                    // More parameters than the user delegate takes: the conversion below names
+                    // the arity, which is the actual mistake — "cannot infer … or assign the
+                    // lambda to a typed delegate variable" would be advice already followed.
+                    paramType = _typeManager.ObjectType;
                 }
                 else
                 {
@@ -6924,21 +7141,49 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 // If the body is itself a lambda (curried form: Function(x) Function(y) ...),
                 // propagate the target delegate's RETURN type (last Func generic argument)
                 // so the inner lambda's parameters can be inferred too
-                if (node.Body is LambdaExpressionNode && targetType != null &&
-                    targetType.Name.Equals("Func", StringComparison.OrdinalIgnoreCase) &&
-                    targetType.GenericArguments.Count > 0)
+                if (node.Body is LambdaExpressionNode && targetShape != null &&
+                    targetShape.Name.Equals("Func", StringComparison.OrdinalIgnoreCase) &&
+                    targetShape.GenericArguments.Count > 0)
                 {
-                    _lambdaTargetType = targetType.GenericArguments[targetType.GenericArguments.Count - 1];
+                    _lambdaTargetType = targetShape.GenericArguments[targetShape.GenericArguments.Count - 1];
                 }
                 node.Body.Accept(this);
                 bodyType = GetNodeType(node.Body) ?? _typeManager.GetType("Object");
             }
             else if (node.StatementBody != null)
             {
-                lambdaScope.ReturnType = node.ReturnType != null
-                    ? ResolveTypeReference(node.ReturnType)
-                    : _typeManager.GetType("Void");
+                // A multi-line lambda's return type, in VB's order (#164): a written `As T`; else,
+                // for a Function, the R of the Func(Of …, R) it is target-typed by; else INFERRED
+                // from its own Return expressions. A Sub is Void, so `Return 1` in it stays an error.
+                //
+                // ⛔ A Function with no `As` used to be given Void here, exactly like a Sub: its
+                // `Return c` was refused ("Cannot return a value from a subroutine") and the lambda
+                // typed Func(Of Void), which then failed every Func(Of Integer) it met.
+                TypeInfo targetReturnType;
+                if (node.ReturnType != null)
+                {
+                    lambdaScope.ReturnType = ResolveTypeReference(node.ReturnType);
+                }
+                else if (!node.IsFunction)
+                {
+                    lambdaScope.ReturnType = _typeManager.GetType("Void");
+                }
+                else if ((targetReturnType = TargetedLambdaReturnType(targetShape, node.Parameters.Count)) != null)
+                {
+                    lambdaScope.ReturnType = targetReturnType;
+                }
+                else
+                {
+                    lambdaScope.InferredReturnTypes = new List<TypeInfo>();
+                }
+
                 node.StatementBody.Accept(this);
+
+                if (lambdaScope.InferredReturnTypes != null)
+                {
+                    lambdaScope.ReturnType = DominantReturnType(lambdaScope.InferredReturnTypes);
+                    lambdaScope.InferredReturnTypes = null;
+                }
                 bodyType = lambdaScope.ReturnType;
             }
 
@@ -6967,17 +7212,90 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 delegateType.GenericArguments.AddRange(paramTypes);
             }
 
+            // #187: converted to a user Delegate target, the lambda IS of that type.
+            if (IsUserDelegate(targetType))
+            {
+                delegateType = ConvertToUserDelegate(
+                    delegateType, targetType,
+                    $"lambda '{FormatLambdaSignature(node, paramTypes, delegateType)}'",
+                    node.Line, node.Column);
+            }
+
             SetNodeType(node, delegateType);
             ExitScope();
         }
 
         /// <summary>
+        /// The return type a multi-line <c>Function</c> lambda with no <c>As</c> clause takes from
+        /// its TARGET (#164): the R of a <c>Func(Of T1, …, R)</c> whose arity matches the lambda's
+        /// parameter list. Null — so the lambda infers its return type instead — when there is no
+        /// target, the target is not a Func, the arity disagrees (the mismatch is reported where
+        /// the lambda is stored), or R mentions a type parameter: a generic callee's parameter is
+        /// not substituted before its argument is visited, so R there is the callee's own
+        /// <c>T</c>, and it is the lambda's INFERRED type that the call's inference needs.
+        /// </summary>
+        private static TypeInfo TargetedLambdaReturnType(TypeInfo targetType, int parameterCount)
+        {
+            if (targetType == null ||
+                !targetType.Name.Equals("Func", StringComparison.OrdinalIgnoreCase) ||
+                targetType.GenericArguments == null ||
+                targetType.GenericArguments.Count != parameterCount + 1)
+                return null;
+
+            var returnType = targetType.GenericArguments[parameterCount];
+            return MentionsTypeParameter(returnType) ? null : returnType;
+        }
+
+        private static bool MentionsTypeParameter(TypeInfo type, int depth = 0)
+        {
+            if (type == null || depth > 32) return false;
+            if (type.Kind == TypeKind.TypeParameter) return true;
+            return MentionsTypeParameter(type.ElementType, depth + 1) ||
+                   (type.GenericArguments?.Any(a => MentionsTypeParameter(a, depth + 1)) ?? false);
+        }
+
+        /// <summary>
+        /// VB's DOMINANT TYPE of a multi-line <c>Function</c> lambda's returned values, for a lambda
+        /// with neither an <c>As</c> clause nor a Func target (#164): the returned type to which
+        /// every other returned type widens, by the analyzer's own widening rule
+        /// (<see cref="WidensTo"/> — so Integer and Double give Double, Byte and Short give
+        /// Short). <c>Object</c> when no returned type is dominant (String and Integer; two
+        /// unrelated classes) and when nothing is returned — VB's answer without Option Strict,
+        /// which BasicLang does not have. A <c>Return Nothing</c> converts to any type, so it is
+        /// never recorded as a candidate.
+        /// </summary>
+        private TypeInfo DominantReturnType(List<TypeInfo> returnedTypes)
+        {
+            var candidates = new List<TypeInfo>();
+            foreach (var type in returnedTypes)
+            {
+                if (type != null && !candidates.Any(c => c.Equals(type)))
+                    candidates.Add(type);
+            }
+
+            foreach (var candidate in candidates)
+            {
+                if (candidates.All(other => candidate.Equals(other) || WidensTo(other, candidate)))
+                    return candidate;
+            }
+
+            return _typeManager.ObjectType;
+        }
+
+        /// <summary>
         /// Extracts the parameter types from a Func/Action delegate type.
         /// For Func(Of T1, ..., TResult) the last generic argument is the return type.
-        /// Returns null if the type is not a known delegate type.
+        /// Returns null if the type is not a known delegate type. Internal: the IR builder reads it
+        /// to type a Nothing argument to a delegate invocation (#173).
         /// </summary>
-        private static List<TypeInfo> GetDelegateParameterTypes(TypeInfo delegateType)
+        internal static List<TypeInfo> GetDelegateParameterTypes(TypeInfo delegateType)
         {
+            // #187: a user Delegate's parameter list is always known — EMPTY for `Delegate Sub
+            // D()`, which its structural shape (a bare `Action`) cannot say: the null below means
+            // "unknown", and a bare Action is also the placeholder some callers build.
+            if (delegateType?.DelegateSignature is { } signature)
+                return signature.Parameters.Select(p => p.Type).ToList();
+
             if (delegateType == null || delegateType.GenericArguments == null ||
                 delegateType.GenericArguments.Count == 0)
                 return null;
@@ -7001,6 +7319,224 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     name.Equals("Action", StringComparison.OrdinalIgnoreCase));
         }
 
+        /// <summary>True for a type declared with <c>Delegate Sub</c>/<c>Delegate Function</c>.</summary>
+        private static bool IsUserDelegate(TypeInfo type) => type?.DelegateSignature != null;
+
+        /// <summary>
+        /// ⭐ #187 — THE one mapping from a user <c>Delegate</c> to the machinery <c>Func</c>/<c>Action</c>
+        /// already have: <c>Action(Of T1, …)</c> for a <c>Delegate Sub D(p1 As T1, …)</c>,
+        /// <c>Func(Of T1, …, R)</c> for a <c>Delegate Function … As R</c>, built from its signature
+        /// (<see cref="TypeInfo.DelegateSignature"/>) exactly as a lambda's own type is built
+        /// (<see cref="Visit(LambdaExpressionNode)"/>). A user delegate is target-typed EXACTLY as
+        /// this shape is — its parameters inferred, its R handed to a multi-line lambda, its
+        /// signature compared with <see cref="TypeInfo.Equals(TypeInfo)"/> — so the two cannot
+        /// drift. Every other type, <c>Func</c>/<c>Action</c> included, is returned unchanged, so a
+        /// caller maps unconditionally. Internal: the IR builder reads it for a lambda's return type.
+        /// </summary>
+        internal static TypeInfo DelegateShapeOf(TypeInfo type)
+        {
+            var signature = type?.DelegateSignature;
+            if (signature == null) return type;
+
+            var returnType = signature.ReturnType;
+            var isSub = returnType == null ||
+                        returnType.Kind == TypeKind.Void ||
+                        returnType.Name.Equals("Void", StringComparison.OrdinalIgnoreCase);
+
+            var shape = new TypeInfo(isSub ? "Action" : "Func", TypeKind.Delegate);
+            foreach (var parameter in signature.Parameters)
+                shape.GenericArguments.Add(parameter.Type ?? new TypeInfo("Object", TypeKind.Class));
+            if (!isSub) shape.GenericArguments.Add(returnType);
+            return shape;
+        }
+
+        /// <summary>
+        /// The result of invoking a value of a delegate type: a user delegate's R (Void for a
+        /// <c>Delegate Sub</c>), a <c>Func(Of …, R)</c>'s R, otherwise Void. ⛔ Invoking a user
+        /// <c>Delegate Function</c> was typed Void — the name is not "Func" — so
+        /// <c>Return f(x, y)</c> from an Integer function was refused (#187 D3).
+        /// </summary>
+        private TypeInfo DelegateInvocationResultType(TypeInfo delegateType)
+        {
+            var shape = DelegateShapeOf(delegateType);
+            return shape != null &&
+                   shape.Name.Equals("Func", StringComparison.OrdinalIgnoreCase) &&
+                   shape.GenericArguments.Count > 0
+                ? shape.GenericArguments[shape.GenericArguments.Count - 1]
+                : _typeManager.VoidType;
+        }
+
+        /// <summary>
+        /// ⭐ #188 — the delegate-typed FIELD or PROPERTY a call's <paramref name="callee"/> names,
+        /// or null for anything else. The member is the one this analyzer BOUND the callee to
+        /// (<paramref name="calleeSymbol"/>, else the callee node's own symbol), and it must be
+        /// exactly the member its owner resolves by that name — the class being analyzed (or a
+        /// base) for a bare name, the receiver's type for <c>Me.X</c> / <c>obj.X</c> /
+        /// <c>MyBase.X</c> / <c>Class.X</c>. So every other binding keeps its own path: a local, a
+        /// parameter or a module variable (lexical resolution found it, not the class), a method
+        /// (a method of that name shadows, exactly as resolution already decided), a Module's
+        /// member, a .NET member (no symbol).
+        ///
+        /// <para>"Delegate-typed" is the type the callee was given: a <c>Func</c>/<c>Action</c>
+        /// or a user <c>Delegate</c> (<see cref="TypeKind.Delegate"/>), or a bare <c>Action</c>,
+        /// which the type table resolves as a CLASS named Action (<see cref="IsDelegateTypeName"/>).
+        /// A .NET delegate class (<c>EventHandler</c>, <c>Predicate(Of T)</c>) is NOT admitted:
+        /// neither its parameters nor its result are known here, and typing its call Void would
+        /// be wrong for a Predicate.</para>
+        /// </summary>
+        private Symbol DelegateMemberCallee(ExpressionNode callee, Symbol calleeSymbol, TypeInfo calleeType)
+        {
+            if (calleeType == null || calleeType.Kind == TypeKind.Array
+                || !(calleeType.Kind == TypeKind.Delegate || IsDelegateTypeName(calleeType.Name)))
+            {
+                return null;
+            }
+
+            TypeInfo owner;
+            string memberName;
+            switch (callee)
+            {
+                case IdentifierExpressionNode bare when !bare.IsForeignQualified:
+                    owner = _currentScope?.GetClassScope()?.ClassType;
+                    memberName = bare.Name;
+                    break;
+                case MemberAccessExpressionNode access:
+                    owner = GetNodeType(access.Object);
+                    memberName = access.MemberName;
+                    break;
+                default:
+                    return null;
+            }
+
+            var bound = calleeSymbol ?? GetNodeSymbol(callee);
+            if (bound == null || (bound.Kind != SymbolKind.Variable && bound.Kind != SymbolKind.Property))
+                return null;
+
+            return owner != null && ReferenceEquals(owner.ResolveMember(memberName), bound) ? bound : null;
+        }
+
+        /// <summary>
+        /// True for the two expressions a delegate TARGET types (#187): a lambda, whose parameters
+        /// and return type it supplies, and <c>AddressOf M</c>, which it converts. Every conversion
+        /// site hands its slot's type to exactly these, through <see cref="_lambdaTargetType"/>.
+        /// </summary>
+        private static bool IsDelegateTargetedExpression(ExpressionNode expression) =>
+            expression is LambdaExpressionNode ||
+            expression is UnaryExpressionNode { Operator: "AddressOf" };
+
+        /// <summary>
+        /// #187 — a lambda or <c>AddressOf</c> whose target is the user delegate
+        /// <paramref name="target"/>. <paramref name="structural"/> is the expression's own
+        /// Func/Action type; it must EQUAL the delegate's shape (<see cref="DelegateShapeOf"/>) —
+        /// the rule a Func/Action target already applies through <c>IsAssignableFrom</c>: a Sub only
+        /// into a <c>Delegate Sub</c>, a Function only into a <c>Delegate Function</c>, the same
+        /// arity, each parameter the SAME type (no widening), and a Function's R the same type.
+        /// (A multi-line Function lambda is handed R as its return type before its body is
+        /// analysed, so its <c>Return</c>s are judged by the ordinary Return rule; a single-line
+        /// lambda's body type must be R itself — both exactly as for Func.)
+        ///
+        /// <para>The expression is then typed AS THE DELEGATE, as VB and C# type a converted
+        /// lambda, so the site's own check passes D to D and every backend sees the slot's
+        /// type on the value. On a mismatch it is typed D too, after the error here names both
+        /// signatures and the first difference: the site must not add the generic
+        /// "Cannot assign value of type 'Action'" on top.</para>
+        /// </summary>
+        private TypeInfo ConvertToUserDelegate(TypeInfo structural, TypeInfo target, string source,
+                                               int line, int column)
+        {
+            var shape = DelegateShapeOf(target);
+            if (structural != null && !shape.Equals(structural))
+            {
+                Error($"Cannot convert {source} to delegate '{FormatDelegateSignature(target)}': " +
+                      DescribeDelegateMismatch(structural, target),
+                      line, column);
+            }
+
+            return target;
+        }
+
+        /// <summary>
+        /// The first difference between a lambda's or method's structural Func/Action type and a
+        /// user delegate's signature, for <see cref="ConvertToUserDelegate"/>'s message.
+        /// </summary>
+        private string DescribeDelegateMismatch(TypeInfo structural, TypeInfo target)
+        {
+            var shape = DelegateShapeOf(target);
+            var targetIsSub = shape.Name.Equals("Action", StringComparison.OrdinalIgnoreCase);
+            var sourceIsSub = structural.Name.Equals("Action", StringComparison.OrdinalIgnoreCase);
+            var targetReturn = targetIsSub ? null : shape.GenericArguments[shape.GenericArguments.Count - 1];
+            var sourceReturn = sourceIsSub || structural.GenericArguments.Count == 0
+                ? null
+                : structural.GenericArguments[structural.GenericArguments.Count - 1];
+
+            if (sourceIsSub && !targetIsSub)
+                return $"it is a Sub, which returns no value; the delegate is a Function returning {FormatTypeForMessage(targetReturn)}";
+            if (!sourceIsSub && targetIsSub)
+                return $"it is a Function returning {FormatTypeForMessage(sourceReturn)}; the delegate is a Sub";
+
+            var expected = GetDelegateParameterTypes(target) ?? new List<TypeInfo>();
+            var actual = GetDelegateParameterTypes(structural) ?? new List<TypeInfo>();
+            if (expected.Count != actual.Count)
+                return $"it takes {actual.Count} parameter(s), the delegate takes {expected.Count}";
+
+            for (var i = 0; i < expected.Count; i++)
+            {
+                if (actual[i] == null || !actual[i].Equals(expected[i]))
+                    return $"parameter {i + 1} is {FormatTypeForMessage(actual[i])}, the delegate takes {FormatTypeForMessage(expected[i])}";
+            }
+
+            if (sourceReturn != null && targetReturn != null && !sourceReturn.Equals(targetReturn))
+                return $"it returns {FormatTypeForMessage(sourceReturn)}, the delegate returns {FormatTypeForMessage(targetReturn)}";
+
+            return "the signatures differ";
+        }
+
+        /// <summary>The operand of an <c>AddressOf</c> as written, for a message: <c>Handler</c>,
+        /// <c>obj.Handler</c>, <c>Me.Handler</c> (<c>Me</c> is an identifier); otherwise the
+        /// method's own name.</summary>
+        private static string DescribeAddressOfOperand(ExpressionNode operand, Symbol method)
+        {
+            switch (operand)
+            {
+                case IdentifierExpressionNode identifier:
+                    return identifier.Name;
+                case MemberAccessExpressionNode member when member.Object is IdentifierExpressionNode receiver:
+                    return $"{receiver.Name}.{member.MemberName}";
+                default:
+                    return method?.Name ?? "?";
+            }
+        }
+
+        /// <summary>A lambda as its source reads, for a message: <c>Sub(m As Integer)</c>,
+        /// <c>Function(n As Integer) As Long</c>.</summary>
+        private static string FormatLambdaSignature(LambdaExpressionNode lambda, IReadOnlyList<TypeInfo> parameterTypes,
+                                                    TypeInfo structural)
+        {
+            var parameters = new List<string>();
+            for (var i = 0; i < lambda.Parameters.Count; i++)
+            {
+                var type = i < parameterTypes.Count ? parameterTypes[i] : null;
+                parameters.Add($"{lambda.Parameters[i].Name} As {FormatTypeForMessage(type)}");
+            }
+
+            var text = $"{(lambda.IsFunction ? "Function" : "Sub")}({string.Join(", ", parameters)})";
+            if (lambda.IsFunction && structural?.GenericArguments.Count > 0)
+                text += $" As {FormatTypeForMessage(structural.GenericArguments[structural.GenericArguments.Count - 1])}";
+            return text;
+        }
+
+        /// <summary>A type as BasicLang source spells it, for a message: <c>Func(Of Integer, Long)</c>,
+        /// <c>Integer()</c>, <c>Notify</c>.</summary>
+        private static string FormatTypeForMessage(TypeInfo type)
+        {
+            if (type == null) return "Object";
+            if (type.Kind == TypeKind.Array && type.ElementType != null)
+                return FormatTypeForMessage(type.ElementType) + "(" + new string(',', Math.Max(0, type.ArrayRank - 1)) + ")";
+            if (type.GenericArguments != null && type.GenericArguments.Count > 0)
+                return $"{type.Name}(Of {string.Join(", ", type.GenericArguments.Select(FormatTypeForMessage))})";
+            return type.Name;
+        }
+
         /// <summary>
         /// Visits a call argument, target-typing it when the argument is a lambda and
         /// the corresponding parameter type is a Func/Action delegate. This lets
@@ -7012,21 +7548,55 @@ namespace BasicLang.Compiler.SemanticAnalysis
         /// </summary>
         private void VisitArgumentWithLambdaTarget(ExpressionNode argument, TypeInfo parameterType)
         {
+            VisitWithDelegateTarget(argument, parameterType);
+            TargetTypeEmptyArrayLiteral(argument, parameterType);
+        }
+
+        /// <summary>
+        /// Visits <paramref name="expression"/> with <paramref name="targetType"/> as its delegate
+        /// target when it is a lambda or <c>AddressOf</c> (<see cref="IsDelegateTargetedExpression"/>)
+        /// and the target is a delegate — a Func/Action, or a user <c>Delegate</c> (#187). The
+        /// previous target is saved and restored, so a nested lambda or call sees only its own.
+        /// </summary>
+        private void VisitWithDelegateTarget(ExpressionNode expression, TypeInfo targetType)
+        {
             var savedTarget = _lambdaTargetType;
-            _lambdaTargetType = (argument is LambdaExpressionNode &&
-                                 parameterType != null &&
-                                 parameterType.Kind == TypeKind.Delegate &&
-                                 IsDelegateTypeName(parameterType.Name))
-                ? parameterType
+            _lambdaTargetType = (IsDelegateTargetedExpression(expression) &&
+                                 targetType != null &&
+                                 targetType.Kind == TypeKind.Delegate &&
+                                 (IsDelegateTypeName(targetType.Name) || IsUserDelegate(targetType)))
+                ? targetType
                 : null;
             try
             {
-                argument.Accept(this);
+                expression.Accept(this);
             }
             finally
             {
                 _lambdaTargetType = savedTarget;
             }
+        }
+
+        /// <summary>
+        /// An EMPTY array literal takes its type from where it is used, as in VB: `{}` stored in
+        /// an Integer array is an empty Integer array. ⛔ Visit(CollectionInitializerNode) types a
+        /// literal from its elements, and `{}` has none, so it fell back to Object[] and
+        /// `Dim a() As Integer = {}` was refused ("Cannot assign value of type 'Object[]' to
+        /// variable of type 'Integer[]'"). Called at every target-typed site: a typed Dim, an
+        /// assignment, a call argument and a Return. With no target (`Dim x = {}`) it stays
+        /// Object[], which is also VB's answer.
+        /// </summary>
+        private void TargetTypeEmptyArrayLiteral(ExpressionNode value, TypeInfo target)
+        {
+            if (value is not CollectionInitializerNode { Elements.Count: 0 } literal) return;
+            if (target?.Kind != TypeKind.Array || target.ElementType == null) return;
+
+            var arrayType = new TypeInfo(target.Name, TypeKind.Array)
+            {
+                ElementType = target.ElementType,
+                ArrayRank = 1,
+            };
+            SetNodeType(literal, arrayType);
         }
 
         public void Visit(CollectionInitializerNode node)
@@ -7132,16 +7702,11 @@ namespace BasicLang.Compiler.SemanticAnalysis
         {
             var elementType = GetNodeType(element);
 
-            if (IsNothingLiteral(element))
+            // Admitted without a check into any reference or unresolvable .NET T (csc takes null);
+            // refused into a value type, with advice that names a value OF that type — "write 0"
+            // for an enum sends the user straight into the non-literal arm's second refusal.
+            if (JudgeNothingConversion(element, target, element.Line, element.Column))
             {
-                // Admitted without a check into any reference or unresolvable .NET T (csc takes null);
-                // refused into a value type, with advice that names a value OF that type — "write 0"
-                // for an enum sends the user straight into the non-literal arm's second refusal.
-                var advice = NothingAdviceFor(target);
-                if (advice != null)
-                {
-                    Error($"Nothing has no value of type '{target.Name}'; {advice}", element.Line, element.Column);
-                }
                 return;
             }
 
@@ -7192,20 +7757,80 @@ namespace BasicLang.Compiler.SemanticAnalysis
         }
 
         /// <summary>
-        /// The advice half of the typed literal's <c>Nothing</c> refusal, per value-type kind; null for
-        /// a reference (or unresolvable .NET) target, which admits <c>Nothing</c>.
+        /// The advice half of the <c>Nothing</c> refusal, per value-type kind; null for a reference
+        /// (or unresolvable .NET) target, which admits <c>Nothing</c>. THE answer to "does Nothing
+        /// convert to T" — every conversion site asks it through <see cref="JudgeNothingConversion"/>.
+        ///
+        /// <para>⚠ The Union, tuple, type-parameter and P1-struct arms arrived with #173, when
+        /// <c>Nothing</c> began reaching Dim, assignment, argument and Return targets: each is a
+        /// type this list used to call a reference type, and each was MEASURED refused-or-wrong on
+        /// the backends once admitted (Union and tuple fail on every backend with or without
+        /// Nothing, so for them the arm only keeps the refusal they had). The P1 structs are typed as
+        /// synthetic CLASSES, so no kind test sees them — <c>Dim d As DateTime = Nothing</c> was
+        /// CS0037 on C#, a clang error on C++ and a silent <c>null</c> on JavaScript (a TypeError at
+        /// the first member read). A type parameter may be instantiated with a value type:
+        /// <c>Dim x As T = Nothing</c> was CS0403 on C# and <c>null</c> for <c>T = Integer</c> on
+        /// JavaScript (VB gives <c>default(T)</c>, which is the value-type default of #186). A
+        /// tuple and a Union are value types that the Structure arm did not name. A NULLABLE
+        /// (<c>Integer?</c>) is deliberately absent: it is the one value type VB admits Nothing into.</para>
         /// </summary>
         private static string NothingAdviceFor(TypeInfo target)
         {
             if (target.IsNumeric()) return "write 0";
             if (target.Name == "Boolean") return "write False";
             if (target.Name == "Char") return "write a character literal";
-            if (target.Kind == TypeKind.Structure || target.Kind == TypeKind.UserDefinedType)
+            if (target.Kind == TypeKind.Structure || target.Kind == TypeKind.UserDefinedType
+                || target.Kind == TypeKind.Union)
             {
                 return $"write New {target.Name}()";   // `Type … End Type` is a value type too (CS0037 otherwise)
             }
             if (target.Kind == TypeKind.Enum) return $"write a member of '{target.Name}'";
+            if (target.Kind == TypeKind.Tuple) return "write a tuple literal";
+            if (target.Kind == TypeKind.TypeParameter)
+            {
+                return $"'{target.Name}' is a type parameter and may be a value type";
+            }
+            // The P1 native structs; StringBuilder is the one NativeOwned reference type, and
+            // Decimal already took the numeric arm. (EndsWith: Categorize strips a `System.` path.)
+            if (BoundaryTypeRegistry.Categorize(target.Name) == BoundaryTypeCategory.NativeOwned
+                && !target.Name.EndsWith("StringBuilder", StringComparison.OrdinalIgnoreCase))
+            {
+                return $"'{target.Name}' is a value type; write a {target.Name} value";
+            }
             return null;
+        }
+
+        /// <summary>
+        /// The <c>Nothing</c> literal at a conversion site (#173). It is typed <c>Object</c>
+        /// (<c>Visit(LiteralExpressionNode)</c>'s default), so every site's own
+        /// <c>IsAssignableFrom</c> refused it into anything but <c>Object</c> — <c>Dim f As Action =
+        /// Nothing</c>, <c>Take(Nothing)</c>, <c>Return Nothing</c>, <c>o = Nothing</c> were all
+        /// "cannot convert 'Object' to …". VB converts it to any REFERENCE type; into a value type it
+        /// stays refused, with the typed array literal's advice (VB's value-type default is #186).
+        ///
+        /// <para>⚠ ONE answer to "does Nothing convert to T": <see cref="NothingAdviceFor"/>, which
+        /// the typed array literal (<see cref="CheckTypedLiteralElement"/>) asks through this same
+        /// method. A second list here would let the two sites disagree about a type.</para>
+        ///
+        /// <para>True when <paramref name="value"/> is the Nothing literal and has been JUDGED —
+        /// admitted, or refused with the advice reported at (<paramref name="line"/>,
+        /// <paramref name="column"/>) — so the caller skips its own type check. False for anything
+        /// else, and for a null <paramref name="target"/> (an unresolved one reports itself).</para>
+        /// </summary>
+        private bool JudgeNothingConversion(ExpressionNode value, TypeInfo target, int line, int column)
+        {
+            if (target == null || !IsNothingLiteral(value))
+            {
+                return false;
+            }
+
+            var advice = NothingAdviceFor(target);
+            if (advice != null)
+            {
+                Error($"Nothing has no value of type '{target.Name}'; {advice}", line, column);
+            }
+
+            return true;
         }
 
         /// <summary>
@@ -8019,6 +8644,11 @@ namespace BasicLang.Compiler.SemanticAnalysis
             {
                 caseClause.Accept(this);
 
+                // ADR-0011 D2 (2): `Case Is Nothing` obeys `x Is Nothing`'s operand rule.
+                if (exprType != null && caseClause.Patterns != null)
+                    foreach (var pattern in caseClause.Patterns)
+                        CheckCaseIsNothingOperand(pattern, exprType);
+
                 // Check case values are compatible with expression
                 foreach (var value in caseClause.Values)
                 {
@@ -8099,7 +8729,16 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 }
             }
 
-            node.Body.Accept(this);
+            // Task #168: a `For Each i` nested in this loop may not REUSE its control variable.
+            _activeLoopControlSymbols.Add(loopVarSymbol);
+            try
+            {
+                node.Body.Accept(this);
+            }
+            finally
+            {
+                _activeLoopControlSymbols.RemoveAt(_activeLoopControlSymbols.Count - 1);
+            }
 
             ExitScope();
         }
@@ -8129,6 +8768,17 @@ namespace BasicLang.Compiler.SemanticAnalysis
                               node.Line, node.Column);
                     }
                 }
+                else if (elementType != null && IsStringForEachCollection(collectionType)
+                         && !elementType.IsAssignableFrom(_typeManager.CharType))
+                {
+                    // Task #171: a String's element is a Char, so the loop variable must accept one
+                    // — the Array arm's rule, with the element the string enumerates. Before this
+                    // `For Each n As Integer In "ab"` compiled and the backends disagreed, all
+                    // measured: C# printed 97 98, C++ 97 98 0, JavaScript a b, and MSIL died with
+                    // InvalidCastException.
+                    Error($"Cannot assign String element type 'Char' to loop variable of type '{elementType}'",
+                          node.Line, node.Column);
+                }
             }
             else
             {
@@ -8138,6 +8788,15 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     if (collectionType.Kind == TypeKind.Array)
                     {
                         elementType = collectionType.ElementType ?? _typeManager.ObjectType;
+                    }
+                    else if (IsStringForEachCollection(collectionType))
+                    {
+                        // Task #171: a String enumerates as Char (VB's rule; String implements
+                        // IEnumerable(Of Char)). It used to fall to the Object arm below, which
+                        // refused `Dim c As Char : For Each c In s` (Object → Char), typed
+                        // `ch = "a"c` as an Object comparison (CS0019 in C#, a REFERENCE compare
+                        // printing 0 in MSIL), and made `acc & ch` print garbage in MSIL.
+                        elementType = _typeManager.CharType;
                     }
                     else if (collectionType.GenericArguments != null && collectionType.GenericArguments.Count > 0)
                     {
@@ -8169,17 +8828,169 @@ namespace BasicLang.Compiler.SemanticAnalysis
             // Set the node type to the element type (used by IRBuilder)
             SetNodeType(node, elementType);
 
+            // Task #168: `For Each x In coll` with NO `As` clause names an EXISTING variable when
+            // there is one, and REUSES it (VB) — see ForEachControlBinding. Asked BEFORE the loop
+            // scope opens, and only without `As`: `For Each x As T` always declares its own `x`
+            // (hiding an outer one, as it did before; VB's BC30616 is deliberately not reported).
+            // Cleared first, so a re-analysis of this node never keeps a stale binding.
+            _forEachControlBindings.Remove(node);
+            var reused = node.VariableType == null ? ExistingForEachControlVariable(node) : null;
+
             EnterScope("ForEachLoop", ScopeKind.Loop);
 
-            var loopVarSymbol = new Symbol(node.Variable, SymbolKind.Variable, elementType, node.Line, node.Column);
-            if (!_currentScope.Define(loopVarSymbol))
+            Symbol controlSymbol;
+            if (reused != null)
             {
-                Error($"Loop variable '{node.Variable}' conflicts with existing symbol", node.Line, node.Column);
+                // The loop iterates a hidden variable of the element type, and the body begins
+                // with `x = hidden` — analyzed here exactly as a written assignment is, in the loop
+                // scope where the hidden name is defined and `x` still resolves outward. Its checks
+                // (type compatibility, the constant-fit rule) and its annotations (the target's
+                // symbol and declared type, which IRBuilder's assignment lowering reads) come from
+                // Visit(AssignmentStatementNode), not from a second copy of them.
+                var hiddenName = $"__foreach_{_forEachHiddenVariableCounter++}";
+                _currentScope.Define(new Symbol(hiddenName, SymbolKind.Variable, elementType, node.Line, node.Column));
+
+                var assignment = new AssignmentStatementNode(node.Line, node.Column)
+                {
+                    Target = new IdentifierExpressionNode(node.Line, node.Column) { Name = node.Variable },
+                    Operator = "=",
+                    Value = new IdentifierExpressionNode(node.Line, node.Column) { Name = hiddenName },
+                };
+                assignment.Accept(this);
+
+                _forEachControlBindings[node] = new ForEachControlBinding(hiddenName, assignment);
+                controlSymbol = reused;
+            }
+            else
+            {
+                var loopVarSymbol = new Symbol(node.Variable, SymbolKind.Variable, elementType, node.Line, node.Column);
+                if (!_currentScope.Define(loopVarSymbol))
+                {
+                    Error($"Loop variable '{node.Variable}' conflicts with existing symbol", node.Line, node.Column);
+                }
+                controlSymbol = loopVarSymbol;
             }
 
-            node.Body.Accept(this);
+            _activeLoopControlSymbols.Add(controlSymbol);
+            try
+            {
+                node.Body.Accept(this);
+            }
+            finally
+            {
+                _activeLoopControlSymbols.RemoveAt(_activeLoopControlSymbols.Count - 1);
+            }
 
             ExitScope();
+        }
+
+        /// <summary>
+        /// Task #171: whether a For Each collection is a String, which enumerates as
+        /// <c>Char</c>. Never an array: a handle <c>System.String[]</c> is
+        /// <c>TypeInfo(Name: "String", Kind: Array)</c> and belongs to the Array arm.
+        /// </summary>
+        private static bool IsStringForEachCollection(TypeInfo collectionType)
+        {
+            if (collectionType == null || collectionType.Kind == TypeKind.Array) return false;
+            return string.Equals(collectionType.Name, "String", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(collectionType.Name, "System.String", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(collectionType.NetHandleTypeFullName, "System.String", StringComparison.Ordinal);
+        }
+
+        /// <summary>
+        /// Task #168: the EXISTING variable a <c>For Each x In coll</c> (no <c>As</c>) reuses, or
+        /// null when the loop declares its own <c>x</c> (a new loop-scoped variable of the element
+        /// type, as before).
+        ///
+        /// <para>Resolved by the SAME chain a bare read of <c>x</c> uses
+        /// (<see cref="ResolveBareName"/>), silently: "not found" is not an error here, it is the
+        /// declaring form. What it finds decides (<see cref="ClassifyForEachControlName"/>):</para>
+        /// <list type="bullet">
+        /// <item><b>a variable</b> — a local, a parameter (by value or ByRef), a module variable
+        /// (this module's, another's, an imported one's) or a field of the enclosing class or a
+        /// base, read bare — is REUSED;</item>
+        /// <item><b>a constant, a property or an event</b> is refused, naming what it is. Each used
+        /// to be SHADOWED without a word: the loop declared a same-named variable, and after
+        /// <c>Next</c> the name meant the constant again. VB refuses them too (BC30039 for a
+        /// property);</item>
+        /// <item><b>anything else</b> — a type, a module, a namespace, a METHOD — declares a new
+        /// variable, as before. For a type that is VB's own rule (Roslyn declares a fresh local
+        /// when the name binds only to a type). For a method it is a deliberate departure from VB:
+        /// BasicLang's pass 1 flattens EVERY procedure signature, class methods included, into the
+        /// global scope, and the standard library puts <c>Day</c>, <c>Hour</c>, <c>Year</c>,
+        /// <c>Min</c>, <c>Str</c>, <c>Val</c>, <c>Left</c>, … there too — so "resolves to a
+        /// method" is true of ordinary loop-variable names that mean no method at the loop.
+        /// MEASURED: refusing it broke <c>For Each val In d.Values</c>
+        /// (<c>CppCollectionTests.Cpp_DictionaryOperations_CompileAndRun</c>).</item>
+        /// </list>
+        ///
+        /// <para>⛔ A variable that is ALREADY the control variable of an enclosing <c>For</c> /
+        /// <c>For Each</c> is refused too — VB's BC30069. Reusing it is not merely VB-illegal: an
+        /// enclosing <c>For Each</c> DECLARED it, so the backends emit it as that loop's own
+        /// iteration variable, and the inner loop's store into it does not compile or run there.
+        /// MEASURED with this refusal removed: CS1656 ("cannot assign to a foreach iteration
+        /// variable") on C#, and "TypeError: Assignment to constant variable" on JavaScript,
+        /// while C++ and MSIL ran.</para>
+        ///
+        /// <para>After an error the loop declares its own variable, as it did before, so the body
+        /// is analyzed without a cascade.</para>
+        /// </summary>
+        private Symbol ExistingForEachControlVariable(ForEachLoopNode node)
+        {
+            var symbol = ResolveBareName(node.Variable, node.Line, node.Column, report: false);
+            if (symbol == null) return null;
+
+            var kind = ClassifyForEachControlName(symbol, out var what);
+            if (kind == ForEachControlName.DeclaresNew) return null;
+            if (kind == ForEachControlName.Refused)
+            {
+                Error($"'{node.Variable}' is {what} and cannot be used as a For Each control variable. " +
+                      $"Use a variable, or declare a new one with 'For Each {node.Variable} As <type>'",
+                      node.Line, node.Column);
+                return null;
+            }
+
+            if (_activeLoopControlSymbols.Contains(symbol))
+            {
+                Error($"For Each control variable '{node.Variable}' is already in use by an enclosing For or For Each loop",
+                      node.Line, node.Column);
+                return null;
+            }
+
+            return symbol;
+        }
+
+        private enum ForEachControlName { Reused, Refused, DeclaresNew }
+
+        /// <summary>
+        /// What a <c>For Each</c> control name that RESOLVED does — see
+        /// <see cref="ExistingForEachControlVariable"/> for the three answers and why.
+        /// <paramref name="what"/> names a refused symbol for the diagnostic ("'x' is ___"). A
+        /// constant is Constant-kind or anything flagged <see cref="Symbol.IsConstant"/> — the flag
+        /// is what the assignment check asks.
+        /// </summary>
+        private static ForEachControlName ClassifyForEachControlName(Symbol symbol, out string what)
+        {
+            what = null;
+            if (symbol.IsConstant || symbol.Kind == SymbolKind.Constant)
+            {
+                what = "a constant";
+                return ForEachControlName.Refused;
+            }
+            switch (symbol.Kind)
+            {
+                case SymbolKind.Variable:
+                case SymbolKind.Parameter:
+                    return ForEachControlName.Reused;
+                case SymbolKind.Property:
+                    what = "a property";
+                    return ForEachControlName.Refused;
+                case SymbolKind.Event:
+                    what = "an event";
+                    return ForEachControlName.Refused;
+                default:
+                    return ForEachControlName.DeclaresNew;
+            }
         }
 
         // Stack of With object types for nested With blocks
@@ -8320,6 +9131,14 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 return;
             }
 
+            // A multi-line Function lambda whose return type is being INFERRED (#164) has no
+            // expected type yet: record what is returned instead of checking it.
+            if (functionScope.InferredReturnTypes != null)
+            {
+                VisitReturnInInferringLambda(node, functionScope);
+                return;
+            }
+
             // Inside an Async function declared As Task(Of T), Return expressions
             // type-check against the unwrapped T (VB.NET semantics)
             var expectedReturnType = functionScope.IsAsync
@@ -8328,14 +9147,16 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
             if (node.Value != null)
             {
-                // Let lambdas infer their parameter types from the function return type
-                if (node.Value is LambdaExpressionNode)
+                // Let lambdas infer their parameter types from the function return type, and a
+                // lambda or AddressOf convert to a user Delegate (#187)
+                if (IsDelegateTargetedExpression(node.Value))
                     _lambdaTargetType = functionScope.ReturnType;
 
                 node.Value.Accept(this);
                 // Spec 6.1: Return in a Decimal function is a Decimal context —
                 // 'Return 1.5' converts the literal from its source text.
                 TryRetypeLiteralToDecimal(node.Value, expectedReturnType);
+                TargetTypeEmptyArrayLiteral(node.Value, expectedReturnType);
                 var returnType = GetNodeType(node.Value);
 
                 // BC30439 at the return: `Return 300` from a `Function … As Byte` was CS0031 on
@@ -8353,9 +9174,14 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 {
                     // Type parameters are checked at instantiation time
                 }
+                else if (JudgeNothingConversion(node.Value, expectedReturnType, node.Line, node.Column))
+                {
+                    // `Return Nothing` (#173): admitted into a reference type, or refused with advice
+                }
                 else if (!expectedReturnType.IsAssignableFrom(returnType))
                 {
-                    Error($"Cannot return type '{returnType}' from function expecting '{expectedReturnType}'",
+                    Error($"Cannot return type '{returnType}' from function expecting '{expectedReturnType}'" +
+                          WithDelegateValueHint(returnType, expectedReturnType),
                           node.Line, node.Column);
                 }
             }
@@ -8367,6 +9193,30 @@ namespace BasicLang.Compiler.SemanticAnalysis
                           node.Line, node.Column);
                 }
             }
+        }
+
+        /// <summary>
+        /// A <c>Return</c> in a multi-line <c>Function</c> lambda whose return type is being
+        /// inferred (#164): the value is analyzed and its type recorded as a candidate for
+        /// <see cref="DominantReturnType"/>. <c>Return Nothing</c> is analyzed but not recorded — it
+        /// converts to any type. A bare <c>Return</c> is refused, as in any Function.
+        /// </summary>
+        private void VisitReturnInInferringLambda(ReturnStatementNode node, Scope lambdaScope)
+        {
+            if (node.Value == null)
+            {
+                Error("Function lambda must return a value", node.Line, node.Column);
+                return;
+            }
+
+            node.Value.Accept(this);
+
+            if (IsNothingLiteral(node.Value))
+                return;
+
+            var returnedType = GetNodeType(node.Value);
+            if (returnedType != null)
+                lambdaScope.InferredReturnTypes.Add(returnedType);
         }
 
         public void Visit(ExitStatementNode node)
@@ -8403,8 +9253,9 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
             var targetType = GetNodeType(node.Target);
 
-            // Let lambdas infer their parameter types from the assignment target
-            if (node.Value is LambdaExpressionNode)
+            // Let lambdas infer their parameter types from the assignment target, and a lambda
+            // or AddressOf convert to a user Delegate (#187)
+            if (IsDelegateTargetedExpression(node.Value))
                 _lambdaTargetType = targetType;
 
             node.Value.Accept(this);
@@ -8413,6 +9264,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
             // Decimal contexts — a numeric literal value converts from its
             // source text and retypes ('d = 1.5', 'd += 0.5').
             TryRetypeLiteralToDecimal(node.Value, targetType);
+            TargetTypeEmptyArrayLiteral(node.Value, targetType);
             var valueType = GetNodeType(node.Value);
 
             if (targetType == null || valueType == null)
@@ -8458,6 +9310,11 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 else if (targetType.Kind == TypeKind.Foreign || valueType.Kind == TypeKind.Foreign)
                 {
                     // Opaque on both sides; the backend renders the member verbatim.
+                }
+                // `x = Nothing` (#173) — a variable, a field, a property set and an element alike.
+                else if (JudgeNothingConversion(node.Value, targetType, node.Line, node.Column))
+                {
+                    // admitted into a reference type, or refused with advice
                 }
                 else if (!targetType.IsAssignableFrom(valueType))
                 {
@@ -8528,7 +9385,31 @@ namespace BasicLang.Compiler.SemanticAnalysis
         public void Visit(ExpressionStatementNode node)
         {
             node.Expression.Accept(this);
+
+            // ⛔ A literal or an operator expression on a line of its own does nothing: VB
+            // refuses it ("Expression is not a statement"). MEASURED on master dc949a24:
+            // `42` alone, or `a + b`, reported "Compilation successful!" on every backend and
+            // the value was silently discarded — usually a typo for an assignment or a call.
+            // A bare name or member access is NOT refused: in VB `Foo` / `obj.Method` is a call
+            // to a parameterless Sub. `x++` / `x--` are statements with an effect.
+            if (IsValueOnlyExpression(node.Expression))
+                Error("Expression is not a statement: its value would be discarded. " +
+                      "Assign it, pass it to a call, or remove it.", node.Line, node.Column);
         }
+
+        /// <summary>
+        /// An expression that can never have an effect as a statement: a literal (plain or
+        /// interpolated), a tuple literal, or an operator applied to operands.
+        /// </summary>
+        private static bool IsValueOnlyExpression(ExpressionNode expression) => expression switch
+        {
+            LiteralExpressionNode => true,
+            InterpolatedStringNode => true,
+            TupleLiteralNode => true,
+            BinaryExpressionNode => true,
+            UnaryExpressionNode unary => unary.Operator is not ("++" or "--"),
+            _ => false,
+        };
 
         // ====================================================================
         // Expressions
@@ -8563,12 +9444,23 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 "isequal" => "IsEqual",
                 "notequal" => "NotEqual",
                 "addressof" => "AddressOf",
+                "is" => "Is",
+                "isnot" => "IsNot",
                 _ => op
             };
         }
 
         public void Visit(BinaryExpressionNode node)
         {
+            // `Is` / `IsNot` are typed by their own rule (ADR-0011), before either operand is
+            // visited: a `Not`-shaped left operand must be judged as a whole, not first reported
+            // as "Logical NOT requires Boolean operand" (D1 (3)).
+            if (NormalizeOperator(node.Operator) is "Is" or "IsNot")
+            {
+                VisitIdentityComparison(node);
+                return;
+            }
+
             node.Left.Accept(this);
             node.Right.Accept(this);
 
@@ -8828,6 +9720,257 @@ namespace BasicLang.Compiler.SemanticAnalysis
         }
 
         /// <summary>
+        /// <c>a Is b</c> / <c>a IsNot b</c> — REFERENCE IDENTITY (task #185, ADR-0011). Always
+        /// typed Boolean, refused or not, so a refusal never cascades into a second error.
+        ///
+        /// <para>The operand rule (D2, D4), in order — each refusal names its fix:</para>
+        /// <list type="number">
+        /// <item>a <c>Not</c>-shaped LEFT operand: BasicLang parses <c>Not</c> at unary precedence,
+        /// so <c>Not x Is Nothing</c> is <c>(Not x) Is Nothing</c>, never VB's
+        /// <c>Not (x Is Nothing)</c>. Refused as a whole, naming <c>x IsNot Nothing</c> (D1 (3)) —
+        /// it can never be right: <c>Not</c> yields a Boolean, a value type;</item>
+        /// <item>each operand is the <c>Nothing</c> literal or a type <c>Nothing</c> converts to.
+        /// ⛔ The predicate IS <see cref="NothingAdviceFor"/> — #173's ONE answer, never a second
+        /// list (D2 (1)). A value type is refused BC30020-style;</item>
+        /// <item>against the <c>Nothing</c> literal, every admitted type is legal — a String, a
+        /// delegate, a nullable included (D4 (2));</item>
+        /// <item>two non-<c>Nothing</c> operands: a nullable is admitted only against
+        /// <c>Nothing</c> (VB BC32127); a String or a delegate is refused on EVERY backend — String
+        /// identity depends on interning on .NET and is a value comparison on JavaScript and C++,
+        /// and a C++ <c>std::function</c> has no identity at all (D4); and the two types must be
+        /// RELATED — one converts to the other, or one is <c>Object</c> — or the result would
+        /// always be False (and unrelated <c>shared_ptr</c>s do not compile on C++).</item>
+        /// </list>
+        /// </summary>
+        private void VisitIdentityComparison(BinaryExpressionNode node)
+        {
+            var op = NormalizeOperator(node.Operator);
+
+            if (node.Left is UnaryExpressionNode unary && !unary.IsPostfix
+                && NormalizeOperator(unary.Operator) is "Not" or "!")
+            {
+                unary.Operand.Accept(this);
+                node.Right.Accept(this);
+                SetNodeType(unary, _typeManager.BooleanType);
+                SetNodeType(node, _typeManager.BooleanType);
+
+                var subject = DescribeIdentityOperand(unary.Operand);
+                var other = DescribeIdentityOperand(node.Right);
+                var negation = op == "Is" ? "IsNot" : "Is";
+                Error($"'Not {subject} {op} {other}' parses as '(Not {subject}) {op} {other}': 'Not' binds " +
+                      $"tighter than '{op}' in BasicLang. Write '{subject} {negation} {other}' " +
+                      $"(or 'Not ({subject} {op} {other})')", node.Line, node.Column);
+                return;
+            }
+
+            node.Left.Accept(this);
+            node.Right.Accept(this);
+            SetNodeType(node, _typeManager.BooleanType);
+
+            var leftType = GetNodeType(node.Left);
+            var rightType = GetNodeType(node.Right);
+            if (leftType == null || rightType == null)
+            {
+                return;   // an unresolved operand has already reported itself
+            }
+
+            var leftIsNothing = IsNothingLiteral(node.Left);
+            var rightIsNothing = IsNothingLiteral(node.Right);
+
+            // `Nothing Is Nothing` is legal; the optimizer folds it (D5).
+            if (leftIsNothing && rightIsNothing)
+            {
+                return;
+            }
+
+            if ((!leftIsNothing && !CheckIdentityOperand(op, node.Left, leftType, node))
+                || (!rightIsNothing && !CheckIdentityOperand(op, node.Right, rightType, node)))
+            {
+                return;
+            }
+
+            // A Nothing test: every type the operand check admitted is legal here.
+            if (leftIsNothing || rightIsNothing)
+            {
+                return;
+            }
+
+            if (leftType.Kind == TypeKind.Nullable || rightType.Kind == TypeKind.Nullable)
+            {
+                var nullable = leftType.Kind == TypeKind.Nullable ? leftType : rightType;
+                Error($"'{op}' compares a nullable ('{nullable.Name}') only with Nothing. " +
+                      "Test '.HasValue' to ask whether it holds a value, or compare values with '='",
+                      node.Line, node.Column);
+                return;
+            }
+
+            if (IsStringForIdentity(leftType) || IsStringForIdentity(rightType))
+            {
+                Error($"'{op}' between String operands is refused: String identity is not portable " +
+                      "(it depends on interning on .NET, and is a value comparison on JavaScript and " +
+                      "C++). Compare values with '=', or test a String against Nothing " +
+                      $"('s {op} Nothing')", node.Line, node.Column);
+                return;
+            }
+
+            if (IsDelegateForIdentity(leftType) || IsDelegateForIdentity(rightType))
+            {
+                var delegateType = IsDelegateForIdentity(leftType) ? leftType : rightType;
+                Error($"'{op}' between delegate operands ('{delegateType.Name}') is refused: delegate " +
+                      "identity is not portable (a C++ delegate has none). Test a delegate against " +
+                      $"Nothing instead ('f {op} Nothing')", node.Line, node.Column);
+                return;
+            }
+
+            if (!AreRelatedForIdentity(leftType, rightType))
+            {
+                Error($"'{op}' compares '{leftType.Name}' and '{rightType.Name}', unrelated types: neither " +
+                      $"converts to the other, so '{op}' could never be {(op == "Is" ? "True" : "False")}. " +
+                      "Compare values with '=' if that is what you meant", node.Line, node.Column);
+            }
+        }
+
+        /// <summary>
+        /// One non-<c>Nothing</c> operand of <c>Is</c> / <c>IsNot</c>: legal exactly when
+        /// <c>Nothing</c> converts to its type — <see cref="NothingAdviceFor"/>, the one answer
+        /// (ADR-0011 D2 (1)). Refused BC30020-style otherwise, naming <c>=</c> (D2 (3)).
+        /// </summary>
+        private bool CheckIdentityOperand(string op, ExpressionNode operand, TypeInfo type, ExpressionNode node)
+        {
+            if (NothingAdviceFor(type) == null)
+            {
+                return true;
+            }
+
+            var what = type.Kind == TypeKind.TypeParameter
+                ? $"'{type.Name}', a type parameter that may be a value type"
+                : $"'{type.Name}', a value type";
+            Error($"'{op}' requires operands of a reference or nullable type, but " +
+                  $"'{DescribeIdentityOperand(operand)}' is {what}. Compare values with '=' instead",
+                  node.Line, node.Column);
+            return false;
+        }
+
+        /// <summary>A scalar String — the type whose identity D4 refuses as not portable.</summary>
+        private static bool IsStringForIdentity(TypeInfo type) =>
+            type.Kind != TypeKind.Array && type.ArrayRank == 0
+            && (string.Equals(type.Name, "String", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(type.Name, "System.String", StringComparison.OrdinalIgnoreCase));
+
+        /// <summary>
+        /// A delegate type (ADR-0011 D4):
+        /// <list type="bullet">
+        /// <item>a user <c>Delegate</c> or a typed <c>Action(Of …)</c> / <c>Func(Of …)</c>
+        /// (<see cref="TypeKind.Delegate"/>);</item>
+        /// <item>a bare <c>Action</c>, which the type table resolves as a CLASS named Action
+        /// (<see cref="IsDelegateTypeName"/>);</item>
+        /// <item>a .NET delegate — <c>EventHandler</c>, <c>Predicate(Of T)</c>, … — which the type
+        /// table ALSO types as a class. It is asked of its CLR type through the analyzer's own .NET
+        /// resolver (<see cref="IsNetDelegateType"/>), never a list of names.</item>
+        /// </list>
+        /// </summary>
+        private bool IsDelegateForIdentity(TypeInfo type) =>
+            type.Kind == TypeKind.Delegate
+            || (type.Kind != TypeKind.Array && IsDelegateTypeName(type.Name))
+            || IsNetDelegateType(type);
+
+        /// <summary>
+        /// Whether <paramref name="type"/> names a .NET type whose CLR type is a delegate — one that
+        /// derives from <c>System.MulticastDelegate</c> (Roslyn's <c>TypeKind.Delegate</c>, carried as
+        /// <see cref="NetTypeCategory.Delegate"/>), or is one of the two delegate roots
+        /// <c>System.Delegate</c> / <c>System.MulticastDelegate</c> themselves.
+        ///
+        /// <para>Resolved exactly as every other .NET name in this analyzer is
+        /// (<see cref="ResolveNetType"/>: the unit's <c>Using</c>s, the ambient namespaces, generic
+        /// arity). ⚠ When there is no resolver — a WinForms/WPF project, the LSP, an analyzer
+        /// constructed without <c>ConfigureNetResolution</c> — or the name does not resolve, the
+        /// answer is FALSE: the type is admitted and the target compiler decides, the same
+        /// admit-and-defer rule <see cref="AreRelatedForIdentity"/> applies to an unresolvable .NET
+        /// type. A user type shadowing a .NET name is never asked.</para>
+        /// </summary>
+        private bool IsNetDelegateType(TypeInfo type)
+        {
+            if (type == null || type.Kind != TypeKind.Class || string.IsNullOrEmpty(type.Name)
+                || IsUserDefinedTypeName(type.Name))
+            {
+                return false;
+            }
+
+            if (ResolveNetType(type.Name, type.GenericArguments?.Count ?? 0, out var fullName)
+                    != NetTypeLookupOutcome.Resolved)
+            {
+                return false;
+            }
+
+            if (string.Equals(fullName, "System.Delegate", StringComparison.Ordinal)
+                || string.Equals(fullName, "System.MulticastDelegate", StringComparison.Ordinal))
+            {
+                return true;
+            }
+
+            return NetResolver()?.ResolveType(fullName)?.Kind == NetTypeCategory.Delegate;
+        }
+
+        /// <summary>
+        /// Whether two non-<c>Nothing</c> identity operands can denote the same object: one converts
+        /// to the other (<see cref="TypeInfo.IsAssignableFrom"/>, the rule <c>Dim</c> and assignment
+        /// use), or one is <c>Object</c>. An opaque <c>::</c> C++ type or an unresolvable .NET type
+        /// is admitted: the target compiler decides, as it does for every other use of one.
+        /// </summary>
+        private bool AreRelatedForIdentity(TypeInfo left, TypeInfo right)
+        {
+            if (IsScalarObject(left) || IsScalarObject(right)) return true;
+            if (left.Kind == TypeKind.Foreign || right.Kind == TypeKind.Foreign) return true;
+            if (IsUnresolvableNetType(left) || IsUnresolvableNetType(right)) return true;
+            return left.IsAssignableFrom(right) || right.IsAssignableFrom(left);
+        }
+
+        private static bool IsScalarObject(TypeInfo type) =>
+            type.Kind != TypeKind.Array && type.ArrayRank == 0
+            && string.Equals(type.Name, "Object", StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>A short source-like rendering of an identity operand, for diagnostics.</summary>
+        private static string DescribeIdentityOperand(ExpressionNode operand) => operand switch
+        {
+            IdentifierExpressionNode identifier => identifier.Name,
+            LiteralExpressionNode literal when literal.LiteralType == TokenType.Nothing => "Nothing",
+            MemberAccessExpressionNode member when member.Object is IdentifierExpressionNode owner
+                => $"{owner.Name}.{member.MemberName}",
+            _ => "x"
+        };
+
+        /// <summary>
+        /// ADR-0011 D2 (2): <c>Case Is Nothing</c> is an identity test, held to the SAME operand
+        /// rule as <c>x Is Nothing</c> — the Select Case value must be a type <c>Nothing</c>
+        /// converts to (<see cref="NothingAdviceFor"/>). On a value type it compiled to four
+        /// different things (CS0037 on C#, a clang error on C++, never-matches on JavaScript,
+        /// matches-zero on MSIL). <c>Case Nothing</c> (no <c>Is</c>) is VB's VALUE comparison with
+        /// the type's default and is not judged here.
+        /// </summary>
+        private void CheckCaseIsNothingOperand(PatternNode pattern, TypeInfo selectType)
+        {
+            switch (pattern)
+            {
+                case NothingPatternNode { WrittenWithIs: true } nothing:
+                    var advice = NothingAdviceFor(selectType);
+                    if (advice != null)
+                    {
+                        var what = selectType.Kind == TypeKind.TypeParameter
+                            ? $"'{selectType.Name}', a type parameter that may be a value type"
+                            : $"'{selectType.Name}', a value type";
+                        Error($"'Case Is Nothing' requires a Select Case value of a reference or nullable " +
+                              $"type, but it is {what}. Compare values instead ('Case …' / 'Case Is = …')",
+                              nothing.Line, nothing.Column);
+                    }
+                    break;
+                case OrPatternNode or:
+                    foreach (var alternative in or.Alternatives)
+                        CheckCaseIsNothingOperand(alternative, selectType);
+                    break;
+            }
+        }
+
+        /// <summary>
         /// The delegate type <c>AddressOf f</c> denotes — <c>Action(Of P…)</c> for a Sub,
         /// <c>Func(Of P…, R)</c> for a Function — built structurally, exactly as a lambda's type
         /// is (Visit(LambdaExpressionNode)), so the two unify at every consumer.
@@ -8857,6 +10000,15 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
         public void Visit(UnaryExpressionNode node)
         {
+            // #187: an AddressOf's delegate target, set by the conversion site and consumed here,
+            // before the operand is visited, exactly as a lambda consumes its own.
+            TypeInfo delegateTarget = null;
+            if (node.Operator == "AddressOf")
+            {
+                delegateTarget = _lambdaTargetType;
+                _lambdaTargetType = null;
+            }
+
             node.Operand.Accept(this);
             var operandType = GetNodeType(node.Operand);
 
@@ -8928,9 +10080,22 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     // un-punctuated name typed as Object, the symbol lookup returned null, and the
                     // ungated pointer fallback below accepted it. D8 wires every generated handler
                     // through AddressOf, so that silence is a handler that never fires.
-                    var handlerDelegate = DelegateTypeOf(GetNodeSymbol(node.Operand));
+                    var handlerSymbol = GetNodeSymbol(node.Operand);
+                    var handlerDelegate = DelegateTypeOf(handlerSymbol);
 
-                    if (handlerDelegate != null)
+                    if (handlerDelegate != null && IsUserDelegate(delegateTarget))
+                    {
+                        // #187: `AddressOf M` into a user Delegate — M's signature judged by the
+                        // rule a lambda's is, and the expression typed as the delegate.
+                        var kind = handlerDelegate.Name.Equals("Action", StringComparison.OrdinalIgnoreCase)
+                            ? "Sub" : "Function";
+                        resultType = ConvertToUserDelegate(
+                            handlerDelegate, delegateTarget,
+                            $"'AddressOf {DescribeAddressOfOperand(node.Operand, handlerSymbol)}' " +
+                            $"({kind} {FormatFunctionSignature(handlerSymbol)})",
+                            node.Line, node.Column);
+                    }
+                    else if (handlerDelegate != null)
                     {
                         resultType = handlerDelegate;
                     }
@@ -9078,38 +10243,18 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 return;
             }
 
-            var symbol = _currentScope.Resolve(node.Name);
+            var symbol = ResolveBareName(node.Name, node.Line, node.Column, report: true);
 
-            // A member of the class being analyzed, or of one of its BASES, by bare name.
-            // ⛔ BEFORE every channel below. Two things forced that position, both measured:
-            // the .NET-type arm further down is deliberately permissive ("any PascalCase
-            // identifier could be a .NET type"), so an inherited `Total` was swallowed into a
-            // phantom type named Total with NO diagnostic — only a one-character or lowercase
-            // name ever reached "Undefined identifier"; and class scope is NEARER than module
-            // scope, which the IR builder already assumes (IsCurrentClassMember suppresses the
-            // module-global fallback for a name it classifies as a class member), so binding a
-            // module global here would leave the two halves disagreeing about where the value
-            // lives. Lexical resolution still wins: a local, a parameter and the class's own
-            // already-defined members are found above.
-            if (symbol == null)
+            // VB's control-character constants (vbCrLf, vbTab, ...). Backslash is not an escape
+            // in a string literal, so these are how source spells a newline or tab. Only when
+            // nothing user-declared has the name: a user's vbTab shadows the built-in.
+            // Cleared first so a re-analysis that now finds a user symbol is not overruled.
+            node.BuiltinConstantValue = null;
+            if (symbol == null && VbStringConstants.TryGetValue(node.Name, out var vbConstant))
             {
-                symbol = ResolveClassMember(node.Name);
-            }
-
-            if (symbol == null)
-            {
-                // Try project symbol table for cross-module references (ModuleName.Symbol or imported symbols)
-                symbol = ResolveQualifiedName(node.Name);
-            }
-
-            // A Public/Friend variable or constant of another Module in this unit, by bare name.
-            // ⛔ BEFORE the .NET-type arm below, which is deliberately permissive ("any PascalCase
-            // identifier could be a .NET type") and used to swallow exactly this reference: it
-            // typed `Value` as a phantom class named Value, no error, and the IR builder then
-            // minted a fresh local of that name. See Symbol.OwningModule.
-            if (symbol == null && TryResolveUnqualifiedModuleMember(node.Name, node.Line, node.Column, out var crossModule))
-            {
-                symbol = crossModule;
+                node.BuiltinConstantValue = vbConstant;
+                SetNodeType(node, _typeManager.StringType);
+                return;
             }
 
             if (symbol == null)
@@ -9141,6 +10286,71 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 SetNodeSymbol(node, symbol);
                 SetNodeType(node, symbol.Type);
             }
+        }
+
+        /// <summary>
+        /// VB's Microsoft.VisualBasic.Constants string members, by (case-insensitive) name.
+        /// The IR builder lowers each to a plain string constant, so every backend gets it.
+        /// ⚠ Only characters every backend's string escaper handles (\r \n \t). vbNullChar is
+        /// deliberately absent: the C++ backend's strings are built from const char*, so an
+        /// embedded NUL would silently truncate.
+        /// </summary>
+        internal static readonly IReadOnlyDictionary<string, string> VbStringConstants =
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["vbCrLf"] = "\r\n",
+                ["vbNewLine"] = "\r\n",
+                ["vbCr"] = "\r",
+                ["vbLf"] = "\n",
+                ["vbTab"] = "\t",
+            };
+
+        /// <summary>
+        /// What a BARE name denotes at this point — the symbol-resolution chain of a bare
+        /// identifier, in its order, and nothing past it (not the VB string constants, not the
+        /// permissive .NET-type arm). ONE chain with two callers: <see cref="Visit(IdentifierExpressionNode)"/>
+        /// and the <c>For Each</c> control-variable question (task #168), which must agree with
+        /// it about what <c>x</c> means or the loop would reuse one thing and the body read
+        /// another. <paramref name="report"/> false asks silently: the cross-module arm's
+        /// ambiguity / Private diagnostics are left to the read (or assignment) that follows.
+        /// </summary>
+        private Symbol ResolveBareName(string name, int line, int column, bool report)
+        {
+            var symbol = _currentScope.Resolve(name);
+
+            // A member of the class being analyzed, or of one of its BASES, by bare name.
+            // ⛔ BEFORE every channel below. Two things forced that position, both measured:
+            // the .NET-type arm further down is deliberately permissive ("any PascalCase
+            // identifier could be a .NET type"), so an inherited `Total` was swallowed into a
+            // phantom type named Total with NO diagnostic — only a one-character or lowercase
+            // name ever reached "Undefined identifier"; and class scope is NEARER than module
+            // scope, which the IR builder already assumes (IsCurrentClassMember suppresses the
+            // module-global fallback for a name it classifies as a class member), so binding a
+            // module global here would leave the two halves disagreeing about where the value
+            // lives. Lexical resolution still wins: a local, a parameter and the class's own
+            // already-defined members are found above.
+            if (symbol == null)
+            {
+                symbol = ResolveClassMember(name);
+            }
+
+            if (symbol == null)
+            {
+                // Try project symbol table for cross-module references (ModuleName.Symbol or imported symbols)
+                symbol = ResolveQualifiedName(name);
+            }
+
+            // A Public/Friend variable or constant of another Module in this unit, by bare name.
+            // ⛔ BEFORE the .NET-type arm in Visit(IdentifierExpressionNode), which is deliberately
+            // permissive ("any PascalCase identifier could be a .NET type") and used to swallow
+            // exactly this reference: it typed `Value` as a phantom class named Value, no error,
+            // and the IR builder then minted a fresh local of that name. See Symbol.OwningModule.
+            if (symbol == null && TryResolveUnqualifiedModuleMember(name, line, column, out var crossModule, report))
+            {
+                symbol = crossModule;
+            }
+
+            return symbol;
         }
 
         /// <summary>
@@ -9421,6 +10631,18 @@ namespace BasicLang.Compiler.SemanticAnalysis
             else if (node.Callee is MemberAccessExpressionNode memberExpr)
             {
                 calleeSymbol = GetNodeSymbol(memberExpr);
+
+                // #187: `d.Invoke(args)` on a user-delegate value IS `d(args)` — the same
+                // argument checks, the same result type — so it takes the delegate-invocation
+                // path below with the RECEIVER as the callee. The member itself resolves to
+                // nothing (a user delegate declares no members), which typed the call Object.
+                if (string.Equals(memberExpr.MemberName, "Invoke", StringComparison.OrdinalIgnoreCase)
+                    && GetNodeType(memberExpr.Object) is { } invokedType
+                    && IsUserDelegate(invokedType))
+                {
+                    calleeType = invokedType;
+                    calleeSymbol = null;
+                }
             }
 
             // `f(args)` is a CALL, not an index, whenever f is itself callable (a Function or
@@ -9487,13 +10709,22 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 return;
             }
 
+            // #188: a delegate-typed FIELD or PROPERTY member is invoked as its value — including
+            // a bare `Action`, which the type table resolves as a CLASS, and a property, which the
+            // arm below never admitted. Recorded for the IR builder (IsDelegateMemberInvocation).
+            var invokesDelegateMember = DelegateMemberCallee(node.Callee, calleeSymbol, calleeType) != null;
+            _delegateMemberInvocations.Remove(node);
+            if (invokesDelegateMember) _delegateMemberInvocations.Add(node);
+
             // Check if this is a delegate invocation: f(...) where f is a Func/Action variable
-            if (calleeType != null && calleeType.Kind == TypeKind.Delegate &&
+            if (invokesDelegateMember ||
+                calleeType != null && calleeType.Kind == TypeKind.Delegate &&
                 (calleeSymbol == null || calleeSymbol.Kind == SymbolKind.Variable ||
                  calleeSymbol.Kind == SymbolKind.Parameter))
             {
                 // Compute parameter types first so lambda arguments can be target-typed
-                // (Func(Of T1, ..., TResult) excludes the trailing return type; Action(Of T1, ...) uses all)
+                // (Func(Of T1, ..., TResult) excludes the trailing return type; Action(Of T1, ...) uses all;
+                // a user Delegate its declared list, #187)
                 var delegateParamTypes = GetDelegateParameterTypes(calleeType);
 
                 for (int i = 0; i < node.Arguments.Count; i++)
@@ -9531,21 +10762,25 @@ namespace BasicLang.Compiler.SemanticAnalysis
                                 continue;
                             }
 
+                            if (JudgeNothingConversion(node.Arguments[i], paramType,
+                                    node.Arguments[i].Line, node.Arguments[i].Column))
+                            {
+                                continue;   // `f(Nothing)` (#173)
+                            }
+
                             if (argType != null && paramType != null && !paramType.IsAssignableFrom(argType))
                             {
-                                Error($"Argument {i + 1}: cannot convert from '{argType}' to '{paramType}'. Expected: {signature}",
+                                Error($"Argument {i + 1}: cannot convert from '{argType}' to '{paramType}'. Expected: {signature}" +
+                                      WithDelegateValueHint(argType, paramType),
                                       node.Arguments[i].Line, node.Arguments[i].Column);
                             }
                         }
                     }
                 }
 
-                // Func(Of T1, ..., TResult): last generic argument is the return type
-                var delegateReturnType = calleeType.Name.Equals("Func", StringComparison.OrdinalIgnoreCase) &&
-                                         calleeType.GenericArguments.Count > 0
-                    ? calleeType.GenericArguments[calleeType.GenericArguments.Count - 1]
-                    : _typeManager.VoidType;
-                SetNodeType(node, delegateReturnType);
+                // Func(Of T1, ..., TResult): last generic argument is the return type; a user
+                // Delegate Function's R through its shape (#187 — it was typed Void)
+                SetNodeType(node, DelegateInvocationResultType(calleeType));
                 return;
             }
 
@@ -9615,6 +10850,16 @@ namespace BasicLang.Compiler.SemanticAnalysis
                         TryRetypeLiteralToDecimal(node.Arguments[i], paramType);
                         var argType = GetNodeType(node.Arguments[i]);
 
+                        // VB: the ONE argument in a ParamArray's slot may be an array, and then it
+                        // IS the ParamArray (`Sum(arr)`), not its first element. It was checked
+                        // against the ELEMENT type and refused as "cannot convert Integer[] to
+                        // Integer". IRBuilder.IsParamArrayPassedWhole makes the same call.
+                        if (hasParamArray && i == totalParams - 1 && node.Arguments.Count == totalParams
+                            && argType?.Kind == TypeKind.Array)
+                        {
+                            paramType = calleeSymbol.Parameters[totalParams - 1].Type ?? paramType;
+                        }
+
                         if (paramType == null)
                         {
                             continue;
@@ -9634,9 +10879,16 @@ namespace BasicLang.Compiler.SemanticAnalysis
                             continue;
                         }
 
+                        if (JudgeNothingConversion(node.Arguments[i], paramType,
+                                node.Arguments[i].Line, node.Arguments[i].Column))
+                        {
+                            continue;   // `Take(Nothing)`, `obj.M(Nothing)` (#173)
+                        }
+
                         if (argType != null && paramType != null && !paramType.IsAssignableFrom(argType))
                         {
-                            Error($"Argument {i + 1}: cannot convert from '{argType}' to '{paramType}'",
+                            Error($"Argument {i + 1}: cannot convert from '{argType}' to '{paramType}'" +
+                                  WithDelegateValueHint(argType, paramType),
                                   node.Arguments[i].Line, node.Arguments[i].Column);
                         }
                     }
@@ -9710,6 +10962,22 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 index.Accept(this);
             }
 
+            // ⛔ The parser folds chained brackets into ONE index list — `a[i][j]` arrives as
+            // `a[i, j]`, which is right for a RANK-2 array (C-style `grid[1][2]`) and wrong for
+            // anything that takes fewer indices: `lst[0][3]` over a List(Of Integer()) became
+            // `lst[0, 3]` (CS1501 on C#). Split off the indices the base actually takes and
+            // index the result with the rest — `(lst[0])[3]`. The base and every index are
+            // already analysed above, so the split re-visits nothing.
+            while (arrayType != null && IndicesTakenBy(arrayType) is int takes && takes > 0 && node.Indices.Count > takes)
+            {
+                var inner = new ArrayAccessExpressionNode(node.Line, node.Column) { Array = node.Array };
+                inner.Indices.AddRange(node.Indices.Take(takes));
+                SetNodeType(inner, ElementTypeOfIndexing(arrayType));
+                node.Array = inner;
+                node.Indices = node.Indices.Skip(takes).ToList();
+                arrayType = GetNodeType(inner);
+            }
+
             // Handle actual arrays
             if (arrayType.Kind == TypeKind.Array)
             {
@@ -9755,6 +11023,27 @@ namespace BasicLang.Compiler.SemanticAnalysis
             // Not an array or known indexable type
             Error($"Cannot index non-array type '{arrayType}'", node.Line, node.Column);
             SetNodeType(node, _typeManager.ObjectType);
+        }
+
+        /// <summary>
+        /// How many indices one bracket pair over <paramref name="type"/> takes: an array's rank,
+        /// one for an indexable collection, or null when the type is not indexable here (the
+        /// caller then reports it as written).
+        /// </summary>
+        private int? IndicesTakenBy(TypeInfo type)
+        {
+            if (type.Kind == TypeKind.Array) return Math.Max(1, type.ArrayRank);
+            if (IsNetType(type.Name) || IsIndexableNetType(type.Name)) return 1;
+            return null;
+        }
+
+        /// <summary>What one index into <paramref name="type"/> yields — the same answers <see cref="Visit(ArrayAccessExpressionNode)"/> gives.</summary>
+        private TypeInfo ElementTypeOfIndexing(TypeInfo type)
+        {
+            if (type.Kind == TypeKind.Array) return type.ElementType ?? _typeManager.ObjectType;
+            if (type.GenericArguments != null && type.GenericArguments.Count > 0)
+                return type.GenericArguments[type.GenericArguments.Count - 1];
+            return _typeManager.ObjectType;
         }
 
         /// <summary>
@@ -9902,6 +11191,29 @@ namespace BasicLang.Compiler.SemanticAnalysis
         /// <c>.ctor</c> key here and every constructor check was skipped SILENTLY —
         /// <c>hasAnyConstructor</c> is false with no key, so not even an error.</para>
         /// </summary>
+        /// <summary>
+        /// The type argument <paramref name="index"/> of <paramref name="argumentCount"/> must convert
+        /// to: its parameter's type, or — in a trailing ParamArray's slot — the array's ELEMENT
+        /// type, unless the argument is one array passed alone as the whole ParamArray. Null past
+        /// the end of a callee that has no ParamArray (the arity check reports that). The call path
+        /// in Visit(CallExpressionNode) applies the same rule inline.
+        /// </summary>
+        private static TypeInfo ArgumentTargetType(Symbol callee, int index, int argumentCount, TypeInfo argumentType)
+        {
+            var parameters = callee?.Parameters;
+            if (parameters == null || parameters.Count == 0) return null;
+
+            var last = parameters[^1];
+            if (!last.IsParamArray)
+                return index < parameters.Count ? parameters[index].Type : null;
+
+            var slot = parameters.Count - 1;
+            if (index < slot) return parameters[index].Type;
+            if (index == slot && argumentCount == parameters.Count && argumentType?.Kind == TypeKind.Array)
+                return last.Type;
+            return last.Type?.ElementType ?? last.Type;
+        }
+
         private static Symbol ResolveConstructor(TypeInfo type, int argumentCount)
         {
             if (type?.Members == null || argumentCount < 0) return null;
@@ -9912,10 +11224,23 @@ namespace BasicLang.Compiler.SemanticAnalysis
             foreach (var entry in type.Members)
             {
                 if (!entry.Key.StartsWith(".ctor")) continue;
-                if (!int.TryParse(entry.Key.Substring(5), out var arity) || arity <= argumentCount) continue;
+                if (!int.TryParse(entry.Key.Substring(5), out var arity)) continue;
 
                 var parameters = entry.Value?.Parameters;
                 if (parameters == null || parameters.Count != arity) continue;
+
+                // A trailing ParamArray takes any number of arguments, none included:
+                // `New Bag("x", "y", "z")` and `New Bag()` against `Sub New(ParamArray names() As
+                // String)` asked for .ctor3 / .ctor0 and were refused. The arguments are packed
+                // into the array by IRBuilder.PackParamArrayArguments.
+                if (arity > 0 && parameters[arity - 1].IsParamArray && argumentCount >= arity - 1)
+                {
+                    if (found != null) return null;   // two candidates — do not guess
+                    found = entry.Value;
+                    continue;
+                }
+
+                if (arity <= argumentCount) continue;
 
                 var fillable = true;
                 for (var i = argumentCount; i < parameters.Count; i++)
@@ -9955,11 +11280,17 @@ namespace BasicLang.Compiler.SemanticAnalysis
                       "returns one, or a javascript{ } block).", node.Line, node.Column);
             }
 
-            // Analyze arguments first to get their types
+            // Analyze arguments first to get their types. A lambda or AddressOf argument is
+            // target-typed by its constructor parameter, exactly as a call argument is (#187) —
+            // ResolveConstructor needs only the argument COUNT, so the constructor is known here.
+            var targetConstructor = type != null && type.Kind == TypeKind.Class && type.Members != null
+                ? ResolveConstructor(type, node.Arguments.Count)
+                : null;
             var argTypes = new List<TypeInfo>();
-            foreach (var arg in node.Arguments)
+            for (int i = 0; i < node.Arguments.Count; i++)
             {
-                arg.Accept(this);
+                var arg = node.Arguments[i];
+                VisitWithDelegateTarget(arg, ArgumentTargetType(targetConstructor, i, node.Arguments.Count, null));
                 var argType = GetNodeType(arg);
                 argTypes.Add(argType ?? _typeManager.ObjectType);
             }
@@ -9975,18 +11306,23 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     // Validate argument types
                     if (ctorSymbol.Parameters != null)
                     {
-                        for (int i = 0; i < Math.Min(argTypes.Count, ctorSymbol.Parameters.Count); i++)
+                        for (int i = 0; i < argTypes.Count; i++)
                         {
-                            var expectedType = ctorSymbol.Parameters[i].Type;
+                            var expectedType = ArgumentTargetType(ctorSymbol, i, argTypes.Count, argTypes[i]);
+                            if (expectedType == null) continue;
                             // Spec 6.1: a constructor argument to a Decimal
                             // parameter is a Decimal context — same rule as the
                             // function-call path.
                             if (TryRetypeLiteralToDecimal(node.Arguments[i], expectedType))
                                 argTypes[i] = GetNodeType(node.Arguments[i]);
+                            if (JudgeNothingConversion(node.Arguments[i], expectedType,
+                                    node.Arguments[i].Line, node.Arguments[i].Column))
+                                continue;   // `New H(Nothing)` (#173)
                             var actualType = argTypes[i];
                             if (expectedType != null && actualType != null && !expectedType.IsAssignableFrom(actualType))
                             {
-                                Error($"Argument {i + 1} of type '{actualType.Name}' is not compatible with parameter '{ctorSymbol.Parameters[i].Name}' of type '{expectedType.Name}'",
+                                Error($"Argument {i + 1} of type '{actualType.Name}' is not compatible with parameter '{ctorSymbol.Parameters[Math.Min(i, ctorSymbol.Parameters.Count - 1)].Name}' of type '{expectedType.Name}'" +
+                                    WithDelegateValueHint(actualType, expectedType),
                                     node.Arguments[i].Line, node.Arguments[i].Column);
                             }
                         }
@@ -10040,6 +11376,48 @@ namespace BasicLang.Compiler.SemanticAnalysis
             RejectImpossibleConversion(node, targetType);
 
             SetNodeType(node, targetType);
+        }
+
+        /// <summary>
+        /// A <c>ReDim</c>'s value (see <see cref="ArrayResizeExpressionNode"/>). The array must
+        /// already be a one-dimensional array variable, the size an integer, and an
+        /// <c>As Type</c> must name the element type it already has: ReDim resizes, it does not
+        /// retype. The node takes the array's own type, so the assignment it sits in type-checks
+        /// as array-to-same-array.
+        /// </summary>
+        public void Visit(ArrayResizeExpressionNode node)
+        {
+            node.Array.Accept(this);
+            node.Size.Accept(this);
+
+            var arrayType = GetNodeType(node.Array);
+            if (arrayType?.Kind != TypeKind.Array)
+            {
+                Error($"ReDim needs an array, but '{(node.Array as IdentifierExpressionNode)?.Name}' "
+                      + $"{(arrayType == null ? "is not declared" : $"has type {arrayType.Name}")}. Declare it "
+                      + "as an array first, for example Dim a[] As Integer.", node.Line, node.Column);
+                SetNodeType(node, arrayType ?? _typeManager.ObjectType);
+                return;
+            }
+
+            if (arrayType.ArrayRank > 1)
+                Error($"ReDim resizes a one-dimensional array; this one has {arrayType.ArrayRank} dimensions.",
+                      node.Line, node.Column);
+
+            var sizeType = GetNodeType(node.Size);
+            if (sizeType != null && !sizeType.IsIntegral())
+                Error($"A ReDim size must be an integer, not {sizeType.Name}.", node.Size.Line, node.Size.Column);
+
+            if (node.ElementType != null)
+            {
+                var declared = ResolveTypeReference(node.ElementType);
+                if (declared != null && arrayType.ElementType != null
+                    && !string.Equals(declared.Name, arrayType.ElementType.Name, StringComparison.OrdinalIgnoreCase))
+                    Error($"ReDim cannot change the element type: the array holds {arrayType.ElementType.Name}, "
+                          + $"not {declared.Name}.", node.Line, node.Column);
+            }
+
+            SetNodeType(node, arrayType);
         }
 
         /// <summary>

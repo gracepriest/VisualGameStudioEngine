@@ -486,11 +486,16 @@ cleanly, and the real count is N+1. The fast subset catches it every time — re
 `ProjectFile.GetSourceFiles` now walks in `GetFilesInWindowsOrder` — a mirrored pair the merge left
 asymmetric (same order on Windows; may differ on Linux).
 
-Not part of "done" but part of honesty — compiler defects the designer WORKS AROUND, all still open:
-the JS bare-global self-call (`task_fc397dba`; `FormScaffolder` emits `Me.`), `control.Name` never
-emitted (`task_fa51e644`), a class named `F` breaks `Me.` lookup (`task_ef845b99`),
-`RejectImpossibleConversion`'s sibling-file hole (`task_0b7436a5`), a bare literal as a statement
-(`task_2e1de6b3`), the C++ `BasicLang::List` with no `Sort` (`task_e7c50371`).
+Not part of "done" but part of honesty — compiler defects the designer WORKS AROUND, still open:
+`control.Name` never emitted (`task_fa51e644`), `RejectImpossibleConversion`'s sibling-file hole
+(`task_0b7436a5`).
+
+Closed since, re-measured on master `dc949a24` (2026-09-26): the C++ `BasicLang::List` with no
+`Sort` (`task_e7c50371`, #105), and a bare literal as a statement (`task_2e1de6b3`, now refused by
+the analyzer — `ExpressionStatementTests`). Not reproduced there: the JS bare-global self-call
+(`task_fc397dba` — an unqualified call in a constructor emits `this.M()` and runs; `FormScaffolder`'s
+`Me.` is now belt-and-braces) and a class named `F` breaking `Me.` lookup (`task_ef845b99` — runs on
+JavaScript and C++, builds on C#).
 
 ---
 
@@ -1450,8 +1455,9 @@ These are measured, not cautionary. Each one shipped a green build that did the 
   is enough, and the unrecognised side is handed to C++ overload resolution, which is the only
   place a foreign return type is knowable (`const char*`/`std::string` concatenate; an integer
   has no operator and becomes a build break). Note the asymmetry that made this worth fixing:
-  the same fall-through is SAFE for Single/Double, which fail to build loudly, and unsafe for a
-  foreign integer, which compiles with at most `-Wstring-plus-int` and walks off the literal.
+  the same fall-through was SAFE for Single/Double, which failed to build loudly (they now
+  stringify through `FormatDouble`/`FormatSingle`), and unsafe for a foreign integer, which
+  compiles with at most `-Wstring-plus-int` and walks off the literal.
   **A build break is the intended outcome for the numeric case** — do not "fix" it by reaching
   for `std::to_string` on an operand whose type you do not know.
 - ⛔ **A "Passed!" summary line does not mean the suite passed.** A crashed test host still
@@ -2035,7 +2041,11 @@ structural count must come from a bare `pass.Run(module)`.
 ⭐ **C#'s inlining rescues a bad merge ONLY when the two expressions are textually identical.** It
 is not general immunity, and the key-injectivity row above is the proof.
 
-#### ⛔ A LIVE WRONG ANSWER ON ALL FOUR BACKENDS THAT IS **NOT** CSE AND IS **NOT** FIXED
+#### ✅ CLOSED on C#/JavaScript (ADR-0006 D1, task #122) — C++/MSIL stay wrong for UNRELATED reasons
+
+**Superseded entry — the paragraph below described this branch BEFORE ADR-0006 D1 and task #122
+landed. Left in place, corrected, because the shape is still the reference example for the closure
+rule.**
 
 A lambda capturing a local **by reference**, with `CopyPropagationPass` + `ConstantFoldingPass`
 folding the expression on both sides of a call that writes the captured variable:
@@ -2051,23 +2061,32 @@ Sub Main()
 End Sub
 ```
 
-Measured on this branch: **C#, C++ and JavaScript all print `a=3 b=3`** where `b` should be 103.
-(MSIL does not even build it — "Reference to undefined class 'Action'".)
+**Measured now: C# and JavaScript print `a=3 b=103` — CORRECT — on every entry point (CLI, CLI
+`--optimize`, a Release `.blproj` build).** ADR-0006 D1's closure rule
+(`OptimizationPass.IsCallVisible` → `IsLambdaCaptured`, `BasicLang/IROptimizer.cs`) makes `n`
+call-visible because a lambda of `Main` genuinely writes it, so `bump()` invalidates both
+`CopyPropagation`'s and CSE's facts for `n` the same way any other call would. Two SEPARATE
+backends are still wrong, for reasons this ADR does not touch:
 
-⚠ **TWO INDEPENDENT ROUTES, both measured, and the CSE fix closes NEITHER:**
+- **C++ prints `a=3 b=3`** — a BACKEND defect, task #140: the emitted lambda captures `n` BY COPY
+  (`[=]() { t0 = n + 100; return; }`) instead of by reference, so the write never reaches the
+  caller's `n` no matter what the optimizer does or does not run (MEASURED wrong even with ZERO
+  optimizer passes running — not a kill-vocabulary or CSE/LICM gap this family could ever have
+  closed).
+- ~~**MSIL cannot build this shape at all** — "Reference to undefined class 'Action'", task #155
+  (no IL lowering for the delegate type a `Sub()` lambda gets typed as).~~ **CLOSED 2026-09-26,
+  task #155 / ADR-0010.** MSIL now prints `a=3 b=103` too — see the MSIL lambda/closures section
+  below.
 
-1. **It is not CSE's to fix.** Re-run with CSE REMOVED from the pipeline (ConstantFolding +
-   CopyPropagation + DeadCodeElimination + StrengthReduction + Peephole only): still `a=3 b=3`.
-   `CopyPropagation` and `ConstantFolding` fold the expression on both sides of `bump()` on their
-   own, so repairing CSE cannot help.
-2. ⛔ **But CSE DOES also merge here — 1 merge, measured** — so it is a second route to the same
-   wrong answer, and the repair in this change does NOT close it. `ReadsCallVisible` cannot: a
-   local captured by reference has `IsGlobal=false` and is indistinguishable from any other local
-   at that point. (An earlier draft of this entry said "CSE is not involved". That is wrong, and
-   the count is where it was caught.)
-
-**Closing it needs a capture set on `IRFunction`, which both the folding passes and
-`ReadsCallVisible` would consult. It needs its own task.**
+D1's own closure rule first closed this for C#/JavaScript with an INTERIM approximation ("every
+local and by-value parameter is call-visible in a function that creates a lambda" — sound, but
+coarser than necessary). Task #122 (committed `22f18284`) narrowed that to the locals a lambda
+ACTUALLY captures — a pure precision gain, re-measured at 492/492 probe cells and 1056/1056 corpus
+cells behaviourally identical, 0 verifier fires; it did not move this example's answer at all,
+since `n` really is captured here. Full rule, its fallback, and a blind spot the soundness review
+found (a lambda passed as a `MyBase.New(...)` argument — pre-existing, not widened by #122; task
+#170) are in `docs/superpowers/decisions/0006-kill-vocabulary-totality-dynamic-use-call-visibility.md`'s
+implementation note for D1. Tests: `VisualGameStudio.Tests/Compiler/LambdaCaptureSetTests.cs`.
 
 #### ⛔ `Samples/*` DO NOT COMPILE — and the "11 merges in shipping code" number rests on that
 
@@ -2092,7 +2111,7 @@ fails loudly and forces a re-measure instead of drifting. **The robust form of t
 is `CseInvalidationDecisionTests`' `ConstGlobalAcrossACall` / `ParametersAcrossACall` rows** — a
 self-contained program that compiles. Prefer those.
 
-#### ⛔ The C++ and JavaScript backends DO NOT CASE-FOLD IDENTIFIERS
+#### ⛔ The C++ and JavaScript backends DO NOT CASE-FOLD IDENTIFIERS (task #124)
 
 BasicLang is case-insensitive; the front end accepts `P = Seed(100)` as a write to `p` and the IR
 records `IRCall("P")` alongside `IRVariable("p")`. Measured on that program:
@@ -2103,7 +2122,11 @@ records `IRCall("P")` alongside `IRVariable("p")`. Measured on that program:
 
 Both are live pre-existing backend defects, neither is CSE's, and neither has a fixture. ⚠ The JS
 one is the nastier: `b=4` is the SAME wrong number CSE's defect produced, so a case-differing shape
-cannot attribute a JS failure to either cause. That is why
+cannot attribute a JS failure to either cause. **This is task #124** — task #168 (ADR-0009, "Newest"
+above) hits the identical gap on a case-differing `For Each` reuse; under this suite's strict-mode
+ES-module JS harness the symptom is a `ReferenceError` (the reuse's target was never declared under
+its OWN case), not the silent `b=4`-style stale value a loose, non-strict script would produce. That
+is why
 `Decision_CaseDifferingRedefinition_DoesNotMerge` is asserted **structurally only**.
 
 #### ⛔ A TRAP THE MUTATION SWEEP CAUGHT: `p = p + 10` does NOT test kill-ORDERING
@@ -2152,8 +2175,495 @@ single new failure against the 170-name baseline.
   widened for CSE. **No reaching program was found**, so this is a suspicion, not a defect.
   ⛔ `WideningCastFoldingPass` runs from `IRBuilder.cs:1165` — **outside the pipeline, on every
   build regardless of flags** — so if it is reachable it is reachable everywhere.
-- `DeadCodeEliminationPass`'s instruction-removal arm is **effectively dead**: its guard is
-  `!v.Name.StartsWith("_tmp")` and temps are spelled `t0`/`t1`. Relates to existing **#118**.
+- **#118 DONE (the use-analysis half).** `DeadCodeEliminationPass`'s use analysis is now the
+  shared, TOTAL `OptimizationPass.UsesOf` walker, run FUNCTION-WIDE (collected once over every
+  block before any block loses an instruction) and descending nested operand trees — the same
+  descent `IRVerifier` makes. Tests: `VisualGameStudio.Tests/Compiler/DeadCodeEliminationUseAnalysisTests.cs`
+  (44 hand-built shapes: 33 missing-arm/sub-slot, 2 cross-block, 2 operand-tree, 7 controls
+  including the guard pin).
+  - Its instruction-removal arm is **still effectively dead, DELIBERATELY** — #118 left the
+    removal GUARD unchanged (`!v.Name.StartsWith("_tmp")`, and IRBuilder spells every real temp
+    `t0`/`t1`/…), so in a real program this pass still removes nothing; only
+    `ControlFlowGraph.RemoveUnreachableBlocks` has any effect. The fixed use analysis is
+    observable only in hand-built IR.
+  - Switching the guard on (e.g. to `OptimizationPass.IsTempDestination`) is a **separate,
+    measured decision**, not folded into #118. A scratch experiment (info-only, never shipped;
+    its numbers are in commit `d4d0633`'s message) un-gated the guard: 62 removals and 9 test
+    failures over the full suite. Two hazards — a user variable SPELLED like a temp (`Dim t5 = a + b`) got removed (37
+    of the 62 removals) and the program printed 12 instead of the correct 82, and a
+    `MyBase.New(v + 1)` argument reachable only through `IRConstructor.BaseConstructorArgs` is
+    invisible to `UsesOf` — against one measured benefit, dropping orphan peephole temps.
+    Whoever picks this up next should start from that commit message and re-measure; the
+    guard needs at least `&& !v.NamedAfterVariable`, and the base-constructor-argument uses
+    must become visible to `UsesOf`, before it can be switched on.
+- ⭐ **Newest — #168 DONE (ADR-0009, fix committed `a454a8cf`; pins/tests/docs in the next
+  commit).** `For Each x In coll` with no `As` clause, where `x` names an EXISTING variable (a
+  local, a parameter incl. ByRef, a module global, an own or inherited field), now REUSES it —
+  VB's rule, and the owner ruled for it directly. Every iteration assigns the element through the
+  ORDINARY assignment lowering (a hidden loop variable, `x = hidden` visited at the top of the
+  body), so field/global/ByRef stores and the assignment coercion come for free; after the loop
+  `x` holds the LAST element assigned. This REVERSES `5783e642`'s premise (BasicLang's own `For
+  Each` used to SHADOW an existing `x`, silently) and brings `For Each` into agreement with the
+  numeric `For`, which already reused an existing `i`. A constant/property/event control variable
+  is now refused rather than silently shadowed; reusing an ENCLOSING loop's own control variable
+  is refused too (VB's BC30069) — without it, C# (`CS1656`) and JavaScript ("Assignment to
+  constant") do not compile/run once reuse actually writes through the enclosing loop's own
+  iteration variable. `For Each x As T` is untouched (still declares, may still shadow; VB's
+  BC30616 deliberately not added). Sixteen pre-existing pins that encoded the old shadowing were
+  rewritten (`ForEachVariableRenameFixTests.cs`, `MsilForEachTests.cs`), and new coverage lives in
+  `ForEachControlVariableReuseTests.cs`/`ForEachControlVariableDiagnosticsTests.cs`. Known gaps,
+  not fixed here: task #124 (the C++/JavaScript case-folding gap below hits a case-differing
+  reuse the same way it hits a plain assignment); tasks #136/#140 (lambda capture of a `For
+  Each` variable, C#/C++ — MSIL's own gap here was task #155, CLOSED 2026-09-26 by ADR-0010: a
+  declaring `For Each`'s captured variable now gets a fresh per-iteration environment); and
+  `Dim c As Char : For Each c In "xyz"` — a bare `For Each` over a
+  `String`'s characters infers the element type as `Object`, not `Char`, which reuse's assignment
+  coercion now refuses where a fresh declaration never had to check it — **CLOSED 2026-09-27 by
+  task #171**, below.
+- ⭐ **Newest — #171 DONE (fix committed `5250d519`).** A `String` `For Each` collection now
+  enumerates as `Char` (VB's rule; `String` implements `IEnumerable(Of Char)`) instead of falling
+  through to `Object` — closing the gap #168's own entry above named. Three layers, one commit:
+  - **Analyzer** (`SemanticAnalyzer.IsStringForEachCollection`): a String collection (by name
+    `String`/`System.String`, or a `System.String` .NET handle; NEVER an array — a handle
+    `System.String[]` is `TypeInfo(Name: "String", Kind: Array)` and stays on the Array arm)
+    infers `Char`. #168's hidden reuse variable takes the same type, so
+    `Dim c As Char : For Each c In s` type-checks. An explicit `For Each x As T In s` is refused
+    unless `Char` widens to `T` — the Array arm's own rule, reapplied. Before this,
+    `For Each n As Integer In "ab"` compiled and the backends DISAGREED: C# printed `97 98`, C++
+    `97 98 0`, JavaScript `a b`, MSIL `InvalidCastException`.
+  - **MSIL** (`MSILBackend.cs`): `IRForEach` itself already lowered a String correctly; two
+    Char-consuming arms did not. `Console.WriteLine(c)` fell to a `box object` arm — a no-op box on
+    a raw char where `WriteLine(object)` wants a reference — `InvalidProgramException` for ANY
+    Char local, loop or not. A Char operand of `&` reached `String::Concat(string, string)` raw,
+    same exception. Both now go through dedicated arms (`WriteLine(char)`;
+    `EmitCharConcatOperandAsString` → `Char::ToString`). Char only — every other value-typed `&`
+    operand still reaches `Concat` raw, a wider pre-existing gap left alone on purpose.
+  - **C++** (`CppCodeGenerator.cs`): a String `For Each` now iterates a `std::string` COPY of the
+    collection. A literal rendered as a raw `const char[N]`, and the range-for walked its NUL
+    terminator too — `For Each ch In "abc"` printed a fourth, invisible character. The copy also
+    gives .NET's snapshot semantics: a body that reassigns the String it iterates keeps
+    enumerating the ORIGINAL characters (measured: wrapping only literals, not variables, still
+    prints garbage the moment the loop body reassigns the variable to a DIFFERENT allocation —
+    `E12` in the test fixture below; a same-allocation growing reassignment, `E7`, happens not to
+    need it).
+  - JavaScript keeps its DESIGNED refusals unchanged: a Char local or a Char literal is BL7004
+    ("JavaScript has no character type. Use String."); a bare `For Each ch In s` with an inferred
+    Char still runs.
+  - Tests: `VisualGameStudio.Tests/Compiler/ForEachOverStringTests.cs` (front end/IR, fast subset)
+    and `ForEachOverStringExecutionTests.cs` (Integration; four-backend where all four agree, three
+    of four where JS's refusal is the point). Measured with `probe.py` across 4 backends × 3 entry
+    points before/after; byte-compared 3,436 corpus/probe files with 0 differences outside the
+    String-`For Each` probes themselves; the IR verifier fired 0 times. Eight mutants built and
+    killed for real (source patched, `BasicLang.dll` rebuilt and swapped into the test output,
+    never during a `dotnet test` run, then restored and md5-verified) — see
+    `ForEachOverStringTests`/`ForEachOverStringExecutionTests` doc comments for which test kills
+    which. One CONSTRUCTED mutant did NOT kill: `IsStringForEachCollection`'s own array exclusion
+    is presently dead code — both its call sites already sit behind a sibling
+    `Kind == TypeKind.Array` check in `Visit(ForEachLoopNode)`, so the helper is never even invoked
+    with an array-kind `TypeInfo` today; `StringArray_StillEnumeratesAsString` is kept as a
+    behavior pin (a `String()` array must keep enumerating as String), not a claim that it kills
+    that mutant.
+  - Filed, not fixed here: **#181** (`AscW`/`Asc` are not known intrinsics — measured:
+    `For Each ch In s : total = total + AscW(ch)` fails on EVERY backend, at the front end, with
+    "Arithmetic operator '+' requires numeric operands"; unrelated to this fix, pre-existing, S6 in
+    the probe set); **#182** (C# keyword identifiers — filed as a separate item; not characterized
+    further here, and not reproduced against String `For Each`); **#183** (MSIL: `&` with an
+    Integer or Double operand, and `Console.WriteLine` of a `Short`, both raise
+    `InvalidProgramException` — RE-VERIFIED here with two standalone one-line repros
+    (`"n=" & i`, `Console.WriteLine(shortVar)`), same exception, same "Common Language Runtime
+    detected an invalid program." The SAME class of defect this task fixed for Char, unfixed for
+    every other value type; a basic, pre-existing gap, not opened by this task and not touched by
+    it — `EmitCharConcatOperandAsString`'s own doc comment says so: "Char ONLY … a wider,
+    pre-existing gap of this backend, left for its own change."); **#184** (owner decision needed:
+    should `Char` widen to `String` on assignment/return/parameter, the way VB allows treating a
+    length-1 String literal as source but not a bare Char value? `For Each s As String In "ab"` is
+    refused today under the same rule as `As Integer`, deliberately, until #184 is decided).
+- ⭐ **Newest — #185 DONE (`Is`/`IsNot` reference identity, fix committed `ffed9fc1`, ADR-0011).**
+  `x Is Nothing`, `x IsNot Nothing` and `a Is b` did not parse anywhere except `Case Is Nothing`
+  before this. The architect's ruling is
+  `docs/superpowers/decisions/0011-is-isnot-reference-identity.md`.
+  - **D1 (grammar):** `Is`/`IsNot` are binary operators at the `=`/`<>` level in BOTH expression
+    parsers (the recursive-descent chain AND the precedence-climbing continuation); `IsNot` is now
+    a lexer keyword. `Case Is Nothing` keeps its dispatch and is now marked `WrittenWithIs`
+    (`NothingPatternNode`), which separates it from VB's value comparison `Case Nothing`. A
+    `Not`-shaped left operand (`Not x Is Nothing`) is refused, naming `x IsNot Nothing` — `Not`
+    itself stays at unary precedence (moving it is filed separately as **#195**).
+  - **D2 (operand rule, `VisitIdentityComparison`):** an operand is `Nothing` or a type #173's
+    `NothingAdviceFor` admits `Nothing` into — the ONE classification, no parallel list; value
+    types are refused BC30020-style, each refusal naming its own fix. A nullable is admitted only
+    against `Nothing` (naming `.HasValue` otherwise). Two non-`Nothing` operands must be related
+    (one converts to the other, or one is `Object`) or the comparison is refused as always-False.
+    `Case Is Nothing` follows the SAME rule (`CheckCaseIsNothingOperand`).
+  - **D3 (C++ `Is Nothing` on String/array):** ONE C++ null test, `EmitNullTest`, shared by the new
+    identity node and `IRNothingPatternCase` — String and array test EMPTINESS there (no null
+    state on C++). This CLOSES **#189**'s C++ `Case Is Nothing` rows on String/array, which
+    previously failed to compile (`x == nullptr` on a `std::string`/`BasicLang::Array<T>`).
+    **The divergence is deliberate and MEASURED:** `"" Is Nothing` and an empty array `Is Nothing`
+    are True on C++ only, False on C#/JavaScript/MSIL — pinned by name,
+    `IsIsNotOperatorExecutionTests.CppStringAndArrayNothingIsEmptiness_DivergesFromDotNet`. It
+    flips for arrays (only) when `Array<T>` gains a real null state — **#196**, filed separately.
+  - **D4 (non-portable identity):** the front end refuses, on EVERY backend, `Is`/`IsNot` where
+    either non-`Nothing` operand is statically String or a delegate type — a user `Delegate`,
+    `Action`/`Func`, OR a resolved **.NET** delegate (`EventHandler`, `Predicate(Of T)`, …, via the
+    analyzer's own .NET resolver, `IsNetDelegateType` — never a name list). `s Is Nothing` /
+    `d IsNot Nothing` stay legal. `Object Is Object` is admitted (the Object hatch). Proven with a
+    class whose user `Operator =` always returns True (`System.Version`, since a BasicLang
+    user-declared `Operator =` does not exist yet — **#198**): `a Is b` on two distinct instances
+    is False on C# while `a = b` is True — emission never reaches a value-equality operator.
+  - **D5 (IR shape):** a new node, `IRIdentityCompare { Left, Right, Negated }` — deliberately NOT
+    a `BinaryOpKind`/`CompareKind` (either would fall into an existing `default:` arm and silently
+    emit `==`, and could be answered by a user `Operator =`/`Delegate.op_Equality`/String value
+    equality). Every walker that must see it does: `NamesWrittenBy` (pure — a read of both
+    operands, a definition of its own name, no kills, per ADR-0006), `UsesOf`/`ReplaceUses`,
+    `CollectReads`/`CollectNames`, the IR verifier, replicability, the C++ capability checker, the
+    ClosureLowering clone, the interpreter, CopyProp (with a LAMBDA-REFERENCE exclusion — a lambda
+    renders as its own expression at its use site, so `(() => {…}) === null` is not valid on any
+    target), CSE (keyed so it is NEVER merged with an `IRCompare Eq` of the same operands, which
+    may run user code) and LICM. `ConstantFoldingPass` folds ONLY `Nothing Is/IsNot Nothing`
+    (never `x Is x`, never rewritten to/from `Eq`/`Ne`).
+  - **Emission:** C# `(object)(a) == (object)(b)`; MSIL `ceq`; JavaScript `===` plus the SAME
+    null/undefined test `Case Is Nothing` already used; C++ `shared_ptr ==` (`Me` via `.get()`) or
+    the D3 helper, with a lambda literal wrapped `std::function(...)` first (a bare closure has no
+    `== nullptr`); LLVM `icmp`.
+  - Measured (probe.py, 4 backends × CLI/CLI-O/Release .blproj, 38 programs): every refusal (R1-R9,
+    plus R10/R10b for the .NET-delegate classification added after the initial pass) refused on
+    every backend; every other row RAN OK except the pre-existing, unrelated gaps below. Byte
+    compare: the 9 files that changed are all C++ `Case Is Nothing` on a String or array, going
+    from a compile failure to `(x).empty()`. `BASICLANG_VERIFY_IR` fired 0 times.
+  - Pre-existing gaps, unrelated to `Is`/`IsNot`, each confirmed by a no-`Is` control that fails
+    identically: a captured lambda's C++ variable mutation (**#140** — E3 vs its E3b control, both
+    "RAN WRONG" identically on C++); `Integer?` has no lowering on C++/MSIL/JavaScript at all
+    (**#193** — undeclared identifier 'Integer' / BL7007, unrelated to `Is`); `Object` has no C++
+    mapping (pre-existing, unrelated); `System.Version` (P11/P11b's D4 (1) proof) has no
+    C++/JavaScript mapping and no MSIL lowering (**#194** — ordinary .NET types on MSIL — names
+    the MSIL row; C++/JavaScript's "no mapping" is the same pre-existing gap other unresolvable
+    .NET types hit), so P11/P11b run on C# only.
+  - **Tests:** `VisualGameStudio.Tests/Compiler/IsIsNotOperatorTests.cs` (front end + IR, fast
+    subset) and `IsIsNotOperatorExecutionTests.cs` (`[Category("Integration")]`, four backends ×
+    two pipelines over the kind table, two-operand identity, the promoted #189 C1/C2/E7 rows, the
+    named C++ divergence, D4 (1)'s operator-overload proof, `Me`/lambda-reference identity, and the
+    fold). `JsExecutionTierRosterTests`' roster grew 76 → 77. `NothingConversionExecutionTests`'
+    and `docs/superpowers/specs/2026-07-07-cpp-backend-preexisting-gaps.md`'s stale
+    "`Is` does not parse" claims were corrected — their assertions were not touched.
+  - **Mutants:** the implementer's list (18 distinct edits once its "String and delegate arms
+    separately" and "JS / C++ wrap" bullets are each split, per their own wording) plus the ONE
+    genuinely new mutant this session's dispatch added once the .NET-delegate classification
+    landed, the `System.Delegate`/`MulticastDelegate` root check — **19 total, all 19 KILLED**
+    (the dispatch's OTHER "extra" mutant, "the `IsNetDelegateType` call removed", is the SAME edit
+    as the implementer list's ".NET-delegate classification" bullet, so it was tested once, not
+    twice), built and run for real in a separate `git worktree` (never during a `dotnet test` run;
+    `BasicLang.dll` swapped into the test output, then the main tree's real DLL restored and
+    md5-verified identical, `4719426f477afb155e69a8a2461538f4`, before and after). The
+    `System.Delegate`/`MulticastDelegate` root-check removal needed a `System.Delegate`-typed
+    operand pair — NOT obviously constructible (the bare keyword `Delegate` cannot be a type
+    name), but IS constructible via the DOTTED spelling `System.Delegate`: `BasicLangLexer`'s
+    "after a dot, treat everything as an identifier" rule lexes it as a plain qualified name,
+    confirmed by tokenizing it directly rather than assumed from the keyword table. Four of the 19
+    needed the KILLING TEST fixed first, not the mutant re-picked: two C++-text and one JS-text
+    assertion were vacuous against the SPLICED BCL RUNTIME's own unrelated `.empty()`/`.get()`
+    text or NullTest's own leading paren, until narrowed to the exact call site; the "precedence-
+    climbing path" TestCase was actually still going through recursive descent (`b = x Is y` is an
+    ASSIGNMENT, which parses its RHS via `ParseExpression`) — the real climbing path is a BARE
+    expression statement (`x Is x` alone, no assignment, no call), found by mutating each parser
+    table independently and observing which shapes stopped parsing. See
+    `IsIsNotOperatorTests.cs`'s and `IsIsNotOperatorExecutionTests.cs`'s doc comments for which
+    test kills which.
+  - Follow-ups filed, not fixed here: **#195** (`Not` to VB precedence); **#196** (`Array<T>` a
+    real null state, which flips the C++ divergence for arrays); **#197** (`TypeOf`, not touched
+    by this task); **#198** (BasicLang cannot declare a user `Operator =` yet, so D4 (1)'s
+    four-backend proof waits on it); **#193** (`Integer?` on C++/MSIL/JavaScript, pre-existing);
+    **#194** (ordinary .NET types, `System.Version` included, on MSIL — pre-existing).
+- ⭐ **Newest — #173 DONE (fix committed `c0b457d9`).** `Nothing` now converts to any REFERENCE
+  type — a class, an interface, a delegate (user `Delegate`/`Action`/`Func`), `String`, an array, a
+  collection, or an unresolvable .NET handle — at every one of the NINE conversion sites the
+  analyzer has: a `Dim`/field/module-level initializer (one code path), an assignment
+  (variable/field/property-set/array element, one code path), a user-call argument, a
+  delegate-invocation argument (`f(Nothing)` where `f` is itself a delegate VALUE), a `New`
+  argument, a `MyBase.New` argument, `Return`, and an `Optional` default. Before this the `Nothing`
+  literal typed `Object`, and every site's own `IsAssignableFrom` refused it into anything but
+  `Object` — `Dim f As Action = Nothing` (the filed case, #155's L16) was one instance of a refusal
+  that hit all nine sites alike.
+  - `JudgeNothingConversion` is the ONE answer, asked at all nine sites; it is built on
+    `NothingAdviceFor` (the typed array literal's own rule, `CheckTypedLiteralElement`, now routed
+    through the same method) — the ONE-answer invariant is pinned directly
+    (`NothingConversionTests.TypedArrayLiteral_AndDimSite_AgreeOnNothing`).
+  - A value type STAYS refused, with advice ("Nothing has no value of type 'Integer'; write 0").
+    `NothingAdviceFor` gained four new arms once value types started reaching it that used to call
+    a reference type: the P1 native structs (DateTime/TimeSpan/Guid — NativeOwned, reference-typed
+    StringBuilder excepted), a type parameter, a tuple, and `Union`. `Integer?` — the one value type
+    VB itself admits `Nothing` into — is admitted. VB's value-type Nothing-DEFAULT (rather than
+    refusal) is the owner decision **#186**, out of scope here.
+  - **IR:** `CoerceToDeclaredType` re-types an Object-typed null constant to the type it is stored
+    into (the same in-place re-typing a numeric literal already gets); a `Nothing` argument to a
+    `Func`/`Action` INVOCATION is typed from the delegate's own generic arguments
+    (`CoerceToParameterType`'s new arm — a delegate value has no parameter-list Symbol to read).
+  - **C++ divergence, recorded:** `CppCodeGenerator.NothingOf` spells a null constant by its TYPE —
+    `nullptr` for a `shared_ptr` class/interface/collection and for a `std::function` delegate, but
+    the EMPTY value for the three reference-type representations this backend holds by VALUE with
+    no null state: `std::string{}` for `String`, `BasicLang::Array<T>{}` for an array,
+    `BasicLang::NetRef{}` for a .NET handle (already `MapType`'s own DEFAULT-value convention).
+    `Dim s As String = Nothing` therefore behaves exactly like `Dim s As String` (`""`) on C++; VB
+    can tell `Nothing` apart from `""` only through `Is`. At the time this entry was written `Is`
+    did not parse at all (**#185**), so the divergence was invisible to any BasicLang program.
+    **#185 is now DONE (see its own entry above)** — `Is`/`IsNot` parse everywhere, and this
+    divergence is directly observable and measured: `"" Is Nothing` is True on C++, False on
+    C#/JavaScript/MSIL (same for an empty array). Verified through the CLI:
+    `Dim s As Stream = Nothing` (an ordinary unresolvable .NET reference type, not NativeOwned) now
+    emits `BasicLang::NetRef s = {}; s = BasicLang::NetRef{};` —
+    `NetGeneratedShimConformanceTests.NothingInAHandleSlot_DoesNotYetCompile_PinnedDivergence`'s
+    doc comment was corrected to say so (its assertions are untouched: the CAST form,
+    `CType(Nothing, Stream)`, is a different code path and still fails to build, C2440).
+  - Measured (probe.py, 4 backends × CLI/CLI-O/Release .blproj): before, every `Nothing` probe
+    failed at compile time; after, N1-N3, N4c, N5, N6b and X1-X8 run correctly on every backend, on
+    both the standard and aggressive optimizer pipelines. Byte-compared 3,991 corpus/probe files
+    across `t118`/`t122`/`t155`/`t164`/`t168`/`t171`/`t175` plus the samples: only `#164`'s E3
+    (`Return Nothing` from a `String` function, 3 files) changed — `return nullptr;` became
+    `return std::string{};` — every other file identical; the IR verifier fired 0 times.
+  - Cells that stay wrong are PRE-EXISTING gaps, unrelated to `Nothing`, each confirmed by a
+    no-`Nothing` control that fails identically:
+    - **#187 — now DONE, see its own entry below.** At the time this entry was written, a lambda
+      (or an `AddressOf` result) could not be stored into a user `Delegate`-typed variable
+      (`Dim d As Notify = Sub(...)` was `Cannot assign value of type 'Action' to 'Notify'` on all
+      four backends, with or without `Nothing` anywhere in the program), so N4/N4b were not run by
+      this fixture; N4c (the same shape with no lambda ever stored) was, and passed everywhere.
+      N4/N4b are now promoted into `NothingConversionExecutionTests` alongside N4c, run on every
+      backend under both pipelines.
+    - **#188 — now DONE, see its own entry below.** At the time this entry was written, a delegate
+      FIELD invoked from inside its OWN class failed on C++ (a `void*` field) and on JavaScript
+      (`ReferenceError: Callback is not defined`), so N6 (that exact shape — this task's own F0
+      probe) was not run by this fixture; N6b (the same "callback set to Nothing, then later set",
+      read into a local before the switch) was, and passed everywhere. N6/F0 now runs on every
+      backend too — see `DelegateMemberInvocationExecutionTests`' F0 case, not a promotion here
+      (this fixture never carried a test of its own for N6, only the note explaining why it was
+      excluded).
+    - **#189 — now DONE too, see its own entry below.** At the time of THIS entry, three C++ gaps
+      and one JavaScript gap, each PINNED rather than silently accepted: a captured `Catch`
+      variable's member access (`ex.Message` → `ex->Message` on a BY-VALUE exception type) failed
+      to compile on C++ (N7, pinned); `Case Is Nothing` on a String or an ARRAY failed to compile
+      on C++ (X4 was not run; X4b, the same shape without that one comparison, ran and passed) —
+      **this row was CLOSED by #185** (ADR-0011 D3's one `EmitNullTest` helper), see #185's own
+      entry above; the promoted, passing pin is `IsIsNotOperatorExecutionTests
+      .CaseIsNothing_189_RunsOnEveryBackend_BothPipelines` (probes C1/C2/E7), not X4/X4b, which
+      were never renamed; JavaScript printed the real `null` rather than `""` when a `String`
+      `Nothing` was concatenated into text (S1-S3's JavaScript legs, pinned). **All of it is now
+      CLOSED — fix commit 381b95ff, #189's own entry below** — N7 is folded into the run-everywhere
+      set and S1-S3's JavaScript legs now assert the same "" text as every other backend.
+  - **Tests:** `VisualGameStudio.Tests/Compiler/NothingConversionTests.cs` (front end + IR, fast
+    subset, 59 cases) and `NothingConversionExecutionTests.cs` (`[Category("Integration")]`, four
+    backends × two pipelines over the 14 probes that run everywhere, plus N7 and the S1-S3
+    JavaScript-null pins and the two C++-spelling assertions — 24 cases). `JsExecutionTierRosterTests`'
+    roster grew 73 → 74; `Msil/ClosureLoweringTests`' and `Blnet/NetGeneratedShimConformanceTests`'
+    stale doc comments (both predating #173, both describing a `Nothing` refusal that no longer
+    holds) were corrected — their assertions were not touched, and the CLI was used to re-verify the
+    new behaviour before writing the correction.
+  - **Mutants:** 14 built and killed for real — source patched in a SEPARATE git worktree,
+    `BasicLang.dll` rebuilt there and swapped into the test output (never during a `dotnet test`
+    run), then the main tree's real DLL restored and md5-verified (`50895fd00942eae00f75d84420c8b371`,
+    identical before and after, confirming this SDK's builds are byte-deterministic given the same
+    source and path). Admission dropped one at a time at each of the eight sites (Dim / assignment /
+    user-argument / delegate-invocation-argument / New / MyBase.New / Return / Optional);
+    `NothingAdviceFor` made to always return null, its NativeOwned arm dropped, its TypeParameter
+    arm dropped; the IR re-type removed; the delegate-argument IR arm removed; `NothingOf` made to
+    always return `nullptr`. All 14 killed on the first try; see `NothingConversionTests`'/
+    `NothingConversionExecutionTests`' doc comments for which test kills which.
+  - Filed, not fixed here: **#185** (`Is`/`IsNot` did not parse at all — the only source-level way
+    VB tells `Nothing` apart from a real value — **now DONE, see its own entry above**);
+    **#186** (VB's value-type Nothing-DEFAULT, as opposed to refusal — an owner decision, still
+    open); **#187** (a lambda/`AddressOf` into a user `Delegate` — **now DONE, see its own entry
+    below**); **#188**/**#189** above (**#189's `Case Is Nothing` C++ row is now closed by
+    #185**; **#188 is now DONE too, see its own entry below** — unrelated to `Is`/`IsNot`; see
+    #187's entry below for its widened scope).
+- ⭐ **Newest — #122 DONE (ADR-0006 D1's Obligation, committed `22f18284`).** The closure rule
+  narrows from "every local is call-visible in a function that creates a lambda" (the interim
+  approximation) to the locals a lambda of that function actually CAPTURES, read straight off the
+  lambda's own built IR (`OptimizationPass.LambdaCapturesOf`/`IsLambdaCaptured`,
+  `BasicLang/IROptimizer.cs`) and recorded by `IRBuilder` on the creator
+  (`IRFunction.LambdaCapturedNames`/`LambdaCaptureSources`). Falls back to the old interim rule,
+  for the WHOLE function, whenever a referenced lambda's names could not be enumerated
+  (`IRInlineCode`) or were never recorded (hand-built IR) — soundness beats precision throughout.
+  Pure precision gain: 492/492 probe cells and 1056/1056 corpus cells behaviourally IDENTICAL, 0
+  verifier fires; every emitted-code difference is a gained fold/merge/hoist on a local NO lambda
+  captures. Full rule, the own-locals and exact-spelling decisions, and a pre-existing blind spot
+  the soundness review found (not widened by this change — a lambda passed as a `MyBase.New(...)`
+  argument, task #170) are in this ADR's implementation note for D1. The soundness review also
+  filed tasks #164-#169 (side findings; #169 is the separate open question of whether a lambda
+  parameter should bind case-insensitively to a same-spelled creator local — not fixed here).
+  Tests: `VisualGameStudio.Tests/Compiler/LambdaCaptureSetTests.cs`. See also the corrected K1-shape
+  example above ("CLOSED on C#/JavaScript").
+- ⭐ **Newest — #183 DONE (fix committed `34ad5c2c`).** MSIL: `&` with a value operand, and
+  `Console.Write`/`WriteLine` of every value type. Before this, `String::Concat(string, string)`
+  received Integer/Long/Short/Byte/Double/Single/Boolean/UInteger/ULong/SByte/UShort raw where a
+  string reference belongs — `"n=" & 5`, `i & "!"`, `acc & k` — `InvalidProgramException` at the
+  CLI, CLI `--optimize` and a Release `.blproj`; `Console.WriteLine`/`Write` had no arm for Short,
+  Byte, SByte, UShort, UInteger or ULong (same exception, and `Console.Write(Short)` named the
+  nonexistent `Write(Int16)` — `MissingMethodException`), and widened Single to
+  `WriteLine(float64)`, printing `0.1F` as `0.10000000149011612`. #171 had fixed the `&` gap for
+  Char only.
+  - `EmitConcatOperandAsString` generalizes #171's Char-only helper: Char keeps
+    `Char::ToString(char)` byte-identical; every other value boxes to its OWN type
+    (`ValueTypeBoxToken`) and calls `Object::ToString()` via `callvirt` — never `box object`, which
+    is a no-op on a value and was the exception. `ConsoleWriteOverload`/`TryEmitConsoleValueWrite`
+    are the one shared table/helper for `Write` and `WriteLine`: int8/int16/uint8/uint16 go to
+    `(int32)` with no conversion (the load already sign/zero-extends); Single goes to `(float32)`,
+    never `(float64)`; an enum or a Structure boxes to its own type token for `(object)`.
+  - Measured with `probe.py`: the five contract probes (`&` with every value type; `Console.Write`/
+    `WriteLine` of every value type) print the C# answer on MSIL in all 15 cells (5 probes × CLI /
+    CLI `-O` / Release `.blproj`), previously `InvalidProgramException`/`MissingMethodException`
+    everywhere. C#, C++ and JavaScript unchanged. Byte-compared 5,230 files: every `.cs`/`.js`/
+    `.cpp`/`.h` identical; the 57 `.il` files that differ are the probes plus #164's E8
+    (Byte/Short, now correct, unrelated task). `BASICLANG_VERIFY_IR` fired 0 times.
+  - **Why the existing MSIL fixtures never caught `"n=" & 5`:** every one wraps a number in
+    `CStr()` before `&` (confirmed by grep — no existing test concatenates a raw numeric/Short/
+    Byte/Single value on MSIL without it), and none prints a small or unsigned integer or a
+    `Single` directly. `CStr(...)` is a separate call path, untouched by this fix.
+  - **Tests:** `VisualGameStudio.Tests/Msil/MsilValueToStringTests.cs` (IL-text pins, fast subset,
+    24 cases — the five mutants below that no running program can distinguish from the fixed
+    behaviour) and `MsilValueToStringExecutionTests.cs` (`[Category("Integration")]`, 21 cases: the
+    five contract probes on both pipelines and all three entry points, plus the edge probes that
+    now run clean: unsigned types, a function/field/array-element/arithmetic `&` operand, and a
+    String `Nothing` operand). `JsExecutionTierRosterTests`' roster grew 75 → 76 (added by hand —
+    the fixture lives in the `Msil` namespace, outside that guard's automatic discovery).
+  - **Mutants:** 15 built and killed for real, in a separate `git worktree --detach` (never the
+    main tree), `BasicLang.dll` rebuilt there and swapped into the test output only between
+    `dotnet test` runs, then the main tree's real DLL restored and md5-verified. Six (c, d, e, f,
+    g, i) change only the emitted IL, not any probe's printed output — an alternate boxed-`ToString()`
+    path happens to print the same text as the correct overload, and the enum/Structure fallback
+    (e, i) does not run on MSIL at all yet (#192) — and are killed only by the IL-text fixture; the
+    other nine are killed by the execution fixture. See both fixtures' doc
+    comments for which test kills which.
+    - ⚠ **The test-writer brief's prose ("value on the LEFT kills b, on the RIGHT kills b2")
+      is BACKWARDS from the measured mutants** — re-verified directly: `b_left_only` (which
+      leaves only the LEFT `&` operand converted) is killed by a probe with the VALUE ON THE
+      RIGHT (`"x=" & i`; the right conversion is what it removed), and `b2_right_only` is killed
+      by a probe with the value on the LEFT (`i & "!"`). The mutants.py diff and the measured
+      kill lists agree with each other; only the summary sentence in the brief was inverted.
+  - **Filed, not fixed here** (left out of the execution fixture on purpose, one comment naming
+    each): **#191** (a user-class `&` operand, and `Console.Write` of a class — pre-existing,
+    unrelated); **#192** (an MSIL enum LOCAL is declared `class 'Shade'` for a type that is itself
+    a value type — TypeLoadException; a default, never-`New`'d Structure local is never
+    initialized — NullReferenceException; `Date`/`DateTime` do not resolve as a type at all on
+    MSIL). `MsilValueToStringTests` pins the enum/Structure fallback's IL shape only (`box
+    'Shade'`/`box 'Pt'`, verified directly against the harness before writing the assertion),
+    never a run. **#129** (Decimal cannot be declared as an MSIL local at all — `MSILBackend`'s
+    type-spec sanitizes `valuetype [System.Runtime]System.Decimal` into an undefined class name;
+    every use fails to assemble, mixing or `&` or not).
+- ⭐ **Newest — #189 DONE (fix commit 381b95ff).** A `Nothing` String in `&`/`Console.Write`/
+  `WriteLine` (JavaScript, C#); a `Catch` variable captured by a lambda (C++). What remained of
+  #189 after #185 closed its C++ `Case Is Nothing` rows (see that entry's correction above).
+  - **JavaScript:** `TextOf` takes a `nothingIsEmpty` flag, passed only at `&` and
+    `Console.Write`/`WriteLine` (`CStr`/`.ToString()` unchanged, on purpose). A null CONSTANT
+    operand becomes `""` directly; a String value that CAN hold Nothing at run time (a variable,
+    parameter, field or call result — `MayHoldNothing` has no data-flow memory of what was ever
+    assigned) becomes `(x ?? "")`; a literal, a Concat result or a CStr result stays bare, since
+    none of those three can be Nothing (`MayHoldNothing`'s three `false` arms). `ConcatText` would
+    force the LEFT operand through `String(...)` when NEITHER operand is certainly a string — kept
+    as a defensive no-op, not deleted: the front end's own `&` legality rule
+    (`SemanticAnalyzer.cs:9595-9606`, `leftType.Name=="String" || rightType.Name=="String"`) is the
+    EXACT condition `IsStringValue`/`ConcatSpellsString` test, so one operand is always spelled as
+    a certain string by the time codegen sees it — confirmed unreachable by running the full fast
+    subset (7,594 cases) against a mutant that deletes it: 0 failures, byte-identical to baseline.
+    `__blStr` (the Object-typed runtime check) now returns `""` for null/undefined instead of JS's
+    own `String(null)` → `"null"` spelling. Before this fix, `"[" & s & "]"` printed `[null]`,
+    `Console.WriteLine(s)` printed the bare word `null`, and — silently worse —
+    `acc = Nothing : acc = acc & i` in a loop did NUMERIC addition (JS `+` is not guaranteed string
+    concatenation unless a side certainly already is one) and printed `6` where VB prints `123`.
+    Churn, measured: 288 of 1,116 `.js` files in the byte-compare corpus changed (96 programs):
+    ~300 `&` operands gained a guard, ~120 `Write`/`WriteLine` arguments, 24 `__blStr` bodies —
+    every changed line guards an operand that can hold Nothing, no unrelated JS output moved.
+  - **C#:** `ConcatOperand` emits a `Nothing` CONSTANT operand of `&` as `(string)null` unless the
+    OTHER operand is already a non-null String (C# already picks string `+` there regardless).
+    Reachable ONLY after the optimizer's `CopyPropagationPass` (a STANDARD pass, unconditional on
+    every shipping route) folds a `Nothing`-initialized String local into the literal the Concat
+    sees: `Dim s As String = Nothing : t = s & 5` types fine as `string + int` while `s` is still a
+    variable (its own declared type is `string`), and turns into C#'s LIFTED `int?` arithmetic —
+    CS0029, "Cannot implicitly convert type 'int?' to 'string'" — only once propagation replaces
+    `s` with a bare `null`. Measured directly: the non-optimizing path emits `t = s + 5;` (no cast,
+    no error); the optimizer-running path emits `t = (string)null + 5;`. 0 `.cs` files changed in
+    the corpus.
+  - **C++:** `IsCatchMessageRead`/`CatchMessageText` are the ONE predicate/spelling for "is this a
+    read of catch variable X's Message" / "what is its `.what()` text", shared by the Catch
+    clause's own body (`EmitCatchBody`, which now pushes the catch variable into
+    `_catchVariablesInScope`) and any lambda written inside it. A lambda takes each catch variable
+    it reads by INIT-CAPTURE — `[=, ex = std::runtime_error(ex.what())]` — never a plain `[=]`
+    copy, which would copy the binding's STATIC type and SLICE a by-value
+    `const std::exception&`/`const BasicLang::NetException&`. `GenerateLambdaExpression` also
+    resets the region label suffix, region blocks and Finally frames on lambda entry: a lambda body
+    is its OWN C++ function scope, so none of the enclosing region's `_nex`/`_fex` label-suffix
+    state applies inside it. Measured before the reset: a `Try` inside a lambda written in a Catch
+    declared `try1_end_nex:` but jumped to the unsuffixed `try1_end` — "use of undeclared label" —
+    and a lambda written inside a `Try`/`Finally` wrapped each of its own exits in a copy of the
+    enclosing `Finally`. 15 `.cpp` files changed in 5 programs (all catch captures); the reset
+    itself changed no corpus file.
+  - **Measured** (probe.py, 4 backends × CLI / CLI `--optimize` / Release `.blproj`): J1-J6, C1-C2
+    moved 27/108 → 108/108 (C3, the control — `ex.Message` read directly, no lambda — stayed OK
+    throughout). `BASICLANG_VERIFY_IR` fired 0 times.
+  - **Tests:** `VisualGameStudio.Tests/Compiler/NothingStringTextTests.cs` (fast subset, pure
+    codegen-text, 17 cases across the JS/C#/C++ legs — `JsNothingStringConcatTextTests`,
+    `CSharpNullConstantCastTests`, `CppCatchLambdaTextTests`) and
+    `NothingStringTextExecutionTests.cs` (`[Category("Integration")]`, 33 cases: J1-J6/C1-C3 on all
+    four backends × both pipelines plus J6 pinned separately by name, a Release `.blproj` leg
+    through MSIL for all 9 probes — the one backend #134 already established as the real
+    aggressive-pipeline entry point on Linux, since a native C++ Release build always needs MSVC
+    and BL6015-skips here — seven edge probes (E1-E3/E7-E9/E11) and the pre-existing failures
+    below). `JsExecutionTierRosterTests`' roster grew 81 → 82.
+  - **Moved pins (6, all promoted, none deleted):** `JsBooleanTextTests.NonBooleanConcat_IsUnchanged`
+    (renamed `..._SkipsBooleanText_GuardedOnlyWhereNothingIsPossible`, re-pinned to the `?? ""`
+    guard, intent unchanged); `NothingConversionExecutionTests`' N7 Cpp compile-failure pin (folded
+    into the run-everywhere `TestCase` set, since C++ runs it now) and its S1-S3 JavaScript
+    `[null]` pins (folded into the same C#/C++/MSIL assertion — one 4-way check now, not two);
+    `MsilValueToStringExecutionTests.E8_JavaScript_PinsTodaysNullText_Against189` (folded into E8's
+    existing 3-backend check, now 4-way). `Msil/ClosureLoweringTests`' L16b doc comment (STALE
+    claim that C++ "still fails, for the SAME unrelated reason as before" — corrected; its two
+    tests now call `FourBackends.RunsOnEveryBackend[Aggressive]` instead of the 3-backend
+    `CSharpJsMsil*` helpers).
+  - **Follow-ups pinned as pre-existing, unrelated failures** (each with its own comment naming the
+    task, so a fix anywhere is a deliberate, noticed change to `NothingStringTextExecutionTests.cs`):
+    - **#136, WIDENED.** A `Try` nested inside a multi-statement `Sub` lambda's body, itself
+      written inside a `Catch` clause (edge probe E6): the emitted C# lambda body is `() => { ; };`
+      — the ENTIRE nested Try/Catch and the trailing `WriteLine` are dropped, not merely reordered,
+      so the program prints NOTHING (measured: empty string). #136's original shape was narrower
+      (a Sub lambda's write to a bare property not observed later); this is a broader instance of
+      the same C# lambda-body-lowering gap.
+    - **#201, WIDENED.** A lambda capturing a Catch variable, stored in a `List(Of Action)` (E5):
+      compiles on C#/JS/MSIL, fails to COMPILE on C++ — `List(Of Action)`'s element type lowers to
+      a bare `void*` rather than `std::function<void()>`, so invoking an element read back out
+      (`a()`) is "assigning to 'void *' from incompatible type 'void'" (clang) / "void value not
+      ignored" (g++). The catch-capture fix itself is fine in isolation (C1/C2, E5's own lambdas
+      all compile); this is a generic-collection-of-delegate gap, filed alongside #201's existing
+      user-delegate-value C++ gaps.
+    - **#205, NEW.** A native (List-index-out-of-range) exception's message, read once directly and
+      once through a lambda captured in the same Catch (E10): C#/C++ agree (`same=True`); MSIL says
+      `same=False` — its captured Catch variable's `Message`, read from inside the lambda,
+      disagrees with the direct read taken before the lambda existed. No prior HANDOFF mention of
+      an MSIL closure/catch-message inconsistency, so this is a new number. (Measured, separately:
+      the C++ init-capture mutant — a plain `[=]` copy instead of the init-capture — reproduces
+      this EXACT symptom on C++ too, `same=False`, confirming the mechanism.)
+    - **#191, WIDENED.** An `Object` field holding a boxed Boolean, concatenated (E13): C#/JS agree
+      (`T=False`); MSIL prints `T=` — the Boolean's text is LOST through `&`. #191 already covers a
+      user-class `&` operand and `Console.Write` of a class on MSIL; a boxed Boolean losing its
+      text is a new instance of the same class of gap. (E13's C++ leg does not compile at all —
+      `Object` has no C++ mapping, a much older, unrelated gap, measured as a fact in the pin but
+      not filed under a new number here.)
+    - **#206, left alone (semantic question, not a bug).** `Nothing = ""`: VB says True, every
+      backend here says False (E4, constant-folded: False/False/True everywhere). Forced through a
+      run-time comparison instead of a fold (E4b), C#/JS/MSIL still agree with their own E4 answer,
+      but C++ FLIPS to True/True/False/True — because C++ represents String by VALUE
+      (`std::string`) with no null state, so at RUN TIME `Nothing` IS `""` on C++ (same root cause
+      as `IsIsNotOperatorExecutionTests.CppStringAndArrayNothingIsEmptiness_DivergesFromDotNet`'s
+      P12). C++'s own answer is internally inconsistent between fold time and run time — exactly
+      why this needs a deliberate owner decision, not a quick fix.
+    - **Filed as #207.** JavaScript reads past the end of a `List` without throwing:
+      `Dim a As New List(Of Integer)() : a(3)` returns `undefined` rather than raising, so E10's
+      own JS leg never enters its `Catch` at all and crashes later with an uncaught
+      `TypeError: f is not a function` when the (never-assigned) `f` is invoked. Measured in
+      `NothingStringTextExecutionTests.E10_JavaScript_ReadingPastEndOfList_DoesNotThrow_Against207`.
+  - **Mutants:** 9 attempted, 8 killed for real — source patched in a SEPARATE
+    `git worktree --detach`, `BasicLang.dll` rebuilt there and swapped into the test output only
+    between `dotnet test` runs (never during one), then the main tree's real DLL restored and
+    md5-verified (`62daf0493f9908f64be546319d00fff2`, identical before and after). The `ConcatText`
+    `String(...)` fallback mutant is UNREACHABLE by construction (see above), confirmed by running
+    the full fast subset against it (0 failures). See `NothingStringTextTests.cs`/
+    `NothingStringTextExecutionTests.cs` doc comments for which test kills which mutant.
 - ⚠ **Two arms of the CSE repair are unreachable from any BasicLang program**, and are pinned by
   direct unit assertions in `CseKeyEncodingUnitTests` rather than by a program, because no program
   can express them:
@@ -2858,9 +3368,9 @@ single new failure against the 170-name baseline.
   namespace-scope objects in that order within a translation unit. Held by a mutation that
   reverses the loop. ⛔ JavaScript REFUSES that shape outright ("a module-level initializer ...
   that is not a constant"), so the backends do NOT agree on it and JS is the strict one.
-  ⛔ **`CStr(Double)` prints `3.500000` on C++** where C# and MSIL print `3.5` — pre-existing and
-  nothing to do with globals (measured on a plain LOCAL). Pinned as C++ actually behaves rather
-  than normalised away.
+  ✅ **`CStr(Double)` used to print `3.500000` on C++** where C# and MSIL print `3.5`. Fixed on
+  2026-09-24: every Single/Double → text route goes through the runtime's `FormatDouble` /
+  `FormatSingle` (`CppFloatFormattingTests`), and the pins now expect `3.5`.
   ⚠ **`ValueText` vs `GetValueName` at that site is a WASH**, measured: the base `GetValueName`
   (`ICodeGenerator`) already routes an `IRConstant` to `EmitConstant`, so swapping them passes
   every test. `ValueText` is there for consistency with its sibling sites, not protection — an
@@ -2894,9 +3404,8 @@ single new failure against the 170-name baseline.
   value"); a `Protected` field is not visible from a derived class ("Undefined identifier"), as the
   analyzer does not inherit Protected members into scope; a `Structure` field initializer does not
   PARSE ("Expected member name but found Assignment").
-  ⚠ **`CStr(Double)` → `2.500000` and `CStr(Boolean)` → `True` on C++** are the long-recorded
-  divergences above, not this fix's; the tests assert C++'s own spelling rather than normalising
-  it away.
+  ✅ **`CStr(Double)` → `2.500000` on C++** was the divergence above; it now prints `2.5`.
+  `CStr(Boolean)` → `True` is .NET's spelling (JavaScript printed `true` until 2026-09-24).
 
   ⚠ **A NON-LITERAL field initializer FOLDS as of 2026-09-18** — `FieldInitializerFoldTests`,
   `IRBuilder.BuildConstantFieldInitializer` + the extracted `TryFoldInitializerToConstant`.
@@ -3887,9 +4396,10 @@ single new failure against the 170-name baseline.
   ⚠ **TWO MUTANTS SURVIVE AND THE CODE IS KEPT, because they are UNREACHABLE, not untested.**
   A `Delegate` returning a class: the FRONT END does not implement user Delegate types
   (`AddressOf` yields 'Func', not the declared type; calling it types as 'Void'), so no legal
-  program reaches `GenerateDelegate`. An interface PROPERTY: broken on BOTH .NET backends
-  independently — C# emits an accessor-less property (**CS0548**) and MSIL lowers the access to a
-  FIELD load (**MissingFieldException**), both newly characterized here and a different family.
+  program reaches `GenerateDelegate`. An interface PROPERTY: at the time, broken on BOTH .NET
+  backends independently — C# emitted an accessor-less property (**CS0548**) and MSIL lowered the
+  access to a FIELD load (**MissingFieldException**), both newly characterized here and a
+  different family. **Both since fixed** — C# by the ADR-0002 flag fix, MSIL by task #175 (below).
   Both lines are correct and identical to their eight proven siblings; reverting one to the
   spelling known to be wrong, to buy a mutation score, would re-introduce the bug the day either
   feature starts working.
@@ -4354,14 +4864,14 @@ single new failure against the 170-name baseline.
   `s.Chars`, `s.Empty`, `s.ToUpper` (no parentheses) and `s.Trim` (no parentheses) all gave
   `MissingFieldException` at RUN time; they now give a named `GenerateFailed`. ⚠ A
   parenthesis-free String METHOD name reaches this arm too, so the refusal fires for it.
-  ⛔ **THE INTERFACE-PROPERTY READ IS STILL BROKEN and was deliberately NOT widened to.**
-  `h.Slot` on an `IHolder` still gives `MissingFieldException: Field not found: 'IHolder.Slot'`:
-  `TryResolveProperty` (`MSILBackend.cs:3104`) resolves only through `TryFindClass`, so an
-  interface receiver misses every arm. **It needs an interface-property resolver alongside the
-  existing `DeclaredInterfaceMethod` — a different lookup, not a table row**, which is why the
-  String fix does not reach it. ⚠ **C# cannot be its oracle either**: it emits an accessor-less
-  interface property and does not compile (**CS0548** + CS0200). JavaScript answers `5`. On the
-  open list.
+  ⛔ **THE INTERFACE-PROPERTY READ WAS BROKEN here and was deliberately NOT widened to — FIXED
+  2026-09-26 by task #175.** `h.Slot` on an `IHolder` used to give `MissingFieldException: Field
+  not found: 'IHolder.Slot'`: `TryResolveProperty` (`MSILBackend.cs:3104`) resolved only through
+  `TryFindClass`, so an interface receiver missed every arm. #175 added the interface-property
+  resolver this paragraph called for (`TryResolveInterfaceProperty`, alongside the existing
+  `DeclaredInterfaceMethod`) — a different lookup, not a table row, which is why the String fix
+  did not reach it. MSIL now calls `IHolder`'s own `get_Slot`/`set_Slot`. See the #175 entry
+  further down for the contract, the mutants, and the two follow-ups it opened (#176, #177).
   **9 of 10 mutants killed against the committed fixture; 1 survivor, declared EQUIVALENT.**
   `s7-unknown-member-falls-through` survived the scratch sweep and dies against the committed
   fixture on all five refusal shapes — it was UNTESTED, not dead. ⚠ **`s8-call-not-callvirt`
@@ -4381,9 +4891,9 @@ single new failure against the 170-name baseline.
     `Right("abcdef", Len(Ab()) + 1)` printed `[f]` instead of `[def]`. Now
     `({str})[^({length})..]`; pinned in `CSharpRightReceiverTests`. ⚠ A folded receiver
     (`Right("ab" & "cdef", 2)`) cannot see any of this — the optimizer collapses it to a literal.
-  - ⛔ **C# backend: an interface property emits an accessor-less property** —
+  - ~~⛔ **C# backend: an interface property emits an accessor-less property**~~ — FIXED by the
+    ADR-0002 flag fix; C# has compiled and run a bare interface property since. Was
     `CS0548: 'IHolder.Slot': property or indexer must have at least one accessor`, plus CS0200.
-    The program does not compile, so C# is not a valid oracle for any interface-property shape.
   - **C# backend: `Dim s As String` with no initializer then `s.Length` prints `0`** — the local
     is initialised to `""`. MSIL gives `NullReferenceException`; every other backend agrees with
     MSIL that the local is null.
@@ -4403,8 +4913,8 @@ single new failure against the 170-name baseline.
     emit, so it was not done from a backend.
   - ⚠ **`BasicLang/StdLib/MSILStdLib.cs` is dead code** registered in `StdLibRegistry.cs:36`
     and referenced by nothing, with a wrong `EmitMid`. Delete or wire.
-  - **MSIL: an INTERFACE property read is still `MissingFieldException`**, needing an
-    interface-property resolver rather than a table row (above).
+  - ~~**MSIL: an INTERFACE property read is still `MissingFieldException`**~~ — FIXED
+    2026-09-26, task #175: the interface-property resolver this line called for. See that entry.
   **Full suite in place for BOTH families: 195 / 6374 / 203 / 6772 against the `2608272`
   baseline 195 / 6299 / 203 / 6697** — +75 passed, +75 total, +0 failed, +0 skipped, which is
   exactly the two new fixtures (54 + 21) and nothing else. 195 reported = 195 anchored
@@ -4626,11 +5136,396 @@ single new failure against the 170-name baseline.
   synthesized only where a BasicLang program actually writes the member. Measured on a real build
   over `System.Console` and `Regex`: zero `set_` slots. C++ can read such a property but not write
   it. The facade cannot fix this — it can only render slots that exist.
-- **VS Code extension host** — roughly 24 unimplemented requests, enumerated and enforced by
+  ⭐ **MSIL LAMBDAS, CLOSURES AND `AddressOf` ARE SUPPORTED as of 2026-09-26 (task #155,
+  ADR-0010)** — before this, EVERY lambda program failed to build (the local typed as an
+  undefined `class 'Action'`, the lambda body reading the creator's locals as unknown locals,
+  a call through a captured delegate emitted as a call to a static method that does not exist).
+  `BasicLang/ClosureLowering.cs` is a new IR→IR pass, opt-in for MSIL ONLY (C++ may opt in for
+  #140), run at the top of `MSILCodeGenerator.Generate` on a CLONE of the module — C#, JavaScript
+  and C++ never see its output, and it hands back the module ITSELF (no clone) when there is
+  nothing to lower. One env per creator function (captured locals, by-value params copied in,
+  `Me`), plus one per ITERATION of a declaring `For Each` whose variable is captured, chained
+  with `parent`; a lambda's environment is NESTED inside its creator's class (`IRClass.
+  EnclosingClass`) so it can reach the creator's PRIVATE members through `Me` — measured: a
+  top-level environment reading a private field is `FieldAccessException` on .NET 8, a nested one
+  is not. `Action`/`Action(Of …)`/`Func(Of …)` map to the real BCL generic delegates through
+  `[mscorlib]`; the measured arity cap is `Action`1..`8` and `Func`1..`9` (`Action`9`/`Func`10`
+  assemble and then die with `TypeLoadException` — the facade does not forward them — so both are
+  refused at compile time instead). A lambda value or `AddressOf` lowers to the new
+  `IRDelegateCreate` node; a call through a delegate VALUE is `callvirt Invoke`; a call to a name
+  that is neither a declared procedure nor a delegate value is now REFUSED (`ForeignFeatureException`)
+  instead of emitting `call` on a static method nothing defines (which used to assemble — ilasm
+  does not resolve member references — and then die with `MissingMethodException` at RUN time,
+  measured with a plain undeclared call).
+  ⛔ **Refused, naming the construct, never mis-emitted:** a ByRef parameter captured by a lambda;
+  a lambda inside an Iterator/Async function, or an iterator/async lambda; `Me` captured in a
+  Structure's method (untestable today — this front end's `Structure` has no method syntax at
+  all, fields only); a capture set #122 could not enumerate (raw inline code); a lambda that
+  declares a name it also reads from the creator (N9) or one that differs from its own parameter
+  only by case (#169); a captured variable typed by the creator's own generic parameter; a
+  captured variable passed ByRef to another call; `MyBase.M()` inside a lambda; a `Select Case`
+  `When` guard (or pattern variable) that reads a capture; a lambda in a field/module initializer
+  or in `MyBase.New(...)` arguments (no creator function to hold an environment); delegate
+  relaxation or converting a delegate VALUE between delegate types; an arity above the cap. Two
+  shapes that have NEVER run on MSIL, before or after this task, and are unrelated to closures:
+  `RaiseEvent` (no lowering at all) and an engine/native call the stdlib table does not know
+  (e.g. `GameInit` — `SampleGames/Pong` and `SampleGames/SpaceShooter` still do not run on MSIL;
+  the new D8 check just reports it at compile time instead of at `ilasm` or at run time). Follow-
+  ups filed, not done here: #140 (C++'s own capture-by-copy lambda lowering — the second consumer
+  `ClosureLowering` was designed for), #169/#170 (front-end diagnostics), #172/#173/#174 (the
+  extra refusals above, each wants its own diagnostic or a considered decision), and events/engine
+  calls on MSIL.
+  ⛔ **TRAP: `IRDelegateCreate` exists ONLY in `ClosureLowering`'s own output.** Every visitor
+  but MSIL's THROWS on it by default (`IIRVisitor.Visit(IRDelegateCreate)` in `IRNodes.cs`) —
+  correctly, since C#/JavaScript/C++/LLVM lower lambdas their own way and must never be handed
+  the lowered form. If a change ever makes `ClosureLowering` run for a different backend (C++,
+  #140) or makes a shared pass see post-lowering IR, that backend needs its OWN `Visit
+  (IRDelegateCreate)` override — inheriting the throw is the correct default, not a bug to fix
+  by deleting it.
+  Tests: `VisualGameStudio.Tests/Msil/ClosureLoweringTests.cs` (contract, D7/D8, both pipelines,
+  `[Category("Integration")]`) and `ClosureLoweringRefusalTests.cs` (the D9 refusals, D8's throw,
+  D1's isolation contract, the verifier sweep — no `ilasm` needed, fast subset). Filtered
+  `FullyQualifiedName~VisualGameStudio.Tests.Msil`: `Failed: 0, Passed: 245`. Four pre-existing
+  pins that asserted MSIL's lambda failure were promoted (value, not just outcome):
+  `CopyPropagationSharedVocabularyTests.CP2_Msil_*`, `LicmKillVocabularyTests.L5_
+  LambdaCapturedLocal_Msil_CannotBuild_PinnedForTask122`, and `DynamicUseSPrimeTests.
+  L5_Msil_CannotBuild_PinnedForTask155` — each folded into its sibling C#/JavaScript assertion
+  rather than kept as a separate red-then-green pin, since MSIL now agrees with them. MSIL is
+  also a second run-time judge of #122's capture set now: `LambdaCaptureSetExecutionTests` has
+  MSIL legs for K1/K8/K11/K12/N1 (N8m/N8n are `javascript{ }` inline code, JS-only), and
+  `CseDestinationKnownGapsTask133Tests.A1_…_Msil_…` asserts `3,0`.
+  ⭐ **MSIL NOW CALLS A PROPERTY'S OWN ACCESSORS THROUGH AN INTERFACE-TYPED RECEIVER, as of
+  2026-09-26 (task #175).** `s.Area` with `s As IShape` used to lower to `ldfld 'IShape'::'Area'`
+  — storage an interface cannot have — which assembled (ilasm does not resolve member references)
+  and died at RUN time with `MissingFieldException`, on both pipelines, at every entry point; see
+  the two corrections above (the String-property and mutation-testing entries both called this
+  gap out and are now stale). `TryResolveInterfaceProperty` is the interface sibling of
+  `TryResolveProperty`: it walks `_module.Interfaces` (base interfaces included, visited set),
+  names the DECLARING interface, and `Visit(IRFieldAccess)`/`Visit(IRFieldStore)` now emit
+  `callvirt get_X`/`set_X` on it — spelled exactly as `GenerateInterface` already declared them —
+  through the SAME `EmitAccessorGet`/`EmitAccessorSet` the class-property arm uses, so class output
+  is unchanged. It boxes across a value/reference gap, and refuses (`ForeignFeatureException`,
+  naming the member) a read of a WriteOnly or a write to a ReadOnly interface property, and a
+  receiver carrying type arguments against a non-generic interface. Measured over the probe suite
+  (I1-I6, both pipelines, all three entry points — CLI, CLI `-O`, Release `.blproj`): 15 of 18
+  cells fixed; the other 3 (I5) hit a separate box gap, #177 below. Byte-compare over 2340 cells:
+  every `.cs`/`.js`/`.cpp` file identical; the only `.il` files that differ are the 30 programs
+  that access a property through an interface. Tests: `VisualGameStudio.Tests/Msil/
+  MsilInterfacePropertyTests.cs` (contract + IL-shape, `[Category("Integration")]`) and
+  `MsilInterfacePropertyCompileTests` (the three refusals, fast subset).
+  ⛔ **Two follow-ups this fix exposed, NOT fixed here, both pre-existing and unrelated to
+  interfaces:**
+  - **#176 — CLOSED, 2026-09-27.** ~~a BARE property write inside a class's own method targets
+    the FIRST class the module declares, not the enclosing class~~ — see the dedicated "Newest —
+    #176 DONE" entry further down this list for the mechanism, the nested-class fix that rode
+    along, and the three follow-ups IT opened (#199, #200, #136 widened). The pin named here no
+    longer exists under that name: `PropertyAccessorTests.PropertyAccessorExecutionTests.
+    Msil_BarePropertyWriteInALaterClass_TargetsAnEarlierClass_PinnedForTask176` is now
+    `Msil_BarePropertyWriteInALaterClass_TargetsItsOwnClass`, asserting SUCCESS, and MSIL is
+    folded back into `StandardPipeline_RunsOnAllFourBackends`/`AggressivePipeline_
+    RunsOnAllFourBackends` for this same Program.
+  - **#177 — MSIL never boxes a value type stored into an `Object` slot** — assignment, an
+    argument, a return, and a class property write all reach it; no interface is involved. `Dim o
+    As Object = <Double>` throws `NullReferenceException` where every other backend prints the
+    value. Repro: `S/t175/edge/B1.bas`.
+  - **#178 — the front end accepts a write to a ReadOnly property or a read of a WriteOnly one**,
+    interface- or class-typed alike (measured on both). Nothing in `SemanticAnalyzer` refuses it,
+    so it reaches every backend; C# only fails once `csc` sees the generated accessor-less
+    assignment (CS0200) or read (CS0154), and on MSIL the interface-property fix above is what
+    stands between such a program and a call to an accessor the interface never declared. The
+    front-end refusal these two constructs are supposed to get has never been implemented.
+- ⭐ **Newest — #164 DONE (fix committed `151a8137`).** A multi-line `Function(...) [As T] ...
+  End Function` lambda used to fail in the front end on EVERY backend and entry point (measured:
+  96/96 cells across probe.py's 4 backends × CLI/CLI `-O`/Release `.blproj` matrix). Two defects:
+  (1) `IRBuilder.Visit(LambdaExpressionNode)` read `GetNodeType(node.Body)` for a Function
+  lambda's return type, and a STATEMENT lambda has no `Body` (its body is `StatementBody`) —
+  `Dictionary.TryGetValue(null)` threw "Value cannot be null. (Parameter 'key')", reported as
+  "Error compiling Main: …" at line 0; (2) a multi-line Function lambda with no `As` clause was
+  analyzed as a Sub (`ReturnType = Void`), so `Return c` inside it was refused ("Cannot return a
+  value from a subroutine") and the lambda was typed `Func(Of Void)`, breaking any caller
+  expecting `Func(Of Integer)` (this broke #155's L10, a closure returned from a Function). Fixed
+  the VB way: a written `As T`; else the R of a `Func(Of …, R)` the lambda is target-typed by
+  (`SemanticAnalyzer.TargetedLambdaReturnType`); else the DOMINANT type of its own `Return`
+  expressions by the analyzer's existing `WidensTo` (`DominantReturnType`), `Object` with none
+  dominant or no `Return` at all; `Return Nothing` is never a candidate; a nested lambda's
+  `Return` stays scoped to ITS OWN function scope (`Scope.InferredReturnTypes`); a bare `Return`
+  while inferring is still refused. `IRBuilder` now takes the IR return type from the analyzer's
+  own recorded `Func` rather than re-deriving it, and a Function lambda that falls off its end
+  returns its type's DEFAULT (a bare `ret` from a non-void function was an
+  `InvalidProgramException` on MSIL). JavaScript and MSIL are 48/48 correct on the F1-F8 probes;
+  C#/C++ have pre-existing, UNRELATED gaps this did not touch and does not fix — see below.
+  Byte-compare over 2340 cells: every file for a program with no multi-line Function lambda is
+  IDENTICAL. Tests: `VisualGameStudio.Tests/Compiler/MultiLineFunctionLambdaTests.cs` (front end,
+  fast subset) and `MultiLineFunctionLambdaExecutionTests` (JS/MSIL both pipelines, C#/C++ where
+  they run correctly, `[Category("Integration")]`); twelve of `S/t164/mut/mutate.py`'s thirteen
+  mutants killed (one, the type-parameter guard on a GENERIC callee's inferred target, survives —
+  it only shows up on a probe outside this fix's contract, E7, which has its own pre-existing,
+  unrelated generic-inference defect).
+  ⛔ Two NEW follow-ups this exposed, NOT fixed here — pre-existing backend gaps (C#, MSIL)
+  unrelated to #164's own front-end fix:
+  - **#179 — the C# backend emits a call statement inside a multi-line lambda body TWICE.** F8's
+    `Return inner() + inner()` inside a nested Function lambda emits
+    `inner(); inner(); return inner() + inner();` — every call in the return expression duplicated
+    as a standalone statement first. Compounds with #165 (a lambda-local `Dim` dropped) on the
+    SAME probe: `inner`'s own `Dim` is dropped too, so all four `inner()` occurrences become
+    `CS0103`, not one — measured directly against Roslyn's own diagnostics (`dotnet build` reports
+    each twice, which is a build-system artifact, not four further errors).
+  - **#180 — an MSIL `Function … As Short` from a Byte/Short expression is `InvalidProgram`.**
+    `E8_byte_short` (`S/t164/edge/E8_byte_short.bas`) has a lambda with no `As` clause returning a
+    `Byte` on one path and a `Short` on the other; `DominantReturnType` correctly infers `Short`
+    (Byte widens to Short) and the lambda is stored into a `Dim k As Short`. JavaScript and C++
+    run it correctly (`197`); MSIL throws `System.InvalidProgramException` on BOTH pipelines,
+    identically on a crash-only patch and on the full #164 fix (`S/t164/edge/m-E8_byte_short.txt`
+    vs `ma-E8_byte_short.txt`) — #164 changing how the Short return type is DETERMINED does not
+    change this MSIL codegen gap. Not a #164
+    regression; filed because #164's probes are what surfaced it.
+  - The `R3_incompatible_returns_object` probe's MSIL leg (`Dim n As Integer = f(True)` where `f`
+    infers `Object`) throws `System.NullReferenceException` — this is the PRE-EXISTING #177 ("MSIL
+    never boxes a value type stored into an `Object` slot", filed under task #175 above), reached
+    here through a lambda's OWN inferred-Object return rather than a `Dim`; not a new gap.
+- ⭐ **#176 DONE (fix committed `4012905c`).** `Me` inside a class member is now typed
+  as THAT class, always — one `IRVariable` per `IRFunction`, never shared across classes.
+  - **Mechanism, confirmed.** `IRBuilder._variableVersions` is not scoped per function and
+    nothing ever popped `"Me"`. Both places that mint `Me` called
+    `GetOrCreateVariable("Me", …)` — the receiver a bare accessor-backed property lowers onto
+    (`AccessorMemberReceiver`) and an explicit `Me`/`Me.X` (`Visit(IdentifierExpressionNode)`) —
+    and `GetOrCreateVariable` returns the EXISTING `_variableVersions["Me"]` whenever one exists,
+    ignoring the type argument. So the FIRST class in a file to use `Me`, implicitly (a bare
+    property) or explicitly, fixed its type for every class built after it. MSIL spells a member
+    token from the receiver's IR type, so a later class's bare `V = 2` became
+    `stfld int32 'Animal'::'V'` and died with `MissingFieldException: Field not found:
+    'Animal.V'`; C#, JavaScript and C++ print `this` and never read the type, which is why only
+    MSIL showed it — and why the suite never caught it: no existing MSIL fixture had a SECOND
+    class use a bare property after an earlier one had touched `Me` at all.
+  - **The fix, one answer.** `IRBuilder.MeOfCurrentMember()` is now the only place either call
+    site reaches: it keeps one `Me` per `IRFunction` (`_meByFunction`, keyed by reference), typed
+    as the class currently being built, and — the load-bearing choice — never puts it in
+    `_variableVersions` at all, so nothing to leak exists. A lambda body is its own `IRFunction`
+    and gets its OWN `Me` (typed as its CREATOR's class, since `_currentClassName` is untouched
+    while visiting a lambda); the #155/ADR-0010 closure-environment capture of `Me` keeps
+    working unchanged. `MyBase` stays the deliberate exception — `Visit(MyBaseExpressionNode)`
+    mints a fresh base-typed `IRVariable` of the same name each time, outside
+    `_meByFunction` too, because it is the SAME object seen as its base class, not the class
+    being built.
+  - **Rode along: the nested-class restore.** `Visit(ClassNode)` used to NULL `_currentClassName`/
+    `_currentClassMethodNames` on the way out; a class nested inside another is visited from the
+    OUTER class's own member loop, so nulling left every outer member declared AFTER the nested
+    class with no enclosing class at all. Measured before, for an outer property declared after a
+    nested class: C# failed `CS0103` on the backing field, JavaScript and MSIL printed `3` for
+    `21`, C++ failed to compile, and Invariant F fired (a bare property lowered back to a plain
+    variable once `_currentClassName` went missing — `AccessorMemberOf` early-returns null
+    without it). Now saved and RESTORED instead.
+  - **Measured** (`S/t176/probes/V6*.bas` + `.exp`, `S/t176/matrix-base.txt` →
+    `matrix-final.txt`, 4 backends × CLI / CLI `-O` / Release `.blproj`): V6, V6b, V6c and V6g go
+    from MSIL `MissingFieldException` to OK; the V6d/V6e/V6f controls (a field, a method, classes
+    reversed) were unaffected throughout. Twelve edge probes (`S/t176/edge/X*.bas`) go from MSIL
+    RUN-FAIL to OK: `Me` as an argument, `Me Is`/`IsNot`, a lambda capturing `Me` (both a
+    Function and a Sub lambda), an inherited bare property, Shared + instance on one class, a
+    `Structure` sandwiched between two classes, interleaved `Module`s, explicit `Me.`, a
+    constructor, and nested classes (both with and without constructing the nested type). Byte
+    compare over 6,361 files: 54 differ, ALL `.il`, ALL in #176 programs — zero `.cs`/`.js`/`.cpp`
+    diffs anywhere in the corpus, the other tasks' probes, or the samples; the nested-class hunk
+    touches C#/C++ too, but only for a program with a nested class, and none of those existed in
+    the scanned set. `BASICLANG_VERIFY_IR` fired zero times.
+  - **Tests.** IR-level (fast subset): `MeReceiverTypingTests.cs` — every method of every class
+    typed as its OWN class for both a bare and an explicit receiver, on both pipelines; one `Me`
+    per FUNCTION (same instance, checked by reference); a lambda in a later class gets its own,
+    correctly-typed `Me`; `MyBase.X` keeps the base type as a DIFFERENT instance; the nested-class
+    shape holds Invariant F. Execution (`[Category("Integration")]`):
+    `MeReceiverTypingExecutionTests.cs` — the V6 family and every edge probe above, four backends
+    × both pipelines where they apply (X1/X2 exclude C++ — task #200 below; X3b excludes C# —
+    task #136, widened; X6d excludes JavaScript — a pre-existing, UNRELATED refusal of any
+    `Structure` declaration on that backend, BL7005; X12b, which also CONSTRUCTS the nested class,
+    excludes C++ — a pre-existing, unrelated nested-class emission-order defect), plus a Release
+    `.blproj` MSIL leg. `PropertyAccessorExecutionTests`' three-backend split (task #175's own fix)
+    is folded back to `StandardPipeline_RunsOnAllFourBackends`/`AggressivePipeline_
+    RunsOnAllFourBackends`, and its `..._PinnedForTask176` pin is promoted to
+    `Msil_BarePropertyWriteInALaterClass_TargetsItsOwnClass`, asserting success on both pipelines
+    — kept under its own name (redundant with the fold-back by design) as the dedicated regression
+    pin for the exact historical repro. Mutants (`S/t176/mut/mut.py`): M1 (both call sites
+    reverted), M2 (only the accessor/bare-property site reverted), M3 (only the explicit site
+    reverted) and M5 (one `Me` per PROGRAM, not per function) are all killed; M6 (a FRESH `Me` per
+    use, never cached) is EQUIVALENT — nothing in the suite or the probe corpus can observe the
+    difference between one `Me` reused within a function and a new one minted at every use, since
+    every use within one function is typed identically either way; M7 (`Me` typed from a null
+    class when uncached) is killed.
+  - ⛔ **Three follow-ups this exposed, NOT fixed here:**
+    - **#199 — the SAME `_variableVersions`-never-scoped-per-function leak, for every other
+      name.** `MeOfCurrentMember`/`_meByFunction` closes it for `"Me"` alone; the implementer's
+      own brief asked whether `MyBase`, `MyClass`, a parameter shadowing an earlier function's
+      local, or a `For` control variable share the same hazard, and that walk was not done. Filed
+      to track it, not measured.
+    - **#200 — the C++ backend cannot pass `Me` where a value (not the implicit receiver) is
+      expected.** `Me` as an ordinary argument, or as an `Is`/`IsNot` operand, fails to COMPILE:
+      `error: no viable conversion from 'Counter *' to 'std::shared_ptr<Counter>'`. `this` is a
+      raw pointer; every other place a `Counter` value is needed gets a `shared_ptr<Counter>`, and
+      nothing converts between them at a call/comparison site. Repro: `S/t176/edge/X1_me_arg.bas`,
+      `X2_me_is.bas`. Unrelated to #176 — measured unchanged before and after its fix.
+    - **#136, WIDENED — a Sub lambda's write to a bare property is not observed by a later
+      Function lambda's read, on C# only.** Previously scoped to a `For Each` variable capture;
+      `S/t176/edge/X3b_sub_lambda_store.bas` (`Dim f = Function() V + 1 : Dim g = Sub() V = 3`)
+      prints `1021` where C++/JavaScript/MSIL all print the correct `31021`. Same closure-capture
+      family as #136's original shape, not investigated further here.
   `ExtensionHostRequestCoverageTests.KnownUnimplemented` (a second test fails once an entry is
   implemented, so the list must shrink). A missing `sendNotification` handler is a silent
   no-op; a missing `sendRequest` handler rejects inside `activate()` and kills the extension.
   Webviews still render as source text.
+- ⭐ **#187 DONE (fix commit `37faed14`).** A lambda or `AddressOf` now target-types to a user
+  `Delegate Sub`/`Delegate Function` at every site Func/Action already convert at (`Dim`, field
+  initializer, assignment, property set, `Return`, call argument, and the two NEW sites —
+  constructor and `MyBase.New` arguments), and invoking a user `Delegate Function` is typed its
+  own return type instead of Void. `TypeInfo.DelegateSignature` carries the declaration;
+  `SemanticAnalyzer.DelegateShapeOf` is the one mapping to the structural Action/Func shape the
+  rest of the machinery already had; `ConvertToUserDelegate` requires an EXACT match (the
+  existing Func/Action rule, unchanged) and names both signatures plus the first difference on a
+  mismatch. `d(args)`/`d.Invoke(args)` on a user delegate take the same path. A delegate VALUE of
+  one type never converts to a different delegate type (`Dim n As Notify = someAction` stays
+  refused, as in C#). Delegate parameters now get their OWN scope (`EnterScope("Delegate …")`),
+  fixing a pre-existing bug where two delegates sharing a parameter name were refused. IRBuilder
+  reads the delegate's resolved parameter/return TYPES (not bare names) so a lambda's own R comes
+  off the shape and a class-typed delegate parameter/return reaches C++ as `shared_ptr<T>`, not a
+  bare value type that could hold no lambda at all.
+  - **Measured** (`S/t187/probes` D1-D6/R1-R12, `S/t187/edge*`, probe.py, 4 backends × CLI/CLI
+    `-O`/Release `.blproj`): D1-D6 go from 0/72 to 72/72 OK; R1-R12 refused everywhere with the
+    named message; 12 of 17 edge probes OK everywhere. Byte compare: 6,399 files identical, 0
+    differ — the only new outputs are 5 programs that store a lambda into a user delegate.
+    `BASICLANG_VERIFY_IR` fired 0 times.
+  - **Tests:** `VisualGameStudio.Tests/Compiler/UserDelegateConversionTests.cs` (front end, fast
+    subset, 43 cases — conversion at every site, untyped-parameter inference, invocation typing,
+    the 10 exact mismatch messages, delegate-parameter scope, the unchanged Func exactness rule,
+    and two C++-codegen-TEXT-only checks for the lambda-shape/IRDelegate-type fixes) and
+    `UserDelegateConversionExecutionTests.cs` (`[Category("Integration")]`, 35 cases — D1-D6 on
+    four backends × both pipelines × the `CompileProjectFiles` project-build entry point, plus
+    the edge probes that pass everywhere and a pinned failure for each that does not). Promoted
+    N4/N4b into `NothingConversionExecutionTests` (were not run before, since storing a lambda
+    into a user delegate was refused regardless of `Nothing`). Corrected stale doc comments in
+    `Msil/ClosureLoweringTests.cs` (D7's `CType` escape hatch is no longer the only way to assign
+    `AddressOf` to a user delegate) and `Blnet/NetFlipTests.cs` (a delegate parameter's resolved
+    type now routes through `CppCodeGenerator.MapType`, not `MapTypeName`'s default arm — the two
+    sweep tests there still pass and still test the real invariant, just through a different
+    function than their own doc comments claimed). `JsExecutionTierRosterTests`' roster grew 79
+    → 80 (unique `typeof` entries; no duplicates in the array either way).
+  - **Mutants:** 16 predicted by the implementer, all built for real in a separate git worktree
+    and killed — see `S/t187/tw/mut-results.txt` for the full table. One pair (untyped-parameter
+    inference / delegate-invocation-argument checking) turned out to be the SAME code
+    (`SemanticAnalyzer.GetDelegateParameterTypes`'s `DelegateSignature` branch feeds both), so
+    that single mutant is recorded once with both rows' killers named. The `.Invoke` IR-lowering
+    mutant is caught ONLY at the execution level — a real .NET delegate genuinely has an `Invoke`
+    method, so the C# backend's ordinary member-call fallback happens to still work; C++/
+    JavaScript/MSIL do not, which is exactly why the fix exists.
+  - **Follow-ups filed, not fixed here** (next in the queue):
+    - **#201** — the C++ backend has several independent gaps specific to a user-delegate VALUE:
+      a `List(Of D)` element invoked through a `For Each`/indexer throws `bad_function_call` at
+      run time (E5); a capturing lambda added to a `List(Of D)` fails to compile over an
+      undeclared identifier (E5b); `AddressOf` an INSTANCE method fails to compile the same way
+      (E8); a function that `Return`s an `AddressOf` result on one branch and a lambda on the
+      other fails with "cannot jump from this goto statement" (E9e); a delegate-typed FIELD's
+      `.Invoke` fails because the field is typed `void*` (J1); and a lambda argument to
+      `MyBase.New` produces an undeclared `__lambda_0` reference on BOTH C# and C++ (E13, shared
+      with #170 below). None of these are new — the SAME shapes fail identically with a plain
+      `Func`/`Action` where a matching control exists (`S/t187/edge-func*`) — #187 only exposed
+      them by making the user-delegate side of these programs compile far enough to reach them.
+    - **#202** — `.Invoke` on a Func/Action value (not a user delegate) still types Object,
+      unchanged by #187: the `.Invoke` redirect is gated on `IsUserDelegate`, so
+      `Dim r As Integer = f.Invoke(5)` (f a `Func(Of Integer, Integer)`) is still refused with
+      "Cannot assign value of type 'Object' to variable of type 'Integer'". Pinned in
+      `UserDelegateConversionTests.DotInvoke_OnFuncAction_StaysTypedObject_PinnedAgainst202`.
+    - **#188 — now DONE, see its own entry below.** At the time this entry was written, a delegate
+      FIELD invoked from inside its OWN class failed unqualified on JavaScript (`ReferenceError:
+      OnClick is not defined`, E10) and via `b.OnClick("b")` call syntax on MSIL
+      (`MissingMethodException`, J2 — reproduced identically for a `Func`/`Action` field, J2f, so
+      it was never specific to a user delegate). Already filed by #173/#185's entries above; #187
+      measured it again for the user-delegate shape and widened it with the MSIL row.
+    - **#170** — a lambda argument to `MyBase.New` has no IL lowering at all on MSIL
+      (`ForeignFeatureException`, predates #187, unaffected by it — see #201 above for the
+      cross-backend half of the same probe).
+- ⭐ **#188 DONE (fix commit `5e82a786`).** Invoking a delegate-typed FIELD or PROPERTY through its
+  MEMBER spelling — bare `Callback()`, `Me.Callback()`, `obj.Op(5)`, `Class.Hook()`, own or
+  inherited, Shared included — now works on all four backends. 54 of 120 matrix cells failed
+  before: C++ gave a Sub-shaped delegate a result destination (`t0 = Callback();`, "assigning to
+  'void *' from 'void'"); JavaScript emitted the bare name unqualified (`ReferenceError: Callback
+  is not defined`); MSIL lowered a qualified call as a METHOD call (`MissingMethodException:
+  Holder.Callback()`) and refused a delegate-typed PROPERTY outright under ADR-0010 D8. Copying the
+  member into a local first (#173's N6b) always worked — the delegate-VALUE invocation path was
+  sound; the member spelling never reached it.
+  - **ONE lowering.** `SemanticAnalyzer.DelegateMemberCallee` is the single answer to "is this
+    callee a delegate-typed field or property?" — the bound symbol must be a Variable or Property
+    and must be EXACTLY the member its owner resolves (the current class or a base for a bare
+    name; the receiver's type for `Me.`/`obj.`/`MyBase.`/`Class.`), typed as a delegate including a
+    bare `Action`/`Func` (which resolves as a class). A method of the same name, a local or
+    parameter that shadows the field, a module variable, and a module Sub sharing the field's name
+    all keep their own path (measured directly: `DelegateMemberInvocationTests`' FALSE cases).
+    `IRBuilder.EmitDelegateValueInvocation` reads the member through the ordinary read path
+    (ADR-0007's accessor rule kept — a bare accessor-backed property still lowers to the same
+    `IRFieldAccess` its `Me.` form does) and invokes that VALUE through the SAME `IRCall.CalleeValue`
+    node the `f(a)(b)` chain-call and #187's `.Invoke` branches already used. A Sub-shaped call gets
+    NO result destination.
+  - **C++ and JS now render `IRCall.CalleeValue`**, exactly as the node's own doc comment and
+    ADR-0010 D8 already described — both used to call by NAME instead, which on C++ let its own
+    temp-renaming point at the WRONG temp entirely (the root cause behind #187's E5/E5b/J1 C++
+    pins, now promoted — see below). JavaScript reads the member into a value first (`const t0 =
+    this.Callback; t0();`) and parenthesises a callee that is not a plain name/member chain (an
+    inline lambda IIFE — `S/t188/iife/L1`). MSIL is UNCHANGED: ADR-0010 D8 now admits these calls
+    because they arrive as ordinary `CalleeValue` calls, and admits nothing else.
+  - **Measured** (probe.py, 4 backends × CLI/CLI `-O`/Release `.blproj`): F0-F9 go from 66/120 to
+    120/120; 21 edge probes OK everywhere (a `Func` result in an expression, call arguments that
+    are themselves calls, a method beside a field, a user `Delegate Function`, a `List(Of Action)`
+    field, a base-typed receiver, `MyBase`/`Me`/bare spellings, an interface property, an accessor
+    property, Shared through every spelling, a same-named module Sub, a `Nothing` argument,
+    shadowing locals/parameters, and a field declared below its use); a multi-file `.blproj` was OK
+    only on C# before and is OK on all four now; a `Nothing` field invoked raises on every backend
+    (never a silent success). Byte compare: 6,966 files, 78 differ — none are C#, the `t118` corpus
+    or the samples; every diff is a program that invokes a delegate member. `BASICLANG_VERIFY_IR`
+    fired 0 times.
+  - ⚠ **The P8/#140 caveat.** `S/t155edge/P8` (a bare field call, once directly and once from
+    inside a lambda in the same method) used to fail to COMPILE on C++; #188 makes it compile for
+    the first time, which exposes **#140** (a C++ lambda captures its enclosing object BY COPY, not
+    by reference) as a SILENT WRONG ANSWER — it prints `0` where `2` is expected, not a build
+    failure. Pinned as `DelegateMemberInvocationExecutionTests
+    .P8_FieldCalledDirectlyAndFromALambda_Cpp_PinsTodaysWrongCount_Against140`.
+  - **Tests:** `DelegateMemberInvocationTests.cs` (front end/IR/codegen-text, fast subset, 19
+    cases — the TRUE/FALSE decision for every spelling and every excluded shape, Sub-vs-Func
+    typing, survival through the standard optimizer, and the C++/JS codegen-text assertions) and
+    `DelegateMemberInvocationExecutionTests.cs` (`[Category("Integration")]`, 33 cases — F0-F9 and
+    every edge probe that runs everywhere on four backends × both pipelines × the
+    `CompileProjectFiles` project entry point, the multi-file project, the L1 IIFE on C++/
+    JavaScript, G8's Nothing-raises-everywhere, and the P8/#140, G2b/#203, G5/#192 and G6c/#204
+    pins). Promoted five tests that pinned #187/#188/#201 exceptions in
+    `UserDelegateConversionExecutionTests.cs`: E10 (JavaScript), J2 (MSIL) and J1/E5/E5b (C++) all
+    now run, folded into that fixture's four-backend runners (35 cases → 30: five separate pin
+    tests became four-backend rows on the tests they already shared). Corrected `#173`'s N6 note in
+    `NothingConversionExecutionTests.cs` (N6 IS this task's own F0 probe; it runs everywhere now,
+    proven in `DelegateMemberInvocationExecutionTests`, not promoted in that older fixture since it
+    was never pinned there as a test of its own). `JsExecutionTierRosterTests`' roster grew 80 → 81
+    (unique `typeof` entries).
+  - **Mutants:** 11 predicted by the implementer, all built for real in a separate git worktree and
+    killed against real NUnit — see `S/t188/tw/mut-results.txt` for the full table (which test
+    kills which).
+  - **Follow-ups filed, not fixed here** (next in the queue):
+    - **#203** — the BARE spelling of a delegate-member call evaluates its callee's value AFTER its
+      own argument runs, when that argument reassigns the same field (`Handler(Swap(1))` inside the
+      declaring class prints "new 1" where C# prints "old 1"). The `Me.`-qualified and externally-
+      qualified spellings are unaffected — they snapshot the field into a temp BEFORE the arguments
+      run; the bare spelling's `CalleeValue` is an `IRVariable` read INLINE at the call site
+      (ADR-0007's bare-name rule), with no such snapshot. Pinned as `DelegateMemberInvocation
+      ExecutionTests.G2b_BareSpellingEvaluatesTheCalleeAfterItsArgument_PinsTodaysWrongOrder_Against203`.
+    - **#204** — a `List(Of Action)` FIELD (not a local) indexed with VB's paren syntax through an
+      EXTERNAL, qualified receiver (`b.Items(0)`) fails to build on EVERY backend, C# included
+      (`CS1955: Non-invocable member`) — a pre-existing codegen gap #188 never touched. The SAME
+      indexer called BARE from a method of the declaring class (`Items(0)()`) runs everywhere, so
+      the gap is specific to the qualified-receiver spelling of a List-typed field. Pinned as
+      `DelegateMemberInvocationExecutionTests.G6c_ListFieldIndexedThroughAnExternalReceiver_PinsTodaysCSharpCompileFailure_Against204`.
+    - **#192** — a `Structure` (value type) with a delegate FIELD, called through a bare identifier
+      after a member-access write (`s.F = ...; s.F(41)`), throws a `NullReferenceException` on MSIL
+      where C#/C++ both run it correctly; JavaScript refuses the whole `Structure` at compile time
+      by DESIGN (BL7005), unrelated. Pinned as `DelegateMemberInvocationExecutionTests
+      .G5_StructureDelegateField_Msil_PinsTodaysNullReferenceException_Against192`.
+    - **#201's AddressOf half, still open.** #188 fixed the temp-NAMING half of what broke E5/E5b/J1
+      on C++ (promoted, now run everywhere) — those failed because C++ called a delegate value by
+      NAME, which its own temp-renaming could point at the wrong temp. E8 (`AddressOf` an INSTANCE
+      method) and E9e (a branch that `Return`s an `AddressOf` result on one arm) are UNTOUCHED by
+      this fix and still fail to compile on C++; #201 remains open for that half. See
+      `UserDelegateConversionExecutionTests`' own updated doc comment and E9e's pin.
 - **JavaScript backend** — the `lib.dom.d.ts` → `.bli` generator was never built
   (`dom-core.bli` is hand-curated). Known front-end gaps affecting all backends:
   `Inherits ArgumentException`, assigning an inherited field from a derived class,
@@ -4638,7 +5533,9 @@ single new failure against the 170-name baseline.
   `For Each … In items.Select(…)` inside a class method failing on C#.
 - **The New Project wizard's JavaScript path has not been clicked through by a human.** Tests
   cover the view model and the template service; nothing here can drive the Avalonia window.
-- Scope decisions already made — **MSIL and LLVM are out of scope** (do not test, fix, or file
+- Scope decisions already made — ~~**MSIL and LLVM are out of scope**~~ **STALE — MSIL has been a
+  MAINTAINED target since 2026-09-15** (see this same list, above); LLVM only is still out of
+  scope (do not test, fix, or file
   bugs on them), and **COM interop is ruled out**.
 
 ---

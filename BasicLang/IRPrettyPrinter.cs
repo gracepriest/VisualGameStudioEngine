@@ -141,6 +141,11 @@ namespace BasicLang.Compiler.IR
         {
             WriteLine(compare.ToString());
         }
+
+        public void Visit(IRIdentityCompare identityCompare)
+        {
+            WriteLine(identityCompare.ToString());
+        }
         
         public void Visit(IRAssignment assignment)
         {
@@ -259,6 +264,12 @@ namespace BasicLang.Compiler.IR
         public void Visit(IRFieldAccess fieldAccess)
         {
             WriteLine(fieldAccess.ToString());
+        }
+
+        // Printable, unlike in the backends: the pretty printer is how a lowered module is read.
+        public void Visit(IRDelegateCreate delegateCreate)
+        {
+            WriteLine(delegateCreate.ToString());
         }
 
         public void Visit(IRFieldStore fieldStore)

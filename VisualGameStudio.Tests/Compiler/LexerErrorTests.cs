@@ -95,7 +95,8 @@ public class LexerErrorTests
     [Test]
     public void Lex_StringWithEscapedQuote_DoesNotThrow()
     {
-        var source = @"Dim x = ""hello \""world\""""";
+        // VB escape: a doubled quote. (Backslash is not an escape character.)
+        var source = @"Dim x = ""hello """"world""""""";
         var lexer = new Lexer(source);
 
         Assert.DoesNotThrow(() => lexer.Tokenize());

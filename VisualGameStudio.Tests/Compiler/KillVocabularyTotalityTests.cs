@@ -136,6 +136,26 @@ public class KillVocabularyReflectionTotalityTests
         [typeof(IRFieldAccess)] = f => new IRFieldAccess("t0", f.P, "K", IntType),
         [typeof(IRFieldStore)] = f => new IRFieldStore(f.P, "K", f.Q),
         [typeof(IRAwait)] = f => new IRAwait("t0", f.P, IntType),
+
+        // ADR-0010 (task #155): produced only by ClosureLowering (MSIL's opt-in pass), never by
+        // IRBuilder or the optimizer — but it is a concrete IRInstruction subclass in this
+        // assembly regardless of who produces it, so the reflection sweep below finds it and
+        // this roster must carry it. A definition of its own name and nothing else: building a
+        // delegate runs no user code (OptimizationPass.NamesWrittenBy: WriteKind.Named, IsCall
+        // false) — see IRDelegateCreate's own doc comment in IRNodes.cs.
+        [typeof(IRDelegateCreate)] = f => new IRDelegateCreate("t0", IntType, f.P, f.Function, false),
+
+        // Task #185 (ADR-0011 D5): `Is` / `IsNot` — reference identity, its own node, never a
+        // BinaryOpKind/CompareKind (a user Operator=, Delegate.op_Equality or String value
+        // equality could answer those; this node runs no user code on any backend). Pure
+        // (ADR-0006): a read of both operands and a definition of its own name — the SAME
+        // classification IRCompare gets (OptimizationPass.NamesWrittenBy folds it into the
+        // IRCompare/IRBinaryOp/... arm) — and no kills. Added here because the roster is a
+        // reflection totality pin: a new IRInstruction subclass with no entry fails
+        // Roster_CoversEveryConcreteIRInstructionSubclass by NAME, which is exactly what the fix
+        // commit's own message calls out as the expected failure until this test lands.
+        [typeof(IRIdentityCompare)] = f =>
+            new IRIdentityCompare("t0", f.P, f.Q, false, new TypeInfo("Boolean", TypeKind.Primitive)),
     };
 
     /// <summary>

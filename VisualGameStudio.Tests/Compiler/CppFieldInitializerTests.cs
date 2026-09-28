@@ -36,9 +36,8 @@ namespace VisualGameStudio.Tests.Compiler;
 /// <item>A <c>Structure</c> field initializer does not PARSE at all.</item>
 /// </list>
 ///
-/// <para>⚠ <c>CStr(Boolean)</c> prints <c>True</c> on C++ against JavaScript's <c>true</c>, a
-/// long-recorded divergence not this fix's. (<c>CStr(Double)</c> printed <c>2.500000</c> here
-/// until C++ got .NET's formatter — CppDoubleFormattingTests; it now prints <c>2.5</c>.)</para>
+/// <para>The headline output is .NET's spelling: <c>CStr(Double)</c> prints <c>2.5</c> (it was
+/// <c>2.500000</c> before CppFloatFormattingTests) and <c>CStr(Boolean)</c> prints <c>True</c>.</para>
 /// </summary>
 [TestFixture]
 [Category("Integration")]
@@ -261,8 +260,9 @@ public class CppFieldInitializerTests
     /// ⛔ Before the fix, <c>-0.0</c> emitted the INTEGER literal <c>-0</c> (unary minus on an int
     /// literal), which is <c>+0.0</c> once stored in a float slot — the sign was silently lost. A
     /// text assertion cannot catch that (<c>-0</c> and <c>-0.0</c> both read as "the same number"
-    /// to a human skim); only <c>1 / NZ</c> printing <c>-inf</c> rather than <c>inf</c> proves the
-    /// sign survived, for BOTH Double and Single.
+    /// to a human skim); only <c>1 / NZ</c> printing <c>-Infinity</c> rather than <c>Infinity</c>
+    /// proves the sign survived, for BOTH Double and Single. (.NET's spelling; C++ printed
+    /// <c>-inf</c> before CppFloatFormattingTests.)
     /// </summary>
     [Test]
     public void NegativeZero_KeepsItsSign_ForDoubleAndSingle()

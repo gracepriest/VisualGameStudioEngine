@@ -87,6 +87,10 @@ namespace BasicLang.Compiler.CodeGen
                     if (cmp.Left != null) yield return cmp.Left;
                     if (cmp.Right != null) yield return cmp.Right;
                     break;
+                case IRIdentityCompare identity:
+                    if (identity.Left != null) yield return identity.Left;
+                    if (identity.Right != null) yield return identity.Right;
+                    break;
                 case IRUnaryOp un:
                     if (un.Operand != null) yield return un.Operand;
                     break;
@@ -134,6 +138,9 @@ namespace BasicLang.Compiler.CodeGen
                     break;
                 case IRForEach fe:
                     if (fe.Collection != null) yield return fe.Collection;
+                    break;
+                case IRDelegateCreate dc:
+                    if (dc.Target != null) yield return dc.Target;
                     break;
             }
         }

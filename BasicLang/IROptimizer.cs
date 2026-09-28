@@ -256,25 +256,27 @@ namespace BasicLang.Compiler.IR.Optimization
         protected internal static bool IsCallVisible(string name, IRFunction function)
         {
             if (string.IsNullOrEmpty(name)) return false;
-            // ⭐ ADR-0006 D1's INTERIM CLOSURE RULE, here and nowhere else (every consumer reaches
-            // the declarations through this method): in a function that contains a lambda, every
-            // local is call-visible — a lambda may capture it by reference, and a call may invoke
-            // the lambda. MEASURED before this rule: `Dim bump = Sub() x = x + 1` with `bump()` in
-            // a loop let LICM hoist `x * 2` (L5, JavaScript under --optimize printed 6 for 12), and
+            // ⭐ ADR-0006 D1's CLOSURE RULE, here and nowhere else (every consumer reaches the
+            // declarations through this method): a local a lambda of this function CAPTURES is
+            // call-visible — the lambda may write it by reference, and a call may invoke the
+            // lambda. MEASURED before the rule: `Dim bump = Sub() x = x + 1` with `bump()` in a
+            // loop let LICM hoist `x * 2` (L5, JavaScript under --optimize printed 6 for 12), and
             // `a = p + q : clr() : l(0) = p + q` with `clr = Sub() a = 0` let CSE read the cleared
             // `a` back (A1, JavaScript printed 0,0 for 3,0). A BY-VALUE PARAMETER is a local of the
             // frame for this purpose — a lambda captures it the same way (MEASURED:
             // `Sub Work(p, q) : bump = Sub() p = p + 100 : a = p + q : bump() : l(0) = p + q`
-            // printed 3,3 for 103,3 on JavaScript). Task #122 narrows "every local" to the capture
-            // set; that is a pure precision gain. A Const is still exempt: nothing can write it.
+            // printed 3,3 for 103,3 on JavaScript). WHICH locals are captured is
+            // IsLambdaCaptured's answer: the capture set IRBuilder records (task #122), or, when it
+            // did not record one, D1's INTERIM rule — every local of a function that contains a
+            // lambda. A Const is exempt either way: nothing can write it.
             if (function?.Parameters != null)
                 foreach (var parameter in function.Parameters)
                     if (string.Equals(parameter.Name, name, StringComparison.OrdinalIgnoreCase))
-                        return parameter.IsByRef || ContainsLambda(function);
+                        return parameter.IsByRef || IsLambdaCaptured(name, function);
             if (function?.LocalVariables != null)
                 foreach (var local in function.LocalVariables)
                     if (string.Equals(local.Name, name, StringComparison.OrdinalIgnoreCase))
-                        return !local.IsConst && (local.IsGlobal || ContainsLambda(function));
+                        return !local.IsConst && (local.IsGlobal || IsLambdaCaptured(name, function));
             // Undeclared: a class member read bare, a module variable, or a name whose
             // declaration IRFunction does not carry. The last only costs a merge or a hoist.
             // ⚠ IRBuilder leaves three locals out of LocalVariables: a For Each loop variable
@@ -285,65 +287,213 @@ namespace BasicLang.Compiler.IR.Optimization
         }
 
         /// <summary>
+        /// ⭐ ADR-0006 D1's closure rule, narrowed by task #122: whether a lambda
+        /// <paramref name="function"/> creates may read or write <paramref name="name"/>.
+        /// <list type="bullet">
+        /// <item>No lambda referenced (<see cref="ContainsLambda"/>): no.</item>
+        /// <item>IRBuilder recorded a capture set for EVERY lambda the function references
+        /// (<see cref="IRFunction.LambdaCaptureSources"/>): whether the name is in
+        /// <see cref="IRFunction.LambdaCapturedNames"/>, ignoring case (BasicLang is
+        /// case-insensitive, and a lambda may spell the creator's local differently).</item>
+        /// <item>Otherwise — no set at all (<c>null</c> means NOT computed: hand-built IR), or a
+        /// referenced lambda the set does not account for (one whose IR holds raw
+        /// <see cref="IRInlineCode"/>, or a reference IRBuilder did not write) — the INTERIM rule:
+        /// yes, for every local.</item>
+        /// </list>
+        /// <para>A pure precision gain over the interim rule, by construction: the answer can only
+        /// be "no" where IRBuilder enumerated, for every lambda this function references, every
+        /// name that lambda's IR mentions (<see cref="LambdaCapturesOf"/>).</para>
+        /// </summary>
+        protected internal static bool IsLambdaCaptured(string name, IRFunction function)
+        {
+            var lambdas = LambdaReferences(function);
+            if (lambdas.Count == 0) return false;
+            var captured = function.LambdaCapturedNames;
+            var recorded = function.LambdaCaptureSources;
+            if (captured == null || recorded == null) return true;
+            foreach (var lambda in lambdas)
+                if (!recorded.Contains(lambda)) return true;
+            foreach (var capture in captured)
+                if (string.Equals(capture, name, StringComparison.OrdinalIgnoreCase)) return true;
+            return false;
+        }
+
+        /// <summary>
         /// Whether <paramref name="function"/> creates a lambda — the trigger of ADR-0006 D1's
-        /// interim closure rule (<see cref="IsCallVisible(string, IRFunction)"/>). IRBuilder lowers a
+        /// closure rule (<see cref="IsLambdaCaptured"/>). IRBuilder lowers a
         /// lambda to its own <see cref="IRFunction"/> named <c>__lambda_N</c> and leaves the
         /// enclosing function an <see cref="IRVariable"/> spelled that name wherever the delegate
         /// value is used — the same reference every backend recognises the lambda by
         /// (<c>CppCodeGenerator</c>, <c>JavaScriptBackend.IsLambdaRef</c>, <c>CSharpBackend</c>).
         /// The walk follows every operand slot (<see cref="UsesOf"/>) and descends into operand
         /// instructions, so a reference inside a never-emitted When guard is found too.
-        ///
-        /// <para>Cached per function, because every consumer asks per operand. A YES is kept for
-        /// good (a stale yes only costs a merge). A NO is kept only while the function's
-        /// instruction count is unchanged, and is otherwise re-walked — the hole left is an
-        /// instruction REPLACED in place by one that references a lambda, which nothing does:
-        /// IRBuilder writes every lambda reference before any pass runs, and no pass creates one
-        /// (the one pass that could copy code between functions, FunctionInliningPass, is not
-        /// registered).</para>
         /// </summary>
-        protected internal static bool ContainsLambda(IRFunction function)
+        protected internal static bool ContainsLambda(IRFunction function) => LambdaReferences(function).Count > 0;
+
+        /// <summary>
+        /// The <c>__lambda_N</c> names <paramref name="function"/> references (see
+        /// <see cref="ContainsLambda"/>).
+        ///
+        /// <para>Cached per function, because every consumer asks per operand. The set only GROWS:
+        /// it is re-walked whenever the function's instruction count changes and the new walk is
+        /// added to the old, so a reference a pass deleted stays listed (a stale name only costs a
+        /// merge — the closure rule falls back to the interim one if it is unaccounted for) and a
+        /// reference a pass added is found. The hole left is an instruction REPLACED in place by
+        /// one that references a lambda, which nothing does: IRBuilder writes every lambda
+        /// reference before any pass runs, and no pass creates one (the one pass that could copy
+        /// code between functions, FunctionInliningPass, is not registered).</para>
+        /// </summary>
+        protected internal static IReadOnlyCollection<string> LambdaReferences(IRFunction function)
         {
-            if (function?.Blocks == null) return false;
+            if (function?.Blocks == null) return Array.Empty<string>();
             int count = 0;
             foreach (var block in function.Blocks) count += block?.Instructions?.Count ?? 0;
-            if (LambdaScans.TryGetValue(function, out var cached) && (cached.Found || cached.InstructionCount == count))
-                return cached.Found;
-            bool found = ScanForLambda(function);
-            LambdaScans.AddOrUpdate(function, new LambdaScan(found, count));
-            return found;
+            if (LambdaScans.TryGetValue(function, out var cached) && cached.InstructionCount == count)
+                return cached.Names;
+            var names = ScanForLambdas(function);
+            if (cached != null) names.UnionWith(cached.Names);
+            LambdaScans.AddOrUpdate(function, new LambdaScan(names, count));
+            return names;
         }
 
-        private sealed record LambdaScan(bool Found, int InstructionCount);
+        private sealed record LambdaScan(HashSet<string> Names, int InstructionCount);
 
         private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<IRFunction, LambdaScan> LambdaScans = new();
 
-        private static bool ScanForLambda(IRFunction function)
+        private static bool IsLambdaReference(IRVariable variable) =>
+            variable.Name != null && variable.Name.StartsWith("__lambda_", StringComparison.Ordinal);
+
+        private static HashSet<string> ScanForLambdas(IRFunction function)
         {
+            var found = new HashSet<string>(StringComparer.Ordinal);
             var seen = new HashSet<IRValue>(ReferenceEqualityComparer.Instance);
-            var pending = new Stack<IRValue>();
             foreach (var block in function.Blocks)
+            {
+                if (block?.Instructions == null) continue;
+                foreach (var inst in block.Instructions)
+                    foreach (var value in OperandTree(inst, seen))
+                        if (value is IRVariable variable && IsLambdaReference(variable))
+                            found.Add(variable.Name);
+            }
+            return found;
+        }
+
+        /// <summary>
+        /// Every value <paramref name="inst"/> uses, and every value THOSE use: each operand slot
+        /// (<see cref="UsesOf"/>, When-guard trees included), descending into operand
+        /// instructions, each value once per <paramref name="seen"/>. The one walk
+        /// <see cref="ContainsLambda"/> and <see cref="LambdaCapturesOf"/> share, so a lambda
+        /// reference and a captured name are found in exactly the same places.
+        /// </summary>
+        private static IEnumerable<IRValue> OperandTree(IRInstruction inst, HashSet<IRValue> seen)
+        {
+            if (inst == null) yield break;
+            var pending = new Stack<IRValue>();
+            foreach (var used in UsesOf(inst)) pending.Push(used);
+            while (pending.Count > 0)
+            {
+                var value = pending.Pop();
+                if (value == null || !seen.Add(value)) continue;
+                yield return value;
+                if (value is IRVariable) continue;
+                foreach (var operand in UsesOf(value)) pending.Push(operand);
+            }
+        }
+
+        /// <summary>
+        /// ⭐ THE CAPTURE SET of <paramref name="lambda"/> (task #122, ADR-0006 D1's Obligation),
+        /// computed from its IR by IRBuilder at the end of the lambda, once its body — and every
+        /// lambda nested in it — is built. Name → the type of an <see cref="IRVariable"/> or value
+        /// carrying that name (null when none does), or null when the names cannot be
+        /// enumerated. It is:
+        /// <list type="number">
+        /// <item>every NAME the lambda's IR mentions: every operand, descending operand
+        /// instructions and When-guard trees (<see cref="OperandTree"/>); every value's own name;
+        /// every name <see cref="NamesWrittenBy"/> says an instruction or operand writes (an
+        /// assignment target, a store's variable and an alloca slot's <c>V</c>, a For Each /
+        /// Catch / pattern variable, a member, a ByRef argument); plus the
+        /// <c>V</c> of any <c>V_addr</c> slot it reads;</item>
+        /// <item>plus the captures of every lambda created INSIDE it
+        /// (<see cref="IRFunction.LambdaCapturedNames"/> of the lambda as a creator) — nesting is
+        /// transitive;</item>
+        /// <item>minus its own PARAMETERS, matched by exact spelling.</item>
+        /// </list>
+        /// <para>Over-approximating only costs a merge (a field or global spelled like a creator's
+        /// local); under-approximating miscompiles. So it is null — the creator then keeps the
+        /// interim rule — when an instruction's names cannot be enumerated
+        /// (<see cref="NamesWrittenBy"/> answers Universal: raw <see cref="IRInlineCode"/>, which
+        /// can name any variable, or a kind nobody classified), or when the lambda references a
+        /// nested lambda whose captures were not recorded.</para>
+        /// <para>⚠ The lambda's own LOCALS are NOT subtracted. A lambda body can use the creator's
+        /// <c>n</c> and then declare its own <c>Dim n</c> (MEASURED: the analyzer accepts it, and
+        /// the first <c>n</c> is the creator's), and the C# backend does not declare a lambda's
+        /// locals at all (K6's CS0103), so a lambda local spelled like a creator local IS the
+        /// creator's variable in emitted C#. A parameter is declared by every backend, and IRBuilder
+        /// binds it for the whole body, so a mention spelled EXACTLY like it is it. Matching
+        /// ignoring case would remove the creator's <c>n</c> from a lambda whose parameter is
+        /// <c>N</c>; the exact match keeps it.</para>
+        /// </summary>
+        protected internal static Dictionary<string, TypeInfo> LambdaCapturesOf(IRFunction lambda)
+        {
+            if (lambda?.Blocks == null) return null;
+            var captures = new Dictionary<string, TypeInfo>(StringComparer.Ordinal);
+            var nested = new HashSet<string>(StringComparer.Ordinal);
+            var seen = new HashSet<IRValue>(ReferenceEqualityComparer.Instance);
+
+            void Mention(string name, TypeInfo type)
+            {
+                if (string.IsNullOrEmpty(name)) return;
+                if (!captures.TryGetValue(name, out var known) || known == null) captures[name] = type;
+            }
+
+            // False when the instruction's names cannot be enumerated.
+            bool Mentions(IRInstruction inst)
+            {
+                var writes = NamesWrittenBy(inst, lambda);
+                if (writes.IsUniversal) return false;
+                foreach (var written in writes.Names) Mention(written, null);
+                switch (inst)
+                {
+                    case IRVariable variable:
+                        Mention(variable.Name, variable.Type);
+                        if (IsLambdaReference(variable)) nested.Add(variable.Name);
+                        break;
+                    case IRAlloca slot:
+                        Mention(slot.Name, slot.Type);
+                        if (slot.Name != null && slot.Name.EndsWith("_addr", StringComparison.OrdinalIgnoreCase))
+                            Mention(slot.Name.Substring(0, slot.Name.Length - "_addr".Length), slot.Type);
+                        break;
+                    case IRValue value:
+                        Mention(value.Name, value.Type);
+                        break;
+                    case IRAssignment assignment:
+                        Mention(assignment.Target?.Name, assignment.Target?.Type);
+                        break;
+                }
+                return true;
+            }
+
+            foreach (var block in lambda.Blocks)
             {
                 if (block?.Instructions == null) continue;
                 foreach (var inst in block.Instructions)
                 {
                     if (inst == null) continue;
-                    foreach (var used in UsesOf(inst)) pending.Push(used);
-                    while (pending.Count > 0)
-                    {
-                        var value = pending.Pop();
-                        if (value == null || !seen.Add(value)) continue;
-                        if (value is IRVariable variable)
-                        {
-                            if (variable.Name != null && variable.Name.StartsWith("__lambda_", StringComparison.Ordinal))
-                                return true;
-                            continue;
-                        }
-                        foreach (var operand in UsesOf(value)) pending.Push(operand);
-                    }
+                    if (!Mentions(inst)) return null;
+                    foreach (var value in OperandTree(inst, seen))
+                        if (!Mentions(value)) return null;
                 }
             }
-            return false;
+
+            foreach (var reference in nested)
+                if (lambda.LambdaCaptureSources == null || !lambda.LambdaCaptureSources.Contains(reference))
+                    return null;
+            if (lambda.LambdaCapturedNames != null)
+                foreach (var name in lambda.LambdaCapturedNames) Mention(name, null);
+
+            foreach (var parameter in lambda.Parameters)
+                if (parameter?.Name != null) captures.Remove(parameter.Name);
+            return captures;
         }
 
         /// <summary>
@@ -463,8 +613,20 @@ namespace BasicLang.Compiler.IR.Optimization
                         Walk(compare.Left);
                         Walk(compare.Right);
                         return;
+                    // ADR-0011 D5: reference identity is pure — a read of both operands.
+                    case IRIdentityCompare identity:
+                        Walk(identity.Left);
+                        Walk(identity.Right);
+                        return;
                     case IRCast cast:
                         Walk(cast.Value);
+                        return;
+
+                    // ADR-0010: a member read the producer KNOWS is storage (only ClosureLowering
+                    // sets it) is not call-shaped — NamesWrittenBy gives it no call arm — so it is
+                    // a read of the member it names, exactly as the bare variable it replaced was.
+                    case IRFieldAccess storage when storage.IsStorageAccess:
+                        names.Add(new StorageRead(storage.FieldName, null));
                         return;
 
                     // Call-shaped (NamesWrittenBy's call arms): evaluated once, and it may read (or
@@ -527,9 +689,11 @@ namespace BasicLang.Compiler.IR.Optimization
         /// <see cref="CollectReads"/>. Its operands are still walked, as before.</para>
         ///
         /// <para>A local captured BY REFERENCE by a lambda that a call then invokes is closed by
-        /// ADR-0006 D1's interim closure rule, inside
-        /// <see cref="IsCallVisible(string, IRFunction)"/>: in a function that creates a lambda
-        /// every local is call-visible — for CSE and, since task #146, for CopyPropagation too
+        /// ADR-0006 D1's closure rule, inside
+        /// <see cref="IsCallVisible(string, IRFunction)"/>: in a function that creates a lambda,
+        /// every local in its lambdas' capture set (<see cref="IsLambdaCaptured"/>, task #122 —
+        /// every local, the interim rule, where IRBuilder recorded no set) is call-visible — for
+        /// CSE and, since task #146, for CopyPropagation too
         /// (MEASURED before #146 on <c>Dim bump = Sub() p = p + 100 : a = p + q : bump() :
         /// l(0) = p + q</c> with <c>p</c> starting as a constant: CopyPropagation plus
         /// ConstantFolding folded <c>p + q</c> to a constant on BOTH sides of <c>bump()</c>, so
@@ -703,7 +867,10 @@ namespace BasicLang.Compiler.IR.Optimization
                 // JavaScript and MSIL. The node does not say which it is, so every member store
                 // is treated as one that may run a setter.
                 case IRFieldStore fieldStore:
-                    isCall = true;
+                    // ADR-0010: a store the producer KNOWS is a plain field (only ClosureLowering
+                    // says so, for a closure environment or a creator's field reached through the
+                    // captured Me) runs no setter — a named write, not a call.
+                    isCall = !fieldStore.IsStorageAccess;
                     Name(fieldStore.FieldName);
                     escapes = true; // a member, which a ByRef parameter may alias (`Work(K)`)
                     break;
@@ -713,8 +880,16 @@ namespace BasicLang.Compiler.IR.Optimization
                 // getter that bumps the field K, `a = K + q : t = Me.Tick : l(0) = K + q` printed
                 // 3,3,11 for 13,3,11 on JavaScript and MSIL.
                 case IRFieldAccess fieldAccess:
-                    isCall = true;
+                    // ADR-0010: a read the producer KNOWS is storage runs no getter.
+                    isCall = !fieldAccess.IsStorageAccess;
                     Definition(fieldAccess);
+                    break;
+
+                // ---- A delegate value (ADR-0010 D8, produced only by ClosureLowering): a
+                // definition of its own name. Building a delegate runs no user code — the
+                // constructor is runtime-implemented and only records the target and method.
+                case IRDelegateCreate delegateCreate:
+                    Definition(delegateCreate);
                     break;
 
                 // ---- Calls: the result's name (a rename, `Dim p = Seed(1)`), every ByRef
@@ -760,6 +935,10 @@ namespace BasicLang.Compiler.IR.Optimization
                 case IRVariable:
                 case IRBinaryOp:
                 case IRCompare:
+                // ADR-0011 D5: `Is` / `IsNot` runs no user code on any backend — every rendering
+                // is a reference compare or a null/emptiness test — so, like IRCompare, it is a
+                // definition of its own name and nothing else.
+                case IRIdentityCompare:
                 case IRCast:
                 case IRLoad:
                 case IRAlloca:
@@ -977,6 +1156,9 @@ namespace BasicLang.Compiler.IR.Optimization
                 case IRCompare c:
                     CollectNames(c.Left, into); CollectNames(c.Right, into);
                     break;
+                case IRIdentityCompare identity:
+                    CollectNames(identity.Left, into); CollectNames(identity.Right, into);
+                    break;
                 case IRCast cast:
                     CollectNames(cast.Value, into);
                     break;
@@ -1039,6 +1221,13 @@ namespace BasicLang.Compiler.IR.Optimization
         }
 
         /// <summary>
+        /// <see cref="MapUses"/> for a consumer outside the pass hierarchy — ClosureLowering
+        /// (ADR-0010), which rewrites operands with the SAME arm set every pass and the verifier
+        /// use, so the lowering cannot miss an operand slot they see.
+        /// </summary>
+        internal static void MapOperands(IRInstruction inst, Func<IRValue, IRValue> map) => MapUses(inst, map);
+
+        /// <summary>
         /// THE total use walker: one arm per IR node that CONSUMES a value, each operand slot
         /// replaced by <paramref name="map"/>'s answer for it (an identity map rewrites nothing).
         /// Definition slots are deliberately absent: <c>IRAssignment.Target</c> is an
@@ -1058,6 +1247,10 @@ namespace BasicLang.Compiler.IR.Optimization
                 case IRCompare cmp:
                     cmp.Left = map(cmp.Left);
                     cmp.Right = map(cmp.Right);
+                    break;
+                case IRIdentityCompare identity:
+                    identity.Left = map(identity.Left);
+                    identity.Right = map(identity.Right);
                     break;
                 case IRLoad load:
                     load.Address = map(load.Address);
@@ -1141,6 +1334,9 @@ namespace BasicLang.Compiler.IR.Optimization
                 case IRFieldStore fieldStore:
                     fieldStore.Object = map(fieldStore.Object);
                     fieldStore.Value = map(fieldStore.Value);
+                    break;
+                case IRDelegateCreate delegateCreate:
+                    delegateCreate.Target = map(delegateCreate.Target);
                     break;
                 case IRTupleElement tupleElement:
                     tupleElement.Tuple = map(tupleElement.Tuple);
@@ -1387,7 +1583,46 @@ namespace BasicLang.Compiler.IR.Optimization
                         ReportModification();
                     }
                 }
+                else if (instruction is IRIdentityCompare identity)
+                {
+                    var folded = TryFoldIdentity(identity);
+                    if (folded != null)
+                    {
+                        ReplaceAllReferences(block, identity, folded);
+
+                        if (IsNamedVariable(identity))
+                        {
+                            var targetVar = new IRVariable(identity.Name, identity.Type);
+                            block.Instructions[i] = new IRAssignment(targetVar, folded);
+                        }
+                        else
+                        {
+                            block.Instructions[i] = folded;
+                        }
+                        ReportModification();
+                    }
+                }
             }
+        }
+
+        /// <summary>
+        /// ADR-0011 D5 (1): the ONLY identity fold — <c>Nothing Is Nothing</c> is True and
+        /// <c>Nothing IsNot Nothing</c> is False, on every backend.
+        ///
+        /// <para>⛔ Nothing wider. <c>x Is x</c> is not folded (the ruling says only
+        /// <c>Nothing</c>/<c>Nothing</c>), a non-null constant is never treated as Nothing — on C++
+        /// <c>"" Is Nothing</c> is True and on the other three it is False, so no single
+        /// compile-time answer exists for it — and the node is never rewritten to or from an
+        /// <see cref="IRCompare"/> / <c>Eq</c> / <c>Ne</c>, which a user operator could
+        /// answer.</para>
+        /// </summary>
+        private static IRConstant TryFoldIdentity(IRIdentityCompare identity)
+        {
+            if (!IRIdentityCompare.IsNothing(identity.Left) || !IRIdentityCompare.IsNothing(identity.Right))
+                return null;
+
+            return new IRConstant(!identity.Negated,
+                identity.Type ?? new TypeInfo("Boolean", TypeKind.Primitive));
         }
 
         /// <summary>
@@ -1739,7 +1974,32 @@ namespace BasicLang.Compiler.IR.Optimization
     }
     
     /// <summary>
-    /// Dead code elimination - remove instructions that don't affect program output
+    /// Dead code elimination - remove instructions that don't affect program output.
+    ///
+    /// <para>⭐ A CONSUMER OF THE ONE USE WALKER (task #118). What counts as a use is
+    /// <see cref="OptimizationPass.UsesOf"/> — the arm set <see cref="OptimizationPass.ReplaceUses"/>
+    /// rewrites and <see cref="IRVerifier"/> counts — followed through operand trees, over the
+    /// WHOLE function (<see cref="UsedValues"/>). This pass used to keep its own walker,
+    /// <c>MarkUsed</c>, which knew ten node kinds and was consulted one BLOCK at a time. It missed
+    /// every operand of sixteen kinds (an element pointer, a cast, an array store, an await, a
+    /// yield, an indexer load or store, a For Each collection, a throw, an allocation's
+    /// arguments, an instance call's object and arguments, a base call's arguments, a field
+    /// load or store, a tuple element, a phi) and part of two more (a call's callee value; a
+    /// switch's case values and pattern cases), it never looked inside an operand tree that is
+    /// not itself in a block (a When guard), and a value defined in one block and used only in
+    /// another read as unused. Each of those is a LIVE value this pass would delete, leaving its
+    /// consumer holding an instruction that is no longer in the function.</para>
+    ///
+    /// <para>⛔ STILL LATENT, DELIBERATELY. The removal guard below skips every value whose name
+    /// is non-empty and does not start with <c>_tmp</c>, and IRBuilder names every temp
+    /// <c>t0</c>, <c>t1</c>, … — so in a real program this pass removes no instruction; only
+    /// <see cref="ControlFlowGraph.RemoveUnreachableBlocks"/> has an effect. Task #118 made the
+    /// use analysis total and left the guard alone, so emitted code is unchanged. Switching the
+    /// removal on (e.g. <see cref="OptimizationPass.IsTempDestination"/>) is a separate, measured
+    /// decision: ADR-0008 settled point 3 — removing a use can leave a NON-replicable value
+    /// single-use and not adjacent to its definition, which the C# backend then inlines away
+    /// from where it was computed — and the <c>T5</c> caveat on
+    /// <see cref="OptimizationPass.IsTempDestination"/> (a user variable spelled like a temp).</para>
     /// </summary>
     public class DeadCodeEliminationPass : OptimizationPass
     {
@@ -1761,26 +2021,52 @@ namespace BasicLang.Compiler.IR.Optimization
                 int removed = cfg.RemoveUnreachableBlocks();
                 ModificationCount += removed;
                 
-                // Remove dead instructions
+                // Remove dead instructions. The uses are collected over EVERY block before any
+                // block loses an instruction: a value defined in one block is routinely used in
+                // another (a loop body reading a value computed before the loop).
+                var used = UsedValues(function);
                 foreach (var block in function.Blocks)
                 {
-                    RemoveDeadInstructions(block);
+                    RemoveDeadInstructions(block, used);
                 }
             }
             
             return ModificationCount > 0;
         }
-        
-        private void RemoveDeadInstructions(BasicBlock block)
+
+        /// <summary>
+        /// Every value <paramref name="function"/> uses: each operand slot of each instruction in
+        /// each of its blocks (<see cref="OptimizationPass.UsesOf"/>), and — through operand trees —
+        /// each operand of an operand instruction, the same descent
+        /// <see cref="IRVerifier"/> makes. The descent is what finds a block value whose only
+        /// consumer is an instruction that is not itself in a block (a When guard's tree hangs
+        /// off its <see cref="IRSwitch"/>; an expression tree hangs off its consumer).
+        /// Reference identity, never names: a use is of the <see cref="IRValue"/> object.
+        /// </summary>
+        private static HashSet<IRValue> UsedValues(IRFunction function)
         {
-            var used = new HashSet<IRValue>();
-
-            // Mark instructions that are used
-            foreach (var inst in block.Instructions)
+            var used = new HashSet<IRValue>(ReferenceEqualityComparer.Instance);
+            var pending = new Stack<IRValue>();
+            foreach (var block in function.Blocks)
             {
-                MarkUsed(inst, used);
+                if (block?.Instructions == null) continue;
+                foreach (var inst in block.Instructions)
+                {
+                    if (inst == null) continue;
+                    foreach (var operand in UsesOf(inst)) pending.Push(operand);
+                    while (pending.Count > 0)
+                    {
+                        var value = pending.Pop();
+                        if (value == null || !used.Add(value)) continue;
+                        foreach (var nested in UsesOf(value)) pending.Push(nested);
+                    }
+                }
             }
-
+            return used;
+        }
+        
+        private void RemoveDeadInstructions(BasicBlock block, HashSet<IRValue> used)
+        {
             // Remove unused assignments
             for (int i = block.Instructions.Count - 1; i >= 0; i--)
             {
@@ -1808,61 +2094,17 @@ namespace BasicLang.Compiler.IR.Optimization
                     block.Instructions.RemoveAt(i);
                     ReportModification();
                 }
+                // Pure (ADR-0011 D5), so an unused one is dead exactly as an unused IRCompare is.
+                else if (inst is IRIdentityCompare identity && !used.Contains(identity))
+                {
+                    block.Instructions.RemoveAt(i);
+                    ReportModification();
+                }
                 else if (inst is IRLoad load && !used.Contains(load))
                 {
                     block.Instructions.RemoveAt(i);
                     ReportModification();
                 }
-            }
-        }
-        
-        private void MarkUsed(IRInstruction inst, HashSet<IRValue> used)
-        {
-            if (inst is IRBinaryOp binaryOp)
-            {
-                used.Add(binaryOp.Left);
-                used.Add(binaryOp.Right);
-            }
-            else if (inst is IRUnaryOp unaryOp)
-            {
-                used.Add(unaryOp.Operand);
-            }
-            else if (inst is IRCompare compare)
-            {
-                used.Add(compare.Left);
-                used.Add(compare.Right);
-            }
-            else if (inst is IRStore store)
-            {
-                used.Add(store.Value);
-                used.Add(store.Address);
-            }
-            else if (inst is IRLoad load)
-            {
-                used.Add(load.Address);
-            }
-            else if (inst is IRCall call)
-            {
-                foreach (var arg in call.Arguments)
-                {
-                    used.Add(arg);
-                }
-            }
-            else if (inst is IRReturn ret && ret.Value != null)
-            {
-                used.Add(ret.Value);
-            }
-            else if (inst is IRConditionalBranch condBr)
-            {
-                used.Add(condBr.Condition);
-            }
-            else if (inst is IRSwitch switchInst)
-            {
-                used.Add(switchInst.Value);
-            }
-            else if (inst is IRAssignment assignment)
-            {
-                used.Add(assignment.Value);
             }
         }
     }
@@ -1885,7 +2127,9 @@ namespace BasicLang.Compiler.IR.Optimization
     /// <c>Dim bump = Sub() p = p + 100 : a = p + q : bump() : l(0) = p + q</c>, with <c>p</c>
     /// starting as a constant, printed 3,3 for 103,3 on C# and JavaScript: the fact
     /// <c>p -> 1</c> survived the lambda call (ADR-0006 D1's closure rule makes <c>p</c>
-    /// call-visible in a function that creates a lambda). (C++ prints 3,3 there with no
+    /// call-visible: the lambda captures it — <see cref="OptimizationPass.IsLambdaCaptured"/>,
+    /// the capture set of task #122, or every local where IRBuilder recorded none). A local no
+    /// lambda of the function captures keeps its facts across the call. (C++ prints 3,3 there with no
     /// optimizer pass at all — its lambda captures by copy, task #140.) Every other kind the private rules
     /// missed — a member store, an element store a ByRef parameter may alias, a For Each / Catch /
     /// pattern variable, <c>++x</c>'s operand, a constructor's or base call's variable arguments,
@@ -1934,7 +2178,9 @@ namespace BasicLang.Compiler.IR.Optimization
                 // await-valued `x = Await F()`).
                 Invalidate(copies, inst, function);
 
-                // Track copy assignments; recording is restricted to the safe subset.
+                // Track copy assignments; recording is restricted to the safe subset. A value that
+                // reads its own target (Mentions: a variable, or an operand instruction named after
+                // it) is not recorded: after the store, re-reading it at a use would read the NEW value.
                 if (inst is IRAssignment assignment && assignment.Target is IRVariable target
                     // Never propagate awaits - duplicating them would re-execute the awaited task.
                     && assignment.Value is IRValue value && value is not IRAwait
@@ -1992,29 +2238,86 @@ namespace BasicLang.Compiler.IR.Optimization
 
 
         /// <summary>
-        /// Whether a recorded copy value reads the named variable anywhere in
-        /// its operand tree. Unknown value shapes conservatively answer TRUE
-        /// (killing a copy fact is always safe; keeping a stale one is not).
+        /// Whether a recorded copy value reads the storage called <paramref name="name"/>
+        /// anywhere in its operand tree (case-insensitively). Unknown value shapes conservatively
+        /// answer TRUE (killing a copy fact is always safe; keeping a stale one is not).
+        ///
+        /// <para>⭐ TWO HALVES, and the answer is their union:</para>
+        /// <list type="number">
+        /// <item>the storage the value reads by THE ONE OPERAND WALK,
+        /// <see cref="OptimizationPass.CollectReads"/> (ADR-0008 D1): every variable, and every
+        /// operand instruction with a named destination (<see cref="OptimizationPass.NamedDestination"/>),
+        /// the value itself included, reached through the pure operators. Every backend reads such
+        /// an instruction back BY THAT NAME, so a store to the name changes what the value reads;</item>
+        /// <item><see cref="MentionsPastTheWalk"/>: what the walk does not look at — the
+        /// arguments of a call or an allocation, and the object of a field access or instance
+        /// call, where <see cref="OptimizationPass.CollectReads"/> stops. Each is asked this whole
+        /// question again, so a named instruction inside a call's argument counts too.</item>
+        /// </list>
+        ///
+        /// <para>⛔ MEASURED (task #161): before the first half existed this walked the operand
+        /// tree for an <see cref="IRVariable"/> spelled <paramref name="name"/> and nothing else,
+        /// so an operand INSTRUCTION renamed after a variable was invisible to it: with
+        /// <c>u = a + 1</c> (an IRBinaryOp renamed <c>u</c>), <c>t0 = u * 2</c> and
+        /// <c>x := t0</c>, the direct store <c>u = 5</c> left the fact standing, although
+        /// ADR-0008 settled point 4 requires it to die. A SOURCE program reaches that shape:
+        /// <c>Dim u As Integer = a + b : Dim x As Double = a + b : u = 5 : Dim y As Double = x :
+        /// Return y * c + u</c>. CSE forwards the second <c>a + b</c> to the renamed <c>u</c>, so
+        /// on the pipeline's second iteration the fact is <c>x := CDbl(u)</c>, and it was
+        /// propagated past the store into <c>y * c</c>. <see cref="IRVerifier"/> then reported an
+        /// S′ violation (the cast, used twice, reads <c>u</c>, which is written between) on all
+        /// four backends at all three entry points (CLI, CLI <c>--optimize</c>, Release project).
+        /// Every backend still printed the right number, only because none of them re-evaluated
+        /// the cast after the store (C++, JavaScript and MSIL materialise it before the store; C#
+        /// re-evaluates it inline as <c>(double)(a + b)</c>). A backend that re-evaluated it there
+        /// and read the renamed operand BY ITS NAME, as C++ renders it
+        /// (<c>static_cast&lt;double&gt;(u)</c>), would read the new <c>u</c> — the hazard
+        /// settled point 4 and task #118 name.</para>
+        ///
+        /// <para>⛔ Do NOT reduce this to the first half alone. The walk stops at a call-shaped
+        /// node because it answers a different question (what a value reads once it has been
+        /// evaluated where it is defined); this pass has always also killed a fact whose value
+        /// passes the written variable to a call, an allocation or a member access, and dropping
+        /// that second half narrows the kills. The union is a superset of the old answer at every
+        /// node: a variable is found by the walk exactly as the old variable arm found it, a pure
+        /// operator's operands are reached by both halves, and every other kind is answered by the
+        /// second half with the old arms verbatim.</para>
         /// </summary>
         private static bool Mentions(IRValue value, string name)
+        {
+            foreach (var read in CollectReads(value).Names)
+                if (string.Equals(read.Name, name, StringComparison.OrdinalIgnoreCase))
+                    return true;
+            return MentionsPastTheWalk(value, name);
+        }
+
+        /// <summary>
+        /// The half of <see cref="Mentions"/> that <see cref="OptimizationPass.CollectReads"/>
+        /// does not cover: it descends the same pure operators to find the call-shaped nodes the
+        /// walk stopped at, and asks <see cref="Mentions"/> of their operands. A variable, a
+        /// constant and a pure operator's own name are the walk's to answer, so they answer FALSE
+        /// here. A kind neither half lists answers TRUE, as it always has.
+        /// </summary>
+        private static bool MentionsPastTheWalk(IRValue value, string name)
         {
             switch (value)
             {
                 case null:
                 case IRConstant:
+                case IRVariable:
                     return false;
-                case IRVariable v:
-                    return string.Equals(v.Name, name, StringComparison.OrdinalIgnoreCase);
+                case IRBinaryOp b:
+                    return MentionsPastTheWalk(b.Left, name) || MentionsPastTheWalk(b.Right, name);
+                case IRUnaryOp u:
+                    return MentionsPastTheWalk(u.Operand, name);
+                case IRCompare c:
+                    return MentionsPastTheWalk(c.Left, name) || MentionsPastTheWalk(c.Right, name);
+                case IRIdentityCompare identity:
+                    return MentionsPastTheWalk(identity.Left, name) || MentionsPastTheWalk(identity.Right, name);
+                case IRCast cast:
+                    return MentionsPastTheWalk(cast.Value, name);
                 case IRNewObject n:
                     return n.Arguments.Any(a => Mentions(a, name));
-                case IRBinaryOp b:
-                    return Mentions(b.Left, name) || Mentions(b.Right, name);
-                case IRUnaryOp u:
-                    return Mentions(u.Operand, name);
-                case IRCompare c:
-                    return Mentions(c.Left, name) || Mentions(c.Right, name);
-                case IRCast cast:
-                    return Mentions(cast.Value, name);
                 case IRFieldAccess f:
                     return Mentions(f.Object, name);
                 case IRInstanceMethodCall m:
@@ -2089,7 +2392,30 @@ namespace BasicLang.Compiler.IR.Optimization
                     ReportModification();
                 }
             }
+            else if (inst is IRIdentityCompare identity)
+            {
+                // ⚠ A LAMBDA reference is never propagated into `Is`: every backend renders one as
+                // the lambda EXPRESSION itself, at its use site, and `(() => {…}) === null` /
+                // `[=]() {…} == nullptr` is not an operand either language accepts (MEASURED:
+                // `x = Sub() … : x Is Nothing` was a JavaScript SyntaxError and a clang error).
+                // The variable holding it is tested instead, which is the same answer.
+                if (identity.Left is IRVariable leftVar && copies.TryGetValue(leftVar, out var leftCopy)
+                    && !IsLambdaReferenceValue(leftCopy))
+                {
+                    identity.Left = leftCopy;
+                    ReportModification();
+                }
+                if (identity.Right is IRVariable rightVar && copies.TryGetValue(rightVar, out var rightCopy)
+                    && !IsLambdaReferenceValue(rightCopy))
+                {
+                    identity.Right = rightCopy;
+                    ReportModification();
+                }
+            }
         }
+
+        private static bool IsLambdaReferenceValue(IRValue value) =>
+            value is IRVariable { Name: { } name } && name.StartsWith("__lambda_", StringComparison.Ordinal);
     }
     
     /// <summary>
@@ -2531,9 +2857,11 @@ namespace BasicLang.Compiler.IR.Optimization
         /// whose <c>Inc()</c> call bumps <c>K</c> (C++, JavaScript and MSIL).</item>
         /// </list>
         /// <para>A local captured by reference and written inside a lambda counts as call-visible
-        /// under ADR-0006 D1's interim closure rule, so a loop that calls a lambda keeps it
-        /// (MEASURED: L5 now 12 on JavaScript under --optimize, 6 before). Task #122's capture set
-        /// narrows that from "every local" to the captured ones. An instruction that may write
+        /// under ADR-0006 D1's closure rule, so a loop that calls a lambda keeps it (MEASURED: L5
+        /// now 12 on JavaScript under --optimize, 6 before). Since task #122 that is the locals in
+        /// the function's lambdas' capture set (<see cref="OptimizationPass.IsLambdaCaptured"/>),
+        /// not every local — every local only where IRBuilder recorded no set (the interim rule),
+        /// so a value reading only uncaptured locals may still leave a loop that calls a lambda. An instruction that may write
         /// ANY name (<see cref="WriteKind.Universal"/>) leaves nothing in the loop invariant.</para>
         /// </summary>
         private static HashSet<string> VariablesWrittenIn(List<BasicBlock> loop, IRFunction function, out bool writesEverything)
@@ -2585,6 +2913,11 @@ namespace BasicLang.Compiler.IR.Optimization
                 case IRCompare compare:
                     return IsValueInvariant(compare.Left, loop, knownInvariants, written) &&
                            IsValueInvariant(compare.Right, loop, knownInvariants, written);
+                // Pure and non-trapping on every backend (a reference compare or a null/emptiness
+                // test), so it moves exactly when its operands are invariant.
+                case IRIdentityCompare identity:
+                    return IsValueInvariant(identity.Left, loop, knownInvariants, written) &&
+                           IsValueInvariant(identity.Right, loop, knownInvariants, written);
                 default:
                     return false;
             }
@@ -4610,6 +4943,10 @@ namespace BasicLang.Compiler.IR.Optimization
                 case IRCompare compare:
                     if (compare.Left is IRVariable cmpLeft) used.Add(cmpLeft.Name);
                     if (compare.Right is IRVariable cmpRight) used.Add(cmpRight.Name);
+                    break;
+                case IRIdentityCompare identity:
+                    if (identity.Left is IRVariable idLeft) used.Add(idLeft.Name);
+                    if (identity.Right is IRVariable idRight) used.Add(idRight.Name);
                     break;
                 case IRGetElementPtr gep:
                     if (gep.BasePointer is IRVariable gepVar) used.Add(gepVar.Name);

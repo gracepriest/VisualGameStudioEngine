@@ -176,6 +176,51 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             return _frameworkStdLib.CanHandle(functionName) || _stdLib.CanHandle(functionName);
         }
 
+        /// <summary>
+        /// The VB conversion rules <c>System.Convert</c> gets wrong, keyed on the argument's SOURCE
+        /// type (<c>CType(x, T)</c> lowers to these same calls — IRBuilder.ConversionBuiltinFor):
+        /// a Boolean converts to a number as <b>True = -1</b> (Convert.ToInt32(true) is 1), and a
+        /// String converts by VB's own parser — <c>Convert.ToBoolean("0")</c> THROWS where VB's
+        /// CBool("0") is False. <c>Microsoft.VisualBasic.CompilerServices.Conversions</c> is that
+        /// parser, shipped in the shared framework every generated project already targets.
+        /// </summary>
+        private string VbConversionText(IRCall call, string[] arguments)
+        {
+            if (call == null || arguments.Length != 1 || call.Arguments.Count != 1) return null;
+            if (_declaredIdentifiers.Contains(call.FunctionName)) return null;
+
+            var source = call.Arguments[0].Type?.Name;
+            var value = arguments[0];
+            const string conversions = "Microsoft.VisualBasic.CompilerServices.Conversions";
+
+            if (string.Equals(source, "Boolean", StringComparison.OrdinalIgnoreCase))
+            {
+                return call.FunctionName switch
+                {
+                    "CInt" => $"({value} ? -1 : 0)",
+                    "CLng" => $"({value} ? -1L : 0L)",
+                    "CDbl" => $"({value} ? -1.0 : 0.0)",
+                    "CSng" => $"({value} ? -1f : 0f)",
+                    _ => null
+                };
+            }
+
+            if (string.Equals(source, "String", StringComparison.OrdinalIgnoreCase))
+            {
+                return call.FunctionName switch
+                {
+                    "CInt" => $"{conversions}.ToInteger({value})",
+                    "CLng" => $"{conversions}.ToLong({value})",
+                    "CDbl" => $"{conversions}.ToDouble({value})",
+                    "CSng" => $"{conversions}.ToSingle({value})",
+                    "CBool" => $"{conversions}.ToBoolean({value})",
+                    _ => null
+                };
+            }
+
+            return null;
+        }
+
         private string StdLibEmitCall(string functionName, string[] arguments)
         {
             if (_frameworkStdLib.CanHandle(functionName))
@@ -855,6 +900,31 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             if (returnType == "Task" || returnType.StartsWith("Task<"))
                 return returnType;
             return $"Task<{returnType}>";
+        }
+
+        /// <summary>
+        /// An iterator's C# return type. BasicLang accepts both VB's own spelling,
+        /// <c>Iterator Function F() As IEnumerable(Of Integer)</c>, and the element-type shorthand
+        /// <c>As Integer</c>; only the shorthand is wrapped, as WrapAsyncReturnType leaves a
+        /// declared Task alone. ⛔ Wrapping unconditionally turned VB's spelling into
+        /// <c>IEnumerable&lt;IEnumerable&lt;int&gt;&gt;</c>, and every <c>Yield</c> in it failed with CS0029.
+        /// </summary>
+        private static string WrapIteratorReturnType(string returnType)
+        {
+            if (returnType == "void")
+                return returnType;
+
+            var bare = returnType.StartsWith("System.Collections.Generic.", StringComparison.Ordinal)
+                ? returnType.Substring("System.Collections.Generic.".Length)
+                : returnType.StartsWith("System.Collections.", StringComparison.Ordinal)
+                    ? returnType.Substring("System.Collections.".Length)
+                    : returnType;
+            if (bare is "IEnumerable" or "IEnumerator"
+                || bare.StartsWith("IEnumerable<", StringComparison.Ordinal)
+                || bare.StartsWith("IEnumerator<", StringComparison.Ordinal))
+                return returnType;
+
+            return $"IEnumerable<{returnType}>";
         }
 
         /// <summary>
@@ -1581,9 +1651,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             }
             else if (function.IsIterator)
             {
-                // Wrap return type in IEnumerable<T>
-                if (returnType != "void")
-                    actualReturnType = $"IEnumerable<{returnType}>";
+                actualReturnType = WrapIteratorReturnType(returnType);
             }
 
             // Generate constraint clauses for generic type parameters
@@ -3158,6 +3226,13 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         private string UserCallTarget(IRCall call)
         {
             var name = call.FunctionName ?? string.Empty;
+
+            // `Integer.Parse(s)` / `String.Format(...)`: the receiver is a TYPE KEYWORD, spelled as
+            // C#'s own keyword. `Integer` is no C# type (CS0103), and SanitizeName escaped `String`
+            // to `@String`, which only resolves through a `using System;` that may be absent.
+            if (PrimitiveStaticSurface.IsKeywordReceiver(name, out var keywordType, out var keywordMember))
+                return $"{PrimitiveStaticSurface.CSharpKeyword[keywordType]}.{keywordMember}";
+
             var spelled = name.Contains(".")
                 ? string.Join(".", name.Split('.').Select(SanitizeName))
                 : SanitizeName(name);
@@ -3257,6 +3332,11 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                         return EmitConstant(c);
 
                     case IRVariable v:
+                        // A type KEYWORD as a static receiver (`Integer.MaxValue`, `String.Empty`),
+                        // spelled as C#'s keyword. A keyword can never name a user variable.
+                        if (PrimitiveStaticSurface.IsTypeKeyword(v.Name))
+                            return PrimitiveStaticSurface.CSharpKeyword[v.Name];
+
                         // Check if this is a lambda reference
                         if (v.Name != null && v.Name.StartsWith("__lambda_"))
                         {
@@ -3289,8 +3369,8 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                     case IRBinaryOp bin:
                     {
                         // Sub-expressions need parens to preserve precedence
-                        var left = EmitExpression(bin.Left, stack, true);
-                        var right = EmitDivisor(bin, EmitExpression(bin.Right, stack, true));
+                        var left = ConcatOperand(bin, bin.Left, EmitExpression(bin.Left, stack, true));
+                        var right = EmitDivisor(bin, ConcatOperand(bin, bin.Right, EmitExpression(bin.Right, stack, true)));
                         var op = MapBinaryOperator(bin.Operation);
                         var narrowed = NarrowArithmetic(bin, $"{left} {op} {right}");
                         if (narrowed != null) return narrowed;
@@ -3317,9 +3397,18 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                         return needsParens ? $"({expr})" : expr;
                     }
 
+                    case IRIdentityCompare identity:
+                    {
+                        var expr = IdentityText(identity, v => EmitExpression(v, stack, true));
+                        return needsParens ? $"({expr})" : expr;
+                    }
+
                     case IRCall call:
                     {
                         var argExprs = call.Arguments.Select(a => EmitExpression(a, stack, false)).ToArray();
+
+                        if (TryRenderArrayResize(call, argExprs, out var resized))
+                            return resized;
 
                         // Invoke a delegate value directly: (calleeExpr)(args), e.g. f(a)(b)
                         if (call.CalleeValue != null)
@@ -3327,6 +3416,9 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                             var calleeExpr = EmitExpression(call.CalleeValue, stack, true);
                             return $"{calleeExpr}({string.Join(", ", argExprs)})";
                         }
+
+                        if (VbConversionText(call, argExprs) is string vbConversion)
+                            return vbConversion;
 
                         // Check if this is a standard library function
                         if (StdLibCanHandle(call.FunctionName))
@@ -3493,6 +3585,8 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                     return new[] { un.Operand };
                 case IRCompare cmp:
                     return new[] { cmp.Left, cmp.Right };
+                case IRIdentityCompare identity:
+                    return new[] { identity.Left, identity.Right };
                 case IRCast cast:
                     return new[] { cast.Value };
                 case IRCall call:
@@ -3560,6 +3654,12 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                     return throwInst.Exception != null ? new[] { throwInst.Exception } : Array.Empty<IRValue>();
                 case IRYield yieldInst:
                     return yieldInst.Value != null ? new[] { yieldInst.Value } : Array.Empty<IRValue>();
+
+                // ADR-0010: produced only by ClosureLowering, which only MSIL runs, on a clone — this
+                // backend never sees one (its Visit throws). Listed so this census stays TOTAL over
+                // node kinds, which is ADR-0001's contract, not because C# counts it.
+                case IRDelegateCreate delegateCreate:
+                    return delegateCreate.Target != null ? new[] { delegateCreate.Target } : Array.Empty<IRValue>();
 
                 // Kinds that read no IRValue. Listed, not defaulted, so the default can throw.
                 // ⚠ IRVariable.DefaultValue / InitialValue are DECLARATION data (a parameter's
@@ -3630,8 +3730,8 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 return;
 
             // Use needsParens=true for sub-expressions to preserve operator precedence
-            var left = EmitExpression(binaryOp.Left, new HashSet<IRValue>(), needsParens: true);
-            var right = EmitDivisor(binaryOp, EmitExpression(binaryOp.Right, new HashSet<IRValue>(), needsParens: true));
+            var left = ConcatOperand(binaryOp, binaryOp.Left, EmitExpression(binaryOp.Left, new HashSet<IRValue>(), needsParens: true));
+            var right = EmitDivisor(binaryOp, ConcatOperand(binaryOp, binaryOp.Right, EmitExpression(binaryOp.Right, new HashSet<IRValue>(), needsParens: true)));
             var op = MapBinaryOperator(binaryOp.Operation);
 
             var target = GetValueName(binaryOp);
@@ -3663,6 +3763,32 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
             var target = GetValueName(compare);
             WriteLine($"{target} = {left} {op} {right};");
+        }
+
+        public void Visit(IRIdentityCompare identity)
+        {
+            if (!IsNamedDestination(identity))
+                return;
+
+            var target = GetValueName(identity);
+            WriteLine($"{target} = {IdentityText(identity, v => EmitExpression(v, new HashSet<IRValue>(), needsParens: true))};");
+        }
+
+        /// <summary>
+        /// <c>Is</c> / <c>IsNot</c> as C# (ADR-0011): both operands cast to <c>object</c>, so the
+        /// <c>==</c> is C#'s REFERENCE comparison whatever the static types are. A plain
+        /// <c>a == b</c> would reach a user <c>Operator =</c> (BasicLang has operator overloading),
+        /// <c>Delegate.op_Equality</c> (value equality over the invocation list) or
+        /// <c>string ==</c> (value equality) — each a different answer from VB's <c>Is</c>
+        /// (D4 (1)). A Nothing test casts its subject alone and compares with <c>null</c>, which
+        /// also boxes a nullable to null when it holds no value.
+        /// </summary>
+        private static string IdentityText(IRIdentityCompare identity, Func<IRValue, string> render)
+        {
+            var op = identity.Negated ? "!=" : "==";
+            if (identity.GetNullTestSubject() is IRValue subject)
+                return $"(object)({render(subject)}) {op} null";
+            return $"(object)({render(identity.Left)}) {op} (object)({render(identity.Right)})";
         }
 
         public void Visit(IRAssignment assignment)
@@ -3700,9 +3826,35 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             WriteLine($"{address} = {value};");
         }
 
+        /// <summary>
+        /// ReDim's value (IRBuilder.ArrayResizeIntrinsic: array, count, preserve), for both the
+        /// inline and the statement path. Preserve goes through a one-shot lambda so the array
+        /// and the count are each evaluated once; Array.Resize on the lambda's own copy returns
+        /// a new array (or allocates one for a Nothing array) and leaves the original alone.
+        /// </summary>
+        private bool TryRenderArrayResize(IRCall call, IReadOnlyList<string> argExprs, out string expression)
+        {
+            expression = null;
+            if (call.FunctionName != IR.IRBuilder.ArrayResizeIntrinsic || call.Arguments.Count != 3)
+                return false;
+
+            var element = MapType(call.Type?.ElementType);
+            expression = call.Arguments[2] is IRConstant { Value: true }
+                ? $"((System.Func<{element}[], int, {element}[]>)((__a, __n) => {{ System.Array.Resize(ref __a, __n); return __a; }}))({argExprs[0]}, {argExprs[1]})"
+                : $"new {element}[{argExprs[1]}]";
+            return true;
+        }
+
         public void Visit(IRCall call)
         {
             var functionName = call.FunctionName;
+
+            // A ReDim that assigns straight into its variable (IRBuilder names the call after it).
+            if (TryRenderArrayResize(call, call.Arguments.Select(a => EmitExpression(a)).ToList(), out var resizedArray))
+            {
+                WriteLine($"{GetValueName(call)} = {resizedArray};");
+                return;
+            }
 
             // RaiseEvent X(args) arrives as a call named raise_X (IRBuilder's convention).
             // MEASURED before this arm: emitted verbatim, CS0103 — nothing defined raise_X, so
@@ -3812,7 +3964,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             // Check if this is a standard library function
             if (StdLibCanHandle(functionName))
             {
-                var stdLibCall = StdLibEmitCall(functionName, argExprs);
+                var stdLibCall = VbConversionText(call, argExprs) ?? StdLibEmitCall(functionName, argExprs);
 
                 // Add required imports
                 foreach (var import in StdLibGetRequiredImports(functionName))
@@ -4030,6 +4182,12 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 return $"Convert.{narrowing}({valueExpr})";
             }
 
+            // A REFERENCE cast is parenthesised whole: this text is inlined into larger
+            // expressions, and `(Dog)(a).Bark()` binds the call BEFORE the cast — CS1061 "'Animal'
+            // does not contain a definition for 'Bark'" for `CType(a, Dog).Bark()`. (A numeric
+            // cast is never a member-access receiver, so its long-standing text is left alone.)
+            if (cast.Type?.Kind is TypeKind.Class or TypeKind.Interface or TypeKind.Array)
+                return $"(({targetType})({valueExpr}))";
             return $"({targetType})({valueExpr})";
         }
 
@@ -4375,10 +4533,13 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             // where the name still has its outer meaning.
             var collectionExpr = EmitExpression(forEach.Collection);
 
-            // ⛔ THE LOOP VARIABLE MAY NOT REUSE AN OUTER NAME. BasicLang scopes a For Each variable
-            // to its body and lets it shadow a local, a parameter or an enclosing loop's variable;
-            // C# refuses that (CS0136). And BasicLang is case-INSENSITIVE where C# is not, so a
-            // local `N` beside `For Each n` compiled — and the body read the OUTER `N` through the
+            // ⛔ THE LOOP VARIABLE MAY NOT REUSE AN OUTER NAME. A For Each that DECLARES its variable
+            // scopes it to the body, where it may shadow a local, a parameter or an enclosing loop's
+            // variable; C# refuses that (CS0136). Since task #168 only `For Each x As T` still
+            // declares over an existing `x` — a bare `For Each x` naming an existing variable
+            // REUSES it, and the IRForEach then iterates a hidden `__foreach_N`, which never
+            // collides. And BasicLang is case-INSENSITIVE where C# is not, so a local `N` beside a
+            // declaring `For Each n` compiled — and the body read the OUTER `N` through the
             // case-insensitive name map: a silent wrong answer (68 where 43 was right, measured).
             // A colliding variable gets a fresh name for its body only.
             var hadOuterRename = false;
@@ -4828,6 +4989,27 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             if (un.Type?.Name is not ("Short" or "UShort" or "Byte" or "SByte" or "UByte")) return null;
             if (un.Operation is not (UnaryOpKind.Neg or UnaryOpKind.BitwiseNot)) return null;
             return $"unchecked(({MapType(un.Type)})({expr}))";
+        }
+
+        /// <summary>
+        /// A <c>Nothing</c> constant operand of <c>&amp;</c>, typed as the String it stands for.
+        ///
+        /// <para>⛔ C# gives a bare <c>null</c> no type of its own, so the other operand picks the
+        /// operator: once the optimizer propagates <c>Dim s As String = Nothing</c> into
+        /// <c>s &amp; 5</c>, the text is <c>null + 5</c> — C#'s LIFTED <c>int?</c> addition, CS0029
+        /// "Cannot implicitly convert type 'int?' to 'string'" — and <c>null + null</c> is
+        /// ambiguous. <c>(string)null</c> makes it C#'s string concatenation, which reads null as
+        /// <c>""</c> exactly as VB's <c>&amp;</c> does. The cast is left off when the OTHER operand
+        /// is already a non-Nothing String, where C# picks string <c>+</c> anyway.</para>
+        /// </summary>
+        private static string ConcatOperand(IRBinaryOp bin, IRValue operand, string rendered)
+        {
+            if (bin.Operation != BinaryOpKind.Concat || operand is not IRConstant { Value: null })
+                return rendered;
+            var other = ReferenceEquals(operand, bin.Left) ? bin.Right : bin.Left;
+            var otherIsString = other is not IRConstant { Value: null }
+                && string.Equals(other?.Type?.Name, "String", StringComparison.OrdinalIgnoreCase);
+            return otherIsString ? rendered : "(string)null";
         }
 
         private static string EmitDivisor(IRBinaryOp bin, string renderedRight)

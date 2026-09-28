@@ -162,6 +162,13 @@ namespace BasicLang.Compiler.CodeGen
         public abstract void Visit(IRGetElementPtr gep);
         public abstract void Visit(IRCast cast);
         public abstract void Visit(IRCompare compare);
+
+        /// <summary>
+        /// ABSTRACT, deliberately (ADR-0011 D5): `Is` / `IsNot` is reference identity, and a
+        /// backend that has not implemented it must not compile — never inherit a no-op or a
+        /// value comparison.
+        /// </summary>
+        public abstract void Visit(IRIdentityCompare identityCompare);
         public abstract void Visit(IRSwitch switchInst);
         public abstract void Visit(IRLabel label);
         public abstract void Visit(IRComment comment);
@@ -189,6 +196,17 @@ namespace BasicLang.Compiler.CodeGen
         /// </summary>
         // TODO(Task 6): LLVM/MSIL silently drop collection indexed writes until ForeignFeatureChecker rejects collections on those backends.
         public virtual void Visit(IRIndexerStore indexerStore) { }
+
+        /// <summary>
+        /// Virtual that THROWS: an <see cref="IRDelegateCreate"/> exists only in ClosureLowering's
+        /// output, which only the MSIL backend runs, on a clone of the module (ADR-0010 D1). MSIL
+        /// overrides this; C++ and LLVM reaching it means the lowered form leaked.
+        /// </summary>
+        public virtual void Visit(IRDelegateCreate delegateCreate) =>
+            throw new InvalidOperationException(
+                $"{BackendName} reached an IRDelegateCreate. That node is produced only by "
+                + "ClosureLowering, which only the MSIL backend runs, on a clone of the module "
+                + "(ADR-0010 D1).");
 
         /// <summary>
         /// Map IR type to target language type

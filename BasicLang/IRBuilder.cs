@@ -56,6 +56,13 @@ namespace BasicLang.Compiler.IR
         /// class. See <see cref="IsCurrentClassMethod"/> for why this exists.
         /// </summary>
         private HashSet<string> _currentClassMethodNames;
+
+        /// <summary>
+        /// The one <c>Me</c> of each function built inside a class, keyed by the function itself.
+        /// Read and written only by <see cref="MeOfCurrentMember"/>.
+        /// </summary>
+        private readonly Dictionary<IRFunction, IRVariable> _meByFunction =
+            new Dictionary<IRFunction, IRVariable>(ReferenceEqualityComparer.Instance);
         private string _currentNamespace;
         private string _currentModuleName;  // Track current module for constants/globals
         private string _sourceFilePath;
@@ -367,15 +374,54 @@ namespace BasicLang.Compiler.IR
         }
 
         /// <summary>
-        /// The receiver the QUALIFIED form of <paramref name="member"/> evaluates to — the same
-        /// <see cref="GetOrCreateVariable"/> call visiting its receiver identifier makes:
-        /// <c>Me</c> (typed as the class being built) for an instance property, the declaring
-        /// class's name for a Shared one (<c>Box.P</c>).
+        /// The receiver the QUALIFIED form of <paramref name="member"/> evaluates to — exactly
+        /// what visiting its receiver identifier produces: <see cref="MeOfCurrentMember"/> for an
+        /// instance property, the declaring class's name for a Shared one (<c>Box.P</c>).
         /// </summary>
         private IRValue AccessorMemberReceiver(BareAccessorMember member) =>
             member.IsShared
                 ? GetOrCreateVariable(member.DeclaringType.Name, member.DeclaringType)
-                : GetOrCreateVariable("Me", _semanticAnalyzer.LookupType(_currentClassName));
+                : MeOfCurrentMember();
+
+        /// <summary>
+        /// ⭐ THE ONE ANSWER to "what is <c>Me</c> here": the receiver of the member being built,
+        /// typed as THE CLASS BEING BUILT — one <see cref="IRVariable"/> per function, shared by
+        /// every use in it. Both sites that produce <c>Me</c> ask this: an explicit <c>Me</c> /
+        /// <c>Me.X</c> (<see cref="Visit(IdentifierExpressionNode)"/>) and the receiver a bare
+        /// accessor-backed property lowers onto (<see cref="AccessorMemberReceiver"/>), so the two
+        /// spellings of one member reference cannot disagree about its receiver.
+        ///
+        /// <para>⛔ Both used to call <c>GetOrCreateVariable("Me", …)</c>, and
+        /// <c>_variableVersions</c> is NOT scoped per function — nothing ever popped "Me" — so the
+        /// FIRST class in the file to use <c>Me</c>, implicitly or explicitly, fixed its type for
+        /// every class after it. MSIL spells a member token from the receiver's IR type, so a
+        /// later class's bare property became <c>stfld int32 'Animal'::'V'</c> and died with
+        /// <c>MissingFieldException: Field not found: 'Animal.V'</c> (#176); C#, JavaScript and C++
+        /// print <c>this</c> and never read the type, which is why only MSIL showed it.</para>
+        ///
+        /// <para>⚠ Kept OUT of <c>_variableVersions</c> altogether, because that stack is exactly
+        /// how a binding outlives its function. Keyed by the function, not cleared on entry: a
+        /// lambda body is its own function and gets its own <c>Me</c>, while the method enclosing
+        /// it keeps the SAME one before and after the lambda is visited. One instance per function
+        /// is what the IR always had within a function; it is kept for that, not because anything
+        /// is measured to need it — a fresh <c>Me</c> per USE ran every #176 probe identically.</para>
+        ///
+        /// <para>⚠ <c>MyBase</c> is the deliberate exception: the same object seen as its BASE
+        /// class, so <see cref="Visit(MyBaseExpressionNode)"/> mints its own base-typed variable of
+        /// the same name. It never enters <c>_variableVersions</c> either.</para>
+        /// </summary>
+        private IRVariable MeOfCurrentMember()
+        {
+            var classType = _semanticAnalyzer.LookupType(_currentClassName);
+            if (_currentFunction == null) return CreateVariable("Me", classType);
+
+            if (!_meByFunction.TryGetValue(_currentFunction, out var me))
+            {
+                me = CreateVariable("Me", classType);
+                _meByFunction[_currentFunction] = me;
+            }
+            return me;
+        }
 
         /// <summary>
         /// The global that a resolved module member reference binds to: the declared one when
@@ -1391,6 +1437,16 @@ namespace BasicLang.Compiler.IR
             }
 
             _module.Classes[node.Name] = irClass;
+
+            // ⛔ Saved and RESTORED, not cleared at the end: a class nested inside another is
+            // visited from the outer class's member loop below, and clearing left every outer
+            // member declared AFTER it built with no class at all. Measured before, with a
+            // property declared after a nested class: CS0103 on its backing field on C#, `3` for
+            // `21` on JavaScript and MSIL, "use of undeclared identifier '_v'" on C++; and a bare
+            // property used after one lowered to a variable (Invariant F). It would also leave
+            // `Me` typed as nothing — MeOfCurrentMember's one answer is only as good as this name.
+            var enclosingClassName = _currentClassName;
+            var enclosingClassMethodNames = _currentClassMethodNames;
             _currentClassName = node.Name;
 
             // ⛔ Taken from the AST, BEFORE the loop below, and not from irClass.Methods — that list
@@ -1565,8 +1621,8 @@ namespace BasicLang.Compiler.IR
 
             SynthesizeImplicitConstructor(node, irClass);
 
-            _currentClassName = null;
-            _currentClassMethodNames = null;
+            _currentClassName = enclosingClassName;
+            _currentClassMethodNames = enclosingClassMethodNames;
         }
 
         /// <summary>
@@ -1989,11 +2045,17 @@ namespace BasicLang.Compiler.IR
 
         public void Visit(DelegateDeclarationNode node)
         {
+            // #187: the signature the analyzer RESOLVED (TypeInfo.DelegateSignature), where it
+            // has one. A bare name stamped Primitive made C++ declare
+            // `std::function<Widget(std::string)>` — a VALUE Widget, where every Widget is a
+            // std::shared_ptr — so a `Delegate Function … As Widget` could hold no lambda and no
+            // AddressOf ("no viable overloaded '='"), and a class-typed parameter likewise.
+            var resolvedReturn = _semanticAnalyzer.GetNodeSymbol(node)?.ReturnType;
             var irDelegate = new IRDelegate(node.Name)
             {
                 Namespace = _currentNamespace,
                 ReturnType = node.ReturnType != null
-                    ? new TypeInfo(node.ReturnType.Name, TypeKind.Primitive)
+                    ? resolvedReturn ?? new TypeInfo(node.ReturnType.Name, TypeKind.Primitive)
                     : new TypeInfo("Void", TypeKind.Void)
             };
 
@@ -2002,6 +2064,7 @@ namespace BasicLang.Compiler.IR
                 irDelegate.Parameters.Add(new IRParameter
                 {
                     Name = param.Name,
+                    Type = _semanticAnalyzer.GetNodeType(param),
                     TypeName = param.Type?.Name ?? "Object",
                     IsOptional = param.IsOptional,
                     IsParamArray = param.IsParamArray,
@@ -2216,9 +2279,19 @@ namespace BasicLang.Compiler.IR
             // JavaScript, CS0103 on C# and an InvalidProgramException on MSIL — `MyBase.Field`
             // was broken on all four, measured. Only `MyBase.Method(...)` escaped it, through the
             // IRBaseMethodCall arm that intercepts the call before the receiver is ever visited.
+            //
+            // ⚠ The one deliberate exception to MeOfCurrentMember: a DIFFERENT variable of the
+            // same name, because its type is the base, not the class being built.
             var baseType = _semanticAnalyzer.GetNodeType(node);
             _expressionResult = new IRVariable("Me", baseType);
         }
+
+        /// <summary>True for the structural <c>Func(Of …, R)</c> the analyzer types a Function lambda as.</summary>
+        private static bool IsFuncWithReturnType(TypeInfo delegateType) =>
+            delegateType != null &&
+            string.Equals(delegateType.Name, "Func", StringComparison.OrdinalIgnoreCase) &&
+            delegateType.GenericArguments != null &&
+            delegateType.GenericArguments.Count > 0;
 
         public void Visit(LambdaExpressionNode node)
         {
@@ -2229,16 +2302,38 @@ namespace BasicLang.Compiler.IR
             // wrong function at the call site.
             var lambdaName = $"__lambda_{_lambdaCounter++}";
 
-            // Determine return type from semantic analysis
+            // Determine return type from semantic analysis. A lambda converted to a user Delegate
+            // is typed AS that delegate (#187); its R is read off the delegate's structural
+            // Func shape, the one mapping the analyzer judged it by.
             var lambdaType = _semanticAnalyzer.GetNodeType(node);
-            var returnType = node.IsFunction
-                ? (_semanticAnalyzer.GetNodeType(node.Body) ?? new TypeInfo("Object", TypeKind.Class))
-                : new TypeInfo("Void", TypeKind.Primitive);
-
-            // If explicit return type specified, use it
-            if (node.ReturnType != null)
+            var lambdaShape = SemanticAnalyzer.DelegateShapeOf(lambdaType);
+            TypeInfo returnType;
+            if (!node.IsFunction)
             {
-                returnType = new TypeInfo(node.ReturnType.Name, TypeKind.Class);
+                returnType = new TypeInfo("Void", TypeKind.Primitive);
+            }
+            else if (node.StatementBody != null && IsFuncWithReturnType(lambdaShape))
+            {
+                // A multi-line Function lambda (#164) returns exactly what the analyzer checked
+                // its Returns against: the R of the Func it recorded — the `As T`, the target's R
+                // or the inferred dominant type. ⛔ This path read GetNodeType(node.Body), and a
+                // statement lambda has no Body: Dictionary.TryGetValue(null) threw, and every
+                // `Function(…) As T … End Function` died as "Error compiling Main: Value cannot be
+                // null. (Parameter 'key')" on every backend and entry point.
+                returnType = lambdaShape.GenericArguments[lambdaShape.GenericArguments.Count - 1];
+            }
+            else
+            {
+                // An expression lambda keeps its long-standing derivation: the body's type,
+                // overridden by an explicit `As T`.
+                returnType = (node.Body != null ? _semanticAnalyzer.GetNodeType(node.Body) : null)
+                    ?? new TypeInfo("Object", TypeKind.Class);
+
+                // If explicit return type specified, use it
+                if (node.ReturnType != null)
+                {
+                    returnType = new TypeInfo(node.ReturnType.Name, TypeKind.Class);
+                }
             }
 
             // Create the lambda function
@@ -2250,9 +2345,6 @@ namespace BasicLang.Compiler.IR
             // that, for a file named Main.bas (whose own module class is renamed Program),
             // produced two `static class Program` declarations and CS0101.
             lambdaFunc.ModuleName = _currentModuleName ?? _module?.Name;
-
-            // Detect captured variables (variables from outer scopes)
-            var capturedVars = new List<(string name, TypeInfo type)>();
 
             // Add parameters
             foreach (var param in node.Parameters)
@@ -2297,24 +2389,33 @@ namespace BasicLang.Compiler.IR
                 // Ensure we have a return for void lambdas
                 if (!_currentBlock.IsTerminated())
                 {
-                    EmitInstruction(new IRReturn(null));
+                    // A Function lambda that falls off its end returns its type's default, exactly
+                    // as a named Function does (Visit(FunctionNode)). A bare `ret` from a non-void
+                    // lambda was an InvalidProgramException on MSIL (#164).
+                    EmitInstruction(new IRReturn(node.IsFunction ? CreateDefaultValue(returnType) : null));
                 }
             }
 
-            // Detect captured variables by checking which outer scope variables were accessed
-            // This is a simplified approach - in a full implementation, we'd track this during body generation
-            foreach (var kvp in savedLocals)
+            // ⭐ THE CAPTURE SET (task #122, ADR-0006 D1's Obligation), read off the lambda's IR
+            // now that its body — and every lambda nested in it, each already recorded on this
+            // one — is built. A structural walk of the IR rather than name resolution tracked in
+            // every visitor: it sees exactly what the IR references, whichever visitor produced
+            // it. The CREATOR records it, because the optimizer asks "which of MY locals can a
+            // call write?" (OptimizationPass.IsCallVisible). Null when the lambda's names cannot be
+            // enumerated (raw inline code, or a nested lambda that was not recorded): the lambda
+            // is then left out of the creator's LambdaCaptureSources, and the creator keeps
+            // ADR-0006 D1's interim rule. (This replaces a loop over `_locals`, which nothing
+            // ever fills, so CapturedVariables was always empty.)
+            var captures = Optimization.OptimizationPass.LambdaCapturesOf(lambdaFunc);
+            lambdaFunc.CapturedVariables = captures?.Select(c => (c.Key, c.Value)).ToList()
+                ?? new List<(string name, TypeInfo type)>();
+            if (captures != null && savedFunction != null)
             {
-                if (!_locals.ContainsKey(kvp.Key))
-                {
-                    // This variable from outer scope was potentially captured
-                    // We'll let the C# backend handle this via closure conversion
-                    capturedVars.Add((kvp.Key, kvp.Value.Type));
-                }
+                (savedFunction.LambdaCapturedNames ??= new HashSet<string>(StringComparer.Ordinal))
+                    .UnionWith(captures.Keys);
+                (savedFunction.LambdaCaptureSources ??= new HashSet<string>(StringComparer.Ordinal))
+                    .Add(lambdaName);
             }
-
-            // Store captured variables in the function metadata
-            lambdaFunc.CapturedVariables = capturedVars;
 
             // Add lambda function to module
             _module.Functions.Add(lambdaFunc);
@@ -3647,8 +3748,16 @@ namespace BasicLang.Compiler.IR
             var bodyBlock = _currentFunction.CreateBlock($"foreach{suffix}.body");
             var endBlock = _currentFunction.CreateBlock($"foreach{suffix}.end");
 
+            // ⭐ Task #168: `For Each x In coll` over an EXISTING `x` (no `As`) iterates a HIDDEN
+            // variable, and the body begins with `x = hidden` — the analyzer decided which loops
+            // those are and built the assignment (ForEachControlBinding); this never guesses.
+            // Before it, every backend declared its own `x` from the IRForEach and the variable
+            // the program named was never written (measured on all four, every entry point).
+            ForEachControlBinding reusedControl = null;
+            _semanticAnalyzer?.ForEachControlBindings?.TryGetValue(node, out reusedControl);
+
             // Emit IRForEach instruction
-            var forEach = new IRForEach(node.Variable, elemType, collection, bodyBlock, endBlock);
+            var forEach = new IRForEach(reusedControl?.HiddenName ?? node.Variable, elemType, collection, bodyBlock, endBlock);
 
             // P2a-2 Task 9 (§8.5): a For Each over a HANDLE-represented .NET collection carries
             // the four IEnumerable<T>/IEnumerator<T> members the analyzer resolved. Absent for
@@ -3665,6 +3774,13 @@ namespace BasicLang.Compiler.IR
             _currentBlock = bodyBlock;
 
             _loopStack.Push(new LoopContext(endBlock, endBlock));  // Continue goes to end (next iteration handled by foreach)
+
+            // The element reaches `x` FIRST, before any statement of the body can read `x` or
+            // leave the iteration — so an `Exit For` leaves `x` holding the element being
+            // processed, as VB does. Lowered by the ordinary assignment path, so a field, a module
+            // global, a ByRef parameter and the assignment coercion are all its business.
+            reusedControl?.Assignment.Accept(this);
+
             node.Body.Accept(this);
             _loopStack.Pop();
 
@@ -4034,6 +4150,19 @@ namespace BasicLang.Compiler.IR
         {
             var actual = value?.Type;
 
+            // #173: the Nothing literal is an Object-typed null constant (the analyzer types it
+            // Object and then admits it into any reference type), so it is re-typed in place to the
+            // type it is stored into — the same in-place re-typing a numeric literal gets below.
+            // A null is a null to C#, JavaScript and MSIL; the type is for a backend that holds a
+            // reference type as a VALUE with no null state, which cannot spell it untyped: C++'s
+            // `std::string s = nullptr` is undefined behaviour, and `BasicLang::Array<T> a =
+            // nullptr` does not compile (see CppCodeGenerator.EmitConstant).
+            if (value is IRConstant { Value: null } && IsObjectTyped(actual)
+                && declared != null && declared.Kind != TypeKind.Void && !IsObjectTyped(declared))
+            {
+                return new IRConstant(null, declared);
+            }
+
             // ⚠ ONE guard, not two. An earlier version also tested a broad
             // `IsNumericPrimitive` (any integral or floating type) before this; it is redundant,
             // because every type this admits is one that would admit — and a mutation removing it
@@ -4065,6 +4194,11 @@ namespace BasicLang.Compiler.IR
             return cast;
         }
 
+        /// <summary>The scalar <c>Object</c> type — what the analyzer types the Nothing literal as.</summary>
+        private static bool IsObjectTyped(TypeInfo type) =>
+            type != null && type.Kind != TypeKind.Array &&
+            string.Equals(type.Name, "Object", StringComparison.OrdinalIgnoreCase);
+
         /// <summary>
         /// Coerces one ARGUMENT to the declared type of the parameter it fills.
         ///
@@ -4091,6 +4225,18 @@ namespace BasicLang.Compiler.IR
         /// </summary>
         private IRValue CoerceToParameterType(IRValue value, Symbol callee, int index)
         {
+            // #173: invoking a Func/Action VALUE (`f(Nothing)`) has no parameter list on its
+            // symbol — the types live in the delegate's generic arguments. Only the Nothing
+            // literal is typed from them: a numeric argument to a delegate was never coerced, and
+            // coercing it now would change what every such call already emits.
+            if (value is IRConstant { Value: null } && callee != null
+                && callee.Kind != SymbolKind.Function && callee.Kind != SymbolKind.Subroutine
+                && SemanticAnalyzer.GetDelegateParameterTypes(callee.Type) is { } delegateParameters
+                && index >= 0 && index < delegateParameters.Count)
+            {
+                return CoerceToDeclaredType(value, delegateParameters[index]);
+            }
+
             var parameters = callee?.Parameters;
             if (parameters == null || index < 0 || index >= parameters.Count) return value;
 
@@ -4129,6 +4275,53 @@ namespace BasicLang.Compiler.IR
         /// has not been taught, where skipping ahead would silently misalign the argument
         /// list.</para>
         /// </summary>
+        /// <summary>
+        /// Packs the arguments a call passes to a trailing <c>ParamArray</c> into ONE array
+        /// argument, so every backend receives the shape the callee declares.
+        ///
+        /// <para>⛔ Only C# worked, and only because C# has <c>params</c> of its own and csc packed
+        /// the loose arguments. <c>Sum(1, 2, 3)</c> against <c>ParamArray v() As Integer</c> was
+        /// "could not convert '1' from 'int' to 'std::vector&lt;int&gt;'" on C++, and printed
+        /// <c>undefined</c> on JavaScript — the callee iterated its FIRST argument, the number 1.
+        /// Packing here, where the analyzer's resolved callee is known, moves every backend at once;
+        /// the emitted C# passes the array explicitly, which <c>params</c> accepts.</para>
+        ///
+        /// <para>An array passed alone in the ParamArray's slot IS the ParamArray (<c>Sum(arr)</c>)
+        /// and is left as it is — the same rule the analyzer's argument check applies.</para>
+        /// </summary>
+        private void PackParamArrayArguments(
+            List<IRValue> arguments, List<bool> byRefFlags, Symbol callee, IList<ExpressionNode> written)
+        {
+            var parameters = callee?.Parameters;
+            if (parameters == null || parameters.Count == 0 || !parameters[^1].IsParamArray) return;
+
+            var slot = parameters.Count - 1;
+            if (arguments.Count < slot) return;   // too few for the fixed parameters: the analyzer reported it
+
+            if (arguments.Count == parameters.Count && written != null && written.Count == parameters.Count
+                && _semanticAnalyzer.GetNodeType(written[slot])?.Kind == TypeKind.Array)
+                return;
+
+            var elementType = parameters[slot].Type?.ElementType
+                              ?? new TypeInfo("Object", TypeKind.Class);
+            var packed = arguments.Skip(slot).ToList();
+
+            var array = new IRArrayAlloc(_currentFunction.GetNextTempName(), elementType, packed.Count);
+            EmitInstruction(array);
+            for (var i = 0; i < packed.Count; i++)
+                EmitInstruction(new IRArrayStore(array,
+                    new IRConstant(i, new TypeInfo("Integer", TypeKind.Primitive)),
+                    CoerceToDeclaredType(packed[i], elementType)));
+
+            arguments.RemoveRange(slot, arguments.Count - slot);
+            arguments.Add(array);
+            if (byRefFlags != null)
+            {
+                if (byRefFlags.Count > slot) byRefFlags.RemoveRange(slot, byRefFlags.Count - slot);
+                byRefFlags.Add(false);
+            }
+        }
+
         private void AppendOmittedOptionalArguments(
             List<IRValue> arguments, List<bool> byRefFlags, Symbol callee)
         {
@@ -4723,6 +4916,25 @@ namespace BasicLang.Compiler.IR
 
         public void Visit(BinaryExpressionNode node)
         {
+            // `Is` / `IsNot`: reference identity, its OWN node (ADR-0011 D5) — never an
+            // IRCompare/IRBinaryOp Eq/Ne, which a user `Operator =`, Delegate.op_Equality or String
+            // value equality could answer. `x Is Nothing` is the same node with the Nothing
+            // literal (an Object-typed null IRConstant) as an operand.
+            if (IsIdentityOperator(node.Operator, out var negated))
+            {
+                node.Left.Accept(this);
+                var identityLeft = _expressionResult;
+                node.Right.Accept(this);
+                var identityRight = _expressionResult;
+
+                var identity = new IRIdentityCompare(_currentFunction.GetNextTempName(),
+                    identityLeft, identityRight, negated,
+                    _semanticAnalyzer.GetNodeType(node) ?? new TypeInfo("Boolean", TypeKind.Primitive));
+                EmitInstruction(identity);
+                _expressionResult = identity;
+                return;
+            }
+
             // ⛔ SHORT-CIRCUIT FIRST, before the right operand is touched. AndAlso/OrElse are
             // CONTROL FLOW, not operators with two ready values — see BuildShortCircuit.
             if (!IsComparisonOperator(node.Operator))
@@ -4969,12 +5181,18 @@ namespace BasicLang.Compiler.IR
                     expr.Accept(this);
                     var exprValue = _expressionResult;
 
-                    // If not already a string, convert to string
+                    // If not already a string, convert to string — through CStr, the conversion
+                    // every backend lowers (C# Convert.ToString, C++ StringifyForText, MSIL
+                    // box + Object::ToString, JS String with .NET Boolean spelling).
+                    // ⛔ Not an IRCall named "ToString": that is a free function no backend has,
+                    // so any non-String hole failed — C# CS1501 "No overload for method
+                    // 'ToString' takes 1 arguments", C++ "'ToString' was not declared in this
+                    // scope", JS a call to an undefined ToString.
                     var exprType = _semanticAnalyzer.GetNodeType(expr);
                     if (exprType?.Name != "String")
                     {
                         var tempName = _currentFunction.GetNextTempName();
-                        var toStringCall = new IRCall(tempName, "ToString", stringType);
+                        var toStringCall = new IRCall(tempName, "CStr", stringType);
                         toStringCall.Arguments.Add(exprValue);
                         EmitInstruction(toStringCall);
                         partValue = toStringCall;
@@ -5015,6 +5233,22 @@ namespace BasicLang.Compiler.IR
             if (node.IsForeignQualified)
             {
                 _expressionResult = new IRVariable(node.Name, _semanticAnalyzer.GetNodeType(node));
+                return;
+            }
+
+            // `Me` is the receiver of the member being built, never a variable lookup — see
+            // MeOfCurrentMember. Recognised by the analyzer's own rule (Visit(IdentifierExpressionNode)
+            // there): the parser spells the keyword "Me" whatever the source casing.
+            if (string.Equals(node.Name, "Me", StringComparison.OrdinalIgnoreCase))
+            {
+                _expressionResult = MeOfCurrentMember();
+                return;
+            }
+
+            // vbCrLf, vbTab, ... (see SemanticAnalyzer.VbStringConstants).
+            if (node.BuiltinConstantValue != null)
+            {
+                _expressionResult = new IRConstant(node.BuiltinConstantValue, _semanticAnalyzer.GetNodeType(node));
                 return;
             }
 
@@ -5143,6 +5377,23 @@ namespace BasicLang.Compiler.IR
                 ? _currentFunction.GetNextTempName()
                 : null;
 
+            // ⭐ #188: a delegate-typed FIELD or PROPERTY, invoked — `Callback()`, `Me.Callback()`,
+            // `obj.Op(5)`, `Registry.Hook()`, own or inherited. The ANALYZER decided it
+            // (IsDelegateMemberInvocation: a method of that name, a local or a parameter is never
+            // one), so this is one lowering for every spelling: evaluate the member's value
+            // through the ordinary read path — the bare name through Visit(IdentifierExpressionNode),
+            // which keeps ADR-0007's accessor rule, a qualified one through
+            // Visit(MemberAccessExpressionNode) — and invoke that VALUE, the canonical delegate call
+            // (ADR-0010 D8). A Sub-shaped delegate is typed Void there, so the call has no
+            // destination. ⛔ Before, the bare name reached each backend as a call BY NAME and the
+            // qualified one as a METHOD call — see IsDelegateMemberInvocation for what each did.
+            if (_semanticAnalyzer.IsDelegateMemberInvocation(node))
+            {
+                EmitDelegateValueInvocation(node.Callee, node.Arguments, tempName, returnType,
+                    _semanticAnalyzer.GetNodeSymbol(node.Callee));
+                return;
+            }
+
             // Nested/chained indexer read: `m(0)(1)` (or `d("a")("b")`). The OUTER callee is an
             // arbitrary expression (here the inner `m(0)` indexer), not an identifier/member — so
             // it never reached the identifier-branch indexer check, and fell through to the
@@ -5170,11 +5421,61 @@ namespace BasicLang.Compiler.IR
                     _expressionResult = chainAccess;
                     return;
                 }
+
+                // The same chain when the inner value is an ARRAY: `lst(0)(2)` over a
+                // List(Of Integer()), `MakeInts()(1)`, `grid(r)(c)` over an array-typed element.
+                // The collection arm above only knows generic collections, so these fell to the
+                // delegate-invocation branch and called the array — `t5(2)`: CS0149 on C#, "cannot
+                // be used as a function" on C++, "t5 is not a function" on JavaScript. Lowered like
+                // every other array read: GEP over the evaluated inner value, then load.
+                if (chainType != null
+                    && chainType.Kind == TypeKind.Array
+                    // §8.5: a handle-represented .NET array owns no native storage to index.
+                    && chainType.NetHandleTypeFullName == null)
+                {
+                    node.Callee.Accept(this);
+                    var innerArray = _expressionResult;
+
+                    var elementType = chainType.ElementType ?? returnType ?? new TypeInfo("Object", TypeKind.Class);
+                    var chainGep = new IRGetElementPtr(_currentFunction.GetNextTempName(), innerArray, elementType);
+                    foreach (var index in node.Arguments)
+                    {
+                        index.Accept(this);
+                        chainGep.Indices.Add(_expressionResult);
+                    }
+                    EmitInstruction(chainGep);
+
+                    var chainLoad = new IRLoad(_currentFunction.GetNextTempName(), chainGep, elementType);
+                    EmitInstruction(chainLoad);
+                    _expressionResult = chainLoad;
+                    return;
+                }
             }
 
             // Check for different call types
             if (node.Callee is MemberAccessExpressionNode memberExpr)
             {
+                // #187: `d.Invoke(args)` on a user-delegate value is `d(args)`, as the analyzer
+                // types it — lowered to the SAME IR, so no backend has to know a delegate has an
+                // Invoke member (a std::function and a JavaScript function have none: measured,
+                // "no member named 'Invoke'" from clang and "t.Invoke is not a function" from
+                // node). A named receiver takes the exact path `d(args)` takes; any other
+                // receiver is invoked as a VALUE, the form `f(a)(b)` already lowers to.
+                if (string.Equals(memberExpr.MemberName, "Invoke", StringComparison.OrdinalIgnoreCase)
+                    && _semanticAnalyzer.GetNodeType(memberExpr.Object)?.DelegateSignature != null)
+                {
+                    if (memberExpr.Object is IdentifierExpressionNode invokedName)
+                    {
+                        EmitProcedureCall(node, _semanticAnalyzer.GetNodeSymbol(invokedName),
+                            invokedName.Name, tempName, returnType);
+                        return;
+                    }
+
+                    EmitDelegateValueInvocation(memberExpr.Object, node.Arguments, tempName, returnType,
+                        delegateSymbol: null);
+                    return;
+                }
+
                 // Check if this is a MyBase call
                 if (memberExpr.Object is MyBaseExpressionNode)
                 {
@@ -5284,7 +5585,12 @@ namespace BasicLang.Compiler.IR
                                           _locals.ContainsKey(objVar.Name);
 
                     // Check if it's a .NET type (contains dot or is known .NET type name)
-                    bool isNetType = objVar.Name.Contains('.') || IsKnownNetStaticType(objVar.Name);
+                    // A type KEYWORD (`Integer.Parse`, `Char.IsDigit`) is always a static receiver —
+                    // a keyword can name no variable. IsKnownNetStaticType knows `String` but not
+                    // `Integer`, which sent `Integer.Parse(s)` down the INSTANCE arm as a call on a
+                    // variable named Integer.
+                    bool isNetType = objVar.Name.Contains('.') || IsKnownNetStaticType(objVar.Name)
+                        || PrimitiveStaticSurface.IsTypeKeyword(objVar.Name);
 
                     // A declared name is never a type name, so the guard applies to BOTH
                     // sources of type-ness, not just the class-name one. It used to read
@@ -5307,8 +5613,9 @@ namespace BasicLang.Compiler.IR
                     // C1 shape above — is NOT caught here; it is caught by the descriptor
                     // cross-check immediately below, which is the AUTHORITATIVE layer for
                     // locals. Do not "simplify away" that check on the strength of this line.
-                    // (Fixing `_locals`, or deleting it, is separate work: it would also revive
-                    // the dead lambda capture-detection loop it feeds.)
+                    // (Fixing `_locals`, or deleting it, is separate work. The lambda
+                    // capture-detection loop it used to feed is gone: a lambda's capture set is
+                    // read off its IR — OptimizationPass.LambdaCapturesOf, task #122.)
                     isStaticCall = (exactClassMatch || isNetType) && !isLocalOrParam;
                 }
 
@@ -5421,6 +5728,7 @@ namespace BasicLang.Compiler.IR
                     // arguments keep exactly what they had before this existed.
                     if (call.ResolvedNetTarget == null)
                     {
+                        PackParamArrayArguments(call.Arguments, call.ByRefArguments, staticCalleeSymbol, node.Arguments);
                         AppendOmittedOptionalArguments(
                             call.Arguments, call.ByRefArguments, staticCalleeSymbol);
                     }
@@ -5468,6 +5776,9 @@ namespace BasicLang.Compiler.IR
                             && methodParams[methodCall.Arguments.Count - 1].IsByRef);
                     }
 
+                    // A .NET method's `params` is csc's to pack; only a user callee is packed here.
+                    if (methodCall.ResolvedNetTarget == null)
+                        PackParamArrayArguments(methodCall.Arguments, methodCall.ByRefArguments, methodSymbol, node.Arguments);
                     AppendOmittedOptionalArguments(
                         methodCall.Arguments, methodCall.ByRefArguments, methodSymbol);
 
@@ -5560,22 +5871,44 @@ namespace BasicLang.Compiler.IR
                 // e.g. invoking the delegate returned by another call: f(a)(b).
                 // Invoke the callee VALUE rather than treating its temp name as
                 // a function name (which dropped the invocation).
-                node.Callee.Accept(this);
-                var callee = _expressionResult;
-                var call = new IRCall(tempName, callee?.Name ?? "unknown", returnType)
-                {
-                    CalleeValue = callee
-                };
-
-                foreach (var arg in node.Arguments)
-                {
-                    arg.Accept(this);
-                    call.Arguments.Add(_expressionResult);
-                }
-
-                EmitInstruction(call);
-                _expressionResult = call;
+                EmitDelegateValueInvocation(node.Callee, node.Arguments, tempName, returnType,
+                    delegateSymbol: null);
             }
+        }
+
+        /// <summary>
+        /// Invokes the delegate VALUE <paramref name="callee"/> evaluates to: the value first,
+        /// then the arguments, then one <see cref="IRCall"/> whose <see cref="IRCall.CalleeValue"/>
+        /// is that value — ADR-0010 D8's canonical delegate call, which every backend renders as
+        /// <c>(value)(args)</c>. Shared by every site that invokes a value rather than a named
+        /// procedure: <c>f(a)(b)</c>, <c>x.Invoke(…)</c> on a non-name receiver (#187), and a
+        /// delegate-typed field or property (#188).
+        ///
+        /// <para><paramref name="delegateSymbol"/> is the member being invoked, when there is
+        /// one: a <c>Nothing</c> argument is typed from its delegate's parameters, exactly as
+        /// <see cref="EmitProcedureCall"/> types it for a delegate LOCAL (#173). Null for an
+        /// arbitrary callee, whose arguments were never coerced.</para>
+        /// </summary>
+        private void EmitDelegateValueInvocation(ExpressionNode callee, List<ExpressionNode> arguments,
+            string tempName, TypeInfo returnType, Symbol delegateSymbol)
+        {
+            callee.Accept(this);
+            var value = _expressionResult;
+            var call = new IRCall(tempName, value?.Name ?? "unknown", returnType)
+            {
+                CalleeValue = value
+            };
+
+            foreach (var arg in arguments)
+            {
+                arg.Accept(this);
+                call.Arguments.Add(delegateSymbol != null
+                    ? CoerceToParameterType(_expressionResult, delegateSymbol, call.Arguments.Count)
+                    : _expressionResult);
+            }
+
+            EmitInstruction(call);
+            _expressionResult = call;
         }
 
         /// <summary>
@@ -5606,6 +5939,7 @@ namespace BasicLang.Compiler.IR
                 call.ByRefArguments.Add(isByRef);
             }
 
+            PackParamArrayArguments(call.Arguments, call.ByRefArguments, funcSymbol, node.Arguments);
             AppendOmittedOptionalArguments(call.Arguments, call.ByRefArguments, funcSymbol);
 
             EmitInstruction(call);
@@ -5618,6 +5952,26 @@ namespace BasicLang.Compiler.IR
             var array = _expressionResult;
 
             var elementType = _semanticAnalyzer.GetNodeType(node);
+
+            // `lst[0]` over a List/Dictionary is the collection's INDEXER — the same
+            // IRIndexerAccess the paren spelling `lst(0)` lowers to. As a GEP it emitted
+            // `lst[0]` on the C++ side, which is operator[] on a std::shared_ptr and does not
+            // compile; the two spellings must not diverge.
+            var receiverType = _semanticAnalyzer.GetNodeType(node.Array);
+            if (receiverType != null && IsIndexableGenericType(receiverType))
+            {
+                var indexer = new IRIndexerAccess(_currentFunction.GetNextTempName(), array,
+                    elementType ?? new TypeInfo("Object", TypeKind.Class));
+                foreach (var index in node.Indices)
+                {
+                    index.Accept(this);
+                    indexer.Indices.Add(_expressionResult);
+                }
+                EmitInstruction(indexer);
+                _expressionResult = indexer;
+                return;
+            }
+
             var gepTemp = _currentFunction.GetNextTempName();
             var gep = new IRGetElementPtr(gepTemp, array, elementType);
 
@@ -5686,6 +6040,8 @@ namespace BasicLang.Compiler.IR
                     _expressionResult, ctorSymbol, newObj.Arguments.Count));
             }
 
+            if (newObj.ResolvedNetTarget == null)
+                PackParamArrayArguments(newObj.Arguments, null, ctorSymbol, node.Arguments);
             AppendOmittedOptionalArguments(newObj.Arguments, null, ctorSymbol);
 
             EmitInstruction(newObj);
@@ -5700,6 +6056,21 @@ namespace BasicLang.Compiler.IR
             var sourceType = _semanticAnalyzer.GetNodeType(node.Expression);
             var targetType = _semanticAnalyzer.GetNodeType(node);
 
+            // `CType(x, Integer)` IS `CInt(x)` in VB — same rounding (half-to-even), same string
+            // parsing, same Boolean rule. Lowered to the builtin so the two spellings cannot
+            // disagree: as an IRCast it was a bare C++ static_cast (truncating, and a compile
+            // error from a String), CS0030 for `(bool)1` on C#, and no lowering at all on
+            // JavaScript. A primitive target only; class/array casts stay IRCast, and so does
+            // DirectCast/TryCast — they are type checks that never convert.
+            if (!node.IsTryCast && !node.IsDirectCast && ConversionBuiltinFor(targetType) is string builtin)
+            {
+                var conversion = new IRCall(_currentFunction.GetNextTempName(), builtin, targetType);
+                conversion.Arguments.Add(value);
+                EmitInstruction(conversion);
+                _expressionResult = conversion;
+                return;
+            }
+
             var tempName = _currentFunction.GetNextTempName();
             var castKind = DetermineCastKind(sourceType, targetType);
 
@@ -5708,6 +6079,33 @@ namespace BasicLang.Compiler.IR
             EmitInstruction(cast);
 
             _expressionResult = cast;
+        }
+
+        /// <summary>
+        /// The IR intrinsic a ReDim's value lowers to: <c>ArrayResizeIntrinsic(array, count,
+        /// preserve)</c>, returning the resized array, which the enclosing assignment stores back.
+        /// Each backend renders it natively (C# <c>new T[n]</c> / <c>Array.Resize</c>, C++
+        /// <c>BasicLang::ReDimArray</c>, JavaScript <c>new Array(n).fill</c> / <c>Array.from</c>).
+        /// A call, not a new IR node: optimizer passes already treat a call as opaque and
+        /// side-effecting, so nothing folds, hoists or merges it.
+        /// </summary>
+        public const string ArrayResizeIntrinsic = "__BLReDim";
+
+        public void Visit(ArrayResizeExpressionNode node)
+        {
+            node.Array.Accept(this);
+            var array = _expressionResult;
+            node.Size.Accept(this);
+            var size = _expressionResult;
+
+            var arrayType = _semanticAnalyzer.GetNodeType(node);
+            var call = new IRCall(_currentFunction.GetNextTempName(), ArrayResizeIntrinsic, arrayType);
+            call.Arguments.Add(array);
+            call.Arguments.Add(size);
+            call.Arguments.Add(new IRConstant(node.Preserve, new TypeInfo("Boolean", TypeKind.Primitive)));
+            EmitInstruction(call);
+
+            _expressionResult = call;
         }
 
         // ====================================================================
@@ -5726,6 +6124,16 @@ namespace BasicLang.Compiler.IR
                 return new IRConstant("", type);
 
             return new IRConstant(null, type);
+        }
+
+        /// <summary>
+        /// <c>Is</c> / <c>IsNot</c>, in any case (the parser stores the canonical spelling; the
+        /// test is case-insensitive anyway, as every word operator here is).
+        /// </summary>
+        private static bool IsIdentityOperator(string op, out bool negated)
+        {
+            negated = string.Equals(op, "IsNot", StringComparison.OrdinalIgnoreCase);
+            return negated || string.Equals(op, "Is", StringComparison.OrdinalIgnoreCase);
         }
 
         private bool IsComparisonOperator(string op)
@@ -5823,6 +6231,18 @@ namespace BasicLang.Compiler.IR
                 _ => throw new Exception($"Unknown unary operator: {op}")
             };
         }
+
+        /// <summary>The VB conversion function a <c>CType</c> to <paramref name="target"/> means, or null.</summary>
+        private static string ConversionBuiltinFor(TypeInfo target) => target?.Kind == TypeKind.Array ? null : target?.Name switch
+        {
+            "Integer" => "CInt",
+            "Long" => "CLng",
+            "Double" => "CDbl",
+            "Single" => "CSng",
+            "String" => "CStr",
+            "Boolean" => "CBool",
+            _ => null
+        };
 
         private CastKind DetermineCastKind(TypeInfo source, TypeInfo target)
         {

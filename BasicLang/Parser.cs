@@ -352,7 +352,10 @@ namespace BasicLang.Compiler
                 {
                     node.Members.Add(member);
                 }
-                SkipNewlines();
+                // Same rule as a statement in a block: `Dim G As Integer = 5 E3` must not read
+                // E3 as the start of a second declaration.
+                ExpectEndOfStatement(TokenType.EndModule);
+                SkipStatementSeparators();
             }
 
             node.EndLine = Consume(TokenType.EndModule, "Expected 'End Module'").Line;
@@ -1081,6 +1084,7 @@ namespace BasicLang.Compiler
 
                     Consume(TokenType.As, "Expected 'As' in field declaration");
 
+                    var fieldTypeToken = Peek();
                     var field = new VariableDeclarationNode(token.Line, token.Column)
                     {
                         Name = name,
@@ -1098,6 +1102,7 @@ namespace BasicLang.Compiler
                     // both; fields were the one path that set only one.
                     if (arrayDimensions != null)
                     {
+                        RejectArrayOnNameAndType(name, field.Type, fieldTypeToken);
                         field.Type.IsArray = true;
                         field.Type.ArrayDimensions = arrayDimensions;
                     }
@@ -1700,10 +1705,12 @@ namespace BasicLang.Compiler
                     RejectChainedArrayDimensions(member.Name);
 
                 Consume(TokenType.As, "Expected 'As'");
+                var memberTypeToken = Peek();
                 member.Type = ParseTypeReference();
 
                 if (memberDimensions != null)
                 {
+                    RejectArrayOnNameAndType(member.Name, member.Type, memberTypeToken);
                     member.Type.IsArray = true;
                     member.Type.ArrayDimensions = memberDimensions;
                 }
@@ -2375,7 +2382,8 @@ namespace BasicLang.Compiler
 
             node.Name = Consume(TokenType.Identifier, "Expected parameter name").Lexeme;
 
-            // Check for array brackets before 'As'
+            // Check for array brackets before 'As': `v[] As T`, or VB's `v() As T`, which used to
+            // be refused here with "Expected 'As'" although Dim and fields accepted it.
             bool isArray = false;
             List<ExpressionNode> arrayDimensions = new List<ExpressionNode>();
 
@@ -2385,13 +2393,21 @@ namespace BasicLang.Compiler
                 arrayDimensions = ParseArrayDimensionList(TokenType.RightBracket, "]");
                 RejectChainedArrayDimensions(node.Name);
             }
+            else if (Match(TokenType.LeftParen))
+            {
+                isArray = true;
+                arrayDimensions = ParseArrayDimensionList(TokenType.RightParen, ")");
+                RejectChainedArrayDimensions(node.Name);
+            }
 
             Consume(TokenType.As, "Expected 'As'");
+            var typeToken = Peek();
             node.Type = ParseTypeReference();
 
             // If we had array brackets, mark the type as an array
             if (isArray)
             {
+                RejectArrayOnNameAndType(node.Name, node.Type, typeToken);
                 node.Type.IsArray = true;
                 node.Type.ArrayDimensions = arrayDimensions;
             }
@@ -2455,6 +2471,16 @@ namespace BasicLang.Compiler
                 return dimensions;
             }
 
+            // The two spellings mean different things, and this is the one place both pass:
+            //  - `Dim a[n]` (BasicLang's preferred form) declares n ELEMENTS, C-style.
+            //  - `Dim a(n)` (kept so older BASIC programs run) declares UPPER BOUND n, as VB does:
+            //    n + 1 elements, indices 0..n.
+            // Everything downstream reads a dimension as an element COUNT, so the paren form is
+            // turned into one here. Both spellings used to mean n elements, contradicting
+            // language.md's `Dim nums(9) As Integer ' 10 elements`: C# threw
+            // IndexOutOfRangeException on `a(9) = x` and C++ wrote past the end.
+            var upperBounds = closeToken == TokenType.RightParen;
+
             do
             {
                 // An empty slot inside the list keeps that dimension unspecified while still
@@ -2462,11 +2488,98 @@ namespace BasicLang.Compiler
                 if (Check(TokenType.Comma) || Check(closeToken))
                     dimensions.Add(null);
                 else
-                    dimensions.Add(ParseExpression());
+                {
+                    var dimension = ParseExpression();
+                    dimensions.Add(upperBounds ? UpperBoundToCount(dimension) : dimension);
+                }
             } while (Match(TokenType.Comma));
 
             Consume(closeToken, $"Expected '{closeStr}'");
             return dimensions;
+        }
+
+        /// <summary>
+        /// <c>ReDim [Preserve] name(upperBound) [As Type]</c> or <c>ReDim [Preserve] name[count]</c>,
+        /// lowered to the assignment <c>name = &lt;resize&gt;</c> so later passes see an ordinary
+        /// write. The size follows the Dim rule: parentheses are an upper bound, brackets a
+        /// count, and it may be computed at run time (that is what ReDim is for).
+        /// </summary>
+        private StatementNode ParseReDimStatement()
+        {
+            var reDim = Advance(); // ReDim
+
+            var preserve = false;
+            if (Check(TokenType.Identifier) && Peek().Lexeme.Equals("Preserve", StringComparison.OrdinalIgnoreCase)
+                && PeekNext().Type == TokenType.Identifier)
+            {
+                Advance();
+                preserve = true;
+            }
+
+            var nameToken = Consume(TokenType.Identifier, "Expected the array to resize after 'ReDim'");
+            ExpressionNode Name() => new IdentifierExpressionNode(nameToken.Line, nameToken.Column) { Name = nameToken.Lexeme };
+
+            List<ExpressionNode> sizes;
+            if (Match(TokenType.LeftParen))
+                sizes = ParseArrayDimensionList(TokenType.RightParen, ")");
+            else if (Match(TokenType.LeftBracket))
+                sizes = ParseArrayDimensionList(TokenType.RightBracket, "]");
+            else
+                throw new ParseException($"Expected '(' or '[' with the new size after 'ReDim {nameToken.Lexeme}'", Peek(),
+                    "Write ReDim a[count] (or ReDim a(upperBound), as older BASICs do).");
+
+            if (sizes.Count != 1 || sizes[0] == null)
+                throw new ParseException(
+                    sizes.Count != 1
+                        ? "ReDim resizes a one-dimensional array; give exactly one size"
+                        : "ReDim needs a size", nameToken, null);
+
+            TypeReference elementType = null;
+            if (Match(TokenType.As))
+                elementType = ParseTypeReference();
+
+            if (Check(TokenType.Comma))
+                throw new ParseException("ReDim resizes one array per statement; put each on its own line", Peek(), null);
+
+            return new AssignmentStatementNode(reDim.Line, reDim.Column)
+            {
+                Target = Name(),
+                Operator = "=",
+                Value = new ArrayResizeExpressionNode(reDim.Line, reDim.Column)
+                {
+                    Array = Name(),
+                    Size = sizes[0],
+                    Preserve = preserve,
+                    ElementType = elementType,
+                },
+            };
+        }
+
+        /// <summary>
+        /// An upper bound as an element count: a literal is folded (<c>(9)</c> is 10), so every
+        /// consumer that wants a constant size still gets one; anything else becomes
+        /// <c>bound + 1</c>.
+        /// </summary>
+        private static ExpressionNode UpperBoundToCount(ExpressionNode bound)
+        {
+            if (bound is LiteralExpressionNode { LiteralType: TokenType.IntegerLiteral } literal
+                && literal.Value is int n && n < int.MaxValue)
+            {
+                return new LiteralExpressionNode(literal.Line, literal.Column)
+                {
+                    Value = n + 1,
+                    LiteralType = TokenType.IntegerLiteral,
+                    Text = (n + 1).ToString(System.Globalization.CultureInfo.InvariantCulture),
+                };
+            }
+
+            var one = new LiteralExpressionNode(bound.Line, bound.Column)
+            {
+                Value = 1,
+                LiteralType = TokenType.IntegerLiteral,
+                Text = "1",
+            };
+            return new BinaryExpressionNode(bound.Line, bound.Column) { Left = bound, Operator = "+", Right = one };
         }
 
         /// <summary>
@@ -2525,7 +2638,9 @@ namespace BasicLang.Compiler
                 RejectChainedArrayDimensions(node.Name);
 
                 Consume(TokenType.As, "Expected 'As'");
+                var typeToken = Peek();
                 var elementType = ParseTypeReference();
+                RejectArrayOnNameAndType(node.Name, elementType, typeToken);
                 elementType.IsArray = true;
                 elementType.ArrayDimensions = dimensions;
                 node.Type = elementType;
@@ -2545,7 +2660,7 @@ namespace BasicLang.Compiler
                 {
                     var newToken = Previous();
                     var newExpr = new NewExpressionNode(newToken.Line, newToken.Column);
-                    newExpr.Type = ParseTypeReference();
+                    newExpr.Type = ParseTypeReference(allowArraySuffix: false);
 
                     // Check for constructor arguments
                     if (Match(TokenType.LeftParen))
@@ -2716,7 +2831,98 @@ namespace BasicLang.Compiler
             return new GenericConstraint(GenericConstraintKind.Type, typeName);
         }
 
-        private TypeReference ParseTypeReference()
+        /// <summary>
+        /// Parses a type, including an array suffix written on the TYPE rather than the name:
+        /// <c>As Integer()</c>, <c>As Integer[]</c>, <c>As Integer(,)</c>. VB puts the suffix
+        /// here wherever there is no name to put it on — a Function's return type, a Property's
+        /// type, a generic argument (<c>List(Of Integer())</c>), a cast target — so without it an
+        /// array could not be returned at all: every one of those failed to parse.
+        ///
+        /// <para>The suffix is always EMPTY (only commas for rank): a type names no size, and a
+        /// sized one (<c>As Integer(3)</c>) is refused. Before that refusal the <c>(3)</c> was
+        /// left behind and swallowed by whatever parsed next, so the declaration silently became
+        /// a SCALAR <c>Integer</c>.</para>
+        /// </summary>
+        /// <param name="allowArraySuffix">
+        /// False after <c>New</c>, where <c>T()</c> is an empty CONSTRUCTOR argument list
+        /// (<c>New List(Of Integer)()</c>, <c>New T() {…}</c>) and must stay the caller's to read.
+        /// </param>
+        /// <param name="refuseSizedSuffix">
+        /// False for a lambda's return type, where a single-line body may begin with <c>(</c>.
+        /// </param>
+        private TypeReference ParseTypeReference(bool allowArraySuffix = true, bool refuseSizedSuffix = true)
+        {
+            var type = ParseTypeReferenceCore();
+            if (!allowArraySuffix)
+                return type;
+
+            if (!TryParseArrayTypeSuffix(out var dimensions))
+            {
+                if (refuseSizedSuffix && (Check(TokenType.LeftBracket) || (Check(TokenType.LeftParen) && PeekNext().Type != TokenType.Of)))
+                {
+                    throw new ParseException(
+                        $"An array size cannot appear in a type ('{type}{Peek().Lexeme}…'): a type names no size.",
+                        Peek(), $"Put the size on the name — 'Dim a[3] As {type.Name}' — or leave the type unsized: '{type.Name}()'");
+                }
+                return type;
+            }
+
+            if (TryPeekArrayTypeSuffix())
+            {
+                throw new ParseException(
+                    $"Jagged array types ('{type.Name}()()') are not supported. "
+                    + $"Declare rank with a comma list — '{type.Name}(,)' — instead.",
+                    Peek(), "Use a single comma-separated suffix");
+            }
+
+            type.IsArray = true;
+            type.ArrayDimensions = dimensions;
+            return type;
+        }
+
+        /// <summary>True when the next tokens are an empty array suffix: <c>()</c>, <c>(,)</c>, <c>[]</c>, <c>[,]</c>.</summary>
+        private bool TryPeekArrayTypeSuffix()
+        {
+            var next = PeekNext().Type;
+            if (Check(TokenType.LeftParen))
+                return next == TokenType.RightParen || next == TokenType.Comma;
+            if (Check(TokenType.LeftBracket))
+                return next == TokenType.RightBracket || next == TokenType.Comma;
+            return false;
+        }
+
+        private bool TryParseArrayTypeSuffix(out List<ExpressionNode> dimensions)
+        {
+            dimensions = null;
+            if (!TryPeekArrayTypeSuffix())
+                return false;
+
+            var close = Advance().Type == TokenType.LeftParen ? TokenType.RightParen : TokenType.RightBracket;
+            var closeStr = close == TokenType.RightParen ? ")" : "]";
+            dimensions = new List<ExpressionNode> { null };
+            while (Match(TokenType.Comma))
+                dimensions.Add(null);
+            Consume(close, $"Expected '{closeStr}' to close the array type suffix (a type names no size)");
+            return true;
+        }
+
+        /// <summary>
+        /// Refuses an array suffix on BOTH the name and the type (<c>Dim a() As Integer()</c>): in
+        /// VB that is a jagged array, which this compiler does not have, and taking either half
+        /// alone would silently declare a different type than the one written.
+        /// </summary>
+        private void RejectArrayOnNameAndType(string name, TypeReference type, Token at)
+        {
+            if (type.IsArray)
+            {
+                throw new ParseException(
+                    $"'{name}' has an array suffix on both its name and its type, which declares a jagged "
+                    + "array; jagged arrays are not supported.",
+                    at, $"Write the suffix once: '{name}() As {type.Name}' or '{name} As {type.Name}()'");
+            }
+        }
+
+        private TypeReference ParseTypeReferenceCore()
         {
             TypeReference type;
 
@@ -2920,7 +3126,7 @@ namespace BasicLang.Compiler
 
             while (!Check(endToken) && !IsAtEnd())
             {
-                SkipNewlines();
+                SkipStatementSeparators();
 
                 if (Check(endToken) || IsAtEnd())
                     break;
@@ -2946,7 +3152,7 @@ namespace BasicLang.Compiler
                         break;
                 }
 
-                SkipNewlines();
+                SkipStatementSeparators();
             }
 
             return block;
@@ -2982,6 +3188,16 @@ namespace BasicLang.Compiler
                 return ParseAutoDeclaration();
             if (Check(TokenType.Const))
                 return ParseConstantDeclaration();
+            // ReDim is CONTEXTUAL (an identifier token), like Preserve after it, so a program
+            // that already names something ReDim keeps compiling: it is ReDim only when an
+            // identifier follows. ⛔ It used to fall through to the expression-statement path,
+            // so `ReDim a(n)` compiled "successfully" to a call to a nonexistent function
+            // `ReDim(a[n])`, and `ReDim Preserve a(6)` to `ReDim(Preserve)`, silently dropping
+            // the array and its size.
+            if (Check(TokenType.Identifier)
+                && Peek().Lexeme.Equals("ReDim", StringComparison.OrdinalIgnoreCase)
+                && PeekNext().Type == TokenType.Identifier)
+                return ParseReDimStatement();
             if (Check(TokenType.Yield))
                 return ParseYieldStatement();
             if (Check(TokenType.RaiseEvent))
@@ -3138,10 +3354,14 @@ namespace BasicLang.Compiler
                 }
                 else
                 {
-                    // Single-line if: If condition Then statement
-                    var statement = ParseStatement();
-                    node.ThenBlock = new BlockNode(token.Line, token.Column);
-                    node.ThenBlock.Statements.Add(statement);
+                    // Single-line if, as in VB: `If c Then s1 : s2 Else s3 : s4`. Everything up to
+                    // the end of the line belongs to the If — a `:`-joined statement is part of the
+                    // Then (or Else) list, not a statement after the If. ⛔ This took ONE statement
+                    // and returned, so the enclosing block met `Else` (or `:`) where a statement
+                    // should start: `If x > 3 Then A() Else B()` failed to parse at all.
+                    node.ThenBlock = ParseSingleLineIfList(token);
+                    if (Match(TokenType.Else))
+                        node.ElseBlock = ParseSingleLineIfList(token);
                 }
             }
             else
@@ -3152,13 +3372,39 @@ namespace BasicLang.Compiler
 
             return node;
         }
+        /// <summary>
+        /// The statement list of a single-line If's Then or Else part: statements joined by
+        /// <c>:</c>, ending at the end of the line or at the single-line <c>Else</c>. An empty
+        /// list is legal (<c>If c Then Else x</c>). A nested single-line If consumes the rest of
+        /// the line, its own Else included — VB binds an Else to the nearest If.
+        /// </summary>
+        private BlockNode ParseSingleLineIfList(Token ifToken)
+        {
+            var block = new BlockNode(ifToken.Line, ifToken.Column);
+            while (!IsAtEnd() && !Check(TokenType.Newline) && !Check(TokenType.Else))
+            {
+                if (Match(TokenType.Colon))
+                    continue;
+
+                var statement = ParseStatement();
+                if (statement != null)
+                    block.Statements.Add(statement);
+
+                // Only a `:` continues the list; anything else ends it, and the enclosing
+                // block's ExpectEndOfStatement reports a stray token.
+                if (!Check(TokenType.Colon))
+                    break;
+            }
+            return block;
+        }
+
         private BlockNode ParseBlock(params TokenType[] endTokens)
         {
             var block = new BlockNode(Peek().Line, Peek().Column);
 
             while (!endTokens.Any(t => Check(t)) && !IsAtEnd())
             {
-                SkipNewlines();
+                SkipStatementSeparators();
 
                 if (endTokens.Any(t => Check(t)) || IsAtEnd())
                     break;
@@ -3182,7 +3428,7 @@ namespace BasicLang.Compiler
                         break;
                 }
 
-                SkipNewlines();
+                SkipStatementSeparators();
             }
 
             return block;
@@ -3390,10 +3636,11 @@ namespace BasicLang.Compiler
             // Case Is > 10, Case Is Integer, Case Is Nothing
             if (Match(TokenType.Is))
             {
-                // Case Is Nothing
+                // Case Is Nothing — the identity test (ADR-0011 D2 (2)), marked so the analyzer
+                // can hold it to `x Is Nothing`'s operand rule; `Case Nothing` above is not one.
                 if (Match(TokenType.Nothing))
                 {
-                    var pattern = new NothingPatternNode(token.Line, token.Column);
+                    var pattern = new NothingPatternNode(token.Line, token.Column) { WrittenWithIs = true };
                     return ParseWhenGuard(pattern);
                 }
 
@@ -3989,12 +4236,26 @@ namespace BasicLang.Compiler
 
                 var binary = new BinaryExpressionNode(op.Line, op.Column);
                 binary.Left = left;
-                binary.Operator = op.Lexeme;
+                binary.Operator = BinaryOperatorSpelling(op);
                 binary.Right = right;
                 left = binary;
             }
             return left;
         }
+
+        /// <summary>
+        /// The operator string a <see cref="BinaryExpressionNode"/> carries. The raw lexeme,
+        /// except for the reference-identity operators, which are stored in ONE canonical
+        /// spelling (<c>Is</c> / <c>IsNot</c>) whatever case the source used — BOTH expression
+        /// parsers go through here, so the two can never hand the analyzer different strings for
+        /// the same source (ADR-0011 D1).
+        /// </summary>
+        private static string BinaryOperatorSpelling(Token op) => op.Type switch
+        {
+            TokenType.Is => "Is",
+            TokenType.IsNot => "IsNot",
+            _ => op.Lexeme
+        };
 
         private bool IsBinaryOperator(Token token)
         {
@@ -4005,7 +4266,9 @@ namespace BasicLang.Compiler
                 TokenType.AndAlso or TokenType.OrElse or
                 TokenType.AndAnd or TokenType.OrOr or TokenType.Assignment or
                 TokenType.Equal or TokenType.NotEqual or TokenType.LessThan or
-                TokenType.LessThanOrEqual or TokenType.GreaterThan or TokenType.GreaterThanOrEqual => true,
+                TokenType.LessThanOrEqual or TokenType.GreaterThan or TokenType.GreaterThanOrEqual or
+                // ADR-0011 D1: reference identity, in THIS table and in ParseEquality's.
+                TokenType.Is or TokenType.IsNot => true,
                 _ => false
             };
         }
@@ -4022,7 +4285,9 @@ namespace BasicLang.Compiler
                 // `r = a AndAlso b` would not.
                 TokenType.OrOr or TokenType.Or or TokenType.OrElse => 1,
                 TokenType.AndAnd or TokenType.And or TokenType.AndAlso => 2,
-                TokenType.Assignment or TokenType.Equal or TokenType.NotEqual => 3,
+                // `Is` / `IsNot` sit at VB's level: the same as `=` / `<>` (ADR-0011 D1).
+                TokenType.Assignment or TokenType.Equal or TokenType.NotEqual or
+                TokenType.Is or TokenType.IsNot => 3,
                 TokenType.LessThan or TokenType.LessThanOrEqual or
                 TokenType.GreaterThan or TokenType.GreaterThanOrEqual => 4,
                 TokenType.Plus or TokenType.Minus => 5,
@@ -4084,8 +4349,13 @@ namespace BasicLang.Compiler
         {
             var expr = ParseComparison();
 
+            // `Is` / `IsNot` (reference identity) share this level with `=` / `<>`, as in VB —
+            // and the precedence-climbing table (GetPrecedence) says the same (ADR-0011 D1).
+            // ⚠ `Not` stays at UNARY precedence here, so `Not x Is Nothing` parses as
+            // `(Not x) Is Nothing`; the analyzer refuses that shape and names `x IsNot Nothing`.
             while (Check(TokenType.Equal) || Check(TokenType.NotEqual) ||
-                   Check(TokenType.IsEqual) || Check(TokenType.Assignment)) // Include Assignment here
+                   Check(TokenType.IsEqual) || Check(TokenType.Assignment) || // Include Assignment here
+                   Check(TokenType.Is) || Check(TokenType.IsNot))
             {
                 var op = Advance();
                 // Normalize = to == in expression context
@@ -4095,7 +4365,7 @@ namespace BasicLang.Compiler
                 var right = ParseComparison();
                 var binary = new BinaryExpressionNode(op.Line, op.Column);
                 binary.Left = expr;
-                binary.Operator = op.Lexeme;
+                binary.Operator = BinaryOperatorSpelling(op);
                 binary.Right = right;
                 expr = binary;
             }
@@ -4287,9 +4557,15 @@ namespace BasicLang.Compiler
                     var arrayAccess = new ArrayAccessExpressionNode(expr.Line, expr.Column);
                     arrayAccess.Array = expr;
 
+                    // A comma list inside the brackets, as the paren form takes: `grid[2, 3]` must
+                    // index what `Dim grid[3, 4]` declared (it failed "Expected ']' but found
+                    // Comma"). Chained `a[i][j]` still adds one index per bracket pair.
                     do
                     {
-                        arrayAccess.Indices.Add(ParseExpression());
+                        do
+                        {
+                            arrayAccess.Indices.Add(ParseExpression());
+                        } while (Match(TokenType.Comma));
                         Consume(TokenType.RightBracket, "Expected ']'");
                     } while (Match(TokenType.LeftBracket));
 
@@ -4361,7 +4637,7 @@ namespace BasicLang.Compiler
             {
                 var token = Previous();
                 var newExpr = new NewExpressionNode(token.Line, token.Column);
-                newExpr.Type = ParseTypeReference();
+                newExpr.Type = ParseTypeReference(allowArraySuffix: false);
 
                 var sawParens = false;
                 if (Match(TokenType.LeftParen))
@@ -4507,6 +4783,7 @@ namespace BasicLang.Compiler
                 castNode.TargetType = ParseTypeReference();
                 Consume(TokenType.RightParen, $"Expected ')' after target type in '{castToken.Lexeme}(value, Type)'");
                 castNode.IsTryCast = castToken.Lexeme.Equals("TryCast", StringComparison.OrdinalIgnoreCase);
+                castNode.IsDirectCast = castToken.Lexeme.Equals("DirectCast", StringComparison.OrdinalIgnoreCase);
 
                 return castNode;
             }
@@ -4524,6 +4801,17 @@ namespace BasicLang.Compiler
                  && PeekNext().Type == TokenType.ScopeResolution))
             {
                 return ParseForeignQualifiedNameExpression();
+            }
+
+            // A built-in type keyword naming its TYPE, for a Shared member: `String.Format(...)`,
+            // `Integer.Parse(s)`, `Integer.MaxValue`, `Char.IsDigit(c)`. These lex as keywords, so
+            // every one of them was "Unexpected token in expression: 'String'" — while `Math.Max`,
+            // an ordinary identifier, worked. Only when a `.` follows: a bare `String` is still a
+            // type in a type position and nothing in an expression.
+            if (!IsAtEnd() && IsBuiltInTypeKeyword(Peek().Type) && PeekNext().Type == TokenType.Dot)
+            {
+                var token = Advance();
+                return new IdentifierExpressionNode(token.Line, token.Column) { Name = token.Lexeme };
             }
 
             // Identifier (soft keywords like First/Take are valid identifiers outside
@@ -4585,6 +4873,13 @@ namespace BasicLang.Compiler
                 "Expected a value, variable, function call, or operator. Valid expression elements include: literals, identifiers, parentheses, or operators like +, -, *, /.");
         }
 
+        /// <summary>The data-type keywords (the lexer's "Data Types" group).</summary>
+        private static bool IsBuiltInTypeKeyword(TokenType type) => type is
+            TokenType.Integer or TokenType.Long or TokenType.Single or TokenType.Double or
+            TokenType.String or TokenType.Boolean or TokenType.Char or TokenType.Byte or
+            TokenType.Short or TokenType.UByte or TokenType.UShort or TokenType.UInteger or
+            TokenType.ULong;
+
         /// <summary>The brace list of `New T() { … }`, typed by T (spec §9).</summary>
         private CollectionInitializerNode ParseTypedCollectionInitializer(TypeReference elementType)
         {
@@ -4618,7 +4913,14 @@ namespace BasicLang.Compiler
 
             while (i < content.Length)
             {
-                if (content[i] == '{')
+                // {{ and }} are literal braces (the lexer keeps them doubled for us).
+                if ((content[i] == '{' || content[i] == '}')
+                    && i + 1 < content.Length && content[i + 1] == content[i])
+                {
+                    currentText.Append(content[i]);
+                    i += 2;
+                }
+                else if (content[i] == '{')
                 {
                     // Save any accumulated text
                     if (currentText.Length > 0)
@@ -4680,9 +4982,25 @@ namespace BasicLang.Compiler
                     var param = new ParameterNode(Peek().Line, Peek().Column);
                     param.Name = Consume(TokenType.Identifier, "Expected parameter name").Lexeme;
 
+                    // `q() As T` / `q[] As T`, as on a named Sub's parameter.
+                    TryParseArrayTypeSuffix(out var nameDimensions);
+
                     if (Match(TokenType.As))
                     {
+                        var typeToken = Peek();
                         param.Type = ParseTypeReference();
+                        if (nameDimensions != null)
+                        {
+                            RejectArrayOnNameAndType(param.Name, param.Type, typeToken);
+                            param.Type.IsArray = true;
+                            param.Type.ArrayDimensions = nameDimensions;
+                        }
+                    }
+                    else if (nameDimensions != null)
+                    {
+                        throw new ParseException(
+                            $"Array parameter '{param.Name}' needs its element type", Peek(),
+                            $"Write '{param.Name}() As <Type>'");
                     }
 
                     lambda.Parameters.Add(param);
@@ -4694,7 +5012,7 @@ namespace BasicLang.Compiler
             // Optional return type for Function lambdas
             if (isFunction && Match(TokenType.As))
             {
-                lambda.ReturnType = ParseTypeReference();
+                lambda.ReturnType = ParseTypeReference(refuseSizedSuffix: false);
             }
 
             // Single-line vs multi-line is decided by whether a NEWLINE follows the parameter
@@ -5156,6 +5474,19 @@ namespace BasicLang.Compiler
                     return "Multiple items should be separated by commas.";
                 default:
                     return null;
+            }
+        }
+
+        /// <summary>
+        /// Between statements: newlines and <c>:</c> separators. <c>:</c> joins statements on one
+        /// line, as in VB — the lexer has always produced it, but no statement loop consumed it,
+        /// so <c>a() : b()</c> failed with "Unexpected token in expression: ':'".
+        /// </summary>
+        private void SkipStatementSeparators()
+        {
+            while ((Check(TokenType.Newline) || Check(TokenType.Colon)) && !IsAtEnd())
+            {
+                Advance();
             }
         }
 

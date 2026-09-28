@@ -34,12 +34,15 @@ namespace VisualGameStudio.Tests.Compiler;
 //  L2/L4 are the CONTROLS that must stay correct: L2's ByRef write is through a FREE
 //  function (an IRCall, always covered), L4's write is a module global (always IsGlobal,
 //  always covered). L5 (a local captured BY REFERENCE and written inside a lambda) was a
-//  KNOWN-WRONG gap this fix alone did NOT close (task #122's capture set). ADR-0006 D1's
-//  interim closure rule closes it for JavaScript (now correct, seed\n12 under --optimize) —
-//  see LicmKillVocabularyKnownGapsTask122Tests below, whose JavaScript pin is now promoted.
-//  C++ stays known-wrong, but for an UNRELATED reason settled in the ADR's implementation
-//  note: the C++ BACKEND's own capture-by-copy lowering (task #140), present even with NO
-//  optimizer pass at all — not a kill-vocabulary gap this file's passes could ever close.
+//  KNOWN-WRONG gap this fix alone did NOT close. ADR-0006 D1's closure rule closes it for
+//  JavaScript (now correct, seed\n12 under --optimize) — see
+//  LicmKillVocabularyKnownGapsTask122Tests below, whose JavaScript pin is now promoted. Task
+//  #122 (the capture set narrowing D1's "every local" interim rule to just the captured ones)
+//  is DISCHARGED: L5's x is genuinely in bump's capture set, so this is now correct via the
+//  capture set itself, not the coarser fallback. C++ stays known-wrong, but for an UNRELATED
+//  reason settled in the ADR's implementation note: the C++ BACKEND's own capture-by-copy
+//  lowering (task #140), present even with NO optimizer pass at all — not a kill-vocabulary
+//  gap this file's passes could ever close.
 //  L6 is the pass's OWN control: a truly invariant product with no call in the loop at all,
 //  proving the fix does not disable LICM wholesale.
 //
@@ -567,14 +570,17 @@ public class LicmKillVocabularyExecutionTests
 
 /// <summary>
 /// Item 4 of the fixture brief — L5 (a local captured BY REFERENCE and written inside a lambda).
-/// JavaScript is now CORRECT under ADR-0006 D1's interim closure rule (a function containing a
-/// lambda call-visits every local, so <c>bump()</c> kills LICM's belief that <c>x * 2</c> is
-/// invariant); C++ and MSIL stay KNOWN-WRONG, but for reasons ADR-0006 D1's implementation note
-/// settles as UNRELATED to the kill vocabulary or to LICM: C++'s is task #140, a BACKEND lambda
+/// JavaScript is now CORRECT under ADR-0006 D1's closure rule: <c>x</c> is genuinely in bump's
+/// capture set (task #122, DISCHARGED — not merely the coarser "every local" interim fallback),
+/// so <c>bump()</c> kills LICM's belief that <c>x * 2</c> is invariant. MSIL AGREES too — task
+/// #155/ADR-0010's ClosureLowering closed MSIL's OWN, unrelated gap (it used to be unable to
+/// build this shape at all: "no lowering for the delegate type a <c>Sub()</c> lambda gets typed
+/// as"), so its assertion is folded into the JavaScript pin below rather than kept separate. C++
+/// stays KNOWN-WRONG, for a reason ADR-0006 D1's implementation note
+/// settles as UNRELATED to the kill vocabulary or to LICM: task #140, a BACKEND lambda
 /// lowering defect (capture BY COPY where BasicLang means capture by reference — MEASURED present
-/// even with NO optimizer pass at all, so no kill-vocabulary fix could ever have closed it); MSIL
-/// cannot build the shape at all (no lowering for the delegate type a <c>Sub()</c> lambda gets
-/// typed as), unrelated to LICM. Correct is <c>seed\n12</c> everywhere; C# alone got it right
+/// even with NO optimizer pass at all, so no kill-vocabulary fix could ever have closed it).
+/// Correct is <c>seed\n12</c> everywhere; C# alone got it right
 /// before D1 too and is not pinned here for that reason.
 ///
 /// <para>⛔ NOT caught by <c>JsExecutionTierRosterTests</c>' name-based auto-discovery (matches
@@ -588,20 +594,37 @@ public class LicmKillVocabularyExecutionTests
 public class LicmKillVocabularyKnownGapsTask122Tests
 {
     /// <summary>
-    /// CORRECT under ADR-0006 D1: the interim closure rule makes <c>x</c> call-visible (the
-    /// enclosing function contains a lambda), so <c>bump()</c> — a call — is no longer invisible
-    /// to <c>VariablesWrittenIn</c>, and LICM no longer hoists <c>x * 2</c> out of the loop.
+    /// CORRECT under ADR-0006 D1's closure rule: <c>x</c> is written inside bump's own body, so
+    /// it is genuinely in bump's recorded capture set (task #122, DISCHARGED) — <c>bump()</c>, a
+    /// call, is no longer invisible to <c>VariablesWrittenIn</c>, and LICM no longer hoists
+    /// <c>x * 2</c> out of the loop. Before #122 the SAME correct answer came from the coarser
+    /// "every local" interim rule; #122 does not move this VALUE, only narrows WHY it is correct.
     /// Promoted from a known-wrong pin (was <c>seed\n6</c>, task #122). D2's L5 NOTE said this
     /// attribution would move to JavaScript once C++'s failure was confirmed a backend defect —
     /// see <see cref="L5_LambdaCapturedLocal_Cpp_StandardPipeline_PinnedForTask140"/>'s doc comment.
+    ///
+    /// <para>MSIL's OWN identical pin here used to be
+    /// <c>L5_LambdaCapturedLocal_Msil_CannotBuild_PinnedForTask122</c> — "MSIL has no lowering
+    /// for the delegate type a Sub() lambda gets typed as", i.e. it could not even ASSEMBLE
+    /// this shape. Task #155/ADR-0010 (ClosureLowering) closes that: MSIL now agrees with
+    /// JavaScript (<c>seed\n12</c>), so its assertion is FOLDED in here rather than kept as a
+    /// separate red-then-green pin.</para>
     /// </summary>
     [Test]
-    public void L5_LambdaCapturedLocal_JavaScript_AggressivePipeline_CorrectAfterAdr6D1()
-        => Assert.That(FourBackends.Norm(FourBackends.RunAggressiveJs(LicmKillVocabularyShapes.L5)),
-            Is.EqualTo("seed\n12"),
-            "ADR-0006 D1's interim closure rule closes this for JavaScript under --optimize; if "
-            + "this regressed, re-measure against S/adr6-d1/probes/matrix-final.txt (or "
-            + "matrix-in-step5.txt) before touching it.");
+    public void L5_LambdaCapturedLocal_JavaScriptAndMsil_AggressivePipeline_CorrectAfterAdr6D1AndTask155()
+        => Assert.Multiple(() =>
+        {
+            Assert.That(FourBackends.Norm(FourBackends.RunAggressiveJs(LicmKillVocabularyShapes.L5)),
+                Is.EqualTo("seed\n12"),
+                "ADR-0006 D1's closure rule closes this for JavaScript under --optimize (x is in "
+                + "bump's capture set, task #122); if this regressed, re-measure against "
+                + "S/adr6-d1/probes/matrix-final.txt (or matrix-in-step5.txt) before touching it.");
+            Assert.That(FourBackends.Norm(MsilHarness.RunAggressiveExpectingSuccess(LicmKillVocabularyShapes.L5)),
+                Is.EqualTo("seed\n12"),
+                "MSIL — was AssembleFailed/'Action' (task #155/#122), now closed by ADR-0010's "
+                + "ClosureLowering: x is captured and copied into bump's environment, so bump() "
+                + "writes the SAME x the loop reads.");
+        });
 
     /// <summary>
     /// STAYS known-wrong, but the STALE attribution is fixed: this is NOT "ConstantFolding +
@@ -628,13 +651,4 @@ public class LicmKillVocabularyKnownGapsTask122Tests
             + "level\" (both C++ pins here agree with each other, not just with the standard-"
             + "pipeline one above) because the cause is the backend's lambda lowering, not LICM.");
 
-    [Test]
-    public void L5_LambdaCapturedLocal_Msil_CannotBuild_PinnedForTask122()
-    {
-        var run = MsilHarness.Run(LicmKillVocabularyShapes.L5, aggressive: true);
-        Assert.That(run.Outcome, Is.EqualTo(MsilHarness.MsilOutcome.AssembleFailed), run.Report);
-        Assert.That(run.Detail, Does.Contain("Action"),
-            "task #122 — MSIL has no lowering for the delegate type a Sub() lambda gets typed as "
-            + "(ilasm: \"Reference to undefined class 'Action'\"), a pre-existing gap unrelated to LICM.");
-    }
 }

@@ -184,6 +184,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             EmitExceptionPrelude(module);
             EmitConversionPrelude(module);
             EmitIntegerDivisionPrelude(module);
+            EmitPrimitiveStaticsPrelude(module);
 
             // Module-level Dims, also before classes — a static field initialiser may read one.
             EmitGlobals(module);
@@ -304,12 +305,156 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             IRCall call => IsCIntCall(call) || call.Arguments.Any(TreeUsesRoundingHelper),
             IRBinaryOp binary => TreeUsesRoundingHelper(binary.Left) || TreeUsesRoundingHelper(binary.Right),
             IRCompare compare => TreeUsesRoundingHelper(compare.Left) || TreeUsesRoundingHelper(compare.Right),
+            IRIdentityCompare identity => TreeUsesRoundingHelper(identity.Left) || TreeUsesRoundingHelper(identity.Right),
             IRUnaryOp unary => TreeUsesRoundingHelper(unary.Operand),
             _ => false,
         };
 
         /// <summary>The emitted name of the half-to-even rounding helper CInt lowers to.</summary>
         private const string CIntHelperName = "__blCInt";
+
+        /// <summary>The emitted name of the runtime value-to-text helper (see <see cref="TextOf"/>).</summary>
+        private const string TextHelperName = "__blStr";
+
+        private bool _textHelperEmitted;
+
+        /// <summary>
+        /// THE one place a value becomes text on this backend, mirroring the C++ backend's
+        /// <c>StringifyForText</c>: <c>&amp;</c>, interpolation (which lowers to the same Concat),
+        /// <c>CStr</c>, <c>Console.Write</c>/<c>WriteLine</c> and a primitive's <c>.ToString()</c>.
+        ///
+        /// <para>⛔ A Boolean is <c>True</c>/<c>False</c>, as .NET and the C# and C++ backends print
+        /// it. JavaScript's own conversion gives lowercase <c>true</c>, and every one of those
+        /// sites used it: <c>"b=" &amp; flag</c> printed <c>b=true</c>.</para>
+        ///
+        /// <para>A value typed Object may hold a Boolean that nothing here can see, so it goes
+        /// through <see cref="TextHelperName"/>, a runtime check emitted in the prelude. Everything
+        /// else keeps the conversion it had: <paramref name="mustBeString"/> false leaves it to
+        /// JS's <c>+</c> / <c>console.log</c>, true wraps it in <c>String(...)</c>.</para>
+        ///
+        /// <para>⛔ <paramref name="nothingIsEmpty"/>: at <c>&amp;</c> and <c>Console.Write</c>/<c>WriteLine</c>
+        /// a <c>Nothing</c> String is <c>""</c>, as VB and C# have it. JavaScript's own conversion
+        /// spells it <c>null</c>: <c>"[" &amp; s &amp; "]"</c> printed <c>[null]</c>, a bare
+        /// <c>WriteLine(s)</c> printed <c>null</c>, and — silently worse — <c>acc = acc &amp; i</c>
+        /// from a Nothing <c>acc</c> was <c>null + 1</c>, NUMERIC addition, so the loop summed
+        /// 1+2+3 and printed <c>6</c> where VB prints <c>123</c>. Only a value that CAN hold Nothing
+        /// is wrapped (<see cref="MayHoldNothing"/>); a literal, another <c>&amp;</c> and a number are
+        /// emitted exactly as before. <c>CStr</c> and <c>.ToString()</c> keep their old spelling.</para>
+        /// </summary>
+        private string TextOf(IRValue value, string rendered, bool mustBeString, bool nothingIsEmpty = false)
+        {
+            // The optimizer propagates a Nothing constant straight into the operand (J1's
+            // `"[" + null`), whatever the constant's own static type.
+            if (nothingIsEmpty && value is IRConstant { Value: null })
+                return "\"\"";
+
+            if (IsBooleanValue(value))
+            {
+                if (value is IRConstant { Value: bool constant })
+                    return constant ? "\"True\"" : "\"False\"";
+                return $"({rendered} ? \"True\" : \"False\")";
+            }
+
+            if (NeedsRuntimeTextCheck(value))
+            {
+                // Scanned into the prelude by UsesTextHelper with this same predicate; a miss
+                // would be "__blStr is not defined" at run time, so refuse it here instead.
+                if (!_textHelperEmitted)
+                    throw new InvalidOperationException(
+                        $"JavaScript backend: {TextHelperName} is needed but UsesTextHelper did not see it.");
+                return $"{TextHelperName}({rendered})";
+            }
+
+            if (nothingIsEmpty && IsStringValue(value) && MayHoldNothing(value))
+                return $"({rendered} ?? \"\")";
+
+            return mustBeString ? $"String({rendered})" : rendered;
+        }
+
+        /// <summary>
+        /// VB's <c>&amp;</c>: each operand as its text (<see cref="TextOf"/>, Nothing as <c>""</c>),
+        /// joined by JS <c>+</c>.
+        ///
+        /// <para>⛔ JS <c>+</c> concatenates only when a side IS a string at run time — <c>null + 1</c>
+        /// is <c>1</c>. TextOf now spells every String, Object, Boolean and Nothing operand as a
+        /// real string, and the front end refuses an <c>&amp;</c> with no String operand, so one
+        /// side always qualifies; should neither (an operand whose static type was lost), the left
+        /// is forced through <c>String(...)</c> rather than trusted.</para>
+        /// </summary>
+        private string ConcatText(IRBinaryOp op, string l, string r)
+        {
+            var left = TextOf(op.Left, l, mustBeString: false, nothingIsEmpty: true);
+            var right = TextOf(op.Right, r, mustBeString: false, nothingIsEmpty: true);
+            if (!ConcatSpellsString(op.Left) && !ConcatSpellsString(op.Right))
+                left = $"String({left})";
+            return $"({left} + {right})";
+        }
+
+        /// <summary>Whether <see cref="ConcatText"/>'s spelling of an operand is certainly a JS string.</summary>
+        private static bool ConcatSpellsString(IRValue value) =>
+            value is IRConstant { Value: null or string }
+            || IsBooleanValue(value) || NeedsRuntimeTextCheck(value) || IsStringValue(value)
+            || string.Equals(value?.Type?.Name, "Char", StringComparison.OrdinalIgnoreCase);
+
+        private static bool IsStringValue(IRValue value) =>
+            string.Equals(value?.Type?.Name, "String", StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// Whether a String-typed value can be <c>Nothing</c> at run time. A string literal cannot,
+        /// and neither can the result of another <c>&amp;</c> (TextOf makes every one a real
+        /// string) or of <c>CStr</c> (<c>String(...)</c> / the text helper). Everything else — a
+        /// variable, a parameter, a field, a call's result — can.
+        /// </summary>
+        private bool MayHoldNothing(IRValue value) => value switch
+        {
+            IRConstant { Value: string } => false,
+            IRBinaryOp { Operation: BinaryOpKind.Concat } => false,
+            IRCall call when call.CalleeValue == null
+                && string.Equals(call.FunctionName, "CStr", StringComparison.OrdinalIgnoreCase)
+                && !_userFunctionNames.Contains(call.FunctionName) => false,
+            _ => true,
+        };
+
+        private static bool IsBooleanValue(IRValue value) =>
+            string.Equals(value?.Type?.Name, "Boolean", StringComparison.OrdinalIgnoreCase);
+
+        private static bool IsPrimitiveTextType(IRValue value) =>
+            (value?.Type?.Name?.ToLowerInvariant()) switch
+            {
+                "boolean" or "string" or "byte" or "sbyte" or "short" or "ushort"
+                    or "integer" or "uinteger" or "single" or "double" => true,
+                _ => false,
+            };
+
+        private static bool NeedsRuntimeTextCheck(IRValue value) =>
+            string.Equals(value?.Type?.Name, "Object", StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>The single-argument calls TextOf lowers (see TryTextCall).</summary>
+        private static bool IsTextCall(string name, int argCount) =>
+            argCount == 1 && (string.Equals(name, "CStr", StringComparison.OrdinalIgnoreCase) ||
+                              name == "Console.WriteLine" || name == "Console.Write");
+
+        /// <summary>
+        /// Whether any TextOf site will need <see cref="TextHelperName"/>. ⛔ SCANNED for the same
+        /// reason as <see cref="UsesRoundingHelper"/>: the prelude is written before any body.
+        /// </summary>
+        private static bool UsesTextHelper(IRModule module)
+        {
+            foreach (var function in module?.Functions ?? Enumerable.Empty<IRFunction>())
+                foreach (var block in function.Blocks ?? Enumerable.Empty<BasicBlock>())
+                    foreach (var instruction in block.Instructions ?? Enumerable.Empty<IRInstruction>())
+                        switch (instruction)
+                        {
+                            case IRBinaryOp { Operation: BinaryOpKind.Concat } op
+                                when NeedsRuntimeTextCheck(op.Left) || NeedsRuntimeTextCheck(op.Right):
+                                return true;
+                            case IRCall call when IsTextCall(call.FunctionName, call.Arguments?.Count ?? 0)
+                                && NeedsRuntimeTextCheck(call.Arguments[0]):
+                                return true;
+                        }
+
+            return false;
+        }
 
 
         /// <summary>
@@ -329,6 +474,19 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// </param>
         private void EmitConversionPrelude(IRModule module)
         {
+            _textHelperEmitted = UsesTextHelper(module);
+            if (_textHelperEmitted)
+            {
+                // Only for a value typed Object, whose runtime type is unknown here: see TextOf.
+                // `x == null` is Nothing (null or undefined), which VB and C# print as "".
+                Line($"function {TextHelperName}(x) {{");
+                _indentLevel++;
+                Line("return x == null ? \"\" : typeof x === \"boolean\" ? (x ? \"True\" : \"False\") : String(x);");
+                _indentLevel--;
+                Line("}");
+                Line();
+            }
+
             if (!UsesRoundingHelper(module)) return;
 
             Line($"function {CIntHelperName}(x) {{");
@@ -394,6 +552,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             IRCast cast => TreeUsesIntegerDivision(cast.Value),
             IRCall call => call.Arguments.Any(TreeUsesIntegerDivision),
             IRCompare compare => TreeUsesIntegerDivision(compare.Left) || TreeUsesIntegerDivision(compare.Right),
+            IRIdentityCompare identity => TreeUsesIntegerDivision(identity.Left) || TreeUsesIntegerDivision(identity.Right),
             IRUnaryOp unary => TreeUsesIntegerDivision(unary.Operand),
             _ => false,
         };
@@ -436,6 +595,15 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             Line("return q;");
             _indentLevel--;
             Line("}");
+            Line();
+        }
+
+        /// <summary>The <see cref="JsPrimitiveStatics"/> helpers, when any row is used (scanned, as above).</summary>
+        private void EmitPrimitiveStaticsPrelude(IRModule module)
+        {
+            if (!JsPrimitiveStatics.IsUsed(module)) return;
+            foreach (var line in JsPrimitiveStatics.Prelude.Replace("\r\n", "\n").TrimEnd('\n').Split('\n'))
+                Line(line);
             Line();
         }
 
@@ -920,6 +1088,8 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                     return Bound(b) ? SanitizeName(b.Name) : BinaryExprInline(b);
                 case IRCompare c2:
                     return Bound(c2) ? SanitizeName(c2.Name) : CompareExprInline(c2);
+                case IRIdentityCompare identity:
+                    return Bound(identity) ? SanitizeName(identity.Name) : IdentityText(identity, ExprInline);
                 case IRUnaryOp u:
                     return Bound(u) ? SanitizeName(u.Name) : UnaryText(u, ExprInline(u.Operand));
                 case IRCall call:
@@ -935,6 +1105,15 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                     return ElementAccess(gep);
                 case IRLoad load:
                     return Expr(load.Address);
+
+                // IRBuilder gives an array local a memory slot named `<name>_addr` (only arrays:
+                // see Visit(VariableDeclarationNode)). In JavaScript the slot IS the local, as the
+                // C# backend also renders it. ⛔ Unhandled, an initialised array local —
+                // `Dim a[] As Integer = {1, 2}` — failed the build ("IRAlloca (as an expression)").
+                case IRAlloca alloca:
+                    return SanitizeName(alloca.Name != null && alloca.Name.EndsWith("_addr", StringComparison.Ordinal)
+                        ? alloca.Name.Substring(0, alloca.Name.Length - "_addr".Length)
+                        : alloca.Name);
 
                 // `.Length` on an array OR a string. The rename to lowercase is MANDATORY:
                 // JavaScript has no `.Length`, and reading it yields `undefined` with no
@@ -978,7 +1157,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 // looking names up, so patching only the statement form left `a / b` throwing
                 // from RenderBinary the moment the division sat inside a larger expression.
                 // Any cast that is NOT numeric still throws, on both paths.
-                case IRCast c when TryNumericCast(c, out var castRendered):
+                case IRCast c when TryNumericCast(c, out var castRendered) || TryReferenceCast(c, out castRendered):
                     return Bound(c) ? SanitizeName(c.Name) : castRendered;
 
                 // Task 24a. See Visit(IRArrayAlloc). BOUND is the ordinary path — the M4 shape
@@ -1048,6 +1227,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 case IRVariable v: return SanitizeName(v.Name);
                 case IRBinaryOp b: return BinaryExprInline(b);
                 case IRCompare cm: return CompareExprInline(cm);
+                case IRIdentityCompare identity: return IdentityText(identity, ExprInline);
                 case IRUnaryOp u: return UnaryText(u, ExprInline(u.Operand));
                 default:
                     // A call inside a guard WAS emitted (only the guard's own operator tree is
@@ -1078,25 +1258,6 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             "Integer" or "Short" or "Byte" or "SByte" or "UShort" => true,
             _ => false
         };
-
-        /// <summary>
-        /// <paramref name="rendered"/> as .NET TEXT. A Boolean is the one primitive whose JS
-        /// spelling differs: JavaScript's <c>"b" + true</c> is "btrue", and <c>console.log(true)</c>
-        /// prints "true", where .NET says "True" / "False" — MEASURED: <c>"b" &amp; True</c>,
-        /// <c>s &amp;= f</c>, <c>CStr(b)</c> and <c>Console.WriteLine(b)</c> all printed lower case.
-        /// Type-directed, like the C++ backend's StringifyForText: a Boolean-typed value is
-        /// spelled out, everything else is left to JavaScript, which already agrees.
-        /// </summary>
-        private static string TextOf(IRValue value, string rendered) =>
-            IsBoolean(value?.Type) ? $"({rendered} ? \"True\" : \"False\")" : rendered;
-
-        private static bool IsBoolean(TypeInfo type) =>
-            string.Equals(type?.Name, "Boolean", StringComparison.OrdinalIgnoreCase);
-
-        /// <summary>The primitives whose <c>ToString()</c> is their text: Boolean, numbers, Char, String.</summary>
-        private static bool IsTextablePrimitive(TypeInfo type) =>
-            type != null && (IsBoolean(type) || type.IsIntegral() || type.IsFloatingPoint()
-                || type.Name is "String" or "Char");
 
         /// <summary>
         /// <paramref name="int32"/> (an expression already wrapped to int32) wrapped again to
@@ -1174,9 +1335,9 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 case BinaryOpKind.Mod when IsCheckedMod(op): return $"{ModHelperName}({l}, {r})";
                 case BinaryOpKind.Mod: return $"({l} % {r})";
 
-                // String concatenation is its own kind, so `+` here is never numeric addition
-                // in disguise.
-                case BinaryOpKind.Concat: return $"({TextOf(op.Left, l)} + {TextOf(op.Right, r)})";
+                // String concatenation is its own kind; ConcatText makes sure the `+` it emits
+                // is never numeric addition in disguise.
+                case BinaryOpKind.Concat: return ConcatText(op, l, r);
 
                 case BinaryOpKind.Eq: return $"({l} === {r})";
                 case BinaryOpKind.Ne: return $"({l} !== {r})";
@@ -1367,6 +1528,38 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
         private string CompareExpr(IRCompare op) => RenderCompare(op, Expr);
         private string CompareExprInline(IRCompare op) => RenderCompare(op, ExprInline);
+
+        /// <summary>
+        /// <c>Is</c> / <c>IsNot</c> (ADR-0011). Two operands compare with <c>===</c> — reference
+        /// identity for an object, which is every operand the analyzer admits here (a String or a
+        /// delegate is refused against anything but Nothing, D4). A Nothing test is the SAME test
+        /// <c>Case Is Nothing</c> makes (<see cref="NullTest"/>), so the two can never disagree
+        /// about <c>undefined</c>.
+        /// </summary>
+        private static string IdentityText(IRIdentityCompare identity, Func<IRValue, string> render)
+        {
+            if (identity.GetNullTestSubject() is IRValue subject)
+            {
+                // A lambda reference renders as the arrow function itself, and `() => {…} === null`
+                // is a SyntaxError: an arrow body swallows what follows it. Parenthesised, it is a
+                // value like any other.
+                var rendered = render(subject);
+                if (subject is IRVariable { Name: { } name } && name.StartsWith("__lambda_", StringComparison.Ordinal))
+                    rendered = $"({rendered})";
+                var test = NullTest(rendered);
+                return identity.Negated ? $"(!{test})" : test;
+            }
+            var l = render(identity.Left);
+            var r = render(identity.Right);
+            return identity.Negated ? $"({l} !== {r})" : $"({l} === {r})";
+        }
+
+        /// <summary>
+        /// THE JavaScript null test, shared by <c>Case Is Nothing</c> (<see cref="PatternTest"/>)
+        /// and <c>x Is Nothing</c> (<see cref="IdentityText"/>): a BasicLang Nothing reaches
+        /// JavaScript as <c>null</c>, and an unassigned slot as <c>undefined</c>.
+        /// </summary>
+        private static string NullTest(string subject) => $"({subject} === null || {subject} === undefined)";
 
         private string RenderCompare(IRCompare op, Func<IRValue, string> render)
         {
@@ -1973,9 +2166,10 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// whose holes read as <c>undefined</c> and which iteration treats differently from
         /// filled slots. BasicLang expects 0 / "" / false per element type.</para>
         ///
-        /// <para>⚠ <c>ArrayDimensionSizes</c> entries are ELEMENT COUNTS, not upper bounds:
-        /// <c>Dim a(4)</c> is four elements here, matching the C# and C++ backends. That
-        /// diverges from real VB, deliberately and consistently — do not add one.</para>
+        /// <para>⚠ <c>ArrayDimensionSizes</c> entries are ELEMENT COUNTS: do not add one here.
+        /// The parser has already turned the paren form's upper bound into a count
+        /// (<c>Dim a(4)</c> reaches every backend as 5, <c>Dim a[4]</c> as 4), so every backend
+        /// allocates exactly what it is given.</para>
         /// </summary>
         private string ArrayInitializer(TypeInfo type)
         {
@@ -2497,7 +2691,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                     break;
 
                 case IRNothingPatternCase:
-                    test = $"({subject} === null || {subject} === undefined)";
+                    test = NullTest(subject);
                     break;
 
                 case IROrPatternCase or:
@@ -2666,7 +2860,14 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             if (store.Address is IRAlloca) return;
 
             // The destination is an L-VALUE expression, not a previously-bound temp.
-            Line($"{Expr(store.Address)} = {Expr(store.Value)};");
+            var target = Expr(store.Address);
+            var value = Expr(store.Value);
+
+            // `Dim a[] As Integer = {1, 2}` stores the literal into the local's `a_addr` slot AND
+            // renames the literal to `a` — the store would read `a = a;`. Skip it.
+            if (store.Address is IRAlloca && target == value) return;
+
+            Line($"{target} = {value};");
         }
 
         /// <summary>
@@ -2745,20 +2946,64 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             return false;
         }
 
+        /// <summary>A callee that needs no parentheses in front of an argument list: a name, or a
+        /// dotted chain of names (<c>t2</c>, <c>this.Callback</c>, <c>Registry.Hook</c>).</summary>
+        private static readonly System.Text.RegularExpressions.Regex SimpleCalleeText =
+            new(@"^[A-Za-z_$][A-Za-z0-9_$]*(\.[A-Za-z_$][A-Za-z0-9_$]*)*$",
+                System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
         /// <summary>Renders a call WITHOUT emitting it, for inline use.</summary>
         private string CallExpr(IRCall call)
         {
             var rendered = call.Arguments.ConvertAll(Expr);
 
-            // The builtins that turn their argument into TEXT spell a Boolean the .NET way.
-            if (call.FunctionName is "CStr" or "Console.WriteLine" or "Console.Write")
-                rendered = call.Arguments.Select((a, i) => TextOf(a, rendered[i])).ToList();
+            // ADR-0010 D8: a call through a delegate VALUE invokes that value, rendered like any
+            // other operand — as IRCall.CalleeValue documents — and never its FunctionName, which
+            // is only the value's IR name. ⛔ A delegate-typed field read bare (#188) is named
+            // after the FIELD, and CallTarget spells a bare name unqualified: `Callback()`,
+            // "Callback is not defined", where the value is `this.Callback`. Anything that is not
+            // a plain name or member chain (an inline arrow function, above all) is parenthesised,
+            // or `(x) => {…}(5)` would not even parse.
+            if (call.CalleeValue != null)
+            {
+                var callee = Expr(call.CalleeValue);
+                if (!SimpleCalleeText.IsMatch(callee)) callee = $"({callee})";
+                return $"{callee}({string.Join(", ", rendered)})";
+            }
+
+            // A type keyword's Shared member (`String.Format(...)`, `Integer.Parse(s)`): the prelude
+            // helper for its row. A keyword member outside the table is refused, never emitted as a
+            // member of JavaScript's own String/Number.
+            if (PrimitiveStaticSurface.IsKeywordReceiver(call.FunctionName, out _, out _))
+            {
+                return JsPrimitiveStatics.TryLowerCall(call.FunctionName, call.Arguments, rendered, out var primitive)
+                    ? primitive
+                    : throw NoLowering(call.FunctionName);
+            }
 
             // String builtins arrive as a BARE FunctionName, which CallTarget would pass
             // straight through as if it were a user function — emitting `Len(s)`, a call to
             // something that exists nowhere in JavaScript. They also cannot be expressed as a
             // renamed callee, since `Len(s)` becomes the MEMBER expression `s.length`, so they
             // are rendered whole here.
+            if (TryTextCall(call, rendered, out var text))
+                return text;
+
+            if (TryVbConversion(call, rendered, out var converted))
+                return converted;
+
+            // ReDim's value (IRBuilder.ArrayResizeIntrinsic: array, count, preserve). Plain ReDim
+            // is a fresh filled array, as a Dim is (see ArrayInitializer on why .fill matters);
+            // Preserve copies what still fits, via a one-shot arrow so the array and the count
+            // are each evaluated once and a Nothing array reads as empty.
+            if (call.FunctionName == IRBuilder.ArrayResizeIntrinsic && rendered.Count == 3)
+            {
+                var element = TypeMapper.GetDefaultValue(call.Type?.ElementType);
+                return call.Arguments[2] is IRConstant { Value: true }
+                    ? $"((a, n) => Array.from({{ length: n }}, (_, i) => a != null && i < a.length ? a[i] : {element}))({rendered[0]}, {rendered[1]})"
+                    : $"new Array({rendered[1]}).fill({element})";
+            }
+
             if (TryStringBuiltin(call.FunctionName, rendered, out var builtin))
                 return builtin;
 
@@ -2766,6 +3011,73 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 return stdlib;
 
             return $"{CallTarget(call.FunctionName)}({string.Join(", ", rendered)})";
+        }
+
+        /// <summary>
+        /// <c>CStr(x)</c>, <c>Console.WriteLine(x)</c> and <c>Console.Write(x)</c>, through
+        /// <see cref="TextOf"/>. <c>Console.Write</c> needs a real string: Node's
+        /// <c>process.stdout.write</c> THROWS on a number or a Boolean (ERR_INVALID_ARG_TYPE),
+        /// where <c>console.log</c> accepts anything.
+        /// </summary>
+        private bool TryTextCall(IRCall call, List<string> rendered, out string result)
+        {
+            result = null;
+            var name = call.FunctionName;
+            if (!IsTextCall(name, rendered.Count)) return false;
+
+            var arg = call.Arguments[0];
+            switch (name)
+            {
+                case "Console.WriteLine":
+                    result = $"console.log({TextOf(arg, rendered[0], mustBeString: false, nothingIsEmpty: true)})";
+                    return true;
+                case "Console.Write":
+                    result = $"process.stdout.write({TextOf(arg, rendered[0], mustBeString: true, nothingIsEmpty: true)})";
+                    return true;
+                default: // CStr — unless the program declares its own, which must win.
+                    if (_userFunctionNames.Contains(name)) return false;
+                    result = TextOf(arg, rendered[0], mustBeString: true);
+                    return true;
+            }
+        }
+
+        /// <summary>
+        /// The VB conversion rules JavaScript's own coercions get wrong, keyed on the argument's
+        /// SOURCE type (<c>CType(x, T)</c> lowers to these same calls — IRBuilder.ConversionBuiltinFor):
+        /// <list type="bullet">
+        /// <item>A Boolean converts to a number as <b>True = -1</b>, False = 0 (VB's CInt(True) is
+        /// -1; <c>__blCInt(true)</c> and <c>Number(true)</c> both answered 1).</item>
+        /// <item><c>CBool</c> of a String parses: "True"/"False" in any case, else a number, else it
+        /// throws, as VB's InvalidCastException. <c>Boolean("False")</c> is <c>true</c> — any
+        /// non-empty string is — so <c>CBool("False")</c> and <c>CBool("0")</c> printed True.</item>
+        /// </list>
+        /// Rendered inline (an arrow for the String parse) so no prelude scan is needed.
+        /// </summary>
+        private bool TryVbConversion(IRCall call, List<string> rendered, out string result)
+        {
+            result = null;
+            if (rendered.Count != 1 || _userFunctionNames.Contains(call.FunctionName)) return false;
+
+            var source = call.Arguments[0].Type?.Name;
+            var name = call.FunctionName;
+            if (string.Equals(source, "Boolean", StringComparison.OrdinalIgnoreCase)
+                && (name is "CInt" or "CDbl" or "CSng"))
+            {
+                result = $"({rendered[0]} ? -1 : 0)";
+                return true;
+            }
+
+            if (string.Equals(source, "String", StringComparison.OrdinalIgnoreCase) && name == "CBool")
+            {
+                result = "((s) => { const t = String(s).trim(); const l = t.toLowerCase(); "
+                         + "if (l === \"true\") return true; if (l === \"false\") return false; "
+                         + "const n = Number(t); if (t === \"\" || Number.isNaN(n)) "
+                         + "throw new Error(\"InvalidCastException: Conversion from string \\\"\" + s + \"\\\" to type 'Boolean' is not valid.\"); "
+                         + $"return n !== 0; }})({rendered[0]})";
+                return true;
+            }
+
+            return false;
         }
 
         public void Visit(IRReturn ret) =>
@@ -2790,13 +3102,54 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         // miscompile — the exact trade this file's NotYet() exists to refuse.
         public void Visit(IRCast cast)
         {
-            if (TryNumericCast(cast, out var rendered))
+            if (TryNumericCast(cast, out var rendered) || TryReferenceCast(cast, out rendered))
             {
                 Bind(cast.Name, rendered);
                 return;
             }
 
             throw NotYet(nameof(IRCast));
+        }
+
+        /// <summary>
+        /// A cast between REFERENCES — <c>CType</c>/<c>DirectCast</c>/<c>TryCast</c> to a class, an
+        /// interface or an array. There was no lowering at all ("IRCast lowering is not implemented
+        /// yet"), so any program with one failed its whole build. (A cast to a primitive never gets
+        /// here: IRBuilder lowers it to the matching CInt/CStr/… call.)
+        /// <list type="bullet">
+        /// <item>A user CLASS target is checked with <c>instanceof</c>: <c>TryCast</c> answers
+        /// <c>null</c> for the wrong type, and <c>CType</c>/<c>DirectCast</c> throw VB's
+        /// InvalidCastException for a non-null value of the wrong type — never pass it on to fail
+        /// later somewhere else.</item>
+        /// <item>An interface, an array or an <c>Extern Class</c> target is the value itself: JS has
+        /// no interfaces to test, an array is already an array, and an Extern class may not exist
+        /// as a constructor to test against.</item>
+        /// </list>
+        /// </summary>
+        private bool TryReferenceCast(IRCast cast, out string rendered)
+        {
+            rendered = null;
+            var target = cast.Type;
+            if (target == null) return false;
+            var isReferenceTarget = target.Kind is TypeKind.Class or TypeKind.Interface or TypeKind.Array;
+            var sourceIsReference = cast.SourceType == null
+                || cast.SourceType.Kind is TypeKind.Class or TypeKind.Interface or TypeKind.Array;
+            if (!isReferenceTarget || !sourceIsReference) return false;
+
+            var value = Expr(cast.Value);
+            if (target.Kind == TypeKind.Class
+                && _module?.Classes != null
+                && _module.Classes.TryGetValue(target.Name, out var cls) && cls != null && !cls.IsExtern)
+            {
+                var ctor = SanitizeName(cls.Name);
+                rendered = cast.IsTryCast
+                    ? $"((v) => v instanceof {ctor} ? v : null)({value})"
+                    : $"((v) => {{ if (v != null && !(v instanceof {ctor})) throw new Error(\"InvalidCastException: Unable to cast object to type '{cls.Name}'.\"); return v; }})({value})";
+                return true;
+            }
+
+            rendered = value;
+            return true;
         }
 
         /// <summary>
@@ -2859,6 +3212,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             return false;
         }
         public void Visit(IRCompare compare) => Bind(compare, CompareExpr(compare));
+        public void Visit(IRIdentityCompare identityCompare) => Bind(identityCompare, IdentityText(identityCompare, Expr));
         public void Visit(IRSwitch switchInst) => throw NotYet(nameof(IRSwitch));
         public void Visit(IRLabel label) => throw NotYet(nameof(IRLabel));
         public void Visit(IRComment comment) => throw NotYet(nameof(IRComment));
@@ -3016,14 +3370,19 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         ///
         /// <para><b>Why inline is the only workable route.</b> The alternative — hoist
         /// <c>__lambda_N</c> to a top-level function and pass its captures as parameters —
-        /// depends on <c>IRFunction.CapturedVariables</c>, which is ALWAYS EMPTY: it is
-        /// populated from a list IRBuilder never fills. A hoisted body would therefore
-        /// reference every captured variable as a FREE identifier — a ReferenceError at
-        /// runtime from a build that reported success. Measured: the non-capturing lambda
-        /// tests passed while all three capture tests failed.</para>
+        /// would need a declared free-variable list, and <c>IRFunction.CapturedVariables</c> is
+        /// not one. It was ALWAYS EMPTY when this was measured (populated from a list IRBuilder
+        /// never filled): a hoisted body referenced every captured variable as a FREE
+        /// identifier — a ReferenceError at runtime from a build that reported success, with
+        /// the non-capturing lambda tests passing while all three capture tests failed. Since
+        /// task #122 it holds the lambda's capture SET, which is a name-based OVER-approximation
+        /// built for the optimizer's kill rule (it includes the lambda's own locals, temps,
+        /// members and globals, and some entries carry no type) — still not something a hoisted
+        /// function could take as its parameter list.</para>
         ///
         /// <para>Emitted where the value is used, so JavaScript's lexical scope does the
-        /// capture — and captures by REFERENCE, matching BasicLang.</para>
+        /// capture — and captures by REFERENCE, matching BasicLang. Passing captures as
+        /// parameters would copy them, which is wrong for a lambda that writes one.</para>
         /// </summary>
         private string RenderLambda(IRFunction fn)
         {
@@ -3165,12 +3524,12 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 return $"{receiver}.{raw}({string.Join(", ", args)})";
             }
 
-            // `x.ToString()` on a primitive. A JS primitive has no ToString method — it has
-            // toString — so this emitted `x.ToString()` and died in Node with "ToString is not a
-            // function" for every Boolean, number and String receiver.
+            // `x.ToString()` on a primitive emitted `x.ToString()`, and a JS boolean, number or
+            // string has no such method: a TypeError at run time. (A class's own ToString is
+            // untouched: its receiver is not one of these types.)
             if (args.Count == 0 && string.Equals(mc.MethodName, "ToString", StringComparison.OrdinalIgnoreCase)
-                && IsTextablePrimitive(mc.Object?.Type))
-                return IsBoolean(mc.Object.Type) ? TextOf(mc.Object, receiver) : $"String({receiver})";
+                && IsPrimitiveTextType(mc.Object))
+                return TextOf(mc.Object, receiver, mustBeString: true);
 
             var kind = ReceiverKind(mc.Object);
 
@@ -3320,6 +3679,11 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             if (args.Count != 0) throw NotYet("List.Sort with more than one argument");
 
             var element = mc.Object?.Type?.GenericArguments?.FirstOrDefault();
+            // ⛔ `a - b` is NaN for any pair with a NaN, which Array.prototype.sort treats as
+            // "equal" — an inconsistent comparator, and the NaN stayed wherever it was. MEASURED:
+            // [2.5, NaN, -1, 0.5] sorted to 2.5, NaN, -1, 0.5. .NET sorts NaN FIRST.
+            if (element != null && element.IsFloatingPoint())
+                return $"{receiver}.sort((a, b) => a !== a ? (b !== b ? 0 : -1) : b !== b ? 1 : a - b)";
             if (element != null && element.IsNumeric()) return $"{receiver}.sort((a, b) => a - b)";
             if (element != null && element.Name.Equals("String", StringComparison.OrdinalIgnoreCase))
                 return $"{receiver}.sort()";
@@ -3413,6 +3777,17 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
         private string FieldAccess(IRFieldAccess fa)
         {
+            // A type keyword's Shared property (`Integer.MaxValue`, `String.Empty`). ⛔ Never the bare
+            // member: `String.Empty` read a property of JavaScript's String constructor, which has none,
+            // and `String.Empty & "x"` printed "undefinedx" from a clean build.
+            if (fa.Object is IRVariable keywordRecv && PrimitiveStaticSurface.IsTypeKeyword(keywordRecv.Name))
+            {
+                return PrimitiveStaticSurface.TryGet(keywordRecv.Name, fa.FieldName, out var row)
+                       && JsPrimitiveStatics.TryLowerProperty(row, out var constant)
+                    ? constant
+                    : throw NoLowering($"{keywordRecv.Name}.{fa.FieldName}");
+            }
+
             var receiver = Expr(fa.Object);
 
             // ⚠ FIRST, ahead of every rewrite below. A member of a FOREIGN object is raw

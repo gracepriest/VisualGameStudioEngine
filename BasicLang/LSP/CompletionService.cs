@@ -2929,7 +2929,7 @@ namespace BasicLang.Compiler.LSP
                 ("UBound", "Returns upper bound of array", "UBound(${1:arr})", "Integer"),
                 ("LBound", "Returns lower bound of array", "LBound(${1:arr})", "Integer"),
                 ("Array", "Creates array from values", "Array(${1:values})", "Object()"),
-                ("ReDim", "Resizes an array", "ReDim ${1:arr}(${2:size})", "Void"),
+                ("ReDim", "Resizes an array to a new element count", "ReDim ${1:arr}[${2:count}]", "Void"),
                 ("Erase", "Clears array contents", "Erase ${1:arr}", "Void"),
                 ("ArrayLength", "Gets length of array", "ArrayLength(${1:arr})", "Integer"),
                 ("ArrayResize", "Resizes array preserving data", "ArrayResize(${1:arr}, ${2:newSize})", "Void"),

@@ -459,25 +459,50 @@ mutant M6 live in
   global, one in-loop use, a call in the loop — QUIET before ADR-0008
   (pruned as non-replicable), FIRES after (D1's contract shape (ii)).
   Kept, per the brief.
-- **Settled point 4 (direct stores do kill) — measured true, plus a new
-  pre-existing gap this task found.** A direct `IRStore` through a
-  variable's address kills a `CopyPropagation` fact that reads it, not
-  only a call (`Adr0008D2Pins.SettledPoint4_DirectStoreThroughAnAddress_KillsTheFact`,
+- **Settled point 4 (direct stores do kill) — measured true, plus a
+  pre-existing gap this task found, FIXED by task #161.** A direct
+  `IRStore` through a variable's address kills a `CopyPropagation` fact
+  that reads it, not only a call
+  (`Adr0008D2Pins.SettledPoint4_DirectStoreThroughAnAddress_KillsTheFact`,
   MEASURED live). But: a direct `IRAssignment` to a NAMED NESTED
   operand's OWN NAME (`u = a + 1` renamed `u`, `t0 = u * 2`, `x := t0`,
-  then `u = 5`) does NOT kill `x`'s fact — `CollectReads(t0)` correctly
-  reports `t0` reads storage named `u` (ADR-0008's own walk gets this
-  right), but `CopyPropagationPass.Invalidate`'s `Mentions()` walks the
-  recorded VALUE structurally for an `IRVariable` named `u` and has no
+  then `u = 5`) did NOT kill `x`'s fact — `CollectReads(t0)` correctly
+  reported `t0` reads storage named `u` (ADR-0008's own walk got this
+  right), but `CopyPropagationPass.Invalidate`'s `Mentions()` walked the
+  recorded VALUE structurally for an `IRVariable` named `u` and had no
   case for "a named pure-operator instruction whose destination happens
-  to be `u`", so it never finds it. Pinned as a KNOWN-WRONG regression
+  to be `u`", so it never found it. Pinned as a KNOWN-WRONG regression
   test,
   `Adr0008D2Pins.KnownGap_DirectStoreToANamedNestedOperandsOwnName_DoesNotKillTheFact`,
-  NOT fixed here (test-writer scope). This is a genuine, separate defect
-  in `CopyPropagationPass`'s own kill rule — filed as task #161, outside
-  ADR-0008's scope, and it blocks #118
-  (DCE) the same way settled point 4 does: DCE cannot safely remove `u`'s
-  own defining instruction while a stale fact might still reference it.
+  NOT fixed at the time (test-writer scope then) — a genuine, separate
+  defect in `CopyPropagationPass`'s own kill rule, filed as task #161,
+  outside ADR-0008's scope, blocking #118 (DCE) the same way settled
+  point 4 does: DCE could not safely remove `u`'s own defining
+  instruction while a stale fact might still reference it.
+  **Task #161 fixed it**: `Mentions(v, name)` is now the union of
+  `CollectReads(v).Names` (ADR-0008's own walk, already finding a named
+  nested operand instruction by name) and `MentionsPastTheWalk` — the
+  pass's OLD structural descent, kept for what `CollectReads` does not
+  cover (a call's or allocation's arguments, a field/instance-call's
+  object, where the walk stops at the call-shaped node). The union is a
+  proven superset of the old `Mentions` at every node, so kills only
+  widen. The pin above is promoted and renamed
+  `Adr0008D2Pins.DirectStoreToANamedNestedOperandsOwnName_KillsTheFact`,
+  now asserting the fact IS killed; the full hand-built shape set (S1–S5,
+  R1) lives in `CopyPropagationMentionsTests.cs`. A SOURCE program reaches
+  the defect (probe E3: `Dim u As Integer = a + b : Dim x As Double =
+  a + b : u = 5 : Dim y As Double = x : Return y * c + u` — CSE forwards
+  the second `a + b` to the renamed `u`, so the fact ends up `x := CDbl(u)`):
+  `IRVerifier.CheckInvariantSPrime` FIRED on all 4 backends × 3 entry
+  points (CLI, CLI `--optimize`, Release project) — 12/12 cells — at
+  master, and 0/12 after the fix, with byte-identical output throughout
+  (no backend happened to re-evaluate the stale cast, so the hazard was
+  never a wrong answer, only an unsafe one — the reason it stayed latent
+  until ADR-0008's D1 walk made it visible to `CollectReads` without
+  fixing `Mentions` to match). Cost, measured over the whole suite: EXACTLY
+  ONE fact changes across the full run — CopyPropagation substitutions
+  481 → 480, kills by a written name 410 → 411; recordings, self-reference
+  refusals, call kills, CSE merges and LICM hoists are all unchanged.
 - **The mutation table** (each mutant built in a SCRATCH tree, its
   `BasicLang.dll` swapped into
   `VisualGameStudio.Tests/bin/Release/net8.0/`, the filtered suite

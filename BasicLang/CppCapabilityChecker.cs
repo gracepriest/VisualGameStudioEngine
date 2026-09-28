@@ -427,7 +427,48 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                     // patterns (RTTI), tuple deconstruction, or variable bindings — reject those.
                     foreach (var pc in sw.PatternCases)
                         CheckSwitchPattern(pc, funcName, diags);
+                    // (3) A When guard is rendered inline, never as a block instruction, so an
+                    // `Is` in one is judged here (CheckIdentity) rather than by the arm below.
+                    foreach (var op in IROperandWalker.EnumerateOperands(sw))
+                        if (op is IRIdentityCompare guardIdentity)
+                            CheckIdentity(guardIdentity, funcName, diags);
                     break;
+
+                case IRIdentityCompare identity:
+                    CheckIdentity(identity, funcName, diags);
+                    break;
+            }
+        }
+
+        /// <summary>
+        /// ADR-0011: <c>Is</c> / <c>IsNot</c> on the C++ backend. The generator lowers every shape
+        /// the front end admits — a Nothing test through its one null test, two references through
+        /// <c>shared_ptr ==</c> or <c>BasicLang::Array ==</c> — except TWO .NET object HANDLES
+        /// (<c>BasicLang::NetRef</c>): a handle is a table entry, not the object, so two handles to
+        /// one object need not be equal and <c>NetRef</c> has no <c>==</c> at all. Refused here
+        /// rather than left to die as a raw C++ compiler error. (A Nothing test on a handle is
+        /// fine: the empty handle is how Nothing crosses.)
+        /// </summary>
+        private void CheckIdentity(IRIdentityCompare identity, string funcName, List<string> diags)
+        {
+            if (identity.GetNullTestSubject() != null
+                || (IRIdentityCompare.IsNothing(identity.Left) && IRIdentityCompare.IsNothing(identity.Right)))
+                return;
+
+            foreach (var operand in new[] { identity.Left, identity.Right })
+            {
+                var type = operand?.Type;
+                if (type == null) continue;
+                if (type.NetHandleTypeFullName != null
+                    || (type.Name != null
+                        && BoundaryTypeRegistry.Categorize(type.Name) == BoundaryTypeCategory.ManagedOwned))
+                {
+                    diags.Add($"'{(identity.Negated ? "IsNot" : "Is")}' between two .NET objects " +
+                              $"('{type.Name}', in '{funcName}') is not supported on the C++ backend: a .NET " +
+                              "object crosses as a handle, and two handles to one object need not be " +
+                              "equal. Test each against Nothing instead");
+                    return;
+                }
             }
         }
 
@@ -462,6 +503,13 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                     break;
 
                 case IRFieldAccess fa:
+                    // A type KEYWORD's Shared property (`Integer.MaxValue`, `String.Empty`).
+                    if (fa.Object is IRVariable keywordRecv && PrimitiveStaticSurface.IsTypeKeyword(keywordRecv.Name))
+                    {
+                        CheckPrimitiveStatic(keywordRecv.Name, fa.FieldName, argCount: 0, isCallSyntax: false, funcName, diags);
+                        break;
+                    }
+
                     // Static form: the receiver is an IRVariable literally NAMED after the
                     // type ("DateTime.Now"), unless a value of that name is in scope.
                     if (fa.Object is IRVariable staticRecv
@@ -534,6 +582,13 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             var name = call.FunctionName;
             var argCount = call.Arguments?.Count ?? 0;
 
+            // A type KEYWORD's Shared member (`String.Format(...)`, `Integer.Parse(s)`).
+            if (PrimitiveStaticSurface.IsKeywordReceiver(name, out var keywordType, out var keywordMember))
+            {
+                CheckPrimitiveStatic(keywordType, keywordMember, argCount, isCallSyntax: true, funcName, diags);
+                return;
+            }
+
             var dot = name.LastIndexOf('.');
             if (dot > 0 && dot < name.Length - 1)
             {
@@ -565,6 +620,33 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             if (argCount > 0 && !_moduleFunctionNames.Contains(name)
                 && ConversionIntrinsicTargets.TryGetValue(name, out var intrinsicTarget))
                 CheckNativeConversion(call.Arguments[0]?.Type?.Name, intrinsicTarget, funcName, diags);
+        }
+
+        /// <summary>
+        /// Validate a type keyword's Shared member against <see cref="PrimitiveStaticSurface"/>. A member
+        /// the runtime does not implement used to reach g++ as a flattened name (`StringCompare(...)`)
+        /// and fail there, after "Compilation successful" — or, for a keyword property, as an
+        /// undeclared `Integer`.
+        /// </summary>
+        private void CheckPrimitiveStatic(string typeName, string memberName, int argCount,
+            bool isCallSyntax, string funcName, List<string> diags)
+        {
+            if (!PrimitiveStaticSurface.TryGet(typeName, memberName, out var row))
+            {
+                diags.Add($"'{typeName}.{memberName}' is not implemented on the C++ backend (in '{funcName}'). " +
+                          $"Supported Shared members of '{typeName}': " +
+                          string.Join(", ", PrimitiveStaticSurface.Rows
+                              .Where(r => string.Equals(r.TypeName, typeName, StringComparison.OrdinalIgnoreCase))
+                              .Select(r => r.MemberName)));
+                return;
+            }
+
+            // A property may be written with or without parentheses; a method must be called with an
+            // argument count the runtime has an overload for.
+            if (!row.IsProperty && (!isCallSyntax || !row.AcceptsArgCount(argCount)))
+            {
+                diags.Add($"'{row.TypeName}.{row.MemberName}' does not take {argCount} argument(s) on the C++ backend (in '{funcName}')");
+            }
         }
 
         /// <summary>

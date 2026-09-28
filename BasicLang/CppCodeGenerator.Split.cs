@@ -428,12 +428,19 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // typed-catch ladder's trigger is source-level, not surface-level. It precedes the
             // BCL bodies because the Decimal runtime THROWS it (division by zero).
             SpliceRuntimeSource(CppNetExceptionRuntime.Source);
+            // Arrays are handles to shared storage (.NET reference semantics) — see CppArrayRuntime.
+            SpliceRuntimeSource(CppArrayRuntime.Source);
             SpliceRuntimeSource(CppBclRuntime.BclBody);
             SpliceRuntimeSource(CppDecimalRuntime.DecimalBody);
 
             // Checked integral `\` / `Mod`, after the NetException it throws (spliced above) —
             // mirroring the combined mode (keep in sync).
             SpliceRuntimeSource(CppIntegerDivisionRuntime.Source);
+
+            // The type keywords' Shared members, on demand over the COMBINED module — mirroring
+            // the combined mode (keep in sync).
+            if (PrimitiveStaticSurface.IsUsedBy(module))
+                SpliceRuntimeSource(CppPrimitiveStaticsRuntime.Source);
 
             // D-P7 NetRef (P2a-2 flip): UNCONDITIONAL, mirroring the combined mode —
             // ManagedOwned declaration positions lower to BasicLang::NetRef even with an

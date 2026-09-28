@@ -77,6 +77,7 @@ namespace BasicLang.Compiler.AST
         void Visit(ArrayAccessExpressionNode node);
         void Visit(NewExpressionNode node);
         void Visit(CastExpressionNode node);
+        void Visit(ArrayResizeExpressionNode node);
         void Visit(LambdaExpressionNode node);
         void Visit(TemplateDeclarationNode node);
         void Visit(DelegateDeclarationNode node);
@@ -1254,6 +1255,14 @@ namespace BasicLang.Compiler.AST
     {
         public NothingPatternNode(int line, int column) : base(line, column) { }
 
+        /// <summary>
+        /// True when written <c>Case Is Nothing</c> — the reference-IDENTITY test, governed by the
+        /// same operand rule as <c>x Is Nothing</c> (ADR-0011 D2 (2)). False for <c>Case Nothing</c>,
+        /// which is VB's VALUE comparison against the type's default (<c>Case 0</c> on an Integer)
+        /// and is not an identity test at all. Both lower to the same IR today.
+        /// </summary>
+        public bool WrittenWithIs { get; set; }
+
         public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
     }
 
@@ -1543,6 +1552,13 @@ namespace BasicLang.Compiler.AST
         /// </summary>
         public bool IsForeignQualified { get; set; }
 
+        /// <summary>
+        /// Set by the semantic analyzer when <see cref="Name"/> is a VB control-character
+        /// constant (vbCrLf, vbTab, ...) that nothing user-declared shadows; the IR builder
+        /// lowers the reference to this string constant.
+        /// </summary>
+        public string BuiltinConstantValue { get; set; }
+
         public IdentifierExpressionNode(int line, int column) : base(line, column) { }
 
         public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
@@ -1622,7 +1638,36 @@ namespace BasicLang.Compiler.AST
         /// <summary>True for TryCast(expr, Type) - emits C# 'as' (null on failure)</summary>
         public bool IsTryCast { get; set; }
 
+        /// <summary>
+        /// True for DirectCast(expr, Type): a pure type check that never CONVERTS, unlike CType —
+        /// so it is never lowered to CInt/CStr/… (IRBuilder.ConversionBuiltinFor).
+        /// </summary>
+        public bool IsDirectCast { get; set; }
+
         public CastExpressionNode(int line, int column) : base(line, column) { }
+
+        public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
+    }
+
+    /// <summary>
+    /// The value of a <c>ReDim</c>: <see cref="Array"/> resized to <see cref="Size"/> elements.
+    /// The parser lowers <c>ReDim [Preserve] a(n)</c> / <c>a[n]</c> to the ASSIGNMENT
+    /// <c>a = &lt;this&gt;</c>, so every later pass sees an ordinary write to <c>a</c>.
+    /// <see cref="Size"/> is already an element COUNT (the paren form's upper bound plus one),
+    /// exactly as for a <c>Dim</c>, and may be computed at run time.
+    /// </summary>
+    public class ArrayResizeExpressionNode : ExpressionNode
+    {
+        public ExpressionNode Array { get; set; }
+        public ExpressionNode Size { get; set; }
+
+        /// <summary>ReDim Preserve: keep the existing elements that still fit.</summary>
+        public bool Preserve { get; set; }
+
+        /// <summary>The optional <c>As Type</c>, which must name the declared element type.</summary>
+        public TypeReference ElementType { get; set; }
+
+        public ArrayResizeExpressionNode(int line, int column) : base(line, column) { }
 
         public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
     }

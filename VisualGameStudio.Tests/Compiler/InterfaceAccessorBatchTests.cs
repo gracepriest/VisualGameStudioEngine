@@ -20,8 +20,9 @@ namespace VisualGameStudio.Tests.Compiler;
 /// <c>--optimize</c>) a Release build. <see cref="FourBackends.RunsOnEveryBackend"/> and
 /// <see cref="FourBackends.RunsOnEveryBackendAggressive"/> together cover exactly that: the two
 /// pipelines a Release <c>.blproj</c> and the CLI can take. INTERFACE-typed access
-/// (<c>Dim h As IHolder</c>) is explicitly OUT of this batch (own defect, own brief) and is
-/// pinned known-failing here, not fixed.</para>
+/// (<c>Dim h As IHolder</c>) was explicitly OUT of this batch (own defect, own brief) and was
+/// pinned known-failing here, not fixed — closed by task #175; see
+/// <see cref="AccessThroughAnInterfaceTypedVariable_RunsOnMsil"/> below.</para>
 ///
 /// <para><b>Sub-step attribution</b> (measured against the family's own probe matrices,
 /// <c>matrix-base/s1/s2/s3.txt</c> in the session scratchpad) — the three sub-steps this batch
@@ -368,7 +369,8 @@ public class InterfaceAccessorBatchTests
         => FourBackends.RunsOnEveryBackendAggressive(StringConcatProperty, "abcd");
 
     // ====================================================================================
-    // Explicit Get/Set implementation — known gap on C++ only (P3/P4/P8). C#, JS, MSIL run.
+    // Explicit Get/Set implementation (P3/P4/P8) — runs on all four. C++ was a known gap until
+    // property reads and writes were routed through get_/set_ (task #148).
     // ====================================================================================
 
     private const string ExplicitGetSetImpl = // P4
@@ -408,16 +410,14 @@ public class InterfaceAccessorBatchTests
         => Assert.That(FourBackends.Norm(MsilHarness.RunExpectingSuccess(ExplicitGetSetImpl)), Is.EqualTo("gs"));
 
     /// <summary>
-    /// P4 pinned known-failing on C++: a class implementing an interface property with EXPLICIT
-    /// Get/Set bodies does not compile — <c>CppCodeGenerator</c> cannot yet emit an explicit
-    /// accessor body through <see cref="CppCodeGenerator.PropertyAccessorSignature"/>'s override
-    /// path (measured: "no member named 'Slot' in 'Holder'"). Out of the D1 batch's scope; a
-    /// known pre-existing gap, not a regression this batch introduces or is meant to close.
+    /// P4 on C++. Pinned known-failing until task #148: a read or write of a property with
+    /// EXPLICIT Get/Set bodies lowered to a field access, and the class has no member of that
+    /// name (measured: "no member named 'Slot' in 'Holder'"). It now calls get_Slot/set_Slot.
     /// </summary>
     [Test]
-    public void AnExplicitGetSetImplementation_FailsToCompileOnCpp() // P4
-        => Assert.Throws<AssertionException>(
-            () => BclE2E.CompileRun(BclE2E.CompileToCppOptimized(ExplicitGetSetImpl)));
+    public void AnExplicitGetSetImplementation_RunsOnCpp() // P4
+        => Assert.That(FourBackends.Norm(BclE2E.CompileRun(BclE2E.CompileToCppOptimized(ExplicitGetSetImpl))),
+            Is.EqualTo("gs"));
 
     private const string WriteOnlyExplicitSetImpl = // P3
         "Interface IHolder\n" +
@@ -456,9 +456,9 @@ public class InterfaceAccessorBatchTests
         => Assert.That(FourBackends.Norm(MsilHarness.RunExpectingSuccess(WriteOnlyExplicitSetImpl)), Is.EqualTo("wo"));
 
     [Test]
-    public void AWriteOnlyExplicitSetImplementation_FailsToCompileOnCpp() // P3
-        => Assert.Throws<AssertionException>(
-            () => BclE2E.CompileRun(BclE2E.CompileToCppOptimized(WriteOnlyExplicitSetImpl)));
+    public void AWriteOnlyExplicitSetImplementation_RunsOnCpp() // P3
+        => Assert.That(FourBackends.Norm(BclE2E.CompileRun(BclE2E.CompileToCppOptimized(WriteOnlyExplicitSetImpl))),
+            Is.EqualTo("wo"));
 
     private const string ReadOnlyExplicitGetImpl = // P8
         "Interface IHolder\n" +
@@ -492,9 +492,9 @@ public class InterfaceAccessorBatchTests
         => Assert.That(FourBackends.Norm(MsilHarness.RunExpectingSuccess(ReadOnlyExplicitGetImpl)), Is.EqualTo("rg"));
 
     [Test]
-    public void AReadOnlyExplicitGetImplementation_FailsToCompileOnCpp() // P8
-        => Assert.Throws<AssertionException>(
-            () => BclE2E.CompileRun(BclE2E.CompileToCppOptimized(ReadOnlyExplicitGetImpl)));
+    public void AReadOnlyExplicitGetImplementation_RunsOnCpp() // P8
+        => Assert.That(FourBackends.Norm(BclE2E.CompileRun(BclE2E.CompileToCppOptimized(ReadOnlyExplicitGetImpl))),
+            Is.EqualTo("rg"));
 
     // ====================================================================================
     // Structure-typed interface property (Q1) — C#/C++ OK; MSIL known-wrong; JS BL7005.
@@ -558,8 +558,8 @@ public class InterfaceAccessorBatchTests
     }
 
     // ====================================================================================
-    // P6 — interface-TYPED access (Dim h As IHolder). Out of scope for D1: pinned
-    // known-failing on C++ and MSIL; C# and JS now pass (assert it, per the task).
+    // P6 — interface-TYPED access (Dim h As IHolder). C#, JS and C++ pass; MSIL now does too
+    // (task #175).
     // ====================================================================================
 
     private const string InterfaceTypedAccess =
@@ -587,29 +587,25 @@ public class InterfaceAccessorBatchTests
         => Assert.That(FourBackends.Norm(JavaScriptExecutionTests.RunJs(InterfaceTypedAccess)), Is.EqualTo("if"));
 
     /// <summary>
-    /// Known-failing, explicitly out of the D1 batch (ADR-0004: "Interface-typed access ...
-    /// gets a known-failing test, not a fix"). C++ still declares no <c>Slot</c> member on
-    /// <c>IHolder</c> itself for FIELD access through the interface pointer — measured:
-    /// "no member named 'Slot' in 'IHolder'".
+    /// Pinned known-failing until task #148: the read and write lowered to FIELD access through
+    /// the interface pointer, and an interface declares accessors, never storage (measured:
+    /// "no member named 'Slot' in 'IHolder'"). Both now go through the pure-virtual accessors.
     /// </summary>
     [Test]
-    public void AccessThroughAnInterfaceTypedVariable_FailsToCompileOnCpp()
-        => Assert.Throws<AssertionException>(
-            () => BclE2E.CompileRun(BclE2E.CompileToCppOptimized(InterfaceTypedAccess)));
+    public void AccessThroughAnInterfaceTypedVariable_RunsOnCpp()
+        => Assert.That(FourBackends.Norm(BclE2E.CompileRun(BclE2E.CompileToCppOptimized(InterfaceTypedAccess))),
+            Is.EqualTo("if"));
 
     /// <summary>
-    /// Known-failing on MSIL: the interface's property TYPE is still built as the old
+    /// Fixed by task #175. Previously the interface's property TYPE was built as the old
     /// class-kinded stand-in for field access purposes here (<c>ldfld</c> against a slot the
     /// interface metadata never declares as a field) — measured: <c>MissingFieldException:
-    /// Field not found: 'IHolder.Slot'</c>.
+    /// Field not found: 'IHolder.Slot'</c>. MSIL now calls <c>IHolder</c>'s own
+    /// <c>set_Slot</c>/<c>get_Slot</c>, matching C#/JS above.
     /// </summary>
     [Test]
-    public void AccessThroughAnInterfaceTypedVariable_ThrowsMissingFieldOnMsil()
-    {
-        var run = MsilHarness.Run(InterfaceTypedAccess);
-        Assert.That(run.Outcome, Is.EqualTo(MsilHarness.MsilOutcome.RunFailed));
-        Assert.That(run.Output, Does.Contain("MissingFieldException"));
-    }
+    public void AccessThroughAnInterfaceTypedVariable_RunsOnMsil()
+        => Assert.That(FourBackends.Norm(MsilHarness.RunExpectingSuccess(InterfaceTypedAccess)), Is.EqualTo("if"));
 
     // ====================================================================================
     // The MSIL ReadOnly-auto-property-assigned-in-constructor defect (control C1 — NO

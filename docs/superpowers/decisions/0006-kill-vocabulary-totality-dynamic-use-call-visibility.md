@@ -230,6 +230,64 @@ completeness-checked.
   rebuilt, and run against the fast unit-level `KillVocabulary*`/`Cse*`/
   `Licm*`/`CallVisibility*`/`IRVerifier*` fixtures; ALL 22 were KILLED, 0
   survived.
+- **#122 DISCHARGED** (the Obligation above, committed `22f18284`):
+  `OptimizationPass.LambdaCapturesOf(lambda)` reads a lambda's capture set
+  straight off its own built IR — every name it mentions (every operand,
+  descending into operand instructions and When-guard trees, the SAME walk
+  `ContainsLambda` shares; every `NamesWrittenBy` name; the `V` a `V_addr`
+  alloca slot backs), plus the recorded capture sets of every lambda
+  created INSIDE it (nesting is transitive), minus its own PARAMETERS —
+  matched by EXACT spelling, not case-insensitively. `IsCallVisible` asks
+  `IsLambdaCaptured`, whose own final compare against that recorded set IS
+  case-insensitive (BasicLang itself is — MEASURED: K14, a creator's `N`
+  written inside a lambda spelled `n`). The two decisions pull in opposite
+  directions on purpose: IRBuilder binds a lambda's own parameter for its
+  whole body under its EXACT declared spelling, so subtracting parameters
+  case-insensitively would also strip a CREATOR local the current binding
+  never touches (MEASURED: N4b — a lambda parameter `N` whose body writes
+  the bare name `n`; under TODAY's binding that `n` resolves to the
+  CREATOR's variable, not the parameter, so it must stay captured; task
+  #169 is the separate, open question of whether VB should instead bind it
+  to the lambda's own `N` — an IR-BINDING question this ADR does not
+  touch). The lambda's own LOCALS are deliberately NOT subtracted at all:
+  a lambda body can read the creator's `n` before its own `Dim n` takes
+  effect, and the C# backend never declares a lambda's locals in the first
+  place, so a lambda-local spelled like a creator local IS the creator's
+  variable in emitted C# (MEASURED: N9). `IsLambdaCaptured` FALLS BACK to
+  D1's original "every local" rule for the WHOLE function when the
+  creator's set was never recorded (null — hand-built IR, or a function
+  IRBuilder never visited a lambda for) or when it references a
+  `__lambda_N` its own `LambdaCaptureSources` does not list — because that
+  lambda's names could not be enumerated (`IRInlineCode`, which can write
+  ANY variable — MEASURED: N8_javascript, N8m, N8n, nested included) or
+  because it was simply never recorded. Soundness beats precision
+  throughout: the answer can only get MORE private where IRBuilder
+  positively enumerated every name every referenced lambda's IR mentions;
+  anywhere it could not, or did not, the fallback keeps D1's old, safe
+  answer. Measured: 492/492 probe cells and 1056/1056 corpus cells
+  behaviourally IDENTICAL to master, 0 verifier fires — every emitted-code
+  difference sits in a function that creates a lambda, on a local NO
+  lambda of that function captures (K10's `m + q` folds to a literal even
+  AFTER the call; N1-N6/N11 merge; N7's LICM hoists an uncaptured shift
+  out of a loop that calls a lambda while the captured one's stays put).
+  BLIND SPOT, NOT WIDENED by this change: a lambda passed as a `MyBase.
+  New(...)` ARGUMENT is built normally — its own `__lambda_N` function,
+  its captures correctly merged into the constructor's recorded set — but
+  the `__lambda_N` REFERENCE itself lives only in `IRConstructor.
+  BaseConstructorArgs`, a plain field no block instruction ever carries,
+  never inside the constructor's own `Blocks`. `ContainsLambda`/
+  `LambdaReferences` walk only `function.Blocks`, so neither can ever find
+  it, and `IsLambdaCaptured`'s very first check
+  (`LambdaReferences(function).Count == 0`) returns false before ever
+  consulting the (otherwise correct) recorded set — no local in that
+  constructor becomes call-visible at all. This is NOT new: `ContainsLambda`
+  already had this exact blind spot before #122 (D1's interim rule reads
+  the identical `ContainsLambda` result), so narrowing "every local" to
+  the capture set could not have made it worse — it inherits a
+  pre-existing gap rather than creating one. Filed as task #170; not
+  fixed here, per this ADR's own Contract (D1/its Obligation fix the
+  CLASSIFIED-kind and capture-set gaps, not a lambda-reference SITE this
+  vocabulary's own walk does not reach at all).
 
 ## D2: Should S′ cover a value used in a loop that does not contain its definition?
 

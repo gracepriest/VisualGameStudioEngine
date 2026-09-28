@@ -525,33 +525,44 @@ public class CseDestinationKnownGapsTask133Tests
     /// A1 — the destination is written inside a LAMBDA's body (<c>Dim clr = Sub() a = 0 : clr()</c>)
     /// rather than by a plain call. Correct is <c>seed\nseed\n3,0</c>.
     ///
-    /// <para>⛔ C++ and MSIL are EXCLUDED — both fail to compile this program for reasons that have
-    /// nothing to do with CSE: C++ ("cannot assign to a variable captured by copy in a non-mutable
-    /// lambda") cannot lower a mutating capture at all, and MSIL ("Reference to undefined class
-    /// 'Action'") has no lowering for the delegate type a <c>Sub()</c> lambda gets typed as. Both
-    /// are pre-existing, unrelated gaps.</para>
+    /// <para>⛔ C++ is EXCLUDED — it fails to compile this program for a reason that has nothing to
+    /// do with CSE ("cannot assign to a variable captured by copy in a non-mutable lambda", task
+    /// #140). MSIL used to be excluded too ("Reference to undefined class 'Action'"); task #155
+    /// (ADR-0010's ClosureLowering) closed that, so MSIL is asserted below.</para>
     ///
     /// <para>C# stays task #136 — a SEPARATE, pre-existing defect (the emitted lambda body is
     /// <c>() => { ; }</c>, so <c>a</c> is never actually zeroed) that ADR-0006 D1 does not touch.
-    /// JavaScript is now CORRECT: D1's interim closure rule (<c>IsCallVisible</c>: "in a function
-    /// that contains a lambda, every local is call-visible") makes <c>a</c> call-visible, so
-    /// <c>clr()</c> kills CSE's record the same way any other call would.</para>
+    /// JavaScript is now CORRECT: <c>a</c> is genuinely in <c>clr</c>'s recorded capture set (it
+    /// is the only name <c>clr</c>'s body writes) — <c>IsCallVisible</c>'s closure rule (task
+    /// #122, DISCHARGED) makes <c>a</c> call-visible on that basis, not merely D1's coarser
+    /// "every local" interim fallback — so <c>clr()</c> kills CSE's record the same way any
+    /// other call would.</para>
     /// </summary>
     [Test]
     public void A1_LambdaCapturedDestination_CSharp_PinnedForTask136()
         => Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharpAggressive(A1)), Is.EqualTo("seed\nseed\n3,3"),
             "task #136 (unrelated to ADR-0006 D1) — if this changed, C#'s handling of a destination "
             + "written inside a lambda capture may have changed (for better or worse); re-measure "
-            + "and update or delete this pin, do not just widen it. C++ and MSIL are excluded — "
-            + "both fail to compile this shape for unrelated, pre-existing reasons.");
+            + "and update or delete this pin, do not just widen it. C++ is excluded — it fails to "
+            + "compile this shape for an unrelated, pre-existing reason (task #140).");
 
     [Test]
     public void A1_LambdaCapturedDestination_JavaScript_CorrectAfterAdr6D1()
         => Assert.That(FourBackends.Norm(FourBackends.RunAggressiveJs(A1)), Is.EqualTo("seed\nseed\n3,0"),
-            "ADR-0006 D1's interim closure rule (OptimizationPass.IsCallVisible: a function "
-            + "containing a lambda call-visits every local) makes `a` call-visible, so `clr()` "
-            + "kills CSE's record for it. Promoted from a known-wrong pin (was seed\\nseed\\n0,0, "
-            + "task #133) — re-measured against S/adr6-d1/probes/matrix-final.txt.");
+            "ADR-0006 D1's closure rule (OptimizationPass.IsCallVisible -> IsLambdaCaptured) makes "
+            + "`a` call-visible because `a` is genuinely in clr's recorded capture set (task #122, "
+            + "DISCHARGED), so `clr()` kills CSE's record for it. Promoted from a known-wrong pin "
+            + "(was seed\\nseed\\n0,0, task #133) — re-measured against "
+            + "S/adr6-d1/probes/matrix-final.txt.");
+
+    /// <summary>A1 on MSIL — buildable since task #155 (ADR-0010): <c>a</c> lives in the closure
+    /// environment, <c>clr</c> is a method on it, and the same closure rule that makes JavaScript
+    /// correct keeps CSE from reusing the stale <c>p + q</c> record past <c>clr()</c>.</summary>
+    [Test]
+    public void A1_LambdaCapturedDestination_Msil_CorrectAfterAdr6D1AndTask155()
+        => Assert.That(FourBackends.Norm(MsilHarness.RunAggressiveExpectingSuccess(A1)), Is.EqualTo("seed\nseed\n3,0"),
+            "ADR-0006 D1's closure rule, on MSIL now that task #155 lowers the lambda — measured "
+            + "seed|seed|3,0 through the CLI and CLI -O before being pinned.");
 
     private const string A1 = """
         Function Seed(v As Integer) As Integer

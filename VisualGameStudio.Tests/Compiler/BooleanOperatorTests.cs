@@ -195,7 +195,8 @@ public class BooleanOperatorExecutionTests
 
     /// <summary>
     /// THE point of using <c>&amp;&amp;</c> over <c>&amp;</c>: a Boolean result must print as a
-    /// boolean. JavaScript's <c>&amp;</c> coerces to int32, so this would read 1/0.
+    /// boolean. JavaScript's <c>&amp;</c> coerces to int32, so this would read 1/0. (And it
+    /// prints .NET's <c>True</c>, not JS's <c>true</c>: see JavaScriptBooleanTextTests.)
     /// </summary>
     [Test]
     public void BooleanResult_PrintsAsBooleanNotAsNumber()

@@ -35,6 +35,8 @@
       <Begin>\$"</Begin>
       <End>"</End>
       <RuleSet>
+        <Span begin='""' end="" />
+        <Span begin="\{\{|\}\}" end="" />
         <Span begin="\{" end="\}" color="Keyword" />
       </RuleSet>
     </Span>

@@ -496,6 +496,17 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             _typeMap["Decimal"] = "valuetype [System.Runtime]System.Decimal";
         }
 
+        /// <summary>
+        /// The IL reference token of each closure ENVIRONMENT class (ADR-0010), keyed by its exact
+        /// IR name: <c>'&lt;&gt;c__Env0'</c> for one at top level, <c>'Box'/'&lt;&gt;c__Env0'</c> for
+        /// one nested in the class whose member created the lambda. <see cref="SanitizeName"/>
+        /// consults it, so every site that names a class — a local's type, <c>newobj</c>,
+        /// <c>ldfld</c>/<c>stfld</c>, <c>ldftn</c> — spells an environment the same way. The IR
+        /// names begin with <c>&lt;&gt;</c>, which no BasicLang identifier can, so no user name is
+        /// ever looked up here by accident.
+        /// </summary>
+        private readonly Dictionary<string, string> _envTypeTokens = new(StringComparer.Ordinal);
+
         public override string Generate(IRModule module)
         {
             _module = module;
@@ -520,6 +531,32 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             // Flipping this to false before that exists trades a clean BL diagnostic for a
             // runtime crash, which is the one thing the honesty matrix exists to prevent.
             ForeignFeatureChecker.Check(module, "MSIL", rejectCollections: false, ownInlineLanguage: "msil");
+
+            // ⭐ CLOSURE CONVERSION (ADR-0010 D1). Lambdas, AddressOf and calls through delegate
+            // values are lowered HERE, at the generator's own entry, because this is the one seam
+            // every MSIL route shares — the CLI (Program.GenerateCode), a .blproj build (the same
+            // GenerateCode), the IDE (BuildService) and the test harness (MsilHarness.CompileToIl)
+            // all call Generate on the optimized module and nothing else. The pass lowers a CLONE
+            // and hands back the module itself when there is nothing to lower, so C#, JavaScript
+            // and C++ never see the lowered form even when one module feeds several backends.
+            var lowered = ClosureLowering.Run(module);
+            if (!ReferenceEquals(lowered, module))
+            {
+                // The lowered IR is new IR: verified under the same invariants as the optimizer's
+                // output. A no-op unless verification is enabled (tests, DEBUG, BASICLANG_VERIFY_IR).
+                BasicLang.Compiler.IR.Optimization.IRVerifier.VerifyAfterOptimization(lowered);
+                module = lowered;
+                _module = lowered;
+            }
+
+            _envTypeTokens.Clear();
+            foreach (var cls in module.Classes.Values)
+            {
+                if (!ClosureLowering.IsEnvironmentClass(cls)) continue;
+                _envTypeTokens[cls.Name] = string.IsNullOrEmpty(cls.EnclosingClass)
+                    ? IlName(cls.Name)
+                    : SanitizeName(cls.EnclosingClass) + "/" + IlName(cls.Name);
+            }
 
             _output.Clear();
             _stringConstants.Clear();
@@ -555,9 +592,11 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 WriteLine();
             }
 
-            // Generate user-defined classes
+            // Generate user-defined classes. A closure environment nested in a class is written
+            // INSIDE that class's body (GenerateUserClass), never at top level.
             foreach (var irClass in module.Classes.Values)
             {
+                if (!string.IsNullOrEmpty(irClass.EnclosingClass)) continue;
                 GenerateUserClass(irClass);
                 WriteLine();
             }
@@ -618,9 +657,12 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             WriteLine("  } // end of method Invoke");
             WriteLine();
 
-            // BeginInvoke
+            // BeginInvoke. ⛔ The separator only when there ARE parameters: a parameterless
+            // `Delegate Sub D()` emitted `BeginInvoke(, class …)`, which ilasm refuses as a syntax
+            // error — no parameterless user delegate had ever assembled here.
+            var beginParams = string.IsNullOrEmpty(paramTypes) ? "" : paramTypes + ", ";
             WriteLine("  .method public hidebysig newslot virtual");
-            WriteLine($"          instance class [mscorlib]System.IAsyncResult BeginInvoke({paramTypes}, class [mscorlib]System.AsyncCallback callback, object 'object') runtime managed");
+            WriteLine($"          instance class [mscorlib]System.IAsyncResult BeginInvoke({beginParams}class [mscorlib]System.AsyncCallback callback, object 'object') runtime managed");
             WriteLine("  {");
             WriteLine("  } // end of method BeginInvoke");
             WriteLine();
@@ -698,11 +740,112 @@ namespace BasicLang.Compiler.CodeGen.MSIL
         /// element type has been lost is not a type IL can name.</para>
         /// </summary>
         private string IlTypeSpec(TypeInfo type) =>
-            TryCollectionToken(type, out var token) ? "class " + token : IlTypeSpec(MapType(type));
+            TryCollectionToken(type, out var token) ? "class " + token
+            : TryDelegateToken(type, out var delegateToken, out _) ? "class " + delegateToken
+            : IlTypeSpec(MapType(type));
 
         /// <inheritdoc cref="IlTypeToken(string)"/>
         private string IlTypeToken(TypeInfo type) =>
-            TryCollectionToken(type, out var token) ? token : IlTypeToken(MapType(type));
+            TryCollectionToken(type, out var token) ? token
+            : TryDelegateToken(type, out var delegateToken, out _) ? delegateToken
+            : IlTypeToken(MapType(type));
+
+        /// <summary>
+        /// ⭐ ADR-0010 D7: <c>Action</c>, <c>Action(Of …)</c> and <c>Func(Of …)</c> are the BCL
+        /// generic delegates, reached through the <c>[mscorlib]</c> reference every generated
+        /// assembly already carries — <c>[mscorlib]System.Func`2&lt;int32, int32&gt;</c>.
+        ///
+        /// <para>⛔ Before this a delegate type fell through to <c>MapTypeName</c> and came out as a
+        /// bare <c>class 'Func'</c>, its type arguments lost, which ilasm refuses as an undefined
+        /// class. A user <c>Delegate</c> declaration stays NOMINAL (it is declared in this assembly
+        /// by <c>GenerateDelegate</c>), and a program's own class named <c>Action</c> wins over the
+        /// BCL one, so both return false here.</para>
+        ///
+        /// <para>⛔ The arity is CAPPED at what was measured to assemble and run through the facade
+        /// on .NET 8 (<see cref="ClosureLowering.MaxActionTypeArguments"/>,
+        /// <see cref="ClosureLowering.MaxFuncTypeArguments"/>): <c>Action`9</c> and <c>Func`10</c>
+        /// assemble and then die with TypeLoadException, because the <c>mscorlib</c> facade does not
+        /// forward them. Above the cap is refused, never emitted.</para>
+        /// </summary>
+        private bool TryDelegateToken(TypeInfo type, out string token, out bool isGeneric)
+        {
+            token = null;
+            isGeneric = false;
+            if (type?.Name == null) return false;
+            if (_module != null && (_module.Delegates.ContainsKey(type.Name) || _module.Classes.ContainsKey(type.Name)
+                                    || _module.Interfaces.ContainsKey(type.Name) || _module.Enums.ContainsKey(type.Name)))
+                return false;
+
+            var bare = type.Name.StartsWith("System.", StringComparison.OrdinalIgnoreCase) ? type.Name.Substring(7) : type.Name;
+            var isAction = string.Equals(bare, "Action", StringComparison.OrdinalIgnoreCase);
+            var isFunc = string.Equals(bare, "Func", StringComparison.OrdinalIgnoreCase);
+            if (!isAction && !isFunc) return false;
+
+            var args = type.GenericArguments ?? new List<TypeInfo>();
+            if (args.Count == 0)
+            {
+                if (isAction)
+                {
+                    token = "[mscorlib]System.Action";
+                    return true;
+                }
+                throw new ForeignFeatureException(
+                    "MSIL: 'Func' reached a type position with its type arguments lost, so there is no "
+                    + "Func`N to name. Emitting a bare 'Func' is an undefined class to ilasm.");
+            }
+
+            var cap = isAction ? ClosureLowering.MaxActionTypeArguments : ClosureLowering.MaxFuncTypeArguments;
+            if (args.Count > cap)
+            {
+                throw new ForeignFeatureException(
+                    $"MSIL: '{(isAction ? "Action" : "Func")}' with {args.Count} type arguments is above the supported "
+                    + $"arity ({cap}). It would assemble and then die with TypeLoadException: the [mscorlib] "
+                    + "facade this backend references does not forward it on .NET 8 (measured). Declare "
+                    + "your own Delegate type instead.");
+            }
+
+            token = $"[mscorlib]System.{(isAction ? "Action" : "Func")}`{args.Count}<{string.Join(", ", args.Select(IlTypeSpec))}>";
+            isGeneric = true;
+            return true;
+        }
+
+        /// <summary>
+        /// How a call through a delegate of <paramref name="delegateType"/> is spelled: the type the
+        /// <c>Invoke</c> (and the constructor) is called on, <c>Invoke</c>'s return and parameter
+        /// specs as its DEFINITION declares them — <c>!0</c>/<c>!1</c> for a BCL generic, exactly as
+        /// a <c>List`1</c> member is called with <c>!0</c> — and the CLOSED return spec, which is
+        /// what is really on the stack afterwards.
+        /// </summary>
+        private bool TryInvokeShape(TypeInfo delegateType, out string receiver, out string returnSpec,
+            out List<string> parameterSpecs, out string closedReturn)
+        {
+            receiver = returnSpec = closedReturn = null;
+            parameterSpecs = null;
+
+            if (TryDelegateToken(delegateType, out var token, out var isGeneric))
+            {
+                var args = delegateType.GenericArguments ?? new List<TypeInfo>();
+                var isAction = token.StartsWith("[mscorlib]System.Action", StringComparison.Ordinal);
+                receiver = isGeneric ? "class " + token : token;
+                var parameterCount = isAction ? args.Count : args.Count - 1;
+                parameterSpecs = Enumerable.Range(0, parameterCount).Select(i => $"!{i}").ToList();
+                returnSpec = isAction ? "void" : $"!{args.Count - 1}";
+                closedReturn = isAction ? "void" : IlTypeSpec(args[args.Count - 1]);
+                return true;
+            }
+
+            if (delegateType?.Name != null && _module != null
+                && _module.Delegates.TryGetValue(delegateType.Name, out var declared) && declared != null)
+            {
+                receiver = SanitizeName(declared.Name);
+                returnSpec = IlTypeSpec(declared.ReturnType);
+                closedReturn = returnSpec;
+                parameterSpecs = declared.Parameters.Select(IlParameterSpec).ToList();
+                return true;
+            }
+
+            return false;
+        }
 
         /// <summary>
         /// The BCL generic token for a BasicLang collection — <c>List</c> →
@@ -865,6 +1008,8 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             if (type?.Name == null) return "[mscorlib]System.Object";
 
             if (TryCollectionToken(type, out var collection)) return "class " + collection;
+            if (TryDelegateToken(type, out var delegateToken, out var isGenericDelegate))
+                return isGenericDelegate ? "class " + delegateToken : delegateToken;
 
             var mapped = MapTypeName(type.Name);
             return PrimitiveTokens.TryGetValue(mapped, out var bcl) ? bcl : mapped;
@@ -960,6 +1105,15 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             // "Reference to undefined class 'Exception'".
             if (CppExceptionTypes.TryGetNetFullName(typeName, out var exceptionFullName))
                 return "[mscorlib]" + exceptionFullName;
+
+            // The non-generic BCL `Action` — the only delegate a bare NAME can denote (ADR-0010 D7;
+            // a generic one needs its TypeInfo, see TryDelegateToken). A program's own type of that
+            // name wins.
+            if ((string.Equals(typeName, "Action", StringComparison.OrdinalIgnoreCase)
+                 || string.Equals(typeName, "System.Action", StringComparison.OrdinalIgnoreCase))
+                && (_module == null || (!_module.Delegates.ContainsKey(typeName) && !_module.Classes.ContainsKey(typeName)
+                                        && !_module.Interfaces.ContainsKey(typeName))))
+                return "[mscorlib]System.Action";
 
             return SanitizeName(typeName);
         }
@@ -1101,7 +1255,14 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             // Same rule as the module class: `beforefieldinit` is dropped when a type initializer
             // exists, as the C# compiler does for a class with a static constructor.
             var needsInitializer = irClass.Fields.Any(NeedsStaticFieldInitialization);
-            WriteLine($".class public auto ansi{(needsInitializer ? "" : " beforefieldinit")} {className}");
+
+            // A closure environment nested in its creator's class (ADR-0010) is DECLARED by its own
+            // simple name and `nested public`; every reference to it spells the full 'Outer'/'Env'
+            // token SanitizeName returns.
+            var isNested = !string.IsNullOrEmpty(irClass.EnclosingClass);
+            var visibility = isNested ? "nested public" : "public";
+            var declaredName = isNested ? IlName(irClass.Name) : className;
+            WriteLine($".class {visibility} auto ansi{(needsInitializer ? "" : " beforefieldinit")} {declaredName}");
             WriteLine($"       extends {extends}{implements}");
             WriteLine("{");
 
@@ -1162,6 +1323,21 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             if (needsInitializer)
             {
                 GenerateClassStaticConstructor(irClass, className);
+            }
+
+            // The closure environments of lambdas this class's members create, nested so a lambda
+            // reaches the class's PRIVATE members through the captured Me — measured: a top-level
+            // environment reading a private field dies with FieldAccessException on .NET 8.
+            if (!isNested)
+            {
+                foreach (var nested in _module.Classes.Values
+                             .Where(c => string.Equals(c.EnclosingClass, irClass.Name, StringComparison.OrdinalIgnoreCase))
+                             .ToList())
+                {
+                    WriteLine();
+                    GenerateUserClass(nested);
+                }
+                _currentClass = irClass;
             }
 
             WriteLine($"}} // end of class {className}");
@@ -2909,7 +3085,8 @@ namespace BasicLang.Compiler.CodeGen.MSIL
         /// setter parameter, which is the same fix applied to the one name that had already been
         /// hit. This generalizes it.</para>
         /// </summary>
-        protected override string SanitizeName(string name) => IlName(RawName(name));
+        protected override string SanitizeName(string name) =>
+            name != null && _envTypeTokens.TryGetValue(name, out var envToken) ? envToken : IlName(RawName(name));
 
         /// <summary>
         /// The sanitized name WITHOUT the quotes.
@@ -3599,13 +3776,28 @@ namespace BasicLang.Compiler.CodeGen.MSIL
         /// <c>ex.Message</c> and collection-<c>Count</c> arms above are the same fix for the BCL's
         /// properties.</para>
         /// </summary>
-        private void EmitPropertyGet(IRClass owner, IRProperty prop)
-        {
-            var propType = IlTypeSpec(prop.Type);
-            var token = SanitizeName(owner.Name);
-            var getter = $"get_{RawName(prop.Name)}";
+        private void EmitPropertyGet(IRClass owner, IRProperty prop) =>
+            EmitAccessorGet(SanitizeName(owner.Name), IlTypeSpec(prop.Type), RawName(prop.Name), prop.IsStatic);
 
-            if (prop.IsStatic)
+        /// <summary>
+        /// A property WRITE as its accessor call. The receiver (for an instance property) and then
+        /// the value are already on the stack, which is the order <c>callvirt</c> wants.
+        /// </summary>
+        private void EmitPropertySet(IRClass owner, IRProperty prop) =>
+            EmitAccessorSet(SanitizeName(owner.Name), IlTypeSpec(prop.Type), RawName(prop.Name), prop.IsStatic);
+
+        /// <summary>
+        /// The getter call itself, shared by the class and interface property arms so the two
+        /// cannot spell an accessor or count the stack differently. <paramref name="token"/> and
+        /// <paramref name="propType"/> must be spelled exactly as the DECLARATION spells them —
+        /// ilasm does not check a member reference against it, so a mismatch assembles and then
+        /// fails with MissingMethodException.
+        /// </summary>
+        private void EmitAccessorGet(string token, string propType, string rawName, bool isStatic)
+        {
+            var getter = $"get_{rawName}";
+
+            if (isStatic)
             {
                 WriteLine($"    call {propType} {token}::{getter}()");
                 _currentStack++;
@@ -3617,17 +3809,12 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             _currentStack++;   // the value
         }
 
-        /// <summary>
-        /// A property WRITE as its accessor call. The receiver (for an instance property) and then
-        /// the value are already on the stack, which is the order <c>callvirt</c> wants.
-        /// </summary>
-        private void EmitPropertySet(IRClass owner, IRProperty prop)
+        /// <summary>The setter half of <see cref="EmitAccessorGet"/>.</summary>
+        private void EmitAccessorSet(string token, string propType, string rawName, bool isStatic)
         {
-            var propType = IlTypeSpec(prop.Type);
-            var token = SanitizeName(owner.Name);
-            var setter = $"set_{RawName(prop.Name)}";
+            var setter = $"set_{rawName}";
 
-            if (prop.IsStatic)
+            if (isStatic)
             {
                 WriteLine($"    call void {token}::{setter}({propType})");
                 _currentStack--;
@@ -3636,6 +3823,109 @@ namespace BasicLang.Compiler.CodeGen.MSIL
 
             WriteLine($"    callvirt instance void {token}::{setter}({propType})");
             _currentStack -= 2;
+        }
+
+        /// <summary>
+        /// The property a member access names through an INTERFACE-typed receiver
+        /// (<c>s.Area</c> where <c>s As IShape</c>), and the interface that DECLARES it.
+        ///
+        /// <para>⛔ The interface sibling of <see cref="TryResolveProperty"/>, which looks in
+        /// <c>_module.Classes</c> only. An interface is not a class, so every property read or
+        /// write through one fell through to the plain <c>ldfld</c>/<c>stfld</c> arm and named
+        /// <c>'IShape'::'Area'</c> — storage an interface cannot have. ilasm does not resolve
+        /// member references, so that assembled and died at RUN time with
+        /// <c>MissingFieldException: Field not found: 'IShape.Area'</c>. The accessors the call
+        /// needs were already there: <see cref="GenerateInterface"/> declares them.</para>
+        ///
+        /// <para>⚠ The base interfaces are walked with a visited set, as
+        /// <see cref="DeclaredInterfaceMethod"/> walks them, and the token names the interface
+        /// that DECLARES the property — the only one whose <c>get_X</c> exists. The front end
+        /// refuses <c>Inherits</c> inside an Interface today, so that walk goes no further than
+        /// the receiver's own interface for now.</para>
+        /// </summary>
+        private bool TryResolveInterfaceProperty(
+            IRValue receiver, string memberName, out IRInterface declaring, out IRInterfaceProperty prop)
+        {
+            declaring = null;
+            prop = null;
+            var typeName = receiver?.Type?.Name;
+            if (string.IsNullOrEmpty(typeName) || string.IsNullOrEmpty(memberName)
+                || _module?.Interfaces == null) return false;
+
+            var pending = new Queue<string>();
+            pending.Enqueue(typeName);
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            while (pending.Count > 0)
+            {
+                var name = pending.Dequeue();
+                if (string.IsNullOrEmpty(name) || !seen.Add(name)) continue;
+                if (!_module.Interfaces.TryGetValue(name, out var iface) || iface == null) continue;
+
+                var found = iface.Properties?.FirstOrDefault(p => p?.Name != null
+                    && string.Equals(p.Name, memberName, StringComparison.OrdinalIgnoreCase));
+                if (found != null)
+                {
+                    declaring = iface;
+                    prop = found;
+                    break;
+                }
+
+                foreach (var b in iface.BaseInterfaces ?? new List<string>()) pending.Enqueue(b);
+            }
+
+            if (prop == null) return false;
+
+            // ⛔ The token below is NON-generic, and a user interface cannot declare type
+            // parameters (the parser refuses `Interface IBox(Of T)`). But the front end does let
+            // `s As IShape(Of Integer)` name a NON-generic interface, and emitting 'IShape' for
+            // that would quietly bind to a type the program did not write.
+            if (receiver.Type.GenericArguments is { Count: > 0 })
+            {
+                throw new ForeignFeatureException(
+                    $"MSIL: property '{memberName}' is reached through '{typeName}' with type arguments, "
+                    + $"but interface '{declaring.Name}' is not generic. A generic interface property "
+                    + "cannot be lowered to an accessor call on this backend.");
+            }
+
+            return true;
+        }
+
+        /// <summary>
+        /// An interface property READ: the receiver is on the stack; this calls the interface's
+        /// getter and boxes the value if the slot it lands in is a reference slot.
+        /// </summary>
+        private void EmitInterfacePropertyGet(IRInterface iface, IRInterfaceProperty prop, string slotSpec)
+        {
+            if (!prop.HasGetter)
+            {
+                throw new ForeignFeatureException(
+                    $"MSIL: '{iface.Name}.{prop.Name}' is WriteOnly and is being read. The interface "
+                    + "declares no getter to call.");
+            }
+
+            // ⛔ Spelled from the INTERFACE declaration, as GenerateInterface spells it — never from
+            // the IR slot, which a caller may have typed differently (Object).
+            var propType = IlTypeSpec(prop.Type);
+            EmitAccessorGet(SanitizeName(iface.Name), propType, RawName(prop.Name), isStatic: false);
+            if (NeedsBoxingInto(slotSpec, propType, out var boxToken)) WriteLine($"    box {boxToken}");
+        }
+
+        /// <summary>
+        /// An interface property WRITE: the receiver and then the value are on the stack; this
+        /// boxes the value if the property is a reference slot and calls the interface's setter.
+        /// </summary>
+        private void EmitInterfacePropertySet(IRInterface iface, IRInterfaceProperty prop, string valueSpec)
+        {
+            if (!prop.HasSetter)
+            {
+                throw new ForeignFeatureException(
+                    $"MSIL: '{iface.Name}.{prop.Name}' is ReadOnly and is being assigned. The interface "
+                    + "declares no setter to call.");
+            }
+
+            var propType = IlTypeSpec(prop.Type);
+            if (NeedsBoxingInto(propType, valueSpec, out var boxToken)) WriteLine($"    box {boxToken}");
+            EmitAccessorSet(SanitizeName(iface.Name), propType, RawName(prop.Name), isStatic: false);
         }
 
         /// <summary>True when this name already denotes storage the current method can load.</summary>
@@ -3999,7 +4289,9 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             if (binaryOp.Operation == BinaryOpKind.Concat)
             {
                 EmitLoadValue(binaryOp.Left);
+                EmitConcatOperandAsString(binaryOp.Left);
                 EmitLoadValue(binaryOp.Right);
+                EmitConcatOperandAsString(binaryOp.Right);
                 WriteLine("    call string [mscorlib]System.String::Concat(string, string)");
                 _currentStack--; // Two pops, one push = net -1
 
@@ -4085,6 +4377,38 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             }
         }
 
+        public override void Visit(IRIdentityCompare identity)
+        {
+            EmitIdentityCompare(identity, EmitLoadValue);
+
+            if (!string.IsNullOrEmpty(identity.Name) && _declaredIdentifiers.Contains(identity.Name))
+            {
+                EmitStoreLocal(identity.Name);
+            }
+            else
+            {
+                var tempIdx = GetTempIndex(identity);
+                EmitStloc(tempIdx);
+            }
+        }
+
+        /// <summary>
+        /// <c>Is</c> / <c>IsNot</c> (ADR-0011): both operands loaded as they are — object
+        /// references, <c>ldnull</c> for Nothing — and compared with <c>ceq</c>, IL's REFERENCE
+        /// comparison on two O values. No <c>op_Equality</c> is ever called, so neither a user
+        /// <c>Operator =</c> nor <c>Delegate.op_Equality</c> nor String value equality can answer
+        /// (D4 (1)). <c>IsNot</c> negates with <c>ldc.i4.0; ceq</c>, as <c>&lt;&gt;</c> does.
+        /// Leaves one int32 (0/1) on the stack. <paramref name="load"/> is the ordinary loader
+        /// for a statement and the in-place rebuilder for a <c>When</c> guard.
+        /// </summary>
+        private void EmitIdentityCompare(IRIdentityCompare identity, Action<IRValue> load)
+        {
+            load(identity.Left);
+            load(identity.Right);
+            EmitCompareOpcodes(identity.Negated ? CompareKind.Ne : CompareKind.Eq);
+            _currentStack--; // two in, one out
+        }
+
         public override void Visit(IRAssignment assignment)
         {
             EmitLoadValue(assignment.Value);
@@ -4161,6 +4485,15 @@ namespace BasicLang.Compiler.CodeGen.MSIL
 
         public override void Visit(IRCall call)
         {
+            // ⭐ ADR-0010 D8: a call whose callee is a delegate VALUE is `callvirt Invoke` on that
+            // value — never a call by name. ClosureLowering canonicalises a call named after a
+            // delegate-typed variable into this form, so no delegate call reaches the name path.
+            if (call.CalleeValue != null)
+            {
+                EmitDelegateInvoke(call);
+                return;
+            }
+
             var funcName = call.FunctionName;
             var hasReturn = call.Type != null && !call.Type.Name.Equals("Void", StringComparison.OrdinalIgnoreCase);
 
@@ -4304,6 +4637,18 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 : null;
             var isSelfCall = selfCallOwner != null;
 
+            // ⛔ ADR-0010 D8: NEITHER a delegate value NOR a declared procedure — the "call a static
+            // method nothing defines" path dies here. It used to emit `call … 'Combined'::'bump'()`
+            // for `bump()` on a local delegate, which ilasm accepts (it does not resolve member
+            // references) and the CLR rejects at run time with MissingMethodException.
+            if (!isSelfCall && !IsDeclaredModuleProcedure(funcName))
+            {
+                throw new ForeignFeatureException(
+                    $"MSIL: '{funcName}' is called, but it is neither a procedure this program declares nor "
+                    + "a delegate value. Emitting 'call' on it would name a static method nothing defines, "
+                    + "which assembles and then fails with MissingMethodException at run time (ADR-0010 D8).");
+            }
+
             if (isSelfCall) EmitLdarg(0);
 
             var declaredParams =
@@ -4352,6 +4697,176 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 // Discard result if not used
                 WriteLine("    pop");
                 _currentStack--;
+            }
+        }
+
+        /// <summary>
+        /// Whether <paramref name="name"/> is a procedure this module declares at module level —
+        /// what the fallback <c>call 'Module'::'name'</c> can bind to. A class member is not one
+        /// (it is not on the module class), nor an external or a lambda.
+        /// </summary>
+        private bool IsDeclaredModuleProcedure(string name)
+        {
+            if (string.IsNullOrEmpty(name) || _module?.Functions == null) return false;
+            return _module.Functions.Any(f => f?.Name != null && !f.IsExternal && !f.IsLambda
+                                             && string.Equals(f.Name, name, StringComparison.OrdinalIgnoreCase)
+                                             && !IsClassMember(f, _module));
+        }
+
+        /// <summary>
+        /// ⭐ ADR-0010 D8: a call through a delegate VALUE — the value, the arguments, then
+        /// <c>callvirt instance … Invoke</c> spelled from the delegate's DEFINITION
+        /// (<c>class [mscorlib]System.Func`2&lt;int32, int32&gt;::Invoke(!0)</c> returns
+        /// <c>!1</c>). The declaration decides what is left on the stack, not the IR's type for the
+        /// call: the front end types a <c>Sub</c> delegate's call <c>Object</c>, and storing a value
+        /// that <c>Invoke</c> never pushed would underflow the stack — the same disagreement the
+        /// interface-method arm resolves the same way.
+        /// </summary>
+        private void EmitDelegateInvoke(IRCall call)
+        {
+            var delegateType = call.CalleeValue.Type;
+            if (!TryInvokeShape(delegateType, out var receiver, out var returnSpec, out var parameterSpecs, out var closedReturn))
+            {
+                throw new ForeignFeatureException(
+                    $"MSIL: a call through a value of type '{delegateType?.Name ?? "unknown"}', which is not a "
+                    + "delegate type this backend can name (an Action, a Func, or a Delegate this program "
+                    + "declares). Its Invoke has no signature to call.");
+            }
+
+            if (parameterSpecs.Count != call.Arguments.Count)
+            {
+                throw new ForeignFeatureException(
+                    $"MSIL: a call through a '{delegateType.Name}' passes {call.Arguments.Count} argument(s) to an "
+                    + $"Invoke that takes {parameterSpecs.Count}.");
+            }
+
+            EmitLoadValue(call.CalleeValue);
+            foreach (var argument in call.Arguments)
+            {
+                EmitLoadValue(argument);
+            }
+
+            WriteLine($"    callvirt instance {returnSpec} {receiver}::Invoke({string.Join(", ", parameterSpecs)})");
+            _currentStack -= 1 + call.Arguments.Count;
+
+            // A Sub pushed nothing, whatever the IR typed the call.
+            if (closedReturn == "void") return;
+
+            _currentStack++;
+            if (string.IsNullOrEmpty(call.Name))
+            {
+                WriteLine("    pop");
+                _currentStack--;
+                return;
+            }
+
+            // A value type into a slot the IR declared as a reference: box across the gap, exactly
+            // as the .NET-static arm does.
+            if (NeedsBoxingInto(IlTypeSpec(call.Type), closedReturn, out var boxToken))
+            {
+                WriteLine($"    box {boxToken}");
+            }
+
+            if (_declaredIdentifiers.Contains(call.Name)) EmitStoreLocal(call.Name);
+            else EmitStloc(GetTempIndex(call));
+        }
+
+        /// <summary>
+        /// ⭐ ADR-0010 D8: a delegate VALUE — the one node a lambda (as ClosureLowering leaves it) and
+        /// <c>AddressOf</c> both become. <c>ldnull</c> or the target, <c>ldftn</c> (or
+        /// <c>dup; ldvirtftn</c> to bind through the target's vtable), then the delegate's
+        /// <c>.ctor(object, native int)</c>.
+        ///
+        /// <para>⛔ The method reference is spelled from the method's DECLARATION — the same
+        /// <see cref="IlTypeSpec(TypeInfo)"/> and <see cref="ParamSpec"/> the declaration is written
+        /// with — because ilasm does not resolve member references: a <c>ldftn</c> whose signature
+        /// disagrees with the declaration assembles and then fails with MissingMethodException.</para>
+        /// </summary>
+        public override void Visit(IRDelegateCreate create)
+        {
+            var method = create.Method
+                ?? throw new ForeignFeatureException("MSIL: a delegate value with no method to bind.");
+
+            string owner, name;
+            bool isStatic;
+            TypeInfo returnType;
+            var declaringClass = _module.Classes.Values.FirstOrDefault(
+                c => c?.Methods != null && c.Methods.Any(m => ReferenceEquals(m?.Implementation, method)));
+            if (declaringClass != null)
+            {
+                var declared = declaringClass.Methods.First(m => ReferenceEquals(m?.Implementation, method));
+                owner = SanitizeName(declaringClass.Name);
+                name = SanitizeName(declared.Name);
+                isStatic = declared.IsStatic;
+                returnType = declared.ReturnType;
+            }
+            else if (_module.Functions.Contains(method) && !IsClassMember(method, _module))
+            {
+                owner = _moduleName;
+                name = SanitizeName(method.Name);
+                isStatic = true;
+                returnType = method.ReturnType;
+            }
+            else
+            {
+                throw new ForeignFeatureException(
+                    $"MSIL: a delegate bound to '{method.Name}', which is neither a module procedure nor a "
+                    + "method of a class this program declares, has no method to name.");
+            }
+
+            if (!TryInvokeShape(create.DelegateType, out var receiver, out _, out _, out _))
+            {
+                throw new ForeignFeatureException(
+                    $"MSIL: a delegate value of type '{create.DelegateType?.Name ?? "unknown"}', which is not a "
+                    + "delegate type this backend can name.");
+            }
+
+            if (create.Target == null && !isStatic)
+            {
+                throw new ForeignFeatureException(
+                    $"MSIL: a delegate bound to the instance method '{method.Name}' with no object to bind it to.");
+            }
+
+            var methodRef = $"{(isStatic ? "" : "instance ")}{IlTypeSpec(returnType)} {owner}::{name}"
+                            + $"({string.Join(", ", method.Parameters.Select(ParamSpec))})";
+
+            if (create.Target == null)
+            {
+                WriteLine("    ldnull");
+                _currentStack++;
+            }
+            else
+            {
+                EmitLoadValue(create.Target);
+            }
+
+            if (create.IsVirtual)
+            {
+                WriteLine("    dup");
+                _currentStack++;
+                WriteLine($"    ldvirtftn {methodRef}");
+            }
+            else
+            {
+                WriteLine($"    ldftn {methodRef}");
+                _currentStack++;
+            }
+
+            WriteLine($"    newobj instance void {receiver}::.ctor(object, native int)");
+            _currentStack--;
+
+            if (string.IsNullOrEmpty(create.Name))
+            {
+                WriteLine("    pop");
+                _currentStack--;
+            }
+            else if (_declaredIdentifiers.Contains(create.Name))
+            {
+                EmitStoreLocal(create.Name);
+            }
+            else
+            {
+                EmitStloc(GetTempIndex(create));
             }
         }
 
@@ -4880,30 +5395,18 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                     if (args.Count > 0)
                     {
                         EmitLoadValue(args[0]);
-                        var argType = MapType(args[0].Type);
 
-                        if (argType == "string")
+                        // A string or any VALUE: its own overload, or boxed to its OWN type
+                        // (task #171 for Char, #183 for the rest — Short, Byte, SByte, UShort,
+                        // UInteger and ULong had no arm and fell to the `box object` below, a
+                        // no-op on a value and an InvalidProgramException; Single was widened to
+                        // WriteLine(float64) and printed 0.1F as 0.10000000149011612).
+                        if (!TryEmitConsoleValueWrite("WriteLine", args[0]))
                         {
-                            WriteLine("    call void [mscorlib]System.Console::WriteLine(string)");
-                        }
-                        else if (argType == "int32")
-                        {
-                            WriteLine("    call void [mscorlib]System.Console::WriteLine(int32)");
-                        }
-                        else if (argType == "int64")
-                        {
-                            WriteLine("    call void [mscorlib]System.Console::WriteLine(int64)");
-                        }
-                        else if (argType == "float64" || argType == "float32")
-                        {
-                            WriteLine("    call void [mscorlib]System.Console::WriteLine(float64)");
-                        }
-                        else if (argType == "bool")
-                        {
-                            WriteLine("    call void [mscorlib]System.Console::WriteLine(bool)");
-                        }
-                        else
-                        {
+                            // A REFERENCE only (object, a class, an array). `box object` on a
+                            // reference returns it unchanged (ECMA-335 III.4.1) — a no-op kept so
+                            // this arm's output is byte-identical for the programs it already ran.
+                            // ⛔ A value never reaches here: it would be the #183 crash again.
                             WriteLine("    box object");
                             WriteLine("    call void [mscorlib]System.Console::WriteLine(object)");
                         }
@@ -4919,8 +5422,17 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                     if (args.Count > 0)
                     {
                         EmitLoadValue(args[0]);
-                        var argType = MapType(args[0].Type);
-                        WriteLine($"    call void [mscorlib]System.Console::Write({argType})");
+
+                        // The SAME overload choice as WriteLine (task #183): the raw spelling
+                        // below named `Write(int16)`, which does not exist — MissingMethodException
+                        // for every Short, Byte, SByte and UShort.
+                        if (!TryEmitConsoleValueWrite("Write", args[0]))
+                        {
+                            // A REFERENCE only, spelled as it always was. ⚠ A user class here still
+                            // names a `Write(Foo)` that does not exist — a separate, pre-existing gap.
+                            var argType = MapType(args[0].Type);
+                            WriteLine($"    call void [mscorlib]System.Console::Write({argType})");
+                        }
                         _currentStack--;
                     }
                     return true;
@@ -5613,6 +6125,121 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             value?.Type != null && IlTypeSpec(value.Type) == "string";
 
         /// <summary>
+        /// Turns a VALUE-typed operand of <c>&amp;</c>, already on the stack, into the
+        /// <c>string</c> that <c>String::Concat(string, string)</c> takes — the value type's own
+        /// <c>ToString()</c>, which is what C#'s <c>"n=" + 5</c> calls. A string, an object and a
+        /// class reference are left as they are.
+        ///
+        /// <para>⛔ Without it the raw value reached Concat where a string REFERENCE belongs:
+        /// InvalidProgramException for every <c>"n=" &amp; 5</c>, <c>i &amp; "!"</c>,
+        /// <c>"x=" &amp; d</c> and <c>acc &amp; k</c> (task #183, measured on Integer, Long, Short,
+        /// Byte, Double, Single, Boolean, UInteger, ULong, SByte and UShort, at the CLI, the
+        /// CLI with <c>--optimize</c> and a Release <c>.blproj</c>). Task #171 had closed the same
+        /// hole for Char alone.</para>
+        ///
+        /// <para>Char keeps #171's <c>Char::ToString(char)</c> — the same text, no box. Everything
+        /// else boxes to its OWN type (<see cref="ValueTypeBoxToken"/>) and calls
+        /// <c>Object::ToString()</c> virtually, so Boolean prints <c>True</c>, Double <c>2.5</c> and
+        /// an enum its member name, exactly as C# prints them on the same machine. Net stack
+        /// effect zero: <c>box</c> and the <c>callvirt</c> each pop one and push one.</para>
+        /// </summary>
+        private void EmitConcatOperandAsString(IRValue operand)
+        {
+            if (operand?.Type == null) return;
+
+            if (IlTypeSpec(operand.Type) == "char")
+            {
+                WriteLine("    call string [mscorlib]System.Char::ToString(char)");
+                return;
+            }
+
+            var boxToken = ValueTypeBoxToken(operand.Type);
+            if (boxToken == null) return;
+
+            WriteLine($"    box {boxToken}");
+            WriteLine("    callvirt instance string [mscorlib]System.Object::ToString()");
+        }
+
+        /// <summary>
+        /// The token a VALUE of <paramref name="type"/> boxes to — its OWN type — or null when the
+        /// value is a reference already (a string, an object, a class, an array), which is left
+        /// alone. Shared by <c>&amp;</c> (<see cref="EmitConcatOperandAsString"/>) and the
+        /// Console.Write/WriteLine fallback (<see cref="TryEmitConsoleValueWrite"/>), so the two
+        /// cannot disagree about what is a value.
+        ///
+        /// <para>⛔ Never <c>box object</c> for a value: <c>object</c> is a reference type, so that
+        /// box is a no-op and leaves the raw value where a reference belongs —
+        /// InvalidProgramException, measured on <c>Console.WriteLine(sh)</c> for a Short.</para>
+        ///
+        /// <para>The IL primitives come from <see cref="PrimitiveTokens"/>; an enum or a Structure
+        /// by its kind, through <see cref="IlTypeToken(TypeInfo)"/>. ⚠ Decimal and Date do not reach
+        /// here as values: this backend cannot declare a local of either (ilasm refuses the
+        /// <c>.locals</c> line), which is a type-mapping gap of its own.</para>
+        ///
+        /// <para>The primitive test reads <c>MapType</c>, which names every primitive exactly as
+        /// <see cref="IlTypeSpec(TypeInfo)"/> does but never throws — IlTypeSpec refuses a delegate
+        /// type whose arguments were lost, and <c>Console.WriteLine(f)</c> did not ask it
+        /// before.</para>
+        /// </summary>
+        private string ValueTypeBoxToken(TypeInfo type)
+        {
+            if (type == null) return null;
+
+            var spec = MapType(type);
+            if (BoxableSpecs.Contains(spec) && PrimitiveTokens.TryGetValue(spec, out var token)) return token;
+
+            if (type.Kind == TypeKind.Enum || type.Kind == TypeKind.Structure) return IlTypeToken(type);
+
+            return null;
+        }
+
+        /// <summary>
+        /// The <c>Console.Write</c>/<c>WriteLine</c> overload a value of IL type
+        /// <paramref name="spec"/> is passed to, or null when there is none and the value must be
+        /// boxed to its own type for the <c>(object)</c> overload instead.
+        ///
+        /// <para>⛔ Short, SByte, Byte and UShort have NO overload — <c>Write(int16)</c> assembled
+        /// and died with MissingMethodException (task #183). They go to <c>(int32)</c> with no
+        /// conversion instruction: a load of a small integer already sign- or zero-extends it to
+        /// int32 on the evaluation stack (ECMA-335 III.1.1.1), so the value arrives right.</para>
+        ///
+        /// <para>⛔ Single is <c>(float32)</c>, never <c>(float64)</c>: widening first printed
+        /// <c>0.1F</c> as <c>0.10000000149011612</c> where C# prints <c>0.1</c>.</para>
+        /// </summary>
+        private static string ConsoleWriteOverload(string spec) => spec switch
+        {
+            "string" or "bool" or "char" or "int32" or "uint32" or "int64" or "uint64"
+                or "float32" or "float64" => spec,
+            "int8" or "int16" or "uint8" or "uint16" => "int32",
+            _ => null,
+        };
+
+        /// <summary>
+        /// <c>Console.<paramref name="method"/>(arg)</c> for a string or a VALUE argument already
+        /// on the stack: its own overload when one exists (<see cref="ConsoleWriteOverload"/>),
+        /// otherwise boxed to its OWN type (<see cref="ValueTypeBoxToken"/>) for the
+        /// <c>(object)</c> overload — an enum, a Structure. Returns false, having emitted nothing,
+        /// for a reference argument, which each caller handles as it always has. Pops nothing
+        /// from <c>_currentStack</c>: the caller accounts for the call.
+        /// </summary>
+        private bool TryEmitConsoleValueWrite(string method, IRValue argument)
+        {
+            var overload = ConsoleWriteOverload(MapType(argument?.Type));
+            if (overload != null)
+            {
+                WriteLine($"    call void [mscorlib]System.Console::{method}({overload})");
+                return true;
+            }
+
+            var boxToken = ValueTypeBoxToken(argument?.Type);
+            if (boxToken == null) return false;
+
+            WriteLine($"    box {boxToken}");
+            WriteLine($"    call void [mscorlib]System.Console::{method}(object)");
+            return true;
+        }
+
+        /// <summary>
         /// True for the IL primitives whose ordering needs the <c>.un</c> compare forms.
         /// <c>uint8</c>/<c>uint16</c>/<c>char</c> are deliberately absent: they are zero-extended
         /// to int32 on the evaluation stack, so the SIGNED compare already gives the right answer
@@ -5673,6 +6300,10 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                     _currentStack--;
                     return;
                 }
+
+                case IRIdentityCompare identity:
+                    EmitIdentityCompare(identity, EmitInlineValue);
+                    return;
 
                 case IRUnaryOp unaryOp:
                     EmitInlineValue(unaryOp.Operand);
@@ -6207,6 +6838,18 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 return;
             }
 
+            // ⛔ The same property reached through an INTERFACE-typed receiver (`s.Area`, `s As
+            // IShape`) — see TryResolveInterfaceProperty. An interface property is never Shared,
+            // so the receiver is always a value and is always loaded.
+            if (TryResolveInterfaceProperty(fieldAccess.Object, fieldAccess.FieldName,
+                    out var readIface, out var readIfaceProp))
+            {
+                EmitLoadValue(fieldAccess.Object);
+                EmitInterfacePropertyGet(readIface, readIfaceProp, IlTypeSpec(fieldAccess.Type));
+                EmitFieldAccessResult(fieldAccess);
+                return;
+            }
+
             // Load object reference
             EmitLoadValue(fieldAccess.Object);
 
@@ -6345,6 +6988,16 @@ namespace BasicLang.Compiler.CodeGen.MSIL
 
                 EmitLoadValue(fieldStore.Value);
                 EmitPropertySet(storePropOwner, storeProp);
+                return;
+            }
+
+            // The write half of the interface property case.
+            if (TryResolveInterfaceProperty(fieldStore.Object, fieldStore.FieldName,
+                    out var storeIface, out var storeIfaceProp))
+            {
+                EmitLoadValue(fieldStore.Object);
+                EmitLoadValue(fieldStore.Value);
+                EmitInterfacePropertySet(storeIface, storeIfaceProp, IlTypeSpec(fieldStore.Value?.Type));
                 return;
             }
 

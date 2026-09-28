@@ -166,9 +166,7 @@ internal static class CopyPropagationSharedVocabularyProbes
     /// <summary>CP9 — the property-Setter half of the same idea: <c>Me.P = 10</c> lowers to an
     /// IRFieldStore (ADR-0007) whose Setter body writes the DIFFERENTLY-named field K.
     /// Before #146: 6. Correct is 21 (P's setter doubles its argument: K = 10 * 2 = 20, K + 1 =
-    /// 21). C++ cannot build ANY Get/Set property (task #148 — not task #141 as an earlier
-    /// analysis pass mislabeled it; #141 is the unrelated MyBase-Exception family) and is pinned
-    /// separately below.</summary>
+    /// 21), on all four backends — C++ could not build a Get/Set property until task #148.</summary>
     internal const string CP9 = """
         Class Box
             Public K As Integer
@@ -323,26 +321,38 @@ internal static class CopyPropagationSharedVocabularyProbes
 [NonParallelizable]         // the C# leg redirects Console.Out (see FourBackends)
 public class CopyPropagationSharedVocabularyExecutionTests
 {
-    // ---- CP2: C# + JavaScript RIGHT; C++ KNOWN-WRONG (task #140); MSIL cannot build (task #155) ----
+    // ---- CP2: C# + JavaScript + MSIL agree; C++ KNOWN-WRONG (task #140) ---------------------
+    //
+    //  MSIL used to have no lowering for the delegate type a Sub() lambda gets typed as
+    //  ("Reference to undefined class 'Action'", task #155) — pinned below as
+    //  CP2_Msil_PinnedForTask155_* while it was red. #155/ADR-0010 (ClosureLowering) closes it:
+    //  MSIL now agrees with C# and JavaScript, so its assertion is FOLDED into this pair's own
+    //  Assert.Multiple rather than kept as a separate pin, matching the fixture's "AllFour/
+    //  ThreeBackends" pattern elsewhere (see DynamicUseSPrimeTests' L1). C++ stays its own
+    //  separate pin below (task #140, unrelated, still wrong).
 
     [Test]
-    public void CP2_StandardPipeline_CSharpAndJavaScript()
+    public void CP2_StandardPipeline_CSharpAndJavaScriptAndMsilAgree()
         => Assert.Multiple(() =>
         {
             Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharp(CopyPropagationSharedVocabularyProbes.CP2)),
                 Is.EqualTo(CopyPropagationSharedVocabularyProbes.CP2Expected), "C#, standard");
             Assert.That(FourBackends.Norm(JavaScriptOptimizedExecutionTests.RunOptimized(CopyPropagationSharedVocabularyProbes.CP2)),
                 Is.EqualTo(CopyPropagationSharedVocabularyProbes.CP2Expected), "JavaScript, standard");
+            Assert.That(FourBackends.Norm(MsilHarness.RunExpectingSuccess(CopyPropagationSharedVocabularyProbes.CP2)),
+                Is.EqualTo(CopyPropagationSharedVocabularyProbes.CP2Expected), "MSIL, standard — was AssembleFailed/'Action' (task #155), now closed by ADR-0010");
         });
 
     [Test]
-    public void CP2_AggressivePipeline_CSharpAndJavaScript()
+    public void CP2_AggressivePipeline_CSharpAndJavaScriptAndMsilAgree()
         => Assert.Multiple(() =>
         {
             Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharpAggressive(CopyPropagationSharedVocabularyProbes.CP2)),
                 Is.EqualTo(CopyPropagationSharedVocabularyProbes.CP2Expected), "C#, aggressive");
             Assert.That(FourBackends.Norm(FourBackends.RunAggressiveJs(CopyPropagationSharedVocabularyProbes.CP2)),
                 Is.EqualTo(CopyPropagationSharedVocabularyProbes.CP2Expected), "JavaScript, aggressive");
+            Assert.That(FourBackends.Norm(MsilHarness.RunAggressiveExpectingSuccess(CopyPropagationSharedVocabularyProbes.CP2)),
+                Is.EqualTo(CopyPropagationSharedVocabularyProbes.CP2Expected), "MSIL, aggressive — was AssembleFailed/'Action' (task #155), now closed by ADR-0010");
         });
 
     /// <summary>C++'s own lambda lowering captures BY COPY (<c>[=]</c>), not by reference — task
@@ -361,27 +371,6 @@ public class CopyPropagationSharedVocabularyExecutionTests
         => Assert.That(FourBackends.Norm(BclE2E.CompileRun(BclE2E.CompileToCppAggressive(CopyPropagationSharedVocabularyProbes.CP2))),
             Is.EqualTo("3,3"),
             "task #140, aggressive pipeline — same backend defect, unrelated to LICM or CopyPropagation.");
-
-    /// <summary>MSIL has no lowering for the delegate type a <c>Sub()</c> lambda gets typed as —
-    /// task #155 ("Reference to undefined class 'Action'", ilasm), a pre-existing gap this pass
-    /// never touches. Matches LicmKillVocabularyTests' identical pin for the same MSIL gap on a
-    /// different probe (there tracked as task #122).</summary>
-    [Test]
-    public void CP2_Msil_CannotBuild_PinnedForTask155_StandardPipeline()
-    {
-        var run = MsilHarness.Run(CopyPropagationSharedVocabularyProbes.CP2, aggressive: false);
-        Assert.That(run.Outcome, Is.EqualTo(MsilHarness.MsilOutcome.AssembleFailed), run.Report);
-        Assert.That(run.Detail, Does.Contain("Action"), "task #155 — MSIL has no lowering for the "
-            + "delegate type a Sub() lambda gets typed as.");
-    }
-
-    [Test]
-    public void CP2_Msil_CannotBuild_PinnedForTask155_AggressivePipeline()
-    {
-        var run = MsilHarness.Run(CopyPropagationSharedVocabularyProbes.CP2, aggressive: true);
-        Assert.That(run.Outcome, Is.EqualTo(MsilHarness.MsilOutcome.AssembleFailed), run.Report);
-        Assert.That(run.Detail, Does.Contain("Action"), "task #155, aggressive pipeline — same gap.");
-    }
 
     // ---- CP5, CP6: all four backends agree, both pipelines --------------------------------------
 
@@ -549,54 +538,15 @@ public class CopyPropagationSharedVocabularyExecutionTests
     public void CP8_AggressivePipeline_AllFourBackends()
         => FourBackends.RunsOnEveryBackendAggressive(CopyPropagationSharedVocabularyProbes.CP8, CopyPropagationSharedVocabularyProbes.CP8Expected);
 
-    // ---- CP9: C#/JavaScript/MSIL; C++ cannot build ANY Get/Set property (task #148) --------------
+    // ---- CP9: all four backends. C++ could not build any Get/Set property until task #148 -------
 
     [Test]
-    public void CP9_StandardPipeline_CSharpJavaScriptMsil()
-        => Assert.Multiple(() =>
-        {
-            Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharp(CopyPropagationSharedVocabularyProbes.CP9)),
-                Is.EqualTo(CopyPropagationSharedVocabularyProbes.CP9Expected), "C#, standard");
-            Assert.That(FourBackends.Norm(JavaScriptOptimizedExecutionTests.RunOptimized(CopyPropagationSharedVocabularyProbes.CP9)),
-                Is.EqualTo(CopyPropagationSharedVocabularyProbes.CP9Expected), "JavaScript, standard");
-            Assert.That(FourBackends.Norm(MsilHarness.RunExpectingSuccess(CopyPropagationSharedVocabularyProbes.CP9)),
-                Is.EqualTo(CopyPropagationSharedVocabularyProbes.CP9Expected), "MSIL, standard");
-        });
+    public void CP9_StandardPipeline_AllFourBackends()
+        => FourBackends.RunsOnEveryBackend(CopyPropagationSharedVocabularyProbes.CP9, CopyPropagationSharedVocabularyProbes.CP9Expected);
 
     [Test]
-    public void CP9_AggressivePipeline_CSharpJavaScriptMsil()
-        => Assert.Multiple(() =>
-        {
-            Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharpAggressive(CopyPropagationSharedVocabularyProbes.CP9)),
-                Is.EqualTo(CopyPropagationSharedVocabularyProbes.CP9Expected), "C#, aggressive");
-            Assert.That(FourBackends.Norm(FourBackends.RunAggressiveJs(CopyPropagationSharedVocabularyProbes.CP9)),
-                Is.EqualTo(CopyPropagationSharedVocabularyProbes.CP9Expected), "JavaScript, aggressive");
-            Assert.That(FourBackends.Norm(MsilHarness.RunAggressiveExpectingSuccess(CopyPropagationSharedVocabularyProbes.CP9)),
-                Is.EqualTo(CopyPropagationSharedVocabularyProbes.CP9Expected), "MSIL, aggressive");
-        });
-
-    /// <summary>task #148 ("no member named 'P' in 'Box'") — NOT task #141 as an earlier pass
-    /// mislabeled it; #141 is the unrelated MyBase/Exception family (ADR-0006 D1's own
-    /// implementation note). Matches <c>BarePropertyLoweringTests.P4_Cpp_StillDoesNotBuild_Task148</c>'s
-    /// pattern exactly — same underlying gap, different probe.</summary>
-    [Test]
-    public void CP9_Cpp_CannotBuild_PinnedForTask148_StandardPipeline()
-    {
-        var ex = Assert.Throws<AssertionException>(
-            () => BclE2E.CompileRun(BclE2E.CompileToCppOptimized(CopyPropagationSharedVocabularyProbes.CP9)));
-        Assert.That(ex!.Message, Does.Contain("C++ compilation failed"),
-            "expected a COMPILE failure (task #148) — if this now builds, re-measure before "
-            + "widening this pin.");
-    }
-
-    [Test]
-    public void CP9_Cpp_CannotBuild_PinnedForTask148_AggressivePipeline()
-    {
-        var ex = Assert.Throws<AssertionException>(
-            () => BclE2E.CompileRun(BclE2E.CompileToCppAggressive(CopyPropagationSharedVocabularyProbes.CP9)));
-        Assert.That(ex!.Message, Does.Contain("C++ compilation failed"),
-            "expected a COMPILE failure (task #148), aggressive pipeline — same gap.");
-    }
+    public void CP9_AggressivePipeline_AllFourBackends()
+        => FourBackends.RunsOnEveryBackendAggressive(CopyPropagationSharedVocabularyProbes.CP9, CopyPropagationSharedVocabularyProbes.CP9Expected);
 
     // ---- CPI_cpp / CPI_csharp / CPI_javascript: IRInlineCode is Universal, each on its own backend
 
@@ -633,8 +583,10 @@ public class CopyPropagationSharedVocabularyExecutionTests
     // ---- One CLI entry-point leg for C#, one for MSIL (CLAUDE.md: "test both entry points") ------
     //      Matches CseDestinationInvalidationTests.RunThroughEntryPoint's convention: BasicCompiler
     //      with OptimizeAggressive=true is what the CLI's --optimize and a Release .blproj build
-    //      both request (Compiler.cs). CP2 for C# (the flagship closure shape); CP6 for MSIL (CP2
-    //      itself cannot build there — task #155 — so a probe that DOES build stands in).
+    //      both request (Compiler.cs). CP2 for C# (the flagship closure shape); CP6 for MSIL — CP2
+    //      itself now builds and runs there too (task #155/ADR-0010 closed it), but CP6 was
+    //      written as MSIL's CLI-entry-point stand-in while CP2 could not, and stays here rather
+    //      than being swapped for CP2 with nothing else changed.
 
     [Test]
     public void CP2_TheCliSingleFileEntryPoint_CSharp()
@@ -910,6 +862,17 @@ public class CopyPropagationSharedVocabularyUnitTests
             + "assign ANY variable) — every fact must die, including a private declared local's.");
     }
 
+    /// <summary>
+    /// Since task #122 (ADR-0006 D1's Obligation, DISCHARGED), <c>IsCallVisible</c> asks whether
+    /// <c>x</c> is in the function's RECORDED capture set — but this <c>IRFunction</c> is
+    /// hand-built, so nothing ever recorded one (<c>LambdaCapturedNames</c>/
+    /// <c>LambdaCaptureSources</c> both stay null). That is exactly the FALLBACK case: a function
+    /// referencing <c>__lambda_0</c> with no recorded set falls all the way back to D1's original
+    /// "every local" rule, so <c>x</c> — never captured by anything real here, since there is no
+    /// real lambda body at all — still ends up call-visible. This is the canonical hand-built pin
+    /// for that fallback; <c>LambdaCaptureSetFallbackTests</c> (LambdaCaptureSetTests.cs) covers
+    /// the same fallback reached from REAL front-end source instead.
+    /// </summary>
     [Test]
     public void U7_ClosureRule_MakesADeclaredLocalFact_CallVisible()
     {
@@ -918,16 +881,17 @@ public class CopyPropagationSharedVocabularyUnitTests
         var kept = Kept((f, b) =>
         {
             // A reference to the IRBuilder lambda spelling, marking this function as one that
-            // "contains a lambda" for ADR-0006 D1's interim closure rule.
+            // "contains a lambda" — but with NO recorded capture set (hand-built IR), so
+            // IsCallVisible falls back to ADR-0006 D1's original "every local" rule.
             b.Instructions.Add(new IRAssignment(bump, new IRVariable("__lambda_0", I)));
             b.Instructions.Add(new IRAssignment(x, new IRConstant(1, I)));
             b.Instructions.Add(new IRCall("t0", "bump", V));
             return x;
         }, f => { f.LocalVariables.Add(x); f.LocalVariables.Add(bump); });
 
-        Assert.That(kept, Is.True, "in a function that creates a lambda, EVERY local — including "
-            + "x, never captured itself — is call-visible (the interim closure rule), so a "
-            + "subsequent call must invalidate x's fact.");
+        Assert.That(kept, Is.True, "the function references __lambda_0 but has no RECORDED "
+            + "capture set (hand-built IR) -- IsCallVisible falls back to D1's original rule, "
+            + "every local call-visible, so a subsequent call must invalidate x's fact.");
     }
 
     [Test]

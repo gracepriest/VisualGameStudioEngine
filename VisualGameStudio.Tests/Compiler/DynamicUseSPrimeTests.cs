@@ -933,11 +933,11 @@ public class DynamicUseSPrimeAggressivePipelineStructuralTests
 ///
 /// <para>Every cell here is pinned exactly as the implementer measured it
 /// (S/adr6-d2/probes/matrix-after.txt): L1/L2 are BL7002 on JavaScript (a ByRef parameter — JavaScript
-/// has no reference parameters, unrelated to D2 either way); L5 is correct on JavaScript only
-/// (ADR-0006 D1's interim closure rule), with C++ known-wrong for task #140 (backend lambda
-/// capture-by-copy, present even with no optimizer running) and MSIL known-not-to-build for task
-/// #155 (no lowering for the delegate type a <c>Sub()</c> lambda gets typed as) — both pre-existing
-/// gaps this task neither caused nor closes.</para>
+/// has no reference parameters, unrelated to D2 either way); L5 is correct on JavaScript AND
+/// (since task #155/ADR-0010 closed MSIL's lambda gap) MSIL (ADR-0006 D1's closure rule — x is
+/// genuinely in bump's capture set, task #122 DISCHARGED), with C++ STILL known-wrong for task
+/// #140 (backend lambda capture-by-copy, present even with no optimizer running) — a
+/// pre-existing gap this task neither caused nor closes.</para>
 /// </summary>
 [TestFixture]
 [Category("Integration")]
@@ -1084,17 +1084,34 @@ public class DynamicUseSPrimeExecutionTests
     public void L7_AggressivePipeline_AllFourBackendsAgree()
         => FourBackends.RunsOnEveryBackendAggressive(DynamicUseSPrimeProbes.L7, DynamicUseSPrimeProbes.ExpectedL7);
 
-    // ---- L5: JavaScript CORRECT (ADR-0006 D1); C++ #140 and MSIL #155 known-wrong/does-not-build.
+    // ---- L5: JavaScript AND MSIL CORRECT (ADR-0006 D1 / task #155's ADR-0010); C++ #140 known-wrong.
 
-    /// <summary>CORRECT under ADR-0006 D1's interim closure rule: <c>bump()</c> is call-visible
-    /// over the captured local <c>x</c>, so LICM does not hoist <c>x * 2</c>. Matches
-    /// <c>LicmKillVocabularyKnownGapsTask122Tests.L5_LambdaCapturedLocal_JavaScript_AggressivePipeline_CorrectAfterAdr6D1</c>'s
-    /// pin, repeated here so this file's own probe-by-probe matrix is self-contained.</summary>
+    /// <summary>CORRECT under ADR-0006 D1's closure rule: <c>x</c> is genuinely in bump's
+    /// recorded capture set (task #122, DISCHARGED — not merely the coarser "every local"
+    /// interim fallback), so <c>bump()</c> is call-visible over <c>x</c> and LICM does not hoist
+    /// <c>x * 2</c>. Matches
+    /// <c>LicmKillVocabularyKnownGapsTask122Tests.L5_LambdaCapturedLocal_JavaScriptAndMsil_AggressivePipeline_CorrectAfterAdr6D1AndTask155</c>'s
+    /// pin, repeated here so this file's own probe-by-probe matrix is self-contained.
+    ///
+    /// <para>MSIL's own pin here used to be <c>L5_Msil_CannotBuild_PinnedForTask155</c> — it
+    /// could not even ASSEMBLE this shape ("Reference to undefined class 'Action'"). Task
+    /// #155/ADR-0010 (ClosureLowering) closes that: MSIL now agrees with JavaScript
+    /// (<c>seed\n12</c>), so its assertion is FOLDED in here rather than kept as a separate
+    /// red-then-green pin.</para>
+    /// </summary>
     [Test]
-    public void L5_JavaScript_AggressivePipeline_Correct()
-        => Assert.That(FourBackends.Norm(FourBackends.RunAggressiveJs(LicmKillVocabularyShapes.L5)),
-            Is.EqualTo("seed\n12"),
-            "ADR-0006 D1's interim closure rule closes this for JavaScript under --optimize.");
+    public void L5_JavaScriptAndMsil_AggressivePipeline_Correct()
+        => Assert.Multiple(() =>
+        {
+            Assert.That(FourBackends.Norm(FourBackends.RunAggressiveJs(LicmKillVocabularyShapes.L5)),
+                Is.EqualTo("seed\n12"),
+                "ADR-0006 D1's closure rule closes this for JavaScript under --optimize (x is in "
+                + "bump's capture set, task #122).");
+            Assert.That(FourBackends.Norm(MsilHarness.RunAggressiveExpectingSuccess(LicmKillVocabularyShapes.L5)),
+                Is.EqualTo("seed\n12"),
+                "MSIL — was AssembleFailed/'Action' (task #155), now closed by ADR-0010's "
+                + "ClosureLowering (x copied into bump's environment).");
+        });
 
     /// <summary>KNOWN-WRONG, task #140: the C++ backend's own lambda lowering captures BY COPY
     /// (<c>[=]</c>) where BasicLang means by reference — MEASURED present even with NO optimizer
@@ -1104,18 +1121,4 @@ public class DynamicUseSPrimeExecutionTests
         => Assert.That(FourBackends.Norm(BclE2E.CompileRun(BclE2E.CompileToCppAggressive(LicmKillVocabularyShapes.L5))),
             Is.EqualTo("seed\n6"),
             "task #140 (C++ BACKEND capture-by-copy, not a kill-vocabulary, LICM or D2 defect).");
-
-    /// <summary>KNOWN-NOT-TO-BUILD, task #155: MSIL has no lowering for the delegate type a
-    /// <c>Sub()</c> lambda gets typed as (<c>ilasm</c>: "Reference to undefined class 'Action'"),
-    /// a pre-existing gap unrelated to D2. The ADR-0006 D2 ruling itself cites #155 for this (the
-    /// implementer brief's contract text), superseding the older #122 attribution
-    /// <c>LicmKillVocabularyKnownGapsTask122Tests</c> carries for the same failure.</summary>
-    [Test]
-    public void L5_Msil_CannotBuild_PinnedForTask155()
-    {
-        var run = MsilHarness.Run(LicmKillVocabularyShapes.L5, aggressive: true);
-        Assert.That(run.Outcome, Is.EqualTo(MsilHarness.MsilOutcome.AssembleFailed), run.Report);
-        Assert.That(run.Detail, Does.Contain("Action"),
-            "task #155 — MSIL has no lowering for the delegate type a Sub() lambda gets typed as.");
-    }
 }

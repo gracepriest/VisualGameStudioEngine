@@ -53,6 +53,13 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         // Visit(IRFieldAccess) lowers members of this set to BasicLang::String(v.what()).
         // Strictly catch-variable-scoped: no general exception-object model exists.
         private readonly HashSet<IRValue> _catchMessageAccesses = new HashSet<IRValue>();
+
+        /// <summary>
+        /// The catch variables visible where code is being written: the clause bodies
+        /// <see cref="Visit(IRTryCatch)"/> is inside, innermost last. A lambda written in one
+        /// captures them (<see cref="GenerateLambdaExpression"/>, task #189).
+        /// </summary>
+        private readonly List<string> _catchVariablesInScope = new List<string>();
         private bool _usesFramework;
         private readonly HashSet<string> _frameworkFunctionsUsed;
         private IRModule _module;
@@ -411,12 +418,21 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // (split-mode counterpart: EmitRuntimeHeader in CppCodeGenerator.Split.cs). It
             // precedes the BCL bodies because the Decimal runtime THROWS it (division by zero).
             SpliceRuntimeSource(CppNetExceptionRuntime.Source);
+            // Arrays are handles to shared storage (.NET reference semantics) — see CppArrayRuntime.
+            SpliceRuntimeSource(CppArrayRuntime.Source);
             SpliceRuntimeSource(CppBclRuntime.BclBody);
             SpliceRuntimeSource(CppDecimalRuntime.DecimalBody);
 
             // Checked integral `\` / `Mod` (throws NetException, so AFTER it). UNCONDITIONAL
             // in both modes (split-mode counterpart: EmitRuntimeHeader in CppCodeGenerator.Split.cs).
             SpliceRuntimeSource(CppIntegerDivisionRuntime.Source);
+
+            // The type keywords' Shared members (String.Format, Integer.Parse, …) — after the
+            // NetException they throw and the BCL body's FormatDouble they use. ON DEMAND, in
+            // both modes (split-mode counterpart: EmitRuntimeHeader in CppCodeGenerator.Split.cs):
+            // a program naming no row carries none of it.
+            if (PrimitiveStaticSurface.IsUsedBy(module))
+                SpliceRuntimeSource(CppPrimitiveStaticsRuntime.Source);
 
             // D-P7 NetRef (P2a-2 flip): UNCONDITIONAL in both modes — ManagedOwned
             // declaration positions lower to BasicLang::NetRef even with an empty surface,
@@ -568,8 +584,11 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         {
             var delegateName = SanitizeName(irDelegate.Name);
             var returnType = MapType(irDelegate.ReturnType);
+            // The resolved parameter type when the IR builder has it (#187), as the C# and MSIL
+            // backends already prefer: a class parameter by NAME mapped to a value `Widget`.
             var paramTypes = string.Join(", ",
-                irDelegate.Parameters.Select(p => MapTypeName(p.TypeName) + (p.IsByRef ? "&" : "")));
+                irDelegate.Parameters.Select(p =>
+                    (p.Type != null ? MapType(p.Type) : MapTypeName(p.TypeName)) + (p.IsByRef ? "&" : "")));
 
             // Use std::function for delegate types
             WriteLine($"using {delegateName} = std::function<{returnType}({paramTypes})>;");
@@ -622,20 +641,24 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             if (type.NetHandleTypeFullName != null)
                 return "BasicLang::NetRef";
 
-            // VB arrays lower to std::vector<T>: an assignable/copyable value type (unlike a
-            // C array, which cannot be assigned or returned). Route the element type through
-            // the mapper so `Integer` becomes int32_t instead of leaking verbatim into C++.
+            // VB arrays lower to BasicLang::Array<T>: a HANDLE to shared std::vector storage, so
+            // an array has .NET's REFERENCE semantics (CppArrayRuntime). They used to lower to a
+            // bare std::vector<T> — a VALUE — so `b = a`, passing to a Sub, and `lst.Add(a)` each
+            // copied the storage and every write through the copy was lost. Route the element
+            // type through the mapper so `Integer` becomes int32_t.
             //
             // A MULTI-DIMENSIONAL array nests one vector per rank, which is the shape
-            // ElementLValue already renders (`base[i][j]`). ArrayRank is clamped to at least 1
+            // ElementLValue already renders (`base[i][j]`); only the OUTERMOST rank is the
+            // handle, so the whole array is one shared object. ArrayRank is clamped to at least 1
             // because plenty of synthesized array TypeInfos (LINQ results, .NET element types)
             // carry rank 0 and have always meant a single dimension.
             if (type.Kind == TypeKind.Array && type.ElementType != null)
             {
                 var mapped = MapType(type.ElementType);
-                for (var dimension = 0; dimension < Math.Max(1, type.ArrayRank); dimension++)
+                var rank = Math.Max(1, type.ArrayRank);
+                for (var dimension = 1; dimension < rank; dimension++)
                     mapped = $"std::vector<{mapped}>";
-                return mapped;
+                return $"BasicLang::Array<{mapped}>";
             }
             if (type.Kind == TypeKind.Array || type.Kind == TypeKind.Pointer || type.IsPointer)
                 return base.MapType(type);
@@ -899,27 +922,49 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             var savedDeclared = new HashSet<string>(_declaredIdentifiers, StringComparer.OrdinalIgnoreCase);
             var savedTemps = new HashSet<IRValue>(_allTemporaries);
             var savedCatchMessageAccesses = new HashSet<IRValue>(_catchMessageAccesses);
+            var savedCatchScope = new List<string>(_catchVariablesInScope);
             var savedSuppress = _suppressLineDirectives;
+            // ⛔ A lambda body is its OWN C++ function scope, so none of the enclosing region's
+            // emit state applies inside it: its labels are the lambda's (no `_nex`/`_fex` copy
+            // suffix, no enclosing region to jump out of) and it leaves no enclosing Finally.
+            // MEASURED before this was reset (#189): a Try inside a lambda written in a Catch
+            // defined `try1_end_nex:` and jumped to `try1_end` — "use of undeclared label" — and a
+            // lambda written inside a Try/Finally wrapped each of its own exits in a copy of the
+            // enclosing Finally.
+            var savedSuffix = _regionLabelSuffix;
+            var savedRegionBlocks = _currentRegionBlocks;
+            var savedFinallyFrames = new List<(IRTryCatch Try, HashSet<BasicBlock> Owned)>(_finallyFrames);
 
             try
             {
                 _output = new StringBuilder();
                 _indentLevel = 0;
+                _regionLabelSuffix = "";
+                _currentRegionBlocks = null;
+                _finallyFrames.Clear();
                 // A #line directive inside an inlined lambda body would land mid-expression
                 // and break the compile — suppress for the whole capture (nesting-safe).
                 _suppressLineDirectives = true;
 
+                // #189: the enclosing catch variables this lambda reads, each taken by an
+                // init-capture (see CatchVariableCapture). They are the only catch variables in
+                // scope inside the body, so a lambda nested in this one sees them too.
+                var capturedCatch = CapturedCatchVariables(lambda);
+                _catchVariablesInScope.Clear();
+                _catchVariablesInScope.AddRange(capturedCatch);
+                var captures = string.Concat(capturedCatch.Select(n => ", " + CatchVariableCapture(n)));
+
                 var ps = string.Join(", ",
                     lambda.Parameters.Select(p => $"{MapType(p.Type)} {SanitizeName(p.Name)}"));
                 var ret = MapType(lambda.ReturnType);
-                var header = ret == "void" ? $"[=]({ps})" : $"[=]({ps}) -> {ret}";
+                var header = ret == "void" ? $"[={captures}]({ps})" : $"[={captures}]({ps}) -> {ret}";
 
                 _output.Append(header);
                 _output.Append(" {\n");
                 _indentLevel = 1;
 
                 _currentFunction = lambda;
-                InitializeFunctionContext(lambda);
+                InitializeFunctionContext(lambda, capturedCatch);
                 DeclareLocalsAndTemporaries(lambda);
                 GenerateFunctionBody(lambda);
 
@@ -941,6 +986,12 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 foreach (var t in savedTemps) _allTemporaries.Add(t);
                 _catchMessageAccesses.Clear();
                 foreach (var t in savedCatchMessageAccesses) _catchMessageAccesses.Add(t);
+                _catchVariablesInScope.Clear();
+                _catchVariablesInScope.AddRange(savedCatchScope);
+                _regionLabelSuffix = savedSuffix;
+                _currentRegionBlocks = savedRegionBlocks;
+                _finallyFrames.Clear();
+                _finallyFrames.AddRange(savedFinallyFrames);
             }
         }
 
@@ -970,6 +1021,109 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
 
             var owner = DeclaringClassOfStaticMember(v.Name, memberName);
             return owner == null ? null : $"{SanitizeName(owner)}::";
+        }
+
+        /// <summary>
+        /// A member access that must go through a property's ACCESSORS: <c>Accessor</c> is what
+        /// the member is reached through — <c>"Box::"</c> for a Shared property, else the
+        /// receiver and its access operator — and <c>Name</c> is the property's DECLARED name,
+        /// ready for a <c>get_</c>/<c>set_</c> prefix.
+        /// </summary>
+        private sealed record AccessorProperty(string Accessor, string Name);
+
+        /// <summary>
+        /// Resolves <c>receiver.member</c> to a property whose value lives behind its accessors,
+        /// or null when the member is storage (a field, or a plain auto-property — which keeps a
+        /// data member of its own name, see <see cref="GenerateProperty"/>).
+        ///
+        /// <para>⛔ THE IR CARRIES A PROPERTY READ AS A FIELD READ. <c>b.Count</c> and a bare
+        /// <c>Count</c> inside the class both arrive as an <see cref="IRFieldAccess"/> by NAME,
+        /// and a write as an <see cref="IRFieldStore"/>. For a property with a Get/Set body the
+        /// class has no member of that name — only <c>get_Count()</c> — so every such program
+        /// failed with "no member named 'Count'" on this backend alone (task #148). The same
+        /// holds for an Overridable one, whose value must come from the DERIVED accessor, and
+        /// for any property reached through an INTERFACE, which declares accessors and no
+        /// storage.</para>
+        /// </summary>
+        private AccessorProperty AccessorPropertyOf(IRValue receiver, string member)
+        {
+            if (receiver == null || string.IsNullOrEmpty(member) || _module == null) return null;
+
+            // A Shared property through the class name: `Box.K`.
+            if (receiver is IRVariable typeName && !string.IsNullOrEmpty(typeName.Name)
+                && !_declaredIdentifiers.Contains(typeName.Name)
+                && FindClassProperty(typeName.Name, member) is { } shared && shared.prop.IsStatic)
+            {
+                return shared.prop.IsAccessorBacked
+                    ? new AccessorProperty($"{SanitizeName(shared.owner.Name)}::", SanitizeName(shared.prop.Name))
+                    : null;
+            }
+
+            // ⛔ `Me` IS RESOLVED AGAINST THE CLASS BEING EMITTED, NEVER ITS IR TYPE. IRBuilder
+            // caches one `Me` variable (GetOrCreateVariable) and hands it to every later class,
+            // so inside the SECOND class's method `Me` is typed as the FIRST — measured: with an
+            // Animal declared above Counter, Counter.Probe's bare `V` resolved against Animal,
+            // found no property, and fell back to `this->V`.
+            var receiverType = receiver is IRVariable { Name: var self }
+                               && (string.Equals(self, "Me", StringComparison.OrdinalIgnoreCase) || self == "this")
+                               && _emittingClass != null
+                ? _emittingClass.Name
+                : receiver.Type?.Name;
+            if (string.IsNullOrEmpty(receiverType)) return null;
+
+            if (FindClassProperty(receiverType, member) is { } found)
+            {
+                if (!found.prop.IsAccessorBacked) return null;
+                var accessor = found.prop.IsStatic
+                    ? $"{SanitizeName(found.owner.Name)}::"
+                    : GetValueName(receiver) + MemberAccessOp(receiver);
+                return new AccessorProperty(accessor, SanitizeName(found.prop.Name));
+            }
+
+            if (FindInterfaceProperty(receiverType, member) is { } declared)
+                return new AccessorProperty(GetValueName(receiver) + MemberAccessOp(receiver), SanitizeName(declared.Name));
+
+            return null;
+        }
+
+        /// <summary>The property <paramref name="member"/> reachable from class <paramref name="typeName"/>, walking bases.</summary>
+        private (IRClass owner, IRProperty prop)? FindClassProperty(string typeName, string member)
+        {
+            if (_module?.Classes == null) return null;
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            while (!string.IsNullOrEmpty(typeName) && seen.Add(typeName)
+                   && _module.Classes.TryGetValue(typeName, out var cls) && cls != null)
+            {
+                foreach (var p in cls.Properties ?? new List<IRProperty>())
+                    if (string.Equals(p?.Name, member, StringComparison.OrdinalIgnoreCase))
+                        return (cls, p);
+                // A field of that name further down the chain is storage; stop at it.
+                if ((cls.Fields ?? new List<IRField>()).Any(f => string.Equals(f?.Name, member, StringComparison.OrdinalIgnoreCase)))
+                    return null;
+                typeName = cls.BaseClass;
+            }
+            return null;
+        }
+
+        /// <summary>The property <paramref name="member"/> declared by interface <paramref name="typeName"/> or one it extends.</summary>
+        private IRInterfaceProperty FindInterfaceProperty(string typeName, string member)
+        {
+            if (_module?.Interfaces == null) return null;
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var pending = new Stack<string>();
+            pending.Push(typeName);
+            while (pending.Count > 0)
+            {
+                var name = pending.Pop();
+                if (string.IsNullOrEmpty(name) || !seen.Add(name)
+                    || !_module.Interfaces.TryGetValue(name, out var iface) || iface == null) continue;
+                foreach (var p in iface.Properties ?? new List<IRInterfaceProperty>())
+                    if (string.Equals(p?.Name, member, StringComparison.OrdinalIgnoreCase))
+                        return p;
+                foreach (var b in iface.BaseInterfaces ?? new List<string>())
+                    pending.Push(b);
+            }
+            return null;
         }
 
         /// <summary>
@@ -1276,7 +1430,11 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // Destructor - virtual if has base class, interfaces, or virtual methods
             bool needsVirtualDestructor = !string.IsNullOrEmpty(irClass.BaseClass) ||
                                          irClass.Interfaces.Count > 0 ||
-                                         irClass.Methods.Any(m => m.IsVirtual || m.IsOverride);
+                                         irClass.Methods.Any(m => m.IsVirtual || m.IsOverride) ||
+                                         irClass.Properties.Any(p => p.IsVirtual || p.IsOverride) ||
+                                         // A BASE class must be polymorphic for a downcast from it
+                                         // (CType/DirectCast/TryCast → dynamic_pointer_cast) to compile.
+                                         (_module?.Classes?.Values.Any(c => string.Equals(c?.BaseClass, irClass.Name, StringComparison.OrdinalIgnoreCase)) ?? false);
 
             if (needsVirtualDestructor)
             {
@@ -1477,10 +1635,20 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         /// <c>construct_at</c>. Measured with an interface property that carried an (empty) Get
         /// block, the one shape whose interface accessor was emitted at all.</para>
         ///
-        /// <para>Strings and class-kinded types pass and return by <c>const&amp;</c>; a non-static
-        /// getter is <c>const</c>. <paramref name="isStatic"/> adds the <c>static</c> prefix and
-        /// drops the <c>const</c>, since a static member function has no object to promise not
-        /// to change.</para>
+        /// <para>A setter takes strings and class-kinded types by <c>const&amp;</c>.
+        /// <paramref name="isStatic"/> adds the <c>static</c> prefix.</para>
+        ///
+        /// <para>⛔ A GETTER RETURNS BY VALUE. It used to return <c>const std::string&amp;</c>, so
+        /// <c>Return "Woof"</c> — or any computed value, which is what a Get block is for — bound
+        /// the reference to a temporary destroyed at the <c>return</c>: a segfault on the first
+        /// read, from a clean compile (<c>-Wreturn-local-addr</c> only). Nothing called a getter
+        /// before reads were routed to it, so nothing saw it.</para>
+        ///
+        /// <para>⛔ A GETTER IS NOT <c>const</c>. VB promises nothing about <c>Me</c> inside a Get
+        /// block, and an ordinary one calls a method (<c>Return Bump()</c>) or caches a value —
+        /// both "passing 'const Counter' as 'this' argument" on a <c>const</c> getter, measured
+        /// the moment reads started reaching the getter. Nothing here needs the promise: a class
+        /// is reached through a <c>shared_ptr</c> to a non-const object.</para>
         /// </summary>
         private string PropertyAccessorSignature(TypeInfo type, string propName, bool isStatic, bool getter)
         {
@@ -1490,7 +1658,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             var passType = byConstRef ? $"const {propType}&" : propType;
 
             return getter
-                ? $"{staticMod}{passType} get_{propName}(){(isStatic ? "" : " const")}"
+                ? $"{staticMod}{propType} get_{propName}()"
                 : $"{staticMod}void set_{propName}({passType} value)";
         }
 
@@ -1535,19 +1703,30 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         {
             var propType = MapType(prop.Type);
             var propName = SanitizeName(prop.Name);
-            var getterSignature = PropertyAccessorSignature(prop.Type, propName, prop.IsStatic, getter: true)
-                + InterfaceAccessorOverride(irClass, prop, getter: true);
-            var setterSignature = PropertyAccessorSignature(prop.Type, propName, prop.IsStatic, getter: false)
-                + InterfaceAccessorOverride(irClass, prop, getter: false);
+            // Overridable / Overrides: the accessors are what dispatch, so they are what must be
+            // virtual — every read and write goes through them (AccessorPropertyOf). The same
+            // rule GenerateMethod applies: `virtual` on the introducing declaration, `override`
+            // on the overriding one (unless the interface arm already spelled it).
+            var virtualMod = prop.IsVirtual && !prop.IsOverride && !prop.IsStatic ? "virtual " : "";
+            string Override(bool getter)
+            {
+                var viaInterface = InterfaceAccessorOverride(irClass, prop, getter);
+                return viaInterface.Length > 0 ? viaInterface : (prop.IsOverride && !prop.IsStatic ? " override" : "");
+            }
+            var getterSignature = virtualMod + PropertyAccessorSignature(prop.Type, propName, prop.IsStatic, getter: true)
+                + Override(getter: true);
+            var setterSignature = virtualMod + PropertyAccessorSignature(prop.Type, propName, prop.IsStatic, getter: false)
+                + Override(getter: false);
 
             // AUTO-PROPERTY: both accessors null. C++ has no property syntax, so emit a real
             // data member plus inline accessors.
             //
             // The DATA MEMBER is not optional: a read of `obj.V` lowers to IRFieldAccess by
-            // NAME (IRBuilder.cs:3348) rather than to a get_V() call, so emitting only the
-            // accessors would leave every call site referring to a member that does not
-            // exist. The ACCESSORS are not optional either: an interface property declares
-            // get_X/set_X as pure virtuals, so a class implementing one must define them.
+            // NAME (IRBuilder.cs:3348), and for a plain auto-property AccessorPropertyOf leaves
+            // it a member access — so emitting only the accessors would leave every call site
+            // referring to a member that does not exist. The ACCESSORS are not optional either:
+            // an interface property declares get_X/set_X as pure virtuals, so a class
+            // implementing one must define them, and a read through the interface calls them.
             if (prop.Getter == null && prop.Setter == null)
             {
                 // `inline static`, not bare `static`: a non-const static data member cannot be
@@ -1686,7 +1865,10 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             WriteLine();
         }
 
-        private void InitializeFunctionContext(IRFunction function)
+        /// <param name="capturedCatchVariables">
+        /// For a lambda, the enclosing catch variables it reads (<see cref="CapturedCatchVariables"/>).
+        /// </param>
+        private void InitializeFunctionContext(IRFunction function, IReadOnlyCollection<string> capturedCatchVariables = null)
         {
             _valueNames.Clear();
             _declaredIdentifiers.Clear();
@@ -1720,8 +1902,8 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // recognised as a real name. The walk mirrors DeclaringClassOfStaticMember.
             //
             // ⚠ PROPERTIES were registered here too and are not any more: that half survived
-            // mutation. A property is not a storage destination on this backend — a bare
-            // Get/Set property is not even readable here (pinned) — so nothing observed it.
+            // mutation. A property is not a storage destination on this backend — a Get/Set
+            // property is read and written through its accessors (AccessorPropertyOf).
             for (var cls = _emittingClass; cls != null; )
             {
                 foreach (var field in cls.Fields ?? new List<IRField>())
@@ -1827,13 +2009,94 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                         if (string.IsNullOrEmpty(cc.VariableName) || cc.Block == null) continue;
                         foreach (var regionBlock in ComputeInlineRegion(cc.Block, tc.EndBlock))
                             foreach (var inst in regionBlock.Instructions)
-                                if (inst is IRFieldAccess fa
-                                    && string.Equals(fa.FieldName, "Message", StringComparison.OrdinalIgnoreCase)
-                                    && fa.Object is IRVariable fv
-                                    && string.Equals(fv.Name, cc.VariableName, StringComparison.OrdinalIgnoreCase))
-                                    _catchMessageAccesses.Add(fa);
+                                if (IsCatchMessageRead(inst, cc.VariableName))
+                                    _catchMessageAccesses.Add((IRValue)inst);
                     }
                 }
+
+            // #189: a LAMBDA written inside a catch clause reads the clause's variable anywhere in
+            // its own body, which is a separate IRFunction with no IRTryCatch of its own — so the
+            // region walk above never saw those reads, and `ex.Message` in the lambda fell through
+            // to the shared_ptr member access `ex->Message`, which does not compile against the
+            // catch binding. The same predicate marks them, so both contexts lower one way.
+            if (capturedCatchVariables != null)
+                foreach (var block in function.Blocks)
+                    foreach (var inst in block.Instructions)
+                        foreach (var name in capturedCatchVariables)
+                            if (IsCatchMessageRead(inst, name))
+                                _catchMessageAccesses.Add((IRValue)inst);
+        }
+
+        /// <summary>
+        /// §11.1 / #189: THE one answer to "is this a read of catch variable
+        /// <paramref name="catchVariable"/>'s <c>Message</c>", shared by the clause's own body and
+        /// by a lambda that captures the variable. <see cref="Visit(IRFieldAccess)"/> lowers every
+        /// read it marks to <see cref="CatchMessageText"/>.
+        /// </summary>
+        private static bool IsCatchMessageRead(IRInstruction instruction, string catchVariable) =>
+            instruction is IRFieldAccess fa
+            && string.Equals(fa.FieldName, "Message", StringComparison.OrdinalIgnoreCase)
+            && fa.Object is IRVariable fv
+            && string.Equals(fv.Name, catchVariable, StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// A catch variable's <c>Message</c>: its <c>what()</c>. It holds for every binding the
+        /// variable has — the ladder's <c>const BasicLang::NetException&amp;</c>, a per-clause
+        /// <c>const std::exception&amp;</c> / <c>std::runtime_error&amp;</c>, and a lambda's
+        /// by-value capture (<see cref="CatchVariableCapture"/>).
+        /// </summary>
+        private string CatchMessageText(string catchVariable) =>
+            $"BasicLang::String({SanitizeName(catchVariable)}.what())";
+
+        /// <summary>
+        /// The init-capture a lambda takes a catch variable by (#189). ⛔ NOT the plain <c>[=]</c>
+        /// copy: that copies the binding's STATIC type, and a per-clause <c>const std::exception&amp;</c>
+        /// copied by value is SLICED — libstdc++'s <c>std::exception::what()</c> then answers
+        /// "std::exception", not the message. Nor by reference: C1's lambda runs after the Try,
+        /// when the exception object is gone. A <c>std::runtime_error</c> built from the message
+        /// owns it, and <c>what()</c> reads it back, so <see cref="CatchMessageText"/> is unchanged.
+        /// </summary>
+        private string CatchVariableCapture(string catchVariable)
+        {
+            var name = SanitizeName(catchVariable);
+            return $"{name} = std::runtime_error({name}.what())";
+        }
+
+        /// <summary>
+        /// The catch variables in scope that <paramref name="lambda"/> reads the <c>Message</c> of,
+        /// in its own body or a lambda nested in it (the outer one must hold the capture for the
+        /// inner to copy). A name the lambda declares itself — a parameter or a local — shadows
+        /// the catch variable and is left out.
+        /// </summary>
+        private List<string> CapturedCatchVariables(IRFunction lambda)
+        {
+            var captured = new List<string>();
+            foreach (var name in _catchVariablesInScope)
+                if (!captured.Contains(name, StringComparer.OrdinalIgnoreCase)
+                    && LambdaReadsCatchMessage(lambda, name, new HashSet<IRFunction>()))
+                    captured.Add(name);
+            return captured;
+        }
+
+        private bool LambdaReadsCatchMessage(IRFunction lambda, string name, HashSet<IRFunction> visiting)
+        {
+            if (!visiting.Add(lambda)) return false;
+            if (lambda.Parameters.Any(p => string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase))
+                || lambda.LocalVariables.Any(l => string.Equals(l.Name, name, StringComparison.OrdinalIgnoreCase)))
+                return false;
+
+            foreach (var block in lambda.Blocks)
+                foreach (var inst in block.Instructions)
+                {
+                    if (IsCatchMessageRead(inst, name)) return true;
+                    foreach (var operand in IROperandWalker.EnumerateOperands(inst))
+                        if (operand is IRVariable { Name: { } lambdaName } && lambdaName.StartsWith("__lambda_", StringComparison.Ordinal)
+                            && _module?.Functions.FirstOrDefault(f => f.Name == lambdaName && f.IsLambda) is IRFunction nested
+                            && LambdaReadsCatchMessage(nested, name, visiting))
+                            return true;
+                }
+
+            return false;
         }
 
         /// <summary>
@@ -1881,7 +2144,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         private string SizedArrayInitializer(TypeInfo type, string mappedType)
         {
             if (type?.Kind != TypeKind.Array) return null;
-            if (mappedType == null || !mappedType.StartsWith("std::vector<", StringComparison.Ordinal))
+            if (mappedType == null || !mappedType.StartsWith("BasicLang::Array<", StringComparison.Ordinal))
                 return null;
 
             var sizes = type.ArrayDimensionSizes;
@@ -2602,10 +2865,6 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 //     integer                   -> no operator+(std::string, int): a BUILD BREAK
                 // and a build break is the outcome this module already prefers to a plausible
                 // wrong string.
-                //
-                // Single/Double are unaffected: `"v" & aDouble` becomes
-                // `std::string("v") + aDouble`, which has no operator either, so the deliberate
-                // refusal still refuses.
                 if (leftText != null || rightText != null)
                 {
                     WriteLine($"{result} = {leftText ?? left} + {rightText ?? right};");
@@ -2707,6 +2966,89 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             
             WriteLine($"{result} = {left} {op} {right};");
         }
+
+        public override void Visit(IRIdentityCompare identity)
+        {
+            var result = GetValueName(identity);
+            WriteLine($"{result} = {IdentityText(identity, GetValueName)};");
+        }
+
+        /// <summary>
+        /// <c>Is</c> / <c>IsNot</c> as C++ (ADR-0011). A Nothing test goes through the ONE null
+        /// test, <see cref="EmitNullTest"/>, shared with <c>Case Is Nothing</c>. Two operands
+        /// compare as REFERENCES: <c>shared_ptr ==</c> compares the pointers it holds (a class, an
+        /// interface, a collection), and <c>BasicLang::Array</c>'s <c>==</c> compares its shared
+        /// storage — never an element or a value. <c>Me</c> is the raw <c>this</c> pointer here, so
+        /// against <c>Me</c> the other operand is compared by its <c>.get()</c>.
+        /// </summary>
+        private string IdentityText(IRIdentityCompare identity, Func<IRValue, string> render)
+        {
+            if (IRIdentityCompare.IsNothing(identity.Left) && IRIdentityCompare.IsNothing(identity.Right))
+                return identity.Negated ? "false" : "true";   // Nothing Is Nothing (unfolded: no -O)
+
+            if (identity.GetNullTestSubject() is IRValue subject)
+            {
+                // A lambda reference renders as the closure expression itself, whose type has no
+                // `== nullptr`; as the std::function it is stored as (CTAD), it compares like any
+                // delegate value.
+                var rendered = render(subject);
+                if (subject is IRVariable { Name: { } name } && name.StartsWith("__lambda_", StringComparison.Ordinal))
+                    rendered = $"std::function({rendered})";
+                var test = EmitNullTest(rendered, subject.Type);
+                return identity.Negated ? $"!({test})" : $"({test})";
+            }
+
+            var left = render(identity.Left);
+            var right = render(identity.Right);
+            var leftIsSelf = IsSelfReference(identity.Left);
+            var rightIsSelf = IsSelfReference(identity.Right);
+            if (leftIsSelf && !rightIsSelf) right = $"({right}).get()";
+            else if (rightIsSelf && !leftIsSelf) left = $"({left}).get()";
+            return $"({left} {(identity.Negated ? "!=" : "==")} {right})";
+        }
+
+        /// <summary><c>Me</c> — rendered as the raw <c>this</c> pointer, not a shared_ptr.</summary>
+        private static bool IsSelfReference(IRValue value) =>
+            value is IRVariable v
+            && (string.Equals(v.Name, "Me", StringComparison.OrdinalIgnoreCase) || v.Name == "this");
+
+        /// <summary>
+        /// ⭐ THE C++ NULL TEST (ADR-0011 D3): whether <paramref name="expr"/>, of
+        /// <paramref name="type"/>, is <c>Nothing</c>. ONE helper, used by BOTH
+        /// <c>x Is Nothing</c> (<see cref="IdentityText"/>) and <c>Case Is Nothing</c>
+        /// (<see cref="PatternMatchCondition"/>), so the two can never disagree.
+        ///
+        /// <para>The read side of #173's write side (<see cref="NothingOf"/>), keyed on the SAME
+        /// mapped spelling:</para>
+        /// <list type="bullet">
+        /// <item><c>std::string</c> and <c>BasicLang::Array&lt;T&gt;</c> hold no null state —
+        /// <c>NothingOf</c> writes Nothing as the EMPTY value — so the test is EMPTINESS.
+        /// ⚠ A DIVERGENCE, measured and deliberate: <c>"" Is Nothing</c> and an empty array
+        /// <c>Is Nothing</c> are True here and False on C#, JavaScript and MSIL. It flips for arrays
+        /// when <c>Array&lt;T&gt;</c> gets a real null state (D3(c)), in this one place.</item>
+        /// <item><c>BasicLang::NetRef</c>: <c>NothingOf</c> writes the empty handle, which has no
+        /// <c>==</c> but an <c>explicit operator bool</c>, so the test is <c>!x</c>.</item>
+        /// <item>Everything else — a <c>shared_ptr</c> (class, interface, collection), a
+        /// <c>std::function</c> (delegate, where <c>== nullptr</c> means "empty") — compares with
+        /// <c>nullptr</c>, as <c>Case Is Nothing</c> always did.</item>
+        /// </list>
+        /// <para>⚠ A String operand the optimizer propagated to a CONSTANT renders as a C++ string
+        /// LITERAL (a <c>const char[]</c>, the only expression that starts with a quote), which has
+        /// no <c>.empty()</c>; it is wrapped in a <c>std::string</c> first.</para>
+        /// </summary>
+        private string EmitNullTest(string expr, TypeInfo type)
+        {
+            var mapped = type == null ? null : MapType(type);
+            if (mapped != null && mapped.StartsWith("BasicLang::Array<", StringComparison.Ordinal))
+                return $"({expr}).empty()";
+            if (string.Equals(mapped, "std::string", StringComparison.Ordinal))
+                return expr.StartsWith("\"", StringComparison.Ordinal)
+                    ? $"std::string({expr}).empty()"
+                    : $"({expr}).empty()";
+            if (string.Equals(mapped, "BasicLang::NetRef", StringComparison.Ordinal))
+                return $"!({expr})";
+            return $"{expr} == nullptr";
+        }
         
         public override void Visit(IRAssignment assignment)
         {
@@ -2788,6 +3130,18 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // program could reach it. It is fixed here so it stays fixed if multi-dim lands.
             if (store.Address is IRGetElementPtr gep)
             {
+                // `lst(0)(2) = 9` over a List(Of Integer()): the GEP's base is the List ELEMENT,
+                // read into a temp — and a std::vector temp is a COPY, so the write landed in it
+                // and the list never changed. Write through the List's operator[] instead, which
+                // returns a reference. Store-only on purpose: a read through the copy is already
+                // right, and re-deriving it at every load is the aliasing ElementLValueOfArrayRead
+                // warns against.
+                if (ListElementLValue(gep.BasePointer) is string listElement)
+                {
+                    WriteLine($"{listElement}{string.Concat(gep.Indices.Select(i => $"[{GetValueName(i)}]"))} = {value};");
+                    return;
+                }
+
                 WriteLine($"{ElementLValue(gep)} = {value};");
                 return;
             }
@@ -2891,6 +3245,27 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 EmitRegion(destination != null ? $"{destination} = {expression};" : $"{expression};");
             }
 
+            // ADR-0010 D8: a call through a delegate VALUE invokes that value, rendered like any
+            // other operand — as IRCall.CalleeValue documents. ⛔ Its FunctionName is only the
+            // value's IR name, and this backend numbers its own temps: `b.Scale.Invoke(4)` read the
+            // field into `t2` and then called `t4(4)`, a name declared as nothing (#187 J1). And a
+            // member's value read bare (#188) must not reach the extern/stdlib lookups below by
+            // the member's NAME.
+            if (call.CalleeValue != null)
+            {
+                EmitCallStatement($"{GetValueName(call.CalleeValue)}({string.Join(", ", args)})");
+                return;
+            }
+
+            // ReDim's value (IRBuilder.ArrayResizeIntrinsic: array, count, preserve) — the runtime's
+            // BasicLang::ReDimArray (CppBclRuntime), which returns the resized std::vector.
+            if (functionName == IRBuilder.ArrayResizeIntrinsic && args.Count == 3)
+            {
+                var preserve = call.Arguments[2] is IRConstant { Value: true } ? "true" : "false";
+                EmitCallStatement($"BasicLang::ReDimArray({args[0]}, {args[1]}, {preserve})");
+                return;
+            }
+
             // Check if this is an extern function call
             if (_module != null && _module.IsExtern(functionName))
             {
@@ -2978,6 +3353,8 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             if (field.Type?.Kind == TypeKind.Foreign) return null;
             if (field.ResolvedNetTarget != null) return null;
             if (field.Object == null || string.IsNullOrEmpty(field.FieldName)) return null;
+            // A property read is a getter CALL, not storage — there is nothing to bind to.
+            if (AccessorPropertyOf(field.Object, field.FieldName) != null) return null;
 
             var obj = ElementLValueOfArrayRead(field.Object) ?? GetValueName(field.Object);
             return $"{obj}{MemberAccessOp(field.Object)}{SanitizeName(field.FieldName)}";
@@ -3341,6 +3718,12 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 return $"BasicLang::{BclCanonicalName(bclTypeName)}::{bclStatic.CppName ?? bclStatic.MemberName}({string.Join(", ", args)})";
             }
 
+            // A type keyword's Shared member (`String.Format(...)`, `Integer.Parse(s)`) → the
+            // BasicLang::Prim runtime function. It used to fall through and emit `StringFormat(...)`,
+            // a name that exists nowhere — a g++ error after "Compilation successful".
+            if (PrimitiveStaticSurface.TryGetDotted(functionName, out var primitive))
+                return $"{PrimitiveRuntimeName(primitive)}({string.Join(", ", args)})";
+
             return StdLibArm(functionName, args, call);
         }
 
@@ -3354,6 +3737,10 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         /// covers the parenthesized access form (<c>DateTime.Now()</c>); the paren-less property
         /// form arrives as an IRFieldAccess and is handled in Visit(IRFieldAccess).
         /// </summary>
+        /// <summary>The <c>BasicLang::Prim</c> function implementing a <see cref="PrimitiveStaticSurface"/> row.</summary>
+        internal static string PrimitiveRuntimeName(PrimitiveStaticSurface.Row row) =>
+            $"BasicLang::Prim::{row.TypeName}_{row.MemberName}";
+
         internal static bool TryGetNativeBclStaticMember(
             string functionName, out string typeName, out NativeBclMember member)
         {
@@ -3415,6 +3802,31 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             var arg0IsDecimal = call != null && call.Arguments.Count > 0
                 && IsNativeOwnedBclType(call.Arguments[0]?.Type?.Name)
                 && call.Arguments[0].Type.Name.Equals("Decimal", StringComparison.OrdinalIgnoreCase);
+
+            // VB's conversion rules where a static_cast is wrong (CType(x, T) lowers to these same
+            // calls — IRBuilder.ConversionBuiltinFor): a Boolean converts to a number as
+            // True = -1 (static_cast gives 1), and a String is PARSED (static_cast from a string
+            // does not compile) — BasicLang::VbParseDouble / VbParseBool, in the BCL runtime.
+            var arg0Type = call != null && call.Arguments.Count > 0 ? call.Arguments[0]?.Type?.Name : null;
+            var arg0IsString = string.Equals(arg0Type, "String", StringComparison.OrdinalIgnoreCase);
+            var arg0IsBoolean = string.Equals(arg0Type, "Boolean", StringComparison.OrdinalIgnoreCase);
+            if (args.Count == 1 && (arg0IsString || arg0IsBoolean))
+            {
+                var vb = (functionName.ToLowerInvariant(), arg0IsString) switch
+                {
+                    ("cint", true) => $"static_cast<int32_t>(std::nearbyint(BasicLang::VbParseDouble({args[0]})))",
+                    ("clng", true) => $"static_cast<int64_t>(std::nearbyint(BasicLang::VbParseDouble({args[0]})))",
+                    ("cdbl", true) => $"BasicLang::VbParseDouble({args[0]})",
+                    ("csng", true) => $"static_cast<float>(BasicLang::VbParseDouble({args[0]}))",
+                    ("cbool", true) => $"BasicLang::VbParseBool({args[0]})",
+                    ("cint", false) => $"(({args[0]}) ? int32_t(-1) : int32_t(0))",
+                    ("clng", false) => $"(({args[0]}) ? int64_t(-1) : int64_t(0))",
+                    ("cdbl", false) => $"(({args[0]}) ? -1.0 : 0.0)",
+                    ("csng", false) => $"(({args[0]}) ? -1.0f : 0.0f)",
+                    _ => null
+                };
+                if (vb != null) return vb;
+            }
 
             return functionName.ToLower() switch
             {
@@ -3501,7 +3913,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 // magnitude test (and treats a canonicalized -0 as zero, like .NET).
                 "cbool" => arg0IsDecimal
                     ? $"(!({args[0]}).IsZeroMag())"
-                    : $"static_cast<bool>({args[0]})",
+                    : $"static_cast<bool>({args[0]} != 0)",
                 // ---- VB date/time stdlib (spec §7, P1 Task 12). The analyzer
                 // registrations (Task 5) copied the repo's C# StdLib function table
                 // VERBATIM, and these emissions mirror StdLib/CSharpStdLib.cs's
@@ -3769,6 +4181,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
 
             return FrameworkCallExpression(functionName, ArmProbeArgs) != null
                    || TryGetNativeBclStaticMember(functionName, out _, out _)
+                   || PrimitiveStaticSurface.TryGetDotted(functionName, out _)
                    || StdLibArm(functionName, ArmProbeArgs, null) != null;
         }
 
@@ -4022,7 +4435,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
 
             foreach (var patternCase in switchInst.PatternCases)
             {
-                var cond = PatternCaseCondition(value, patternCase);
+                var cond = PatternCaseCondition(value, switchInst.Value?.Type, patternCase);
                 WriteLine($"if ({cond}) {{ goto {GotoLabel(patternCase.Target)}; }}");
             }
 
@@ -4035,16 +4448,16 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         /// guard. Type/tuple/binding patterns are rejected by CppCapabilityChecker and never reach
         /// here.
         /// </summary>
-        private string PatternCaseCondition(string value, IRPatternCase pc)
+        private string PatternCaseCondition(string value, TypeInfo valueType, IRPatternCase pc)
         {
-            var match = PatternMatchCondition(value, pc);
+            var match = PatternMatchCondition(value, valueType, pc);
             if (pc.WhenGuard != null)
                 return $"({match}) && ({RenderInline(pc.WhenGuard)})";
             return match;
         }
 
         /// <summary>The value/range/comparison test for a single pattern case (no When guard).</summary>
-        private string PatternMatchCondition(string value, IRPatternCase pc)
+        private string PatternMatchCondition(string value, TypeInfo valueType, IRPatternCase pc)
         {
             switch (pc)
             {
@@ -4054,11 +4467,13 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                     return $"({value} >= {ValueText(r.LowerBound)} && {value} <= {ValueText(r.UpperBound)})";
                 case IRComparisonPatternCase cmp:
                     return $"{value} {MapCasePatternOperator(cmp.Operator)} {ValueText(cmp.CompareValue)}";
+                // ADR-0011 D3 (1): the ONE C++ null test, shared with `x Is Nothing`. On a String or
+                // an array it is an emptiness test — `x == nullptr` did not compile for either (#189).
                 case IRNothingPatternCase:
-                    return $"{value} == nullptr";
+                    return EmitNullTest(value, valueType);
                 case IROrPatternCase or:
                     if (or.Alternatives.Count == 0) return "false";
-                    return "(" + string.Join(" || ", or.Alternatives.Select(a => PatternMatchCondition(value, a))) + ")";
+                    return "(" + string.Join(" || ", or.Alternatives.Select(a => PatternMatchCondition(value, valueType, a))) + ")";
                 default:
                     // Unreachable: CppCapabilityChecker rejects type/tuple/binding patterns before
                     // emission. Fail loudly rather than silently drop if that guard is ever bypassed.
@@ -4105,6 +4520,8 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                     return $"({RenderInline(b.Left)} {MapBinaryOperator(b.Operation)} {RenderInline(b.Right)})";
                 case IRCompare cmp:
                     return $"({RenderInline(cmp.Left)} {MapCompareOperator(cmp.Comparison)} {RenderInline(cmp.Right)})";
+                case IRIdentityCompare identity:
+                    return IdentityText(identity, RenderInline);
                 case IRUnaryOp u:
                     return $"({MapUnaryOperator(u.Operation)}{RenderInline(u.Operand)})";
                 // ⛔ Without this arm a numeric cast in a guard renders by NAME — an undeclared
@@ -4168,6 +4585,13 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         /// load materialized. See <see cref="Visit(IRFieldStore)"/> for why this is opt-in per
         /// call site rather than applied to every load.
         /// </summary>
+        private string ListElementLValue(IRValue value) =>
+            value is IRIndexerAccess indexer
+            && indexer.ResolvedNetTarget == null
+            && string.Equals(indexer.Collection?.Type?.Name, "List", StringComparison.OrdinalIgnoreCase)
+                ? $"(*{GetValueName(indexer.Collection)})[{string.Join("][", indexer.Indices.Select(i => GetValueName(i)))}]"
+                : null;
+
         private string ElementLValueOfArrayRead(IRValue value) =>
             value is IRLoad load && load.Address is IRGetElementPtr gep
                 ? ElementLValue(gep)
@@ -4298,6 +4722,25 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // AwayFromZero and answers 9 for 8.5.
             if (IsFloatingTypeName(cast.Value?.Type?.Name) && IsIntegralTypeName(cast.Type?.Name))
                 return $"static_cast<{targetType}>(std::nearbyint({value}))";
+
+            // A cast between CLASS references (CType / DirectCast / TryCast to a class or an
+            // interface): a static_cast between shared_ptrs of different types does not compile
+            // for a downcast ("no matching function for call to shared_ptr<Dog>(shared_ptr<Animal>&)").
+            // dynamic_pointer_cast answers null for the wrong type — TryCast's whole meaning — and
+            // CType/DirectCast throw VB's InvalidCastException on a non-null value that is not the
+            // target type, rather than hand back a null that crashes later.
+            const string sharedPrefix = "std::shared_ptr<";
+            if ((cast.Type?.Kind == TypeKind.Class || cast.Type?.Kind == TypeKind.Interface)
+                && targetType.StartsWith(sharedPrefix, StringComparison.Ordinal)
+                && MapType(cast.Value?.Type).StartsWith(sharedPrefix, StringComparison.Ordinal))
+            {
+                var pointee = targetType.Substring(sharedPrefix.Length, targetType.Length - sharedPrefix.Length - 1);
+                if (cast.IsTryCast)
+                    return $"std::dynamic_pointer_cast<{pointee}>({value})";
+                return $"([&]() {{ auto blSrc = {value}; auto blCast = std::dynamic_pointer_cast<{pointee}>(blSrc); "
+                       + $"if (blSrc && !blCast) throw std::runtime_error(\"InvalidCastException: Unable to cast to type '{cast.Type.Name}'.\"); "
+                       + "return blCast; }())";
+            }
 
             return $"static_cast<{targetType}>({value})";
         }
@@ -4634,18 +5077,16 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
 
             switch (receiverTypeName)
             {
+                // Through the shared stringifier, so `x.ToString()` agrees with CStr(x) and `&`.
+                // (It used to say std::to_string for Single/Double too: "2.500000".)
                 case "integer":
                 case "long":
                 case "short":
                 case "byte":
-                    return $"std::to_string({obj})";
-                // Not std::to_string (%f, six decimals) — see StringifyForText.
                 case "single":
-                    return $"BasicLang::FormatSingle({obj})";
                 case "double":
-                    return $"BasicLang::FormatDouble({obj})";
                 case "boolean":
-                    return $"std::string({obj} ? \"True\" : \"False\")";
+                    return StringifyForText(methodCall.Object, obj);
                 case "string":
                     return obj;
                 default:
@@ -4708,7 +5149,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // of the (twice-emitted) catch body.
             if (_catchMessageAccesses.Contains(fieldAccess) && fieldAccess.Object is IRVariable catchVar)
             {
-                WriteLine($"{result} = BasicLang::String({SanitizeName(catchVar.Name)}.what());");
+                WriteLine($"{result} = {CatchMessageText(catchVar.Name)};");
                 return;
             }
 
@@ -4736,6 +5177,15 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                     || staticMember.Kind == NativeBclMemberKind.StaticMethod))
             {
                 WriteLine($"{result} = BasicLang::{BclCanonicalName(staticRecv.Name)}::{staticMember.CppName ?? staticMember.MemberName}();");
+                return;
+            }
+
+            // A type keyword's Shared PROPERTY (`Integer.MaxValue`, `String.Empty`, `Double.NaN`):
+            // the BasicLang::Prim function of the same row. A keyword can never name a local.
+            if (fieldAccess.Object is IRVariable keywordRecv
+                && PrimitiveStaticSurface.TryGet(keywordRecv.Name, fieldAccess.FieldName, out var primitiveProp))
+            {
+                WriteLine($"{result} = {PrimitiveRuntimeName(primitiveProp)}();");
                 return;
             }
 
@@ -4812,6 +5262,14 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 return;
             }
 
+            // A property with a Get body (or Overridable, or read through an interface) has no
+            // data member to read — call its getter. See AccessorPropertyOf.
+            if (AccessorPropertyOf(fieldAccess.Object, fieldAccess.FieldName) is { } getter)
+            {
+                WriteLine($"{result} = {getter.Accessor}get_{getter.Name}();");
+                return;
+            }
+
             var fieldName = SanitizeName(fieldAccess.FieldName);
 
             // A `Shared` READ through the class name: `Box.K` is `Box::K`, not `Box->K`.
@@ -4844,6 +5302,14 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             var fieldName = SanitizeName(fieldStore.FieldName);
             var value = GetValueName(fieldStore.Value);
 
+            // The write half of AccessorPropertyOf: a property with a Set body has no member to
+            // assign — call its setter.
+            if (AccessorPropertyOf(fieldStore.Object, fieldStore.FieldName) is { } setter)
+            {
+                WriteLine($"{setter.Accessor}set_{setter.Name}({value});");
+                return;
+            }
+
             // A `Shared` WRITE through the class name — the same qualifier the read takes, so the
             // two cannot disagree about where the member lives.
             if (StaticMemberQualifier(fieldStore.Object, fieldStore.FieldName) is string writeQualifier)
@@ -4864,6 +5330,25 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             var type = MapType(tupleElement.Type);
             // C++ uses std::get<index>(tuple)
             WriteLine($"{type} {SanitizeName(tupleElement.Name)} = std::get<{tupleElement.Index}>({tuple});");
+        }
+
+        /// <summary>
+        /// A catch clause's body, with its variable in scope (<see cref="_catchVariablesInScope"/>)
+        /// for any lambda written inside it (#189). Each copy of the body — the §11.1 ladder arm
+        /// and the per-clause handler — goes through here.
+        /// </summary>
+        private void EmitCatchBody(IRCatchClause catchClause, IRTryCatch tryCatch, string afterCatchLabel)
+        {
+            var named = !string.IsNullOrEmpty(catchClause.VariableName);
+            if (named) _catchVariablesInScope.Add(catchClause.VariableName);
+            try
+            {
+                EmitInlineRegion(catchClause.Block, tryCatch.EndBlock, RegionEnd.GotoEnd, afterCatchLabel);
+            }
+            finally
+            {
+                if (named) _catchVariablesInScope.RemoveAt(_catchVariablesInScope.Count - 1);
+            }
         }
 
         public override void Visit(IRTryCatch tryCatch)
@@ -5022,7 +5507,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                     // next block's label — MEASURED as an infinite loop, compiling cleanly. See
                     // EmitRegionEnd. With no Finally, endLabel IS the end label, so the emission
                     // is byte-identical to before the finally-entry label existed.
-                    EmitInlineRegion(catchClause.Block, tryCatch.EndBlock, RegionEnd.GotoEnd, afterCatchLabel);
+                    EmitCatchBody(catchClause, tryCatch, afterCatchLabel);
                     Unindent();
                     WriteLine("}");
                 }
@@ -5079,7 +5564,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 // Measured before this: the caught case printed 2 instead of 12. It gets there
                 // by JUMPING to the finally-entry label, not by falling out — see EmitRegionEnd
                 // for why falling out loses a mid-region exit.
-                EmitInlineRegion(catchClause.Block, tryCatch.EndBlock, RegionEnd.GotoEnd, afterCatchLabel);
+                EmitCatchBody(catchClause, tryCatch, afterCatchLabel);
                 Unindent();
                 WriteLine("}");
             }
@@ -5462,6 +5947,19 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             if (IsCollectionType(forEach.Collection?.Type))
                 collection = $"(*{collection})";
 
+            // Task #171: a String is iterated as a std::string it OWNS — a copy. A literal
+            // collection renders as a raw "abc", a `const char[4]`, and the range-for walked its
+            // terminator too: `For Each ch In "abc"` printed a fourth, NUL, character. The copy
+            // also gives .NET's snapshot semantics: a String is immutable, so a body that
+            // reassigns the variable it iterates keeps enumerating the ORIGINAL characters,
+            // where a range-for bound to the variable itself would iterate a string being
+            // reallocated under it.
+            var collectionType = forEach.Collection?.Type;
+            if (collectionType != null && collectionType.Kind != TypeKind.Array
+                && collectionType.NetHandleTypeFullName == null
+                && string.Equals(collectionType.Name, "String", StringComparison.OrdinalIgnoreCase))
+                collection = $"std::string({collection})";
+
             WriteLine($"for ({elemType} {varName} : {collection})");
             WriteLine("{");
             Indent();
@@ -5620,6 +6118,52 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             return _declaredIdentifiers.Contains(value.Name);
         }
 
+        /// <summary>
+        /// The C++ spelling of a <c>Nothing</c> constant of <paramref name="type"/> (#173):
+        /// <c>nullptr</c>, except for the three reference-type representations this backend holds
+        /// as VALUES with no conversion from <c>nullptr</c>, which get their EMPTY value — the
+        /// value <see cref="GetDefaultValue"/> already gives an unassigned declaration of the same
+        /// type. In VB <c>Dim s As String</c> IS <c>Dim s As String = Nothing</c>, and this
+        /// backend lowers the first to <c>""</c> (IRBuilder.CreateDefaultValue likewise returns
+        /// <c>""</c> from a String Function that falls off its end, on every backend).
+        /// <list type="bullet">
+        /// <item><description><c>std::string</c>: <c>std::string s = nullptr</c> compiles and is
+        /// undefined behaviour — the typed literal <c>New String() {"a", Nothing}</c> segfaulted
+        /// on it, measured — and <c>"[" + nullptr</c> does not compile.</description></item>
+        /// <item><description><c>BasicLang::Array&lt;T&gt;</c> (CppArrayRuntime): a shared
+        /// handle whose default is an EMPTY array, never null.</description></item>
+        /// <item><description><c>BasicLang::NetRef</c>: <c>{}</c> is the empty handle, which is
+        /// what Nothing crosses as (spec §8.2's handle 0) — GetDefaultValue's own
+        /// answer.</description></item>
+        /// </list>
+        ///
+        /// <para>⚠ A DIVERGENCE, recorded: VB tells <c>Nothing</c> from <c>""</c> or an empty
+        /// array only through <c>Is Nothing</c> and <c>Case Is Nothing</c>, which on C++ both go
+        /// through <c>EmitNullTest</c> and test EMPTINESS for these two (ADR-0011 D3), so
+        /// <c>"" Is Nothing</c> is True here and False elsewhere. C#, JavaScript and MSIL keep a
+        /// real null. Keyed on the MAPPED spelling, so a registry handle type and a
+        /// marker-carrying one (§8.5) cannot take different answers.</para>
+        /// </summary>
+        private string NothingOf(TypeInfo type)
+        {
+            // An untyped Nothing (Object — no store site re-typed it) never reaches MapType.
+            if (type == null || type.Kind == TypeKind.Void
+                || string.Equals(type.Name, "Object", StringComparison.OrdinalIgnoreCase))
+            {
+                return "nullptr";
+            }
+
+            var mapped = MapType(type);
+            if (mapped.StartsWith("BasicLang::Array<", StringComparison.Ordinal)
+                || string.Equals(mapped, "std::string", StringComparison.Ordinal)
+                || string.Equals(mapped, "BasicLang::NetRef", StringComparison.Ordinal))
+            {
+                return mapped + "{}";
+            }
+
+            return "nullptr";
+        }
+
         private string GetDefaultValue(TypeInfo type)
         {
             if (type == null) return "{}";
@@ -5659,7 +6203,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         protected override string EmitConstant(IRConstant constant)
         {
             if (constant.Value == null)
-                return "nullptr";
+                return NothingOf(constant.Type);
 
             if (constant.Value is string str)
                 return $"\"{EscapeString(str)}\"";

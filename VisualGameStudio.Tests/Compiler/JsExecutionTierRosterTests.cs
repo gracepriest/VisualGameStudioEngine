@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 using NUnit.Framework;
+using VisualGameStudio.Tests.Msil;
 
 namespace VisualGameStudio.Tests.Compiler;
 
@@ -97,6 +98,35 @@ public class JsExecutionTierRosterTests
         // JavaScriptOptimizedExecutionTests.RunOptimized.
         typeof(NegativeCaseLabelExecutionTests),
 
+        // Runs one program under Node AND a C++ compiler, and compares both against .NET.
+        typeof(InterpolatedStringExecutionTests),
+        typeof(JavaScriptBooleanTextExecutionTests),
+
+        // Both array spellings, run under Node, a C++ compiler and dotnet.
+        typeof(ArrayBoundsExecutionTests),
+        typeof(ReDimExecutionTests),
+        typeof(SingleLineIfExecutionTests),
+        // C# placement program; its JS leg runs under Node (the `_sel0` fix).
+        typeof(CSharpNestedTerminatorExecutionTests),
+        // Array literals on JavaScript, with C++ and C# legs.
+        typeof(JavaScriptArrayLiteralExecutionTests),
+        // Empty array literals, target-typed; C++ and C# legs too.
+        typeof(EmptyArrayLiteralExecutionTests),
+        // Array types written on the type (`As Integer()`); C++ and C# legs too.
+        typeof(ArrayTypeSuffixExecutionTests),
+        // Get/Set properties, now reachable on C++ (task #148); every leg incl. Node.
+        typeof(PropertyAccessorExecutionTests),
+        // Chained indexing over array values; C++ and C# legs too.
+        typeof(ChainedIndexingExecutionTests),
+        // Arrays as references (C++ BasicLang::Array); C++ and C# legs too.
+        typeof(ArrayReferenceSemanticsExecutionTests),
+        // ParamArray packing at the call site; C++ and C# legs too.
+        typeof(ParamArrayExecutionTests),
+        // CType/conversions/reference casts with VB rules; C++ and C# legs too.
+        typeof(CTypeConversionExecutionTests),
+        // Method calls through an interface, typed; C++ and C# legs too.
+        typeof(InterfaceMethodTypingExecutionTests),
+
         // ADR-0005 D2 — CSE guards a shared value's own destination, not only its operands.
         // CseDestinationInvalidationExecutionTests / DestinationInvalidation_D4_ByRefExecutionTests
         // are four-backend fixtures (FourBackends.RunsOnEveryBackend[Aggressive]); their JS legs
@@ -123,9 +153,10 @@ public class JsExecutionTierRosterTests
         // LicmKillVocabularyKnownGapsTask122Tests is NOT caught by the widened name match below —
         // it neither starts with "JavaScript"/"Js" nor ends with "ExecutionTests" — same reason
         // CseDestinationKnownGapsTask133Tests needed a manual entry above. Its JavaScript leg is
-        // now CORRECT under ADR-0006 D1's interim closure rule (promoted from task #122); C++
-        // stays known-wrong for an unrelated backend defect (task #140). Either way it DOES spawn
-        // Node (FourBackends.RunAggressiveJs), so it belongs here.
+        // CORRECT under ADR-0006 D1's closure rule — x is genuinely in bump's capture set (task
+        // #122 is now DISCHARGED, not merely the coarser interim fallback); C++ stays known-wrong
+        // for an unrelated backend defect (task #140). Either way it DOES spawn Node
+        // (FourBackends.RunAggressiveJs), so it belongs here.
         typeof(LicmKillVocabularyKnownGapsTask122Tests),
 
         // ADR-0005 D1 — `\` with a floating operand. Named "...ExecutionTests", so the widened
@@ -197,12 +228,125 @@ public class JsExecutionTierRosterTests
         // A Boolean as .NET text ("True"), and x.ToString() on a primitive.
         typeof(JsBooleanTextRunTests),
 
+        // String interpolation with non-String holes. Named outside the patterns below, so listed
+        // by hand; its JS leg spawns Node.
+        typeof(StringInterpolationRunTests),
+
+        // The type keywords' Shared members (String.Format, Integer.Parse, …). Named outside the
+        // patterns below, so listed by hand; its JS legs spawn Node.
+        typeof(PrimitiveStaticSurfaceRunTests),
+
         // ADR-0006 D2 (task #137) — the use count Invariant S′ checks is dynamic, not static.
         // Named "...ExecutionTests", so the widened match below WOULD catch it on its own; listed
         // explicitly anyway, matching every row above. L1/L2's JS legs spawn Node via
         // JavaScriptCodeGenerator directly (the BL7002 refusal check); L3/L4/L5/L6/L7's JS legs
         // run through FourBackends.RunsOnEveryBackendAggressive / FourBackends.RunAggressiveJs.
         typeof(DynamicUseSPrimeExecutionTests),
+
+        // Task #161 — CopyPropagationPass.Mentions becomes the union of ADR-0008's CollectReads
+        // walk and the old structural descent into call-shaped operands (MentionsPastTheWalk).
+        // Named "...ExecutionTests", so the widened match below WOULD catch it on its own; listed
+        // explicitly anyway, matching every row above. E3/E4's JS leg runs through
+        // FourBackends.RunAggressiveJs (inside RunsOnEveryBackendAggressive), which spawns Node.
+        // CopyPropagationMentionsTests and CopyPropagationMentionsStructuralTests are NOT here:
+        // pure in-process IR/front-end fixtures, spawn nothing, carry no [Category("Integration")].
+        typeof(CopyPropagationMentionsExecutionTests),
+
+        // Task #122 — the lambda capture set (ADR-0006 D1's Obligation). Named
+        // "...ExecutionTests", so the widened match below WOULD catch it on its own; listed
+        // explicitly anyway, matching every row above. Its JS legs all run through
+        // FourBackends.RunAggressiveJs (K1/K8/K11/K12/N1/N8m/N8n). LambdaCaptureSetIrLevelTests,
+        // LambdaCaptureSetFallbackTests and LambdaCaptureSetPrecisionStructuralTests are NOT
+        // here: pure in-process IR/front-end/pass fixtures, spawn nothing, carry no
+        // [Category("Integration")].
+        typeof(LambdaCaptureSetExecutionTests),
+
+        // Task #168 — a bare `For Each x In coll` over an existing variable REUSES it (ADR-0009).
+        // Named "...ReuseTests", so the widened match below cannot see it — listed by hand. Its
+        // JS legs run through FourBackends.RunsOnEveryBackend[Aggressive] (which call
+        // JavaScriptExecutionTests.RunJs / FourBackends.RunAggressiveJs) for every reuse and
+        // control shape but G4 (ByRef — JavaScript refuses that by design, so its own test never
+        // asks the JS leg at all). ForEachControlVariableDiagnosticsTests is NOT here: pure
+        // front-end/IR fixture, spawns nothing, carries no [Category("Integration")].
+        typeof(ForEachControlVariableReuseTests),
+
+        // Task #164 — a multi-line `Function(...) [As T] ... End Function` lambda. Named
+        // "...ExecutionTests", so the widened match below WOULD catch it on its own; listed
+        // explicitly anyway, matching every row above. Its JS legs run through
+        // JavaScriptExecutionTests.RunJs (standard pipeline) and FourBackends.RunAggressiveJs
+        // (aggressive), both spawning Node. MultiLineFunctionLambdaTests (front end only, no
+        // process spawned, no [Category("Integration")]) is NOT here.
+        typeof(MultiLineFunctionLambdaExecutionTests),
+
+        // Task #171 — a String For Each collection enumerates as Char (VB's rule). Named
+        // "...ExecutionTests", so the widened match below WOULD catch it on its own; listed
+        // explicitly anyway, matching every row above. Its JS legs run through
+        // FourBackends.RunsOnEveryBackend (S2/S3/S7/E1/E2/E6/E7/E12, which call
+        // JavaScriptExecutionTests.RunJs) and directly via JsTestSupport.BuildModule +
+        // JavaScriptCodeGenerator (the pinned S1/S5 BL7004 refusal texts). ForEachOverStringTests
+        // (front end/IR only, no process spawned, no [Category("Integration")]) is NOT here.
+        typeof(ForEachOverStringExecutionTests),
+
+        // Task #173 — Nothing converts to any reference type at every conversion site. Named
+        // "...ExecutionTests", so the widened match below WOULD catch it on its own; listed
+        // explicitly anyway, matching every row above. Its JS legs run through
+        // FourBackends.RunsOnEveryBackend[Aggressive] (the 15 probes that run on every backend,
+        // N7 included since #189) and JavaScriptExecutionTests.RunJs directly (the S1-S3 rows,
+        // which since #189 assert the SAME "" text every other backend does). NothingConversionTests
+        // (front end/IR only, no process spawned, no [Category("Integration")]) is NOT here.
+        typeof(NothingConversionExecutionTests),
+
+        // Task #183 — MSIL `&` with a value operand, and Console.Write/WriteLine of every value
+        // type. Lives in the VisualGameStudio.Tests.Msil namespace, NOT
+        // VisualGameStudio.Tests.Compiler, so RosterCoversEveryJavaScriptIntegrationFixture's own
+        // namespace filter below cannot discover it automatically — listed here by hand, same as
+        // every manually-added row above. Its JS legs run through FourBackends.RunsOnEveryBackend
+        // / RunsOnEveryBackendAggressive (C2/C3/W2/E7, and E8 too since #189 made JS agree with
+        // the other three backends there). MsilValueToStringTests (pure in-process IL-text
+        // fixture, spawns nothing, no [Category("Integration")]) is NOT here.
+        typeof(MsilValueToStringExecutionTests),
+
+        // Task #185 — `Is` / `IsNot` reference identity (ADR-0011). Named "...ExecutionTests", so
+        // the widened match below WOULD catch it on its own; listed explicitly anyway, matching
+        // every row above. Its JS legs run through FourBackends.RunsOnEveryBackend[Aggressive]
+        // (the kind-table/two-operand/E-series probes, C1/C2/E7's promoted #189 rows, E10/E11's
+        // lambda rows, P13's fold) and JavaScriptExecutionTests.RunJs / JsTestSupport.CompileOptimized
+        // directly (P12's named C++ divergence and E11's parentheses-wrap mutant check).
+        typeof(IsIsNotOperatorExecutionTests),
+
+        // Task #176 — one `Me` per member, typed as its own class. Named "...ExecutionTests", so
+        // the widened match below WOULD catch it on its own; listed explicitly anyway, matching
+        // every row above. Its JS legs run through FourBackends.RunsOnEveryBackend[Aggressive]
+        // (the V6 family and most edge probes) and JavaScriptExecutionTests.RunJs /
+        // FourBackends.RunAggressiveJs directly (X1/X2, which exclude C++, and X3b's JS leg,
+        // which the C#-only #136 pin does not touch).
+        typeof(MeReceiverTypingExecutionTests),
+
+        // Task #187 — a lambda or AddressOf into a user Delegate type; invoking a user delegate
+        // returns its type. Named "...ExecutionTests", so the widened match below WOULD catch it
+        // on its own; listed explicitly anyway, matching every row above. Its JS legs run
+        // through FourBackends.RunsOnEveryBackend[Aggressive] (D1-D6, and — since #188 — E10/J2/
+        // E5/E5b/J1, promoted into that same runner) and JavaScriptExecutionTests.RunJs directly
+        // (the edge probes, E13's own JS-only pass).
+        typeof(UserDelegateConversionExecutionTests),
+
+        // Task #188 — invoking a delegate-typed field or property through its MEMBER spelling
+        // (bare, Me., obj., Class.), own or inherited, Shared included. Named "...ExecutionTests",
+        // so the widened match below WOULD catch it on its own; listed explicitly anyway, matching
+        // every row above. Its JS legs run through FourBackends.RunsOnEveryBackend[Aggressive]
+        // (F0-F9 and the G/J2f probes) and JavaScriptExecutionTests.RunJs / RunNodeScript directly
+        // (L1's IIFE, the multi-file project's JS leg, G8's Nothing-raises pin, and G5's
+        // BL7005-by-design refusal check).
+        typeof(DelegateMemberInvocationExecutionTests),
+
+        // Task #189 — a Nothing String in `&`/Write (JS, C#); a Catch variable captured by a
+        // lambda (C++). Named "...ExecutionTests", so the widened match below WOULD catch it on
+        // its own; listed explicitly anyway, matching every row above. Its JS legs run through
+        // FourBackends.RunsOnEveryBackend[Aggressive] (J1-J6/C1-C3 and the edge probes that run
+        // everywhere) and JavaScriptExecutionTests.RunJs directly (J6's silent-6-vs-123 pin, the
+        // pre-existing E10 List-bounds note). NothingStringTextTests (pure codegen-text fixture,
+        // spawns nothing, no [Category("Integration")]) is NOT here.
+        typeof(NothingStringTextExecutionTests),
     };
 
     /// <summary>
@@ -233,6 +377,7 @@ public class JsExecutionTierRosterTests
         "CppExitForExecutionTests",
         // Builds and runs the C# backend's output through the CLI and dotnet — no Node.
         "CSharpFieldAssignmentExecutionTests",
+        "CSharpInlinedOperandExecutionTests",
     };
 
     /// <summary>Counts NUnit cases: a [TestCase]-driven method contributes one per attribute.</summary>
@@ -250,7 +395,7 @@ public class JsExecutionTierRosterTests
 
     [Test]
     public void RosterIsPinned()
-        => Assert.That(ExecutionTier, Has.Length.EqualTo(53),
+        => Assert.That(ExecutionTier, Has.Length.EqualTo(82), // + MsilValueToStringExecutionTests (task #183), InterfaceMethodTypingExecutionTests, IsIsNotOperatorExecutionTests (task #185), MeReceiverTypingExecutionTests (task #176), UserDelegateConversionExecutionTests (task #187), DelegateMemberInvocationExecutionTests (task #188), NothingStringTextExecutionTests (task #189)
             "The execution-tier roster changed. That is fine — update the number — but it must " +
             "be a deliberate edit, not a silent shrink.");
 

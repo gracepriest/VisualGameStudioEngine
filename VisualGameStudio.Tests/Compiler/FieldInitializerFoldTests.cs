@@ -102,11 +102,11 @@ public class FieldInitializerFoldTests
     }
 
     /// <summary>
-    /// ⚠ The BOOLEAN-valued folds, separately, because <c>CStr(Boolean)</c> does not agree across
-    /// backends: JavaScript prints <c>true</c>/<c>false</c> where C# and MSIL print
-    /// <c>True</c>/<c>False</c>. That is PRE-EXISTING and nothing to do with folding — measured on
-    /// a plain local — so each backend is asserted against its own spelling rather than
-    /// normalised to a shared one.
+    /// ⚠ The BOOLEAN-valued folds, separately, because <c>CStr(Boolean)</c> used not to agree
+    /// across backends: JavaScript printed <c>true</c>/<c>false</c> where C# and MSIL print
+    /// <c>True</c>/<c>False</c>. That was unrelated to folding, and master's #102 made JavaScript
+    /// spell a Boolean as .NET does, so the two spelling columns now hold the same text. Each
+    /// backend is still asserted against its own column rather than normalised.
     ///
     /// <para>⛔ These matter beyond arithmetic: <c>True And False</c> goes through
     /// <c>FoldAnd</c> and <c>1 &lt; 2</c> through <c>TryFoldCompare</c>, which are different
@@ -117,8 +117,8 @@ public class FieldInitializerFoldTests
     /// </summary>
     [Test]
     [Category("Integration")]
-    [TestCase("Public N As Boolean = True And False", "False", "false", TestName = "Fold_BoolOp")]
-    [TestCase("Public N As Boolean = 1 < 2", "True", "true", TestName = "Fold_Compare")]
+    [TestCase("Public N As Boolean = True And False", "False", "False", TestName = "Fold_BoolOp")]
+    [TestCase("Public N As Boolean = 1 < 2", "True", "True", TestName = "Fold_Compare")]
     public void ABooleanFieldInitializer_Folds_InEachBackendsOwnSpelling(
         string field, string dotNet, string js)
     {
@@ -133,9 +133,8 @@ public class FieldInitializerFoldTests
     }
 
     /// <summary>
-    /// ⚠ C++ separately, because it spells a Boolean <c>True</c> — a long-recorded divergence,
-    /// pinned as C++ actually behaves. (Its Double was <c>3.500000</c> until C++ got .NET's
-    /// formatter; it is <c>3.5</c> now — CppDoubleFormattingTests.)
+    /// ⚠ C++ separately. It used to spell a Double <c>3.500000</c>; it now prints .NET's
+    /// <c>3.5</c> (see CppFloatFormattingTests).
     /// </summary>
     [Test]
     [Category("Integration")]

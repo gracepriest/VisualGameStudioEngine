@@ -146,7 +146,7 @@
       "patterns": [
         {
           "name": "constant.character.basiclang",
-          "match": "\"(?:\\\\.|[^\"\\\\])\"[cC]"
+          "match": "\"(?:\"\"|[^\"])\"[cC]"
         },
         {
           "name": "string.quoted.double.basiclang",
@@ -155,7 +155,7 @@
           "patterns": [
             {
               "name": "constant.character.escape.basiclang",
-              "match": "\\\\."
+              "match": "\"\""
             }
           ]
         },
@@ -166,7 +166,7 @@
           "patterns": [
             {
               "name": "constant.character.escape.basiclang",
-              "match": "\\\\."
+              "match": "\"\"|\\{\\{|\\}\\}"
             },
             {
               "name": "meta.interpolation.basiclang",
