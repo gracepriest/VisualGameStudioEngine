@@ -107,6 +107,8 @@ namespace BasicLang.Compiler.IR
             _module = new IRModule(moduleName);
             _currentFunction = null;
             _currentBlock = null;
+            _bodyLocalSites.Clear();
+            _lambdaCreator.Clear();
 
             CollectSharedModuleGlobalNames(program);
 
@@ -115,6 +117,8 @@ namespace BasicLang.Compiler.IR
             CanonicaliseMemberNames();
 
             SeparateTempsFromUserNames();
+
+            AssignBodyLocals();
 
             return _module;
         }
@@ -1157,6 +1161,7 @@ namespace BasicLang.Compiler.IR
                 localVar.IsInferredType = node.IsAuto;
                 PushVariableVersion(node.Name, localVar);
                 _currentFunction.LocalVariables.Add(localVar);
+                RecordBodyLocal(localVar);   // ADR-0014: before the initializer, which is ordinary IR (D4)
 
                 // Only emit IRAlloca for variables that need memory semantics
                 // (arrays, ByRef parameters, address-of operations)
@@ -1244,6 +1249,7 @@ namespace BasicLang.Compiler.IR
                 var localVar = CreateVariable(varName, varType, _nextVersion++);
                 PushVariableVersion(varName, localVar);
                 _currentFunction.LocalVariables.Add(localVar);
+                RecordBodyLocal(localVar);   // ADR-0014: `Dim (a, b) = …` is a Dim too
 
                 // Emit instruction to get tuple element
                 var elementAccess = new IRTupleElement(tupleValue, i, varType)
@@ -2534,6 +2540,7 @@ namespace BasicLang.Compiler.IR
 
             // Add lambda function to module
             _module.Functions.Add(lambdaFunc);
+            if (savedFunction != null) _lambdaCreator[lambdaFunc] = savedFunction;
 
             // Restore context
             _currentFunction = savedFunction;
@@ -3753,7 +3760,7 @@ namespace BasicLang.Compiler.IR
             EmitInstruction(new IRConditionalBranch(cond, bodyBlock, endBlock));
 
             // Push loop context
-            _loopStack.Push(new LoopContext(condBlock, endBlock));
+            _loopStack.Push(new LoopContext(condBlock, endBlock, bodyBlock, _currentFunction));
 
             // Body block
             _currentBlock = bodyBlock;
@@ -3908,7 +3915,7 @@ namespace BasicLang.Compiler.IR
             // Body block
             _currentBlock = bodyBlock;
 
-            _loopStack.Push(new LoopContext(endBlock, endBlock));  // Continue goes to end (next iteration handled by foreach)
+            _loopStack.Push(new LoopContext(endBlock, endBlock, bodyBlock, _currentFunction));  // Continue goes to end (next iteration handled by foreach)
 
             // ⭐ #169 (ADR-0013 D5): the variable the IRForEach declares is REGISTERED for the body,
             // under the name it was declared with — the loop's own `x` (`As`, or a fresh name),
@@ -4005,7 +4012,7 @@ namespace BasicLang.Compiler.IR
 
             // Body block
             _currentBlock = bodyBlock;
-            _loopStack.Push(new LoopContext(condBlock, endBlock));
+            _loopStack.Push(new LoopContext(condBlock, endBlock, bodyBlock, _currentFunction));
             node.Body.Accept(this);
             _loopStack.Pop();
 
@@ -4044,7 +4051,7 @@ namespace BasicLang.Compiler.IR
 
                 // Body block
                 _currentBlock = bodyBlock;
-                _loopStack.Push(new LoopContext(condBlock, endBlock));
+                _loopStack.Push(new LoopContext(condBlock, endBlock, bodyBlock, _currentFunction));
                 node.Body.Accept(this);
                 _loopStack.Pop();
 
@@ -4060,7 +4067,7 @@ namespace BasicLang.Compiler.IR
 
                 // Body block
                 _currentBlock = bodyBlock;
-                _loopStack.Push(new LoopContext(condBlock, endBlock));
+                _loopStack.Push(new LoopContext(condBlock, endBlock, bodyBlock, _currentFunction));
                 node.Body.Accept(this);
                 _loopStack.Pop();
 
@@ -6582,10 +6589,130 @@ namespace BasicLang.Compiler.IR
             public BasicBlock ContinueTarget { get; }
             public BasicBlock BreakTarget { get; }
 
-            public LoopContext(BasicBlock continueTarget, BasicBlock breakTarget)
+            /// <summary>ADR-0014: the loop's body entry block, which records its <c>BodyLocals</c>.</summary>
+            public BasicBlock Body { get; }
+
+            /// <summary>The function the loop is in. A lambda's body is built while its creator's
+            /// loops are still on the stack; a <c>Dim</c> there belongs to the lambda's own loops
+            /// only (ADR-0014 D3), so the innermost loop counts only when it is this function's.</summary>
+            public IRFunction Function { get; }
+
+            public LoopContext(BasicBlock continueTarget, BasicBlock breakTarget, BasicBlock body, IRFunction function)
             {
                 ContinueTarget = continueTarget;
                 BreakTarget = breakTarget;
+                Body = body;
+                Function = function;
+            }
+        }
+
+        // =====================================================================================
+        // ⭐ ADR-0014: loop-body locals. Every local `Dim` is recorded against the innermost loop
+        // of THIS function whose body it executes in (D3: through If/Select/Try/With/SyncLock, never
+        // across a lambda), and Build assigns the recorded ones to BasicBlock.BodyLocals at the end.
+        // =====================================================================================
+
+        private readonly List<(IRFunction Function, BasicBlock Body, IRVariable Local)> _bodyLocalSites = new();
+
+        /// <summary>Each lambda, by the function whose body created it.</summary>
+        private readonly Dictionary<IRFunction, IRFunction> _lambdaCreator = new(ReferenceEqualityComparer.Instance);
+
+        private void RecordBodyLocal(IRVariable local)
+        {
+            if (local == null || _currentFunction == null || _loopStack.Count == 0) return;
+            var loop = _loopStack.Peek();
+            if (!ReferenceEquals(loop.Function, _currentFunction) || loop.Body == null) return;
+            _bodyLocalSites.Add((_currentFunction, loop.Body, local));
+        }
+
+        /// <summary>
+        /// Writes <see cref="BasicBlock.BodyLocals"/> from the sites <see cref="RecordBodyLocal"/> saw.
+        ///
+        /// <para>⚠ <b>A name with ONE declaration only.</b> The IR is flat and every backend
+        /// identifies a local by NAME: two <c>Dim x</c> in one function (two sibling loops, a loop and
+        /// an If, a loop and a <c>For x</c> control variable, a local and a parameter) are two
+        /// declarations but one <c>x</c> in
+        /// the emitted C#, JavaScript and IL. Declaring that <c>x</c> at the top of one loop's body
+        /// would leave every other mention of it naming nothing, and one variable in two loops breaks
+        /// ADR-0014's "at most one loop". Such a name keeps today's function-level behaviour. The same
+        /// holds for a name a lambda this function creates declares as its own local: the C# backend
+        /// does not declare a lambda's locals (they bind to the creator's of that spelling), so moving
+        /// the creator's into a loop body would leave the lambda's naming nothing (CS0103). Splitting
+        /// a name into one variable per declaration is ADR-0013's rejected "uniquify IR names".</para>
+        ///
+        /// <para>And no mention of the name outside the loop's body (<see cref="IRLoops.VariableMentions"/>),
+        /// so ADR-0014 A2's invariant S″ holds for IRBuilder's output by construction and a later
+        /// breach is a pass's doing. (A class field read bare is a variable of the same spelling in
+        /// the IR.)</para>
+        /// </summary>
+        private void AssignBodyLocals()
+        {
+            if (_bodyLocalSites.Count == 0) return;
+
+            var created = new Dictionary<IRFunction, List<IRFunction>>(ReferenceEqualityComparer.Instance);
+            foreach (var (lambda, creator) in _lambdaCreator)
+            {
+                if (!created.TryGetValue(creator, out var list)) created[creator] = list = new List<IRFunction>();
+                list.Add(lambda);
+            }
+
+            HashSet<string> LambdaLocalNames(IRFunction function)
+            {
+                var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                var seen = new HashSet<IRFunction>(ReferenceEqualityComparer.Instance);
+                var pending = new Stack<IRFunction>();
+                pending.Push(function);
+                while (pending.Count > 0)
+                {
+                    var f = pending.Pop();
+                    if (!seen.Add(f) || !created.TryGetValue(f, out var lambdas)) continue;
+                    foreach (var lambda in lambdas)
+                    {
+                        foreach (var l in lambda.LocalVariables) if (l?.Name != null) names.Add(l.Name);
+                        pending.Push(lambda);
+                    }
+                }
+                return names;
+            }
+
+            foreach (var group in _bodyLocalSites.GroupBy(s => s.Function, ReferenceEqualityComparer.Instance))
+            {
+                var function = (IRFunction)group.Key;
+                var declarations = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+                foreach (var l in function.LocalVariables)
+                    if (l?.Name != null) declarations[l.Name] = declarations.TryGetValue(l.Name, out var n) ? n + 1 : 1;
+                var lambdaLocals = LambdaLocalNames(function);
+
+                // ADR-0014 A2 (S″): every mention of the name lies in the loop's body. A mention outside
+                // it is some other storage of the same spelling (a class member read bare, another
+                // declaration's leftovers), which a per-iteration declaration would take away from it.
+                var loops = IRLoops.Of(function);
+                var byEnd = IRLoops.ByEnd(loops);
+                var regions = new Dictionary<BasicBlock, HashSet<BasicBlock>>(ReferenceEqualityComparer.Instance);
+                HashSet<string> MentionedOutside(BasicBlock body)
+                {
+                    var loop = loops.FirstOrDefault(l => ReferenceEquals(l.Body, body));
+                    if (loop == null) return null;
+                    if (!regions.TryGetValue(body, out var region)) regions[body] = region = IRLoops.BodyRegion(loop, byEnd);
+                    var outside = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    foreach (var block in function.Blocks)
+                        if (!region.Contains(block))
+                            foreach (var inst in block.Instructions)
+                                foreach (var name in IRLoops.VariableMentions(inst)) outside.Add(name);
+                    return outside;
+                }
+                var outsideByBody = new Dictionary<BasicBlock, HashSet<string>>(ReferenceEqualityComparer.Instance);
+
+                foreach (var (_, body, local) in group)
+                {
+                    if (!declarations.TryGetValue(local.Name, out var count) || count != 1) continue;
+                    if (lambdaLocals.Contains(local.Name)) continue;
+                    if (function.Parameters.Any(p => string.Equals(p?.Name, local.Name, StringComparison.OrdinalIgnoreCase))) continue;
+                    if (!function.LocalVariables.Any(l => ReferenceEquals(l, local))) continue;
+                    if (!outsideByBody.TryGetValue(body, out var outside)) outsideByBody[body] = outside = MentionedOutside(body);
+                    if (outside == null || outside.Contains(local.Name)) continue;
+                    if (!body.BodyLocals.Contains(local)) body.BodyLocals.Add(local);
+                }
             }
         }
     }
