@@ -19,8 +19,51 @@ facade (all five tasks of `2026-09-13-blnet-cpp-facade.md`).
 
 ## 🌐 NEWEST — 2026-09-27: web forms laid out in pixels (piece 1 of "one form, either target"), branch `feat/web-pixel-layout`
 
-Branch `feat/web-pixel-layout` (pushed; based on `feat/property-grid` @ `6af0bea1`, NOT on master —
-master has moved since; do a real merge in a `git worktree add --detach` before any PR).
+Branch `feat/web-pixel-layout` (based on `feat/property-grid` @ `6af0bea1`; now carries master — see
+"Merge round 2026-09-28" below).
+
+**Merge round 2026-09-28 (final, before the PR).** Master merged twice, each tried first in a
+`git worktree add --detach` (never `git merge-tree`):
+- `b6f34b6e` merged origin/master `81e5fb13`. It brought master `3cec5030`, which made the lexer read a
+  string literal as VB does (a backslash is ordinary, `""` is the only escape) — and the designer still
+  wrote C-style escapes, so after the merge `a\b` reached the running program as `a\\b` and a line break
+  as the four characters `\r\n`, build green. **`d7cb7083`** fixes it: `FormPropertyDef.StringLiteral`
+  writes a backslash raw and spells CR/LF/tab with `vbCr`/`vbLf`/`vbCrLf`/`vbTab` joined by `&`. Caught
+  only by the Integration row `WinFormsCatalogSweepTests.CaptionsThatLookLikeSource_CompileAsStrings`.
+- `1105181f` merged `fix/web-main-startup` (`d44fb825`, reviewed + approved) — the owner-reported bug
+  below. Clean.
+- `2e291915` merged origin/master `53633acf` (#127 Not at VB's precedence, #132 MSIL Object boxing /
+  ADR-0012, #133 BC30526/BC30524). Clean; the trial and the real merge produced the same tree. JS roster
+  pin: this branch never touched `JsExecutionTierRosterTests`, so master's 85 stands.
+
+**Owner-reported bug 2026-09-28: `Sub Main` in a web project with a form.** Main ran but its output was
+hidden and the form never started unless the user hand-wrote `VgsForms.VgsDispatchForm()`. **Owner
+decision: Main is STARTUP, as on WinForms** — Main runs, then the form starts. The fix: the Canvas page
+body is a flex column so Main's content stays visible above the form; the entry point dispatches after
+Main ONLY when no user code calls or references `VgsForms.VgsDispatchForm` (decided on the IR,
+`AddressOf` included — a string is not a call); a once-per-page guard makes an existing explicit call
+harmless; the scaffold now runs `RegionWriter` itself so `InitializeComponent` exists before the first
+designer save (a never-opened form built clean and died with `this.InitializeComponent is not a
+function`). **BL8018 is RETIRED** (constant kept, marked retired in `DesignDiagnostic.cs`). Accepted
+limit: inline elements Main appends directly to `<body>` stack as flex items (one per line) — wrap them
+in a block element. Tests: `WebMainStartupTests` (node + Edge).
+
+**Chips filed this round:** an unknown-`Dock` value diagnostic (`design --check` runs no Dock check);
+designer writes that bypass the ONE selection store; the JS cross-file call gaps (module member / bare
+top-level Sub across files) — REPRODUCE FIRST on the current tree, #57 may have fixed them.
+
+**Failing on Windows on MASTER ALONE (inherited, not this branch's)** — 14 rows, A/B'd on a detached
+origin/master worktree: `AClassUsingALaterClassMember_IsAnOrderingGapOnCpp_Pinned`,
+`AGenericFreeFunction_IsAGapOnCpp_EvenFromMain_Pinned`, `MeAsAnArgumentToAModuleProcedure_IsAGapOnCpp_Pinned`,
+`TheCombinedEmission_…`, `TheSplitHeader_…`, `EveryTextRoute_UsesTheFormatter_NeverToStringOrABareCout`,
+`G8_NothingFieldInvoked_RaisesOnEveryBackend_NeverASilentSuccess`, `StringNothing_AllFourBackends_MatchTheExpectation`,
+`E12_TwoCatchClausesSameVariableName_Msil_RefusesToCompile_ADR0010D2`,
+`E9b_EveryValueTypeThroughWriteAndWriteLine_CSharpCppMsilAgree`,
+`E9e_ReturnAddressOfOnOneBranchArm_Cpp_PinsTodaysCompileFailure_Against201`, `Cpp_Runs`, `Cpp_Aggressive_Runs`,
+`CSharp_Runs`. Plus the older inherited `CppDoubleFormattingTests.Expected_IsWhatDotNetPrints` and
+`AFoldedComparison_ReachesEveryBackend_ModuloBooleanFormatting`, and the flaky
+`NonEx_variants_marshal_and_are_screen_size_dependent`. Full-suite record for the merged tree: see the
+gate line below.
 Spec `docs/superpowers/specs/2026-09-27-web-pixel-layout-design.md` · plan
 `docs/superpowers/plans/2026-09-27-web-pixel-layout.md` · per-task pre-flights (they WIN over the plan)
 `…-task9-preflight.md` … `…-task14-preflight.md`; mutation record `…-task15-mutations.md` (20/20 killed).
@@ -1223,6 +1266,8 @@ finding that matters needs a gate or a filed issue.
 #### Diagnostics
 
 **BL8018** claimed and in the band table (form pages exist, nothing calls the dispatch).
+⚠ **Superseded 2026-09-28: BL8018 is RETIRED** — the JavaScript entry point now starts the form itself
+(after `Main`, when no user code calls the dispatch). See the NEWEST section at the top.
 **BL8031 left alone** — the spec and plan reserve it for one specific `--check` collision.
 
 ### What the next session should pick up
@@ -1237,9 +1282,9 @@ finding that matters needs a gate or a filed issue.
    puts BL8011 in the Error List. That path is covered by caller tests driving the real `SaveAsync`,
    but nobody has watched it happen.
 3. **Decide the multi-edge `Anchor` question above.** Until then anchoring is single-edge or `Dock`.
-4. **Decide follow-up 13**: nothing makes `Main()` call the dispatch. BL8018 warns, which is the
-   honest minimum, but a warning is not the feature working. Both ways to close it edit the user's
-   code, which is why neither was done unilaterally.
+4. ~~**Decide follow-up 13**: nothing makes `Main()` call the dispatch.~~ **DONE 2026-09-28** (owner
+   decision: Main is startup, as on WinForms). The entry point dispatches after `Main` unless user code
+   calls the dispatch itself; BL8018 is retired. See the NEWEST section at the top.
 5. **File the seventeen chips** in `docs/form-designer-followups.md`. Several are runtime failures
    from clean builds, which is the highest-severity shape this repo tracks. Entries 3 and 14 are
    the SAME compiler bug — file them together. Entry 15's residue (Win32 `*.bas` matching `.basic`)
