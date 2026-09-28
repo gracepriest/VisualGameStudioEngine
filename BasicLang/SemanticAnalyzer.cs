@@ -9725,10 +9725,12 @@ namespace BasicLang.Compiler.SemanticAnalysis
         ///
         /// <para>The operand rule (D2, D4), in order — each refusal names its fix:</para>
         /// <list type="number">
-        /// <item>a <c>Not</c>-shaped LEFT operand: BasicLang parses <c>Not</c> at unary precedence,
-        /// so <c>Not x Is Nothing</c> is <c>(Not x) Is Nothing</c>, never VB's
-        /// <c>Not (x Is Nothing)</c>. Refused as a whole, naming <c>x IsNot Nothing</c> (D1 (3)) —
-        /// it can never be right: <c>Not</c> yields a Boolean, a value type;</item>
+        /// <item>a <c>Not</c>-shaped LEFT operand, <c>(Not x) Is Nothing</c>. Since #195 the parser
+        /// gives <c>Not</c> VB's precedence, so <c>Not x Is Nothing</c> is
+        /// <c>Not (x Is Nothing)</c>; only an explicitly parenthesised <c>(Not x) Is …</c> (the AST
+        /// keeps no paren node) reaches here. Refused as a whole, naming
+        /// <c>x IsNot Nothing</c> (D1 (3)) — it can never be right: <c>Not</c> yields a Boolean,
+        /// a value type;</item>
         /// <item>each operand is the <c>Nothing</c> literal or a type <c>Nothing</c> converts to.
         /// ⛔ The predicate IS <see cref="NothingAdviceFor"/> — #173's ONE answer, never a second
         /// list (D2 (1)). A value type is refused BC30020-style;</item>
@@ -9757,9 +9759,9 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 var subject = DescribeIdentityOperand(unary.Operand);
                 var other = DescribeIdentityOperand(node.Right);
                 var negation = op == "Is" ? "IsNot" : "Is";
-                Error($"'Not {subject} {op} {other}' parses as '(Not {subject}) {op} {other}': 'Not' binds " +
-                      $"tighter than '{op}' in BasicLang. Write '{subject} {negation} {other}' " +
-                      $"(or 'Not ({subject} {op} {other})')", node.Line, node.Column);
+                Error($"'(Not {subject}) {op} {other}' applies '{op}' to a Boolean, which is a value and " +
+                      $"never Nothing. Write '{subject} {negation} {other}' " +
+                      $"(or 'Not {subject} {op} {other}')", node.Line, node.Column);
                 return;
             }
 
