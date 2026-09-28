@@ -5145,6 +5145,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 case ClassNode cls:
                     PopulateClassMemberSignatures(
                         cls, _typeManager.GetType(cls.Name), includeConstructors: false);
+                    RegisterUserOperators(cls);
                     foreach (var member in cls.Members)
                         RegisterClassMemberSignatures(member);
                     break;
@@ -5157,6 +5158,158 @@ namespace BasicLang.Compiler.SemanticAnalysis
                         RegisterClassMemberSignatures(member);
                     break;
             }
+        }
+
+        /// <summary>
+        /// Each class's <c>Operator</c> declarations, by class name — recorded in pass 1 so a
+        /// use ahead of the class still binds. See <see cref="TryBindUserOperator"/>.
+        /// </summary>
+        private readonly Dictionary<string, List<OperatorDeclarationNode>> _userOperators =
+            new Dictionary<string, List<OperatorDeclarationNode>>(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// The binary operators a class may declare. Each lowers to a static <c>op_*</c> function
+        /// the IR builder calls; C# renders the call back as the infix operator, so the set is
+        /// what C# can declare. VB's <c>\</c>, <c>^</c>, <c>&amp;</c> and <c>Like</c> have no C#
+        /// operator (C# would emit <c>operator Exponent</c>, which does not compile).
+        /// </summary>
+        private static readonly HashSet<string> SupportedBinaryUserOperators = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "+", "-", "*", "/", "Mod", "=", "<>", "<", ">", "<=", ">=", "And", "Or", "Xor"
+        };
+
+        /// <summary>VB (BC33033) and C# (CS0216) both require these to be declared in pairs.</summary>
+        private static readonly (string, string)[] PairedUserOperators = { ("=", "<>"), ("<", ">"), ("<=", ">=") };
+
+        /// <summary>
+        /// Pass 1: record <paramref name="cls"/>'s operators and check each declaration — a
+        /// supported symbol, two parameters, one of them the containing class, and the pairs
+        /// VB and C# require. Every refusal names its fix.
+        /// </summary>
+        private void RegisterUserOperators(ClassNode cls)
+        {
+            if (!string.IsNullOrEmpty(cls.BaseClass))
+                _declaredBaseClass[cls.Name] = cls.BaseClass;
+
+            var operators = cls.Members.OfType<OperatorDeclarationNode>().ToList();
+            if (operators.Count == 0) return;
+            _userOperators[cls.Name] = operators;
+
+            foreach (var op in operators)
+            {
+                var symbol = op.OperatorSymbol;
+                if (!SupportedBinaryUserOperators.Contains(symbol))
+                {
+                    Error($"'Operator {symbol}' is not supported yet: only the binary operators " +
+                          $"{string.Join(" ", SupportedBinaryUserOperators)} can be declared. " +
+                          "Declare a Shared Function instead and call it by name",
+                          op.Line, op.Column);
+                    continue;
+                }
+                if (op.Parameters.Count != 2)
+                {
+                    Error($"'Operator {symbol}' must take exactly two parameters " +
+                          $"(unary operators are not supported yet); it takes {op.Parameters.Count}",
+                          op.Line, op.Column);
+                    continue;
+                }
+                if (!op.Parameters.Any(p => string.Equals(p.Type?.Name, cls.Name, StringComparison.OrdinalIgnoreCase)))
+                {
+                    Error($"At least one parameter of 'Operator {symbol}' must be of the containing type '{cls.Name}'",
+                          op.Line, op.Column);
+                }
+            }
+
+            foreach (var (a, b) in PairedUserOperators)
+            {
+                var hasA = operators.Any(o => o.OperatorSymbol == a);
+                var hasB = operators.Any(o => o.OperatorSymbol == b);
+                if (hasA == hasB) continue;
+                var (present, missing) = hasA ? (a, b) : (b, a);
+                var decl = operators.First(o => o.OperatorSymbol == present);
+                Error($"'Operator {present}' requires a matching 'Operator {missing}' in class '{cls.Name}'",
+                      decl.Line, decl.Column);
+            }
+        }
+
+        /// <summary>
+        /// The VB operator symbol a binary expression's operator spells, for matching against a
+        /// user <c>Operator</c> declaration; null for an operator a class cannot declare.
+        /// </summary>
+        private static string UserOperatorSymbolFor(string op) => NormalizeOperator(op) switch
+        {
+            "=" or "==" or "IsEqual" => "=",
+            "<>" or "!=" or "NotEqual" => "<>",
+            "%" or "Mod" => "Mod",
+            var s when SupportedBinaryUserOperators.Contains(s) => s,
+            _ => null
+        };
+
+        /// <summary>
+        /// <c>a op b</c> where a CLASS operand declares <c>Operator op</c> taking both operands:
+        /// types the expression as the operator's return type and records the binding on the
+        /// node for the IR builder. Without it `Box = Box` compared REFERENCES on C++ and
+        /// JavaScript (silently wrong) and `Box + Box` was refused as non-numeric.
+        /// </summary>
+        private bool TryBindUserOperator(BinaryExpressionNode node, TypeInfo leftType, TypeInfo rightType)
+        {
+            var symbol = UserOperatorSymbolFor(node.Operator);
+            if (symbol == null) return false;
+
+            foreach (var candidate in DeclaringClassesOf(leftType).Concat(DeclaringClassesOf(rightType)))
+            {
+                if (!_userOperators.TryGetValue(candidate, out var declared)) continue;
+
+                foreach (var op in declared)
+                {
+                    if (op.OperatorSymbol != symbol || op.Parameters.Count != 2) continue;
+                    var p0 = ResolveTypeReference(op.Parameters[0].Type);
+                    var p1 = ResolveTypeReference(op.Parameters[1].Type);
+                    if (!OperandFits(p0, leftType) || !OperandFits(p1, rightType))
+                        continue;
+
+                    node.UserOperatorClass = candidate;
+                    node.UserOperatorSymbol = symbol;
+                    SetNodeType(node, ResolveTypeReference(op.ReturnType) ?? _typeManager.ObjectType);
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// An operand converts to an operator parameter: the ordinary rule, or — for a class the
+        /// ordinary rule cannot see through yet (see <see cref="DeclaringClassesOf"/>) — the
+        /// parameter's class is one of the operand's declared bases.
+        /// </summary>
+        private bool OperandFits(TypeInfo parameter, TypeInfo operand) =>
+            parameter != null && operand != null
+            && (parameter.IsAssignableFrom(operand)
+                || (parameter.Kind == TypeKind.Class
+                    && DeclaringClassesOf(operand).Contains(parameter.Name, StringComparer.OrdinalIgnoreCase)));
+
+        /// <summary>Each class's <c>Inherits</c> name, recorded in pass 1 — see <see cref="DeclaringClassesOf"/>.</summary>
+        private readonly Dictionary<string, string> _declaredBaseClass =
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// A class operand's name and its base classes' names, nearest first: VB finds an operator
+        /// a BASE declares (`Derived = Derived` calls Base's `Operator =`), and missing it falls
+        /// through to a reference comparison — silently, on C++.
+        ///
+        /// <para>⚠ Walked by NAME through <see cref="_declaredBaseClass"/>, not through
+        /// <c>TypeInfo.BaseType</c>: that is set when the derived class's own body is visited, so
+        /// for a class declared below the code using it, it was still null — measured,
+        /// `Tip = Tip` compared references on C++ while C# (which resolves the operator itself)
+        /// printed True.</para>
+        /// </summary>
+        private IEnumerable<string> DeclaringClassesOf(TypeInfo type)
+        {
+            if (type?.Kind != TypeKind.Class || type.Name == null) yield break;
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            for (var name = type.Name; name != null && seen.Add(name);
+                 name = _declaredBaseClass.TryGetValue(name, out var baseName) ? baseName : null)
+                yield return name;
         }
 
         /// <summary>
@@ -9757,6 +9910,11 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 SetNodeType(node, _typeManager.ObjectType);
                 return;
             }
+
+            // A class operand's own `Operator` answers first (#198) — before any built-in rule,
+            // which would compare references (`=`) or refuse non-numeric operands (`+`).
+            if (TryBindUserOperator(node, leftType, rightType))
+                return;
 
             // Spec 6.1: operand position is a Decimal context when the OTHER
             // operand is Decimal — 'd * 1.08' converts the literal from its

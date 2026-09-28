@@ -2265,8 +2265,9 @@ single new failure against the 170-name baseline.
   - Follow-ups filed, not fixed here: **#195** (`Not` to VB precedence — since done, see D1
     above); **#196** (`Array<T>` a
     real null state, which flips the C++ divergence for arrays); **#197** (`TypeOf`, not touched
-    by this task); **#198** (BasicLang cannot declare a user `Operator =` yet, so D4 (1)'s
-    four-backend proof waits on it); **#193** (`Integer?` on C++/MSIL/JavaScript, pre-existing);
+    by this task); **#198** (a user `Operator =` — since done: a class's operators now parse,
+    bind and run on C# and C++, and `UserOperatorExecutionTests` pins `a = b` True where
+    `a Is b` is False; JavaScript still refuses them, BL7006); **#193** (`Integer?` on C++/MSIL/JavaScript, pre-existing);
     **#194** (ordinary .NET types, `System.Version` included, on MSIL — pre-existing).
 - ⭐ **Newest — #173 DONE (fix committed `c0b457d9`).** `Nothing` now converts to any REFERENCE
   type — a class, an interface, a delegate (user `Delegate`/`Action`/`Func`), `String`, an array, a
