@@ -398,6 +398,9 @@ public class JsExecutionTierRosterTests
         // Builds and runs the C# backend's output through the CLI and dotnet — no Node.
         "CSharpFieldAssignmentExecutionTests",
         "CSharpInlinedOperandExecutionTests",
+        // Runs user operators on C# and C++ only — JavaScript refuses them (BL7006), which
+        // UserOperatorTests asserts without spawning Node.
+        "UserOperatorExecutionTests",
     };
 
     /// <summary>Counts NUnit cases: a [TestCase]-driven method contributes one per attribute.</summary>

@@ -3405,6 +3405,15 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
                     case IRCall call:
                     {
+                        if (call.UserOperatorSymbol != null)
+                        {
+                            // ⚠ Always parenthesised, whatever `needsParens` says: every other
+                            // call renders as `f(…)`, so a receiver never asks — measured,
+                            // `(x + z).V` came out as `x + z.V` (CS0019).
+                            return "(" + UserOperatorText(call,
+                                call.Arguments.Select(a => EmitExpression(a, stack, true)).ToArray()) + ")";
+                        }
+
                         var argExprs = call.Arguments.Select(a => EmitExpression(a, stack, false)).ToArray();
 
                         if (TryRenderArrayResize(call, argExprs, out var resized))
@@ -3845,9 +3854,40 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             return true;
         }
 
+        /// <summary>
+        /// A user <c>Operator</c> call (#198) as C# infix: C# declares the operator
+        /// (<see cref="GenerateOperator"/>) and forbids calling it by its <c>op_*</c> name
+        /// (CS0571), so <c>Box.op_Equality(a, b)</c> is written <c>a == b</c>.
+        /// </summary>
+        private static string UserOperatorText(IRCall call, IReadOnlyList<string> operands)
+        {
+            var op = call.UserOperatorSymbol switch
+            {
+                "=" => "==",
+                "<>" => "!=",
+                "Mod" => "%",
+                "And" => "&",
+                "Or" => "|",
+                "Xor" => "^",
+                var s => s
+            };
+            return $"{operands[0]} {op} {operands[1]}";
+        }
+
         public void Visit(IRCall call)
         {
             var functionName = call.FunctionName;
+
+            if (call.UserOperatorSymbol != null)
+            {
+                var operatorExpr = UserOperatorText(call,
+                    call.Arguments.Select(a => EmitExpression(a, new HashSet<IRValue>(), true)).ToArray());
+                if (IsNamedDestination(call))
+                    WriteLine($"{GetValueName(call)} = {operatorExpr};");
+                else if (GetUseCount(call) == 0)
+                    WriteLine($"_ = {operatorExpr};");
+                return;
+            }
 
             // A ReDim that assigns straight into its variable (IRBuilder names the call after it).
             if (TryRenderArrayResize(call, call.Arguments.Select(a => EmitExpression(a)).ToList(), out var resizedArray))

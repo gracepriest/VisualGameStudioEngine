@@ -791,6 +791,14 @@ namespace BasicLang.Compiler.IR
         public bool IsTailCall { get; set; }
 
         /// <summary>
+        /// Set when this call is a user <c>Operator</c> applied in an expression (#198): the VB
+        /// symbol (<c>=</c>, <c>+</c>, …). The call targets the class's static <c>op_*</c>
+        /// function, which C++ calls by name; C# cannot (CS0571 — an operator is not callable by
+        /// name) and renders the call as the infix operator instead.
+        /// </summary>
+        public string UserOperatorSymbol { get; set; }
+
+        /// <summary>
         /// When set, the call target is this delegate VALUE rather than a named
         /// function — e.g. invoking the delegate returned by another call:
         /// f(a)(b). Backends render (calleeValue)(args) and ignore FunctionName.

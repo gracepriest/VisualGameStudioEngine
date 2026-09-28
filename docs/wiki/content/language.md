@@ -143,6 +143,23 @@ Inheritance uses `Inherits`; `MustInherit` marks an abstract class, `MustOverrid
 abstract member, `Overridable` / `Overrides` a virtual one, `NotInheritable` a sealed
 class. `MyBase` reaches the base implementation.
 
+A class can declare its own binary operators; `a = b`, `a + b` and so on then call them,
+including for a derived class. At least one parameter must be the class, and `=`/`<>`,
+`<`/`>` and `<=`/`>=` come in pairs:
+
+```vb
+Public Shared Operator =(a As Money, b As Money) As Boolean
+    Return a.Cents = b.Cents
+End Operator
+Public Shared Operator <>(a As Money, b As Money) As Boolean
+    Return Not a = b
+End Operator
+```
+
+Supported: `+ - * / Mod = <> < > <= >= And Or Xor`, on the C# and C++ backends. `Is`
+still compares references. JavaScript has no operator overloading and refuses the class
+(BL7006) — use a named `Shared Function` there.
+
 ## Interfaces and modules
 
 ```vb

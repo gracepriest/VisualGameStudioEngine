@@ -1377,8 +1377,10 @@ namespace BasicLang.Compiler
                 Advance();
                 node.OperatorSymbol = "Mod";
             }
-            else if (Check(TokenType.Equal))
+            else if (Check(TokenType.Equal) || Check(TokenType.Assignment))
             {
+                // `=` lexes as Assignment (ParseEquality normalises it the same way), so
+                // `Operator =(…)` never matched Equal and failed "Expected operator symbol".
                 Advance();
                 node.OperatorSymbol = "=";
             }
