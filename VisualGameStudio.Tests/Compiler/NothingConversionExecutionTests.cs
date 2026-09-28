@@ -426,6 +426,7 @@ public class NothingConversionExecutionTests
     [TestCase(N4c, "empty\nempty2", "N4c")]
     [TestCase(N5, "7\nTrue", "N5")]
     [TestCase(N6b, "unset\nfired", "N6b")]
+    [TestCase(N7, "boom", "N7")]
     [TestCase(X1, "dim:null\nnew:obj\nasg:null\narg:null\nret:null\nret2:obj\nctor:null\nfield:null\nprop:null", "X1")]
     [TestCase(X2, "null\nobj\nnull\nnull", "X2")]
     [TestCase(X3, "null\n1\nnull2", "X3")]
@@ -446,6 +447,13 @@ public class NothingConversionExecutionTests
     // 2. N7 / L16 — a Catch-captured Action initialized to Nothing, invoked after the Try.
     //    (ClosureLoweringTests' L16 constant was never written — its own doc comment records why:
     //    before #173 the front end refused it outright. This is that shape, now that it compiles.)
+    //
+    //    ⛔ #189 DONE (fix commit 381b95ff): N7 used to run C#/JavaScript/MSIL only and separately
+    //    PIN a C++ compile failure — a captured Catch variable's member access lowered to
+    //    `ex->Message`, a shared_ptr field access, against exception representations C++ holds by
+    //    VALUE. `CatchMessageText`/`CapturedCatchVariables` now give the lambda body the same
+    //    `.what()` spelling and an init-capture the Catch clause's own code uses, so N7 runs
+    //    everywhere and is folded into the TestCase list above rather than pinned separately.
     // ============================================================================================
 
     private const string N7 = """
@@ -460,36 +468,6 @@ public class NothingConversionExecutionTests
         End Sub
         """;
 
-    [Test]
-    public void N7_CatchCapturedActionInitializedToNothing_CSharpJavaScriptMsil_PrintBoom()
-    {
-        Assert.Multiple(() =>
-        {
-            Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharp(N7)), Is.EqualTo("boom"), "C#");
-            Assert.That(FourBackends.Norm(JavaScriptExecutionTests.RunJs(N7)), Is.EqualTo("boom"), "JavaScript");
-            Assert.That(FourBackends.Norm(Msil.MsilHarness.RunExpectingSuccess(N7)), Is.EqualTo("boom"), "MSIL");
-        });
-    }
-
-    /// <summary>
-    /// C++ does not run this: a captured <c>Catch</c> variable's member access (<c>ex.Message</c>)
-    /// lowers to <c>ex-&gt;Message</c>, and the C++ exception representations
-    /// (<c>BasicLang::NetException</c> / <c>std::exception</c>) are held by VALUE, not by pointer —
-    /// a PRE-EXISTING gap, unrelated to <c>Nothing</c> (measured: the same shape with a
-    /// non-Nothing-initialized <c>Dim f As Action</c>, i.e. <c>ClosureLoweringTests.L16b</c>, fails
-    /// identically on C++). Filed under #189. Pinned so a fix is a deliberate, noticed change.
-    /// </summary>
-    [Test]
-    public void N7_CatchCapturedActionInitializedToNothing_Cpp_PinsTodaysCompileFailure_Against189()
-    {
-        var cpp = BclE2E.CompileToCppOptimized(N7);
-        var ex = Assert.Throws<AssertionException>(() => BclE2E.CompileRun(cpp));
-        Assert.That(ex!.Message, Does.Contain("NetException").And.Contain("is not a pointer"),
-            "the compile failure must still be the captured Catch variable's member access on a " +
-            "by-value exception type (#189). A DIFFERENT failure here means this pin is stale.\n" +
-            ex.Message);
-    }
-
     // ============================================================================================
     // 3. S1-S3 — a String Nothing. VB semantics: `Dim s As String = Nothing` behaves like "",
     //    because C++ represents String by VALUE (std::string) with no null state — the recorded
@@ -498,6 +476,12 @@ public class NothingConversionExecutionTests
     //    observable and measured — see IsIsNotOperatorExecutionTests
     //    .CppStringAndArrayNothingIsEmptiness_DivergesFromDotNet (probe P12): `"" Is Nothing` and
     //    an empty array `Is Nothing` are True on C++ only, False on C#/JS/MSIL.
+    //
+    //    ⛔ #189 DONE (fix commit 381b95ff): JavaScript used to print the real word `null` here
+    //    (string concatenation with a JS `null`) where every other backend printed "" — pinned
+    //    separately below as a known divergence. `&`'s `nothingIsEmpty` TextOf guard now makes a
+    //    Nothing String render "" on JavaScript too, so S1-S3 are ONE assertion across all four
+    //    backends (folded into the test right below; the separate JS-only pin is gone).
     // ============================================================================================
 
     private const string S1 = """
@@ -555,29 +539,15 @@ public class NothingConversionExecutionTests
     [TestCase(S1, "[]", "S1")]
     [TestCase(S2, "asg[]\nret[]\narg[]", "S2")]
     [TestCase(S3, "ctor[]\nfield[]\nmeth[]\nmod[]\nelem[]\ndel[]", "S3")]
-    public void StringNothing_CSharpCppMsil_MatchTheExpectation(string source, string expected, string label)
+    public void StringNothing_AllFourBackends_MatchTheExpectation(string source, string expected, string label)
     {
         Assert.Multiple(() =>
         {
             Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharp(source)), Is.EqualTo(expected), $"[{label}] C#");
             Assert.That(FourBackends.Norm(BclE2E.CompileRun(BclE2E.CompileToCppOptimized(source))), Is.EqualTo(expected), $"[{label}] C++");
+            Assert.That(FourBackends.Norm(JavaScriptExecutionTests.RunJs(source)), Is.EqualTo(expected), $"[{label}] JavaScript");
             Assert.That(FourBackends.Norm(Msil.MsilHarness.RunExpectingSuccess(source)), Is.EqualTo(expected), $"[{label}] MSIL");
         });
-    }
-
-    /// <summary>
-    /// JavaScript prints the real <c>null</c> rather than an empty string — measured as a
-    /// PRE-EXISTING behaviour (string concatenation with a JS <c>null</c> renders "null"), not
-    /// introduced by #173: before this fix, none of these probes compiled at all. Filed under
-    /// #189. Pinned so a fix (or a decision to special-case String's default in the JS backend)
-    /// is deliberate rather than a silent, unnoticed behavior change.
-    /// </summary>
-    [TestCase(S1, "[null]", "S1")]
-    [TestCase(S2, "asg[null]\nret[null]\narg[null]", "S2")]
-    [TestCase(S3, "ctor[null]\nfield[null]\nmeth[null]\nmod[null]\nelem[null]\ndel[null]", "S3")]
-    public void StringNothing_JavaScript_PinsTodaysNullText_Against189(string source, string expected, string label)
-    {
-        Assert.That(FourBackends.Norm(JavaScriptExecutionTests.RunJs(source)), Is.EqualTo(expected), $"[{label}] JavaScript");
     }
 
     // ============================================================================================

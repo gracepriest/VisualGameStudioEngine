@@ -3369,8 +3369,8 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                     case IRBinaryOp bin:
                     {
                         // Sub-expressions need parens to preserve precedence
-                        var left = EmitExpression(bin.Left, stack, true);
-                        var right = EmitDivisor(bin, EmitExpression(bin.Right, stack, true));
+                        var left = ConcatOperand(bin, bin.Left, EmitExpression(bin.Left, stack, true));
+                        var right = EmitDivisor(bin, ConcatOperand(bin, bin.Right, EmitExpression(bin.Right, stack, true)));
                         var op = MapBinaryOperator(bin.Operation);
                         var narrowed = NarrowArithmetic(bin, $"{left} {op} {right}");
                         if (narrowed != null) return narrowed;
@@ -3730,8 +3730,8 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 return;
 
             // Use needsParens=true for sub-expressions to preserve operator precedence
-            var left = EmitExpression(binaryOp.Left, new HashSet<IRValue>(), needsParens: true);
-            var right = EmitDivisor(binaryOp, EmitExpression(binaryOp.Right, new HashSet<IRValue>(), needsParens: true));
+            var left = ConcatOperand(binaryOp, binaryOp.Left, EmitExpression(binaryOp.Left, new HashSet<IRValue>(), needsParens: true));
+            var right = EmitDivisor(binaryOp, ConcatOperand(binaryOp, binaryOp.Right, EmitExpression(binaryOp.Right, new HashSet<IRValue>(), needsParens: true)));
             var op = MapBinaryOperator(binaryOp.Operation);
 
             var target = GetValueName(binaryOp);
@@ -4989,6 +4989,27 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             if (un.Type?.Name is not ("Short" or "UShort" or "Byte" or "SByte" or "UByte")) return null;
             if (un.Operation is not (UnaryOpKind.Neg or UnaryOpKind.BitwiseNot)) return null;
             return $"unchecked(({MapType(un.Type)})({expr}))";
+        }
+
+        /// <summary>
+        /// A <c>Nothing</c> constant operand of <c>&amp;</c>, typed as the String it stands for.
+        ///
+        /// <para>⛔ C# gives a bare <c>null</c> no type of its own, so the other operand picks the
+        /// operator: once the optimizer propagates <c>Dim s As String = Nothing</c> into
+        /// <c>s &amp; 5</c>, the text is <c>null + 5</c> — C#'s LIFTED <c>int?</c> addition, CS0029
+        /// "Cannot implicitly convert type 'int?' to 'string'" — and <c>null + null</c> is
+        /// ambiguous. <c>(string)null</c> makes it C#'s string concatenation, which reads null as
+        /// <c>""</c> exactly as VB's <c>&amp;</c> does. The cast is left off when the OTHER operand
+        /// is already a non-Nothing String, where C# picks string <c>+</c> anyway.</para>
+        /// </summary>
+        private static string ConcatOperand(IRBinaryOp bin, IRValue operand, string rendered)
+        {
+            if (bin.Operation != BinaryOpKind.Concat || operand is not IRConstant { Value: null })
+                return rendered;
+            var other = ReferenceEquals(operand, bin.Left) ? bin.Right : bin.Left;
+            var otherIsString = other is not IRConstant { Value: null }
+                && string.Equals(other?.Type?.Name, "String", StringComparison.OrdinalIgnoreCase);
+            return otherIsString ? rendered : "(string)null";
         }
 
         private static string EmitDivisor(IRBinaryOp bin, string renderedRight)
