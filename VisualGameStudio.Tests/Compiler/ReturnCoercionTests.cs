@@ -109,11 +109,13 @@ public class ReturnCoercionTests
     /// ("IRCast lowering is not implemented" — a Bitcast is not a numeric cast), which is what
     /// makes this test discriminating at all.</para>
     ///
-    /// <para>⚠ MSIL is deliberately NOT asserted here. <c>Function … As Object</c> already fails
-    /// on that backend with or without this change (NullReferenceException), as does a
-    /// class-typed return (<c>.method … Base Make()</c> — the <c>class</c> prefix is missing and
-    /// ilasm rejects it). Both are pre-existing MSIL gaps unrelated to return coercion; asserting
-    /// them here would pin someone else's defect to this fixture.</para>
+    /// <para>⛔ <b>Corrected, 2026-09-28 (task #177):</b> this used to say MSIL was deliberately
+    /// not asserted because <c>Function … As Object</c> failed on that backend with or without
+    /// this change (NullReferenceException) — that WAS task #177's own gap (a <c>Return</c> from
+    /// <c>As Object</c> was never boxed), now fixed (<c>EmitCoerceToSlot</c>), so MSIL is
+    /// asserted below too. A CLASS-typed return (<c>.method … Base Make()</c> — the <c>class</c>
+    /// prefix missing, ilasm rejects it) remains a separate, pre-existing, still-unrelated MSIL
+    /// gap that #177 does not touch (boxing is only for VALUE types into <c>Object</c>).</para>
     /// </summary>
     [Test]
     [Category("Integration")]
@@ -138,6 +140,9 @@ public class ReturnCoercionTests
             Assert.That(CompileEmittedCSharp(program), Is.Empty);
             Assert.That(JavaScriptExecutionTests.RunJs(program), Is.EqualTo("7,hi"),
                 "a Bitcast has no numeric lowering, so a stray cast here fails the JS build");
+            Assert.That(FourBackends.Norm(Msil.MsilHarness.RunExpectingSuccess(program)), Is.EqualTo("7,hi"),
+                "MSIL — task #177 fixed the Return-from-As-Object box; a regression here means "
+                + "#177 moved");
         });
     }
 

@@ -390,12 +390,14 @@ public class ForEachOverStringExecutionTests
     // (b2) together.
     //
     // ⛔ The full repro (S/t171/w/pre/C1.bas) has a THIRD statement — `Dim o As Object = c` then
-    // `Console.WriteLine(o)` — deliberately dropped here. Measured: it throws
+    // `Console.WriteLine(o)` — deliberately dropped here. MEASURED AT THE TIME: it threw
     // NullReferenceException on MSIL, but NOT because of Char or this fix — the identical shape
-    // with `Dim o As Object = 5` (an Integer) throws the SAME exception at the SAME frame
-    // (`Console.WriteLine(Object value)`). That is a general, pre-existing MSIL box-to-Object
-    // defect for ANY value type, outside task #171's fix and outside this fixture's job; flagged
-    // separately rather than pinned wrong or silently dropped.
+    // with `Dim o As Object = 5` (an Integer) threw the SAME exception at the SAME frame
+    // (`Console.WriteLine(Object value)`). That was a general MSIL box-to-Object defect for ANY
+    // value type, outside task #171's fix and outside this fixture's job — filed and FIXED as
+    // task #177 (`MsilObjectBoxingTests`/`MsilObjectBoxingExecutionTests`): a value stored into
+    // an Object slot now boxes, so this third statement would print correctly today. Left out of
+    // this fixture regardless, since #171's own C1 stays scoped to the Char shapes it is about.
     // ========================================================================================
 
     [Test]

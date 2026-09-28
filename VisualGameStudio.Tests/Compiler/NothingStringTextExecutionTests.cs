@@ -618,15 +618,18 @@ public class NothingStringTextExecutionTests
     }
 
     /// <summary>
-    /// E13 — an <c>Object</c> field set to a Boolean, concatenated. C#/JS agree ("T=False"). C++
-    /// does not compile at all — a PRE-EXISTING, unrelated, and much older gap (<c>Object</c> has
-    /// no C++ mapping whatsoever; not specific to Boolean or to #189) — measured here only as a
-    /// fact, not filed under a new number by this pin. MSIL is a DIFFERENT PRE-EXISTING bug,
-    /// unrelated to #189: it prints "T=" (the Boolean's text is LOST) where every other backend
-    /// prints "T=False". Filed under #191 (widened: #191's own entry already covers a user-class
-    /// <c>&amp;</c> operand and <c>Console.Write</c> of a class on MSIL; a boxed Boolean inside an
-    /// <c>Object</c> field losing its text through <c>&amp;</c> is a new instance of the same
-    /// class of gap).
+    /// E13 — an <c>Object</c> field set to a Boolean, concatenated. C#/JS/MSIL all agree
+    /// ("T=False"). C++ does not compile at all — a PRE-EXISTING, unrelated, and much older gap
+    /// (<c>Object</c> has no C++ mapping whatsoever; not specific to Boolean or to #189) —
+    /// measured here only as a fact, not filed under a new number by this pin.
+    ///
+    /// <para>⛔ <b>Corrected, 2026-09-28 (task #177):</b> this used to pin MSIL printing "T="
+    /// (the Boolean's text LOST) under #191, widened. That was a MIS-FILING — #191 is about a
+    /// user-class <c>&amp;</c> operand and <c>Console.Write</c> of a class; a Boolean boxed into
+    /// an <c>Object</c> field is #177's own box-into-Object-slot gap (MSIL never boxed the store,
+    /// so <c>&amp;</c> concatenated a raw, unboxed value's text away). #177's fix
+    /// (<c>EmitCoerceToSlot</c> boxing every field store into an <c>Object</c> slot) makes MSIL
+    /// agree with every other backend, so this is no longer a pin of a wrong answer.</para>
     /// </summary>
     private const string E13 = """
         Class Box
@@ -645,21 +648,19 @@ public class NothingStringTextExecutionTests
     private const string E13Expected = "L=;T=;\nT=False\n[]";
 
     [Test]
-    public void E13_ObjectFieldHoldingBoolean_Msil_PinsPreExistingWrongAnswer_Against191()
+    public void E13_ObjectFieldHoldingBoolean_AgreesOnCSharpJavaScriptAndMsil()
     {
         Assert.Multiple(() =>
         {
             Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharp(E13)), Is.EqualTo(E13Expected), "C#");
             Assert.That(FourBackends.Norm(JavaScriptExecutionTests.RunJs(E13)), Is.EqualTo(E13Expected), "JavaScript");
-            Assert.That(FourBackends.Norm(Msil.MsilHarness.RunExpectingSuccess(E13)), Is.EqualTo("L=;T=;\nT=\n[]"),
-                "MSIL — #191, widened. A DIFFERENT answer here (including the correct 'T=False') " +
-                "means #191 moved — update this pin, do not just delete it.");
+            Assert.That(FourBackends.Norm(Msil.MsilHarness.RunExpectingSuccess(E13)), Is.EqualTo(E13Expected), "MSIL");
         });
 
         Assert.That(() => BclE2E.CompileToCppOptimized(E13), Throws.Exception,
-            "C++ — pre-existing, unrelated to #189: Object has no C++ mapping at all. If this " +
-            "starts compiling, C++ gained Object support and this assertion (not a tracked task " +
-            "here) should simply be removed.");
+            "C++ — pre-existing, unrelated to #189 or #177: Object has no C++ mapping at all. If " +
+            "this starts compiling, C++ gained Object support and this assertion (not a tracked " +
+            "task here) should simply be removed.");
     }
 
     // ============================================================================================
