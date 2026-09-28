@@ -678,17 +678,24 @@ public class FormRegionWriterTests
             Does.Contain("btn.NoSuchRow = " + FormPropertyDef.StringLiteral(value)));
     }
 
-    [TestCase(@"a\b", @"""a\\b""", TestName = "{m}(backslash)")]
-    [TestCase(@"a\", @"""a\\""", TestName = "{m}(trailing backslash)")]
-    [TestCase("a\nb", @"""a\nb""", TestName = "{m}(line feed)")]
-    [TestCase("a\r\nb", @"""a\r\nb""", TestName = "{m}(CRLF)")]
-    [TestCase("a\tb", @"""a\tb""", TestName = "{m}(tab)")]
+    [TestCase(@"a\b", @"""a\b""", TestName = "{m}(backslash)")]
+    [TestCase(@"a\", @"""a\""", TestName = "{m}(trailing backslash)")]
+    [TestCase("a\nb", @"""a"" & vbLf & ""b""", TestName = "{m}(line feed)")]
+    [TestCase("a\r\nb", @"""a"" & vbCrLf & ""b""", TestName = "{m}(CRLF)")]
+    [TestCase("a\rb", @"""a"" & vbCr & ""b""", TestName = "{m}(lone CR)")]
+    [TestCase("a\tb", @"""a"" & vbTab & ""b""", TestName = "{m}(tab)")]
+    [TestCase("\tb", @"vbTab & ""b""", TestName = "{m}(leading tab)")]
+    [TestCase("\n", @"vbLf", TestName = "{m}(only a line feed)")]
     [TestCase("a\"b", @"""a""""b""", TestName = "{m}(quote)")]
     public void Write_EscapesACaptionForTheBasicLangLexer(string caption, string literal)
     {
-        // ⛔ The BasicLang lexer treats `\` as an escape (\n \r \t \\ \" and any other char as itself),
-        // so `"a\b"` lexes as "ab" — the backslash silently gone from the running caption. And a raw
-        // line break inside the region is a multi-line string in the user's own file.
+        // ⛔ The lexer reads a string literal as VB does (master 3cec5030): a backslash is an ORDINARY
+        // character and "" is the only escape. So a caption's `\` is written raw — the old C-style
+        // `\\` now reaches the running program as two backslashes. A line break or tab still must
+        // not be written raw (a raw line break inside the region is a multi-line string in the
+        // user's own file, and a CR LF caption would decide the file's newline style), and there is
+        // no escape for it inside a literal any more — so it is spelled with the VB constant that
+        // commit added for exactly this, joined with `&`.
         var form = new FormDocument { Target = FormTarget.WinForms, Name = "LoginForm" };
         var button = new FormControl { Kind = "Button", Id = "btn", TabIndex = 0 };
         button.Properties["Text"] = caption;

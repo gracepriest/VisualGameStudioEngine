@@ -379,32 +379,64 @@ public sealed record FormPropertyDef(
     }
 
     /// <summary>
-    /// Document text as a BasicLang string literal, quotes included — the ONE escape every generated
-    /// string goes through.
+    /// Document text as a BasicLang string EXPRESSION — the ONE escape every generated string goes
+    /// through. Usually a single quoted literal; a value with a line break or tab becomes literals
+    /// joined with <c>&amp;</c> to <c>vbCr</c> / <c>vbLf</c> / <c>vbCrLf</c> / <c>vbTab</c>, so every
+    /// caller must splice it where an expression is allowed (all of them do).
     ///
-    /// <para>⛔ Not just <c>"</c> → <c>""</c>. The BasicLang lexer treats <c>\</c> as an escape
-    /// (<c>\n \r \t \\ \"</c>, and any other character as itself), so a caption <c>a\b</c> written
-    /// raw lexes as <c>ab</c> — the backslash silently gone from the running program. A raw line break
-    /// is worse: it lands inside the generated region, and a CR LF caption in an LF file makes the next
-    /// write read the file's newline style from the caption and rewrite every line ending.</para>
+    /// <para>⛔ The lexer reads a literal as VB does: <c>""</c> is the only escape and a backslash
+    /// is an ORDINARY character, so <c>a\b</c> is written raw. (It used to be a C-style escape, and
+    /// this method wrote <c>\\</c>; since master 3cec5030 that reaches the running program as TWO
+    /// backslashes, with the build green.)</para>
+    ///
+    /// <para>⛔ A line break or tab must still never be written raw: it lands inside the generated
+    /// region, and a CR LF caption in an LF file makes the next write read the file's newline style
+    /// from the caption and rewrite every line ending. With no escape left inside a literal, it is
+    /// spelled with the VB constant (<c>SemanticAnalyzer.VbStringConstants</c>, lowered to a plain
+    /// string constant on every backend).</para>
     /// </summary>
     public static string StringLiteral(string text)
     {
-        var sb = new System.Text.StringBuilder(text.Length + 2).Append('"');
-        foreach (var c in text)
+        var parts = new System.Collections.Generic.List<string>();
+        var run = new System.Text.StringBuilder();
+
+        void FlushRun()
         {
-            sb.Append(c switch
+            if (run.Length > 0)
             {
-                '"' => "\"\"",
-                '\\' => @"\\",
-                '\r' => @"\r",
-                '\n' => @"\n",
-                '\t' => @"\t",
-                _ => c.ToString()
-            });
+                parts.Add("\"" + run + "\"");
+                run.Clear();
+            }
         }
 
-        return sb.Append('"').ToString();
+        for (var i = 0; i < text.Length; i++)
+        {
+            var c = text[i];
+            string? constant = c switch
+            {
+                '\r' when i + 1 < text.Length && text[i + 1] == '\n' => "vbCrLf",
+                '\r' => "vbCr",
+                '\n' => "vbLf",
+                '\t' => "vbTab",
+                _ => null
+            };
+
+            if (constant == null)
+            {
+                run.Append(c == '"' ? "\"\"" : c.ToString());
+                continue;
+            }
+
+            FlushRun();
+            parts.Add(constant);
+            if (constant == "vbCrLf")
+            {
+                i++;
+            }
+        }
+
+        FlushRun();
+        return parts.Count == 0 ? "\"\"" : string.Join(" & ", parts);
     }
 
     // ⛔ INVARIANT formatting, not interpolation: under sv-SE an int formats its minus as U+2212, and
