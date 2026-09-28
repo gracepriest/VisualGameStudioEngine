@@ -1483,7 +1483,17 @@ namespace BasicLang.Compiler.AST
         public ExpressionNode Left { get; set; }
         public string Operator { get; set; }
         public ExpressionNode Right { get; set; }
-        
+
+        /// <summary>
+        /// Set by the analyzer when a class operand declares this operator (<c>Operator =</c>,
+        /// <c>Operator +</c>, …): the declaring class. The IR builder lowers the expression to a
+        /// call of that class's <c>op_*</c> function; null for every built-in operator.
+        /// </summary>
+        public string UserOperatorClass { get; set; }
+
+        /// <summary>The VB spelling of the bound user operator (<c>=</c>, <c>&lt;&gt;</c>, <c>+</c>, <c>Mod</c>, …).</summary>
+        public string UserOperatorSymbol { get; set; }
+
         public BinaryExpressionNode(int line, int column) : base(line, column) { }
         
         public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
