@@ -203,14 +203,14 @@ public class FormDesignerAcceptanceTests
               </PropertyGroup>
             </BasicLangProject>
             """);
-        // ⛔ The dispatch call is the user's responsibility and the build says so. Each page names
-        // its form in <body data-form="…">, and NOTHING reads that attribute except the generated
-        // VgsForms.VgsDispatchForm — so without this line every page loads and shows nothing.
-        // Omitting it is what this walkthrough did first; the build caught it with BL8018.
+        // ⛔ NO dispatch call (owner decision 2026-09-28: Sub Main is startup, like WinForms). Each
+        // page names its form in <body data-form="…">, and the generated VgsForms.VgsDispatchForm
+        // reads it — the JavaScript entry point now calls it after Main by itself. This walkthrough
+        // once needed the explicit line (BL8018 caught its absence); the Canvas twin below keeps an
+        // explicit call, so both shapes stay covered.
         Write("Main.bas",
             "Sub Main()\n" +
             "    Console.WriteLine(\"App loaded\")\n" +
-            "    VgsForms.VgsDispatchForm()\n" +
             "End Sub\n");
 
         var (exit, stdout, stderr) = CliTestHarness.RunProcess(
@@ -219,11 +219,9 @@ public class FormDesignerAcceptanceTests
         Log($"[7] build exit    -> {exit}");
         Assert.That(exit, Is.Zero, $"the real CLI refused the designer's output.\n{stdout}\n{stderr}");
 
-        // ⚠ And it must be CLEAN. BL8018 is a warning, so a build that emits it still exits 0 —
-        // and the page it produces does nothing at all.
+        // ⚠ And it must be CLEAN: BL8018 is retired — the entry point starts the form itself.
         Assert.That(stdout + stderr, Does.Not.Contain("BL8018"),
-            "the build warned that nothing calls the form dispatch, which means every page loads " +
-            "and shows nothing");
+            "the retired 'nothing calls the form dispatch' warning came back");
 
         var outDir = Path.Combine(_dir, "bin", "Debug", "net8.0");
         var page = Path.Combine(outDir, "LoginForm.html");
@@ -313,7 +311,7 @@ public class FormDesignerAcceptanceTests
                 setAttribute: (n, v) => { attrs.set(id, { ...(attrs.get(id) || {}), [n]: v }); },
                 dispatch: (n) => (handlers[n] || []).forEach(h => h({ target: el })),
                 click: () => (handlers["click"] || []).forEach(h => h({ target: el })),
-                appendChild: () => {}, querySelector: () => null
+                appendChild: () => {}, prepend: () => {}, querySelector: () => null
               };
               els.set(id, el);
               return el;
@@ -522,6 +520,10 @@ public class FormDesignerAcceptanceTests
             Assert.That(ran, Does.Not.Contain("CLICK ERROR"), "the click handler threw");
             Assert.That(ran, Does.Not.Contain("NO ELEMENT"), "the page registered nothing under Button1");
             Assert.That(ran, Does.Contain("HANDLER FIRED"), "the click handler did not fire");
+            // ⛔ Main calls the dispatch EXPLICITLY here and the entry point calls it again after Main: the dispatch
+            // runs once per page, so the form is built once and one click fires its handler once — not twice.
+            Assert.That(ran!.Split("HANDLER FIRED").Length - 1, Is.EqualTo(1),
+                "the form was dispatched twice: every handler wired twice, one click fired it twice");
         });
 
         // --- ⛔ LAY IT OUT in a real browser: the design size, and wider ---

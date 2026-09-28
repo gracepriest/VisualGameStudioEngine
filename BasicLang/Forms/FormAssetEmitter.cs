@@ -48,8 +48,41 @@ public static class FormAssetEmitter
     /// <summary>The class the dispatch lives on — see <see cref="DispatchSubName"/> for why.</summary>
     public const string DispatchModuleName = "VgsForms";
 
-    /// <summary>Exactly what a user writes in <c>Main()</c> to hand control to the dispatch.</summary>
+    /// <summary>
+    /// Exactly what a user MAY write to start the form at a point of their choosing — after an Await, from a button.
+    /// Never required: with no such call anywhere, the JavaScript backend dispatches after <c>Main</c> by itself
+    /// (<see cref="IsStartupDispatch"/>). With one, it does NOT — the user decides when — and the dispatch runs once.
+    /// </summary>
     public const string DispatchCall = DispatchModuleName + "." + DispatchSubName + "()";
+
+    /// <summary>The dispatch's once-per-page flag (see <see cref="DispatchSource"/>).</summary>
+    private const string DispatchedFieldName = "vgsDispatched";
+
+    /// <summary>
+    /// ⛔⛔ THE startup rule (owner decision 2026-09-28: <b>Sub Main in a web project with forms is STARTUP, like
+    /// WinForms</b>): the program's entry point runs <c>Main</c> first — so anything it adds to the page is there — and
+    /// then starts the page's form, as <c>Application.Run(New Form1)</c> shows the form after the startup code. With no
+    /// Main, the form starts on load.
+    ///
+    /// <para>⛔ Only when NO user code calls <see cref="DispatchCall"/> (review of 27af2e46): a user who writes that
+    /// call chose when the form starts, and the automatic start used to pre-empt them (an Async Main returns at its
+    /// first Await). ⚠ A Main that THROWS stops the script and the form never starts — the WinForms behaviour of a Main
+    /// that throws before <c>Application.Run</c>.</para>
+    ///
+    /// <para>The JavaScript backend asks THIS, once, when it writes the entry point: is <paramref name="className"/> /
+    /// <paramref name="methodName"/> the generated dispatch (a shared method on the generated class)? The class exists
+    /// only when <see cref="FormDispatch.Write"/> put it in the build — a project with forms that have code-behind — so
+    /// a program without forms is untouched. One rule, in the backend's entry point, reached identically by the CLI
+    /// and the IDE because both compile the same generated file; never a second copy per build route.</para>
+    ///
+    /// <para>⚠ By name. A user's own <c>VgsForms</c> class in a project with forms is already a second declaration of
+    /// the generated one; the reserved BL8031 (<c>design --check</c>) is the number set aside to name that
+    /// collision.</para>
+    /// </summary>
+    public static bool IsStartupDispatch(string? className, string? methodName, bool isShared) =>
+        isShared &&
+        string.Equals(className, DispatchModuleName, StringComparison.Ordinal) &&
+        string.Equals(methodName, DispatchSubName, StringComparison.Ordinal);
 
     /// <summary>
     /// Writes <c>&lt;Name&gt;.html</c> and <c>&lt;Name&gt;.css</c> for each form.
@@ -609,18 +642,40 @@ public static class FormAssetEmitter
         var (width, height) = runtime.RootClientSize;
 
         sb.Append($"/* Generated from {form.Name}{form.FileExtension}. Edits here are overwritten on build. */\n");
-        sb.Append("body { margin: 0; }\n");
+
+        // ⛔⛔ The page body is a COLUMN and the form area takes the space LEFT OVER (owner decision 2026-09-28: Sub
+        // Main is startup, like WinForms, and what it adds to the page stays visible). The form area used to be
+        // `height: 100vh`, so a heading Main appended to the body sat exactly one viewport down — the owner's blank page
+        // with a scrollbar. Now content Main puts before or after the form area is on screen when there is room, the
+        // form area still fills the window when there is none (with nothing else on the page it is exactly the
+        // viewport, as before — the Edge/WinForms harness numbers do not move), and anchors and docks follow its REAL
+        // size because every inset is against .vgs-form, never the viewport.
+        //
+        // ⚠ "When there is room": the form area never goes below its design height, so on a window no taller than the
+        // design (plus Main's content) that content is below the fold and the page scrolls to it — the scroll-not-squash
+        // rule wins. ⚠ align-items: flex-start (review of 27af2e46, measured in Edge): a column STRETCHES every child
+        // across its width by default, so the template's "Click me" button rendered 1024px wide. Main's elements keep
+        // their own width; only the form area stretches (align-self below).
+        // ⛔ KNOWN LIMIT, measured: in a column EVERY direct child of <body> is its own row, so two inline elements Main
+        // appends straight to the body (two <span>s) stack instead of sharing a line. Wrap inline content in one element
+        // (a <div> or <p>) to keep it on one line. No pure-CSS layout gives both "the form area takes the remaining
+        // height" and "loose inline body children share a line".
+        sb.Append("body { margin: 0; display: flex; flex-direction: column; align-items: flex-start; min-height: 100vh; }\n");
         sb.Append(".vgs-form {\n");
         sb.Append("  position: relative;\n");
 
         // ⛔ Its own block formatting context (Task 10 review N-1, measured in Chromium): otherwise a <Literal> whose
         // first element has a top margin (<p>, <h1>, <ul>) collapses that margin through .vgs-literal and .vgs-form,
         // and the WHOLE form area — every positioned control with it — moves down. The phone query's display:flex
-        // overrides this below the breakpoint.
+        // overrides this below the breakpoint. (It is the form area's INSIDE; the body's flex column is its outside.)
         sb.Append("  display: flow-root;\n");
+
+        // Grows into the column's free space; never shrinks below its content or its design size — below the design
+        // size the page scrolls, it never squashes.
+        sb.Append("  flex: 1 0 auto;\n");
+        sb.Append("  align-self: stretch;\n");
         sb.Append("  width: 100%;\n");
         sb.Append($"  min-width: {Number(width)}px;\n");
-        sb.Append("  height: 100vh;\n");
         sb.Append($"  min-height: {Number(height)}px;\n");
         sb.Append("  box-sizing: border-box;\n");
         sb.Append("}\n");
@@ -651,7 +706,9 @@ public static class FormAssetEmitter
         }
 
         sb.Append($"@media (width < {Number(breakpoint)}px) {{\n");
-        sb.Append("  .vgs-form { display: flex; flex-direction: column; gap: 8px; height: auto; min-width: 0; min-height: 0; }\n");
+        // flex: none — the stacked form area is its content's height; it does not grow into the body column's free
+        // space below the breakpoint.
+        sb.Append("  .vgs-form { display: flex; flex-direction: column; gap: 8px; flex: none; min-width: 0; min-height: 0; }\n");
         var ordered = AppendStacked(sb, form.Controls, designer);
 
         // The <Literal>'s wrapper (AppendCanvasBody) comes after every top-level control, bottom strips included.
@@ -863,11 +920,25 @@ public static class FormAssetEmitter
     /// <c>Element.getAttribute(…) As String</c> are declared. The two-step form compiles and
     /// runs.</para>
     /// </summary>
+    /// <remarks>
+    /// ⛔⛔ <b>Once per page</b> (owner decision 2026-09-28). The JavaScript backend calls this itself after
+    /// <c>Main</c> returns when no user code does (<see cref="IsStartupDispatch"/>); a user's own
+    /// <c>VgsForms.VgsDispatchForm()</c> — which BL8018 used to demand — runs where they put it instead. The guard
+    /// keeps a second call (two buttons, a double click, a call from Main and a handler) from constructing a second
+    /// form, wiring every handler twice. A page runs its script once, so a <c>Shared</c> flag is exactly "once per
+    /// page".
+    /// </remarks>
     public static string DispatchSource(IEnumerable<string> formNames)
     {
         var sb = new StringBuilder();
         sb.Append($"Public Class {DispatchModuleName}\n");
+        sb.Append($"    Private Shared {DispatchedFieldName} As Boolean = False\n");
+        sb.Append('\n');
         sb.Append($"    Public Shared Sub {DispatchSubName}()\n");
+        sb.Append($"        If {DispatchedFieldName} Then\n");
+        sb.Append("            Return\n");
+        sb.Append("        End If\n");
+        sb.Append($"        {DispatchedFieldName} = True\n");
         sb.Append("        Dim doc As Document = ::document\n");
         sb.Append("        Dim b As Element = doc.body\n");
         sb.Append("        Dim formName As String = b.getAttribute(\"data-form\")\n");

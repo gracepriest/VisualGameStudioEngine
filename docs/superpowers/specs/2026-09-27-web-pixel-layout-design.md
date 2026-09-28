@@ -155,6 +155,21 @@ writer, region writer, grid (`FormPropertyGridViewModel.cs:479`, `:489`) and ret
 size**: larger → controls follow anchors; smaller but above the breakpoint → the form keeps its design size and the page
 scrolls; never squashed.
 
+> **Amended 2026-09-28 (owner decision: Sub Main is startup, like WinForms).** "Fills the viewport" now means *takes the
+> height LEFT OVER in the page*: `body` is a flex column (`align-items: flex-start`, `min-height: 100vh`) and
+> `.vgs-form` is `flex: 1 0 auto; align-self: stretch` with the design size as its minimum — no longer `height: 100vh`,
+> which pushed everything `Main` appended to the body one viewport down (the owner's blank page). With nothing else on
+> the page the form area is exactly the viewport, as before. Rules that follow from it:
+> - `Main` runs first and then the form starts automatically — **only when no user code calls
+>   `VgsForms.VgsDispatchForm()`**; a user who calls it decides when (after an `Await`, from a button). Once per page.
+> - A `Main` that **throws** stops the script, so the form never starts (WinForms: a Main that throws before
+>   `Application.Run` shows no form).
+> - `Main`'s content is visible **only when the design height leaves room**; otherwise the page scrolls to it
+>   (scroll-not-squash wins).
+> - Known limit: every direct child of `<body>` is a column row, so loose inline elements appended straight to the body
+>   stack; wrap them in one element to keep them on a line.
+> - Below the breakpoint the stacked form area is `flex: none` (its content's height).
+
 Per control, with `W`/`H` the container's design width/height (Anchor default `Top, Left`):
 
 | Anchor | CSS |
