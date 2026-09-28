@@ -260,6 +260,33 @@ namespace BasicLang.Compiler.SemanticAnalysis
         private readonly List<Symbol> _activeLoopControlSymbols = new List<Symbol>();
 
         /// <summary>
+        /// Task #178: the expression node an assignment is about to STORE into, while
+        /// <see cref="VisitWriteTarget"/> visits it — and only for a PURE write (<c>=</c>). A
+        /// compound <c>+=</c> or <c>++</c> reads its target too, so it leaves this null and the
+        /// target is judged as a read as well. <see cref="CheckPropertyRead"/> skips exactly this
+        /// one node: <c>o.W.X = 1</c> still reads <c>o.W</c>, and an index or receiver inside the
+        /// target is still a read.
+        /// </summary>
+        private ASTNode _pureWriteTarget;
+
+        /// <summary>
+        /// Task #178: the function scope of the <c>Sub New</c> whose body is being analyzed, and
+        /// whether it is a <c>Shared Sub New</c> — what VB's BC30526 exception asks
+        /// (<see cref="IsReadOnlyAutoPropertyInitialization"/>). Compared by IDENTITY with the
+        /// nearest function scope, so a lambda written inside the constructor — its own function
+        /// scope — is not the constructor.
+        /// </summary>
+        private Scope _constructorScope;
+        private bool _constructorIsShared;
+
+        /// <summary>
+        /// Task #178: the property whose <c>Get</c> body is being analyzed, and that accessor's
+        /// function scope — for <see cref="IsGetterReturnVariable"/>. Null outside a getter.
+        /// </summary>
+        private string _currentGetterProperty;
+        private Scope _currentGetterScope;
+
+        /// <summary>
         /// P2a-2 Task 8c-3 — spec §8.3's enum row. Enum-member arguments that were folded to
         /// their underlying primitive because the winner's parameter at that index is
         /// enum-typed. <see cref="IRBuilder"/> mints an <c>IRConstant</c> for exactly these
@@ -660,7 +687,12 @@ namespace BasicLang.Compiler.SemanticAnalysis
                             // bare use that binds through THIS signature (a class declared in a
                             // sibling file, or below its use) lowers the same way.
                             IsAccessorBacked = prop.IsAccessorBacked,
-                            IsShared = prop.IsStatic
+                            IsShared = prop.IsStatic,
+                            // Task #178 — the same three facts, for the same reason: a use that
+                            // binds through THIS signature is judged BC30526/BC30524 identically.
+                            IsReadOnly = prop.IsReadOnly,
+                            IsWriteOnly = prop.IsWriteOnly,
+                            IsAutoProperty = prop.IsAuto
                         };
                         break;
                     }
@@ -5807,7 +5839,12 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 interfaceType.Members[prop.Name] = new Symbol(prop.Name, SymbolKind.Property, propertyType, prop.Line, prop.Column)
                 {
                     Access = AccessModifier.Public,
-                    IsAccessorBacked = true
+                    IsAccessorBacked = true,
+                    // Task #178: what a use THROUGH the interface is judged by (BC30526/BC30524) —
+                    // VB's rule, the receiver's static type decides. Never IsAutoProperty: an
+                    // interface has no storage, so the constructor exception cannot apply.
+                    IsReadOnly = prop.IsReadOnly,
+                    IsWriteOnly = prop.IsWriteOnly
                 };
             }
 
@@ -6776,8 +6813,27 @@ namespace BasicLang.Compiler.SemanticAnalysis
         public void Visit(ConstructorNode node)
         {
             // Enter constructor scope
-            EnterScope("Constructor", ScopeKind.Function);
+            var constructorScope = EnterScope("Constructor", ScopeKind.Function);
 
+            // Task #178: the scope VB's BC30526 exception tests the nearest function scope against.
+            // Saved and restored rather than cleared, so nothing outlives this body.
+            var outerConstructorScope = _constructorScope;
+            var outerConstructorIsShared = _constructorIsShared;
+            _constructorScope = constructorScope;
+            _constructorIsShared = node.IsShared;
+            try
+            {
+                VisitConstructorBody(node);
+            }
+            finally
+            {
+                _constructorScope = outerConstructorScope;
+                _constructorIsShared = outerConstructorIsShared;
+            }
+        }
+
+        private void VisitConstructorBody(ConstructorNode node)
+        {
             // Register parameters
             var parameterSymbols = new List<Symbol>();
             foreach (var param in node.Parameters)
@@ -6959,6 +7015,10 @@ namespace BasicLang.Compiler.SemanticAnalysis
             // ADR-0007: what IRBuilder's bare-name lowering reads (see Symbol.IsAccessorBacked).
             symbol.IsAccessorBacked = node.IsAccessorBacked;
             symbol.IsShared = node.IsStatic;
+            // Task #178: what CheckPropertyWrite / CheckPropertyRead judge (see Symbol.IsReadOnly).
+            symbol.IsReadOnly = node.IsReadOnly;
+            symbol.IsWriteOnly = node.IsWriteOnly;
+            symbol.IsAutoProperty = node.IsAuto;
 
             // Try to define in current scope
             if (!_currentScope.Define(symbol))
@@ -6982,8 +7042,21 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 var getterScope = EnterScope($"get_{node.Name}", ScopeKind.Function);
                 getterScope.ReturnType = propertyType;
 
-                // Analyze getter body
-                node.Getter.Accept(this);
+                // Analyze getter body. Task #178: inside it, `P = v` names the accessor's return
+                // variable, not the property (IsGetterReturnVariable).
+                var outerGetterProperty = _currentGetterProperty;
+                var outerGetterScope = _currentGetterScope;
+                _currentGetterProperty = node.Name;
+                _currentGetterScope = getterScope;
+                try
+                {
+                    node.Getter.Accept(this);
+                }
+                finally
+                {
+                    _currentGetterProperty = outerGetterProperty;
+                    _currentGetterScope = outerGetterScope;
+                }
 
                 // Validate that getter returns the correct type
                 // Check if all return statements in getter return the property type
@@ -8688,6 +8761,20 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     ?? _typeManager.IntegerType;
             }
 
+            // Task #178: `For P = …` with no `As` DRIVES whatever P already denotes — IRBuilder
+            // reuses existing storage, a class property included (IsCurrentClassMember) — so the
+            // loop STORES into P and reads it back every iteration, like `P += 1`. Judged at the
+            // one write site, so a ReadOnly P is BC30526 and a WriteOnly one BC30524. (VB refuses
+            // every property here, BC30039; BasicLang drives a ReadWrite one, as it did before.)
+            // Asked BEFORE the loop scope exists, which is where the IR builder resolves it too.
+            if (string.IsNullOrEmpty(node.VariableType)
+                && ResolveBareName(node.Variable, node.Line, node.Column, report: false)?.Kind == SymbolKind.Property)
+            {
+                VisitWriteTarget(
+                    new IdentifierExpressionNode(node.Line, node.Column) { Name = node.Variable },
+                    alsoRead: true);
+            }
+
             // Define loop variable
             var loopVarSymbol = new Symbol(node.Variable, SymbolKind.Variable,
                                           loopVarType, node.Line, node.Column);
@@ -9035,6 +9122,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
             if (withType.ResolveMember(node.MemberName) is Symbol memberSymbol)
             {
                 SetNodeType(node, memberSymbol.Type ?? memberSymbol.ReturnType ?? _typeManager.ObjectType);
+                CheckPropertyRead(node, memberSymbol);   // task #178: `.W` read in a With block
             }
             else
             {
@@ -9241,9 +9329,172 @@ namespace BasicLang.Compiler.SemanticAnalysis
             }
         }
 
+        /// <summary>
+        /// ⭐ Task #178 — THE ONE PLACE a statement decides "this expression is being WRITTEN",
+        /// and so the one place BC30526 is judged. Every statement that stores into an expression
+        /// visits its target through here instead of <c>Accept</c>:
+        /// <list type="bullet">
+        /// <item><see cref="Visit(AssignmentStatementNode)"/> — <c>=</c>, every compound operator,
+        /// the bare-name form ADR-0007 lowers to the qualified one, <c>Me.</c> / <c>MyBase.</c> /
+        /// <c>obj.</c> / <c>Class.</c>, a <c>With</c> block's <c>.P = v</c>, and <c>ReDim</c>, which
+        /// the parser lowers to an assignment;</item>
+        /// <item><see cref="Visit(UnaryExpressionNode)"/> — <c>++</c> / <c>--</c>;</item>
+        /// <item><see cref="Visit(ForLoopNode)"/> — <c>For P = …</c> with no <c>As</c>, which
+        /// drives an existing <c>P</c>, a class property included (<c>For o.P =</c> does not
+        /// parse; <c>For P As T</c> declares a fresh local).</item>
+        /// </list>
+        /// Nothing else in the language stores into an EXISTING property: a <c>For Each</c>
+        /// refuses a property as its control variable already (ADR-0009), there are no object
+        /// initializers and no parameterized properties, and a ByRef argument is not a write — VB
+        /// passes a ReadOnly property's value and skips the write-back (task #209 owns making
+        /// every backend do that).
+        ///
+        /// <para><paramref name="alsoRead"/>: a compound assignment or <c>++</c> READS its target
+        /// first, so the target is judged by <see cref="CheckPropertyRead"/> as well (BC30524 on
+        /// <c>o.W += 1</c>). A plain <c>=</c> exempts exactly the target node from the read
+        /// judgment; everything inside it (a receiver, an index) is still a read.</para>
+        /// </summary>
+        private void VisitWriteTarget(ExpressionNode target, bool alsoRead)
+        {
+            var outer = _pureWriteTarget;
+            _pureWriteTarget = alsoRead ? null : target;
+            try
+            {
+                target.Accept(this);
+            }
+            finally
+            {
+                _pureWriteTarget = outer;
+            }
+
+            CheckPropertyWrite(target);
+        }
+
+        /// <summary>
+        /// BC30526, "Property 'P' is 'ReadOnly'." — a store into a property declared
+        /// <c>ReadOnly</c>, as seen through the receiver's STATIC type (the symbol the target
+        /// bound to): an interface's ReadOnly property is ReadOnly through that interface even when
+        /// the implementing class adds a setter, and writable through the class. Called by
+        /// <see cref="VisitWriteTarget"/> only.
+        /// </summary>
+        private void CheckPropertyWrite(ExpressionNode target)
+        {
+            var property = BoundProperty(target);
+            if (property == null || !property.IsReadOnly) return;
+            if (IsReadOnlyAutoPropertyInitialization(target, property)) return;
+            if (IsGetterReturnVariable(target, property)) return;
+
+            PropertyAccessError("BC30526", $"Property '{property.Name}' is 'ReadOnly'.", target);
+        }
+
+        /// <summary>
+        /// ⭐ Task #178 — THE ONE PLACE a property READ is judged: BC30524, "Property 'W' is
+        /// 'WriteOnly'." Called by the three visitors that bind a name to a member — a bare
+        /// identifier, <c>x.M</c> and a <c>With</c> block's <c>.M</c> — the moment they bind it, so
+        /// every rvalue position is covered without listing them (an initializer, an argument, a
+        /// condition, an operand of <c>&amp;</c>, a receiver, a ByRef argument, the read half of a
+        /// compound assignment). The ONE node exempted is the target of a plain <c>=</c>
+        /// (<see cref="_pureWriteTarget"/>).
+        /// </summary>
+        private void CheckPropertyRead(ExpressionNode node, Symbol symbol)
+        {
+            if (symbol == null || symbol.Kind != SymbolKind.Property || !symbol.IsWriteOnly) return;
+            if (ReferenceEquals(node, _pureWriteTarget)) return;
+
+            PropertyAccessError("BC30524", $"Property '{symbol.Name}' is 'WriteOnly'.", node);
+        }
+
+        /// <summary>
+        /// The property an assignment target names, or null. Only the three NAMING forms can be a
+        /// property; an element (<c>o.Items(0) = 1</c>) or a call result is a store into something
+        /// the property RETURNED, which a ReadOnly property allows.
+        /// </summary>
+        private Symbol BoundProperty(ExpressionNode expression)
+        {
+            var symbol = expression switch
+            {
+                IdentifierExpressionNode or MemberAccessExpressionNode => GetNodeSymbol(expression),
+                ImplicitWithMemberNode withMember when _withObjectTypes.Count > 0 =>
+                    _withObjectTypes.Peek()?.ResolveMember(withMember.MemberName),
+                _ => null,
+            };
+            return symbol?.Kind == SymbolKind.Property ? symbol : null;
+        }
+
+        /// <summary>
+        /// VB's ONE exception to BC30526 (Roslyn's <c>PropertySymbol.IsWritable</c>): a ReadOnly
+        /// AUTO-property — no Get body, so it has a backing field — may be assigned
+        /// <list type="bullet">
+        /// <item>directly in a constructor of its DECLARING class — not a derived class's, not
+        /// another method, and not a lambda written inside the constructor (the lambda is its own
+        /// function; C# refuses it too, CS0200);</item>
+        /// <item>of the matching kind: an instance <c>Sub New</c> for an instance property, a
+        /// <c>Shared Sub New</c> for a Shared one;</item>
+        /// <item>through <c>Me</c>: bare <c>P</c> or <c>Me.P</c> — not <c>obj.P</c> (even another
+        /// instance of the same class), not <c>MyBase.P</c>, not a <c>With</c> block's
+        /// <c>.P</c>. A Shared property has no <c>Me</c>; bare <c>S</c> or <c>Class.S</c>.</item>
+        /// </list>
+        /// Every backend compiles the store to the backing field (the MSIL backend in
+        /// <c>EmitPropertySet</c>), because there is no setter to call.
+        /// </summary>
+        private bool IsReadOnlyAutoPropertyInitialization(ExpressionNode target, Symbol property)
+        {
+            if (!property.IsAutoProperty) return false;
+
+            var function = _currentScope?.GetFunctionScope();
+            if (function == null || !ReferenceEquals(function, _constructorScope)) return false;
+            if (_constructorIsShared != property.IsShared) return false;
+
+            // Declared by THIS class. Resolution is nearest-first, so when this class declares a
+            // property of that name the target bound to it; an inherited one is not ours.
+            var declaring = _currentScope.GetClassScope()?.ClassType;
+            if (declaring?.Members == null
+                || !declaring.Members.TryGetValue(property.Name, out var own)
+                || own?.Kind != SymbolKind.Property)
+            {
+                return false;
+            }
+
+            return target switch
+            {
+                IdentifierExpressionNode => true,
+                MemberAccessExpressionNode { Object: IdentifierExpressionNode receiver } => property.IsShared
+                    ? GetNodeSymbol(receiver) is { Kind: SymbolKind.Class } receiverClass
+                      && string.Equals(receiverClass.Name, declaring.Name, StringComparison.OrdinalIgnoreCase)
+                    : receiver.Name.Equals("Me", StringComparison.OrdinalIgnoreCase),
+                _ => false,
+            };
+        }
+
+        /// <summary>
+        /// Inside a property's own <c>Get</c>, VB binds an assignment to the property's bare name
+        /// to the accessor's implicit RETURN VARIABLE, as it does a Function's name — it is not a
+        /// store into the property, so it is not BC30526. (BasicLang does not implement that
+        /// return variable; the program is left exactly as it compiled before, not refused.)
+        /// </summary>
+        private bool IsGetterReturnVariable(ExpressionNode target, Symbol property) =>
+            target is IdentifierExpressionNode
+            && _currentGetterProperty != null
+            && ReferenceEquals(_currentScope?.GetFunctionScope(), _currentGetterScope)
+            && string.Equals(_currentGetterProperty, property.Name, StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// A BC3052x diagnostic at the property use: VB's number as the code (the IDE's error
+        /// list and the native build print it) and at the head of the message, as BL6014 does, so
+        /// the CLI shows it too.
+        /// </summary>
+        private void PropertyAccessError(string code, string message, ASTNode at)
+        {
+            _errors.Add(new SemanticError(
+                _errorContext.FormatErrorWithContext($"{code}: {message}"), at.Line, at.Column)
+            {
+                ErrorCode = code
+            });
+        }
+
         public void Visit(AssignmentStatementNode node)
         {
-            node.Target.Accept(this);
+            VisitWriteTarget(node.Target, alsoRead: node.Operator != "=");
 
             // P2a-2 Task 7b: a WRITE to a .NET member that has no usable setter. Checked here,
             // before every early return below, because this is the one place that knows both
@@ -10011,7 +10262,11 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 _lambdaTargetType = null;
             }
 
-            node.Operand.Accept(this);
+            // Task #178: `x++` / `x--` read AND store their operand — judged like `x += 1`.
+            if (node.Operator is "++" or "--")
+                VisitWriteTarget(node.Operand, alsoRead: true);
+            else
+                node.Operand.Accept(this);
             var operandType = GetNodeType(node.Operand);
 
             if (operandType == null)
@@ -10287,6 +10542,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
             {
                 SetNodeSymbol(node, symbol);
                 SetNodeType(node, symbol.Type);
+                CheckPropertyRead(node, symbol);   // task #178: bare `W` read
             }
         }
 
@@ -10370,6 +10626,15 @@ namespace BasicLang.Compiler.SemanticAnalysis
             _currentScope?.GetClassScope()?.ClassType?.ResolveMember(name);
 
         public void Visit(MemberAccessExpressionNode node)
+        {
+            BindMemberAccess(node);
+
+            // Task #178: judged once, after whichever channel below bound the member — a class
+            // member, an interface member through an interface receiver, a module member alike.
+            CheckPropertyRead(node, GetNodeSymbol(node));
+        }
+
+        private void BindMemberAccess(MemberAccessExpressionNode node)
         {
             // First, check if this is a module reference (ModuleName.Symbol).
             // Skip this when the identifier is a local variable/parameter: a
@@ -11389,7 +11654,26 @@ namespace BasicLang.Compiler.SemanticAnalysis
         /// </summary>
         public void Visit(ArrayResizeExpressionNode node)
         {
-            node.Array.Accept(this);
+            // Task #178: only `ReDim Preserve` READS the old array; a plain ReDim replaces it, so
+            // its array is not a read and a WriteOnly array property may be ReDim'd (VB accepts).
+            // The store itself is judged on the assignment target the parser built.
+            if (node.Preserve)
+            {
+                node.Array.Accept(this);
+            }
+            else
+            {
+                var outer = _pureWriteTarget;
+                _pureWriteTarget = node.Array;
+                try
+                {
+                    node.Array.Accept(this);
+                }
+                finally
+                {
+                    _pureWriteTarget = outer;
+                }
+            }
             node.Size.Accept(this);
 
             var arrayType = GetNodeType(node.Array);
