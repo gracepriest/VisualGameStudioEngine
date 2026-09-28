@@ -3385,8 +3385,8 @@ namespace BasicLang.Compiler.IR
                     result = new IRConstantPatternCase(constValue, target);
                     break;
 
-                case NothingPatternNode:
-                    result = new IRNothingPatternCase(target);
+                case NothingPatternNode nothingPattern:
+                    result = new IRNothingPatternCase(target) { WrittenWithIs = nothingPattern.WrittenWithIs };
                     break;
 
                 case OrPatternNode orPattern:

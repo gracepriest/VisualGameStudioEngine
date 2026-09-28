@@ -1259,7 +1259,8 @@ namespace BasicLang.Compiler.AST
         /// True when written <c>Case Is Nothing</c> — the reference-IDENTITY test, governed by the
         /// same operand rule as <c>x Is Nothing</c> (ADR-0011 D2 (2)). False for <c>Case Nothing</c>,
         /// which is VB's VALUE comparison against the type's default (<c>Case 0</c> on an Integer)
-        /// and is not an identity test at all. Both lower to the same IR today.
+        /// and is not an identity test at all. Both lower to <c>IRNothingPatternCase</c>, which carries
+        /// this flag as its own <c>WrittenWithIs</c>.
         /// </summary>
         public bool WrittenWithIs { get; set; }
 
