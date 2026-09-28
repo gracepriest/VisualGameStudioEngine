@@ -19,11 +19,24 @@ facade (all five tasks of `2026-09-13-blnet-cpp-facade.md`).
 
 ## 🌐 NEWEST — 2026-09-27: web forms laid out in pixels (piece 1 of "one form, either target"), branch `feat/web-pixel-layout`
 
-Branch `feat/web-pixel-layout` @ `9ffb4dd2` (pushed; based on `feat/property-grid` @ `6af0bea1`, NOT
-on master — master has moved since; do a real merge in a `git worktree add --detach` before any PR).
+Branch `feat/web-pixel-layout` (pushed; based on `feat/property-grid` @ `6af0bea1`, NOT on master —
+master has moved since; do a real merge in a `git worktree add --detach` before any PR).
 Spec `docs/superpowers/specs/2026-09-27-web-pixel-layout-design.md` · plan
 `docs/superpowers/plans/2026-09-27-web-pixel-layout.md` · per-task pre-flights (they WIN over the plan)
-`…-task9-preflight.md`, `…-task10-preflight.md`, `…-task11-preflight.md`.
+`…-task9-preflight.md` … `…-task14-preflight.md`; mutation record `…-task15-mutations.md` (20/20 killed).
+
+**✅ ALL 16 TASKS DONE — gate at `4a19bc4f` (2026-09-27), clean Release build:** fast subset 8322 total /
+8316 passed / 5 failed / 1 skipped — the 5 known machine failures only (same names as the Task 0 baseline
+at `a696b9c4`, 7946/5). Integration (`TestCategory=Integration` over Form*/PixelLayout/Retarget/WinForms):
+234 total / 232 passed / 2 failed — both INHERITED, failing identically on the branch base `6af0bea1` in a
+detached worktree: `CppDoubleFormattingTests.Expected_IsWhatDotNetPrints` ("∞" vs "Infinity") and
+`ModuleScopeInitializerTests.AFoldedComparison_ReachesEveryBackend_ModuloBooleanFormatting` (they match
+only because "Formatting" contains "Form"). **Waiting on: the owner's click-through** (plan Task 16 Step 7).
+The Edge harness (headless, loopback-served, real CLI build) and the WinForms reference window agree with
+the model within ±1px on every non-gap case; recorded gaps (asserted as literals): GroupBox (web fieldset
+insets 2px; WinForms docked +3/+19, positioned 0), bordered Panels draw no border on the web (WinForms
+insets 1/2px), CheckBox caption not rendered on the page, no-anchor centring 0.5px (WinForms floors). OPEN
+for the owner: the reflow script re-walks on any style write inside the form (filter to docked ids?).
 
 **Programme decisions (owner, do not relitigate):** design every form in pixels; the web page is
 desktop-exact, follows Anchor/Dock on resize, stacks on phones (secondary); a portable control library
@@ -38,12 +51,12 @@ through a small reflow script the page carries (`FormDockScript`, MutationObserv
 pixel geometry + vocabulary-based paste refusal, `MobileBreakpoint`, Canvas scaffold default,
 `FormDockLayout` (Designer/Runtime) + `FormDocument.DesignSize`, `FormAnchor`/`FormAnchorCss`,
 `FormReadingOrder`, canvas/placement (Task 9), the page emitter + reflow script (Task 10), lossless
-Canvas→WinForms retarget with polite BL8015 refusal (Task 11). Fast gate at `9ffb4dd2`: 8292 total,
-the 5 known machine failures only. **Left:** Task 12 (WinForms reference harness), 13 (Edge harness),
-14 (acceptance twin), 15 (mutations), 16 (gate, IDE drop, owner click-through). No IDE drop yet — the
-`IDE\` folder still predates this branch.
+Canvas→WinForms retarget with polite BL8015 refusal (Task 11), the WinForms reference harness (Task 12 —
+also made RegionWriter emit a docked control's Designer-resolved Size and the page anchor against the
+Designer client size, both confirmed by the real window), the Edge harness (Task 13), the Canvas acceptance
+twin (Task 14), the mutation pass (Task 15), the gate + IDE drop (Task 16).
 
-**Carried into Tasks 12/13 (measure, don't guess):** WinForms run-time Visible toggle + an anchored
+**Measured in Tasks 12/13 (these were the carried questions):** WinForms run-time Visible toggle + an anchored
 sibling that must not move; overflowing Top-then-Bottom and Left-then-Right; hidden-control docking;
 bordered Panel/GroupBox client area (1–2px, fieldset legend/min-inline-size); strip AutoSize vs
 DefaultHeight at 96 DPI; PictureBox with a LOADED image anchored Left+Right and docked Fill (img ignores
@@ -53,7 +66,8 @@ dropdown over a later control (z-order); 0.5px resize drift vs WinForms' floored
 **Click-through list for Task 16:** the three Task 9 decisions (dashed outline on a selected docked
 control; Canvas page = outline + caption, no title bar; strips inside Panels drawn) and the 11 in the
 Task 10 pre-flight's "Decisions taken".
-**Follow-ups recorded:** `FormArrange` writes a docked control's X/Y; `design --check` runs neither
+**Follow-ups recorded:** the property grid shows a docked control's STORED Size while canvas + code use the
+resolved size; `FormArrange` writes a docked control's X/Y; `design --check` runs neither
 CheckAnchors nor a Dock check (chip: unknown-Dock diagnostic); CheckBox/RadioButton caption invisible on
 Canvas; WinForms→web retarget still produces Grid (piece 4); a Canvas→Grid layout switch drops Width in
 Create but keeps it in Apply (piece 4); flaky row seen once: `FormDesignerRealViewTests.F2_WithAWindowLevelKeyBinding…`.
