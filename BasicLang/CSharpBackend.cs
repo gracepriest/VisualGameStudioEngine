@@ -1699,7 +1699,52 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             _currentFunction = null;
         }
 
+        /// <summary>
+        /// Emits a lambda inline, with its parameters' names meaning the PARAMETERS inside its
+        /// body (#169).
+        ///
+        /// <para>⛔ <see cref="_variableNameMap"/> folds names case-insensitively, and the
+        /// enclosing function's locals and parameters are already in it. So a parameter spelled
+        /// like one of them in another case — <c>Sub(N As Integer)</c> inside a function with a
+        /// local <c>n</c> — was declared <c>(int N)</c> while every use of it in the body was
+        /// looked up as <c>N</c>, found <c>n</c>, and emitted as the ENCLOSING variable: the
+        /// lambda wrote the caller's <c>n</c> (K1 printed 101, not 1) or read it (K6 printed 3,
+        /// not 7). The IR names the parameter exactly (IRBuilder binds every reference to its
+        /// declaration), so the backend only has to stop folding it onto something else.</para>
+        ///
+        /// <para>⚠ SCOPED both ways: whatever the map held for each parameter's name is put back
+        /// when the body is done, and an entry the lambda ADDED is removed. The second half
+        /// matters as much as the first — a parameter <c>G</c> read in the body used to leave
+        /// <c>G</c> in the map, and the module global <c>g</c> read after the lambda then
+        /// emitted as <c>G</c> (CS0103). A name spelled exactly like the parameter maps to the
+        /// same text either way, so a program with no case collision is emitted as before.</para>
+        /// </summary>
         private string GenerateLambdaExpression(IRFunction lambdaFunc)
+        {
+            var saved = new List<(string Key, bool Had, string Value)>();
+            foreach (var param in lambdaFunc.Parameters)
+            {
+                if (string.IsNullOrEmpty(param?.Name)) continue;
+                var had = _variableNameMap.TryGetValue(param.Name, out var outer);
+                saved.Add((param.Name, had, outer));
+                _variableNameMap[param.Name] = SanitizeName(param.Name);
+            }
+
+            try
+            {
+                return GenerateLambdaExpressionCore(lambdaFunc);
+            }
+            finally
+            {
+                for (var i = saved.Count - 1; i >= 0; i--)
+                {
+                    if (saved[i].Had) _variableNameMap[saved[i].Key] = saved[i].Value;
+                    else _variableNameMap.Remove(saved[i].Key);
+                }
+            }
+        }
+
+        private string GenerateLambdaExpressionCore(IRFunction lambdaFunc)
         {
             var sb = new StringBuilder();
 

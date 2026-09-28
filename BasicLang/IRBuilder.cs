@@ -796,7 +796,7 @@ namespace BasicLang.Compiler.IR
         /// <summary>
         /// Opens the name scope of ONE procedure body — a Sub, Function, constructor (declared
         /// or synthesized), property accessor, operator or interface default implementation.
-        /// Paired with <see cref="ExitProcedureScope"/> at the body's end (#199, ADR D4).
+        /// Paired with <see cref="ExitProcedureScope"/> at the body's end (#199, ADR-0013 D4).
         ///
         /// <para>⛔ Neither map was ever scoped: a local's <c>PushVariableVersion</c> was never
         /// popped, nor a constructor's parameters, a setter's <c>value</c>, or a name
@@ -2355,6 +2355,20 @@ namespace BasicLang.Compiler.IR
                 _currentFunction.Parameters.Add(valueParam);
                 PushVariableVersion("value", valueParam);
 
+                // ⭐ #169 (ADR-0013 D5): a DECLARED setter parameter (`Set(nv As Integer)`) is an ALIAS
+                // of that same `value` — the one sanctioned place an IRVariable's name differs
+                // from its declaration's, chosen here and never at a reference. The storage and
+                // every backend's setter contract stay `value`. Before, the body's `nv` bound
+                // nothing and was minted as a stray variable: CS0103 on C#, undeclared on C++,
+                // ReferenceError on JavaScript, InvalidProgramException on MSIL. The default
+                // `value` spelling registers nothing extra, so its setters are unchanged.
+                var declaredSetterParameter = node.SetterParameter?.Name;
+                if (!string.IsNullOrEmpty(declaredSetterParameter)
+                    && !string.Equals(declaredSetterParameter, valueParam.Name, StringComparison.Ordinal))
+                {
+                    PushVariableVersion(declaredSetterParameter, valueParam);
+                }
+
                 node.Setter.Accept(this);
 
                 if (!_currentBlock.IsTerminated())
@@ -2458,7 +2472,7 @@ namespace BasicLang.Compiler.IR
                 lambdaFunc.Parameters.Add(paramVar);
             }
 
-            // Save current context. ⚠ NOT a name scope (#199, ADR D4): the body is built inside
+            // Save current context. ⚠ NOT a name scope (#199, ADR-0013 D4): the body is built inside
             // its creator's scope because it captures the creator's names, so neither
             // `_variableVersions` nor `_locals` is saved here — only the parameters below are
             // pushed and popped.
@@ -2978,6 +2992,13 @@ namespace BasicLang.Compiler.IR
             // Store the query as a special IR node for code generation
             IRValue result = null;
 
+            // ⭐ #169 (ADR-0013 D5): the range variables, registered as each clause brings them into
+            // scope — the order the analyzer defines them in, after the clause's own expressions
+            // — and dropped when the query ends. The lowering evaluates each clause's expressions
+            // inline rather than in a lambda, so these are the names those expressions read;
+            // before, each was minted by its first reference.
+            var rangeVariables = new List<string>();
+
             foreach (var clause in node.Clauses)
             {
                 switch (clause)
@@ -3147,7 +3168,19 @@ namespace BasicLang.Compiler.IR
                         result = distinctCall;
                         break;
                 }
+
+                if (_semanticAnalyzer.LinqRangeVariables.TryGetValue(clause, out var declared))
+                {
+                    foreach (var symbol in declared)
+                    {
+                        PushVariableVersion(symbol.Name, CreateVariable(symbol.Name, symbol.Type, _nextVersion++));
+                        rangeVariables.Add(symbol.Name);
+                    }
+                }
             }
+
+            foreach (var name in rangeVariables)
+                PopVariableVersion(name);
 
             _expressionResult = result;
         }
@@ -3696,6 +3729,13 @@ namespace BasicLang.Compiler.IR
             var loopVar = GetOrCreateVariable(node.Variable, loopVarType);
             EmitInstruction(new IRAssignment(loopVar, startValue));
 
+            // ⭐ #169 (ADR-0013 D5): the analyzer declares the loop's control variable in the loop's
+            // own scope, so the body's references to it are bound as a Local of this name — and
+            // bind to WHATEVER the line above resolved it to, a module global included, which
+            // GetOrCreateVariable returns without registering. Registered for the loop only; the
+            // new-vs-existing decision above is untouched (#124's).
+            PushVariableVersion(node.Variable, loopVar);
+
             // Jump to condition
             EmitInstruction(new IRBranch(condBlock));
 
@@ -3750,6 +3790,7 @@ namespace BasicLang.Compiler.IR
             // Pop loop context
             _loopStack.Pop();
             PopVariableVersion(node.Variable);
+            PopVariableVersion(node.Variable);   // the registration above
 
             // Continue with end block
             _currentBlock = endBlock;
@@ -3869,6 +3910,17 @@ namespace BasicLang.Compiler.IR
 
             _loopStack.Push(new LoopContext(endBlock, endBlock));  // Continue goes to end (next iteration handled by foreach)
 
+            // ⭐ #169 (ADR-0013 D5): the variable the IRForEach declares is REGISTERED for the body,
+            // under the name it was declared with — the loop's own `x` (`As`, or a fresh name),
+            // or #168's hidden element variable, which the analyzer synthesized and which is
+            // bound by that name alone. Still not a LocalVariables entry: the backend's
+            // foreach construct declares it. Before, the body's first reference minted it — by
+            // the spelling of THAT reference, so `For Each Item …` read as `item` in a lambda
+            // was a second, undeclared variable (CS0103 on C#, undeclared on C++, a
+            // ReferenceError on JavaScript).
+            var controlVariable = CreateVariable(forEach.VariableName, elemType, _nextVersion++);
+            PushVariableVersion(controlVariable.Name, controlVariable);
+
             // The element reaches `x` FIRST, before any statement of the body can read `x` or
             // leave the iteration — so an `Exit For` leaves `x` holding the element being
             // processed, as VB does. Lowered by the ordinary assignment path, so a field, a module
@@ -3877,6 +3929,7 @@ namespace BasicLang.Compiler.IR
 
             node.Body.Accept(this);
             _loopStack.Pop();
+            PopVariableVersion(controlVariable.Name);
 
             // Branch back to foreach (will be handled by C# foreach semantics)
             if (!_currentBlock.IsTerminated())
@@ -4728,7 +4781,7 @@ namespace BasicLang.Compiler.IR
                 }
                 else
                 {
-                    targetVar = GetOrCreateVariable(idExpr2.Name, value.Type);
+                    targetVar = ReferencedVariable(idExpr2, value.Type);
                 }
 
                 // Optimization: rename a fresh result to the target instead of a separate
@@ -5381,9 +5434,60 @@ namespace BasicLang.Compiler.IR
             }
 
             // Look up variable normally
-            var localVar = GetOrCreateVariable(node.Name, _semanticAnalyzer.GetNodeType(node));
+            var localVar = ReferencedVariable(node, _semanticAnalyzer.GetNodeType(node));
             _expressionResult = localVar;
         }
+
+        /// <summary>
+        /// ⭐ #169 (ADR-0013 D1/D3) — THE ONE place an identifier reference that reaches variable
+        /// lookup becomes a variable: the read (<see cref="Visit(IdentifierExpressionNode)"/>)
+        /// and the target of an assignment both come here, after every arm that claims the
+        /// name for something else (a module global, an accessor-backed property, an import).
+        ///
+        /// <para>A reference the analyzer bound to a Local, Parameter or LambdaParameter is looked
+        /// up by the DECLARED spelling (<see cref="NameBinding.DeclaredName"/>) in
+        /// <see cref="_variableVersions"/> ONLY — never a module global or a class member, which
+        /// is what a same-spelled field shadowed by a case-differing lambda parameter used to
+        /// win (<c>Private n … Function(N) n * 10</c> printed 10, not 40, on C#, C++ and
+        /// JavaScript). The map stays Ordinal: the declared spelling is its key by construction,
+        /// so a program whose references all match their declarations looks up exactly what it
+        /// always did.</para>
+        ///
+        /// <para>⛔ A bound reference with nothing registered is an INTERNAL COMPILER ERROR, never
+        /// a silent create. Silently minting a variable named as WRITTEN is the bug this
+        /// replaces: <c>Function(N As Integer) n * 2</c> gave the IR a parameter <c>N</c> and a
+        /// second, undeclared <c>n</c> — CS0103 on C#, an undeclared identifier on C++, a
+        /// ReferenceError on JavaScript. Every declaration site registers its name first (ADR
+        /// D5), so a miss means one was missed.</para>
+        ///
+        /// <para>Everything unbound — <c>Me</c>, foreign and .NET names, the For Each hidden
+        /// variable, a Field, ModuleGlobal, Property, Method or Type reference — takes the
+        /// verbatim path it always took (#124 owns those kinds).</para>
+        /// </summary>
+        private IRVariable ReferencedVariable(IdentifierExpressionNode node, TypeInfo typeIfUnbound)
+        {
+            var binding = node.Binding;
+            if (binding == null || !IsVersionedBinding(binding.Kind))
+                return GetOrCreateVariable(node.Name, typeIfUnbound);
+
+            if (_variableVersions.TryGetValue(binding.DeclaredName, out var versions) && versions.Count > 0)
+                return versions.Peek();
+
+            throw new InvalidOperationException(
+                $"Internal compiler error: '{node.Name}' (line {node.Line}) resolved to the "
+                + $"{binding.Kind} declared as '{binding.DeclaredName}', but no variable of that name "
+                + "is registered in the IR builder's scope. A declaration site did not register it "
+                + "(#169, ADR-0013 D5); refusing to invent one.");
+        }
+
+        /// <summary>
+        /// The binding kinds whose declarations <see cref="_variableVersions"/> holds, and so
+        /// the kinds <see cref="ReferencedVariable"/> binds through it (#169, ADR-0013 D3).
+        /// </summary>
+        private static bool IsVersionedBinding(NameBindingKind kind) =>
+            kind == NameBindingKind.Local
+            || kind == NameBindingKind.Parameter
+            || kind == NameBindingKind.LambdaParameter;
 
         public void Visit(MemberAccessExpressionNode node)
         {
