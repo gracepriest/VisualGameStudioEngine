@@ -254,18 +254,31 @@ End Sub
 
     internal const string CastExpected = "intdiv 8\nstr 9.5\ndec 3";
 
-    /// <summary>A binding pattern: `n` is the Select subject, visible to its guard and body.</summary>
+    /// <summary>
+    /// A binding pattern: `m` is the Select subject, visible to its guard and body. Two clauses
+    /// of one Select bind the same name, and a sibling Select binds it again — JavaScript
+    /// declared `const m` twice in one scope for both (node refused the program), and the IR
+    /// builder must register each clause's binding (#169's unregistered-Local check threw).
+    /// </summary>
     internal const string BindingProgram = @"
 Sub Main()
     Dim y As Integer = 5
     Select Case y
+        Case m When m > 9
+            Console.WriteLine(""big "" & m)
         Case m When m > 3
-            Console.WriteLine(""bound "" & m)
+            Console.WriteLine(""bound "" & (m + 1))
         Case Else
             Console.WriteLine(""unbound"")
     End Select
+    Select Case y - 4
+        Case m When m > 0
+            Console.WriteLine(""sibling "" & m)
+    End Select
 End Sub
 ";
+
+    internal const string BindingExpected = "bound 6\nsibling 1";
 
     // ---------------------------------------------------------------------------------------
 
@@ -477,8 +490,8 @@ public class WhenGuardCallRunTests
     [Test]
     public void Binding_CSharpAndJavaScript_Run()
     {
-        Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharp(WhenGuardCallTests.BindingProgram)), Is.EqualTo("bound 5"));
+        Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharp(WhenGuardCallTests.BindingProgram)), Is.EqualTo(WhenGuardCallTests.BindingExpected));
         Assert.That(FourBackends.Norm(JavaScriptExecutionTests.RunNodeScript(JsTestSupport.Compile(WhenGuardCallTests.BindingProgram))),
-            Is.EqualTo("bound 5"));
+            Is.EqualTo(WhenGuardCallTests.BindingExpected));
     }
 }

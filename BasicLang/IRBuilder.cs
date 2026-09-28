@@ -3413,6 +3413,9 @@ namespace BasicLang.Compiler.IR
 
             // Generate case blocks
             var caseBlocks = new List<BasicBlock>();
+            // The pattern variables each clause declares, re-registered around that clause's
+            // body so a body sees its OWN clause's binding, never a sibling's same-named one.
+            var clauseBindings = new Dictionary<CaseClauseNode, List<IRVariable>>();
             int caseIndex = 0;
             foreach (var caseClause in node.Cases)
             {
@@ -3434,13 +3437,22 @@ namespace BasicLang.Compiler.IR
                 }
 
                 // Add pattern cases
-                foreach (var pattern in caseClause.Patterns)
+                var bindings = new List<IRVariable>();
+                clauseBindings[caseClause] = bindings;
+                try
                 {
-                    var patternCase = ConvertPatternToIR(pattern, caseBlock);
-                    if (patternCase != null)
+                    foreach (var pattern in caseClause.Patterns)
                     {
-                        switchInst.PatternCases.Add(patternCase);
+                        var patternCase = ConvertPatternToIR(pattern, caseBlock, bindings);
+                        if (patternCase != null)
+                        {
+                            switchInst.PatternCases.Add(patternCase);
+                        }
                     }
+                }
+                finally
+                {
+                    foreach (var bound in bindings) PopVariableVersion(bound.Name);
                 }
             }
 
@@ -3461,7 +3473,17 @@ namespace BasicLang.Compiler.IR
                     _currentBlock = caseBlocks[caseBlockIndex++];
                 }
 
-                caseClause.Body.Accept(this);
+                var bodyBindings = clauseBindings.TryGetValue(caseClause, out var own)
+                    ? own : new List<IRVariable>();
+                foreach (var bound in bodyBindings) PushVariableVersion(bound.Name, bound);
+                try
+                {
+                    caseClause.Body.Accept(this);
+                }
+                finally
+                {
+                    foreach (var bound in bodyBindings) PopVariableVersion(bound.Name);
+                }
 
                 if (!_currentBlock.IsTerminated())
                 {
@@ -3479,7 +3501,13 @@ namespace BasicLang.Compiler.IR
             _currentBlock = endBlock;
         }
 
-        private IRPatternCase ConvertPatternToIR(PatternNode pattern, BasicBlock target)
+        /// <param name="bindings">Receives every pattern variable this pattern declares, each
+        /// already pushed onto <see cref="_variableVersions"/> so its When guard (and, re-pushed
+        /// by the caller, the clause body) resolves it. The caller pops them. ⛔ A declaration
+        /// site (#169, ADR-0013 D5): the analyzer binds a guard's <c>n</c> to the pattern's
+        /// Local, and an unregistered Local is an internal compiler error, not a silent create.
+        /// </param>
+        private IRPatternCase ConvertPatternToIR(PatternNode pattern, BasicBlock target, List<IRVariable> bindings)
         {
             IRPatternCase result = null;
 
@@ -3491,6 +3519,7 @@ namespace BasicLang.Compiler.IR
                         target
                     );
                     typeCase.BindingVariable = typePattern.VariableName;
+                    RegisterPatternBinding(typePattern, typePattern.VariableName, bindings);
                     result = typeCase;
                     break;
 
@@ -3522,7 +3551,7 @@ namespace BasicLang.Compiler.IR
                     var orCase = new IROrPatternCase(target);
                     foreach (var alt in orPattern.Alternatives)
                     {
-                        var altCase = ConvertPatternToIR(alt, target);
+                        var altCase = ConvertPatternToIR(alt, target, bindings);
                         if (altCase != null)
                         {
                             orCase.Alternatives.Add(altCase);
@@ -3535,7 +3564,7 @@ namespace BasicLang.Compiler.IR
                     var tupleCase = new IRTuplePatternCase(target);
                     foreach (var elem in tuplePattern.Elements)
                     {
-                        var elemCase = ConvertPatternToIR(elem, target);
+                        var elemCase = ConvertPatternToIR(elem, target, bindings);
                         if (elemCase != null)
                         {
                             tupleCase.Elements.Add(elemCase);
@@ -3547,6 +3576,7 @@ namespace BasicLang.Compiler.IR
                 case BindingPatternNode bindingPattern:
                     var bindingCase = new IRBindingPatternCase(target);
                     bindingCase.BindingVariable = bindingPattern.VariableName;
+                    RegisterPatternBinding(bindingPattern, bindingPattern.VariableName, bindings);
                     result = bindingCase;
                     break;
 
@@ -3580,6 +3610,21 @@ namespace BasicLang.Compiler.IR
             }
 
             return result;
+        }
+
+        /// <summary>
+        /// Registers the variable a type or binding pattern declares, typed as the analyzer
+        /// declared it (recorded on the pattern node). A pattern the analyzer declared nothing
+        /// for — a type pattern whose type did not resolve — registers nothing.
+        /// </summary>
+        private void RegisterPatternBinding(PatternNode pattern, string name, List<IRVariable> bindings)
+        {
+            if (string.IsNullOrEmpty(name)) return;
+            var type = _semanticAnalyzer?.GetNodeType(pattern);
+            if (type == null) return;
+            var variable = CreateVariable(name, type, _nextVersion++);
+            PushVariableVersion(name, variable);
+            bindings.Add(variable);
         }
 
         public void Visit(CaseClauseNode node)

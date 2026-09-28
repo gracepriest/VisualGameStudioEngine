@@ -8473,6 +8473,8 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 {
                     var symbol = new Symbol(node.VariableName, SymbolKind.Variable, resolvedType, node.Line, node.Column);
                     _currentScope.Define(symbol);
+                    // The IR builder registers the binding from this (#169, ADR-0013 D5).
+                    SetNodeType(node, resolvedType);
                 }
             }
 
@@ -8553,8 +8555,11 @@ namespace BasicLang.Compiler.SemanticAnalysis
             // Select subject; the variable is used in the When guard expression.
             if (!string.IsNullOrEmpty(node.VariableName))
             {
+                var bindingType = _selectSubjectType ?? _typeManager.ObjectType;
                 _currentScope.Define(new Symbol(node.VariableName, SymbolKind.Variable,
-                    _selectSubjectType ?? _typeManager.ObjectType, node.Line, node.Column));
+                    bindingType, node.Line, node.Column));
+                // The IR builder registers the binding from this (#169, ADR-0013 D5).
+                SetNodeType(node, bindingType);
             }
 
             // Analyze When guard if present
