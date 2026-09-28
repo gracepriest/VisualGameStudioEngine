@@ -2020,6 +2020,20 @@ its OWN case), not the silent `b=4`-style stale value a loose, non-strict script
 is why
 `Decision_CaseDifferingRedefinition_DoesNotMerge` is asserted **structurally only**.
 
+**⭐ STALE as of #169/ADR-0013 (2026-09-28) for a LOCAL/PARAMETER/LAMBDAPARAMETER — this exact
+repro is now FIXED, re-measured against this working tree:** `P = Seed(100)` against a declared
+local `p` now prints `106` on ALL FOUR backends, C++ and JavaScript included — `IRBuilder`'s
+general assignment-target lowering goes through the SAME ONE consuming site
+(`ReferencedVariable`) every OTHER identifier reference does now, so a case-differing WRITE to an
+existing local is no longer special. #169 owns exactly this: DECLARATION REGISTRATION plus the
+identifier-expression REFERENCE site, for Local/Parameter/LambdaParameter (ADR-0013 D6). **#124
+remains open for everything D6 leaves it**: Field and ModuleGlobal reads/writes, Property/Method/
+Type/Event references, and the RESOLUTION DECISIONS at non-identifier sites —
+`ResolvesToExistingStorage` choosing new-vs-existing for a `For`/`For Each` without `As`, and the
+Catch/Using/ReDim declarators. `CaseDifferingCollision_ReusesCaseInsensitively_OnEveryBackend`
+(`ForEachVariableRenameFixTests.cs`) is the promoted pin for the `For Each` reuse case named
+above — see the dedicated "#169 + #199 DONE" entry further down this list.
+
 #### ⛔ A TRAP THE MUTATION SWEEP CAUGHT: `p = p + 10` does NOT test kill-ORDERING
 
 The CSE repair orders its invalidation step **use → record → kill**, and the shape everyone
@@ -5063,7 +5077,8 @@ single new failure against the 170-name baseline.
   Structure's method (untestable today — this front end's `Structure` has no method syntax at
   all, fields only); a capture set #122 could not enumerate (raw inline code); a lambda that
   declares a name it also reads from the creator (N9) or one that differs from its own parameter
-  only by case (#169); a captured variable typed by the creator's own generic parameter; a
+  only by case (#169 — **STALE as of ADR-0013, 2026-09-28, see the note below the list**); a
+  captured variable typed by the creator's own generic parameter; a
   captured variable passed ByRef to another call; `MyBase.M()` inside a lambda; a `Select Case`
   `When` guard (or pattern variable) that reads a capture; a lambda in a field/module initializer
   or in `MyBase.New(...)` arguments (no creator function to hold an environment); delegate
@@ -5071,9 +5086,16 @@ single new failure against the 170-name baseline.
   shapes that have NEVER run on MSIL, before or after this task, and are unrelated to closures:
   `RaiseEvent` (no lowering at all) and an engine/native call the stdlib table does not know
   (e.g. `GameInit` — `SampleGames/Pong` and `SampleGames/SpaceShooter` still do not run on MSIL;
-  the new D8 check just reports it at compile time instead of at `ilasm` or at run time). Follow-
+  the new D8 check just reports it at compile time instead of at `ilasm` or at run time).
+  **The "differs only by case" refusal above is STALE as of #169/ADR-0013 (2026-09-28):** the
+  front end now binds that case-differing reference to the parameter itself (VB's shadowing
+  rule), so no front-end-analyzed program reaches this check any more; it stays as a
+  defence-in-depth backstop ADR-0013's own Obligations section requires, reachable now only from
+  hand-tampered IR (`ClosureLoweringRefusalTests.BackstopStillThrows_WhenALambdaParameterIsRenamedAfterTheIrIsBuilt`)
+  — see the dedicated "#169 + #199 DONE" entry further down this list. Follow-
   ups filed, not done here: #140 (C++'s own capture-by-copy lambda lowering — the second consumer
-  `ClosureLowering` was designed for), #169/#170 (front-end diagnostics), #172/#173/#174 (the
+  `ClosureLowering` was designed for), #170 (front-end diagnostics; #169 itself is CLOSED — see the
+  "#169 + #199 DONE" entry further down this list), #172/#173/#174 (the
   extra refusals above, each wants its own diagnostic or a considered decision), and events/engine
   calls on MSIL.
   ⛔ **TRAP: `IRDelegateCreate` exists ONLY in `ClosureLowering`'s own output.** Every visitor
@@ -5374,11 +5396,14 @@ single new failure against the 170-name baseline.
     every use within one function is typed identically either way; M7 (`Me` typed from a null
     class when uncached) is killed.
   - ⛔ **Three follow-ups this exposed, NOT fixed here:**
-    - **#199 — the SAME `_variableVersions`-never-scoped-per-function leak, for every other
-      name.** `MeOfCurrentMember`/`_meByFunction` closes it for `"Me"` alone; the implementer's
-      own brief asked whether `MyBase`, `MyClass`, a parameter shadowing an earlier function's
-      local, or a `For` control variable share the same hazard, and that walk was not done. Filed
-      to track it, not measured.
+    - **#199 — CLOSED, 2026-09-28 (fix commit `4ecbe895`).** ~~the SAME
+      `_variableVersions`-never-scoped-per-function leak, for every other name~~ —
+      `EnterProcedureScope`/`ExitProcedureScope` snapshot-and-restore `_variableVersions`/
+      `_locals` at every procedure body (Function, Sub, the declared and synthesized constructor,
+      the property getter/setter, the operator, the interface default implementation); a lambda
+      body is deliberately NOT its own scope (it captures the creator's). See the dedicated
+      "#169 + #199 DONE" entry further down this list for the mechanism and what #169 built on
+      top of it.
     - **#200 — the C++ backend cannot pass `Me` where a value (not the implicit receiver) is
       expected.** `Me` as an ordinary argument, or as an `Is`/`IsNot` operand, fails to COMPILE:
       `error: no viable conversion from 'Counter *' to 'std::shared_ptr<Counter>'`. `this` is a
@@ -5550,6 +5575,102 @@ single new failure against the 170-name baseline.
       method) and E9e (a branch that `Return`s an `AddressOf` result on one arm) are UNTOUCHED by
       this fix and still fail to compile on C++; #201 remains open for that half. See
       `UserDelegateConversionExecutionTests`' own updated doc comment and E9e's pin.
+- ⭐ **#169 + #199 DONE (ADR-0013; fix commits `4ecbe895` #199, `2549cbc7` #169).** BasicLang is
+  case-insensitive, but the IR builder used to re-resolve every bare name through its OWN Ordinal
+  maps — a SECOND resolver that could disagree with the analyzer's: `Function(N As Integer) n * 2`
+  minted a stray, undeclared second variable (CS0103/undeclared/ReferenceError on three backends);
+  with a same-spelled field `n`, `Function(N) n * 10` silently printed 10, not 40 — the FIELD won.
+  #199 landed first (its own commit, its own corpus diff) and closed a SEPARATE, prerequisite leak:
+  `_variableVersions`/`_locals` were never scoped per procedure, so an earlier Sub's local or
+  parameter could bind a LATER Sub's same-named reference.
+  - **#199 — the one mechanism.** `EnterProcedureScope`/`ExitProcedureScope` snapshot
+    `_variableVersions`/`_locals` on entry and restore the snapshot EXACTLY on exit (not by
+    popping a count, so an unbalanced push/pop inside the body cannot leak) — wrapped around
+    every procedure body: `Function`, `Sub`, the declared and synthesized constructor, the
+    property getter and setter, the operator, the interface default implementation. A LAMBDA body
+    is deliberately NOT its own scope (ADR-0013 D4): it is built inside its creator's scope
+    because it captures the creator's names.
+  - **#169 — the one recording point.** `SemanticAnalyzer.SetNodeSymbol` is the ONLY place an
+    identifier reference's `NameBinding` (`DeclaredName`, `Kind`, `Declaration`) is written — at
+    the analyzer's own `SymbolTable` lookup, so the binding and the resolved symbol can never
+    disagree. Fresh on every analysis pass; `Name` is never rewritten. Null (exempt) for `Me`, a
+    `::` foreign name, a .NET member with no BasicLang `Symbol`, an `Event` reference (D7, left
+    for #124), a compiler-SYNTHESIZED declaration (the `For Each` hidden `__foreach_N`), and a
+    symbol whose name fails the OrdinalIgnoreCase invariant against the written spelling (D8,
+    counted — 0 on the corpus and every probe here).
+  - **#169 — the one consuming site.** `IRBuilder.ReferencedVariable` is the ONLY site a bound
+    identifier reference becomes a variable — both a READ and an assignment TARGET go through it.
+    For Local/Parameter/LambdaParameter it looks up `Binding.DeclaredName` in `_variableVersions`
+    ONLY — never a module global or a class member (the K8 fix). **A miss is an INTERNAL COMPILER
+    ERROR, never a silent create** — silent creation-by-written-spelling is exactly the bug this
+    replaces, so `ReferencedVariable` refuses to reproduce it. The ICE message names the task and
+    the missing declared spelling, and stays the detector: after #169, no bound reference reaches
+    it on the corpus or the full suite (`BASICLANG_VERIFY_IR` 0 fires either way).
+  - **D5 registration** — the obligation the ICE creates: every declaration the analyzer binds as
+    Local/Parameter/LambdaParameter must be registered in `_variableVersions` at ITS declaration
+    site, before anything can reference it. Four sites needed one: the `For Each` control
+    variable (and its hidden `__foreach_N`, registered by its own synthesized name, no Binding);
+    the counted `For` variable; LINQ range variables (registered per clause, in clause order); and
+    a setter's DECLARED parameter (`Set(nv As Integer)`) registered as an ALIAS of the backend
+    `value` contract — the ONE sanctioned place an `IRVariable.Name` differs from its
+    `DeclaredName`, chosen at the declaration site, never at a reference. Setter EMISSION is
+    unchanged (still `value`).
+  - **The C# backend's own half.** `GenerateLambdaExpression` scopes a lambda's parameter names
+    in the case-insensitive `_variableNameMap` BOTH ways: in, for the body (so `Sub(N As Integer)`
+    inside a function with a local `n` writes `N`, never the enclosing `n`), and back OUT again
+    once the body closes (an entry the lambda ADDED — a parameter spelled like nothing else in
+    scope — is REMOVED, not merely restored; K1 printed 101 before this, and a module global read
+    right after such a lambda would otherwise inherit the lambda's OWN parameter's C# spelling).
+  - **Measured** (4 backends × CLI/CLI `-O`/Release `.blproj`): K2 42, K3 6, K8 40, K10 27 in
+    every cell; K1/K6/K7 shadow (1/7/1) with NO diagnostic (D2's interim — BC36641 stays an owner
+    decision, #217); K4/K9/K5 are right except pre-existing, UNRELATED backend defects (C#'s own
+    dropped lambda-parameter write, widened #136; C++'s capture-by-copy, #140; C#'s dropped
+    nested-lambda declaration, #165). Byte compare of 646 programs: only the 11 CASE-DIFFERING
+    programs change at all. No internal compiler error anywhere in the corpus or the full suite.
+    #199 alone: leak probes K1-K6 72/72 pass; byte compare of 646 programs/8,825 files: 24 differ,
+    all in the three probes the leak itself touched; no program that worked on every backend
+    changed.
+  - **Tests:** `VisualGameStudio.Tests/Compiler/NameBindingTests.cs` (front end/IR, fast subset —
+    every `NameBindingKind` recorded with its declared spelling and symbol identity, `Name` never
+    rewritten, every exemption incl. the D7 Event and the D5 synthesized `__foreach_N`, D8's
+    mismatch counter, re-analysis freshness, the M4 bound-miss ICE via a direct `with {
+    DeclaredName = "…" }` tamper, K8 at the IR level, #199's own two-Subs-same-local-name identity
+    check, and the two C# text pins) and `NameBindingExecutionTests.cs`
+    (`[Category("Integration")]` — the headline K-probes and edge probes on 4 backends × both
+    pipelines plus a Release `.blproj` leg, the leak probes, X1's two-Subs-undeclared-`For i`, the
+    multi-file module-global-vs-local case through `CompileProjectFiles` on all four backends, and
+    the K4/K9/K5/E18 pins plus E17 LINQ's "broken everywhere but never an ICE" contract). Four
+    pre-existing pins MOVED, promoted to the new truth rather than deleted: `LambdaCaptureSetTests
+    .N4b_…` (the body's `n` now binds to the lambda's OWN `N` — shadowed, not captured);
+    `ClosureLoweringRefusalTests.R6_…Task169_…` (MSIL's "differs only by case" backstop is no
+    longer REACHED by any front-end-analyzed program — kept covered by a NEW test that tampers a
+    built lambda's own parameter name post-build, since #178's `CompileToIlFromUncheckedIr` still
+    runs full binding and could not be made to reach it either, confirmed directly); and
+    `ForEachVariableRenameFixTests`' two `CaseDifferingCollision_…` tests (used to pin "#124 gap:
+    JS throws, C++ does not compile" — the SAME one consuming site fixes this too, since a `For
+    Each` reuse's write target is an ordinary assignment lowered through it; now 43/13 on all four
+    backends).
+  - **Mutants:** 11 predicted by the implementer (`S/t169/mutants.py`, M1-M11), each built for
+    real in a separate git worktree and killed against real NUnit — see the test-writer's own
+    hand-back for the full table (which test kills which); M4 and M5 are killed by
+    `NameBindingTests.cs`'s own direct tests (the bound-miss tamper, and the `Name`-never-rewritten
+    assertion), not by a probe-matrix difference — both produced ZERO cells different from
+    production at the implementer's own probe-based measurement.
+  - **Follow-ups filed, not fixed here:**
+    - **#124** — narrower now than before #169: #169 owns declaration registration plus the
+      identifier-expression reference site for Local/Parameter/LambdaParameter; #124 owns Field,
+      ModuleGlobal, Property, Method, Type and Event references, plus the RESOLUTION DECISIONS at
+      non-identifier sites (`ResolvesToExistingStorage`'s new-vs-existing choice for a `For`/`For
+      Each` without `As`, and the Catch/Using/ReDim declarators). See the correction on the
+      original #124 section above — its own headline repro is now fixed for a local, and what
+      remains is narrower than that section describes.
+    - **#217** — D2's "BC36641 is not reported" recommendation is language policy and needs an
+      owner decision; #169 implements the shadowing D1 produces on its own and adds no diagnostic
+      either way.
+    - **#224** — LINQ (`From`/`Where`/`Select`) is broken on every backend, a pre-existing gap
+      unrelated to name binding (measured: the front end accepts it and the IR builds without
+      throwing — never #169's ICE; each backend's own failure is downstream, in codegen or at run
+      time).
 - **JavaScript backend** — the `lib.dom.d.ts` → `.bli` generator was never built
   (`dom-core.bli` is hand-curated). Known front-end gaps affecting all backends:
   `Inherits ArgumentException`, assigning an inherited field from a derived class,

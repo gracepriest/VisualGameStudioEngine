@@ -205,20 +205,24 @@ public class ForEachVariableRenameFixTests
     /// this test's OLD value) — it holds the last element REUSE assigned, 4, so <c>N + n_1</c> =
     /// 4 + 9 = 13 (VB's own answer, measured on C# and MSIL).</para>
     ///
-    /// <para>⛔ <b>Only TWO of the four backends can be asked here — task #124, pre-existing.</b>
-    /// C++ does not case-fold identifiers at all: the store lowers to `n = …`, which C++ sees as an
-    /// UNDECLARED identifier (`N` is what got declared) — a compile failure. JavaScript does not
-    /// case-fold either, and under this harness's ES-module (strict-mode) semantics that is a
-    /// RUNTIME <c>ReferenceError: n is not defined</c>, not a silently-wrong value — `n` was never
-    /// `let`-declared (only `N` was), and strict mode refuses the implicit global a non-strict
-    /// script would have created. (A plain `n = 5` assignment to a `Dim N` fails the identical way,
-    /// independent of <c>For Each</c> — the implementer's probes <c>G38</c>/<c>G39</c> measure it in
-    /// a loose, non-strict harness, where it instead creates a silent global and prints a stale
-    /// value; the two harnesses disagree on SYMPTOM, not on the underlying gap.) Neither is task
-    /// #168's to fix; see ADR-0009's consequences.</para>
+    /// <para>⛔⛔ <b>PROMOTED by task #169 (ADR-0013) — this used to pin "#124 gap: JS throws, C++
+    /// does not compile" on TWO of the four backends; it no longer does, on EITHER.</b> The reuse
+    /// store's target was the bare-written spelling (<c>n</c>), looked up Ordinally — a MISS,
+    /// since only <c>N</c> was ever registered, so it silently minted a SECOND, undeclared
+    /// variable (JS: <c>ReferenceError: n is not defined</c>; C++: <c>use of undeclared
+    /// identifier 'n'</c>). ADR-0013 D1/D3 changed the ONE consuming site
+    /// (<c>IRBuilder.ReferencedVariable</c>) every assignment target goes through, this reuse
+    /// store included: the analyzer resolves this loop's bare <c>n</c> to the SAME symbol as the
+    /// outer <c>N</c> (case-insensitively, ADR-0009's own reuse rule), records
+    /// <c>Binding{DeclaredName="N"}</c>, and the IR builder now looks up "N" — the variable that
+    /// IS registered — instead of minting "n". RE-MEASURED against this working tree: the
+    /// program below now prints <c>43</c> / <c>13</c> on all four backends, not just C#/MSIL.
+    /// Task #124 (front-end-level identifier case-folding) is otherwise untouched and still open
+    /// for the resolution DECISIONS ADR-0013 D6 leaves it (the sites this shape's OWN resolution —
+    /// which existing variable a bare reuse targets — does not touch).</para>
     /// </summary>
     [Test]
-    public void CaseDifferingCollision_ReusesCaseInsensitively_OnTheBackendsThatCaseFold()
+    public void CaseDifferingCollision_ReusesCaseInsensitively_OnEveryBackend()
     {
         const string program =
             "Sub Main()\n" +
@@ -234,37 +238,16 @@ public class ForEachVariableRenameFixTests
             " Console.WriteLine(s)\n" +
             " Console.WriteLine(N + n_1)\n" +
             "End Sub";
-        const string vbAnswer = "43\n13"; // was "43\n14" before task #168
+        const string vbAnswer = "43\n13"; // was "43\n14" before task #168; JS/C++ fixed by #169
 
-        Assert.Multiple(() =>
-        {
-            Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharp(program)), Is.EqualTo(vbAnswer), "C#");
-            Assert.That(FourBackends.Norm(Msil.MsilHarness.RunExpectingSuccess(program)), Is.EqualTo(vbAnswer), "MSIL");
-
-            // Known gap, task #124 (not #168's): JavaScript does not case-fold, so the reuse
-            // store's target `n` was never declared (only `N` was) — under this harness's strict
-            // ES-module semantics that throws at run time rather than silently misbehaving.
-            var (exitCode, _, stderr) = JavaScriptExecutionTests.RunNodeScriptForOutcome(JsTestSupport.Compile(program));
-            Assert.That(exitCode, Is.Not.Zero, "JavaScript — known gap #124 (case folding) was expected to throw");
-            Assert.That(stderr, Does.Contain("n is not defined"), stderr);
-        });
-
-        // Known gap, task #124: C++ does not case-fold either, and here it cannot even compile —
-        // the store lowers to `n = ...`, and only `N` was ever declared.
-        var cpp = BclE2E.CompileToCppOptimized(program);
-        var compiler = VisualGameStudio.Tests.Native.CppCompile.FindRunCompiler();
-        if (compiler == null) Assert.Ignore("No C++ compiler available on this machine");
-        var (compiled, output) = VisualGameStudio.Tests.Native.CppCompile.TryCompile(cpp, compiler!.Value);
-        Assert.That(compiled, Is.False, "C++ does not case-fold identifiers — known gap #124");
-        Assert.That(output, Does.Contain("n"), output);
+        FourBackends.RunsOnEveryBackend(program, vbAnswer);
     }
 
     /// <summary>The aggressive-pipeline sibling of
-    /// <see cref="CaseDifferingCollision_ReusesCaseInsensitively_OnTheBackendsThatCaseFold"/> — same
-    /// shape, same split (C#/MSIL correct; JavaScript throws; C++ does not compile), through the
-    /// aggressive optimizer passes on every leg that can run at all.</summary>
+    /// <see cref="CaseDifferingCollision_ReusesCaseInsensitively_OnEveryBackend"/> — same shape,
+    /// now correct on all four backends, through the aggressive optimizer passes.</summary>
     [Test]
-    public void CaseDifferingCollision_ReusesCaseInsensitively_OnTheBackendsThatCaseFold_Aggressive()
+    public void CaseDifferingCollision_ReusesCaseInsensitively_OnEveryBackend_Aggressive()
     {
         const string program =
             "Sub Main()\n" +
@@ -282,20 +265,7 @@ public class ForEachVariableRenameFixTests
             "End Sub";
         const string vbAnswer = "43\n13";
 
-        Assert.Multiple(() =>
-        {
-            Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharpAggressive(program)), Is.EqualTo(vbAnswer), "C#");
-            Assert.That(FourBackends.Norm(Msil.MsilHarness.RunAggressiveExpectingSuccess(program)), Is.EqualTo(vbAnswer), "MSIL");
-            var (exitCode, _, stderr) = JavaScriptExecutionTests.RunNodeScriptForOutcome(JsTestSupport.CompileAggressive(program));
-            Assert.That(exitCode, Is.Not.Zero, "JavaScript — known gap #124 (case folding) was expected to throw");
-            Assert.That(stderr, Does.Contain("n is not defined"), stderr);
-        });
-
-        var cpp = BclE2E.CompileToCppAggressive(program);
-        var compiler = VisualGameStudio.Tests.Native.CppCompile.FindRunCompiler();
-        if (compiler == null) Assert.Ignore("No C++ compiler available on this machine");
-        var (compiled, _) = VisualGameStudio.Tests.Native.CppCompile.TryCompile(cpp, compiler!.Value);
-        Assert.That(compiled, Is.False, "C++ does not case-fold identifiers — known gap #124");
+        FourBackends.RunsOnEveryBackendAggressive(program, vbAnswer);
     }
 
     [Test]

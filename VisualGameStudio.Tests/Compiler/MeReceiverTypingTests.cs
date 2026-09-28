@@ -10,11 +10,19 @@ namespace VisualGameStudio.Tests.Compiler;
 // ================================================================================================
 //  Task #176 — one `Me` per member, typed as its own class (`IRBuilder.MeOfCurrentMember`).
 //
-//  `IRBuilder._variableVersions` is not scoped per function, and nothing ever popped "Me": the
+//  `IRBuilder._variableVersions` was NOT scoped per function, and nothing ever popped "Me": the
 //  FIRST class in a file to use `Me` — bare (an accessor-backed property's own name) or explicit
 //  (`Me`/`Me.X`) — used to fix its type for every class built after it. MSIL spells a member
 //  token from the receiver's IR type, so it alone showed the bug (`stfld int32 'Animal'::'V'` for
 //  a LATER class's own field); C#, JavaScript and C++ print `this` and never read the type.
+//
+//  ⚠ STALE AS OF #199 (`EnterProcedureScope`/`ExitProcedureScope`, 2026-09-28): `_variableVersions`
+//  IS now scoped per procedure body. That is not what fixes `Me` here, though — `Me` is
+//  deliberately kept OUT of `_variableVersions` altogether (see `EnterProcedureScope`'s own doc
+//  comment) and stays on its own `MeOfCurrentMember`/`_meByFunction` mechanism, keyed by function
+//  and never cleared on entry, which is what this fixture actually exercises. The narrative above
+//  describes the bug `MeOfCurrentMember` fixed; it is no longer a general true statement about
+//  `_variableVersions` today.
 //
 //  This fixture is the IR-level sibling of <see cref="MeReceiverTypingExecutionTests"/>: it
 //  inspects the `Me` `IRVariable` `AccessorMemberReceiver`/`Visit(IdentifierExpressionNode)`
