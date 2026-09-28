@@ -109,21 +109,102 @@ public class ClosureLoweringRefusalTests
         Assert.That(ex.Message, Does.Contain("'n'"));
     }
 
-    // ---- R6: #169 — a name matches a lambda parameter case-insensitively but not exactly (D3) --
+    // ---- R6: #169/ADR-0013 — a name matches a lambda parameter case-insensitively but not
+    //      exactly, D3's backstop obligation --------------------------------------------------
 
+    /// <summary>
+    /// ⛔⛔ <b>THIS PIN MOVED.</b> Before ADR-0013 (#169), this shape reached MSIL's own "differs
+    /// only by case" backstop (<c>ClosureLowering.BuildEnvironments</c>) because the IR builder
+    /// re-resolved a bare name through its own Ordinal maps: the body's <c>X</c> never found the
+    /// lambda's own <c>x</c> (a case-sensitive lookup), so it silently bound the CREATOR's <c>X</c>
+    /// instead — exactly the shape the backstop was written to catch and refuse rather than
+    /// mis-emit. ADR-0013 D1 closes the hole the backstop was standing in for: the semantic
+    /// analyzer now resolves <c>X</c> inside the lambda body case-insensitively to the lambda's
+    /// OWN parameter <c>x</c> (VB's shadowing rule, D2's interim), and the IR builder binds
+    /// through that record — so the shape the backstop used to catch can no longer be PRODUCED by
+    /// any front-end-analyzed program at all. ADR-0013's own Obligations section says exactly
+    /// this: "after #169 it must never fire on a program the analyzer accepted; a firing means a
+    /// reference bypassed the binding."
+    ///
+    /// <para>RE-MEASURED against this working tree: the program below now compiles AND RUNS on
+    /// MSIL, printing <c>2</c> (VB's own answer — the lambda's own parameter <c>x</c> = 1,
+    /// <c>X + 1</c> = 2). This fixture is compile-only by design (see its own header — no
+    /// <c>ilasm</c>, fast subset), so the RUN assertion lives in
+    /// <c>NameBindingExecutionTests.R6_NameMatchesLambdaParameterOnlyByCase_RunsEverywhere</c>
+    /// (<c>[Category("Integration")]</c>); this test only proves the backstop is no longer
+    /// REACHED, which needs no <c>ilasm</c>.</para>
+    /// </summary>
     [Test]
-    public void R6_NameMatchesLambdaParameterOnlyByCase_Task169_Refused()
+    public void R6_NameMatchesLambdaParameterOnlyByCase_Task169_NoLongerReachesTheBackstop()
     {
-        var ex = CompileAndCaptureRefusal("""
+        const string program = """
             Sub Main()
                 Dim X As Integer = 10
                 Dim f = Function(x As Integer) X + 1
                 Console.WriteLine(f(1))
             End Sub
-            """);
-        Assert.That(ex.Message, Does.Contain("#169"));
-        Assert.That(ex.Message, Does.Contain("'X'"));
-        Assert.That(ex.Message, Does.Contain("'x'"));
+            """;
+        // MsilHarness.CompileToIl asserts a clean semantic analysis and returns IL text; it
+        // throws ForeignFeatureException only when MSILCodeGenerator (ClosureLowering included)
+        // itself refuses. This used to throw "... differs from its parameter ... only by case";
+        // it no longer does.
+        Assert.That(() => MsilHarness.CompileToIl(program), Throws.Nothing);
+    }
+
+    /// <summary>
+    /// The backstop itself (<c>ClosureLowering.BuildEnvironments</c>'s "differs from its
+    /// parameter ... only by case" check) is STILL THERE and still throws — ADR-0013's own
+    /// Obligation keeps it as a defence in depth, never removes it. It is unreachable from ANY
+    /// program a checked front end produces now (<see cref="R6_NameMatchesLambdaParameterOnlyByCase_Task169_NoLongerReachesTheBackstop"/>
+    /// is the one shape that used to reach it, and no longer does), so the only way left to
+    /// exercise it is IR that bypasses the front end's binding altogether.
+    ///
+    /// <para>⛔ <b>#178's <c>CompileToIlFromUncheckedIr</c> (<c>MsilInterfacePropertyTests</c>)
+    /// does NOT reach it — tried, and confirmed it cannot.</b> That helper ignores the analyzer's
+    /// ERROR list, but still RUNS the analyzer, and #169's binding is set at the analyzer's one
+    /// recording point (<c>SetNodeSymbol</c>) regardless of whether the program has unrelated
+    /// errors elsewhere. VB scope resolution picks the lambda's own parameter (the innermost
+    /// declaration) case-insensitively no matter what else is wrong with the program, so a
+    /// case-differing reference to a lambda parameter is ALWAYS bound to the parameter now —
+    /// there is no analyzed AST, checked or not, that still hands <c>ClosureLowering</c> the
+    /// pre-#169 shape. (Confirmed directly: R6's own program, run through the exact same
+    /// three-stage pipeline <c>CompileToIlFromUncheckedIr</c> uses, does not throw either — it
+    /// has no semantic errors to begin with, so "unchecked" changes nothing for this shape.)</para>
+    ///
+    /// <para>What DOES still reach it: renaming a lambda's own parameter's
+    /// <see cref="IRValue.Name"/> AFTER the IR is built, directly on the built
+    /// <see cref="IRFunction"/> — IR the front end never produced, the same kind of direct
+    /// post-build tamper <c>NameBindingTests</c>' bound-miss (M4) test makes on
+    /// <c>Binding.DeclaredName</c>. The lambda's genuinely captured names are already computed by
+    /// the time this runs, so renaming only the PARAMETER (not the captured variable) reproduces
+    /// exactly the case-mismatch the backstop's own message describes, without hand-building an
+    /// entire <see cref="IRModule"/> from scratch.</para>
+    /// </summary>
+    [Test]
+    public void BackstopStillThrows_WhenALambdaParameterIsRenamedAfterTheIrIsBuilt()
+    {
+        const string program = """
+            Sub Main()
+                Dim n As Integer = 1
+                Dim bump = Sub(p As Integer) n = n + p
+                bump(5)
+                Console.WriteLine(n)
+            End Sub
+            """;
+        var ast = new Parser(new Lexer(program).Tokenize()).Parse();
+        var analyzer = new SemanticAnalyzer();
+        Assert.That(analyzer.Analyze(ast), Is.True,
+            "semantic errors:\n" + string.Join("\n", analyzer.Errors.Select(e => e.ToString())));
+        var module = new IRBuilder(analyzer).Build(ast, "MsilProbe");
+
+        var lambda = module.Functions.Single(f => f.Name == "__lambda_0");
+        // The ONLY hand-tamper: rename the lambda's own parameter from its declared "p" to "N" --
+        // case-insensitively equal to the creator's genuinely captured "n", but not Ordinal-equal.
+        // No front-end-analyzed program can produce this (see this test's own doc comment).
+        lambda.Parameters[0].Name = "N";
+
+        var ex = Assert.Throws<ForeignFeatureException>(() => new MSILCodeGenerator().Generate(module));
+        Assert.That(ex!.Message, Does.Contain("'n'").And.Contain("'N'").And.Contain("only by case"));
     }
 
     // ---- R9/R17: an arity above the measured cap (D7) --------------------------------------
