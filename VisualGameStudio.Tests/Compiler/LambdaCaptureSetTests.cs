@@ -202,11 +202,13 @@ internal static class LambdaCaptureSetProbes
     internal const string N1Expected = "3,103,9,9";
 
     /// <summary>N4b (pin g) — the lambda's OWN parameter is N (uppercase); its body writes n
-    /// (lowercase). Under the CURRENT IR binding this is NOT the shadowing case K9 pins: N4b's
-    /// parameter binds to the LAMBDA's own N, but the body's bare `n` resolves to the CREATOR's
-    /// variable (task #169 is the open question of whether VB should instead bind it to the
-    /// lambda's own N case-insensitively — not fixed here, and this pin is IR semantics, not a
-    /// VB-binding claim). So the creator's n IS written, and must stay call-visible.</summary>
+    /// (lowercase). Task #169 (ADR-0013 D1) closed the open question this pin used to carry:
+    /// the analyzer now resolves the body's bare `n` case-insensitively to the LAMBDA's own
+    /// parameter N (VB's own shadowing rule), and the IR builder binds through that record — so
+    /// the write targets the parameter, not the creator's n. This IS now the K9 shadowing case,
+    /// just spelled with the case difference on the OTHER side (creator lowercase, parameter
+    /// uppercase, instead of K9's exact-spelling match both lowercase). The creator's n is never
+    /// written, and must stay call-INvisible.</summary>
     internal const string N4b = """
         Function Seed(v As Integer) As Integer
             Return v
@@ -527,28 +529,38 @@ public class LambdaCaptureSetIrLevelTests
     }
 
     /// <summary>N4b (pin g) — the lambda's OWN parameter is N (uppercase); its body writes the
-    /// bare name n (lowercase). Under the CURRENT IR binding this is the creator's n (task #169
-    /// is the open question of whether VB should instead bind a case-insensitive match to the
-    /// lambda's OWN parameter — an IR-BINDING question, not this capture-set rule; #169 is not
-    /// fixed here and this pin is IR semantics under today's binding, not a claim about what VB
-    /// SHOULD do). So the creator's n genuinely is captured and must stay call-visible.
-    /// <para>⛔ MUTANT Mg_param_subtraction_ignorecase (the parameter-name subtraction compares
-    /// case-INSENSITIVELY instead of exactly) kills this test: it would remove "n" from the
-    /// capture set too (since "N" case-insensitively matches "n"), even though the write is to
-    /// the CREATOR's variable, not the parameter -- IsCallVisible("n", Main) wrongly becomes
-    /// False, UNSOUND. MEASURED: N4b's own JS leg prints 3,3 under this mutant, 3,103 without
-    /// it.</para>
+    /// bare name n (lowercase). Task #169 (ADR-0013 D1) closed the open question this pin used
+    /// to carry: the front end now resolves the body's bare <c>n</c> case-insensitively to the
+    /// LAMBDA's own parameter <c>N</c> (VB's shadowing rule), and the IR builder binds every
+    /// reference through that record (<c>ReferencedVariable</c>) — so the write targets the
+    /// parameter's own storage, never the creator's <c>n</c>. This is now the SAME shadowing
+    /// K9 pins, just with the case difference on the opposite side (creator lowercase, parameter
+    /// uppercase, instead of K9's exact-spelling match). The creator's <c>n</c> is never
+    /// written, and must stay call-INvisible.
+    /// <para>⛔ MUTANT Mg_param_subtraction_ignorecase (the parameter-name subtraction inside
+    /// <c>LambdaCapturesOf</c> compares case-INSENSITIVELY instead of exactly) no longer kills
+    /// this test — RE-MEASURED against this working tree with the mutation applied (a scratch
+    /// worktree build, never this repo's own source): under the CURRENT binding the write's own
+    /// IR operand is already named exactly <c>N</c> (<c>ReferencedVariable</c> returns the
+    /// parameter's own <c>IRVariable</c>, whose <c>Name</c> is never the written "n"), so the raw
+    /// capture set this probe produces is <c>{const_100}</c> only — "n"/"N" never appear in it at
+    /// all, and the subtraction has nothing case-differently-spelled left to over-remove. #169
+    /// did not change this mutant's own code (<c>IROptimizer.cs</c>); it removed the SHAPE that
+    /// used to distinguish it. No test in this fixture currently kills Mg — K9 never did either,
+    /// its spelling already matched exactly with nothing for the mutant to over-remove — which is
+    /// a real gap in Mg's coverage here now, left open rather than patched (inventing a new
+    /// discriminating shape is outside this task's scope).</para>
     /// </summary>
     [Test]
-    public void N4b_LambdaParameterUppercaseN_BodyWritesLowercaseN_CreatorsNStaysCaptured()
+    public void N4b_LambdaParameterUppercaseN_BodyWritesLowercaseN_BindsToTheParameter_CreatorsNStaysPrivate()
     {
         var module = JsTestSupport.BuildModule(LambdaCaptureSetProbes.N4b, sourceFilePath: "prog.bas");
         var main = Fn(module, "Main");
 
-        Assert.That(OptimizationPass.IsCallVisible("n", main), Is.True,
-            "under the CURRENT IR binding the body's bare n resolves to the CREATOR's n (task "
-            + "#169 tracks whether VB should instead bind it to the lambda's own parameter N) -- "
-            + "so the creator's n is genuinely written and must stay call-visible.");
+        Assert.That(OptimizationPass.IsCallVisible("n", main), Is.False,
+            "task #169 (ADR-0013 D1): the body's bare n now resolves case-insensitively to the "
+            + "LAMBDA's own parameter N (VB's shadowing rule) -- the creator's n is never "
+            + "written, so it must stay private.");
     }
 
     /// <summary>N9 (pin h) — the lambda writes the creator's n on its FIRST line, then declares
