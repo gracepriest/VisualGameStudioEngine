@@ -107,6 +107,110 @@ namespace BasicLang.Compiler.IR
             return false;
         }
 
+        /// <summary>Each loop by its end block — what an <c>Exit</c> branches to.</summary>
+        public static Dictionary<BasicBlock, IRLoop> ByEnd(IEnumerable<IRLoop> loops)
+        {
+            var byEnd = new Dictionary<BasicBlock, IRLoop>(ReferenceEqualityComparer.Instance);
+            foreach (var loop in loops) if (loop.End != null) byEnd.TryAdd(loop.End, loop);
+            return byEnd;
+        }
+
+        /// <summary>
+        /// The blocks of <paramref name="loop"/>'s body: everything reachable from its body block
+        /// without passing its continue block or its end, and without following an <c>Exit</c> out of
+        /// a loop that ENCLOSES it (an <c>Exit Do</c> inside a For inside a Do leaves both). An exit is
+        /// inside the body of the loop it leaves, so when that loop is nested in this one its body
+        /// block has already been reached by the time the exit is.
+        /// </summary>
+        public static HashSet<BasicBlock> BodyRegion(IRLoop loop, IReadOnlyDictionary<BasicBlock, IRLoop> byEnd)
+        {
+            var region = new HashSet<BasicBlock>(ReferenceEqualityComparer.Instance);
+            var stack = new Stack<BasicBlock>();
+            stack.Push(loop.Body);
+            while (stack.Count > 0)
+            {
+                var b = stack.Pop();
+                if (b == null || ReferenceEquals(b, loop.Continue) || ReferenceEquals(b, loop.End) || !region.Add(b)) continue;
+                var exit = b.GetTerminator() as IRBranch;
+                foreach (var s in ControlFlowGraph.SuccessorsOf(b))
+                {
+                    if (exit != null && exit.IsLoopExit && ReferenceEquals(exit.Target, s)
+                        && byEnd.TryGetValue(s, out var left) && !ReferenceEquals(left, loop) && !region.Contains(left.Body))
+                        continue;
+                    stack.Push(s);
+                }
+            }
+            return region;
+        }
+
+        /// <summary>
+        /// The names of the non-global VARIABLES <paramref name="inst"/> reads or writes, as the
+        /// backends see them: an assignment's or a variable store's target, a value renamed after a
+        /// variable, the variable of an <c>x_addr</c> slot, and every <see cref="IRVariable"/>
+        /// operand (descending only into operand trees that live in no block, such as a When guard —
+        /// an operand that is itself an instruction is that instruction's business). ADR-0014 A2's
+        /// "IR reference", shared by IRBuilder (which records a Dim only when S″ already holds for it)
+        /// and the verifier (which checks S″ after every pass), so the two cannot disagree.
+        /// </summary>
+        public static IEnumerable<string> VariableMentions(IRInstruction inst)
+        {
+            if (inst == null) yield break;
+            switch (inst)
+            {
+                case IRAssignment a when a.Target?.Name != null && !a.Target.IsGlobal:
+                    yield return a.Target.Name;
+                    break;
+                case IRStore { Address: IRVariable address } when address.Name != null && !address.IsGlobal:
+                    yield return address.Name;
+                    break;
+                case IRAlloca slot when slot.Name != null && slot.Name.EndsWith("_addr", StringComparison.Ordinal):
+                    yield return slot.Name.Substring(0, slot.Name.Length - "_addr".Length);
+                    break;
+            }
+            if (inst is IRValue value && !(inst is IRVariable) && OptimizationPass.NamedDestination(value) is string named)
+                yield return named;
+
+            var seen = new HashSet<IRValue>(ReferenceEqualityComparer.Instance);
+            var stack = new Stack<IRValue>(OptimizationPass.UsesOf(inst));
+            while (stack.Count > 0)
+            {
+                var v = stack.Pop();
+                if (v == null || !seen.Add(v)) continue;
+                if (v is IRVariable variable)
+                {
+                    if (variable.Name != null && !variable.IsGlobal) yield return variable.Name;
+                    continue;
+                }
+                if (v is IRInstruction nested && nested.ParentBlock == null)
+                    foreach (var u in OptimizationPass.UsesOf(nested)) stack.Push(u);
+            }
+        }
+
+        /// <summary>
+        /// ADR-0014 A2: <c>perIter(L)</c> for every loop of <paramref name="function"/> as the IR stands
+        /// now — its body's <see cref="BasicBlock.BodyLocals"/> the function's lambdas capture — with
+        /// the loop's body region. Empty for a function with none, which is every lambda-free one.
+        /// </summary>
+        public static List<(IRLoop Loop, HashSet<BasicBlock> Region, List<IRVariable> PerIter)> PerIteration(
+            IRModule module, IRFunction function)
+        {
+            var result = new List<(IRLoop, HashSet<BasicBlock>, List<IRVariable>)>();
+            if (function?.Blocks == null || !function.Blocks.Any(b => b?.BodyLocals?.Count > 0)) return result;
+            if (OptimizationPass.LambdaReferences(function).Count == 0) return result;
+
+            var loops = Of(function);
+            Dictionary<BasicBlock, IRLoop> byEnd = null;
+            foreach (var loop in loops)
+            {
+                var perIter = loop.Body.BodyLocals
+                    .Where(v => v?.Name != null && IsCaptured(module, function, v.Name)).ToList();
+                if (perIter.Count == 0) continue;
+                byEnd ??= ByEnd(loops);
+                result.Add((loop, BodyRegion(loop, byEnd), perIter));
+            }
+            return result;
+        }
+
         /// <summary>
         /// Whether a lambda <paramref name="creator"/> creates may capture its variable
         /// <paramref name="name"/> — #122's capture set as <see cref="OptimizationPass.IsLambdaCaptured"/>
@@ -169,7 +273,7 @@ namespace BasicLang.Compiler.IR
     }
 
     /// <summary>
-    /// ⭐ ADR-0014 D1/D2 for a backend with native closures: which locals of one function are
+    /// ⭐ ADR-0014 D1 and A1 for a backend with native closures: which locals of one function are
     /// declared at the top of a loop body instead of at function top, and the carrier each one is
     /// copied forward through.
     ///
@@ -178,12 +282,13 @@ namespace BasicLang.Compiler.IR
     /// have had there, and is never reset. The top of the loop's body declares the variable from its
     /// carrier (<c>T x = carry;</c> / <c>let x = carry;</c>), so a lambda created in the iteration
     /// captures that iteration's variable, and the value copied in is the previous iteration's —
-    /// VB's copy-forward. An initializer is the ordinary IR assignment after it (D4). The carrier is
-    /// written back at the CONTINUE TARGET only: before the step of a counted <c>For</c>
-    /// (<see cref="AtContinueBlock"/>), at the end of the body of every other loop
-    /// (<see cref="AtBodyEnd"/>). BasicLang has no <c>Continue</c> statement, so the only way to
-    /// reach it is normal completion of the body; an <c>Exit</c>, a <c>Return</c> or an exception
-    /// never writes it (D2).</para>
+    /// VB's copy-forward. An initializer is the ordinary IR assignment after it (D4).</para>
+    ///
+    /// <para><b>A1:</b> the rest of the body is a <c>try</c> whose <c>finally</c> writes the carrier
+    /// back, so it is written however the iteration is left — its end, an <c>Exit</c>, a
+    /// <c>Return</c>, an exception — after every user <c>Finally</c> it crosses, in nesting order.
+    /// A counted <c>For</c>'s step block is emitted AFTER that finally
+    /// (<see cref="DeferredStep"/>): the step is not part of the body.</para>
     ///
     /// <para><see cref="Empty"/> — every function with no captured loop-body <c>Dim</c> — changes
     /// nothing a backend emits (D6).</para>
@@ -201,28 +306,28 @@ namespace BasicLang.Compiler.IR
         public static readonly PerIterationPlan Empty = new PerIterationPlan();
 
         private readonly Dictionary<BasicBlock, List<Entry>> _byBody = new(ReferenceEqualityComparer.Instance);
-        private readonly Dictionary<BasicBlock, List<Entry>> _byContinue = new(ReferenceEqualityComparer.Instance);
+        private readonly HashSet<BasicBlock> _deferredSteps = new(ReferenceEqualityComparer.Instance);
         private readonly Dictionary<IRVariable, Entry> _byVariable = new(ReferenceEqualityComparer.Instance);
 
         public bool IsEmpty => _byVariable.Count == 0;
 
-        /// <summary>The declarations at the top of the body entered at <paramref name="body"/>.</summary>
+        /// <summary>The captured locals of the body entered at <paramref name="body"/>: declared at its
+        /// top, and written back by the finally that closes it.</summary>
         public IReadOnlyList<Entry> AtBody(BasicBlock body) =>
             body != null && _byBody.TryGetValue(body, out var list) ? list : Array.Empty<Entry>();
 
-        /// <summary>The carrier writes placed just before <paramref name="block"/>'s instructions —
-        /// non-empty only for a counted <c>For</c>'s step block.</summary>
-        public IReadOnlyList<Entry> AtContinueBlock(BasicBlock block) =>
-            block != null && _byContinue.TryGetValue(block, out var list) ? list : Array.Empty<Entry>();
-
-        /// <summary>The carrier writes at the textual end of the body entered at
-        /// <paramref name="body"/> — every loop but a counted <c>For</c>, whose writes are
-        /// <see cref="AtContinueBlock"/>'s.</summary>
-        public IReadOnlyList<Entry> AtBodyEnd(BasicBlock body)
+        /// <summary>A counted For's step block when the body entered at <paramref name="body"/> is
+        /// wrapped: emitted after the finally, never from inside the body. Null otherwise.</summary>
+        public BasicBlock DeferredStep(BasicBlock body)
         {
             var list = AtBody(body);
-            return list.Count > 0 && list[0].Loop.Kind != IRLoopKind.For ? list : Array.Empty<Entry>();
+            return list.Count > 0 && list[0].Loop.Kind == IRLoopKind.For ? list[0].Loop.Continue : null;
         }
+
+        /// <summary>Whether <paramref name="block"/> is a wrapped counted For's step block, which a
+        /// branch from inside the body must not emit (the body's end falls to the finally, and the
+        /// step follows it).</summary>
+        public bool IsDeferredStep(BasicBlock block) => block != null && _deferredSteps.Contains(block);
 
         /// <summary>The entry for a local of the function, or null when it is declared at function top as before.</summary>
         public Entry For(IRVariable local) =>
@@ -252,17 +357,12 @@ namespace BasicLang.Compiler.IR
 
                     var entry = new PerIterationPlan.Entry { Variable = variable, Carrier = carrier, Loop = loop };
                     plan._byVariable[variable] = entry;
-                    Add(plan._byBody, loop.Body, entry);
-                    if (loop.Kind == IRLoopKind.For && loop.Continue != null) Add(plan._byContinue, loop.Continue, entry);
+                    if (!plan._byBody.TryGetValue(loop.Body, out var list)) plan._byBody[loop.Body] = list = new List<Entry>();
+                    list.Add(entry);
+                    if (loop.Kind == IRLoopKind.For && loop.Continue != null) plan._deferredSteps.Add(loop.Continue);
                 }
             }
             return plan ?? Empty;
-        }
-
-        private static void Add(Dictionary<BasicBlock, List<Entry>> map, BasicBlock key, Entry entry)
-        {
-            if (!map.TryGetValue(key, out var list)) map[key] = list = new List<Entry>();
-            list.Add(entry);
         }
 
         /// <summary>Every name a carrier must not collide with: the function's parameters, locals and

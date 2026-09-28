@@ -6639,6 +6639,11 @@ namespace BasicLang.Compiler.IR
         /// does not declare a lambda's locals (they bind to the creator's of that spelling), so moving
         /// the creator's into a loop body would leave the lambda's naming nothing (CS0103). Splitting
         /// a name into one variable per declaration is ADR-0013's rejected "uniquify IR names".</para>
+        ///
+        /// <para>And no mention of the name outside the loop's body (<see cref="IRLoops.VariableMentions"/>),
+        /// so ADR-0014 A2's invariant S″ holds for IRBuilder's output by construction and a later
+        /// breach is a pass's doing. (A class field read bare is a variable of the same spelling in
+        /// the IR.)</para>
         /// </summary>
         private void AssignBodyLocals()
         {
@@ -6678,12 +6683,34 @@ namespace BasicLang.Compiler.IR
                     if (l?.Name != null) declarations[l.Name] = declarations.TryGetValue(l.Name, out var n) ? n + 1 : 1;
                 var lambdaLocals = LambdaLocalNames(function);
 
+                // ADR-0014 A2 (S″): every mention of the name lies in the loop's body. A mention outside
+                // it is some other storage of the same spelling (a class member read bare, another
+                // declaration's leftovers), which a per-iteration declaration would take away from it.
+                var loops = IRLoops.Of(function);
+                var byEnd = IRLoops.ByEnd(loops);
+                var regions = new Dictionary<BasicBlock, HashSet<BasicBlock>>(ReferenceEqualityComparer.Instance);
+                HashSet<string> MentionedOutside(BasicBlock body)
+                {
+                    var loop = loops.FirstOrDefault(l => ReferenceEquals(l.Body, body));
+                    if (loop == null) return null;
+                    if (!regions.TryGetValue(body, out var region)) regions[body] = region = IRLoops.BodyRegion(loop, byEnd);
+                    var outside = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    foreach (var block in function.Blocks)
+                        if (!region.Contains(block))
+                            foreach (var inst in block.Instructions)
+                                foreach (var name in IRLoops.VariableMentions(inst)) outside.Add(name);
+                    return outside;
+                }
+                var outsideByBody = new Dictionary<BasicBlock, HashSet<string>>(ReferenceEqualityComparer.Instance);
+
                 foreach (var (_, body, local) in group)
                 {
                     if (!declarations.TryGetValue(local.Name, out var count) || count != 1) continue;
                     if (lambdaLocals.Contains(local.Name)) continue;
                     if (function.Parameters.Any(p => string.Equals(p?.Name, local.Name, StringComparison.OrdinalIgnoreCase))) continue;
                     if (!function.LocalVariables.Any(l => ReferenceEquals(l, local))) continue;
+                    if (!outsideByBody.TryGetValue(body, out var outside)) outsideByBody[body] = outside = MentionedOutside(body);
+                    if (outside == null || outside.Contains(local.Name)) continue;
                     if (!body.BodyLocals.Contains(local)) body.BodyLocals.Add(local);
                 }
             }

@@ -52,7 +52,15 @@ namespace BasicLang.Compiler.IR.Optimization
         /// dynamically repeated, which is what made a single anonymous use shared.</summary>
         public bool UseRepeats { get; init; }
 
-        public override string ToString() => Invariant == "B"
+        /// <summary>For Invariant S″: the pass after which it was checked.</summary>
+        public string Pass { get; init; }
+
+        public override string ToString() => Invariant == "S″"
+            ? $"Invariant S″ violated in {Function}{(Pass != null ? " after " + Pass : "")}: {Writer?.GetType().Name} in "
+              + $"{WriterBlock} references '{Variable}', which is per-iteration in the loop whose body is "
+              + $"{UseBlock} (a loop-body Dim a lambda captures), outside that body (ADR-0014 A2: no pass "
+              + "may move such a reference across a loop boundary)."
+            : Invariant == "B"
             ? $"Invariant B violated in {Function}: the loop body {WriterBlock} lists '{Variable}' in its "
               + $"BodyLocals, and {UseBlock} (ADR-0014 D1: every entry is one of the function's "
               + "LocalVariables, in exactly one loop, on a loop's body entry block)."
@@ -269,6 +277,23 @@ namespace BasicLang.Compiler.IR.Optimization
 
             var violations = CheckInvariantV(module).Concat(CheckInvariantF(module))
                 .Concat(CheckInvariantSPrime(module)).Concat(CheckInvariantB(module)).ToList();
+            Report(mode, violations);
+        }
+
+        /// <summary>
+        /// ADR-0014 A2: Invariant S″ after ONE pass of <see cref="OptimizationPipeline.Run"/> (and once
+        /// before the first, on IRBuilder's output), on un-lowered IR. Does nothing in
+        /// <see cref="IRVerifierMode.Off"/>.
+        /// </summary>
+        public static void VerifyAfterPass(IRModule module, string pass)
+        {
+            var mode = Mode;
+            if (mode == IRVerifierMode.Off || module == null) return;
+            Report(mode, CheckInvariantSDoublePrime(module, pass).ToList());
+        }
+
+        private static void Report(IRVerifierMode mode, List<InvariantViolation> violations)
+        {
             if (violations.Count == 0) return;
 
             if (mode == IRVerifierMode.Log)
@@ -283,6 +308,46 @@ namespace BasicLang.Compiler.IR.Optimization
             }
 
             throw new IRVerificationException(violations);
+        }
+
+        /// <summary>
+        /// Every breach of Invariant S″ (ADR-0014 A2) in <paramref name="module"/>: every IR reference
+        /// — read or write, as <see cref="IRLoops.VariableMentions"/> lists them — to a variable in
+        /// <c>perIter(L) = BodyLocals ∩ captureSet</c> lies in a block of L's body
+        /// (<see cref="IRLoops.BodyRegion"/>). <c>perIter</c> is computed from the IR as it stands, and
+        /// only the function's own blocks are read: a lambda's mention of the variable is the capture
+        /// itself. After ClosureLowering no function references a lambda by name any more, so the
+        /// check is vacuous there; S′ is the post-lowering check of the same truth.
+        /// </summary>
+        public static IReadOnlyList<InvariantViolation> CheckInvariantSDoublePrime(IRModule module, string pass = null)
+        {
+            var violations = new List<InvariantViolation>();
+            if (module?.Functions == null) return violations;
+            foreach (var function in module.Functions)
+            {
+                if (function?.Blocks == null) continue;
+                foreach (var (loop, region, perIter) in IRLoops.PerIteration(module, function))
+                {
+                    var names = new HashSet<string>(perIter.Select(v => v.Name), StringComparer.OrdinalIgnoreCase);
+                    foreach (var block in function.Blocks)
+                    {
+                        if (block == null || region.Contains(block)) continue;
+                        foreach (var inst in block.Instructions)
+                            foreach (var name in IRLoops.VariableMentions(inst).Where(names.Contains).Distinct(StringComparer.OrdinalIgnoreCase))
+                                violations.Add(new InvariantViolation
+                                {
+                                    Invariant = "S″",
+                                    Function = function.Name,
+                                    Variable = name,
+                                    Writer = inst,
+                                    WriterBlock = block.Name,
+                                    UseBlock = loop.Body.Name,
+                                    Pass = pass,
+                                });
+                    }
+                }
+            }
+            return violations;
         }
 
         /// <summary>

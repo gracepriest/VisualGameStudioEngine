@@ -2276,7 +2276,8 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// <summary>
         /// ⭐ ADR-0014: the captured loop-body locals of the function being emitted. Each is declared
         /// with <c>let</c> at the top of its loop's body from a carrier, so every iteration has its own
-        /// binding for a lambda to capture, and the carrier is written back at the continue target.
+        /// binding for a lambda to capture, and the rest of the body is a <c>try</c> whose
+        /// <c>finally</c> writes the carrier back however the iteration is left (A1).
         /// Empty for every function without one, which then emits exactly what it did before.
         /// </summary>
         private PerIterationPlan _perIter = PerIterationPlan.Empty;
@@ -2288,18 +2289,43 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             Line($"let {SanitizeName(perIter?.Carrier ?? local.Name)} = {LocalInitializer(local.Type)};");
         }
 
-        /// <summary><c>let x = __carry_x;</c> for each captured local of the body entered at <paramref name="body"/>.</summary>
-        private void EmitPerIterationDeclarations(BasicBlock body)
+        /// <summary>
+        /// ADR-0014 D1/A1, the top of a body with captured locals: <c>let x = __carry_x;</c> for each,
+        /// then <c>try {</c>. A wrapped counted For's step block is held back as a pending merge, so a
+        /// branch to it from inside the body emits nothing and the step follows the finally.
+        /// Nothing for any other body.
+        /// </summary>
+        private void OpenIteration(BasicBlock body)
         {
-            foreach (var entry in _perIter.AtBody(body))
+            var entries = _perIter.AtBody(body);
+            if (entries.Count == 0) return;
+            foreach (var entry in entries)
                 Line($"let {SanitizeName(entry.Variable.Name)} = {SanitizeName(entry.Carrier)};");
+            Line("try {");
+            _indentLevel++;
+            var step = _perIter.DeferredStep(body);
+            if (step != null) _pendingMerges.Push(step);
         }
 
-        /// <summary><c>__carry_x = x;</c> — the continue target's snapshot (ADR-0014 D2).</summary>
-        private void EmitCarrierWrites(IReadOnlyList<PerIterationPlan.Entry> entries)
+        /// <summary>
+        /// ADR-0014 A1, the end of that body: <c>} finally { __carry_x = x; }</c> — the carrier is
+        /// written however the iteration is left (its end, a <c>break</c>, a <c>return</c>, an
+        /// exception), after every user <c>finally</c> it crosses — then a counted For's step.
+        /// </summary>
+        private void CloseIteration(BasicBlock body)
         {
+            var entries = _perIter.AtBody(body);
+            if (entries.Count == 0) return;
+            var step = _perIter.DeferredStep(body);
+            if (step != null) _pendingMerges.Pop();
+            _indentLevel--;
+            Line("} finally {");
+            _indentLevel++;
             foreach (var entry in entries)
                 Line($"{SanitizeName(entry.Carrier)} = {SanitizeName(entry.Variable.Name)};");
+            _indentLevel--;
+            Line("}");
+            if (step != null) EmitStructured(step);
         }
 
         /// <summary>Loop exit blocks, innermost last. Membership means `break`.</summary>
@@ -2381,10 +2407,6 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
             _emitted.Add(block);
 
-            // ADR-0014 D2: a counted For's step block is its continue target; the carrier writes
-            // go before the step. Nothing else ever maps here.
-            EmitCarrierWrites(_perIter.AtContinueBlock(block));
-
             EmitInstructions(block);
 
             // Control-flow HEADERS never reach EmitInstructions — If/While/Select are
@@ -2457,17 +2479,17 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             EmitInstructions(header);
             Line(ExitTest(cond, leaveWhenTrue));
 
-            // ADR-0014: this iteration's captured locals, copied forward from their carriers.
-            EmitPerIterationDeclarations(body);
+            // ADR-0014: this iteration's captured locals, copied forward from their carriers, and the
+            // try the rest of the body runs in (A1).
+            OpenIteration(body);
 
             _loopEnds.Push(end);
             EmitStructured(body);
             _loopEnds.Pop();
 
-            // ADR-0014 D2: a While/Do body's continue target is its end (a counted For's is its
-            // step block, written by EmitStructured). Only normal completion gets here: an Exit is
-            // `break`, and BasicLang has no Continue.
-            EmitCarrierWrites(_perIter.AtBodyEnd(body));
+            // ADR-0014 A1: the finally that writes the carriers however the body was left, then a
+            // counted For's step.
+            CloseIteration(body);
 
             _indentLevel--;
             Line("}");
@@ -2573,8 +2595,9 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             Line("while (true) {");
             _indentLevel++;
 
-            // ADR-0014: this iteration's captured locals, copied forward from their carriers.
-            EmitPerIterationDeclarations(body);
+            // ADR-0014: this iteration's captured locals, copied forward from their carriers, and the
+            // try the rest of the body runs in (A1).
+            OpenIteration(body);
 
             _loopEnds.Push(end);
             _pendingMerges.Push(header);
@@ -2589,8 +2612,8 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
             _pendingMerges.Pop();
 
-            // ADR-0014 D2: the continue target, before the condition's instructions.
-            EmitCarrierWrites(_perIter.AtBodyEnd(body));
+            // ADR-0014 A1: the finally that writes the carriers, before the condition's instructions.
+            CloseIteration(body);
 
             // Header instructions first, THEN the test — see EmitLoop for why the order matters.
             EmitInstructions(header);
@@ -4105,8 +4128,9 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 _emitted.Add(body);
                 _forEachEnds.Push(forEach.EndBlock);
 
-                // ADR-0014: this iteration's captured locals, copied forward from their carriers.
-                EmitPerIterationDeclarations(body);
+                // ADR-0014: this iteration's captured locals, copied forward from their carriers, and
+                // the try the rest of the body runs in (A1).
+                OpenIteration(body);
 
                 EmitInstructions(body);
                 switch (body.GetTerminator())
@@ -4118,8 +4142,8 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
                 _forEachEnds.Pop();
 
-                // ADR-0014 D2: the continue target — normal completion only (Exit For is `break`).
-                EmitCarrierWrites(_perIter.AtBodyEnd(body));
+                // ADR-0014 A1: the finally that writes the carriers, however the body was left.
+                CloseIteration(body);
             }
 
             _indentLevel--;

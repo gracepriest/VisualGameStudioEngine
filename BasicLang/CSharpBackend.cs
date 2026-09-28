@@ -118,8 +118,9 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         /// ⭐ ADR-0014: the captured loop-body locals of the body being emitted, set by
         /// <see cref="DeclareLocals"/> (which every body emission calls first). Each is declared at
         /// the top of its loop's body from a carrier (<c>T x = __carry_x;</c>) so a lambda captures
-        /// that iteration's <c>x</c>, and the carrier is written back at the continue target. Empty
-        /// for every body without one, which then emits exactly what it did before.
+        /// that iteration's <c>x</c>, and the rest of the body is a <c>try</c> whose <c>finally</c>
+        /// writes the carrier back however the iteration is left (A1). Empty for every body without
+        /// one, which then emits exactly what it did before.
         /// </summary>
         private PerIterationPlan _perIter = PerIterationPlan.Empty;
 
@@ -129,20 +130,41 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         /// <c>while</c> and once inside it — so the peeled copy gets its own braces (its <c>x</c>
         /// would otherwise clash with the loop's, CS0136), closed where it branches to the condition.
         /// </summary>
-        private readonly Stack<(BasicBlock Cond, IReadOnlyList<PerIterationPlan.Entry> Entries)> _openPeels = new();
+        private readonly Stack<(BasicBlock Cond, BasicBlock Body)> _openPeels = new();
 
-        /// <summary><c>T x = __carry_x;</c> for each captured local of the body entered at <paramref name="body"/>.</summary>
-        private void EmitPerIterationDeclarations(BasicBlock body)
+        /// <summary>
+        /// ADR-0014 D1/A1, the top of a body with captured locals: <c>T x = __carry_x;</c> for each,
+        /// then <c>try {</c>. Nothing for any other body.
+        /// </summary>
+        private void OpenIteration(BasicBlock body)
         {
-            foreach (var entry in _perIter.AtBody(body))
+            var entries = _perIter.AtBody(body);
+            if (entries.Count == 0) return;
+            foreach (var entry in entries)
                 WriteLine($"{MapType(entry.Variable.Type)} {GetValueName(entry.Variable)} = {SanitizeName(entry.Carrier)};");
+            WriteLine("try");
+            WriteLine("{");
+            Indent();
         }
 
-        /// <summary><c>__carry_x = x;</c> — the continue target's snapshot (ADR-0014 D2).</summary>
-        private void EmitCarrierWrites(IReadOnlyList<PerIterationPlan.Entry> entries)
+        /// <summary>
+        /// ADR-0014 A1, the end of that body: <c>} finally { __carry_x = x; }</c> — the carrier is
+        /// written however the iteration is left (its end, a <c>break</c> or <c>goto</c> for an Exit,
+        /// a <c>return</c>, an exception), after every user <c>finally</c> it crosses.
+        /// </summary>
+        private void CloseIteration(BasicBlock body)
         {
+            var entries = _perIter.AtBody(body);
+            if (entries.Count == 0) return;
+            Unindent();
+            WriteLine("}");
+            WriteLine("finally");
+            WriteLine("{");
+            Indent();
             foreach (var entry in entries)
                 WriteLine($"{SanitizeName(entry.Carrier)} = {GetValueName(entry.Variable)};");
+            Unindent();
+            WriteLine("}");
         }
 
         // Standard library provider for built-in functions
@@ -2057,8 +2079,8 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 peelCond = peel[0].Loop.Continue;
                 WriteLine("{");
                 Indent();
-                EmitPerIterationDeclarations(block);
-                _openPeels.Push((peelCond, peel));
+                OpenIteration(block);
+                _openPeels.Push((peelCond, block));
             }
 
             try
@@ -2069,7 +2091,8 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             {
                 if (peelCond != null && _openPeels.Count > 0 && ReferenceEquals(_openPeels.Peek().Cond, peelCond))
                 {
-                    _openPeels.Pop();
+                    var (_, peeledBody) = _openPeels.Pop();
+                    CloseIteration(peeledBody);
                     Unindent();
                     WriteLine("}");
                 }
@@ -2131,10 +2154,6 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
         private void EmitBlockInstructions(BasicBlock block)
         {
-            // ADR-0014 D2: a counted For's step block is its continue target — the carrier writes
-            // go before the step, wherever the structured walk emits it.
-            EmitCarrierWrites(_perIter.AtContinueBlock(block));
-
             var instructions = block.Instructions.ToList();
             var emittedTupleGroups = new HashSet<int>();
 
@@ -2265,14 +2284,20 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         {
             var target = branch.Target;
 
-            // ADR-0014: the peeled first iteration of a Do loop reaches its continue target here.
+            // ADR-0014: the peeled first iteration of a Do loop ends where it branches to the
+            // condition — close its try, its finally and its braces there.
             if (_openPeels.Count > 0 && target != null && ReferenceEquals(_openPeels.Peek().Cond, target))
             {
-                var (_, entries) = _openPeels.Pop();
-                EmitCarrierWrites(entries);
+                var (_, peeledBody) = _openPeels.Pop();
+                CloseIteration(peeledBody);
                 Unindent();
                 WriteLine("}");
             }
+
+            // ADR-0014 A1: a wrapped counted For's step comes after the body's finally, which
+            // GenerateLoop writes; the body's end simply falls to the end of the try.
+            if (_perIter.IsDeferredStep(target))
+                return;
 
             // ⛔ FIRST, and before the _processedBlocks / ".end" tests below: an `Exit For` out of
             // a For Each targets a block those two tests both discard, which is exactly how
@@ -2692,8 +2717,9 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             WriteLine("{");
             Indent();
 
-            // ADR-0014: this iteration's captured locals, copied forward from their carriers.
-            EmitPerIterationDeclarations(bodyBlock);
+            // ADR-0014: this iteration's captured locals, copied forward from their carriers, and the
+            // try the rest of the body runs in (A1).
+            OpenIteration(bodyBlock);
 
             // Generate body
             _processedBlocks.Add(bodyBlock);
@@ -2733,10 +2759,12 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 }
             }
 
-            // ADR-0014 D2: a While/Do body's continue target is its end — normal completion is the
-            // only way here (no `continue` is ever emitted; an Exit is a `break`). A counted For's
-            // is its step block, whose writes EmitBlockInstructions places wherever it is emitted.
-            EmitCarrierWrites(_perIter.AtBodyEnd(bodyBlock));
+            // ADR-0014 A1: the finally that writes the carriers, however the body was left.
+            CloseIteration(bodyBlock);
+
+            // A wrapped counted For's step is emitted here, after that finally, and never from
+            // inside the body (HandleUnconditionalBranch skips it there).
+            incBlock = _perIter.DeferredStep(bodyBlock) ?? incBlock;
 
             // Always generate increment if it exists
             if (incBlock != null && !_processedBlocks.Contains(incBlock))
@@ -3224,7 +3252,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             var any = false;
 
             // ADR-0014: a captured loop-body local is declared at the top of its loop's body
-            // (EmitPerIterationDeclarations); its CARRIER takes its place here, with the default the
+            // (OpenIteration); its CARRIER takes its place here, with the default the
             // variable itself would have had, and is never reset.
             _perIter = PerIterationPlan.Build(_currentModule, function);
             _openPeels.Clear();
@@ -4742,8 +4770,9 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             var registeredEnd = forEach.EndBlock != null && _forEachEndBlocks.Add(forEach.EndBlock);
             _loopSwitchDepths.Push(_switchDepth);
 
-            // ADR-0014: this iteration's captured locals, copied forward from their carriers.
-            EmitPerIterationDeclarations(forEach.BodyBlock);
+            // ADR-0014: this iteration's captured locals, copied forward from their carriers, and the
+            // try the rest of the body runs in (A1).
+            OpenIteration(forEach.BodyBlock);
 
             // Generate body block
             _processedBlocks.Add(forEach.BodyBlock);
@@ -4774,9 +4803,8 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 }
             }
 
-            // ADR-0014 D2: the continue target — reached by normal completion only (Exit For is a
-            // `break` or a `goto` past the loop).
-            EmitCarrierWrites(_perIter.AtBodyEnd(forEach.BodyBlock));
+            // ADR-0014 A1: the finally that writes the carriers, however the body was left.
+            CloseIteration(forEach.BodyBlock);
 
             Unindent();
             WriteLine("}");
