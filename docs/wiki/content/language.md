@@ -45,10 +45,15 @@ Dim a, b, c As Integer     ' several on one line
 |---|---|
 | Arithmetic | `+` `-` `*` `/` `\` (integer divide) `Mod` `^` |
 | Comparison | `=` `<>` `<` `>` `<=` `>=` |
+| Reference identity | `Is` `IsNot` — `x Is Nothing`, `a IsNot b`; references only (use `=` for values) |
 | Logical | `And` `Or` `Not` `AndAlso` `OrElse` |
 | Bitwise | `And` `Or` `Xor` `Shl` `Shr` |
 | String | `&` (concatenate) |
 | Compound | `+=` `-=` `*=` `/=` `&=` and the rest |
+
+As in VB, `Not` binds looser than every comparison and tighter than `And`/`Or`:
+`Not x Is Nothing` is `Not (x Is Nothing)`, `Not n = 5` is `Not (n = 5)`, and
+`Not a And b` is `(Not a) And b`.
 
 A line continues with a trailing `_`. Comments start with `'` or `Rem`.
 

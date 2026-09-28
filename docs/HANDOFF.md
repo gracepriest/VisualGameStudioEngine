@@ -2176,9 +2176,12 @@ single new failure against the 170-name baseline.
   - **D1 (grammar):** `Is`/`IsNot` are binary operators at the `=`/`<>` level in BOTH expression
     parsers (the recursive-descent chain AND the precedence-climbing continuation); `IsNot` is now
     a lexer keyword. `Case Is Nothing` keeps its dispatch and is now marked `WrittenWithIs`
-    (`NothingPatternNode`), which separates it from VB's value comparison `Case Nothing`. A
-    `Not`-shaped left operand (`Not x Is Nothing`) is refused, naming `x IsNot Nothing` — `Not`
-    itself stays at unary precedence (moving it is filed separately as **#195**).
+    (`NothingPatternNode`), which separates it from VB's value comparison `Case Nothing`.
+    **#195 (done):** `Not` is at VB precedence in both parsers (`ParseLogicalNot` /
+    `ParseNotContinuation`) — looser than every comparison, tighter than `And` — so
+    `Not x Is Nothing` is `Not (x Is Nothing)` and `Not n = 5` is `Not (n = 5)`. A `Not` in
+    operand position (`x = Not b`) is still the unary. Only an explicit `(Not x) Is Nothing` still
+    reaches D1 (3)'s refusal, which names `x IsNot Nothing`.
   - **D2 (operand rule, `VisitIdentityComparison`):** an operand is `Nothing` or a type #173's
     `NothingAdviceFor` admits `Nothing` into — the ONE classification, no parallel list; value
     types are refused BC30020-style, each refusal naming its own fix. A nullable is admitted only
@@ -2259,7 +2262,8 @@ single new failure against the 170-name baseline.
     table independently and observing which shapes stopped parsing. See
     `IsIsNotOperatorTests.cs`'s and `IsIsNotOperatorExecutionTests.cs`'s doc comments for which
     test kills which.
-  - Follow-ups filed, not fixed here: **#195** (`Not` to VB precedence); **#196** (`Array<T>` a
+  - Follow-ups filed, not fixed here: **#195** (`Not` to VB precedence — since done, see D1
+    above); **#196** (`Array<T>` a
     real null state, which flips the C++ divergence for arrays); **#197** (`TypeOf`, not touched
     by this task); **#198** (BasicLang cannot declare a user `Operator =` yet, so D4 (1)'s
     four-backend proof waits on it); **#193** (`Integer?` on C++/MSIL/JavaScript, pre-existing);
