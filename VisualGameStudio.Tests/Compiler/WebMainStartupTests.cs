@@ -79,6 +79,27 @@ public class WebMainStartupTests
             banner.textContent = "A banner above the form"
             ::document.body.prepend(banner)
 
+            Dim first As Element = doc.createElement("span")
+            first.id = "vgsSpanA"
+            first.textContent = "two inline"
+            doc.body.appendChild(first)
+
+            Dim second As Element = doc.createElement("span")
+            second.id = "vgsSpanB"
+            second.textContent = "spans"
+            doc.body.appendChild(second)
+
+            Dim line As Element = doc.createElement("p")
+            doc.body.appendChild(line)
+            Dim third As Element = doc.createElement("span")
+            third.id = "vgsSpanC"
+            third.textContent = "wrapped inline"
+            line.appendChild(third)
+            Dim fourth As Element = doc.createElement("span")
+            fourth.id = "vgsSpanD"
+            fourth.textContent = "spans"
+            line.appendChild(fourth)
+
             Console.WriteLine("MAIN RAN")
         End Sub
 
@@ -199,6 +220,90 @@ public class WebMainStartupTests
         });
     }
 
+    /// <summary>
+    /// ⛔⛔ Review of 27af2e46: a user who calls the dispatch THEMSELVES chose when the form starts, and the automatic
+    /// start must not pre-empt them. Measured on 27af2e46: an <c>Async Sub Main</c> returns at its first Await, the
+    /// entry point's automatic call started the form there — before the config it was waiting for — and the user's own
+    /// call was a no-op under the once-per-page guard. BL8018 told every user to write that call, so such projects exist.
+    /// Rule now: the automatic start happens only when no user code calls the dispatch.
+    /// </summary>
+    [Test]
+    public void AnAsyncMainThatCallsTheDispatchAfterAnAwait_StartsTheFormWhereItSaid()
+    {
+        WriteOwnerProject("""
+            Async Function Load() As Task(Of Integer)
+                Return 1
+            End Function
+
+            Async Sub Main()
+                Console.WriteLine("MAIN START")
+                Dim loaded As Integer
+                loaded = Await Load()
+                Console.WriteLine("CONFIG LOADED")
+                VgsForms.VgsDispatchForm()
+                Console.WriteLine("MAIN DONE")
+            End Sub
+
+            """);
+        BuildWithTheRealCli();
+
+        var ran = RunUnderNode();
+        Assert.Multiple(() =>
+        {
+            Assert.That(ran, Does.Not.Contain("LOAD ERROR"));
+            Assert.That(Count(ran, "FORM SHOWN"), Is.EqualTo(1));
+            Assert.That(ran.IndexOf("CONFIG LOADED", StringComparison.Ordinal),
+                Is.LessThan(ran.IndexOf("FORM SHOWN", StringComparison.Ordinal)),
+                "the form started before the config Main awaited — the automatic start pre-empted the user's own call");
+            Assert.That(ran.IndexOf("FORM SHOWN", StringComparison.Ordinal),
+                Is.LessThan(ran.IndexOf("MAIN DONE", StringComparison.Ordinal)));
+        });
+    }
+
+    /// <summary>
+    /// A form started from a BUTTON (a splash page with "Sign in") must not start on load; clicking starts it, once.
+    /// </summary>
+    [Test]
+    public void ADispatchCallInAButtonHandler_DoesNotAutoStart_AndTheClickStartsTheFormOnce()
+    {
+        WriteOwnerProject("""
+            Sub StartForm(e As DomEvent)
+                VgsForms.VgsDispatchForm()
+            End Sub
+
+            Sub Main()
+                Dim doc As Document = ::document
+                Dim button As Element = doc.createElement("button")
+                button.textContent = "Start"
+                doc.body.appendChild(button)
+                button.addEventListener("click", AddressOf StartForm)
+                Console.WriteLine("MAIN RAN")
+            End Sub
+
+            """);
+        BuildWithTheRealCli();
+
+        // The node stub names every createElement result "created"; clicking nothing first, then that button.
+        var loaded = FormDesignerAcceptanceTests.RunPageUnderNode(OutputDir, clickId: "vgsNothing");
+        if (loaded == null)
+        {
+            Assert.Ignore("node is not on PATH, so the emitted page cannot be executed here");
+        }
+
+        var clicked = FormDesignerAcceptanceTests.RunPageUnderNode(OutputDir, clickId: "created");
+        TestContext.Out.WriteLine("[node load] " + loaded!.Trim() + "\n[node click] " + clicked!.Trim());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(loaded, Does.Contain("MAIN RAN"));
+            Assert.That(loaded, Does.Not.Contain("LOAD ERROR"));
+            Assert.That(Count(loaded, "FORM SHOWN"), Is.Zero,
+                "the form started on load although the user starts it from a button");
+            Assert.That(clicked, Does.Not.Contain("CLICK ERROR"));
+            Assert.That(Count(clicked, "FORM SHOWN"), Is.EqualTo(1), "one click, one form");
+        });
+    }
+
     /// <summary>A project with forms and NO Main (a site that is all forms) still starts its form, on load.</summary>
     [Test]
     public void AProjectWithNoMain_StartsItsFormOnLoad()
@@ -230,10 +335,22 @@ public class WebMainStartupTests
             EdgeCase.Of(form, Viewport, ViewportH,
                 EdgeStep.InViewport("heading", "vgsMainHeading"),
                 EdgeStep.InViewport("button", "vgsMainButton"),
-                EdgeStep.InViewport("banner", "vgsMainBanner"))
+                EdgeStep.InViewport("banner", "vgsMainBanner"),
+                EdgeStep.Rect("buttonRect", "vgsMainButton"),
+                EdgeStep.Rect("spanA", "vgsSpanA"),
+                EdgeStep.Rect("spanB", "vgsSpanB"),
+                EdgeStep.Rect("spanC", "vgsSpanC"),
+                EdgeStep.Rect("spanD", "vgsSpanD"))
         });
         var result = edge.Results[$"LoginForm@{Viewport}x{ViewportH}"];
         var (designW, designH) = form.DesignSize;
+        var button = Rect(result.Probes["buttonRect"]);
+        var spanA = Rect(result.Probes["spanA"]);
+        var spanB = Rect(result.Probes["spanB"]);
+        var spanC = Rect(result.Probes["spanC"]);
+        var spanD = Rect(result.Probes["spanD"]);
+        TestContext.Out.WriteLine(
+            $"[edge] button {button} spanA {spanA} spanB {spanB} spanC {spanC} spanD {spanD} form {result.FormArea}");
 
         Assert.Multiple(() =>
         {
@@ -249,6 +366,29 @@ public class WebMainStartupTests
             Assert.That(result.ScrollHeight, Is.LessThanOrEqualTo((double)ViewportH),
                 "the page must not scroll: there was room for Main's content beside the form");
             Assert.That(designW, Is.LessThanOrEqualTo(Viewport), "precondition: the design fits the window");
+
+            // ⛔ Review of 27af2e46: a flex column STRETCHES its children across the cross axis, so the template's
+            // "Click me" button measured 1024px wide. Main's elements keep their own size.
+            Assert.That(button.W, Is.LessThan(200.0), "Main's button was stretched to the window's width");
+            Assert.That(spanA.W, Is.LessThan(200.0), "Main's span was stretched to the window's width");
+
+            // Inline content Main wraps in ONE element stays on one line — the documented way (FormAssetEmitter.CanvasCss).
+            Assert.That(spanD.Y, Is.EqualTo(spanC.Y).Within(1.0), "two spans inside one <p> must share a line");
+            Assert.That(spanD.X, Is.GreaterThan(spanC.X + spanC.W - 1), "and sit side by side");
+
+            // ⛔ PINNED DIVERGENCE (review of 27af2e46 asked for these on one line; measured in Edge it is not achievable
+            // with the body a flex column): two spans appended straight to <body> are two column rows. If a layout
+            // change ever puts them on one line, this goes red — delete the pin and assert the line instead.
+            Assert.That(spanB.Y, Is.GreaterThanOrEqualTo(spanA.Y + spanA.H - 1),
+                "PINNED: loose inline body children stack in the column (see FormAssetEmitter.CanvasCss KNOWN LIMIT)");
         });
+    }
+
+    private static (double X, double Y, double W, double H) Rect(string json)
+    {
+        using var doc = System.Text.Json.JsonDocument.Parse(json);
+        var r = doc.RootElement;
+        return (r.GetProperty("x").GetDouble(), r.GetProperty("y").GetDouble(),
+                r.GetProperty("w").GetDouble(), r.GetProperty("h").GetDouble());
     }
 }

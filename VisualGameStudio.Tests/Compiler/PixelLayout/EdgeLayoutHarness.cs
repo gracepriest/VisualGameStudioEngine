@@ -34,6 +34,9 @@ internal sealed record EdgeStep(string Label, string Kind, string Id = "", strin
     /// <c>false {rect}</c> naming where it was.
     /// </summary>
     public static EdgeStep InViewport(string label, string id) => new(label, "inview", id);
+
+    /// <summary>The element <paramref name="id"/>'s border box in VIEWPORT px, as the probe JSON <c>{"x":…,"y":…,"w":…,"h":…}</c>.</summary>
+    public static EdgeStep Rect(string label, string id) => new(label, "rect", id);
 }
 
 /// <summary>One page loaded into an iframe of exactly <see cref="Width"/>×<see cref="Height"/> CSS px.</summary>
@@ -564,6 +567,10 @@ internal static class EdgeLayoutHarness
                              v.right <= window.innerWidth && v.bottom <= window.innerHeight;
                 probes[step.label] = inside ? "true"
                   : "false " + JSON.stringify({ x: v.left, y: v.top, w: v.width, h: v.height, vw: window.innerWidth, vh: window.innerHeight });
+                break;
+              case "rect":
+                var rr = element(step.id).getBoundingClientRect();
+                probes[step.label] = JSON.stringify({ x: rr.left, y: rr.top, w: rr.width, h: rr.height });
                 break;
               case "cost":
                 var writes = parseInt(step.value, 10), before = styleCalls, el = element(step.id);

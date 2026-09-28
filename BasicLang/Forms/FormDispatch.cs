@@ -71,6 +71,7 @@ public static class FormDispatch
     // ⛔ There is no "is it called?" check any more (BL8018, retired 2026-09-28). Generating the helper
     // used to be only half the job — the backend invoked Main and nothing else, so a helper nobody
     // called was a page that loaded and showed nothing, flagged only by a warning. The JavaScript
-    // entry point now calls it after Main itself (FormAssetEmitter.IsStartupDispatch) and the helper
-    // runs once per page, so a user's own call is optional and never doubles the form.
+    // entry point now calls it after Main itself whenever no user code does (FormAssetEmitter.IsStartupDispatch;
+    // the "is it called?" question moved onto the IR, JavaScriptBackend.UserCodeCallsDispatch), and the helper
+    // runs once per page, so a user's own call is optional, decides when the form starts, and never doubles it.
 }

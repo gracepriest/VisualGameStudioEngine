@@ -93,7 +93,8 @@ public static class DesignCodes
     /// ⛔ RETIRED 2026-09-28 — NOTHING EMITS THIS. It warned that a project had form pages and no
     /// source called the generated dispatch helper. Owner decision that day: Sub Main in a web project
     /// with forms is STARTUP, like WinForms, and the JavaScript entry point now starts the form after
-    /// Main by itself (<see cref="FormAssetEmitter.IsStartupDispatch"/>), so there is nothing left to
+    /// Main by itself whenever no user code calls the helper (<see cref="FormAssetEmitter.IsStartupDispatch"/>;
+    /// a user who calls it decides when the form starts), so there is nothing left to
     /// warn about — not even as a note: a user who never heard of the helper is the case that works.
     /// Kept so the number stays claimed and so tests can assert it never reappears.
     /// </summary>

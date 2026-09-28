@@ -762,13 +762,15 @@ public class FormAssetEmitterTests
         {
             // ⛔⛔ Owner decision 2026-09-28 (Sub Main is startup): the body is a column and the form area takes what is
             // LEFT — never `height: 100vh`, which put everything Main appended to the body one viewport down.
-            Assert.That(css, Does.Contain("body { margin: 0; display: flex; flex-direction: column; min-height: 100vh; }"));
+            // align-items: flex-start — a column would otherwise stretch everything Main adds to the full width.
+            Assert.That(css, Does.Contain(
+                "body { margin: 0; display: flex; flex-direction: column; align-items: flex-start; min-height: 100vh; }"));
             Assert.That(css, Does.Not.Contain("\n  height: 100vh"), "the form area is not the viewport; it is what is left of it");
             Assert.That(css, Does.Contain(
                 // ⛔ display: flow-root (Task 10 review N-1, measured in Chromium): without its own block formatting
                 // context a Literal's first <p>/<h1> top margin collapses through .vgs-form and moves EVERY control
                 // down (a button at Y=30 rendered at 46). The phone query's display:flex overrides it.
-                ".vgs-form {\n  position: relative;\n  display: flow-root;\n  flex: 1 0 auto;\n  width: 100%;\n" +
+                ".vgs-form {\n  position: relative;\n  display: flow-root;\n  flex: 1 0 auto;\n  align-self: stretch;\n  width: 100%;\n" +
                 $"  min-width: {w}px;\n  min-height: {h}px;\n  box-sizing: border-box;\n}}"));
             Assert.That(css, Does.Contain(".vgs-form [hidden] { display: none !important; }"),
                 "B7: a phone's display:flex must not un-hide a control user code hid");
@@ -1073,7 +1075,9 @@ public class FormAssetEmitterTests
 
         Assert.That(FormAssetEmitter.Css(page), Does.Contain(
             $"@media (width < {expected}px) {{\n" +
-            "  .vgs-form { display: flex; flex-direction: column; gap: 8px; height: auto; min-width: 0; min-height: 0; }\n"));
+            // flex: none — below the breakpoint the stacked form area is its content's height and does not grow into
+            // the body column's free space (review of 27af2e46).
+            "  .vgs-form { display: flex; flex-direction: column; gap: 8px; flex: none; min-width: 0; min-height: 0; }\n"));
     }
 
     [Test]

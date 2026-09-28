@@ -157,15 +157,19 @@ to a shared method on a class rather than a top-level name; and the cross-file t
 limitation is a **compiler** gap worth its own investigation — it is not a form-designer problem and
 it will bite anyone splitting procedural code across files on the JavaScript backend.
 
-### 13. Nothing makes `Main()` call the dispatch for you
-`BL8018` warns when a project has form pages and no source calls `VgsForms.VgsDispatchForm()`, which
-is the honest minimum: the backend emits exactly one invocation, for `Main`, so an uncalled helper
-is a page that loads a script and does nothing.
+### 13. ✅ RESOLVED 2026-09-28 — Nothing makes `Main()` call the dispatch for you
+*Was:* `BL8018` warned when a project had form pages and no source called
+`VgsForms.VgsDispatchForm()` — the backend emitted exactly one invocation, for `Main`, so an uncalled
+helper was a page that loaded a script and did nothing (the owner hit exactly that: "can't call Sub
+Main if I use a (web) form").
 
-But a warning is not the same as it working. The options are to have **File → New Form** offer to
-insert the call into the project's `Main()` the first time a form is added, or to make the web
-project template ship a `Main()` that already dispatches. Both edit the user's code, which is why
-neither was done unilaterally.
+*Now (owner decision: Sub Main is startup, like WinForms):* the JavaScript entry point runs `Main()`
+and then starts the page's form itself — **only when no user code calls the dispatch** (asked of the
+IR, `JavaScriptBackend.UserCodeCallsDispatch`; a user who calls it chose when, e.g. after an `Await`
+or from a button). No Main → the form starts on load. The dispatch runs once per page. **`BL8018` is
+retired** — nothing emits it and the number stays claimed. Neither option once listed here (New Form
+inserting the call into `Main()`, or a template whose `Main()` dispatches) was needed, so no user code
+is edited. Tests: `WebMainStartupTests`.
 
 ### 14. ⛔⛔ The JavaScript backend emits calls to module objects it never defines
 **This is a runtime failure from a clean, green build**, and it is a COMPILER bug.

@@ -878,14 +878,18 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// project with forms is STARTUP, like WinForms — Main first, so what it adds to the page
         /// is there, then the form, as <c>Application.Run(New Form1)</c>). The rule is
         /// <see cref="global::BasicLang.Forms.FormAssetEmitter.IsStartupDispatch"/>; the generated dispatch exists
-        /// only in a build with forms, and it dispatches once per page, so a user's own earlier
-        /// call is not repeated. With no Main the form starts on load. Before this, nothing called
-        /// the dispatch unless Main did, the build said so only as warning BL8018, and the owner's
-        /// page loaded blank.</para>
+        /// only in a build with forms. With no Main the form starts on load. Before this, nothing
+        /// called the dispatch unless Main did, the build said so only as warning BL8018, and the
+        /// owner's page loaded blank.</para>
         ///
-        /// <para>⚠ After Main RETURNS: an <c>Async Sub Main</c> returns at its first Await, and
-        /// the form starts there — as it would after the startup code of a WinForms Main that does
-        /// not await.</para>
+        /// <para>⛔ ONLY when no user code calls the dispatch itself (<see cref="UserCodeCallsDispatch"/>):
+        /// such a user chose when the form starts. The dispatch also runs once per page, so two
+        /// user calls never build two forms.</para>
+        ///
+        /// <para>⚠ After Main RETURNS: an <c>Async Sub Main</c> with no dispatch call of its own
+        /// returns at its first Await and the form starts there. ⚠ A Main that THROWS stops the
+        /// script, so the form never starts — as a WinForms Main that throws before
+        /// <c>Application.Run</c> never shows its form.</para>
         /// </summary>
         private void EmitEntryPoint(IRModule module)
         {
@@ -904,12 +908,57 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
                 var dispatch = irClass.Methods.FirstOrDefault(
                     m => global::BasicLang.Forms.FormAssetEmitter.IsStartupDispatch(irClass.Name, m.Name, m.IsStatic));
-                if (dispatch != null)
-                {
-                    Line($"{SanitizeName(irClass.Name)}.{SanitizeName(dispatch.Name)}();");
-                    return;
-                }
+                if (dispatch == null) continue;
+
+                // ⛔⛔ Only when NO user code calls it (review of 27af2e46). A user who calls the
+                // dispatch chose WHEN the form starts — after an Await in an Async Main, from a
+                // button, from a timer — and BL8018 told every user to write that call, so such
+                // projects exist. Starting it here anyway pre-empted them: an Async Main returns at
+                // its first Await, the form started there, and the user's own later call was a
+                // no-op under the once-per-page guard. Asked of the IR, so a mention in a comment
+                // or a string is not a call. (The old BL8018 text match asked the same question.)
+                if (UserCodeCallsDispatch(module, irClass, dispatch.Name)) return;
+
+                Line($"{SanitizeName(irClass.Name)}.{SanitizeName(dispatch.Name)}();");
+                return;
             }
+        }
+
+        /// <summary>
+        /// True when any function OUTSIDE <paramref name="dispatchClass"/> — Main, a module Sub, a
+        /// class method, a handler, a lambda — calls <paramref name="methodName"/>. The generated
+        /// class's own bodies are excluded: the dispatch does not call itself, and a future helper
+        /// on that class calling it is not the USER choosing when the form starts.
+        /// </summary>
+        private static bool UserCodeCallsDispatch(IRModule module, IRClass dispatchClass, string methodName)
+        {
+            var own = new HashSet<IRFunction>(dispatchClass.Methods
+                .Select(m => m.Implementation)
+                .Where(f => f != null));
+
+            bool Names(string? name) =>
+                name != null &&
+                (string.Equals(name, methodName, StringComparison.OrdinalIgnoreCase) ||
+                 name.EndsWith("." + methodName, StringComparison.OrdinalIgnoreCase));
+
+            bool Calls(IRValue? value) => value switch
+            {
+                IRCall call => Names(call.FunctionName) || (call.Arguments?.Any(Calls) ?? false),
+                IRInstanceMethodCall call => Names(call.MethodName) || (call.Arguments?.Any(Calls) ?? false),
+                _ => false,
+            };
+
+            foreach (var function in module.Functions)
+            {
+                if (own.Contains(function)) continue;
+
+                foreach (var block in function.Blocks ?? Enumerable.Empty<BasicBlock>())
+                    foreach (var instruction in block.Instructions ?? Enumerable.Empty<IRInstruction>())
+                        if (instruction is IRValue value && Calls(value))
+                            return true;
+            }
+
+            return false;
         }
 
         // ------------------------------------------------------------------
