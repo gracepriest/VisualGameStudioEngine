@@ -290,6 +290,32 @@ namespace BasicLang.Compiler.SemanticAnalysis
         internal int UnboundByNameMismatch { get; private set; }
 
         /// <summary>
+        /// Task #174 — the function scope of every lambda analyzed in this pass, by reference. A
+        /// lambda's scope is an ordinary <see cref="ScopeKind.Function"/> named "Lambda", and a user
+        /// procedure may be named Lambda too, so the scope's NAME never decides.
+        /// </summary>
+        private readonly HashSet<Scope> _lambdaScopes =
+            new HashSet<Scope>(ReferenceEqualityComparer.Instance);
+
+        /// <summary>
+        /// Task #174 — every <c>Dim</c> declared inside a lambda that hid nothing when it was
+        /// declared, by name, with the innermost lambda it sits in: the LATER-declaration half of
+        /// BC30616. VB's block scope is the whole block, so a local declared BELOW the lambda in an
+        /// enclosing block is hidden too (N7, N12), but pass 2 defines locals in source order, so at
+        /// the lambda's <c>Dim</c> that local does not exist yet. The question is asked again when
+        /// it is declared (<see cref="ReportLambdaLocalsHiddenBy"/>).
+        /// </summary>
+        private readonly Dictionary<string, List<(VariableDeclarationNode Local, Scope Lambda)>> _lambdaLocals =
+            new Dictionary<string, List<(VariableDeclarationNode Local, Scope Lambda)>>(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// Task #174 — the nodes a lambda-boundary diagnostic was reported at, so a node the
+        /// analyzer visits twice (an argument re-typed for overload resolution) reports once.
+        /// </summary>
+        private readonly HashSet<ASTNode> _lambdaDiagnosticSites =
+            new HashSet<ASTNode>(ReferenceEqualityComparer.Instance);
+
+        /// <summary>
         /// The control variables of the <c>For</c> / <c>For Each</c> loops whose bodies are being
         /// analyzed, innermost last — VB's BC30069 question ("already in use by an enclosing
         /// loop"), asked only by a <c>For Each</c> that would REUSE a variable.
@@ -1221,6 +1247,9 @@ namespace BasicLang.Compiler.SemanticAnalysis
             _nodeTypes.Clear();
             _nodeSymbols.Clear();
             _lambdaParameterSymbols.Clear();
+            _lambdaScopes.Clear();
+            _lambdaLocals.Clear();
+            _lambdaDiagnosticSites.Clear();
             _synthesizedSymbols.Clear();
             _delegateMemberInvocations.Clear();
             _netNamespaces.Clear();
@@ -6554,6 +6583,11 @@ namespace BasicLang.Compiler.SemanticAnalysis
             }
             AttachOwningModule(symbol);
 
+            // Task #174, before the initializer: VB scopes a local over its own initializer, so a
+            // lambda in it that declares the same name hides THIS one.
+            CheckLambdaLocalHides(node);
+            ReportLambdaLocalsHiddenBy(symbol);
+
             SetNodeSymbol(node, symbol);
             SetNodeType(node, varType);
 
@@ -6688,6 +6722,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 Error($"Constant '{node.Name}' is already defined in this scope", node.Line, node.Column);
             }
             AttachOwningModule(symbol);
+            ReportLambdaLocalsHiddenBy(symbol);   // task #174: a local Const declared below a lambda
 
             SetNodeSymbol(node, symbol);
             SetNodeType(node, constType);
@@ -7444,6 +7479,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
             var targetShape = DelegateShapeOf(targetType);
 
             var lambdaScope = EnterScope("Lambda", ScopeKind.Function);
+            _lambdaScopes.Add(lambdaScope);   // task #174: the lambda boundary, by identity
 
             // Parameter types supplied by the target delegate type (Func/Action, or a user
             // Delegate's own list — known even when empty)
@@ -9067,6 +9103,13 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     alsoRead: true);
             }
 
+            // Task #174: `For n = …` with no `As` drives an existing `n` too, so inside a lambda it
+            // WRITES a ByRef parameter of the procedure around it — VB's BC36639 (E06). The loop
+            // variable defined below would hide `n` from every reference in the body, so this is
+            // the one place the write is seen.
+            if (string.IsNullOrEmpty(node.VariableType))
+                CheckByRefParameterInLambda(_currentScope.Resolve(node.Variable), node);
+
             // Define loop variable
             var loopVarSymbol = new Symbol(node.Variable, SymbolKind.Variable,
                                           loopVarType, node.Line, node.Column);
@@ -9777,7 +9820,14 @@ namespace BasicLang.Compiler.SemanticAnalysis
         /// list and the native build print it) and at the head of the message, as BL6014 does, so
         /// the CLI shows it too.
         /// </summary>
-        private void PropertyAccessError(string code, string message, ASTNode at)
+        private void PropertyAccessError(string code, string message, ASTNode at) =>
+            VbCodedError(code, message, at);
+
+        /// <summary>
+        /// An error carrying VB's own number: as the code (the IDE's error list and the native build
+        /// print it) and at the head of the message, as BL6014 does, so the CLI shows it too.
+        /// </summary>
+        private void VbCodedError(string code, string message, ASTNode at)
         {
             _errors.Add(new SemanticError(
                 _errorContext.FormatErrorWithContext($"{code}: {message}"), at.Line, at.Column)
@@ -9785,6 +9835,140 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 ErrorCode = code
             });
         }
+
+        // ====================================================================
+        // Task #174 — VB's diagnostics at the LAMBDA BOUNDARY. Each backend did something
+        // different with these shapes (C++ and JavaScript printed wrong answers, C# failed with a
+        // C# error, MSIL refused inside ClosureLowering), so the front end reports VB's own code
+        // before any backend runs. ClosureLowering's two refusals (ADR-0010 D4 and N9) stay as
+        // backstops for what this does not cover.
+        // ====================================================================
+
+        /// <summary>
+        /// ⭐ Task #174 — VB's BC36639, "'ByRef' parameter 'n' cannot be used in a lambda
+        /// expression.": a reference, read or write, at any lambda nesting depth, to a ByRef
+        /// parameter declared OUTSIDE the innermost lambda around it. Decided by the resolved
+        /// SYMBOL, never by spelling (ADR-0013): a lambda parameter spelled like the ByRef one
+        /// resolves to itself, declared inside the lambda, and is not reported (R7 — whether that
+        /// shadowing is BC36641 is #217). BasicLang's lambda parameters cannot be ByRef (the parser
+        /// takes a bare name), so the parameter is always an enclosing procedure's.
+        /// </summary>
+        private void CheckByRefParameterInLambda(Symbol symbol, ASTNode at)
+        {
+            if (symbol == null || symbol.Kind != SymbolKind.Parameter || !symbol.IsByRef) return;
+
+            var lambda = InnermostLambdaScope();
+            if (lambda == null || !IsStrictAncestor(symbol.DeclaringScope, lambda)) return;
+
+            LambdaBoundaryError(
+                "BC36639", $"'ByRef' parameter '{symbol.Name}' cannot be used in a lambda expression.", at);
+        }
+
+        /// <summary>
+        /// ⭐ Task #174 — a <c>Dim</c> inside a lambda that hides a name declared OUTSIDE that
+        /// lambda, within the procedure around it: the nearest such declaration decides the code
+        /// (<see cref="ReportLambdaLocalHiding"/>). A class field or a module global is not in a
+        /// procedure scope and may be hidden (N8, N9). The lambda's OWN blocks are not searched:
+        /// a nested-block <c>Dim</c> hiding a local with no lambda between them is task #231.
+        /// A <c>Dim</c> that hides nothing yet is remembered for a local declared later in an
+        /// enclosing block (<see cref="ReportLambdaLocalsHiddenBy"/>).
+        /// </summary>
+        private void CheckLambdaLocalHides(VariableDeclarationNode node)
+        {
+            var lambda = InnermostLambdaScope();
+            if (lambda == null) return;
+
+            for (var scope = lambda.Parent; scope != null && IsProcedureLocalScope(scope); scope = scope.Parent)
+            {
+                var hidden = scope.ResolveLocal(node.Name);
+                if (hidden == null || _synthesizedSymbols.Contains(hidden)) continue;
+
+                if (ReportLambdaLocalHiding(node, hidden)) return;
+                break;   // the nearest declaration is what the name means outside; it hides nothing we report
+            }
+
+            if (!_lambdaLocals.TryGetValue(node.Name, out var locals))
+                _lambdaLocals[node.Name] = locals = new List<(VariableDeclarationNode Local, Scope Lambda)>();
+            locals.Add((node, lambda));
+        }
+
+        /// <summary>
+        /// Task #174 — the later-declaration half of BC30616 (N7, N12): <paramref name="declared"/>,
+        /// a local just defined, is hidden by every earlier lambda <c>Dim</c> of the same name
+        /// whose lambda it ENCLOSES. VB's block scope is the whole block, so the order of the two
+        /// declarations does not matter; a local of a sibling block encloses nothing and is not
+        /// reported.
+        /// </summary>
+        private void ReportLambdaLocalsHiddenBy(Symbol declared)
+        {
+            var scope = declared?.DeclaringScope;
+            if (scope == null || !IsProcedureLocalScope(scope)) return;
+            if (!_lambdaLocals.TryGetValue(declared.Name, out var locals)) return;
+
+            foreach (var (local, lambda) in locals)
+                if (IsStrictAncestor(scope, lambda))
+                    ReportLambdaLocalHiding(local, declared);
+        }
+
+        /// <summary>
+        /// VB's code for a lambda <c>Dim</c> that hides <paramref name="hidden"/>: a local of an
+        /// enclosing block, of the creator or of an enclosing lambda (a <c>For</c>, <c>For Each</c>,
+        /// <c>Catch</c> or <c>Using</c> variable and a local <c>Const</c> included), is BC30616; a
+        /// parameter of the enclosing procedure BC30734; a parameter of an enclosing lambda
+        /// BC36667. False for anything else (a type parameter is VB's BC32089, not reported here).
+        /// </summary>
+        private bool ReportLambdaLocalHiding(VariableDeclarationNode local, Symbol hidden)
+        {
+            switch (hidden.Kind)
+            {
+                case SymbolKind.Variable:
+                case SymbolKind.Constant:
+                    LambdaBoundaryError(
+                        "BC30616", $"Variable '{local.Name}' hides a variable in an enclosing block.", local);
+                    return true;
+                case SymbolKind.Parameter when _lambdaParameterSymbols.Contains(hidden):
+                    LambdaBoundaryError(
+                        "BC36667",
+                        $"Variable '{local.Name}' is already declared as a parameter of this or an enclosing lambda expression.",
+                        local);
+                    return true;
+                case SymbolKind.Parameter:
+                    LambdaBoundaryError(
+                        "BC30734", $"'{local.Name}' is already declared as a parameter of this method.", local);
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        private void LambdaBoundaryError(string code, string message, ASTNode at)
+        {
+            if (_lambdaDiagnosticSites.Add(at)) VbCodedError(code, message, at);
+        }
+
+        /// <summary>The function scope of the innermost lambda being analyzed, or null outside one.</summary>
+        private Scope InnermostLambdaScope()
+        {
+            for (var scope = _currentScope; scope != null; scope = scope.Parent)
+                if (_lambdaScopes.Contains(scope)) return scope;
+            return null;
+        }
+
+        /// <summary>Whether <paramref name="ancestor"/> encloses <paramref name="scope"/> and is not it.</summary>
+        private static bool IsStrictAncestor(Scope ancestor, Scope scope)
+        {
+            if (ancestor == null) return false;
+            for (var s = scope?.Parent; s != null; s = s.Parent)
+                if (ReferenceEquals(s, ancestor)) return true;
+            return false;
+        }
+
+        /// <summary>
+        /// A scope that holds a procedure's or a lambda's locals and parameters — everything
+        /// between a lambda and the class, module or file around its procedure.
+        /// </summary>
+        private static bool IsProcedureLocalScope(Scope scope) =>
+            scope.Kind is ScopeKind.Function or ScopeKind.Subroutine or ScopeKind.Block or ScopeKind.Loop;
 
         public void Visit(AssignmentStatementNode node)
         {
@@ -10846,6 +11030,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 SetNodeSymbol(node, symbol);
                 SetNodeType(node, symbol.Type);
                 CheckPropertyRead(node, symbol);   // task #178: bare `W` read
+                CheckByRefParameterInLambda(symbol, node);   // task #174: BC36639, read or write
             }
         }
 
