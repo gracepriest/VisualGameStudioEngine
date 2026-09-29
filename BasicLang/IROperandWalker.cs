@@ -142,6 +142,11 @@ namespace BasicLang.Compiler.CodeGen
                 case IRDelegateCreate dc:
                     if (dc.Target != null) yield return dc.Target;
                     break;
+                // Only a guard's allocation carries its elements (see InlineElements); an emitted
+                // one's elements are operands of the IRArrayStores that follow it.
+                case IRArrayAlloc alloc when alloc.InlineElements != null:
+                    foreach (var e in alloc.InlineElements) yield return e;
+                    break;
             }
         }
 
