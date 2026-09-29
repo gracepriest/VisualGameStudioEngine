@@ -319,6 +319,9 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                                   "hold it in a field instead");
                     }
 
+                    // ADR-0015 E11 / D2a: MyBase.New arguments a two-phase constructor can place.
+                    CheckBaseConstructorArguments(module, cls, diags);
+
                     // Class field types.
                     if (cls.Fields != null)
                         foreach (var fld in cls.Fields)
@@ -360,6 +363,40 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 }
 
             return diags.Distinct().ToList();
+        }
+
+        /// <summary>
+        /// ADR-0015: a class's <c>MyBase.New</c> arguments must be ones the two-phase constructor
+        /// can place (<see cref="CppObjectModel.PlanBaseArguments"/>), and — in a hierarchy built on
+        /// a <c>#CppInclude</c>d C++ class — PURE (<see cref="CppObjectModel.IsPureBaseArgument"/>),
+        /// because there each argument is evaluated in the tag constructor's initializer list as
+        /// well as in <c>ctor_</c>. Both are refused here by name; neither shape compiled before
+        /// ADR-0015 (every computed argument was "use of undeclared identifier" in clang).
+        /// </summary>
+        private static void CheckBaseConstructorArguments(IRModule module, IRClass cls, List<string> diags)
+        {
+            if (cls == null || cls.IsStruct || cls.Constructors == null) return;
+            var foreignRoot = CppObjectModel.ForeignRootOf(module, cls);
+            foreach (var ctor in cls.Constructors)
+            {
+                if (ctor?.BaseConstructorArgs == null || ctor.BaseConstructorArgs.Count == 0) continue;
+                if (foreignRoot != null
+                    && ctor.BaseConstructorArgs.Any(a => !CppObjectModel.IsPureBaseArgument(module, ctor.Implementation, a)))
+                {
+                    diags.Add($"'{cls.Name}' passes a computed value to MyBase.New in a class built on the " +
+                              $"C++ class '{foreignRoot}' — on the C++ backend such an argument must be a " +
+                              "parameter, a constant, a module-level variable, or an operator expression over " +
+                              "those, because it is evaluated both when the C++ base is built and when the " +
+                              "BasicLang constructor runs (ADR-0015 D2a); compute it in the caller and pass " +
+                              "it in as a parameter");
+                    continue;
+                }
+                var (_, _, refusal) = CppObjectModel.PlanBaseArguments(module, ctor);
+                if (refusal != null)
+                    diags.Add($"'{cls.Name}': a MyBase.New argument {refusal} — the C++ backend calls the " +
+                              "base constructor immediately after evaluating its arguments (ADR-0015), so " +
+                              "compute the value in the caller and pass it in as a parameter");
+            }
         }
 
         private void CheckInstruction(IRInstruction inst, string funcName, List<string> diags)

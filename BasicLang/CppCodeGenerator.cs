@@ -440,6 +440,12 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // verbatim with blnet_runtime.hpp (single definition).
             SpliceRuntimeSource(CppNetRefRuntime.GuardedSource);
 
+            // ADR-0015: the object model (BasicLang::New / Self / Construct). ON DEMAND, for a
+            // module that declares a class, so a program without one emits byte-identically
+            // (split-mode counterpart: EmitRuntimeHeader in CppCodeGenerator.Split.cs — keep in sync).
+            if (DeclaresClass(module))
+                SpliceRuntimeSource(CppObjectModelRuntime.Source);
+
             // P2a-2 Task 7a: the boundary includes, ONLY for a surface-drawing module —
             // AFTER the splices, honoring blnet_marshal.hpp's include-order contract (the
             // P1 BCL splices above put BasicLang::DateTime et al. in scope first).
@@ -865,6 +871,16 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
 
         private string GetValueNameCore(IRValue value)
         {
+            // ⭐ ADR-0015 D3: `Me` used as a VALUE — an argument, a return, a Dim or assignment, a
+            // field store, a collection add, a cast operand — is the OWNING shared_ptr, never the
+            // raw `this`, which converts to no shared_ptr at all ("no viable conversion from
+            // 'Node *' to 'std::shared_ptr<Node>'", every such use, C++ only). Value by DEFAULT:
+            // exactly two contexts keep `this`, and they ask for it by name — a member receiver
+            // (ReceiverName) and an Is/IsNot operand (IdentityText). A Structure's `Me` would be
+            // `*this`, but a Structure cannot declare a method (#230), so that arm is dormant.
+            if (IsSelfReference(value) && _emittingClass is { IsStruct: false })
+                return "BasicLang::Self(this)";
+
             if (value is IRVariable v && v.Name != null && v.Name.StartsWith("__lambda_"))
             {
                 var lambdaFunc = _module?.Functions.FirstOrDefault(f => f.Name == v.Name && f.IsLambda);
@@ -1085,12 +1101,12 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 if (!found.prop.IsAccessorBacked) return null;
                 var accessor = found.prop.IsStatic
                     ? $"{SanitizeName(found.owner.Name)}::"
-                    : GetValueName(receiver) + MemberAccessOp(receiver);
+                    : ReceiverName(receiver) + MemberAccessOp(receiver);
                 return new AccessorProperty(accessor, SanitizeName(found.prop.Name));
             }
 
             if (FindInterfaceProperty(receiverType, member) is { } declared)
-                return new AccessorProperty(GetValueName(receiver) + MemberAccessOp(receiver), SanitizeName(declared.Name));
+                return new AccessorProperty(ReceiverName(receiver) + MemberAccessOp(receiver), SanitizeName(declared.Name));
 
             return null;
         }
@@ -1365,7 +1381,25 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 baseList.Add($"public {SanitizeName(iface)}");
             }
 
+            // ADR-0015 D1: the hierarchy ROOT — no BasicLang base — carries the one
+            // enable_shared_from_this, LAST, after the (foreign) base and every interface. Never
+            // on a derived class: two such subobjects in one object leave weak_this unset, and
+            // Me-as-a-value then fails with bad_weak_ptr at RUN time.
+            if (CppObjectModel.IsRoot(_module, irClass))
+            {
+                baseList.Add($"public std::enable_shared_from_this<{SelfTypeName(irClass)}>");
+            }
+
             var inheritance = baseList.Count > 0 ? " : " + string.Join(", ", baseList) : "";
+
+            // ADR-0015 D2a: a C++ base that is itself an enable_shared_from_this would be a second
+            // one in the object — loud here, instead of a silent bad_weak_ptr.
+            if (CppObjectModel.ForeignBaseOf(_module, irClass) is { } foreignBase)
+            {
+                WriteLine($"static_assert(!BasicLang::HasSharedFromThis<{SanitizeName(foreignBase)}>, "
+                          + $"\"'{SanitizeName(irClass.Name)}': its C++ base '{SanitizeName(foreignBase)}' must not derive "
+                          + "from std::enable_shared_from_this (ADR-0015 D2a)\");");
+            }
 
             var classTemplate = TemplatePrefix(irClass.GenericParameters);
             if (classTemplate != null)
@@ -1430,10 +1464,18 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             if (publicFields.Count > 0)
                 WriteLine();
 
-            // Constructors
-            foreach (var ctor in irClass.Constructors)
+            // Constructors. A class constructs in two phases (ADR-0015 D2); a Structure keeps its
+            // real C++ constructors — it is a value, and its `Me` is never shared.
+            if (irClass.IsStruct)
             {
-                GenerateConstructor(irClass, ctor);
+                foreach (var ctor in irClass.Constructors)
+                {
+                    GenerateConstructor(irClass, ctor);
+                }
+            }
+            else
+            {
+                GenerateTwoPhaseConstruction(irClass);
             }
 
             // Destructor - virtual if has base class, interfaces, or virtual methods
@@ -1579,6 +1621,239 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             WriteLine("}");
             WriteLine();
         }
+
+        /// <summary>True when the module declares a CLASS (a Structure does not count) — the trigger
+        /// for splicing <see cref="CppObjectModelRuntime"/>.</summary>
+        private static bool DeclaresClass(IRModule module) =>
+            module?.Classes != null && module.Classes.Values.Any(c => c != null && !c.IsStruct);
+
+        /// <summary>The class's own type as C++ spells it inside its definition: <c>Box</c>, or
+        /// <c>Box&lt;T&gt;</c> for a generic class — what <c>enable_shared_from_this</c> is keyed on.</summary>
+        private string SelfTypeName(IRClass irClass) =>
+            irClass.GenericParameters == null || irClass.GenericParameters.Count == 0
+                ? SanitizeName(irClass.Name)
+                : $"{SanitizeName(irClass.Name)}<{string.Join(", ", irClass.GenericParameters.Select(SanitizeName))}>";
+
+        /// <summary>
+        /// The instance fields the class body DECLARES, in the order it declares them (the three
+        /// access groups of <see cref="GenerateClassCore"/>, each in IR order) — the members a tag
+        /// constructor value-initializes. Exactly that set: naming a member the body never
+        /// declared would not compile.
+        /// </summary>
+        private static IEnumerable<IRField> DeclaredInstanceFields(IRClass irClass) =>
+            new[] { AccessModifier.Private, AccessModifier.Protected, AccessModifier.Public }
+                .SelectMany(access => irClass.Fields.Where(f => f.Access == access && !f.IsStatic));
+
+        /// <summary>The C++ parameter list of a constructor phase, spelled as the constructor always
+        /// was: ByRef by reference, a String or class by const reference, the rest by value.</summary>
+        private string ConstructorParameterList(IRFunction implementation) =>
+            implementation == null
+                ? ""
+                : string.Join(", ", implementation.Parameters.Select(p =>
+                {
+                    var paramType = MapType(p.Type);
+                    // ByRef outranks the const-ref optimization below: `const T&` aliases the
+                    // caller's object but forbids the write ByRef exists to make visible.
+                    if (p.IsByRef)
+                        return $"{paramType}& {SanitizeName(p.Name)}";
+                    if (paramType == "std::string" || (p.Type != null && p.Type.Kind == TypeKind.Class))
+                        return $"const {paramType}& {SanitizeName(p.Name)}";
+                    return $"{paramType} {SanitizeName(p.Name)}";
+                }));
+
+        /// <summary>
+        /// ⭐ ADR-0015 D2 / D2a: a class constructs in TWO PHASES, so that <c>Me</c> is owned
+        /// before any user code runs.
+        ///
+        /// <list type="number">
+        /// <item><b>The tag constructor</b> <c>explicit C(BasicLang::Construct)</c> runs inside
+        /// <c>make_shared</c>. It chains the base's tag constructor and value-initializes every
+        /// declared field — the .NET default. It runs NO user code and NO field initializer: a
+        /// virtual call from a base constructor must see a derived field at its default, as .NET
+        /// does. ⚠ The in-class initializer a field declaration still carries is therefore DEAD —
+        /// a member-initializer overrides it — and is kept only so the declaration lines stay
+        /// byte-identical; the value is set in <c>ctor_</c>.</item>
+        /// <item><b><c>ctor_</c></b>, one overload per VB constructor (or the implicit
+        /// parameterless one), runs once ownership exists, in VB's order: (1) the base's
+        /// <c>ctor_</c> with the <c>MyBase.New</c> arguments — only the statements computing those
+        /// arguments may precede it (E11); (2) this class's field initializers, in declaration
+        /// order; (3) the body. It never synthesizes a field store from a parameter's name (E12):
+        /// the old constructor initialized <c>X(x)</c> for any parameter named like a field, which
+        /// VB does not do.</item>
+        /// </list>
+        ///
+        /// <para><b>A foreign-rooted hierarchy</b> (D2a) has one tag constructor PER VB constructor,
+        /// carrying its parameters, because the C++ base can only be built in an initializer list:
+        /// the class directly on the C++ base builds it there from the (pure) <c>MyBase.New</c>
+        /// arguments and its <c>ctor_</c> omits step 1; every class below chains the base's tag
+        /// constructor with those arguments and its <c>ctor_</c> keeps step 1.</para>
+        /// </summary>
+        private void GenerateTwoPhaseConstruction(IRClass irClass)
+        {
+            var className = SanitizeName(irClass.Name);
+            var foreignBase = CppObjectModel.ForeignBaseOf(_module, irClass);
+            var foreignRooted = CppObjectModel.IsForeignRooted(_module, irClass);
+            var userBase = !string.IsNullOrEmpty(irClass.BaseClass) && foreignBase == null
+                ? SanitizeName(irClass.BaseClass)
+                : null;
+            var fieldDefaults = DeclaredInstanceFields(irClass).Select(f => $"{SanitizeName(f.Name)}{{}}").ToList();
+
+            // A class with no `Sub New` has VB's implicit parameterless one (null here).
+            var constructors = irClass.Constructors.Count > 0
+                ? irClass.Constructors.ToList()
+                : new List<IRConstructor> { null };
+
+            if (!foreignRooted)
+            {
+                var items = new List<string>();
+                if (userBase != null) items.Add($"{userBase}(blTag)");
+                items.AddRange(fieldDefaults);
+                var tag = userBase != null ? "BasicLang::Construct blTag" : "BasicLang::Construct";
+                WriteLine($"explicit {className}({tag}){(items.Count > 0 ? " : " + string.Join(", ", items) : "")} {{}}");
+            }
+            else
+            {
+                foreach (var ctor in constructors)
+                {
+                    var parameters = ConstructorParameterList(ctor?.Implementation);
+                    var args = ctor == null
+                        ? ""
+                        : string.Join(", ", ctor.BaseConstructorArgs.Select(RenderPureBaseArgument));
+                    var items = new List<string>
+                    {
+                        foreignBase != null
+                            ? $"{SanitizeName(foreignBase)}({args})"
+                            : $"{userBase}(blTag{(args.Length > 0 ? ", " + args : "")})",
+                    };
+                    items.AddRange(fieldDefaults);
+                    var tag = foreignBase != null ? "BasicLang::Construct" : "BasicLang::Construct blTag";
+                    WriteLine($"explicit {className}({tag}{(parameters.Length > 0 ? ", " + parameters : "")}) : "
+                              + $"{string.Join(", ", items)} {{}}");
+                }
+            }
+            WriteLine();
+
+            foreach (var ctor in constructors)
+            {
+                GenerateCtorPhase(irClass, ctor, userBase);
+            }
+        }
+
+        /// <summary>
+        /// A <c>MyBase.New</c> argument as one inline expression for a foreign-rooted tag
+        /// constructor's initializer list. The checker admitted only PURE arguments
+        /// (<see cref="CppObjectModel.IsPureBaseArgument"/>) — parameters, constants, module-level
+        /// values and operators over them — which render by the guard path's inline builders,
+        /// through the same operator spellings the statement forms use.
+        /// </summary>
+        private string RenderPureBaseArgument(IRValue argument)
+        {
+            var saved = _guardNodes;
+            _guardNodes = new HashSet<IRValue>(ReferenceEqualityComparer.Instance);
+            CollectGuardNodes(argument, _guardNodes);
+            try
+            {
+                return RenderInline(argument);
+            }
+            finally
+            {
+                _guardNodes = saved;
+            }
+        }
+
+        /// <summary>
+        /// One <c>ctor_</c> overload (see <see cref="GenerateTwoPhaseConstruction"/>). Steps 1 and 2
+        /// are a PROLOGUE placed right after the instructions that evaluate the <c>MyBase.New</c>
+        /// arguments (<see cref="CppObjectModel.PlanBaseArguments"/>) — at the top of the body
+        /// when there are none — and the rest of the body follows.
+        /// </summary>
+        private void GenerateCtorPhase(IRClass irClass, IRConstructor ctor, string userBase)
+        {
+            var implementation = ctor?.Implementation;
+            WriteLine($"void ctor_({ConstructorParameterList(implementation)})");
+            WriteLine("{");
+            Indent();
+
+            // The plan says where the prologue goes and which argument nodes render INLINE (an
+            // operator the optimizer replaced in the block but not in BaseConstructorArgs).
+            var (prefixLength, inlineNodes, refusal) = CppObjectModel.PlanBaseArguments(_module, ctor);
+            if (refusal != null)
+                throw new InvalidOperationException(
+                    $"C++ backend: '{irClass.Name}' reached emission with a MyBase.New argument that " +
+                    $"{refusal}; CppCapabilityChecker refuses that shape (ADR-0015 E11).");
+
+            void Prologue()
+            {
+                if (userBase != null)
+                {
+                    var saved = _guardNodes;
+                    _guardNodes = inlineNodes;
+                    try
+                    {
+                        var args = ctor == null ? "" : string.Join(", ", ctor.BaseConstructorArgs.Select(GetValueName));
+                        WriteLine($"{userBase}::ctor_({args});");
+                    }
+                    finally
+                    {
+                        _guardNodes = saved;
+                    }
+                }
+                var declared = DeclaredInstanceFields(irClass).ToHashSet();
+                foreach (var field in irClass.Fields.Where(declared.Contains))
+                {
+                    if (FieldInitializerExpression(field) is { } initializer)
+                        WriteLine($"this->{SanitizeName(field.Name)} = {initializer};");
+                }
+            }
+
+            if (implementation == null)
+            {
+                Prologue();
+            }
+            else
+            {
+                _currentFunction = implementation;
+                _lastEmittedSourceLine = -1;
+                _lastEmittedSourceFile = null;
+                InitializeFunctionContext(implementation);
+                DeclareLocalsAndTemporaries(implementation);
+
+                if (prefixLength == 0)
+                {
+                    Prologue();
+                }
+                else
+                {
+                    _ctorPrologueAnchor = implementation.EntryBlock.Instructions[prefixLength - 1];
+                    _ctorPrologue = Prologue;
+                }
+
+                GenerateFunctionBody(implementation);
+
+                // ⛔ A prologue that was never placed is a constructor that silently skipped its
+                // base and its field initializers — fail the build instead.
+                if (_ctorPrologue != null)
+                {
+                    _ctorPrologue = null;
+                    _ctorPrologueAnchor = null;
+                    throw new InvalidOperationException(
+                        $"C++ backend: '{irClass.Name}'s ctor_ prologue was never placed (ADR-0015 E11).");
+                }
+                _currentFunction = null;
+            }
+
+            Unindent();
+            WriteLine("}");
+            WriteLine();
+        }
+
+        /// <summary>
+        /// ADR-0015 E11: the <c>ctor_</c> prologue (base <c>ctor_</c>, field initializers) waiting to
+        /// be written right after <see cref="_ctorPrologueAnchor"/>, the last instruction that
+        /// evaluates a <c>MyBase.New</c> argument. Placed by <see cref="GenerateBlock"/>.
+        /// </summary>
+        private Action _ctorPrologue;
+        private IRInstruction _ctorPrologueAnchor;
 
         private void GenerateSimplePropertyAccessors(IRClass irClass)
         {
@@ -2212,18 +2487,25 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         /// static is not legal C++ — and its callers already guard on <c>IsStatic</c> before
         /// asking.</para>
         /// </summary>
-        private string FieldInitializer(IRField field)
+        private string FieldInitializer(IRField field) =>
+            FieldInitializerExpression(field) is { } expression ? $" = {expression}" : "";
+
+        /// <summary>
+        /// A field's initializer as an expression — its DECLARED value, or storage for a sized
+        /// array — or null. One helper for both places it is spelled: the in-class initializer
+        /// (<see cref="FieldInitializer"/>) and a class's <c>ctor_</c> step 2 (ADR-0015 D2), where
+        /// the value is actually set.
+        /// </summary>
+        private string FieldInitializerExpression(IRField field)
         {
             if (field?.Initializer != null)
             {
-                var declared = field.Initializer is IRConstant constant
+                return field.Initializer is IRConstant constant
                     ? EmitConstant(constant)
                     : GetValueName(field.Initializer);
-                return $" = {declared}";
             }
 
-            var sized = SizedArrayInitializer(field?.Type, MapType(field?.Type));
-            return sized != null ? $" = {sized}" : "";
+            return SizedArrayInitializer(field?.Type, MapType(field?.Type));
         }
 
         private void DeclareLocalsAndTemporaries(IRFunction function)
@@ -2694,6 +2976,16 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 else
                     EmitLineReset();
                 instruction.Accept(this);
+
+                // ADR-0015 E11: a ctor_'s base call and field initializers go right after the last
+                // instruction evaluating its MyBase.New arguments (see GenerateCtorPhase).
+                if (_ctorPrologue != null && ReferenceEquals(instruction, _ctorPrologueAnchor))
+                {
+                    var prologue = _ctorPrologue;
+                    _ctorPrologue = null;
+                    _ctorPrologueAnchor = null;
+                    prologue();
+                }
             }
 
             // Process successors (populated only when a CFG pass has run — e.g. the optimizer's
@@ -2999,8 +3291,12 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         /// storage — never an element or a value. <c>Me</c> is the raw <c>this</c> pointer here, so
         /// against <c>Me</c> the other operand is compared by its <c>.get()</c>.
         /// </summary>
-        private string IdentityText(IRIdentityCompare identity, Func<IRValue, string> render)
+        private string IdentityText(IRIdentityCompare identity, Func<IRValue, string> renderValue)
         {
+            // ADR-0015 D3: an `Is`/`IsNot` operand is one of the two contexts where `Me` stays the
+            // raw `this` (the other operand is compared by its .get()) — never BasicLang::Self.
+            string render(IRValue operand) => IsSelfReference(operand) ? "this" : renderValue(operand);
+
             if (IRIdentityCompare.IsNothing(identity.Left) && IRIdentityCompare.IsNothing(identity.Right))
                 return identity.Negated ? "false" : "true";   // Nothing Is Nothing (unfolded: no -O)
 
@@ -3025,7 +3321,16 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             return $"({left} {(identity.Negated ? "!=" : "==")} {right})";
         }
 
-        /// <summary><c>Me</c> — rendered as the raw <c>this</c> pointer, not a shared_ptr.</summary>
+        /// <summary>
+        /// ADR-0015 D3: the RECEIVER of a member access or call — <c>this-&gt;V</c>,
+        /// <c>this-&gt;M()</c> — is the one context besides an <c>Is</c> operand where <c>Me</c> stays
+        /// the raw <c>this</c>. Every other use of <c>Me</c> is a value and renders as
+        /// <c>BasicLang::Self(this)</c> (<see cref="GetValueNameCore"/>).
+        /// </summary>
+        private string ReceiverName(IRValue receiver) =>
+            IsSelfReference(receiver) ? "this" : GetValueName(receiver);
+
+        /// <summary><c>Me</c> (or the <c>MyBase</c> receiver, a base-typed variable of the same name).</summary>
         private static bool IsSelfReference(IRValue value) =>
             value is IRVariable v
             && (string.Equals(v.Name, "Me", StringComparison.OrdinalIgnoreCase) || v.Name == "this");
@@ -3371,7 +3676,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // A property read is a getter CALL, not storage — there is nothing to bind to.
             if (AccessorPropertyOf(field.Object, field.FieldName) != null) return null;
 
-            var obj = ElementLValueOfArrayRead(field.Object) ?? GetValueName(field.Object);
+            var obj = ElementLValueOfArrayRead(field.Object) ?? ReceiverName(field.Object);
             return $"{obj}{MemberAccessOp(field.Object)}{SanitizeName(field.FieldName)}";
         }
 
@@ -4724,7 +5029,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             basePointer is IRFieldAccess fieldAccess
             && fieldAccess.Type?.Kind == TypeKind.Array
             && fieldAccess.Type.NetHandleTypeFullName == null
-                ? $"{GetValueName(fieldAccess.Object)}{MemberAccessOp(fieldAccess.Object)}"
+                ? $"{ReceiverName(fieldAccess.Object)}{MemberAccessOp(fieldAccess.Object)}"
                   + SanitizeName(fieldAccess.FieldName)
                 : GetValueName(basePointer);
 
@@ -5068,7 +5373,12 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 || newObj.Type.Kind == TypeKind.Class
                 || newObj.Type.Kind == TypeKind.Interface;
 
-            if (isReferenceType)
+            // ADR-0015 D2: a BasicLang class is created ONLY through BasicLang::New — the tag
+            // constructor inside make_shared, then ctor_ once the instance owns itself. Anything
+            // else that reaches here (a name that is not a class of this module) keeps make_shared.
+            if (isReferenceType && CppObjectModel.IsUserClass(_module, newObj.ClassName))
+                WriteLine($"{result} = BasicLang::New<{bareName}>({args});");
+            else if (isReferenceType)
                 WriteLine($"{result} = std::make_shared<{bareName}>({args});");
             else
                 WriteLine($"{result} = {bareName}({args});");
@@ -5136,7 +5446,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         /// </summary>
         private string InstanceCallExpression(IRInstanceMethodCall methodCall, out bool isShim, out List<string> byRefTemps)
         {
-            var obj = GetValueName(methodCall.Object);
+            var obj = ReceiverName(methodCall.Object);
 
             // .NET-surface shim: ToString has no C++ counterpart — lower it by
             // receiver type (DateTime → runtime formatter, numbers → to_string).
@@ -5174,7 +5484,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             var obj = methodCall.Object is IRInstanceMethodCall innerForeign
                       && innerForeign.Type?.Kind == TypeKind.Foreign
                 ? RenderForeignMethodCall(innerForeign)
-                : GetValueName(methodCall.Object);
+                : ReceiverName(methodCall.Object);
             var op = MemberAccessOp(methodCall.Object);
             var methodName = SanitizeName(methodCall.MethodName);
             var args = string.Join(", ", methodCall.Arguments.Select(a => GetValueName(a)));
@@ -5190,7 +5500,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         /// </summary>
         private string RenderForeignFieldAccess(IRFieldAccess fieldAccess)
         {
-            var obj = GetValueName(fieldAccess.Object);
+            var obj = ReceiverName(fieldAccess.Object);
             var op = MemberAccessOp(fieldAccess.Object);
             var field = SanitizeName(fieldAccess.FieldName);
             return $"{obj}{op}{field}";
@@ -5440,7 +5750,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 return $"{readQualifier}{fieldName}";
             }
 
-            var obj = GetValueName(fieldAccess.Object);
+            var obj = ReceiverName(fieldAccess.Object);
             var op = MemberAccessOp(fieldAccess.Object);
             return $"{obj}{op}{fieldName}";
         }
@@ -5480,7 +5790,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             }
 
             var obj = ElementLValueOfArrayRead(fieldStore.Object)
-                      ?? GetValueName(fieldStore.Object);
+                      ?? ReceiverName(fieldStore.Object);
             var op = MemberAccessOp(fieldStore.Object);
             WriteLine($"{obj}{op}{fieldName} = {value};");
         }
