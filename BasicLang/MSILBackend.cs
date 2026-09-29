@@ -3065,6 +3065,13 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             {
                 GenerateBasicBlock(successor, visited);
             }
+
+            // #226 / ADR-0014 A1: where an Exit inside a Try in this block leaves it, see
+            // ExcludedExits. Nothing for a block with no such Try.
+            foreach (var nested in block.Instructions.OfType<IRTryCatch>())
+                foreach (var escaped in ExcludedExits(nested))
+                    if (!visited.Contains(escaped))
+                        GenerateBasicBlock(escaped, visited);
         }
 
         /// <summary>
@@ -7712,7 +7719,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             BasicBlock entry, HashSet<BasicBlock> boundaries, string leaveTarget, bool inRegion,
             bool isFinally, bool isCatch = false)
         {
-            var blocks = CollectRegionBlocks(entry, boundaries);
+            var blocks = CollectRegionBlocks(entry, boundaries, stopAtOuterLoopExits: true);
 
             var previousBlocks = _regionBlocks;
             var previousIsFinally = _regionIsFinally;
@@ -7761,10 +7768,31 @@ namespace BasicLang.Compiler.CodeGen.MSIL
         /// that is, one arm of a Try. Depth-first from the entry so the emitted order matches the
         /// order <see cref="GenerateBasicBlock"/> would have used.
         /// </summary>
-        private List<BasicBlock> CollectRegionBlocks(BasicBlock entry, HashSet<BasicBlock> boundaries)
+        /// <param name="stopAtOuterLoopExits">
+        /// ⛔ For a Try arm (#226, ADR-0014 A1): an <c>Exit For/Do/While</c> inside the arm leaves the
+        /// Try when the loop it exits ENCLOSES the Try, and the walk must not follow it — or the loop's
+        /// end block, and everything after the loop, is collected INTO the protected region and
+        /// written inside <c>.try { }</c>: measured, <c>For … Try … If i = 2 Then Exit For … Finally …</c>
+        /// died with InvalidProgramException. Not followed, the exit is a branch out of the region,
+        /// which <see cref="EmitRegionAwareBranch"/> spells <c>leave</c>. An exit is inside the body
+        /// of the loop it leaves, so for a loop nested INSIDE the arm its body block has already been
+        /// walked, and its exit is followed as before (ADR-0014's <see cref="IRLoops.BodyRegion"/>
+        /// uses the same rule). A For Each body's own walk keeps the old behaviour.
+        /// </param>
+        /// <param name="excludedExits">Collects the exits <paramref name="stopAtOuterLoopExits"/>
+        /// left unfollowed (see <see cref="ExcludedExits"/>).</param>
+        private List<BasicBlock> CollectRegionBlocks(BasicBlock entry, HashSet<BasicBlock> boundaries,
+            bool stopAtOuterLoopExits = false, List<BasicBlock> excludedExits = null)
         {
             var ordered = new List<BasicBlock>();
             var seen = new HashSet<BasicBlock>();
+            Dictionary<BasicBlock, IRLoop> loopByEnd = null;
+            if (stopAtOuterLoopExits && entry?.ParentFunction != null)
+                loopByEnd = IRLoops.ByEnd(IRLoops.Of(entry.ParentFunction));
+
+            // An exit out of a loop whose body this walk has not reached leaves the region.
+            bool LeavesThisArm(BasicBlock target) =>
+                loopByEnd != null && loopByEnd.TryGetValue(target, out var exited) && !seen.Contains(exited.Body);
 
             // The ENTRY is exempt from the boundary test. Every arm's own entry block is in the
             // boundary set — that is what stops the try body walking into the catch — so testing
@@ -7794,15 +7822,62 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                     if (nested.FinallyBlock != null) nestedArms.Add(nested.FinallyBlock);
                 }
 
+                var exit = block.GetTerminator() as IRBranch;
                 foreach (var successor in block.Successors)
                 {
                     if (nestedArms.Contains(successor)) continue;
+                    if (exit != null && exit.IsLoopExit && ReferenceEquals(exit.Target, successor) && LeavesThisArm(successor))
+                    {
+                        excludedExits?.Add(successor);
+                        continue;
+                    }
                     Walk(successor, isEntry: false);
                 }
+
+                // A nested Try's arms are its own, but where an Exit inside them LEAVES them it lands
+                // out here — and nothing else may reach that block (the end of a condition-less
+                // `Do … Loop` is reached only by its exits). Walked from here, unless it leaves this
+                // arm too, in which case it is this arm's exit to report.
+                foreach (var nested in block.Instructions.OfType<IRTryCatch>())
+                    foreach (var escaped in ExcludedExits(nested))
+                    {
+                        if (boundaries.Contains(escaped)) continue;
+                        if (LeavesThisArm(escaped))
+                        {
+                            excludedExits?.Add(escaped);
+                            continue;
+                        }
+                        Walk(escaped, isEntry: false);
+                    }
             }
 
             Walk(entry, isEntry: true);
             return ordered;
+        }
+
+        /// <summary>
+        /// #226 / ADR-0014 A1: the blocks an <c>Exit</c> inside <paramref name="tryCatch"/>'s arms
+        /// reaches OUTSIDE it — the end of a loop that encloses the Try. The arms' own walk leaves
+        /// them out (they are a <c>leave</c>), so the walk that emits the block holding the Try has to
+        /// reach them instead: <see cref="GenerateBasicBlock"/> and <see cref="CollectRegionBlocks"/>
+        /// both do. Empty for a Try with no such exit, which is every Try before #172 could compile.
+        /// </summary>
+        private List<BasicBlock> ExcludedExits(IRTryCatch tryCatch)
+        {
+            var excluded = new List<BasicBlock>();
+            if (tryCatch?.TryBlock == null) return excluded;
+            var boundaries = new HashSet<BasicBlock>();
+            if (tryCatch.EndBlock != null) boundaries.Add(tryCatch.EndBlock);
+            foreach (var clause in tryCatch.CatchClauses) if (clause.Block != null) boundaries.Add(clause.Block);
+            if (tryCatch.FinallyBlock != null) boundaries.Add(tryCatch.FinallyBlock);
+
+            CollectRegionBlocks(tryCatch.TryBlock, boundaries, stopAtOuterLoopExits: true, excludedExits: excluded);
+            foreach (var clause in tryCatch.CatchClauses)
+                if (clause.Block != null)
+                    CollectRegionBlocks(clause.Block, boundaries, stopAtOuterLoopExits: true, excludedExits: excluded);
+            if (tryCatch.FinallyBlock != null)
+                CollectRegionBlocks(tryCatch.FinallyBlock, boundaries, stopAtOuterLoopExits: true, excludedExits: excluded);
+            return excluded.Distinct().Where(b => !boundaries.Contains(b)).ToList();
         }
 
         /// <summary>

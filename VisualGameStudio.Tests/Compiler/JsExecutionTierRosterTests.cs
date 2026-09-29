@@ -378,6 +378,21 @@ public class JsExecutionTierRosterTests
         // E19's multi-file project-entry-point leg). NameBindingTests (front end/IR only, no
         // process spawned, no [Category("Integration")]) is NOT here.
         typeof(NameBindingExecutionTests),
+
+        // Task #172, ADR-0014 (D1-D6, amended A1/A2) — VB's per-iteration loop-body Dim, with
+        // copy-forward, on every backend. Both named "...ExecutionTests", so the widened match
+        // below WOULD catch them on their own; listed explicitly anyway, matching every row
+        // above. PerIterationLoopBodyDimExecutionTests' JS legs run through
+        // FourBackends.RunsOnEveryBackend[Aggressive] (the headline L/E-probe table) and
+        // JavaScriptExecutionTests.RunJs/RunNodeScript directly (the pinned edge cases and the
+        // project-entry-point leg); PerIterationLoopBodyDimOptimizerExecutionTests' JS legs run
+        // through JavaScriptExecutionTests.RunJs and FourBackends.RunAggressiveJs (K1-K5, A2's
+        // own LICM regression set — the reason this pair exists is to prove JavaScript no longer
+        // throws ReferenceError under -O). PerIterationLoopBodyDimByteIdentityTests/
+        // IrFactTests/VerifierTests (Compiler namespace, no process spawned) and
+        // PerIterationLoopBodyDimMsilTests (Msil namespace — ilasm/dotnet, no Node) are NOT here.
+        typeof(PerIterationLoopBodyDimExecutionTests),
+        typeof(PerIterationLoopBodyDimOptimizerExecutionTests),
     };
 
     /// <summary>
@@ -429,7 +444,7 @@ public class JsExecutionTierRosterTests
 
     [Test]
     public void RosterIsPinned()
-        => Assert.That(ExecutionTier, Has.Length.EqualTo(87), // + MsilValueToStringExecutionTests (task #183), InterfaceMethodTypingExecutionTests, IsIsNotOperatorExecutionTests (task #185), MeReceiverTypingExecutionTests (task #176), UserDelegateConversionExecutionTests (task #187), DelegateMemberInvocationExecutionTests (task #188), NothingStringTextExecutionTests (task #189), MsilObjectBoxingExecutionTests (task #177), NotPrecedenceExecutionTests (#195), PropertyAccessExecutionTests (task #178), NameBindingExecutionTests (task #169/#199); + WhenGuardCallRunTests
+        => Assert.That(ExecutionTier, Has.Length.EqualTo(89), // + MsilValueToStringExecutionTests (task #183), InterfaceMethodTypingExecutionTests, IsIsNotOperatorExecutionTests (task #185), MeReceiverTypingExecutionTests (task #176), UserDelegateConversionExecutionTests (task #187), DelegateMemberInvocationExecutionTests (task #188), NothingStringTextExecutionTests (task #189), MsilObjectBoxingExecutionTests (task #177), NotPrecedenceExecutionTests (#195), PropertyAccessExecutionTests (task #178), NameBindingExecutionTests (task #169/#199), PerIterationLoopBodyDimExecutionTests + PerIterationLoopBodyDimOptimizerExecutionTests (task #172, ADR-0014); + WhenGuardCallRunTests
             "The execution-tier roster changed. That is fine — update the number — but it must " +
             "be a deliberate edit, not a silent shrink.");
 

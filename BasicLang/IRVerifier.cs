@@ -52,7 +52,19 @@ namespace BasicLang.Compiler.IR.Optimization
         /// dynamically repeated, which is what made a single anonymous use shared.</summary>
         public bool UseRepeats { get; init; }
 
-        public override string ToString() => Invariant == "V"
+        /// <summary>For Invariant S″: the pass after which it was checked.</summary>
+        public string Pass { get; init; }
+
+        public override string ToString() => Invariant == "S″"
+            ? $"Invariant S″ violated in {Function}{(Pass != null ? " after " + Pass : "")}: {Writer?.GetType().Name} in "
+              + $"{WriterBlock} references '{Variable}', which is per-iteration in the loop whose body is "
+              + $"{UseBlock} (a loop-body Dim a lambda captures), outside that body (ADR-0014 A2: no pass "
+              + "may move such a reference across a loop boundary)."
+            : Invariant == "B"
+            ? $"Invariant B violated in {Function}: the loop body {WriterBlock} lists '{Variable}' in its "
+              + $"BodyLocals, and {UseBlock} (ADR-0014 D1: every entry is one of the function's "
+              + "LocalVariables, in exactly one loop, on a loop's body entry block)."
+            : Invariant == "V"
             ? $"Invariant V violated in {Function}: {Writer?.GetType().Name} in {WriterBlock} is an instruction "
               + "kind the kill vocabulary (OptimizationPass.NamesWrittenBy) does not classify, so every pass "
               + "treats it as writing everything. Give it an arm there, stating what it writes."
@@ -264,7 +276,24 @@ namespace BasicLang.Compiler.IR.Optimization
             if (mode == IRVerifierMode.Off || module == null) return;
 
             var violations = CheckInvariantV(module).Concat(CheckInvariantF(module))
-                .Concat(CheckInvariantSPrime(module)).ToList();
+                .Concat(CheckInvariantSPrime(module)).Concat(CheckInvariantB(module)).ToList();
+            Report(mode, violations);
+        }
+
+        /// <summary>
+        /// ADR-0014 A2: Invariant S″ after ONE pass of <see cref="OptimizationPipeline.Run"/> (and once
+        /// before the first, on IRBuilder's output), on un-lowered IR. Does nothing in
+        /// <see cref="IRVerifierMode.Off"/>.
+        /// </summary>
+        public static void VerifyAfterPass(IRModule module, string pass)
+        {
+            var mode = Mode;
+            if (mode == IRVerifierMode.Off || module == null) return;
+            Report(mode, CheckInvariantSDoublePrime(module, pass).ToList());
+        }
+
+        private static void Report(IRVerifierMode mode, List<InvariantViolation> violations)
+        {
             if (violations.Count == 0) return;
 
             if (mode == IRVerifierMode.Log)
@@ -279,6 +308,94 @@ namespace BasicLang.Compiler.IR.Optimization
             }
 
             throw new IRVerificationException(violations);
+        }
+
+        /// <summary>
+        /// Every breach of Invariant S″ (ADR-0014 A2) in <paramref name="module"/>: every IR reference
+        /// — read or write, as <see cref="IRLoops.VariableMentions"/> lists them — to a variable in
+        /// <c>perIter(L) = BodyLocals ∩ captureSet</c> lies in a block of L's body
+        /// (<see cref="IRLoops.BodyRegion"/>). <c>perIter</c> is computed from the IR as it stands, and
+        /// only the function's own blocks are read: a lambda's mention of the variable is the capture
+        /// itself. After ClosureLowering no function references a lambda by name any more, so the
+        /// check is vacuous there; S′ is the post-lowering check of the same truth.
+        /// </summary>
+        public static IReadOnlyList<InvariantViolation> CheckInvariantSDoublePrime(IRModule module, string pass = null)
+        {
+            var violations = new List<InvariantViolation>();
+            if (module?.Functions == null) return violations;
+            foreach (var function in module.Functions)
+            {
+                if (function?.Blocks == null) continue;
+                foreach (var (loop, region, perIter) in IRLoops.PerIteration(module, function))
+                {
+                    var names = new HashSet<string>(perIter.Select(v => v.Name), StringComparer.OrdinalIgnoreCase);
+                    foreach (var block in function.Blocks)
+                    {
+                        if (block == null || region.Contains(block)) continue;
+                        foreach (var inst in block.Instructions)
+                            foreach (var name in IRLoops.VariableMentions(inst).Where(names.Contains).Distinct(StringComparer.OrdinalIgnoreCase))
+                                violations.Add(new InvariantViolation
+                                {
+                                    Invariant = "S″",
+                                    Function = function.Name,
+                                    Variable = name,
+                                    Writer = inst,
+                                    WriterBlock = block.Name,
+                                    UseBlock = loop.Body.Name,
+                                    Pass = pass,
+                                });
+                    }
+                }
+            }
+            return violations;
+        }
+
+        /// <summary>
+        /// Every breach of Invariant B (ADR-0014 D1) in <paramref name="module"/>: every entry of a
+        /// block's <see cref="BasicBlock.BodyLocals"/> is one of its function's
+        /// <see cref="IRFunction.LocalVariables"/> (by identity), no variable is listed by two loops
+        /// (or twice by one), and only a loop's body entry block lists any. <c>IROptimizer</c> never
+        /// removes a local (no pass writes <c>LocalVariables</c>), so the first half is what would
+        /// catch one that started to without dropping its entry. Reads the IR only.
+        /// </summary>
+        public static IReadOnlyList<InvariantViolation> CheckInvariantB(IRModule module)
+        {
+            var violations = new List<InvariantViolation>();
+            if (module?.Functions == null) return violations;
+            foreach (var function in module.Functions)
+            {
+                if (function?.Blocks == null || !function.Blocks.Any(b => b?.BodyLocals?.Count > 0)) continue;
+
+                var locals = new HashSet<IRVariable>(function.LocalVariables ?? new List<IRVariable>(), ReferenceEqualityComparer.Instance);
+                var loopBodies = new HashSet<BasicBlock>(IRLoops.Of(function).Select(l => l.Body), ReferenceEqualityComparer.Instance);
+                var owner = new Dictionary<IRVariable, BasicBlock>(ReferenceEqualityComparer.Instance);
+
+                void Breach(BasicBlock block, IRVariable variable, string what) => violations.Add(new InvariantViolation
+                {
+                    Invariant = "B",
+                    Function = function.Name,
+                    WriterBlock = block.Name,
+                    Variable = variable?.Name,
+                    UseBlock = what,
+                });
+
+                foreach (var block in function.Blocks)
+                {
+                    if (block?.BodyLocals == null || block.BodyLocals.Count == 0) continue;
+                    if (!loopBodies.Contains(block))
+                        Breach(block, block.BodyLocals[0], "that block is no loop's body entry");
+                    foreach (var variable in block.BodyLocals)
+                    {
+                        if (variable == null || !locals.Contains(variable))
+                            Breach(block, variable, "that variable is not in the function's LocalVariables");
+                        else if (owner.TryGetValue(variable, out var other))
+                            Breach(block, variable, $"the loop body {other.Name} lists it too");
+                        else
+                            owner[variable] = block;
+                    }
+                }
+            }
+            return violations;
         }
 
         /// <summary>
