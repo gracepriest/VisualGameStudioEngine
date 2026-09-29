@@ -61,6 +61,7 @@ The probes (C# and JavaScript are the oracle):
   copy-forward `y`); nested declaring `For Each`s each see their own pair; a non-declaring
   `For Each x` over an existing `x` shows every lambda the final `x`; a `Catch` variable is
   function-level and the backend spills the exception to its slot before the environment store.
+  ⚠ **Superseded in part by ADR-0014** — the L15 clause (L15 is 1|3|6 on every backend; see its D5).
 - **D3 — what is hoisted.** (creator's locals ∪ by-value parameters) ∩ (the transitive union of
   its lambdas' capture sets, task #122's over-approximation). A null capture set is refused.
   Binding is the front end's job: the pass never re-resolves a name, and refuses — naming the

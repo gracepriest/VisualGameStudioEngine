@@ -295,10 +295,17 @@ internal static class ClosureLoweringProbes
         """;
     internal const string L14Expected = "4\n4\n4";
 
-    /// <summary>A loop-body <c>Dim</c> is bound at FUNCTION level, same as L14 — matching
-    /// C#/JS's 6|6|6, NOT VB's own 1|3|6 (a recorded, deliberate, all-backend divergence; see
-    /// ADR-0010's D2 amendment and probes/L15.oracle.exp, not probes/L15.exp — that file is the
-    /// naive per-iteration expectation the oracle itself does NOT give).</summary>
+    /// <summary>⚠ STALE HEADER, KEPT FOR HISTORY — see the class remarks and
+    /// <c>L15_LoopBodyDimIsPerIteration_*</c> below. This used to be bound at FUNCTION level
+    /// (C#/JS 6|6|6, ADR-0010's own D2 amendment, "the pass must not reset or copy-forward
+    /// <c>y</c>"), a recorded, deliberate, all-backend divergence from VB's 1|3|6.
+    /// <b>ADR-0014 D5 SUPERSEDES that clause</b> (task #172, fix commit <c>4cdf2dd1</c> on top of
+    /// <c>ef1e949b</c>): a captured loop-body <c>Dim</c> is now per-iteration with copy-forward on
+    /// every backend, so this shape prints VB's own 1|3|6 — same as
+    /// <c>PerIterationLoopBodyDimProbes.L2</c> in
+    /// <c>VisualGameStudio.Tests.Compiler.PerIterationLoopBodyDimTests.cs</c>, which this probe is
+    /// byte-identical to modulo the <c>Sub</c>/<c>Function</c> capture kind. <c>L15Expected</c> is
+    /// kept as the name every existing caller uses; its VALUE is now VB's, not the old oracle's.</summary>
     internal const string L15 = """
         Sub Main()
             Dim fs As New List(Of Action)()
@@ -312,7 +319,7 @@ internal static class ClosureLoweringProbes
             Next
         End Sub
         """;
-    internal const string L15Expected = "6\n6\n6";
+    internal const string L15Expected = "1\n3\n6";
 
     /// <summary>A <c>Catch</c> variable captured and invoked after the <c>Try</c> — L16 itself
     /// (<c>Dim f As Action = Nothing</c>) used to fail the front end for an unrelated reason
@@ -615,12 +622,20 @@ public class ClosureLoweringContractTests
     public void L14_ForNextSharedBinding_AggressivePipeline_CSharpJavaScriptMsilAgree()
         => CSharpJsMsilAggressive(ClosureLoweringProbes.L14, ClosureLoweringProbes.L14Expected);
 
+    /// <summary>RENAMED from <c>L15_LoopBodyDimFunctionLevel_…</c> and its expectation MOVED from
+    /// 6|6|6 to VB's own 1|3|6 — ADR-0014 D5 supersedes ADR-0010 D2's L15 clause (task #172, fix
+    /// commit <c>4cdf2dd1</c> on <c>ef1e949b</c>): a loop-body <c>Dim</c> a lambda captures is now
+    /// per-iteration with copy-forward on every backend, C# and JavaScript included. See
+    /// <c>VisualGameStudio.Tests.Compiler.PerIterationLoopBodyDimTests</c> for the full ADR-0014
+    /// coverage (L1-L7, Exit/re-entry, the optimizer, the IR facts); this pair stays here only
+    /// because it is this fixture's own L13-L16b closure-lowering family and its MSIL leg matters
+    /// to ADR-0010's own contract.</summary>
     [Test]
-    public void L15_LoopBodyDimFunctionLevel_StandardPipeline_CSharpJavaScriptMsilAgree()
+    public void L15_LoopBodyDimIsPerIteration_StandardPipeline_CSharpJavaScriptMsilAgree()
         => CSharpJsMsilStandard(ClosureLoweringProbes.L15, ClosureLoweringProbes.L15Expected);
 
     [Test]
-    public void L15_LoopBodyDimFunctionLevel_AggressivePipeline_CSharpJavaScriptMsilAgree()
+    public void L15_LoopBodyDimIsPerIteration_AggressivePipeline_CSharpJavaScriptMsilAgree()
         => CSharpJsMsilAggressive(ClosureLoweringProbes.L15, ClosureLoweringProbes.L15Expected);
 
     [Test]

@@ -5836,6 +5836,50 @@ single new failure against the 170-name baseline.
       unrelated to name binding (measured: the front end accepts it and the IR builds without
       throwing — never #169's ICE; each backend's own failure is downstream, in codegen or at run
       time).
+- ⭐ **Newest — #172 DONE (ADR-0014, D1-D6 amended A1/A2; fix `ef1e949b`+`4cdf2dd1`).** VB's
+  per-iteration loop-body `Dim`, with copy-forward, on every backend — `Dim x` inside a loop body
+  is now a FRESH binding per iteration, as far as a lambda that captures it can observe, and a new
+  iteration's `x` starts from the previous iteration's final value. Gated on the CAPTURE SET
+  (`BasicBlock.BodyLocals ∩` the function's lambda captures, task #122): a loop with no captured
+  body local emits exactly what it did before (D6 byte identity).
+  - **C#/JavaScript:** the captured local is declared at the TOP of the loop's body from a
+    function-top, never-reset `__carry_x`; the rest of the body is wrapped `try { … } finally {
+    __carry_x = x; }` (A1) — the carrier is written however the iteration is LEFT (normal end,
+    `Exit`, `Return`, an exception), after every user `Finally` it crosses. A counted `For`'s step
+    is emitted AFTER that finally, never inside the try.
+  - **ClosureLowering (MSIL):** one per-iteration environment per loop (shared with a captured
+    `For Each` variable — never two), created at the top of the body, wrapped the same way in an
+    IR try/finally the pass emits itself, after the optimizer.
+  - **C++** is UNCHANGED — it ignores `BodyLocals` until #140 gives it its own ClosureLowering
+    consumer; by-copy capture already gives most of this shape for free, and #140 is the write-
+    capture / `Exit`-loss gap this task did NOT touch.
+  - **A2's new verifier invariant S″** ("every reference to a `perIter` variable lies in its
+    loop's body") is ON under `BASICLANG_VERIFY_IR` / the test host's `BasicLang.VerifyIR` switch,
+    checked after every optimizer pass on un-lowered IR; LICM now treats a `perIter` variable as
+    WRITTEN at its loop's body entry, so it can no longer hoist a read of one out of the loop.
+  - **#226 fixed alongside A1**, same commit: MSIL's `CollectRegionBlocks` no longer walks an
+    `Exit` out of a loop a Try's arm encloses INTO the protected region (it used to drag the
+    loop's end block, and everything after the loop, into `.try { }` —
+    InvalidProgramException); the exit is a `leave` instead.
+  - **Open, tracked, NOT fixed by #172** (measured pins in
+    `VisualGameStudio.Tests/Compiler/PerIterationLoopBodyDimTests.cs` /
+    `VisualGameStudio.Tests/Msil/PerIterationLoopBodyDimMsilTests.cs`): **#140** (C++'s own
+    capture-by-copy lambda lowering — every write/re-read-after-Exit loss on that backend is this
+    pre-existing gap, not a new one); **#136** (C#'s pre-existing multi-statement-lambda-body
+    defect — reaches a `Do While f()` whose condition is reassigned to a lambda that writes the
+    loop's own captured local, and CS1643 on a lambda-in-a-lambda's own loop); **#227** (C# alone,
+    `Exit Do` inside a `While`, the outer loop re-enters — re-measure before touching); **#228** (a
+    SIZED array `Dim a(2)` in a loop body is never an IR instruction, so it stays one
+    function-level allocation on every backend regardless of capture — VB re-creates it per
+    iteration); **#229** (the one-declaration rule: a name with two `Dim`s in one function —
+    sibling loops, or a lambda's OWN local of the same name — stays function-level by
+    construction, on purpose, rather than taking one loop's per-iteration identity from the
+    other); **#225** (pre-existing, MSIL: `newarr` of a `Func`N`` array type does not assemble —
+    unrelated to #172, hits K1/K2 only because their fixed array happens to hold delegates).
+  - **Tests:** the two files named above (execution on all four backends × both pipelines + a
+    Release `.blproj`/`CompileProjectFiles` leg for headline probes; byte-identity, IR-fact and
+    verifier fixtures in the fast subset) plus `Msil/ClosureLoweringTests.cs`'s `L15` pin, MOVED
+    from ADR-0010's old 6|6|6 (superseded — see ADR-0014 D5) to VB's own 1|3|6.
 - **JavaScript backend** — the `lib.dom.d.ts` → `.bli` generator was never built
   (`dom-core.bli` is hand-curated). Known front-end gaps affecting all backends:
   `Inherits ArgumentException`, assigning an inherited field from a derived class,
