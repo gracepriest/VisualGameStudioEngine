@@ -573,14 +573,21 @@ public class CppMeAsValueTests
     }
 
     /// <summary>
-    /// <c>AndAlso</c> builds its value across several statements (a local set in TWO blocks, one
-    /// per branch) — refused BY NAME, not guessed at, because <c>Base::ctor_</c> is placed
-    /// immediately after the straight-line prefix that computes the argument (E11's placement
-    /// rule) and a branchy value has no such prefix. Never compiled before #200 either ("use of
-    /// undeclared identifier"), so refusing it regresses nothing.
+    /// ⭐ MOVED PIN (ADR-0016 / #170). <c>AndAlso</c> builds its value across several statements
+    /// (a local set in TWO blocks, one per branch) — this USED TO BE refused by name because
+    /// <c>Base::ctor_</c> was placed immediately after the straight-line prefix that computed the
+    /// argument (E11's placement rule, ADR-0015) and a branchy value had no such prefix.
+    ///
+    /// <para>ADR-0016's orchestrator clarification C1 admits a MULTI-BLOCK prologue: "branch/phi
+    /// are admitted inside it only as the lowering of the argument expressions (AndAlso / OrElse /
+    /// If(...))", and names C++ among the backends that "emit a multi-block region" (only C#
+    /// refuses it, D1). <c>Base::ctor_</c> now sits AT the <c>IRBaseConstructorCall</c> instruction
+    /// itself, wherever that lands, rather than after a straight-line prefix the branchy value
+    /// broke — so E15 RUNS, printing <c>True 5 4</c> (measured: <c>a &gt; 0 AndAlso b &gt; 0</c> is
+    /// <c>True</c> for a=2,b=5; <c>Twice(2)+1=5</c>; <c>W=3+1=4</c>).</para>
     /// </summary>
     [Test]
-    public void E15_AndAlsoInAMyBaseNewArgument_IsRefusedByName()
+    public void E15_AndAlsoInAMyBaseNewArgument_RunsOnCpp()
     {
         const string program = """
             Class Base
@@ -607,10 +614,9 @@ public class CppMeAsValueTests
                 Console.WriteLine(d.BV & " " & d.N & " " & d.W)
             End Sub
             """;
-        var ex = Assert.Throws<CppCapabilityException>(() => BclE2E.CompileToCppOptimized(program));
-        Assert.That(ex!.Message, Does.Contain("AndAlso").And.Contain("ADR-0015"),
-            "the refusal must still name AndAlso/OrElse and ADR-0015 — a different message here " +
-            "means the refusal moved.\n" + ex.Message);
+        const string expected = "True 5 4";
+        Assert.That(Cpp(program), Is.EqualTo(expected), "C++");
+        Assert.That(CppAgg(program), Is.EqualTo(expected), "C++ (-O)");
     }
 
     /// <summary>
