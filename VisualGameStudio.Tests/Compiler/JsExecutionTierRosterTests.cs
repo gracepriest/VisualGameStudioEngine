@@ -394,6 +394,15 @@ public class JsExecutionTierRosterTests
         typeof(PerIterationLoopBodyDimExecutionTests),
         typeof(PerIterationLoopBodyDimOptimizerExecutionTests),
 
+        // Task #174 — VB's lambda-boundary diagnostics (BC36639/BC30616/BC30734/BC36667). Named
+        // "...ExecutionTests", so the widened match below WOULD catch it on its own; listed
+        // explicitly anyway, matching every row above. Its JS legs run through
+        // FourBackends.RunsOnEveryBackend[Aggressive] (N5/R6/S5) and JsTestSupport.Compile /
+        // JavaScriptExecutionTests.RunJs directly (N8/N9's run, and R3/R7's own BL7002-by-design
+        // refusal pins). LambdaBoundaryDiagnosticsTests (Compiler namespace, no process spawned —
+        // the fast-subset analyzer/LSP fixture) is NOT here.
+        typeof(LambdaBoundaryDiagnosticsExecutionTests),
+
         // #197 — `TypeOf x Is T`; its JS legs run under Node (a class target; interfaces are BL7013).
         typeof(TypeOfExecutionTests),
     };
@@ -447,7 +456,7 @@ public class JsExecutionTierRosterTests
 
     [Test]
     public void RosterIsPinned()
-        => Assert.That(ExecutionTier, Has.Length.EqualTo(90), // + MsilValueToStringExecutionTests (task #183), InterfaceMethodTypingExecutionTests, IsIsNotOperatorExecutionTests (task #185), MeReceiverTypingExecutionTests (task #176), UserDelegateConversionExecutionTests (task #187), DelegateMemberInvocationExecutionTests (task #188), NothingStringTextExecutionTests (task #189), MsilObjectBoxingExecutionTests (task #177), NotPrecedenceExecutionTests (#195), PropertyAccessExecutionTests (task #178), NameBindingExecutionTests (task #169/#199), PerIterationLoopBodyDimExecutionTests + PerIterationLoopBodyDimOptimizerExecutionTests (task #172, ADR-0014); + WhenGuardCallRunTests, TypeOfExecutionTests (#197)
+        => Assert.That(ExecutionTier, Has.Length.EqualTo(91), // + MsilValueToStringExecutionTests (task #183), InterfaceMethodTypingExecutionTests, IsIsNotOperatorExecutionTests (task #185), MeReceiverTypingExecutionTests (task #176), UserDelegateConversionExecutionTests (task #187), DelegateMemberInvocationExecutionTests (task #188), NothingStringTextExecutionTests (task #189), MsilObjectBoxingExecutionTests (task #177), NotPrecedenceExecutionTests (#195), PropertyAccessExecutionTests (task #178), NameBindingExecutionTests (task #169/#199), PerIterationLoopBodyDimExecutionTests + PerIterationLoopBodyDimOptimizerExecutionTests (task #172, ADR-0014), LambdaBoundaryDiagnosticsExecutionTests (task #174); + WhenGuardCallRunTests, TypeOfExecutionTests (#197)
             "The execution-tier roster changed. That is fine — update the number — but it must " +
             "be a deliberate edit, not a silent shrink.");
 

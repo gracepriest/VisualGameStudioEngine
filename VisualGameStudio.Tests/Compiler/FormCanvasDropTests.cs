@@ -194,6 +194,29 @@ public class FormCanvasDropTests
     }
 
     [Test]
+    public void ADropOnANewWebForm_WhichIsACanvasPage_ReachesTheFileInPixels()
+    {
+        // ⛔⛔ Spec 2026-09-27 D1/§2.4: a NEW web form is a Canvas page (Task 5), and PlaceOnWeb refused every drop on it
+        // until Task 9 — the scaffold's default shape could not be designed at all.
+        var (vm, _) = Open(FormTarget.Web);
+
+        var refusal = vm.PlaceControl("Button", 96, 80);
+
+        Assert.That(refusal, Is.Null);
+        Assert.Multiple(() =>
+        {
+            Assert.That(vm.Text, Does.Contain("<Layout Kind=\"Canvas\""), "precondition: the scaffold is a Canvas page");
+            Assert.That(vm.Text, Does.Contain("Id=\"Button1\""));
+            Assert.That(vm.Text, Does.Contain("X=\"96\""));
+            Assert.That(vm.Text, Does.Contain("Y=\"80\""));
+            Assert.That(vm.Text, Does.Not.Contain("Col=\""), "a Canvas page has no cells");
+        });
+
+        var reread = BasicLang.Forms.Serialization.FormDocumentReader.Read(vm.FilePath!, vm.Text);
+        Assert.That(reread.Model.FindById("Button1")?.Geometry, Is.InstanceOf<PixelGeometry>());
+    }
+
+    [Test]
     public void ADropOnAFlowPage_IsRefused_AndChangesNothing()
     {
         // Flow positions by document ORDER, so there is no cell a point could mean. The refusal

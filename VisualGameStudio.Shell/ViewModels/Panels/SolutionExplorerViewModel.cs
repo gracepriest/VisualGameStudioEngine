@@ -1441,6 +1441,17 @@ public partial class SolutionExplorerViewModel : ViewModelBase
             return;
         }
 
+        // A document the reader accepts can still be one the DESTINATION's region writer refuses (a Canvas
+        // page's unknown Anchor edge, BL8015). Refused through the same dialog, before a folder is asked for.
+        var refusals = BasicLang.Forms.FormRetarget.Refusals(file.Model, to);
+        if (refusals.Count > 0)
+        {
+            await _dialogService.ShowMessageAsync(
+                "Cannot retarget",
+                $"'{node.Name}' cannot be retargeted:\n\n" + string.Join("\n", refusals.Select(d => d.Message)));
+            return;
+        }
+
         var describe = to == BasicLang.Forms.FormTarget.Web ? "a web form (.blwebform)" : "a WinForms form (.blform)";
         var folder = await _dialogService.ShowFolderDialogAsync(new FolderDialogOptions
         {

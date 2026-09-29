@@ -201,6 +201,64 @@ public class FormAnchorDockPickerTests
     }
 
     /// <summary>
+    /// ⛔ The picker reads edges through <see cref="FormAnchor.Parse"/>, the ONE Anchor parser (plan
+    /// 2026-09-27 scope call S10): blank is Top+Left, names are trimmed and case-insensitive, and a repeated
+    /// edge is still one edge. A picker that read the attribute differently from the region writer would
+    /// show the user checkboxes the generated program does not obey.
+    /// </summary>
+    [TestCase(null, true, false, true, false)]
+    [TestCase("   ", true, false, true, false)]
+    [TestCase(" top , LEFT", true, false, true, false)]
+    [TestCase("Right,Right", false, false, false, true)]
+    [TestCase("Bottom,bottom,Left", false, true, true, false)]
+    [TestCase("None", false, false, false, false)]
+    public void ThePickerReadsTheEdgesAsTheOneParserDoes(
+        string? anchor, bool top, bool bottom, bool left, bool right)
+    {
+        var geometry = Pixel();
+        geometry.Anchor = anchor;
+        var (grid, _) = GridFor(geometry, FormTarget.WinForms);
+        var row = Row(grid, "Anchor");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(row.AnchorTop, Is.EqualTo(top), "Top");
+            Assert.That(row.AnchorBottom, Is.EqualTo(bottom), "Bottom");
+            Assert.That(row.AnchorLeft, Is.EqualTo(left), "Left");
+            Assert.That(row.AnchorRight, Is.EqualTo(right), "Right");
+        });
+    }
+
+    /// <summary>
+    /// A toggle rewrites the WHOLE set canonically: flag order, one spelling per edge, a repeat collapsed.
+    /// ⚠ An UNKNOWN edge name ("Middle") is dropped by the rewrite — the picker can only write edges it has.
+    /// That document was already refused by the region writer (<c>AnchorNotExpressible</c>), so the toggle
+    /// turns a refused document into a buildable one rather than losing anything that built.
+    /// </summary>
+    [TestCase(" top , LEFT", "Top,Left,Right")]
+    [TestCase("Right,Right", "Right")]
+    [TestCase("Top,Middle", "Top,Right")]
+    public void TogglingAnEdgeRewritesAMessyValueCanonically(string anchor, string expected)
+    {
+        var geometry = Pixel();
+        geometry.Anchor = anchor;
+        var (grid, control) = GridFor(geometry, FormTarget.WinForms);
+        var row = Row(grid, "Anchor");
+
+        if (row.AnchorRight)
+        {
+            row.AnchorTop = !row.AnchorTop;
+            row.AnchorTop = !row.AnchorTop;
+        }
+        else
+        {
+            row.AnchorRight = true;
+        }
+
+        Assert.That(GeometryOf(control).Anchor, Is.EqualTo(expected));
+    }
+
+    /// <summary>
     /// ⛔⛔ The whole point of Task 26, end to end: what the PICKER produces is what the region
     /// writer EMITS, multi-edge included. Before the analyzer exemption this combination was
     /// refused outright with BL8015.

@@ -102,6 +102,24 @@ public class FormAnchorEmissionTests
             Does.Contain("CType(12, AnchorStyles)"));
     }
 
+    /// <summary>
+    /// ⛔ Flags are OR-ed, never summed (plan 2026-09-27 scope call S10). The old private parser summed, so a
+    /// repeated edge "Left,Left" emitted 8 — AnchorStyles.RIGHT — anchoring the control to the opposite edge
+    /// from the one written, with csc happy. Now the one parser (<see cref="FormAnchor.Parse"/>) ORs it to 4.
+    /// </summary>
+    [TestCase("Left,Left", 4)]
+    [TestCase("left, LEFT, Top", 5)]
+    public void ARepeatedEdge_CountsOnce_NotTwice(string anchor, int expected)
+    {
+        var text = Write(FormWith(anchor)).Text;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(text, Does.Contain($"btn.Anchor = CType({expected}, AnchorStyles)"));
+            Assert.That(text, Does.Not.Contain($"CType({2 * 4}, AnchorStyles)"), "8 is AnchorStyles.Right");
+        });
+    }
+
     // ==================================================================
     // Refusals that must survive
     // ==================================================================

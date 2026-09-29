@@ -55,7 +55,8 @@ public class FormComponentAcceptanceTests
     private async Task<CodeEditorDocumentViewModel> BuildTimerFormInDesignerAsync(FormTarget target)
     {
         // ⚠ Named LoginForm on both targets: the node harness hard-codes data-form="LoginForm".
-        var scaffold = FormScaffolder.Create("LoginForm", target);
+        // ⚠ Pinned to Grid (spec 2026-09-27 §2.5): this path was written against the Grid scaffold; the Canvas twin is Task 14.
+        var scaffold = FormScaffolder.Create("LoginForm", target, FormLayoutKind.Grid);
         File.WriteAllText(Path_(scaffold.DocumentFileName), scaffold.DocumentText);
         File.WriteAllText(Path_(scaffold.CodeFileName), scaffold.CodeText);
         Log($"[1] new form      -> {scaffold.DocumentFileName} + {scaffold.CodeFileName}");

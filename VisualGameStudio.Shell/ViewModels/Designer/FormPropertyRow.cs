@@ -1,3 +1,4 @@
+using System.Globalization;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using BasicLang.Forms;
@@ -32,13 +33,29 @@ public enum FormRowEditor
 /// the document carries — an XML attribute is text. This row parses on read and formats on write
 /// rather than holding a typed copy, so there is exactly one representation of the value and no
 /// second one to fall out of step with the document.</para>
+///
+/// <para>⛔ Spec §2.7: an ABSENT property DISPLAYS the target's default (greyed, not bold); BOLD is
+/// present AND different from that default; RESET removes the property. The three rules read ONE
+/// value — <see cref="DefaultValue"/> — so they cannot disagree.</para>
 /// </summary>
-public partial class FormPropertyRow : ObservableObject, ITypedValueRow
+public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDisplayRow
 {
     private readonly FormControl? _control;
     private readonly Action _onChanged;
     private readonly FormPropertyType _type;
     private readonly IReadOnlyList<string>? _choices;
+
+    /// <summary>The catalog row, for a catalog property; null for an intrinsic row.</summary>
+    private readonly FormPropertyDef? _definition;
+
+    /// <summary>Whose default an absent row shows — WinForms' and the browser's can differ (spec §2.7).</summary>
+    private readonly FormTarget _target;
+
+    /// <summary>For a catalog row stored outside the bag (a FormRoot row); null = the attribute rule.</summary>
+    private readonly Func<bool>? _isPresent;
+
+    /// <summary>How a non-attribute row removes itself; null = remove the attribute.</summary>
+    private readonly Action? _reset;
 
     /// <summary>
     /// Where an INTRINSIC row's value lives, or null for a catalog row.
@@ -51,33 +68,54 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow
     /// </summary>
     private readonly Func<string>? _read;
 
-    private readonly Action<string>? _write;
+    /// <summary>
+    /// Stores a value that lives outside the bag, and answers whether it CHANGED anything. ⛔ False covers
+    /// both "refused" (FormRootValues.Set on a non-positive size, IntRow on unparseable text) and "the
+    /// same value again" (<c>007</c> on an X of 7) — either way no edit happened, so no Edited is raised
+    /// and the editor re-reads what the model still holds.
+    /// </summary>
+    private readonly Func<string, bool>? _write;
+
+    /// <summary>
+    /// Why the STORE refused a value, for a stored-value row (<see cref="ForStoredValue"/>), or null. ⛔ Asked only when
+    /// <see cref="_write"/> returns false, which also means "the same value again" — so it answers null for that, and
+    /// non-null only for a genuine refusal (<c>FormRootValues.RefusalOf</c>).
+    /// </summary>
+    private readonly Func<string, string?>? _storeRefusal;
 
     /// <summary>A catalog property of the control — an attribute the document carries as text.</summary>
     public FormPropertyRow(
-        FormControl control, FormPropertyDef definition, string? frozenReason, Action onChanged)
+        FormControl control, FormPropertyDef definition, FormTarget target, string? frozenReason, Action onChanged)
     {
         _control = control;
         _onChanged = onChanged;
         Name = definition.Name;
         _type = definition.Type;
         _choices = definition.AllowedValues;
+        _definition = definition;
+        _target = target;
         FrozenReason = frozenReason;
+        Category = CategoryName(definition.Category);
+        Description = definition.Description ?? "";
     }
 
     /// <summary>
-    /// An intrinsic row: a field of the control or its geometry, not a document attribute.
+    /// An INTRINSIC row: a field of the control or its geometry (Name, X, TabIndex…), or the form's Name —
+    /// no catalog row, so no default, no bold and no reset; it is always present.
     /// Pass <paramref name="write"/> as null for one the designer cannot change yet, and give
     /// <paramref name="frozenReason"/> the reason — the Degraded tier already renders exactly that.
+    /// <paramref name="write"/> returns whether it changed the model (see <see cref="_write"/>).
     /// </summary>
     public FormPropertyRow(
         string name,
         FormPropertyType type,
         Func<string> read,
-        Action<string>? write,
+        Func<string, bool>? write,
         Action onChanged,
         string? frozenReason = null,
-        FormRowEditor editor = FormRowEditor.Default)
+        FormRowEditor editor = FormRowEditor.Default,
+        string category = "Misc",
+        string description = "")
     {
         _onChanged = onChanged;
         Name = name;
@@ -86,14 +124,96 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow
         _write = write;
         _editor = editor;
         FrozenReason = frozenReason ?? (write == null ? "This value is not editable here." : null);
+        Category = category;
+        Description = description;
     }
+
+    /// <summary>A catalog row stored outside the bag — see <see cref="ForStoredValue"/>.</summary>
+    private FormPropertyRow(
+        FormPropertyDef definition,
+        FormTarget target,
+        Func<string?> read,
+        Func<string, bool> write,
+        Action? remove,
+        string? frozenReason,
+        string? frozenText,
+        Action onChanged,
+        Func<string, string?>? storeRefusal)
+    {
+        _onChanged = onChanged;
+        Name = definition.Name;
+        _type = definition.Type;
+        _choices = definition.AllowedValues;
+        _definition = definition;
+        _target = target;
+
+        // ⚠ A frozen value the model could not hold (a Degraded ClientSize is null in the model) shows the
+        // document's own text — its reason says it is "preserved exactly as written" — and IS present: the
+        // document carries it, so it must not grey out as a default.
+        var carried = frozenReason != null ? frozenText : null;
+
+        // ⛔ Presence and value come from ONE reader, so they cannot disagree: null IS absent.
+        _isPresent = () => read() != null || carried != null;
+        _read = () => read() ?? carried ?? "";
+        _write = write;
+        _storeRefusal = storeRefusal;
+        _reset = remove;
+        FrozenReason = frozenReason;
+        Category = CategoryName(definition.Category);
+        Description = definition.Description ?? "";
+    }
+
+    /// <summary>
+    /// A CATALOG row whose value is stored somewhere other than <see cref="FormControl.Properties"/> — a
+    /// <see cref="FormControlCatalog.FormRoot"/> row, stored in typed <see cref="FormDocument"/> fields via
+    /// <see cref="FormRootValues"/>. It shows its <paramref name="target"/>'s default, bolds, judges and
+    /// resets exactly like a bag row.
+    /// </summary>
+    /// <param name="definition">The catalog row: type, default, description, category, value rules.</param>
+    /// <param name="target">⛔ REQUIRED — whose default an absent row shows and whose value rules apply.</param>
+    /// <param name="read">The stored value, or NULL when the document does not carry it. ⛔ Presence is
+    /// read from here, never passed separately.</param>
+    /// <param name="write">Stores a value; returns whether it CHANGED anything (false = refused or same).</param>
+    /// <param name="remove">Removes the value from the document, or null when removal is not expressible
+    /// for this row (then no Reset is offered, and clearing a typed row snaps back).</param>
+    /// <param name="frozenReason">D9's Degraded reason, or null when editable.</param>
+    /// <param name="frozenText">What a frozen row shows when <paramref name="read"/> has nothing — the
+    /// document's own text. Ignored unless <paramref name="frozenReason"/> is given.</param>
+    /// <param name="onChanged">Raised after an edit that changed the model.</param>
+    /// <param name="storeRefusal">Names a value the store refuses (shown in the description pane); null for a store
+    /// that refuses nothing.</param>
+    public static FormPropertyRow ForStoredValue(
+        FormPropertyDef definition,
+        FormTarget target,
+        Func<string?> read,
+        Func<string, bool> write,
+        Action? remove,
+        Action onChanged,
+        string? frozenReason = null,
+        string? frozenText = null,
+        Func<string, string?>? storeRefusal = null) =>
+        new(definition, target, read, write, remove, frozenReason, frozenText, onChanged, storeRefusal);
 
     private readonly FormRowEditor _editor = FormRowEditor.Default;
 
     public string Name { get; }
 
+    /// <summary>The Visual Studio group this row is listed under (spec §3).</summary>
+    public string Category { get; }
+
+    /// <summary>The description pane's text (spec §3). Empty when the row has none.</summary>
+    public string Description { get; }
+
     /// <summary>The declared type, shown beside the name so a frozen row is explicable.</summary>
     public string TypeName => _type.ToString();
+
+    /// <summary>"Window Style", not "WindowStyle" — VS's own spelling of its groups.</summary>
+    internal static string CategoryName(FormPropertyCategory? category) => category switch
+    {
+        null => "Misc",
+        FormPropertyCategory.WindowStyle => "Window Style",
+        var c => c.Value.ToString()
+    };
 
     // ==================================================================
     // D9 — which tier this row is in
@@ -142,8 +262,9 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow
 
     public bool IsComboBox => Typed && _type == FormPropertyType.Enum;
 
+    /// <summary>Size is text for now (<c>800, 450</c>); its composite editor arrives in slice 3.</summary>
     public bool IsTextBox => Typed &&
-        _type is FormPropertyType.String or FormPropertyType.Color;
+        _type is FormPropertyType.String or FormPropertyType.Color or FormPropertyType.Size;
 
     /// <summary>The four-edge Anchor box (Task 26).</summary>
     public bool IsAnchorPicker => IsEditable && _editor == FormRowEditor.AnchorPicker;
@@ -168,6 +289,61 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow
     public int Increment => 1;
 
     // ==================================================================
+    // Spec §2.7 — present, default, bold, reset
+    // ==================================================================
+
+    /// <summary>
+    /// Whether the document CARRIES this property. An intrinsic row with no catalog definition (X,
+    /// TabIndex) is always present: it has no default to fall back to.
+    /// </summary>
+    public bool IsPresent =>
+        _isPresent?.Invoke() ?? (_control != null ? _control.Properties.ContainsKey(Name) : true);
+
+    /// <summary>The target's default, canonicalised — what an absent row shows. Null = no static default.</summary>
+    public string? DefaultValue =>
+        _definition?.DefaultFor(_target) is { } d ? _definition.Canonical(d) : null;
+
+    /// <summary>Greyed: the row shows a default the document does not carry.</summary>
+    public bool IsDefaultShown => _definition != null && !IsPresent;
+
+    /// <summary>
+    /// ⛔ Present AND different from the displayed default. A null default DISPLAYS as empty, so a
+    /// present empty Text is not bold while a present "Hi" is.
+    /// </summary>
+    public bool IsBold => _definition != null && IsPresent &&
+                          !_definition.SameValue(DisplayValue, _definition.Displayed(null, _target));
+
+    /// <summary>Offered on present, editable rows that know how to remove themselves.</summary>
+    public bool CanReset => IsEditable && IsPresent && (_reset != null || (_control != null && _definition != null));
+
+    /// <summary>
+    /// Reset (spec §2.7): REMOVE the property from the document — never write the default, which would
+    /// leave a property the user now has to know is redundant.
+    /// </summary>
+    [RelayCommand(CanExecute = nameof(CanReset))]
+    private void Reset()
+    {
+        // ⚠ RelayCommand.Execute does NOT consult CanExecute — a context menu, a key binding or a test
+        // can run this on an absent or frozen row, and it must not report an edit that changed nothing.
+        if (!CanReset)
+        {
+            return;
+        }
+
+        if (_reset != null)
+        {
+            _reset();
+        }
+        else
+        {
+            _control!.Properties.Remove(Name);
+        }
+
+        RaiseValueChanged();
+        _onChanged();
+    }
+
+    // ==================================================================
     // The value
     // ==================================================================
 
@@ -177,24 +353,61 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow
             ? _read()
             : _control != null && _control.Properties.TryGetValue(Name, out var value) ? value : "";
 
+    /// <summary>
+    /// What the editor shows: the document's value in its CANONICAL spelling (spec §2.8) when present —
+    /// a legacy <c>TextAlign="Left"</c> shows as <c>MiddleLeft</c>, which is what the nine-member combo
+    /// can match — and the target's default when absent (spec §2.7).
+    ///
+    /// <para>⛔ Except when FROZEN: a Degraded row shows the document's text exactly, because its
+    /// reason quotes that text and says it is "preserved exactly as written".</para>
+    /// </summary>
+    public string DisplayValue =>
+        IsFrozen ? RawValue
+        : _definition != null ? _definition.Displayed(IsPresent ? RawValue : null, _target)
+        : RawValue;
+
+    /// <summary>
+    /// What the three editor properties read: <see cref="DisplayValue"/>, except for the one moment
+    /// <see cref="RaiseEditorRefresh"/> ECHOES a refused value back (see there).
+    /// </summary>
+    private string EditorText => _editorEcho ?? DisplayValue;
+
+    /// <summary>Set only inside <see cref="RaiseEditorRefresh"/>'s posted step; null otherwise.</summary>
+    private string? _editorEcho;
+
+    /// <summary>The editor's text: <see cref="DisplayValue"/> (frozen → raw; absent → the default).</summary>
     public string StringValue
     {
-        get => RawValue;
+        get => EditorText;
         set => Commit(value);
     }
 
     public bool BoolValue
     {
-        get => bool.TryParse(RawValue, out var parsed) && parsed;
+        get => bool.TryParse(EditorText, out var parsed) && parsed;
         // ⛔ Lower case, matching the document's own vocabulary — the reader accepts either, but a
         // round trip that rewrote every "true" as "True" would report a change the user never made.
         set => Commit(value ? "true" : "false");
     }
 
+    /// <summary>
+    /// ⛔⛔ Culture-INVARIANT both ways. sv-SE/fi-FI/nb-NO format a negative number with U+2212,
+    /// which <see cref="FormPropertyDef.TryParseInt"/> refuses — so a current-culture write froze
+    /// SelectedIndex's own default (-1) the moment the user set it. Read with the same parser the
+    /// catalog judges tiers with, so the row and the document can never disagree on a value.
+    ///
+    /// <para>Reads <see cref="DisplayValue"/>, not <see cref="RawValue"/>: an absent row shows the
+    /// target's default (spec §2.7).</para>
+    ///
+    /// <para>⚠ An absent row with NO default (a web TextBox's MaxLength: no limit) displays "", which
+    /// this reads as 0 — an int cannot say "empty", and neither can the NumericUpDown. The row is greyed
+    /// (<see cref="IsDefaultShown"/>), and the 0 the editor pushes back is a no-op
+    /// (<see cref="FormPropertyDef.Judge"/>), so the displayed 0 never reaches the document.</para>
+    /// </summary>
     public int IntValue
     {
-        get => int.TryParse(RawValue, out var parsed) ? parsed : 0;
-        set => Commit(value.ToString());
+        get => FormPropertyDef.TryParseInt(EditorText, out var parsed) ? parsed : 0;
+        set => Commit(value.ToString(CultureInfo.InvariantCulture));
     }
 
     // ==================================================================
@@ -206,30 +419,33 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow
     /// ⚠ Not alphabetical: writing "Bottom,Left,Right,Top" would round-trip correctly and read as
     /// though the designer had scrambled it.
     /// </summary>
-    private static readonly string[] EdgeOrder = { "Top", "Bottom", "Left", "Right" };
+    private static readonly FormAnchorEdges[] EdgeOrder =
+    {
+        FormAnchorEdges.Top, FormAnchorEdges.Bottom, FormAnchorEdges.Left, FormAnchorEdges.Right
+    };
 
     public bool AnchorTop
     {
-        get => HasEdge("Top");
-        set => SetEdge("Top", value);
+        get => HasEdge(FormAnchorEdges.Top);
+        set => SetEdge(FormAnchorEdges.Top, value);
     }
 
     public bool AnchorBottom
     {
-        get => HasEdge("Bottom");
-        set => SetEdge("Bottom", value);
+        get => HasEdge(FormAnchorEdges.Bottom);
+        set => SetEdge(FormAnchorEdges.Bottom, value);
     }
 
     public bool AnchorLeft
     {
-        get => HasEdge("Left");
-        set => SetEdge("Left", value);
+        get => HasEdge(FormAnchorEdges.Left);
+        set => SetEdge(FormAnchorEdges.Left, value);
     }
 
     public bool AnchorRight
     {
-        get => HasEdge("Right");
-        set => SetEdge("Right", value);
+        get => HasEdge(FormAnchorEdges.Right);
+        set => SetEdge(FormAnchorEdges.Right, value);
     }
 
     /// <summary>
@@ -240,29 +456,30 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow
     ///
     /// <para>⚠ Reading the default does not WRITE it: the document keeps its null until the user
     /// actually toggles an edge, so opening a form and closing it changes nothing.</para>
+    ///
+    /// <para>⛔ Read through <see cref="FormAnchor.Parse"/>, the ONE Anchor parser (plan 2026-09-27 scope
+    /// call S10) — its absent-means-Top|Left default is the one described above. A second split here would
+    /// be a picker showing edges the region writer and the page do not read.</para>
     /// </summary>
-    private bool HasEdge(string edge)
-    {
-        var raw = RawValue;
-        if (string.IsNullOrWhiteSpace(raw))
-        {
-            return edge is "Top" or "Left";
-        }
+    private bool HasEdge(FormAnchorEdges edge) => Edges.HasFlag(edge);
 
-        return raw.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                  .Any(e => string.Equals(e, edge, StringComparison.OrdinalIgnoreCase));
-    }
+    private FormAnchorEdges Edges => FormAnchor.Parse(RawValue, out _);
 
-    private void SetEdge(string edge, bool on)
+    /// <summary>
+    /// Rewrites the whole set, in <see cref="EdgeOrder"/>, one spelling per edge. ⚠ An unknown edge name
+    /// in the old value is DROPPED: the picker writes only edges it has. Such a document was already
+    /// refused by the region writer (<c>AnchorNotExpressible</c>), so nothing that built is lost.
+    /// </summary>
+    private void SetEdge(FormAnchorEdges edge, bool on)
     {
-        if (HasEdge(edge) == on)
+        var current = Edges;
+        if (current.HasFlag(edge) == on)
         {
             return;
         }
 
-        var edges = EdgeOrder
-            .Where(e => string.Equals(e, edge, StringComparison.OrdinalIgnoreCase) ? on : HasEdge(e))
-            .ToList();
+        var next = on ? current | edge : current & ~edge;
+        var edges = EdgeOrder.Where(e => next.HasFlag(e)).Select(e => e.ToString()).ToList();
 
         // ⚠ No edges is a real, expressible state — AnchorStyles.None — and it is NOT the same as
         // unset. A control the user has explicitly un-anchored moves half the distance the form is
@@ -328,16 +545,83 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow
     /// still push a value on load, and that is exactly the coercion the Degraded tier exists to
     /// prevent.</para>
     /// </summary>
-    private void Commit(string value)
+    private void Commit(string? value)
     {
-        if (IsFrozen || string.Equals(RawValue, value, StringComparison.Ordinal))
+        // ⛔ A null push (a combo whose SelectedItem matched nothing) and a frozen row write nothing.
+        // (A frozen row returns BEFORE the comparison below, so its raw display never meets it.)
+        if (value == null || IsFrozen)
         {
             return;
         }
 
+        // ⚠ An editor pushing BACK the echoed text (a future ranged NumericUpDown coercing it) must not start
+        // another commit, refusal and echo — that would loop.
+        if (_editorEcho != null)
+        {
+            return;
+        }
+
+        // ⛔ The DECISION is the catalog's (FormPropertyDef.Judge — a pure, table-tested function: no-op,
+        // reset, refuse or write, with every rule and its reason stated there). This row only carries
+        // it out. ⚠ DELIBERATE no-ops, per Judge: a case-only change (`middleleft` → `MiddleLeft`,
+        // `#ff0000` → `#FF0000`) and picking the member an alias already means (`Left` → `MiddleLeft`)
+        // change nothing the program does, so a legacy `Left` stays until the user picks a genuinely
+        // DIFFERENT value. An intrinsic row (no definition) has only the exact no-op, and IntRow ignores
+        // text it cannot parse.
+        var verdict = _definition?.Judge(value, IsPresent ? RawValue : null, _target)
+                      ?? (string.Equals(value, DisplayValue, StringComparison.Ordinal)
+                          ? FormEditVerdict.NoOp
+                          : FormEditVerdict.Write);
+
+        // The last refusal is about the LAST commit only: any other outcome retracts it.
+        // ⚠ DescribeRefusedEdit throws for a usable value, so it is asked only on the Refuse verdict,
+        // which Judge gives exactly when the catalog does not accept the value.
+        // Cleared first, so a SECOND identical refusal still raises a change the pane can hear.
+        Refusal = null;
+        if (verdict == FormEditVerdict.Refuse)
+        {
+            Refusal = _definition!.DescribeRefusedEdit(value, _target);
+        }
+
+        switch (verdict)
+        {
+            case FormEditVerdict.NoOp:
+                return;
+
+            case FormEditVerdict.Reset:
+                // The SAME operation as the Reset command. Nothing to remove (absent, or a row that
+                // cannot remove itself) → the editor snaps back to the default it was showing.
+                if (CanReset)
+                {
+                    Reset();
+                }
+                else
+                {
+                    RaiseEditorRefresh(value);
+                }
+
+                return;
+
+            case FormEditVerdict.Refuse:
+                // Spec §7: never written; the editor re-reads, so it shows what the document holds.
+                RaiseEditorRefresh(value);
+                return;
+        }
+
         if (_write != null)
         {
-            _write(value);
+            // ⛔ A write that changed nothing is not an edit: refused by the store (a non-positive
+            // ClientSize, unparseable Int text) or the same value re-spelled ("007" on an X of 7). No
+            // Edited, and the editor re-reads what the model holds.
+            if (!_write(value))
+            {
+                // ⛔ A store refusal is SAID (plan 2026-09-27 Task 9): a value the catalog accepts and the store refuses
+                // (ClientSize "0, 300", MobileBreakpoint -5) used to vanish with no reason. "The same value again"
+                // has none, so this stays null for it.
+                Refusal = _storeRefusal?.Invoke(value);
+                RaiseEditorRefresh(value);
+                return;
+            }
         }
         else if (_control != null)
         {
@@ -348,10 +632,80 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow
             return;
         }
 
-        OnPropertyChanged(nameof(RawValue));
+        RaiseValueChanged();
+        _onChanged();
+    }
+
+    /// <summary>
+    /// Why the last value typed into this row was REFUSED (spec §7 "refused in the editor, never
+    /// written"), or null when the last commit was not a refusal. The grid's description pane shows it:
+    /// without it a refused value simply vanished from the box, with nothing saying why.
+    /// </summary>
+    [ObservableProperty]
+    private string? _refusal;
+
+    /// <summary>
+    /// A refused edit: the editor re-reads the value the document still holds.
+    ///
+    /// <para>⛔⛔ Measured headless on Avalonia 11.3
+    /// (<c>FormPropertyGridRealViewTests.ARefusedValue_SnapsTheRealEditorBack_…</c>): raising
+    /// PropertyChanged(StringValue) alone does NOT snap a real TextBox back — the refused <c>12345</c>
+    /// stayed in the box while the document held nothing. Neither synchronously (the refusal happens
+    /// INSIDE the binding's own LostFocus push) nor posted after it: the typed text lives in the TextBox as
+    /// its CURRENT value, over the binding, and the binding re-applies only a value that DIFFERS from the
+    /// last one it read — which is the very value being snapped back to ("" before, "" after). So the
+    /// posted step first ECHOES the pushed text (the binding now holds what the box shows: no visible
+    /// change), then raises the real value, which now differs and is applied. The same holds for the Int
+    /// editor (Width pushed to 0 and clamped back to the 1 it already was — measured through the real
+    /// NumericUpDown by <c>AnIntTheStoreClampsBackToTheSameValue_SnapsTheRealNumericUpDownBack</c>).</para>
+    ///
+    /// <para>The synchronous raise stays for every listener that is not a binding mid-push.</para>
+    ///
+    /// <para>The post runs at Default priority, above Input, so a second edit cannot be processed between the
+    /// refusal and its snap-back; and a post that lands after a rebuild raises on an orphan row that no live
+    /// binding reads any more — harmless.</para>
+    ///
+    /// <para>⚠ View-model [Test]s never drain the dispatcher, so the posted echo is covered ONLY by the
+    /// real-view tests.</para>
+    /// </summary>
+    /// <param name="pushed">The text the editor pushed, and still shows.</param>
+    private void RaiseEditorRefresh(string pushed)
+    {
+        RaiseEditorProperties();
+        Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+        {
+            _editorEcho = pushed;
+            try
+            {
+                RaiseEditorProperties();
+            }
+            finally
+            {
+                _editorEcho = null;
+            }
+
+            RaiseEditorProperties();
+        });
+    }
+
+    private void RaiseEditorProperties()
+    {
         OnPropertyChanged(nameof(StringValue));
         OnPropertyChanged(nameof(BoolValue));
         OnPropertyChanged(nameof(IntValue));
-        _onChanged();
+    }
+
+    private void RaiseValueChanged()
+    {
+        foreach (var name in new[]
+                 {
+                     nameof(RawValue), nameof(DisplayValue), nameof(StringValue), nameof(BoolValue),
+                     nameof(IntValue), nameof(IsPresent), nameof(IsBold), nameof(IsDefaultShown), nameof(CanReset)
+                 })
+        {
+            OnPropertyChanged(name);
+        }
+
+        ResetCommand.NotifyCanExecuteChanged();
     }
 }

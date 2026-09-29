@@ -20,7 +20,8 @@ public sealed class FormFile
         string originalText,
         string filePath,
         IReadOnlyList<DesignDiagnostic> diagnostics,
-        IReadOnlyList<DegradedProperty> degraded)
+        IReadOnlyList<DegradedProperty> degraded,
+        IReadOnlyList<DegradedProperty>? degradedRoot = null)
     {
         Model = model;
         Xml = xml;
@@ -29,6 +30,7 @@ public sealed class FormFile
         FilePath = filePath;
         Diagnostics = diagnostics;
         Degraded = degraded;
+        DegradedRoot = degradedRoot ?? Array.Empty<DegradedProperty>();
     }
 
     public FormDocument Model { get; }
@@ -80,5 +82,38 @@ public sealed class FormFile
         var control = Model.FindById(controlId);
         var definition = control?.Definition;
         return definition?.Property(property) != null ? PropertyTier.Canon : PropertyTier.Unknown;
+    }
+
+    /// <summary>The FORM's frozen rows — its own list, never a reserved control id (spec §2.3): a
+    /// control with <c>Id=""</c> is legal to read.</summary>
+    public IReadOnlyList<DegradedProperty> DegradedRoot { get; }
+
+    /// <summary>The frozen reason for one FormRoot row, or null when it is not Degraded.</summary>
+    /// <remarks>⚠ Ordinal — see <see cref="TierOfRoot"/>.</remarks>
+    public string? DegradedReasonOfRoot(string property) =>
+        DegradedRoot.FirstOrDefault(d => string.Equals(d.Property, property, StringComparison.Ordinal))?.Reason;
+
+    /// <summary>
+    /// The D9 tier of one FormRoot row on this document's (target, layout) — through
+    /// <see cref="FormRootValues.Applies(FormPropertyDef, FormDocument)"/>, the one applicability predicate.
+    /// </summary>
+    /// <remarks>
+    /// ⚠ ORDINAL, deliberately unlike <see cref="TierOf"/>'s case-insensitive control lookup: a root row's
+    /// name is its XML attribute spelling, and <see cref="FormRootValues.RowForAttribute"/> (what the
+    /// reader asks) matches attributes ordinally because XML is case-sensitive. A case-insensitive tier
+    /// would call <c>text</c> Canon while the reader keeps <c>text="x"</c> as an unknown attribute.
+    /// Callers pass <c>row.Name</c>.
+    /// </remarks>
+    public PropertyTier TierOfRoot(string property)
+    {
+        if (DegradedReasonOfRoot(property) != null)
+        {
+            return PropertyTier.Degraded;
+        }
+
+        return FormControlCatalog.FormRoot.Properties.FirstOrDefault(r => string.Equals(r.Name, property, StringComparison.Ordinal))
+                   is { } row && FormRootValues.Applies(row, Model)
+            ? PropertyTier.Canon
+            : PropertyTier.Unknown;
     }
 }

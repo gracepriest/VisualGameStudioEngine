@@ -96,14 +96,17 @@ public static class FormPlacement
             return new FormPlacementResult(strip, null);
         }
 
-        // ⛔ D3. A .blwebform positions controls by CELL, not by pixel, so the web path produces a
-        // GridGeometry from the cell the pointer is in rather than an X/Y.
-        if (document.Target != FormTarget.WinForms)
+        // ⛔ D3, by VOCABULARY (spec 2026-09-27 §2.4): a Grid or Flow page positions controls by CELL, so its path
+        // produces a GridGeometry from the cell the pointer is in. A Canvas page speaks PIXELS and places exactly as a
+        // .blform does, below — it used to be refused here because this asked the TARGET.
+        if (!FormVocabulary.IsPixel(document))
         {
             return PlaceOnWeb(document, definition, x, y);
         }
 
-        var container = FormCanvasTransform.ContainerAt(document, new Point(x, y));
+        // ONE resolve serves the target search and the clamp below.
+        var docking = FormDockLayout.Resolve(document, FormDockMode.Designer);
+        var container = FormCanvasTransform.ContainerAt(document, new Point(x, y), dock: docking);
         var siblings = container?.Container.Children ?? document.Controls;
 
         // Child coordinates are relative to the CONTAINER, not to the form. Storing form-space
@@ -112,7 +115,7 @@ public static class FormPlacement
         var origin = container?.Origin ?? new Point(0, 0);
         var local = new Point(x - origin.X, y - origin.Y);
 
-        var (surfaceWidth, surfaceHeight) = SurfaceOf(document, container?.Container);
+        var (surfaceWidth, surfaceHeight) = FormGeometryEdit.SurfaceOf(document, container?.Container, docking);
 
         var control = new FormControl
         {
@@ -141,7 +144,10 @@ public static class FormPlacement
     }
 
     /// <summary>
-    /// A drop on a <c>.blwebform</c>: the control goes in the CELL the pointer is over.
+    /// A drop on a Grid or Flow page: the control goes in the CELL the pointer is over.
+    ///
+    /// <para>⚠ A Canvas page never arrives here — it speaks pixels (<c>FormVocabulary.IsPixel</c>) — so the Kind
+    /// refusal below can only ever say Flow.</para>
     ///
     /// <para>⚠ Grid only, and the refusals say why. <c>Flow</c> is flexbox — position comes from
     /// document ORDER, not from a cell, so a point on the canvas means nothing there. A page with
@@ -283,22 +289,6 @@ public static class FormPlacement
     /// </summary>
     private static int Clamp(double value, int size, int surface) =>
         (int)Math.Max(0, Math.Min(value, surface - size));
-
-    /// <summary>
-    /// The usable area a control is being dropped into: the container's own box, or the form's
-    /// client size. The fallbacks match <c>FormCanvasControl.Fit</c>'s, so clamping cannot disagree
-    /// with the rectangle the canvas drew.
-    /// </summary>
-    private static (int Width, int Height) SurfaceOf(FormDocument document, FormControl? container)
-    {
-        if (container?.Geometry is PixelGeometry pixel)
-        {
-            return (pixel.Width, pixel.Height);
-        }
-
-        var surface = FormCanvasTransform.SurfaceSize(document);
-        return ((int)surface.Width, (int)surface.Height);
-    }
 
     /// <summary>
     /// <c>Button1</c>, <c>Button2</c>, … — the convention every VB and WinForms designer uses, and

@@ -570,7 +570,7 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
         }
 
         _designerClipboard = BasicLang.Forms.FormClipboard.SerializeSubtree(
-            file.Model.Target, Selection.Controls);
+            file.Model.Target, Selection.Controls, BasicLang.Forms.FormVocabulary.LayoutOf(file.Model));
     }
 
     [RelayCommand]
@@ -599,7 +599,7 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
     /// <summary>
     /// Pastes the copy buffer, renaming anything whose id is taken.
     ///
-    /// <para>⛔ <c>DeserializeSubtree</c> does the renaming AND retargets the binds that named the
+    /// <para>⛔ <c>FormClipboard.Paste</c> does the renaming AND retargets the binds that named the
     /// old id — which is why it was built alongside the model rather than when Ctrl+V was wired.
     /// Pasting a button called <c>btnLogin</c> beside an existing one must not produce two controls
     /// answering to one handler.</para>
@@ -622,9 +622,19 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
             file.Model.AllControls().Concat(file.Model.AllComponents()).Select(c => c.Id),
             StringComparer.OrdinalIgnoreCase);
 
-        var pasted = BasicLang.Forms.FormClipboard.DeserializeSubtree(
-            _designerClipboard, file.Model.Target, id => taken.Contains(id));
+        var paste = BasicLang.Forms.FormClipboard.Paste(
+            _designerClipboard, file.Model.Target, BasicLang.Forms.FormVocabulary.LayoutOf(file.Model),
+            id => taken.Contains(id));
 
+        // ⛔ A refused paste is SAID (spec 2026-09-27 §2.1) — between layouts, and between targets, which used
+        // to come back empty and silent.
+        if (paste.Refusal != null)
+        {
+            ReportPlacementRefusal(paste.Refusal);
+            return;
+        }
+
+        var pasted = paste.Controls;
         if (pasted.Count == 0)
         {
             return;
@@ -1121,6 +1131,11 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
                 }
             }
         };
+
+        // ⛔⛔ The grid's object selector (spec §3) never writes PropertyGrid.SelectedControl — it asks,
+        // and the ONE selection store answers, so the canvas, the tray and the grid cannot disagree.
+        // Choosing the form is SelectInDesigner(null).
+        PropertyGrid.SelectionRequested += (_, control) => SelectInDesigner(control);
     }
 
     /// <summary>The component tray under the canvas (Task 25): a view of <c>DesignDocument.Components</c>.</summary>

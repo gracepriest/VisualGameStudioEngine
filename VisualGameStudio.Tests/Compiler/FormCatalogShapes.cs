@@ -41,12 +41,14 @@ internal static class FormCatalogShapes
             }
             default:
             {
+                // ⛔ By VOCABULARY, never by target: a Canvas page speaks pixels (spec 2026-09-27 §2.1), and a
+                // cell on one is a shape the reader never produces.
                 var c = new FormControl
                 {
                     Kind = definition.Kind, Id = id, TabIndex = 0,
-                    Geometry = geometry ?? (document.Target == FormTarget.Web
-                        ? new GridGeometry { Col = 0, Row = 0 }
-                        : new PixelGeometry { X = 96, Y = 80, Width = 120, Height = 24, Anchor = "Top" })
+                    Geometry = geometry ?? (FormVocabulary.IsPixel(document)
+                        ? new PixelGeometry { X = 96, Y = 80, Width = 120, Height = 24, Anchor = "Top" }
+                        : new GridGeometry { Col = 0, Row = 0 })
                 };
                 document.Controls.Add(c);
                 return c;

@@ -1,8 +1,33 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="using:VisualGameStudio.Core.Abstractions.ViewModels"
+             xmlns:local="using:VisualGameStudio.Shell.Views.Controls"
              x:Class="VisualGameStudio.Shell.Views.Controls.TypedValueEditor"
              x:DataType="vm:ITypedValueRow">
+
+  <!-- ⛔ The minimum widths are STYLES, not local values, so a narrow host can take them away. A
+       child whose MinWidth exceeds its slot is not clipped on the right: Avalonia arranges a
+       Stretch child that does not fit as if it were CENTRED, so the overflow lands on BOTH sides —
+       in the designer's property grid (a ~154px value column) the text box began 23px left of its
+       column, under the name cell, and "ComboBox1" read "omboBox1". A local MinWidth cannot be
+       overridden by the host (a local value beats every style); a class can.
+       The Settings dialog keeps the widths it always had; the property grid sets Classes="compact"
+       and the editors fill the column instead (FormDesignerLayoutRealViewTests). -->
+  <UserControl.Styles>
+    <Style Selector="TextBox.text">
+      <Setter Property="MinWidth" Value="200"/>
+    </Style>
+    <Style Selector="ComboBox.choice">
+      <Setter Property="MinWidth" Value="170"/>
+    </Style>
+    <Style Selector="local|TypedValueEditor.compact TextBox.text">
+      <Setter Property="MinWidth" Value="0"/>
+    </Style>
+    <Style Selector="local|TypedValueEditor.compact ComboBox.choice">
+      <Setter Property="MinWidth" Value="0"/>
+      <Setter Property="HorizontalAlignment" Value="Stretch"/>
+    </Style>
+  </UserControl.Styles>
 
   <!-- ⛔ ONE copy of the four shared editors. SettingsDialog.axaml carried them twice (:140 and
        :266) and the designer's property grid would have been a third. Each host keeps only the
@@ -13,13 +38,17 @@
                   IsEnabled="{Binding IsEditable}"
                   OnContent="" OffContent="" Padding="0" Margin="0"/>
 
+    <!-- ⚠ The value is an INTEGER: FormatString="0" shows no decimals, and ParsingNumberStyle="Integer"
+         refuses a typed "1.5" or "1,000" rather than letting the control round it into a number the
+         user never wrote. -->
     <NumericUpDown Value="{Binding IntValue}"
                    Minimum="{Binding Minimum}" Maximum="{Binding Maximum}" Increment="{Binding Increment}"
+                   FormatString="0" ParsingNumberStyle="Integer"
                    Width="110" IsVisible="{Binding IsNumericUpDown}"
                    IsEnabled="{Binding IsEditable}"/>
 
-    <ComboBox ItemsSource="{Binding Choices}" SelectedItem="{Binding StringValue}"
-              MinWidth="170" IsVisible="{Binding IsComboBox}"
+    <ComboBox Classes="choice" ItemsSource="{Binding Choices}" SelectedItem="{Binding StringValue}"
+              IsVisible="{Binding IsComboBox}"
               IsEnabled="{Binding IsEditable}"/>
 
     <!-- ⛔⛔ UpdateSourceTrigger=LostFocus, not the default PropertyChanged (D13). Committing per
@@ -27,8 +56,8 @@
          character would rewrite the document, regenerate the region in the user's .bas, and land
          on the undo stack. Typing "Sign in" would be seven saves and seven undo entries. Enter
          commits too, which Avalonia's LostFocus trigger already does for a TextBox. -->
-    <TextBox Text="{Binding StringValue, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
-             MinWidth="200" IsVisible="{Binding IsTextBox}"
+    <TextBox Classes="text" Text="{Binding StringValue, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
+             IsVisible="{Binding IsTextBox}"
              IsReadOnly="{Binding !IsEditable}"/>
   </Panel>
 </UserControl>
