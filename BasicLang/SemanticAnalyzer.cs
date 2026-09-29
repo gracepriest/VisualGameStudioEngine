@@ -8473,6 +8473,8 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 {
                     var symbol = new Symbol(node.VariableName, SymbolKind.Variable, resolvedType, node.Line, node.Column);
                     _currentScope.Define(symbol);
+                    // The IR builder registers the binding from this (#169, ADR-0013 D5).
+                    SetNodeType(node, resolvedType);
                 }
             }
 
@@ -8491,21 +8493,12 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
         public void Visit(RangePatternNode node)
         {
-            // Analyze bounds
+            // Analyze bounds. ⚠ No "bounds should be numeric" warning: `Case "a" To "z"` is valid VB
+            // (strings and Chars range too). The warning here was never reached while this visitor
+            // had no caller; once CaseClauseNode began analyzing its patterns it fired on every
+            // string range, at a column the parser never set.
             node.LowerBound?.Accept(this);
             node.UpperBound?.Accept(this);
-
-            // Verify bounds are comparable
-            var lowerType = GetNodeType(node.LowerBound);
-            var upperType = GetNodeType(node.UpperBound);
-
-            if (lowerType != null && upperType != null)
-            {
-                if (!lowerType.IsNumeric() || !upperType.IsNumeric())
-                {
-                    Warning("Range pattern bounds should be numeric types", node.Line, node.Column);
-                }
-            }
 
             // Analyze When guard if present
             node.WhenGuard?.Accept(this);
@@ -8558,8 +8551,17 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
         public void Visit(BindingPatternNode node)
         {
-            // Binding pattern captures the matched value with a variable name
-            // The variable is used in the When guard expression
+            // Binding pattern captures the matched value with a variable name, typed as the
+            // Select subject; the variable is used in the When guard expression.
+            if (!string.IsNullOrEmpty(node.VariableName))
+            {
+                var bindingType = _selectSubjectType ?? _typeManager.ObjectType;
+                _currentScope.Define(new Symbol(node.VariableName, SymbolKind.Variable,
+                    bindingType, node.Line, node.Column));
+                // The IR builder registers the binding from this (#169, ADR-0013 D5).
+                SetNodeType(node, bindingType);
+            }
+
             // Analyze When guard if present
             node.WhenGuard?.Accept(this);
         }
@@ -9000,14 +9002,30 @@ namespace BasicLang.Compiler.SemanticAnalysis
             }
         }
 
+        /// <summary>The type of the innermost Select Case subject — what a binding pattern binds.</summary>
+        private TypeInfo _selectSubjectType;
+
         public void Visit(SelectStatementNode node)
         {
             node.Expression.Accept(this);
             var exprType = GetNodeType(node.Expression);
 
+            var savedSubjectType = _selectSubjectType;
+            _selectSubjectType = exprType;
+            try
+            {
+                foreach (var caseClause in node.Cases)
+                    caseClause.Accept(this);
+            }
+            finally
+            {
+                _selectSubjectType = savedSubjectType;
+            }
+
             foreach (var caseClause in node.Cases)
             {
-                caseClause.Accept(this);
+                // (Each clause was already visited above, with the subject type in scope — visiting
+                // it again here would analyze it twice and report every error twice.)
 
                 // ADR-0011 D2 (2): `Case Is Nothing` obeys `x Is Nothing`'s operand rule.
                 if (exprType != null && caseClause.Patterns != null)
@@ -9035,7 +9053,28 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 value.Accept(this);
             }
 
-            node.Body.Accept(this);
+            // ⛔ The PATTERNS — and so every `When` guard — used to be skipped: the parser puts
+            // every Case in Patterns (never Values), so nothing in a Case line was analyzed. A
+            // guard's calls reached the backends untyped, an array index `arr(2)` was built as a
+            // CALL to the local `arr` (C# CS1955, JavaScript "arr is not a function", a g++
+            // error), a member of a call result guessed `.` for a class on C++, and a misspelled
+            // name compiled green. The pattern visitors were written and complete; nothing called
+            // them. Its own scope, so a binding (`Case n When n > 0`, `Case x As Integer`) is
+            // visible to its guard and body and not to the next Case.
+            EnterScope("Case", ScopeKind.Block);
+            try
+            {
+                foreach (var pattern in node.Patterns)
+                {
+                    pattern.Accept(this);
+                }
+
+                node.Body.Accept(this);
+            }
+            finally
+            {
+                ExitScope();
+            }
         }
 
         public void Visit(ForLoopNode node)
