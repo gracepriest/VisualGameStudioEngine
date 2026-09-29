@@ -235,6 +235,8 @@ public class JsExecutionTierRosterTests
         // The type keywords' Shared members (String.Format, Integer.Parse, …). Named outside the
         // patterns below, so listed by hand; its JS legs spawn Node.
         typeof(PrimitiveStaticSurfaceRunTests),
+        // Select Case When guards: calls, AndAlso/OrElse, casts, a binding pattern.
+        typeof(WhenGuardCallRunTests),
 
         // ADR-0006 D2 (task #137) — the use count Invariant S′ checks is dynamic, not static.
         // Named "...ExecutionTests", so the widened match below WOULD catch it on its own; listed
@@ -442,7 +444,7 @@ public class JsExecutionTierRosterTests
 
     [Test]
     public void RosterIsPinned()
-        => Assert.That(ExecutionTier, Has.Length.EqualTo(88), // + MsilValueToStringExecutionTests (task #183), InterfaceMethodTypingExecutionTests, IsIsNotOperatorExecutionTests (task #185), MeReceiverTypingExecutionTests (task #176), UserDelegateConversionExecutionTests (task #187), DelegateMemberInvocationExecutionTests (task #188), NothingStringTextExecutionTests (task #189), MsilObjectBoxingExecutionTests (task #177), NotPrecedenceExecutionTests (#195), PropertyAccessExecutionTests (task #178), NameBindingExecutionTests (task #169/#199), PerIterationLoopBodyDimExecutionTests + PerIterationLoopBodyDimOptimizerExecutionTests (task #172, ADR-0014)
+        => Assert.That(ExecutionTier, Has.Length.EqualTo(89), // + MsilValueToStringExecutionTests (task #183), InterfaceMethodTypingExecutionTests, IsIsNotOperatorExecutionTests (task #185), MeReceiverTypingExecutionTests (task #176), UserDelegateConversionExecutionTests (task #187), DelegateMemberInvocationExecutionTests (task #188), NothingStringTextExecutionTests (task #189), MsilObjectBoxingExecutionTests (task #177), NotPrecedenceExecutionTests (#195), PropertyAccessExecutionTests (task #178), NameBindingExecutionTests (task #169/#199), PerIterationLoopBodyDimExecutionTests + PerIterationLoopBodyDimOptimizerExecutionTests (task #172, ADR-0014); + WhenGuardCallRunTests
             "The execution-tier roster changed. That is fine — update the number — but it must " +
             "be a deliberate edit, not a silent shrink.");
 

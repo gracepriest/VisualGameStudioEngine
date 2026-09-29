@@ -101,12 +101,12 @@ public class TypedArrayLiteralExecutionTests
     }
 
     // ------------------------------------------------------------------------------------------
-    // JavaScriptBackend.cs Expr's IRArrayAlloc arm (~:768) — an UNBOUND alloc means IRBuilder's
+    // JavaScriptBackend.cs Expr's IRArrayAlloc arm — an UNBOUND alloc means IRBuilder's
     // `_suppressEmit` (a `Select Case … When` guard) swallowed the allocation AND its element
-    // stores together (IRBuilder.EmitInstruction ~:349, guard ~:2883-2885; both are emitted
-    // together in Visit(CollectionInitializerNode) ~:1926-1934). Rendering `new Array(N)` there
-    // would produce a sparse array of holes wearing the right length — silently wrong output from
-    // a green build. `Size == 0` is carved out because `New Integer() {}` has no stores to lose.
+    // stores together. Rendering `new Array(N)` there would produce a sparse array of holes
+    // wearing the right length — silently wrong output from a green build. A guard's allocation
+    // now carries its elements (IRArrayAlloc.InlineElements), rendered as an array literal;
+    // `Size == 0` keeps its carve-out because `New Integer() {}` has no stores to lose.
     // ------------------------------------------------------------------------------------------
 
     // Populated typed literal inside a `When` guard's call argument. ⚠ MEASURED (both by the
@@ -122,16 +122,24 @@ public class TypedArrayLiteralExecutionTests
     private const string GuardEmptyLiteral = "Function Total(a[] As Integer) As Integer\nDim s As Integer = 0\nFor Each x As Integer In a\ns = s + x\nNext\nReturn s\nEnd Function\nSub Main()\nDim n As Integer = 5\nSelect Case n\nCase Is > 0 When Total(New Integer() {}) = 0\nConsole.WriteLine(\"empty-hit\")\nCase Else\nConsole.WriteLine(\"empty-miss\")\nEnd Select\nEnd Sub";
 
     /// <summary>
-    /// The throw arm: a populated typed literal inside a `When` guard must fail loudly rather
-    /// than silently rendering a sparse array. Message must name the unrenderable node so a
-    /// diagnosing reader lands in the right place.
+    /// A populated typed literal inside a `When` guard RUNS. It used to be refused here (the only
+    /// alternative was an array of holes), and C# emitted `Total(t0)` with t0 declared nowhere:
+    /// the stores were suppressed with the allocation. The guard's allocation now carries its
+    /// elements (<c>IRArrayAlloc.InlineElements</c>) and every backend spells an array literal.
     /// </summary>
     [Test]
-    public void JavaScript_ArrayLiteralInsideWhenGuard_Populated_Throws()
+    public void JavaScript_ArrayLiteralInsideWhenGuard_Populated_Runs()
     {
-        var ex = Assert.Throws<NotSupportedException>(() => JsTestSupport.Compile(GuardPopulatedLiteral));
-        Assert.That(ex!.Message, Does.Contain("IRArrayAlloc"),
-            "the thrown message must name the unrenderable node.\n" + ex.Message);
+        RequireNode();
+        Assert.That(JavaScriptExecutionTests.RunJs(GuardPopulatedLiteral), Is.EqualTo("guard-hit"));
+    }
+
+    [Test]
+    public void CSharpAndCpp_ArrayLiteralInsideWhenGuard_Populated_Run()
+    {
+        // Not Assert.Multiple: CompileRun's no-compiler Assert.Ignore would FAIL inside one.
+        Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharp(GuardPopulatedLiteral)), Is.EqualTo("guard-hit"));
+        Assert.That(BclE2E.CompileRun(BclE2E.CompileToCppOptimized(GuardPopulatedLiteral)).Trim(), Is.EqualTo("guard-hit"));
     }
 
     /// <summary>

@@ -1160,7 +1160,7 @@ public class MsilObjectBoxingExecutionTests
                     Console.WriteLine("not-nothing")
             End Select
         End Sub
-        Sub Guard(o As Object, limit As Object)
+        Sub Guard(o As Object, limit As Integer)
             Select Case o
                 Case Is > 0 When o < limit
                     Console.WriteLine("in-range")
@@ -1180,11 +1180,16 @@ public class MsilObjectBoxingExecutionTests
             TestIs(MakeN())
             TestIs("")
             TestIs(False)
-            Guard(Make(3), Make(10))
-            Guard(Make(30), Make(10))
-            Guard(Make(-1), Make(10))
+            Guard(Make(3), 10)
+            Guard(Make(30), 10)
+            Guard(Make(-1), 10)
         End Sub
         """;
+    // ⚠ `limit` is an Integer, not an Object: the guard is a late-bound Object-vs-number
+    // comparison, like `If o < 20` in L01. Object-vs-Object ordering is refused by the analyzer
+    // ("Comparison operator '<' requires numeric operands") in a statement, and — since #115 made
+    // Case patterns analyzed — in a When guard too. It once passed here only because guards were
+    // skipped.
     private const string L08Expected =
         "nothing\nnothing\nsomething\nnothing\nnothing\nnot-nothing\nis-nothing\nnot-nothing\n"
         + "not-nothing\nin-range\nover\nnon-positive";

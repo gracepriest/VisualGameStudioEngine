@@ -1085,6 +1085,15 @@ namespace BasicLang.Compiler.IR
         public TypeInfo ElementType { get; set; }
         public int Size { get; set; }
 
+        /// <summary>
+        /// The elements, carried ON the node — set only for an allocation built with emission
+        /// suppressed (inside a <c>When</c> guard), where the element stores that normally follow
+        /// it never reach a block. A guard is rendered inline, so each backend spells this as an
+        /// array literal; without it the array was a name nothing declared (C# CS0103) or a
+        /// <c>new Array(n)</c> of holes (JavaScript). Null everywhere else.
+        /// </summary>
+        public List<IRValue> InlineElements { get; set; }
+
         public IRArrayAlloc(string name, TypeInfo elementType, int size)
             : base(name, new TypeInfo($"{elementType.Name}[]", TypeKind.Array) { ElementType = elementType })
         {

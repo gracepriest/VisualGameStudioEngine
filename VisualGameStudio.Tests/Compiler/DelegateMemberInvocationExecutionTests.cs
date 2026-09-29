@@ -844,6 +844,10 @@ public class DelegateMemberInvocationExecutionTests
     [Test]
     public void G5_StructureDelegateField_Msil_PinsTodaysNullReferenceException_Against192()
     {
+        // Skip OUTSIDE Assert.Throws: without ilasm the harness throws its IgnoreException, and
+        // inside the lambda that is caught as the wrong exception type — a FAIL on every Linux
+        // run instead of a skip.
+        Msil.MsilHarness.RequireIlasm();
         var ex = Assert.Throws<AssertionException>(() => Msil.MsilHarness.RunExpectingSuccess(G5));
         Assert.That(ex!.Message, Does.Contain("NullReferenceException"),
             "the failure must still be a NullReferenceException reading a delegate field off a " +

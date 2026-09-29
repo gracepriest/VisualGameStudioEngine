@@ -1185,6 +1185,11 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 case IRArrayAlloc alloc:
                     if (Bound(alloc)) return SanitizeName(alloc.Name);
                     if (alloc.Size == 0) return ArrayAlloc(alloc);
+                    // A guard's allocation carries its elements (IRArrayAlloc.InlineElements): a
+                    // JS array literal is exactly the value. An allocation without them still
+                    // lost its stores and is refused below.
+                    if (alloc.InlineElements != null)
+                        return "[" + string.Join(", ", alloc.InlineElements.Select(Expr)) + "]";
                     throw NotYet(
                         "IRArrayAlloc with unemitted element stores (an array literal inside a "
                         + "`When` guard — IRBuilder suppresses the allocation and its element "
@@ -2675,6 +2680,16 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             var subject = $"_sel{_selectCount++}";
             Line($"const {subject} = {Expr(sw.Value)};");
 
+            // ⛔ The pattern variables are `const`s ahead of the chain, so they get a block of
+            // their own: two clauses binding the same name (`Case k When k > 3` … `Case k When
+            // k > 0`), or two sibling Selects that each bind `k`, otherwise declare it twice in
+            // one scope and node refuses the whole program. Every binding aliases the subject,
+            // so one declaration per name is exact. The code after the Select stays outside.
+            Line("{");
+            _indentLevel++;
+            var boundBefore = _selectBindings;
+            _selectBindings = new HashSet<string>(StringComparer.Ordinal);
+
             // Arms are grouped by TARGET BLOCK IDENTITY: `Case 1, 2, 3` produces three
             // separate Cases entries all pointing at ONE block, and emitting one arm each
             // would duplicate the body three times.
@@ -2727,8 +2742,15 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 EmitStructured(sw.DefaultTarget);
             }
 
+            _selectBindings = boundBefore;
+            _indentLevel--;
+            Line("}");
+
             EmitStructured(sw.EndBlock);
         }
+
+        /// <summary>The pattern-variable names already declared in the Select being emitted.</summary>
+        private HashSet<string> _selectBindings;
 
         /// <summary>
         /// Numbers the <c>_selN</c> subject temps of the function being emitted: counts every
@@ -2781,7 +2803,8 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                     throw NotYet($"Select Case pattern {pattern.GetType().Name}");
             }
 
-            if (!string.IsNullOrEmpty(pattern.BindingVariable))
+            if (!string.IsNullOrEmpty(pattern.BindingVariable)
+                && (_selectBindings == null || _selectBindings.Add(pattern.BindingVariable)))
                 Line($"const {SanitizeName(pattern.BindingVariable)} = {subject};");
 
             // `Case <pattern> When <guard>` — the guard narrows the arm further.
