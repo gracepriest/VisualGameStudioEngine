@@ -239,19 +239,32 @@ public class FormBuildEmissionTests
     }
 
     [Test]
-    public void AProjectWhoseMainNeverCallsTheDispatch_IsWarnedAbout()
+    public void AProjectWhoseMainNeverCallsTheDispatch_StartsTheFormAfterMain_AndIsNotWarned()
     {
-        // ⚠ Generating the helper is only half the job — the backend emits one invocation, for
-        // Main. A helper nobody calls is a page that loads a script and does nothing, from a build
-        // that succeeded in every visible way.
+        // ⛔⛔ This used to assert the BL8018 WARNING — the backend emitted one invocation, for Main, so
+        // a helper nobody called was a page that loaded and did nothing. Owner decision 2026-09-28:
+        // Sub Main is startup, like WinForms, and the entry point starts the form itself after Main.
+        // BL8018 is retired: there is nothing left to warn about.
         WriteProject("Main.bas", "LoginForm.blwebform", "LoginForm.bas");
         Write("LoginForm.blwebform", LoginForm);
         WriteCodeBehind("LoginForm");
 
         var (exit, stdout, stderr) = Build();
 
-        Assert.That(exit, Is.Zero, "it is a warning, not a failure");
-        Assert.That(stdout + stderr, Does.Contain(BasicLang.Forms.DesignCodes.DispatchNotCalled));
+        Assert.That(exit, Is.Zero, $"STDOUT:\n{stdout}\nSTDERR:\n{stderr}");
+        Assert.That(stdout + stderr, Does.Not.Contain(BasicLang.Forms.DesignCodes.DispatchNotCalled));
+
+        // ONE rule, in the entry point: Main, THEN the dispatch — in that order, each once.
+        var js = File.ReadAllText(Path.Combine(OutputDir, "App.js"));
+        var main = js.IndexOf("\nMain();", StringComparison.Ordinal);
+        var dispatch = js.IndexOf($"\n{BasicLang.Forms.FormAssetEmitter.DispatchCall};", StringComparison.Ordinal);
+        Assert.Multiple(() =>
+        {
+            Assert.That(main, Is.GreaterThan(0), "the entry point runs Main");
+            Assert.That(dispatch, Is.GreaterThan(main), "and then starts the page's form");
+        });
+
+        Assert.That(RunEmittedScript("LoginForm"), Is.Empty.Or.Null, "and the page runs without throwing");
     }
 
     [Test]
@@ -497,5 +510,88 @@ public class FormBuildEmissionTests
                 + "under \"Click\" is never called by a real click. The emitter must canonicalise "
                 + "the event through the catalog row's WebEvent instead of trusting the document.");
         });
+    }
+
+    // ==================================================================
+    // Task 10 — a Canvas page, built by the REAL CLI and RUN (a green build is not a running page)
+    // ==================================================================
+
+    private const string CanvasLoginForm = """
+        <WebForm Name="LoginForm" Version="1" Width="640" Height="480">
+          <Layout Kind="Canvas" MobileBreakpoint="600"/>
+          <Controls>
+            <Panel Id="pnlTop" X="0" Y="0" Width="10" Height="40" Dock="Top" TabIndex="0"/>
+            <MenuStrip Id="menuStrip1" Dock="Top"/>
+            <Label Id="lblUser" Text="User" X="12" Y="80" Width="100" Height="23" TabIndex="1"/>
+            <Button Id="btnLogin" Text="Sign in" X="520" Y="80" Width="75" Height="23" Anchor="Top,Right" TabIndex="2">
+              <Bind Event="click" Handler="btnLogin_Click"/>
+            </Button>
+            <StatusStrip Id="statusStrip1" Dock="Bottom"/>
+          </Controls>
+          <Components/>
+          <Resources/>
+        </WebForm>
+        """;
+
+    [Test]
+    public void ACanvasPage_BuiltByTheRealCli_RunsAndCarriesItsPixelLayout()
+    {
+        WriteProject("Main.bas", "LoginForm.blwebform", "LoginForm.bas");
+        Write("LoginForm.blwebform", CanvasLoginForm);
+        Write("Main.bas",
+            "Sub Main()\n" +
+            "    Console.WriteLine(\"App loaded\")\n" +
+            $"    {BasicLang.Forms.FormAssetEmitter.DispatchCall}\n" +
+            "End Sub\n");
+
+        var diagnostics = WriteDesignedCodeBehind(CanvasLoginForm);
+        Assert.That(diagnostics.Where(d => !d.IsWarning), Is.Empty,
+            string.Join("; ", diagnostics.Select(d => d.Message)));
+
+        var (exit, stdout, stderr) = Build();
+        Assert.That(exit, Is.Zero, $"STDOUT:\n{stdout}\nSTDERR:\n{stderr}");
+
+        var html = File.ReadAllText(Path.Combine(OutputDir, "LoginForm.html"));
+        var css = File.ReadAllText(Path.Combine(OutputDir, "LoginForm.css"));
+        var model = BasicLang.Forms.Serialization.FormDocumentReader
+            .Read(Path.Combine(_dir, "LoginForm.blwebform"), CanvasLoginForm).Model;
+
+        Assert.Multiple(() =>
+        {
+            var open = html.IndexOf("<div class=\"vgs-form\">", StringComparison.Ordinal);
+            var close = html.LastIndexOf("</div>", StringComparison.Ordinal);
+            Assert.That(html.IndexOf("id=\"menuStrip1\"", StringComparison.Ordinal), Is.GreaterThan(open).And.LessThan(close),
+                "the real build writes the Canvas markup: strips inside the form area (spec §3)");
+            Assert.That(html.IndexOf("id=\"statusStrip1\"", StringComparison.Ordinal), Is.GreaterThan(open).And.LessThan(close));
+            Assert.That(html, Does.Contain("<script data-vgs=\"dock\">"), "the page carries its reflow script");
+            Assert.That(css, Is.EqualTo(BasicLang.Forms.FormAssetEmitter.Css(model)),
+                "the build writes exactly the emitter's Canvas stylesheet");
+            Assert.That(css, Does.Contain("min-width: 640px;").And.Contain("@media (width < 600px)"));
+        });
+
+        var ran = RunPage();
+        if (ran == null)
+        {
+            Assert.Ignore("node is not on PATH, so the emitted page cannot be executed here");
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ran, Does.Not.Contain("ReferenceError"), "the page threw on load");
+            Assert.That(ran, Does.Not.Contain("LOAD ERROR"));
+            Assert.That(ran, Does.Contain("App loaded"), "the script did not run at all");
+            Assert.That(ran, Does.Contain("HANDLER FIRED"), "the designer wired something that does not run");
+        });
+
+        // ⛔ And the page's OWN reflow script — which no App.js harness ever runs (B2).
+        var glue = FormDockScriptTests.RunGlue(_dir, html, model, "pnlTop");
+        Assert.That(glue, Is.Not.Null, "node ran App.js above, so it must run the page script too");
+
+        var hidden = BasicLang.Forms.Serialization.FormDocumentReader
+            .Read(Path.Combine(_dir, "LoginForm.blwebform"), CanvasLoginForm).Model;
+        hidden.FindById("pnlTop")!.Properties["Visible"] = "False";
+
+        Assert.That(glue!.Flipped, Is.EqualTo(FormDockScriptTests.LiveCss(
+            BasicLang.Forms.FormDockLayout.Resolve(hidden, BasicLang.Forms.FormDockMode.Runtime), 600)));
     }
 }

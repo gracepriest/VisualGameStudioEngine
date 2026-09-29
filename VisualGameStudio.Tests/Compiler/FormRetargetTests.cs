@@ -99,7 +99,7 @@ public class FormRetargetTests
             Assert.That(doc.FindById("btnLogin")!.Binds.Single().Handler, Is.EqualTo("btnLogin_Click"),
                 "a handler name is the user's own Sub and crosses verbatim");
             Assert.That(doc.Width, Is.Null, "a page has no window size");
-            Assert.That(doc.Text, Is.Null, "a page has no caption");
+            Assert.That(doc.Text, Is.EqualTo("Sign in"), "Text is one vocabulary on both targets (D2): it becomes the page title");
         });
     }
 
@@ -158,8 +158,8 @@ public class FormRetargetTests
                 "…and where it LANDED, so the user can review the cell");
 
             var window = crossed.SingleOrDefault(d => d.Message.Contains("400") && d.Message.Contains("300"));
-            Assert.That(window, Is.Not.Null, "the window's size and caption are lost once, for the document");
-            Assert.That(window!.Message, Does.Contain("Sign in"));
+            Assert.That(window, Is.Not.Null, "the window's size is lost once, for the document");
+            Assert.That(window!.Message, Does.Not.Contain("Sign in"), "the caption now CROSSES (D2); it is not lost");
 
             Assert.That(crossed, Has.Count.EqualTo(4), "three controls + the window; nothing else at this edge");
         });
@@ -284,6 +284,177 @@ public class FormRetargetTests
             Assert.That(rdo.Properties.ContainsKey("GroupName"), Is.False);
             Assert.That(Of(result, DesignCodes.RetargetPropertyLost).Single().Message,
                 Does.Contain("'rdo.GroupName'").And.Contain("choice"));
+        });
+    }
+
+    // ==================================================================
+    // A property that crosses with a VALUE the destination refuses (Task 4 review → slice 1 Task 7)
+    // ==================================================================
+
+    [Test]
+    public void ToWeb_ASystemColourTheWebCannotUse_CrossesPreserved_AndIsNamed()
+    {
+        // ActiveCaption is a Windows system colour with no CSS equivalent: valid on the window, Degraded
+        // on the page. The value is preserved (the user's own text), but the loss of MEANING is named.
+        var source = WinForms("""
+            <Form Name="LoginForm" Version="1">
+              <Controls>
+                <Label Id="lbl" Text="Hi" ForeColor="ActiveCaption" X="8" Y="8" Width="60" Height="23" TabIndex="0"/>
+              </Controls>
+            </Form>
+            """);
+
+        var result = FormRetarget.Convert(source, FormTarget.Web);
+        var property = FormControlCatalog.Find("Label")!.Property("ForeColor")!;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Document.FindById("lbl")!.Properties["ForeColor"], Is.EqualTo("ActiveCaption"),
+                "preserved exactly as written — the page opens it Degraded, never rewritten");
+            var named = Of(result, DesignCodes.RetargetPropertyLost).Single();
+            Assert.That(named.Message, Does.Contain("'lbl.ForeColor'")
+                .And.Contain(property.DescribeRefusal("ActiveCaption", FormTarget.Web)),
+                "the reason is the catalog's own refusal, never a hand-written one");
+        });
+    }
+
+    [Test]
+    public void ToWinForms_ACssColourNameWinFormsDoesNotKnow_CrossesPreserved_AndIsNamed()
+    {
+        // RebeccaPurple is a CSS name System.Drawing.Color lacks: fine on the page, CS0117 on the window.
+        var source = Web("""
+            <WebForm Name="LoginForm" Version="1">
+              <Layout Kind="Grid" Cols="auto" Rows="auto"/>
+              <Controls>
+                <Label Id="lbl" Text="Hi" ForeColor="RebeccaPurple" Col="0" Row="0" TabIndex="0"/>
+              </Controls>
+            </WebForm>
+            """);
+
+        var result = FormRetarget.Convert(source, FormTarget.WinForms);
+        var property = FormControlCatalog.Find("Label")!.Property("ForeColor")!;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Document.FindById("lbl")!.Properties["ForeColor"], Is.EqualTo("RebeccaPurple"));
+            var named = Of(result, DesignCodes.RetargetPropertyLost).Single();
+            Assert.That(named.Message, Does.Contain("'lbl.ForeColor'")
+                .And.Contain(property.DescribeRefusal("RebeccaPurple", FormTarget.WinForms)));
+        });
+    }
+
+    [Test]
+    public void AColourBothTargetsAccept_CrossesWithNoFinding([Values(FormTarget.WinForms, FormTarget.Web)] FormTarget from)
+    {
+        var source = new FormDocument { Target = from, Name = "Sweep" };
+        var label = FormCatalogShapes.Canonical(source, FormControlCatalog.Find("Label")!, "c");
+        label.Properties["ForeColor"] = "Red";
+
+        var result = FormRetarget.Convert(source, Other(from));
+
+        Assert.That(Of(result, DesignCodes.RetargetPropertyLost), Is.Empty,
+            "only a REFUSED value is named — a usable one crossing is not a loss");
+    }
+
+    [Test]
+    public void ToWeb_AValueTheSourceAlreadyRefused_CrossesPreserved_WithNoFinding()
+    {
+        // Minimum="abc" is Degraded on the window BEFORE the retarget and Degraded on the page after it:
+        // the retarget lost nothing, so it reports nothing — the Degraded row on each side is the finding.
+        var source = WinForms("""
+            <Form Name="LoginForm" Version="1">
+              <Controls>
+                <NumericUpDown Id="num" X="8" Y="8" Width="120" Height="23" Minimum="abc" TabIndex="0"/>
+              </Controls>
+            </Form>
+            """);
+
+        var result = FormRetarget.Convert(source, FormTarget.Web);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Document.FindById("num")!.Properties["Minimum"], Is.EqualTo("abc"),
+                "preserved exactly as written");
+            Assert.That(Of(result, DesignCodes.RetargetPropertyLost), Is.Empty,
+                "a value Degraded before the retarget is not a retarget loss");
+        });
+    }
+
+    /// <summary>
+    /// ⛔ Catalog-driven: for every property on both targets, a value BOTH targets refuse crosses
+    /// preserved and is never reported as a retarget loss. Asserts it exercised rows in each direction.
+    /// </summary>
+    [Test]
+    public void EveryCatalogProperty_WhoseValueBothTargetsRefuse_CrossesPreserved_WithNoFinding(
+        [Values(FormTarget.WinForms, FormTarget.Web)] FormTarget from)
+    {
+        const string bogus = "not a value!";
+        var to = Other(from);
+        var exercised = 0;
+
+        foreach (var definition in FormControlCatalog.For(from).Where(d => d.SupportsTarget(to)))
+        {
+            foreach (var property in definition.Properties.Where(p =>
+                         p.AppliesTo(from) && p.AppliesTo(to) && !p.Accepts(bogus, from) && !p.Accepts(bogus, to)))
+            {
+                var source = new FormDocument { Target = from, Name = "Sweep" };
+                FormCatalogShapes.Canonical(source, definition, "c").Properties[property.Name] = bogus;
+
+                var result = FormRetarget.Convert(source, to);
+                var converted = result.Document.AllControls().Concat(result.Document.AllComponents())
+                    .Single(c => c.Kind == definition.Kind);
+
+                Assert.Multiple(() =>
+                {
+                    Assert.That(converted.Properties.GetValueOrDefault(property.Name), Is.EqualTo(bogus),
+                        $"{definition.Kind}.{property.Name} {from}→{to}: preserved exactly as written");
+                    Assert.That(Of(result, DesignCodes.RetargetPropertyLost).Where(d => d.Message.Contains($"'c.{property.Name}'")),
+                        Is.Empty, $"{definition.Kind}.{property.Name} {from}→{to}: Degraded on both sides is no retarget loss");
+                });
+                exercised++;
+            }
+        }
+
+        Assert.That(exercised, Is.GreaterThan(0), $"{from}→{to}: no row was exercised — the sweep is vacuous");
+    }
+
+    // ==================================================================
+    // The caption round-trips (D2: Text is shared)
+    // ==================================================================
+
+    [Test]
+    public void RoundTrip_AWindowCaptionedWithItsName_KeepsTheCaption()
+    {
+        // WinForms → web writes the caption as absence (the page title is Text ?? Name, so it shows
+        // "Login" either way); web → WinForms captions the window with the name again.
+        var source = new FormDocument { Target = FormTarget.WinForms, Name = "Login", Text = "Login" };
+
+        Assert.That(RoundTrip(source).Text, Is.EqualTo("Login"));
+    }
+
+    [Test]
+    public void RoundTrip_AWindowCaptionDifferentFromItsName_KeepsTheCaption()
+    {
+        var source = new FormDocument { Target = FormTarget.WinForms, Name = "Login", Text = "Welcome" };
+
+        Assert.That(RoundTrip(source).Text, Is.EqualTo("Welcome"));
+    }
+
+    /// <summary>
+    /// ⚠ The ONE known caption normalisation: an explicit web Text equal to the form's Name comes back as
+    /// ABSENCE. The page's title is Text ?? Name, so what the page shows is unchanged.
+    /// </summary>
+    [Test]
+    public void RoundTrip_AnExplicitWebCaptionEqualToTheName_ComesBackAsAbsence_TitleUnchanged()
+    {
+        var source = new FormDocument { Target = FormTarget.Web, Name = "Login", Text = "Login" };
+
+        var back = RoundTrip(source);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(back.Text, Is.Null, "normalised to absence");
+            Assert.That(back.Text ?? back.Name, Is.EqualTo(source.Text ?? source.Name), "the page title is unchanged");
         });
     }
 
@@ -710,12 +881,17 @@ public class FormRetargetTests
     }
 
     /// <summary>
-    /// The document with its layout vocabulary erased: root size/caption/layout/literal gone,
-    /// every control's geometry gone. What is left is exactly what D2 says the two formats share.
+    /// The document with its layout vocabulary erased: root size/layout/literal gone, every control's
+    /// geometry gone. What is left is exactly what D2 says the two formats share — including the
+    /// caption, which is ONE vocabulary on both targets (compared as the title it shows, Text ?? Name,
+    /// because a caption equal to the name is written as absence on a page).
     /// </summary>
     private static string SharedSubset(FormDocument doc)
     {
-        var copy = new FormDocument { Target = FormTarget.Web, Name = doc.Name, Version = doc.Version };
+        var copy = new FormDocument
+        {
+            Target = FormTarget.Web, Name = doc.Name, Version = doc.Version, Text = doc.Text ?? doc.Name
+        };
         foreach (var control in doc.Controls)
         {
             copy.Controls.Add(Strip(control));
@@ -1095,6 +1271,260 @@ public class FormRetargetTests
     }
 
     // ==================================================================
+    // Task 11 — a Canvas page speaks pixels, so it crosses to a window EXACTLY (spec 2026-09-27 §6)
+    // ==================================================================
+
+    /// <summary>
+    /// A Canvas page smaller than a new window on BOTH axes (so the old 800x450 minimum would show), with a
+    /// docked container, anchored children at depth 2, a plain control and a strip.
+    /// </summary>
+    internal const string CanvasLogin = """
+        <WebForm Name="LoginForm" Version="1" Width="640" Height="400">
+          <Layout Kind="Canvas" MobileBreakpoint="480"/>
+          <Controls>
+            <MenuStrip Id="menuStrip1" Dock="Top">
+              <ToolStripMenuItem Id="mnuFile" Text="&amp;File"/>
+            </MenuStrip>
+            <Panel Id="pnl" X="0" Y="24" Width="640" Height="120" Dock="Top" TabIndex="0">
+              <TextBox Id="txtUser" X="12" Y="10" Width="300" Height="23" Anchor="Top,Left,Right" TabIndex="1"/>
+              <Button  Id="btnLogin" Text="Sign in" X="540" Y="80" Width="88" Height="30" Anchor="Bottom,Right" TabIndex="2"/>
+            </Panel>
+            <Label Id="lblUser" Text="User" X="20" Y="170" Width="60" Height="23" TabIndex="3"/>
+          </Controls>
+          <Components/>
+          <Resources/>
+        </WebForm>
+        """;
+
+    private static IEnumerable<(string Id, PixelGeometry? Geometry)> GeometryOf(FormDocument doc) =>
+        Recurse(doc.Controls).Select(c => (c.Id, c.Geometry as PixelGeometry));
+
+    [Test]
+    public void CanvasToWinForms_IsLossless()
+    {
+        var source = Web(CanvasLogin);
+        var result = FormRetarget.Convert(source, FormTarget.WinForms);
+        var doc = result.Document;
+
+        static string Show(PixelGeometry? g) =>
+            g == null ? "(none)" : $"X={g.X} Y={g.Y} W={g.Width} H={g.Height} Anchor={g.Anchor} Dock={g.Dock}";
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(GeometryOf(doc).Select(p => $"{p.Id}: {Show(p.Geometry)}"),
+                Is.EqualTo(GeometryOf(source).Select(p => $"{p.Id}: {Show(p.Geometry)}")),
+                "every control at every depth arrives where it was, anchors and docks included");
+            Assert.That(Pixels(doc, "btnLogin").Anchor, Is.EqualTo("Bottom,Right"), "the fixture is non-vacuous");
+            Assert.That(Pixels(doc, "pnl").Dock, Is.EqualTo("Top"));
+            Assert.That(doc.FindById("menuStrip1")!.Geometry, Is.Null, "a strip still docks by its property");
+            Assert.That(doc.FindById("menuStrip1")!.Properties["Dock"], Is.EqualTo("Top"));
+
+            Assert.That((doc.Width, doc.Height), Is.EqualTo(((int?)640, (int?)400)),
+                "the design size IS the window's client size — no 800x450 minimum");
+            Assert.That(doc.Text, Is.EqualTo("LoginForm"), "a page with no caption is a window captioned with its name");
+
+            Assert.That(Of(result, DesignCodes.RetargetLayoutCrossed), Is.Empty,
+                "nothing was derived, so nothing is reported at the pixel⇄cell edge");
+            var only = result.Diagnostics.Single();
+            Assert.That(only.Code, Is.EqualTo(DesignCodes.RetargetPropertyLost));
+            Assert.That(only.Message, Does.Contain("'form.MobileBreakpoint'").And.Contain("480"),
+                "the one web-only thing a window cannot hold is dropped and NAMED");
+        });
+    }
+
+    /// <summary>
+    /// Every scaffolded Canvas page carries the DEFAULT breakpoint explicitly — it is lost on a window too,
+    /// and must be named even though it is the default.
+    /// </summary>
+    [Test]
+    public void CanvasToWinForms_AScaffoldedPagesDefaultBreakpoint_IsNamedToo()
+    {
+        var scaffold = FormScaffolder.Create("LoginForm");
+        var source = Web(scaffold.DocumentText);
+        Assume.That(source.Layout?.MobileBreakpoint, Is.EqualTo("600"), "the scaffold writes the default explicitly");
+
+        var result = FormRetarget.Convert(source, FormTarget.WinForms);
+
+        Assert.That(Of(result, DesignCodes.RetargetPropertyLost).Select(d => d.Message),
+            Has.Some.Contains("'form.MobileBreakpoint'").And.Some.Contains("\"600\""));
+    }
+
+    /// <summary>
+    /// ⛔ A hand-edited unknown Anchor edge. The page already fails its own web build (the region writer's
+    /// CheckAnchors asks IsPixel), and the window's region writer refuses it the same way — so the retarget
+    /// REFUSES with that same BL8015 before producing anything. It must never reach ConvertToPair's
+    /// "cannot happen" InvalidOperationException.
+    /// </summary>
+    [Test]
+    public void ACanvasPageWithAnUnknownAnchorEdge_IsRefusedWithBL8015_NeverAnInternalError()
+    {
+        var source = Web("""
+            <WebForm Name="LoginForm" Version="1" Width="640" Height="400">
+              <Layout Kind="Canvas"/>
+              <Controls><Button Id="btn" X="8" Y="8" Width="75" Height="23" Anchor="Top,Rigth" TabIndex="0"/></Controls>
+            </WebForm>
+            """);
+
+        var refusals = FormRetarget.Refusals(source, FormTarget.WinForms);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(refusals.Select(d => d.Code), Is.EqualTo(new[] { DesignCodes.AnchorNotExpressible }));
+            Assert.That(refusals.Single().IsWarning, Is.False);
+            Assert.That(refusals.Single().Message, Does.Contain("'btn'").And.Contain("Rigth"));
+
+            var thrown = Assert.Throws<ArgumentException>(() => FormRetarget.ConvertToPair(source, FormTarget.WinForms),
+                "a caller that skipped Refusals gets the refusal as an argument error, never an internal one");
+            Assert.That(thrown!.Message, Does.Contain("BL8015"));
+        });
+    }
+
+    [Test]
+    public void AWellFormedCanvasPage_AndEveryOtherDirection_HaveNoRefusals()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(FormRetarget.Refusals(Web(CanvasLogin), FormTarget.WinForms), Is.Empty);
+            // A .blform's bad anchor never reaches a Grid page — it becomes a cell, named by BL8025.
+            Assert.That(FormRetarget.Refusals(WinForms("""
+                <Form Name="LoginForm" Version="1">
+                  <Controls><Button Id="btn" X="8" Y="8" Width="75" Height="23" Anchor="Rigth" TabIndex="0"/></Controls>
+                </Form>
+                """), FormTarget.Web), Is.Empty);
+        });
+    }
+
+    /// <summary>
+    /// Pins pre-flight B2: every web catalog row has a WinForms type, so nothing on a Canvas page is ever
+    /// HOISTED going to WinForms — which is why Hoist may translate by a container's stored X/Y.
+    /// </summary>
+    [Test]
+    public void EveryWebCatalogRow_HasAWinFormsType_SoACanvasPageNeverHoists()
+    {
+        var webOnly = FormControlCatalog.For(FormTarget.Web).Where(d => !d.SupportsTarget(FormTarget.WinForms))
+            .Select(d => d.Kind).ToList();
+
+        Assert.That(webOnly, Is.Empty,
+            "a web-only row now exists, so a Canvas page CAN hoist going to WinForms. FormRetarget.Hoist translates " +
+            "children by the removed container's STORED X/Y — for a docked container that is not where it sits, and " +
+            "its hoisted children would land offset. Translate by FormDockLayout's resolved rect there first " +
+            "(Task 11 pre-flight B2).");
+    }
+
+    [Test]
+    public void CanvasToWinForms_ANullDesignSize_StaysNull()
+    {
+        var result = FormRetarget.Convert(Web("""
+            <WebForm Name="LoginForm" Version="1">
+              <Layout Kind="Canvas"/>
+              <Controls><Button Id="btn" X="8" Y="8" Width="75" Height="23" TabIndex="0"/></Controls>
+            </WebForm>
+            """), FormTarget.WinForms);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Document.Width, Is.Null, "absence is copied; no size is invented");
+            Assert.That(result.Document.Height, Is.Null);
+            Assert.That(result.Diagnostics, Is.Empty, "no breakpoint, no literal: nothing was lost");
+        });
+    }
+
+    [Test]
+    public void CanvasToWinForms_TheLiteral_IsNamedAsALoss_NotAtTheLayoutEdge()
+    {
+        var result = FormRetarget.Convert(Web("""
+            <WebForm Name="LoginForm" Version="1" Width="640" Height="400">
+              <Layout Kind="Canvas"/>
+              <Controls><Button Id="btn" X="8" Y="8" Width="75" Height="23" TabIndex="0"/></Controls>
+              <Literal><![CDATA[<p>hint</p>]]></Literal>
+            </WebForm>
+            """), FormTarget.WinForms);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Document.Literal, Is.Null);
+            Assert.That(Of(result, DesignCodes.RetargetLayoutCrossed), Is.Empty);
+            Assert.That(Of(result, DesignCodes.RetargetPropertyLost).Single().Message, Does.Contain("<Literal>"));
+        });
+    }
+
+    [Test]
+    public void CanvasToWinForms_AStrayGridAttributeOnTheLayout_IsNamed()
+    {
+        var result = FormRetarget.Convert(Web("""
+            <WebForm Name="LoginForm" Version="1" Width="640" Height="400">
+              <Layout Kind="Canvas" Cols="120px,1fr" Rows="auto" Gap="4px" Dir="Vertical"/>
+              <Controls><Button Id="btn" X="8" Y="8" Width="75" Height="23" TabIndex="0"/></Controls>
+            </WebForm>
+            """), FormTarget.WinForms);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Of(result, DesignCodes.RetargetLayoutCrossed), Is.Empty);
+            Assert.That(Of(result, DesignCodes.RetargetPropertyLost).Single().Message,
+                Does.Contain("Cols=\"120px,1fr\"").And.Contain("Rows=\"auto\"")
+                    .And.Contain("Gap=\"4px\"").And.Contain("Dir=\"Vertical\""),
+                "a Canvas page never read them, but they are the user's text: named, never dropped silently");
+        });
+    }
+
+    [Test]
+    public void CanvasToWinForms_ADegradedWidth_IsNamedOnce_AndNotCarried()
+    {
+        var result = FormRetarget.Convert(Web("""
+            <WebForm Name="LoginForm" Version="1" Width="12px" Height="400">
+              <Layout Kind="Canvas"/>
+              <Controls><Button Id="btn" X="8" Y="8" Width="75" Height="23" TabIndex="0"/></Controls>
+            </WebForm>
+            """), FormTarget.WinForms);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Document.UnknownAttributes.ContainsKey("Width"), Is.False);
+            Assert.That(result.Document.Width, Is.Null, "the page could not use it; the window is not given a guess");
+            Assert.That(result.Document.Height, Is.EqualTo(400));
+            Assert.That(Of(result, DesignCodes.RetargetPropertyLost).Count(d => d.Message.Contains("12px")), Is.EqualTo(1));
+        });
+    }
+
+    [Test]
+    public void CanvasToWinForms_AWiredWebTimer_ArrivesEnabled_AndSaysSo()
+    {
+        var result = FormRetarget.Convert(Web("""
+            <WebForm Name="LoginForm" Version="1" Width="640" Height="400">
+              <Layout Kind="Canvas"/>
+              <Controls><Button Id="btn" X="8" Y="8" Width="75" Height="23" TabIndex="0"/></Controls>
+              <Components>
+                <Timer Id="tmr" Interval="50"><Bind Event="tick" Handler="tmr_Tick"/></Timer>
+              </Components>
+            </WebForm>
+            """), FormTarget.WinForms);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Document.Components.Single().Properties["Enabled"], Is.EqualTo("true"));
+            Assert.That(result.Document.Components.Single().Geometry, Is.Null);
+            Assert.That(Of(result, DesignCodes.RetargetRunStateCrossed).Single().Message, Does.Contain("'tmr'"));
+        });
+    }
+
+    [Test]
+    public void ToWinForms_AStrayMobileBreakpointOnAGridPage_IsNamedInTheLayoutFinding()
+    {
+        // The reader reads MobileBreakpoint on ANY <Layout>; on a Grid page it is not a row, and it
+        // round-trips untouched. Going to a window it is lost with the layout, so the finding names it.
+        var result = FormRetarget.Convert(Web("""
+            <WebForm Name="LoginForm" Version="1">
+              <Layout Kind="Grid" Cols="auto" MobileBreakpoint="480"/>
+              <Controls><Button Id="btn" Col="0" Row="0" TabIndex="0"/></Controls>
+            </WebForm>
+            """), FormTarget.WinForms);
+
+        Assert.That(Of(result, DesignCodes.RetargetLayoutCrossed).Select(d => d.Message),
+            Has.Some.Contains("MobileBreakpoint=\"480\""));
+    }
+
+    // ==================================================================
     // The catalog gate: every kind, every property, both directions
     // ==================================================================
 
@@ -1106,13 +1536,29 @@ public class FormRetargetTests
     /// </summary>
     [Test]
     public void EveryCatalogKind_Retargets_ReportingExactlyThePropertiesThatCannotCross(
-        [Values(FormTarget.WinForms, FormTarget.Web)] FormTarget from)
+        [Values(FormTarget.WinForms, FormTarget.Web)] FormTarget from) =>
+        SweepEveryCatalogKind(from, layout: null);
+
+    /// <summary>
+    /// Task 11: the same sweep from a CANVAS page — every kind crosses with the same property rules, and a
+    /// Positioned control's pixels arrive EXACTLY (no derivation, so nothing at the layout edge at all).
+    /// </summary>
+    [Test]
+    public void EveryCatalogKind_Retargets_FromACanvasPage_CopyingItsGeometryExactly() =>
+        SweepEveryCatalogKind(FormTarget.Web, FormLayoutKind.Canvas);
+
+    private static void SweepEveryCatalogKind(FormTarget from, FormLayoutKind? layout)
     {
         var to = Other(from);
+        var canvas = layout == FormLayoutKind.Canvas;
 
         foreach (var definition in FormControlCatalog.For(from))
         {
-            var source = new FormDocument { Target = from, Name = "Sweep" };
+            var source = new FormDocument
+            {
+                Target = from, Name = "Sweep",
+                Layout = layout is { } kind ? new FormLayout { Kind = kind } : null
+            };
             // Task 24, commit 24b: the shape (Tray/Docked/Item/Positioned) is the ONE answer in
             // FormCatalogShapes.Canonical rather than a hand-picked list — an Item definition (none
             // exist yet; commit 24c adds the first) nests "c" under a host, so the crossed control is
@@ -1195,8 +1641,82 @@ public class FormRetargetTests
                         $"{definition.Kind} {from}→{to}: a {definition.Place} control must not be reported " +
                         "at the pixel⇄cell edge");
                 }
+
+                // Task 11: from a Canvas page there is no edge to cross — nothing is derived, so nothing
+                // is reported there, and a Positioned control's pixels arrive as they were.
+                if (canvas)
+                {
+                    Assert.That(Of(result, DesignCodes.RetargetLayoutCrossed), Is.Empty,
+                        $"{definition.Kind} Canvas→{to}: a pixel page crosses with no layout finding");
+                    if (definition.Place == FormPlace.Positioned)
+                    {
+                        var had = (PixelGeometry)control.Geometry!;
+                        var got = matches[0].Geometry as PixelGeometry;
+                        Assert.That(got, Is.Not.Null, $"{definition.Kind} Canvas→{to}: pixels must arrive");
+                        Assert.That((got?.X, got?.Y, got?.Width, got?.Height, got?.Anchor, got?.Dock),
+                            Is.EqualTo(((int?)had.X, (int?)had.Y, (int?)had.Width, (int?)had.Height, had.Anchor, had.Dock)),
+                            $"{definition.Kind} Canvas→{to}: the geometry is copied exactly");
+                    }
+                }
             });
         }
+    }
+
+    /// <summary>
+    /// Values usable on one target and refused on the other — the only target-specific refusals the
+    /// catalog makes today (<c>FormPropertyDef.Accepts(value, target)</c>): a system colour with no CSS
+    /// equivalent, and a CSS colour name System.Drawing.Color lacks. The sweep picks, per row, whichever
+    /// one the source accepts and the destination refuses, so a new refusal kind needs only a new entry.
+    /// </summary>
+    private static readonly string[] TargetRefusedSamples = { "ActiveCaption", "RebeccaPurple" };
+
+    /// <summary>
+    /// ⛔ Catalog-driven companion of the sweep above: every property that APPLIES on both targets but
+    /// holds a value the destination refuses crosses PRESERVED (the user's own text, opened Degraded on
+    /// the other side) and is NAMED with the catalog's own refusal reason — never carried silently.
+    /// Asserts it exercised at least one row, so it cannot pass by absence.
+    /// </summary>
+    [Test]
+    public void EveryCatalogProperty_WhoseValueTheDestinationRefuses_CrossesPreserved_AndIsNamed(
+        [Values(FormTarget.WinForms, FormTarget.Web)] FormTarget from)
+    {
+        var to = Other(from);
+        var exercised = 0;
+
+        foreach (var definition in FormControlCatalog.For(from).Where(d => d.SupportsTarget(to)))
+        {
+            foreach (var property in definition.Properties.Where(p => p.AppliesTo(from) && p.AppliesTo(to)))
+            {
+                var value = TargetRefusedSamples.FirstOrDefault(v => property.Accepts(v, from) && !property.Accepts(v, to));
+                if (value == null)
+                {
+                    continue;
+                }
+
+                var source = new FormDocument { Target = from, Name = "Sweep" };
+                FormCatalogShapes.Canonical(source, definition, "c").Properties[property.Name] = value;
+
+                var result = FormRetarget.Convert(source, to);
+                var converted = result.Document.AllControls().Concat(result.Document.AllComponents())
+                    .Single(c => c.Kind == definition.Kind);
+                var named = Of(result, DesignCodes.RetargetPropertyLost)
+                    .Where(d => d.Message.Contains($"'c.{property.Name}'"))
+                    .ToList();
+
+                Assert.Multiple(() =>
+                {
+                    Assert.That(converted.Properties.GetValueOrDefault(property.Name), Is.EqualTo(value),
+                        $"{definition.Kind}.{property.Name} {from}→{to}: preserved exactly as written");
+                    Assert.That(named, Has.Count.EqualTo(1),
+                        $"{definition.Kind}.{property.Name} = \"{value}\" {from}→{to}: must be named once");
+                    Assert.That(named.FirstOrDefault()?.Message, Does.Contain(property.DescribeRefusal(value, to)),
+                        $"{definition.Kind}.{property.Name} {from}→{to}: the catalog's own reason");
+                });
+                exercised++;
+            }
+        }
+
+        Assert.That(exercised, Is.GreaterThan(0), $"{from}→{to}: no row was exercised — the sweep is vacuous");
     }
 
     private static string Sample(FormPropertyDef property) => property.Type switch
@@ -1205,6 +1725,7 @@ public class FormRetargetTests
         FormPropertyType.Bool => "true",
         FormPropertyType.Color => "#ff0000",
         FormPropertyType.Enum => property.AllowedValues![0],
+        FormPropertyType.Size => "75, 23",
         _ => "x"
     };
 }

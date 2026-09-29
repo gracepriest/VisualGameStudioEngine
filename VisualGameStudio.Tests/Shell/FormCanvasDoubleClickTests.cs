@@ -75,7 +75,7 @@ public class FormCanvasDoubleClickTests
     private static Point CentreOf(FormCanvasControl canvas, FormDocument doc, FormControl control)
     {
         var fit = FormCanvasControl.Fit(doc, canvas.Bounds.Size);
-        var bounds = FormCanvasTransform.BoundsOf(control, default)
+        var bounds = FormCanvasTransform.BoundsOf(control, default, FormDockLayout.Resolve(doc))
                      ?? throw new InvalidOperationException("the fixture control has no geometry");
         return fit.ToCanvas(bounds).Center;
     }

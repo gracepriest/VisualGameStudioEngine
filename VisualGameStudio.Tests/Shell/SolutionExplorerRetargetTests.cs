@@ -114,6 +114,63 @@ public class SolutionExplorerRetargetTests
         _projectService.Verify(p => p.SaveProjectAsync(It.IsAny<CancellationToken>()), Times.Never);
     }
 
+    /// <summary>
+    /// Task 11 through the IDE's own command: a Canvas page becomes the window it was designed as, and the
+    /// Error List hears only the web-only breakpoint — nothing at the layout edge.
+    /// </summary>
+    [Test]
+    public async Task RetargetFormCommand_ACanvasPage_WritesTheExactGeometry_AndPublishesNoLayoutWarning()
+    {
+        SelectDocument("LoginForm.blwebform", VisualGameStudio.Tests.Compiler.FormRetargetTests.CanvasLogin);
+        var winOut = Path.Combine(_dir, "win");
+        ChooseFolder(winOut);
+
+        await _vm.RetargetFormCommand.ExecuteAsync(null);
+
+        var blform = File.ReadAllText(Path.Combine(winOut, "LoginForm.blform"));
+        Assert.Multiple(() =>
+        {
+            Assert.That(blform, Does.Contain("Width=\"640\"").And.Contain("Height=\"400\""));
+            Assert.That(blform, Does.Contain("X=\"12\" Y=\"10\" Width=\"300\" Height=\"23\" Anchor=\"Top,Left,Right\""));
+        });
+
+        _events.Verify(e => e.Publish(It.Is<DesignerDiagnosticsEvent>(ev =>
+                ev.FilePath == Path.Combine(winOut, "LoginForm.bas") &&
+                ev.Diagnostics.Any(d => d.Id == "BL8024" && d.Message.Contains("MobileBreakpoint")) &&
+                ev.Diagnostics.All(d => d.Id != "BL8025"))),
+            Times.Once,
+            "a Canvas page crosses with no layout finding; only the breakpoint is lost");
+    }
+
+    /// <summary>
+    /// A Canvas page with a hand-edited unknown Anchor edge: refused through the same dialog as a reader
+    /// refusal, with the region writer's own BL8015 — no exception on the UI thread, nothing written.
+    /// </summary>
+    [Test]
+    public async Task RetargetFormCommand_ACanvasPageWithAnUnknownAnchorEdge_ShowsTheRefusal_AndWritesNothing()
+    {
+        SelectDocument("LoginForm.blwebform", """
+            <WebForm Name="LoginForm" Version="1" Width="640" Height="400">
+              <Layout Kind="Canvas"/>
+              <Controls><Button Id="btn" X="8" Y="8" Width="75" Height="23" Anchor="Top,Rigth" TabIndex="0"/></Controls>
+            </WebForm>
+            """);
+        var winOut = Path.Combine(_dir, "win");
+        ChooseFolder(winOut);
+
+        Assert.DoesNotThrowAsync(async () => await _vm.RetargetFormCommand.ExecuteAsync(null));
+
+        Assert.That(Directory.Exists(winOut) && Directory.GetFiles(winOut).Length > 0, Is.False, "nothing written");
+        _dialogService.Verify(d => d.ShowMessageAsync(
+                "Cannot retarget",
+                It.Is<string>(m => m.Contains("BL8015") && m.Contains("'btn'") && m.Contains("Rigth")),
+                It.IsAny<DialogButtons>(), It.IsAny<DialogIcon>()),
+            Times.Once,
+            "the refusal reaches the user through the retarget's own refusal dialog");
+        _dialogService.Verify(d => d.ShowFolderDialogAsync(It.IsAny<FolderDialogOptions>()), Times.Never,
+            "a form that cannot be retargeted must not ask for a folder first");
+    }
+
     [Test]
     public async Task RetargetFormCommand_PublishesEveryLoss_ToTheErrorList_AgainstTheNewCodeBehind()
     {

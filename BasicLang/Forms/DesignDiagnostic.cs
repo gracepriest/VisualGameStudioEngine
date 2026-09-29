@@ -60,7 +60,9 @@ public static class DesignCodes
     //   BL8002..BL8010  recognizer and design-check findings (here)
     //   BL8010          illegal/missing control id (here)
     //   BL8011..BL8017  designer-owned region states, region-writer and document findings
-    //   BL8018          the generated D7 dispatch helper is never called (here)
+    //   BL8018          RETIRED 2026-09-28 — "the generated D7 dispatch helper is never called". The
+    //                   JavaScript entry point now dispatches after Main itself, so nothing emits it.
+    //                   The number stays claimed; never reuse it.
     //   BL8019          a toolbox drop the designer refused (here)
     //   BL8020          a component under <Controls>, or a control under <Components> (here)
     //   BL8021, BL8022  document-level refusals in a form document (here)
@@ -88,8 +90,13 @@ public static class DesignCodes
     public const string WithBlock = "BL8003";
 
     /// <summary>
-    /// The project has form pages but nothing calls the generated dispatch helper, so every page
-    /// loads its script and shows nothing.
+    /// ⛔ RETIRED 2026-09-28 — NOTHING EMITS THIS. It warned that a project had form pages and no
+    /// source called the generated dispatch helper. Owner decision that day: Sub Main in a web project
+    /// with forms is STARTUP, like WinForms, and the JavaScript entry point now starts the form after
+    /// Main by itself whenever no user code calls the helper (<see cref="FormAssetEmitter.IsStartupDispatch"/>;
+    /// a user who calls it decides when the form starts), so there is nothing left to
+    /// warn about — not even as a note: a user who never heard of the helper is the case that works.
+    /// Kept so the number stays claimed and so tests can assert it never reappears.
     /// </summary>
     public const string DispatchNotCalled = "BL8018";
 

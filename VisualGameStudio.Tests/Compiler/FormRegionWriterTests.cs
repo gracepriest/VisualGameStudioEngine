@@ -27,7 +27,7 @@ public class FormRegionWriterTests
     {
         var form = new FormDocument { Target = FormTarget.WinForms, Name = "LoginForm" };
         var button = new FormControl { Kind = "Button", Id = "btnLogin", TabIndex = 0 };
-        button.Properties["Text"] = "\"Sign in\"";
+        button.Properties["Text"] = "Sign in";
         button.Binds.Add(new FormBind { Event = "Click", Handler = "btnLogin_Click" });
         form.Controls.Add(button);
         return form;
@@ -269,6 +269,102 @@ public class FormRegionWriterTests
         }
     }
 
+    /// <summary>
+    /// ⛔⛔ sv-SE formats a negative with U+2212, so an interpolated <c>New Point({X}, {Y})</c> emitted
+    /// <c>New Point(−5, −3)</c> — CS1056 at csc, from a control the user merely dragged past the left edge.
+    /// </summary>
+    [Test]
+    [SetCulture("sv-SE")]
+    public void Write_WinForms_NegativeGeometry_UnderAUnicodeMinusCulture_UsesAnAsciiHyphen()
+    {
+        UnicodeMinusCulture.Require();
+        var form = WinFormsLoginForm();
+        form.Controls[0].Geometry = new PixelGeometry { X = -5, Y = -3, Width = -7, Height = -9 };
+
+        var result = RegionWriter.Write("LoginForm.bas", ScaffoldedFile(), form, "LoginForm.blform");
+
+        Assert.That(result.Refused, Is.False, string.Join("; ", result.Diagnostics.Select(d => d.Format())));
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Text, Does.Contain("btnLogin.Location = New Point(-5, -3)"));
+            Assert.That(result.Text, Does.Contain("btnLogin.Size = New Size(-7, -9)"));
+            Assert.That(result.Text, Does.Not.Contain(UnicodeMinusCulture.Minus));
+        });
+    }
+
+    /// <summary>
+    /// ⛔ A DOCKED control's Size is written as the size it docks at (<c>FormDockLayout.Resolve(…, Designer)</c>),
+    /// not its stored size — coordinator decision after the Task 12 harness measured it. WinForms captures a child's
+    /// anchor distances when the child is ADDED, against the container's size at that moment; the container is docked
+    /// only when it is itself added to the form, so with its stored 120×50 a Bottom,Right child at Y=250 landed at
+    /// Y=500 in a 300-tall dock. Visual Studio's own designer serialises a docked control's actual size for the same
+    /// reason. Location stays as stored (docking overrides it; nothing reads it).
+    /// </summary>
+    [Test]
+    public void Write_WinForms_ADockedControl_WritesTheSizeItDocksAt()
+    {
+        var form = BasicLang.Forms.Serialization.FormDocumentReader.Read("Docked.blform", """
+            <Form Name="Docked" Version="1" Width="400" Height="300">
+              <Controls>
+                <Panel Id="hid" X="0" Y="0" Width="400" Height="40" Dock="Top" Visible="false"/>
+                <Panel Id="side" X="200" Y="100" Width="120" Height="50" Dock="Left">
+                  <Panel Id="kid" X="60" Y="200" Width="50" Height="30" Anchor="Bottom,Right"/>
+                </Panel>
+                <Panel Id="free" X="200" Y="100" Width="120" Height="50"/>
+              </Controls>
+              <Components/>
+              <Resources/>
+            </Form>
+            """).Model;
+
+        var result = RegionWriter.Write("Docked.bas", ScaffoldedFile(), form, "Docked.blform");
+
+        Assert.That(result.Refused, Is.False, string.Join("; ", result.Diagnostics.Select(d => d.Format())));
+        Assert.Multiple(() =>
+        {
+            // Designer mode: the hidden Top sibling takes its 40px, so side docks 120×260 — the size its children
+            // were designed in, all siblings visible.
+            Assert.That(result.Text, Does.Contain("side.Size = New Size(120, 260)"));
+            Assert.That(result.Text, Does.Not.Contain("side.Size = New Size(120, 50)"));
+            Assert.That(result.Text, Does.Contain("side.Location = New Point(200, 100)"), "Location stays as stored");
+            Assert.That(result.Text, Does.Contain("hid.Size = New Size(400, 40)"));
+            Assert.That(result.Text, Does.Contain("free.Size = New Size(120, 50)"), "an undocked control keeps its own size");
+            Assert.That(result.Text, Does.Contain("kid.Size = New Size(50, 30)"));
+        });
+    }
+
+    /// <summary>
+    /// ⛔ A docked control that resolves to 0×0 (a Fill after an overflowing Top AND an overflowing Left) still gets
+    /// <c>Size = New Size(0, 0)</c>. Skipping the zero size, as the stored-geometry rule does, would leave WinForms'
+    /// default (a Panel's 200×100), and the Fill's children would capture their anchor distances against that.
+    /// </summary>
+    [Test]
+    public void Write_WinForms_ADockedControlResolvedToZero_StillWritesItsZeroSize()
+    {
+        var form = BasicLang.Forms.Serialization.FormDocumentReader.Read("Zero.blform", """
+            <Form Name="Zero" Version="1" Width="400" Height="300">
+              <Controls>
+                <Panel Id="top" X="0" Y="0" Width="400" Height="400" Dock="Top"/>
+                <Panel Id="left" X="0" Y="0" Width="500" Height="300" Dock="Left"/>
+                <Panel Id="fill" X="0" Y="0" Width="100" Height="100" Dock="Fill"/>
+              </Controls>
+              <Components/>
+              <Resources/>
+            </Form>
+            """).Model;
+
+        var result = RegionWriter.Write("Zero.bas", ScaffoldedFile(), form, "Zero.blform");
+
+        Assert.That(result.Refused, Is.False, string.Join("; ", result.Diagnostics.Select(d => d.Format())));
+        Assert.Multiple(() =>
+        {
+            Assert.That(FormDockLayout.Resolve(form, FormDockMode.Designer).ClientSizeOf(form.Controls[2]), Is.EqualTo((0, 0)),
+                "precondition: the Fill resolves to 0x0");
+            Assert.That(result.Text, Does.Contain("fill.Size = New Size(0, 0)"));
+            Assert.That(result.Text, Does.Not.Contain("fill.Size = New Size(100, 100)"));
+        });
+    }
+
     [Test]
     public void Write_Web_UsesAddressOf_NotALambda()
     {
@@ -369,6 +465,10 @@ public class FormRegionWriterTests
             Assert.That(result.Diagnostics.Select(d => d.Code),
                 Has.Exactly(2).EqualTo(DesignCodes.DegradedProperty),
                 "and the user is told which values did not make it");
+            // The reason is the catalog's own (DescribeRefusal) — the one the grid shows — so it
+            // carries the allowed values, then this site's tail.
+            Assert.That(result.Diagnostics.Single(d => d.Message.Contains("'lbl.TextAlign'")).Message,
+                Does.Contain("expected one of:").And.Contain("It is not written into the generated code."));
         });
     }
 
@@ -380,7 +480,7 @@ public class FormRegionWriterTests
         // strip the property for no reason the user could name.
         var form = new FormDocument { Target = FormTarget.WinForms, Name = "LoginForm" };
         var label = new FormControl { Kind = "Label", Id = "lbl", TabIndex = 0 };
-        label.Properties["Text"] = "\"Already quoted\"";
+        label.Properties["Text"] = "Plain text";   // a String has no source form: document text, quoted on emit
         label.Properties["TextAlign"] = "ContentAlignment.MiddleLeft";
         form.Controls.Add(label);
 
@@ -390,7 +490,7 @@ public class FormRegionWriterTests
         Assert.Multiple(() =>
         {
             Assert.That(result.Text, Does.Contain("lbl.TextAlign = ContentAlignment.MiddleLeft"));
-            Assert.That(result.Text, Does.Contain("""lbl.Text = "Already quoted" """.TrimEnd()));
+            Assert.That(result.Text, Does.Contain("""lbl.Text = "Plain text" """.TrimEnd()));
             Assert.That(result.Diagnostics.Select(d => d.Code),
                 Has.None.EqualTo(DesignCodes.DegradedProperty));
         });
@@ -442,6 +542,169 @@ public class FormRegionWriterTests
             Assert.That(result.Diagnostics.Select(d => d.Code),
                 Has.Exactly(1).EqualTo(DesignCodes.DegradedProperty));
         });
+    }
+
+    [TestCase("New Foo")]
+    [TestCase("Color.Bogus")]
+    [TestCase("Color.Red + junk")]
+    [TestCase("Color.FromArgb(1, 2, 3)")]
+    public void Write_TreatsAColorTheCatalogCannotProve_AsDegraded(string typed)
+    {
+        // ⛔⛔ The Color row is a free-text box in the grid and Commit writes the raw text. The old arm
+        // took anything starting `Color.` or `New ` as already-source and spliced it verbatim —
+        // `btn.BackColor = New Foo` in the user's file, BasicLang silent, csc failing.
+        var form = new FormDocument { Target = FormTarget.WinForms, Name = "LoginForm" };
+        var button = new FormControl { Kind = "Button", Id = "btn", TabIndex = 0 };
+        button.Properties["BackColor"] = typed;
+        form.Controls.Add(button);
+
+        var source = ScaffoldedFile().Replace("LoginForm.blwebform", "LoginForm.blform");
+        var result = RegionWriter.Write("LoginForm.bas", source, form, "LoginForm.blform");
+
+        Assert.That(result.Refused, Is.False, "a degraded value is a warning, not a refusal");
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Text, Does.Not.Contain("btn.BackColor"));
+            Assert.That(result.Diagnostics.Where(d => d.Code == DesignCodes.DegradedProperty).Select(d => d.Message),
+                Has.Exactly(1).Contains("'btn.BackColor'"));
+            Assert.That(result.Diagnostics.Single(d => d.Code == DesignCodes.DegradedProperty).IsWarning, Is.True);
+        });
+    }
+
+    [TestCase("Color.Red", "Color.Red")]
+    [TestCase("Color.FromArgb(255, 1, 2, 3)", "Color.FromArgb(255, 1, 2, 3)")]
+    [TestCase("Color.FromArgb( 255 ,1,2,3 )", "Color.FromArgb(255, 1, 2, 3)")]
+    [TestCase("red", "Color.Red")]
+    [TestCase("control", "SystemColors.Control")]
+    public void Write_EmitsAColorFromWhatWasParsed(string value, string expected)
+    {
+        var result = WriteButtonWith("BackColor", value);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Text, Does.Contain($"btn.BackColor = {expected}\n").Or.Contain($"btn.BackColor = {expected}\r\n"));
+            Assert.That(result.Diagnostics.Select(d => d.Code), Has.None.EqualTo(DesignCodes.DegradedProperty));
+        });
+    }
+
+    [TestCase("Color.FromArgb(1,\r\n2,3,4)", TestName = "{m}(FromArgb CRLF)")]
+    [TestCase("Color.FromArgb(1,<NBSP>2,3,4)", TestName = "{m}(FromArgb NBSP)")]
+    [TestCase("Bogus", TestName = "{m}(unknown name)")]
+    [TestCase("RebeccaPurple", TestName = "{m}(a CSS name WinForms lacks)")]
+    public void Write_ADegradedColour_IsNotWritten(string value)
+    {
+        var result = WriteButtonWith("BackColor", FormPropertyDefTests.Unmark(value));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Refused, Is.False);
+            Assert.That(result.Text, Does.Not.Contain("btn.BackColor"));
+            Assert.That(result.Diagnostics.Where(d => d.Code == DesignCodes.DegradedProperty).Select(d => d.Message),
+                Has.Exactly(1).Contains("'btn.BackColor'"));
+        });
+    }
+
+    [TestCase(" 5 ", "5")]
+    [TestCase("+007", "7")]
+    public void Write_EmitsAnIntFromWhatWasParsed(string value, string expected)
+    {
+        var result = WriteTextBoxWith("MaxLength", value);
+
+        Assert.That(result.Text, Does.Contain($"txt.MaxLength = {expected}\n").Or.Contain($"txt.MaxLength = {expected}\r\n"));
+    }
+
+    [TestCase("5\r\n")]
+    [TestCase("5<LS>")]
+    public void Write_AnIntWithALineBreak_IsDegraded_NeverSpliced(string value)
+    {
+        var result = WriteTextBoxWith("MaxLength", FormPropertyDefTests.Unmark(value));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Text, Does.Not.Contain("txt.MaxLength"));
+            Assert.That(result.Diagnostics.Select(d => d.Code), Has.Exactly(1).EqualTo(DesignCodes.DegradedProperty));
+        });
+    }
+
+    /// <summary>
+    /// MaxLength's catalog Default is WinForms' 32767 (the parity fix) — a DISPLAY default. An absent
+    /// MaxLength must still emit nothing: writing the default would be a no-op here, but it would make
+    /// the default load-bearing, and a later default change would change the program.
+    /// </summary>
+    [Test]
+    public void Write_ATextBoxWithNoMaxLength_EmitsNoMaxLengthStatement()
+    {
+        var result = WriteTextBoxWith("Text", "hello");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Text, Does.Contain("txt.Text = \"hello\""), "the control was written");
+            Assert.That(result.Text, Does.Not.Contain("MaxLength"));
+        });
+    }
+
+    private static RegionWriteResult WriteButtonWith(string name, string value) => WriteOne("Button", "btn", name, value);
+
+    private static RegionWriteResult WriteTextBoxWith(string name, string value) => WriteOne("TextBox", "txt", name, value);
+
+    private static RegionWriteResult WriteOne(string kind, string id, string name, string value)
+    {
+        var form = new FormDocument { Target = FormTarget.WinForms, Name = "LoginForm" };
+        var control = new FormControl { Kind = kind, Id = id, TabIndex = 0 };
+        control.Properties[name] = value;
+        form.Controls.Add(control);
+
+        var source = ScaffoldedFile().Replace("LoginForm.blwebform", "LoginForm.blform");
+        return RegionWriter.Write("LoginForm.bas", source, form, "LoginForm.blform");
+    }
+
+    [TestCase("New Foo")]
+    [TestCase("\"quoted\"")]
+    [TestCase("Color.Red")]
+    public void Write_AValueWithNoCatalogRow_IsAlwaysQuoted_NeverJudgedByShape(string value)
+    {
+        // Only an in-memory model can hold a property the catalog has no row for (the reader routes
+        // unknown attributes to UnknownAttributes). With no row there is nothing that can PROVE the
+        // value is source, so it is text.
+        var form = new FormDocument { Target = FormTarget.WinForms, Name = "LoginForm" };
+        var button = new FormControl { Kind = "Button", Id = "btn", TabIndex = 0 };
+        button.Properties["NoSuchRow"] = value;
+        form.Controls.Add(button);
+
+        var source = ScaffoldedFile().Replace("LoginForm.blwebform", "LoginForm.blform");
+        var result = RegionWriter.Write("LoginForm.bas", source, form, "LoginForm.blform");
+
+        Assert.That(result.Text,
+            Does.Contain("btn.NoSuchRow = " + FormPropertyDef.StringLiteral(value)));
+    }
+
+    [TestCase(@"a\b", @"""a\b""", TestName = "{m}(backslash)")]
+    [TestCase(@"a\", @"""a\""", TestName = "{m}(trailing backslash)")]
+    [TestCase("a\nb", @"""a"" & vbLf & ""b""", TestName = "{m}(line feed)")]
+    [TestCase("a\r\nb", @"""a"" & vbCrLf & ""b""", TestName = "{m}(CRLF)")]
+    [TestCase("a\rb", @"""a"" & vbCr & ""b""", TestName = "{m}(lone CR)")]
+    [TestCase("a\tb", @"""a"" & vbTab & ""b""", TestName = "{m}(tab)")]
+    [TestCase("\tb", @"vbTab & ""b""", TestName = "{m}(leading tab)")]
+    [TestCase("\n", @"vbLf", TestName = "{m}(only a line feed)")]
+    [TestCase("a\"b", @"""a""""b""", TestName = "{m}(quote)")]
+    public void Write_EscapesACaptionForTheBasicLangLexer(string caption, string literal)
+    {
+        // ⛔ The lexer reads a string literal as VB does (master 3cec5030): a backslash is an ORDINARY
+        // character and "" is the only escape. So a caption's `\` is written raw — the old C-style
+        // `\\` now reaches the running program as two backslashes. A line break or tab still must
+        // not be written raw (a raw line break inside the region is a multi-line string in the
+        // user's own file, and a CR LF caption would decide the file's newline style), and there is
+        // no escape for it inside a literal any more — so it is spelled with the VB constant that
+        // commit added for exactly this, joined with `&`.
+        var form = new FormDocument { Target = FormTarget.WinForms, Name = "LoginForm" };
+        var button = new FormControl { Kind = "Button", Id = "btn", TabIndex = 0 };
+        button.Properties["Text"] = caption;
+        form.Controls.Add(button);
+
+        var source = ScaffoldedFile().Replace("LoginForm.blwebform", "LoginForm.blform");
+        var result = RegionWriter.Write("LoginForm.bas", source, form, "LoginForm.blform");
+
+        Assert.That(result.Text, Does.Contain("btn.Text = " + literal));
     }
 
     [Test]
@@ -607,18 +870,21 @@ public class FormRegionWriterTests
     }
 
     [Test]
-    public void Write_WinForms_LeavesAlreadyQuotedSourceTextAlone()
+    public void Write_WinForms_EscapesACaptionContainingQuotes()
     {
-        // The recognizer's convention: it read `"Sign in"` from source and stores it with quotes.
-        // Double-quoting it would emit `""Sign in""`.
-        var source = ScaffoldedFile().Replace("LoginForm.blwebform", "LoginForm.blform");
-        var result = RegionWriter.Write("LoginForm.bas", source, WinFormsLoginForm(), "LoginForm.blform");
+        // ⛔ The OPPOSITE of what this test used to pin. It fed `"Sign in"` (with quotes) as the
+        // recognizer's convention and asserted it was spliced unquoted — but no production writer
+        // stores source text in Properties, and that same shape test spliced `New Customer` bare and
+        // broke the build. A caption with quotes is document text: its quotes are escaped.
+        var form = new FormDocument { Target = FormTarget.WinForms, Name = "LoginForm" };
+        var button = new FormControl { Kind = "Button", Id = "btnLogin", TabIndex = 0 };
+        button.Properties["Text"] = "\"Sign in\"";
+        form.Controls.Add(button);
 
-        Assert.Multiple(() =>
-        {
-            Assert.That(result.Text, Does.Contain("""btnLogin.Text = "Sign in" """.TrimEnd()));
-            Assert.That(result.Text, Does.Not.Contain("\"\"Sign in\"\""));
-        });
+        var source = ScaffoldedFile().Replace("LoginForm.blwebform", "LoginForm.blform");
+        var result = RegionWriter.Write("LoginForm.bas", source, form, "LoginForm.blform");
+
+        Assert.That(result.Text, Does.Contain("btnLogin.Text = \"\"\"Sign in\"\"\""));
     }
 
     [Test]
@@ -769,5 +1035,78 @@ public class FormRegionWriterTests
     public void TheUnknownWebEventRefusal_KeepsTheNumberItClaimed()
     {
         Assert.That(DesignCodes.UnknownWebEvent, Is.EqualTo("BL8032"));
+    }
+
+    /// <summary>
+    /// ⛔ A caption is DOCUMENT text, whatever it looks like. The old shape test spliced `New Customer`
+    /// unquoted (the build broke) and `"quoted"` without its quotes (silent loss).
+    /// </summary>
+    [TestCase("New Customer", "\"New Customer\"")]
+    [TestCase("\"quoted\"", "\"\"\"quoted\"\"\"")]
+    [TestCase("a \"b\" c", "\"a \"\"b\"\" c\"")]
+    public void APlainCaption_IsAlwaysQuotedAndEscaped(string caption, string emitted)
+    {
+        var form = new FormDocument { Target = FormTarget.WinForms, Name = "LoginForm", Width = 400, Height = 300 };
+        var button = new FormControl { Kind = "Button", Id = "btn", TabIndex = 0 };
+        button.Properties["Text"] = caption;
+        form.Controls.Add(button);
+
+        var source = ScaffoldedFile().Replace("LoginForm.blwebform", "LoginForm.blform");
+        var result = RegionWriter.Write("LoginForm.bas", source, form, "LoginForm.blform");
+
+        Assert.That(result.Text, Does.Contain($"btn.Text = {emitted}"));
+    }
+
+    /// <summary>
+    /// The Form's caption takes the same rule. GREEN before Task 6 (GenerateInit quotes form.Text
+    /// unconditionally) — it is the pin that Task 6's move onto Literal(row, value) does not regress it.
+    /// </summary>
+    [Test]
+    public void TheFormsCaption_IsAlwaysQuoted_EvenWhenItLooksLikeSource()
+    {
+        var form = new FormDocument { Target = FormTarget.WinForms, Name = "LoginForm", Width = 400, Height = 300, Text = "New Customer" };
+
+        var source = ScaffoldedFile().Replace("LoginForm.blwebform", "LoginForm.blform");
+        var result = RegionWriter.Write("LoginForm.bas", source, form, "LoginForm.blform");
+
+        Assert.That(result.Text, Does.Contain("Me.Text = \"New Customer\""));
+    }
+
+    // ==================================================================
+    // Task 10 (spec 2026-09-27 §4) — a Canvas page reads Anchor too, so an unknown edge is refused there as well
+    // ==================================================================
+
+    private static FormDocument CanvasLoginFormAnchored(string anchor)
+    {
+        var form = WebLoginForm();
+        form.Layout = new FormLayout { Kind = FormLayoutKind.Canvas, MobileBreakpoint = "600" };
+        form.Width = 640;
+        form.Height = 480;
+        form.Controls[0].Geometry = new PixelGeometry { X = 10, Y = 10, Width = 75, Height = 23, Anchor = anchor };
+        return form;
+    }
+
+    [Test]
+    public void ACanvasPagesUnknownAnchorEdge_IsRefused()
+    {
+        // ⛔ Before Task 10, CheckAnchors returned early off WinForms, and FormAnchorCss silently dropped the unknown
+        // edge: "Left,Rigth" anchored the control Left only, and "Rigth" alone CENTRED it — from a green build.
+        var result = WriteWeb(CanvasLoginFormAnchored("Left,Rigth"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Refused, Is.True);
+            Assert.That(result.Changed, Is.False, "a refused write leaves the user's file alone");
+            Assert.That(result.Diagnostics.Select(d => d.Code), Does.Contain(DesignCodes.AnchorNotExpressible));
+            Assert.That(string.Join("\n", result.Diagnostics.Select(d => d.Message)), Does.Contain("Rigth"));
+        });
+    }
+
+    [Test]
+    public void ACanvasPagesMultiEdgeAnchor_IsWritten()
+    {
+        var result = WriteWeb(CanvasLoginFormAnchored("Top,Right"));
+
+        Assert.That(result.Refused, Is.False, string.Join("; ", result.Diagnostics.Select(d => d.Format())));
     }
 }

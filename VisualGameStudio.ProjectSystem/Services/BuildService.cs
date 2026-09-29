@@ -642,21 +642,10 @@ public class BuildService : IBuildService
                     webForms, Path.Combine(project.ProjectDirectory, "obj", config.Name),
                     m => _outputService.WriteLine($"Warning: {m}", OutputCategory.Build));
 
+                // ⛔ No "is it called?" warning (BL8018, retired) — the CLI agrees: the JavaScript entry
+                // point starts the form after Main by itself (FormAssetEmitter.IsStartupDispatch).
                 if (dispatchPath != null)
                 {
-                    if (!BasicLang.Forms.FormDispatch.IsCalled(absoluteSourcePaths))
-                    {
-                        result.Diagnostics.Add(new DiagnosticItem
-                        {
-                            Id = BasicLang.Forms.DesignCodes.DispatchNotCalled,
-                            Message = BasicLang.Forms.FormDispatch.NotCalledMessage,
-                            FilePath = project.FilePath,
-                            Severity = DiagnosticSeverity.Warning
-                        });
-                        _outputService.WriteLine(
-                            $"Warning: {BasicLang.Forms.FormDispatch.NotCalledMessage}", OutputCategory.Build);
-                    }
-
                     absoluteSourcePaths.Add(dispatchPath);
                 }
             }

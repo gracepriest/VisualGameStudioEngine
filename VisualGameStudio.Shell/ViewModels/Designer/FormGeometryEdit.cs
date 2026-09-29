@@ -47,17 +47,22 @@ public static class FormGeometryEdit
     /// Moves a control to a position in ITS OWN coordinate space — relative to its container, which
     /// is what <see cref="PixelGeometry"/> stores. Returns whether anything changed.
     /// </summary>
-    public static bool MoveTo(FormDocument document, FormControl control, int x, int y)
+    /// <param name="dock">
+    /// The document's resolved docking, when the caller already has it for this gesture (a group drag moves every
+    /// member against ONE resolve per pointer move); null resolves here. See <see cref="SurfaceOf"/>.
+    /// </param>
+    public static bool MoveTo(
+        FormDocument document, FormControl control, int x, int y, FormDockLayoutResult? dock = null)
     {
         ArgumentNullException.ThrowIfNull(document);
         ArgumentNullException.ThrowIfNull(control);
 
-        if (control.Geometry is not PixelGeometry pixel)
+        if (control.Geometry is not PixelGeometry pixel || IsDocked(control))
         {
             return false;
         }
 
-        var (surfaceWidth, surfaceHeight) = SurfaceFor(document, control);
+        var (surfaceWidth, surfaceHeight) = SurfaceFor(document, control, dock);
 
         var newX = Clamp(x, pixel.Width, surfaceWidth);
         var newY = Clamp(y, pixel.Height, surfaceHeight);
@@ -88,25 +93,32 @@ public static class FormGeometryEdit
     /// <see cref="FormCanvasTransform.ContainerAt"/>. Without that a control hides its target from
     /// itself, and a container dropped into its own subtree makes a loop that every recursive
     /// walker in this feature follows off the end of the stack.</para>
+    ///
+    /// <para>⚠ ONE resolve serves both the target search and the clamp (null <paramref name="dock"/> resolves here
+    /// once). Valid for the whole call: a docked control is never moved, and moving or re-parenting an UNDOCKED one
+    /// changes no docked rectangle and no container's client size.</para>
     /// </summary>
-    public static bool MoveToForm(FormDocument document, FormControl control, int formX, int formY)
+    public static bool MoveToForm(
+        FormDocument document, FormControl control, int formX, int formY, FormDockLayoutResult? dock = null)
     {
         ArgumentNullException.ThrowIfNull(document);
         ArgumentNullException.ThrowIfNull(control);
 
-        if (control.Geometry is not PixelGeometry pixel)
+        if (control.Geometry is not PixelGeometry pixel || IsDocked(control))
         {
             return false;
         }
 
-        var target = FormCanvasTransform.ContainerAt(document, new Point(formX, formY), ignore: control);
+        dock ??= FormDockLayout.Resolve(document);
+
+        var target = FormCanvasTransform.ContainerAt(document, new Point(formX, formY), ignore: control, dock: dock);
         var newParent = target?.Container;
         var origin = target?.Origin ?? new Point(0, 0);
 
         var currentParent = ParentOf(document, control);
         var reparented = !ReferenceEquals(currentParent, newParent);
 
-        var (surfaceWidth, surfaceHeight) = SurfaceOf(document, newParent);
+        var (surfaceWidth, surfaceHeight) = SurfaceOf(document, newParent, dock);
         var newX = Clamp((int)(formX - origin.X), pixel.Width, surfaceWidth);
         var newY = Clamp((int)(formY - origin.Y), pixel.Height, surfaceHeight);
 
@@ -170,17 +182,18 @@ public static class FormGeometryEdit
     /// Returns whether anything changed.
     /// </summary>
     public static bool Resize(
-        FormDocument document, FormControl control, FormResizeHandle handle, int dx, int dy)
+        FormDocument document, FormControl control, FormResizeHandle handle, int dx, int dy,
+        FormDockLayoutResult? dock = null)
     {
         ArgumentNullException.ThrowIfNull(document);
         ArgumentNullException.ThrowIfNull(control);
 
-        if (handle == FormResizeHandle.None || control.Geometry is not PixelGeometry pixel)
+        if (handle == FormResizeHandle.None || control.Geometry is not PixelGeometry pixel || IsDocked(control))
         {
             return false;
         }
 
-        var (surfaceWidth, surfaceHeight) = SurfaceFor(document, control);
+        var (surfaceWidth, surfaceHeight) = SurfaceFor(document, control, dock);
 
         // The edges the handle does NOT touch are anchors and must not move. Working in edges
         // rather than in position-plus-size is what keeps that true: with X and Width, a left-edge
@@ -240,19 +253,41 @@ public static class FormGeometryEdit
         Math.Max(0, Math.Min(value, surface - size));
 
     /// <summary>
-    /// The box this control's coordinates are measured against: its container's, or the form's.
-    /// The form fallbacks match <c>FormCanvasControl.Fit</c>'s, so a control cannot be clamped to a
-    /// surface different from the one the canvas drew.
+    /// ⛔ A DOCKED control is never moved or resized here (spec 2026-09-27 §7a — Visual Studio's rule): its rectangle
+    /// comes from docking, and X/Y written by a drag, a nudge or a group move would be numbers the runtime ignores.
+    /// Asked HERE, the one place every canvas gesture writes geometry through, so the keyboard and the group loop cannot
+    /// forget it. "None" and an unknown name do not dock (<see cref="FormDockLayout.EdgeOf"/>).
     /// </summary>
-    private static (int Width, int Height) SurfaceFor(FormDocument document, FormControl control) =>
-        SurfaceOf(document, ParentOf(document, control));
+    private static bool IsDocked(FormControl control) => FormDockLayout.EdgeOf(control) != null;
 
-    /// <summary>The usable box inside a container, or the form's client size when there is none.</summary>
-    private static (int Width, int Height) SurfaceOf(FormDocument document, FormControl? container)
+    /// <summary>
+    /// The box this control's coordinates are measured against: its container's, or the form's.
+    /// The form's own size is <c>SurfaceSize</c>'s, the one answer <c>Fit</c> draws with, so a control cannot be
+    /// clamped to a surface different from the one the canvas drew.
+    /// </summary>
+    private static (int Width, int Height) SurfaceFor(
+        FormDocument document, FormControl control, FormDockLayoutResult? dock) =>
+        SurfaceOf(document, ParentOf(document, control), dock);
+
+    /// <summary>
+    /// The usable box inside a container, or the form's client size when there is none.
+    ///
+    /// <para>⛔ A container's box is <see cref="FormDockLayoutResult.TryGetClientSize"/>'s answer — its RESOLVED size
+    /// when it docks (a Fill Panel is as big as what is left, not its stale stored Width/Height), else its stored
+    /// size — the one rule the resolver and the page emitter share (plan 2026-09-27 Task 9, B3). ⚠ Internal because
+    /// <see cref="FormPlacement"/> clamps a drop with it too: the drop's box and the drag's box were a mirrored
+    /// pair.</para>
+    ///
+    /// <para>⚠ <paramref name="dock"/> is the caller's resolve of THIS document, passed so one gesture resolves once;
+    /// null resolves here. Either way the rule is this method's — the parameter is the input, never a second copy.</para>
+    /// </summary>
+    internal static (int Width, int Height) SurfaceOf(
+        FormDocument document, FormControl? container, FormDockLayoutResult? dock = null)
     {
-        if (container?.Geometry is PixelGeometry parent)
+        if (container != null &&
+            (dock ?? FormDockLayout.Resolve(document)).TryGetClientSize(container, out var client))
         {
-            return (parent.Width, parent.Height);
+            return client;
         }
 
         var surface = FormCanvasTransform.SurfaceSize(document);

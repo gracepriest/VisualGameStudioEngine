@@ -33,7 +33,7 @@ public class FormCanvasMultiSelectTests
         public Point Centre(FormControl control)
         {
             var fit = FormCanvasControl.Fit(Doc, Canvas.Bounds.Size);
-            var bounds = FormCanvasTransform.BoundsOf(control, default)!.Value;
+            var bounds = FormCanvasTransform.BoundsOf(control, default, FormDockLayout.Resolve(Doc))!.Value;
             return fit.ToCanvas(bounds).Center;
         }
 

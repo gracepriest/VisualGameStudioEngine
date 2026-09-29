@@ -480,7 +480,8 @@ namespace BasicLang.Compiler.Driver
         /// into <c>--out</c>.
         ///
         /// <para>Exit codes as <c>--check</c>: <b>0</b> written, with every loss listed on stdout;
-        /// <b>1</b> the source was refused by the reader, nothing written; <b>2</b> an argument
+        /// <b>1</b> the source was refused by the reader or by <c>FormRetarget.Refusals</c>, nothing
+        /// written; <b>2</b> an argument
         /// error — including a destination file that already exists, which is never overwritten.</para>
         ///
         /// <para>⛔ <c>--out</c> is required. A form's document and code-behind pair by BASE NAME in
@@ -537,6 +538,21 @@ namespace BasicLang.Compiler.Driver
                 }
 
                 Console.WriteLine($"design --retarget: '{Path.GetFileName(source)}' was refused; nothing was written.");
+                return 1;
+            }
+
+            // A document the reader accepts can still be one the DESTINATION's region writer refuses (a Canvas
+            // page's unknown Anchor edge, BL8015). Reported exactly as a reader refusal: exit 1, nothing written.
+            var refusals = BasicLang.Forms.FormRetarget.Refusals(file.Model, to);
+            if (refusals.Count > 0)
+            {
+                foreach (var finding in refusals)
+                {
+                    Console.WriteLine(finding.Format());
+                }
+
+                Console.WriteLine(
+                    $"design --retarget: '{Path.GetFileName(source)}' cannot be retargeted; nothing was written.");
                 return 1;
             }
 
@@ -807,13 +823,10 @@ namespace BasicLang.Compiler.Driver
                     webForms, Path.Combine(projectDir, "obj", configuration),
                     m => Console.Error.WriteLine($"  Warning: {m}"));
 
+                // ⛔ No "is it called?" warning (BL8018, retired): the JavaScript entry point starts the
+                // form after Main by itself (FormAssetEmitter.IsStartupDispatch), once per page.
                 if (dispatchPath != null)
                 {
-                    if (!Forms.FormDispatch.IsCalled(sourceFiles))
-                    {
-                        Console.Error.WriteLine($"  Warning: {Forms.FormDispatch.NotCalledMessage}");
-                    }
-
                     sourceFiles.Add(dispatchPath);
                 }
             }

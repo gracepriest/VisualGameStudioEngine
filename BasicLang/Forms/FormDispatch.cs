@@ -68,51 +68,10 @@ public static class FormDispatch
         return path;
     }
 
-    /// <summary>
-    /// True when some source in <paramref name="sourcePaths"/> mentions the dispatch helper.
-    ///
-    /// <para>⛔ Generating the helper is only half the job: the backend emits ONE invocation, for
-    /// <c>Main</c> (D7 keeps it that way deliberately — per-form entry points are a backend change),
-    /// so a helper nobody calls is a page that loads a script and does nothing. The user cannot see
-    /// why, because everything about the build succeeded.</para>
-    ///
-    /// <para>⚠ A text match, not a resolved call. It runs before the compile, when there is no
-    /// symbol table to ask, and it drives a WARNING — so the failure mode is a warning not shown
-    /// for a mention inside a comment, which costs nothing. Missing the call entirely is what
-    /// costs.</para>
-    /// </summary>
-    public static bool IsCalled(IEnumerable<string> sourcePaths)
-    {
-        ArgumentNullException.ThrowIfNull(sourcePaths);
-
-        foreach (var path in sourcePaths)
-        {
-            if (string.Equals(Path.GetFileName(path), GeneratedFileName, StringComparison.OrdinalIgnoreCase))
-            {
-                // The helper declares itself; that is not a call.
-                continue;
-            }
-
-            try
-            {
-                if (File.ReadAllText(path).Contains(FormAssetEmitter.DispatchSubName, StringComparison.Ordinal))
-                {
-                    return true;
-                }
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-            {
-                // A file the build will complain about on its own account.
-            }
-        }
-
-        return false;
-    }
-
-    /// <summary>What to tell the user when the helper is generated and nothing calls it.</summary>
-    public static string NotCalledMessage =>
-        $"{DesignCodes.DispatchNotCalled}: this project has form pages, but no source calls " +
-        $"'{FormAssetEmitter.DispatchCall}'. Each page names its form in " +
-        "<body data-form=\"...\">, and that attribute is only read by the generated dispatch — so " +
-        $"every page will load and show nothing. Add '{FormAssetEmitter.DispatchCall}' to Main().";
+    // ⛔ There is no "is it called?" check any more (BL8018, retired 2026-09-28). Generating the helper
+    // used to be only half the job — the backend invoked Main and nothing else, so a helper nobody
+    // called was a page that loaded and showed nothing, flagged only by a warning. The JavaScript
+    // entry point now calls it after Main itself whenever no user code does (FormAssetEmitter.IsStartupDispatch;
+    // the "is it called?" question moved onto the IR, JavaScriptBackend.UserCodeCallsDispatch), and the helper
+    // runs once per page, so a user's own call is optional, decides when the form starts, and never doubles it.
 }

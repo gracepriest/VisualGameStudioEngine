@@ -131,6 +131,41 @@ public class FormCanvasRenderTests
     }
 
     /// <summary>
+    /// Task 9 (spec 2026-09-27 §2.4): a Canvas page draws every kind the web has — before Task 9 it went down the Grid
+    /// path and drew none of its positioned controls. Catalog-driven. NOT a distinctness gate (two web-only rows may
+    /// share a schematic): only "something is drawn".
+    /// </summary>
+    [AvaloniaTest]
+    public void EveryWebKind_IsDrawnOnACanvasPage()
+    {
+        FormDocument CanvasPage() => new()
+        {
+            Target = FormTarget.Web, Name = "T", Width = FormWidth, Height = FormHeight,
+            Layout = new FormLayout { Kind = FormLayoutKind.Canvas }
+        };
+
+        var empty = RenderHash(CanvasPage());
+        var webKinds = FormControlCatalog.All
+            .Where(d => d.SupportsTarget(FormTarget.Web) && d.Place != FormPlace.Tray && d.Place != FormPlace.Item)
+            .ToList();
+        Assert.That(webKinds, Is.Not.Empty, "the catalog has no web kinds to draw");
+
+        var blank = new List<string>();
+        foreach (var definition in webKinds)
+        {
+            var page = CanvasPage();
+            FormCatalogShapes.Canonical(page, definition, SharedId, hostId: SharedId,
+                geometry: new PixelGeometry { X = 20, Y = 20, Width = 140, Height = 40 });
+            if (RenderHash(page) == empty)
+            {
+                blank.Add(definition.Kind);
+            }
+        }
+
+        Assert.That(blank, Is.Empty, "these kinds draw NOTHING on a Canvas page: " + string.Join(", ", blank));
+    }
+
+    /// <summary>
     /// Task 25 (pulled up to commit 24d, since it depends only on Tasks 20+21): an Item catalog row
     /// must change what its host's frame looks like — driven off the CATALOG, never a hand-written
     /// <c>[TestCase]</c> list, exactly as <see cref="EveryControlKindRendersDistinctly"/> is. Cells are

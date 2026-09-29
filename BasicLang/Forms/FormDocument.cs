@@ -46,14 +46,24 @@ public sealed class FormDocument
     /// <summary>The file extension this document is persisted under, including the dot.</summary>
     public string FileExtension => Target == FormTarget.WinForms ? ".blform" : ".blwebform";
 
-    // --- .blform only (D3) -------------------------------------------------
+    // --- pixel documents: .blform, and a web Canvas page (spec 2026-09-27 D2) ---
 
-    /// <summary>The form's client size. WinForms only; null on a web document.</summary>
+    /// <summary>The form's client size — a window's, or a Canvas page's design size. Null on a Grid/Flow page.</summary>
     public int? Width { get; set; }
     public int? Height { get; set; }
 
-    /// <summary>The window caption. WinForms only.</summary>
-    public string? Text { get; set; }
+    /// <summary>The design size a pixel document is given when it carries none (or a non-positive one).</summary>
+    public const int DefaultDesignWidth = 400;
+    public const int DefaultDesignHeight = 300;
+
+    /// <summary>
+    /// ⛔⛔ THE one answer to "how big is the form" (spec 2026-09-27 §2.4, scope call S3): the client size, or
+    /// <see cref="DefaultDesignWidth"/>×<see cref="DefaultDesignHeight"/>. The canvas surface
+    /// (<c>FormCanvasTransform.SurfaceSize</c>), the dock resolver and the page emitter all read it — a second
+    /// copy of the fallback puts the page's anchors somewhere other than the surface the user designed on.
+    /// </summary>
+    public (int Width, int Height) DesignSize =>
+        (Width is > 0 ? Width.Value : DefaultDesignWidth, Height is > 0 ? Height.Value : DefaultDesignHeight);
 
     // --- .blwebform only (D3) ----------------------------------------------
 
@@ -69,6 +79,12 @@ public sealed class FormDocument
 
     // --- both --------------------------------------------------------------
 
+    /// <summary>
+    /// The window caption on WinForms and the page <c>&lt;title&gt;</c> on the web (spec §2.3, D2 — one
+    /// vocabulary). Null = the document does not say; the page title then falls back to <see cref="Name"/>.
+    /// </summary>
+    public string? Text { get; set; }
+
     /// <summary>Top-level controls, in document order.</summary>
     public List<FormControl> Controls { get; } = new();
 
@@ -83,6 +99,13 @@ public sealed class FormDocument
     /// <c>Create</c> emitted an empty element and <c>Apply</c> never visited it.</para>
     /// </summary>
     public List<FormControl> Components { get; } = new();
+
+    /// <summary>
+    /// The FORM's own event wiring (spec §2.3) — the same <c>&lt;Bind&gt;</c> shape a control uses,
+    /// written directly under the root element. ⚠ Read and written in slice 1; the region writer WARNS
+    /// rather than emitting until slice 5 gives the Form its events.
+    /// </summary>
+    public List<FormBind> Binds { get; } = new();
 
     /// <summary>Reserved and empty in v1; parsed and re-emitted so a future document round-trips.</summary>
     public List<XElement> Resources { get; } = new();
@@ -236,6 +259,18 @@ public sealed class FormDocument
 }
 
 /// <summary>
+/// What a paste produced: the controls to add (already renamed), or why nothing was pasted.
+/// </summary>
+/// <param name="Refusal">
+/// A reason a user can act on, or null. ⚠ Null with no controls means a fragment that is not ours or is
+/// malformed — nothing to explain; a refusal is a fragment we understood and cannot honour here.
+/// </param>
+public sealed record FormPasteResult(IReadOnlyList<FormControl> Controls, string? Refusal)
+{
+    internal static readonly FormPasteResult Nothing = new(Array.Empty<FormControl>(), null);
+}
+
+/// <summary>
 /// Subtree copy/paste for the canvas.
 ///
 /// <para>Built in Task 4 alongside the model rather than when Ctrl+C is wired, because it is nearly
@@ -248,15 +283,22 @@ public static class FormClipboard
     private const string ClipboardRoot = "FormSubtree";
 
     /// <summary>
-    /// Serializes controls (with their descendants) to a self-describing XML fragment.
-    /// The target is recorded so a paste into the other format can be refused rather than
-    /// producing a WinForms control on a page.
+    /// Serializes controls (with their descendants) to a self-describing XML fragment. The target — and,
+    /// for a web form, its LAYOUT (spec 2026-09-27 §2.1) — is recorded so a paste into a document of another
+    /// vocabulary can be refused rather than producing a WinForms control on a page, or a cell on a pixel page.
     /// </summary>
-    public static string SerializeSubtree(FormTarget target, IEnumerable<FormControl> controls)
+    /// <param name="layout">The source web document's layout; null means Grid. Ignored for WinForms.</param>
+    public static string SerializeSubtree(
+        FormTarget target, IEnumerable<FormControl> controls, FormLayoutKind? layout = null)
     {
         var root = new XElement(ClipboardRoot,
             new XAttribute("Target", target.ToString()),
             new XAttribute("Version", 1));
+
+        if (target == FormTarget.Web)
+        {
+            root.SetAttributeValue("Layout", (layout ?? FormLayoutKind.Grid).ToString());
+        }
 
         foreach (var control in controls)
         {
@@ -267,16 +309,36 @@ public static class FormClipboard
     }
 
     /// <summary>
-    /// Reads a fragment produced by <see cref="SerializeSubtree"/>, renaming every control whose id
-    /// is already taken and retargeting the binds that named it.
+    /// The pre-layout entry point. A web destination is taken to be Grid, i.e. a CELL page — which is how this
+    /// signature always read a web paste (Grid and Flow alike), before Canvas pages had pixel controls. ⚠ Its
+    /// remaining callers are TESTS; no shipping code calls it (the Paste command calls <see cref="Paste"/>).
+    /// New code calls <see cref="Paste"/>.
     /// </summary>
+    public static IReadOnlyList<FormControl> DeserializeSubtree(
+        string xml, FormTarget target, Func<string, bool> isTaken) =>
+        Paste(xml, target, target == FormTarget.Web ? FormLayoutKind.Grid : null, isTaken).Controls;
+
+    /// <summary>
+    /// Reads a fragment produced by <see cref="SerializeSubtree"/> into a document of (<paramref name="target"/>,
+    /// <paramref name="layout"/>), renaming every control whose id is already taken and retargeting the binds
+    /// that named it — or REFUSES, with a reason, a fragment from another target or another VOCABULARY.
+    ///
+    /// <para>⛔ A paste between pixels (Canvas) and cells (Grid/Flow) is refused, never converted (spec
+    /// 2026-09-27 §2.1, "Canvas ↔ Grid"): a grid cell has no pixel position and a pixel position has no cell,
+    /// so every pasted control would land somewhere nobody designed. Converting is piece 4's job.</para>
+    ///
+    /// <para>⚠ By VOCABULARY — <see cref="FormVocabulary.IsPixel(FormTarget, FormLayoutKind?)"/> on each side
+    /// — never by layout NAME. Grid and Flow both read Col/Row into a <see cref="GridGeometry"/>, so a paste
+    /// between them is lossless and was always accepted; refusing it by name would be a regression with a
+    /// false reason (Task 3 review).</para>
+    /// </summary>
+    /// <param name="layout">The destination web document's layout; null means Grid. Ignored for WinForms.</param>
     /// <param name="isTaken">
     /// Whether an id is in use. The caller passes the destination document's lookup; ids minted
     /// during this paste are added to it internally, so two pasted siblings cannot collide.
     /// </param>
-    /// <returns>The controls to add, already renamed. Empty when the fragment targets the other format.</returns>
-    public static IReadOnlyList<FormControl> DeserializeSubtree(
-        string xml, FormTarget target, Func<string, bool> isTaken)
+    public static FormPasteResult Paste(
+        string xml, FormTarget target, FormLayoutKind? layout, Func<string, bool> isTaken)
     {
         XElement root;
         try
@@ -285,20 +347,49 @@ public static class FormClipboard
         }
         catch (System.Xml.XmlException)
         {
-            return Array.Empty<FormControl>();
+            return FormPasteResult.Nothing;
         }
 
-        if (root.Name.LocalName != ClipboardRoot)
+        if (root.Name.LocalName != ClipboardRoot ||
+            !Enum.TryParse<FormTarget>((string?)root.Attribute("Target"), out var sourceTarget))
         {
-            return Array.Empty<FormControl>();
+            return FormPasteResult.Nothing;
         }
 
-        // A .blform subtree pasted into a .blwebform would produce controls the web catalog cannot
-        // emit. Refusing is the honest answer; silently dropping the unsupported ones is not.
-        if (!Enum.TryParse<FormTarget>((string?)root.Attribute("Target"), out var sourceTarget) ||
-            sourceTarget != target)
+        // A web fragment that names no layout is a CELL fragment: before layouts were recorded, every web paste
+        // was read as cells (Grid and Flow alike), so Grid stands for both. ⚠ Defensive, not a migration path:
+        // the designer's clipboard is process-static, so no fragment written before this change can reach a
+        // process running it — only hand-built or test text omits the attribute.
+        FormLayoutKind? sourceLayout = null;
+        if (sourceTarget == FormTarget.Web)
         {
-            return Array.Empty<FormControl>();
+            var recorded = (string?)root.Attribute("Layout");
+            if (recorded == null)
+            {
+                sourceLayout = FormLayoutKind.Grid;
+            }
+            else if (TryLayoutName(recorded, out var kind))
+            {
+                sourceLayout = kind;
+            }
+            else
+            {
+                return FormPasteResult.Nothing;
+            }
+        }
+
+        FormLayoutKind? destination = target == FormTarget.Web ? layout ?? FormLayoutKind.Grid : null;
+
+        if (sourceTarget != target ||
+            FormVocabulary.IsPixel(sourceTarget, sourceLayout) != FormVocabulary.IsPixel(target, destination))
+        {
+            return new FormPasteResult(Array.Empty<FormControl>(),
+                $"These controls were copied from a {Describe(sourceTarget, sourceLayout)} and this is a " +
+                $"{Describe(target, destination)}, so nothing was pasted. " +
+                (sourceTarget != target
+                    ? "The two targets have different control catalogs."
+                    : "A grid cell has no pixel position and a pixel position has no cell — every pasted " +
+                      "control would have landed somewhere it was not designed."));
         }
 
         var minted = new HashSet<string>(StringComparer.Ordinal);
@@ -307,7 +398,7 @@ public static class FormClipboard
         var result = new List<FormControl>();
         foreach (var element in root.Elements())
         {
-            var control = FromElement(element, target);
+            var control = FromElement(element, target, destination);
             if (control != null)
             {
                 Rename(control, Taken, minted);
@@ -315,8 +406,41 @@ public static class FormClipboard
             }
         }
 
-        return result;
+        return new FormPasteResult(result, null);
     }
+
+    /// <summary>
+    /// ⛔ By NAME only. <c>Enum.TryParse</c> accepts a numeric string ("2" is Canvas), and a fragment is
+    /// unvetted text — a number is not a layout name.
+    ///
+    /// <para>⚠ Deliberately STRICTER than the reader's <c>Enum.TryParse(ignoreCase: true)</c> for
+    /// <c>&lt;Layout Kind=&gt;</c>: a document is hand-edited text, but a fragment's <c>Layout=</c> is written
+    /// only by <see cref="SerializeSubtree"/>, which always writes the exact <c>ToString()</c> — so anything
+    /// else is not one of ours.</para>
+    /// </summary>
+    private static bool TryLayoutName(string text, out FormLayoutKind kind)
+    {
+        foreach (var candidate in Enum.GetValues<FormLayoutKind>())
+        {
+            if (string.Equals(candidate.ToString(), text, StringComparison.Ordinal))
+            {
+                kind = candidate;
+                return true;
+            }
+        }
+
+        kind = default;
+        return false;
+    }
+
+    private static string Describe(FormTarget target, FormLayoutKind? layout) => target == FormTarget.WinForms
+        ? "WinForms form"
+        : layout switch
+        {
+            FormLayoutKind.Canvas => "pixel-layout (Canvas) web form",
+            FormLayoutKind.Flow => "Flow-layout web form",
+            _ => "Grid-layout web form"
+        };
 
     /// <summary>
     /// Gives every control in the subtree a free id, and rewrites any bind handler that was named
@@ -426,7 +550,8 @@ public static class FormClipboard
     }
 
     /// <param name="target">
-    /// ⛔ The pasted subtree's format. Without it this used the target-AGNOSTIC
+    /// ⛔ The pasted subtree's (target, layout) — the target half here, the layout half below. Without
+    /// the target this used the target-AGNOSTIC
     /// <c>IsStructural</c>, which treats both vocabularies as structural — so copying a web
     /// control silently dropped its <c>Width</c>, and copying a WinForms control dropped its
     /// <c>Col</c>, because each is structural in the OTHER format and so was skipped without ever
@@ -434,7 +559,11 @@ public static class FormClipboard
     /// target-aware overload was added to document, reached through the one call site that still
     /// used the old one.
     /// </param>
-    private static FormControl? FromElement(XElement element, FormTarget target)
+    /// <param name="layout">
+    /// The pasted subtree's layout (it equals the destination's — <see cref="Paste"/> refuses otherwise);
+    /// with the target, it picks the vocabulary (spec 2026-09-27 §2.1).
+    /// </param>
+    private static FormControl? FromElement(XElement element, FormTarget target, FormLayoutKind? layout)
     {
         var definition = FormControlCatalog.Find(element.Name.LocalName);
         if (definition == null)
@@ -455,7 +584,7 @@ public static class FormClipboard
             TabIndex = place == FormPlace.Positioned ? IntAttribute(element, "TabIndex") ?? 0 : 0
         };
 
-        control.Geometry = place == FormPlace.Positioned ? ReadGeometry(element, target) : null;
+        control.Geometry = place == FormPlace.Positioned ? ReadGeometry(element, target, layout) : null;
 
         foreach (var attribute in element.Attributes())
         {
@@ -465,7 +594,7 @@ public static class FormClipboard
             // so while a strip took the structural branch the catalog's own Dock property was skipped
             // out of this loop and the pasted strip arrived with no Dock at all.
             if (place == FormPlace.Positioned
-                    ? FormControlCatalog.IsStructural(name, target)
+                    ? FormControlCatalog.IsStructural(name, target, layout)
                     : string.Equals(name, "Id", StringComparison.OrdinalIgnoreCase))
             {
                 continue;
@@ -496,7 +625,7 @@ public static class FormClipboard
             }
             else if (place != FormPlace.Tray && FormControlCatalog.Find(child.Name.LocalName) != null)
             {
-                var nested = FromElement(child, target);
+                var nested = FromElement(child, target, layout);
                 if (nested != null)
                 {
                     control.Children.Add(nested);
@@ -512,10 +641,11 @@ public static class FormClipboard
     }
 
     /// <summary>
-    /// The pasted control's geometry, in the vocabulary of the TARGET being pasted into.
+    /// The pasted control's geometry, in the vocabulary of the document being pasted into.
     ///
-    /// <para>⛔⛔ Selected by TARGET, never by sniffing which attributes are present — the same
-    /// rule <c>FormDocumentReader</c> follows, and for the same reason. Sniffing read
+    /// <para>⛔⛔ Selected by (target, layout) — the same <see cref="FormVocabulary.IsPixel(FormTarget, FormLayoutKind?)"/>
+    /// <c>FormDocumentReader.ReadGeometry</c> asks — never by sniffing which attributes are present, and
+    /// for the same reason. Sniffing read
     /// <c>&lt;Button X="10" Col="2" Row="1"/&gt;</c> as PIXEL geometry on a web form: the paste
     /// landed with Col and Row silently dropped, every pasted control stacked at grid cell 0,0, and
     /// the document then wrote back X/Y a web form has no meaning for. A stray attribute from the
@@ -526,14 +656,14 @@ public static class FormClipboard
     /// it cannot parse, and the clipboard is exactly where unvetted text arrives — a paste of a
     /// fragment carrying X="20px" would take the IDE down rather than declining the paste.</para>
     /// </summary>
-    private static FormGeometry? ReadGeometry(XElement element, FormTarget target)
+    private static FormGeometry? ReadGeometry(XElement element, FormTarget target, FormLayoutKind? layout)
     {
-        // ⚠ The target picks the VOCABULARY; absence still means null WITHIN that vocabulary,
+        // ⚠ (target, layout) picks the VOCABULARY; absence still means null WITHIN that vocabulary,
         // exactly as FormDocumentReader.ReadGeometry decides it. Always returning a zeroed geometry
         // instead would give a pasted control a position it never had, and the writer would then
         // persist X="0" Y="0" into a document that carried neither — the same byte-identity wound
         // as the no-op-save defects, arriving through the clipboard.
-        if (target == FormTarget.WinForms)
+        if (FormVocabulary.IsPixel(target, layout))
         {
             if (element.Attribute("X") == null && element.Attribute("Y") == null &&
                 element.Attribute("Width") == null && element.Attribute("Height") == null &&
@@ -567,7 +697,10 @@ public static class FormClipboard
         };
     }
 
-    /// <summary>An integer attribute, or null when absent OR unparseable. Never throws.</summary>
+    /// <summary>
+    /// An integer attribute, or null when absent OR unparseable. Never throws. ⛔ Culture-free, exactly
+    /// as <c>FormDocumentReader</c> reads one — a paste means the same position on every machine.
+    /// </summary>
     private static int? IntAttribute(XElement element, string name) =>
-        int.TryParse((string?)element.Attribute(name), out var value) ? value : null;
+        (string?)element.Attribute(name) is { } text && FormPropertyDef.TryParseInt(text, out var value) ? value : null;
 }

@@ -471,4 +471,82 @@ public class FormGeometryEditTests
 
         Assert.That(FormGeometryEdit.MoveToCell(document, button, 300, 250), Is.False);
     }
+
+    // ==================================================================
+    // Task 9 (spec 2026-09-27 §7a) — a docked control's place comes from docking; a docked container's box is the
+    // one it is DRAWN as (FormDockLayoutResult's client size)
+    // ==================================================================
+
+    private static FormControl DockedFill(string id)
+    {
+        var fill = Control("Panel", id, 7, 7, 10, 10); // stored 10x10 — stale by design
+        Pixel(fill).Dock = "Fill";
+        return fill;
+    }
+
+    [Test]
+    public void ADockedControl_IsNeitherMovedNorResized()
+    {
+        var document = Document();
+        var panel = Control("Panel", "pnl", 30, 40, 100, 50);
+        Pixel(panel).Dock = "Top";
+        document.Controls.Add(panel);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(FormGeometryEdit.MoveTo(document, panel, 60, 70), Is.False, "MoveTo");
+            Assert.That(FormGeometryEdit.MoveToForm(document, panel, 60, 70), Is.False, "MoveToForm");
+            Assert.That(FormGeometryEdit.Resize(document, panel, FormResizeHandle.BottomRight, 10, 10), Is.False, "Resize");
+            Assert.That((Pixel(panel).X, Pixel(panel).Y, Pixel(panel).Width, Pixel(panel).Height),
+                Is.EqualTo((30, 40, 100, 50)), "a drag would write X/Y the runtime ignores");
+        });
+    }
+
+    [Test]
+    public void ADockNamedNone_StillMoves()
+    {
+        var document = Document();
+        var button = Control("Button", "btn", 10, 10, 75, 23);
+        Pixel(button).Dock = "None";
+        document.Controls.Add(button);
+
+        Assert.That(FormGeometryEdit.MoveTo(document, button, 40, 40), Is.True,
+            "\"None\" does not dock (FormDockLayout.EdgeOf)");
+    }
+
+    [Test]
+    public void DraggingIntoADockedFillPanel_UsesWhereItIsDrawn_AndItsResolvedSize()
+    {
+        var document = Document(640, 480);
+        var fill = DockedFill("fill");
+        var button = Control("Button", "btn", 500, 5, 75, 23);
+        document.Controls.Add(new FormControl { Kind = "MenuStrip", Id = "menuStrip1" });
+        document.Controls.Add(fill);
+        document.Controls.Add(button);
+
+        var changed = FormGeometryEdit.MoveToForm(document, button, 100, 200);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(changed, Is.True);
+            Assert.That(fill.Children, Is.EqualTo(new[] { button }), "the Panel is drawn under the point");
+            Assert.That((Pixel(button).X, Pixel(button).Y), Is.EqualTo((100, 176)),
+                "relative to (0, 24) and not clamped to the stale 10x10");
+        });
+    }
+
+    [Test]
+    public void AChildOfADockedFillPanel_IsClampedToThePanelsResolvedSize()
+    {
+        var document = Document(640, 480);
+        var fill = DockedFill("fill");
+        var button = Control("Button", "btn", 10, 10, 75, 23);
+        fill.Children.Add(button);
+        document.Controls.Add(fill);
+
+        FormGeometryEdit.MoveTo(document, button, 300, 300);
+
+        Assert.That((Pixel(button).X, Pixel(button).Y), Is.EqualTo((300, 300)),
+            "the Fill Panel is 640x480 here, so (300, 300) fits; the stale 10x10 would clamp it to (0, 0)");
+    }
 }

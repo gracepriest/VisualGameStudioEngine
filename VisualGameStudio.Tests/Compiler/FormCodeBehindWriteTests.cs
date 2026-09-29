@@ -141,7 +141,11 @@ public class FormCodeBehindWriteTests
     public async Task SavingAWebDocument_GeneratesTheLookupsIntoTheUsersFile()
     {
         // The same call, the other target: on the web the controls are FOUND, not constructed.
-        var (vm, files, _) = Open("LoginForm", FormTarget.Web);
+        // ⚠ Opened on the Grid scaffold explicitly (spec 2026-09-27 §2.5): the default web scaffold is a
+        // Canvas page, and the edit below would otherwise silently switch the page Canvas -> Grid.
+        var (vm, files, _) = Open(
+            "LoginForm", FormTarget.Web,
+            FormScaffolder.Create("LoginForm", FormTarget.Web, FormLayoutKind.Grid).DocumentText);
 
         vm.Text = """
             <WebForm Name="LoginForm" Version="1">
@@ -160,6 +164,38 @@ public class FormCodeBehindWriteTests
         {
             Assert.That(code, Does.Contain("Private btnLogin As Element"));
             Assert.That(code, Does.Contain("""btnLogin = doc.getElementById("btnLogin")"""));
+        });
+    }
+
+    /// <summary>
+    /// ⛔ Owner report 2026-09-28: a new scaffold already carries the generated (empty-form) init region, so its
+    /// <c>InitializeComponent</c> exists before any save. The FIRST designer save through the real view model must
+    /// still take that region as its own — replace it, never refuse it as a hand edit (BL8011) — and leave exactly one
+    /// <c>InitializeComponent</c> behind.
+    /// </summary>
+    [TestCase(FormTarget.Web)]
+    [TestCase(FormTarget.WinForms)]
+    public async Task TheFirstSave_ReplacesTheScaffoldsGeneratedRegion(FormTarget target)
+    {
+        var (vm, files, published) = Open("LoginForm", target);
+        var before = files.Contents[Dir + "LoginForm.bas"];
+        Assert.That(before, Does.Contain("Private Sub InitializeComponent()"), "precondition: the scaffold declares it");
+
+        Assert.That(vm.PlaceControl("Button", 96, 80), Is.Null, "placing a Button was refused");
+        Assert.That(await vm.SaveAsync(), Is.True);
+
+        var code = files.Contents[Dir + "LoginForm.bas"];
+        var id = vm.DesignDocument!.AllControls().Single().Id;
+        Assert.Multiple(() =>
+        {
+            Assert.That(published.SelectMany(p => p.Diagnostics).Select(d => d.Id),
+                Has.None.EqualTo(DesignCodes.RegionHandEdited).And.None.EqualTo(DesignCodes.RegionMalformed),
+                "the scaffold's region is the designer's own output");
+            Assert.That(files.Writes, Does.Contain(Dir + "LoginForm.bas"), "the first save wrote the code-behind");
+            Assert.That(code, Does.Contain($"Private {id} As"), "the controls region was replaced");
+            Assert.That(code.Split("Private Sub InitializeComponent()").Length - 1, Is.EqualTo(1),
+                "the init region was REPLACED, not added to");
+            Assert.That(RegionMarkers.Scan(code), Has.All.Property(nameof(FormRegion.State)).EqualTo(RegionState.Canon));
         });
     }
 

@@ -257,6 +257,8 @@ public class FormComponentEmissionTests
             var degraded = written.Diagnostics.Single(d => d.Code == DesignCodes.DegradedProperty);
             Assert.That(degraded.IsWarning, Is.True);
             Assert.That(degraded.Message, Does.Contain("'tmr.Interval'").And.Contain("fast"));
+            Assert.That(degraded.Message,
+                Does.Contain("is not a valid Int").And.Contain("The catalog default '100' is written in its place."));
         });
     }
 

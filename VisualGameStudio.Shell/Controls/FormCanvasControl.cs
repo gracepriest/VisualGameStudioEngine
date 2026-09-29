@@ -878,9 +878,9 @@ public class FormCanvasControl : Control
 
         // ⚠ AFTER the control's handles, before selection. A control sitting against the form's
         // right edge puts its own grips on top of the form's; the control's win, because that is
-        // what the user was looking at when they selected it. Pixel forms only — a web page has no
-        // client size to drag.
-        if (handle == FormResizeHandle.None && document.Target == FormTarget.WinForms)
+        // what the user was looking at when they selected it. Pixel documents only
+        // (`FormVocabulary.IsPixel` — a .blform or a Canvas page): a Grid/Flow page has no design size to drag.
+        if (handle == FormResizeHandle.None && FormVocabulary.IsPixel(document))
         {
             var grip = FormGripAt(SurfaceCanvasRect(document), point);
             if (grip != FormResizeHandle.None)
@@ -980,7 +980,9 @@ public class FormCanvasControl : Control
             _dragChanged = false;
             e.Pointer.Capture(this);
         }
-        else if (SelectedControl?.Geometry is PixelGeometry pixel)
+        // ⛔ Not for a DOCKED primary (spec §7a, pre-flight B4): "a drag starting on it selects only". FormGeometryEdit
+        // refuses to move it anyway, but a drag armed here would still carry every OTHER selected control along.
+        else if (SelectedControl?.Geometry is PixelGeometry pixel && FormDockLayout.EdgeOf(SelectedControl) == null)
         {
             _dragHandle = handle;
             _dragOrigin = point;
@@ -1121,10 +1123,16 @@ public class FormCanvasControl : Control
             // ⚠ Snapped on the RESULT, not on the delta: snapping the delta would carry the
             // control's original off-grid offset forward for ever, so a control that started at 13
             // would land on 21 and never on 16.
+            // ⚠ ONE dock resolve per pointer move, for the primary AND every other member — never one per member.
+            // Valid across the whole loop: a docked control is never moved, and moving (or re-parenting) an
+            // undocked one changes no docked rectangle and no container's client size.
+            var dock = FormDockLayout.Resolve(document, FormDockMode.Designer);
+
             changed = FormGeometryEdit.MoveToForm(
                 document, control,
                 Snap(_dragStartForm.X + dx, e.KeyModifiers),
-                Snap(_dragStartForm.Y + dy, e.KeyModifiers));
+                Snap(_dragStartForm.Y + dy, e.KeyModifiers),
+                dock);
 
             // ⛔ The REST of a multi-selection moves by the same delta, and NOT through MoveToForm.
             // The primary re-parents when the pointer crosses a Panel boundary because the pointer
@@ -1147,7 +1155,7 @@ public class FormCanvasControl : Control
                     continue;
                 }
 
-                changed |= FormGeometryEdit.MoveTo(document, other, x, y);
+                changed |= FormGeometryEdit.MoveTo(document, other, x, y, dock);
             }
         }
         else
@@ -1269,14 +1277,22 @@ public class FormCanvasControl : Control
         // and since the canvas now lays web controls out, CanvasBoundsOf returns a rectangle for
         // them too. Without this guard a click near a cell edge would arm a resize that can never
         // do anything AND swallow the move the user was starting.
-        if (SelectedControl?.Geometry is not PixelGeometry ||
-            CanvasBoundsOf(document, SelectedControl) is not { } bounds)
+        if (!HasHandles(SelectedControl) || CanvasBoundsOf(document, SelectedControl!) is not { } bounds)
         {
             return FormResizeHandle.None;
         }
 
         return FormCanvasTransform.HandleAt(bounds, point);
     }
+
+    /// <summary>
+    /// ⛔ ONE predicate for "does this control get resize handles", asked by <see cref="HandleUnder"/> (the gesture)
+    /// and by Render (the picture), so the two can never disagree. Pixel geometry only — a Grid page's control IS its
+    /// cell — and never a DOCKED control (spec 2026-09-27 §7a): its rectangle comes from docking, and
+    /// <c>FormGeometryEdit</c> refuses to move or resize it.
+    /// </summary>
+    private static bool HasHandles(FormControl? control) =>
+        control?.Geometry is PixelGeometry && FormDockLayout.EdgeOf(control) == null;
 
     /// <summary>The form's client rectangle in CANVAS space.</summary>
     private Rect SurfaceCanvasRect(FormDocument document)
@@ -1350,6 +1366,26 @@ public class FormCanvasControl : Control
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Each control's FIRST rectangle in <paramref name="layout"/> — <see cref="FormBoundsOf"/>'s answer for every
+    /// control at once, from one layout. ⚠ First match (TryAdd), exactly as FormBoundsOf returns at its first hit.
+    /// ⚠ Built per frame from that frame's layout and never kept: the model is mutated in place, so a cached lookup
+    /// would be a staleness bug (pre-flight C8).
+    /// </summary>
+    private static Dictionary<FormControl, Rect> FirstBoundsByControl(IReadOnlyList<FormLayoutEntry> layout)
+    {
+        var first = new Dictionary<FormControl, Rect>(ReferenceEqualityComparer.Instance);
+        foreach (var entry in layout)
+        {
+            if (entry.Control != null)
+            {
+                first.TryAdd(entry.Control, entry.Bounds);
+            }
+        }
+
+        return first;
     }
 
     private Point? _dragOrigin;
@@ -1491,9 +1527,23 @@ public class FormCanvasControl : Control
         // captured here and published at the very END of this method. See the assignment there.
         var editedSlot = default(Rect);
 
+        // ⛔ ONE layout per frame (Task 9 review): the draw loop, the selection outlines and the handles all read
+        // this list. Each CanvasBoundsOf call used to run the whole Layout — a dock resolve and a parent map
+        // included — so a select-all of N controls paid N+2 layouts per frame. FirstBoundsByControl keeps
+        // FormBoundsOf's FIRST-match rule, so every rectangle is exactly the one it was.
+        var layout = FormCanvasTransform.Layout(document, SelectedControl).ToList();
+        var formBounds = FirstBoundsByControl(layout);
+        Rect? CanvasBoundsInFrame(FormControl control) =>
+            formBounds.TryGetValue(control, out var b) ? _transform.ToCanvas(b) : null;
+
+        // ⚠ A positioned control is CLIPPED to the form surface, as WinForms clips it: an overflowing dock (negative
+        // X/Y, or past the far edge) is never painted outside the form. Chrome — bands, cells, dropdowns, the Type
+        // Here slot — is not clipped; HitTest applies the same rule.
+        var surfaceClip = SurfaceCanvasRect(document);
+
         // ⚠ Containers before their children — Layout guarantees that order, and drawing a
         // container after its children would paint over them.
-        foreach (var entry in FormCanvasTransform.Layout(document, SelectedControl))
+        foreach (var entry in layout)
         {
             var bounds = _transform.ToCanvas(entry.Bounds);
             var editedRect = EditedRectOf(entry, bounds, typeHereHost, renaming, _transform.Zoom);
@@ -1522,7 +1572,19 @@ public class FormCanvasControl : Control
             // where "&File" should be. Same catalog lookup, one copy of it.
             if (entry.Control != null)
             {
-                var drawn = DrawControl(context, entry.Control, bounds);
+                CaptionDraw? drawn;
+                if (entry.Role == FormLayoutRole.Control)
+                {
+                    using (context.PushClip(surfaceClip))
+                    {
+                        drawn = DrawControl(context, entry.Control, bounds);
+                    }
+                }
+                else
+                {
+                    drawn = DrawControl(context, entry.Control, bounds);
+                }
+
                 _captionLog?.Add(new CaptionRecord(entry.Control, null, bounds, CaptionForTest(entry.Control), drawn));
             }
         }
@@ -1541,16 +1603,21 @@ public class FormCanvasControl : Control
         foreach (var member in SelectedSet)
         {
             if (!ReferenceEquals(member, SelectedControl) &&
-                CanvasBoundsOf(document, member) is { } outline)
+                CanvasBoundsInFrame(member) is { } outline)
             {
                 context.DrawRectangle(null, SecondarySelectionPen, outline);
             }
         }
 
-        if (SelectedControl?.Geometry is PixelGeometry &&
-            CanvasBoundsOf(document, SelectedControl) is { } selection)
+        if (HasHandles(SelectedControl) && CanvasBoundsInFrame(SelectedControl!) is { } selection)
         {
             DrawHandles(context, selection);
+        }
+        else if (SelectedControl?.Geometry is PixelGeometry && CanvasBoundsInFrame(SelectedControl) is { } docked)
+        {
+            // A DOCKED primary (spec §7a): selected, but not draggable — outlined like a secondary member, never
+            // handled. Without this a click on a docked Panel shows nothing at all (pre-flight decision 1).
+            context.DrawRectangle(null, SecondarySelectionPen, docked);
         }
 
         // The rubber band, over everything — it is transient and must never be hidden behind a
@@ -1561,9 +1628,10 @@ public class FormCanvasControl : Control
             context.DrawRectangle(MarqueeBrush, MarqueePen, band);
         }
 
-        // The form's own grips, last of all. Unlike the title-bar buttons these are REAL: they
-        // resize the form, so drawing them is a promise the canvas keeps.
-        if (document.Target == FormTarget.WinForms)
+        // The form's own grips — on every document that has a design size (a .blform or a Canvas page) — last of
+        // all. Unlike the title-bar buttons these are REAL: they resize the form, so drawing them is a promise the
+        // canvas keeps.
+        if (FormVocabulary.IsPixel(document))
         {
             var surface = SurfaceCanvasRect(document);
             var reach = FormCanvasTransform.HandleReach;
@@ -1761,8 +1829,8 @@ public class FormCanvasControl : Control
     }
 
     /// <summary>
-    /// The form itself, drawn the way VB6 draws it: a real window with a title bar and a raised
-    /// frame, its client area dotted with the alignment grid.
+    /// The form itself: a WINDOW is drawn the way VB6 draws it (title bar, raised frame, alignment grid); a Canvas
+    /// PAGE gets the alignment grid and an outline, and no frame (spec 2026-09-27 §2.4).
     ///
     /// <para>⚠ The title bar sits ABOVE the surface rectangle because the form's coordinate space is
     /// its CLIENT area — <c>Width</c>/<c>Height</c> are the client size, exactly as WinForms'
@@ -1773,10 +1841,24 @@ public class FormCanvasControl : Control
         var size = FormCanvasTransform.SurfaceSize(document);
         var surface = _transform.ToCanvas(new Rect(0, 0, size.Width, size.Height));
 
-        // ⚠ WinForms only. A .blwebform is a PAGE — it has no title bar, no window frame and no
-        // alignment grid, and dressing one up as a window would claim a shape the browser will
-        // never give it.
+        // ⛔ TARGET-only, deliberately (plan Traps): the title bar and frame say "this is a WINDOW", which a page never
+        // is, however it is laid out — dressing one up as a window would claim a shape the browser will never give it.
+        // Every other decision below is about the VOCABULARY.
         var isWindow = document.Target == FormTarget.WinForms;
+
+        // A document that speaks PIXELS (a .blform, or a Canvas page — FormVocabulary) is designed on the alignment
+        // grid (spec 2026-09-27 §2.4).
+        var isPixel = FormVocabulary.IsPixel(document);
+
+        // Cells are a Grid-only idea. ⚠ DELIBERATELY `Layout?.Kind`, not FormVocabulary.LayoutOf: LayoutOf reads a
+        // missing <Layout> as Grid for VOCABULARY purposes, but drawing cells needs the page's actual Cols/Rows, and a
+        // layout-less page has none — so it draws no cells (and PlaceOnWeb refuses drops on it). Such a page is
+        // legacy; piece 4 retires .blwebform.
+        var isGrid = !isWindow && document.Layout?.Kind == FormLayoutKind.Grid;
+
+        // A PAGE is outlined and captioned ABOVE its surface — never given a title bar. ⚠ A Flow page keeps what it had
+        // (neither): unchanged by this task.
+        var isOutlinedPage = !isWindow && (isGrid || isPixel);
 
         if (isWindow)
         {
@@ -1805,22 +1887,28 @@ public class FormCanvasControl : Control
 
         context.FillRectangle(SurfaceBrush, surface);
 
-        if (isWindow)
+        if (isPixel)
         {
             DrawAlignmentGrid(context, size, surface);
         }
 
-        // ⛔ The web cell guides, UNDER the controls. Without them a page is a blank rectangle with
-        // no clue where a drop will land — the cells are the only thing on screen that says what a
-        // .blwebform's geometry even means, because its controls are placed by cell, not by pixel.
-        if (document.Target == FormTarget.Web && document.Layout?.Kind == FormLayoutKind.Grid)
+        if (isOutlinedPage)
         {
             context.DrawRectangle(null, ShadowPen, surface);
-            foreach (var (_, _, cell) in FormGridLayout.Cells(document.Layout, size))
+        }
+
+        // ⛔ The web cell guides, UNDER the controls. Without them a Grid page is a blank rectangle with no clue where
+        // a drop will land — the cells are the only thing on screen that says what its geometry even means.
+        if (isGrid)
+        {
+            foreach (var (_, _, cell) in FormGridLayout.Cells(document.Layout!, size))
             {
                 context.DrawRectangle(null, GridPen, _transform.ToCanvas(cell));
             }
+        }
 
+        if (isOutlinedPage)
+        {
             var pageCaption = document.Text ?? document.Name;
             if (!string.IsNullOrEmpty(pageCaption))
             {

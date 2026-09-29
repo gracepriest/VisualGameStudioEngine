@@ -204,6 +204,64 @@ public class JavaScriptProjectBuildTests
             output.Dump());
     }
 
+    /// <summary>
+    /// ⛔⛔ Owner report 2026-09-28 through the IDE's route (CLAUDE.md: test BOTH entry points): a project with a Sub
+    /// Main and a freshly scaffolded web form — never saved by the designer, Main never calling the dispatch — builds
+    /// with no BL8018, and its page runs Main FIRST and then starts the form by itself.
+    /// </summary>
+    [Test]
+    [Category("Integration")]
+    public async Task Build_AWebFormProject_RunsMainThenStartsTheForm_WithNoWarning()
+    {
+        var scaffold = BasicLang.Forms.FormScaffolder.Create("LoginForm", BasicLang.Forms.FormTarget.Web);
+        await File.WriteAllTextAsync(Path.Combine(_dir, scaffold.DocumentFileName), scaffold.DocumentText);
+        const string init = "        Me.InitializeComponent()\n";
+        await File.WriteAllTextAsync(Path.Combine(_dir, scaffold.CodeFileName),
+            scaffold.CodeText.Replace(init, init + "        Console.WriteLine(\"FORM SHOWN\")\n"));
+        await File.WriteAllTextAsync(Path.Combine(_dir, "Main.bas"),
+            "Sub Main()\n    Console.WriteLine(\"MAIN RAN\")\nEnd Sub\n");
+
+        var path = Path.Combine(_dir, "Site.blproj");
+        await File.WriteAllTextAsync(path,
+            "<Project>\n" +
+            "  <PropertyGroup>\n" +
+            "    <ProjectName>Site</ProjectName>\n" +
+            "    <TargetBackend>JavaScript</TargetBackend>\n" +
+            "  </PropertyGroup>\n" +
+            "  <ItemGroup>\n" +
+            "    <Compile Include=\"Main.bas\" />\n" +
+            $"    <Compile Include=\"{scaffold.DocumentFileName}\" />\n" +
+            $"    <Compile Include=\"{scaffold.CodeFileName}\" />\n" +
+            "  </ItemGroup>\n" +
+            "</Project>\n");
+
+        var (result, output) = await Build(await new ProjectSerializer().LoadAsync(path));
+
+        Assert.That(result.Success, Is.True, output.Dump());
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Diagnostics.Select(d => d.Id), Has.None.EqualTo(BasicLang.Forms.DesignCodes.DispatchNotCalled),
+                "the automatic dispatch covers it");
+            Assert.That(output.Dump(), Does.Not.Contain(BasicLang.Forms.DesignCodes.DispatchNotCalled));
+            Assert.That(File.Exists(Path.Combine(result.OutputPath!, "LoginForm.html")), Is.True, output.Dump());
+        });
+
+        var ran = VisualGameStudio.Tests.Compiler.FormDesignerAcceptanceTests.RunPageUnderNode(result.OutputPath!);
+        if (ran == null)
+        {
+            Assert.Ignore("node is not on PATH, so the emitted page cannot be executed here");
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ran, Does.Not.Contain("LOAD ERROR"), ran);
+            Assert.That(ran, Does.Contain("MAIN RAN"), ran);
+            Assert.That(ran!.Split("FORM SHOWN").Length - 1, Is.EqualTo(1), ran);
+            Assert.That(ran.IndexOf("MAIN RAN", StringComparison.Ordinal),
+                Is.LessThan(ran.IndexOf("FORM SHOWN", StringComparison.Ordinal)), ran);
+        });
+    }
+
     private sealed class RecordingOutput : IOutputService
     {
         private readonly ConcurrentQueue<string> _lines = new();
