@@ -350,8 +350,11 @@ with the `Dim` path — see `docs/superpowers/specs/2026-09-19-menus-toolbars-st
   `std::vector` storage with the vector's surface. A bare `std::vector` array was a VALUE, so
   `b = a`, a Sub writing its argument, and `lst.Add(a)` each silently copied. Only the outermost
   rank is the handle (`Integer(,)` → `Array<std::vector<int32_t>>`); `ReDim` builds a new array.
-- **Reference vs value:** classes/interfaces → `shared_ptr<T>` + `make_shared` + `->`;
-  `Structure` → value `struct`. Generics → real C++ templates.
+- **Reference vs value:** classes/interfaces → `shared_ptr<T>` + `->`; `Structure` → value
+  `struct`. Generics → real C++ templates. A class is created only by `BasicLang::New<T>`, never a
+  bare `make_shared` — two-phase construction (tag constructor, then `ctor_`), so `Me` is owned
+  before any user code runs and is spelled `BasicLang::Self(this)` as a value everywhere but a
+  member receiver / `Is` operand (ADR-0015).
 - Exceptions via the `IRThrow` node; a `Return` or `Exit` out of a `Try` carries its own copy
   of every `Finally` it leaves (a C++ `return`/`goto` runs no handler); iterators are real C++20 coroutines (`Generator<T>` /
   `co_yield`); async is synchronous `Task<T>` emulation (no scheduler).
