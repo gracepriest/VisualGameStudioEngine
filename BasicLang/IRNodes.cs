@@ -138,6 +138,28 @@ namespace BasicLang.Compiler.IR
         /// </summary>
         public bool NamedAfterVariable { get; set; }
 
+        /// <summary>
+        /// ⭐ True when this value is a COMPILER TEMP (ADR-0017): IRBuilder built it under a name
+        /// <see cref="IRFunction.GetNextTempName"/> MINTED, and it is not storage the program
+        /// declared — never an <see cref="IRVariable"/> or <see cref="IRConstant"/>, never a value
+        /// <see cref="NamedAfterVariable"/>. It is the only licence
+        /// <c>DeadCodeEliminationPass</c> has to delete an unused value instruction.
+        ///
+        /// <para>⛔ A fact about where the NAME came from, never about how it is SPELLED. A program
+        /// may call its own variable <c>t5</c>, <c>T5</c>, <c>_tmp1</c> or <c>_t3</c>. MEASURED
+        /// (#118) with the guard on spelling (<c>IsTempDestination</c>): 37 of 62 removals were
+        /// user variables, and <c>Dim t5 As Integer = a + b</c> printed 12 for 82 on all four
+        /// backends and all three entry points.</para>
+        ///
+        /// <para><b>Who writes it.</b> Set once, by <c>IRBuilder.MarkCompilerTemps</c>, after the
+        /// builder's last rename. An optimizer pass that REPLACES a value carries it to the
+        /// replacement with the rest of the value's identity (<c>OptimizationPass.InheritIdentity</c>);
+        /// a value built without it reads false, which only costs a removal. No REGISTERED optimizer
+        /// pass mints a temp name today; one that does (task #121) must mint through
+        /// <see cref="IRFunction.GetNextTempName"/> and set this where it mints.</para>
+        /// </summary>
+        public bool IsCompilerTemp { get; set; }
+
         protected IRValue(string name, TypeInfo type) : base(type)
         {
             Name = name;
@@ -1594,6 +1616,9 @@ namespace BasicLang.Compiler.IR
         private int _nextBlockId = 0;
         private int _nextTempId = 0;
 
+        /// <summary>Every name <see cref="GetNextTempName"/> has handed out (ADR-0017).</summary>
+        private readonly HashSet<string> _mintedTempNames = new HashSet<string>(StringComparer.Ordinal);
+
         public IRFunction(string name, TypeInfo returnType)
         {
             Name = name;
@@ -1625,11 +1650,26 @@ namespace BasicLang.Compiler.IR
             return block;
         }
         
+        /// <summary>
+        /// ⭐ THE ONE MINTER of compiler-temp names (<c>t0</c>, <c>t1</c>, …), and it RECORDS what
+        /// it hands out: that record is what <see cref="IRValue.IsCompilerTemp"/> is read from
+        /// (ADR-0017), so the flag says "the compiler made this name up", not "this name looks
+        /// made up". No optimizer pass calls it.
+        /// </summary>
         public string GetNextTempName()
         {
-            return $"t{_nextTempId++}";
+            var name = $"t{_nextTempId++}";
+            _mintedTempNames.Add(name);
+            return name;
         }
-        
+
+        /// <summary>
+        /// Whether <see cref="GetNextTempName"/> of THIS function handed out
+        /// <paramref name="name"/> — exactly, ordinal: the minter's own output, not a name that
+        /// merely looks like it (a user's <c>T5</c> is not the minted <c>t5</c>).
+        /// </summary>
+        public bool IsMintedTempName(string name) => name != null && _mintedTempNames.Contains(name);
+
         public void Accept(IIRVisitor visitor)
         {
             visitor.Visit(this);
