@@ -1297,6 +1297,11 @@ namespace BasicLang.Compiler.IR.Optimization
                     arrayStore.Index = map(arrayStore.Index);
                     arrayStore.Value = map(arrayStore.Value);
                     break;
+                // A When guard's array carries its elements (IRArrayAlloc.InlineElements).
+                case IRArrayAlloc guardArray when guardArray.InlineElements != null:
+                    for (var i = 0; i < guardArray.InlineElements.Count; i++)
+                        guardArray.InlineElements[i] = map(guardArray.InlineElements[i]);
+                    break;
                 case IRAwait await:
                     await.Expression = map(await.Expression);
                     break;
@@ -2751,10 +2756,19 @@ namespace BasicLang.Compiler.IR.Optimization
                 cfg.Build();
                 cfg.ComputeDominators();
                 cfg.IdentifyLoops();
+
+                // ⭐ ADR-0014 A2: a per-iteration variable — a loop-body Dim a lambda captures,
+                // perIter(L) as the IR stands now — is WRITTEN at its loop's body entry. The variable
+                // is fresh each iteration: a read of it hoisted out of the body reads nothing (on
+                // JavaScript it read an undeclared name — K1/K3/K5 threw ReferenceError under -O),
+                // and invariant S″ forbids the move. Empty for every lambda-free function.
+                var perIterAtEntry = new Dictionary<BasicBlock, List<string>>(ReferenceEqualityComparer.Instance);
+                foreach (var (l, _, vars) in IRLoops.PerIteration(module, function))
+                    perIterAtEntry[l.Body] = vars.Select(v => v.Name).ToList();
                 
                 foreach (var loop in cfg.NaturalLoops)
                 {
-                    HoistInvariants(loop, cfg);
+                    HoistInvariants(loop, cfg, perIterAtEntry);
                 }
             }
             
@@ -2774,7 +2788,8 @@ namespace BasicLang.Compiler.IR.Optimization
         //    — the loop condition landed in for0.inc.
         //  - IN WHAT ORDER: a backwards sweep over blocks in arbitrary order, so a hoisted value
         //    could land after the hoisted value that reads it.
-        private void HoistInvariants(List<BasicBlock> loop, ControlFlowGraph cfg)
+        private void HoistInvariants(List<BasicBlock> loop, ControlFlowGraph cfg,
+            IReadOnlyDictionary<BasicBlock, List<string>> perIterAtEntry)
         {
             var loopSet = new HashSet<BasicBlock>(loop);
 
@@ -2795,6 +2810,11 @@ namespace BasicLang.Compiler.IR.Optimization
             // ADR-0006 D1: an instruction in the loop that may write ANY name (an unclassified
             // kind, or one classified as universal) leaves nothing invariant.
             if (writesEverything) return;
+
+            // ADR-0014 A2: every per-iteration variable whose loop body starts in this loop.
+            foreach (var block in loop)
+                if (perIterAtEntry.TryGetValue(block, out var fresh))
+                    foreach (var name in fresh) written.Add(name);
 
             // Fixed point, recorded in DISCOVERY order: an instruction joins only after all of its
             // loop-defined operands have, so this list is already in dependency order.
@@ -3274,6 +3294,10 @@ namespace BasicLang.Compiler.IR.Optimization
         public OptimizationResult Run(IRModule module)
         {
             var result = new OptimizationResult();
+
+            // ADR-0014 A2: Invariant S″ on the un-lowered IR, before the first pass and after every
+            // pass that changed anything. A no-op unless verification is enabled.
+            IRVerifier.VerifyAfterPass(module, "IRBuilder (before optimization)");
             
             for (int iteration = 0; iteration < _maxIterations; iteration++)
             {
@@ -3282,6 +3306,7 @@ namespace BasicLang.Compiler.IR.Optimization
                 foreach (var pass in _passes)
                 {
                     bool changed = pass.Run(module);
+                    if (changed) IRVerifier.VerifyAfterPass(module, pass.Name);
                     
                     result.PassResults.Add(new PassResult
                     {

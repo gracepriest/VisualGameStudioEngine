@@ -107,6 +107,8 @@ namespace BasicLang.Compiler.IR
             _module = new IRModule(moduleName);
             _currentFunction = null;
             _currentBlock = null;
+            _bodyLocalSites.Clear();
+            _lambdaCreator.Clear();
 
             CollectSharedModuleGlobalNames(program);
 
@@ -115,6 +117,8 @@ namespace BasicLang.Compiler.IR
             CanonicaliseMemberNames();
 
             SeparateTempsFromUserNames();
+
+            AssignBodyLocals();
 
             return _module;
         }
@@ -1157,6 +1161,7 @@ namespace BasicLang.Compiler.IR
                 localVar.IsInferredType = node.IsAuto;
                 PushVariableVersion(node.Name, localVar);
                 _currentFunction.LocalVariables.Add(localVar);
+                RecordBodyLocal(localVar);   // ADR-0014: before the initializer, which is ordinary IR (D4)
 
                 // Only emit IRAlloca for variables that need memory semantics
                 // (arrays, ByRef parameters, address-of operations)
@@ -1244,6 +1249,7 @@ namespace BasicLang.Compiler.IR
                 var localVar = CreateVariable(varName, varType, _nextVersion++);
                 PushVariableVersion(varName, localVar);
                 _currentFunction.LocalVariables.Add(localVar);
+                RecordBodyLocal(localVar);   // ADR-0014: `Dim (a, b) = …` is a Dim too
 
                 // Emit instruction to get tuple element
                 var elementAccess = new IRTupleElement(tupleValue, i, varType)
@@ -2534,6 +2540,7 @@ namespace BasicLang.Compiler.IR
 
             // Add lambda function to module
             _module.Functions.Add(lambdaFunc);
+            if (savedFunction != null) _lambdaCreator[lambdaFunc] = savedFunction;
 
             // Restore context
             _currentFunction = savedFunction;
@@ -2583,6 +2590,8 @@ namespace BasicLang.Compiler.IR
             // Create an array allocation IR
             var tempName = _currentFunction.GetNextTempName();
             var arrayAlloc = new IRArrayAlloc(tempName, elementType, elements.Count);
+            // In a When guard the stores below never reach a block; the node carries them.
+            if (_suppressEmit) arrayAlloc.InlineElements = elements;
             EmitInstruction(arrayAlloc);
 
             // Store each element
@@ -3411,6 +3420,9 @@ namespace BasicLang.Compiler.IR
 
             // Generate case blocks
             var caseBlocks = new List<BasicBlock>();
+            // The pattern variables each clause declares, re-registered around that clause's
+            // body so a body sees its OWN clause's binding, never a sibling's same-named one.
+            var clauseBindings = new Dictionary<CaseClauseNode, List<IRVariable>>();
             int caseIndex = 0;
             foreach (var caseClause in node.Cases)
             {
@@ -3432,13 +3444,22 @@ namespace BasicLang.Compiler.IR
                 }
 
                 // Add pattern cases
-                foreach (var pattern in caseClause.Patterns)
+                var bindings = new List<IRVariable>();
+                clauseBindings[caseClause] = bindings;
+                try
                 {
-                    var patternCase = ConvertPatternToIR(pattern, caseBlock);
-                    if (patternCase != null)
+                    foreach (var pattern in caseClause.Patterns)
                     {
-                        switchInst.PatternCases.Add(patternCase);
+                        var patternCase = ConvertPatternToIR(pattern, caseBlock, bindings);
+                        if (patternCase != null)
+                        {
+                            switchInst.PatternCases.Add(patternCase);
+                        }
                     }
+                }
+                finally
+                {
+                    foreach (var bound in bindings) PopVariableVersion(bound.Name);
                 }
             }
 
@@ -3459,7 +3480,17 @@ namespace BasicLang.Compiler.IR
                     _currentBlock = caseBlocks[caseBlockIndex++];
                 }
 
-                caseClause.Body.Accept(this);
+                var bodyBindings = clauseBindings.TryGetValue(caseClause, out var own)
+                    ? own : new List<IRVariable>();
+                foreach (var bound in bodyBindings) PushVariableVersion(bound.Name, bound);
+                try
+                {
+                    caseClause.Body.Accept(this);
+                }
+                finally
+                {
+                    foreach (var bound in bodyBindings) PopVariableVersion(bound.Name);
+                }
 
                 if (!_currentBlock.IsTerminated())
                 {
@@ -3477,7 +3508,13 @@ namespace BasicLang.Compiler.IR
             _currentBlock = endBlock;
         }
 
-        private IRPatternCase ConvertPatternToIR(PatternNode pattern, BasicBlock target)
+        /// <param name="bindings">Receives every pattern variable this pattern declares, each
+        /// already pushed onto <see cref="_variableVersions"/> so its When guard (and, re-pushed
+        /// by the caller, the clause body) resolves it. The caller pops them. ⛔ A declaration
+        /// site (#169, ADR-0013 D5): the analyzer binds a guard's <c>n</c> to the pattern's
+        /// Local, and an unregistered Local is an internal compiler error, not a silent create.
+        /// </param>
+        private IRPatternCase ConvertPatternToIR(PatternNode pattern, BasicBlock target, List<IRVariable> bindings)
         {
             IRPatternCase result = null;
 
@@ -3489,6 +3526,7 @@ namespace BasicLang.Compiler.IR
                         target
                     );
                     typeCase.BindingVariable = typePattern.VariableName;
+                    RegisterPatternBinding(typePattern, typePattern.VariableName, bindings);
                     result = typeCase;
                     break;
 
@@ -3520,7 +3558,7 @@ namespace BasicLang.Compiler.IR
                     var orCase = new IROrPatternCase(target);
                     foreach (var alt in orPattern.Alternatives)
                     {
-                        var altCase = ConvertPatternToIR(alt, target);
+                        var altCase = ConvertPatternToIR(alt, target, bindings);
                         if (altCase != null)
                         {
                             orCase.Alternatives.Add(altCase);
@@ -3533,7 +3571,7 @@ namespace BasicLang.Compiler.IR
                     var tupleCase = new IRTuplePatternCase(target);
                     foreach (var elem in tuplePattern.Elements)
                     {
-                        var elemCase = ConvertPatternToIR(elem, target);
+                        var elemCase = ConvertPatternToIR(elem, target, bindings);
                         if (elemCase != null)
                         {
                             tupleCase.Elements.Add(elemCase);
@@ -3545,6 +3583,7 @@ namespace BasicLang.Compiler.IR
                 case BindingPatternNode bindingPattern:
                     var bindingCase = new IRBindingPatternCase(target);
                     bindingCase.BindingVariable = bindingPattern.VariableName;
+                    RegisterPatternBinding(bindingPattern, bindingPattern.VariableName, bindings);
                     result = bindingCase;
                     break;
 
@@ -3556,13 +3595,43 @@ namespace BasicLang.Compiler.IR
             // Suppress instruction emission so optimization passes won't modify the When guard
             if (result != null && pattern.WhenGuard != null)
             {
+                var blockBefore = _currentBlock;
                 _suppressEmit = true;
                 pattern.WhenGuard.Accept(this);
                 _suppressEmit = false;
                 result.WhenGuard = _expressionResult;
+
+                // A guard is ONE inline expression tree; nothing in it may move the builder to
+                // another block. If something does, everything after the Select Case would be
+                // built into a block no branch reaches — the program silently stops there (how
+                // AndAlso/OrElse in a guard behaved until BuildShortCircuit learned to stay
+                // inline). Refuse instead of truncating.
+                if (!ReferenceEquals(_currentBlock, blockBefore))
+                {
+                    _currentBlock = blockBefore;
+                    throw new InvalidOperationException(
+                        $"Line {pattern.Line}: this 'When' guard needs control flow the compiler "
+                        + "cannot build inside a Case guard. Compute it into a variable before the "
+                        + "Select Case and test the variable in the guard.");
+                }
             }
 
             return result;
+        }
+
+        /// <summary>
+        /// Registers the variable a type or binding pattern declares, typed as the analyzer
+        /// declared it (recorded on the pattern node). A pattern the analyzer declared nothing
+        /// for — a type pattern whose type did not resolve — registers nothing.
+        /// </summary>
+        private void RegisterPatternBinding(PatternNode pattern, string name, List<IRVariable> bindings)
+        {
+            if (string.IsNullOrEmpty(name)) return;
+            var type = _semanticAnalyzer?.GetNodeType(pattern);
+            if (type == null) return;
+            var variable = CreateVariable(name, type, _nextVersion++);
+            PushVariableVersion(name, variable);
+            bindings.Add(variable);
         }
 
         public void Visit(CaseClauseNode node)
@@ -3753,7 +3822,7 @@ namespace BasicLang.Compiler.IR
             EmitInstruction(new IRConditionalBranch(cond, bodyBlock, endBlock));
 
             // Push loop context
-            _loopStack.Push(new LoopContext(condBlock, endBlock));
+            _loopStack.Push(new LoopContext(condBlock, endBlock, bodyBlock, _currentFunction));
 
             // Body block
             _currentBlock = bodyBlock;
@@ -3908,7 +3977,7 @@ namespace BasicLang.Compiler.IR
             // Body block
             _currentBlock = bodyBlock;
 
-            _loopStack.Push(new LoopContext(endBlock, endBlock));  // Continue goes to end (next iteration handled by foreach)
+            _loopStack.Push(new LoopContext(endBlock, endBlock, bodyBlock, _currentFunction));  // Continue goes to end (next iteration handled by foreach)
 
             // ⭐ #169 (ADR-0013 D5): the variable the IRForEach declares is REGISTERED for the body,
             // under the name it was declared with — the loop's own `x` (`As`, or a fresh name),
@@ -4005,7 +4074,7 @@ namespace BasicLang.Compiler.IR
 
             // Body block
             _currentBlock = bodyBlock;
-            _loopStack.Push(new LoopContext(condBlock, endBlock));
+            _loopStack.Push(new LoopContext(condBlock, endBlock, bodyBlock, _currentFunction));
             node.Body.Accept(this);
             _loopStack.Pop();
 
@@ -4044,7 +4113,7 @@ namespace BasicLang.Compiler.IR
 
                 // Body block
                 _currentBlock = bodyBlock;
-                _loopStack.Push(new LoopContext(condBlock, endBlock));
+                _loopStack.Push(new LoopContext(condBlock, endBlock, bodyBlock, _currentFunction));
                 node.Body.Accept(this);
                 _loopStack.Pop();
 
@@ -4060,7 +4129,7 @@ namespace BasicLang.Compiler.IR
 
                 // Body block
                 _currentBlock = bodyBlock;
-                _loopStack.Push(new LoopContext(condBlock, endBlock));
+                _loopStack.Push(new LoopContext(condBlock, endBlock, bodyBlock, _currentFunction));
                 node.Body.Accept(this);
                 _loopStack.Pop();
 
@@ -4454,11 +4523,16 @@ namespace BasicLang.Compiler.IR
             var packed = arguments.Skip(slot).ToList();
 
             var array = new IRArrayAlloc(_currentFunction.GetNextTempName(), elementType, packed.Count);
+            var coerced = packed.Select(p => CoerceToDeclaredType(p, elementType)).ToList();
+            // ⛔ In a When guard the stores never reach a block, so the node carries its elements
+            // (InlineElements). Without it a ParamArray call in a guard — which packs only since
+            // guards are analyzed — was `Total(t2)` with t2 declared nowhere (C# CS0103).
+            if (_suppressEmit) array.InlineElements = coerced;
             EmitInstruction(array);
-            for (var i = 0; i < packed.Count; i++)
+            for (var i = 0; i < coerced.Count; i++)
                 EmitInstruction(new IRArrayStore(array,
                     new IRConstant(i, new TypeInfo("Integer", TypeKind.Primitive)),
-                    CoerceToDeclaredType(packed[i], elementType)));
+                    coerced[i]));
 
             arguments.RemoveRange(slot, arguments.Count - slot);
             arguments.Add(array);
@@ -5110,7 +5184,16 @@ namespace BasicLang.Compiler.IR
             if (!IsComparisonOperator(node.Operator))
             {
                 var scKind = MapBinaryOperator(node.Operator);
-                if (scKind == BinaryOpKind.AndAlso || scKind == BinaryOpKind.OrElse)
+                // ⛔ NOT inside a `When` guard. A guard is built with emission suppressed and is
+                // rendered INLINE by every backend (C++ RenderInline, MSIL EmitInlineValue, the
+                // C#/JS expression renderers), so it must stay one expression TREE: here an
+                // AndAlso/OrElse is an IRBinaryOp, which each renderer spells as its own
+                // short-circuit operator. Lowered to control flow instead, the blocks were
+                // created with nothing emitted into them and _currentBlock was left on the
+                // orphan merge block — so every statement AFTER the Select Case landed in a block
+                // no branch reaches, and the program silently stopped at the Select, on every
+                // backend, from a green build.
+                if ((scKind == BinaryOpKind.AndAlso || scKind == BinaryOpKind.OrElse) && !_suppressEmit)
                 {
                     BuildShortCircuit(node, scKind);
                     return;
@@ -6583,10 +6666,130 @@ namespace BasicLang.Compiler.IR
             public BasicBlock ContinueTarget { get; }
             public BasicBlock BreakTarget { get; }
 
-            public LoopContext(BasicBlock continueTarget, BasicBlock breakTarget)
+            /// <summary>ADR-0014: the loop's body entry block, which records its <c>BodyLocals</c>.</summary>
+            public BasicBlock Body { get; }
+
+            /// <summary>The function the loop is in. A lambda's body is built while its creator's
+            /// loops are still on the stack; a <c>Dim</c> there belongs to the lambda's own loops
+            /// only (ADR-0014 D3), so the innermost loop counts only when it is this function's.</summary>
+            public IRFunction Function { get; }
+
+            public LoopContext(BasicBlock continueTarget, BasicBlock breakTarget, BasicBlock body, IRFunction function)
             {
                 ContinueTarget = continueTarget;
                 BreakTarget = breakTarget;
+                Body = body;
+                Function = function;
+            }
+        }
+
+        // =====================================================================================
+        // ⭐ ADR-0014: loop-body locals. Every local `Dim` is recorded against the innermost loop
+        // of THIS function whose body it executes in (D3: through If/Select/Try/With/SyncLock, never
+        // across a lambda), and Build assigns the recorded ones to BasicBlock.BodyLocals at the end.
+        // =====================================================================================
+
+        private readonly List<(IRFunction Function, BasicBlock Body, IRVariable Local)> _bodyLocalSites = new();
+
+        /// <summary>Each lambda, by the function whose body created it.</summary>
+        private readonly Dictionary<IRFunction, IRFunction> _lambdaCreator = new(ReferenceEqualityComparer.Instance);
+
+        private void RecordBodyLocal(IRVariable local)
+        {
+            if (local == null || _currentFunction == null || _loopStack.Count == 0) return;
+            var loop = _loopStack.Peek();
+            if (!ReferenceEquals(loop.Function, _currentFunction) || loop.Body == null) return;
+            _bodyLocalSites.Add((_currentFunction, loop.Body, local));
+        }
+
+        /// <summary>
+        /// Writes <see cref="BasicBlock.BodyLocals"/> from the sites <see cref="RecordBodyLocal"/> saw.
+        ///
+        /// <para>⚠ <b>A name with ONE declaration only.</b> The IR is flat and every backend
+        /// identifies a local by NAME: two <c>Dim x</c> in one function (two sibling loops, a loop and
+        /// an If, a loop and a <c>For x</c> control variable, a local and a parameter) are two
+        /// declarations but one <c>x</c> in
+        /// the emitted C#, JavaScript and IL. Declaring that <c>x</c> at the top of one loop's body
+        /// would leave every other mention of it naming nothing, and one variable in two loops breaks
+        /// ADR-0014's "at most one loop". Such a name keeps today's function-level behaviour. The same
+        /// holds for a name a lambda this function creates declares as its own local: the C# backend
+        /// does not declare a lambda's locals (they bind to the creator's of that spelling), so moving
+        /// the creator's into a loop body would leave the lambda's naming nothing (CS0103). Splitting
+        /// a name into one variable per declaration is ADR-0013's rejected "uniquify IR names".</para>
+        ///
+        /// <para>And no mention of the name outside the loop's body (<see cref="IRLoops.VariableMentions"/>),
+        /// so ADR-0014 A2's invariant S″ holds for IRBuilder's output by construction and a later
+        /// breach is a pass's doing. (A class field read bare is a variable of the same spelling in
+        /// the IR.)</para>
+        /// </summary>
+        private void AssignBodyLocals()
+        {
+            if (_bodyLocalSites.Count == 0) return;
+
+            var created = new Dictionary<IRFunction, List<IRFunction>>(ReferenceEqualityComparer.Instance);
+            foreach (var (lambda, creator) in _lambdaCreator)
+            {
+                if (!created.TryGetValue(creator, out var list)) created[creator] = list = new List<IRFunction>();
+                list.Add(lambda);
+            }
+
+            HashSet<string> LambdaLocalNames(IRFunction function)
+            {
+                var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                var seen = new HashSet<IRFunction>(ReferenceEqualityComparer.Instance);
+                var pending = new Stack<IRFunction>();
+                pending.Push(function);
+                while (pending.Count > 0)
+                {
+                    var f = pending.Pop();
+                    if (!seen.Add(f) || !created.TryGetValue(f, out var lambdas)) continue;
+                    foreach (var lambda in lambdas)
+                    {
+                        foreach (var l in lambda.LocalVariables) if (l?.Name != null) names.Add(l.Name);
+                        pending.Push(lambda);
+                    }
+                }
+                return names;
+            }
+
+            foreach (var group in _bodyLocalSites.GroupBy(s => s.Function, ReferenceEqualityComparer.Instance))
+            {
+                var function = (IRFunction)group.Key;
+                var declarations = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+                foreach (var l in function.LocalVariables)
+                    if (l?.Name != null) declarations[l.Name] = declarations.TryGetValue(l.Name, out var n) ? n + 1 : 1;
+                var lambdaLocals = LambdaLocalNames(function);
+
+                // ADR-0014 A2 (S″): every mention of the name lies in the loop's body. A mention outside
+                // it is some other storage of the same spelling (a class member read bare, another
+                // declaration's leftovers), which a per-iteration declaration would take away from it.
+                var loops = IRLoops.Of(function);
+                var byEnd = IRLoops.ByEnd(loops);
+                var regions = new Dictionary<BasicBlock, HashSet<BasicBlock>>(ReferenceEqualityComparer.Instance);
+                HashSet<string> MentionedOutside(BasicBlock body)
+                {
+                    var loop = loops.FirstOrDefault(l => ReferenceEquals(l.Body, body));
+                    if (loop == null) return null;
+                    if (!regions.TryGetValue(body, out var region)) regions[body] = region = IRLoops.BodyRegion(loop, byEnd);
+                    var outside = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    foreach (var block in function.Blocks)
+                        if (!region.Contains(block))
+                            foreach (var inst in block.Instructions)
+                                foreach (var name in IRLoops.VariableMentions(inst)) outside.Add(name);
+                    return outside;
+                }
+                var outsideByBody = new Dictionary<BasicBlock, HashSet<string>>(ReferenceEqualityComparer.Instance);
+
+                foreach (var (_, body, local) in group)
+                {
+                    if (!declarations.TryGetValue(local.Name, out var count) || count != 1) continue;
+                    if (lambdaLocals.Contains(local.Name)) continue;
+                    if (function.Parameters.Any(p => string.Equals(p?.Name, local.Name, StringComparison.OrdinalIgnoreCase))) continue;
+                    if (!function.LocalVariables.Any(l => ReferenceEquals(l, local))) continue;
+                    if (!outsideByBody.TryGetValue(body, out var outside)) outsideByBody[body] = outside = MentionedOutside(body);
+                    if (outside == null || outside.Contains(local.Name)) continue;
+                    if (!body.BodyLocals.Contains(local)) body.BodyLocals.Add(local);
+                }
             }
         }
     }

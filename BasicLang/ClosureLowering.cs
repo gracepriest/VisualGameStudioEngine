@@ -24,10 +24,14 @@ namespace BasicLang.Compiler.IR
     /// <item>One FUNCTION environment per function that creates a lambda, allocated at entry. It
     /// holds every captured variable of that function — locals, by-value parameters (copied in at
     /// entry), Catch variables — and, for the outermost creator, <c>Me</c>.</item>
-    /// <item>One ITERATION environment per iteration of a DECLARING <see cref="IRForEach"/>
-    /// whose variable is captured, allocated at the top of its body and holding that variable.
-    /// A non-declaring For Each (#168's hidden <c>__foreach_N</c>) gets none: its variable is a
-    /// function-level local.</item>
+    /// <item>One ITERATION environment per iteration of a loop — any kind — that has a captured
+    /// declaring For Each variable or a captured loop-body local (ADR-0014 D5, which generalised
+    /// ADR-0010's For Each-only rule), allocated at the top of its body and holding both. A
+    /// body local is copied in from a plain CARRIER local of the creator there, and the rest of the
+    /// body runs inside an IR try/finally whose finally writes the carrier back, however the
+    /// iteration is left (ADR-0014 D1, A1). A non-declaring For Each
+    /// (#168's hidden <c>__foreach_N</c>) gets none for its variable: it is a function-level
+    /// local.</item>
     /// <item>Every environment but the outermost holds a <c>__parent</c> reference to the next
     /// one out, and a lambda is an instance method on the INNERMOST environment it captures
     /// from, so each delegate has exactly one target object and everything it can reach is on
@@ -523,6 +527,7 @@ namespace BasicLang.Compiler.IR
                         Id = b.Id,
                         ParentFunction = nf,
                         IsVisited = b.IsVisited,
+                        BodyLocals = new List<IRVariable>(b.BodyLocals ?? new List<IRVariable>()),   // ADR-0014; the variables are shared
                     };
                 }
                 BasicBlock B(BasicBlock b) => b != null && blockMap.TryGetValue(b, out var nb) ? nb : b;
@@ -715,8 +720,12 @@ namespace BasicLang.Compiler.IR
             public IRClass Env;
             public TypeInfo EnvType;
             public IRFunction Owner;
-            public IRForEach Loop;                       // null for a function environment
+            public IRForEach Loop;                       // the For Each, when the loop is one (else null)
+            public IRLoop Shape;                          // null for a function environment
             public HashSet<BasicBlock> Region;            // a loop level's body blocks
+            /// <summary>ADR-0014: the captured loop-body locals this iteration environment holds, each
+            /// with the plain local of the creator it is copied forward through.</summary>
+            public readonly List<(IRVariable Variable, IRVariable Carrier)> PerIteration = new();
             public Level Parent;
             public string ParentField;
             public IRVariable LocalRef;                   // the Owner's local holding the instance
@@ -747,6 +756,8 @@ namespace BasicLang.Compiler.IR
             public Level FunctionEnv;
             public readonly List<Level> LoopLevels = new();
             public readonly List<(IRForEach Loop, HashSet<BasicBlock> Region)> Loops = new();
+            /// <summary>ADR-0014: every loop of the function, For Each included, with its body region.</summary>
+            public readonly List<(IRLoop Loop, HashSet<BasicBlock> Region)> AllLoops = new();
             public readonly Dictionary<string, IRVariable> Params = new(StringComparer.OrdinalIgnoreCase);
             public readonly Dictionary<string, IRVariable> Locals = new(StringComparer.OrdinalIgnoreCase);
             public readonly Dictionary<string, TypeInfo> CatchVars = new(StringComparer.OrdinalIgnoreCase);
@@ -789,6 +800,8 @@ namespace BasicLang.Compiler.IR
             private readonly Dictionary<IRFunction, List<IRFunction>> _created = new(ReferenceEqualityComparer.Instance);
             private readonly HashSet<IRFunction> _classMembers;
             private readonly HashSet<IRVariable> _synthetic = new(ReferenceEqualityComparer.Instance);
+            /// <summary>ADR-0014 A1: the loop bodies already wrapped in an iteration try.</summary>
+            private readonly HashSet<BasicBlock> _wrappedBodies = new(ReferenceEqualityComparer.Instance);
             private readonly HashSet<string> _userTempNames;
             private readonly List<FunctionContext> _lowered = new();
             private int _envCounter;
@@ -988,6 +1001,13 @@ namespace BasicLang.Compiler.IR
                     if (inst is IRForEach fe && fe.BodyBlock != null)
                         ctx.Loops.Add((fe, LoopRegion(fe)));
                 }
+
+                var loops = IRLoops.Of(g);
+                var byEnd = IRLoops.ByEnd(loops);
+                foreach (var loop in loops)
+                    ctx.AllLoops.Add((loop, loop.ForEach != null
+                        ? ctx.Loops.First(l => ReferenceEquals(l.Loop, loop.ForEach)).Region
+                        : IRLoops.BodyRegion(loop, byEnd)));
             }
 
             /// <summary>
@@ -1195,24 +1215,61 @@ namespace BasicLang.Compiler.IR
                         + "environment would be nested in a generic type and so would have to be generic too, "
                         + "which is out of scope for the first cut of closure conversion (ADR-0010 D9).");
 
-                // The function environment.
-                var fl = NewLevel(ctx, loop: null);
-                ctx.FunctionEnv = fl;
-
-                void Hoist(string name, TypeInfo type)
+                void RefuseShape(string name, TypeInfo type)
                 {
                     RefuseGeneric(name, type);
                     if (type?.Kind == TypeKind.Array && type.ArrayDimensionSizes.Count > 1)
                         throw new ForeignFeatureException(
                             $"MSIL: captured variable '{name}' of '{g.Name}' is a {type.ArrayDimensionSizes.Count}-dimensional "
                             + "array, which this backend has no IL lowering for at all.");
+                }
+
+                // ⭐ ADR-0014 D1/D5: which loops get an iteration environment, decided BEFORE the
+                // function environment is filled, because a captured loop-body local lives in its
+                // loop's environment and never in the function's. A loop gets ONE if and only if it
+                // is a declaring For Each whose variable is captured, or it has a captured body local
+                // (perIter = BodyLocals ∩ capSet); one environment holds both.
+                var loopPlans = new List<(IRLoop Loop, HashSet<BasicBlock> Region, bool ForEachVariable, List<IRVariable> PerIter)>();
+                var perIterNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var (loop, region) in ctx.AllLoops)
+                {
+                    var forEachVariable = loop.ForEach != null && IsDeclaringLoop(ctx, loop.ForEach)
+                                          && capSet.Contains(loop.ForEach.VariableName);
+                    var perIter = loop.Body.BodyLocals
+                        .Where(v => v?.Name != null && capSet.Contains(v.Name)
+                                    && ctx.Locals.TryGetValue(v.Name, out var declared) && ReferenceEquals(declared, v))
+                        .ToList();
+                    foreach (var v in perIter) perIterNames.Add(v.Name);
+
+                    // ⚠ A creator lambda that comes after its own creator in module.Functions is
+                    // processed TWICE — once as that creator's lambda, then again as a root, because
+                    // the first pass has cleared its IsLambda (pre-existing; measured at 4500ee3b:
+                    // ADR-0010's L7 builds two function environments for its outer lambda). The first
+                    // pass has already given this loop its iteration environment and its try; its body
+                    // no longer names the variables, so the second leaves them alone rather than
+                    // wrapping the body in a second try (which is a "Duplicate label" to ilasm). They
+                    // stay in perIterNames, so the second pass does not hoist them either.
+                    if (_wrappedBodies.Contains(loop.Body)) perIter = new List<IRVariable>();
+
+                    if (!forEachVariable && perIter.Count == 0) continue;
+                    loopPlans.Add((loop, region, forEachVariable, perIter));
+                }
+
+                // The function environment.
+                var fl = NewLevel(ctx, loop: null);
+                ctx.FunctionEnv = fl;
+
+                void Hoist(string name, TypeInfo type)
+                {
+                    RefuseShape(name, type);
                     fl.Vars[name] = (name, type ?? new TypeInfo("Object", TypeKind.Class));
                 }
 
                 foreach (var p in g.Parameters)
                     if (p?.Name != null && !p.IsByRef && capSet.Contains(p.Name)) Hoist(p.Name, p.Type);
                 foreach (var l in g.LocalVariables)
-                    if (l?.Name != null && capSet.Contains(l.Name) && !fl.Holds(l.Name)) Hoist(l.Name, l.Type);
+                    if (l?.Name != null && capSet.Contains(l.Name) && !fl.Holds(l.Name) && !perIterNames.Contains(l.Name))
+                        Hoist(l.Name, l.Type);
                 foreach (var (name, type) in ctx.CatchVars)
                 {
                     if (!capSet.Contains(name) || fl.Holds(name)) continue;
@@ -1246,20 +1303,36 @@ namespace BasicLang.Compiler.IR
 
                 foreach (var (name, (field, type)) in fl.Vars) AddField(fl.Env, field, type);
 
-                // Iteration environments: one per captured declaring For Each, chained to the
-                // next enclosing captured loop, else to the function environment.
-                var captured = ctx.Loops.Where(l => IsDeclaringLoop(ctx, l.Loop) && capSet.Contains(l.Loop.VariableName)).ToList();
-                foreach (var (loop, region) in captured)
+                // Iteration environments (ADR-0014 D5, generalising ADR-0010 D2's For Each one): one
+                // per loop in loopPlans, holding its captured declaring For Each variable and its
+                // captured body locals, chained to the next enclosing loop that has one, else to the
+                // function environment. The chain rule is unchanged.
+                foreach (var (loop, region, forEachVariable, perIter) in loopPlans)
                 {
-                    RefuseGeneric(loop.VariableName, loop.ElementType);
-                    var level = NewLevel(ctx, loop);
+                    var level = NewLevel(ctx, loop.ForEach);
+                    level.Shape = loop;
                     level.Region = region;
-                    level.Vars[loop.VariableName] = (loop.VariableName, loop.ElementType ?? new TypeInfo("Object", TypeKind.Class));
+                    if (forEachVariable)
+                    {
+                        var fe = loop.ForEach;
+                        RefuseGeneric(fe.VariableName, fe.ElementType);
+                        level.Vars[fe.VariableName] = (fe.VariableName, fe.ElementType ?? new TypeInfo("Object", TypeKind.Class));
+                    }
+                    foreach (var v in perIter)
+                    {
+                        RefuseShape(v.Name, v.Type);
+                        level.Vars[v.Name] = (v.Name, v.Type ?? new TypeInfo("Object", TypeKind.Class));
+                        // D1: the carrier is a plain local of the creator, never an environment field.
+                        var carrier = new IRVariable(NewCarrierName(ctx, v.Name), v.Type);
+                        _synthetic.Add(carrier);
+                        level.PerIteration.Add((v, carrier));
+                    }
                     ctx.LoopLevels.Add(level);
                 }
                 foreach (var level in ctx.LoopLevels)
                 {
-                    var head = level.Loop.ParentBlock;
+                    // Where the loop starts: the block holding a For Each, the body entry of any other.
+                    var head = level.Loop?.ParentBlock ?? level.Shape.Body;
                     level.Parent = ctx.LoopLevels
                         .Where(o => !ReferenceEquals(o, level) && head != null && o.Region.Contains(head))
                         .OrderBy(o => o.Region.Count).FirstOrDefault() ?? fl;
@@ -1267,6 +1340,13 @@ namespace BasicLang.Compiler.IR
                     AddField(level.Env, level.ParentField, level.Parent.EnvType);
                     foreach (var (_, (field, type)) in level.Vars) AddField(level.Env, field, type);
                 }
+            }
+
+            private string NewCarrierName(FunctionContext ctx, string variable)
+            {
+                var name = "__carry_" + variable;
+                for (var k = 1; !ctx.TakenNames.Add(name); k++) name = $"__carry_{variable}_{k}";
+                return name;
             }
 
             private Level NewLevel(FunctionContext ctx, IRForEach loop)
@@ -1327,9 +1407,19 @@ namespace BasicLang.Compiler.IR
                     .OrderBy(l => l.Region.Count).Select(l => l.Loop).FirstOrDefault();
                 if (loop != null && IsDeclaringLoop(ctx, loop))
                 {
+                    // A For Each can have an environment for its captured body locals alone (ADR-0014),
+                    // in which its own, uncaptured variable is not a field.
                     var level = ctx.LoopLevels.FirstOrDefault(l => ReferenceEquals(l.Loop, loop));
-                    return level != null ? EnvBinding(level, name) : Binding.None;
+                    return level != null && level.Holds(name) ? EnvBinding(level, name) : Binding.None;
                 }
+
+                // ADR-0014: a captured loop-body local, inside its own loop's body, is this
+                // iteration's field. (Outside it — nowhere, in a program the front end accepted — it
+                // stays the plain local it always was.)
+                var perIteration = ctx.LoopLevels
+                    .Where(l => l.Region.Contains(block) && l.PerIteration.Any(p => NameEquals(p.Variable.Name, name)))
+                    .OrderBy(l => l.Region.Count).FirstOrDefault();
+                if (perIteration != null) return EnvBinding(perIteration, name);
 
                 if (ctx.Declares(name))
                     return ctx.FunctionEnv != null && ctx.FunctionEnv.Holds(name)
@@ -2135,23 +2225,44 @@ namespace BasicLang.Compiler.IR
                         });
                     }
 
-                // One fresh environment per iteration of each captured declaring For Each.
+                var rebuildEdges = false;
+
+                // One fresh environment per iteration of each loop that has one (ADR-0014 D5): at the
+                // top of the body, parented to the innermost enclosing environment, holding the For
+                // Each's element and each captured body local copied forward from its carrier (D1;
+                // an initializer is the ordinary assignment after it, D4).
                 foreach (var level in ctx.LoopLevels)
                 {
-                    var body = level.Loop.BodyBlock;
-                    var line = level.Loop.SourceLine;
+                    var body = level.Shape.Body;
+                    var line = level.Loop?.SourceLine ?? body.Instructions.FirstOrDefault(i => i != null)?.SourceLine ?? 0;
                     var list = new List<IRInstruction>();
                     var create = new IRNewObject(NewTemp(ctx), level.Env.Name, level.EnvType) { SourceLine = line };
                     list.Add(create);
                     list.Add(new IRAssignment(level.LocalRef, create) { SourceLine = line });
                     list.Add(Store(level.LocalRef, level.ParentField, level.Parent.LocalRef, true, line));
-                    var (field, type) = level.Vars[level.Loop.VariableName];
-                    var element = new IRVariable(level.Loop.VariableName, type);
-                    _synthetic.Add(element);
-                    list.Add(Store(level.LocalRef, field, element, true, line));
-                    Prepend(body, list);
+                    if (level.Loop != null && level.Vars.TryGetValue(level.Loop.VariableName ?? "", out var elementSlot))
+                    {
+                        var element = new IRVariable(level.Loop.VariableName, elementSlot.Type);
+                        _synthetic.Add(element);
+                        list.Add(Store(level.LocalRef, elementSlot.Field, element, true, line));
+                    }
+                    foreach (var (variable, carrier) in level.PerIteration)
+                        list.Add(Store(level.LocalRef, level.Vars[variable.Name].Field, carrier, true, line));
                     g.LocalVariables.Add(level.LocalRef);
+
+                    if (level.PerIteration.Count == 0)
+                    {
+                        Prepend(body, list);
+                        continue;
+                    }
+                    foreach (var (_, carrier) in level.PerIteration) g.LocalVariables.Add(carrier);
+                    WrapIterationInTry(ctx, level, list, line);
+                    rebuildEdges = true;
                 }
+
+                // The try nodes above added blocks and retargeted branches; the MSIL backend walks
+                // BasicBlock.Successors, so the edge lists are rebuilt for THIS function only.
+                if (rebuildEdges) new ControlFlowGraph(g).Build();
 
                 // The function environment, at entry.
                 {
@@ -2202,6 +2313,112 @@ namespace BasicLang.Compiler.IR
                     g.LocalVariables.RemoveAll(l => l?.Name != null && fl.Holds(l.Name) && !ReferenceEquals(l, fl.LocalRef));
                     g.LocalVariables.Insert(0, fl.LocalRef);
                 }
+            }
+
+            /// <summary>
+            /// ⭐ ADR-0014 A1: the body of a loop with captured locals runs inside an IR try/finally
+            /// (empty Catch list) whose Finally writes <c>carry = env.x</c> for each — so the carrier is
+            /// written however the iteration is left: its end, an <c>Exit</c> (a <c>leave</c> on MSIL), a
+            /// Return, an exception, after every user Finally it crosses. Emitted here, after the
+            /// optimizer, so the optimizer never sees it (ADR-0010 D1).
+            ///
+            /// <para>The body entry block keeps its identity (branches into the body still target it,
+            /// and it keeps <see cref="BasicBlock.BodyLocals"/>): it now holds the prologue
+            /// (<paramref name="prologue"/>: the environment, its parent, the For Each element and
+            /// <c>env.x = carry</c>) and the try node, IRBuilder's own shape for a Try statement. Its
+            /// original instructions move to the try's entry block. Every branch in the body that ends
+            /// an iteration normally — to a counted For's step block, to a While's or a Do's condition,
+            /// or a For Each's non-exit branch to its end — is retargeted to the try's continuation,
+            /// which branches on to where it went. Any other terminator reaching the continue block is
+            /// a shape IRBuilder does not make, and is refused loudly. Both the copy and the finally are
+            /// inside the body (A2's obligation).</para>
+            /// </summary>
+            private void WrapIterationInTry(FunctionContext ctx, Level level, List<IRInstruction> prologue, int line)
+            {
+                var g = ctx.Function;
+                var body = level.Shape.Body;
+                var target = level.Shape.Continue;
+                var isForEach = level.Loop != null;
+                _wrappedBodies.Add(body);
+
+                var nextId = g.Blocks.Max(b => b.Id) + 1;
+                BasicBlock NewBlock(string suffix) =>
+                    new BasicBlock($"{body.Name}.{suffix}") { Id = nextId++, ParentFunction = g };
+                var tryEntry = NewBlock("iter");
+                var finallyBlock = NewBlock("iterfinally");
+                var done = NewBlock("iterdone");
+
+                // The region the retargeting is judged over, read BEFORE the move.
+                var region = new HashSet<BasicBlock>(level.Region, ReferenceEqualityComparer.Instance);
+
+                foreach (var inst in body.Instructions) { if (inst != null) inst.ParentBlock = tryEntry; tryEntry.Instructions.Add(inst); }
+                body.Instructions = new List<IRInstruction>();
+                foreach (var inst in prologue) { inst.ParentBlock = body; body.Instructions.Add(inst); }
+                body.Instructions.Add(new IRTryCatch(tryEntry, new List<IRCatchClause>(), finallyBlock, done)
+                {
+                    SourceLine = line,
+                    ParentBlock = body,
+                });
+
+                foreach (var (variable, carrier) in level.PerIteration)
+                {
+                    var (field, type) = level.Vars[variable.Name];
+                    var read = new IRFieldAccess(NewTemp(ctx), level.LocalRef, field, type)
+                    {
+                        IsStorageAccess = true, SourceLine = line, ParentBlock = finallyBlock,
+                    };
+                    finallyBlock.Instructions.Add(read);
+                    finallyBlock.Instructions.Add(new IRAssignment(carrier, read) { SourceLine = line, ParentBlock = finallyBlock });
+                }
+                finallyBlock.Instructions.Add(new IRBranch(done) { SourceLine = line, ParentBlock = finallyBlock });
+
+                if (target != null)
+                {
+                    done.Instructions.Add(new IRBranch(target) { SourceLine = line, ParentBlock = done });
+                    region.Remove(body);
+                    region.Add(tryEntry);
+                    foreach (var block in region)
+                    {
+                        var terminator = block.GetTerminator();
+                        switch (terminator)
+                        {
+                            case IRBranch br when ReferenceEquals(br.Target, target):
+                                if (isForEach && br.IsLoopExit) continue;
+                                br.Target = done;
+                                break;
+                            case IRConditionalBranch cb when ReferenceEquals(cb.TrueTarget, target) || ReferenceEquals(cb.FalseTarget, target):
+                            case IRSwitch sw when ControlFlowGraph.SuccessorsOf(block).Any(s => ReferenceEquals(s, target)):
+                                throw new InvalidOperationException(
+                                    $"ClosureLowering: '{g.Name}' reaches the continue block {target.Name} of a loop "
+                                    + $"with captured body locals by a {terminator.GetType().Name} in {block.Name}; only an "
+                                    + "unconditional branch can be retargeted to the iteration's try (ADR-0014 A1).");
+                        }
+                    }
+                }
+                else
+                {
+                    // No iteration completes normally (the step or condition was removed as
+                    // unreachable), so the continuation is never reached; it still needs a terminator,
+                    // and the loop's end is where control would go.
+                    if (level.Shape.End == null)
+                        throw new InvalidOperationException(
+                            $"ClosureLowering: the loop whose body is {body.Name} in '{g.Name}' has neither a continue "
+                            + "block nor an end block, so its iteration's try has nowhere to continue (ADR-0014 A1).");
+                    done.Instructions.Add(new IRBranch(level.Shape.End) { SourceLine = line, ParentBlock = done });
+                }
+
+                var at = g.Blocks.IndexOf(body) + 1;
+                g.Blocks.InsertRange(at, new[] { tryEntry, finallyBlock, done });
+
+                // The new blocks are inside every body the entry block was inside (this loop's own,
+                // and every enclosing loop's), so the post-condition sees them where they belong.
+                foreach (var other in ctx.LoopLevels)
+                    if (other.Region.Contains(body))
+                    {
+                        other.Region.Add(tryEntry);
+                        other.Region.Add(finallyBlock);
+                        other.Region.Add(done);
+                    }
             }
 
             private static void Prepend(BasicBlock block, List<IRInstruction> list)

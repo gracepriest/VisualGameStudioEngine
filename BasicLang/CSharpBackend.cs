@@ -114,6 +114,59 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         /// </summary>
         private HashSet<BasicBlock> _labelledLoopEnds;
 
+        /// <summary>
+        /// ⭐ ADR-0014: the captured loop-body locals of the body being emitted, set by
+        /// <see cref="DeclareLocals"/> (which every body emission calls first). Each is declared at
+        /// the top of its loop's body from a carrier (<c>T x = __carry_x;</c>) so a lambda captures
+        /// that iteration's <c>x</c>, and the rest of the body is a <c>try</c> whose <c>finally</c>
+        /// writes the carrier back however the iteration is left (A1). Empty for every body without
+        /// one, which then emits exactly what it did before.
+        /// </summary>
+        private PerIterationPlan _perIter = PerIterationPlan.Empty;
+
+        /// <summary>
+        /// The first iteration of a <c>Do … Loop While</c> whose body has captured locals, while it is
+        /// being written. This backend peels that iteration — the body is emitted once before the
+        /// <c>while</c> and once inside it — so the peeled copy gets its own braces (its <c>x</c>
+        /// would otherwise clash with the loop's, CS0136), closed where it branches to the condition.
+        /// </summary>
+        private readonly Stack<(BasicBlock Cond, BasicBlock Body)> _openPeels = new();
+
+        /// <summary>
+        /// ADR-0014 D1/A1, the top of a body with captured locals: <c>T x = __carry_x;</c> for each,
+        /// then <c>try {</c>. Nothing for any other body.
+        /// </summary>
+        private void OpenIteration(BasicBlock body)
+        {
+            var entries = _perIter.AtBody(body);
+            if (entries.Count == 0) return;
+            foreach (var entry in entries)
+                WriteLine($"{MapType(entry.Variable.Type)} {GetValueName(entry.Variable)} = {SanitizeName(entry.Carrier)};");
+            WriteLine("try");
+            WriteLine("{");
+            Indent();
+        }
+
+        /// <summary>
+        /// ADR-0014 A1, the end of that body: <c>} finally { __carry_x = x; }</c> — the carrier is
+        /// written however the iteration is left (its end, a <c>break</c> or <c>goto</c> for an Exit,
+        /// a <c>return</c>, an exception), after every user <c>finally</c> it crosses.
+        /// </summary>
+        private void CloseIteration(BasicBlock body)
+        {
+            var entries = _perIter.AtBody(body);
+            if (entries.Count == 0) return;
+            Unindent();
+            WriteLine("}");
+            WriteLine("finally");
+            WriteLine("{");
+            Indent();
+            foreach (var entry in entries)
+                WriteLine($"{SanitizeName(entry.Carrier)} = {GetValueName(entry.Variable)};");
+            Unindent();
+            WriteLine("}");
+        }
+
         // Standard library provider for built-in functions
         private readonly CSharpStdLibProvider _stdLib;
         private readonly FrameworkStdLibProvider _frameworkStdLib;
@@ -2015,6 +2068,39 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
             _processedBlocks.Add(block);
 
+            // ADR-0014: a Do … Loop While/Until body reached here is its PEELED first iteration (a
+            // pre-test body is only emitted by GenerateLoop, a For Each body by Visit(IRForEach)).
+            // Its captured locals get braces of their own, closed where it branches to the condition
+            // (HandleUnconditionalBranch) — or below, if it never does.
+            var peel = _perIter.AtBody(block);
+            BasicBlock peelCond = null;
+            if (peel.Count > 0 && peel[0].Loop.Kind == IRLoopKind.Do && peel[0].Loop.Continue != null)
+            {
+                peelCond = peel[0].Loop.Continue;
+                WriteLine("{");
+                Indent();
+                OpenIteration(block);
+                _openPeels.Push((peelCond, block));
+            }
+
+            try
+            {
+                GenerateStructuredBlockCore(block);
+            }
+            finally
+            {
+                if (peelCond != null && _openPeels.Count > 0 && ReferenceEquals(_openPeels.Peek().Cond, peelCond))
+                {
+                    var (_, peeledBody) = _openPeels.Pop();
+                    CloseIteration(peeledBody);
+                    Unindent();
+                    WriteLine("}");
+                }
+            }
+        }
+
+        private void GenerateStructuredBlockCore(BasicBlock block)
+        {
             // Emit non-control-flow instructions
             EmitBlockInstructions(block);
 
@@ -2197,6 +2283,21 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         private void HandleUnconditionalBranch(IRBranch branch)
         {
             var target = branch.Target;
+
+            // ADR-0014: the peeled first iteration of a Do loop ends where it branches to the
+            // condition — close its try, its finally and its braces there.
+            if (_openPeels.Count > 0 && target != null && ReferenceEquals(_openPeels.Peek().Cond, target))
+            {
+                var (_, peeledBody) = _openPeels.Pop();
+                CloseIteration(peeledBody);
+                Unindent();
+                WriteLine("}");
+            }
+
+            // ADR-0014 A1: a wrapped counted For's step comes after the body's finally, which
+            // GenerateLoop writes; the body's end simply falls to the end of the try.
+            if (_perIter.IsDeferredStep(target))
+                return;
 
             // ⛔ FIRST, and before the _processedBlocks / ".end" tests below: an `Exit For` out of
             // a For Each targets a block those two tests both discard, which is exactly how
@@ -2616,6 +2717,10 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             WriteLine("{");
             Indent();
 
+            // ADR-0014: this iteration's captured locals, copied forward from their carriers, and the
+            // try the rest of the body runs in (A1).
+            OpenIteration(bodyBlock);
+
             // Generate body
             _processedBlocks.Add(bodyBlock);
             EmitBlockInstructions(bodyBlock);
@@ -2653,6 +2758,13 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                     }
                 }
             }
+
+            // ADR-0014 A1: the finally that writes the carriers, however the body was left.
+            CloseIteration(bodyBlock);
+
+            // A wrapped counted For's step is emitted here, after that finally, and never from
+            // inside the body (HandleUnconditionalBranch skips it there).
+            incBlock = _perIter.DeferredStep(bodyBlock) ?? incBlock;
 
             // Always generate increment if it exists
             if (incBlock != null && !_processedBlocks.Contains(incBlock))
@@ -3139,9 +3251,16 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             var declared = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var any = false;
 
+            // ADR-0014: a captured loop-body local is declared at the top of its loop's body
+            // (OpenIteration); its CARRIER takes its place here, with the default the
+            // variable itself would have had, and is never reset.
+            _perIter = PerIterationPlan.Build(_currentModule, function);
+            _openPeels.Clear();
+
             foreach (var localVar in function.LocalVariables)
             {
-                var varName = GetValueName(localVar);
+                var perIter = _perIter.For(localVar);
+                var varName = perIter != null ? SanitizeName(perIter.Carrier) : GetValueName(localVar);
                 any = true;
                 if (declared.Add(varName))
                 {
@@ -3375,6 +3494,14 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 {
                     case IRConstant c:
                         return EmitConstant(c);
+
+                    // A When guard's array carries its elements (IRArrayAlloc.InlineElements) — its
+                    // stores never reached a block, so by name it was `Total(t2)`, t2 declared
+                    // nowhere (CS0103).
+                    case IRArrayAlloc guardArray when guardArray.InlineElements != null:
+                        return $"new {MapType(guardArray.ElementType)}[] {{ "
+                               + string.Join(", ", guardArray.InlineElements.Select(e => EmitExpression(e, stack)))
+                               + " }";
 
                     case IRVariable v:
                         // A type KEYWORD as a static receiver (`Integer.MaxValue`, `String.Empty`),
@@ -3714,6 +3841,11 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 // node kinds, which is ADR-0001's contract, not because C# counts it.
                 case IRDelegateCreate delegateCreate:
                     return delegateCreate.Target != null ? new[] { delegateCreate.Target } : Array.Empty<IRValue>();
+
+                // A When guard's array carries its elements (never in a block, so never counted
+                // here in practice); an emitted allocation's elements belong to its IRArrayStores.
+                case IRArrayAlloc guardArray when guardArray.InlineElements != null:
+                    return guardArray.InlineElements.ToArray();
 
                 // Kinds that read no IRValue. Listed, not defaulted, so the default can throw.
                 // ⚠ IRVariable.DefaultValue / InitialValue are DECLARATION data (a parameter's
@@ -4651,6 +4783,10 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             var registeredEnd = forEach.EndBlock != null && _forEachEndBlocks.Add(forEach.EndBlock);
             _loopSwitchDepths.Push(_switchDepth);
 
+            // ADR-0014: this iteration's captured locals, copied forward from their carriers, and the
+            // try the rest of the body runs in (A1).
+            OpenIteration(forEach.BodyBlock);
+
             // Generate body block
             _processedBlocks.Add(forEach.BodyBlock);
             EmitBlockInstructions(forEach.BodyBlock);
@@ -4679,6 +4815,9 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                     HandleUnconditionalBranch(bodyBranch);
                 }
             }
+
+            // ADR-0014 A1: the finally that writes the carriers, however the body was left.
+            CloseIteration(forEach.BodyBlock);
 
             Unindent();
             WriteLine("}");

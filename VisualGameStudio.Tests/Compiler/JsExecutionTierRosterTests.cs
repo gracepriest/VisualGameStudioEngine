@@ -235,6 +235,8 @@ public class JsExecutionTierRosterTests
         // The type keywords' Shared members (String.Format, Integer.Parse, …). Named outside the
         // patterns below, so listed by hand; its JS legs spawn Node.
         typeof(PrimitiveStaticSurfaceRunTests),
+        // Select Case When guards: calls, AndAlso/OrElse, casts, a binding pattern.
+        typeof(WhenGuardCallRunTests),
 
         // ADR-0006 D2 (task #137) — the use count Invariant S′ checks is dynamic, not static.
         // Named "...ExecutionTests", so the widened match below WOULD catch it on its own; listed
@@ -377,6 +379,21 @@ public class JsExecutionTierRosterTests
         // process spawned, no [Category("Integration")]) is NOT here.
         typeof(NameBindingExecutionTests),
 
+        // Task #172, ADR-0014 (D1-D6, amended A1/A2) — VB's per-iteration loop-body Dim, with
+        // copy-forward, on every backend. Both named "...ExecutionTests", so the widened match
+        // below WOULD catch them on their own; listed explicitly anyway, matching every row
+        // above. PerIterationLoopBodyDimExecutionTests' JS legs run through
+        // FourBackends.RunsOnEveryBackend[Aggressive] (the headline L/E-probe table) and
+        // JavaScriptExecutionTests.RunJs/RunNodeScript directly (the pinned edge cases and the
+        // project-entry-point leg); PerIterationLoopBodyDimOptimizerExecutionTests' JS legs run
+        // through JavaScriptExecutionTests.RunJs and FourBackends.RunAggressiveJs (K1-K5, A2's
+        // own LICM regression set — the reason this pair exists is to prove JavaScript no longer
+        // throws ReferenceError under -O). PerIterationLoopBodyDimByteIdentityTests/
+        // IrFactTests/VerifierTests (Compiler namespace, no process spawned) and
+        // PerIterationLoopBodyDimMsilTests (Msil namespace — ilasm/dotnet, no Node) are NOT here.
+        typeof(PerIterationLoopBodyDimExecutionTests),
+        typeof(PerIterationLoopBodyDimOptimizerExecutionTests),
+
         // #197 — `TypeOf x Is T`; its JS legs run under Node (a class target; interfaces are BL7013).
         typeof(TypeOfExecutionTests),
     };
@@ -430,7 +447,7 @@ public class JsExecutionTierRosterTests
 
     [Test]
     public void RosterIsPinned()
-        => Assert.That(ExecutionTier, Has.Length.EqualTo(87), // + MsilValueToStringExecutionTests (task #183), InterfaceMethodTypingExecutionTests, IsIsNotOperatorExecutionTests (task #185), MeReceiverTypingExecutionTests (task #176), UserDelegateConversionExecutionTests (task #187), DelegateMemberInvocationExecutionTests (task #188), NothingStringTextExecutionTests (task #189), MsilObjectBoxingExecutionTests (task #177), NotPrecedenceExecutionTests (#195), PropertyAccessExecutionTests (task #178), NameBindingExecutionTests (task #169/#199), TypeOfExecutionTests (#197)
+        => Assert.That(ExecutionTier, Has.Length.EqualTo(90), // + MsilValueToStringExecutionTests (task #183), InterfaceMethodTypingExecutionTests, IsIsNotOperatorExecutionTests (task #185), MeReceiverTypingExecutionTests (task #176), UserDelegateConversionExecutionTests (task #187), DelegateMemberInvocationExecutionTests (task #188), NothingStringTextExecutionTests (task #189), MsilObjectBoxingExecutionTests (task #177), NotPrecedenceExecutionTests (#195), PropertyAccessExecutionTests (task #178), NameBindingExecutionTests (task #169/#199), PerIterationLoopBodyDimExecutionTests + PerIterationLoopBodyDimOptimizerExecutionTests (task #172, ADR-0014); + WhenGuardCallRunTests, TypeOfExecutionTests (#197)
             "The execution-tier roster changed. That is fine — update the number — but it must " +
             "be a deliberate edit, not a silent shrink.");
 
