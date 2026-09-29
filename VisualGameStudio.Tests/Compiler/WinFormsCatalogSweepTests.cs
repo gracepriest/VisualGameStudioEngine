@@ -356,6 +356,174 @@ public class WinFormsCatalogSweepTests
         WinFormsCompile.AssertCompiles(generated, "one anchor edge is expressible and must work.");
     }
 
+    /// <summary>
+    /// Spec §8 "one control per new value shape": every system colour through csc in ONE compile. The
+    /// name table is the unfalsifiable part — a misspelled SystemColors member is invisible to BasicLang.
+    /// </summary>
+    [Test]
+    [Category("Integration")]
+    public void EverySystemColour_EmitsCSharpThatCscAccepts()
+    {
+        var form = new FormDocument
+        {
+            Target = FormTarget.WinForms, Name = "SweepForm", Width = 800, Height = 450, Text = "Sweep"
+        };
+
+        var i = 0;
+        foreach (var name in FormSystemColors.Names)
+        {
+            var label = new FormControl
+            {
+                Kind = "Label", Id = $"lbl{i}", TabIndex = i,
+                Geometry = new PixelGeometry { X = 0, Y = i * 4, Width = 10, Height = 4 }
+            };
+            label.Properties["ForeColor"] = name;
+            form.Controls.Add(label);
+            i++;
+        }
+
+        // ⛔ Not GenerateCSharp: a Degraded value is DROPPED with a warning, so a compile that succeeds
+        // proves nothing about the names that never reached it. Every name must be written, as its
+        // own whole statement, with no Degraded diagnostic.
+        var written = RegionWriter.Write("SweepForm.bas", Scaffold(), form, "SweepForm.blform");
+        Assert.That(written.Refused, Is.False,
+            "the region writer refused: " + string.Join("; ", written.Diagnostics.Select(d => d.Format())));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(written.Diagnostics.Where(d => d.Code == DesignCodes.DegradedProperty).Select(d => d.Format()),
+                Is.Empty, "every system colour is a valid WinForms value");
+
+            for (var n = 0; n < FormSystemColors.Names.Count; n++)
+            {
+                var statement = $@"^\s*lbl{n}\.ForeColor = SystemColors\.{FormSystemColors.Names[n]}\r?$";
+                Assert.That(System.Text.RegularExpressions.Regex.IsMatch(written.Text, statement,
+                        System.Text.RegularExpressions.RegexOptions.Multiline), Is.True,
+                    $"lbl{n}.ForeColor = SystemColors.{FormSystemColors.Names[n]} must be written as a whole statement");
+            }
+        });
+
+        WinFormsCompile.AssertCompiles(CompileToCSharp(written.Text),
+            "every SystemColors name the catalog emits must be a member csc knows.");
+    }
+
+    /// <summary>⛔ Through csc, not just the region writer: captions that LOOK like source must compile as strings.</summary>
+    [Test]
+    [Category("Integration")]
+    public void CaptionsThatLookLikeSource_CompileAsStrings()
+    {
+        var form = new FormDocument
+        {
+            Target = FormTarget.WinForms, Name = "SweepForm", Width = 800, Height = 450, Text = "New Customer"
+        };
+
+        var i = 0;
+        foreach (var caption in new[]
+                 {
+                     "New Customer", "\"quoted\"", "a \"b\" c", @"a\b", "line1\r\nline2", "a\tb", @"a\",
+                     "a<LS>b", "a<NEL>b"
+                 }.Select(FormPropertyDefTests.Unmark))
+        {
+            var button = new FormControl
+            {
+                Kind = "Button", Id = $"btn{i}", TabIndex = i,
+                Geometry = new PixelGeometry { X = 8, Y = 8 + i * 30, Width = 120, Height = 24 }
+            };
+            button.Properties["Text"] = caption;
+            form.Controls.Add(button);
+            i++;
+        }
+
+        var generated = GenerateCSharp(form);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(generated, Does.Contain("this.Text = \"New Customer\""));
+            Assert.That(generated, Does.Contain("btn0.Text = \"New Customer\""));
+            Assert.That(generated, Does.Contain("btn1.Text = \"\\\"quoted\\\"\""));
+            Assert.That(generated, Does.Contain("btn2.Text = \"a \\\"b\\\" c\""));
+            // ⛔ Compiling proves nothing here on its own: `"a\b"` lexes in BasicLang as "ab" and
+            // compiles just as cleanly. The C# must carry the caption's own characters.
+            Assert.That(generated, Does.Contain("btn3.Text = \"a\\\\b\""), "the backslash survives");
+            Assert.That(generated, Does.Contain("btn4.Text = \"line1\\r\\nline2\""), "the line break survives");
+            Assert.That(generated, Does.Contain("btn5.Text = \"a\\tb\""), "the tab survives");
+            Assert.That(generated, Does.Contain("btn6.Text = \"a\\\\\""), "a trailing backslash does not eat the quote");
+            // ⛔ C# line terminators BasicLang does not treat as one: raw, they are CS1010 at csc.
+            Assert.That(generated, Does.Contain("btn7.Text = \"a\\u2028b\""), "U+2028 is escaped in the C#");
+            Assert.That(generated, Does.Contain("btn8.Text = \"a\\u0085b\""), "U+0085 is escaped in the C#");
+        });
+        WinFormsCompile.AssertCompiles(generated, "a caption is a string, whatever it looks like.");
+    }
+
+    /// <summary>
+    /// A caption with a line break must not leave a region the NEXT write mistakes for a hand edit —
+    /// the region is regenerated on every save, so a first write that the second refuses would lock the
+    /// user out of the designer after one keystroke.
+    /// </summary>
+    [TestCase("line1\r\nline2")]
+    [TestCase("line1\nline2")]
+    [TestCase("a\tb")]
+    [TestCase(@"a\b")]
+    [TestCase(@"a\")]
+    [TestCase("a<LS>b")]
+    [TestCase("a<NEL>b")]
+    public void ACaptionWithControlCharacters_RewritesCleanly(string caption)
+    {
+        caption = FormPropertyDefTests.Unmark(caption);
+        var form = new FormDocument
+        {
+            Target = FormTarget.WinForms, Name = "SweepForm", Width = 800, Height = 450, Text = caption
+        };
+        var button = new FormControl
+        {
+            Kind = "Button", Id = "btn0", TabIndex = 0,
+            Geometry = new PixelGeometry { X = 8, Y = 8, Width = 120, Height = 24 }
+        };
+        button.Properties["Text"] = caption;
+        form.Controls.Add(button);
+
+        var first = RegionWriter.Write("SweepForm.bas", Scaffold(), form, "SweepForm.blform");
+        Assert.That(first.Refused, Is.False, string.Join("; ", first.Diagnostics.Select(d => d.Format())));
+
+        var second = RegionWriter.Write("SweepForm.bas", first.Text, form, "SweepForm.blform");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(second.Refused, Is.False, string.Join("; ", second.Diagnostics.Select(d => d.Format())));
+            Assert.That(second.Diagnostics.Select(d => d.Code),
+                Has.None.EqualTo(DesignCodes.RegionHandEdited).And.None.EqualTo(DesignCodes.RegionMalformed));
+            Assert.That(second.Text, Is.EqualTo(first.Text), "an unchanged form rewrites to the same bytes");
+        });
+    }
+
+    /// <summary>Every FormRoot row that exists on WinForms — the root's OWN csc sweep (spec §2.3 Gates).</summary>
+    private static IEnumerable<TestCaseData> EveryWinFormsRootProperty() =>
+        FormControlCatalog.FormRoot.Properties
+            .Where(p => p.AppliesTo(FormTarget.WinForms))
+            .Select(p => new TestCaseData(p.Name).SetName("{m}(" + p.Name + ")"));
+
+    /// <summary>
+    /// ⛔ The Form is not a control and is never smuggled through Canonical or For(target). Each root row is
+    /// emitted as ONE `Me.X = …` statement on a real Form and csc must accept it — the only thing that can
+    /// falsify a root property name, since BasicLang types every Form member as Object.
+    /// </summary>
+    [TestCaseSource(nameof(EveryWinFormsRootProperty))]
+    [Category("Integration")]
+    public void EveryFormRootProperty_EmitsMeDotXThatCscAccepts(string name)
+    {
+        var row = FormControlCatalog.FormRoot.Property(name)!;
+        var form = new FormDocument { Target = FormTarget.WinForms, Name = "SweepForm" };
+
+        // SampleValue's Size arm ("75, 23") is a valid, positive ClientSize.
+        Assert.That(FormRootValues.Set(form, row, SampleValue(row)),
+            Is.True, $"the sample for form.{name} must be storable");
+
+        var generated = GenerateCSharp(form);
+
+        Assert.That(generated, Does.Contain($"this.{name} ="), $"form.{name} must be ONE statement on the form itself");
+        WinFormsCompile.AssertCompiles(generated, $"form.{name} emitted as Me.{name} must compile on a real Form.");
+    }
+
     // ==================================================================
     // Harness
     // ==================================================================
@@ -437,6 +605,7 @@ public class WinFormsCatalogSweepTests
         FormPropertyType.Bool => "true",
         FormPropertyType.Color => "Red",
         FormPropertyType.Enum => property.AllowedValues![0],
+        FormPropertyType.Size => "75, 23",
         _ => "sample"
     };
 }

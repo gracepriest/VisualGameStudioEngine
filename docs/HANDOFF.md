@@ -110,6 +110,169 @@ the Release `.blproj` C++ path, and MSIL are all Linux-skips here (`NativeBuildS
 
 ---
 
+## 🌐 NEWEST — 2026-09-27: web forms laid out in pixels (piece 1 of "one form, either target"), branch `feat/web-pixel-layout`
+
+Branch `feat/web-pixel-layout` (based on `feat/property-grid` @ `6af0bea1`; now carries master — see
+"Merge round 2026-09-28" below).
+
+**Merge round 2026-09-28 (final, before the PR).** Master merged twice, each tried first in a
+`git worktree add --detach` (never `git merge-tree`):
+- `b6f34b6e` merged origin/master `81e5fb13`. It brought master `3cec5030`, which made the lexer read a
+  string literal as VB does (a backslash is ordinary, `""` is the only escape) — and the designer still
+  wrote C-style escapes, so after the merge `a\b` reached the running program as `a\\b` and a line break
+  as the four characters `\r\n`, build green. **`d7cb7083`** fixes it: `FormPropertyDef.StringLiteral`
+  writes a backslash raw and spells CR/LF/tab with `vbCr`/`vbLf`/`vbCrLf`/`vbTab` joined by `&`. Caught
+  only by the Integration row `WinFormsCatalogSweepTests.CaptionsThatLookLikeSource_CompileAsStrings`.
+- `1105181f` merged `fix/web-main-startup` (`d44fb825`, reviewed + approved) — the owner-reported bug
+  below. Clean.
+- `2e291915` merged origin/master `53633acf` (#127 Not at VB's precedence, #132 MSIL Object boxing /
+  ADR-0012, #133 BC30526/BC30524). Clean; the trial and the real merge produced the same tree. JS roster
+  pin: this branch never touched `JsExecutionTierRosterTests`, so master's 85 stands.
+
+**Owner-reported bug 2026-09-28: `Sub Main` in a web project with a form.** Main ran but its output was
+hidden and the form never started unless the user hand-wrote `VgsForms.VgsDispatchForm()`. **Owner
+decision: Main is STARTUP, as on WinForms** — Main runs, then the form starts. The fix: the Canvas page
+body is a flex column so Main's content stays visible above the form; the entry point dispatches after
+Main ONLY when no user code calls or references `VgsForms.VgsDispatchForm` (decided on the IR,
+`AddressOf` included — a string is not a call); a once-per-page guard makes an existing explicit call
+harmless; the scaffold now runs `RegionWriter` itself so `InitializeComponent` exists before the first
+designer save (a never-opened form built clean and died with `this.InitializeComponent is not a
+function`). **BL8018 is RETIRED** (constant kept, marked retired in `DesignDiagnostic.cs`). Accepted
+limit: inline elements Main appends directly to `<body>` stack as flex items (one per line) — wrap them
+in a block element. Tests: `WebMainStartupTests` (node + Edge).
+
+**Chips filed this round:** an unknown-`Dock` value diagnostic (`design --check` runs no Dock check);
+designer writes that bypass the ONE selection store; the JS cross-file call gaps (module member / bare
+top-level Sub across files) — REPRODUCE FIRST on the current tree, #57 may have fixed them.
+
+**Failing on Windows on MASTER ALONE (inherited, not this branch's)** — 14 rows, A/B'd on a detached
+origin/master worktree: `AClassUsingALaterClassMember_IsAnOrderingGapOnCpp_Pinned`,
+`AGenericFreeFunction_IsAGapOnCpp_EvenFromMain_Pinned`, `MeAsAnArgumentToAModuleProcedure_IsAGapOnCpp_Pinned`,
+`TheCombinedEmission_…`, `TheSplitHeader_…`, `EveryTextRoute_UsesTheFormatter_NeverToStringOrABareCout`,
+`G8_NothingFieldInvoked_RaisesOnEveryBackend_NeverASilentSuccess`, `StringNothing_AllFourBackends_MatchTheExpectation`,
+`E12_TwoCatchClausesSameVariableName_Msil_RefusesToCompile_ADR0010D2`,
+`E9b_EveryValueTypeThroughWriteAndWriteLine_CSharpCppMsilAgree`,
+`E9e_ReturnAddressOfOnOneBranchArm_Cpp_PinsTodaysCompileFailure_Against201`, `Cpp_Runs`, `Cpp_Aggressive_Runs`,
+`CSharp_Runs`. Plus the older inherited `CppDoubleFormattingTests.Expected_IsWhatDotNetPrints` and
+`AFoldedComparison_ReachesEveryBackend_ModuloBooleanFormatting`, and the flaky
+`NonEx_variants_marshal_and_are_screen_size_dependent`.
+
+**Full-suite gate on the merged tree `758f1e0d` (Windows, clean Release build, `--blame`, both streams):**
+12094 total / 12074 passed / 18 failed / 2 skipped, 6 h 18 m, stderr empty (no abort/crash). Every failure
+is by NAME on a known list: 12 of the 14 master-alone rows above (`StringNothing_AllFourBackends_…` and
+`E9b_EveryValueTypeThroughWriteAndWriteLine_…` PASSED here, as did `AFoldedComparison_…`), plus
+`CppDoubleFormattingTests.Expected_IsWhatDotNetPrints`, the flaky
+`NonEx_variants_marshal_and_are_screen_size_dependent`, and the machine rows
+`Emit_ReplacesAnImportedModuleThatAnotherHandleHasMapped`, `Emit_ReplacesAScriptThatAnotherHandleHasMapped`,
+`SearchSnippets_EmptyQuery_ReturnsAll`, `SearchSnippets_WhitespaceQuery_ReturnsAll`. No new failure. Re-run by
+name afterwards (PixelLayout, WebMainStartup, FormDesignerAcceptance, FormBuildEmission, FormDockScript,
+FormRetargetPair, WinFormsCatalogSweep, JavaScriptProjectBuild): 262/262 passed, 0 skipped (the Edge and
+WinForms-window harnesses ran).
+Spec `docs/superpowers/specs/2026-09-27-web-pixel-layout-design.md` · plan
+`docs/superpowers/plans/2026-09-27-web-pixel-layout.md` · per-task pre-flights (they WIN over the plan)
+`…-task9-preflight.md` … `…-task14-preflight.md`; mutation record `…-task15-mutations.md` (20/20 killed).
+
+**✅ ALL 16 TASKS DONE — gate at `4a19bc4f` (2026-09-27), clean Release build:** fast subset 8322 total /
+8316 passed / 5 failed / 1 skipped — the 5 known machine failures only (same names as the Task 0 baseline
+at `a696b9c4`, 7946/5). Integration (`TestCategory=Integration` over Form*/PixelLayout/Retarget/WinForms):
+234 total / 232 passed / 2 failed — both INHERITED, failing identically on the branch base `6af0bea1` in a
+detached worktree: `CppDoubleFormattingTests.Expected_IsWhatDotNetPrints` ("∞" vs "Infinity") and
+`ModuleScopeInitializerTests.AFoldedComparison_ReachesEveryBackend_ModuloBooleanFormatting` (they match
+only because "Formatting" contains "Form"). **Waiting on: the owner's click-through** (plan Task 16 Step 7).
+The Edge harness (headless, loopback-served, real CLI build) and the WinForms reference window agree with
+the model within ±1px on every non-gap case; recorded gaps (asserted as literals): GroupBox (web fieldset
+insets 2px; WinForms docked +3/+19, positioned 0), bordered Panels draw no border on the web (WinForms
+insets 1/2px), CheckBox caption not rendered on the page, no-anchor centring 0.5px (WinForms floors). OPEN
+for the owner: the reflow script re-walks on any style write inside the form (filter to docked ids?).
+
+**Programme decisions (owner, do not relitigate):** design every form in pixels; the web page is
+desktop-exact, follows Anchor/Dock on resize, stacks on phones (secondary); a portable control library
+(piece 2); a Desktop|Web toolbar switch (piece 3); retire `.blwebform` with convert-on-open (piece 4);
+desktop-only controls badged. **Piece-1 owner decisions 2026-09-27:** phone order = "tall item, then
+pairs" (`FormReadingOrder`: greedy spanning + containment guard); a run-time `Visible` toggle re-docks
+through a small reflow script the page carries (`FormDockScript`, MutationObserver, JS mirror of
+`FormDockLayout` kept in lock-step by `FormDockScriptTests` under node).
+
+**Done (each task: implementer + spec review + quality review + mutation checks):** Tasks 0–11 —
+`FormVocabulary` (one pixels-or-cells answer), root rows via `FormRootValues.Applies` + `WebLayouts`,
+pixel geometry + vocabulary-based paste refusal, `MobileBreakpoint`, Canvas scaffold default,
+`FormDockLayout` (Designer/Runtime) + `FormDocument.DesignSize`, `FormAnchor`/`FormAnchorCss`,
+`FormReadingOrder`, canvas/placement (Task 9), the page emitter + reflow script (Task 10), lossless
+Canvas→WinForms retarget with polite BL8015 refusal (Task 11), the WinForms reference harness (Task 12 —
+also made RegionWriter emit a docked control's Designer-resolved Size and the page anchor against the
+Designer client size, both confirmed by the real window), the Edge harness (Task 13), the Canvas acceptance
+twin (Task 14), the mutation pass (Task 15), the gate + IDE drop (Task 16).
+
+**Measured in Tasks 12/13 (these were the carried questions):** WinForms run-time Visible toggle + an anchored
+sibling that must not move; overflowing Top-then-Bottom and Left-then-Right; hidden-control docking;
+bordered Panel/GroupBox client area (1–2px, fieldset legend/min-inline-size); strip AutoSize vs
+DefaultHeight at 96 DPI; PictureBox with a LOADED image anchored Left+Right and docked Fill (img ignores
+left+right without an explicit size — fixed with calc sizes, Task 10); a Literal starting with `<p>`
+(fixed with `display:flow-root`); Edge flips `style.display` so the real reflow script runs; a MenuStrip
+dropdown over a later control (z-order); 0.5px resize drift vs WinForms' floored halves.
+**Click-through list for Task 16:** the three Task 9 decisions (dashed outline on a selected docked
+control; Canvas page = outline + caption, no title bar; strips inside Panels drawn) and the 11 in the
+Task 10 pre-flight's "Decisions taken".
+**Follow-ups recorded:** the property grid shows a docked control's STORED Size while canvas + code use the
+resolved size; `FormArrange` writes a docked control's X/Y; `design --check` runs neither
+CheckAnchors nor a Dock check (chip: unknown-Dock diagnostic); CheckBox/RadioButton caption invisible on
+Canvas; WinForms→web retarget still produces Grid (piece 4); a Canvas→Grid layout switch drops Width in
+Create but keeps it in Apply (piece 4); flaky row seen once: `FormDesignerRealViewTests.F2_WithAWindowLevelKeyBinding…`.
+
+## 🧩 2026-09-26: property grid → Visual Studio parity, branch `feat/property-grid`, SLICE 1 DONE
+
+The form designer merged to master (PR #4). This is the next feature: spec
+`docs/superpowers/specs/2026-09-25-property-grid-vs-parity-design.md` (+ the measured WinForms reference beside
+it), plan `docs/superpowers/plans/2026-09-25-property-grid-vs-parity.md` (six slices; slices 1–2 at full step
+granularity, 3–6 expanded just before each starts). Owner decisions: the commonly-used property set first; ONE
+vocabulary across WinForms and web (web-only `CssClass`/`Style`); all four features (grid, editors, Events tab,
+multi-select); the catalog is extended by hand and a committed REFLECTION SNAPSHOT of `System.Windows.Forms`
+(`VisualGameStudio.Tests/Data/winforms-metadata.json`, regenerated by `tools/WinFormsMetadataDump/`) is the test
+ORACLE.
+
+**Slice 1 (data model) — done, every task spec-reviewed + quality-reviewed, all review findings fixed.**
+Catalog metadata (Category/Description/CssProperty/WebDefault/Aliases/OracleExemption), the Size type, system
+colours on both targets, per-row TextAlign with legacy aliases, the catalog-driven CSS walk (`FormCss`),
+`FormControlCatalog.FormRoot` (kept OUT of `All`) + `FormRootValues`, root binds, events as lists behind one seam
+(`FormEvents.WiredOn`), the retarget reading `FormRoot`, and the parity test (first run: 269 disagreements — every
+one fixed or exempted with a reason; exemptions fail their own test when stale). Attribution for the WinForms
+description strings: `THIRD-PARTY-NOTICES.md`.
+
+LIVE DEFECTS FIXED ALONG THE WAY (all on master's designer): a caption starting `New ` or `"` emitted as source
+(a "New Customer" button broke the build); a web form's Text edit never saved; system colours → `Color.Control`
+(CS0117); `#AARRGGBB` wrong in CSS; `Color.Bogus`/`New Foo` typed in a colour row spliced as code; a caption
+`a\b` silently compiled as "ab"; a CRLF caption rewrote every line ending of an LF user file; negative numbers
+written with U+2212 under sv-SE (grid, generated `Location`, the `.blform`); U+2028/U+2029/U+0085 in a string
+broke the C# backend (CS1010).
+
+Gate (feat/property-grid @ e0a645eb, clean build): fast subset 7806 / 5 failed = the known machine rows only
+(`Emit_Replaces…AnotherHandleHasMapped` ×2, intermittent `Emit_ReplacingAnImportedModule_LeavesNoTempFileBehind`,
+`SearchSnippets` ×2); touched Integration rows 212 / 1 failed = `AFoldedComparison_ReachesEveryBackend_ModuloBooleanFormatting`
+(JS prints `True`), which FAILS IDENTICALLY on the slice base 12e975c3 (A/B'd) — inherited, not ours. Slice-1
+mutation pass: 11/11 killed.
+
+**Slice 2 (the grid itself) — done, every task spec- + quality-reviewed, all findings fixed.** Its steps were
+re-anchored first by a pre-flight (`docs/superpowers/plans/2026-09-26-property-grid-slice2-preflight.md` — 4 blockers
+where the plan would have silently undone slice-1 fixes; its EXECUTION NOTES record every carried item). Delivered:
+absent properties display the target's default greyed; bold = changed; Reset removes the attribute; clear-means-reset;
+invalid values refused (`FormPropertyDef.Judge`), with the reason in the description pane; categories, Categorized/A-Z,
+search, collapse (`FormPropertyDisplayList`, reusable by slice 5's Events tab); the object selector (asks the ONE selection
+store); the Form's rows from `FormRoot` (ClientSize); the grid extracted into `FormPropertyGridView`. REAL-VIEW TESTS found
+live defects the piece-level tests passed over: a refused value did not snap back in the real TextBox (Avalonia skips
+re-applying an equal value — fixed by a posted two-step echo), and a refusal's reason vanished in the same canvas click
+(carried over one rebuild). Task 13 found a HANG: a named RadioButton `GroupName` spans the whole window, so two grid views
+unchecked each other forever — no GroupName now, pinned. Gate (feat/property-grid @ 4e7cccd6, clean build): fast subset
+7941 / 5 failed = the same known machine rows as slice 1; touched Integration rows 148/148. Mutation pass: 19/19 killed.
+IDE drop refreshed.
+
+**NEXT: the owner's click-through of the new grid in the IDE, then slice 3** (expand it first; its top notes carry the
+slice-1/2 review backlog and four owner questions). Four owner questions are open for
+slice 3 (TableLayoutPanel 2×2 on drop; drop the colour rows WinForms hides; GroupBox's default event `Enter` vs
+`Click`; BackgroundWorker's hand-written descriptions) — see the plan's slice-3 notes, which also carry a backlog
+from slice 1's reviews.
+
+---
+
 ## 🚀 START HERE — 2026-09-21: Task 24 is three commits in; **24a, 24b and 24c are all DONE, GATED and PUSHED**
 
 **Written for the session that picks this up. Newer than everything below; supersedes it where they
@@ -1207,6 +1370,8 @@ finding that matters needs a gate or a filed issue.
 #### Diagnostics
 
 **BL8018** claimed and in the band table (form pages exist, nothing calls the dispatch).
+⚠ **Superseded 2026-09-28: BL8018 is RETIRED** — the JavaScript entry point now starts the form itself
+(after `Main`, when no user code calls the dispatch). See the NEWEST section at the top.
 **BL8031 left alone** — the spec and plan reserve it for one specific `--check` collision.
 
 ### What the next session should pick up
@@ -1221,9 +1386,9 @@ finding that matters needs a gate or a filed issue.
    puts BL8011 in the Error List. That path is covered by caller tests driving the real `SaveAsync`,
    but nobody has watched it happen.
 3. **Decide the multi-edge `Anchor` question above.** Until then anchoring is single-edge or `Dock`.
-4. **Decide follow-up 13**: nothing makes `Main()` call the dispatch. BL8018 warns, which is the
-   honest minimum, but a warning is not the feature working. Both ways to close it edit the user's
-   code, which is why neither was done unilaterally.
+4. ~~**Decide follow-up 13**: nothing makes `Main()` call the dispatch.~~ **DONE 2026-09-28** (owner
+   decision: Main is startup, as on WinForms). The entry point dispatches after `Main` unless user code
+   calls the dispatch itself; BL8018 is retired. See the NEWEST section at the top.
 5. **File the seventeen chips** in `docs/form-designer-followups.md`. Several are runtime failures
    from clean builds, which is the highest-severity shape this repo tracks. Entries 3 and 14 are
    the SAME compiler bug — file them together. Entry 15's residue (Win32 `*.bas` matching `.basic`)

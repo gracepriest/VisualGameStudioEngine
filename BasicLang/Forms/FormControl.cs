@@ -92,9 +92,22 @@ public sealed class FormControl
     public FormControlDef? Definition => FormControlCatalog.Find(Kind);
 
     /// <summary>
+    /// ⛔ THE one answer to "is this control hidden when it runs": its <c>Visible</c> property parses to false.
+    /// The page's <c>display:none</c> (<c>FormCss</c>, <see cref="FormCssConverter.VisibleToDisplay"/>) and the
+    /// run-time dock resolver (<c>FormDockLayout</c>, <c>FormDockMode.Runtime</c>) both ask it, so the page
+    /// cannot hide a control the docking still makes room for. Absent or unparseable is NOT hidden — the Bool
+    /// rule the catalog's <c>Accepts</c> uses, and WinForms' default of true.
+    /// </summary>
+    public bool IsHidden => Properties.TryGetValue("Visible", out var value) && IsHiddenValue(value);
+
+    /// <summary>The value half of <see cref="IsHidden"/>: true exactly when <paramref name="visible"/> parses to false.</summary>
+    public static bool IsHiddenValue(string? visible) => bool.TryParse(visible, out var shown) && !shown;
+
+    /// <summary>
     /// ⛔⛔ <b>THE one answer to "which edge is this strip docked to".</b> Every consumer asks it
-    /// here — the web emitter (<c>FormAssetEmitter.Html</c>, which puts a Bottom strip's
-    /// <c>&lt;footer&gt;</c> after the form div) and the designer canvas
+    /// here — the web emitter on a Grid/Flow page (<c>FormAssetEmitter.Html</c>, which puts a Bottom
+    /// strip's <c>&lt;footer&gt;</c> after the form div; a Canvas page places strips through
+    /// <c>FormDockLayout</c>, which calls this) and the designer canvas
     /// (<c>FormCanvasTransform.Bands</c>, which draws its band at the bottom of the surface).
     ///
     /// <para>⛔ Those two were written as a MIRRORED PAIR and consolidated here the moment the

@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 
 namespace BasicLang.Forms;
@@ -6,7 +7,8 @@ namespace BasicLang.Forms;
 /// <param name="DocumentFileName">e.g. <c>LoginForm.blwebform</c>.</param>
 /// <param name="DocumentText">A minimal, valid form document.</param>
 /// <param name="CodeFileName">e.g. <c>LoginForm.bas</c>.</param>
-/// <param name="CodeText">An empty class carrying two empty designer regions.</param>
+/// <param name="CodeText">An empty class carrying the two designer regions, already generated for the empty form
+/// (so <c>InitializeComponent</c> exists before the first designer save).</param>
 public sealed record FormScaffold(
     string DocumentFileName,
     string DocumentText,
@@ -66,6 +68,14 @@ public static class FormScaffolder
     }
 
     /// <summary>
+    /// 800x450 is the size <c>dotnet new winforms</c> gives a new form, so a form created here and one created
+    /// by the shipped template open the same size. ⛔ A new Canvas PAGE takes the same design size (spec
+    /// 2026-09-27 §2.5): one number for "a new form's size", on both targets.
+    /// </summary>
+    private const int DesignWidth = 800;
+    private const int DesignHeight = 450;
+
+    /// <summary>
     /// The pair for a new, empty form.
     ///
     /// <para>The <c>.bas</c> carries both regions <b>already present and already hashed</b>, so the
@@ -89,7 +99,11 @@ public static class FormScaffolder
     /// is an unresolvable .NET member typed as <c>Object</c>, so there is no declared delegate to
     /// mismatch.</para>
     /// </summary>
-    public static FormScaffold Create(string formName, FormTarget target = FormTarget.Web)
+    /// <param name="webLayout">A new web form's layout: Canvas (spec 2026-09-27 D1, the default — designed like a
+    /// WinForms form) or Grid (the pre-piece-1 scaffold, which tests that build their page from a Grid scaffold
+    /// pin). There is no Flow scaffold. Ignored for WinForms.</param>
+    public static FormScaffold Create(
+        string formName, FormTarget target = FormTarget.Web, FormLayoutKind webLayout = FormLayoutKind.Canvas)
     {
         var illegal = DescribeIllegalName(formName);
         if (illegal != null)
@@ -100,29 +114,74 @@ public static class FormScaffolder
         var document = new FormDocument { Target = target, Name = formName };
         if (target == FormTarget.Web)
         {
-            document.Layout = new FormLayout
+            switch (webLayout)
             {
-                Kind = FormLayoutKind.Grid, Cols = "auto,1fr", Rows = "auto", Gap = "8px"
-            };
+                case FormLayoutKind.Canvas:
+                    // A Canvas page is designed like a window: the same design size, plus the phone breakpoint.
+                    document.Layout = new FormLayout
+                    {
+                        Kind = FormLayoutKind.Canvas,
+                        MobileBreakpoint = FormLayout.DefaultMobileBreakpoint.ToString(CultureInfo.InvariantCulture)
+                    };
+                    document.Width = DesignWidth;
+                    document.Height = DesignHeight;
+                    break;
+
+                case FormLayoutKind.Grid:
+                    document.Layout = new FormLayout
+                    {
+                        Kind = FormLayoutKind.Grid, Cols = "auto,1fr", Rows = "auto", Gap = "8px"
+                    };
+                    break;
+
+                default:
+                    throw new ArgumentOutOfRangeException(nameof(webLayout), webLayout,
+                        "a new web form is a Canvas page (the default) or a Grid page; there is no Flow scaffold.");
+            }
         }
         else
         {
-            // D3's other half: a window has a size and a caption where a page has a layout. 800x450
-            // is the size `dotnet new winforms` gives a new form, so a form created here and a form
-            // created by the shipped template open the same size rather than differing for no
-            // reason the user could name.
-            document.Width = 800;
-            document.Height = 450;
+            // D3's other half: a window has a size and a caption where a page has a layout.
+            document.Width = DesignWidth;
+            document.Height = DesignHeight;
             document.Text = formName;
         }
 
         var documentFileName = formName + document.FileExtension;
+        var codeFileName = formName + ".bas";
 
         return new FormScaffold(
             documentFileName,
             Serialization.FormDocumentWriter.Create(document),
-            formName + ".bas",
-            CodeBehind(formName, documentFileName, target));
+            codeFileName,
+            WithGeneratedRegions(CodeBehind(formName, documentFileName, target), codeFileName, document, documentFileName));
+    }
+
+    /// <summary>
+    /// ⛔⛔ The scaffold carries the designer's OWN output for the empty form, not two empty regions (owner report
+    /// 2026-09-28). The constructor calls <c>Me.InitializeComponent()</c>, and with an empty init region no such method
+    /// existed until the designer's first save wrote one: a form added and built without ever being opened in the
+    /// designer compiled clean — BasicLang does not report the missing method on the JavaScript backend — and died on
+    /// load with <c>TypeError: this.InitializeComponent is not a function</c>.
+    ///
+    /// <para>Written by <see cref="RegionWriter"/> itself rather than by hand here, so the body and its hash are exactly
+    /// what the first save would write: that save finds the regions Canon (never BL8011), and a save of the untouched
+    /// form changes nothing. A second hand-written copy of the generator's empty output is how the two would come to
+    /// disagree.</para>
+    /// </summary>
+    private static string WithGeneratedRegions(
+        string code, string codeFileName, FormDocument document, string documentFileName)
+    {
+        var write = RegionWriter.Write(codeFileName, code, document, documentFileName);
+        if (write.Refused)
+        {
+            // Unreachable for an empty form of a legal name: nothing in it can be refused. Loud if that stops being true.
+            throw new InvalidOperationException(
+                "the region writer refused a new, empty form: " +
+                string.Join("; ", write.Diagnostics.Select(d => d.Message)));
+        }
+
+        return write.Text;
     }
 
     private static void AppendInitRegion(

@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Xml.Linq;
 
 namespace BasicLang.Forms.Serialization;
@@ -85,21 +86,47 @@ public static class FormDocumentWriter
             new XAttribute("Name", model.Name),
             new XAttribute("Version", model.Version));
 
-        if (model.Target == FormTarget.WinForms)
+        // Text is ONE vocabulary on both targets (D2). Null writes nothing.
+        root.SetAttributeValue("Text", model.Text);
+
+        // The client size of a PIXEL document — a window, or a Canvas page (spec 2026-09-27 D2). ⛔ Asked of
+        // FormVocabulary, never of the target: a Canvas page has a size AND a <Layout>.
+        if (FormVocabulary.IsPixel(model))
         {
-            // The window, not the page: a client size and a caption. D3's divergence, at the root.
             root.SetAttributeValue("Width", model.Width);
             root.SetAttributeValue("Height", model.Height);
-            root.SetAttributeValue("Text", model.Text);
         }
-        else if (model.Layout != null)
+
+        if (model.Target == FormTarget.Web && model.Layout != null)
         {
             root.Add(LayoutElement(model.Layout));
         }
 
+        // ⛔ An unknown attribute never overwrites a MODELLED value. SetAttributeValue replaces, and this loop
+        // runs after the modelled writes — so a Grid page's unknown Width="640", switched to Canvas and given
+        // a design size of 800, wrote 640. Skipped only when the model HOLDS a value for the row the
+        // attribute now belongs to: a Degraded Width="12px" has a null model value and still round-trips
+        // from here. (ApplyToDocument has no such loop — the unknown attributes are already in the tree and
+        // ApplyFormAttributes writes over them — so it needs no guard.)
+        // ⚠ Recorded trap, the reverse switch: a Canvas page switched to Grid LOSES its Width/Height here
+        // (modelled, so never an unknown attribute; not pixel, so not written), while Apply KEEPS the
+        // tree's text. Made consistent only by writing a size onto a Grid page, which D3 says it has not.
+        var layout = FormVocabulary.LayoutOf(model);
         foreach (var (name, value) in model.UnknownAttributes)
         {
+            if (FormRootValues.RowForAttribute(name, model.Target, layout) is { } row &&
+                FormRootValues.Get(model, row) != null)
+            {
+                continue;
+            }
+
             root.SetAttributeValue(name, value);
+        }
+
+        // The form's own event wiring, before <Controls> — the same place Apply inserts it.
+        foreach (var bind in model.Binds)
+        {
+            root.Add(BindElement(bind));
         }
 
         var controls = new XElement("Controls");
@@ -166,18 +193,26 @@ public static class FormDocumentWriter
         SetAttributeIfMeaningful(root, "Name", model.Name, nameWhenAbsent);
         SetIntAttributeIfChanged(root, "Version", model.Version, FormDocumentReader.SupportedVersion);
 
-        // D3, at the root: a window has a size and a caption, a page has a layout and may carry
-        // literal markup. Each side writes only its own vocabulary — writing both would put a
-        // <Layout> into a .blform on the first save, and the file would then be refused by its own
-        // reader on the next open.
-        if (model.Target == FormTarget.WinForms)
+        // ⛔ Text is written on BOTH targets (D2). Before this, a web form's caption edit reached the
+        // model and never the file — the grid showed it, the next open lost it. Null removes it: a
+        // string cannot be "present but unparseable", so there is nothing to protect by keeping it.
+        SetAttributeIfChanged(root, "Text", model.Text);
+
+        // D3, at the root: a pixel document has a size — the pixel root's Width/Height, a .blform's or a
+        // Canvas page's — and a page has a layout and may carry literal markup.
+        // ⛔ A Canvas page has BOTH: a size (pixel vocabulary, FormVocabulary) and a <Layout> (web). A .blform
+        // never gets a <Layout> — its own reader would read it as an unknown element on the next open.
+        if (FormVocabulary.IsPixel(model))
         {
             ApplyFormAttributes(root, model);
         }
-        else
+
+        if (model.Target == FormTarget.Web)
         {
             ApplyLayout(root, model);
         }
+
+        ApplyBindList(root, model.Binds, insertBefore: root.Element("Controls") ?? root.Element("Components"));
 
         ApplyControls(root, model);
         ApplyComponents(root, model);
@@ -219,30 +254,26 @@ public static class FormDocumentWriter
     }
 
     /// <summary>
-    /// The <c>.blform</c> root's <c>Width</c>/<c>Height</c>/<c>Text</c>.
+    /// The pixel root's <c>Width</c>/<c>Height</c> — a <c>.blform</c>'s or a Canvas page's.
     ///
     /// <para>⛔ A null model value means "the document did not say" — either the attribute was
     /// absent, or it was present and unparseable, in which case the reader left it unmodelled and
-    /// the unknown-attribute round trip is the only thing preserving it. Either way, writing null
-    /// here as a removal would delete an attribute the user wrote and the designer never
-    /// understood. Clearing the caption from the designer sets <c>Text</c> to the empty string,
-    /// which IS written; it is not the same state as null.</para>
+    /// the unknown-attribute round trip is the only thing preserving it (its ClientSize row is
+    /// Degraded). Either way, writing null here as a removal would delete an attribute the user wrote
+    /// and the designer never understood.</para>
     /// </summary>
     private static void ApplyFormAttributes(XElement root, FormDocument model)
     {
+        // ⛔ Invariant: a Degraded non-positive size is kept modelled, and under sv-SE `-5` formats with a
+        // U+2212 minus — a no-op save would rewrite the user's text.
         if (model.Width != null)
         {
-            SetAttributeIfChanged(root, "Width", model.Width.Value.ToString());
+            SetAttributeIfChanged(root, "Width", model.Width.Value.ToString(System.Globalization.CultureInfo.InvariantCulture));
         }
 
         if (model.Height != null)
         {
-            SetAttributeIfChanged(root, "Height", model.Height.Value.ToString());
-        }
-
-        if (model.Text != null)
-        {
-            SetAttributeIfChanged(root, "Text", model.Text);
+            SetAttributeIfChanged(root, "Height", model.Height.Value.ToString(System.Globalization.CultureInfo.InvariantCulture));
         }
     }
 
@@ -271,6 +302,9 @@ public static class FormDocumentWriter
         SetAttributeIfChanged(element, "Rows", model.Layout.Rows);
         SetAttributeIfChanged(element, "Gap", model.Layout.Gap);
         SetAttributeIfChanged(element, "Dir", model.Layout.Dir);
+        // ⛔ Remove-on-null is correct here (plan scope call S1): null means ABSENT in this storage — an
+        // unusable value is non-null raw text, so no save can delete what the user wrote.
+        SetAttributeIfChanged(element, "MobileBreakpoint", model.Layout.MobileBreakpoint);
     }
 
     private static void ApplyControls(XElement root, FormDocument model)
@@ -470,13 +504,21 @@ public static class FormDocumentWriter
         }
     }
 
-    private static void ApplyBinds(XElement element, FormControl control)
-    {
-        var existing = element.Elements("Bind").ToList();
+    private static void ApplyBinds(XElement element, FormControl control) =>
+        ApplyBindList(element, control.Binds, insertBefore: null);
 
-        for (var i = 0; i < control.Binds.Count; i++)
+    /// <summary>
+    /// Patches <paramref name="owner"/>'s <c>&lt;Bind&gt;</c> children in place — for a control, or for
+    /// the form's root. ONE implementation, so the two cannot drift.
+    /// </summary>
+    /// <param name="insertBefore">Where a NEW bind goes; null appends after the last element (a control's rule).</param>
+    private static void ApplyBindList(XElement owner, IReadOnlyList<FormBind> binds, XElement? insertBefore)
+    {
+        var existing = owner.Elements("Bind").ToList();
+
+        for (var i = 0; i < binds.Count; i++)
         {
-            var bind = control.Binds[i];
+            var bind = binds[i];
             if (i < existing.Count)
             {
                 SetAttributeIfChanged(existing[i], "Event", bind.Event);
@@ -487,11 +529,11 @@ public static class FormDocumentWriter
             }
             else
             {
-                InsertPreservingIndent(element, BindElement(bind), before: null);
+                InsertPreservingIndent(owner, BindElement(bind), before: insertBefore);
             }
         }
 
-        for (var i = control.Binds.Count; i < existing.Count; i++)
+        for (var i = binds.Count; i < existing.Count; i++)
         {
             RemoveWithLeadingWhitespace(existing[i]);
         }
@@ -540,6 +582,7 @@ public static class FormDocumentWriter
         element.SetAttributeValue("Rows", layout.Rows);
         element.SetAttributeValue("Gap", layout.Gap);
         element.SetAttributeValue("Dir", layout.Dir);
+        element.SetAttributeValue("MobileBreakpoint", layout.MobileBreakpoint);
         return element;
     }
 
@@ -697,6 +740,13 @@ public static class FormDocumentWriter
     ///         AWAY from that default, which is the one case that is a real edit. Renumbering the
     ///         tab order still reaches the document; re-saving an untouched one does not.</item>
     /// </list>
+    ///
+    /// <para>⛔⛔ Culture-INVARIANT both ways, and parsed with the READER's parser
+    /// (<see cref="FormPropertyDef.TryParseInt"/>). <c>value.ToString()</c> wrote X with a U+2212
+    /// minus under sv-SE — a file that round-tripped on its author's machine and fell silently to 0 on
+    /// en-US/CI. And a no-op comparison with a DIFFERENT parser than the reader's would call a value
+    /// "unparseable" that the reader parsed (or the reverse), and a save that changed nothing would
+    /// rewrite the user's text.</para>
     /// </summary>
     private static void SetIntAttributeIfChanged(XElement element, string name, int value, int absentMeans)
     {
@@ -706,17 +756,17 @@ public static class FormDocumentWriter
         {
             if (value != absentMeans)
             {
-                element.SetAttributeValue(name, value.ToString());
+                element.SetAttributeValue(name, Number(value));
             }
 
             return;
         }
 
-        if (int.TryParse(existing.Value, out var current))
+        if (FormPropertyDef.TryParseInt(existing.Value, out var current))
         {
             if (current != value)
             {
-                existing.Value = value.ToString();
+                existing.Value = Number(value);
             }
 
             return;
@@ -724,9 +774,12 @@ public static class FormDocumentWriter
 
         if (value != absentMeans)
         {
-            existing.Value = value.ToString();
+            existing.Value = Number(value);
         }
     }
+
+    /// <summary>A document integer. ⛔ Invariant — see <see cref="SetIntAttributeIfChanged"/>.</summary>
+    private static string Number(int value) => value.ToString(CultureInfo.InvariantCulture);
 
     /// <summary>
     /// The same rule for an attribute whose default means ABSENT — <c>ColSpan</c>, <c>RowSpan</c>.
@@ -748,7 +801,7 @@ public static class FormDocumentWriter
 
         if (existing != null)
         {
-            if (int.TryParse(existing.Value, out var current))
+            if (FormPropertyDef.TryParseInt(existing.Value, out var current))
             {
                 if (current == value)
                 {
@@ -762,7 +815,7 @@ public static class FormDocumentWriter
             }
         }
 
-        SetAttributeIfChanged(element, name, value == defaultValue ? null : value.ToString());
+        SetAttributeIfChanged(element, name, value == defaultValue ? null : Number(value));
     }
 
     private static void SetAttributeIfChanged(XElement element, string name, string? value)

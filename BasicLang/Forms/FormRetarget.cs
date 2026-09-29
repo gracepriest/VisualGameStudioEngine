@@ -34,6 +34,10 @@ public sealed record FormRetargetPair(
 /// Anything cleverer (tolerances, span inference, auto-placement emulation) would be a guess the
 /// user could not review, which is the silent loss the task forbids.</para>
 ///
+/// <para>⚠ A <b>Canvas</b> page is on the pixel side of that edge (spec 2026-09-27 §6): going to
+/// WinForms it crosses EXACTLY — geometry and design size copied, no BL8025 at all. WinForms → web
+/// still produces a Grid page (piece 4 replaces the retarget).</para>
+///
 /// <para>⚠ The DOCUMENT only. The code-behind is the user's own class, whose base type and handler
 /// signatures differ by target; the pair-producing entry point scaffolds a fresh one beside the new
 /// document and never rewrites the original.</para>
@@ -100,7 +104,7 @@ public static class FormRetarget
     /// </summary>
     /// <exception cref="ArgumentException">
     /// The form's name cannot be a class name (<see cref="FormScaffolder.DescribeIllegalName"/>),
-    /// or the source is already on <paramref name="to"/>. Nothing is produced.
+    /// the source is already on <paramref name="to"/>, or <see cref="Refusals"/> refuses it. Nothing is produced.
     /// </exception>
     public static FormRetargetPair ConvertToPair(FormDocument source, FormTarget to)
     {
@@ -110,6 +114,16 @@ public static class FormRetarget
         if (illegal != null)
         {
             throw new ArgumentException(illegal, nameof(source));
+        }
+
+        // A refused source is the CALLER's input, not an impossible state: an argument error carrying the
+        // findings, for a caller that did not ask Refusals first. Both shipping callers do ask.
+        var refusals = Refusals(source, to);
+        if (refusals.Count > 0)
+        {
+            throw new ArgumentException(
+                $"'{source.Name}' cannot be retargeted: " + string.Join("; ", refusals.Select(d => d.Message)),
+                nameof(source));
         }
 
         var result = Convert(source, to);
@@ -154,6 +168,25 @@ public static class FormRetarget
             result.Diagnostics);
     }
 
+    /// <summary>
+    /// Why <paramref name="source"/> cannot be retargeted to <paramref name="to"/> at all — errors, each the
+    /// SAME finding the destination's region writer would refuse the pair with. Empty when it can. Callers ask
+    /// this before <see cref="ConvertToPair"/> and report it as they report a reader refusal: nothing written.
+    ///
+    /// <para>⛔ Today one rule (Task 11 review): a Canvas page's Anchor crosses VERBATIM to the window, so an
+    /// unknown edge (<c>Top,Rigth</c>, hand-edited — the reader does not validate Anchor) is refused with the
+    /// region writer's own BL8015, the finding the page's own web build already gives. Going to the web the
+    /// anchor becomes a cell (BL8025) and is never emitted, so there is nothing to refuse.</para>
+    /// </summary>
+    public static IReadOnlyList<DesignDiagnostic> Refusals(FormDocument source, FormTarget to)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+
+        return to == FormTarget.WinForms
+            ? RegionWriter.AnchorRefusals(source.SourcePath, source)
+            : Array.Empty<DesignDiagnostic>();
+    }
+
     private static string Describe(FormTarget target) => target == FormTarget.Web ? "web" : "WinForms";
 
     /// <summary>One conversion's working state, so the passes can share it without a parameter list each.</summary>
@@ -162,6 +195,12 @@ public static class FormRetarget
         private readonly FormDocument _source;
         private readonly FormTarget _from;
         private readonly FormTarget _to;
+
+        /// <summary>
+        /// The layout the DESTINATION document gets: WinForms → web produces Grid (ToCells; spec 2026-09-27 §6 —
+        /// unchanged in piece 1, piece 4 replaces the retarget); a window has none.
+        /// </summary>
+        private readonly FormLayoutKind? _toLayout;
 
         /// <summary>
         /// The geometry each NEW control was converted from, in the source vocabulary — kept apart
@@ -175,6 +214,7 @@ public static class FormRetarget
             _source = source;
             _from = source.Target;
             _to = to;
+            _toLayout = to == FormTarget.Web ? FormLayoutKind.Grid : null;
             Document = new FormDocument { Target = to, Name = source.Name, Version = source.Version };
         }
 
@@ -188,18 +228,46 @@ public static class FormRetarget
 
         public void ConvertRoot()
         {
+            // Text is ONE vocabulary on both targets (D2, spec §2.3). ⚠ A caption EQUAL to the name is
+            // written as ABSENCE on the page, whose title is Text ?? Name, so the page shows the same thing
+            // either way. Byte-identical round trips this keeps: a page with no Text → window (captioned
+            // with its name, ToPixels) → page with no Text; and a window whose caption is its name →
+            // page → window with the same caption. ⚠ The one normalisation: an EXPLICIT web Text equal to
+            // the name comes back from a round trip as absence (title unchanged) — pinned by
+            // FormRetargetTests.RoundTrip_AnExplicitWebCaptionEqualToTheName_ComesBackAsAbsence_TitleUnchanged.
+            Document.Text = _to == FormTarget.Web && string.Equals(_source.Text, _source.Name, StringComparison.Ordinal)
+                ? null
+                : _source.Text;
+
             foreach (var (name, value) in _source.UnknownAttributes)
             {
+                var toRow = FormRootValues.RowForAttribute(name, _to, _toLayout);
+                var fromRow = FormRootValues.RowForAttribute(name, _from, FormVocabulary.LayoutOf(_source));
+
+                // ⛔ The SOURCE's own degraded storage (an unparseable Width on a .blform is kept as an
+                // unknown attribute so it round-trips — plan scope call S3). It is a FormRoot row, not
+                // "content we do not model", so it is named, never carried: on a destination without the
+                // row it would be dead data, and on one with it, a stale value read as the real one.
+                if (fromRow != null)
+                {
+                    Warn(DesignCodes.RetargetPropertyLost,
+                        $"'form.{fromRow.Name}' could not be read on the {Describe(_from)} form ('{name}=\"{value}\"') " +
+                        (FormRootValues.Applies(fromRow, _to, _toLayout)
+                            ? $"and was dropped rather than carried as the {Describe(_to)} form's value."
+                            : $"and does not exist on a {Describe(_to)} one, so it was dropped."));
+                    continue;
+                }
+
                 // ⛔ A .blwebform root carrying Width="400" holds it as an unknown attribute; the
                 // WinForms reader would model that as the window's width. Carrying it across would
-                // let a stale number overrule the size this retarget computed — Create() writes
+                // let a stale number overrule the value this retarget derived — Create() writes
                 // unknown attributes AFTER the modelled ones and SetAttributeValue replaces.
-                if (IsRootAttributeModelledOn(name, _to))
+                if (toRow != null)
                 {
                     Warn(DesignCodes.RetargetPropertyLost,
                         $"the form's '{name}=\"{value}\"' attribute is not modelled on a {Describe(_from)} " +
-                        $"document but WOULD be read as the window's {name} on a {Describe(_to)} one. It was " +
-                        "dropped rather than allowed to overrule the size this retarget derived.");
+                        $"document but WOULD be read as 'form.{toRow.Name}' on a {Describe(_to)} one. It was " +
+                        "dropped rather than allowed to overrule the value this retarget derived.");
                     continue;
                 }
 
@@ -221,13 +289,49 @@ public static class FormRetarget
                 Document.UnknownChildren.Add(new XElement(child));
             }
 
+            ConvertRootBinds();
+
             // Components (Task 25) cross in ConvertComponents, with the same kind/property/bind
             // rules as controls and no geometry pass — see FormRetargetTests.
             Document.Resources.AddRange(_source.Resources.Select(e => new XElement(e)));
         }
 
-        private static bool IsRootAttributeModelledOn(string name, FormTarget target) =>
-            target == FormTarget.WinForms && name is "Width" or "Height" or "Text";
+        /// <summary>
+        /// The form's own binds (spec §2.3): a bind whose event is wired on the destination crosses under
+        /// the destination's name (through the SAME seam the emitter asks); any other is dropped and NAMED.
+        /// ⚠ The Form has no catalog events until slice 5, so today every root bind is named — and the
+        /// crossing branch below is UNTESTED until then.
+        /// </summary>
+        private void ConvertRootBinds()
+        {
+            // ⚠ SLICE 5: unify with ConvertBinds on FormEvents.WiredOn (one crossing rule).
+            foreach (var bind in _source.Binds)
+            {
+                // Reserved data binding is parsed and round-tripped, never interpreted — including here.
+                if (bind.UsesReservedDataBinding)
+                {
+                    Document.Binds.Add(bind.Clone());
+                    continue;
+                }
+
+                var crossing = FormEvents.WiredOn(FormControlCatalog.FormRoot, _from)
+                    .FirstOrDefault(e => string.Equals(FormEvents.NameOn(e, _from), bind.Event, StringComparison.OrdinalIgnoreCase));
+                var toName = crossing != null && FormEvents.WiredOn(FormControlCatalog.FormRoot, _to).Contains(crossing)
+                    ? FormEvents.NameOn(crossing, _to)
+                    : null;
+
+                if (toName != null)
+                {
+                    Document.Binds.Add(new FormBind { Event = toName, Handler = bind.Handler });
+                    continue;
+                }
+
+                Warn(DesignCodes.RetargetBindLost,
+                    $"'form' wires its '{bind.Event}' event to {bind.Handler}, and the catalog knows no " +
+                    $"{Describe(_to)} name for that form event. The wiring was dropped; wire {bind.Handler} " +
+                    "by hand on the other side.");
+            }
+        }
 
         private static bool IsRootElementModelledOn(string name, FormTarget target) =>
             target == FormTarget.Web && name is "Layout" or "Literal";
@@ -280,6 +384,13 @@ public static class FormRetarget
         /// order, at its position among its siblings — so a TabControl's worth of buttons is not
         /// lost with the TabControl.
         /// </summary>
+        /// <remarks>
+        /// ⚠ The offset is the container's STORED X/Y. For a DOCKED container on a pixel source that is not
+        /// where it sits — its rect is resolved by <see cref="FormDockLayout"/>. Unreachable from the reader
+        /// today (every web row has a WinForms type, so nothing on a Canvas page is hoisted going to
+        /// WinForms; Task 11 pre-flight B2); the day a web-only container row lands, translate by the
+        /// resolved rect here.
+        /// </remarks>
         private void Hoist(FormControl source, List<FormControl> into, string where, (int X, int Y) offset)
         {
             var childOffset = source.Geometry is PixelGeometry pixel
@@ -334,6 +445,20 @@ public static class FormRetarget
                 }
 
                 control.Properties[name] = value;
+
+                // The property exists on both sides but the destination refuses this VALUE (a system
+                // colour with no CSS equivalent going to the web; a CSS colour name System.Drawing.Color
+                // lacks going to WinForms). Preserved — it is the user's text, and the other side opens
+                // it Degraded — but its meaning is lost, so it is NAMED. ⚠ The reason is the catalog's
+                // own (DescribeRefusal, which throws on an accepted value — hence only after refusal).
+                // ⛔ Only a value the SOURCE could use: one already Degraded before the retarget (Int
+                // "abc", Enum "Bogus") lost nothing here, and its Degraded row on each side says so.
+                if (property != null && property.Accepts(value, _from) && !property.Accepts(value, _to))
+                {
+                    Warn(DesignCodes.RetargetPropertyLost,
+                        $"'{source.Id}.{name}' = \"{value}\" crosses but is not usable on a {Describe(_to)} " +
+                        $"{source.Kind}: {property.DescribeRefusal(value, _to)}");
+                }
             }
 
             foreach (var (name, value) in source.UnknownAttributes)
@@ -341,7 +466,7 @@ public static class FormRetarget
                 // ⛔ The other format's layout vocabulary. A .blform control carrying a stray Col="2"
                 // holds it as an unknown attribute; carried onto the web control, Create() would write
                 // it over the cell this retarget derived. Dropped and named, never silently honoured.
-                if (FormControlCatalog.IsStructural(name, _to))
+                if (FormControlCatalog.IsStructural(name, _to, _toLayout))
                 {
                     Warn(DesignCodes.RetargetPropertyLost,
                         $"'{source.Id}.{name}' = \"{value}\" is not a {source.Kind} property, and a " +
@@ -356,6 +481,8 @@ public static class FormRetarget
 
         private void ConvertBinds(FormControl source, FormControl control, FormControlDef definition)
         {
+            // ⚠ SLICE 5: unify with ConvertRootBinds on FormEvents.WiredOn (one crossing rule). Today a
+            // control crosses on its DefaultEvent only; the root asks WiredOn/NameOn.
             var fromEvent = definition.DefaultEvent(_from);
             var toEvent = definition.DefaultEvent(_to);
 
@@ -443,17 +570,14 @@ public static class FormRetarget
                   "bind if it should not.");
         }
 
-        /// <summary>Equality in the property's own terms: <c>True</c> and <c>true</c> are one Bool.</summary>
-        private static bool SameValue(FormPropertyDef? property, string a, string b)
-        {
-            if (property?.Type == FormPropertyType.Bool &&
-                bool.TryParse(a, out var x) && bool.TryParse(b, out var y))
-            {
-                return x == y;
-            }
-
-            return string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
-        }
+        /// <summary>
+        /// Equality in the property's own terms (<c>True</c> and <c>true</c> are one Bool) — the catalog's
+        /// one answer, <see cref="FormPropertyDef.SameValue"/>. ⚠ Both callers compare against a
+        /// <see cref="FormImpliedProperty"/> value, which is a Bool today; a property the catalog does not
+        /// know keeps the old case-insensitive comparison.
+        /// </summary>
+        private static bool SameValue(FormPropertyDef? property, string a, string b) =>
+            property?.SameValue(a, b) ?? string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
 
         private static FormGeometry? Translate(FormGeometry? geometry, (int X, int Y) offset)
         {
@@ -487,7 +611,6 @@ public static class FormRetarget
             var lost = new List<string>();
             if (_source.Width != null) lost.Add($"Width={_source.Width}");
             if (_source.Height != null) lost.Add($"Height={_source.Height}");
-            if (_source.Text != null) lost.Add($"Text=\"{_source.Text}\"");
 
             Warn(DesignCodes.RetargetLayoutCrossed,
                 (lost.Count > 0
@@ -547,12 +670,22 @@ public static class FormRetarget
 
         public void ToPixels()
         {
+            // ⛔ A Canvas page already speaks pixels (spec 2026-09-27 §6): nothing is DERIVED, so nothing is
+            // reported at the pixel⇄cell edge — no BL8025 for the page or for any control.
+            if (FormVocabulary.LayoutOf(_source) == FormLayoutKind.Canvas)
+            {
+                CopyPixels();
+                return;
+            }
+
             var layout = _source.Layout ?? new FormLayout();
             var (right, bottom) = Place(Document.Controls, layout);
 
             Document.Width = Math.Max(MinimumWidth, right + Margin);
             Document.Height = Math.Max(MinimumHeight, bottom + Margin);
-            Document.Text = _source.Name;
+            // The caption crossed in ConvertRoot; a page with none becomes a window captioned with its
+            // name — which is what the page's title showed (Text ?? Name).
+            Document.Text ??= _source.Name;
 
             var described = _source.Layout == null
                 ? "the page had no <Layout>, so its controls flowed in document order"
@@ -572,12 +705,79 @@ public static class FormRetarget
 
         private static string DescribeLayout(FormLayout layout)
         {
+            var parts = GridAttributes(layout);
+            // The reader keeps MobileBreakpoint on ANY <Layout>; on a Grid/Flow page it is not a row, but it is
+            // the user's text and it is lost with the layout, so it is named with it.
+            if (layout.MobileBreakpoint != null) parts.Add($"MobileBreakpoint=\"{layout.MobileBreakpoint}\"");
+            return parts.Count == 0 ? "no attributes" : string.Join(" ", parts);
+        }
+
+        /// <summary>The cell/flow vocabulary on a <c>&lt;Layout&gt;</c>, verbatim, in document-attribute form.</summary>
+        private static List<string> GridAttributes(FormLayout layout)
+        {
             var parts = new List<string>();
             if (layout.Cols != null) parts.Add($"Cols=\"{layout.Cols}\"");
             if (layout.Rows != null) parts.Add($"Rows=\"{layout.Rows}\"");
             if (layout.Gap != null) parts.Add($"Gap=\"{layout.Gap}\"");
             if (layout.Dir != null) parts.Add($"Dir=\"{layout.Dir}\"");
-            return parts.Count == 0 ? "no attributes" : string.Join(" ", parts);
+            return parts;
+        }
+
+        // ==============================================================
+        // Canvas web → WinForms: the page's own pixels, exactly (spec 2026-09-27 §6)
+        // ==============================================================
+
+        /// <summary>
+        /// A Canvas page crosses LOSSLESSLY: every Positioned control's geometry (X/Y/Width/Height/Anchor/Dock,
+        /// at every depth — a child's is already relative to its container on both sides) and the design size
+        /// are copied as they are. ⚠ A null size stays null — the page never had one, and inventing the
+        /// scaffolder's 800x450 would be a value nobody chose. A Docked strip or an Item keeps NO geometry, the
+        /// Task 26 rule <see cref="Place"/> applies too. What a window cannot hold is dropped and NAMED
+        /// (BL8024): the phone breakpoint, stray cell/flow attributes, and pass-through markup.
+        /// </summary>
+        private void CopyPixels()
+        {
+            CopyPixels(Document.Controls);
+
+            Document.Width = _source.Width;
+            Document.Height = _source.Height;
+            // The caption crossed in ConvertRoot; a page with none becomes a window captioned with its name.
+            Document.Text ??= _source.Name;
+
+            var layout = _source.Layout!;
+            if (layout.MobileBreakpoint != null)
+            {
+                Warn(DesignCodes.RetargetPropertyLost,
+                    $"'form.MobileBreakpoint' = \"{layout.MobileBreakpoint}\" is the page's phone breakpoint, which a " +
+                    "window does not have, so it was dropped. The window keeps the page's desktop layout at every size.");
+            }
+
+            var stray = GridAttributes(layout);
+            if (stray.Count > 0)
+            {
+                Warn(DesignCodes.RetargetPropertyLost,
+                    $"the page's <Layout> carries {string.Join(" ", stray)}, which a Canvas page does not read and a " +
+                    "window has no place for, so they were dropped.");
+            }
+
+            if (_source.Literal != null)
+            {
+                Warn(DesignCodes.RetargetPropertyLost,
+                    $"the page's <Literal> markup ({_source.Literal.Length} character(s)) has no place in a " +
+                    "window and was dropped.");
+            }
+        }
+
+        private void CopyPixels(List<FormControl> siblings)
+        {
+            foreach (var control in siblings)
+            {
+                control.Geometry = control.Definition?.Place is null or FormPlace.Positioned
+                    ? _sourceGeometry.GetValueOrDefault(control) as PixelGeometry
+                    : null;
+
+                CopyPixels(control.Children);
+            }
         }
 
         /// <returns>The extent the placed siblings reach: the largest right edge and bottom edge.</returns>

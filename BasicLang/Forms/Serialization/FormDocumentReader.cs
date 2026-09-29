@@ -27,6 +27,7 @@ public static class FormDocumentReader
     {
         var diagnostics = new List<DesignDiagnostic>();
         var degraded = new List<DegradedProperty>();
+        var degradedRoot = new List<DegradedProperty>();
 
         // What the FILE NAME claims this is, or null when the path carries neither form extension.
         // Only a claim: the root element is the document's own self-description and wins below.
@@ -106,23 +107,76 @@ public static class FormDocumentReader
         model.Name = (string?)root.Attribute("Name") ?? model.Name;
         model.Version = version;
 
-        if (target == FormTarget.WinForms)
+        // Text is ONE vocabulary on both targets (D2, spec §2.3): the window caption, the page title.
+        model.Text = (string?)root.Attribute("Text");
+
+        // ⛔ PRE-SCAN (spec 2026-09-27 §2.2). The root attributes and every control are read in the
+        // vocabulary the LAYOUT picks — a Canvas page stores Width/Height and X/Y exactly as a .blform does —
+        // but <Layout> is an ordinary child element and may come AFTER <Controls>. So it is read here,
+        // before anything that depends on it. ⚠ The LAST one, exactly as the element loop below always
+        // behaved (each <Layout> overwrote the one before); that loop now skips it.
+        if (target == FormTarget.Web &&
+            root.Elements().LastOrDefault(e => e.Name.LocalName == "Layout") is { } layoutElement)
         {
-            // The form's own client size and caption. WinForms only — D3 gives the web document a
-            // <Layout> instead, and a page has no window to size.
-            //
-            // ⚠ An unparseable Width/Height is left null here and falls through to UnknownAttributes
-            // below, which is what round-trips it verbatim. It is NOT a Degraded row: Degraded is
-            // per-property on a CONTROL (it freezes one property-grid row), and the form root is not
-            // a control — there is no row to freeze and FormFile.TierOf could not find one.
+            model.Layout = ReadLayout(layoutElement);
+        }
+
+        var layout = FormVocabulary.LayoutOf(model);
+
+        // The Canvas page's phone breakpoint (spec 2026-09-27 §2.3). Stored as RAW text, so an unusable value
+        // is preserved by construction; the tier is what says it cannot be used. ⚠ Judged only where the ROW
+        // exists — asked through FormRootValues.Applies, the one predicate, never a second `layout == Canvas`
+        // table beside it. On a Grid/Flow page it is not a row, and it round-trips untouched.
+        if (FormControlCatalog.FormRoot.Property("MobileBreakpoint") is { } breakpointRow &&
+            FormRootValues.Applies(breakpointRow, target.Value, layout) &&
+            model.Layout?.MobileBreakpoint is { } rawBreakpoint &&
+            !FormLayout.TryParseMobileBreakpoint(rawBreakpoint, out _))
+        {
+            degradedRoot.Add(new DegradedProperty("", "MobileBreakpoint", rawBreakpoint,
+                $"the page's phone breakpoint could not be used — MobileBreakpoint=\"{rawBreakpoint}\" must be a " +
+                "whole number of pixels from 0 to 2147483647, where 0 means never stack, so the page stacks below the default " +
+                $"{FormLayout.DefaultMobileBreakpoint}px. The attribute is preserved exactly as written."));
+        }
+
+        if (FormVocabulary.IsPixel(target.Value, layout))
+        {
+            // The form's own client size: a window's, or a Canvas page's design size (spec 2026-09-27 D2).
+            // A Grid/Flow page has none — D3 gives it a <Layout> instead.
             model.Width = IntAttribute(root, "Width");
             model.Height = IntAttribute(root, "Height");
-            model.Text = (string?)root.Attribute("Text");
+
+            // ⚠ An unparseable Width/Height is left null here and still falls through to
+            // UnknownAttributes below — that round trip is what preserves the text byte-for-byte. What
+            // changed (spec §2.3) is the TIER: the ClientSize row is Degraded — frozen, explained — not
+            // Unknown. The storage stayed where it was on purpose: the writer's Width/Height guard
+            // exists to never overwrite text it could not parse.
+            //
+            // ⚠ A size that parses but is not POSITIVE is Degraded too: FormRootValues.Set refuses it and
+            // the region writer emits nothing for it, so showing it Canon would promise a size the
+            // program never gets. A parsed value stays modelled (and so round-trips through the model).
+            var rawWidth = (string?)root.Attribute("Width");
+            var rawHeight = (string?)root.Attribute("Height");
+            var unusable =
+                (rawWidth != null && model.Width is null or <= 0) ||
+                (rawHeight != null && model.Height is null or <= 0);
+            if (unusable)
+            {
+                // Name only the attributes the document CARRIES — never an invented `Height=""`.
+                var present = new List<string>();
+                if (rawWidth != null) present.Add($"Width=\"{rawWidth}\"");
+                if (rawHeight != null) present.Add($"Height=\"{rawHeight}\"");
+
+                degradedRoot.Add(new DegradedProperty("", "ClientSize",
+                    string.Join(" ", present),
+                    $"the form's client size could not be used — {string.Join(" and ", present)} " +
+                    (present.Count == 1 ? "must be a positive whole number" : "must both be positive whole numbers") +
+                    ". The attributes are preserved exactly as written."));
+            }
         }
 
         foreach (var attribute in root.Attributes())
         {
-            if (!IsKnownRootAttribute(attribute.Name.LocalName, target.Value, root))
+            if (!IsKnownRootAttribute(attribute.Name.LocalName, target.Value, layout, root))
             {
                 model.UnknownAttributes[attribute.Name.LocalName] = attribute.Value;
             }
@@ -132,16 +186,16 @@ public static class FormDocumentReader
         {
             switch (element.Name.LocalName)
             {
-                // Web only (D3). On a .blform it is not a layout — it is an element this designer
-                // does not model, and it round-trips untouched like any other.
+                // Web only (D3), and already READ by the pre-scan above — skipped here so it is neither
+                // read twice nor mistaken for an unknown element. On a .blform it is not a layout — it is
+                // an element this designer does not model, and it round-trips untouched like any other.
                 case "Layout" when target == FormTarget.Web:
-                    model.Layout = ReadLayout(element);
                     break;
 
                 case "Controls":
                     foreach (var child in element.Elements())
                     {
-                        var control = ReadControl(child, target.Value, filePath, diagnostics, degraded, positions);
+                        var control = ReadControl(child, target.Value, layout, filePath, diagnostics, degraded, positions);
                         if (control != null)
                         {
                             model.Controls.Add(control);
@@ -167,12 +221,18 @@ public static class FormDocumentReader
                     foreach (var child in element.Elements())
                     {
                         var component = ReadControl(
-                            child, target.Value, filePath, diagnostics, degraded, positions, isComponent: true);
+                            child, target.Value, layout, filePath, diagnostics, degraded, positions, isComponent: true);
                         if (component != null)
                         {
                             model.Components.Add(component);
                         }
                     }
+                    break;
+
+                // The FORM's own event wiring (spec §2.3), the same shape a control's is — read through
+                // the same ReadBind, so the reserved-data-binding refusal cannot drift between them.
+                case "Bind":
+                    model.Binds.Add(ReadBind(element, "form", filePath, diagnostics));
                     break;
 
                 case "Resources":
@@ -188,7 +248,7 @@ public static class FormDocumentReader
 
         CheckDuplicateIds(model, filePath, diagnostics, positions);
 
-        return new FormFile(model, xml, text, filePath, diagnostics, degraded);
+        return new FormFile(model, xml, text, filePath, diagnostics, degraded, degradedRoot);
     }
 
     /// <summary>
@@ -254,28 +314,28 @@ public static class FormDocumentReader
     /// True when the root attribute is one this reader models, so it must NOT also be recorded as an
     /// unknown attribute and written back twice.
     ///
-    /// <para>⚠ <paramref name="root"/> is passed because "known" is not purely a matter of spelling:
-    /// on a WinForms document a <c>Width</c> the reader could not parse is left unmodelled, and the
-    /// only thing that then preserves it is the unknown-attribute round trip.</para>
+    /// <para>⛔ Asks <see cref="FormRootValues.RowForAttribute"/> by (target, layout) — the one map from a
+    /// FormRoot row to its storage, filtered by the one applicability predicate — rather than keeping a
+    /// list here.</para>
+    ///
+    /// <para>⚠ <paramref name="root"/> is passed because "known" is not purely a matter of spelling: on
+    /// a pixel document a <c>Width</c> the reader could not parse is left unmodelled, and the only
+    /// thing that then preserves it is the unknown-attribute round trip (its row is Degraded).</para>
     /// </summary>
-    private static bool IsKnownRootAttribute(string name, FormTarget target, XElement root)
+    private static bool IsKnownRootAttribute(string name, FormTarget target, FormLayoutKind? layout, XElement root)
     {
         if (name is "Name" or "Version")
         {
             return true;
         }
 
-        if (target != FormTarget.WinForms)
+        var row = FormRootValues.RowForAttribute(name, target, layout);
+        if (row == null)
         {
             return false;
         }
 
-        return name switch
-        {
-            "Width" or "Height" => IntAttribute(root, name) != null,
-            "Text" => true,
-            _ => false
-        };
+        return row.Type == FormPropertyType.Size ? IntAttribute(root, name) != null : true;
     }
 
     // ==================================================================
@@ -289,7 +349,8 @@ public static class FormDocumentReader
             Cols = (string?)element.Attribute("Cols"),
             Rows = (string?)element.Attribute("Rows"),
             Gap = (string?)element.Attribute("Gap"),
-            Dir = (string?)element.Attribute("Dir")
+            Dir = (string?)element.Attribute("Dir"),
+            MobileBreakpoint = (string?)element.Attribute("MobileBreakpoint")
         };
 
         if (Enum.TryParse<FormLayoutKind>((string?)element.Attribute("Kind"), ignoreCase: true, out var kind))
@@ -300,6 +361,9 @@ public static class FormDocumentReader
         return layout;
     }
 
+    /// <param name="layout">
+    /// The document's layout (the §2.2 pre-scan's) — with the target, it picks the geometry vocabulary.
+    /// </param>
     /// <param name="isComponent">
     /// True when the element sits under <c>&lt;Components&gt;</c>. A component is a control with no
     /// place: it never acquires geometry or a tab index — a stray <c>X=</c> or <c>TabIndex=</c> on
@@ -312,7 +376,7 @@ public static class FormDocumentReader
     /// carrying two halves of one parent are two parameters that can disagree.
     /// </param>
     private static FormControl? ReadControl(
-        XElement element, FormTarget target, string filePath,
+        XElement element, FormTarget target, FormLayoutKind? layout, string filePath,
         List<DesignDiagnostic> diagnostics, List<DegradedProperty> degraded,
         Dictionary<FormControl, XElement> positions, bool isComponent = false,
         FormControl? parent = null)
@@ -424,7 +488,7 @@ public static class FormDocumentReader
             // component rule), never to geometry — which would otherwise fire, because Dock is one
             // of ReadGeometry's six trigger attributes.
             TabIndex = place == FormPlace.Positioned ? IntAttribute(element, "TabIndex") ?? 0 : 0,
-            Geometry = place == FormPlace.Positioned ? ReadGeometry(element, target) : null
+            Geometry = place == FormPlace.Positioned ? ReadGeometry(element, target, layout) : null
         };
 
         // Where this control came from, for the checks that run over the finished MODEL and would
@@ -455,7 +519,7 @@ public static class FormDocumentReader
         {
             var name = attribute.Name.LocalName;
 
-            // ⛔ Target-aware, because the two vocabularies overlap in spelling and not in meaning.
+            // ⛔ (target, layout)-aware, because the two vocabularies overlap in spelling and not in meaning.
             // A flat "structural" list would swallow a .blwebform's Width="200" — neither a property
             // nor an unknown attribute, so absent from the model entirely, and Create would not
             // reproduce it. Each format treats only its OWN layout vocabulary as structural; the
@@ -473,7 +537,7 @@ public static class FormDocumentReader
             // and FormDocumentWriter's "a catalog property the model dropped" sweep then DELETED
             // Dock="Top" from every strip on the first save.
             if (place == FormPlace.Positioned
-                    ? FormControlCatalog.IsStructural(name, target)
+                    ? FormControlCatalog.IsStructural(name, target, layout)
                     : string.Equals(name, "Id", StringComparison.OrdinalIgnoreCase))
             {
                 continue;
@@ -507,17 +571,14 @@ public static class FormDocumentReader
 
             control.Properties[name] = attribute.Value;
 
-            // D9 Degraded: the catalog knows the attribute but the value does not parse. The row is
-            // frozen with a reason and the value round-trips UNCHANGED — the whole point is that one
-            // bad value costs one row, not the control and not the document.
-            if (!property.Accepts(attribute.Value))
+            // D9 Degraded: the catalog knows the attribute but the value does not parse — or parses and
+            // cannot be used on THIS target (a Windows system colour with no CSS equivalent on a web form,
+            // spec §2.2). The row is frozen with a reason and the value round-trips UNCHANGED — the whole
+            // point is that one bad value costs one row, not the control and not the document.
+            if (!property.Accepts(attribute.Value, target))
             {
                 degraded.Add(new DegradedProperty(control.Id, name, attribute.Value,
-                    $"'{attribute.Value}' is not a valid {property.Type}" +
-                    (property.AllowedValues is { Count: > 0 }
-                        ? $" (expected one of: {string.Join(", ", property.AllowedValues)})"
-                        : "") +
-                    ". The value is preserved exactly as written."));
+                    property.DescribeRefusal(attribute.Value, target)));
             }
         }
 
@@ -525,27 +586,7 @@ public static class FormDocumentReader
         {
             if (child.Name.LocalName == "Bind")
             {
-                var bind = new FormBind
-                {
-                    Event = (string?)child.Attribute("Event") ?? "",
-                    Handler = (string?)child.Attribute("Handler") ?? "",
-                    Property = (string?)child.Attribute("Property"),
-                    Source = (string?)child.Attribute("Source"),
-                    Path = (string?)child.Attribute("Path")
-                };
-
-                // ⛔ Reserved means parsed and round-tripped, never acted on. A populated data
-                // binding is refused rather than ignored: ignoring it leaves the user believing a
-                // binding exists, and nothing in the running page would ever tell them otherwise.
-                if (bind.UsesReservedDataBinding)
-                {
-                    diagnostics.Add(Error(DesignCodes.ReservedBindingPopulated,
-                        $"'{control.Id}' has a <Bind> using the reserved data-binding attributes " +
-                        "(Property/Source/Path). v1 reads only <Bind Event= Handler=>.",
-                        filePath, Line(child), Column(child)));
-                }
-
-                control.Binds.Add(bind);
+                control.Binds.Add(ReadBind(child, control.Id, filePath, diagnostics));
                 continue;
             }
 
@@ -556,7 +597,7 @@ public static class FormDocumentReader
             if (place != FormPlace.Tray && FormControlCatalog.Find(child.Name.LocalName) != null)
             {
                 var nested = ReadControl(
-                    child, target, filePath, diagnostics, degraded, positions, parent: control);
+                    child, target, layout, filePath, diagnostics, degraded, positions, parent: control);
                 if (nested != null)
                 {
                     control.Children.Add(nested);
@@ -569,6 +610,34 @@ public static class FormDocumentReader
         }
 
         return control;
+    }
+
+    /// <summary>
+    /// One <c>&lt;Bind&gt;</c>, for a control or the form (<paramref name="owner"/> is the Id, or
+    /// <c>form</c>). ⛔ Reserved means parsed and round-tripped, never acted on: a populated data binding
+    /// is refused rather than ignored — ignoring it leaves the user believing a binding exists, and
+    /// nothing in the running page would ever tell them otherwise.
+    /// </summary>
+    private static FormBind ReadBind(XElement element, string owner, string filePath, List<DesignDiagnostic> diagnostics)
+    {
+        var bind = new FormBind
+        {
+            Event = (string?)element.Attribute("Event") ?? "",
+            Handler = (string?)element.Attribute("Handler") ?? "",
+            Property = (string?)element.Attribute("Property"),
+            Source = (string?)element.Attribute("Source"),
+            Path = (string?)element.Attribute("Path")
+        };
+
+        if (bind.UsesReservedDataBinding)
+        {
+            diagnostics.Add(Error(DesignCodes.ReservedBindingPopulated,
+                $"'{owner}' has a <Bind> using the reserved data-binding attributes " +
+                "(Property/Source/Path). v1 reads only <Bind Event= Handler=>.",
+                filePath, Line(element), Column(element)));
+        }
+
+        return bind;
     }
 
     /// <summary>
@@ -600,14 +669,15 @@ public static class FormDocumentReader
     /// <summary>
     /// The control's position, in the vocabulary of the document's own format (D3).
     ///
-    /// <para>⛔ Selected by the TARGET, not by sniffing which attributes are present. Sniffing reads
-    /// a stray <c>Col</c> on a <c>.blform</c> control as a grid cell, and the writer then emits grid
-    /// geometry into a document whose every other control is absolute — a document that is half one
-    /// format and half the other, produced by a save the user did not know was a conversion.</para>
+    /// <para>⛔ Selected by (target, layout) — <see cref="FormVocabulary.IsPixel(FormTarget, FormLayoutKind?)"/>
+    /// — not by sniffing which attributes are present. Sniffing reads a stray <c>Col</c> on a pixel
+    /// control as a grid cell, and the writer then emits grid geometry into a document whose every other
+    /// control is absolute — a document that is half one vocabulary and half the other, produced by a save
+    /// the user did not know was a conversion.</para>
     /// </summary>
-    private static FormGeometry? ReadGeometry(XElement element, FormTarget target)
+    private static FormGeometry? ReadGeometry(XElement element, FormTarget target, FormLayoutKind? layout)
     {
-        if (target == FormTarget.WinForms)
+        if (FormVocabulary.IsPixel(target, layout))
         {
             if (element.Attribute("X") == null && element.Attribute("Y") == null &&
                 element.Attribute("Width") == null && element.Attribute("Height") == null &&
@@ -641,9 +711,15 @@ public static class FormDocumentReader
         };
     }
 
-    /// <summary>An integer attribute, or null when absent OR unparseable. Never throws.</summary>
+    /// <summary>
+    /// An integer attribute, or null when absent OR unparseable. Never throws.
+    ///
+    /// <para>⛔ Culture-free (<see cref="FormPropertyDef.TryParseInt"/>), the same parser the writer's
+    /// no-op comparison uses: a document means the same number on every machine, and U+2212 is not a
+    /// minus in it even under the culture that spells negatives that way.</para>
+    /// </summary>
     private static int? IntAttribute(XElement element, string name) =>
-        int.TryParse((string?)element.Attribute(name), out var value) ? value : null;
+        (string?)element.Attribute(name) is { } text && FormPropertyDef.TryParseInt(text, out var value) ? value : null;
 
     /// <summary>`{res:Key}` — the reserved resource syntax.</summary>
     private static bool LooksLikeResourceReference(string value) =>

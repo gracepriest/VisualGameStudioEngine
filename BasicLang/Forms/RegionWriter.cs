@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using BasicLang.Forms.Recognizer;
 
@@ -116,6 +117,7 @@ public static class RegionWriter
         CheckComponentTargets(filePath, form, diagnostics);
         CheckComponentBinds(filePath, form, diagnostics);
         CheckControlBinds(filePath, form, diagnostics);
+        CheckRootBinds(filePath, form, diagnostics);
         CheckHandlerOrdering(filePath, index, form, init, diagnostics);
         if (diagnostics.Any(d => !d.IsWarning))
         {
@@ -139,30 +141,8 @@ public static class RegionWriter
     }
 
     /// <summary>
-    /// ⛔⛔ D8's ordering rule. An <c>AddressOf</c> naming a <c>Sub</c> declared LATER in the file
-    /// erases its parameter types to <c>Action(Of Object)</c> and then hard-errors against the
-    /// expected delegate — measured, in both a Class and a Module. So a handler must be declared
-    /// before the region that wires it.
-    ///
-    /// <para>⚠ The spec's own worked example in D1 violates this: it shows the <c>init</c> region
-    /// above <c>Private Sub btnLogin_Click</c>. The example is illustrating the marker shape rather
-    /// than the ordering, but a reader copying its layout gets a file that does not build on the web
-    /// target. This check turns that into a diagnostic instead of a confusing compile error.</para>
-    /// </summary>
-    /// <summary>
-    /// The <c>AnchorStyles</c> flag values, verified against the official enum documentation.
-    ///
-    /// <para>⛔ <c>DockStyle</c> numbers DIFFERENTLY — its <c>Left</c> is 3, not 4 — and is not a
-    /// flags enum at all. The two must never share a conversion; Dock keeps its named member.</para>
-    /// </summary>
-    private static readonly Dictionary<string, int> AnchorFlags =
-        new(StringComparer.OrdinalIgnoreCase)
-        {
-            ["None"] = 0, ["Top"] = 1, ["Bottom"] = 2, ["Left"] = 4, ["Right"] = 8
-        };
-
-    /// <summary>
-    /// Checks that every named anchor edge exists. Multi-edge anchors are EMITTABLE.
+    /// Checks that every named anchor edge exists (through <see cref="FormAnchor.Parse"/>, the one
+    /// Anchor parser — plan scope call S10). Multi-edge anchors are EMITTABLE.
     ///
     /// <para>⛔⛔ <b>This used to refuse anything with more than one edge</b>, and
     /// <c>docs/HANDOFF.md</c> carried that as an open decision: BasicLang had no way to write a
@@ -180,11 +160,17 @@ public static class RegionWriter
     /// <para>⛔ An UNKNOWN edge name is still refused. Summing it as zero would silently anchor the
     /// control to nothing — the designer/runtime divergence D9 exists to prevent — and the whole
     /// reason this check survives rather than being deleted.</para>
+    ///
+    /// <para>Asked of every PIXEL document (FormVocabulary.IsPixel): a .blform and a Canvas page.</para>
     /// </summary>
+    /// <remarks>⛔ The ONE anchor refusal: <see cref="AnchorRefusals"/> hands the same findings to a caller
+    /// that must refuse BEFORE writing (the retarget, Task 11 review), so the two cannot disagree.</remarks>
     private static void CheckAnchors(
         string filePath, FormDocument form, List<DesignDiagnostic> diagnostics)
     {
-        if (form.Target != FormTarget.WinForms)
+        // ⛔ By VOCABULARY (spec 2026-09-27 §4): a Canvas page reads Anchor too (FormAnchorCss), and would otherwise
+        // anchor an unknown edge to less than written — a misspelt "Rigth" alone CENTRES the control on the page.
+        if (!FormVocabulary.IsPixel(form))
         {
             return;
         }
@@ -197,7 +183,7 @@ public static class RegionWriter
                 continue;
             }
 
-            var unknown = SplitAnchor(anchor).Where(e => !AnchorFlags.ContainsKey(e)).ToList();
+            FormAnchor.Parse(anchor, out var unknown);
             if (unknown.Count > 0)
             {
                 diagnostics.Add(Error(DesignCodes.AnchorNotExpressible,
@@ -210,8 +196,17 @@ public static class RegionWriter
         }
     }
 
-    private static string[] SplitAnchor(string anchor) =>
-        anchor.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+    /// <summary>
+    /// The refusals <see cref="Write"/> would make for <paramref name="form"/>'s anchors — an unknown edge on a
+    /// pixel document (BL8015) — without writing anything. Empty for a Grid/Flow page.
+    /// </summary>
+    public static IReadOnlyList<DesignDiagnostic> AnchorRefusals(string filePath, FormDocument form)
+    {
+        ArgumentNullException.ThrowIfNull(form);
+        var diagnostics = new List<DesignDiagnostic>();
+        CheckAnchors(filePath, form, diagnostics);
+        return diagnostics;
+    }
 
     /// <summary>
     /// Warns about properties the document carries that the target does not have, which
@@ -305,11 +300,16 @@ public static class RegionWriter
                     continue;
                 }
 
+                var wired = DeclaredEvents(definition, FormTarget.Web).ToList();
+
                 diagnostics.Add(new DesignDiagnostic(
                     DesignCodes.BindNotOnTarget,
                     $"{DesignCodes.BindNotOnTarget}: '{component.Id}' wires its '{bind.Event}' event to " +
-                    $"{bind.Handler}, but a web {definition.Kind} is wired only through its " +
-                    $"'{definition.DefaultEvent(FormTarget.Web)}' event, so the wiring is not written " +
+                    $"{bind.Handler}, but a web {definition.Kind} is wired only through " +
+                    (wired.Count > 0
+                        ? $"its {string.Join(" and ", wired.Select(e => $"'{e}'"))} event"
+                        : "no event at all") +
+                    ", so the wiring is not written " +
                     "into the generated code. The document keeps it, and WinForms wires it.",
                     filePath, 0, 0, IsWarning: true));
             }
@@ -317,24 +317,19 @@ public static class RegionWriter
     }
 
     /// <summary>
-    /// Every event a catalog row declares on <paramref name="target"/> — the whole vocabulary the
-    /// emitter is allowed to write, and the whole vocabulary <see cref="CheckControlBinds"/> accepts.
+    /// Every event name a catalog row WIRES on <paramref name="target"/> — the whole vocabulary the
+    /// emitter is allowed to write, the whole vocabulary <see cref="CheckControlBinds"/> accepts, and
+    /// (for a tray component) the whole of what <see cref="IsEmittedBind"/> and the BL8028 warning in
+    /// <see cref="CheckComponentBinds"/> accept.
     ///
-    /// <para>⚠ Today a row names exactly ONE event per target (<c>WinFormsEvent</c> /
-    /// <c>WebEvent</c>), so this yields one name. It exists as a SEQUENCE because followup 18's
-    /// per-kind event table — the thing that would let a Button name <c>mouseenter</c> as well as
-    /// <c>click</c> — widens the vocabulary here and nowhere else. Both callers then widen with it,
-    /// which is the point: the emitter and the refusal must never disagree about what a row
-    /// declares.</para>
+    /// <para>⛔ Delegates to <see cref="FormEvents.WiredOn"/>, the public seam (spec §5), rather than
+    /// reading the row itself — including the web tray rule (template, default event only), which
+    /// lives inside the seam. Every caller here and the grid's Events tab (slice 5) therefore ask the
+    /// same question of the same code, and none restates a rule another could drift from. Followup
+    /// 18's widening happens in the ROWS.</para>
     /// </summary>
-    private static IEnumerable<string> DeclaredEvents(FormControlDef definition, FormTarget target)
-    {
-        var declared = definition.DefaultEvent(target);
-        if (!string.IsNullOrEmpty(declared))
-        {
-            yield return declared;
-        }
-    }
+    private static IEnumerable<string> DeclaredEvents(FormControlDef definition, FormTarget target) =>
+        FormEvents.WiredOn(definition, target).Select(e => FormEvents.NameOn(e, target)!);
 
     /// <summary>
     /// The CATALOG's spelling of the web event <paramref name="bind"/> names, matched ignoring case —
@@ -409,6 +404,30 @@ public static class RegionWriter
     }
 
     /// <summary>
+    /// Warns about the FORM's own binds (spec §2.3): they are read and written from slice 1, but the
+    /// Form has no catalog events until slice 5, so nothing is generated for them yet. A warning, never
+    /// a refusal — the document is not wrong, and before slice 1 the same bind was an unknown child that
+    /// nothing reported at all. ⚠ Slice 5 REPLACES this with emission.
+    /// </summary>
+    private static void CheckRootBinds(string filePath, FormDocument form, List<DesignDiagnostic> diagnostics)
+    {
+        foreach (var bind in form.Binds)
+        {
+            if (bind.UsesReservedDataBinding || string.IsNullOrEmpty(bind.Handler))
+            {
+                continue;
+            }
+
+            diagnostics.Add(new DesignDiagnostic(
+                DesignCodes.BindNotOnTarget,
+                $"{DesignCodes.BindNotOnTarget}: 'form' wires its '{bind.Event}' event to {bind.Handler}, but " +
+                "the designer does not generate form-event wiring yet, so nothing is written for it. The " +
+                "document keeps the bind.",
+                filePath, 0, 0, IsWarning: true));
+        }
+    }
+
+    /// <summary>
     /// Whether the init region will actually wire this bind — the ONE answer the emitter, the
     /// ordering check and the bind warning share, so a bind cannot be refused over in one place and
     /// never emitted in another. A control's binds all reach <c>addEventListener</c> or
@@ -427,8 +446,9 @@ public static class RegionWriter
             return true;
         }
 
-        return definition.WebScript != null &&
-               string.Equals(bind.Event, definition.DefaultEvent(FormTarget.Web), StringComparison.OrdinalIgnoreCase);
+        // ⛔ The template-and-default-event rule is the seam's (FormEvents.WiredOn), not restated here.
+        return DeclaredEvents(definition, FormTarget.Web)
+            .Any(e => string.Equals(e, bind.Event, StringComparison.OrdinalIgnoreCase));
     }
 
     /// <summary>
@@ -603,17 +623,38 @@ public static class RegionWriter
         }
         else
         {
-            // The form's own caption and client size, before any control — the order the shipped
-            // VSIX template uses, and the shape Owner decision 3 makes canonical. ClientSize fans
-            // in exactly as a control's Size does, and for the same CS1612 reason.
-            if (form.Text != null)
+            // The form's own properties, from FormRoot (spec §2.3), before any control — the order the
+            // shipped VSIX template uses, and the shape Owner decision 3 makes canonical. ⛔ ONE
+            // `Me.X = …` statement per row: ClientSize fans in exactly as a control's Size does, for
+            // the same CS1612 reason.
+            foreach (var row in FormControlCatalog.FormRoot.Properties.Where(p => FormRootValues.Applies(p, FormTarget.WinForms, null)))
             {
-                body.Append($"{inner}Me.Text = \"{form.Text.Replace("\"", "\"\"")}\"").Append(newline);
-            }
+                var value = FormRootValues.Get(form, row);
+                if (value == null)
+                {
+                    continue;
+                }
 
-            if (form.Width is > 0 && form.Height is > 0)
-            {
-                body.Append($"{inner}Me.ClientSize = New Size({form.Width}, {form.Height})").Append(newline);
+                // ⛔ A Degraded root value never reaches generated source — the control rule, at the
+                // root. DescribeRefusal is reached only for a value truly refused (it throws otherwise).
+                //
+                // ⚠ RE-CHECK IN SLICE 3: add a test that reaches this. It is UNREACHABLE today: Text is a
+                // String (accepts anything) and FormRootValues.Get yields ClientSize only for two positive
+                // ints, which always parse. Slice 3's Properties-stored root rows make it reachable.
+                if (!row.Accepts(value, FormTarget.WinForms) && !row.IsSourceForm(value))
+                {
+                    diagnostics.Add(new DesignDiagnostic(
+                        DesignCodes.DegradedProperty,
+                        // Composed from the ONE refusal text, exactly as AppendProperties' control site
+                        // is — never a hand-written "is not a valid" copy.
+                        $"{DesignCodes.DegradedProperty}: 'form.{row.Name}': " +
+                        row.DescribeRefusal(value, FormTarget.WinForms) +
+                        " It is not written into the generated code.",
+                        filePath, 0, 0, IsWarning: true));
+                    continue;
+                }
+
+                body.Append($"{inner}Me.{row.Name} = {Literal(row, value)}").Append(newline);
             }
         }
 
@@ -623,8 +664,11 @@ public static class RegionWriter
             AppendComponentInit(body, form, component, inner, newline, filePath, diagnostics);
         }
 
+        // Resolved ONCE per write: a docked control's Size is the size it docks at (AppendPixelGeometry).
+        var docks = form.Target == FormTarget.WinForms ? FormDockLayout.Resolve(form, FormDockMode.Designer) : null;
+
         AppendSiblings(
-            body, form, form.Controls, parent: "Me", parentControl: null, inner, newline, filePath, diagnostics);
+            body, form, form.Controls, parent: "Me", parentControl: null, inner, newline, filePath, diagnostics, docks);
 
         if (form.Target == FormTarget.WinForms)
         {
@@ -677,11 +721,11 @@ public static class RegionWriter
     private static void AppendSiblings(
         StringBuilder body, FormDocument form, IReadOnlyList<FormControl> controls, string parent,
         FormControl? parentControl, string inner, string newline, string filePath,
-        List<DesignDiagnostic> diagnostics)
+        List<DesignDiagnostic> diagnostics, FormDockLayoutResult? docks)
     {
         foreach (var control in controls)
         {
-            AppendControlInit(body, form, control, parent, inner, newline, filePath, diagnostics);
+            AppendControlInit(body, form, control, parent, inner, newline, filePath, diagnostics, docks);
         }
 
         if (form.Target != FormTarget.WinForms)
@@ -724,7 +768,7 @@ public static class RegionWriter
     /// </summary>
     private static void AppendControlInit(
         StringBuilder body, FormDocument form, FormControl control, string parent, string inner,
-        string newline, string filePath, List<DesignDiagnostic> diagnostics)
+        string newline, string filePath, List<DesignDiagnostic> diagnostics, FormDockLayoutResult? docks)
     {
         if (form.Target == FormTarget.Web)
         {
@@ -734,7 +778,7 @@ public static class RegionWriter
         {
             body.Append($"{inner}{control.Id} = New {DeclaredType(form, control)}()").Append(newline);
 
-            AppendPixelGeometry(body, control, inner, newline);
+            AppendPixelGeometry(body, control, inner, newline, docks);
             AppendProperties(body, control, inner, newline, filePath, diagnostics);
         }
 
@@ -743,7 +787,7 @@ public static class RegionWriter
         // ⚠ The container's own children, parented to IT — and their adds happen here, so a
         // container is fully populated before the caller adds it to its own parent, which is the
         // order the shipped template uses.
-        AppendSiblings(body, form, control.Children, control.Id, control, inner, newline, filePath, diagnostics);
+        AppendSiblings(body, form, control.Children, control.Id, control, inner, newline, filePath, diagnostics, docks);
     }
 
     /// <summary>
@@ -815,20 +859,24 @@ public static class RegionWriter
 
             if (component.Properties.TryGetValue(property.Name, out var value))
             {
-                if (property.Accepts(value))
+                // This template is WEB code, so the value is judged as the web would judge it.
+                if (property.Accepts(value, FormTarget.Web))
                 {
                     return value;
                 }
 
+                // ⛔ The reason comes from the catalog (DescribeRefusal) — the same text the reader
+                // freezes the grid row with — so a target refusal is never mislabelled "not a valid X".
                 diagnostics.Add(new DesignDiagnostic(
                     DesignCodes.DegradedProperty,
-                    $"{DesignCodes.DegradedProperty}: '{component.Id}.{property.Name}' is '{value}', " +
-                    $"which is not a valid {property.Type}, so the catalog default '{property.Default}' " +
-                    "is written in its place. The value is preserved in the document.",
+                    $"{DesignCodes.DegradedProperty}: '{component.Id}.{property.Name}': " +
+                    property.DescribeRefusal(value, FormTarget.Web) +
+                    $" The catalog default '{property.DefaultFor(FormTarget.Web)}' is written in its place.",
                     filePath, 0, 0, IsWarning: true));
             }
 
-            return property.Default ?? "";
+            // Spec §2.7: every reader of a default reads the TARGET's — this template is web code.
+            return property.DefaultFor(FormTarget.Web) ?? "";
         });
     }
 
@@ -870,13 +918,17 @@ public static class RegionWriter
             // not parse as the designer's `Left`, but it is exactly what emitting `Left`
             // produces, so skipping it would strip the property for no reason. The catalog
             // answers that per row; a shape test cannot (FormPropertyDef.IsSourceForm).
-            if (property != null && !property.Accepts(value) && !property.IsSourceForm(value))
+            //
+            // ⛔ DescribeRefusal is reached ONLY for a value that is truly Degraded: the
+            // IsSourceForm test above short-circuits first, and DescribeRefusal throws for a value
+            // the target accepts.
+            if (property != null && !property.Accepts(value, FormTarget.WinForms) && !property.IsSourceForm(value))
             {
                 diagnostics.Add(new DesignDiagnostic(
                     DesignCodes.DegradedProperty,
-                    $"{DesignCodes.DegradedProperty}: '{control.Id}.{name}' is '{value}', which " +
-                    $"is not a valid {property.Type}, so it is not written into the generated " +
-                    "code. The value is preserved in the document.",
+                    $"{DesignCodes.DegradedProperty}: '{control.Id}.{name}': " +
+                    property.DescribeRefusal(value, FormTarget.WinForms) +
+                    " It is not written into the generated code.",
                     filePath, 0, 0, IsWarning: true));
                 continue;
             }
@@ -887,14 +939,14 @@ public static class RegionWriter
             {
                 foreach (var item in FormPropertyDef.SplitItems(value))
                 {
-                    body.Append($"{inner}{control.Id}.{name}.Add(\"{item.Replace("\"", "\"\"")}\")")
+                    body.Append($"{inner}{control.Id}.{name}.Add({FormPropertyDef.StringLiteral(item)})")
                         .Append(newline);
                 }
 
                 continue;
             }
 
-            body.Append($"{inner}{control.Id}.{name} = {Literal(control, name, value)}").Append(newline);
+            body.Append($"{inner}{control.Id}.{name} = {Literal(property, value)}").Append(newline);
         }
     }
 
@@ -954,23 +1006,54 @@ public static class RegionWriter
     /// 2026-09-13; the plan says not to assert the code without measuring it, so that is the
     /// measurement. BasicLang itself catches none of this — WinForms member access degrades to
     /// <c>Object</c> with no diagnostic — so the per-statement shape here is load-bearing.</para>
+    ///
+    /// <para>⛔⛔ <b>A DOCKED control's Size is the size it docks at</b>, i.e. its bounds from
+    /// <see cref="FormDockLayout.Resolve"/> in <see cref="FormDockMode.Designer"/> mode (every sibling visible: the size
+    /// its children were designed in). It is NOT its stored Width/Height. WinForms captures a child's anchor distances
+    /// when the child is ADDED, against the container's size at that moment. A container is docked only when it is
+    /// itself added to its parent, AFTER its children, so with the stored size a Bottom,Right child designed at Y=250
+    /// in a 300-tall dock ran at Y=500 (measured, Task 12 harness). Visual Studio's designer serialises a docked
+    /// control's actual size for the same reason. One rule for every docked positioned control: for one with no
+    /// children the size is overridden by docking anyway, so writing it is harmless. Location stays as stored:
+    /// docking overrides it and nothing reads it.</para>
     /// </summary>
+    /// <param name="docks">The form resolved ONCE in Designer mode for this write (null on the web).</param>
     private static void AppendPixelGeometry(
-        StringBuilder body, FormControl control, string inner, string newline)
+        StringBuilder body, FormControl control, string inner, string newline, FormDockLayoutResult? docks)
     {
-        if (control.Geometry is not PixelGeometry pixel)
+        if (control.Geometry is not PixelGeometry stored)
         {
             return;
         }
 
-        if (pixel.X != 0 || pixel.Y != 0)
+        var pixel = stored;
+
+        // ⛔ A docked control's resolved size is written even when it is 0×0 (a Fill after an overflow on both
+        // axes): skipping it would leave WinForms' own default Size (a Panel's 200×100), and the children would
+        // capture their anchor distances against THAT.
+        var writeSize = pixel.Width != 0 || pixel.Height != 0;
+        if (docks != null && FormDockLayout.EdgeOf(control) != null && docks.TryGet(control, out var docked))
         {
-            body.Append($"{inner}{control.Id}.Location = New Point({pixel.X}, {pixel.Y})").Append(newline);
+            pixel = new PixelGeometry
+            {
+                X = stored.X, Y = stored.Y, Width = docked.Bounds.Width, Height = docked.Bounds.Height,
+                Anchor = stored.Anchor, Dock = stored.Dock
+            };
+            writeSize = true;
         }
 
-        if (pixel.Width != 0 || pixel.Height != 0)
+        // ⛔ Formatted INVARIANTLY: sv-SE/fi-FI/nb-NO spell a negative with U+2212, and
+        // `New Point(−5, −3)` is CS1056 at csc — from a control dragged past the form's left edge.
+        if (pixel.X != 0 || pixel.Y != 0)
         {
-            body.Append($"{inner}{control.Id}.Size = New Size({pixel.Width}, {pixel.Height})").Append(newline);
+            body.Append(string.Create(CultureInfo.InvariantCulture,
+                $"{inner}{control.Id}.Location = New Point({pixel.X}, {pixel.Y})")).Append(newline);
+        }
+
+        if (writeSize)
+        {
+            body.Append(string.Create(CultureInfo.InvariantCulture,
+                $"{inner}{control.Id}.Size = New Size({pixel.Width}, {pixel.Height})")).Append(newline);
         }
 
         if (!string.IsNullOrWhiteSpace(pixel.Dock))
@@ -1002,33 +1085,37 @@ public static class RegionWriter
     /// </summary>
     private static string AnchorExpression(string anchor)
     {
-        var edges = SplitAnchor(anchor);
+        var edges = FormAnchor.Split(anchor);
         if (edges.Length == 1)
         {
             return $"AnchorStyles.{edges[0]}";
         }
 
-        // Unknown names are refused by CheckAnchors before this runs, so a miss here would be a
-        // bug in that check rather than bad input — sum defensively rather than throwing mid-write.
-        var value = edges.Sum(e => AnchorFlags.TryGetValue(e, out var flag) ? flag : 0);
+        // Unknown names are refused by CheckAnchors before this runs. ⚠ Flags are OR-ed, not summed: the old
+        // sum turned "Left,Left" into 8 — AnchorStyles.Right (plan scope call S10).
+        var value = (int)FormAnchor.Parse(anchor, out _);
         return $"CType({value}, AnchorStyles)   ' {string.Join(", ", edges)}";
     }
 
     /// <summary>
-    /// True when the value is already BasicLang SOURCE rather than a document value.
+    /// The canonical source when the value is already BasicLang SOURCE rather than a document value;
+    /// null otherwise.
     ///
-    /// <para>⛔ Two conventions share one <c>Properties</c> dictionary: the document reader stores
-    /// the RAW attribute text (<c>Sign in</c>, unquoted), while a value that came from source keeps
-    /// what was read (<c>"Sign in"</c> with its quotes, <c>ContentAlignment.MiddleLeft</c>). The
-    /// CATALOG decides which is which — see <see cref="FormPropertyDef.IsSourceForm"/> for why the
-    /// shape of the string is not a safe answer. Only a property the catalog does not know falls
-    /// back to a shape, and then only to the two that are unambiguous in any language emitted
-    /// here.</para>
+    /// <para>⛔ <c>Properties</c> holds DOCUMENT text (<c>Sign in</c>, unquoted). An Enum, Color or
+    /// Size row may also hold its catalog-decided source form (<c>ContentAlignment.MiddleLeft</c>,
+    /// <c>SystemColors.Control</c>, <c>New Size(…)</c>), and the CATALOG decides which is which —
+    /// see <see cref="FormPropertyDef.IsSourceForm"/> for why the shape of the string is not a safe
+    /// answer. A String row has no source form at all: it is always quoted and escaped, so a caption
+    /// <c>New Customer</c> or <c>"quoted"</c> is text, never source.</para>
+    ///
+    /// <para>⛔ A property with NO catalog row is never source: with no row there is nothing that can
+    /// prove it, and the old shape fallback (<c>"…</c> or <c>New …</c>) was exactly the test this method
+    /// exists to replace. Only an in-memory model can hold one — the reader routes unknown attributes
+    /// to <c>UnknownAttributes</c> (a reserved resource reference is recorded before the row lookup,
+    /// but the reader reports it as an error) — so it is quoted as text.</para>
     /// </summary>
-    private static bool IsAlreadySource(FormPropertyDef? property, string value) =>
-        property?.IsSourceForm(value) ??
-        (value.StartsWith("\"", StringComparison.Ordinal) ||
-         value.StartsWith("New ", StringComparison.Ordinal));
+    private static string? AlreadySource(FormPropertyDef? property, string value) =>
+        property?.SourceLiteral(value);
 
     /// <summary>
     /// Formats a property value as BasicLang SOURCE, driven off the catalog's declared type.
@@ -1036,19 +1123,26 @@ public static class RegionWriter
     /// <para>⛔ The same <c>Properties</c> dictionary means two different things to two consumers:
     /// the document reader stores the RAW attribute text (<c>Sign in</c>, unquoted, because XML
     /// attributes are not quoted values), while this writer splices the value into generated source.
-    /// Emitting the raw text produced <c>btnLogin.Text = Sign in</c> — a syntax error. The recognizer
-    /// meanwhile stores already-quoted source text, because that is what it read. Typing the
-    /// formatting off the catalog is what lets both feed the same writer.</para>
+    /// Emitting the raw text produced <c>btnLogin.Text = Sign in</c> — a syntax error. Properties
+    /// holds document text; a String is always quoted and escaped through
+    /// <see cref="FormPropertyDef.StringLiteral"/> (quotes, backslashes, CR, LF, tab). Typing the
+    /// formatting off the catalog is what lets an Enum/Color/Size row's source form pass through
+    /// while a String never does.</para>
+    ///
+    /// <para>⛔⛔ Nothing numeric is spliced as the input text. A source form comes back from
+    /// <see cref="FormPropertyDef.SourceLiteral"/> RE-EMITTED from what was parsed, and an Int from
+    /// <see cref="FormPropertyDef.WinFormsLiteral"/> the same way — so whitespace a parser tolerated
+    /// (a line break around a comma, a leading zero) never reaches the user's file.</para>
     /// </summary>
-    private static string Literal(FormControl control, string name, string value)
+    /// <param name="property">The row — a control's, or a <see cref="FormControlCatalog.FormRoot"/> row.
+    /// Null for a property the catalog does not know.</param>
+    private static string Literal(FormPropertyDef? property, string value)
     {
-        var property = control.Definition?.Property(name);
-
-        // Already a source literal — leave it exactly as read. Re-formatting it would produce
-        // `ContentAlignment.ContentAlignment.MiddleLeft` for an enum and `""Sign in""` for a string.
-        if (IsAlreadySource(property, value))
+        // Already a source literal — re-emitted canonically, never re-formatted as a document value:
+        // that would produce `ContentAlignment.ContentAlignment.MiddleLeft`. (Never for a String row.)
+        if (AlreadySource(property, value) is { } source)
         {
-            return value;
+            return source;
         }
 
         // ⛔ An enum or a colour is NOT the bare text. MEASURED, both ways:
@@ -1064,11 +1158,19 @@ public static class RegionWriter
 
         return property?.Type switch
         {
-            FormPropertyType.Int => value,
             FormPropertyType.Bool => bool.TryParse(value, out var flag) ? (flag ? "True" : "False") : value,
             FormPropertyType.Enum => value,
             FormPropertyType.Color => value,
-            _ => "\"" + value.Replace("\"", "\"\"") + "\""
+            // ⛔ UNREACHABLE by construction, and loud if that ever stops being true. An Int or a Size
+            // reaches here only when WinFormsLiteral declined it — i.e. it does not parse — and such a
+            // value is either already source (returned above) or Degraded, which every caller skips
+            // before calling this. Quoting it (the default arm) would emit `X.ClientSize = "800x450"`,
+            // CS0029 at csc with BasicLang silent; verbatim would splice unparsed text — `5\r\n` — into
+            // source. Both hide a broken invariant as a broken build, so this names the invariant.
+            FormPropertyType.Int or FormPropertyType.Size => throw new InvalidOperationException(
+                $"'{property.Name}' = '{value}' is not a parsable {property.Type} and reached the region " +
+                "writer; a Degraded value must be skipped before Literal is called."),
+            _ => FormPropertyDef.StringLiteral(value)
         };
     }
 

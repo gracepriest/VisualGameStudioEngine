@@ -282,6 +282,128 @@ public class FormPropertyGridTests
             "an unparseable value left the model where it was");
     }
 
+    private const string WebCombo = """
+        <WebForm Name="F" Version="1">
+          <Controls>
+            <ComboBox Id="cmb" TabIndex="0" Items="Alpha, Beta" SelectedIndex="1"/>
+          </Controls>
+        </WebForm>
+        """;
+
+    /// <summary>
+    /// ⛔⛔ sv-SE's NegativeSign is U+2212. A row that wrote <c>value.ToString()</c> put "−1" into the
+    /// document for SelectedIndex's own default, which the culture-free <c>TryParseInt</c> refuses —
+    /// so the designer FROZE a value it had written itself (and before that, csc saw CS1056).
+    /// </summary>
+    [Test]
+    [SetCulture("sv-SE")]
+    public void ANegativeIntEdit_UnderAUnicodeMinusCulture_IsWrittenWithAnAsciiHyphen_AndStaysEditable()
+    {
+        UnicodeMinusCulture.Require();
+        var file = Read(WebCombo);
+        var grid = new FormPropertyGridViewModel();
+        grid.Load(file);
+        grid.SelectedControl = file.Model.FindById("cmb");
+
+        grid.Rows.Single(r => r.Name == "SelectedIndex").IntValue = -1;
+
+        // A fresh grid re-judges the tier from the document, as reopening the form would.
+        var reopened = new FormPropertyGridViewModel();
+        reopened.Load(file);
+        reopened.SelectedControl = file.Model.FindById("cmb");
+        var row = reopened.Rows.Single(r => r.Name == "SelectedIndex");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(file.Model.FindById("cmb")!.Properties["SelectedIndex"], Is.EqualTo("-1"),
+                "ASCII hyphen-minus, whatever the current culture");
+            Assert.That(row.IsFrozen, Is.False, "the designer must not freeze a value it wrote");
+            Assert.That(row.IntValue, Is.EqualTo(-1), "read and write agree");
+        });
+    }
+
+    [Test]
+    [SetCulture("sv-SE")]
+    public void ANegativeIntrinsicEdit_UnderAUnicodeMinusCulture_ShowsAnAsciiHyphen()
+    {
+        UnicodeMinusCulture.Require();
+        var file = FormDocumentReader.Read("F.blform", WinFormsForm);
+        var grid = new FormPropertyGridViewModel();
+        grid.Load(file);
+        grid.SelectedControl = file.Model.FindById("chk");
+
+        var x = grid.Rows.Single(r => r.Name == "X");
+        x.IntValue = -5;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(((PixelGeometry)grid.SelectedControl!.Geometry!).X, Is.EqualTo(-5));
+            Assert.That(x.RawValue, Is.EqualTo("-5"), "an intrinsic row formats invariantly too");
+            Assert.That(x.IntValue, Is.EqualTo(-5));
+        });
+    }
+
+    /// <summary>
+    /// ⛔ The same edit one step further: the grid formatting invariantly is worth nothing if the
+    /// document on disk then holds <c>X="−5"</c> — which reads back as a DEFAULT on any machine
+    /// whose culture does not share the sign.
+    /// </summary>
+    [Test]
+    [SetCulture("sv-SE")]
+    public void ANegativeIntrinsicEdit_UnderAUnicodeMinusCulture_ReachesTheDocumentWithAnAsciiHyphen()
+    {
+        UnicodeMinusCulture.Require();
+        var file = FormDocumentReader.Read("F.blform", WinFormsForm);
+        var grid = new FormPropertyGridViewModel();
+        grid.Load(file);
+        grid.SelectedControl = file.Model.FindById("chk");
+
+        grid.Rows.Single(r => r.Name == "X").IntValue = -5;
+        var written = FormDocumentWriter.Write(file);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(written, Does.Contain("X=\"-5\""));
+            Assert.That(written, Does.Not.Contain(UnicodeMinusCulture.Minus));
+        });
+    }
+
+    private const string WebNumeric = """
+        <WebForm Name="F" Version="1">
+          <Controls>
+            <NumericUpDown Id="num" TabIndex="0" Value="007"/>
+          </Controls>
+        </WebForm>
+        """;
+
+    /// <summary>
+    /// ⛔ The editor pushes its value back as <c>"7"</c> the moment the row renders. For a document
+    /// holding <c>"007"</c> that is the SAME number, so it is not an edit — writing it would rewrite the
+    /// user's attribute and dirty the document for a selection click (spec §2.8).
+    /// </summary>
+    [TestCase("007")]
+    [TestCase(" 7 ")]
+    [TestCase("+7")]
+    public void AnIntRow_PushedBackTheSameNumber_IsANoOp_AndKeepsTheSpelling(string spelling)
+    {
+        var file = Read(WebNumeric.Replace("\"007\"", $"\"{spelling}\""));
+        var grid = new FormPropertyGridViewModel();
+        grid.Load(file);
+        grid.SelectedControl = file.Model.FindById("num");
+        var edits = 0;
+        grid.Edited += (_, _) => edits++;
+
+        var row = grid.Rows.Single(r => r.Name == "Value");
+        row.IntValue = 7;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(row.IsFrozen, Is.False, "precondition: the value is Canon");
+            Assert.That(file.Model.FindById("num")!.Properties["Value"], Is.EqualTo(spelling));
+            Assert.That(edits, Is.Zero);
+        });
+    }
+
     /// <summary>
     /// ⛔ The FORM's own properties, shown when nothing on the surface is selected — which is what
     /// VS does. Clicking the form used to say "No selection" and offer nothing, so a form's caption
@@ -298,8 +420,7 @@ public class FormPropertyGridTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(names, Does.Contain("Name").And.Contains("Text")
-                .And.Contains("Width").And.Contains("Height"));
+            Assert.That(names, Does.Contain("Name").And.Contains("Text").And.Contains("ClientSize"));
             Assert.That(grid.Header, Is.EqualTo("F"), "the header names the form, not 'No selection'");
             Assert.That(grid.IsEmpty, Is.False);
 
@@ -342,7 +463,8 @@ public class FormPropertyGridTests
         Assert.Multiple(() =>
         {
             Assert.That(names, Does.Contain("Cols").And.Contains("Rows").And.Contains("Gap"));
-            Assert.That(names, Does.Not.Contain("Width").And.Not.Contains("Height"));
+            Assert.That(names, Does.Not.Contain("Width").And.Not.Contains("Height").And.Not.Contains("ClientSize"),
+                "ClientSize targets the web now (a Canvas page's design size), and a Grid page must not show it");
         });
     }
 
@@ -378,7 +500,7 @@ public class FormPropertyGridTests
 
         grid.SelectedControl = null;
 
-        Assert.That(grid.Rows.Select(r => r.Name), Does.Contain("Text").And.Contains("Width"),
+        Assert.That(grid.Rows.Select(r => r.Name), Does.Contain("Text").And.Contains("ClientSize"),
             "and the form's rows again once it is deselected");
     }
 
@@ -459,7 +581,85 @@ public class FormPropertyGridTests
         Assert.Multiple(() =>
         {
             Assert.That(row.IsComboBox, Is.True);
-            Assert.That(row.Choices, Is.EqualTo(new[] { "Left", "Center", "Right" }));
+            Assert.That(row.Choices, Is.EqualTo(new[]
+            {
+                "TopLeft", "TopCenter", "TopRight", "MiddleLeft", "MiddleCenter", "MiddleRight",
+                "BottomLeft", "BottomCenter", "BottomRight"
+            }), "the nine ContentAlignment members; the legacy Left/Center/Right are accepted, never offered (spec §2.8)");
+        });
+    }
+
+    /// <summary>
+    /// ⛔ The slice-1 hazard: the combo's items no longer contain "Left", and a SelectedItem binding
+    /// that cannot match pushes back — the canonical member, or null. Either write would rewrite (or
+    /// delete) the user's attribute just because they selected the Label.
+    /// </summary>
+    [Test]
+    public void ALegacyTextAlign_ShowsItsCanonicalMember_AndIsNotRewrittenWhenTheEditorPushesItBack()
+    {
+        var file = Read("""
+            <WebForm Name="F" Version="1">
+              <Controls><Label Id="lbl" TabIndex="0" TextAlign="Left"/></Controls>
+            </WebForm>
+            """);
+        var grid = new FormPropertyGridViewModel();
+        grid.Load(file);
+        grid.SelectedControl = file.Model.FindById("lbl");
+        var edits = 0;
+        grid.Edited += (_, _) => edits++;
+        var row = grid.Rows.Single(r => r.Name == "TextAlign");
+
+        row.StringValue = "MiddleLeft";   // what the combo pushes back for the matched canonical item
+        row.StringValue = null!;          // what a combo with no matching item can push
+
+        Assert.Multiple(() =>
+        {
+            // ⛔ Not frozen: a legacy alias is CANON (spec §2.8). Without this line a broken alias rule
+            // (the value Degraded, the row frozen) would still pass the rest — a frozen row writes nothing.
+            Assert.That(row.IsFrozen, Is.False, "a legacy TextAlign must stay editable, not Degraded");
+            Assert.That(row.StringValue, Is.EqualTo("MiddleLeft"), "the grid shows the canonical member");
+            Assert.That(file.Model.FindById("lbl")!.Properties["TextAlign"], Is.EqualTo("Left"),
+                "the document keeps its legacy spelling until the user EDITS the row");
+            Assert.That(edits, Is.Zero);
+        });
+    }
+
+    [Test]
+    public void ChoosingADifferentAlignment_WritesTheCanonicalMember()
+    {
+        var file = Read("""
+            <WebForm Name="F" Version="1">
+              <Controls><Label Id="lbl" TabIndex="0" TextAlign="Left"/></Controls>
+            </WebForm>
+            """);
+        var grid = new FormPropertyGridViewModel();
+        grid.Load(file);
+        grid.SelectedControl = file.Model.FindById("lbl");
+
+        grid.Rows.Single(r => r.Name == "TextAlign").StringValue = "TopRight";
+
+        Assert.That(file.Model.FindById("lbl")!.Properties["TextAlign"], Is.EqualTo("TopRight"));
+    }
+
+    /// <summary>
+    /// ⛔ A FROZEN row shows the document's text exactly. Its refusal quotes <c>'activecaption'</c> and
+    /// says it is "preserved exactly as written"; a value box reading <c>ActiveCaption</c> beside it
+    /// would contradict the reason it is shown with.
+    /// </summary>
+    [Test]
+    public void AFrozenRow_ShowsTheRawText_NotTheCanonicalSpelling()
+    {
+        var grid = GridOver("""
+            <WebForm Name="F" Version="1">
+              <Controls><Label Id="lbl" TabIndex="0" BackColor="activecaption"/></Controls>
+            </WebForm>
+            """, "lbl");
+        var row = grid.Rows.Single(r => r.Name == "BackColor");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(row.IsFrozen, Is.True, "ActiveCaption has no CSS equivalent — Degraded on the web");
+            Assert.That(row.StringValue, Is.EqualTo("activecaption"));
         });
     }
 

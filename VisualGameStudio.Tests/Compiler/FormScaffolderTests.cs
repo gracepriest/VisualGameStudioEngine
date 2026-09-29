@@ -115,6 +115,68 @@ public class FormScaffolderTests
         });
     }
 
+    /// <summary>
+    /// ⛔ Spec 2026-09-27 D1: a NEW web form is a Canvas page, designed like a WinForms form — the WinForms
+    /// scaffold's design size and the default phone breakpoint.
+    /// </summary>
+    [Test]
+    public void Create_Web_IsACanvasPage_OfTheWinFormsDesignSize()
+    {
+        var scaffold = FormScaffolder.Create("LoginForm");
+        var file = FormDocumentReader.Read("LoginForm.blwebform", scaffold.DocumentText);
+        var window = FormDocumentReader.Read("LoginForm.blform", FormScaffolder.Create("LoginForm", FormTarget.WinForms).DocumentText);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(file.IsRefused, Is.False, string.Join("; ", file.Diagnostics.Select(d => d.Format())));
+            Assert.That(file.Model.Layout!.Kind, Is.EqualTo(FormLayoutKind.Canvas));
+            Assert.That(file.Model.Layout.MobileBreakpoint, Is.EqualTo(FormLayout.DefaultMobileBreakpoint.ToString()));
+            Assert.That((file.Model.Width, file.Model.Height), Is.EqualTo((window.Model.Width, window.Model.Height)),
+                "the WinForms scaffold's design size (spec §2.5)");
+            Assert.That(file.TierOfRoot("ClientSize"), Is.EqualTo(PropertyTier.Canon));
+            Assert.That(file.TierOfRoot("MobileBreakpoint"), Is.EqualTo(PropertyTier.Canon));
+            Assert.That(scaffold.DocumentText, Does.Contain("<Layout Kind=\"Canvas\" MobileBreakpoint=\"600\" />"));
+            AssertReadsCleanAndRoundTrips(file, scaffold.DocumentText);
+        });
+    }
+
+    /// <summary>
+    /// ⛔ A scaffold is the designer's own output: it must read with no diagnostic, nothing Degraded and
+    /// nothing kept as unknown, and a no-op save must write it back byte-for-byte.
+    /// </summary>
+    private static void AssertReadsCleanAndRoundTrips(FormFile file, string documentText)
+    {
+        Assert.That(file.Diagnostics, Is.Empty, string.Join("; ", file.Diagnostics.Select(d => d.Format())));
+        Assert.That(file.DegradedRoot, Is.Empty, "no root property of a scaffold is Degraded");
+        Assert.That(file.Degraded, Is.Empty, "no control property of a scaffold is Degraded");
+        Assert.That(file.Model.UnknownAttributes, Is.Empty, "the scaffold's root carries no attribute the reader does not model");
+        Assert.That(file.Model.UnknownChildren, Is.Empty, "the scaffold's root carries no element the reader does not model");
+        Assert.That(FormDocumentWriter.Write(file), Is.EqualTo(documentText), "a no-op save rewrites the scaffold");
+    }
+
+    [Test]
+    public void Create_Web_Grid_IsTheGridScaffold_Unchanged()
+    {
+        var scaffold = FormScaffolder.Create("LoginForm", FormTarget.Web, FormLayoutKind.Grid);
+        var file = FormDocumentReader.Read("LoginForm.blwebform", scaffold.DocumentText);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(file.Model.Layout!.Kind, Is.EqualTo(FormLayoutKind.Grid));
+            Assert.That(file.Model.Layout.Cols, Is.EqualTo("auto,1fr"));
+            Assert.That(file.Model.Layout.Rows, Is.EqualTo("auto"));
+            Assert.That(file.Model.Layout.Gap, Is.EqualTo("8px"));
+            Assert.That(file.Model.Width, Is.Null, "a Grid page has no design size");
+            AssertReadsCleanAndRoundTrips(file, scaffold.DocumentText);
+        });
+    }
+
+    [Test]
+    public void Create_Web_Flow_IsRefused()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => FormScaffolder.Create("LoginForm", FormTarget.Web, FormLayoutKind.Flow));
+    }
+
     [Test]
     public void Create_ProducesACodeFileWhoseRegionsAreImmediatelyCanon()
     {
@@ -129,6 +191,53 @@ public class FormScaffolderTests
         {
             Assert.That(regions.Select(r => r.Name), Is.EquivalentTo(new[] { "controls", "init" }));
             Assert.That(regions, Has.All.Property(nameof(FormRegion.State)).EqualTo(RegionState.Canon));
+        });
+    }
+
+    /// <summary>
+    /// ⛔⛔ Owner report 2026-09-28. The constructor calls <c>Me.InitializeComponent()</c>, and a scaffold whose regions
+    /// were EMPTY declared no such method until the designer's first save wrote one. A form added and built without
+    /// ever being opened in the designer died on load with <c>TypeError: this.InitializeComponent is not a
+    /// function</c> — and BasicLang reported nothing. The scaffold now carries the designer's own output for the empty
+    /// form, so the method exists from the start and the regions are still Canon.
+    /// </summary>
+    [TestCase(FormTarget.Web)]
+    [TestCase(FormTarget.WinForms)]
+    public void Create_TheInitRegionAlreadyDeclaresInitializeComponent(FormTarget target)
+    {
+        var scaffold = FormScaffolder.Create("LoginForm", target);
+        var regions = RegionMarkers.Scan(scaffold.CodeText);
+        var init = RegionMarkers.Find(regions, RegionMarkers.Init);
+
+        Assert.That(init, Is.Not.Null, "the scaffold has no init region");
+        var region = scaffold.CodeText.Substring(init!.StartOffset, init.EndOffset - init.StartOffset);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(region, Does.Contain("Private Sub InitializeComponent()"),
+                "the method the constructor calls must exist before any designer save");
+            Assert.That(region, Does.Contain("End Sub"));
+            Assert.That(regions, Has.All.Property(nameof(FormRegion.State)).EqualTo(RegionState.Canon),
+                "and the first designer save must still find the regions its own");
+        });
+    }
+
+    /// <summary>
+    /// The scaffold IS the designer's output for the empty form: a save of the untouched document writes nothing.
+    /// </summary>
+    [TestCase(FormTarget.Web)]
+    [TestCase(FormTarget.WinForms)]
+    public void Create_ASaveOfTheUntouchedForm_ChangesNothing(FormTarget target)
+    {
+        var scaffold = FormScaffolder.Create("LoginForm", target);
+        var document = FormDocumentReader.Read(scaffold.DocumentFileName, scaffold.DocumentText);
+
+        var write = RegionWriter.Write(scaffold.CodeFileName, scaffold.CodeText, document.Model, scaffold.DocumentFileName);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(write.Refused, Is.False, string.Join("; ", write.Diagnostics.Select(d => d.Format())));
+            Assert.That(write.Changed, Is.False, "the scaffold already says what the designer would write");
         });
     }
 

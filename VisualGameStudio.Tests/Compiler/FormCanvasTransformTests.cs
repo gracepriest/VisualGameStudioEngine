@@ -310,6 +310,236 @@ public class FormCanvasTransformTests
     }
 
     // ==================================================================
+    // Task 9 (spec 2026-09-27 §2.4, §3, §7a) — a Canvas page speaks pixels, and every docked thing sits where
+    // FormDockLayout puts it: one answer, two consumers (the canvas here, the page emitter in Task 10)
+    // ==================================================================
+
+    private static FormControl Panel(string id, int x, int y, int w, int h, string? dock = null, params FormControl[] children)
+    {
+        var panel = new FormControl
+        {
+            Kind = "Panel",
+            Id = id,
+            Geometry = new PixelGeometry { X = x, Y = y, Width = w, Height = h, Dock = dock }
+        };
+        panel.Children.AddRange(children);
+        return panel;
+    }
+
+    private static FormControl DockedButton(string id, int x, int y, int w, int h, string dock) => new()
+    {
+        Kind = "Button",
+        Id = id,
+        Geometry = new PixelGeometry { X = x, Y = y, Width = w, Height = h, Dock = dock }
+    };
+
+    private static FormControl StripOf(string kind, string id) => new() { Kind = kind, Id = id };
+
+    private static FormDocument CanvasPage(params FormControl[] controls)
+    {
+        var page = new FormDocument
+        {
+            Target = FormTarget.Web,
+            Name = "Page",
+            Width = 640,
+            Height = 480,
+            Layout = new FormLayout { Kind = FormLayoutKind.Canvas }
+        };
+        page.Controls.AddRange(controls);
+        return page;
+    }
+
+    private static FormDocument DockForm(params FormControl[] controls)
+    {
+        var form = new FormDocument { Target = FormTarget.WinForms, Name = "DockForm", Width = 640, Height = 480 };
+        form.Controls.AddRange(controls);
+        return form;
+    }
+
+    [Test]
+    public void ACanvasPage_IsLaidOutInPixels_NotRoutedDownTheGridPath()
+    {
+        // ⛔ Spec §2.4: Layout sent EVERY web document to WebLayout, which places Grid cells only — a Canvas page's
+        // controls were drawn nowhere.
+        var page = CanvasPage(Control("btn", 20, 30, 100, 40));
+
+        var laid = FormCanvasTransform.Layout(page).ToList();
+
+        Assert.That(laid.Select(e => (e.Control!.Id, e.Bounds, e.Role)),
+            Is.EqualTo(new[] { ("btn", new Rect(20, 30, 100, 40), FormLayoutRole.Control) }));
+    }
+
+    [Test]
+    public void ACanvasPagesControl_IsHitWhereItIsDrawn_AtAnyZoom()
+    {
+        var page = CanvasPage(Control("btn", 20, 30, 100, 40));
+        var t = new FormCanvasTransform(1.75, new Vector(12, -8));
+
+        Assert.That(t.HitTest(page, t.ToCanvas(new Rect(20, 30, 100, 40)).Center)?.Id, Is.EqualTo("btn"));
+    }
+
+    [Test]
+    public void ContainerAt_OnACanvasPage_FindsThePanel_WithItsOrigin()
+    {
+        var page = CanvasPage(Panel("pnl", 100, 100, 200, 200));
+
+        var found = FormCanvasTransform.ContainerAt(page, new Point(150, 150));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(found?.Container.Id, Is.EqualTo("pnl"));
+            Assert.That(found?.Origin, Is.EqualTo(new Point(100, 100)));
+        });
+    }
+
+    /// <summary>
+    /// ⛔⛔ ONE answer, two consumers (spec §3, §7a; plan mutation M5): every band and every docked control the canvas
+    /// lays out is exactly FormDockLayout.Resolve's rectangle, offset by its container's DRAWN origin — at every
+    /// depth. Bands used to derive their own stacking from the root strips alone, and BoundsOf ignored Dock.
+    /// </summary>
+    [Test]
+    public void BandsAndDockedControls_AreWhereTheResolverPutsThem_AtEveryDepth()
+    {
+        var innerMenu = StripOf("MenuStrip", "innerMenu");
+        var innerButton = DockedButton("innerBtn", 5, 5, 60, 20, "Bottom");
+        var fill = Panel("fill", 7, 7, 10, 10, "Fill", innerMenu, innerButton);
+        var topPanel = Panel("topPanel", 300, 300, 50, 40, "Top"); // stored X/Y/Width are stale by design
+        var menu = StripOf("MenuStrip", "menuStrip1");
+        var status = StripOf("StatusStrip", "statusStrip1");
+        var form = DockForm(topPanel, menu, status, fill);
+
+        var dock = FormDockLayout.Resolve(form);
+        var laid = FormCanvasTransform.Layout(form).ToList();
+
+        Rect Entry(FormControl c, FormLayoutRole role) =>
+            laid.Single(e => ReferenceEquals(e.Control, c) && e.Role == role).Bounds;
+
+        Rect Resolved(FormControl c, Point origin)
+        {
+            Assert.That(dock.TryGet(c, out var d), Is.True, $"precondition: {c.Id} is docked");
+            return new Rect(origin.X + d.Bounds.X, origin.Y + d.Bounds.Y, d.Bounds.Width, d.Bounds.Height);
+        }
+
+        var root = new Point(0, 0);
+        var fillOrigin = Entry(fill, FormLayoutRole.Control).TopLeft;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Entry(topPanel, FormLayoutRole.Control), Is.EqualTo(Resolved(topPanel, root)));
+            Assert.That(Entry(menu, FormLayoutRole.Band), Is.EqualTo(Resolved(menu, root)));
+            Assert.That(Entry(status, FormLayoutRole.Band), Is.EqualTo(Resolved(status, root)));
+            Assert.That(Entry(fill, FormLayoutRole.Control), Is.EqualTo(Resolved(fill, root)));
+            Assert.That(Entry(innerMenu, FormLayoutRole.Band), Is.EqualTo(Resolved(innerMenu, fillOrigin)),
+                "a strip inside a Panel is a band too, relative to the Panel's drawn origin");
+            Assert.That(Entry(innerButton, FormLayoutRole.Control), Is.EqualTo(Resolved(innerButton, fillOrigin)));
+
+            // Non-vacuity — the numbers the agreement is about, on a 640x480 client:
+            Assert.That(Entry(menu, FormLayoutRole.Band), Is.EqualTo(new Rect(0, 40, 640, 24)),
+                "the Dock=Top Panel precedes the menu, so it takes the top edge and the menu sits below it");
+            Assert.That(Entry(fill, FormLayoutRole.Control), Is.EqualTo(new Rect(0, 64, 640, 394)));
+            Assert.That(Entry(innerButton, FormLayoutRole.Control), Is.EqualTo(new Rect(0, 64 + 374, 640, 20)));
+            Assert.That(laid.Count(e => e.Role == FormLayoutRole.Band), Is.EqualTo(3), "three strips, three bands");
+        });
+    }
+
+    [Test]
+    public void AHiddenDockedPanel_IsStillDockedAndDrawn_OnTheCanvas()
+    {
+        // ⚠ The canvas is FormDockMode.Designer (plan C2): a Visible=false control is shown, and docks. The page
+        // (Task 10) asks Runtime, where it would give up its edge.
+        var hidden = Panel("hidden", 300, 300, 50, 40, "Top");
+        hidden.Properties["Visible"] = "False";
+        var menu = StripOf("MenuStrip", "menuStrip1");
+        var form = DockForm(hidden, menu);
+
+        var laid = FormCanvasTransform.Layout(form).ToList();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(laid.Single(e => ReferenceEquals(e.Control, hidden)).Bounds, Is.EqualTo(new Rect(0, 0, 640, 40)));
+            Assert.That(laid.Single(e => ReferenceEquals(e.Control, menu)).Bounds.Y, Is.EqualTo(40));
+        });
+    }
+
+    [Test]
+    public void ADockedControl_IsHitWhereItIsDrawn_NotAtItsStaleStoredRect()
+    {
+        var form = DockForm(Panel("topPanel", 300, 300, 50, 40, "Top"));
+        var t = new FormCanvasTransform(2.0, new Vector(30, 10));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(t.HitTest(form, t.ToCanvas(new Point(600, 20)))?.Id, Is.EqualTo("topPanel"),
+                "resolved: the whole top edge, 40 high");
+            Assert.That(t.HitTest(form, t.ToCanvas(new Point(320, 320))), Is.Null,
+                "its stored X/Y is stale by design — nothing is drawn there");
+        });
+    }
+
+    [Test]
+    public void ContainerAt_ADockedFillPanel_ReportsTheOriginItIsDrawnAt()
+    {
+        var fill = Panel("fill", 7, 7, 10, 10, "Fill");
+        var form = DockForm(StripOf("MenuStrip", "menuStrip1"), fill);
+
+        var found = FormCanvasTransform.ContainerAt(form, new Point(100, 200));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(found?.Container, Is.SameAs(fill));
+            Assert.That(found?.Origin, Is.EqualTo(new Point(0, 24)), "under the 24px menu — not the stale (7,7)");
+        });
+    }
+
+    /// <summary>
+    /// Task 9 review: a band beside a Dock=Left control starts at that control's right edge, and so do its item
+    /// cells — never at the form's left edge (they would be drawn, and hit, over the Panel).
+    /// </summary>
+    [Test]
+    public void ABandsItemCells_StartAtTheBandsOwnX_BesideADockLeftControl()
+    {
+        var menu = StripOf("MenuStrip", "menuStrip1");
+        var item = new FormControl { Kind = "ToolStripMenuItem", Id = "fileToolStripMenuItem" };
+        item.Properties["Text"] = "&File";
+        menu.Children.Add(item);
+        var form = DockForm(Panel("left", 300, 300, 100, 40, "Left"), menu);
+
+        var laid = FormCanvasTransform.Layout(form).ToList();
+        var band = laid.Single(e => ReferenceEquals(e.Control, menu)).Bounds;
+        var cell = laid.Single(e => ReferenceEquals(e.Control, item)).Bounds;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(band.X, Is.EqualTo(100), "precondition: the Dock=Left Panel took the left 100px first");
+            Assert.That(cell.X, Is.EqualTo(100), "the first item cell starts where its band does");
+        });
+    }
+
+    /// <summary>
+    /// Task 9 review: an overflowing dock sits partly OUTSIDE the form (a Dock=Left Panel wider than the client), and
+    /// WinForms clips it. The canvas clips it too, so nothing outside the surface is hit, band-selected or dropped into.
+    /// </summary>
+    [Test]
+    public void AnOverflowingDockedControl_IsNotHitOutsideTheForm()
+    {
+        var wide = Panel("wide", 0, 0, 700, 40, "Left"); // 700 wide in a 640-wide client
+        var form = DockForm(wide);
+        var t = new FormCanvasTransform(1.5, new Vector(20, 10));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(FormCanvasTransform.Layout(form).Single().Bounds, Is.EqualTo(new Rect(0, 0, 700, 480)),
+                "precondition: the resolver hands it 700 — it overflows the 640 client");
+            Assert.That(t.HitTest(form, t.ToCanvas(new Point(600, 100)))?.Id, Is.EqualTo("wide"), "inside the form");
+            Assert.That(t.HitTest(form, t.ToCanvas(new Point(670, 100))), Is.Null, "outside the form: clipped");
+            Assert.That(FormCanvasTransform.ContainerAt(form, new Point(600, 100))?.Container, Is.SameAs(wide));
+            Assert.That(FormCanvasTransform.ContainerAt(form, new Point(670, 100)), Is.Null);
+            Assert.That(FormCanvasTransform.ControlsIn(form, new Rect(650, 50, 30, 30)), Is.Empty);
+            Assert.That(FormCanvasTransform.ControlsIn(form, new Rect(620, 50, 30, 30)), Is.EqualTo(new[] { wide }));
+        });
+    }
+
+    // ==================================================================
     // Web documents — laid out on the grid, not on pixels
     // ==================================================================
 

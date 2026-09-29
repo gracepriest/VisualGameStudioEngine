@@ -438,6 +438,31 @@ public class FormDocumentTests
         Assert.That(pasted[0].Geometry, Is.Null);
     }
 
+    /// <summary>
+    /// ⛔ The clipboard reads numbers exactly as <c>FormDocumentReader</c> does — culture-free — so a
+    /// paste means the same position on every machine.
+    /// </summary>
+    [Test]
+    [SetCulture("sv-SE")]
+    public void Clipboard_ReadsCoordinatesCultureFree()
+    {
+        UnicodeMinusCulture.Require();
+        var xml = $"""
+            <FormSubtree Target="WinForms" Version="1">
+              <Button Id="a" TabIndex="0" X="-5" Y="{UnicodeMinusCulture.Minus}3"/>
+            </FormSubtree>
+            """;
+
+        var pixel = (PixelGeometry)FormClipboard.DeserializeSubtree(xml, FormTarget.WinForms, _ => false)
+            .Single().Geometry!;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(pixel.X, Is.EqualTo(-5), "an ASCII negative is that number");
+            Assert.That(pixel.Y, Is.Not.EqualTo(-3), "U+2212 is not a minus in a form fragment");
+        });
+    }
+
     [Test]
     public void Clipboard_RenamesACollidingId_AndRetargetsItsConventionHandler()
     {

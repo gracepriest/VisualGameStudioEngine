@@ -1,0 +1,263 @@
+using System.Text;
+using BasicLang.Forms;
+using BasicLang.Forms.Serialization;
+using NUnit.Framework;
+
+namespace VisualGameStudio.Tests.Compiler.PixelLayout;
+
+/// <summary>
+/// The Canvas pages both reference harnesses lay out — Task 12 in a real WinForms window, Task 13 in Edge — so the
+/// two are measured on the SAME documents. Each builder takes the design size, so a test can ask the model what a
+/// form looks like at another size (a docked control re-docks at every size, in WinForms and on the page alike).
+/// ⚠ Every form name is distinct: each becomes a class in one driver program.
+/// </summary>
+internal static class PixelLayoutFixtures
+{
+    public static FormDocument Read(string name, int width, int height, string controls)
+    {
+        var xml = $"""
+            <WebForm Name="{name}" Version="1" Width="{width}" Height="{height}">
+              <Layout Kind="Canvas"/>
+              <Controls>
+            {controls}
+              </Controls>
+              <Components/>
+              <Resources/>
+            </WebForm>
+            """;
+
+        var file = FormDocumentReader.Read(Path.Combine(Path.GetTempPath(), name + ".blwebform"), xml);
+        Assert.That(file.IsRefused, Is.False,
+            $"fixture {name} was refused: " + string.Join("; ", file.Diagnostics.Select(d => d.Format())));
+        return file.Model;
+    }
+
+    /// <summary>The harness's own proof: one Top|Left control and one anchored Right.</summary>
+    public static FormDocument SelfTest(int width = 400, int height = 300) => Read("SelfTest", width, height, """
+        <Panel Id="p1" X="20" Y="20" Width="100" Height="50"/>
+        <Panel Id="p2" X="280" Y="20" Width="100" Height="50" Anchor="Right"/>
+        """);
+
+    /// <summary>
+    /// Every Anchor combination: control <c>a{n}</c> has the AnchorStyles flags <c>n</c> (Top 1, Bottom 2, Left 4,
+    /// Right 8; 0 is None), 80×60 on a 4×4 grid.
+    /// </summary>
+    public static FormDocument Anchors(int width = 400, int height = 300)
+    {
+        var controls = new StringBuilder();
+        for (var n = 0; n < 16; n++)
+        {
+            var (x, y, _, _) = AnchorCell(n);
+            controls.AppendLine($"""<Panel Id="a{n}" X="{x}" Y="{y}" Width="80" Height="60" Anchor="{AnchorText(n)}"/>""");
+        }
+
+        return Read("Anchors", width, height, controls.ToString());
+    }
+
+    /// <summary>Control <c>a{n}</c>'s stored rectangle in <see cref="Anchors"/>.</summary>
+    public static (int X, int Y, int Width, int Height) AnchorCell(int n) => (10 + (n % 4) * 95, 10 + (n / 4) * 70, 80, 60);
+
+    public static FormAnchorEdges AnchorFlags(int n) => (FormAnchorEdges)n;
+
+    public static string AnchorText(int n) =>
+        n == 0
+            ? "None"
+            : string.Join(",", new[] { FormAnchorEdges.Top, FormAnchorEdges.Bottom, FormAnchorEdges.Left, FormAnchorEdges.Right }
+                .Where(e => ((FormAnchorEdges)n).HasFlag(e)));
+
+    /// <summary>A Fill between a MenuStrip and a StatusStrip (strips first in the document).</summary>
+    public static FormDocument DockStrips(int width = 400, int height = 300) => Read("DockStrips", width, height, """
+        <MenuStrip Id="menu" Dock="Top"><ToolStripMenuItem Id="mnuFile" Text="File"/></MenuStrip>
+        <StatusStrip Id="status" Dock="Bottom"><ToolStripStatusLabel Id="lblReady" Text="Ready"/></StatusStrip>
+        <Panel Id="fill" X="0" Y="0" Width="100" Height="100" Dock="Fill"/>
+        """);
+
+    /// <summary>A Dock=Top Panel BEFORE the MenuStrip in the document: it docks first, so the menu sits below it.</summary>
+    public static FormDocument TopBeforeMenu(int width = 400, int height = 300) => Read("TopBeforeMenu", width, height, """
+        <Panel Id="band" X="0" Y="0" Width="400" Height="40" Dock="Top"/>
+        <MenuStrip Id="menu" Dock="Top"><ToolStripMenuItem Id="mnuFile" Text="File"/></MenuStrip>
+        <Panel Id="below" X="20" Y="100" Width="100" Height="50"/>
+        """);
+
+    /// <summary>S9: an overflowing Dock=Top, then a Dock=Bottom, then a Fill.</summary>
+    public static FormDocument OverflowV(int width = 400, int height = 300) => Read("OverflowV", width, height, """
+        <Panel Id="top" X="0" Y="0" Width="400" Height="400" Dock="Top"/>
+        <Panel Id="bottom" X="0" Y="0" Width="400" Height="50" Dock="Bottom"/>
+        <Panel Id="fill" X="0" Y="0" Width="100" Height="100" Dock="Fill"/>
+        """);
+
+    /// <summary>S9: an overflowing Dock=Left, then a Dock=Right, then a Fill.</summary>
+    public static FormDocument OverflowH(int width = 400, int height = 300) => Read("OverflowH", width, height, """
+        <Panel Id="left" X="0" Y="0" Width="500" Height="300" Dock="Left"/>
+        <Panel Id="right" X="0" Y="0" Width="50" Height="300" Dock="Right"/>
+        <Panel Id="fill" X="0" Y="0" Width="100" Height="100" Dock="Fill"/>
+        """);
+
+    /// <summary>
+    /// A docked Panel hidden at startup before a second docked Panel, and two ANCHORED siblings that must not move
+    /// when it is shown at run time.
+    /// </summary>
+    public static FormDocument HiddenDock(bool pnlAVisible = false, int width = 400, int height = 300) =>
+        Read("HiddenDock", width, height, $"""
+            <Panel Id="pnlA" X="0" Y="0" Width="400" Height="40" Dock="Top" Visible="{(pnlAVisible ? "true" : "false")}"/>
+            <Panel Id="pnlB" X="0" Y="0" Width="400" Height="60" Dock="Top"/>
+            <Panel Id="pnlC" X="10" Y="150" Width="80" Height="40" Anchor="Top,Left"/>
+            <Panel Id="pnlD" X="300" Y="240" Width="80" Height="40" Anchor="Bottom,Right"/>
+            """);
+
+    /// <summary>
+    /// A borderless, a FixedSingle and a Fixed3D Panel and a GroupBox, each holding a Dock=Top child and a
+    /// positioned child — the containers whose client area is NOT their bounds (plan spec-claims #11).
+    /// </summary>
+    public static FormDocument Bordered(int width = 400, int height = 300) => Read("Bordered", width, height, """
+        <Panel Id="pNone" X="10" Y="10" Width="180" Height="100">
+          <Panel Id="pNoneTop" X="0" Y="0" Width="180" Height="20" Dock="Top"/>
+          <Panel Id="pNoneSub" X="10" Y="40" Width="50" Height="30"/>
+        </Panel>
+        <Panel Id="pSingle" X="200" Y="10" Width="180" Height="100" BorderStyle="FixedSingle">
+          <Panel Id="pSingleTop" X="0" Y="0" Width="180" Height="20" Dock="Top"/>
+          <Panel Id="pSingleSub" X="10" Y="40" Width="50" Height="30"/>
+        </Panel>
+        <Panel Id="p3D" X="10" Y="130" Width="180" Height="100" BorderStyle="Fixed3D">
+          <Panel Id="p3DTop" X="0" Y="0" Width="180" Height="20" Dock="Top"/>
+          <Panel Id="p3DSub" X="10" Y="40" Width="50" Height="30"/>
+        </Panel>
+        <GroupBox Id="grp" X="200" Y="130" Width="180" Height="100" Text="Group">
+          <Panel Id="grpTop" X="0" Y="0" Width="180" Height="20" Dock="Top"/>
+          <Panel Id="grpSub" X="10" Y="40" Width="50" Height="30"/>
+        </GroupBox>
+        """);
+
+    /// <summary>
+    /// A container hidden at startup holding a child: the child is not visible either (review I-1 — a model that
+    /// took visibility from the child alone would show it).
+    /// </summary>
+    public static FormDocument HiddenBox(int width = 400, int height = 300) => Read("HiddenBox", width, height, """
+        <Panel Id="box" X="20" Y="20" Width="150" Height="100" Visible="false">
+          <Panel Id="boxKid" X="10" Y="10" Width="40" Height="30"/>
+        </Panel>
+        <Panel Id="shownBox" X="200" Y="20" Width="150" Height="100">
+          <Panel Id="shownKid" X="10" Y="10" Width="40" Height="30"/>
+        </Panel>
+        """);
+
+    /// <summary>
+    /// A Dock=Left container whose STORED X/Y (200,100) are nowhere near where it docks (0,0): its children must be
+    /// offset by the docked rectangle (review I-1). Holds a positioned (Top,Left) child and a Dock=Top child.
+    /// </summary>
+    public static FormDocument DockedBox(int width = 400, int height = 300) => Read("DockedBox", width, height, """
+        <Panel Id="side" X="200" Y="100" Width="120" Height="50" Dock="Left">
+          <Panel Id="sideTop" X="0" Y="0" Width="120" Height="20" Dock="Top"/>
+          <Panel Id="sideSub" X="10" Y="40" Width="50" Height="30"/>
+        </Panel>
+        """);
+
+    /// <summary>
+    /// A Bottom,Right child in a Dock=Left container whose STORED height (50) is not its docked height (300).
+    /// WinForms captures the child's anchor distances when the child is ADDED, against the container's size at that
+    /// moment. Before the fix that was the stored 120×50 (the container docks only when it is itself added to the
+    /// form), so the child landed at Y=500. Since the coordinator's decision the region writer writes a docked
+    /// control's RESOLVED size (Designer mode), so the child is at its designed Y=250, as the model and page say.
+    /// </summary>
+    public static FormDocument DockedAnchor(int width = 400, int height = 300) => Read("DockedAnchor", width, height, """
+        <Panel Id="side" X="200" Y="100" Width="120" Height="50" Dock="Left">
+          <Panel Id="sideBR" X="60" Y="250" Width="50" Height="30" Anchor="Bottom,Right"/>
+        </Panel>
+        """);
+
+    /// <summary>
+    /// A hidden-at-startup Dock=Top sibling changes a Dock=Left container's size: 120×260 at design (all siblings
+    /// visible), 120×300 at run time. The container holds a Bottom,Right child, a Top,Bottom,Left (stretched) child
+    /// and an unanchored (centred) child. Their anchor distances are captured at the DESIGNER size. The container is
+    /// stored 120×50 on purpose, so the region writer's resolved size is exercised too.
+    /// </summary>
+    public static FormDocument HiddenSiblingAnchor(bool hidVisible = false, int width = 400, int height = 300) =>
+        Read("HiddenSiblingAnchor", width, height, $"""
+            <Panel Id="hid" X="0" Y="0" Width="400" Height="40" Dock="Top" Visible="{(hidVisible ? "true" : "false")}"/>
+            <Panel Id="box" X="200" Y="100" Width="120" Height="50" Dock="Left">
+              <Panel Id="boxBR" X="60" Y="200" Width="50" Height="30" Anchor="Bottom,Right"/>
+              <Panel Id="boxTB" X="10" Y="10" Width="30" Height="150" Anchor="Top,Bottom,Left"/>
+              <Panel Id="boxC" X="70" Y="100" Width="20" Height="20" Anchor="None"/>
+            </Panel>
+            """);
+
+    /// <summary>
+    /// A docked container INSIDE a docked container (review N-2). The outer is Dock=Left, stored 120×50, and docks
+    /// 120×300. The inner is Dock=Bottom, stored 60×100 at (5,5), and docks (0,200) 120×100. The inner holds a
+    /// Bottom,Right child. The region writer's resolved Size must reach the NESTED docked control too. With the inner
+    /// at its stored 60 wide, the child's right distance is captured as −40 and it lands 60px right of its design.
+    /// </summary>
+    public static FormDocument NestedDock(int width = 400, int height = 300) => Read("NestedDock", width, height, """
+        <Panel Id="outer" X="200" Y="100" Width="120" Height="50" Dock="Left">
+          <Panel Id="inner" X="5" Y="5" Width="60" Height="100" Dock="Bottom">
+            <Panel Id="innerBR" X="60" Y="70" Width="40" Height="20" Anchor="Bottom,Right"/>
+          </Panel>
+        </Panel>
+        """);
+
+    /// <summary>
+    /// Task 13 (Task 10 review I-1): PictureBoxes showing a REAL image (<c>pic.png</c>, which the harnesses put beside
+    /// the page and beside the WinForms driver) on a stretched axis — anchored Left,Right; anchored Top,Bottom; docked
+    /// Fill inside a Panel. An <c>&lt;img&gt;</c> with a loaded src keeps its intrinsic size under two insets alone.
+    /// </summary>
+    public static FormDocument Picture(int width = 400, int height = 300) => Read("Picture", width, height, """
+        <PictureBox Id="picLR" X="20" Y="20" Width="200" Height="60" Image="pic.png" Anchor="Left,Right"/>
+        <PictureBox Id="picTB" X="300" Y="20" Width="60" Height="200" Image="pic.png" Anchor="Top,Bottom"/>
+        <Panel Id="frame" X="20" Y="120" Width="200" Height="150">
+          <PictureBox Id="picFill" X="0" Y="0" Width="10" Height="10" Image="pic.png" Dock="Fill"/>
+        </Panel>
+        """);
+
+    /// <summary>
+    /// Task 13 (Task 10 B4): a MenuStrip whose File item has a dropdown, and a Panel AFTER it in the document that the
+    /// open dropdown lies over. Strips are in document order, so without the lift the Panel paints over the dropdown.
+    /// </summary>
+    public static FormDocument MenuOver(int width = 400, int height = 300) => Read("MenuOver", width, height, """
+        <MenuStrip Id="menu" Dock="Top">
+          <ToolStripMenuItem Id="mnuFile" Text="File">
+            <ToolStripMenuItem Id="mnuOpen" Text="Open"/>
+            <ToolStripMenuItem Id="mnuExit" Text="Exit"/>
+          </ToolStripMenuItem>
+        </MenuStrip>
+        <Panel Id="under" X="4" Y="26" Width="200" Height="80"/>
+        """);
+
+    /// <summary>
+    /// Task 13 (Task 10 review N-1): a menu and three anchored Panels. The web twin carries a <c>&lt;Literal&gt;</c>
+    /// starting with a <c>&lt;p&gt;</c> (a top margin); a Literal does not exist on WinForms, so the twin without it is
+    /// the reference for both.
+    /// </summary>
+    public static FormDocument Literal(string name, int width = 400, int height = 300) => Read(name, width, height, """
+        <MenuStrip Id="menu" Dock="Top"><ToolStripMenuItem Id="mnuFile" Text="File"/></MenuStrip>
+        <Panel Id="tl" X="20" Y="40" Width="100" Height="50"/>
+        <Panel Id="br" X="280" Y="230" Width="100" Height="50" Anchor="Bottom,Right"/>
+        <Panel Id="mid" X="150" Y="120" Width="100" Height="60" Anchor="None"/>
+        """);
+
+    /// <summary>
+    /// Task 13 (spec §5): a realistic 640×480 page with the DEFAULT 600px breakpoint — label/box pairs (each label 2px
+    /// above its box), a tall list beside them, a CheckBox with a caption, a hidden Button, a docked Panel, a menu and
+    /// a status strip. The harness adds a Literal to the web copy.
+    /// </summary>
+    public static FormDocument Phone(int width = 640, int height = 480) => Read("Phone", width, height, """
+        <MenuStrip Id="menu" Dock="Top"><ToolStripMenuItem Id="mnuFile" Text="File"/></MenuStrip>
+        <Label Id="lblUser" Text="User" X="20" Y="40" Width="80" Height="20"/>
+        <TextBox Id="txtUser" X="110" Y="42" Width="200" Height="23"/>
+        <Label Id="lblPass" Text="Password" X="20" Y="80" Width="80" Height="20"/>
+        <TextBox Id="txtPass" X="110" Y="82" Width="200" Height="23"/>
+        <ListBox Id="lstRecent" X="340" Y="40" Width="200" Height="120"/>
+        <CheckBox Id="chkRemember" Text="Remember me" X="110" Y="120" Width="150" Height="20"/>
+        <Button Id="btnHidden" Text="Hidden" X="20" Y="200" Width="75" Height="23" Visible="false"/>
+        <Button Id="btnGo" Text="Sign in" X="110" Y="160" Width="75" Height="23"/>
+        <Panel Id="pnlFoot" X="0" Y="0" Width="640" Height="40" Dock="Bottom"/>
+        <StatusStrip Id="status" Dock="Bottom"><ToolStripStatusLabel Id="lblReady" Text="Ready"/></StatusStrip>
+        """);
+
+    /// <summary>All three strips, each with one item, and a Fill — measured pinned and auto-sized.</summary>
+    public static FormDocument Strips(string name, int width = 400, int height = 300) => Read(name, width, height, """
+        <MenuStrip Id="menu" Dock="Top"><ToolStripMenuItem Id="mnuFile" Text="File"/></MenuStrip>
+        <ToolStrip Id="tools" Dock="Top"><ToolStripButton Id="btnNew" Text="New"/></ToolStrip>
+        <StatusStrip Id="status" Dock="Bottom"><ToolStripStatusLabel Id="lblReady" Text="Ready"/></StatusStrip>
+        <Panel Id="fill" X="0" Y="0" Width="100" Height="100" Dock="Fill"/>
+        """);
+}
