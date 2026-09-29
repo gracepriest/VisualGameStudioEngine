@@ -5836,7 +5836,7 @@ single new failure against the 170-name baseline.
       unrelated to name binding (measured: the front end accepts it and the IR builds without
       throwing — never #169's ICE; each backend's own failure is downstream, in codegen or at run
       time).
-- ⭐ **Newest — #172 DONE (ADR-0014, D1-D6 amended A1/A2; fix `ef1e949b`+`4cdf2dd1`).** VB's
+- ⭐ **#172 DONE (ADR-0014, D1-D6 amended A1/A2; fix `ef1e949b`+`4cdf2dd1`).** VB's
   per-iteration loop-body `Dim`, with copy-forward, on every backend — `Dim x` inside a loop body
   is now a FRESH binding per iteration, as far as a lambda that captures it can observe, and a new
   iteration's `x` starts from the previous iteration's final value. Gated on the CAPTURE SET
@@ -5880,6 +5880,60 @@ single new failure against the 170-name baseline.
     Release `.blproj`/`CompileProjectFiles` leg for headline probes; byte-identity, IR-fact and
     verifier fixtures in the fast subset) plus `Msil/ClosureLoweringTests.cs`'s `L15` pin, MOVED
     from ADR-0010's old 6|6|6 (superseded — see ADR-0014 D5) to VB's own 1|3|6.
+- ⭐ **Newest — #174 DONE (fix `f608297e`).** VB's lambda-boundary diagnostics, reported by
+  `SemanticAnalyzer` before any backend runs — the front end refuses now, uniformly, instead of
+  each backend doing something different with the same shape (C++/JS silently printed the wrong
+  answer, C# failed with a C# error or miscompiled, MSIL refused inside `ClosureLowering` with a
+  non-VB message):
+  - **BC36639** (`'ByRef' parameter 'n' cannot be used in a lambda expression.`) — a read OR
+    write, at ANY lambda nesting depth, of a ByRef parameter of an enclosing procedure. Decided by
+    the resolved SYMBOL (ADR-0013's NameBinding / `SetNodeSymbol`), never by spelling — a lambda
+    PARAMETER spelled like the ByRef one shadows it (R7) and is not reported; whether that
+    shadowing itself deserves BC36641 is still the owner's pending decision, #217, untouched here.
+  - A lambda's own `Dim` hiding a name declared OUTSIDE that lambda (within its procedure):
+    **BC30616** for a local of an enclosing block, the creator, or an enclosing lambda — including
+    one declared LATER in the same enclosing block, per VB's whole-block scope (N7/N12), and a
+    creator `For` control variable (N10); **BC30734** for the enclosing PROCEDURE's own parameter
+    (N4); **BC36667** for an enclosing LAMBDA's own parameter (N11). Hiding a class field or a
+    module-level global stays legal (N8/N9) — neither is a procedure-local scope.
+  - **Scope, deliberately not widened:** only a `Dim` INSIDE a lambda counts — a `For`/`For Each`
+    control variable or a `Catch` variable declared inside a lambda is #231's job (X1/X3), so is
+    the GENERAL nested-block rule with no lambda involved at all (B1-B3, VB's own BC30616/BC30734
+    but not yet BasicLang's), a lambda `Dim` named like the enclosing Function (E16), and a type
+    parameter (E26, VB's own BC32089). BC36638 (`Me` in a Structure lambda) stays unreported —
+    **waits on #230**, since `ParseStructure` accepts only fields today and no Structure method
+    can hold a lambda at all; #174 added no dead code for it.
+  - **`ClosureLowering`'s own two refusals (ADR-0010 D4 ByRef-capture, and its own "N9"
+    declares-while-captured) stay as BACKSTOPS**, now unreachable from most checked, front-end-
+    accepted programs but not all: D4 is fully covered by BC36639 (every depth), so nothing
+    checked reaches it any more except through IR that bypasses the front end's own gate; its own
+    N9 is still reached TWO ways by a checked, front-end-ACCEPTED program — a SIBLING-block hiding
+    (#174's lexical walk follows only a lambda's own currently-open ancestor chain, never a block
+    that closed before the lambda existed: `S/t174/edge/E12_later_sibling.bas`), and a `For
+    Each`/`Catch` variable inside a lambda (X1/X3, out of #174's own scope entirely). Both measured
+    still throwing the pre-#174 MSIL message.
+  - **Moved pins** (each compiled a shape VB refuses; each now asserts the front-end code
+    directly, with the MSIL backstop coverage it used to provide kept by a dedicated
+    `_BackstopStillThrows_…`/unchecked-IR sibling): `LambdaCaptureSetTests.
+    N9_LambdaLocalShadowsCreatorLocal_OwnLocalsNotSubtracted_StaysCaptured`;
+    `ClosureLoweringRefusalTests.R1_ByRefParameterCaptured_Refused`,
+    `.R5_LambdaDeclaresNameItAlsoUsesFromCreator_N9_Refused` and
+    `.ARefusal_FiresIdenticallyUnderTheAggressivePipeline`. #174 touches only
+    `SemanticAnalyzer.cs`'s diagnostics — never binding or IR construction — so every moved pin's
+    underlying IR question is unchanged; only how it is reached moved.
+  - **Tests:** `VisualGameStudio.Tests/Compiler/LambdaBoundaryDiagnosticsTests.cs` (fast — code,
+    message and line/column straight off the analyzer; both entry points, the CLI-shaped
+    `Analyze` helper and `BasicCompiler.CompileProjectFiles`; the LSP path through
+    `DocumentManager`; a dedup case built from TWO independent later-declarations that both hide
+    the SAME lambda `Dim`, proving it reports once) and
+    `LambdaBoundaryDiagnosticsExecutionTests.cs` (Integration — every `--target`, `--optimize`,
+    and a Release `.blproj` build refuse identically; every accepted shape RUNS, pinning the
+    pre-existing backend gaps this task's own probes surfaced but does not fix: the C# backend
+    drops a lambda `Dim` that shares a name with a field/global/sibling local, task #165 (N8, N9);
+    the C# backend's own ByRef-parameter-plus-lambda mishandling, task #232 (R3 directly; R5
+    through the same unchecked-IR seam the MSIL backstop test uses, now that the front end refuses
+    R5 itself); JavaScript refuses ANY ByRef parameter by DESIGN (BL7002), regardless of whether a
+    lambda ever touches it (R3, R7's own enclosing `Sub`).
 - **JavaScript backend** — the `lib.dom.d.ts` → `.bli` generator was never built
   (`dom-core.bli` is hand-curated). Known front-end gaps affecting all backends:
   `Inherits ArgumentException`, assigning an inherited field from a derived class,

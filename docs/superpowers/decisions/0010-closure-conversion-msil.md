@@ -237,6 +237,14 @@ instead of an assemble-time or run-time surprise.
 
 - File front-end diagnostics, none blocking #155: BC36639 (ByRef captured), BC36638 (`Me` in a
   Structure lambda), N9 (BC30616) and #169 (case-mismatched parameter).
+  - **Done by #174**: BC36639 and N9 (BC30616), plus BC30734/BC36667 (a lambda `Dim` hiding a
+    procedure's own parameter, or an enclosing lambda's) — all four reported by
+    `SemanticAnalyzer` before any backend runs, so `ClosureLowering`'s own D4 (ByRef) and N9
+    (declares-while-captured) refusals are now backstops, reachable only from a shape #174 does
+    not cover (a sibling-block hiding, a `For Each`/`Catch` variable inside a lambda) or from IR
+    that bypasses the front end's own gate. #217 (lambda parameters) is untouched.
+  - **BC36638 still waits on #230** — unreachable today (`ParseStructure` accepts only fields, so
+    no Structure method can hold a lambda at all); #174 deliberately added no dead code for it.
 - **L15 is a recorded, all-backend divergence from VB.** BasicLang binds a loop-body `Dim` at
   FUNCTION level on every backend (C# and JavaScript print 6|6|6; VB prints 1|3|6). #155
   reproduces the oracle, not VB, so MSIL agrees with C#/JS. Fixing it is a FRONT-END task

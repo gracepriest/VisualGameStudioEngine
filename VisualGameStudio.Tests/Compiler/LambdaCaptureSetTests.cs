@@ -404,6 +404,27 @@ public class LambdaCaptureSetIrLevelTests
     private static IRFunction Fn(IRModule module, string name) =>
         module.Functions.First(f => f.Name == name && !f.IsExternal);
 
+    /// <summary>
+    /// Task #174 — build straight from source WITHOUT the front end's own gate (the analyzer
+    /// still runs and its errors are still recorded, but they are intentionally ignored) — the
+    /// same idiom as <c>MsilInterfacePropertyCompileTests.CompileToIlFromUncheckedIr</c> (task
+    /// #178). <see cref="JsTestSupport.BuildModule"/> asserts a CLEAN front end, so it can no
+    /// longer build <see cref="LambdaCaptureSetProbes.N9"/> now that #174 correctly refuses that
+    /// shape (BC30616) before any IR is even built for a checked compile — this is the one seam
+    /// left that can still hand the exact same IR to <c>OptimizationPass</c> for the capture-set
+    /// question <see cref="N9_LambdaLocalShadowsCreatorLocal_OwnLocalsNotSubtracted_StaysCaptured"/>
+    /// asks. #174 touches only <c>SemanticAnalyzer.cs</c>'s DIAGNOSTICS, never binding or IR
+    /// construction, so the IR this produces is byte-for-byte what a pre-#174 checked compile
+    /// produced.
+    /// </summary>
+    private static IRModule BuildModuleFromUncheckedIr(string source, string sourceFilePath = null)
+    {
+        var ast = new BasicLang.Compiler.Parser(new BasicLang.Compiler.Lexer(source).Tokenize()).Parse();
+        var analyzer = new BasicLang.Compiler.SemanticAnalysis.SemanticAnalyzer();
+        analyzer.Analyze(ast);   // errors intentionally IGNORED -- see the summary above
+        return new IRBuilder(analyzer).Build(ast, "TestModule", sourceFilePath);
+    }
+
     /// <summary>K10 — n IS captured (bump writes it); m and q are NOT (bump never touches
     /// either).
     /// <para>⛔ MUTANT Me_always_empty (the final name-compare inside IsLambdaCaptured always
@@ -574,11 +595,22 @@ public class LambdaCaptureSetIrLevelTests
     /// write recorded -- IsCallVisible("n", Main) wrongly becomes False, UNSOUND. This mutant
     /// also produced ZERO probe-matrix differences at the implementer's own measurement (N9 never
     /// prints n again after bump()) -- only this IR-level assertion can see it.</para>
+    /// <para>⛔⛔ <b>THIS PIN MOVED (task #174).</b> This exact shape -- a lambda <c>Dim</c> that
+    /// hides a name the lambda ALSO reads from its creator -- is precisely what task #174 now
+    /// refuses at the front end, BC30616 ("Variable 'n' hides a variable in an enclosing
+    /// block."), before any IR is built for a checked compile at all (see
+    /// <c>LambdaBoundaryDiagnosticsTests.ANodeWithTwoReasonsToBeReported_IsReportedOnlyOnce</c>'s
+    /// sibling assertions and <c>ClosureLoweringRefusalTests.
+    /// R5_LambdaDeclaresNameItAlsoUsesFromCreator_N9_Refused</c> for that same code, asserted
+    /// directly off the analyzer). <see cref="JsTestSupport.BuildModule"/> asserts a clean front
+    /// end and so can no longer build this probe; <see cref="BuildModuleFromUncheckedIr"/> is the
+    /// seam that still can, and #174 changes nothing about BINDING or IR construction (only
+    /// diagnostics), so the IR --and this capture-set question-- are unchanged by the move.</para>
     /// </summary>
     [Test]
     public void N9_LambdaLocalShadowsCreatorLocal_OwnLocalsNotSubtracted_StaysCaptured()
     {
-        var module = JsTestSupport.BuildModule(LambdaCaptureSetProbes.N9, sourceFilePath: "prog.bas");
+        var module = BuildModuleFromUncheckedIr(LambdaCaptureSetProbes.N9, sourceFilePath: "prog.bas");
         var main = Fn(module, "Main");
 
         Assert.That(OptimizationPass.IsCallVisible("n", main), Is.True,
