@@ -633,3 +633,13 @@ the caption clips against its control's bounds rather than scaling with it. Sepa
 Type Here editing surface or the strip/item model 24d and 24e shipped; it is a pre-existing canvas
 rendering gap in the simple-control caption path, found while eyeballing the IDE for the owner's
 acceptance pass and left for its own investigation.
+
+### 34. The property grid's Dock row accepts any text — found 2026-09-29, review of the BL8033 fix
+
+`FormPropertyGridViewModel`'s pixel `Dock` row (≈380-386) writes whatever is typed straight into
+`PixelGeometry.Dock` (`v => pixel.Dock = string.IsNullOrWhiteSpace(v) ? null : v`). Since BL8033 a value
+that is not a `DockStyle` member is refused by the region writer, so the typo no longer reaches generated
+code — but it is caught on SAVE, with the canvas showing the control undocked until then. The write lambda
+should go through `FormDock.Canonical` (store the member's own spelling) and snap back on null, the way a
+refused catalog value already snaps back in the real TextBox (the posted two-step echo, property-grid slice
+2). No code yet.

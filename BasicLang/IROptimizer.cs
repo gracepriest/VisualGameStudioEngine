@@ -1004,6 +1004,16 @@ namespace BasicLang.Compiler.IR.Optimization
                 case IRThrow:
                     return WriteSet.Nothing;
 
+                // ---- ADR-0016 D1 / C2: MyBase.New is a FULL BARRIER. The base constructor runs
+                // user code (a call), and nothing computed in the prologue may be available after
+                // it: C# renders the prologue as expressions inside `: base(...)`, where no body
+                // statement can reach it, and a merge of `p + 1` in the arguments with `p + 1` in
+                // the body is also wrong outright when a lambda the base invokes writes `p`. So it
+                // is classified — deliberately, like IRInlineCode — as writing everything: no
+                // expression, copy or fact survives it.
+                case IRBaseConstructorCall:
+                    return WriteSet.Everything;
+
                 // ---- Raw target-language text can assign ANY variable: classified UNIVERSAL
                 // (explicitly — unlike an unclassified kind, this is a decision, not a gap).
                 case IRInlineCode:
@@ -1332,6 +1342,12 @@ namespace BasicLang.Compiler.IR.Optimization
                     break;
                 case IRBaseMethodCall baseCall:
                     MapList(baseCall.Arguments, map);
+                    break;
+                // ADR-0016 D1: MyBase.New's arguments are this instruction's operands — the one
+                // arm that makes them visible to every walker (the capture scan, DCE, CSE, the
+                // verifier, ClosureLowering's rewrite) with no special case anywhere else.
+                case IRBaseConstructorCall baseConstructorCall:
+                    MapList(baseConstructorCall.ArgSlots, map);
                     break;
                 case IRFieldAccess fieldAccess:
                     fieldAccess.Object = map(fieldAccess.Object);

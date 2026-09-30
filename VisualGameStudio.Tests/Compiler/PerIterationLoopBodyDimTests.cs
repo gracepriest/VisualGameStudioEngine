@@ -992,6 +992,26 @@ public class PerIterationLoopBodyDimExecutionTests
         });
 
     /// <summary>
+    /// ⭐ ADR-0016 D3/W2's own shape for this file: every probe that used to pass a <c>cpp:</c>
+    /// known-wrong value to <see cref="AssertWithPins"/> is now REFUSED BY NAME on C++ instead —
+    /// #170's capability check catches the silent wrong answer before it can run. Asserts C#,
+    /// JavaScript and MSIL agree with <paramref name="vb"/> exactly as <see cref="AssertWithPins"/>
+    /// would, and that the C++ leg throws naming <paramref name="variable"/>, its
+    /// <paramref name="creator"/>, and #140.
+    /// </summary>
+    private static void AssertWithCppRefusedByName(string source, string vb, string variable, string creator) =>
+        Assert.Multiple(() =>
+        {
+            Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharp(source)), Is.EqualTo(vb), "C#");
+            Assert.That(FourBackends.Norm(JavaScriptExecutionTests.RunJs(source)), Is.EqualTo(vb), "JavaScript");
+            Assert.That(FourBackends.Norm(MsilHarness.RunExpectingSuccess(source)), Is.EqualTo(vb), "MSIL");
+
+            var ex = Assert.Throws<CppCapabilityException>(() => BclE2E.CompileToCppOptimized(source));
+            Assert.That(ex!.Message, Does.Contain($"captures '{variable}' of '{creator}'").And.Contain("#140"),
+                "task #140 flips this to running — re-measure before touching.\n" + ex.Message);
+        });
+
+    /// <summary>
     /// The project-build entry point (<c>BasicCompiler.CompileProjectFiles</c>, aggressive
     /// options — what the CLI's own <c>-c Release</c> and the IDE's build service both use) as
     /// opposed to the single-file <c>CompileFile</c> path every helper above goes through. Mirrors
@@ -1106,56 +1126,80 @@ public class PerIterationLoopBodyDimExecutionTests
         => AssertProjectEntryPointAgrees(PerIterationLoopBodyDimProbes.E09, PerIterationLoopBodyDimProbes.E09Expected);
 
     // ============================================================================================
-    // L7 — a lambda WRITES the iteration-1 variable after the loop. C++'s pre-existing
-    // capture-by-copy loses the write (#140); C#, JavaScript and MSIL print VB's own answer.
+    // L7 — a lambda WRITES the iteration-1 variable after the loop. #170/ADR-0016 D3/W2: C++
+    // REFUSES this BY NAME now (arm (a) — its pre-existing capture-by-copy would silently lose
+    // the write); C#, JavaScript and MSIL print VB's own answer.
     // ============================================================================================
 
+    /// <summary>⭐ MOVED PIN (ADR-0016 D3/W2, task #170). USED TO silently print 1\n2 for 101\n2
+    /// (C++'s capture-by-copy losing acts(0)'s write to <c>c</c>); now refused by name.</summary>
     [Test]
     public void L7_LambdaWritesPreviousIterationVariable_StandardPipeline()
-        => AssertWithPins(PerIterationLoopBodyDimProbes.L7, PerIterationLoopBodyDimProbes.L7Expected,
-            cpp: PerIterationLoopBodyDimProbes.L7CppActual);
+        => AssertWithCppRefusedByName(PerIterationLoopBodyDimProbes.L7, PerIterationLoopBodyDimProbes.L7Expected,
+            "c", "Main");
 
     // ============================================================================================
-    // Group 3: A1's Exit-and-carrier family, the pinned edge cases. E03/E04/E07f/E12/E17/E18 are
-    // #140 on C++ only (its pre-existing capture-by-copy loss); E07w is #227 on C# only.
+    // Group 3: A1's Exit-and-carrier family, the pinned edge cases. #170/ADR-0016 D3/W2: E03,
+    // E04, E07f, E12 and E18 are now REFUSED BY NAME on C++ (arm (b) — Main writes the captured
+    // variable at a point reachable from the lambda-creation instruction: a Finally that runs
+    // after the lambda is created for E03/E04/E07f, the For loop's own control-variable increment
+    // for E12/E18); E17 is arm (a) (the second lambda writes what it captures directly); E07w
+    // stays #227 on C# only, unaffected by #170.
     // ============================================================================================
 
+    /// <summary>⭐ MOVED PIN. USED TO silently print 1\n12\n123 for 10\n120\n1230 (C++ losing the
+    /// Finally's write to <c>x</c>, reachable from the lambda-creation instruction via the Try
+    /// block's own edge to its Finally — 5d's "no Try edges" mutant witness).</summary>
     [Test]
     public void E03_UserFinallyWritesX_NoExit()
-        => AssertWithPins(PerIterationLoopBodyDimProbes.E03, PerIterationLoopBodyDimProbes.E03Expected,
-            cpp: PerIterationLoopBodyDimProbes.E03CppActual);
+        => AssertWithCppRefusedByName(PerIterationLoopBodyDimProbes.E03, PerIterationLoopBodyDimProbes.E03Expected,
+            "x", "Main");
 
+    /// <summary>⭐ MOVED PIN. Same Try/Finally reachability as E03, plus an Exit For.</summary>
     [Test]
     public void E04_ExitForInsideUserTryFinallyThatWritesX()
-        => AssertWithPins(PerIterationLoopBodyDimProbes.E04, PerIterationLoopBodyDimProbes.E04Expected,
-            cpp: PerIterationLoopBodyDimProbes.E04CppActual);
+        => AssertWithCppRefusedByName(PerIterationLoopBodyDimProbes.E04, PerIterationLoopBodyDimProbes.E04Expected,
+            "x", "Main");
 
+    /// <summary>⭐ MOVED PIN. Nested loop, same Try/Finally reachability one level deeper.</summary>
     [Test]
     public void E07f_ExitInsideUserTryFinally_OuterLoopReenters()
-        => AssertWithPins(PerIterationLoopBodyDimProbes.E07f, PerIterationLoopBodyDimProbes.E07fExpected,
-            cpp: PerIterationLoopBodyDimProbes.E07fCppActual);
+        => AssertWithCppRefusedByName(PerIterationLoopBodyDimProbes.E07f, PerIterationLoopBodyDimProbes.E07fExpected,
+            "x", "Main");
 
     /// <summary>Task #227: C# alone prints 1|2 instead of VB's 1|2|3|4 for this exact
-    /// Do-inside-While Exit-and-re-entry shape — re-measure before touching (S/t172/m-r2c.txt).</summary>
+    /// Do-inside-While Exit-and-re-entry shape — re-measure before touching (S/t172/m-r2c.txt).
+    /// Unaffected by #170 — no lambda writes a captured variable anywhere in this probe.</summary>
     [Test]
     public void E07w_ExitDoInsideWhile_KnownWrongOnCSharp_PinnedForTask227()
         => AssertWithPins(PerIterationLoopBodyDimProbes.E07w, PerIterationLoopBodyDimProbes.E07wExpected,
             csharp: PerIterationLoopBodyDimProbes.E07wCSharpActual);
 
+    /// <summary>⭐ MOVED PIN. USED TO silently print 1\n2\n3 for 4\n4\n4: the counted For's OWN
+    /// control variable <c>i</c> is not a body <c>Dim</c> (it is NOT in <c>BodyLocals</c>), so the
+    /// per-iteration cut does not exclude it — the loop's own increment of <c>i</c> is a write to
+    /// a captured variable reachable from the lambda-creation instruction via the loop back edge.
+    /// This is exactly the shape that distinguishes a counted For's control variable from a
+    /// per-iteration body Dim (the title's own point).</summary>
     [Test]
     public void E12_CountedForControlVariable_NotABodyDim()
-        => AssertWithPins(PerIterationLoopBodyDimProbes.E12, PerIterationLoopBodyDimProbes.E12Expected,
-            cpp: PerIterationLoopBodyDimProbes.E12CppActual);
+        => AssertWithCppRefusedByName(PerIterationLoopBodyDimProbes.E12, PerIterationLoopBodyDimProbes.E12Expected,
+            "i", "Main");
 
+    /// <summary>⭐ MOVED PIN. USED TO silently print 1\n2\n3 for 1\n1002\n3 (bumps(1)'s write to
+    /// <c>c</c> lost). Arm (a): the <c>bumps</c> lambda writes <c>c</c> directly.</summary>
     [Test]
     public void E17_LambdaWritesThroughAMutatingSub()
-        => AssertWithPins(PerIterationLoopBodyDimProbes.E17, PerIterationLoopBodyDimProbes.E17Expected,
-            cpp: PerIterationLoopBodyDimProbes.E17CppActual);
+        => AssertWithCppRefusedByName(PerIterationLoopBodyDimProbes.E17, PerIterationLoopBodyDimProbes.E17Expected,
+            "c", "Main");
 
+    /// <summary>⭐ MOVED PIN. USED TO silently print 8\n16\n24 for 11\n18\n25: arm (b) —
+    /// <c>i</c>, the counted For's own control variable, is written by the loop's own increment,
+    /// reachable from the lambda-creation instruction (the same shape as E12).</summary>
     [Test]
     public void E18_DelegateCalledByNameFromASecondLambda()
-        => AssertWithPins(PerIterationLoopBodyDimProbes.E18, PerIterationLoopBodyDimProbes.E18Expected,
-            cpp: PerIterationLoopBodyDimProbes.E18CppActual);
+        => AssertWithCppRefusedByName(PerIterationLoopBodyDimProbes.E18, PerIterationLoopBodyDimProbes.E18Expected,
+            "i", "Main");
 
     /// <summary>Task #136: CS1643 — the SAME emptied-multi-statement-lambda-body defect
     /// MultiLineFunctionLambdaTests.F6 already pins, reached here through a lambda-in-a-lambda's
@@ -1270,13 +1314,19 @@ public class PerIterationLoopBodyDimExecutionTests
     // and L8b (agrees across C#, JavaScript and MSIL). `cl` is the non-loop control for #136/#140.
     // ============================================================================================
 
-    /// <summary>D2's own recorded, deliberate, all-backend divergence. VB prints 11 22 33
+    /// <summary>
+    /// ⭐ MOVED PIN (C++ leg only, ADR-0016 D3/W2, task #170). D2's own recorded, deliberate,
+    /// all-backend divergence. VB prints 11 22 33
     /// (<see cref="PerIterationLoopBodyDimProbes.L8VbExpected"/>, documented here — NEVER
     /// asserted as a backend's actual output). JavaScript and MSIL agree with EACH OTHER on 11 21
     /// 31 (the divergence D2 records: the loop's own condition call observes the carrier's value
     /// at ITS continue-target snapshot, before the reassigned `f`'s own write lands). C# is wrong
     /// for the SEPARATE, pre-existing reason #136 already tracks (its own multi-statement lambda
-    /// body defect); C++ for #140.</summary>
+    /// body defect). C++ USED TO silently print 10 20 30 (task #140); #170's capability check now
+    /// REFUSES it by name — TWO violations fire together here: the reassigned `f`'s own lambda
+    /// writes `x` directly (arm (a)), and the loop's own `n = n + 1` writes `n`, captured by the
+    /// SAME lambda, reachable from its creation instruction via the loop back edge (arm (b)).
+    /// </summary>
     [Test]
     public void L8_DoWhileConditionReassignsToALambdaThatWritesX_D2Divergence()
         => Assert.Multiple(() =>
@@ -1289,24 +1339,57 @@ public class PerIterationLoopBodyDimExecutionTests
                 "MSIL — D2's recorded divergence from VB's 11 22 33, not VB-correct");
             Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharp(PerIterationLoopBodyDimProbes.L8)),
                 Is.EqualTo(PerIterationLoopBodyDimProbes.L8CSharpActual), "C# (PINNED known-wrong, task #136)");
-            Assert.That(FourBackends.Norm(BclE2E.CompileRun(BclE2E.CompileToCppOptimized(PerIterationLoopBodyDimProbes.L8))),
-                Is.EqualTo(PerIterationLoopBodyDimProbes.L8CppActual), "C++ (PINNED known-wrong, task #140)");
+
+            var ex = Assert.Throws<CppCapabilityException>(
+                () => BclE2E.CompileToCppOptimized(PerIterationLoopBodyDimProbes.L8));
+            Assert.That(ex!.Message, Does.Contain("captures 'x' of 'Main'")
+                .And.Contain("captures 'n' of 'Main'").And.Contain("#140"),
+                "C++ (task #140 flips this to running) — re-measure before touching.\n" + ex.Message);
         });
 
-    /// <summary>Group 7's other half: L8b agrees across C#, JavaScript AND MSIL (11 21 31) —
-    /// unlike L8, C#'s own #136 defect does not reach this exact shape. C++ stays #140.</summary>
+    /// <summary>
+    /// ⭐ MOVED PIN (C++ leg only). Group 7's other half: L8b agrees across C#, JavaScript AND
+    /// MSIL (11 21 31) — unlike L8, C#'s own #136 defect does not reach this exact shape. C++ USED
+    /// TO silently print 10 20 30 (task #140); now refused by name, same TWO violations as L8
+    /// (the reassigned `f` writes `x` directly, and the loop's own `n = n + 1` reaches the same
+    /// lambda's capture of `n`).
+    /// </summary>
     [Test]
     public void L8b_AgreesAcrossCSharpJavaScriptAndMsil()
-        => AssertWithPins(PerIterationLoopBodyDimProbes.L8b, PerIterationLoopBodyDimProbes.L8bExpected,
-            cpp: PerIterationLoopBodyDimProbes.L8bCppActual);
+        => Assert.Multiple(() =>
+        {
+            Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharp(PerIterationLoopBodyDimProbes.L8b)),
+                Is.EqualTo(PerIterationLoopBodyDimProbes.L8bExpected), "C#");
+            Assert.That(FourBackends.Norm(JavaScriptExecutionTests.RunJs(PerIterationLoopBodyDimProbes.L8b)),
+                Is.EqualTo(PerIterationLoopBodyDimProbes.L8bExpected), "JavaScript");
+            Assert.That(FourBackends.Norm(MsilHarness.RunExpectingSuccess(PerIterationLoopBodyDimProbes.L8b)),
+                Is.EqualTo(PerIterationLoopBodyDimProbes.L8bExpected), "MSIL");
 
-    /// <summary>The non-loop control for #136 (C#) and #140 (C++): a plain function-top local
-    /// captured and written by a lambda, no loop anywhere in the program.</summary>
+            var ex = Assert.Throws<CppCapabilityException>(
+                () => BclE2E.CompileToCppOptimized(PerIterationLoopBodyDimProbes.L8b));
+            Assert.That(ex!.Message, Does.Contain("captures 'x' of 'Main'")
+                .And.Contain("captures 'n' of 'Main'").And.Contain("#140"),
+                "C++ (task #140 flips this to running) — re-measure before touching.\n" + ex.Message);
+        });
+
+    /// <summary>
+    /// ⭐ MOVED PIN (C++ leg only). The non-loop control for #136 (C#) and #140 (C++): a plain
+    /// function-top local captured and written by a lambda, no loop anywhere in the program. C#
+    /// STAYS pinned known-wrong (#136, unaffected by #170). C++ USED TO silently agree with C#'s
+    /// own wrong answer (5\n0 for 5\n1); #170's capability check now REFUSES it by name (arm (a):
+    /// the lambda writes `x` directly).
+    /// </summary>
     [Test]
-    public void Cl_NonLoopClosureWrite_KnownWrongOnCSharpAndCpp()
-        => AssertWithPins(PerIterationLoopBodyDimProbes.Cl, PerIterationLoopBodyDimProbes.ClExpected,
-            csharp: PerIterationLoopBodyDimProbes.ClCSharpCppActual,
-            cpp: PerIterationLoopBodyDimProbes.ClCSharpCppActual);
+    public void Cl_NonLoopClosureWrite_CSharpKnownWrong_CppRefusedByName_PinnedForTask136And140()
+    {
+        Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharp(PerIterationLoopBodyDimProbes.Cl)),
+            Is.EqualTo(PerIterationLoopBodyDimProbes.ClCSharpCppActual), "C# (PINNED known-wrong, task #136)");
+
+        var ex = Assert.Throws<CppCapabilityException>(
+            () => BclE2E.CompileToCppOptimized(PerIterationLoopBodyDimProbes.Cl));
+        Assert.That(ex!.Message, Does.Contain("captures 'x' of 'Main'").And.Contain("#140"),
+            "C++ (task #140 flips this to running) — re-measure before touching.\n" + ex.Message);
+    }
 }
 
 // =====================================================================================

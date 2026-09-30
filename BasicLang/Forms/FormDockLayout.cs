@@ -130,8 +130,6 @@ public sealed class FormDockLayoutResult
 /// </summary>
 public static class FormDockLayout
 {
-    private static readonly FormDockEdge[] Edges = Enum.GetValues<FormDockEdge>();
-
     /// <summary>Every docked thing in <paramref name="document"/>, at every depth, at its design size.</summary>
     public static FormDockLayoutResult Resolve(FormDocument document, FormDockMode mode = FormDockMode.Designer)
     {
@@ -213,33 +211,25 @@ public static class FormDockLayout
     /// <summary>
     /// The edge <paramref name="control"/> docks to, or null when it does not dock. ⛔ The one answer: a strip
     /// through <see cref="FormControl.IsDockedToBottom"/> (its Dock PROPERTY, row default included); a
-    /// positioned control through <see cref="PixelGeometry.Dock"/> — trimmed, case-insensitive; "None" and an
-    /// unknown name do not dock. Tray components and items never do.
+    /// positioned control through <see cref="PixelGeometry.Dock"/> by <see cref="FormDock"/>'s rule — trimmed,
+    /// case-insensitive, the rule the WinForms emitter canonicalises by; "None" and an unknown name do not dock.
+    /// Tray components and items never do.
+    ///
+    /// <para>⛔ An unknown positioned name is not a quiet "not docked" in practice: the region writer REFUSES it
+    /// (BL8033), so the null here only ever draws a document that cannot be saved or built, never one that builds and
+    /// runs differently. A strip docked to an edge its row does not have is Degraded, and IsDockedToBottom reads it as
+    /// the row default — the edge WinForms runs it at, since a Degraded value is never emitted.</para>
     /// </summary>
     public static FormDockEdge? EdgeOf(FormControl control)
     {
         ArgumentNullException.ThrowIfNull(control);
 
-        switch (control.Definition?.Place ?? FormPlace.Positioned)
+        return (control.Definition?.Place ?? FormPlace.Positioned) switch
         {
-            case FormPlace.Docked:
-                return control.IsDockedToBottom ? FormDockEdge.Bottom : FormDockEdge.Top;
-
-            case FormPlace.Positioned when control.Geometry is PixelGeometry { Dock: { } dock }:
-                var name = dock.Trim();
-                foreach (var edge in Edges)
-                {
-                    if (string.Equals(edge.ToString(), name, StringComparison.OrdinalIgnoreCase))
-                    {
-                        return edge;
-                    }
-                }
-
-                return null;
-
-            default:
-                return null;
-        }
+            FormPlace.Docked => control.IsDockedToBottom ? FormDockEdge.Bottom : FormDockEdge.Top,
+            FormPlace.Positioned when control.Geometry is PixelGeometry pixel => FormDock.EdgeOf(pixel.Dock),
+            _ => null
+        };
     }
 
     /// <summary>

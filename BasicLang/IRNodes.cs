@@ -20,6 +20,15 @@ namespace BasicLang.Compiler.IR
         /// </summary>
         public int SourceLine { get; set; }
 
+        /// <summary>
+        /// ADR-0016 D3 (amended): this instruction is a local's <c>Dim</c> initializer — the
+        /// assignment, renamed value, array-slot store or tuple element IRBuilder emits for
+        /// <c>Dim v = …</c>. It DECLARES a variable (a fresh one in VB, however the flat IR spells
+        /// it) rather than writing an existing one. Read only by the C++ backend's
+        /// captured-variable rule; no pass reads or preserves it on an instruction it creates.
+        /// </summary>
+        public bool IsDimInitializer { get; set; }
+
         protected IRInstruction(TypeInfo type = null)
         {
             Type = type;
@@ -88,6 +97,15 @@ namespace BasicLang.Compiler.IR
                 $"{GetType().Name} reached an IRDelegateCreate. That node is produced only by "
                 + "ClosureLowering, which only the MSIL backend runs, on a clone of the module "
                 + "(ADR-0010 D1); every other backend lowers lambdas itself and must never see it.");
+
+        // ⛔ THROWS by default, deliberately (ADR-0016 D1). The base-constructor call is an
+        // instruction every backend must place itself — after its own argument evaluation, before
+        // the body. A visitor that silently skipped it would construct an object whose base never
+        // ran, from a green build.
+        void Visit(IRBaseConstructorCall baseConstructorCall) =>
+            throw new InvalidOperationException(
+                $"{GetType().Name} has no lowering for IRBaseConstructorCall (MyBase.New, ADR-0016). "
+                + "Every backend must emit the base call where the IR places it.");
 
         // ⛔ THROWS by default, deliberately (ADR-0011 D5). `Is` / `IsNot` must never degrade to a
         // value comparison or to nothing at all: a visitor that has not implemented reference
@@ -1652,6 +1670,38 @@ namespace BasicLang.Compiler.IR
         public List<string> Namespaces { get; set; }
 
         /// <summary>
+        /// The classes with every base before the classes that derive from it, otherwise in
+        /// declaration order. Declaration order was the only order, and it held only because the
+        /// analyzer refused a derived class declared above its base. With that fixed, C++ failed
+        /// to compile `class Sq : public Base` ahead of `Base` ("invalid use of incomplete type"),
+        /// and JavaScript built clean and died on load, because `class Sq extends Base` ran first
+        /// ("ReferenceError: Cannot access 'Base' before initialization").
+        /// Every backend that emits class bodies in one pass orders them through here.
+        /// </summary>
+        public IEnumerable<IRClass> ClassesBaseFirst()
+        {
+            var emitted = new HashSet<IRClass>();
+            var ordered = new List<IRClass>();
+
+            void Place(IRClass cls, int depth)
+            {
+                if (cls == null || depth > 256 || !emitted.Add(cls)) return;
+                if (!string.IsNullOrEmpty(cls.BaseClass)
+                    && Classes.TryGetValue(cls.BaseClass, out var baseClass)
+                    && !ReferenceEquals(baseClass, cls))
+                {
+                    // `emitted` is filled before recursing, so a (refused) cycle still terminates.
+                    Place(baseClass, depth + 1);
+                }
+                ordered.Add(cls);
+            }
+
+            foreach (var cls in Classes.Values)
+                Place(cls, 0);
+            return ordered;
+        }
+
+        /// <summary>
         /// .NET namespace imports (e.g., System.IO, System.Text)
         /// These are passed through to the C# backend as using directives
         /// </summary>
@@ -2136,13 +2186,93 @@ namespace BasicLang.Compiler.IR
         public AccessModifier Access { get; set; }
         public List<IRVariable> Parameters { get; set; }
         public IRFunction Implementation { get; set; }
-        public List<IRValue> BaseConstructorArgs { get; set; }
+
+        /// <summary>
+        /// ⭐ ADR-0016 D1: the explicit base-constructor call, an ordinary instruction in
+        /// <see cref="Implementation"/>'s prologue region (<see cref="IRBaseConstructorCall.Find"/>),
+        /// or null for the IMPLICIT parameterless base call every backend emits on its own.
+        /// A view, never a second home: the arguments live only on the instruction.
+        /// </summary>
+        public IRBaseConstructorCall BaseCall => IRBaseConstructorCall.Find(Implementation);
+
+        /// <summary>
+        /// The base call's operands, read off <see cref="BaseCall"/> — empty when there is none.
+        /// Read-only on purpose: <c>IRConstructor.BaseConstructorArgs</c> used to be a list outside
+        /// every block, invisible to the capture analysis, <c>UsesOf</c>, DCE and the verifier
+        /// (#170, #240); ADR-0016 deleted it. What remains is this derived view, which no pass or
+        /// backend writes through.
+        /// </summary>
+        public IReadOnlyList<IRValue> BaseConstructorArgs =>
+            (IReadOnlyList<IRValue>)BaseCall?.Args ?? Array.Empty<IRValue>();
 
         public IRConstructor()
         {
             Parameters = new List<IRVariable>();
-            BaseConstructorArgs = new List<IRValue>();
         }
+    }
+
+    /// <summary>
+    /// ⭐ ADR-0016 D1: <c>MyBase.New(a1, …, an)</c> as an INSTRUCTION. Its arguments are ordinary
+    /// instructions evaluated before it — the constructor's PROLOGUE — and it is their one
+    /// consumer, so every walker (the capture analysis, <c>UsesOf</c>, DCE, CSE, the verifier) sees
+    /// the use without a special case. Built by IRBuilder only when the base call has arguments
+    /// (written ones, or Optional defaults filled for an implicit call); the implicit
+    /// parameterless call stays backend-side exactly as before.
+    ///
+    /// <list type="bullet">
+    /// <item>No result value; <see cref="HasSideEffects"/> is true. Never removable, never
+    /// reordered: a barrier like <see cref="IRThrow"/>, and a FULL one in the kill vocabulary
+    /// (<c>NamesWrittenBy</c> answers Everything): no expression or copy available before it is
+    /// available after it.</item>
+    /// <item>The PROLOGUE REGION is the blocks from the entry up to and including the block
+    /// holding this instruction; within that block, the instructions before it. Nothing outside
+    /// the region branches into it; a branch inside it is only the lowering of an argument
+    /// expression itself (<c>AndAlso</c>/<c>OrElse</c>). The verifier checks the region
+    /// (<c>IRVerifier.CheckInvariantP</c>).</item>
+    /// <item>Every backend emits it after its own argument evaluation and before the body: C#
+    /// renders the operands as EXPRESSIONS into <c>: base(…)</c>, JavaScript and MSIL emit the
+    /// prologue before <c>super(…)</c> / <c>call Base::.ctor</c>, C++ emits it in place in
+    /// <c>ctor_</c> (ADR-0015).</item>
+    /// </list>
+    /// </summary>
+    public sealed class IRBaseConstructorCall : IRInstruction
+    {
+        private List<IRValue> _args;
+
+        public IRBaseConstructorCall(IEnumerable<IRValue> args)
+        {
+            _args = new List<IRValue>(args ?? Enumerable.Empty<IRValue>());
+        }
+
+        /// <summary>The arguments, in the base constructor's parameter order (Optional
+        /// defaults already filled).</summary>
+        public IReadOnlyList<IRValue> Args => _args;
+
+        /// <summary>The operand slots, for the one use walker (<c>OptimizationPass.MapUses</c>)
+        /// and the module cloner — the only writers.</summary>
+        internal List<IRValue> ArgSlots => _args;
+
+        /// <summary>Gives a shallow clone (<c>ClosureLowering</c>'s module cloner) its own operand
+        /// list, so rewriting the clone's operands never writes into the original module.</summary>
+        internal void DetachArgs() => _args = new List<IRValue>(_args);
+
+        /// <summary>Always true: the base constructor runs user code.</summary>
+        public bool HasSideEffects => true;
+
+        /// <summary>The one base call of <paramref name="implementation"/>, or null. D5(b): at most
+        /// one, in the prologue region.</summary>
+        public static IRBaseConstructorCall Find(IRFunction implementation)
+        {
+            if (implementation?.Blocks == null) return null;
+            foreach (var block in implementation.Blocks)
+                foreach (var inst in block.Instructions)
+                    if (inst is IRBaseConstructorCall call) return call;
+            return null;
+        }
+
+        public override void Accept(IIRVisitor visitor) => visitor.Visit(this);
+        public override string ToString() =>
+            $"call base.New({string.Join(", ", _args.Select(a => a is IRConstant c ? c.ToString() : a?.Name))})";
     }
 
     /// <summary>

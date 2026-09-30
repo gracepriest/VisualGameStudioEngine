@@ -748,13 +748,15 @@ public class NameBindingExecutionTests
     }
 
     /// <summary>
-    /// K9 on C++ prints 0 for 7 -- #140: the C++ backend's lambda lowering captures its creator's
-    /// locals BY COPY, not by reference, so writes inside the lambda (<c>total = total + amount</c>)
-    /// never reach the creator's own storage. C#/JavaScript/MSIL all print 7 correctly. Unrelated
-    /// to #169 -- no case difference in this probe at all.
+    /// ⭐ MOVED PIN (ADR-0016 D3/W2, task #170). K9 on C++ USED TO print 0 for 7 -- #140: the C++
+    /// backend's lambda lowering captures its creator's locals BY COPY, not by reference, so
+    /// writes inside the lambda (<c>total = total + amount</c>) never reach the creator's own
+    /// storage. #170's capability check now REFUSES it by name (arm (a): <c>add</c> writes
+    /// <c>total</c>, which it captures) rather than compiling it wrong. C#/JavaScript/MSIL all
+    /// still print 7 correctly. Unrelated to #169 -- no case difference in this probe at all.
     /// </summary>
     [Test]
-    public void K9_Cpp_CapturesByCopy_PinsTodaysWrongZero_Against140()
+    public void K9_Cpp_RefusedByName_PinnedForTask140()
     {
         const string k9 = """
             Sub Main()
@@ -772,9 +774,10 @@ public class NameBindingExecutionTests
             Assert.That(FourBackends.Norm(Msil.MsilHarness.RunExpectingSuccess(k9)), Is.EqualTo("7"), "MSIL");
         });
 
-        var cpp = BclE2E.CompileToCppOptimized(k9);
-        Assert.That(FourBackends.Norm(BclE2E.CompileRun(cpp)), Is.EqualTo("0"),
-            "known gap #140 (C++ captures by copy): total never sees add()'s writes");
+        var ex = Assert.Throws<CppCapabilityException>(() => BclE2E.CompileToCppOptimized(k9));
+        Assert.That(ex!.Message, Does.Contain("captures 'total' of 'Main'").And.Contain("#140"),
+            "known gap #140 (C++ captures by copy) flips this to running — re-measure before "
+            + "touching.\n" + ex.Message);
     }
 
     /// <summary>

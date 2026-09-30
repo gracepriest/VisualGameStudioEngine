@@ -468,20 +468,23 @@ public class BaseConstructorDiagnosticTests
     }
 
     /// <summary>
-    /// ⛔ The remaining gap, and it is the one PR #31 already pinned rather than a new one: a base
-    /// <c>Optional</c> default that is an EXPRESSION rather than a literal
-    /// (<c>Optional a As Integer = 2 + 3</c>). The filled value is a temp the constructor BODY
-    /// computes, and a base call must precede the body — so MSIL refuses it by the same rule that
-    /// refuses <c>MyBase.New(v + 1)</c>, and C# emits <c>: base(t0)</c> naming a temp out of scope
-    /// (<b>CS0103</b>).
+    /// ⭐ MOVED PIN (ADR-0016 / #170). This used to be the remaining gap PR #31 already pinned: a
+    /// base <c>Optional</c> default that is an EXPRESSION rather than a literal
+    /// (<c>Optional a As Integer = 2 + 3</c>) — the filled value was a temp the constructor BODY
+    /// computed, off the instruction stream, and a base call had to precede the body, so MSIL
+    /// refused it by the same rule that refused <c>MyBase.New(v + 1)</c> and C# emitted
+    /// <c>: base(t0)</c> naming a temp out of scope (CS0103).
     ///
-    /// <para>⚠ NOT a regression: this shape was already broken before the synthesized constructor
-    /// existed (it was CS7036 / MissingMethodException then, CS0103 / a clear refusal now). It is
-    /// the same IR-level gap — <c>BaseConstructorArgs</c> is not self-contained — and closing THAT
-    /// closes this. Pinned here so the synthesized-constructor position is named in it.</para>
+    /// <para>#170's <c>IRBaseConstructorCall</c> gives the filled default a home in the entry
+    /// block's prologue — realised, per the implementation notes, as "the instruction is built
+    /// whenever the (implicit) base call's argument list is non-empty", which an all-Optional
+    /// synthesized constructor's filled defaults are. <c>base:5</c> now runs on C#, JavaScript,
+    /// MSIL AND C++ (measured, <c>S/t170/pins/m-final.txt</c>'s <c>BD_OptDefault</c> row, all
+    /// three modes) — closing <c>MsilBaseConstructorTests.AComputedBaseArgument_IsRefused_NotSilentlyZero</c>'s
+    /// sibling gap too, as this pin's own old comment predicted.</para>
     /// </summary>
     [Test]
-    public void ANonLiteralOptionalDefault_IsStillTheComputedArgumentGap()
+    public void ANonLiteralOptionalDefault_RunsOnEveryBackend()
     {
         const string program = """
             Class Base
@@ -501,9 +504,6 @@ public class BaseConstructorDiagnosticTests
             End Module
             """;
 
-        Assert.That(ReturnCoercionTests.CompileEmittedCSharpForTest(program),
-            Has.Some.Contains("CS0103"),
-            "when this stops failing, BaseConstructorArgs has become self-contained — that closes "
-            + "MsilBaseConstructorTests.AComputedBaseArgument_IsRefused_NotSilentlyZero too");
+        FourBackends.RunsOnEveryBackend(program, "base:5");
     }
 }

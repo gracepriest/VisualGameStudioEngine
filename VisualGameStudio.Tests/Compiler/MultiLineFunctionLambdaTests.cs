@@ -3,6 +3,7 @@ using System.Linq;
 using NUnit.Framework;
 using BasicLang.Compiler;
 using BasicLang.Compiler.AST;
+using BasicLang.Compiler.CodeGen.CPlusPlus;
 using BasicLang.Compiler.IR;
 using BasicLang.Compiler.SemanticAnalysis;
 using VisualGameStudio.Tests.Msil;
@@ -841,26 +842,49 @@ public class MultiLineFunctionLambdaExecutionTests
         Assert.That(errors, Has.All.Contains("'inner'"));
     }
 
-    /// <summary>Task #140: the C++ backend's lambda lowering captures BY COPY, not by reference —
-    /// <c>bump()</c>'s write to <c>n</c> never reaches the caller's <c>n</c>.</summary>
+    /// <summary>
+    /// ⭐ MOVED PIN (ADR-0016 D3/W2, task #170). Task #140: the C++ backend's lambda lowering
+    /// captures BY COPY, not by reference — <c>bump()</c>'s write to <c>n</c> never reaches the
+    /// caller's <c>n</c>. This USED TO silently print 3,3,0 for 3,103,0; #170's capability check
+    /// now REFUSES it by name (arm (a): <c>bump</c> writes <c>n</c>, which it captures).
+    /// </summary>
     [Test]
-    public void F1_Cpp_KnownWrong_PinnedForTask140()
-        => Assert.That(FourBackends.Norm(BclE2E.CompileRun(BclE2E.CompileToCppOptimized(MultiLineFunctionLambdaProbes.F1))),
-            Is.EqualTo("3,3,0"),
-            "task #140 (C++ backend capture-by-copy) — re-measure before touching.");
+    public void F1_Cpp_RefusedByName_PinnedForTask140()
+    {
+        var ex = Assert.Throws<CppCapabilityException>(
+            () => BclE2E.CompileToCppOptimized(MultiLineFunctionLambdaProbes.F1));
+        Assert.That(ex!.Message, Does.Contain("captures 'n' of 'Main'").And.Contain("#140"),
+            "task #140 (C++ backend capture-by-copy) flips this to running — re-measure before "
+            + "touching.\n" + ex.Message);
+    }
 
-    /// <summary>Task #140: <c>MakeCounter</c>'s closure captures <c>c</c> by copy, so each call to
-    /// the returned lambda increments its OWN copy from the same starting value.</summary>
+    /// <summary>
+    /// ⭐ MOVED PIN (ADR-0016 D3/W2, task #170). Task #140: <c>MakeCounter</c>'s closure captures
+    /// <c>c</c> by copy, so each call to the returned lambda USED TO increment its OWN copy from
+    /// the same starting value (silently printing 10\n10 for 11\n12). #170's capability check now
+    /// REFUSES it by name (arm (a): the returned lambda writes <c>c</c>, which it captures from
+    /// <c>MakeCounter</c>).
+    /// </summary>
     [Test]
-    public void F2_Cpp_KnownWrong_PinnedForTask140()
-        => Assert.That(FourBackends.Norm(BclE2E.CompileRun(BclE2E.CompileToCppOptimized(MultiLineFunctionLambdaProbes.F2))),
-            Is.EqualTo("10\n10"),
-            "task #140 — re-measure before touching.");
+    public void F2_Cpp_RefusedByName_PinnedForTask140()
+    {
+        var ex = Assert.Throws<CppCapabilityException>(
+            () => BclE2E.CompileToCppOptimized(MultiLineFunctionLambdaProbes.F2));
+        Assert.That(ex!.Message, Does.Contain("captures 'c' of 'MakeCounter'").And.Contain("#140"),
+            "task #140 flips this to running — re-measure before touching.\n" + ex.Message);
+    }
 
-    /// <summary>Task #140, the same capture-by-copy defect, one level of nesting deeper.</summary>
+    /// <summary>
+    /// ⭐ MOVED PIN (ADR-0016 D3/W2, task #170), the same capture-by-copy defect one level of
+    /// nesting deeper. USED TO silently print 2\n1 for 32\n21; now refused by name (arm (a):
+    /// <c>inner</c> writes <c>n</c>, which it captures from <c>Main</c>).
+    /// </summary>
     [Test]
-    public void F8_Cpp_KnownWrong_PinnedForTask140()
-        => Assert.That(FourBackends.Norm(BclE2E.CompileRun(BclE2E.CompileToCppOptimized(MultiLineFunctionLambdaProbes.F8))),
-            Is.EqualTo("2\n1"),
-            "task #140 — re-measure before touching.");
+    public void F8_Cpp_RefusedByName_PinnedForTask140()
+    {
+        var ex = Assert.Throws<CppCapabilityException>(
+            () => BclE2E.CompileToCppOptimized(MultiLineFunctionLambdaProbes.F8));
+        Assert.That(ex!.Message, Does.Contain("captures 'n' of 'Main'").And.Contain("#140"),
+            "task #140 flips this to running — re-measure before touching.\n" + ex.Message);
+    }
 }

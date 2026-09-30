@@ -122,7 +122,9 @@ Pipeline: `Preprocessor.cs` → `BasicLangLexer.cs` → `Parser.cs` → `Semanti
 Backends: `CSharpBackend.cs`, `LLVMBackend.cs`, `MSILBackend.cs`, `CppCodeGenerator.cs`
 (+ `CppCapabilityChecker.cs`). Resolution/types: `ModuleResolver.cs`,
 `ModuleTypeWalker.cs`, `TypeMapper.cs`. LSP: `BasicLang/LSP/` (server +
-per-feature handlers, `CompletionService.cs`).
+per-feature handlers, `CompletionService.cs`). `MyBase.New(...)` is an `IRBaseConstructorCall`
+**instruction** ending the constructor's entry-block prologue (ADR-0016) — not a list on
+`IRConstructor`; a use with no home in any block is invisible to every pass.
 
 ## Form designer (`BasicLang/Forms/`, `VisualGameStudio.Shell/Controls/`)
 
@@ -345,8 +347,16 @@ with the `Dim` path — see `docs/superpowers/specs/2026-09-19-menus-toolbars-st
   `std::vector` storage with the vector's surface. A bare `std::vector` array was a VALUE, so
   `b = a`, a Sub writing its argument, and `lst.Add(a)` each silently copied. Only the outermost
   rank is the handle (`Integer(,)` → `Array<std::vector<int32_t>>`); `ReDim` builds a new array.
-- **Reference vs value:** classes/interfaces → `shared_ptr<T>` + `make_shared` + `->`;
-  `Structure` → value `struct`. Generics → real C++ templates.
+- **Reference vs value:** classes/interfaces → `shared_ptr<T>` + `->`; `Structure` → value
+  `struct`. Generics → real C++ templates. A class is created only by `BasicLang::New<T>`, never a
+  bare `make_shared` — two-phase construction (tag constructor, then `ctor_`), so `Me` is owned
+  before any user code runs and is spelled `BasicLang::Self(this)` as a value everywhere but a
+  member receiver / `Is` operand (ADR-0015).
+- **A lambda whose by-copy capture could go stale is refused by name (ADR-0016 D3/W2) until #140;
+  the refusal is ONE rule in `CppCapabilityChecker.CheckLambdaCaptureWrites` over
+  `ControlFlowGraph.ExecutionSuccessors`.** It is stated over ANY lambda, never keyed on
+  `MyBase.New` position; #140 deletes it and must keep `BaseConstructorCallCppRefusalTests`'s
+  regression fence running.
 - Exceptions via the `IRThrow` node; a `Return` or `Exit` out of a `Try` carries its own copy
   of every `Finally` it leaves (a C++ `return`/`goto` runs no handler); iterators are real C++20 coroutines (`Generator<T>` /
   `co_yield`); async is synchronous `Task<T>` emulation (no scheduler).

@@ -141,7 +141,9 @@ End Class
 Access modifiers: `Public`, `Private`, `Protected`, `Friend`, `Protected Friend`.
 Inheritance uses `Inherits`; `MustInherit` marks an abstract class, `MustOverride` an
 abstract member, `Overridable` / `Overrides` a virtual one, `NotInheritable` a sealed
-class. `MyBase` reaches the base implementation.
+class. `MyBase` reaches the base implementation. Classes and interfaces may be declared in
+any order — a base class or an implemented interface can appear below the code that uses it.
+An inheritance cycle (`A Inherits B`, `B Inherits A`) is refused.
 
 A class can declare its own binary operators; `a = b`, `a + b` and so on then call them,
 including for a derived class. At least one parameter must be the class, and `=`/`<>`,

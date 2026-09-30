@@ -666,20 +666,26 @@ public class IsIsNotOperatorExecutionTests
     }
 
     /// <summary>
-    /// E3 on C++ is a PRE-EXISTING lambda-capture defect, task #140 — measured against E3b, the
-    /// no-`Is`-at-all control (a captured Integer mutated after the lambda is created), which fails
-    /// IDENTICALLY: both print stale captures ("True | True" instead of "True | False"). Not
-    /// caused by, or fixed by, #185. Pinned so a #140 fix is a deliberate, noticed change here too.
+    /// ⭐ MOVED PIN (ADR-0016 D3/W2, task #170). E3 on C++ is a PRE-EXISTING lambda-capture
+    /// defect, task #140 — measured against E3b, the no-`Is`-at-all control (a captured Integer
+    /// mutated after the lambda is created), which USED TO fail IDENTICALLY: both silently printed
+    /// stale captures ("True | True" instead of "True | False"). Not caused by, or fixed by,
+    /// #185. #170's capability check now REFUSES BOTH by name instead (arm (b): <c>Main</c> writes
+    /// the captured variable — <c>a</c> in each — at a point reachable from the lambda-creation
+    /// instruction). Pinned so a #140 fix is a deliberate, noticed change here too.
     /// </summary>
     [Test]
-    public void E3_LambdaCapturedIdentity_Cpp_PinsThePreExisting140Defect_WithItsControl()
+    public void E3_LambdaCapturedIdentity_Cpp_RefusedByName_PinnedForTask140_WithItsControl()
     {
         Assert.Multiple(() =>
         {
-            Assert.That(FourBackends.Norm(BclE2E.CompileRun(BclE2E.CompileToCppOptimized(E3_Lambda))),
-                Is.EqualTo("True\nTrue\nTrue\nFalse"), "E3 (measured wrong on C++, #140)");
-            Assert.That(FourBackends.Norm(BclE2E.CompileRun(BclE2E.CompileToCppOptimized(E3b_LambdaControl))),
-                Is.EqualTo("True\nTrue"), "E3b control — the SAME stale-capture shape with no Is/IsNot at all");
+            var e3 = Assert.Throws<CppCapabilityException>(() => BclE2E.CompileToCppOptimized(E3_Lambda));
+            Assert.That(e3!.Message, Does.Contain("captures 'a' of 'Main'").And.Contain("#140"),
+                "E3 (task #140 flips this to running) — re-measure before touching.\n" + e3.Message);
+
+            var e3b = Assert.Throws<CppCapabilityException>(() => BclE2E.CompileToCppOptimized(E3b_LambdaControl));
+            Assert.That(e3b!.Message, Does.Contain("captures 'a' of 'Main'").And.Contain("#140"),
+                "E3b control — the SAME capture-write shape with no Is/IsNot at all.\n" + e3b.Message);
         });
     }
 
