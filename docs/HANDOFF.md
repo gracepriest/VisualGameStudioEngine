@@ -17,7 +17,115 @@ facade (all five tasks of `2026-09-13-blnet-cpp-facade.md`).
 
 ---
 
-## 🚀 NEWEST — 2026-09-29: #170 DONE, `MyBase.New(...)` is an IR instruction (ADR-0016; absorbs #240)
+## 🚀 NEWEST — 2026-09-29: #163 DONE, DCE removes unused compiler temps, by marker (ADR-0017)
+
+The fix is `ec021f8f` on top of #200, #170 and the SCRATCH option-(a) commit (`b0f12d90`); the TEST side is uncommitted work on top
+of it. Compiler only (IRBuilder, IRNodes, IROptimizer); no backend changed. Design and measurements:
+`docs/superpowers/decisions/0017-dce-removal-compiler-temp-marker.md` (read it; this section is what the test work adds and what to
+watch for).
+
+**The marker contract (D1).** `IRValue.IsCompilerTemp` is the ONE licence `DeadCodeEliminationPass` has to delete an unused
+instruction, and it says where a NAME came from, never how it is SPELLED.
+- `IRFunction.GetNextTempName()` is the one minter and RECORDS each name (`IsMintedTempName`, ordinal: a user `T5` is not the minted `t5`).
+- `IRBuilder.MarkCompilerTemps()` is the ONLY place the flag is set, the last step of `Build`, after every rename. It flags a value only
+  if it is not an `IRVariable`/`IRConstant`, not `NamedAfterVariable`, and its function minted its name. User storage (`Dim t5 = a + b`
+  is ONE binop renamed `t5`, `NamedAfterVariable`) never carries it.
+- `OptimizationPass.InheritIdentity` copies it when a pass REPLACES a value. A value built anywhere else reads false, and DCE keeps it.
+- ⛔ Any pass that mints a temp (#121) must mint through `GetNextTempName` and set the flag. CLAUDE.md carries the one durable clause.
+
+**The removal licence (D2, D3).** An unused value is deleted only if ALL hold: marked and not `NamedAfterVariable`; a pure, non-trapping
+KIND (binary except `/` `\` `Mod`; unary except `++` `--`; compare; `Is`; a load of a variable or an alloca — never an element read);
+the kill vocabulary agrees (writes only its own name, no call); unused by identity; NO `IRVariable` operand spells its name (the
+by-name rule); and ADR-0008 settled point 3 holds (`KeepsOperandMaterialisation`: a non-replicable operand must keep at least two
+operand uses, or its one). Calls, stores, `IRBaseConstructorCall`, throw and await are never among the kinds.
+
+**The witness for the by-name rule: `CT_wbr_t0`.** `Catch t0` with orphans before the Try. Without the rule the orphan `t0 = -a` goes, the
+C++ backend's own temp counter renumbers and the surviving string temp becomes `t0` in the catch (`t0 = BasicLang::String(t0.what())`,
+"no viable overloaded '='"): OK before, OK with the rule, COMPILE-FAIL without it, C++ in all three entry points. Pinned by
+`CompilerTempExecutionTests.CT_wbr_t0_CatchT0_StillCompilesAndRuns`; mutant M8 fails it (below).
+
+**#121's regression fence** (`CompilerTempCollisionFenceTests`, all three entry points). A user variable IRBuilder does not reserve (For Each,
+Catch, pattern, LINQ range) spelled like a temp collides with a minted name; every such program was already wrong or failing before #163.
+CURRENT behaviour, pinned so #121 flips each row deliberately (each message names #121):
+- `LC_t0` (a For Each `t0` captured by a lambda): ⚠ **the one #163 change that is not toward VB** — MSIL was a WRONG ANSWER (`7|-3|7|-4`)
+  before #163 and is now `7` then a segmentation fault (RUN-FAIL, 3 cells): with `-a`'s orphan gone the MSIL output conflates the
+  delegate's local with another slot. OPEN. C++ prints `7|0|7|0`, JavaScript a ReferenceError, both unchanged.
+- `R11` (For Each `t0`/`t1`): C++ `-3|-4|3|4` (VB `3|4|3|4`; it was `-3|-4|6|8`), C# and MSIL `-3|-4|3|4`, JavaScript a ReferenceError.
+- The 27 cells that reached VB's output, pinned CORRECT: C++ `CT_rbw_t2`, `CT_rbw_t3`, `CT_wbr_t2`, `CT_wbr_t3` (were COMPILE-FAIL), `FE_rbw_t1`,
+  `FE_wbr_t2`, `LC_t1` (were WRONG); C# `LC_t0` (was `7|-7|7|-7`); MSIL `LC_t3` (was an AccessViolationException).
+- Controls: `LC_x`, `R11_yz`, `CT_wbr_k` (ordinary names) are VB-correct everywhere.
+- ⚠ Without the by-name rule R11 prints VB's answer in 12 of 12 cells: the rule costs those, and buys `CT_wbr_t0`. #121 (reserving the names) removes the trade.
+
+**The U2 fix.** `Dim _tmp1 As Integer = a + b` printed `0` for VB's `67` in 12 of 12 cells BEFORE #163: the old guard deleted every unused value
+whose name started with `_tmp`, and the renamed binop of a `Dim _tmp1` is one. The "latent" removal was not latent for that spelling.
+Pinned by `U2` in the execution tier and `U2_TheUserVariablesCalledTmp_SurviveTheDeadCodePass`.
+
+**Tests (Linux-measured; the oracle is `vbc`, re-run by the test-writer for every expected value).** 298 new tests in five files, and the
+moved file:
+- `Compiler/CompilerTempProbes.cs` — support: the probes, `TempIr` (pipeline surgery: the DCE pass removed or replaced by
+  `RecordingDeadCodePass`), `TempExec` (a program through CLI / CLI `--optimize` / `CompileProjectFiles` on C#, C++, JavaScript, MSIL, and LLVM by exit code).
+- `Compiler/CompilerTempMarkerTests.cs` (54) — the minter's record; the marker never on user storage, whatever the spelling (M4a); `InheritIdentity` (M2).
+- `Compiler/DeadCodeRemovalLicenceTests.cs` (98) — hand-built IR: the licence kind by kind, the marker-not-spelling rows (M1, M4b), the by-name rule (M8),
+  the base-call operand (M5), settled point 3 (M6), and the isolation rows where the kind guard is the only defence (M7, M9, M10).
+- `Compiler/DeadCodeRemovalOnRealIrTests.cs` (41) — real IR: what is removed per probe (R1 Neg+Not, R2 Shl, R7 Mul+Neg, R8 Not×3, U4/U5 Neg — the ADR's
+  totals Neg 4 / Not 4 / Mul 1 / Shl 1), the U spellings, R3/R5 refusals, R6/R9/R10 survivors, R4's base-call operand, the R7 dead-store cascade
+  (one store of `n` with the pass, two without), the verifier silent, and the in-repo corpus test (below).
+- `Compiler/CompilerTempExecutionTests.cs` (80 execution + 25 fence) — `[Category("Integration")]`: the execution tier (R1 R2 R8 U4 U5; R3 R4 R5 R6 R7 R10; U1-U8; R7 on LLVM by exit code 135;
+  the witness) and `CompilerTempCollisionFenceTests` (the fence). Both are in `JsExecutionTierRosterTests` (pinned at 94).
+- `DeadCodeEliminationUseAnalysisTests.cs` (44 → 49) — see the moved pins.
+
+**Moved pins (3), and the vacuity they hid.** `Control_UnusedTempNamedValue_Removed`, `Control_UnusedNamelessValue_Removed` and
+`Control_UnusedUnaryCompareLoad_Removed` hand-built values with no marker, so nothing was removed. They now mark their value; each has a
+negative twin (the same value UNMARKED is kept — `Dim _tmp1`'s fix in one line). ⛔ The file's ~40 "value is kept" tests were passing VACUOUSLY: their
+values were never removable. `Live` now marks its value and `Run` asserts, before running the pass, that the value would be deleted if unused
+(`IsRemovableWhenUnused`). Proven with two use-walker mutants outside M1-M10: dropping the descent into operand trees (X1) passes 0 of the kept
+tests in the ORIGINAL file (only the 3 stale controls fail) and fails the 2 `OperandTree_*` tests in the re-armed one; removing the `IRCast` arm of
+`MapUses` (X2) likewise fails `Cast_Value_OnlyUseIsACastsValue_Kept` only in the re-armed file. Two stale guard pins were renamed
+(`GuardPin_UnusedNamedTempT0_NotRemoved_DceStaysLatentByDesign` → `GuardPin_UnusedValueNamedT0_NotMarked_Kept_TheSpellingIsNeverTheLicence`).
+
+**⚠ FINDING: "the pre-existing corpus has 0 removals" is true of the implementer's 854-program scratch corpus and NOT of the in-repo tests.**
+`DeadCodeRemovalOnRealIrTests.ExistingTestPrograms_LoseNothing_ExceptTheTwoThatContainTheOrphanShape` harvests every program string in the test assembly
+(720 candidates, 674 build) and runs both pipelines with the pass recorded: DCE deletes something in exactly TWO — `NotPrecedenceExecutionTests.Program`
+(`Not Not n < 3`: one `Not`) and `OptimizerOrphanedTempTests.FoldProgram` (`-(-n)` and `Not (Not b)`: one `Neg`, one `Not`) — orphan shapes by design, each a flagged,
+minted, pure temp. Their own tests pass. The test pins exactly those two and asserts 0 everywhere else, so a new removal is a decision.
+
+**Mutation proof** (detached worktrees, real NUnit, `S/t163/mutants163.py` M1-M10; the 346 new and moved tests of that run pass unmutated and every mutant is killed. The run predates `TheFenceTables_HaveTheirRows` and the roster edit, which no mutant reaches):
+
+| Mutant | Killed by (the count is the whole kill set) |
+|---|---|
+| M1 licence reverted to spelling | `AnUnmarkedValue_IsKept_WhateverItsName` ×7, `AMarkedValue_IsRemoved_WhateverItsName` ×2, the four `…_NotMarked_Kept` controls, `GuardPin_…NotMarked_Kept`, the `SettledPoint3_*`, and U5/U6 execution on all four backends (40) |
+| M2 flag not copied on replace | `InheritIdentity_*` ×2, `TheShiftStrengthReductionMakes_…` ×2, `R2_standard/aggressive`, `TheEighteenProbes…(False)`, and the C++ collision cells `CT_rbw_t2`, `CT_rbw_t3`, R11 (11) |
+| M3 call removable | `Call` (kind table), `R3_BothCallsToTagSurvive` ×2, R3 / R5 / R6 / R10 execution, `OneRun_UpdatesTheCountsAsItDeletes`, the corpus test (21) |
+| M4a flag on a user Dim | IR ONLY: `EverySpellingOfADim`, U1-U8 marker rows, `U2_TheUserVariablesCalledTmp…` (21). No execution test fails: D2's own `NamedAfterVariable` re-check masks it, as the implementer measured |
+| M4b M4a + the guard trusts the flag | `AMarkedValue_ThatIsNamedAfterAVariable_IsKept`, the marker rows, U5 / U6 execution ×4 backends, the corpus test (41) |
+| M5 base-call operands invisible | `ATemp_WhoseOnlyUseIsTheBaseConstructorCall…`, `R4_*` execution on C++ / JavaScript / MSIL, `R4_TheBaseCallsOperandSurvives…` ×2, the verifier test, the corpus test (13) |
+| M6 settled point 3 not enforced | `SettledPoint3_*` ×5, `Unit_*` ×4, `R3_OneAdjacentRefusal`, `R5_TheNotAdjacentRefusal…`, `NoDeletion_TakesANonReplicableOperand…` ×2 (15) |
+| M7 `/` `\` `Mod` removable | the three kind rows and the three isolation rows, `R6_TheDivisionSurvives…` ×2, R6 execution on C++ / JavaScript / MSIL (13) |
+| M8 no by-name use | ⭐ `CT_wbr_t0_Cpp` (the witness), `ByName_*` ×3, the R11 fence ×4 and `LC_t0` C++ / JavaScript (10) |
+| M9 `++` `--` removable | `Unary_Inc_overAnElement`, `Unary_Dec_overAnElement` — NOTHING else (2) |
+| M10 element load removable | `Load_throughAnElementPointer`, `R10_TheElementReadSurvives…` ×2 (3) |
+
+M9 and M10 are masked on real programs, and were killed by isolation, not by an argument. M9: on real IR `++a` also writes `a`, so the kill vocabulary refuses
+it on its own (`R9_TheIncrementSurvives…` passes under M9); the isolated shape — a `++` over a non-variable operand, where the kill vocabulary names only the
+result — is the only kill. M10: settled point 3 also refuses an element load (the pointer would lose its only use), so no execution test moves; the real-IR
+`R10_…` test kills it through the licence (`IsRemovableWhenUnused`), and the isolated shape gives the pointer two other uses so D3 lets it go.
+
+**Test-tier facts worth knowing.**
+- LLVM has no console and names its entry point `@Main`, so nothing it emits links, before or after #163. R7's LLVM leg returns 135 from `Main` and links with a two-line C shim.
+- `MsilHarness.RunIl` reads only the TEXT of a run: a process that prints `7` and then segfaults (exit 139) is `Ran`. The fence's MSIL cells use their own exit-code-aware run (`TempExec.ObserveMsil`).
+- Backends left out of a probe are defects that predate #163, measured identical before and after: R4 on C# (CS0103), R6 on C# (prints `0`), R10 on C#, C++, JavaScript (print `0|0`), R9 everywhere, `CT_wbr_t0` on C# (does not compile).
+- `NamedAfterVariable` and the marker together: DCE re-checks the former although IRBuilder already excludes it. Do not "simplify" that away: M4b shows it is the only thing between a mis-set flag and a deleted store.
+
+**Gates (Linux, g++/clang++/node/ilasm present, no MSVC), on the final test DLL:** the fast subset (`TestCategory!=Integration`) `Failed: 0, Passed: 9247, Skipped: 93, Total: 9340` (2 m 11 s; the #170 baseline was 9142 with the 3 moved pins red, and the same 93 skips). The filter `FullyQualifiedName~DeadCode|Dce|Optimizer|Pipeline|Aggressive|Verifier|Temp|Kill|CopyProp|Cse|BaseConstructorCall`, Integration included: `Failed: 0, Passed: 1611, Skipped: 18, Total: 1629` (19 m 20 s); the 18 skips are BuildServicePipelineTests 7, NetShimPipelineTests 7, TemplateBuildSweepTests 4 and SettingsServicePersistenceTests 2 (all pre-existing); none of the 347 new and moved tests skipped. ⚠ The FULL suite was NOT run for this task.
+
+**Only Windows can validate:** the MSVC leg of every C++ probe (`CT_wbr_t0` above all: the by-name rule's witness was compiled with clang/g++ only, and MSVC reports its own
+diagnostics for the collision); the Release `.blproj` path through the IDE build service into `CompileProjectFiles`; the MSIL fence under a Windows `ilasm` and CLR (LC_t0 is a Linux
+segmentation fault; on Windows it is an access violation and the pin only asserts "printed 7, then failed"); the LLVM leg does not run on Windows without a `clang` and the shim; Win32 glob
+over-matching is unrelated to this task.
+
+---
+
+## 2026-09-29 (earlier): #170 DONE, `MyBase.New(...)` is an IR instruction (ADR-0016; absorbs #240)
 
 The fix is `af1c7e60` on top of #200's `58ad8700`; the TEST side is uncommitted work on top of it.
 Scoped to the compiler (IR, all five backends, the front end, the verifier) plus one new C++ capability

@@ -119,7 +119,55 @@ namespace BasicLang.Compiler.IR
 
             AssignBodyLocals();
 
+            // LAST: every rename (TryRenameToVariable, SeparateTempsFromUserNames) has happened.
+            MarkCompilerTemps();
+
             return _module;
+        }
+
+        /// <summary>
+        /// ⭐ ADR-0017: the ONE place <see cref="IRValue.IsCompilerTemp"/> is set. A value is a
+        /// compiler temp when its function's minter handed out its name
+        /// (<see cref="IRFunction.IsMintedTempName"/>) and it is not storage the program declared:
+        /// <list type="bullet">
+        /// <item>not an <see cref="IRVariable"/> or <see cref="IRConstant"/> — a user's local,
+        /// parameter, global or field is an <c>IRVariable</c>;</item>
+        /// <item>not <see cref="IRValue.NamedAfterVariable"/> — <c>Dim t5 = a + b</c> is ONE
+        /// IRBinaryOp renamed <c>t5</c> (<see cref="TryRenameToVariable"/>), whose later reads are
+        /// reads of the VARIABLE, so it has no operand use and must never be taken for dead;</item>
+        /// <item>and a name the program itself declares never survives on a value that is neither:
+        /// <see cref="SeparateTempsFromUserNames"/>, which runs first, renames every such
+        /// collision to a freshly minted name.</item>
+        /// </list>
+        /// <para>Run after the builder's last rename, so what it records is final. The spelling
+        /// of the name is never consulted (a user <c>T5</c> is not the minted <c>t5</c>; a user
+        /// <c>t5</c> is NamedAfterVariable or an IRVariable).</para>
+        /// </summary>
+        private void MarkCompilerTemps()
+        {
+            foreach (var fn in IRTempNames.AllFunctions(_module))
+                foreach (var v in ValuesReachableFrom(fn))
+                    if (v is not IRVariable && v is not IRConstant && !v.NamedAfterVariable
+                        && fn.IsMintedTempName(v.Name))
+                        v.IsCompilerTemp = true;
+        }
+
+        /// <summary>Every value reachable from <paramref name="fn"/>'s body: its block instructions
+        /// and their operand trees (a When guard's tree lives in no block).</summary>
+        private static List<IRValue> ValuesReachableFrom(IRFunction fn)
+        {
+            var values = new List<IRValue>();
+            var seen = new HashSet<IRInstruction>();
+            var pending = new Stack<IRInstruction>(fn.Blocks.SelectMany(b => b.Instructions).Reverse());
+            while (pending.Count > 0)
+            {
+                var inst = pending.Pop();
+                if (inst == null || !seen.Add(inst)) continue;
+                if (inst is IRValue v) values.Add(v);
+                foreach (var operand in CodeGen.IROperandWalker.EnumerateOperands(inst))
+                    pending.Push(operand);
+            }
+            return values;
         }
 
         /// <summary>
@@ -149,17 +197,7 @@ namespace BasicLang.Compiler.IR
             foreach (var fn in IRTempNames.AllFunctions(_module))
             {
                 // Every value reachable from the body: instructions and their operand trees.
-                var values = new List<IRValue>();
-                var seen = new HashSet<IRInstruction>();
-                var pending = new Stack<IRInstruction>(fn.Blocks.SelectMany(b => b.Instructions).Reverse());
-                while (pending.Count > 0)
-                {
-                    var inst = pending.Pop();
-                    if (inst == null || !seen.Add(inst)) continue;
-                    if (inst is IRValue v) values.Add(v);
-                    foreach (var operand in CodeGen.IROperandWalker.EnumerateOperands(inst))
-                        pending.Push(operand);
-                }
+                var values = ValuesReachableFrom(fn);
 
                 var taken = new HashSet<string>(reserved, StringComparer.OrdinalIgnoreCase);
                 foreach (var v in values)

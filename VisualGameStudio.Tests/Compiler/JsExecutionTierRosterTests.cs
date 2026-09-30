@@ -417,6 +417,15 @@ public class JsExecutionTierRosterTests
 
         // #197 — `TypeOf x Is T`; its JS legs run under Node (a class target; interfaces are BL7013).
         typeof(TypeOfExecutionTests),
+        // Task #163 / ADR-0017 — every probe of the dead-code temp marker (R1-R11, U1-U8, the by-name rule's
+        // CT_wbr_t0 witness) through the CLI, the CLI with --optimize and CompileProjectFiles on C#, C++,
+        // JavaScript (Node: TempExec.Run -> JavaScriptExecutionTests.RunNodeScript) and MSIL. Named
+        // "...ExecutionTests", so the widened match below would catch it on its own; listed explicitly anyway.
+        typeof(CompilerTempExecutionTests),
+        // ...and #121's regression fence, which runs the same programs on the same four backends (its JavaScript
+        // cells pin a Node ReferenceError). Named "...FenceTests", so the widened match below does NOT see it:
+        // listed by hand, like every row that is not named "...ExecutionTests".
+        typeof(CompilerTempCollisionFenceTests),
     };
 
     /// <summary>
@@ -468,7 +477,7 @@ public class JsExecutionTierRosterTests
 
     [Test]
     public void RosterIsPinned()
-        => Assert.That(ExecutionTier, Has.Length.EqualTo(94), // + BaseConstructorCallLoweringExecutionTests + BaseConstructorCallCppRefusalTests (task #170, ADR-0016), MsilValueToStringExecutionTests (task #183), InterfaceMethodTypingExecutionTests, IsIsNotOperatorExecutionTests (task #185), MeReceiverTypingExecutionTests (task #176), UserDelegateConversionExecutionTests (task #187), DelegateMemberInvocationExecutionTests (task #188), NothingStringTextExecutionTests (task #189), MsilObjectBoxingExecutionTests (task #177), NotPrecedenceExecutionTests (#195), PropertyAccessExecutionTests (task #178), NameBindingExecutionTests (task #169/#199), PerIterationLoopBodyDimExecutionTests + PerIterationLoopBodyDimOptimizerExecutionTests (task #172, ADR-0014), LambdaBoundaryDiagnosticsExecutionTests (task #174); + WhenGuardCallRunTests, TypeOfExecutionTests (#197), ForwardDeclaredTypeExecutionTests
+        => Assert.That(ExecutionTier, Has.Length.EqualTo(96), // + CompilerTempExecutionTests + CompilerTempCollisionFenceTests (task #163, ADR-0017); + BaseConstructorCallLoweringExecutionTests + BaseConstructorCallCppRefusalTests (task #170, ADR-0016), MsilValueToStringExecutionTests (task #183), InterfaceMethodTypingExecutionTests, IsIsNotOperatorExecutionTests (task #185), MeReceiverTypingExecutionTests (task #176), UserDelegateConversionExecutionTests (task #187), DelegateMemberInvocationExecutionTests (task #188), NothingStringTextExecutionTests (task #189), MsilObjectBoxingExecutionTests (task #177), NotPrecedenceExecutionTests (#195), PropertyAccessExecutionTests (task #178), NameBindingExecutionTests (task #169/#199), PerIterationLoopBodyDimExecutionTests + PerIterationLoopBodyDimOptimizerExecutionTests (task #172, ADR-0014), LambdaBoundaryDiagnosticsExecutionTests (task #174); + WhenGuardCallRunTests, TypeOfExecutionTests (#197), ForwardDeclaredTypeExecutionTests
             "The execution-tier roster changed. That is fine — update the number — but it must " +
             "be a deliberate edit, not a silent shrink.");
 
