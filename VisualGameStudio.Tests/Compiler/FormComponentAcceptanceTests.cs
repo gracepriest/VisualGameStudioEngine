@@ -77,7 +77,10 @@ public class FormComponentAcceptanceTests
         Log("[2] placed        -> Timer1, in the tray");
 
         // --- properties, through the real grid (Enabled is WinForms-only and offered only there) ---
-        vm.PropertyGrid.SelectedControl = timer;
+        // ⛔ Through the ONE selection store, never PropertyGrid.SelectedControl (CLAUDE.md): the grid follows it.
+        vm.Selection.Set(timer);
+        Assert.That(vm.PropertyGrid.SelectedControl, Is.SameAs(timer),
+            "selecting the timer through the selection store did not put it in the property grid");
         SetRow(vm, "Interval", "1");
         if (target == FormTarget.WinForms)
         {

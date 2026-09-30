@@ -25,6 +25,19 @@ public class FormDesignModeTests
     private static CodeEditorDocumentViewModel NewViewModel() =>
         new(new Mock<IFileService>().Object, new Mock<IEventAggregator>().Object);
 
+    /// <summary>
+    /// Selects through the ONE selection store and checks the grid followed. ⛔ Never
+    /// <c>PropertyGrid.SelectedControl</c> directly (CLAUDE.md) — these tests are of the view model's
+    /// write-back, not of the grid alone, and a direct write would let the two stores disagree.
+    /// </summary>
+    private static void Select(CodeEditorDocumentViewModel vm, FormControl? control)
+    {
+        Assert.That(control, Is.Not.Null, "fixture control not found");
+        vm.Selection.Set(control);
+        Assert.That(vm.PropertyGrid.SelectedControl, Is.SameAs(control),
+            "selecting through the selection store did not put the control in the property grid");
+    }
+
     private const string WebForm = """
         <WebForm Name="LoginForm" Version="1">
           <Controls>
@@ -157,7 +170,7 @@ public class FormDesignModeTests
         vm.Text = WebForm;
         vm.ToggleDesignModeCommand.Execute(null);
 
-        vm.PropertyGrid.SelectedControl = vm.DesignDocument!.FindById("btnLogin");
+        Select(vm, vm.DesignDocument!.FindById("btnLogin"));
         vm.PropertyGrid.Rows.Single(r => r.Name == "Text").StringValue = "Log in";
 
         Assert.That(vm.Text, Does.Contain("Log in"),
@@ -177,12 +190,13 @@ public class FormDesignModeTests
         vm.ToggleDesignModeCommand.Execute(null);
 
         var button = vm.DesignDocument!.FindById("btnLogin");
-        vm.PropertyGrid.SelectedControl = button;
+        Select(vm, button);
         vm.PropertyGrid.Rows.Single(r => r.Name == "Text").StringValue = "Log in";
 
         Assert.Multiple(() =>
         {
             Assert.That(vm.PropertyGrid.SelectedControl, Is.SameAs(button), "still the same control");
+            Assert.That(vm.Selection.Primary, Is.SameAs(button), "in the selection store too");
             Assert.That(vm.PropertyGrid.Rows, Is.Not.Empty, "and the grid still shows it");
             Assert.That(vm.DesignDocument!.FindById("btnLogin"), Is.SameAs(button),
                 "the canvas and the grid must still be looking at ONE object graph");
@@ -200,7 +214,7 @@ public class FormDesignModeTests
         vm.FilePath = "/tmp/LoginForm.blwebform";
         vm.Text = WebForm;
         vm.ToggleDesignModeCommand.Execute(null);
-        vm.PropertyGrid.SelectedControl = vm.DesignDocument!.FindById("btnLogin");
+        Select(vm, vm.DesignDocument!.FindById("btnLogin"));
 
         var before = vm.DesignModelRevision;
         vm.PropertyGrid.Rows.Single(r => r.Name == "Text").StringValue = "Log in";
@@ -216,7 +230,7 @@ public class FormDesignModeTests
         vm.FilePath = "/tmp/LoginForm.blwebform";
         vm.Text = WebForm;
         vm.ToggleDesignModeCommand.Execute(null);
-        vm.PropertyGrid.SelectedControl = vm.DesignDocument!.FindById("btnLogin");
+        Select(vm, vm.DesignDocument!.FindById("btnLogin"));
 
         var before = vm.DesignModelRevision;
         var row = vm.PropertyGrid.Rows.Single(r => r.Name == "Text");
@@ -234,7 +248,7 @@ public class FormDesignModeTests
         vm.FilePath = "/tmp/LoginForm.blwebform";
         vm.Text = WebForm;
         vm.ToggleDesignModeCommand.Execute(null);
-        vm.PropertyGrid.SelectedControl = vm.DesignDocument!.FindById("btnLogin");
+        Select(vm, vm.DesignDocument!.FindById("btnLogin"));
 
         vm.Text = WebForm.Replace("btnLogin", "btnRenamed");
 
@@ -260,7 +274,7 @@ public class FormDesignModeTests
         }
 
         vm.ToggleDesignModeCommand.Execute(null);
-        vm.PropertyGrid.SelectedControl = vm.DesignDocument!.FindById("btnLogin");
+        Select(vm, vm.DesignDocument!.FindById("btnLogin"));
 
         var texts = new List<string>();
         vm.PropertyChanged += (_, e) => { if (e.PropertyName == nameof(vm.Text)) texts.Add(vm.Text); };

@@ -591,8 +591,9 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
             file.Model.ListContaining(control)?.Remove(control);
         }
 
+        // ⛔ The grid follows Selection.Changed (constructor) — never written here directly. The
+        // selection was non-empty (guarded above), so Clear always raises Changed.
         Selection.Clear();
-        PropertyGrid.SelectedControl = null;
         WriteDesignerEditBack();
     }
 
@@ -701,8 +702,9 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
         }
 
         file.Model.RenumberTabIndexes();
+        // ⛔ The grid follows Selection.Changed (constructor) — never written here directly. Every
+        // pasted control is a new object, so SetRange always changes the selection and raises it.
         Selection.SetRange(added);
-        PropertyGrid.SelectedControl = Selection.Primary;
         WriteDesignerEditBack();
     }
 
