@@ -431,9 +431,18 @@ namespace BasicLang.Compiler
                 // includer's. Before, the recursive public Process() cleared _errors and _conditionalStack.
                 var parentBlocks = _conditionalStack.ToArray();   // top first
                 _conditionalStack.Clear();
-                result.Append(ProcessCore(includeContent, resolvedPath));
-                _conditionalStack.Clear();
-                for (var i = parentBlocks.Length - 1; i >= 0; i--) _conditionalStack.Push(parentBlocks[i]);
+                try
+                {
+                    result.Append(ProcessCore(includeContent, resolvedPath));
+                }
+                finally
+                {
+                    // An include left unclosed has reported it already; its blocks must not leak into the
+                    // includer's. And an exception (caught below as an include error) must not lose the
+                    // includer's blocks either.
+                    _conditionalStack.Clear();
+                    for (var i = parentBlocks.Length - 1; i >= 0; i--) _conditionalStack.Push(parentBlocks[i]);
+                }
                 result.AppendLine($"' End include: {includePath}");
 
                 return result.ToString();

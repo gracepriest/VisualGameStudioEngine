@@ -252,4 +252,31 @@ public class PreprocessorConditionalTests
         }
         finally { System.IO.Directory.Delete(dir, true); }
     }
+
+    /// <summary>⛔ An include that leaves a block UNCLOSED reports it once, and that block must not leak into the
+    /// includer: left on the stack under the includer's blocks, it would outlive the includer's #End If, report a
+    /// second "Unclosed" at the includer's end, and silently skip every line after it.</summary>
+    [Test]
+    public void AnInclude_LeftUnclosed_ReportsOnce_AndDoesNotLeakIntoTheIncluder()
+    {
+        var dir = System.IO.Directory.CreateDirectory(System.IO.Path.Combine(System.IO.Path.GetTempPath(),
+            "bl-pre-" + Guid.NewGuid().ToString("N"))).FullName;
+        try
+        {
+            System.IO.File.WriteAllText(System.IO.Path.Combine(dir, "inc.bas"), "#If A Then\nIN_A");
+            var pre = new Preprocessor();
+            var output = pre.Process("#If NOPE Then\nNOPE_BRANCH\n#Else\n#Include \"inc.bas\"\nELSE_BRANCH\n#End If\nAFTER",
+                System.IO.Path.Combine(dir, "main.bas"));
+            var active = output.Replace("\r\n", "\n").Split('\n')
+                .Where(l => l.Trim().Length > 0 && !l.TrimStart().StartsWith("'")).ToArray();
+            Assert.Multiple(() =>
+            {
+                Assert.That(pre.Errors.Select(e => e.Message).ToArray(),
+                    Has.Exactly(1).Contains("Unclosed conditional block"), "only the include's own block is unclosed");
+                Assert.That(pre.Errors, Has.Count.EqualTo(1));
+                Assert.That(active, Is.EqualTo(new[] { "ELSE_BRANCH", "AFTER" }));
+            });
+        }
+        finally { System.IO.Directory.Delete(dir, true); }
+    }
 }
