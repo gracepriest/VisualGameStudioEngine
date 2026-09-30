@@ -226,6 +226,26 @@ public class WinFormsCatalogParityTests
         });
     }
 
+    /// <summary>
+    /// ⛔ Owner decision (2026-09-29): a double-click opens what VS opens. Where WinForms declares a
+    /// <c>[DefaultEvent]</c>, the catalog's default event on WinForms IS it — Panel's Paint, TrackBar's Scroll,
+    /// DataGridView's CellContentClick. The check this fixture lacked, which is how three rows drifted.
+    /// A kind whose snapshot names none (ErrorProvider; BackgroundWorker on .NET 8) is not judged: the gesture
+    /// still needs an event, and there is nothing to disagree with.
+    /// </summary>
+    [Test]
+    public void TheDefaultEvent_IsWinFormsOwn_WhereWinFormsDeclaresOne()
+    {
+        var snapshot = WinFormsMetadata.Load();
+        var drift = WinFormsDefinitions()
+            .Where(d => d.Events != null && snapshot.Type(d.Kind)?.DefaultEvent is { } expected &&
+                        !string.Equals(d.DefaultEvent(FormTarget.WinForms), expected, StringComparison.Ordinal))
+            .Select(d => $"{d.Kind}: catalog {d.DefaultEvent(FormTarget.WinForms)}, WinForms {snapshot.Type(d.Kind)!.DefaultEvent}")
+            .ToList();
+
+        Assert.That(drift, Is.Empty, string.Join("\n", drift));
+    }
+
     [Test]
     public void TheExemptionSweep_HasSomethingToSweep()
     {

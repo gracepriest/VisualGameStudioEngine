@@ -143,6 +143,57 @@ public class FormHandlerPlanTests
         });
     }
 
+    /// <summary>
+    /// ⛔ Owner decision (2026-09-29): a Panel opens on Paint, which a page does not have. On the web the double-click
+    /// opens the row's declared web default (Click) and SAYS so — never a Paint handler that silently never fires.
+    /// </summary>
+    [Test]
+    public void AWebPanel_OpensClick_AndSaysPaintHasNoWebEquivalent()
+    {
+        var form = Form(FormTarget.Web, "Panel", "pnl");
+        var plan = FormHandlers.PlanDefault(form, Only(form), Scaffold(FormTarget.Web));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(plan.Outcome, Is.EqualTo(HandlerOutcome.Created));
+            Assert.That(plan.Handler, Is.EqualTo("pnl_Click"));
+            Assert.That(plan.EventName, Is.EqualTo("click"));
+            Assert.That(plan.CodeText, Does.Contain("Private Sub pnl_Click(e As DomEvent)"));
+            Assert.That(plan.Notice, Does.Contain("Paint").And.Contain("Click").And.Contain("web"),
+                "the substitution is named, so nobody waits for a Paint handler");
+        });
+    }
+
+    [Test]
+    public void AWinFormsPanel_OpensPaint_WithItsPaintEventArgs_AndNoNotice()
+    {
+        var form = Form(FormTarget.WinForms, "Panel", "pnl");
+        var plan = FormHandlers.PlanDefault(form, Only(form), Scaffold(FormTarget.WinForms));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(plan.CodeText, Does.Contain("Private Sub pnl_Paint(sender As Object, e As PaintEventArgs)"));
+            Assert.That(plan.Notice, Is.Null);
+        });
+    }
+
+    /// <summary>A notice is for a substitution only — an ordinary double-click says nothing.</summary>
+    [Test]
+    public void OnlyASubstitutedDefault_CarriesANotice()
+    {
+        foreach (var def in FormControlCatalog.All)
+        {
+            foreach (var target in new[] { FormTarget.WinForms, FormTarget.Web }.Where(def.SupportsTarget))
+            {
+                var form = Form(target, def.Kind, "ctl");
+                var plan = FormHandlers.PlanDefault(form, Only(form), Scaffold(target));
+                var substituted = !ReferenceEquals(FormHandlers.DefaultEventDef(def, target), def.DefaultEventDef);
+
+                Assert.That(plan.Notice != null, Is.EqualTo(substituted), $"{def.Kind} on {target}");
+            }
+        }
+    }
+
     /// <summary>The same rule, for every kind on every target it supports — no row may name its handler otherwise.</summary>
     [Test]
     public void EveryKind_OnEveryTarget_NamesItsHandlerAfterTheWinFormsEvent()

@@ -18,13 +18,19 @@ public enum HandlerOutcome
 /// <summary>The result of double-clicking a control: the code-behind as it should now read, and where to put the caret.</summary>
 /// <param name="CodeText">The <c>.bas</c> after any insert — unchanged when navigating or refusing.</param>
 /// <param name="CaretLine">1-based line to reveal, or 0 when refused.</param>
+/// <param name="Notice">
+/// Set when the double-click opened an event OTHER than the kind's default because the default has no meaning on
+/// this target (a web Panel: Paint → Click). The host must show it — a substitution only the planner knew would be
+/// as silent as a Paint handler that never fires. Null for every ordinary gesture.
+/// </param>
 public sealed record FormHandlerPlan(
     HandlerOutcome Outcome,
     string EventName,
     string Handler,
     string CodeText,
     int CaretLine,
-    string? Refusal);
+    string? Refusal,
+    string? Notice = null);
 
 /// <summary>
 /// Task 22 — the double-click gesture: create the control's default handler if it is absent, navigate
@@ -110,7 +116,17 @@ public static class FormHandlers
                  !string.IsNullOrEmpty(b.Handler));
         var handler = bind?.Handler ?? NameFor(control.Id, evt.Name);
 
-        return Plan(form, codeText, eventName, handler, evt.WinFormsArgs, definition);
+        var plan = Plan(form, codeText, eventName, handler, evt.WinFormsArgs, definition);
+
+        // A substitution is named (owner decision 2026-09-29): the kind's default has no meaning here, so the
+        // gesture opened the row's declared fallback instead — and says so, rather than leaving the user waiting
+        // for a Paint handler a page can never raise.
+        var notice = definition?.DefaultEventDef is { } preferred && !ReferenceEquals(preferred, evt)
+            ? $"{DesignCodes.DefaultEventNotOnTarget}: a {control.Kind}'s default event, {preferred.Name}, has no " +
+              $"{Describe(form.Target)} equivalent, so the double-click opened {evt.Name} ('{eventName}') instead."
+            : null;
+
+        return plan.Outcome == HandlerOutcome.Refused || notice == null ? plan : plan with { Notice = notice };
     }
 
     /// <summary>

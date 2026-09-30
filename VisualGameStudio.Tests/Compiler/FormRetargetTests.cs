@@ -538,6 +538,42 @@ public class FormRetargetTests
     }
 
     /// <summary>
+    /// ⚠ The consequence of owner decision 2026-09-29 (TrackBar opens on Scroll, which is the page's <c>input</c>): an
+    /// EXISTING web TrackBar bound on <c>input</c> — written when <c>input</c> meant ValueChanged — keeps firing exactly
+    /// as before on the page, but retargets to WinForms as Scroll. Scroll is what WinForms raises for a user's drag,
+    /// the closest match to the DOM's <c>input</c>. Pinned so the change of meaning is deliberate.
+    /// </summary>
+    [Test]
+    public void AnExistingWebTrackBarInputBind_RetargetsToScroll()
+    {
+        var source = new FormDocument { Target = FormTarget.Web, Name = "Sweep" };
+        var bar = FormCatalogShapes.Canonical(source, FormControlCatalog.Find("TrackBar")!, "trk");
+        bar.Binds.Add(new FormBind { Event = "input", Handler = "trk_Input" });
+
+        var crossed = FormRetarget.Convert(source, FormTarget.WinForms).Document.FindById("trk")!;
+
+        Assert.That(crossed.Binds.Select(b => (b.Event, b.Handler)), Is.EqualTo(new[] { ("Scroll", "trk_Input") }),
+            "the user's handler name is kept; only the event it means on WinForms is named");
+    }
+
+    /// <summary>A WinForms Panel's Paint bind has no page equivalent: it is dropped AND named, never carried silently.</summary>
+    [Test]
+    public void ToWeb_APanelPaintBind_IsDroppedAndReported()
+    {
+        var source = new FormDocument { Target = FormTarget.WinForms, Name = "Sweep" };
+        var panel = FormCatalogShapes.Canonical(source, FormControlCatalog.Find("Panel")!, "pnl");
+        panel.Binds.Add(new FormBind { Event = "Paint", Handler = "pnl_Paint" });
+
+        var result = FormRetarget.Convert(source, FormTarget.Web);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Document.FindById("pnl")!.Binds, Is.Empty);
+            Assert.That(Of(result, DesignCodes.RetargetBindLost).Single().Message, Does.Contain("Paint").And.Contain("pnl_Paint"));
+        });
+    }
+
+    /// <summary>
     /// ⛔ Catalog-driven: EVERY event of every kind that exists on both targets and is wired on both crosses under
     /// the destination's name, and nothing else is reported lost for it. A row whose event lists widen (slice 5) is
     /// covered the day it widens.

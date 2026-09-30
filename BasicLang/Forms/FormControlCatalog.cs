@@ -1273,11 +1273,21 @@ public sealed record FormControlDef(
 
     /// <summary>
     /// The EVENT a double-click opens on <paramref name="target"/> — the row's <see cref="FormEventDef.IsDefault"/>
-    /// entry when it has a name there, else null. Its <see cref="FormEventDef.Name"/> names the handler on both
-    /// targets (owner decision 2026-09-29); <see cref="DefaultEvent"/> is what the bind listens to.
+    /// entry when it has a name there; on the web, else the row's declared <see cref="FormEventDef.IsWebDefault"/>
+    /// (a Panel: Paint has no page equivalent, so Click); else null. Its <see cref="FormEventDef.Name"/> names the
+    /// handler on both targets (owner decision 2026-09-29); <see cref="DefaultEvent"/> is what the bind listens to.
     /// </summary>
-    public FormEventDef? DefaultEventDefOn(FormTarget target) =>
-        DefaultEventDef is { } evt && FormEvents.NameOn(evt, target) != null ? evt : null;
+    public FormEventDef? DefaultEventDefOn(FormTarget target)
+    {
+        if (DefaultEventDef is { } evt && FormEvents.NameOn(evt, target) != null)
+        {
+            return evt;
+        }
+
+        return target == FormTarget.Web
+            ? Events?.FirstOrDefault(e => e.IsWebDefault && FormEvents.NameOn(e, target) != null)
+            : null;
+    }
 
     public FormPropertyDef? Property(string name) =>
         Properties.FirstOrDefault(p => string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase));
@@ -1589,6 +1599,20 @@ public static class FormControlCatalog
     private const string ControlValueChangedDescription = "Occurs when the value of the control changes.";
 
     /// <summary>
+    /// The panel kinds' events (owner decision 2026-09-29): Paint is the default, as VS opens it, and Click stays as a
+    /// non-default event. <paramref name="web"/> is Click's DOM name on a kind that exists on the page — where it is
+    /// also the declared web default, since a page has no Paint — or null on a WinForms-only kind.
+    /// ⛔ A static METHOD, not a field, for the same initializer-order reason as <see cref="Ev"/>.
+    /// </summary>
+    private static IReadOnlyList<FormEventDef> PanelEvents(string? web) => new[]
+    {
+        new FormEventDef("Paint", "PaintEventArgs", Category: FormEventCategory.Appearance,
+            Description: "Occurs when a control needs repainting.", IsDefault: true),
+        new FormEventDef("Click", WebEvent: web, Category: FormEventCategory.Action, Description: ClickedDescription,
+            IsWebDefault: web != null)
+    };
+
+    /// <summary>
     /// A row's events when it declares only its DEFAULT one — every row today (the D1 event lists
     /// arrive in slice 5). Category and Description are WinForms' own, from the parity run (Task 8).
     /// ⛔ A static METHOD, not a field, so it is immune to the textual-order initializer trap below.
@@ -1766,10 +1790,10 @@ public static class FormControlCatalog
                 Description: "Indicates whether scroll bars automatically appear when the control contents are larger than its visible area.",
                 CssProperty: "overflow", CssConverter: FormCssConverter.AutoScrollToOverflow)),
             DefaultWidth: 200, DefaultHeight: 100, Schematic: FormSchematic.Container,
-            // ⚠ VS opens a Panel on Paint. That handler takes a PaintEventArgs and is for drawing,
-            // not for a gesture — Click is the event a double-click in THIS designer can honestly
-            // stub, and the Events tab (Task 23) is where the rest will be reachable.
-            Events: Ev("Click", "click", category: FormEventCategory.Action, description: ClickedDescription)),
+            // ⛔ Owner decision (2026-09-29): a double-click opens what VS opens — Paint, with its PaintEventArgs. A page
+            // has no Paint, so on the web the gesture opens the row's DECLARED web default, Click, and says so
+            // (BL8035); a Paint bind is dropped-and-named by a retarget like any event with no web name.
+            Events: PanelEvents(web: "click")),
         new("GroupBox",    "GroupBox",    "fieldset", null,       true,  Common(Text),
             DefaultWidth: 200, DefaultHeight: 100, Schematic: FormSchematic.Group,
             // ⛔ Owner decision O3 (2026-09-29, checked in Visual Studio): a double-click creates an ENTER handler,
@@ -1926,8 +1950,17 @@ public static class FormControlCatalog
                 Category: FormPropertyCategory.Behavior,
                 Description: "The number of positions the slider moves in response to keyboard input (arrow keys).")),
             DefaultWidth: 150, DefaultHeight: 45, Schematic: FormSchematic.Slider,
-            Events: Ev("ValueChanged", "input", category: FormEventCategory.Action,
-                description: ControlValueChangedDescription)),
+            // ⛔ Owner decision (2026-09-29): VS opens a TrackBar on Scroll. On the page Scroll is the range input's
+            // `input` — it fires per step of a drag, as WinForms' Scroll does for a user's move — and ValueChanged is
+            // `change`. Two events cannot share one DOM name (a web bind is stored BY it), so an existing web `input`
+            // bind now retargets to WinForms as Scroll; on the page it fires exactly as before.
+            Events: new[]
+            {
+                new FormEventDef("Scroll", WebEvent: "input", Category: FormEventCategory.Behavior,
+                    Description: "Occurs when the TrackBar slider moves.", IsDefault: true),
+                new FormEventDef("ValueChanged", WebEvent: "change", Category: FormEventCategory.Action,
+                    Description: ControlValueChangedDescription)
+            }),
 
         new("ProgressBar", "ProgressBar", "progress", null,       false, ControlRows(HighlightForeColor, BackColor, null, CursorRow,
             new FormPropertyDef("Minimum", FormPropertyType.Int, "0",
@@ -2030,8 +2063,14 @@ public static class FormControlCatalog
                 Description: "Indicates whether the column headers row is displayed.")),
             DefaultWidth: 280, DefaultHeight: 150, Schematic: FormSchematic.DataGrid,
             // ⚠ The typed args (Task 8's parity run): EventArgs compiled by contravariance but hid e.RowIndex.
-            Events: Ev("CellClick", args: "DataGridViewCellEventArgs", category: FormEventCategory.Mouse,
-                description: "Occurs when any part of the cell is clicked.")),
+            // ⛔ Owner decision (2026-09-29): VS opens CellContentClick; CellClick stays, non-default.
+            Events: new[]
+            {
+                new FormEventDef("CellContentClick", "DataGridViewCellEventArgs", Category: FormEventCategory.Mouse,
+                    Description: "Occurs when the content within a cell is clicked.", IsDefault: true),
+                new FormEventDef("CellClick", "DataGridViewCellEventArgs", Category: FormEventCategory.Mouse,
+                    Description: "Occurs when any part of the cell is clicked.")
+            }),
 
         new("TabControl",  "TabControl",  null,       null,       true,  CommonColoured(
             null, null,
@@ -2091,7 +2130,7 @@ public static class FormControlCatalog
                 Category: FormPropertyCategory.Layout,
                 Description: "Indicates whether scroll bars automatically appear when the control contents are larger than its visible area.")),
             DefaultWidth: 220, DefaultHeight: 120, Schematic: FormSchematic.FlowContainer,
-            Events: Ev("Click", category: FormEventCategory.Action, description: ClickedDescription)),
+            Events: PanelEvents(web: null)),
 
         new("TableLayoutPanel", "TableLayoutPanel", null, null,   true,  Common(
             // ⚠ WinForms' [DefaultValue] is 0 for both (the parity run). VS DROPS a TableLayoutPanel as
@@ -2109,7 +2148,7 @@ public static class FormControlCatalog
                 Category: FormPropertyCategory.Appearance,
                 Description: "Indicates the appearance of cell borders in a table.")),
             DefaultWidth: 220, DefaultHeight: 120, Schematic: FormSchematic.TableContainer,
-            Events: Ev("Click", category: FormEventCategory.Action, description: ClickedDescription),
+            Events: PanelEvents(web: null),
             DropValues: new Dictionary<string, string> { ["ColumnCount"] = "2", ["RowCount"] = "2" }),
 
         // ==================================================================

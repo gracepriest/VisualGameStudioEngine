@@ -185,6 +185,39 @@ public class FormHandlerGestureTests
             Does.Contain("Private Sub btnLogin_Click(e As DomEvent)"));
     }
 
+    /// <summary>
+    /// ⛔ The substitution reaches the USER: a web Panel's double-click writes and opens the Click handler AND
+    /// publishes an Info finding naming it — a notice only the planner knew would be as silent as none.
+    /// </summary>
+    [Test]
+    public async Task AWebPanelsDoubleClick_OpensClick_AndReportsTheSubstitution()
+    {
+        var h = Open(FormTarget.Web, "Panel", "pnl");
+
+        await ActivateAsync(h);
+
+        var notice = h.Diagnostics.SelectMany(d => d.Diagnostics).SingleOrDefault();
+        Assert.Multiple(() =>
+        {
+            Assert.That(h.Files.Contents[h.CodePath], Does.Contain("Private Sub pnl_Click(e As DomEvent)"));
+            Assert.That(h.Navigations, Has.Count.EqualTo(1), "a notice does not stop the gesture");
+            Assert.That(notice, Is.Not.Null, "the substitution must be reported");
+            Assert.That(notice!.Id, Is.EqualTo(DesignCodes.DefaultEventNotOnTarget));
+            Assert.That(notice.Severity, Is.EqualTo(VisualGameStudio.Core.Models.DiagnosticSeverity.Info));
+            Assert.That(notice.Message, Does.Contain("Paint"));
+        });
+    }
+
+    [Test]
+    public async Task AnOrdinaryDoubleClick_ReportsNothing()
+    {
+        var h = Open(FormTarget.Web);
+
+        await ActivateAsync(h);
+
+        Assert.That(h.Diagnostics, Is.Empty);
+    }
+
     // ==================================================================
     // Navigating
     // ==================================================================

@@ -78,9 +78,11 @@ public static class DesignCodes
     //   BL8033          claimed by fix/unknown-dock-diagnostic (an unknown Dock value) — coordination
     //                   note 2026-09-29; that branch lands first and defines it
     //   BL8034          a form reference row (AcceptButton) naming no control of the kinds it allows (here)
+    //   BL8035          a double-click opened a fallback event: the kind's default has no meaning on this
+    //                   target (a web Panel's Paint → Click) — an INFO notice, never a refusal (here)
     //
-    // The ENUMERATED table above is now exhausted: the next claim starts at BL8035. That is not
-    // the band being full — BL8035..BL8999 are simply unclaimed, and "full" would wrongly send the
+    // The ENUMERATED table above is now exhausted: the next claim starts at BL8036. That is not
+    // the band being full — BL8036..BL8999 are simply unclaimed, and "full" would wrongly send the
     // next task looking for another band.
     //
     // Nothing in this band lives in BasicLang.Compiler.ErrorCode as a string; the enum registration
@@ -307,6 +309,13 @@ public static class DesignCodes
     /// assignment, BasicLang silent); the document keeps the reference.
     /// </summary>
     public const string ReferenceNotFound = "BL8034";
+
+    /// <summary>
+    /// An INFO notice from the double-click gesture: the kind's default event has no meaning on this target, so the row's
+    /// declared fallback was opened instead (owner decision 2026-09-29: a web Panel's Paint → Click). Never a refusal —
+    /// the handler is written and opened; the notice only says it is not the event VS would open.
+    /// </summary>
+    public const string DefaultEventNotOnTarget = "BL8035";
 
     /// <summary>The form document itself is not well-formed XML, or its root/version is not one we know.</summary>
     public const string MalformedDocument = "BL8008";

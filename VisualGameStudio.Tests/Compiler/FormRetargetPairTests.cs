@@ -230,6 +230,31 @@ public class FormRetargetPairTests
         });
     }
 
+    /// <summary>
+    /// ⛔ A crossed bind's stub takes ITS event's signature: a web Panel's Click arrives on a WinForms Panel whose
+    /// DEFAULT is Paint, and a <c>PaintEventArgs</c> stub wired to Click would not compile (no relaxation to it).
+    /// </summary>
+    [Test]
+    public void ACrossedNonDefaultBind_TakesItsOwnEventsSignature_NotTheDefaults()
+    {
+        var pair = FormRetarget.ConvertToPair(Read("""
+            <WebForm Name="PanelForm" Version="1">
+              <Layout Kind="Grid" Cols="1fr" Rows="auto" Gap="8px"/>
+              <Controls>
+                <Panel Id="pnl" Col="0" Row="0" TabIndex="0">
+                  <Bind Event="click" Handler="pnl_Click"/>
+                </Panel>
+              </Controls>
+            </WebForm>
+            """, "PanelForm.blwebform"), FormTarget.WinForms);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(pair.CodeText, Does.Contain("Private Sub pnl_Click(sender As Object, e As EventArgs)"));
+            Assert.That(pair.CodeText, Does.Not.Contain("PaintEventArgs"));
+        });
+    }
+
     [Test]
     public void ThePairsRegions_AreCanon_SoTheDesignersFirstSave_WritesInsteadOfRefusing()
     {

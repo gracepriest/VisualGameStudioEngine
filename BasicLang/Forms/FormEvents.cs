@@ -34,6 +34,12 @@ public enum FormEventCategory
 /// <see cref="FormPropertyDef.OracleExemption"/>, carried on the row so the parity test prints the
 /// reason rather than keeping a hand list. Null for every event the snapshot judges.
 /// </param>
+/// <param name="IsWebDefault">
+/// What a double-click opens on the WEB when the <see cref="IsDefault"/> event has no web meaning — a Panel's Paint
+/// (owner decision 2026-09-29): Click, and the gesture says so. ⛔ Declared, never guessed as "the first event with a
+/// web name": a silent pick is the widen-the-default failure <see cref="FormControlDef.DefaultEvent"/> exists to stop.
+/// Only on a row whose default has no web name, at most once, and only on an event that has one.
+/// </param>
 public sealed record FormEventDef(
     string Name,
     string? WinFormsArgs = null,
@@ -41,7 +47,8 @@ public sealed record FormEventDef(
     FormEventCategory? Category = null,
     string? Description = null,
     bool IsDefault = false,
-    string? OracleExemption = null);
+    string? OracleExemption = null,
+    bool IsWebDefault = false);
 
 /// <summary>
 /// ⛔⛔ THE one answer to "which events are wired on this target" (spec §5). Every region-writer

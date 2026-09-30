@@ -771,6 +771,14 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
 
             SelectInDesigner(control);
             _eventAggregator.Publish(new NavigateToFileEvent(codePath, plan.CaretLine));
+
+            // ⛔ A substituted default (a web Panel: Paint has no page equivalent → Click) is SAID, as information —
+            // the handler was written and opened, so it is not a refusal, but the user must not wait for a Paint.
+            if (plan.Notice != null)
+            {
+                ReportDesignerRefusal(
+                    codePath, BasicLang.Forms.DesignCodes.DefaultEventNotOnTarget, plan.Notice, DiagnosticSeverity.Info);
+            }
         }
         catch (Exception ex)
         {
@@ -788,14 +796,15 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
     /// save path — which republishes on the .bas — leaving a phantom in the Error List for the rest
     /// of the session.</para>
     /// </summary>
-    private void ReportDesignerRefusal(string codePath, string code, string message) =>
+    private void ReportDesignerRefusal(
+        string codePath, string code, string message, DiagnosticSeverity severity = DiagnosticSeverity.Warning) =>
         _eventAggregator.Publish(new DesignerDiagnosticsEvent(codePath, new List<DiagnosticItem>
         {
             new()
             {
                 Id = code,
                 Message = message,
-                Severity = DiagnosticSeverity.Warning,
+                Severity = severity,
                 FilePath = codePath,
                 Source = DesignerDiagnosticSource
             }
