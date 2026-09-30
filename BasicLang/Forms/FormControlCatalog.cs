@@ -327,19 +327,59 @@ public sealed record FormPropertyDef(
     }
 
     /// <summary>
-    /// A <see cref="FormPropertyType.Fraction"/>: an invariant decimal (point, no grouping, no exponent) from 0 to 1, with
-    /// only ASCII spaces around it — the TryParseInt rule for what may surround a number.
+    /// A <see cref="FormPropertyType.Fraction"/> (the Form's Opacity) — read EXACTLY as Visual Studio's OpacityConverter
+    /// reads it (owner decision 2026-09-29; measured on .NET Framework 4.8):
+    /// <list type="bullet">
+    /// <item>a trailing <c>%</c> (spaces allowed around it) means percent: <c>80%</c> is 0.8, <c>1%</c> is 0.01;</item>
+    /// <item>a bare number up to 1 is the FRACTION itself: <c>1</c> is 100%, <c>0.5</c> is 50% — which is also why every
+    /// stored document value (<c>0.85</c>) still reads as itself;</item>
+    /// <item>a bare number above 1 is a percent: <c>80</c> is 0.8, <c>1.5</c> is 0.015;</item>
+    /// <item>anything outside 0%–100% is refused, as VS refuses it.</item>
+    /// </list>
+    /// An invariant decimal — point, no grouping, no sign, and (beyond VS, approved) no exponent — with only ASCII spaces
+    /// around it, the TryParseInt rule for what may surround a number.
     /// </summary>
     public static bool TryParseFraction(string? value, out decimal fraction)
     {
         fraction = 0;
-        return value != null &&
-               decimal.TryParse(value.Trim(' '), NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out fraction) &&
-               fraction is >= 0 and <= 1;
+        if (value == null)
+        {
+            return false;
+        }
+
+        var text = value.Trim(' ');
+        var percent = text.EndsWith('%');
+        if (percent)
+        {
+            text = text[..^1].TrimEnd(' ');
+        }
+
+        if (!decimal.TryParse(text, NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out var number))
+        {
+            return false;
+        }
+
+        fraction = percent || number > 1 ? number / 100 : number;
+        return fraction is >= 0 and <= 1;
     }
 
     /// <summary>The number as a BasicLang/C# literal and as canonical document text: invariant, no trailing zeros.</summary>
     private static string FractionText(decimal fraction) => fraction.ToString("0.##########", CultureInfo.InvariantCulture);
+
+    /// <summary>
+    /// What the grid SHOWS for a fraction: a percentage, invariant, with up to two decimals — <c>85.5%</c>. (VS rounds to a
+    /// whole percent, hiding a stored 0.855 as 85%; showing it is an approved deviation.)
+    /// </summary>
+    private static string PercentText(decimal fraction) =>
+        (fraction * 100).ToString("0.##", CultureInfo.InvariantCulture) + "%";
+
+    /// <summary>
+    /// The DOCUMENT text a value typed into the grid is stored as. The typed text itself for every type — except one whose
+    /// grid vocabulary is not its document's: a Fraction is typed and shown as a percentage (<c>80%</c>) and stored the way
+    /// WinForms stores it, the 0–1 Double (<c>0.8</c>). Call only for a value the row accepts.
+    /// </summary>
+    public string ToDocument(string value) =>
+        Type == FormPropertyType.Fraction && TryParseFraction(value, out var fraction) ? FractionText(fraction) : value;
 
     /// <summary>
     /// What an editor OFFERS for this row: an Enum's <see cref="AllowedValues"/>, a Cursor row's
@@ -370,10 +410,20 @@ public sealed record FormPropertyDef(
     /// value in its canonical spelling when present, the target's default when absent, "" when absent
     /// with no default. <paramref name="present"/> is the document's text, or null when it carries none.
     /// </summary>
-    public string Displayed(string? present, FormTarget target) =>
-        present != null
-            ? Canonical(present)
-            : DefaultFor(target) is { } fallback ? Canonical(fallback) : "";
+    public string Displayed(string? present, FormTarget target)
+    {
+        var shown = present ?? DefaultFor(target);
+        if (shown == null)
+        {
+            return "";
+        }
+
+        // ⚠ A Fraction is SHOWN in the grid's vocabulary, a percentage (owner decision 2026-09-29) — SameValue still
+        // compares it with the stored 0–1 text, because both canonicalise to the same fraction.
+        return Type == FormPropertyType.Fraction && TryParseFraction(shown, out var fraction)
+            ? PercentText(fraction)
+            : Canonical(shown);
+    }
 
     /// <summary>
     /// What a typed editor pushes back when it renders "" — a NumericUpDown cannot show empty, so it
@@ -799,7 +849,8 @@ public sealed record FormPropertyDef(
                    FormPropertyType.Font => " (expected WinForms' font text: a family of letters, digits, spaces or " +
                                             "hyphens, a size in points, optional styles — e.g. 'Segoe UI, 9pt, style=Bold')",
                    FormPropertyType.Padding => " (expected one non-negative whole number, or four: Left, Top, Right, Bottom)",
-                   FormPropertyType.Fraction => " (expected a number from 0 to 1 with a decimal point, e.g. 0.85)",
+                   FormPropertyType.Fraction => " (expected a percentage from 0% to 100%, e.g. 85% — a bare number up " +
+                                                "to 1 is read as a fraction, as Visual Studio reads it, so 0.85 is also 85%)",
                    FormPropertyType.Reference => " (expected the Id of a control on this form)",
                    _ => ""
                } +

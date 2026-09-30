@@ -136,7 +136,7 @@ public class FormPropertyBatchAcceptanceTests
         SetThroughGrid(vm, null, "StartPosition", "CenterScreen");
         SetThroughGrid(vm, null, "BackColor", "LightYellow");
         SetThroughGrid(vm, null, "Font", "Segoe UI, 10pt, style=Bold");
-        SetThroughGrid(vm, null, "Opacity", "0.9");
+        SetThroughGrid(vm, null, "Opacity", "90%");   // typed as VS types it (owner decision 2026-09-29)
         SetThroughGrid(vm, null, "TopMost", "true");
         SetThroughGrid(vm, null, "AcceptButton", button.Id);
 

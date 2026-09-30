@@ -449,6 +449,40 @@ public class FormRootTests
         });
     }
 
+    /// <summary>
+    /// ⛔ Owner decision (2026-09-29): Opacity is shown and typed as a PERCENTAGE, like VS, and stored the way WinForms
+    /// stores it — the 0–1 Double. Through the REAL grid row: <c>0.85</c> shows as <c>85%</c>, typing <c>80%</c> stores
+    /// <c>0.8</c>, and a refused <c>150</c> is never written — the row keeps showing <c>80%</c> with the reason.
+    /// </summary>
+    [Test]
+    public void OpacityThroughTheGrid_IsAPercentage_StoredAsTheFraction_AndARefusalSnapsBack()
+    {
+        var file = FormDocumentReader.Read("F.blform", WinFormWithRootProperties);
+        var grid = new VisualGameStudio.Shell.ViewModels.Designer.FormPropertyGridViewModel();
+        grid.Load(file);
+        grid.SelectedControl = null;
+        var row = grid.Rows.Single(r => r.Name == "Opacity");
+
+        Assert.That(row.StringValue, Is.EqualTo("85%"), "shown as VS shows it");
+
+        row.StringValue = "80%";
+        Assert.Multiple(() =>
+        {
+            Assert.That(row.Refusal, Is.Null);
+            Assert.That(file.Model.Properties["Opacity"], Is.EqualTo("0.8"), "stored as WinForms' Double, never '80%'");
+            Assert.That(row.StringValue, Is.EqualTo("80%"));
+        });
+
+        row.StringValue = "150";
+        Assert.Multiple(() =>
+        {
+            Assert.That(file.Model.Properties["Opacity"], Is.EqualTo("0.8"), "a refused value is never written");
+            Assert.That(row.Refusal, Does.Contain("100%"), "and the reason says what is accepted");
+            Assert.That(row.StringValue, Is.EqualTo("80%"), "the editor snaps back to what the document holds");
+            Assert.That(FormDocumentWriter.Write(file), Does.Contain("Opacity=\"0.8\""));
+        });
+    }
+
     [Test]
     public void AnEditedRootProperty_IsWritten_AndAResetOneLeavesTheDocument()
     {

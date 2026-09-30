@@ -675,6 +675,10 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
                 return;
         }
 
+        // ⛔ Stored in the DOCUMENT's vocabulary: an Opacity typed as "80%" is written as WinForms' "0.8" (owner decision
+        // 2026-09-29) — the catalog's one conversion, a no-op for every other type.
+        value = _definition?.ToDocument(value) ?? value;
+
         if (_write != null)
         {
             // ⛔ A write that changed nothing is not an edit: refused by the store (a non-positive

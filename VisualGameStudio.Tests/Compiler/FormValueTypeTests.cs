@@ -182,27 +182,102 @@ public class FormValueTypeTests
     private static readonly FormPropertyDef Fraction = Def(FormPropertyType.Fraction);
     private static readonly FormPropertyDef Reference = new("X", FormPropertyType.Reference, ReferenceKinds: new[] { "Button" });
 
-    [TestCase("0.85", true)]
-    [TestCase("1", true)]
-    [TestCase("0", true)]
-    [TestCase(" 0.5 ", true)]
-    [TestCase("1.5", false)]      // Opacity is a proportion: WinForms would clamp it, the designer refuses it
-    [TestCase("-0.1", false)]
-    [TestCase("0,85", false)]     // an invariant decimal point only
-    [TestCase("85%", false)]
-    [TestCase("", false)]
-    public void AFraction_IsAnInvariantNumberFromZeroToOne(string value, bool accepted) =>
-        Assert.That(Fraction.Accepts(value), Is.EqualTo(accepted));
-
+    /// <summary>
+    /// ⛔ Owner decision (2026-09-29): Opacity is typed as a PERCENTAGE, read exactly as Visual Studio's OpacityConverter
+    /// reads it — MEASURED on .NET Framework 4.8: a <c>%</c> means percent; a bare number up to 1 is a FRACTION (so
+    /// <c>1</c> is 100% and the stored <c>0.85</c> still reads as 85%); a bare number above 1 is a percent. Beyond VS
+    /// (approved): an exponent is refused (<c>1e2</c>), as every catalog number refuses one.
+    /// </summary>
+    [TestCase("80%", "0.8")]
+    [TestCase("80", "0.8")]
+    [TestCase(" 80 %", "0.8")]
+    [TestCase("0.5", "0.5")]
+    [TestCase("0.85", "0.85")]
+    [TestCase("1", "1")]
+    [TestCase("1%", "0.01")]
+    [TestCase("1.5", "0.015")]    // VS: a bare number above 1 is a percent
+    [TestCase("100", "1")]
+    [TestCase("100%", "1")]
+    [TestCase("85.5%", "0.855")]
+    [TestCase("0", "0")]
+    [TestCase("0%", "0")]
     [TestCase("0.850", "0.85")]
-    [TestCase("1.0", "1")]
     [TestCase(".5", "0.5")]
-    public void AFraction_IsReEmittedFromItsNumber(string value, string canonical)
+    public void AnOpacity_IsReadAsVisualStudioReadsIt_AndStoredAsTheFraction(string typed, string stored)
     {
         Assert.Multiple(() =>
         {
-            Assert.That(Fraction.Canonical(value), Is.EqualTo(canonical));
-            Assert.That(Fraction.WinFormsLiteral(value), Is.EqualTo(canonical));
+            Assert.That(Fraction.Accepts(typed), Is.True, typed);
+            Assert.That(Fraction.Canonical(typed), Is.EqualTo(stored));
+            Assert.That(Fraction.ToDocument(typed), Is.EqualTo(stored), "the document keeps WinForms' 0–1 Double, never the percentage");
+            Assert.That(Fraction.WinFormsLiteral(typed), Is.EqualTo(stored), "the generated code assigns the Double");
+        });
+    }
+
+    [TestCase("150")]
+    [TestCase("101%")]
+    [TestCase("-5")]
+    [TestCase("-0.1")]
+    [TestCase("80,5")]            // an invariant decimal point only (VS: not a valid Double)
+    [TestCase("1e2")]             // VS accepts it as 100%; the catalog refuses every exponent
+    [TestCase("abc")]
+    [TestCase("%")]
+    [TestCase("")]
+    public void AnOpacity_OutsideZeroToOneHundredPercent_IsRefused(string typed) =>
+        Assert.That(Fraction.Accepts(typed), Is.False, typed);
+
+    [Test]
+    public void AnOpacity_RefusesTheMinusSignOfANordicCulture()
+    {
+        var minus = ((char)0x2212).ToString();
+        Assert.That(Fraction.Accepts(minus + "5"), Is.False);
+    }
+
+    /// <summary>It is SHOWN as a percentage with up to two decimals (VS rounds to a whole percent; approved deviation).</summary>
+    [TestCase("0.855", "85.5%")]
+    [TestCase("0.8", "80%")]
+    [TestCase("1", "100%")]
+    [TestCase("0", "0%")]
+    [TestCase("0.123456", "12.35%")]
+    public void AnOpacity_IsShownAsAPercentage(string stored, string shown) =>
+        Assert.That(Fraction.Displayed(stored, FormTarget.WinForms), Is.EqualTo(shown));
+
+    [Test]
+    public void AnAbsentOpacity_ShowsItsDefault_AsAPercentage()
+    {
+        var opacity = FormControlCatalog.FormRoot.Property("Opacity")!;
+        Assert.That(opacity.Displayed(null, FormTarget.WinForms), Is.EqualTo("100%"));
+    }
+
+    /// <summary>⛔ Culture-invariant both ways: a Swedish machine shows and reads the same text.</summary>
+    [Test]
+    [SetCulture("sv-SE")]
+    public void AnOpacity_IsCultureInvariant()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(Fraction.Displayed("0.855", FormTarget.WinForms), Is.EqualTo("85.5%"));
+            Assert.That(Fraction.ToDocument("85.5%"), Is.EqualTo("0.855"));
+            Assert.That(Fraction.Accepts("85,5%"), Is.False);
+        });
+    }
+
+    /// <summary>A refused value names the rule, in the percentage vocabulary the user typed in.</summary>
+    [Test]
+    public void ARefusedOpacity_SaysWhatIsAccepted()
+    {
+        var reason = Fraction.DescribeRefusedEdit("150", FormTarget.WinForms);
+        Assert.That(reason, Does.Contain("0%").And.Contain("100%"));
+    }
+
+    /// <summary>Every other type stores what was typed — only a type whose grid vocabulary differs converts.</summary>
+    [Test]
+    public void ToDocument_ChangesNothingForAnyOtherType()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(Font.ToDocument("segoe ui, 9pt"), Is.EqualTo("segoe ui, 9pt"));
+            Assert.That(Def(FormPropertyType.Int).ToDocument("007"), Is.EqualTo("007"));
         });
     }
 
