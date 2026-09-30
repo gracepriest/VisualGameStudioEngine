@@ -278,39 +278,38 @@ a second document type.
   module's members to bare globals while emitting the call site qualified**, so the script referenced
   an object that appears nowhere in the file. No string assertion can see that. `FormBuildEmissionTests`
   now RUNS the emitted script under node. The dispatch is generated as `Public Class` + `Public Shared
-  Sub`, which emits a real `class` with a `static` member. (The backend bug behind it is fixed —
-  see the module-call bullet below — but the dispatch stays a class.)
-- ✅ **Unqualified self-calls and bare cross-file `Sub`s work on this tree** — re-measured 2026-09-29
-  (JavaScript, C#, C++; built by the CLI and RUN). `Unqualified()` in a constructor emits
-  `this.Unqualified()`; a top-level `Sub Helper` in `Util.bas` is callable bare from `Main.bas`. The
-  2026-09-18 rows that said otherwise (a bare global / *"no lowering for 'Helper.Helper'"*) are
-  history; `FormScaffolder` still emits `Me.InitializeComponent()`, which is harmless.
-  ⚠ One C#-only trap remains: a top-level `Sub` NAMED LIKE ITS FILE (`Sub Helper` in `Helper.bas`)
-  is CS0542 — the file becomes `static class Helper`.
-- ⛔ **A MODULE member call works in every spelling — re-measured 2026-09-29** (CLI build, RUN,
-  JavaScript / C# / C++-MSVC). Before the fix that date, same-file calls and a Module in a file OF ITS OWN
-  NAME already worked both ways, but a Module BLOCK named unlike its file (`Module Program` holding
-  `Main` in `Main.bas`, `Module M` in `Helpers.bas`) was unreachable QUALIFIED from another file on
-  all three (`ReferenceError: Program is not defined` / `CS0103` / `C2065`) — the qualified channel
-  found units only by FILE name — and its procedures imported BARE lost their Module, so C#
-  qualified them by the file (`Program.Go()` for `Module M`'s `Go`). Every row now runs on all three:
+  Sub`, which emits a real `class` with a `static` member; module calls across files work now (next
+  bullets), but the dispatch stays a class.
+- ✅ **Unqualified self-calls and bare cross-file `Sub`s work** on JavaScript, C# and C++ (measured by
+  RUNNING, 2026-09-29): `Unqualified()` in a constructor emits `this.Unqualified()`, and a top-level
+  `Sub Helper` in `Util.bas` is callable bare from `Main.bas`. `FormScaffolder`'s
+  `Me.InitializeComponent()` is harmless.
+  ⚠ **A file's name is a C# class name.** Each file's top level becomes `static class <FileName>`, so
+  a top-level `Sub Helper` in `Helper.bas` is CS0542, and a `Class Widget` in `Widget.bas` beside
+  top-level code (or a lambda) is CS0101. Name the file differently.
+- ⛔ **A Module member is reachable in every spelling, from any file** (JavaScript / C# / C++,
+  measured by RUNNING):
 
   | | same file | Module in own-named file | Module block in another file |
   |---|---|---|---|
-  | `M.Go()` qualified | ✅ | ✅ | ✅ (was ✗ on all three) |
-  | `Go()` bare | ✅ | ✅ | ✅ (was ✗ on C#) |
+  | `M.Go()` qualified | ✅ | ✅ | ✅ |
+  | `Go()` bare | ✅ | ✅ | ✅ |
 
-  `SemanticAnalyzer.TryResolveOtherUnitModuleBlockMember` is the channel; `CrossFileBindingTests` runs
-  it in both compile orders. The #57 note and the older "no spelling works everywhere" table are
-  history.
+  ⚠ A Module BLOCK is named by its author, not its file (`Module Program` holding `Main` sits in
+  `Main.bas`), so any cross-unit lookup keyed on the FILE name misses it — that is what broke the
+  right-hand column. `SemanticAnalyzer.TryResolveOtherUnitModuleBlockMember` is the channel, and an
+  imported procedure must keep its `OwningModule` or C# qualifies it by the file.
+  `CrossFileBindingTests` runs every shape in both compile orders.
 - ⛔ **A member access on a user class never reaches the "PascalCase = .NET" fallback when the class's
-  members are all known** (`SemanticAnalyzer.LacksDeclaredMember`). That fallback claimed any receiver
-  named with two letters or more, so `Me.InitializeComponent()` with no such method compiled clean on
-  every backend and died at load on JavaScript (`TypeError: this.InitializeComponent is not a
-  function`); only a class named `F` was checked. It stays permissive for an `Extern Class`, a .NET or
-  unresolved base, and anything it cannot enumerate. ⚠ Still open: `Inherits` a class from ANOTHER file
-  is "Unknown base class" (the base lookup asks only the type manager), and JS/C++ emit a derived
-  class before its base when declared in that order.
+  members are all known** (`SemanticAnalyzer.LacksDeclaredMember`). That fallback claims any receiver
+  named with two letters or more, so a missing member on `LoginForm` compiles clean and dies at load
+  on JavaScript (`TypeError: this.X is not a function`) — only csc catches it on C#. Stays permissive
+  for an `Extern Class`, a .NET or unresolved base, and anything it cannot enumerate; an `Extension`
+  method on the class (or a base, or Object) is never refused — typed Object and bound by the
+  backend, which today means C# only (JavaScript `TypeError`, C++ `C2039`). ⚠ Still open:
+  `Inherits` or `Extension Function` over a class from ANOTHER file ("Unknown base class" / "Cannot
+  extend unknown type" — both ask only the type manager), and JS/C++ emit a derived class before its
+  base when declared in that order.
 - ⛔ **`Place` decides "strip" vs "item" vs "positioned", and each has its own rule.** A **strip**
   (`FormPlace.Docked`) is geometry-less — `Geometry == null`, its edge is a `Dock` PROPERTY not a
   rect, it draws as a BAND on the canvas, and it is page chrome on the web (before/after the form

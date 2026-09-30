@@ -171,7 +171,17 @@ retired** — nothing emits it and the number stays claimed. Neither option once
 inserting the call into `Main()`, or a template whose `Main()` dispatches) was needed, so no user code
 is edited. Tests: `WebMainStartupTests`.
 
-### 14. ⛔⛔ The JavaScript backend emits calls to module objects it never defines
+### 14. ✅ FIXED — The JavaScript backend emits calls to module objects it never defines
+
+> **Status 2026-09-29, branch `fix/js-cross-file-calls`:** closed on all three backends. #57
+> (`e486382d`) fixed the same-file and own-named-file cases; the last hole — a Module BLOCK named
+> unlike its file (`Module Program` in `Main.bas`), called qualified from another file, which was
+> still `ReferenceError` / `CS0103` / `C2065` — is fixed by
+> `SemanticAnalyzer.TryResolveOtherUnitModuleBlockMember`, and a bare import now keeps its Module so
+> C# qualifies it correctly. Every qualified/bare × same-file/own-file/other-file shape builds and
+> RUNS on JavaScript, C# and C++ (`CrossFileBindingTests`, CLI-measured). The text below is the
+> original record.
+
 **This is a runtime failure from a clean, green build**, and it is a COMPILER bug.
 
 ⛔⛔ **File this as the same issue as the third bullet of entry 3, not as a new one.** That bullet

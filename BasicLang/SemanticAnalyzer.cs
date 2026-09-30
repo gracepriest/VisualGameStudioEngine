@@ -497,6 +497,12 @@ namespace BasicLang.Compiler.SemanticAnalysis
         /// </summary>
         private void ImportImplicitProjectSymbols()
         {
+            // A sibling's Extension methods extend classes this unit may use (LacksDeclaredMember).
+            foreach (var unit in _implicitImportUnits)
+            {
+                RecordExtensionMethods(unit?.AST?.Declarations);
+            }
+
             // Full-fidelity symbols first: Define() keeps the first symbol
             // registered under a name, so completed units win over the
             // signature-level fallback below.
@@ -5150,6 +5156,8 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 RegisterClassTypes(decl);
             }
 
+            RecordExtensionMethods(program.Declarations);
+
             // ⛔ Class MEMBERS next, in their own sweep, because a class type with no members is
             // only half a forward reference. Measured on a class declared AFTER the module that
             // uses it, with a plain literal field: every member kind read as Object, so the temp
@@ -5423,6 +5431,62 @@ namespace BasicLang.Compiler.SemanticAnalysis
             return false;
         }
 
+        /// <summary>Extension method name → the type names it extends, from this unit and every unit it sees.</summary>
+        private readonly Dictionary<string, HashSet<string>> _extensionMethods = new(StringComparer.OrdinalIgnoreCase);
+
+        private void RecordExtensionMethods(IEnumerable<ASTNode> declarations)
+        {
+            if (declarations == null) return;
+            foreach (var declaration in declarations)
+            {
+                switch (declaration)
+                {
+                    case ExtensionMethodNode ext when !string.IsNullOrEmpty(ext.Method?.Name):
+                        if (!_extensionMethods.TryGetValue(ext.Method.Name, out var extended))
+                            _extensionMethods[ext.Method.Name] = extended = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                        extended.Add(ext.ExtendedType ?? "Object");
+                        break;
+                    case ModuleNode module:
+                        RecordExtensionMethods(module.Members);
+                        break;
+                    case NamespaceNode ns:
+                        RecordExtensionMethods(ns.Members);
+                        break;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Whether an <c>Extension</c> method named <paramref name="memberName"/> extends
+        /// <paramref name="type"/>, a base of it, or Object — a member the class declaration cannot
+        /// list, so <see cref="LacksDeclaredMember"/> must not refuse it (it is bound by the backend, as
+        /// before). ⚠ The LSP analyzes a file against the project symbol table with no sibling ASTs to
+        /// read, so there any project FUNCTION of that name keeps the access permissive.
+        /// </summary>
+        private bool HasExtensionMethod(TypeInfo type, string memberName)
+        {
+            if (string.IsNullOrEmpty(memberName)) return false;
+
+            if (_extensionMethods.TryGetValue(memberName, out var extended))
+            {
+                if (extended.Contains("Object")) return true;
+                var seen = new HashSet<TypeInfo>(ReferenceEqualityComparer.Instance);
+                for (var current = type; current != null && seen.Add(current); current = current.BaseType)
+                {
+                    if (extended.Contains(current.Name)) return true;
+                }
+            }
+
+            if (_moduleRegistry == null && _projectSymbols != null)
+            {
+                return _projectSymbols.GetAllPublicSymbols().Any(entry =>
+                    entry.Item2?.Kind == SymbolKind.Function &&
+                    string.Equals(entry.Item2.Name, memberName, StringComparison.OrdinalIgnoreCase));
+            }
+
+            return false;
+        }
+
         /// <summary>Whether <paramref name="type"/> or a recorded base DECLARES <paramref name="memberName"/>.</summary>
         private static bool DeclaresMember(TypeInfo type, string memberName)
         {
@@ -5433,6 +5497,42 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 if (current.DeclaredMemberNames?.Contains(memberName) == true) return true;
             }
             return false;
+        }
+
+        /// <summary>
+        /// <c>Game.Version</c> where <c>Game</c> is BOTH a class and the file <c>Game.bas</c>, and
+        /// <c>Version</c> is declared at FILE level there, not in the class. Refused, naming the real
+        /// problem. Returns false (nothing reported) for every other shape.
+        ///
+        /// <para>⛔ Before, the answer depended on compile order and was wrong both ways: with
+        /// <c>Game.bas</c> compiled first the file channel bound the constant and the IR lowered a read
+        /// of it off the CLASS — JavaScript printed an empty line from a clean build
+        /// (<c>Game.Version</c> is undefined on <c>class Game</c>); compiled second, the class won and
+        /// the message was "Type 'Game' does not have a member 'Version'", true but no help. (C# also
+        /// refuses the pair outright: the file becomes <c>static class Game</c> beside the class, CS0101.)</para>
+        /// </summary>
+        private bool RefuseFileMemberQualifiedByAClassName(string qualifier, MemberAccessExpressionNode node)
+        {
+            if (_moduleRegistry == null) return false;
+            if (ResolveTypeSymbol(qualifier) is not { Kind: SymbolKind.Class } classSymbol) return false;
+
+            var classType = classSymbol.Type;
+            if (classType?.ResolveMember(node.MemberName) != null || DeclaresMember(classType, node.MemberName)) return false;
+
+            var unit = FindModuleByName(qualifier);
+            if (unit?.AST?.Declarations == null) return false;
+
+            var fileLevel = unit.AST.Declarations.FirstOrDefault(d =>
+                d is not ClassNode && d is not ModuleNode && d is not NamespaceNode &&
+                string.Equals(DeclaredName(d), node.MemberName, StringComparison.OrdinalIgnoreCase));
+            if (fileLevel == null) return false;
+
+            Error($"'{qualifier}' here is the class '{classSymbol.Name}', which has no member '{node.MemberName}'. " +
+                  $"'{node.MemberName}' is declared at file level in {Path.GetFileName(unit.FilePath)} — refer to it " +
+                  $"unqualified ('{node.MemberName}'), or rename the class or the file so they differ",
+                  node.Line, node.Column);
+            SetNodeType(node, _typeManager.ObjectType);
+            return true;
         }
 
         /// <summary>The Module block named <paramref name="name"/> among these declarations, Namespaces and nested Modules included.</summary>
@@ -5453,6 +5553,13 @@ namespace BasicLang.Compiler.SemanticAnalysis
             return null;
         }
 
+        /// <remarks>
+        /// ⚠ ONE name per node. That holds because the parser gives every declared name its own node;
+        /// if a multi-name declaration (<c>Public A, B As Integer</c>) ever parses into ONE node, the
+        /// second name is missed here — <see cref="TryResolveOtherUnitModuleBlockMember"/> would then
+        /// report it as not a member, and <see cref="RecordDeclaredMembers"/> would let
+        /// <see cref="LacksDeclaredMember"/> refuse it. Enumerate every name if that node shape changes.
+        /// </remarks>
         private static string DeclaredName(ASTNode member) => member switch
         {
             FunctionNode f => f.Name,
@@ -7331,6 +7438,8 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 // Module hasn't been compiled yet - this will be handled by the Compiler
                 return;
             }
+
+            RecordExtensionMethods(unit.AST?.Declarations);
 
             // Import exported symbols into current scope
             foreach (var symbol in unit.ExportedSymbols)
@@ -11416,6 +11525,11 @@ namespace BasicLang.Compiler.SemanticAnalysis
             {
                 var moduleName = objId.Name;
 
+                if (RefuseFileMemberQualifiedByAClassName(moduleName, node))
+                {
+                    return;
+                }
+
                 // A Module declared in THIS unit, before any cross-unit channel: its variables and
                 // constants are in _moduleMembers whatever the declaration order. Not found here
                 // means "not one of this unit's module variables" — a procedure, or another unit's
@@ -11596,8 +11710,10 @@ namespace BasicLang.Compiler.SemanticAnalysis
             // Declared on the class but not in Members — a Private member reached through Me, an
             // Event, a nested type. Unbound and untyped as before, but never "does not have a member":
             // that false error used to reach only classes with one-letter names, which alone missed
-            // the .NET arm below.
-            else if (DeclaresMember(objectType, node.MemberName))
+            // the .NET arm below. An Extension method on the class (or a base, or Object) is the same:
+            // not in the declaration, bound by the backend, never refused here.
+            else if (DeclaresMember(objectType, node.MemberName)
+                     || (objectType.DeclaredMemberNames != null && HasExtensionMethod(objectType, node.MemberName)))
             {
                 SetNodeType(node, _typeManager.ObjectType);
             }
@@ -11629,6 +11745,16 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 }
 
                 SetNodeType(node, memberType ?? _typeManager.ObjectType);
+            }
+            // `Me.New(3)` inside a constructor is VB's constructor chaining, which this compiler does
+            // not lower — say that, rather than "does not have a member 'New'. Did you mean 'N'?".
+            else if (string.Equals(node.MemberName, "New", StringComparison.OrdinalIgnoreCase)
+                     && node.Object is IdentifierExpressionNode { Name: var receiver }
+                     && string.Equals(receiver, "Me", StringComparison.OrdinalIgnoreCase))
+            {
+                Error("Constructor chaining via Me.New is not supported. Move the shared initialization " +
+                      "into a Private Sub and call it from each constructor", node.Line, node.Column);
+                SetNodeType(node, _typeManager.ObjectType);
             }
             else
             {

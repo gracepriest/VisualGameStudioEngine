@@ -309,6 +309,81 @@ public class CrossFileBindingTests
         }
     }
 
+    /// <summary>
+    /// ⛔ An <c>Extension</c> method on a user class is not in the class's declaration, and was
+    /// REFUSED by the first cut of the strict check ("Type 'Widget' does not have a member
+    /// 'Describe'") on every backend and in the editor — while the base built and ran it on C#.
+    /// Runs on C# only: on base the same program already died on JavaScript
+    /// (<c>TypeError: w.Describe is not a function</c>) and C++ (<c>C2039</c>) — extension calls
+    /// are not lowered there, a separate gap this does not make worse (measured 2026-09-29).
+    /// ⚠ One file on purpose: a class in a file of its own name is CS0101 on C#, and extending a
+    /// class from ANOTHER file is "Cannot extend unknown type" — both separate, pre-existing.
+    /// </summary>
+    [TestCase("Widget")]
+    [TestCase("W")]
+    public void AnExtensionMethodOnAUserClass_IsNotAMissingMember_AndRunsOnCSharp(string widget)
+    {
+        var paths = Write(("Main.bas",
+            $"Public Class {widget}\n Public Name As String = \"W2\"\nEnd Class\n" +
+            $"Extension Function Describe(w As {widget}) As String\n Return w.Name\nEnd Function\n" +
+            $"Sub Main()\n Dim w As New {widget}()\n PrintLine(w.Describe())\nEnd Sub\n"));
+        var result = Compile(paths);
+        Assert.That(result.HasErrors, Is.False, Messages(result));
+        var cs = new CSharpCodeGenerator().Generate(Optimized(result.CombinedIR!));
+        Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharpText(cs)), Is.EqualTo("W2"), cs);
+    }
+
+    /// <summary>
+    /// The branch of the strict check for an <c>Inherits</c> it could not resolve: a not-yet-compiled
+    /// sibling's class over a .NET base (<c>ArrayList</c>) has a shell with no BaseType, and its
+    /// inherited members must stay permissive (a surviving mutant said nothing pinned it).
+    /// </summary>
+    [Test]
+    public void AClassOverAnUnresolvedBase_InAPendingSibling_StaysPermissive()
+    {
+        var paths = Write(
+            ("Main.bas", "Sub Main()\n Dim z As New ZList()\n z.Add(1)\nEnd Sub\n"),
+            ("ZList.bas", "Using System.Collections\nPublic Class ZList\n Inherits ArrayList\nEnd Class\n"));
+        foreach (var order in new[] { paths, paths.Reverse().ToArray() })
+        {
+            var result = Compile(order);
+            Assert.That(Messages(result), Does.Not.Contain("does not have a member"),
+                string.Join(",", order.Select(Path.GetFileName)));
+        }
+    }
+
+    /// <summary><c>Me.New(…)</c> is constructor chaining, and the message says so.</summary>
+    [Test]
+    public void ConstructorChainingViaMeNew_IsNamedAsSuch()
+    {
+        var paths = Write(("Main.bas",
+            "Public Class Widget\n Public N As Integer\n Public Sub New()\n  Me.New(3)\n End Sub\n" +
+            " Public Sub New(n As Integer)\n  Me.N = n\n End Sub\nEnd Class\n" +
+            "Sub Main()\n Dim w As New Widget()\nEnd Sub\n"));
+        var messages = Messages(Compile(paths));
+        Assert.That(messages, Does.Contain("Constructor chaining via Me.New is not supported"));
+        Assert.That(messages, Does.Not.Contain("does not have a member 'New'"));
+    }
+
+    /// <summary>
+    /// <c>Game.Version</c> with <c>Game</c> both a class and <c>Game.bas</c>, and <c>Version</c> a
+    /// file-level Const: refused in BOTH compile orders, naming the real problem. Before, one order
+    /// built clean and printed an empty line on JavaScript; the other said only "does not have a member".
+    /// </summary>
+    [Test]
+    public void AFileLevelMember_QualifiedByAClassOfTheFilesName_IsRefusedWithTheRealReason()
+    {
+        var paths = Write(
+            ("Game.bas", "Public Const Version As String = \"1.0\"\nPublic Class Game\n Public Sub Run()\n End Sub\nEnd Class\n"),
+            ("Main.bas", "Sub Main()\n PrintLine(Game.Version)\nEnd Sub\n"));
+        foreach (var order in new[] { paths, paths.Reverse().ToArray() })
+        {
+            var messages = Messages(Compile(order));
+            Assert.That(messages, Does.Contain("is declared at file level in Game.bas"),
+                string.Join(",", order.Select(Path.GetFileName)));
+        }
+    }
+
     /// <summary>Object's own members are members of every class — never "does not have a member".</summary>
     [Test]
     public void ObjectsOwnMembers_AreNotRefused_OnAUserClass()
