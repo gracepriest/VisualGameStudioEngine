@@ -264,16 +264,39 @@ public static class FormDocumentWriter
     /// </summary>
     private static void ApplyFormAttributes(XElement root, FormDocument model)
     {
-        // ⛔ Invariant: a Degraded non-positive size is kept modelled, and under sv-SE `-5` formats with a
+        // ⛔ Invariant (Number): a Degraded non-positive size is kept modelled, and under sv-SE `-5` formats with a
         // U+2212 minus — a no-op save would rewrite the user's text.
         if (model.Width != null)
         {
-            SetAttributeIfChanged(root, "Width", model.Width.Value.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            SetParsedIntIfChanged(root, "Width", model.Width.Value);
         }
 
         if (model.Height != null)
         {
-            SetAttributeIfChanged(root, "Height", model.Height.Value.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            SetParsedIntIfChanged(root, "Height", model.Height.Value);
+        }
+    }
+
+    /// <summary>
+    /// An integer attribute with NO "absent means" default — the root's Width/Height. Written when absent; when the
+    /// text parses (the reader's own parser, <see cref="FormPropertyDef.TryParseInt"/>), written only when the NUMBER
+    /// differs, so <c>"0400"</c> keeps its spelling through a save that changed nothing (slice 3 backlog (3) — this
+    /// compared TEXT). Unparseable text is replaced only by a real edit: the reader models it as null (and null never
+    /// reaches this method), so a number here over unparseable text is one the user set.
+    /// </summary>
+    private static void SetParsedIntIfChanged(XElement element, string name, int value)
+    {
+        var existing = element.Attribute(name);
+
+        if (existing == null)
+        {
+            element.SetAttributeValue(name, Number(value));
+            return;
+        }
+
+        if (!FormPropertyDef.TryParseInt(existing.Value, out var current) || current != value)
+        {
+            existing.Value = Number(value);
         }
     }
 

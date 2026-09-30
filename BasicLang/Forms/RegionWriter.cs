@@ -114,6 +114,7 @@ public static class RegionWriter
 
         CheckAnchors(filePath, form, diagnostics);
         CheckTargetProperties(filePath, form, diagnostics);
+        CheckWebRefusedValues(filePath, form, diagnostics);
         CheckComponentTargets(filePath, form, diagnostics);
         CheckComponentBinds(filePath, form, diagnostics);
         CheckControlBinds(filePath, form, diagnostics);
@@ -238,6 +239,50 @@ public static class RegionWriter
                         "value is preserved in the document.",
                         filePath, 0, 0, IsWarning: true));
                 }
+            }
+        }
+    }
+
+    /// <summary>
+    /// The web counterpart of <see cref="AppendProperties"/>' BL8009 (slice 3, carried from slice 1's Task 5
+    /// review): a CONTROL property whose row exists on the web but whose value the web refuses — a system colour
+    /// with no CSS equivalent, an unparseable number — is left out of the page by the markup emitter and the
+    /// stylesheet walk (<see cref="FormCss"/> gates on <c>Accepts(value, Web)</c>). It used to be left out
+    /// SILENTLY, so one document's Error List differed by target.
+    ///
+    /// <para>⛔ Controls only: a tray component's properties reach the page only through its script template,
+    /// and <see cref="ExpandWebScript"/> already reports a refused one there. ⛔ The reason is the catalog's own
+    /// (<see cref="FormPropertyDef.DescribeRefusal"/>), reached only for a value truly refused — it throws otherwise.</para>
+    /// </summary>
+    private static void CheckWebRefusedValues(
+        string filePath, FormDocument form, List<DesignDiagnostic> diagnostics)
+    {
+        if (form.Target != FormTarget.Web)
+        {
+            return;
+        }
+
+        foreach (var control in form.AllControls())
+        {
+            if (control.Definition is not { } definition)
+            {
+                continue;
+            }
+
+            foreach (var (name, value) in control.Properties)
+            {
+                var property = definition.Property(name);
+                if (property == null || !property.AppliesTo(FormTarget.Web) || property.Accepts(value, FormTarget.Web))
+                {
+                    continue;
+                }
+
+                diagnostics.Add(new DesignDiagnostic(
+                    DesignCodes.DegradedProperty,
+                    $"{DesignCodes.DegradedProperty}: '{control.Id}.{name}': " +
+                    property.DescribeRefusal(value, FormTarget.Web) +
+                    " It is not written into the page.",
+                    filePath, 0, 0, IsWarning: true));
             }
         }
     }
@@ -862,7 +907,11 @@ public static class RegionWriter
                 // This template is WEB code, so the value is judged as the web would judge it.
                 if (property.Accepts(value, FormTarget.Web))
                 {
-                    return value;
+                    // ⛔ Re-emitted from the PARSED number (slice 3 backlog (2)), as every Int the writer emits is:
+                    // " 250" and "0250" are accepted by TryParseInt, and whatever it tolerated stays out of the file.
+                    return property.Type == FormPropertyType.Int && FormPropertyDef.TryParseInt(value, out var number)
+                        ? number.ToString(CultureInfo.InvariantCulture)
+                        : value;
                 }
 
                 // ⛔ The reason comes from the catalog (DescribeRefusal) — the same text the reader

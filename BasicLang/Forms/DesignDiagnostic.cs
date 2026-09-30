@@ -376,6 +376,17 @@ public static class DesignCheck
                 filePath, 0, 0, IsWarning: true));
         }
 
+        // ⛔ The FORM's own frozen rows too (slice 3, found anchoring the backlog): a Degraded ClientSize or
+        // MobileBreakpoint was frozen in the grid and invisible here. 'form.' is how every root finding is quoted.
+        foreach (var degraded in form.DegradedRoot)
+        {
+            findings.Add(new DesignDiagnostic(
+                DesignCodes.DegradedProperty,
+                $"{DesignCodes.DegradedProperty}: 'form.{degraded.Property}' is frozen in the property grid — " +
+                degraded.Reason,
+                filePath, 0, 0, IsWarning: true));
+        }
+
         return findings;
     }
 

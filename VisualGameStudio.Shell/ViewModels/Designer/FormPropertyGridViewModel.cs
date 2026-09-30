@@ -338,6 +338,21 @@ public partial class FormPropertyGridViewModel : ObservableObject
     {
         void Changed() => RaiseEdited();
 
+        // ⛔ A structural integer the reader could not read (X="5&#9;", a U+2212 minus) is D9 Degraded (slice 3
+        // backlog (1)): the row is FROZEN with the reader's reason and shows the document's own text — never the 0 the
+        // model fell back to, which the editor would otherwise offer as if it were the value (slice 2 B1's rule).
+        FormPropertyRow IntRow(string name, Func<int> read, Action<int> write, Action changed, string category, string description)
+        {
+            var degraded = _file?.Degraded.FirstOrDefault(d =>
+                string.Equals(d.ControlId, control.Id, StringComparison.Ordinal) &&
+                string.Equals(d.Property, name, StringComparison.Ordinal));
+
+            return degraded != null
+                ? new FormPropertyRow(name, FormPropertyType.Int, () => degraded.Value, write: null, changed,
+                    degraded.Reason, category: category, description: description)
+                : FormPropertyGridViewModel.IntRow(name, read, write, changed, category, description);
+        }
+
         Rows.Add(new FormPropertyRow(
             "Name", FormPropertyType.String,
             () => control.Id,

@@ -109,6 +109,25 @@ public class FormRootTests
         });
     }
 
+    /// <summary>
+    /// Slice 3 backlog (3): the root size's no-op check compared TEXT, so a save that changed nothing rewrote
+    /// <c>Width="0400"</c> as <c>"400"</c>. It compares the PARSED number, as every control coordinate does
+    /// (SetIntAttributeIfChanged) — the spelling is the user's until the number moves.
+    /// </summary>
+    [TestCase("F.blform", "<Form Name=\"F\" Version=\"1\" Width=\"0400\" Height=\" 300 \"><Controls/></Form>")]
+    [TestCase("F.blwebform", "<WebForm Name=\"F\" Version=\"1\" Width=\"+800\" Height=\"0450\"><Layout Kind=\"Canvas\"/><Controls/></WebForm>")]
+    public void ARootSizeSpelledDifferently_SurvivesANoOpSave_AndMovesOnlyWhenTheNumberDoes(string name, string xml)
+    {
+        var file = FormDocumentReader.Read(name, xml);
+
+        Assert.That(FormDocumentWriter.Write(file), Is.EqualTo(xml), "a no-op save is byte-identical");
+
+        file.Model.Width = file.Model.Width + 1;
+        var moved = FormDocumentWriter.Write(file);
+
+        Assert.That(moved, Does.Contain($"Width=\"{file.Model.Width}\""), "a real edit is written in canonical form");
+    }
+
     private const string WebWithText = """
         <WebForm Name="F" Version="1" Text="Hello">
           <Layout Kind="Grid" Cols="auto" Rows="auto"/>

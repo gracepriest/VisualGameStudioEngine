@@ -497,6 +497,11 @@ public static class FormDocumentReader
         // case this serves.
         positions[control] = element;
 
+        if (place == FormPlace.Positioned)
+        {
+            JudgeStructuralIntegers(element, control.Id, target, layout, degraded);
+        }
+
         // ⛔⛔ The Id becomes a FIELD NAME in the user's own .bas. Until this check existed,
         // FormDocument.IsLegalControlId had no caller outside its own tests, and a document with
         // Id="" or Id="my-button" passed `design --check` with zero findings while the region
@@ -709,6 +714,41 @@ public static class FormDocumentReader
             ColSpan = IntAttribute(element, "ColSpan") ?? 1,
             RowSpan = IntAttribute(element, "RowSpan") ?? 1
         };
+    }
+
+    /// <summary>
+    /// D9's Degraded tier for a positioned control's structural INTEGERS — its tab index and its place in the
+    /// document's own vocabulary (X/Y/Width/Height on a pixel document, Col/Row/ColSpan/RowSpan on a Grid/Flow page).
+    ///
+    /// <para>⛔ Slice 3 backlog (1): an unreadable one used to read as 0 (1 for a span) with NO diagnostic, so the
+    /// program placed the control at the origin silently. The model still holds that fallback — there is no other
+    /// number — but the row is now frozen, the text preserved (the writer never overwrites text it could not parse,
+    /// <c>SetIntAttributeIfChanged</c>), and <c>design --check</c> says why. A U+2212 minus stays unreadable (a document
+    /// means one number on every machine) and is named, because it is the one case whose fix we can state.</para>
+    /// </summary>
+    private static void JudgeStructuralIntegers(
+        XElement element, string controlId, FormTarget target, FormLayoutKind? layout, List<DegradedProperty> degraded)
+    {
+        var names = FormVocabulary.IsPixel(target, layout)
+            ? new[] { "X", "Y", "Width", "Height", "TabIndex" }
+            : new[] { "Col", "Row", "ColSpan", "RowSpan", "TabIndex" };
+
+        foreach (var name in names)
+        {
+            if ((string?)element.Attribute(name) is not { } raw || FormPropertyDef.TryParseInt(raw, out _))
+            {
+                continue;
+            }
+
+            var fallback = name is "ColSpan" or "RowSpan" ? "1" : "0";
+            var minus = raw.Contains('−')
+                ? " (it is written with the Unicode minus sign U+2212, which is not a minus in a document — use an ASCII hyphen)"
+                : "";
+
+            degraded.Add(new DegradedProperty(controlId, name, raw,
+                $"'{controlId}' could not be placed as written — {name}=\"{raw}\" is not a whole number{minus}, so the " +
+                $"designer and the program use {fallback}. The attribute is preserved exactly as written."));
+        }
     }
 
     /// <summary>
