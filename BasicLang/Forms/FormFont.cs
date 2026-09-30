@@ -103,8 +103,10 @@ public sealed record FormFontValue(string Family, decimal Size, bool Bold, bool 
             sizeText = sizeText[..^2].TrimEnd(' ');
         }
 
+        // ⛔ At most two decimal places (code review M1): a 0.00001pt size re-emitted as `New Font(…, 0F)` — WinForms
+        // throws on a zero em-size at run time, with the build green. Trailing zeros are not precision (9.750 is 9.75).
         if (!decimal.TryParse(sizeText, NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out var size) ||
-            size <= 0 || size > 1000)
+            size <= 0 || size > 1000 || decimal.Round(size, 2) != size)
         {
             return false;
         }

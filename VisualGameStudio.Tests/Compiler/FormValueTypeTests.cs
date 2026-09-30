@@ -176,6 +176,73 @@ public class FormValueTypeTests
     public void AnUnknownCursor_IsDegraded(string value) => Assert.That(Cursor.Accepts(value), Is.False);
 
     // ==================================================================
+    // Code review minors (2026-09-29): the Font size's bounds, and the Cursor → CSS table pinned row by row
+    // ==================================================================
+
+    /// <summary>
+    /// ⛔ M1: at most TWO decimal places. A 0.00001pt size re-emitted as <c>New Font(…, 0F)</c> — the size text rounds to
+    /// four places — and WinForms throws on a zero em-size at run time; the build was green. Trailing zeros are not
+    /// extra precision (<c>9.750pt</c> is 9.75).
+    /// </summary>
+    [TestCase("Segoe UI, 9.75pt", true)]
+    [TestCase("Segoe UI, 9.750pt", true)]
+    [TestCase("Segoe UI, 0.01pt", true)]
+    [TestCase("Segoe UI, 9.755pt", false)]
+    [TestCase("Segoe UI, 0.00001pt", false)]
+    [TestCase("Segoe UI, 0.001pt", false)]
+    public void AFontSize_HasAtMostTwoDecimalPlaces(string value, bool accepted) =>
+        Assert.That(Font.Accepts(value), Is.EqualTo(accepted), value);
+
+    /// <summary>⛔ M7: the upper bound is 1000pt inclusive — pinned both sides (a mutant moving it survived).</summary>
+    [TestCase("Segoe UI, 1000pt", true)]
+    [TestCase("Segoe UI, 999.99pt", true)]
+    [TestCase("Segoe UI, 1000.01pt", false)]
+    [TestCase("Segoe UI, 1001pt", false)]
+    public void AFontSize_IsAtMostOneThousandPoints(string value, bool accepted) =>
+        Assert.That(Font.Accepts(value), Is.EqualTo(accepted), value);
+
+    /// <summary>
+    /// ⛔ M3: EVERY Cursors member → its CSS keyword, one row each — a table whose rows are only sampled let
+    /// SizeNESW → nwse-resize survive a mutant (the opposite diagonal: a page showing the wrong resize arrow). Null =
+    /// no CSS equivalent (refused on a web form, never approximated). The row count is pinned below, so a member added to
+    /// FormCursors without a row here fails.
+    /// </summary>
+    [TestCase("AppStarting", "progress")]
+    [TestCase("Arrow", "default")]
+    [TestCase("Cross", "crosshair")]
+    [TestCase("Default", "default")]
+    [TestCase("IBeam", "text")]
+    [TestCase("No", "not-allowed")]
+    [TestCase("SizeAll", "move")]
+    [TestCase("SizeNESW", "nesw-resize")]
+    [TestCase("SizeNS", "ns-resize")]
+    [TestCase("SizeNWSE", "nwse-resize")]
+    [TestCase("SizeWE", "ew-resize")]
+    [TestCase("UpArrow", null)]
+    [TestCase("WaitCursor", "wait")]
+    [TestCase("Help", "help")]
+    [TestCase("HSplit", "row-resize")]
+    [TestCase("VSplit", "col-resize")]
+    [TestCase("NoMove2D", "all-scroll")]
+    [TestCase("NoMoveHoriz", null)]
+    [TestCase("NoMoveVert", null)]
+    [TestCase("PanEast", null)]
+    [TestCase("PanNE", null)]
+    [TestCase("PanNorth", null)]
+    [TestCase("PanNW", null)]
+    [TestCase("PanSE", null)]
+    [TestCase("PanSouth", null)]
+    [TestCase("PanSW", null)]
+    [TestCase("PanWest", null)]
+    [TestCase("Hand", "pointer")]
+    public void EveryCursor_MapsToItsCssKeyword(string member, string? css) =>
+        Assert.That(FormCursors.CssFor(member), Is.EqualTo(css), member);
+
+    [Test]
+    public void TheCursorTable_HasOneTestRowPerMember() =>
+        Assert.That(FormCursors.Names, Has.Count.EqualTo(28), "add the new member's CSS row to EveryCursor_MapsToItsCssKeyword");
+
+    // ==================================================================
     // Task 4 — Fraction (the Form's Opacity) and Reference (AcceptButton/CancelButton)
     // ==================================================================
 
