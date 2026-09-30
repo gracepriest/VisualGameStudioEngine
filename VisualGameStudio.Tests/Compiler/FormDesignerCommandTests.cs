@@ -467,6 +467,43 @@ public class FormDesignerCommandTests
             "the grid keeps following the one selection store after the paste");
     }
 
+    /// <summary>
+    /// ⛔ An undo re-parses the text into a FRESH model, so every control the selection held belongs
+    /// to a document nobody draws. The store must empty with the grid — otherwise a following
+    /// BringToFront/Cut acts on the ghost (and silently does nothing to the document on screen).
+    /// </summary>
+    [Test]
+    public void AnUndo_LeavesNoStaleSelection_AndAFollowingCutCopiesNothingStale()
+    {
+        var vm = Open();
+        vm.Selection.Set(Control(vm, "a"));
+        vm.Selection.Add(Control(vm, "c"));
+        vm.ArrangeCommand.Execute(FormArrangeKind.AlignLeft);
+
+        vm.UndoDesignerEditCommand.Execute(null);
+        var afterUndo = vm.Text;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(vm.Selection.IsEmpty, Is.True, "no control of the discarded model stays selected");
+            Assert.That(vm.PropertyGrid.SelectedControl, Is.Null, "and the grid agrees");
+        });
+
+        // ⚠ The designer clipboard is STATIC (one per IDE session), so seed it with a known control from
+        // ANOTHER document — a Cut of a ghost selection would overwrite it with the old parse's a and c.
+        var seed = Open();
+        seed.Selection.Set(Control(seed, "b"));
+        seed.CopyControlsCommand.Execute(null);
+
+        vm.CutControlsCommand.Execute(null);
+        Assert.That(vm.Text, Is.EqualTo(afterUndo), "nothing was selected, so Cut changes nothing");
+
+        vm.PasteControlsCommand.Execute(null);
+        var added = vm.DesignDocument!.Controls.Except(new[] { Control(vm, "a"), Control(vm, "b"), Control(vm, "c") }).ToList();
+        Assert.That(added.Select(c => (G(c).Width, G(c).Height)), Is.EqualTo(new[] { (80, 40) }),
+            "the clipboard still holds the seeded 'b' (80x40) — the Cut copied nothing from the discarded model");
+    }
+
     [Test]
     public void ACopyReachesTheDocumentTextOnPaste()
     {

@@ -255,7 +255,79 @@ public class FormDesignModeTests
         Assert.Multiple(() =>
         {
             Assert.That(vm.PropertyGrid.SelectedControl, Is.Null, "the old selection is gone");
+            Assert.That(vm.Selection.IsEmpty, Is.True,
+                "from the ONE selection store too — a control of the OLD parse left in Selection is a ghost " +
+                "the grid does not show and every command would act on");
             Assert.That(vm.DesignDocument!.FindById("btnRenamed"), Is.Not.Null);
+        });
+    }
+
+    /// <summary>
+    /// Re-entering Design view reloads the panels WITHOUT any text change, and the grid comes back
+    /// empty; the selection store must agree, or the canvas outlines (and every command acts on) a
+    /// control the grid is not showing.
+    /// </summary>
+    [Test]
+    public void ReenteringDesignView_TheSelectionAgreesWithTheEmptiedGrid()
+    {
+        var vm = NewViewModel();
+        vm.FilePath = "/tmp/LoginForm.blwebform";
+        vm.Text = WebForm;
+        vm.ToggleDesignModeCommand.Execute(null);
+        Select(vm, vm.DesignDocument!.FindById("btnLogin"));
+
+        vm.ToggleDesignModeCommand.Execute(null);
+        vm.ToggleDesignModeCommand.Execute(null);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(vm.PropertyGrid.SelectedControl, Is.Null, "the reload starts the grid from nothing selected");
+            Assert.That(vm.Selection.IsEmpty, Is.True, "and the ONE selection store agrees with it");
+        });
+    }
+
+    /// <summary>
+    /// ⛔ After a Code-view edit, a Cut acts on NOTHING stale. The id survives the edit, so a ghost
+    /// selection is invisible: the grid is empty, yet Cut used to copy the OLD parse's button (its old
+    /// caption) to the clipboard, remove nothing from the new document, and hand a stale copy to the
+    /// next Paste.
+    /// </summary>
+    [Test]
+    public void AfterAnEditInCodeView_CutAndPasteActOnNothingStale()
+    {
+        var vm = NewViewModel();
+        vm.FilePath = "/tmp/LoginForm.blwebform";
+        vm.Text = WebForm;
+        vm.ToggleDesignModeCommand.Execute(null);
+        Select(vm, vm.DesignDocument!.FindById("btnLogin"));
+
+        vm.Text = WebForm.Replace("Sign in", "Log in");
+        var afterEdit = vm.Text;
+
+        // ⚠ The designer clipboard is STATIC (one per IDE session), so seed it with a known control from
+        // ANOTHER document — a Cut of the ghost would overwrite it with the old parse's button.
+        var seed = NewViewModel();
+        seed.FilePath = "/tmp/SeedForm.blwebform";
+        seed.Text = WebForm.Replace("btnLogin", "seed").Replace("Sign in", "SEED");
+        seed.ToggleDesignModeCommand.Execute(null);
+        Select(seed, seed.DesignDocument!.FindById("seed"));
+        seed.CopyControlsCommand.Execute(null);
+
+        vm.CutControlsCommand.Execute(null);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(vm.Text, Is.EqualTo(afterEdit), "nothing was selected, so Cut changes nothing");
+            Assert.That(vm.DesignDocument!.Controls.Single().Properties["Text"], Is.EqualTo("Log in"));
+        });
+
+        vm.PasteControlsCommand.Execute(null);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(vm.Text, Does.Contain("SEED"), "the clipboard still holds the seeded control");
+            Assert.That(vm.Text, Does.Not.Contain("Sign in"),
+                "the old parse's caption never comes back — the Cut copied nothing stale");
         });
     }
 

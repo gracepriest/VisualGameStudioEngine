@@ -218,6 +218,17 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
         }
 
         Tray.Rebuild(file?.Model);
+
+        // ⛔⛔ The ONE selection store resets WITH the panels. Load above empties the grid — a reload
+        // is "start from nothing selected", the same rule as a Code-view edit, an undo and entering
+        // Design view — and every one of those routes can hand us a FRESH parse whose objects are
+        // not the ones Selection holds. Left behind, those are ghosts: the grid shows nothing while
+        // Cut copies the old parse's control and Paste brings it back (measured: a second button).
+        // Cleared, not re-resolved by id, because the grid does not re-resolve either.
+        // ⚠ AFTER Load: Load already nulled the grid, so the Changed this raises (the grid follows it
+        // in the constructor) finds nothing to change and the grid rebuilds exactly once. It also
+        // runs the Type Here leave-rule, which is right — the editor's host is from the old parse.
+        Selection.Clear();
     }
 
     /// <summary>
