@@ -52,10 +52,8 @@ public class JavaScriptInteropTests
     /// <summary>
     /// An import gated behind an inactive conditional must not be collected.
     ///
-    /// ⛔ #IfDef, NOT #If. The Preprocessor implements #IfDef/#IfNDef/#Else/#EndIf; `#If` is a
-    /// LEXER/parser construct and never reaches the directive collector, so a test written
-    /// with #If fails through JsTestSupport's parse guard no matter how correct the
-    /// implementation is.
+    /// #IfDef here only because this test predates #If; both are directives the preprocessor
+    /// consumes (the #If form is covered by PreprocessorConditionalTests).
     /// </summary>
     [Test]
     public void JsImport_InsideInactiveConditional_IsNotCollected()
