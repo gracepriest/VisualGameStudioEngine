@@ -1268,12 +1268,16 @@ public sealed record FormControlDef(
     /// new control kind a Click handler that is wrong for most of the catalog and wrong invisibly —
     /// the same "widen the default" failure this table exists to prevent.</para>
     /// </summary>
-    public string? DefaultEvent(FormTarget target) => target switch
-    {
-        FormTarget.WinForms => WinFormsEvent,
-        FormTarget.Web => WebEvent,
-        _ => null
-    };
+    public string? DefaultEvent(FormTarget target) =>
+        DefaultEventDefOn(target) is { } evt ? FormEvents.NameOn(evt, target) : null;
+
+    /// <summary>
+    /// The EVENT a double-click opens on <paramref name="target"/> — the row's <see cref="FormEventDef.IsDefault"/>
+    /// entry when it has a name there, else null. Its <see cref="FormEventDef.Name"/> names the handler on both
+    /// targets (owner decision 2026-09-29); <see cref="DefaultEvent"/> is what the bind listens to.
+    /// </summary>
+    public FormEventDef? DefaultEventDefOn(FormTarget target) =>
+        DefaultEventDef is { } evt && FormEvents.NameOn(evt, target) != null ? evt : null;
 
     public FormPropertyDef? Property(string name) =>
         Properties.FirstOrDefault(p => string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase));

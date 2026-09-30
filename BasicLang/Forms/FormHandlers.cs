@@ -50,10 +50,14 @@ public static class FormHandlers
     public static string? DefaultEvent(string kind, FormTarget target) =>
         FormControlCatalog.Find(kind)?.DefaultEvent(target);
 
+    /// <summary>The EVENT a double-click on <paramref name="definition"/> opens on <paramref name="target"/>, or null.</summary>
+    public static FormEventDef? DefaultEventDef(FormControlDef definition, FormTarget target) =>
+        definition.DefaultEventDefOn(target);
+
     /// <summary>
-    /// <c>btnLogin_Click</c> — VS's shape, kept on BOTH targets even though the DOM's event is
-    /// lowercase. <c>btnLogin_click</c> would be the literal event name and would read, in a file
-    /// full of PascalCase Subs, like a mistake.
+    /// <c>btnLogin_Click</c> — VS's shape. ⛔ Callers pass the WinForms event NAME on both targets (owner decision
+    /// 2026-09-29): <c>GroupBox1_Enter</c> on the page too, never the DOM's <c>GroupBox1_Focusin</c>. The PascalCase
+    /// step remains for a caller that has only a DOM name.
     /// </summary>
     public static string NameFor(string controlId, string eventName) =>
         $"{controlId}_{Pascal(eventName)}";
@@ -89,21 +93,24 @@ public static class FormHandlers
     /// </summary>
     public static FormHandlerPlan PlanDefault(FormDocument form, FormControl control, string codeText)
     {
-        var eventName = DefaultEvent(control.Kind, form.Target);
-        if (string.IsNullOrEmpty(eventName))
+        var definition = control.Definition;
+        var evt = definition?.DefaultEventDefOn(form.Target);
+        var eventName = evt == null ? null : FormEvents.NameOn(evt, form.Target);
+        if (evt == null || string.IsNullOrEmpty(eventName))
         {
             return Refuse(codeText,
                 $"'{control.Kind}' has no default event for {Describe(form.Target)}, so there is " +
                 "nothing for a double-click to open. Add one to the control catalog.");
         }
 
-        // An existing wiring names the handler; otherwise the convention does.
+        // An existing wiring names the handler — never renamed, whichever rule named it; otherwise the convention
+        // does, from the WinForms event name on BOTH targets (owner decision 2026-09-29).
         var bind = control.Binds.FirstOrDefault(
             b => string.Equals(b.Event, eventName, StringComparison.OrdinalIgnoreCase) &&
                  !string.IsNullOrEmpty(b.Handler));
-        var handler = bind?.Handler ?? NameFor(control.Id, eventName);
+        var handler = bind?.Handler ?? NameFor(control.Id, evt.Name);
 
-        return Plan(form, codeText, eventName, handler, control.Definition?.DefaultEventDef?.WinFormsArgs, control.Definition);
+        return Plan(form, codeText, eventName, handler, evt.WinFormsArgs, definition);
     }
 
     /// <summary>

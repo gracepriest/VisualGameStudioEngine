@@ -120,6 +120,69 @@ public class FormHandlerPlanTests
         });
     }
 
+    /// <summary>
+    /// ⛔ Owner decision (2026-09-29): the handler NAME comes from the WinForms event name on BOTH targets — VS's
+    /// <c>GroupBox1_Enter</c>, never the DOM's <c>GroupBox1_Focusin</c> — while the web bind still LISTENS to the DOM
+    /// event. One rule for every kind, so a form's handlers read the same whichever target it was designed for.
+    /// </summary>
+    [TestCase("GroupBox", "grp", "grp_Enter", "focusin")]
+    [TestCase("TextBox", "txtName", "txtName_TextChanged", "input")]
+    [TestCase("CheckBox", "chkAgree", "chkAgree_CheckedChanged", "change")]
+    [TestCase("LinkLabel", "lnkHelp", "lnkHelp_LinkClicked", "click")]
+    public void OnTheWeb_TheHandlerIsNamedAfterTheWinFormsEvent_AndTheBindListensToTheDomEvent(
+        string kind, string id, string handler, string domEvent)
+    {
+        var form = Form(FormTarget.Web, kind, id);
+        var plan = FormHandlers.PlanDefault(form, Only(form), Scaffold(FormTarget.Web));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(plan.Handler, Is.EqualTo(handler));
+            Assert.That(plan.EventName, Is.EqualTo(domEvent), "the bind the IDE writes must name the DOM event it listens to");
+            Assert.That(plan.CodeText, Does.Contain($"Private Sub {handler}(e As DomEvent)"));
+        });
+    }
+
+    /// <summary>The same rule, for every kind on every target it supports — no row may name its handler otherwise.</summary>
+    [Test]
+    public void EveryKind_OnEveryTarget_NamesItsHandlerAfterTheWinFormsEvent()
+    {
+        foreach (var def in FormControlCatalog.All)
+        {
+            foreach (var target in new[] { FormTarget.WinForms, FormTarget.Web }.Where(def.SupportsTarget))
+            {
+                var form = Form(target, def.Kind, "ctl");
+                var plan = FormHandlers.PlanDefault(form, Only(form), Scaffold(target));
+                var opened = FormHandlers.DefaultEventDef(def, target)!;
+
+                Assert.That(plan.Handler, Is.EqualTo("ctl_" + opened.Name), $"{def.Kind} on {target}");
+            }
+        }
+    }
+
+    /// <summary>
+    /// ⛔ Never rename a user's handler. A web TextBox wired by the OLD rule (<c>txtName_Input</c>) keeps it: the
+    /// double-click opens the Sub that is actually wired and writes nothing.
+    /// </summary>
+    [Test]
+    public void AHandlerNamedByTheOldWebRule_IsKept_AndNavigatedTo()
+    {
+        var form = Form(FormTarget.Web, "TextBox", "txtName");
+        var control = Only(form);
+        control.Binds.Add(new FormBind { Event = "input", Handler = "txtName_Input" });
+        var code = Scaffold(FormTarget.Web).Replace("End Class",
+            "    Private Sub txtName_Input(e As DomEvent)\n    End Sub\nEnd Class");
+
+        var plan = FormHandlers.PlanDefault(form, control, code);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(plan.Outcome, Is.EqualTo(HandlerOutcome.Navigated));
+            Assert.That(plan.Handler, Is.EqualTo("txtName_Input"));
+            Assert.That(plan.CodeText, Is.EqualTo(code), "an existing wired handler is never renamed or duplicated");
+        });
+    }
+
     // ==================================================================
     // Creating the stub
     // ==================================================================
