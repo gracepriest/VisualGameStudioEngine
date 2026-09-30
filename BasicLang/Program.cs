@@ -1709,10 +1709,11 @@ namespace BasicLang.Compiler.Driver
         /// <summary>
         /// True for every spelling of the JavaScript target. One predicate rather than a
         /// repeated <c>== "javascript" || == "js"</c> — the repo already carries three
-        /// independent backend→extension maps, and this is how that starts.
+        /// independent backend→extension maps, and this is how that starts. It IS
+        /// <see cref="BasicLang.Compiler.BuildSymbols.IsWebBackend"/> — the rule that defines WEB — never a copy.
         /// </summary>
         internal static bool IsJavaScriptTarget(string backend) =>
-            backend?.ToLowerInvariant() is "javascript" or "js";
+            BasicLang.Compiler.BuildSymbols.IsWebBackend(backend);
 
         /// <summary>
         /// The Source Map v3 document for a completed JavaScript generation, or null when the

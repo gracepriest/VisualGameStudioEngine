@@ -120,6 +120,24 @@ public class BuildSymbolRouteTests
             Is.EqualTo(new[] { "DESKTOP", "DEBUG" }));
     }
 
+    /// <summary>The debugger's PROJECT branch (a .blproj beside the program) passes the project's Debug
+    /// DefineConstants, as the CLI and IDE routes do. Drives the real launch compile, then runs the IR as C#.</summary>
+    [Test]
+    public void TheDebuggerRoute_ProjectBranch_PassesTheDebugConfigurationsDefineConstants()
+    {
+        var main = WriteMain(FeatureProgram);
+        File.WriteAllText(Path.Combine(_dir, "App.blproj"),
+            "<Project>\n  <PropertyGroup>\n    <ProjectName>App</ProjectName>\n  </PropertyGroup>\n" +
+            "  <PropertyGroup Condition=\"'$(Configuration)' == 'Debug'\">\n" +
+            "    <DefineConstants>DEBUG;FEATURE</DefineConstants>\n  </PropertyGroup>\n" +
+            "  <ItemGroup>\n    <Compile Include=\"Main.bas\" />\n  </ItemGroup>\n</Project>\n");
+
+        var r = BasicLang.Debugger.DebugSession.CompileForDebugging(main);
+        Assert.That(r.HasErrors, Is.False, Errors(r));
+        var cs = new CSharpCodeGenerator().Generate(r.CombinedIR!);
+        Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharpText(cs)), Is.EqualTo("feature on"));
+    }
+
     /// <summary>The native route (CppProjectBuilder) passes its configuration and that configuration's
     /// DefineConstants. The options are read directly: the native BUILD always uses MSVC and is covered (and
     /// skipped without it — Native/NativeBuildSkip) by the CppProjectBuilder fixtures.</summary>

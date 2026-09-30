@@ -44,8 +44,50 @@ namespace BasicLang.Debugger
         /// The debugger route's compiler options — ONE construction for both of its compile sites, so a test
         /// can read what they define: a Debug build (spec §4.1; the symbols come from <see cref="BuildSymbols"/>
         /// in the <see cref="BasicCompiler"/> constructor). The interpreter runs the IR, so it is a desktop build.
+        /// With a project, its Debug configuration's &lt;DefineConstants&gt; join too, as on the CLI and IDE routes.
         /// </summary>
-        internal static CompilerOptions CompilerOptionsForDebugging() => new CompilerOptions { Configuration = "Debug" };
+        internal static CompilerOptions CompilerOptionsForDebugging(
+            BasicLang.Compiler.ProjectSystem.ProjectFile? project = null)
+        {
+            const string configuration = "Debug";
+            var options = new CompilerOptions { Configuration = configuration };
+            if (project != null && project.Configurations.TryGetValue(configuration, out var config))
+            {
+                options.DefineConstants.AddRange(config.DefineConstants);
+            }
+            return options;
+        }
+
+        /// <summary>
+        /// The launch request's compile: the program's directory holds a <c>.blproj</c> → compile it with every
+        /// project source (and the project's Debug DefineConstants); otherwise the single file. Split out of
+        /// <c>HandleLaunch</c> so a test drives the real route without a DAP transport.
+        /// </summary>
+        internal static CompilationResult CompileForDebugging(string currentFile)
+        {
+            // Check if there's a .blproj file in the working directory
+            var projectDir = Path.GetDirectoryName(currentFile) ?? ".";
+            var blprojFiles = Directory.GetFiles(projectDir, "*.blproj", SearchOption.TopDirectoryOnly);
+
+            if (blprojFiles.Length > 0)
+            {
+                // Multi-file project: compile via project file
+                var project = BasicLang.Compiler.ProjectSystem.ProjectFile.Load(blprojFiles[0]);
+                var sourceFiles = project.GetSourceFiles().ToList();
+
+                // Find the entry point file and compile with all project files
+                var compiler = new BasicCompiler(CompilerOptionsForDebugging(project));
+                var additionalFiles = sourceFiles.Where(f =>
+                    !string.Equals(f, currentFile, StringComparison.OrdinalIgnoreCase)).ToList();
+
+                return additionalFiles.Count > 0
+                    ? compiler.CompileProject(currentFile, additionalFiles)
+                    : compiler.CompileFile(currentFile);
+            }
+
+            // Single file or no project: use compiler which handles Import directives
+            return new BasicCompiler(CompilerOptionsForDebugging()).CompileFile(currentFile);
+        }
 
         public async Task RunAsync()
         {
@@ -175,59 +217,20 @@ namespace BasicLang.Debugger
             {
                 try
                 {
-                    // Check if there's a .blproj file in the working directory
-                    var projectDir = Path.GetDirectoryName(_currentFile) ?? ".";
-                    var blprojFiles = Directory.GetFiles(projectDir, "*.blproj", SearchOption.TopDirectoryOnly);
+                    var compilationResult = CompileForDebugging(_currentFile);
 
-                    IRModule module;
-
-                    if (blprojFiles.Length > 0)
+                    if (!compilationResult.Success || compilationResult.CombinedIR == null)
                     {
-                        // Multi-file project: compile via project file
-                        var project = BasicLang.Compiler.ProjectSystem.ProjectFile.Load(blprojFiles[0]);
-                        var sourceFiles = project.GetSourceFiles().ToList();
-
-                        // Find the entry point file and compile with all project files
-                        var compiler = new BasicCompiler(CompilerOptionsForDebugging());
-                        var additionalFiles = sourceFiles.Where(f =>
-                            !string.Equals(f, _currentFile, StringComparison.OrdinalIgnoreCase)).ToList();
-
-                        var compilationResult = additionalFiles.Count > 0
-                            ? compiler.CompileProject(_currentFile, additionalFiles)
-                            : compiler.CompileFile(_currentFile);
-
-                        if (!compilationResult.Success || compilationResult.CombinedIR == null)
+                        var errors = string.Join("\n", compilationResult.AllErrors.Select(e => e.Message));
+                        await SendEventAsync("output", new Dictionary<string, object>
                         {
-                            var errors = string.Join("\n", compilationResult.AllErrors.Select(e => e.Message));
-                            await SendEventAsync("output", new Dictionary<string, object>
-                            {
-                                ["category"] = "stderr",
-                                ["output"] = $"Compilation errors:\n{errors}\n"
-                            });
-                            return CreateResponse(request, true);
-                        }
-
-                        module = compilationResult.CombinedIR;
+                            ["category"] = "stderr",
+                            ["output"] = $"Compilation errors:\n{errors}\n"
+                        });
+                        return CreateResponse(request, true);
                     }
-                    else
-                    {
-                        // Single file or no project: use compiler which handles Import directives
-                        var compiler = new BasicCompiler(CompilerOptionsForDebugging());
-                        var compilationResult = compiler.CompileFile(_currentFile);
 
-                        if (!compilationResult.Success || compilationResult.CombinedIR == null)
-                        {
-                            var errors = string.Join("\n", compilationResult.AllErrors.Select(e => e.Message));
-                            await SendEventAsync("output", new Dictionary<string, object>
-                            {
-                                ["category"] = "stderr",
-                                ["output"] = $"Compilation errors:\n{errors}\n"
-                            });
-                            return CreateResponse(request, true);
-                        }
-
-                        module = compilationResult.CombinedIR;
-                    }
+                    IRModule module = compilationResult.CombinedIR;
 
                     // Diagnostic: report what was compiled
                     var funcNames = string.Join(", ", module.Functions.Select(f => f.Name));

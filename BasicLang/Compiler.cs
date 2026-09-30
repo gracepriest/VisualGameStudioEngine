@@ -180,6 +180,10 @@ namespace BasicLang.Compiler
         private readonly CompilerOptions _options;
         private readonly Preprocessor _preprocessor;
 
+        /// <summary>BuildSymbols' findings about the options' DefineConstants (an unrecognised NAME=value);
+        /// every result carries them as warnings (<see cref="FinalizeResult"/>).</summary>
+        private readonly List<string> _buildSymbolWarnings = new List<string>();
+
         public ModuleResolver Resolver => _resolver;
         public ModuleRegistry Registry => _registry;
 
@@ -193,7 +197,8 @@ namespace BasicLang.Compiler
 
             // ⛔ The ONE place a build's symbols are defined (BuildSymbols). Every route — CLI file, CLI project,
             // IDE, native, debugger — constructs a BasicCompiler from options, so none can forget them.
-            foreach (var symbol in BuildSymbols.For(_options.TargetBackend, _options.Configuration, _options.DefineConstants))
+            foreach (var symbol in BuildSymbols.For(
+                         _options.TargetBackend, _options.Configuration, _options.DefineConstants, _buildSymbolWarnings))
             {
                 _preprocessor.Define(symbol);
             }
@@ -551,8 +556,8 @@ namespace BasicLang.Compiler
         public static string DomDeclarationsPath =>
             Path.Combine(AppContext.BaseDirectory, "lib", "js", "dom-core.bli");
 
-        private bool IsJavaScriptTarget =>
-            _options?.TargetBackend?.ToLowerInvariant() is "javascript" or "js";
+        // One rule for "is this a web build" — the same one that defines WEB.
+        private bool IsJavaScriptTarget => BuildSymbols.IsWebBackend(_options?.TargetBackend);
 
         /// <summary>
         /// The source set plus the shipped DOM declarations when the target is JavaScript and
@@ -1167,6 +1172,14 @@ namespace BasicLang.Compiler
         private CompilationResult FinalizeResult(CompilationResult result, DateTime startTime)
         {
             result.Duration = DateTime.UtcNow - startTime;
+
+            // The build's symbol warnings (BuildSymbols) — on the warning channel the CLI prints and the IDE
+            // lists. Once per result: a JavaScript CompileFile finalizes through CompileProjectFiles.
+            foreach (var warning in _buildSymbolWarnings)
+            {
+                if (!result.AllErrors.Any(e => e.Severity == ErrorSeverity.Warning && e.Message == warning))
+                    result.AllErrors.Add(new SemanticError(warning, 0, 0, ErrorSeverity.Warning));
+            }
 
             // Ensure every located error carries its position in the message text.
             // Project build mode (BasicLang.exe build) prints only error.Message,
