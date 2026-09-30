@@ -285,7 +285,10 @@ public static class FormAssetEmitter
         }
 
         sb.Append($"{indent}<{tag} id=\"{Attr(control.Id)}\"");
-        sb.Append($" class=\"vgs-{Attr(control.Kind)}\"");
+
+        // D2's web-only CssClass JOINS the element's own class (a second class= attribute is invalid HTML) — only a value
+        // the row accepts (class-name tokens): anything else is Degraded and the element keeps its own class alone.
+        sb.Append($" class=\"vgs-{Attr(control.Kind)}{Attr(ExtraClasses(control))}\"");
 
         // Chrome is the one part of a form whose meaning the DOM cannot infer from its tag — a
         // <menu> is not a toolbar and an <li> is not a separator to a screen reader. Stated on the
@@ -1004,11 +1007,25 @@ public static class FormAssetEmitter
     private static string Tracks(string commaSeparated) =>
         string.Join(" ", commaSeparated.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
 
-    /// <summary>True/false for a boolean-ish property, or null when it is unset or unparseable.</summary>
+    /// <summary>
+    /// True/false for a boolean-ish property, or null when it is unset, unparseable — or not a WEB row of this control.
+    ///
+    /// <para>⛔ Through the catalog row (slice 3, found by the D2 sweep): a flag read by NAME alone put <c>disabled</c> on a
+    /// MenuStrip's &lt;nav&gt; for its WinForms-only Enabled, and <c>checked</c> on a menu item's &lt;li&gt; for its
+    /// WinForms-only Checked — rows D2 says never reach a page.</para>
+    /// </summary>
     private static bool? Flag(FormControl control, string name) =>
+        control.Definition?.Property(name) is { } row && row.AppliesTo(FormTarget.Web) &&
         control.Properties.TryGetValue(name, out var value) && bool.TryParse(value, out var parsed)
             ? parsed
             : null;
+
+    /// <summary>The web-only CssClass tokens, space-led and single-spaced, or "" — asked of the catalog row.</summary>
+    private static string ExtraClasses(FormControl control) =>
+        control.Definition?.Property("CssClass") is { } row && row.AppliesTo(FormTarget.Web) &&
+        control.Properties.TryGetValue(row.Name, out var value) && row.Accepts(value, FormTarget.Web)
+            ? " " + string.Join(" ", value.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+            : "";
 
     private static string Text(string value) => value
         .Replace("&", "&amp;")

@@ -196,6 +196,8 @@ public class FormCssTests
                 CssConverter: converter), "4"),
             FormCssConverter.Cursor => (new FormPropertyDef("X", FormPropertyType.Cursor, CssProperty: "cursor",
                 CssConverter: converter), "Hand"),
+            FormCssConverter.AutoScrollToOverflow => (new FormPropertyDef("X", FormPropertyType.Bool, "false",
+                CssProperty: "overflow", CssConverter: converter), "true"),
             _ => throw new ArgumentOutOfRangeException(nameof(converter), converter, "add a sample for the new converter")
         };
 

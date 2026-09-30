@@ -143,7 +143,9 @@ public class FormPropertyGridTests
         // already set, and no way to add one that is not.
         var grid = GridOver(WebForm, "chk");
 
-        var expected = FormControlCatalog.Find("CheckBox")!.Properties.Select(p => p.Name).ToList();
+        // ⚠ Slice 3: the rows that EXIST on this (web) document — CheckState, CheckAlign… are WinForms-only (D2).
+        var expected = FormControlCatalog.Find("CheckBox")!.Properties
+            .Where(p => p.AppliesTo(FormTarget.Web)).Select(p => p.Name).ToList();
 
         // ⚠ Compared over the CATALOG rows only. The grid now also shows the intrinsic rows VS puts
         // on every control — Name, Col/Row or X/Y/Width/Height, TabIndex — which are fields on the

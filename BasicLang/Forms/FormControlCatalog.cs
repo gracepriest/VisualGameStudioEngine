@@ -44,7 +44,13 @@ public enum FormPropertyType
     /// constructed. <see cref="FormPropertyDef.ReferenceKinds"/> names the kinds it may point at; the region writer,
     /// which has the document, warns BL8034 for a reference that names none of them.
     /// </summary>
-    Reference
+    Reference,
+
+    /// <summary>
+    /// Space-separated CSS class names (D2's web-only <c>CssClass</c>): each token a letter, <c>_</c> or <c>-</c> then
+    /// letters, digits, <c>_</c> and <c>-</c>. Anything else is Degraded — it lands inside the element's class attribute.
+    /// </summary>
+    CssClasses
 }
 
 /// <summary>
@@ -90,7 +96,10 @@ public enum FormCssConverter
     Padding,
 
     /// <summary>A Cursors member → its CSS <c>cursor</c> keyword (<see cref="FormCursors.CssFor"/>).</summary>
-    Cursor
+    Cursor,
+
+    /// <summary><c>AutoScroll=true</c> → <c>overflow: auto</c>; <c>false</c> → no declaration.</summary>
+    AutoScrollToOverflow
 }
 
 /// <summary>What the property grid does with a value an editor pushed — see <see cref="FormPropertyDef.Judge"/>.</summary>
@@ -697,8 +706,25 @@ public sealed record FormPropertyDef(
             FormPropertyType.Cursor => FormCursors.TryCanonical(value, out _),
             FormPropertyType.Fraction => TryParseFraction(value, out _),
             FormPropertyType.Reference => FormDocument.IsLegalControlId(value),
+            FormPropertyType.CssClasses => IsCssClassList(value),
             _ => false
         };
+    }
+
+    /// <summary>
+    /// One or more CSS class names separated by spaces: each starts with a letter, <c>_</c> or <c>-</c> (then not a digit)
+    /// and continues with letters, digits, <c>_</c>, <c>-</c>. ⛔ ASCII only — the value lands inside the element's
+    /// <c>class</c> attribute, and a quote or an angle bracket there would be the page's problem, not the user's.
+    /// </summary>
+    private static bool IsCssClassList(string value)
+    {
+        var tokens = value.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return tokens.Length > 0 && tokens.All(t =>
+        {
+            var body = t.StartsWith('-') ? t[1..] : t;
+            return body.Length > 0 && (char.IsAsciiLetter(body[0]) || body[0] == '_') &&
+                   body.All(c => char.IsAsciiLetterOrDigit(c) || c is '_' or '-');
+        });
     }
 
     /// <summary>
@@ -1467,6 +1493,60 @@ public static class FormControlCatalog
         Category: FormPropertyCategory.Layout, Description: "Specifies the interior spacing of a control.",
         CssProperty: "padding", CssConverter: FormCssConverter.Padding, WebDefault: "");
 
+    // ==================================================================
+    // D2's web-only extras (spec §1): on EVERY web element kind, added by rule (WithWebExtras) to each row of All that
+    // has an HtmlTag — never to a tray component (no element) or a WinForms-only kind.
+    // ==================================================================
+    private static readonly FormPropertyDef CssClassRow = new("CssClass", FormPropertyType.CssClasses,
+        Targets: new[] { FormTarget.Web }, Category: FormPropertyCategory.Appearance,
+        Description: "CSS class names added to the element on the page, separated by spaces.");
+
+    // ⚠ The element's style ATTRIBUTE (raw CSS the user wrote), escaped by the emitter as every attribute is — an inline
+    // style is exactly "raw CSS" and cannot leave its attribute. It outranks the stylesheet, as inline styles do.
+    private static readonly FormPropertyDef StyleRow = new("Style", FormPropertyType.String, HtmlAttribute: "style",
+        Targets: new[] { FormTarget.Web }, Category: FormPropertyCategory.Appearance,
+        Description: "Extra CSS declarations for the element on the page (its style attribute).");
+
+    // ==================================================================
+    // Slice 3 Task 5 — shared D1 rows used by more than one kind. WinForms' own metadata (the snapshot); every one is
+    // WinForms-only unless it has a clean page meaning (D2) — the D2 sweep (FormWebVocabularyTests) keeps it that way.
+    // ⛔ Methods, not fields: immune to the textual-order initializer trap.
+    // ==================================================================
+    private static FormPropertyDef LabelAutoSize() => new("AutoSize", FormPropertyType.Bool, "false",
+        Targets: new[] { FormTarget.WinForms }, Category: FormPropertyCategory.Layout,
+        Description: "Enables automatic resizing based on font size. Note that this is only valid for label controls that do not wrap text.");
+
+    private static FormPropertyDef CheckAlign() => new("CheckAlign", FormPropertyType.Enum, "MiddleLeft", ContentAlignments,
+        WinFormsEnumType: "ContentAlignment", Targets: new[] { FormTarget.WinForms },
+        Category: FormPropertyCategory.Appearance, Description: "Determines the location of the check box inside the control.");
+
+    private static FormPropertyDef ListSorted() => new("Sorted", FormPropertyType.Bool, "false",
+        Targets: new[] { FormTarget.WinForms }, Category: FormPropertyCategory.Behavior,
+        Description: "Controls whether the list is sorted.");
+
+    // ⚠ TextBox/NumericUpDown's own TextAlign — WinForms' HorizontalAlignment (Left/Right/Center), NOT ContentAlignment.
+    // The page's text-align through the same horizontal converter (it reads the member's Left/Center/Right ending).
+    private static FormPropertyDef HorizontalTextAlign(string description) => new("TextAlign", FormPropertyType.Enum, "Left",
+        new[] { "Left", "Right", "Center" }, WinFormsEnumType: "HorizontalAlignment",
+        Category: FormPropertyCategory.Appearance, Description: description,
+        CssProperty: "text-align", CssConverter: FormCssConverter.ContentAlignmentHorizontal);
+
+    /// <summary>
+    /// ⚠ An extra is skipped on a kind that already has a row of that NAME: a row is found by name, never by target
+    /// (<see cref="FormControlDef.Property"/>), so a second "Style" beside ProgressBar's WinForms <c>ProgressBarStyle</c>
+    /// row would make the reader judge the page's raw CSS as that enum. ProgressBar therefore has no raw Style on the web
+    /// (<c>FormWebVocabularyTests</c> pins the exception and that no kind carries two rows of one name).
+    /// </summary>
+    private static FormControlDef WithWebExtras(FormControlDef definition) =>
+        definition.HtmlTag == null
+            ? definition
+            : definition with
+            {
+                Properties = definition.Properties
+                    .Concat(new[] { CssClassRow, StyleRow }.Where(extra => definition.Property(extra.Name) == null))
+                    .ToList()
+            };
+
     private static IReadOnlyList<FormPropertyDef> Common(params FormPropertyDef[] own) =>
         CommonColoured(ForeColor, BackColor, own);
 
@@ -1526,7 +1606,11 @@ public static class FormControlCatalog
     /// </summary>
     public static readonly IReadOnlyList<FormControlDef> All = new List<FormControlDef>
     {
-        new("Label",       "Label",       "label",    null,       false, Common(Text, LabelTextAlign, PaddingRow),
+        new("Label",       "Label",       "label",    null,       false, Common(Text, LabelTextAlign, PaddingRow,
+            LabelAutoSize(),
+            new FormPropertyDef("BorderStyle", FormPropertyType.Enum, "None", new[] { "None", "FixedSingle", "Fixed3D" },
+                WinFormsEnumType: "BorderStyle", Targets: new[] { FormTarget.WinForms },
+                Category: FormPropertyCategory.Appearance, Description: "Determines if the label has a visible border.")),
             DefaultWidth: 100, DefaultHeight: 23, Schematic: FormSchematic.Text,
             Events: Ev("Click", "click", category: FormEventCategory.Action, description: ClickedDescription)),
         new("TextBox",     "TextBox",     "input",    "text",     false, ControlRows(WindowTextForeColor, WindowBackColor,
@@ -1547,17 +1631,55 @@ public static class FormControlCatalog
             new FormPropertyDef("PasswordChar", FormPropertyType.String,
                 WinFormsFactory: "Convert.ToChar",
                 Category: FormPropertyCategory.Behavior,
-                Description: "Indicates the character to display for password input for single-line edit controls.")),
+                Description: "Indicates the character to display for password input for single-line edit controls."),
+            new FormPropertyDef("UseSystemPasswordChar", FormPropertyType.Bool, "false", Targets: new[] { FormTarget.WinForms },
+                Category: FormPropertyCategory.Behavior,
+                Description: "Indicates if the text in the edit control should appear as the default password character."),
+            new FormPropertyDef("ScrollBars", FormPropertyType.Enum, "None", new[] { "None", "Horizontal", "Vertical", "Both" },
+                WinFormsEnumType: "ScrollBars", Targets: new[] { FormTarget.WinForms },
+                Category: FormPropertyCategory.Appearance,
+                Description: "Indicates, for multiline edit controls, which scroll bars will be shown for this control."),
+            new FormPropertyDef("WordWrap", FormPropertyType.Bool, "true", Targets: new[] { FormTarget.WinForms },
+                Category: FormPropertyCategory.Behavior,
+                Description: "Indicates if lines are automatically word-wrapped for multiline edit controls."),
+            // ⛔ Both targets (D2): the <input>'s own placeholder attribute.
+            new FormPropertyDef("PlaceholderText", FormPropertyType.String, HtmlAttribute: "placeholder",
+                Category: FormPropertyCategory.Misc,
+                Description: "Specifies the PlaceholderText of the TextBox control. The PlaceholderText is displayed in the control when the Text property is null or empty and can be used to guide the user what input is expected by the control."),
+            HorizontalTextAlign("Indicates how the text should be aligned for edit controls.")),
             DefaultWidth: 100, DefaultHeight: 23,
             // ⚠ The DOM has no TextChanged. `input` fires per keystroke, which is what TextChanged
             // means; `change` fires on blur and would be a different gesture wearing the same name.
             Events: Ev("TextChanged", "input", category: FormEventCategory.PropertyChanged,
                 description: "Event raised when the value of the Text property is changed on Control."),
             StretchesWhenStacked: true),
-        new("Button",      "Button",      "button",   null,       false, Common(Text, ButtonTextAlign, PaddingRow),
+        new("Button",      "Button",      "button",   null,       false, Common(Text, ButtonTextAlign, PaddingRow,
+            new FormPropertyDef("DialogResult", FormPropertyType.Enum, "None",
+                new[] { "None", "OK", "Cancel", "Abort", "Retry", "Ignore", "Yes", "No", "TryAgain", "Continue" },
+                WinFormsEnumType: "DialogResult", Targets: new[] { FormTarget.WinForms },
+                Category: FormPropertyCategory.Behavior,
+                Description: "The dialog-box result produced in a modal form by clicking the button."),
+            new FormPropertyDef("FlatStyle", FormPropertyType.Enum, "Standard", new[] { "Flat", "Popup", "Standard", "System" },
+                WinFormsEnumType: "FlatStyle", Targets: new[] { FormTarget.WinForms },
+                Category: FormPropertyCategory.Appearance,
+                Description: "Determines the appearance of the control when a user moves the mouse over the control and clicks.")),
             DefaultWidth: 75, DefaultHeight: 23, Schematic: FormSchematic.Button,
             Events: Ev("Click", "click", category: FormEventCategory.Action, description: ClickedDescription)),
-        new("CheckBox",    "CheckBox",    "input",    "checkbox", false, Common(Text, Checked, PaddingRow),
+        new("CheckBox",    "CheckBox",    "input",    "checkbox", false, Common(Text, Checked, PaddingRow,
+            // ⚠ WinForms only: an HTML checkbox's indeterminate state exists only as a script property, never markup.
+            new FormPropertyDef("CheckState", FormPropertyType.Enum, "Unchecked", new[] { "Unchecked", "Checked", "Indeterminate" },
+                WinFormsEnumType: "CheckState", Targets: new[] { FormTarget.WinForms },
+                Category: FormPropertyCategory.Appearance, Description: "Indicates the state of the component."),
+            CheckAlign(),
+            new FormPropertyDef("ThreeState", FormPropertyType.Bool, "false", Targets: new[] { FormTarget.WinForms },
+                Category: FormPropertyCategory.Behavior,
+                Description: "Indicates whether the CheckBox will allow three check states rather than two."),
+            new FormPropertyDef("AutoCheck", FormPropertyType.Bool, "true", Targets: new[] { FormTarget.WinForms },
+                Category: FormPropertyCategory.Behavior,
+                Description: "Causes the check box to automatically change state when clicked."),
+            new FormPropertyDef("Appearance", FormPropertyType.Enum, "Normal", new[] { "Normal", "Button" },
+                WinFormsEnumType: "Appearance", Targets: new[] { FormTarget.WinForms },
+                Category: FormPropertyCategory.Appearance, Description: "Controls the appearance of the check box.")),
             DefaultWidth: 104, DefaultHeight: 24, Schematic: FormSchematic.Check,
             Events: Ev("CheckedChanged", "change", category: FormEventCategory.Misc,
                 description: "Occurs whenever the Check property is changed.")),
@@ -1570,7 +1692,15 @@ public static class FormControlCatalog
                 Targets: new[] { FormTarget.Web },
                 Category: FormPropertyCategory.Behavior,
                 Description: "The radio group this button belongs to on the page: buttons sharing a name are mutually exclusive."),
-            PaddingRow),
+            PaddingRow,
+            CheckAlign(),
+            new FormPropertyDef("AutoCheck", FormPropertyType.Bool, "true", Targets: new[] { FormTarget.WinForms },
+                Category: FormPropertyCategory.Behavior,
+                Description: "Causes the radio button to automatically change state when clicked."),
+            new FormPropertyDef("Appearance", FormPropertyType.Enum, "Normal", new[] { "Normal", "Button" },
+                WinFormsEnumType: "Appearance", Targets: new[] { FormTarget.WinForms },
+                Category: FormPropertyCategory.Appearance,
+                Description: "Controls whether the RadioButton appears as normal or as a Windows PushButton.")),
             DefaultWidth: 104, DefaultHeight: 24, Schematic: FormSchematic.Radio,
             Events: Ev("CheckedChanged", "change", category: FormEventCategory.Misc,
                 description: "Occurs whenever the 'checked' property changes value.")),
@@ -1579,7 +1709,18 @@ public static class FormControlCatalog
             // Items is a get-only collection on WinForms — assigning it is CS0200.
             new FormPropertyDef("Items", FormPropertyType.String, IsItemCollection: true,
                 Category: FormPropertyCategory.Data, Description: "The items in the combo box."),
-            SelectedIndex(SelectedIndexForTheWeb)),
+            SelectedIndex(SelectedIndexForTheWeb),
+            // ⚠ WinForms only: a <select> is always a drop-down list — it has no editable text box to style.
+            new FormPropertyDef("DropDownStyle", FormPropertyType.Enum, "DropDown", new[] { "Simple", "DropDown", "DropDownList" },
+                WinFormsEnumType: "ComboBoxStyle", Targets: new[] { FormTarget.WinForms },
+                Category: FormPropertyCategory.Appearance,
+                Description: "Controls the appearance and functionality of the combo box."),
+            new FormPropertyDef("Sorted", FormPropertyType.Bool, "false", Targets: new[] { FormTarget.WinForms },
+                Category: FormPropertyCategory.Behavior,
+                Description: "Specifies whether items in the list portion of the combo box are sorted."),
+            new FormPropertyDef("MaxDropDownItems", FormPropertyType.Int, "8", Targets: new[] { FormTarget.WinForms },
+                Category: FormPropertyCategory.Behavior,
+                Description: "The maximum number of entries to display in the drop-down list.")),
             DefaultWidth: 121, DefaultHeight: 23, Schematic: FormSchematic.Dropdown,
             Events: Ev("SelectedIndexChanged", "change", category: FormEventCategory.Behavior,
                 description: SelectedIndexChangedDescription),
@@ -1594,7 +1735,17 @@ public static class FormControlCatalog
             new FormPropertyDef("MultiSelect", FormPropertyType.Bool, "false",
                 Targets: new[] { FormTarget.Web },
                 Category: FormPropertyCategory.Behavior,
-                Description: "Allows more than one item to be selected at a time on the page.")),
+                Description: "Allows more than one item to be selected at a time on the page."),
+            // ⚠ WinForms' own selection vocabulary; the page keeps its web-only MultiSelect (above) — mapping one onto
+            // the other is still the decision v1 has not made.
+            new FormPropertyDef("SelectionMode", FormPropertyType.Enum, "One", new[] { "None", "One", "MultiSimple", "MultiExtended" },
+                WinFormsEnumType: "SelectionMode", Targets: new[] { FormTarget.WinForms },
+                Category: FormPropertyCategory.Behavior,
+                Description: "Indicates if the list box is to be single-select, multi-select, or not selectable."),
+            ListSorted(),
+            new FormPropertyDef("MultiColumn", FormPropertyType.Bool, "false", Targets: new[] { FormTarget.WinForms },
+                Category: FormPropertyCategory.Behavior,
+                Description: "Indicates if values should be displayed in columns horizontally.")),
             DefaultWidth: 120, DefaultHeight: 95, Schematic: FormSchematic.List,
             Events: Ev("SelectedIndexChanged", "change", category: FormEventCategory.Behavior,
                 description: SelectedIndexChangedDescription),
@@ -1604,7 +1755,12 @@ public static class FormControlCatalog
                 new[] { "None", "FixedSingle", "Fixed3D" },
                 WinFormsEnumType: "BorderStyle",
                 Category: FormPropertyCategory.Appearance,
-                Description: "Indicates whether the panel should have a border.")),
+                Description: "Indicates whether the panel should have a border."),
+            // ⛔ Both targets (D2): on the page the <div> scrolls its overflow, as the WinForms Panel does.
+            new FormPropertyDef("AutoScroll", FormPropertyType.Bool, "false",
+                Category: FormPropertyCategory.Layout,
+                Description: "Indicates whether scroll bars automatically appear when the control contents are larger than its visible area.",
+                CssProperty: "overflow", CssConverter: FormCssConverter.AutoScrollToOverflow)),
             DefaultWidth: 200, DefaultHeight: 100, Schematic: FormSchematic.Container,
             // ⚠ VS opens a Panel on Paint. That handler takes a PaintEventArgs and is for drawing,
             // not for a gesture — Click is the event a double-click in THIS designer can honestly
@@ -1640,7 +1796,11 @@ public static class FormControlCatalog
                 new[] { "Normal", "StretchImage", "AutoSize", "CenterImage", "Zoom" },
                 WinFormsEnumType: "PictureBoxSizeMode",
                 Category: FormPropertyCategory.Behavior,
-                Description: "Controls how the PictureBox will handle image placement and control sizing.")),
+                Description: "Controls how the PictureBox will handle image placement and control sizing."),
+            new FormPropertyDef("BorderStyle", FormPropertyType.Enum, "None", new[] { "None", "FixedSingle", "Fixed3D" },
+                WinFormsEnumType: "BorderStyle", Targets: new[] { FormTarget.WinForms },
+                Category: FormPropertyCategory.Appearance,
+                Description: "Controls what type of border the PictureBox should have.")),
             DefaultWidth: 100, DefaultHeight: 50, Schematic: FormSchematic.Image,
             Events: Ev("Click", "click", category: FormEventCategory.Action, description: ClickedDescription),
             StretchesWhenStacked: true),
@@ -1653,11 +1813,19 @@ public static class FormControlCatalog
         // WinFormsCatalogSweepTests has generated it and the real compiler has accepted it.
         // ==================================================================
 
-        // ⚠ A LinkLabel IS a Label that looks clickable, and <a> is the honest tag. LinkColor and
-        // friends are deliberately omitted: they are Color properties whose WinForms defaults are
-        // system colours, and a designer that wrote them out would freeze today's theme into the
-        // form.
-        new("LinkLabel",   "LinkLabel",   "a",        null,       false, Common(Text, LinkLabelTextAlign, PaddingRow),
+        // ⚠ A LinkLabel IS a Label that looks clickable, and <a> is the honest tag. Slice 3 (D1) adds LinkColor — the
+        // designer writes it only when the user sets it (spec §2.7), so no theme is frozen into the form. ⚠ WinForms-only:
+        // on the page the link's colour IS its ForeColor (`color`), and two rows writing one CSS property conflict.
+        // ActiveLinkColor/DisabledLinkColor/VisitedLinkColor stay out (not D1).
+        new("LinkLabel",   "LinkLabel",   "a",        null,       false, Common(Text, LinkLabelTextAlign, PaddingRow,
+            new FormPropertyDef("LinkColor", FormPropertyType.Color, "#FF0000FF", Targets: new[] { FormTarget.WinForms },
+                Category: FormPropertyCategory.Appearance,
+                Description: "Determines the color of the hyperlink in its default state."),
+            new FormPropertyDef("LinkBehavior", FormPropertyType.Enum, "SystemDefault",
+                new[] { "SystemDefault", "AlwaysUnderline", "HoverUnderline", "NeverUnderline" },
+                WinFormsEnumType: "LinkBehavior", Targets: new[] { FormTarget.WinForms },
+                Category: FormPropertyCategory.Behavior, Description: "Determines the underline behavior of the hyperlink."),
+            LabelAutoSize()),
             DefaultWidth: 100, DefaultHeight: 23, Schematic: FormSchematic.Link,
             // ⚠ The typed args (Task 8's parity run): EventArgs compiled by contravariance but hid e.Link.
             Events: Ev("LinkClicked", "click", args: "LinkLabelLinkClickedEventArgs",
@@ -1684,7 +1852,14 @@ public static class FormControlCatalog
             new FormPropertyDef("DecimalPlaces", FormPropertyType.Int, "0",
                 Targets: new[] { FormTarget.WinForms },
                 Category: FormPropertyCategory.Data,
-                Description: "Indicates the number of decimal places to display.")),
+                Description: "Indicates the number of decimal places to display."),
+            new FormPropertyDef("Hexadecimal", FormPropertyType.Bool, "false", Targets: new[] { FormTarget.WinForms },
+                Category: FormPropertyCategory.Appearance,
+                Description: "Indicates whether the numeric up-down should display its value in hexadecimal."),
+            // ⛔ Both targets (D2): the <input>'s readonly (the emitter's flag, through this row).
+            new FormPropertyDef("ReadOnly", FormPropertyType.Bool, "false",
+                Category: FormPropertyCategory.Behavior, Description: "Indicates whether the edit box is read-only."),
+            HorizontalTextAlign("Indicates how the text should be aligned in the edit box.")),
             DefaultWidth: 120, DefaultHeight: 23, Schematic: FormSchematic.Spinner,
             Events: Ev("ValueChanged", "input", category: FormEventCategory.Action,
                 description: "Occurs when the value in the up-down control changes.")),
@@ -1707,7 +1882,10 @@ public static class FormControlCatalog
             new FormPropertyDef("ShowUpDown", FormPropertyType.Bool, "false",
                 Targets: new[] { FormTarget.WinForms },
                 Category: FormPropertyCategory.Appearance,
-                Description: "Indicates whether a spin box rather than a drop-down calendar is displayed for modifying the control value.")),
+                Description: "Indicates whether a spin box rather than a drop-down calendar is displayed for modifying the control value."),
+            new FormPropertyDef("ShowCheckBox", FormPropertyType.Bool, "false", Targets: new[] { FormTarget.WinForms },
+                Category: FormPropertyCategory.Appearance,
+                Description: "Determines whether a check box is displayed in the control. When the box is unchecked, no value is selected.")),
             DefaultWidth: 200, DefaultHeight: 23, Schematic: FormSchematic.DatePicker,
             Events: Ev("ValueChanged", "change", category: FormEventCategory.Action,
                 description: ControlValueChangedDescription)),
@@ -1732,7 +1910,17 @@ public static class FormControlCatalog
                 WinFormsEnumType: "Orientation",
                 Targets: new[] { FormTarget.WinForms },
                 Category: FormPropertyCategory.Appearance,
-                Description: "The orientation of the control.")),
+                Description: "The orientation of the control."),
+            new FormPropertyDef("TickStyle", FormPropertyType.Enum, "BottomRight", new[] { "None", "TopLeft", "BottomRight", "Both" },
+                WinFormsEnumType: "TickStyle", Targets: new[] { FormTarget.WinForms },
+                Category: FormPropertyCategory.Appearance, Description: "Indicates where the ticks appear on the TrackBar."),
+            new FormPropertyDef("LargeChange", FormPropertyType.Int, "5", Targets: new[] { FormTarget.WinForms },
+                Category: FormPropertyCategory.Behavior,
+                Description: "The number of positions the slider moves in response to mouse clicks or the PAGE UP and PAGE DOWN keys."),
+            // ⚠ WinForms only: the page's `step` constrains which VALUES are valid, not how far an arrow key moves.
+            new FormPropertyDef("SmallChange", FormPropertyType.Int, "1", Targets: new[] { FormTarget.WinForms },
+                Category: FormPropertyCategory.Behavior,
+                Description: "The number of positions the slider moves in response to keyboard input (arrow keys).")),
             DefaultWidth: 150, DefaultHeight: 45, Schematic: FormSchematic.Slider,
             Events: Ev("ValueChanged", "input", category: FormEventCategory.Action,
                 description: ControlValueChangedDescription)),
@@ -1773,7 +1961,8 @@ public static class FormControlCatalog
             SelectedIndex(SelectedIndexWinFormsOnly),
             new FormPropertyDef("CheckOnClick", FormPropertyType.Bool, "false",
                 Category: FormPropertyCategory.Behavior,
-                Description: "Indicates if the check box should be toggled with the first click on an item.")),
+                Description: "Indicates if the check box should be toggled with the first click on an item."),
+            ListSorted()),
             DefaultWidth: 160, DefaultHeight: 95, Schematic: FormSchematic.CheckList,
             Events: Ev("SelectedIndexChanged", category: FormEventCategory.Behavior,
                 description: SelectedIndexChangedDescription)),
@@ -1809,7 +1998,10 @@ public static class FormControlCatalog
                 Description: "Removes highlight from the selected node when control does not have focus."),
             new FormPropertyDef("Indent", FormPropertyType.Int, "19",
                 Category: FormPropertyCategory.Behavior,
-                Description: "The indentation width of child nodes in pixels.")),
+                Description: "The indentation width of child nodes in pixels."),
+            new FormPropertyDef("CheckBoxes", FormPropertyType.Bool, "false",
+                Category: FormPropertyCategory.Appearance,
+                Description: "Indicates whether check boxes are displayed beside nodes.")),
             DefaultWidth: 180, DefaultHeight: 140, Schematic: FormSchematic.Tree,
             // ⚠ The typed args (Task 8's parity run): EventArgs compiled by contravariance but hid e.Node.
             Events: Ev("AfterSelect", args: "TreeViewEventArgs", category: FormEventCategory.Behavior,
@@ -1847,7 +2039,11 @@ public static class FormControlCatalog
             new FormPropertyDef("Multiline", FormPropertyType.Bool, "false",
                 Category: FormPropertyCategory.Behavior,
                 Description: "Indicates if more than one row of tabs is allowed."),
-            SelectedIndex(SelectedIndexWinFormsOnly)),
+            SelectedIndex(SelectedIndexWinFormsOnly),
+            new FormPropertyDef("Appearance", FormPropertyType.Enum, "Normal", new[] { "Normal", "Buttons", "FlatButtons" },
+                WinFormsEnumType: "TabAppearance",
+                Category: FormPropertyCategory.Behavior,
+                Description: "Indicates whether the tabs are painted as buttons or regular tabs.")),
             DefaultWidth: 240, DefaultHeight: 160, Schematic: FormSchematic.Tabs,
             Events: Ev("SelectedIndexChanged", category: FormEventCategory.Behavior,
                 description: SelectedIndexChangedDescription)),
@@ -1868,7 +2064,11 @@ public static class FormControlCatalog
                 Description: "Determines the thickness of the splitter."),
             new FormPropertyDef("IsSplitterFixed", FormPropertyType.Bool, "false",
                 Category: FormPropertyCategory.Layout,
-                Description: "Determines if the splitter can move.")),
+                Description: "Determines if the splitter can move."),
+            new FormPropertyDef("FixedPanel", FormPropertyType.Enum, "None", new[] { "None", "Panel1", "Panel2" },
+                WinFormsEnumType: "FixedPanel",
+                Category: FormPropertyCategory.Layout,
+                Description: "Indicates that a particular SplitContainer's Panel should remain fixed in size during resize events.")),
             DefaultWidth: 260, DefaultHeight: 140, Schematic: FormSchematic.Split,
             // ⚠ The typed args (Task 8's parity run).
             Events: Ev("SplitterMoved", args: "SplitterEventArgs", category: FormEventCategory.Behavior,
@@ -2085,7 +2285,10 @@ public static class FormControlCatalog
                 ItemVisible,
                 Checked with { Targets = new[] { FormTarget.WinForms } },
                 ItemCheckOnClick(),
-                ItemToolTipText()
+                ItemToolTipText(),
+                // ⚠ WinForms only (D1): the text drawn beside a menu item for its shortcut; the page's <li> has none.
+                new("ShortcutKeyDisplayString", FormPropertyType.String, Targets: new[] { FormTarget.WinForms },
+                    Category: FormPropertyCategory.Appearance, Description: "The string to be displayed as the shortcut key.")
             },
             Schematic: FormSchematic.MenuItem,
             Events: Ev("Click", "click", category: FormEventCategory.Action, description: ItemClickedDescription),
@@ -2138,7 +2341,7 @@ public static class FormControlCatalog
             Schematic: FormSchematic.StatusLabel,
             Events: Ev("Click", "click", category: FormEventCategory.Action, description: ItemClickedDescription),
             Place: FormPlace.Item),
-    };
+    }.Select(WithWebExtras).ToList();
 
     /// <summary>
     /// The FORM's own definition (spec §2.3) — ⛔⛔ deliberately NOT in <see cref="All"/>.
