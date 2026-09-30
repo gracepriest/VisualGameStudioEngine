@@ -113,10 +113,14 @@ namespace BasicLang.Compiler.LSP
             // so semantic analysis can see cross-file symbols.
             var projectContext = GetProjectContext(uri, content);
 
-            // Check if document exists and content hasn't changed
+            // The symbols this document is preprocessed with (its project's Debug build, or a loose file's).
+            var symbolKey = LspProjectContext.SymbolKey(LspProjectContext.EditorSymbolsFor(projectContext));
+
+            // Check if document exists and content hasn't changed. ⛔ Same text under DIFFERENT symbols (the
+            // project was retargeted) is a different parse — it must fall through to a fresh one.
             if (_documents.TryGetValue(uri, out var existingState))
             {
-                if (existingState.ContentHash == ComputeHash(content))
+                if (existingState.ContentHash == ComputeHash(content) && existingState.PreprocessorKey == symbolKey)
                 {
                     if (projectContext?.Stamp == existingState.ProjectStamp)
                     {
@@ -138,8 +142,9 @@ namespace BasicLang.Compiler.LSP
             state.SetProjectContext(projectContext);
 
             // The parse result depends on the file extension (.mod/.cls get an
-            // implicit container), so the cache key must include it
-            var cacheKey = GetParseCacheKey(uri, state.ContentHash);
+            // implicit container) and on the preprocessor symbols (#If), so the
+            // cache key must include both
+            var cacheKey = GetParseCacheKey(uri, state.ContentHash) + "|" + symbolKey;
 
             // Check parse cache
             if (_parseCache.TryGetValue(cacheKey, out var cachedResult))
@@ -231,7 +236,10 @@ namespace BasicLang.Compiler.LSP
                 {
                     Tokens = state.Tokens,
                     AST = state.AST,
-                    CachedAt = DateTime.UtcNow
+                    CachedAt = DateTime.UtcNow,
+                    PreprocessorKey = state.PreprocessorKey,
+                    InactiveLines = state.InactiveLines,
+                    PreprocessorDiagnostics = state.PreprocessorDiagnostics
                 };
             }
         }
@@ -365,6 +373,9 @@ namespace BasicLang.Compiler.LSP
         public List<Token> Tokens { get; set; }
         public ProgramNode AST { get; set; }
         public DateTime CachedAt { get; set; }
+        public string PreprocessorKey { get; set; }
+        public IReadOnlyList<int> InactiveLines { get; set; }
+        public IReadOnlyList<Diagnostic> PreprocessorDiagnostics { get; set; }
     }
 
     /// <summary>
@@ -415,6 +426,17 @@ namespace BasicLang.Compiler.LSP
         /// Alias for Content property (for CompletionService compatibility)
         /// </summary>
         public string SourceCode => Content;
+
+        /// <summary>The symbol set (<see cref="LspProjectContext.SymbolKey"/>) the last parse was preprocessed with.</summary>
+        public string PreprocessorKey { get; private set; }
+
+        /// <summary>1-based lines in an inactive <c>#If</c> branch — reported to the client as comment tokens, so
+        /// they are dimmed (as Visual Studio does).</summary>
+        public IReadOnlyList<int> InactiveLines { get; private set; } = Array.Empty<int>();
+
+        /// <summary>What the preprocessor refused (a malformed or unbalanced directive) — the build fails on these,
+        /// so the editor reports them beside the analyzer's diagnostics.</summary>
+        public IReadOnlyList<Diagnostic> PreprocessorDiagnostics { get; private set; } = Array.Empty<Diagnostic>();
 
         public DocumentState(DocumentUri uri, string content)
         {
@@ -494,6 +516,9 @@ namespace BasicLang.Compiler.LSP
         {
             Tokens = cached.Tokens;
             AST = cached.AST;
+            PreprocessorKey = cached.PreprocessorKey;
+            InactiveLines = cached.InactiveLines ?? Array.Empty<int>();
+            PreprocessorDiagnostics = cached.PreprocessorDiagnostics ?? Array.Empty<Diagnostic>();
             ParseSuccessful = true;
             FromCache = true;
 
@@ -514,15 +539,32 @@ namespace BasicLang.Compiler.LSP
 
             try
             {
+                // #If: the lexer sees the editor's view — the SAME preprocessor as the build, inactive branches and
+                // directives blanked LINE FOR LINE (spec §4.12). ⛔ Content stays the user's text: completion, hover
+                // and formatting read it; only the lexer sees the blanked copy.
+                var path = FilePath ?? Uri?.Path;
+                var symbols = LspProjectContext.EditorSymbolsFor(ProjectContext);
+                var source = LspProjectContext.Preprocess(symbols, Content, path);
+                PreprocessorKey = LspProjectContext.SymbolKey(symbols);
+                InactiveLines = source.InactiveLines;
+                PreprocessorDiagnostics = source.Errors.Select(e => new Diagnostic
+                {
+                    Message = e.Message,
+                    Severity = DiagnosticSeverity.Error,
+                    Line = e.Line > 0 ? e.Line : 1,
+                    Column = e.Column > 0 ? e.Column : 1
+                }).ToList();
+                Diagnostics.AddRange(PreprocessorDiagnostics);
+
                 // Lexical analysis
-                var lexer = new Lexer(Content);
+                var lexer = new Lexer(source.Text);
                 Tokens = lexer.Tokenize();
 
                 // Parsing — .mod/.cls documents get their implicit Module/Class
                 // wrapper synthesized in the AST (no source text wrapping, so
                 // line numbers stay exact)
                 var parser = new Parser(Tokens);
-                AST = ImplicitContainer.Parse(parser, FilePath ?? Uri?.Path, Content);
+                AST = ImplicitContainer.Parse(parser, path, source.Text);
                 ParseSuccessful = true;
 
                 // Semantic analysis
@@ -561,7 +603,8 @@ namespace BasicLang.Compiler.LSP
         {
             if (AST == null) return;
 
-            var diagnostics = new List<Diagnostic>();
+            // The preprocessor's refusals belong to the parse, and survive every re-analysis of it.
+            var diagnostics = new List<Diagnostic>(PreprocessorDiagnostics);
             var analyzer = new SemanticAnalyzer();
             try
             {

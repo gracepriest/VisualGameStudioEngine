@@ -1177,7 +1177,7 @@ O18, spec §4.12. Scope call S3.
 - Modify: `BasicLang/LSP/DocumentManager.cs` (`DocumentState.Parse` `:507-551`)
 - Create: `VisualGameStudio.Tests/LSP/LspConditionalCompilationTests.cs`
 
-- [ ] **Step 1: Failing tests.**
+- [x] **Step 1: Failing tests.**
 
 ```csharp
 using System;
@@ -1279,8 +1279,8 @@ public class LspConditionalCompilationTests
 }
 ```
   ⚠ Check the `DocumentState`/`Diagnostic` type names and namespaces against `CrossFileAnalysisTests.cs:60-104` (the existing in-process LSP harness) and adjust the usings to match; `Diagnostic.Line` is 1-based there (`DocumentManager.cs:597-598`).
-- [ ] **Step 2: Run — RED:** the web test reports the desktop branch's error (and a parse error on `#If`); `ProcessForEditor` does not exist (compile error — the red for that test); the DOM test may already be red with unknown `Document`/`Element` (record which).
-- [ ] **Step 3: Implement `ProcessForEditor`.** In `Preprocessor`, add a private `bool _editorMode` and:
+- [x] **Step 2: Run — RED:** the web test reports the desktop branch's error (and a parse error on `#If`); `ProcessForEditor` does not exist (compile error — the red for that test); the DOM test may already be red with unknown `Document`/`Element` (record which).
+- [x] **Step 3: Implement `ProcessForEditor`.** In `Preprocessor`, add a private `bool _editorMode` and:
 
 ```csharp
         /// <summary>
@@ -1297,16 +1297,26 @@ public class LspConditionalCompilationTests
         }
 ```
   In `ProcessCore`, every `result.AppendLine($"' {line}")` for a directive, the `[IFDEF SKIP]` line and the `#Include` arm write `result.AppendLine(_editorMode ? "" : …)`; in editor mode the `#Include` arm never calls `ProcessInclude`.
-- [ ] **Step 4: The LSP uses it.**
+- [x] **Step 4: The LSP uses it.**
   - `LspProjectContext`: add `public string TargetBackend { get; }` (constructor parameter with default `null`, stored), and populate it where the `.blproj` is loaded (`GetBlprojSourceFiles`, `ProjectFile.Load(blprojPath)` at `:382` — keep the `Backend` beside the source list in `BlprojSnapshot`). An implicit (no `.blproj`) project: null → `DESKTOP`.
   - A helper in `LspProjectContext`: `public string Preprocess(string content, string path)` → `var pre = new Preprocessor(); foreach (var s in BuildSymbols.For(TargetBackend, "Debug", null)) pre.Define(s); return pre.ProcessForEditor(content, path);`. The editor is a Debug view **[impl]**.
   - `DocumentManager.DocumentState.Parse` (`:518`): `var text = LspProjectContext.PreprocessFor(ProjectContext, Content, FilePath);` — a static helper that uses the context's backend, or, for a LOOSE file (null `ProjectContext`), `BuildSymbols.For(null, "Debug", null)` (DESKTOP, DEBUG) — then `new Lexer(text)` and `ImplicitContainer.Parse(parser, FilePath ?? Uri?.Path, text)`. ⚠ `Content` stays the user's text (completion, hover and formatting read it); only the lexer sees the blanked copy.
   - **Dimming — decided [impl]: inactive branches are dimmed, as Visual Studio does.** `ProcessForEditor` also records the inactive line ranges (`Preprocessor.InactiveLines`, set by the editor mode); `DocumentState` keeps them; `SemanticTokensHandler` reports each inactive line as one `comment` token (every theme dims comments — no client extension needed). Add to Step 1 the test `AnInactiveBranch_IsReportedAsCommentTokens` (drive `SemanticTokensHandler` the way its existing tests do — grep `SemanticTokensHandler` in `VisualGameStudio.Tests/LSP`) and `ALooseFile_IsPreprocessedAsADesktopDebugBuild` (a `DocumentManager.UpdateDocument` on a file with no `.blproj` above it: the `#If DESKTOP` branch is analyzed, the `#Else` is not). The IDE's own editor (VisualGameStudio.Editor) is out of scope for dimming here — record it as a follow-up.
   - `LspProjectContext.ParseCached` (`:445`): the same `Preprocess` before `new Lexer`.
   - Web projects: when `BuildSymbols.IsWebBackend(TargetBackend)` and `File.Exists(BasicCompiler.DomDeclarationsPath)`, add that path to the project's source list (the sibling symbol table then carries `Document`/`Element`), exactly as `WithJavaScriptDeclarations` does for the build (`Compiler.cs:550-559`). The portable library joins here in Task 34.
-- [ ] **Step 5: Run — GREEN**, plus the LSP suite by name: `CrossFileAnalysisTests`, `LspMixedProjectTests`, `ModClsDocumentTests`, `CompletionServiceTests`, `BaseConstructorCallDiagnosticsTests`.
-- [ ] **Step 6: Mutations:** (1) editor mode writes the `' …` comment instead of `""` for a skipped line → the blanking test red (a comment is not blank) — then check the diagnostic line test also still guards line numbers; (2) `ProcessForEditor` splices includes → add a `[Test]` with an include and assert it is not spliced if no test catches it; (3) `Preprocess` ignores `TargetBackend` → the web test red.
-- [ ] **Step 7: Commit.**
+- [x] **Step 5: Run — GREEN**, plus the LSP suite by name: `CrossFileAnalysisTests`, `LspMixedProjectTests`, `ModClsDocumentTests`, `CompletionServiceTests`, `BaseConstructorCallDiagnosticsTests`.
+- [x] **Step 6: Mutations:** (1) editor mode writes the `' …` comment instead of `""` for a skipped line → the blanking test red (a comment is not blank) — then check the diagnostic line test also still guards line numbers; (2) `ProcessForEditor` splices includes → add a `[Test]` with an include and assert it is not spliced if no test catches it; (3) `Preprocess` ignores `TargetBackend` → the web test red.
+- [x] **Step 7: Commit.**
+
+### Task 6 RECORD (base `d1234b62`)
+
+- **Steps 1–7 done.** `LspConditionalCompilationTests`: 15 cases (the plan's 4 + the two Step-4 tests + 9 more below). RED: compile error (`ProcessForEditor`/`InactiveLines` missing); with the preprocessor half only, 10/13 red — the web project reported the desktop branch's `Error(6,5)`, the DOM test `Error(4,1): Cannot assign value of type 'Object' to variable of type 'Element'` (so the DOM test WAS red before), no comment tokens, no preprocessor diagnostics. GREEN 15/15, 0 skipped.
+- **Mutations, all killed:** (1) skipped line written as `' [IFDEF SKIP]` in editor mode → blanking + comment-token tests; (1b) skipped line DROPPED in editor mode → both line tests, the published-range test and both loose-file tests (the line guard holds); (2) editor splices `#Include` → `TheEditorMode_NeverSplicesAnInclude` (added — nothing else caught it); (3) symbols ignore the backend → web, comment-token and retarget tests; (4) DOM declarations ungated → `ADesktopProject_DoesNotSeeTheDomDeclarations`; (4b) never added → `AWebProject_KnowsTheDomDeclarations`; (5) no inactive-line tokens → comment-token test; (6) preprocessor diagnostics dropped on analysis → `AMalformedDirective_IsReportedAtItsLine`; (7) the document cache ignores the symbol key → `RetargetingTheProject_ReblanksAnUnchangedDocument`; (8) siblings lexed raw → `ASiblingFile_IsPreprocessedWithTheProjectsSymbols(CSharp)`. (4b–7 ran as one build; exactly their four tests failed.)
+- **Deviations (each minimal):** (a) the editor symbols include the project's **Debug `<DefineConstants>`** (`BuildSymbols.For(backend, "Debug", debugDefines)`), not `null` — exactly what the debugger route compiles (`DebugSession.CompilerOptionsForDebugging`); with `null`, a `#If TRACE` the Debug build compiles would be dimmed. (b) `Preprocess` returns an `EditorSource` (text + inactive lines + errors), not a string. (c) The preprocessor's **errors are reported** as editor diagnostics (the build fails on them, `Compiler.cs:598`). (d) The symbol key is part of the project stamp, the sibling AST cache, the document parse cache and the document short-circuit — without it a retargeted project kept its old parse. (e) Editor output drops the trailing line break `AppendLine` adds, so the line count equals the source's. (f) `InactiveLines` dims a conditional directive only when its block sits inside a dead branch (VS does not dim a live block's directives).
+- **Plan text found false:** "drive `SemanticTokensHandler` the way its existing tests do" — there were none; the test calls the handler's public `Handle(SemanticTokensParams)` and decodes the wire data.
+- **Measured in passing (not fixed, pre-existing):** the LSP types a cross-file module `Function … As Integer` as `Object` at the call site (`Cannot assign value of type 'Object' to … 'Integer'`), whichever branch declares it and with no `#If` at all; `As String` resolves. The sibling test reads the project table instead.
+- **Follow-up (out of scope, recorded):** the IDE's own editor (VisualGameStudio.Editor) dimming of inactive branches is unverified — the server now reports them as `comment` semantic tokens; whether the IDE requests and paints them is not checked here.
+- **Seam for Tasks 28/34:** `LspProjectContextProvider.WebDeclarationFiles()` — the portable library's files join that list; `WithWebDeclarations` gates it on the backend.
 
 ---
 

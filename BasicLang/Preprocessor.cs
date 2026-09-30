@@ -225,6 +225,7 @@ namespace BasicLang.Compiler
             _errors.Clear();
             _conditionalStack.Clear();
             _fileSymbols.Clear();   // a new top-level file: the previous file's #Defines end here
+            _inactiveLines.Clear();
 
             // Track this file to prevent circular includes
             var normalizedPath = Path.GetFullPath(filePath).ToLowerInvariant();
@@ -232,6 +233,48 @@ namespace BasicLang.Compiler
 
             return ProcessCore(source, filePath);
         }
+
+        /// <summary>Set only by <see cref="ProcessForEditor"/>: directive and inactive lines become EMPTY lines and
+        /// <c>#Include</c> is never spliced.</summary>
+        private bool _editorMode;
+        private readonly List<int> _inactiveLines = new List<int>();
+
+        /// <summary>
+        /// The 1-based lines of the last <see cref="ProcessForEditor"/> call that sit in an inactive branch — what
+        /// the editor dims (as Visual Studio does). A conditional directive is listed only when the block it
+        /// belongs to is itself inside an inactive branch; the directives of a live block are not dimmed. Empty
+        /// after <see cref="Process"/>.
+        /// </summary>
+        public IReadOnlyList<int> InactiveLines => _inactiveLines;
+
+        /// <summary>
+        /// The editor's view of <paramref name="source"/> (spec §4.12, O18): the SAME directive walker as
+        /// <see cref="Process"/>, but every directive line and every inactive line becomes an EMPTY line and
+        /// <c>#Include</c> is never spliced — so the result has exactly the source's lines, and every position the
+        /// language server reports is the user's own. <see cref="Errors"/> and <see cref="InactiveLines"/> describe
+        /// the call afterwards.
+        /// </summary>
+        public string ProcessForEditor(string source, string filePath)
+        {
+            _editorMode = true;
+            try
+            {
+                var text = Process(source ?? "", string.IsNullOrEmpty(filePath) ? "untitled.bas" : filePath);
+                // Every source line was written with AppendLine, so the LAST one gained a line break the source
+                // does not have. Drop it: the editor's copy has exactly the source's lines, not one more.
+                return text.EndsWith(Environment.NewLine, StringComparison.Ordinal)
+                    ? text.Substring(0, text.Length - Environment.NewLine.Length)
+                    : text;
+            }
+            finally { _editorMode = false; }
+        }
+
+        /// <summary>What a directive line becomes: commented out for the compiler (never removed, so every later
+        /// line keeps its number), EMPTY for the editor.</summary>
+        private string DirectiveLine(string line) => _editorMode ? "" : $"' {line}";
+
+        /// <summary>What a line of an inactive branch becomes (the compiler comments it; the editor blanks it).</summary>
+        private string SkippedLine(string line) => _editorMode ? "" : $"' [IFDEF SKIP] {line}";
 
         /// <summary>
         /// The line loop and the unclosed-block check. Clears nothing: an <c>#Include</c> calls it with the
@@ -248,11 +291,21 @@ namespace BasicLang.Compiler
                 lineNumber++;
                 var trimmedLine = line.TrimStart();
 
+                // The editor dims what the build skips. Read BEFORE the line is processed: a code line is dead when
+                // its branch is; a conditional directive only when the block it belongs to sits in a dead branch.
+                if (_editorMode && IsInactiveForEditor(trimmedLine))
+                    _inactiveLines.Add(lineNumber);
+
                 // Check for #Include directive. Gated: an #Include in an inactive branch is not spliced
                 // (nor resolved — a missing file there is no error, exactly as any other skipped line).
+                // ⛔ The editor never splices: the included lines would shift every later position.
                 if (trimmedLine.StartsWith("#Include", StringComparison.OrdinalIgnoreCase))
                 {
-                    if (IsConditionalActive())
+                    if (_editorMode)
+                    {
+                        result.AppendLine("");
+                    }
+                    else if (IsConditionalActive())
                     {
                         var includeContent = ProcessInclude(trimmedLine, filePath, lineNumber);
                         if (includeContent != null)
@@ -267,7 +320,7 @@ namespace BasicLang.Compiler
                     }
                     else
                     {
-                        result.AppendLine($"' [IFDEF SKIP] {line}");
+                        result.AppendLine(SkippedLine(line));
                     }
                 }
                 // Check for #Define directive. Gated like #CppInclude: a #Define in an inactive branch defines
@@ -276,7 +329,7 @@ namespace BasicLang.Compiler
                 {
                     if (IsConditionalActive())
                         ProcessDefine(trimmedLine, lineNumber);
-                    result.AppendLine($"' {line}");
+                    result.AppendLine(DirectiveLine(line));
                 }
                 // ⛔ ORDER IS LOAD-BEARING. #IfDef/#IfNDef before #If (\b stops "#If" matching "#IfDef" anyway);
                 // #ElseIf before #Else (\b: "#Else" + "If" has no word boundary, so ElseDirective cannot take it).
@@ -285,32 +338,32 @@ namespace BasicLang.Compiler
                 else if (trimmedLine.StartsWith("#IfDef", StringComparison.OrdinalIgnoreCase))
                 {
                     ProcessIfDef(trimmedLine, lineNumber, false);
-                    result.AppendLine($"' {line}");
+                    result.AppendLine(DirectiveLine(line));
                 }
                 else if (trimmedLine.StartsWith("#IfNDef", StringComparison.OrdinalIgnoreCase))
                 {
                     ProcessIfDef(trimmedLine, lineNumber, true);
-                    result.AppendLine($"' {line}");
+                    result.AppendLine(DirectiveLine(line));
                 }
                 else if (ElseIfDirective.IsMatch(trimmedLine))
                 {
                     ProcessElseIf(trimmedLine, lineNumber);
-                    result.AppendLine($"' {line}");
+                    result.AppendLine(DirectiveLine(line));
                 }
                 else if (ElseDirective.IsMatch(trimmedLine))
                 {
                     ProcessElse(trimmedLine, lineNumber);
-                    result.AppendLine($"' {line}");
+                    result.AppendLine(DirectiveLine(line));
                 }
                 else if (EndIfDirective.IsMatch(trimmedLine))
                 {
                     ProcessEndIf(trimmedLine, lineNumber);
-                    result.AppendLine($"' {line}");
+                    result.AppendLine(DirectiveLine(line));
                 }
                 else if (IfDirective.IsMatch(trimmedLine))
                 {
                     ProcessIf(trimmedLine, lineNumber);
-                    result.AppendLine($"' {line}");
+                    result.AppendLine(DirectiveLine(line));
                 }
                 // Check for #CppInclude directive (C++ std passthrough - emits a real
                 // C++ #include; distinct from #Include which splices BasicLang source).
@@ -331,7 +384,7 @@ namespace BasicLang.Compiler
                         else
                             _errors.Add(new PreprocessorError { Line = lineNumber, Message = $"Invalid #CppInclude syntax: {trimmedLine}" });
                     }
-                    result.AppendLine($"' {line}"); // Comment the directive out of the BasicLang source
+                    result.AppendLine(DirectiveLine(line)); // Comment the directive out of the BasicLang source
                 }
                 // Check for #JsImport directive (JavaScript interop - becomes a real ES
                 // `import` statement; the JS-backend sibling of #CppInclude).
@@ -343,7 +396,7 @@ namespace BasicLang.Compiler
                     // subsequent line number and silently skew the JS source map.
                     if (IsConditionalActive())
                         ParseJsImport(trimmedLine, lineNumber);
-                    result.AppendLine($"' {line}"); // Comment the directive out of the BasicLang source
+                    result.AppendLine(DirectiveLine(line)); // Comment the directive out of the BasicLang source
                 }
                 else
                 {
@@ -355,7 +408,7 @@ namespace BasicLang.Compiler
                     else
                     {
                         // Comment out the line when in inactive block
-                        result.AppendLine($"' [IFDEF SKIP] {line}");
+                        result.AppendLine(SkippedLine(line));
                     }
                 }
             }
@@ -679,6 +732,26 @@ namespace BasicLang.Compiler
             // Active only when the enclosing block was active AND this block's current branch is the taken one.
             var s = _conditionalStack.Peek();
             return s.ParentActive && s.BranchActive;
+        }
+
+        /// <summary>
+        /// Is <paramref name="trimmedLine"/> (not yet processed) part of a dead region, for the editor's dimming?
+        /// A conditional directive belongs to its BLOCK: <c>#If</c>/<c>#IfDef</c>/<c>#IfNDef</c> open one inside the
+        /// current state, and <c>#ElseIf</c>/<c>#Else</c>/<c>#End If</c> continue the innermost one, whose own
+        /// enclosing state decides. Every other line is dead exactly when the current branch is.
+        /// </summary>
+        private bool IsInactiveForEditor(string trimmedLine)
+        {
+            if (trimmedLine.StartsWith("#IfDef", StringComparison.OrdinalIgnoreCase)
+                || trimmedLine.StartsWith("#IfNDef", StringComparison.OrdinalIgnoreCase)
+                || IfDirective.IsMatch(trimmedLine))
+                return !IsConditionalActive();
+
+            if (ElseIfDirective.IsMatch(trimmedLine) || ElseDirective.IsMatch(trimmedLine)
+                || EndIfDirective.IsMatch(trimmedLine))
+                return _conditionalStack.Count > 0 && !_conditionalStack.Peek().ParentActive;
+
+            return !IsConditionalActive();
         }
 
         /// <summary>

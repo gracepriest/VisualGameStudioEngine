@@ -183,11 +183,29 @@ namespace BasicLang.Compiler.LSP
                 CollectDeclarations(_state.AST);
             }
 
-            // Second pass: tokenize based on collected info
+            // Second pass: tokenize based on collected info. Inactive #If lines (blanked for the lexer, so they
+            // have no tokens) are interleaved IN LINE ORDER as whole-line comment tokens: every theme dims a
+            // comment, so the dead branch is dimmed as in Visual Studio with no client extension (spec §4.12).
+            var inactive = _state.InactiveLines ?? Array.Empty<int>();
+            var next = 0;
             foreach (var token in _state.Tokens)
             {
+                while (next < inactive.Count && inactive[next] < token.Line)
+                    PushInactiveLine(inactive[next++]);
                 ProcessToken(token);
             }
+            while (next < inactive.Count)
+                PushInactiveLine(inactive[next++]);
+        }
+
+        /// <summary>One comment token over the whole of 1-based <paramref name="line"/> of the user's text.</summary>
+        private void PushInactiveLine(int line)
+        {
+            if (line < 1 || _state.Lines == null || line > _state.Lines.Length)
+                return;
+            var length = _state.Lines[line - 1].TrimEnd('\r').Length;
+            if (length > 0)
+                _builder.Push(line - 1, 0, length, TokenTypeComment, 0);
         }
 
         private void CollectDeclarations(ProgramNode program)

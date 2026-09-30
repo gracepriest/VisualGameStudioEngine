@@ -47,13 +47,23 @@ namespace BasicLang.Compiler.LSP
         /// </summary>
         public IReadOnlyCollection<string> IndeterminateImports { get; }
 
+        /// <summary>The project's <c>&lt;TargetBackend&gt;</c>, or null for an implicit (no .blproj) project —
+        /// which the editor treats as a desktop build, like a loose file.</summary>
+        public string TargetBackend { get; }
+
+        /// <summary>The conditional-compilation symbols the editor preprocesses this project's files with: the
+        /// project's Debug build (spec §4.12). From <see cref="BuildSymbols"/>, never re-derived.</summary>
+        public IReadOnlyList<string> EditorSymbols { get; }
+
         public LspProjectContext(
             string projectKey,
             string projectFilePath,
             IReadOnlyList<string> sourceFiles,
             ProjectSymbolTable symbols,
             string stamp,
-            IReadOnlyCollection<string> indeterminateImports = null)
+            IReadOnlyCollection<string> indeterminateImports = null,
+            string targetBackend = null,
+            IReadOnlyList<string> editorSymbols = null)
         {
             ProjectKey = projectKey;
             ProjectFilePath = projectFilePath;
@@ -61,9 +71,47 @@ namespace BasicLang.Compiler.LSP
             Symbols = symbols;
             Stamp = stamp;
             IndeterminateImports = indeterminateImports ?? Array.Empty<string>();
+            TargetBackend = targetBackend;
+            EditorSymbols = editorSymbols ?? EditorSymbolsFor(targetBackend, null);
             _fileSet = new HashSet<string>(sourceFiles ?? (IReadOnlyList<string>)Array.Empty<string>(),
                 StringComparer.OrdinalIgnoreCase);
         }
+
+        /// <summary>
+        /// ⛔ The editor is a DEBUG view of the build (spec §4.12): the target decides WEB/DESKTOP, the configuration is
+        /// Debug, and the project's Debug <c>&lt;DefineConstants&gt;</c> join — exactly what the debugger route
+        /// compiles (<c>DebugSession.CompilerOptionsForDebugging</c>). A loose file or an implicit project has no
+        /// backend and no constants: a desktop Debug build.
+        /// </summary>
+        public static IReadOnlyList<string> EditorSymbolsFor(string targetBackend, IEnumerable<string> debugDefineConstants) =>
+            BuildSymbols.For(targetBackend, "Debug", debugDefineConstants);
+
+        /// <summary>The symbols a document is preprocessed with: its project's, or a loose file's (null context).</summary>
+        public static IReadOnlyList<string> EditorSymbolsFor(LspProjectContext context) =>
+            context?.EditorSymbols ?? EditorSymbolsFor(null, null);
+
+        /// <summary>A stable key over a symbol set — two documents preprocessed with the same key parse the same.</summary>
+        public static string SymbolKey(IEnumerable<string> symbols) =>
+            string.Join(";", symbols.Select(s => s.ToUpperInvariant()).OrderBy(s => s, StringComparer.Ordinal));
+
+        /// <summary>
+        /// The editor's view of one file: the SAME preprocessor as the build, in its line-preserving editor mode
+        /// (scope call S3) — directive and inactive lines EMPTY, <c>#Include</c> never spliced — so every position
+        /// the language server reports is the user's own.
+        /// </summary>
+        public static EditorSource Preprocess(IEnumerable<string> symbols, string content, string path)
+        {
+            var pre = new Preprocessor();
+            foreach (var symbol in symbols) pre.Define(symbol);
+            var text = pre.ProcessForEditor(content ?? "", path);
+            return new EditorSource(text, pre.InactiveLines.ToArray(),
+                pre.Errors.Select(e => new PreprocessorError { Line = e.Line, Column = e.Column, Message = e.Message }).ToArray());
+        }
+
+        /// <summary><see cref="Preprocess(IEnumerable{string}, string, string)"/> with the document's project's
+        /// symbols, or a loose file's for a null <paramref name="context"/>.</summary>
+        public static EditorSource PreprocessFor(LspProjectContext context, string content, string path) =>
+            Preprocess(EditorSymbolsFor(context), content, path);
 
         public bool ContainsFile(string filePath)
         {
@@ -118,6 +166,22 @@ namespace BasicLang.Compiler.LSP
         }
     }
 
+    /// <summary>What the lexer sees of a document (<see cref="Text"/>, line for line the user's), which of its
+    /// 1-based lines are dead branches (<see cref="InactiveLines"/>, dimmed), and what the preprocessor refused.</summary>
+    public sealed class EditorSource
+    {
+        public EditorSource(string text, IReadOnlyList<int> inactiveLines, IReadOnlyList<PreprocessorError> errors)
+        {
+            Text = text;
+            InactiveLines = inactiveLines;
+            Errors = errors;
+        }
+
+        public string Text { get; }
+        public IReadOnlyList<int> InactiveLines { get; }
+        public IReadOnlyList<PreprocessorError> Errors { get; }
+    }
+
     /// <summary>
     /// Locates and caches the project context for documents opened in the LSP
     /// server. A document belongs to the nearest .blproj that lists it in a
@@ -158,6 +222,8 @@ namespace BasicLang.Compiler.LSP
         {
             public DateTime LastWriteUtc;
             public List<string> SourceFiles; // normalized full paths (null on load failure)
+            public string Backend;           // <TargetBackend> (ProjectFile.Backend)
+            public List<string> DebugDefineConstants; // the Debug configuration's <DefineConstants>
         }
 
         /// <summary>
@@ -188,6 +254,14 @@ namespace BasicLang.Compiler.LSP
                 if (sourceFiles == null || sourceFiles.Count == 0)
                     return null;
 
+                // The editor preprocesses every project file as the project's Debug build would (spec §4.12).
+                var blproj = projectFilePath != null ? GetBlprojSnapshot(projectFilePath) : null;
+                var targetBackend = blproj?.Backend;
+                var editorSymbols = LspProjectContext.EditorSymbolsFor(targetBackend, blproj?.DebugDefineConstants);
+
+                // A web project sees what its build compiles with: the shipped DOM declarations.
+                sourceFiles = WithWebDeclarations(sourceFiles, targetBackend);
+
                 // Gather the effective content of every project file:
                 // current document > open editor buffer > disk.
                 var entries = new List<(string Path, string Content)>();
@@ -210,7 +284,9 @@ namespace BasicLang.Compiler.LSP
                 if (entries.Count == 0)
                     return null;
 
-                var stamp = ComputeStamp(projectKey, entries);
+                // The symbols are part of the stamp: retargeting a project changes every file's editor view.
+                var symbolKey = LspProjectContext.SymbolKey(editorSymbols);
+                var stamp = ComputeStamp(projectKey + "|" + symbolKey, entries);
                 if (_contexts.TryGetValue(projectKey, out var cached) && cached.Stamp == stamp)
                     return cached;
 
@@ -218,7 +294,7 @@ namespace BasicLang.Compiler.LSP
                 var indeterminate = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 foreach (var (path, content) in entries)
                 {
-                    var ast = ParseCached(path, content);
+                    var ast = ParseCached(path, content, editorSymbols, symbolKey);
                     if (ast != null)
                     {
                         LspModuleSymbolCollector.Collect(ast, path, table);
@@ -246,7 +322,9 @@ namespace BasicLang.Compiler.LSP
                     entries.Select(e => e.Path).ToList(),
                     table,
                     stamp,
-                    indeterminate);
+                    indeterminate,
+                    targetBackend,
+                    editorSymbols);
 
                 _contexts[projectKey] = context;
                 return context;
@@ -366,7 +444,37 @@ namespace BasicLang.Compiler.LSP
             return siblings;
         }
 
-        private List<string> GetBlprojSourceFiles(string blprojPath)
+        private List<string> GetBlprojSourceFiles(string blprojPath) => GetBlprojSnapshot(blprojPath)?.SourceFiles;
+
+        /// <summary>
+        /// The source set plus the declarations a WEB build compiles with (<c>BasicCompiler.WithJavaScriptDeclarations</c>):
+        /// the shipped <c>dom-core.bli</c>, so <c>Document</c>/<c>Element</c> resolve in the editor as in the build.
+        /// ⛔ Gated on the backend, like the build: on a desktop project an <c>Element</c> would collide with a user
+        /// type. The portable control library joins here (plan Tasks 28/34) — add its files to
+        /// <see cref="WebDeclarationFiles"/>, never a second list.
+        /// </summary>
+        private static List<string> WithWebDeclarations(List<string> sourceFiles, string targetBackend)
+        {
+            if (!BuildSymbols.IsWebBackend(targetBackend))
+                return sourceFiles;
+
+            var files = new List<string>(sourceFiles);
+            foreach (var declarations in WebDeclarationFiles())
+            {
+                if (File.Exists(declarations)
+                    && !files.Any(f => string.Equals(f, declarations, StringComparison.OrdinalIgnoreCase)))
+                    files.Add(Path.GetFullPath(declarations));
+            }
+            return files;
+        }
+
+        /// <summary>The declaration files every web build is given, in the build's order.</summary>
+        private static IEnumerable<string> WebDeclarationFiles()
+        {
+            yield return BasicCompiler.DomDeclarationsPath;
+        }
+
+        private BlprojSnapshot GetBlprojSnapshot(string blprojPath)
         {
             try
             {
@@ -374,12 +482,17 @@ namespace BasicLang.Compiler.LSP
                 var lastWrite = File.GetLastWriteTimeUtc(blprojPath);
 
                 if (_blprojCache.TryGetValue(blprojPath, out var cached) && cached.LastWriteUtc == lastWrite)
-                    return cached.SourceFiles;
+                    return cached;
 
                 List<string> files = null;
+                string backend = null;
+                List<string> debugDefines = null;
                 try
                 {
                     var projectFile = ProjectFile.Load(blprojPath);
+                    backend = projectFile.Backend;
+                    if (projectFile.Configurations.TryGetValue("Debug", out var debug))
+                        debugDefines = debug.DefineConstants?.ToList();
                     // ProjectFile.GetSourceFiles() returns ALL <Compile> items —
                     // in a mixed BasicLang/C++ project that includes .cpp/.h
                     // translation units (CppProjectBuilder and
@@ -402,8 +515,12 @@ namespace BasicLang.Compiler.LSP
                     // Malformed project file: remember the failure until it changes
                 }
 
-                _blprojCache[blprojPath] = new BlprojSnapshot { LastWriteUtc = lastWrite, SourceFiles = files };
-                return files;
+                var snapshot = new BlprojSnapshot
+                {
+                    LastWriteUtc = lastWrite, SourceFiles = files, Backend = backend, DebugDefineConstants = debugDefines
+                };
+                _blprojCache[blprojPath] = snapshot;
+                return snapshot;
             }
             catch
             {
@@ -433,21 +550,24 @@ namespace BasicLang.Compiler.LSP
             }
         }
 
-        private ProgramNode ParseCached(string path, string content)
+        private ProgramNode ParseCached(string path, string content, IReadOnlyList<string> symbols, string symbolKey)
         {
-            var hash = ComputeHash(content);
+            // Keyed on the symbols too: the same text parses differently for a web and a desktop project.
+            var hash = ComputeHash(symbolKey + "\n" + content);
             if (_astCache.TryGetValue(path, out var cached) && cached.ContentHash == hash)
                 return cached.AST;
 
             ProgramNode ast = null;
             try
             {
-                var lexer = new Lexer(content);
+                // The sibling's editor view — the same preprocessing as the open document's (DocumentState.Parse).
+                var text = LspProjectContext.Preprocess(symbols, content, path).Text;
+                var lexer = new Lexer(text);
                 var tokens = lexer.Tokenize();
                 var parser = new Parser(tokens);
                 // .mod/.cls siblings parse with their implicit Module/Class
                 // wrapper (AST-synthesized, so symbol lines match the file)
-                ast = ImplicitContainer.Parse(parser, path, content);
+                ast = ImplicitContainer.Parse(parser, path, text);
             }
             catch
             {
