@@ -87,14 +87,18 @@ when verification is enabled, and on ClosureLowering's lowered module). In every
   alternatives).
 
 A LINQ range variable has no declaring IR node, so the verifier cannot name one. It is reserved at
-the same push as every other kind, and a test pins it (E2.3).
+the same push as every other kind, and a test pins it (E2.3: `NameReservationTests.TheBuilder_Reserves_EveryKindOfDeclaration`,
+row `LinqRange_variable`).
 
 **Scope of the invariant (E2.2).** `IRFunction.TracksReservedNames` is set by IRBuilder
 (`CompleteReservations`, on every function it built) and copied by ClosureLowering's clone. The test
 suite runs the verifier in Throw mode, and its hand-built IR tracks nothing, so the invariant does
 not apply to it. Production creates `IRFunction`s only in IRBuilder and in ClosureLowering's clone,
 and `CombineIRModules` moves the functions themselves. The test-writer pins that every function
-reaching a backend has the flag.
+reaching a backend has the flag: `NameReservationTests.EveryFunctionThatReachesABackend_TracksReservedNames`
+(the CLI's `CompileFile` and the project route's `CompileProjectFiles`, standard and aggressive; the
+probe corpus and the shipped samples), and `EveryFunctionIRBuilderBuilds_TracksReservedNames` and
+`EveryFunctionClosureLoweringProduces_TracksReservedNames` for the two creation sites.
 
 ### D2: `IRFunction.DeclareTemp(type)`, the only door for an optimizer pass
 
@@ -228,13 +232,39 @@ builds: before, reservation with the keep, reservation without it).**
    pushed them before switching `_currentFunction`. Invariant R named `Box.op_Equality`'s `a` and
    `b` on the first test run. The function is now switched first.
 
-**Tests** (the `wt` tree).
+**Found by the test-writer's matrix, and fixed here.** MSIL refused `Function(T0 As Integer) T0 * 2`, a
+user `T0` as a LAMBDA PARAMETER, which falsified the ruling's falsifier 5 for one position and one backend
+(`LP_T0`..`LP_T3` on MSIL, every entry point, identical on `7eae6d54`). ClosureLowering's #169 guard ("'t0'
+differs from its parameter 'T0' only by case") compared the parameters with the lambda's
+`CapturedVariables`, which IRBuilder fills when it builds the lambda with every value's name — a temp's and
+a constant's included, before the renamer ran (`t0,t1,t2,const_2,t3,const_0,t4`). It is the same class of
+defect as #121's own: a temp's name taken for a user's. The guard now compares only the VARIABLES the
+lambda's IR, and every lambda nested in it, reads or writes NOW (a variable operand, a value renamed after
+the variable it assigns, an assignment target, a bare call name), and of those only the ones the creator OWNS
+(`g.ReservedNames`: complete by Invariant R, and disjoint from compiler temps by Invariant T), in an ORDINAL
+set. MEASURED, each part is needed:
+- ownership alone (the first proposal) still refused two programs VB accepts, a sibling `For Each t0` and a
+  sibling `Catch t0` beside a `Function(T0 …)`: the reservation is function-wide, so the creator owns a `t0`
+  the lambda cannot see;
+- the optimizer's recomputed capture set, with ownership, still refused a NESTED lambda: that set folds in
+  the nested lambda's build-time record;
+- a case-insensitive set let the parameter's own `T0` hide the creator's `t0`, and the guard stopped
+  refusing what it exists for.
+
+`CapturedVariables` itself is unchanged. The guard's own shape (a creator variable used under another case)
+is unreachable from source since #169 and is tested on tampered IR. The four cells are ordinary rows of
+the matrix now (120 upper-case cells).
+
+**Tests** (the `wt` tree, before the test-writer moved the pins).
 - The fast subset: 9,357 tests, **3 failures**: `DeadCodeRemovalLicenceTests` `ByName_*` ×3 (the keep
   is gone).
 - The brief's filter (`CompilerTemp|DeadCode|Temp|Collision|Verifier|Closure|Lambda|ForEach|Catch|Pattern|Linq|NameBinding`,
   Integration included): 1,602 tests, **10 failures**: `CompilerTempCollisionFenceTests` `LC_t0` ×3
   and `R11` ×4, plus the same `ByName_*` ×3. All are moved pins that assert the old behaviour.
   21 tests skipped (Windows, MSVC or the engine).
+- The test-writer moved those pins: `ByName_*` became `ByIdentity_*` and `TheShapeTheKeepUsedToHold_*`
+  (`DeadCodeRemovalLicenceTests`), and the seven fence rows became
+  `CompilerTempCollisionFenceTests.ACollisionCellMovedBy121_PrintsVbsAnswer_InEveryEntryPoint`.
 
 **Mutants.** Each mutant was built in a detached worktree, and measured on these tests and on 8
 probes × 4 backends × 3 modes. **All 16 are killed.**
@@ -258,7 +288,12 @@ probes × 4 backends × 3 modes. **All 16 are killed.**
 | Clone without the minted record | 8 MSIL rows |
 | IRBuilder does not seed lambdas | 16 `CapturedByLambda` rows, and the direct assertion |
 
-The direct assertions exist only as the implementer's probes. The test-writer owns them.
+The direct assertions are `NameReservationTests`: `EveryFunctionIRBuilderBuilds_TracksReservedNames` and
+`EveryFunctionClosureLoweringProduces_TracksReservedNames` (the two flag mutants),
+`ANameClosureLoweringAddsToTheCreator_IsReservedInTheCreatorAndTheHoistedLambda` (the seeding mutant; one row per
+write site of the pass), `ACompilerTempUnderAReservedName_IsRefused_ByVerifyAfterOptimization` (the D4 refusal) and
+the `LinqRange_variable` row of `TheBuilder_Reserves_EveryKindOfDeclaration`. All 16 mutants are killed by tests in
+the repo, every one in the fast tier (see `docs/HANDOFF.md`).
 
 ## Rejected
 

@@ -17,7 +17,167 @@ facade (all five tasks of `2026-09-13-blnet-cpp-facade.md`).
 
 ---
 
-## 🚀 NEWEST — 2026-09-29: #163 DONE, DCE removes unused compiler temps, by marker (ADR-0017)
+## 🚀 NEWEST — 2026-09-30: #121 DONE, every name the program owns is reserved, and a pass mints only through `DeclareTemp` (ADR-0018)
+
+The fix is `f39d53e5` on top of #163 (`5b4ca51e`); the TEST side is uncommitted work on top of it. Compiler only (IRBuilder, IRNodes,
+IRTempNames, IRVerifier, ClosureLowering, `Compiler.CombineIRModules`, IROptimizer); no backend changed. Design and measurements:
+`docs/superpowers/decisions/0018-name-reservation-and-temp-minting.md` (read it; this section is what the test work adds and what to
+watch for). It supersedes ADR-0017's by-name DCE rule and its D4, and closes the 99 collision cells of ADR-0017 Findings 3.
+
+**What it is.**
+- `IRFunction.ReservedNames` (OrdinalIgnoreCase) holds every name the program owns in that function, whatever its shape: `Dim`, `Const`,
+  parameters, a counted `For`'s and a `For Each`'s variable (the hidden `__foreach_N` of a reused control included), a `Catch`
+  variable, a pattern binding, a LINQ range variable, a lambda parameter, a lowering's own names (`__scN`, `__with`, ClosureLowering's
+  `__closure_envN` and `__carry_x`), and, for a lambda, EVERY name of the function that creates it, transitively. It is NOT a declaration
+  list: `LocalVariables` still means "what a backend declares at the top of the function", and **no backend may read `ReservedNames`**.
+- `IRFunction.ModuleReservedNames` (E3) is the module's own names (globals, class fields, properties, methods, every function's name) as
+  ONE set every function shares; `Compiler.CombineIRModules` publishes it again on the combined module, because each unit can only see its own.
+- `IRFunction.IsReserved(name)` reads both sets, ignoring case. `IRTempNames.UserOwned` reads the union and filters by shape (`t<digits>`);
+  it is the one reader the renamer and every backend's temp counter use. Reserving is the OVER-approximation: an extra name costs a temp number.
+- **Timing (E1).** IRBuilder RECORDS at the ONE primitive (`PushVariableVersion`) and PUBLISHES in `CompleteReservations`, after the walk and
+  before `SeparateTempsFromUserNames`. Publishing at the push renumbered temps in 6 programs outside the ruled set (the ADR's Variant A).
+- `IRFunction.DeclareTemp(type)` is THE ONE DOOR for an optimizer pass: it mints through `GetNextTempName` (which skips `IsReserved` and
+  every name it already handed out), marks the variable `IsCompilerTemp`, records the name as minted, and adds it to `LocalVariables`.
+  A minted name never enters `ReservedNames`; the two stay disjoint.
+- `IRFunction.TracksReservedNames` is set on every function IRBuilder builds and copied by ClosureLowering's clone (with the minted record,
+  `InheritTempRecordFrom`). Hand-built IR tracks nothing.
+
+**The verifier (`IRVerifier`, run by `VerifyAfterOptimization` on every compile when verification is on, and on ClosureLowering's module).**
+- **Invariant R**, for a function with `TracksReservedNames`: every parameter, every `LocalVariables` name, and every For Each, Catch and
+  pattern-binding name (through Or and tuple alternatives) is in `ReservedNames`. The ONE exemption is exact: `IsCompilerTemp &&
+  IsMintedTempName(name)`, both together. A LINQ range variable has no declaring IR node, so R cannot see one: a test pins it.
+- **Invariant T** (ADR-0017's by-name keep, converted): a value with `IsCompilerTemp` whose name `IsReserved` (this function's, or the module's)
+  is a violation, for every value reachable from the blocks (operand trees included) and every `LocalVariables` entry.
+- ⚠ Both are refusals that NAME a leak. A firing means a declaration site skipped the push: fix the writer, never the invariant. The CLI
+  subprocess runs with the verifier OFF in Release (`BASICLANG_VERIFY_IR` unset); the in-process suite runs it in Throw mode.
+
+**The rule for any future pass.** Inlining, LoopUnrolling and InductionVariable are unregistered, and all three have the defect "minted a
+name, declared nothing". A pass that is re-enabled mints ONLY through `IRFunction.DeclareTemp`, never `GetNextTempName` (a test reads the IL
+of the compiler assembly: only IRBuilder and `DeclareTemp` may call it, and a decoy proves the scanner sees a call from a lambda). A temp
+that must be fresh per loop iteration is ALSO added to `BodyLocals` by the pass (ADR-0014). A pass that needs a name in a function it was not
+handed (cross-function inlining) needs a target-function form of the facility first (ADR-0018 "Revisit if").
+
+**The fence that moved.** `CompilerTempCollisionFenceTests` no longer pins anything wrong:
+- `LC_t0` on C++, JavaScript and MSIL and `R11` on all four backends were pinned WRONG or failing until #121 (`7|0|7|0`, a ReferenceError, a
+  segmentation fault; `-3|-4|3|4`, a ReferenceError). They print VB's answer in all three entry points, in `ACollisionCellMovedBy121_PrintsVbsAnswer_InEveryEntryPoint`
+  (7 rows). The 9 rows #163 moved stay (`ACollisionCell_NowReachesVbsOutput_InEveryEntryPoint`), and so do the 8 controls.
+- `CT_wbr_t0` (ADR-0017's by-name witness) is held by RESERVATION now, and C# runs it too (it did not compile there before).
+- `DeadCodeRemovalLicenceTests.ByName_*` (3) became `ByIdentity_*` (DCE decides by identity ONLY: an unused marked temp goes even with a
+  variable spelled like it, in either case, and a used one stays) plus `TheShapeTheKeepUsedToHold_*` (that shape is now Invariant T).
+- `TempExec.Observe`, `Pin` and `AssertPinnedInEveryEntryPoint` had no caller left and were removed. The gotcha they carried is still true:
+  `MsilHarness.RunIl` reads only the TEXT of a run, so a process that prints `7` and then segfaults is `Ran`.
+
+**⭐ FOUND BY THE MATRIX AND FIXED IN #121: MSIL refused `Function(T0 As Integer) T0 * 2`.** ClosureLowering's #169 guard ("'t0' differs from
+its parameter 'T0' only by case", `ClosureLowering.BuildEnvironments`) compared the lambda's `CapturedVariables` with its parameters, and IRBuilder
+fills that list at lambda-build time with COMPILER-TEMP and constant names too (`t0,t1,t2,const_2,t3,const_0,t4`, before the renamer ran), so a
+lambda parameter spelled `T0`..`T4` whose body holds a binary op was refused for a `t0` the user never wrote — on the #163 base and on #121's first
+cut, in every entry point (`LP_T0`..`LP_T3` on MSIL). The guard now compares only the VARIABLES the lambda's IR (and every lambda nested in it) reads
+or writes NOW that the creator OWNS (`g.ReservedNames`, complete by Invariant R, disjoint from temps by Invariant T), in an ORDINAL set. MEASURED,
+every half is needed: ownership alone still refused two programs VB accepts (a sibling `For Each t0` / `Catch t0` the lambda cannot see — the
+reservation is function-wide); the optimizer's recomputed capture set still refused a NESTED lambda (it folds in the nested lambda's build-time
+record); and a case-insensitive set let the parameter's own `T0` hide the creator's `t0`. The four cells are in `UpperCaseCells` (120); the direct
+tests are `ClosureLoweringRefusalTests.TheCaseGuard_*` (fast). ⚠ `CapturedVariables` itself is unchanged and still carries stale names: read it
+for nothing that compares names.
+
+**Tests (Linux-measured; the oracle is `vbc`).**
+- `Compiler/NameReservationTests.cs` (101, fast) — the reservation as a property of the IR: the flag on every function IRBuilder builds and on every
+  clone ClosureLowering makes, and on every function of a REAL compile through `CompileFile` and `CompileProjectFiles` (standard and aggressive),
+  the probe corpus and three samples included (two of the five samples do not compile on this base: an untyped `Const`, a parse error); one row per
+  declaration kind of D1's writer table (LINQ range variable and the operator fix among them); a lambda holds its creator's names, transitively;
+  Falsifier 6 (`LC_t0`'s hoisted lambda has a populated set) and P2 (each of ClosureLowering's three write sites); Invariant R positive, negative and
+  out-of-scope for every construct incl. Or and tuple patterns, and its EXACT exemption; Invariant T incl. module names and operand trees; the minter
+  skips a reserved name in either case; `UserOwned` reads the union; module-level names, and A's `t3()` skipped in B's `Main` (`CombineIRModules`).
+- `Compiler/NameReservationExecutionTests.cs` (342: 338 run, 4 ignored, Integration) — the ADR-0017 Findings 3 witness matrix: 34 programs in 10 families, spelled `t{K}`,
+  `T{K}` and (as controls) `v{K}`, on every backend where the control prints VB's answer, through the CLI, the CLI `-O` and `CompileProjectFiles`.
+  Rows the fence and `CompilerTempExecutionTests` already run are not repeated (`CompilerTempCollisionFenceTests.Covered`). Templates are byte-equal to
+  `S/t163/witness/*.bas` and `S/t121/witctl/*.bas`.
+- `Compiler/TempMintingFacilityTests.cs` (the implementer's D2 proof: 117 Integration tests in `TempMintingFacilityTests` and 4 fast ones in `TempMintingDoorTests`): a test-only
+  pass registered through `OptimizationPipeline.AddPass` mints one temp in a function that spells the name it would take. Added here: the plain roster row, a hardened IL
+  guard that cannot pass vacuously, and a scanner self-test.
+- Moved and edited: `CompilerTempExecutionTests.cs` (fence flipped), `CompilerTempProbes.cs` (docs; `LambdaCaptureProbe`), `DeadCodeRemovalLicenceTests.cs`
+  (`ByIdentity_*`), `JsExecutionTierRosterTests.cs` (+2 fixtures, pinned at 98).
+
+**Mutation proof** (a detached worktree, real NUnit, `S/t121/twm-tools/mut.py`; ADR-0018's M01-M16 plus the test-writer's M17-M37).
+
+Every mutant was built ONE AT A TIME in a detached worktree (removed afterwards), against the FINAL tests without the implementer's `MutantProbeTests.cs`, and measured on the FULL fast subset first, the Integration fixtures only if it survived. **All 38 are killed, every one in the fast tier**; the unmutated control passes (fast 9,441; D2 facility 117; matrix, fence and `CompilerTempExecutionTests` 444). M01-M16 are ADR-0018's; M17-M37 are the test-writer's (the reserve sites of ClosureLowering, each branch of R and T, the operator fix, `CombineIRModules`, the E1 timing, and ADR-0017's keep put back). `NRT` = `NameReservationTests`, `Door` = `TempMintingDoorTests`, `Licence` = `DeadCodeRemovalLicenceTests`, `Marker` = `CompilerTempMarkerTests`; "other" = pre-existing tests that fire through the verifier. M01-M16 ran before the E1 numbering pin (`TheWalkPublishesNothing_…`, which M36 needs) was added, and all of them before the corpus zero-fire lines in the flag test; both only add assertions.
+
+The four ADR-0018 mutants no witness can see are killed by direct assertions only: M06 (three `ANameClosureLoweringAddsToTheCreator_…` rows), M10 (`ACompilerTempUnderAReservedName_IsRefused_ByVerifyAfterOptimization`), M12 and M13 (`EveryFunctionIRBuilderBuilds_TracksReservedNames`, `EveryFunctionClosureLoweringProduces_TracksReservedNames`); M15 by `AClone_KeepsTheMintedRecord_AndTheCounter` alone.
+
+| Mutant | Killed by (failing tests, fast tier) |
+|---|---|
+| M01 For Each variable not reserved | 53: NRT x21, Door x2, Marker x2, 28 other |
+| M02 Catch variable not reserved | 80: NRT x14, Marker x3, 63 other |
+| M03 pattern binding not reserved | 15: NRT x14, 1 other |
+| M04 LINQ range variable not reserved | 3: Door x2, NRT x1 |
+| M05 lambda parameter not reserved | 23: NRT x13, 10 other |
+| M06 ClosureLowering does not seed the hoisted lambda | 3: NRT x3 |
+| M07 `GetNextTempName` ignores reserved names | 9: NRT x7, Door x2 |
+| M08 `DeclareTemp` does not declare | 2: NRT x2 |
+| M09 `DeclareTemp` does not flag | 5: NRT x3, Door x2 |
+| M10 D4 refusal (Invariant T) dropped from the verifier | 1: NRT x1 |
+| M11 case-sensitive reservation | 25: NRT x23, Door x1, Licence x1 |
+| M12 IRBuilder does not set `TracksReservedNames` | 19: NRT x19 |
+| M13 ClosureLowering does not copy the flag | 7: NRT x7 |
+| M14 module names not published (IRBuilder and `CombineIRModules`) | 8: NRT x8 |
+| M15 clone without the minted record | 1: NRT x1 |
+| M16 IRBuilder does not seed lambdas | 2: NRT x2 |
+| M17 `CombineIRModules` does not publish (E3, multi-file) | 2: NRT x2 |
+| M18 operator parameters reserved in the wrong function (the fix reverted) | 17: NRT x15, 2 other |
+| M19a ClosureLowering: loop-level environment local not reserved | 5: NRT x4, 1 other |
+| M19b ClosureLowering: per-iteration carrier not reserved | 2: NRT x1, 1 other |
+| M19c ClosureLowering: function-level environment local not reserved | 13: NRT x4, 9 other |
+| M20 R exempts ANY flagged local | 2: NRT x2 |
+| M21 R exempts ANY minted name | 1: NRT x1 |
+| M22 R ignores Or patterns | 3: NRT x3 |
+| M23 R ignores tuple patterns | 2: NRT x2 |
+| M24 R ignores Catch variables | 2: NRT x2 |
+| M25 R ignores For Each variables | 3: NRT x3 |
+| M26 R ignores parameters | 3: NRT x3 |
+| M27 R ignores locals | 6: NRT x6 |
+| M28 R applies to untracked (hand-built) functions | 10: NRT x8, 2 other |
+| M29 T ignores module-level names | 1: NRT x1 |
+| M30 T skips `LocalVariables` | 1: NRT x1 |
+| M31 T does not descend operand trees | 1: NRT x1 |
+| M32 ADR-0017's by-name DCE keep reinstated | 3: Licence x3 |
+| M33 minter skips only the function's own names, not the module's | 3: NRT x3 |
+| M34 `UserOwned` ignores `ReservedNames` | 7: NRT x6, 1 other |
+| M36 reservation published AT the push (the rejected Variant A) | 1: NRT x1 |
+| M37 reservation published AFTER the renamer | 5: NRT x4, 1 other |
+
+**Gates (Linux, g++/clang++/node/ilasm present, no MSVC).**
+
+On the final test DLL (`f39d53e5` plus the test and doc changes):
+- The fast subset (`TestCategory!=Integration`): `Failed: 0, Passed: 9442, Skipped: 93, Total: 9535` (2 m 1 s; the same 93 skips as before, and `TerminalServiceTests` passed).
+- The filter `CompilerTemp|DeadCode|Temp|Collision|Verifier|Closure|Lambda|ForEach|Catch|Pattern|Linq|NameBinding|Reserv|Minting` (each as `FullyQualifiedName~`), Integration
+  included: `Failed: 0, Passed: 2032, Skipped: 25, Total: 2057` (1 h 1 m). The 25 skips are the 21 that predate this work (Windows, MSVC or the engine; the same 21 the ADR's run reports) and the 4
+  `KnownDefectCells` that were ignored THEN; none of the other ~590 new tests skipped. ⚠ Those four are fixed since (the case-guard, above) and
+  are ordinary `UpperCaseCells` rows; see the follow-up gates below.
+- **After the case-guard fix** (same tree plus the fix): the fast subset `Failed: 0, Passed: 9446, Skipped: 93, Total: 9539`; the filter
+  `Closure|Lambda|NameReservation|TempMinting|CompilerTemp` (each as `FullyQualifiedName~`), Integration included: `Failed: 0, Passed: 1125,
+  Skipped: 0, Total: 1125` (20 m 40 s). MSIL byte compare of the whole corpus (982 programs × 3 entry points): 2,946 of 2,946 identical, no
+  cell of it was refused by the guard before; the only cells that change are the 21 the guard refused (`LP_T0`..`LP_T3`, and the three probes
+  in `ClosureLoweringRefusalTests.TheCaseGuard_*`, × 3 entry points), which now compile and print VB's answer. Verifier fires 0.
+- The tests-first state, for the record: before the tests moved, the five fixtures the fix touches ran 327 tests with exactly 10 failures (the 7 fence pins and `ByName_*` x3).
+- ⚠ The FULL suite (~39 min plus) was NOT run for this task; the two gates above were.
+
+**Only Windows can validate:** the MSVC leg of every C++ collision cell (`LC_t0`, `R11`, the `CT_*` and `FE_*` rows compile with clang/g++ only, and MSVC reports
+its own diagnostics); MSIL under a Windows `ilasm` and CLR (`LC_t0` was a Linux segmentation fault before #121, an access violation on Windows); the Release
+`.blproj` route through the IDE build service into `CompileProjectFiles`.
+
+**Traps this work found.**
+- ⛔ NUnit's `Does.Contain(x)` on a `HashSet<string>(OrdinalIgnoreCase)` compares item by item, CASE-SENSITIVELY. A case-insensitivity assertion on a reservation set
+  must call the set's own `Contains`.
+- ⚠ A fixture whose tests are all `[TestCaseSource]` has `CaseCount == 0` in `JsExecutionTierRosterTests` and fails `EveryFixtureStillHasTests`: give it one plain `[Test]`
+  that pins its table (`ThePositionTable_HasItsRows`, `TheMatrix_HasItsRows`, `TheFenceTables_HaveTheirRows`).
+- ⚠ `ClosureLowering.Run` returns the module ITSELF when there is nothing to lower, so "the clone carries the flag" is only tested on a program with a lambda.
+
+---
+
+## 2026-09-29 (earlier): #163 DONE, DCE removes unused compiler temps, by marker (ADR-0017)
+
+> ⚠ **Partly HISTORY since #121 (the section above).** Superseded: the by-name DCE rule (gone; Invariant T replaces it), the fence's PINNED rows (every one now prints
+> VB's answer), the clause "a pass mints through `GetNextTempName`" (a pass mints through `DeclareTemp`), `TempExec.ObserveMsil` (removed), and `CT_wbr_t0` on C# (it
+> compiles now). The marker contract, the removal licence's other clauses, the U2 fix and the mutation table below still stand.
 
 The fix is `ec021f8f` on top of #200, #170 and the SCRATCH option-(a) commit (`b0f12d90`); the TEST side is uncommitted work on top
 of it. Compiler only (IRBuilder, IRNodes, IROptimizer); no backend changed. Design and measurements:
@@ -31,7 +191,7 @@ instruction, and it says where a NAME came from, never how it is SPELLED.
   if it is not an `IRVariable`/`IRConstant`, not `NamedAfterVariable`, and its function minted its name. User storage (`Dim t5 = a + b`
   is ONE binop renamed `t5`, `NamedAfterVariable`) never carries it.
 - `OptimizationPass.InheritIdentity` copies it when a pass REPLACES a value. A value built anywhere else reads false, and DCE keeps it.
-- ⛔ Any pass that mints a temp (#121) must mint through `GetNextTempName` and set the flag. CLAUDE.md carries the one durable clause.
+- ⛔ Any pass that mints a temp must mint through `IRFunction.DeclareTemp`, which sets the flag and declares the temp (#121, ADR-0018; it was "through `GetNextTempName`" here). CLAUDE.md carries the one durable clause.
 
 **The removal licence (D2, D3).** An unused value is deleted only if ALL hold: marked and not `NamedAfterVariable`; a pure, non-trapping
 KIND (binary except `/` `\` `Mod`; unary except `++` `--`; compare; `Is`; a load of a variable or an alloca — never an element read);
@@ -44,7 +204,7 @@ C++ backend's own temp counter renumbers and the surviving string temp becomes `
 "no viable overloaded '='"): OK before, OK with the rule, COMPILE-FAIL without it, C++ in all three entry points. Pinned by
 `CompilerTempExecutionTests.CT_wbr_t0_CatchT0_StillCompilesAndRuns`; mutant M8 fails it (below).
 
-**#121's regression fence** (`CompilerTempCollisionFenceTests`, all three entry points). A user variable IRBuilder does not reserve (For Each,
+**#121's regression fence** (`CompilerTempCollisionFenceTests`, all three entry points). ⚠ HISTORICAL: #121 flipped every pinned row below to VB's answer. A user variable IRBuilder does not reserve (For Each,
 Catch, pattern, LINQ range) spelled like a temp collides with a minted name; every such program was already wrong or failing before #163.
 CURRENT behaviour, pinned so #121 flips each row deliberately (each message names #121):
 - `LC_t0` (a For Each `t0` captured by a lambda): ⚠ **the one #163 change that is not toward VB** — MSIL was a WRONG ANSWER (`7|-3|7|-4`)
