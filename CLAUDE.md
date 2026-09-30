@@ -278,43 +278,39 @@ a second document type.
   module's members to bare globals while emitting the call site qualified**, so the script referenced
   an object that appears nowhere in the file. No string assertion can see that. `FormBuildEmissionTests`
   now RUNS the emitted script under node. The dispatch is generated as `Public Class` + `Public Shared
-  Sub`, which emits a real `class` with a `static` member. The backend bug itself is UNFIXED
-  (`docs/form-designer-followups.md` 14) and will bite anyone calling a module across files.
-- ⛔⛔ **An UNQUALIFIED call to the enclosing class's own method is a runtime `ReferenceError` on the
-  JavaScript backend** — it emits a **bare global** where it must emit `this.M()`. Green build,
-  *"Compilation successful!"*, dead page. `Me.M()` emits `this.M()` and is correct.
-  ⚠ **This is BROADER than the spec's Measured-facts row**, which scoped it to *a lambda* calling an
-  unqualified method. Measured 2026-09-18 from an ordinary **constructor**, no lambda involved:
-  `Unqualified()` → `Unqualified();`, `Me.Qualified()` → `this.Qualified();`. Any unqualified
-  self-call in a class is affected. ⚠ The `Me.` workaround holds only OUTSIDE a lambda — inside one
-  the spec measured `Me.` hard-erroring, so the two rows are both true and neither generalises.
-  ⛔ Every scaffolded web form carried exactly this shape (`InitializeComponent()` in `Public Sub
-  New()`) and **every one of them was dead on load**; nothing caught it because no test ran a
-  generated FORM, only the dispatch. `FormScaffolder` now emits `Me.InitializeComponent()`
-  (`FormScaffolderTests.TheScaffoldQualifiesItsInitializeComponentCall`). The backend defect is
-  UNFIXED and hits hand-written user code.
-- ⚠ A bare top-level `Sub` in one `.bas` is not callable from another at all
-  (*"no lowering for 'Helper.Helper'"*). Between that and the above, **a class is the only shape that
-  works across files on the JavaScript backend** — both are compiler gaps, not designer ones.
-- ⛔⛔ **A MODULE member call is broken on all three backends, in DIFFERENT directions** — measured
-  by generating, compiling and RUNNING the same eight-line program on each:
+  Sub`, which emits a real `class` with a `static` member. (The backend bug behind it is fixed —
+  see the module-call bullet below — but the dispatch stays a class.)
+- ✅ **Unqualified self-calls and bare cross-file `Sub`s work on this tree** — re-measured 2026-09-29
+  (JavaScript, C#, C++; built by the CLI and RUN). `Unqualified()` in a constructor emits
+  `this.Unqualified()`; a top-level `Sub Helper` in `Util.bas` is callable bare from `Main.bas`. The
+  2026-09-18 rows that said otherwise (a bare global / *"no lowering for 'Helper.Helper'"*) are
+  history; `FormScaffolder` still emits `Me.InitializeComponent()`, which is harmless.
+  ⚠ One C#-only trap remains: a top-level `Sub` NAMED LIKE ITS FILE (`Sub Helper` in `Helper.bas`)
+  is CS0542 — the file becomes `static class Helper`.
+- ⛔ **A MODULE member call works in every spelling — re-measured 2026-09-29** (CLI build, RUN,
+  JavaScript / C# / C++-MSVC). Before the fix that date, same-file calls and a Module in a file OF ITS OWN
+  NAME already worked both ways, but a Module BLOCK named unlike its file (`Module Program` holding
+  `Main` in `Main.bas`, `Module M` in `Helpers.bas`) was unreachable QUALIFIED from another file on
+  all three (`ReferenceError: Program is not defined` / `CS0103` / `C2065`) — the qualified channel
+  found units only by FILE name — and its procedures imported BARE lost their Module, so C#
+  qualified them by the file (`Program.Go()` for `Module M`'s `Go`). Every row now runs on all three:
 
-  | | `M.Go()` qualified | `Go()` unqualified |
-  |---|---|---|
-  | JavaScript | builds clean, `ReferenceError` at RUN time | ✅ |
-  | C# | ✅ | `CS0103: The name 'Go' does not exist` |
-  | C++ | clang: `undeclared identifier 'M'` | ✅ |
+  | | same file | Module in own-named file | Module block in another file |
+  |---|---|---|---|
+  | `M.Go()` qualified | ✅ | ✅ | ✅ (was ✗ on all three) |
+  | `Go()` bare | ✅ | ✅ | ✅ (was ✗ on C#) |
 
-  **No spelling works everywhere**, so a program calling a module member is silently locked to a
-  subset of targets. JS/C++ hoist members to bare top-level functions
-  (`IRBuilder.Visit(ModuleNode)`, `IRBuilder.cs:385`) and emit the call qualified anyway; C# gets the
-  container right (`public static class M`) and breaks the unqualified call instead. Repro, matrix
-  and per-backend fix shapes in `docs/form-designer-followups.md` 14. **PR #6 fixes JavaScript
-  only** — C# and C++ still need theirs.
-  ⚠ **Superseded on master by #57 (`e486382d`)**, which reports both spellings, cross-file included
-  (the dotted `'Helper.Helper'` wire form above is gone too), compiling and running on every backend
-  through one `EmitProcedureCall`. This table and the bullet above are kept as the measured history
-  until they are RE-MEASURED on the merged tree — do not rely on either direction without doing so.
+  `SemanticAnalyzer.TryResolveOtherUnitModuleBlockMember` is the channel; `CrossFileBindingTests` runs
+  it in both compile orders. The #57 note and the older "no spelling works everywhere" table are
+  history.
+- ⛔ **A member access on a user class never reaches the "PascalCase = .NET" fallback when the class's
+  members are all known** (`SemanticAnalyzer.LacksDeclaredMember`). That fallback claimed any receiver
+  named with two letters or more, so `Me.InitializeComponent()` with no such method compiled clean on
+  every backend and died at load on JavaScript (`TypeError: this.InitializeComponent is not a
+  function`); only a class named `F` was checked. It stays permissive for an `Extern Class`, a .NET or
+  unresolved base, and anything it cannot enumerate. ⚠ Still open: `Inherits` a class from ANOTHER file
+  is "Unknown base class" (the base lookup asks only the type manager), and JS/C++ emit a derived
+  class before its base when declared in that order.
 - ⛔ **`Place` decides "strip" vs "item" vs "positioned", and each has its own rule.** A **strip**
   (`FormPlace.Docked`) is geometry-less — `Geometry == null`, its edge is a `Dock` PROPERTY not a
   rect, it draws as a BAND on the canvas, and it is page chrome on the web (before/after the form
