@@ -879,6 +879,24 @@ order of input).
 | Re-review minors | one scheduler per reflow (§5.8); anchor writes below the breakpoint (§5.9); pre-2a drops read the marker as BL8012 (§6.1); half-converted files refused, `MixedCodeStyle` (§8.4) |
 | Minors | G11 (`WinFormsEventArgs`, placement by style §6.2); P2/§5.4 ComboBox `title=`; §5.4 enable targets; §5.1 security; §5.1 trigger widened; §6.3 WinForms rehash; §5.10 `FormDock`; §9 `Selection`; §10.4/§11.1 Edge authority; O2 wording |
 
+## 11b. Notes for the plan (from the final spec review — approved, non-blocking)
+
+1. **The live walk visits CONTROLS only** (§5.10): an element counts when it carries a control id (or a `vgs-<Kind>`
+   class) — never the CheckBox/RadioButton `<input>` or caption `<span>` inside its `<label>`, the GroupBox `<legend>`, or a
+   strip's `<ul>`/`<li>`, which are parts of one control, not siblings. Lock-step fixture: a GroupBox holding a docked child,
+   proving the legend is not counted as a docked sibling (the child docks inside the 3/19/3/3 padding exactly as
+   `FormDockLayout` says).
+2. **The "complete rules" step lives in the CSS pair** `FormAnchorCss.Docked` ↔ `vgsDockCss` (§5.10). The same-commit rule
+   and the lock-step test name those two as well as `FormDockLayout` and the script's core — four files, one commit, one
+   gate.
+3. **The token scans skip comments and string literals**: §5.1's library-inclusion trigger and §8.4's `MixedCodeStyle`
+   detection read tokens, not text, so `' Using System.Windows.Forms` or `"System.Drawing."` inside a string triggers
+   neither. A test for each.
+4. **Intended divergence, recorded:** below the breakpoint a geometry READ returns the stored requested bounds
+   (`data-vgs-x/-y/-w/-h`, §5.9), while at desktop width after a window resize it MEASURES the live box. The two differ for an
+   anchored control (the live box has followed its anchors; the stored request has not). Documented in the library's
+   geometry members and pinned by an Edge test at both widths.
+
 ## 12. Risks
 - **The JS backend is the library's substrate**; 2.0 fixes what was measured, the library will find more. The library runs
   under node from its first commit and every behaviour is pinned by the twin, never by strings.
