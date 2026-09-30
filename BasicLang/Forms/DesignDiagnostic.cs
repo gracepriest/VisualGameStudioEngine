@@ -76,9 +76,12 @@ public static class DesignCodes
     //                   BL8018 below is a different finding and takes a different number.
     //   BL8032          a web <Bind> on an event the control's row does not declare (here)
     //   BL8033          a positioned control's Dock that is not a DockStyle member (here)
+    //   BL8034          a form reference row (AcceptButton) naming no control of the kinds it allows (here)
+    //   BL8035          a double-click opened a fallback event: the kind's default has no meaning on this
+    //                   target (a web Panel's Paint → Click) — an INFO notice, never a refusal (here)
     //
-    // The ENUMERATED table above is now exhausted: the next claim starts at BL8034. That is not
-    // the band being full — BL8034..BL8999 are simply unclaimed, and "full" would wrongly send the
+    // The ENUMERATED table above is now exhausted: the next claim starts at BL8036. That is not
+    // the band being full — BL8036..BL8999 are simply unclaimed, and "full" would wrongly send the
     // next task looking for another band.
     //
     // Nothing in this band lives in BasicLang.Compiler.ErrorCode as a string; the enum registration
@@ -312,6 +315,20 @@ public static class DesignCodes
     /// </summary>
     public const string UnknownWebEvent = "BL8032";
 
+    /// <summary>
+    /// A WARNING: a form reference row (<c>AcceptButton</c>, <c>CancelButton</c> — slice 3) names an Id this form has no
+    /// control of the allowed kinds for — renamed, deleted, or a Label. Nothing is written for it (csc would reject the
+    /// assignment, BasicLang silent); the document keeps the reference.
+    /// </summary>
+    public const string ReferenceNotFound = "BL8034";
+
+    /// <summary>
+    /// An INFO notice from the double-click gesture: the kind's default event has no meaning on this target, so the row's
+    /// declared fallback was opened instead (owner decision 2026-09-29: a web Panel's Paint → Click). Never a refusal —
+    /// the handler is written and opened; the notice only says it is not the event VS would open.
+    /// </summary>
+    public const string DefaultEventNotOnTarget = "BL8035";
+
     /// <summary>The form document itself is not well-formed XML, or its root/version is not one we know.</summary>
     public const string MalformedDocument = "BL8008";
 
@@ -388,6 +405,17 @@ public static class DesignCheck
                 DesignCodes.DegradedProperty,
                 $"{DesignCodes.DegradedProperty}: '{degraded.ControlId}.{degraded.Property}' is " +
                 $"frozen in the property grid — {degraded.Reason}",
+                filePath, 0, 0, IsWarning: true));
+        }
+
+        // ⛔ The FORM's own frozen rows too (slice 3, found anchoring the backlog): a Degraded ClientSize or
+        // MobileBreakpoint was frozen in the grid and invisible here. 'form.' is how every root finding is quoted.
+        foreach (var degraded in form.DegradedRoot)
+        {
+            findings.Add(new DesignDiagnostic(
+                DesignCodes.DegradedProperty,
+                $"{DesignCodes.DegradedProperty}: 'form.{degraded.Property}' is frozen in the property grid — " +
+                degraded.Reason,
                 filePath, 0, 0, IsWarning: true));
         }
 

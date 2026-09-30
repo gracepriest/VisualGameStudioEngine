@@ -2516,7 +2516,11 @@ public partial class MainWindowViewModel : ViewModelBase
                 // SetLanguageService — so the control's folding reaches clangd for .cpp and
                 // BasicLang for .bas, and is null for files no server serves.
                 LanguageService = _languageServices.GetFor(filePath),
-                GitService = _gitService
+                GitService = _gitService,
+                // ⛔ D2 (2026-09-30): the form designer writes a form's code-behind; when that .bas is open in a tab, the
+                // designer writes THROUGH the tab (clean: tab and disk; unsaved edits: the tab only) instead of leaving it
+                // stale. The same dictionary this method checks for "already open".
+                OpenDocumentLookup = path => _openDocuments.TryGetValue(path, out var open) ? open : null
             };
             document.SetContent(content);
 

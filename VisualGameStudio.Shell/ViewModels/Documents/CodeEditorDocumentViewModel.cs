@@ -755,7 +755,7 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
 
         try
         {
-            if (!await _fileService.FileExistsAsync(codePath))
+            if (!await CodeBehindExistsAsync(codePath))
             {
                 ReportDesignerRefusal(
                     codePath,
@@ -766,7 +766,8 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
                 return;
             }
 
-            var before = await _fileService.ReadFileAsync(codePath, CancellationToken.None);
+            // D2: the OPEN tab's text when the .bas is open (its unsaved edits included), else the disk.
+            var before = await ReadCodeBehindAsync(codePath, CancellationToken.None);
             var plan = BasicLang.Forms.FormHandlers.PlanDefault(file.Model, control, before);
 
             if (plan.Outcome == BasicLang.Forms.HandlerOutcome.Refused)
@@ -779,8 +780,7 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
 
             if (plan.Outcome == BasicLang.Forms.HandlerOutcome.Created)
             {
-                await _fileService.WriteFileAsync(codePath, plan.CodeText, CancellationToken.None);
-                _eventAggregator.Publish(new FileSavedEvent(codePath));
+                await WriteCodeBehindAsync(codePath, plan.CodeText, CancellationToken.None);
             }
 
             if (BasicLang.Forms.FormHandlers.EnsureBind(control, plan.EventName, plan.Handler))
@@ -790,6 +790,14 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
 
             SelectInDesigner(control);
             _eventAggregator.Publish(new NavigateToFileEvent(codePath, plan.CaretLine));
+
+            // ⛔ A substituted default (a web Panel: Paint has no page equivalent → Click) is SAID, as information —
+            // the handler was written and opened, so it is not a refusal, but the user must not wait for a Paint.
+            if (plan.Notice != null)
+            {
+                ReportDesignerRefusal(
+                    codePath, BasicLang.Forms.DesignCodes.DefaultEventNotOnTarget, plan.Notice, DiagnosticSeverity.Info);
+            }
         }
         catch (Exception ex)
         {
@@ -800,6 +808,79 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
     }
 
     /// <summary>
+    /// The IDE's OPEN document for a path, or null — set by the shell's file-open route
+    /// (<c>MainWindowViewModel.OpenFileAsync</c>). The designer writes a form's code-behind (a double-click's handler
+    /// stub, a save's regenerated regions); when that file is open in a tab the tab is the truth, not the disk.
+    ///
+    /// <para>⛔ Owner click-through D2 (2026-09-30): the designer wrote the .bas on disk and an already-open tab kept
+    /// showing the old text until it was closed and reopened — and that tab's next save would have written the stale
+    /// text back over the designer's work.</para>
+    /// </summary>
+    public Func<string, CodeEditorDocumentViewModel?>? OpenDocumentLookup { get; set; }
+
+    private CodeEditorDocumentViewModel? OpenCodeBehind(string codePath) =>
+        OpenDocumentLookup?.Invoke(codePath) is { } open && !ReferenceEquals(open, this) ? open : null;
+
+    /// <summary>The code-behind as the user sees it: the open tab's buffer (unsaved edits included), else the disk.</summary>
+    private async Task<string> ReadCodeBehindAsync(string codePath, CancellationToken cancellationToken) =>
+        OpenCodeBehind(codePath)?.Text ?? await _fileService.ReadFileAsync(codePath, cancellationToken);
+
+    /// <summary>Whether the code-behind exists: open in a tab, or on disk.</summary>
+    private async Task<bool> CodeBehindExistsAsync(string codePath) =>
+        OpenCodeBehind(codePath) != null || await _fileService.FileExistsAsync(codePath);
+
+    /// <summary>
+    /// Writes the designer's new code-behind text — the ONE route both designer writes take (D2):
+    /// <list type="bullet">
+    /// <item>not open → the disk, as before;</item>
+    /// <item>open and CLEAN → the disk AND the tab (an undoable edit in its buffer), which stays clean;</item>
+    /// <item>open with UNSAVED EDITS → the tab's buffer ONLY, and it stays dirty. The new text was computed from that
+    /// buffer, so the user's edits and the designer's are both in it; the disk is not touched, because writing the buffer
+    /// would save the user's edits without asking and writing the old disk text would lose them. The user saves the tab.</item>
+    /// </list>
+    /// </summary>
+    private async Task WriteCodeBehindAsync(string codePath, string text, CancellationToken cancellationToken)
+    {
+        var open = OpenCodeBehind(codePath);
+        if (open is { IsDirty: true })
+        {
+            open.ApplyDesignerWrite(text, savedToDisk: false);
+            return;
+        }
+
+        await _fileService.WriteFileAsync(codePath, text, cancellationToken);
+        open?.ApplyDesignerWrite(text, savedToDisk: true);
+        _eventAggregator.Publish(new FileSavedEvent(codePath));
+    }
+
+    /// <summary>
+    /// The form designer changed THIS document's text while it is open (D2): an undoable replace in the buffer. With
+    /// <paramref name="savedToDisk"/> the new text is also what the disk holds, so the document is clean afterwards;
+    /// otherwise it is compared with the text last loaded or saved, as any edit is.
+    /// </summary>
+    public void ApplyDesignerWrite(string text, bool savedToDisk)
+    {
+        if (savedToDisk)
+        {
+            _originalText = text;
+        }
+
+        ReplaceContent(text);
+
+        var wasDirty = IsDirty;
+        IsDirty = !string.Equals(Text, _originalText, StringComparison.Ordinal);
+        if (wasDirty != IsDirty)
+        {
+            DirtyChanged?.Invoke(this, EventArgs.Empty);
+            OnPropertyChanged(nameof(Title));
+            TitleChanged?.Invoke(this, EventArgs.Empty);
+        }
+
+        OnPropertyChanged(nameof(Text));
+        TextChanged?.Invoke(this, text);
+    }
+
+    /// <summary>
     /// Publishes one designer finding against the code-behind's key.
     ///
     /// <para>⚠ Always the CODE-BEHIND's path, never the document's. The aggregator keys findings by
@@ -807,14 +888,15 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
     /// save path — which republishes on the .bas — leaving a phantom in the Error List for the rest
     /// of the session.</para>
     /// </summary>
-    private void ReportDesignerRefusal(string codePath, string code, string message) =>
+    private void ReportDesignerRefusal(
+        string codePath, string code, string message, DiagnosticSeverity severity = DiagnosticSeverity.Warning) =>
         _eventAggregator.Publish(new DesignerDiagnosticsEvent(codePath, new List<DiagnosticItem>
         {
             new()
             {
                 Id = code,
                 Message = message,
-                Severity = DiagnosticSeverity.Warning,
+                Severity = severity,
                 FilePath = codePath,
                 Source = DesignerDiagnosticSource
             }
@@ -1729,7 +1811,7 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
                     Source = DesignerDiagnosticSource
                 });
             }
-            else if (!await _fileService.FileExistsAsync(codePath))
+            else if (!await CodeBehindExistsAsync(codePath))
             {
                 findings.Add(new DiagnosticItem
                 {
@@ -1744,13 +1826,13 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
             }
             else
             {
-                var before = await _fileService.ReadFileAsync(codePath, cancellationToken);
+                // D2: regenerated from — and into — the OPEN tab when the .bas is open, through the one write route.
+                var before = await ReadCodeBehindAsync(codePath, cancellationToken);
                 var result = BasicLang.Forms.FormCodeBehind.Regenerate(file, codePath, before);
 
                 if (result.Changed)
                 {
-                    await _fileService.WriteFileAsync(codePath, result.Text, cancellationToken);
-                    _eventAggregator.Publish(new FileSavedEvent(codePath));
+                    await WriteCodeBehindAsync(codePath, result.Text, cancellationToken);
                 }
 
                 findings.AddRange(result.Diagnostics.Select(ToDiagnosticItem));

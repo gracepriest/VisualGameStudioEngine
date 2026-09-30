@@ -77,6 +77,34 @@ public class FormRetargetPairTests
         </WebForm>
         """;
 
+    /// <summary>
+    /// A GroupBox wired on its DEFAULT event (Enter) and on a NON-default one (Click) — both are wired on both
+    /// targets, so both binds cross (pre-flight B1). Code review follow-up 2026-09-29: the pair used to stub the
+    /// default event only, so the crossed Click bind wired a Sub that did not exist.
+    /// </summary>
+    private const string WinFormsGroup = """
+        <Form Name="GroupForm" Version="1" Width="400" Height="300">
+          <Controls>
+            <GroupBox Id="grp" Text="Options" X="10" Y="10" Width="200" Height="100" TabIndex="0">
+              <Bind Event="Enter" Handler="grp_Enter"/>
+              <Bind Event="Click" Handler="grp_Click"/>
+            </GroupBox>
+          </Controls>
+        </Form>
+        """;
+
+    private const string WebGroup = """
+        <WebForm Name="GroupForm" Version="1">
+          <Layout Kind="Grid" Cols="1fr" Rows="auto" Gap="8px"/>
+          <Controls>
+            <GroupBox Id="grp" Text="Options" Col="0" Row="0" TabIndex="0">
+              <Bind Event="focusin" Handler="grp_Enter"/>
+              <Bind Event="click" Handler="grp_Click"/>
+            </GroupBox>
+          </Controls>
+        </WebForm>
+        """;
+
     private FormDocument Read(string xml, string fileName)
     {
         var file = FormDocumentReader.Read(Path.Combine(_dir, fileName), xml);
@@ -172,6 +200,61 @@ public class FormRetargetPairTests
         });
     }
 
+    /// <summary>
+    /// ⛔ Every bind that crossed gets its OWN stub, under its own handler name and with its own event's signature —
+    /// not only the default event's. A crossed non-default bind with no stub wires a Sub that does not exist, and the
+    /// pair stops compiling.
+    /// </summary>
+    [Test]
+    public void EveryCrossedBind_DefaultOrNot_GetsItsOwnStub()
+    {
+        var toWinForms = FormRetarget.ConvertToPair(Read(WebGroup, "GroupForm.blwebform"), FormTarget.WinForms).CodeText;
+        var toWeb = FormRetarget.ConvertToPair(Read(WinFormsGroup, "GroupForm.blform"), FormTarget.Web).CodeText;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(toWinForms, Does.Contain("AddHandler grp.Click, AddressOf grp_Click"));
+            Assert.That(toWinForms, Does.Contain("Private Sub grp_Click(sender As Object, e As EventArgs)"));
+            Assert.That(toWinForms, Does.Contain("Private Sub grp_Enter(sender As Object, e As EventArgs)"));
+
+            Assert.That(toWeb, Does.Contain("addEventListener(\"click\""));
+            Assert.That(toWeb, Does.Contain("Private Sub grp_Click(e As DomEvent)"));
+            Assert.That(toWeb, Does.Contain("Private Sub grp_Enter(e As DomEvent)"));
+            Assert.That(LineOf(toWeb, "Sub grp_Click"), Is.LessThan(InitMarkerLine(toWeb)), "web: handlers precede the init region");
+
+            foreach (var code in new[] { toWinForms, toWeb })
+            {
+                Assert.That(code.Split("Sub grp_Click(").Length - 1, Is.EqualTo(1), "one stub per handler, never two");
+                Assert.That(code.Split("Sub grp_Enter(").Length - 1, Is.EqualTo(1));
+            }
+        });
+    }
+
+    /// <summary>
+    /// ⛔ A crossed bind's stub takes ITS event's signature: a web Panel's Click arrives on a WinForms Panel whose
+    /// DEFAULT is Paint, and a <c>PaintEventArgs</c> stub wired to Click would not compile (no relaxation to it).
+    /// </summary>
+    [Test]
+    public void ACrossedNonDefaultBind_TakesItsOwnEventsSignature_NotTheDefaults()
+    {
+        var pair = FormRetarget.ConvertToPair(Read("""
+            <WebForm Name="PanelForm" Version="1">
+              <Layout Kind="Grid" Cols="1fr" Rows="auto" Gap="8px"/>
+              <Controls>
+                <Panel Id="pnl" Col="0" Row="0" TabIndex="0">
+                  <Bind Event="click" Handler="pnl_Click"/>
+                </Panel>
+              </Controls>
+            </WebForm>
+            """, "PanelForm.blwebform"), FormTarget.WinForms);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(pair.CodeText, Does.Contain("Private Sub pnl_Click(sender As Object, e As EventArgs)"));
+            Assert.That(pair.CodeText, Does.Not.Contain("PaintEventArgs"));
+        });
+    }
+
     [Test]
     public void ThePairsRegions_AreCanon_SoTheDesignersFirstSave_WritesInsteadOfRefusing()
     {
@@ -240,6 +323,51 @@ public class FormRetargetPairTests
         var csharp = WinFormsCatalogSweepTests.CompileToCSharp(pair.CodeText);
         WinFormsCompile.AssertCompiles(csharp,
             "the code-behind a retarget produced for a WinForms form must be one csc accepts.");
+    }
+
+    /// <summary>⛔ The crossed non-default bind, through csc: a wired Sub that does not exist is BC30451 / CS0103.</summary>
+    [Test]
+    [Category("Integration")]
+    public void ARetargetedPairWithANonDefaultBind_CompilesOnWinForms()
+    {
+        var pair = FormRetarget.ConvertToPair(Read(WebGroup, "GroupForm.blwebform"), FormTarget.WinForms);
+
+        var csharp = WinFormsCatalogSweepTests.CompileToCSharp(pair.CodeText);
+        WinFormsCompile.AssertCompiles(csharp,
+            "a retargeted pair whose GroupBox is wired on Click (non-default) and Enter must be one csc accepts.");
+    }
+
+    /// <summary>⛔ The same, built by the real CLI as a JavaScript project — both handlers must exist and be wired.</summary>
+    [Test]
+    [Category("Integration")]
+    public void ARetargetedPairWithANonDefaultBind_BuildsOnTheWeb()
+    {
+        var pair = FormRetarget.ConvertToPair(Read(WinFormsGroup, "GroupForm.blform"), FormTarget.Web);
+        var (exit, output) = BuildWebPair(pair, "GroupForm");
+
+        Assert.That(exit, Is.Zero, $"the real CLI refused the retargeted pair.\n{output}");
+    }
+
+    /// <summary>Writes a web pair into a JavaScript project and builds it with the real CLI.</summary>
+    private (int Exit, string Output) BuildWebPair(FormRetargetPair pair, string startupForm)
+    {
+        File.WriteAllText(Path.Combine(_dir, pair.DocumentFileName), pair.DocumentText);
+        File.WriteAllText(Path.Combine(_dir, pair.CodeFileName), pair.CodeText);
+        File.WriteAllText(Path.Combine(_dir, "App.blproj"), $"""
+            <BasicLangProject Version="1.0">
+              <PropertyGroup>
+                <ProjectName>App</ProjectName>
+                <OutputType>Exe</OutputType>
+                <TargetBackend>JavaScript</TargetBackend>
+                <StartupForm>{startupForm}</StartupForm>
+              </PropertyGroup>
+            </BasicLangProject>
+            """);
+        File.WriteAllText(Path.Combine(_dir, "Main.bas"), "Sub Main()\n    VgsForms.VgsDispatchForm()\nEnd Sub\n");
+
+        var (exit, stdout, stderr) = CliTestHarness.RunProcess(
+            CliTestHarness.CliPath(), new[] { "build", Path.Combine(_dir, "App.blproj") }, _dir, timeoutMs: 180_000);
+        return (exit, stdout + "\n" + stderr);
     }
 
     /// <summary>

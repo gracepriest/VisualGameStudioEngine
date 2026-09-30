@@ -38,17 +38,27 @@ public class FormRootLayoutTests
     private static FormPropertyDef Row(string name) => FormControlCatalog.FormRoot.Property(name)!;
 
     // ⚠ These expected sets are the SPEC's decisions (§2.3), not a list of catalog kinds.
+    // Slice 3 (spec §2.3's D1 set): every Form row on WinForms; on the web only BackColor/ForeColor/Font, on every layout.
+    private static readonly string[] WinFormsD1 =
+    {
+        "FormBorderStyle", "StartPosition", "WindowState", "MinimumSize", "MaximumSize", "ControlBox", "MaximizeBox",
+        "MinimizeBox", "ShowIcon", "ShowInTaskbar", "TopMost", "AcceptButton", "CancelButton", "KeyPreview",
+        "BackColor", "ForeColor", "Font", "Opacity"
+    };
+
+    private static readonly string[] WebD1 = { "BackColor", "ForeColor", "Font" };
+
     private static IEnumerable<TestCaseData> Documents()
     {
-        yield return new TestCaseData(FormTarget.WinForms, null, new[] { "Text", "ClientSize" })
+        yield return new TestCaseData(FormTarget.WinForms, null, new[] { "Text", "ClientSize" }.Concat(WinFormsD1).ToArray())
             .SetName("{m}(WinForms)");
-        yield return new TestCaseData(FormTarget.Web, null, new[] { "Text", "Cols", "Rows", "Gap" })
+        yield return new TestCaseData(FormTarget.Web, null, new[] { "Text", "Cols", "Rows", "Gap" }.Concat(WebD1).ToArray())
             .SetName("{m}(Web, no Layout)");
-        yield return new TestCaseData(FormTarget.Web, FormLayoutKind.Grid, new[] { "Text", "Cols", "Rows", "Gap" })
+        yield return new TestCaseData(FormTarget.Web, FormLayoutKind.Grid, new[] { "Text", "Cols", "Rows", "Gap" }.Concat(WebD1).ToArray())
             .SetName("{m}(Web Grid)");
-        yield return new TestCaseData(FormTarget.Web, FormLayoutKind.Flow, new[] { "Text", "Gap" })
+        yield return new TestCaseData(FormTarget.Web, FormLayoutKind.Flow, new[] { "Text", "Gap" }.Concat(WebD1).ToArray())
             .SetName("{m}(Web Flow)");
-        yield return new TestCaseData(FormTarget.Web, FormLayoutKind.Canvas, new[] { "Text", "ClientSize", "MobileBreakpoint" })
+        yield return new TestCaseData(FormTarget.Web, FormLayoutKind.Canvas, new[] { "Text", "ClientSize", "MobileBreakpoint" }.Concat(WebD1).ToArray())
             .SetName("{m}(Web Canvas)");
     }
 

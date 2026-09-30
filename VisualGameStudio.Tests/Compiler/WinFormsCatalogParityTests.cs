@@ -188,6 +188,64 @@ public class WinFormsCatalogParityTests
             "without it the snapshot agrees with the row");
     }
 
+    /// <summary>
+    /// Owner decision O2 (2026-09-29): the grid shows what VS shows, so a colour WinForms marks
+    /// <c>[Browsable(false)]</c> on a kind is not offered at all — every WinForms colour row must be one the
+    /// snapshot (browsable-only) lists for that kind. Catalog-driven: a hidden colour re-added to any kind fails here.
+    /// </summary>
+    [Test]
+    public void EveryWinFormsColourRow_IsBrowsableInWinForms()
+    {
+        var snapshot = WinFormsMetadata.Load();
+        var hidden = WinFormsDefinitions()
+            .SelectMany(d => d.Properties
+                .Where(p => p.Type == FormPropertyType.Color && p.AppliesTo(FormTarget.WinForms) &&
+                            snapshot.Type(d.Kind)?.Property(p.Name) == null)
+                .Select(p => $"{d.Kind}.{p.Name}"))
+            .ToList();
+
+        Assert.That(hidden, Is.Empty, "WinForms hides these from its property grid, so ours must not offer them");
+    }
+
+    /// <summary>
+    /// Owner decision O4 (2026-09-29): BackgroundWorker's descriptions are WinForms' OWN text. .NET 8's type carries no
+    /// [Description] (the snapshot's empty text — why the exemption stays), so the text is .NET Framework 4.8's,
+    /// measured with <c>TypeDescriptor</c> over System.dll: the designer does not invent descriptions for it.
+    /// </summary>
+    [Test]
+    public void TheBackgroundWorkersDescriptions_AreWinFormsOwnText()
+    {
+        var worker = FormControlCatalog.Find("BackgroundWorker")!;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(worker.Property("WorkerReportsProgress")!.Description, Is.EqualTo("Whether the worker will report progress."));
+            Assert.That(worker.Property("WorkerSupportsCancellation")!.Description, Is.EqualTo("Whether the worker supports cancellation."));
+            Assert.That(worker.DefaultEventDef!.Description,
+                Is.EqualTo("Event handler to be run on a different thread when the operation begins."));
+        });
+    }
+
+    /// <summary>
+    /// ⛔ Owner decision (2026-09-29): a double-click opens what VS opens. Where WinForms declares a
+    /// <c>[DefaultEvent]</c>, the catalog's default event on WinForms IS it — Panel's Paint, TrackBar's Scroll,
+    /// DataGridView's CellContentClick. The check this fixture lacked, which is how three rows drifted.
+    /// A kind whose snapshot names none (ErrorProvider; BackgroundWorker on .NET 8) is not judged: the gesture
+    /// still needs an event, and there is nothing to disagree with.
+    /// </summary>
+    [Test]
+    public void TheDefaultEvent_IsWinFormsOwn_WhereWinFormsDeclaresOne()
+    {
+        var snapshot = WinFormsMetadata.Load();
+        var drift = WinFormsDefinitions()
+            .Where(d => d.Events != null && snapshot.Type(d.Kind)?.DefaultEvent is { } expected &&
+                        !string.Equals(d.DefaultEvent(FormTarget.WinForms), expected, StringComparison.Ordinal))
+            .Select(d => $"{d.Kind}: catalog {d.DefaultEvent(FormTarget.WinForms)}, WinForms {snapshot.Type(d.Kind)!.DefaultEvent}")
+            .ToList();
+
+        Assert.That(drift, Is.Empty, string.Join("\n", drift));
+    }
+
     [Test]
     public void TheExemptionSweep_HasSomethingToSweep()
     {

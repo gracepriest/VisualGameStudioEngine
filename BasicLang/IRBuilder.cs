@@ -333,7 +333,10 @@ namespace BasicLang.Compiler.IR
         {
             if (callee == null) return (writtenName, null);
             var isProcedure = callee.Kind == SymbolKind.Function || callee.Kind == SymbolKind.Subroutine;
-            if (isProcedure && !string.IsNullOrEmpty(callee.OwningModule))
+            // An IMPORT carries its Module too (so C# qualifies it by the Module, not the file), and
+            // takes the same class-method guard as the arm below.
+            if (isProcedure && !string.IsNullOrEmpty(callee.OwningModule)
+                && !(callee.IsImported && IsCurrentClassMethod(callee.Name)))
                 return (GlobalIrName(callee.OwningModule, callee.Name), callee.OwningModule);
             // ⛔ ...but NEVER owner an import when the class being built declares that method
             // itself. One symbol table entry per name means the last declaration wins, so without

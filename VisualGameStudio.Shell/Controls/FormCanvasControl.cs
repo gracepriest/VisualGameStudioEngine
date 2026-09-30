@@ -1918,7 +1918,8 @@ public class FormCanvasControl : Control
             }
         }
 
-        context.FillRectangle(SurfaceBrush, surface);
+        // D1: the Form's own BackColor, when it sets one — the running window's client area is that colour.
+        context.FillRectangle(FormSurfaceColour(document) ?? SurfaceBrush, surface);
 
         if (isPixel)
         {
@@ -2082,7 +2083,8 @@ public class FormCanvasControl : Control
         // ⚠ No selected/unselected variant here, deliberately. VB6 marks a selection with its eight
         // handles and NOTHING else — a control does not change colour or gain an outline when you
         // click it. DrawHandles, called after every control is painted, is the whole indication.
-        var schematic = FormControlCatalog.Find(control.Kind)?.Schematic ?? FormSchematic.Input;
+        var definition = FormControlCatalog.Find(control.Kind);
+        var schematic = definition?.Schematic ?? FormSchematic.Input;
 
         // The control's own colours win over the system ones. `face` is what a chrome-coloured
         // control fills with, `client` what a white-interior one does — a BackColor overrides
@@ -2090,7 +2092,14 @@ public class FormCanvasControl : Control
         var back = ControlColour(control, "BackColor");
         var face = back ?? SurfaceBrush;
         var client = back ?? WindowBrush;
-        var ink = ControlColour(control, "ForeColor") ?? LabelBrush;
+
+        // ⛔ Owner click-through D1 (2026-09-30): an AMBIENT ForeColor the control does not set is its container's /
+        // the Form's — the running form inks a Label on a red-text Form red, and the canvas drew it black.
+        var ink = ControlColour(control, "ForeColor") ?? InheritedColour(control, definition, "ForeColor") ?? LabelBrush;
+
+        // ⛔ D1: the caption's EFFECTIVE font (own, else the nearest container's, else the Form's — FormAmbient, the one
+        // rule the grid's Font parts use). Null when no Font is set anywhere up the chain: the schematic's own caption.
+        var font = CaptionFontOf(control, definition);
 
         // The control's own Text if it has one, else its id — a box with no label is unidentifiable
         // on a schematic, which is the one thing the canvas has to get right. ⛔ The SAME answer the
@@ -2101,8 +2110,81 @@ public class FormCanvasControl : Control
         // ⚠ What was drawn is RETURNED, never stored here: the live canvas discards it, and only
         // Render's test-only caption log (null on every real canvas) records it — see
         // RenderDocumentForTest.
-        return DrawSchematic(context, schematic, bounds, label, face, client, ink, underline);
+        return DrawSchematic(context, schematic, bounds, label, face, client, ink, underline, font);
     }
+
+    /// <summary>
+    /// A caption's own font (D1): the family, the size in form pixels at 1:1 (points × 96/72), and the styles. The draw
+    /// multiplies the size by the canvas zoom, as the control's rectangle is.
+    /// </summary>
+    public sealed record CaptionFont(string Family, double SizeAtOne, bool Bold, bool Italic, bool Underline, bool Strikeout)
+    {
+        public Typeface Typeface => new(
+            new FontFamily(Family), Italic ? FontStyle.Italic : FontStyle.Normal, Bold ? FontWeight.Bold : FontWeight.Normal);
+    }
+
+    /// <summary>
+    /// The font <paramref name="control"/>'s caption is drawn in: its own usable Font, else what it INHERITS
+    /// (<see cref="FormAmbient.Inherited"/> — nearest container, then the Form). ⚠ Null — the schematic's fixed caption —
+    /// when the kind has no Font row, or when nothing up the chain sets one (the inherited answer is then only the Form
+    /// row's catalog default): an untouched form draws exactly as it always has, and its pinned caption arithmetic holds.
+    /// </summary>
+    private CaptionFont? CaptionFontOf(FormControl control, FormControlDef? definition)
+    {
+        var row = definition?.Property("Font");
+        var document = Document;
+        if (row == null || document == null)
+        {
+            return null;
+        }
+
+        var text = control.Properties.TryGetValue("Font", out var own) && row.Accepts(own, document.Target) ? own
+            : FontSetAbove(document, control) ? FormAmbient.Inherited(document, control, "Font")
+            : null;
+
+        return text != null && FormFontValue.TryParse(text, out var font)
+            ? new CaptionFont(font.Family, (double)font.Size * 96 / 72, font.Bold, font.Italic, font.Underline, font.Strikeout)
+            : null;
+    }
+
+    /// <summary>Whether a container of <paramref name="control"/>, or the Form, carries a USABLE Font of its own.</summary>
+    private static bool FontSetAbove(FormDocument document, FormControl control)
+    {
+        for (var parent = document.ParentOf(control); parent != null; parent = document.ParentOf(parent))
+        {
+            if (parent.Properties.TryGetValue("Font", out var value) &&
+                parent.Definition?.Property("Font") is { } row && row.Accepts(value, document.Target))
+            {
+                return true;
+            }
+        }
+
+        return document.Properties.TryGetValue("Font", out var own) &&
+               FormControlCatalog.FormRoot.Property("Font") is { } rootRow && rootRow.Accepts(own, document.Target);
+    }
+
+    /// <summary>
+    /// What an AMBIENT colour row inherits (D1) — only where the kind's row has no static default of its own (a TextBox's
+    /// ForeColor is WindowText, not its parent's), and only a colour the canvas can parse; otherwise null.
+    /// </summary>
+    private IBrush? InheritedColour(FormControl control, FormControlDef? definition, string property)
+    {
+        var document = Document;
+        if (document == null || definition?.Property(property) is not { } row || row.DefaultFor(document.Target) != null)
+        {
+            return null;
+        }
+
+        return FormAmbient.Inherited(document, control, property) is { } text && Color.TryParse(text, out var colour)
+            ? new SolidColorBrush(colour)
+            : null;
+    }
+
+    /// <summary>The Form's own BackColor on its surface (D1), when it sets one the canvas can parse; else null.</summary>
+    private static IBrush? FormSurfaceColour(FormDocument document) =>
+        document.Properties.TryGetValue("BackColor", out var text) && Color.TryParse(text, out var colour)
+            ? new SolidColorBrush(colour)
+            : null;
 
     /// <summary>
     /// TEST SEAM (form-designer menu-editor defects): the exact string <see cref="DrawControl"/>
@@ -2244,7 +2326,8 @@ public class FormCanvasControl : Control
         IBrush face,
         IBrush client,
         IBrush ink,
-        int underline = -1)
+        int underline = -1,
+        CaptionFont? font = null)
     {
         // Where the label goes once the shape has had its say: indented past a tick or a bullet,
         // centred in a button, at the top-left of everything else.
@@ -2260,6 +2343,14 @@ public class FormCanvasControl : Control
         var zoom = _transform.Zoom;
         var captionSize = FormCanvasTransform.CaptionFontSize;
 
+        // ⛔ D1 (2026-09-30): EVERY caption this method shapes — the ones an arm measures to centre or clear, and the final
+        // draw — goes through here, so a control's own font sizes the caption it is centred by. With a font the size is
+        // its point size at the canvas zoom; without one, the arm's schematic size, exactly as before.
+        FormattedText CaptionText(string text, IBrush brush, double schematicSize) => font == null
+            ? Text(text, brush, schematicSize)
+            : new FormattedText(text, CultureInfo.CurrentCulture, FlowDirection.LeftToRight, font.Typeface,
+                font.SizeAtOne * zoom, brush);
+
         switch (schematic)
         {
             case FormSchematic.Text:
@@ -2272,7 +2363,7 @@ public class FormCanvasControl : Control
                 Bevel(context, bounds, raised: true);
                 if (!tooSmallForText && !string.IsNullOrEmpty(label))
                 {
-                    var caption = Text(label, ink);
+                    var caption = CaptionText(label, ink, captionSize);
                     labelOrigin = new Point(
                         bounds.X + Math.Max(3, (bounds.Width - caption.Width) / 2),
                         bounds.Y + Math.Max(2, (bounds.Height - caption.Height) / 2));
@@ -2372,9 +2463,9 @@ public class FormCanvasControl : Control
 
                 if (!tooSmallForText && !string.IsNullOrEmpty(label))
                 {
-                    var caption = Text(label, LabelBrush);
+                    var caption = CaptionText(label, LabelBrush, captionSize);
                     context.FillRectangle(SurfaceBrush,
-                        new Rect(bounds.X + 6, bounds.Y, caption.Width + 4, 12));
+                        new Rect(bounds.X + 6, bounds.Y, caption.Width + 4, Math.Max(12, caption.Height)));
                 }
 
                 break;
@@ -2402,7 +2493,7 @@ public class FormCanvasControl : Control
                 // what a LinkLabel is.
                 if (!tooSmallForText && !string.IsNullOrEmpty(label))
                 {
-                    var linkText = Text(label, ink);
+                    var linkText = CaptionText(label, ink, captionSize);
                     var baseline = bounds.Y + 2 + linkText.Height - 1;
                     context.DrawLine(
                         new Pen(ink, 1),
@@ -2856,7 +2947,7 @@ public class FormCanvasControl : Control
                 captionSize = FormCanvasTransform.CaptionFontSize * zoom;
                 if (!tooSmallForText && !string.IsNullOrEmpty(label))
                 {
-                    var caption = Text(label, ink, captionSize);
+                    var caption = CaptionText(label, ink, captionSize);
                     labelOrigin = new Point(
                         bounds.X + (FormCanvasTransform.ItemCaptionInset(FormSchematic.StatusLabel) * zoom),
                         bounds.Y + Math.Max(2 * zoom, (bounds.Height - caption.Height) / 2));
@@ -2880,9 +2971,21 @@ public class FormCanvasControl : Control
         // ⛔ The mnemonic underline is a decoration ON the formatted text, not a line drawn at a
         // computed x: the shaper decides where that glyph starts, so this lands under the right
         // character in any font, and moves with it wherever an arm put the caption.
-        var fontSize = captionSize;
-        var formatted = Text(label, ink, fontSize);
-        if (underline >= 0 && underline < label.Length)
+        var formatted = CaptionText(label, ink, captionSize);
+        // ⚠ The em size the text was SHAPED at — the same expression CaptionText used, never re-derived elsewhere.
+        var fontSize = font == null ? captionSize : font.SizeAtOne * zoom;
+
+        // D1: the font's own Underline / Strikeout across the whole caption; the mnemonic's single-character underline
+        // on top (a whole-caption underline already covers it).
+        if (font is { Underline: true } or { Strikeout: true })
+        {
+            var decorations = new TextDecorationCollection();
+            if (font.Underline) decorations.AddRange(TextDecorations.Underline);
+            if (font.Strikeout) decorations.AddRange(TextDecorations.Strikethrough);
+            formatted.SetTextDecorations(decorations);
+        }
+
+        if (underline >= 0 && underline < label.Length && font is not { Underline: true })
         {
             formatted.SetTextDecorations(TextDecorations.Underline, underline, 1);
         }

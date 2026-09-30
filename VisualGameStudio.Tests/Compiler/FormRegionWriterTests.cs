@@ -952,6 +952,55 @@ public class FormRegionWriterTests
     private static RegionWriteResult WriteWeb(FormDocument form) =>
         RegionWriter.Write("LoginForm.bas", ScaffoldedFile(), form, "LoginForm.blwebform");
 
+    // ==================================================================
+    // Slice 3 backlog (carried from slice 1 Task 5 review): a value the WEB refuses is left out of the page,
+    // and used to be left out SILENTLY — BL8009 was WinForms-only.
+    // ==================================================================
+
+    /// <summary>
+    /// ⛔ The web counterpart of AppendProperties' BL8009: the same document, the same catalog reason
+    /// (DescribeRefusal), the page's ending. A warning, never a refusal — the value is preserved in the
+    /// document and valid on the other target.
+    /// </summary>
+    [Test]
+    public void AValueTheWebRefuses_IsNamedAsLeftOutOfThePage()
+    {
+        var form = WebLoginForm();
+        form.Controls[0].Properties["BackColor"] = "ActiveCaption";
+
+        var result = WriteWeb(form);
+        var row = FormControlCatalog.Find("Button")!.Property("BackColor")!;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Refused, Is.False, string.Join("; ", result.Diagnostics.Select(d => d.Format())));
+            var degraded = result.Diagnostics.Single(d => d.Code == DesignCodes.DegradedProperty);
+            Assert.That(degraded.IsWarning, Is.True);
+            Assert.That(degraded.Message, Does.Contain("'btnLogin.BackColor'")
+                .And.Contain(row.DescribeRefusal("ActiveCaption", FormTarget.Web))
+                .And.Contain("It is not written into the page."));
+        });
+    }
+
+    /// <summary>
+    /// The check asks the WEB judgement of a row that EXISTS on the web: a usable value, and a WinForms-only
+    /// row (that is BL8016's finding), are not this warning's business.
+    /// </summary>
+    [Test]
+    public void AUsableWebValue_AndAWinFormsOnlyRow_AreNotReportedAsLeftOut()
+    {
+        var form = WebLoginForm();
+        form.Controls[0].Properties["BackColor"] = "Control";   // a system colour WITH a CSS equivalent
+        var num = new FormControl { Kind = "NumericUpDown", Id = "num", TabIndex = 1 };
+        num.Properties["DecimalPlaces"] = "two";                // WinForms-only row, unparseable anyway
+        form.Controls.Add(num);
+
+        var result = WriteWeb(form);
+
+        Assert.That(result.Diagnostics.Select(d => d.Code), Has.None.EqualTo(DesignCodes.DegradedProperty),
+            string.Join("; ", result.Diagnostics.Select(d => d.Format())));
+    }
+
     /// <summary>
     /// ⛔⛔ The CATALOG's spelling reaches <c>addEventListener</c>, not the document's.
     ///

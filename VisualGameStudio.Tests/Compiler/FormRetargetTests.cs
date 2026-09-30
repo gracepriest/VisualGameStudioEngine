@@ -511,6 +511,107 @@ public class FormRetargetTests
         });
     }
 
+    /// <summary>
+    /// Slice 3 pre-flight B1: GroupBox's default event became Enter (owner decision O3), and a control bind used to
+    /// cross ONLY on the default event — so every existing GroupBox <c>Click</c> bind would have been dropped. A bind
+    /// crosses when its event is wired on BOTH targets (through <see cref="FormEvents.WiredOn"/>, the one seam),
+    /// under the destination's name.
+    /// </summary>
+    [TestCase(FormTarget.WinForms, "Click", "click")]
+    [TestCase(FormTarget.Web, "click", "Click")]
+    [TestCase(FormTarget.WinForms, "Enter", "focusin")]
+    [TestCase(FormTarget.Web, "focusin", "Enter")]
+    public void AGroupBoxBind_OnAnyEventWiredOnBothTargets_Crosses(FormTarget from, string fromEvent, string toEvent)
+    {
+        var source = new FormDocument { Target = from, Name = "Sweep" };
+        var group = FormCatalogShapes.Canonical(source, FormControlCatalog.Find("GroupBox")!, "grp");
+        group.Binds.Add(new FormBind { Event = fromEvent, Handler = "grp_Handler" });
+
+        var result = FormRetarget.Convert(source, Other(from));
+        var crossed = result.Document.FindById("grp")!;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(crossed.Binds.Select(b => (b.Event, b.Handler)), Is.EqualTo(new[] { (toEvent, "grp_Handler") }));
+            Assert.That(Of(result, DesignCodes.RetargetBindLost), Is.Empty);
+        });
+    }
+
+    /// <summary>
+    /// ⚠ The consequence of owner decision 2026-09-29 (TrackBar opens on Scroll, which is the page's <c>input</c>): an
+    /// EXISTING web TrackBar bound on <c>input</c> — written when <c>input</c> meant ValueChanged — keeps firing exactly
+    /// as before on the page, but retargets to WinForms as Scroll. Scroll is what WinForms raises for a user's drag,
+    /// the closest match to the DOM's <c>input</c>. Pinned so the change of meaning is deliberate.
+    /// </summary>
+    [Test]
+    public void AnExistingWebTrackBarInputBind_RetargetsToScroll()
+    {
+        var source = new FormDocument { Target = FormTarget.Web, Name = "Sweep" };
+        var bar = FormCatalogShapes.Canonical(source, FormControlCatalog.Find("TrackBar")!, "trk");
+        bar.Binds.Add(new FormBind { Event = "input", Handler = "trk_Input" });
+
+        var crossed = FormRetarget.Convert(source, FormTarget.WinForms).Document.FindById("trk")!;
+
+        Assert.That(crossed.Binds.Select(b => (b.Event, b.Handler)), Is.EqualTo(new[] { ("Scroll", "trk_Input") }),
+            "the user's handler name is kept; only the event it means on WinForms is named");
+    }
+
+    /// <summary>A WinForms Panel's Paint bind has no page equivalent: it is dropped AND named, never carried silently.</summary>
+    [Test]
+    public void ToWeb_APanelPaintBind_IsDroppedAndReported()
+    {
+        var source = new FormDocument { Target = FormTarget.WinForms, Name = "Sweep" };
+        var panel = FormCatalogShapes.Canonical(source, FormControlCatalog.Find("Panel")!, "pnl");
+        panel.Binds.Add(new FormBind { Event = "Paint", Handler = "pnl_Paint" });
+
+        var result = FormRetarget.Convert(source, FormTarget.Web);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Document.FindById("pnl")!.Binds, Is.Empty);
+            Assert.That(Of(result, DesignCodes.RetargetBindLost).Single().Message, Does.Contain("Paint").And.Contain("pnl_Paint"));
+        });
+    }
+
+    /// <summary>
+    /// ⛔ Catalog-driven: EVERY event of every kind that exists on both targets and is wired on both crosses under
+    /// the destination's name, and nothing else is reported lost for it. A row whose event lists widen (slice 5) is
+    /// covered the day it widens.
+    /// </summary>
+    [Test]
+    public void EveryEventWiredOnBothTargets_Crosses_UnderTheDestinationsName(
+        [Values(FormTarget.WinForms, FormTarget.Web)] FormTarget from)
+    {
+        var to = Other(from);
+        var exercised = 0;
+
+        Assert.Multiple(() =>
+        {
+            foreach (var definition in FormControlCatalog.For(from).Where(d => d.SupportsTarget(to)))
+            {
+                var there = FormEvents.WiredOn(definition, to);
+                foreach (var evt in FormEvents.WiredOn(definition, from).Where(e => there.Contains(e)))
+                {
+                    var source = new FormDocument { Target = from, Name = "Sweep" };
+                    var control = FormCatalogShapes.Canonical(source, definition, "c");
+                    control.Binds.Add(new FormBind { Event = FormEvents.NameOn(evt, from)!, Handler = "c_Handler" });
+
+                    var result = FormRetarget.Convert(source, to);
+                    var crossed = result.Document.AllControls().Concat(result.Document.AllComponents())
+                        .Single(c => c.Kind == definition.Kind);
+
+                    Assert.That(crossed.Binds.Select(b => b.Event), Is.EqualTo(new[] { FormEvents.NameOn(evt, to) }),
+                        $"{definition.Kind}.{evt.Name} {from}→{to}");
+                    Assert.That(Of(result, DesignCodes.RetargetBindLost), Is.Empty, $"{definition.Kind}.{evt.Name} {from}→{to}");
+                    exercised++;
+                }
+            }
+        });
+
+        Assert.That(exercised, Is.GreaterThan(FormControlCatalog.For(from).Count(d => d.SupportsTarget(to)) / 2),
+            "the sweep reaches most kinds, or it passes by absence");
+    }
+
     // ==================================================================
     // Web → WinForms: cells become pixels by a rule the finding can state
     // ==================================================================
@@ -1668,7 +1769,7 @@ public class FormRetargetTests
     /// equivalent, and a CSS colour name System.Drawing.Color lacks. The sweep picks, per row, whichever
     /// one the source accepts and the destination refuses, so a new refusal kind needs only a new entry.
     /// </summary>
-    private static readonly string[] TargetRefusedSamples = { "ActiveCaption", "RebeccaPurple" };
+    private static readonly string[] TargetRefusedSamples = { "ActiveCaption", "RebeccaPurple", "UpArrow" };
 
     /// <summary>
     /// ⛔ Catalog-driven companion of the sweep above: every property that APPLIES on both targets but
@@ -1726,6 +1827,9 @@ public class FormRetargetTests
         FormPropertyType.Color => "#ff0000",
         FormPropertyType.Enum => property.AllowedValues![0],
         FormPropertyType.Size => "75, 23",
+        FormPropertyType.Font => "Arial, 10pt",
+        FormPropertyType.Padding => "4",
+        FormPropertyType.Cursor => "Hand",
         _ => "x"
     };
 }

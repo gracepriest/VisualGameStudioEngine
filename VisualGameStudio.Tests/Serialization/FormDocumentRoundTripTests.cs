@@ -349,9 +349,17 @@ public class FormDocumentRoundTripTests
         UnicodeMinusCulture.Require();
         var xml = NegativeWinForm.Replace("X=\"-5\"", $"X=\"{UnicodeMinusCulture.Minus}5\"");
 
-        var pixel = (PixelGeometry)Read(xml, "F.blform").Model.FindById("btn")!.Geometry!;
+        var file = Read(xml, "F.blform");
+        var pixel = (PixelGeometry)file.Model.FindById("btn")!.Geometry!;
 
-        Assert.That(pixel.X, Is.Not.EqualTo(-5), "read culture-free, exactly as an en-US machine reads it");
+        // ⛔ Tightened in slice 3 (backlog (1)): "not -5" alone let the reader fall silently to 0. The value is
+        // unreadable AND the row says so — Degraded, frozen, the reason naming the minus sign.
+        Assert.Multiple(() =>
+        {
+            Assert.That(pixel.X, Is.EqualTo(0), "read culture-free, exactly as an en-US machine reads it");
+            Assert.That(file.TierOf("btn", "X"), Is.EqualTo(PropertyTier.Degraded));
+            Assert.That(file.DegradedReason("btn", "X"), Does.Contain("U+2212"));
+        });
     }
 
     /// <summary>

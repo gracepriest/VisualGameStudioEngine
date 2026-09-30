@@ -796,16 +796,67 @@ public class FormPlacementTests
 
             Assert.That(result.Refusal, Is.Null, $"{definition.Kind}: {result.Refusal}");
 
-            offenders.AddRange(result.Control!.Properties.Keys
-                .Where(k => !string.Equals(k, "Text", StringComparison.OrdinalIgnoreCase) &&
-                            !(definition.Place == FormPlace.Docked && string.Equals(k, "Dock", StringComparison.OrdinalIgnoreCase)))
-                .Select(k => $"{definition.Kind}.{k} = {result.Control.Properties[k]}"));
+            // ⚠ Slice 3 (owner decision O1): a row's DropValues are the one other thing a drop writes — the designer
+            // PREFERENCE (TableLayoutPanel 2×2) written explicitly at placement, exactly as spec §2.7 says a
+            // preference must be. Allowed only with the row's own value.
+            offenders.AddRange(result.Control!.Properties
+                .Where(kv => !string.Equals(kv.Key, "Text", StringComparison.OrdinalIgnoreCase) &&
+                             !(definition.Place == FormPlace.Docked && string.Equals(kv.Key, "Dock", StringComparison.OrdinalIgnoreCase)) &&
+                             !(definition.DropValues?.TryGetValue(kv.Key, out var dropped) == true && dropped == kv.Value))
+                .Select(kv => $"{definition.Kind}.{kv.Key} = {kv.Value}"));
         }
 
         Assert.That(offenders, Is.Empty,
-            "placement wrote a property beyond the caption and a strip's Dock — a default the grid displays " +
-            "would now also be WRITTEN, and a catalog default change would change the program:\n" +
+            "placement wrote a property beyond the caption, a strip's Dock and the row's DropValues — a default the " +
+            "grid displays would now also be WRITTEN, and a catalog default change would change the program:\n" +
             string.Join("\n", offenders));
+    }
+
+    /// <summary>
+    /// Owner decision O1 (2026-09-29): a newly dropped TableLayoutPanel starts 2 columns × 2 rows, as Visual
+    /// Studio drops one. ⛔ WinForms' own default stays 0×0 (the parity test pins it) — this is what a DROP
+    /// writes, not what an absent attribute means.
+    /// </summary>
+    [Test]
+    public void ADroppedTableLayoutPanel_StartsTwoByTwo_WhileItsDefaultStaysWinForms()
+    {
+        var result = FormPlacement.Place(WinFormsDocument(), "TableLayoutPanel", 10, 10);
+        var row = FormControlCatalog.Find("TableLayoutPanel")!;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Refusal, Is.Null);
+            Assert.That(result.Control!.Properties["ColumnCount"], Is.EqualTo("2"));
+            Assert.That(result.Control.Properties["RowCount"], Is.EqualTo("2"));
+            Assert.That(row.Property("ColumnCount")!.Default, Is.EqualTo("0"), "WinForms' [DefaultValue], unchanged");
+            Assert.That(row.Property("RowCount")!.Default, Is.EqualTo("0"));
+        });
+    }
+
+    /// <summary>
+    /// ⛔ Catalog integrity for the facet: a DropValues entry must name a property the row HAS, with a value that
+    /// row accepts on every target the kind exists on — otherwise a drop would write a Degraded value or an
+    /// attribute the reader keeps as unknown.
+    /// </summary>
+    [Test]
+    public void EveryDropValue_IsARowOfItsKind_WithAValueItAccepts()
+    {
+        var offenders = FormControlCatalog.All
+            .Where(d => d.DropValues != null)
+            .SelectMany(d => d.DropValues!.Select(kv => (Definition: d, kv.Key, kv.Value)))
+            .Where(x => x.Definition.Property(x.Key) is not { } p ||
+                        new[] { FormTarget.WinForms, FormTarget.Web }
+                            .Where(t => x.Definition.SupportsTarget(t) && p.AppliesTo(t))
+                            .Any(t => !p.Accepts(x.Value, t)))
+            .Select(x => $"{x.Definition.Kind}.{x.Key} = {x.Value}")
+            .ToList();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(offenders, Is.Empty);
+            Assert.That(FormControlCatalog.All.Count(d => d.DropValues != null), Is.GreaterThan(0),
+                "the facet has at least one row, or this passes by absence");
+        });
     }
 
     /// <summary>
