@@ -2611,7 +2611,22 @@ public class JavaScriptDecimalTests
 
             """;
 ```
-  Wire: `UsesDecimal`, `EmitDecimalPrelude` (before the conversion prelude — `__blStr` references the class), constants, defaults, `__blStr`, the allow-list, the exception types. **Licence:** the prelude's first lines are the dotnet/runtime notice comment above (it is emitted into every user's App.js), and `THIRD-PARTY-NOTICES.md` gains one entry covering `VarR8FromDec`, `VarDecFromR8` and the power-of-ten table (the pattern of the existing dotnet/winforms entry for the catalog's descriptions). A test asserts the emitted App.js of a Decimal program contains the notice line. Arithmetic/comparison/conversion lowering is Tasks 20–22; this task needs only literals, assignment, members and printing.
+  Wire: `UsesDecimal`, `EmitDecimalPrelude` (before the conversion prelude — `__blStr` references the class), constants, defaults, `__blStr`, the allow-list, the exception types. **Licence:** the prelude's first lines are the dotnet/runtime notice comment above (it is emitted into every user's App.js), and `THIRD-PARTY-NOTICES.md` gains one entry covering `VarR8FromDec`, `VarDecFromR8` and the power-of-ten table (the pattern of the existing dotnet/winforms entry for the catalog's descriptions). A test pins it on the EMITTED text: add to `JavaScriptDecimalTests`
+
+```csharp
+    /// <summary>MIT: the ported code ships inside every user's App.js, so the notice must be IN the emitted prelude.</summary>
+    [Test]
+    public void TheEmittedPrelude_CarriesTheDotnetRuntimeNotice()
+    {
+        var js = JsTestSupport.CompileOptimized("Sub Main()\n Dim d As Decimal = 1.5D\n Console.WriteLine(d)\nEnd Sub\n");
+        Assert.Multiple(() =>
+        {
+            Assert.That(js, Does.Contain("class VgsDecimal"));
+            Assert.That(js, Does.Contain("Portions derived from dotnet/runtime (System.Decimal.DecCalc"));
+            Assert.That(js, Does.Contain("MIT License"));
+        });
+    }
+``` Arithmetic/comparison/conversion lowering is Tasks 20–22; this task needs only literals, assignment, members and printing.
 - [ ] **Step 4: Run — GREEN**, plus `JsExecutionTierRosterTests`, `JavaScriptCodeGenTests`, every test grepping `BL7007` (a Decimal refusal test there becomes a lowering test — list them).
 - [ ] **Step 5: Mutations:** (0) `UsesDecimal` scans only function bodies (not class fields) → `DecimalOnlyInASiblingFilesField_OnEveryRoute` red with `VgsDecimal is not defined`; (1) render the constant with `m.ToString()` under `sv-SE` culture (drop `InvariantCulture`) → with the test run under `sv-SE` (set it in a one-off test) `LiteralsKeepTheirScale` red; (2) `__blStr` without the Decimal arm → `TheTextForms`/`LiteralsKeepTheirScale` red (`[object Object]`); (3) default `null` instead of `ZERO` → `FieldsProperties…` red.
 - [ ] **Step 6: Commit.**
@@ -2695,6 +2710,30 @@ Plan review CRITICAL; scope call S10. The C# backend is a BasicLang backend, and
     private static bool __BlIsNumber(object o) =>
         o is byte or sbyte or short or ushort or int or uint or long or ulong or float or double or decimal;
 ```
+- Modify: `VisualGameStudio.Tests/Compiler/FourBackends.cs` — beside `RunEmittedCSharpText` (`:136`), a NON-ASSERTING compile that returns diagnostics (an `Assert` that fails inside a helper is recorded by NUnit even when the caller catches the exception, so "expect it to fail" needs a helper that never asserts). Share the reference list and compilation options with `RunEmittedCSharpText` (extract them into one private method, so the two cannot drift):
+
+```csharp
+    /// <summary>Compiles <paramref name="csharp"/> as RunEmittedCSharpText does and RETURNS the errors — never
+    /// asserts, so a test can expect a refusal (CS0019) without NUnit recording a failure.</summary>
+    internal static IReadOnlyList<Diagnostic> TryCompileCSharp(string csharp)
+    {
+        using var ms = new MemoryStream();
+        var emitted = CreateCompilation(csharp).Emit(ms);
+        return emitted.Diagnostics.Where(d => d.Severity == DiagnosticSeverity.Error).ToList();
+    }
+
+    private static CSharpCompilation CreateCompilation(string csharp) =>
+        CSharpCompilation.Create(
+            "FourBackendsProbe_" + Guid.NewGuid().ToString("N"),
+            new[] { CSharpSyntaxTree.ParseText(csharp) },
+            AppDomain.CurrentDomain.GetAssemblies()
+                .Where(a => !a.IsDynamic && !string.IsNullOrEmpty(a.Location))
+                .Select(a => MetadataReference.CreateFromFile(a.Location))
+                .Cast<MetadataReference>()
+                .ToImmutableArray(),
+            new CSharpCompilationOptions(OutputKind.ConsoleApplication));
+```
+  (`RunEmittedCSharpText` then calls `CreateCompilation(csharp)`; add `using System.Collections.Generic;`.) Task 22's mixing grid uses this helper too.
 - Create: `VisualGameStudio.Tests/Compiler/CSharpDecimalVbRulesTests.cs` (Integration, in-process Roslyn, `[NonParallelizable]`)
 
 - [ ] **Step 1: Failing tests** (VB-literal expectations, C# only here — the JS legs come in Tasks 21–22):
@@ -2738,30 +2777,43 @@ public class CSharpDecimalVbRulesTests
         Overflow("CShort(Id(40000D))") + Overflow("CByte(Id(256D))") + Overflow("CByte(Id(-1D))") + "End Sub\n")),
         Is.EqualTo("2\n255\noverflow\noverflow\noverflow"));
 
+    /// <summary>A boxed value the optimizer cannot see through — a constant `Dim o As Object = 5` is copy-propagated
+    /// and FOLDED (measured on the spec base `14c2e17d`: `o = 5` emits `Console.WriteLine(true)`, and `o = 5.0` emits
+    /// `Console.WriteLine(false)` where VB says True — a separate finding, recorded below).</summary>
+    private const string Box = "Function Box(n As Integer) As Object\n Return n\nEnd Function\n";
+
     [Test]
-    public void E2_E3_Boxing() => Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharp(Id +
+    public void E2_E3_Boxing() => Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharp(Id + Box +
         "Public Class Thing\nEnd Class\n" +
         "Sub Main()\n Dim o As Object = Id(1.10D)\n Dim p As Object = Id(1.1D)\n Console.WriteLine(o = p)\n Console.WriteLine(o <> p)\n" +
-        " Dim i As Object = 5\n Console.WriteLine(CType(i, Decimal))\n Dim five As Object = Id(5D)\n Console.WriteLine(i = five)\n" +
+        " Dim i As Object = Box(5)\n Console.WriteLine(CType(i, Decimal))\n Dim five As Object = Id(5D)\n Console.WriteLine(i = five)\n" +
+        " Console.WriteLine(i = Id(5D))\n" +
         " Dim t As Object = New Thing()\n Try\n  Console.WriteLine(CType(t, Decimal))\n Catch ex As InvalidCastException\n  Console.WriteLine(\"invalid cast\")\n End Try\n" +
         " Dim a As Object = New Thing()\n Dim b As Object = a\n Console.WriteLine(a = b)\nEnd Sub\n")),
-        Is.EqualTo("True\nFalse\n5\nTrue\ninvalid cast\nTrue"),
-        "the last row: two references to one object stay equal — non-Decimal comparisons are unchanged");
+        Is.EqualTo("True\nFalse\n5\nTrue\nTrue\ninvalid cast\nTrue"),
+        "row 5 is Object vs a TYPED Decimal (the helper, value comparison); the last row: two references to one object stay equal");
 
-    /// <summary>⛔ Scope guard (plan re-review): an Object compared with a NON-Decimal primitive is emitted exactly as
-    /// before — still refused by csc (CS0019), never a silently-false comparison.</summary>
+    /// <summary>
+    /// ⛔ Scope guard (plan re-review): an Object compared with a NON-Decimal primitive is emitted exactly as before.
+    /// MEASURED on the spec base `14c2e17d` (CLI `--target=csharp`, `Dim o As Object = Box(5)`): the ANALYZER ACCEPTS all
+    /// three shapes and emits `o == 5`, `o == 5.0`, `o == Convert.ToInt64(5)` — so the refusal is csc's CS0019, and it
+    /// must stay csc's (never a silently-false comparison: two boxed ints are never reference-equal). Uses the
+    /// non-asserting Roslyn compile (FourBackends.TryCompileCSharp) — an Assert inside RunEmittedCSharpText is
+    /// recorded by NUnit even when caught.
+    /// </summary>
     [TestCase("5")]
     [TestCase("5.0")]
     [TestCase("CLng(5)")]
     public void ObjectVersusAnotherPrimitive_IsStillRefusedByCsc(string other)
     {
-        var cs = ReturnCoercionTests.EmitCSharpForTest(
-            "Sub Main()\n Dim o As Object = 5\n Console.WriteLine(o = " + other + ")\nEnd Sub\n");
+        var cs = ReturnCoercionTests.EmitCSharpForTest(Box +
+            "Sub Main()\n Dim o As Object = Box(5)\n Console.WriteLine(o = " + other + ")\nEnd Sub\n");
+        var diagnostics = FourBackends.TryCompileCSharp(cs);
         Assert.Multiple(() =>
         {
             Assert.That(cs, Does.Not.Contain("__BlObjectEquals"));
-            Assert.That(() => FourBackends.RunEmittedCSharpText(cs), Throws.InstanceOf<AssertionException>()
-                .With.Message.Contains("CS0019"), "csc still refuses it, as on the base");
+            Assert.That(diagnostics.Any(d => d.Id == "CS0019"), Is.True,
+                "csc still refuses it, as on the base:\n" + string.Join("\n", diagnostics));
         });
     }
 
@@ -2775,12 +2827,13 @@ public class CSharpDecimalVbRulesTests
         Is.EqualTo("False"));
 }
 ```
-  ⚠ If `Dim o As Object = 5 : o = 5` is refused by the ANALYZER rather than csc on the base, assert that refusal instead (and that it is unchanged) — the property is "not newly accepted"; confirm on the base first (Step 2).
+  The fixture needs `using System.Linq;`.
   ⚠ If the analyzer refuses `Dim j As Integer = Id(3.5D)` (implicit narrowing), drop that row and record the refusal — it is then the same refusal on every target.
-- [ ] **Step 2: Run — RED:** E1 prints `2\n3\n-2\n3` (truncation); E4 prints wrapped/truncated values instead of `overflow`; E2/E3 prints `False\nTrue` then an uncaught `InvalidCastException` (test failure message from `RunEmittedCSharpText`).
+  **Finding to record (not fixed here — a follow-up beside "VB value equality for boxed numbers"):** the optimizer copy-propagates a constant into an Object and folds the comparison — `Dim o As Object = 5 : o = 5.0` emits `Console.WriteLine(false)`, where VB says True (measured on `14c2e17d`). A silent miscompile of a program csc would otherwise refuse.
+- [ ] **Step 2: Run — RED:** E1 prints `2\n3\n-2\n3` (truncation); E4 prints wrapped/truncated values instead of `overflow`; E2/E3 prints `False\nTrue` then an uncaught `InvalidCastException` (test failure message from `RunEmittedCSharpText`). The guard rows `ObjectVersusAnotherPrimitive_…` (all three) and `TwoObjectsHoldingEqualBoxedIntegers_…` are GREEN on the base — re-confirm the measurement above on the current base before trusting them (if the analyzer now refuses `o = 5`, change the row to assert THAT refusal is unchanged and record it).
 - [ ] **Step 3: Implement** (the four edits above).
 - [ ] **Step 4: Run — GREEN**, plus the C# fixtures that exercise casts and Object comparisons by name: `CTypeConversionTests`, `NarrowIntegerWrapTests`, `IsIsNotOperatorExecutionTests`, `MsilObjectBoxingExecutionTests` (MSIL is out of scope — record if its expectations diverge from the new C# ones), `WinFormsTemplateBuildTests`.
-- [ ] **Step 5: Mutations:** (1) drop `|| sourceName == "Decimal"` → E1 red; (2) `__BlObjectEquals` → `a == b` → E2 red; (3) drop the Object → Decimal arm → E3 red; (4) **route EVERY comparison with an Object operand through the helper** (the rejected scope) → `ObjectVersusAnotherPrimitive_IsStillRefusedByCsc` red (it now builds); (5) route one of the three `IRCompare` render sites around `CompareText` → the row that renders through that site red (find which test inlines vs binds a named temp; add one if a site is uncovered).
+- [ ] **Step 5: Mutations:** (1) drop `|| sourceName == "Decimal"` → E1 red; (2) `__BlObjectEquals` → `a == b` → E2 red; (3) drop the Object → Decimal arm → E3 red; (4) **route EVERY comparison with an Object operand through the helper** (the rejected scope) → `ObjectVersusAnotherPrimitive_IsStillRefusedByCsc` red on all three rows — `TryCompileCSharp` returns no CS0019 (it now builds) and the text contains `__BlObjectEquals`; (5) route one of the three `IRCompare` render sites around `CompareText` → the row that renders through that site red (find which test inlines vs binds a named temp; add one if a site is uncovered).
 - [ ] **Step 6: Commit.** Message: "C# backend: Decimal narrowing rounds and overflows like VB; boxed Decimals compare by value (spec D19); CType of a boxed number to Decimal converts".
 
 ## Task 21: Comparisons, `Select Case`, boxing
@@ -2831,11 +2884,13 @@ D5, D6, D19.
     /// until Task 20A; this test drives that fix on C# too.</summary>
     [Test]
     public void Boxing_VbRules() => BothEqual(Id +
+        "Function Box(n As Integer) As Object\n Return n\nEnd Function\n" +
         "Public Class Thing\nEnd Class\n" +
         "Sub Main()\n Dim o As Object = Id(1.10D)\n Dim p As Object = Id(1.1D)\n Console.WriteLine(o = p)\n Console.WriteLine(o <> p)\n" +
-        " Dim i As Object = 5\n Console.WriteLine(CType(i, Decimal))\n Dim five As Object = Id(5D)\n Console.WriteLine(i = five)\n" +
+        " Dim i As Object = Box(5)\n Console.WriteLine(CType(i, Decimal))\n Dim five As Object = Id(5D)\n Console.WriteLine(i = five)\n" +
+        " Console.WriteLine(i = Id(5D))\n" +
         " Dim t As Object = New Thing()\n Try\n  Console.WriteLine(CType(t, Decimal))\n Catch ex As InvalidCastException\n  Console.WriteLine(\"invalid cast\")\n End Try\nEnd Sub\n",
-        "True\nFalse\n5\nTrue\ninvalid cast");
+        "True\nFalse\n5\nTrue\nTrue\ninvalid cast");
 - [ ] **Step 2: Run — RED:** JS compares object identity (`1.10 = 1.1` prints `False`), `<` compares coerced strings, `Select Case` takes the wrong arm; record each.
 - [ ] **Step 3: Implement** (files above).
 - [ ] **Step 4: Run — GREEN**, plus `IsIsNotOperatorExecutionTests`, `TypeOfTests`, `SelectCase*` by name.
@@ -2916,7 +2971,17 @@ D7, D8, D9, D10.
     {
         try { return "OK:" + FourBackends.Norm(run()); }
         catch (InvalidOperationException ex) { return "REFUSED:" + ex.Message.Split('\n').FirstOrDefault(l => l.StartsWith("Diagnostics:")); }
-        catch (AssertionException ex) { return "CSFAIL:" + ex.Message.Split('\n')[0]; }
+    }
+
+    /// <summary>The C# leg of a grid cell, never asserting: analyzer refusal → REFUSED, csc refusal → CSFAIL (via
+    /// FourBackends.TryCompileCSharp, Task 20A), else the run's output.</summary>
+    private static string CSharpOutcome(string program)
+    {
+        string cs;
+        try { cs = ReturnCoercionTests.EmitCSharpForTest(program); }
+        catch (InvalidOperationException ex) { return "REFUSED:" + ex.Message.Split('\n').FirstOrDefault(l => l.StartsWith("Diagnostics:")); }
+        var errors = FourBackends.TryCompileCSharp(cs);
+        return errors.Count > 0 ? "CSFAIL:" + errors[0].Id : "OK:" + FourBackends.Norm(FourBackends.RunEmittedCSharpText(cs));
     }
 
     /// <summary>
@@ -2935,7 +3000,7 @@ D7, D8, D9, D10.
         {
             var expr = reversed ? $"y {op} x" : $"x {op} y";
             var program = Id + $"Sub Main()\n Dim x As {t} = 3\n Dim y As Decimal = Id(1.5D)\n Console.WriteLine({expr})\nEnd Sub\n";
-            var cs = Outcome(() => FourBackends.RunEmittedCSharp(program));
+            var cs = CSharpOutcome(program);
             var js = Outcome(() => JavaScriptExecutionTests.RunJs(program));
             if (cs.StartsWith("CSFAIL") || cs != js) findings.Append($"{t} {expr}: C#={cs} | JS={js}\n");
         }
@@ -2949,7 +3014,7 @@ D7, D8, D9, D10.
         Assert.That(() => JsTestSupport.Compile("Sub Main()\n Dim d As Decimal = 1D\n Dim l As Long = CLng(d)\nEnd Sub"),
             Throws.Exception.With.Message.Contains("BL7003"));
 ```
-  ⚠ An `AssertionException` caught inside a test still marks NUnit's result (CLAUDE.md-adjacent NUnit behaviour: the failure is recorded when the assertion fires). If NUnit records the caught C# compile failure, run the C# leg through `ReturnCoercionTests.EmitCSharpForTest(program)` + a Roslyn compile that RETURNS diagnostics instead of asserting (add a small `TryRunEmittedCSharp` beside `RunEmittedCSharpText` in `FourBackends.cs`, same file, one commit). Decide by running the grid once.
+  ⚠ An `AssertionException` caught inside a test still marks NUnit's result (the failure is recorded when the assertion fires), which is why the C# leg is `CSharpOutcome` over `FourBackends.TryCompileCSharp` (added in Task 20A) — nothing in the grid catches an assertion.
 - [ ] **Step 2: Run — RED:** `Conversions` fails on the JS legs (no conversion arms — `TypeError` or wrong text); the grid lists every JS cell that differs. Record the grid's C# column as it stands (it is the oracle; CSFAIL cells are findings).
 - [ ] **Step 3: Implement** (files above). A grid CSFAIL cell is fixed in the ANALYZER (`IsDecimalFloatingMix`, `SemanticAnalyzer.cs:2260-2264`; `GetCommonType` `SymbolTable.cs:905-912`) so both targets refuse it; list each such cell in the commit.
 - [ ] **Step 4: Run — GREEN**, plus `CTypeConversionTests`, `NarrowIntegerWrapTests`, `NarrowIntegerDivisionTests` by name.
