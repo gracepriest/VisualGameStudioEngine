@@ -156,6 +156,14 @@ public class KillVocabularyReflectionTotalityTests
         // commit's own message calls out as the expected failure until this test lands.
         [typeof(IRIdentityCompare)] = f =>
             new IRIdentityCompare("t0", f.P, f.Q, false, new TypeInfo("Boolean", TypeKind.Primitive)),
+
+        // ADR-0016 D1/C2 (task #170): MyBase.New becomes an instruction. Classified UNIVERSAL —
+        // a FULL BARRIER, deliberately, like IRInlineCode (OptimizationPass.NamesWrittenBy's own
+        // arm): the base constructor runs user code and nothing computed in the prologue may
+        // survive it (C# renders the prologue as expressions inside `: base(...)`, where no body
+        // statement can reach it). See EveryInstructionKind_IsClassified /
+        // KillVocabularyBarrier_IsUniversal below for the executable claim.
+        [typeof(IRBaseConstructorCall)] = f => new IRBaseConstructorCall(new List<IRValue> { f.P }),
     };
 
     /// <summary>
@@ -207,6 +215,29 @@ public class KillVocabularyReflectionTotalityTests
     }
 
     private static IEnumerable<string> RosteredTypeNames() => Instances.Keys.Select(t => t.Name).OrderBy(n => n);
+
+    /// <summary>
+    /// ⭐ ADR-0016 D1/C2's own kill entry, made executable: <c>IRBaseConstructorCall</c> is not
+    /// merely classified (the totality half above already covers that) but classified as a FULL
+    /// BARRIER — <see cref="WriteKind.Universal"/>, <see cref="WriteSet.IsCall"/> true, and
+    /// (unlike an unclassified kind) <see cref="WriteSet.IsClassified"/> true. This is what makes
+    /// CSE's and CopyProp's <c>Invalidate</c> clear their whole candidate set on it (C2) rather
+    /// than fall through to the "everything, but by accident" unclassified path Invariant V
+    /// would otherwise fire on.
+    /// </summary>
+    [Test]
+    public void IRBaseConstructorCall_IsAFullBarrier()
+    {
+        var fixture = NewFixture();
+        var writes = OptimizationPass.NamesWrittenBy(Instances[typeof(IRBaseConstructorCall)](fixture), fixture.Function);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(writes.IsClassified, Is.True, "a full barrier is a DECISION, not a gap");
+            Assert.That(writes.Kind, Is.EqualTo(WriteKind.Universal));
+            Assert.That(writes.IsCall, Is.True, "the base constructor runs user code");
+        });
+    }
 }
 
 /// <summary>

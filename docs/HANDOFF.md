@@ -17,6 +17,126 @@ facade (all five tasks of `2026-09-13-blnet-cpp-facade.md`).
 
 ---
 
+## 🚀 NEWEST — 2026-09-29: #170 DONE, `MyBase.New(...)` is an IR instruction (ADR-0016; absorbs #240)
+
+The fix is `af1c7e60` on top of #200's `58ad8700`; the TEST side is uncommitted work on top of it.
+Scoped to the compiler (IR, all five backends, the front end, the verifier) plus one new C++ capability
+rule — unrelated to the form-designer section further down, which stays the live handoff for that area.
+
+**What changed.** `docs/superpowers/decisions/0016-base-constructor-call-as-instruction.md` (ADR-0016).
+A lambda or computed argument in `MyBase.New(...)` lived in `IRConstructor.BaseConstructorArgs`, a list
+no block held: the capture scan, `UsesOf`, DCE, CSE and the verifier never saw it, so every backend was
+wrong (C# `CS0103 '__lambda_0'` / `'t0'`, a JS TDZ `ReferenceError`, a named MSIL refusal, a silent wrong
+answer on C++). Now:
+- **D1** the list has no storage; argument evaluation is ordinary instructions in the entry block,
+  terminated by `IRBaseConstructorCall` (a full barrier: `NamesWrittenBy` answers `WriteSet.Everything`).
+  C# renders its operands as expressions into `: base(...)` (a multi-block prologue — `AndAlso`/`OrElse`
+  — is refused by name, C# only); JS emits the prologue before `super(...)`; MSIL before `call Base::.ctor`
+  with the environment allocated first and `Me` stored into it **immediately after** the call; C++ in place.
+- **D3 (amended, "W2")** C++ REFUSES BY NAME a lambda that could go stale under `[=]`: (a) the lambda writes
+  a variable it captures, or (b) its creator writes one at a point reachable in the creator's CFG from the
+  creation instruction. ⚠ It is stated over ANY lambda, not only `MyBase.New` arguments — it refuses
+  `Dim bump = Sub() p = p + 100` in an ordinary `Main` too. One rule, one deletion point:
+  `CppCapabilityChecker.CheckLambdaCaptureWrites` over `ControlFlowGraph.ExecutionSuccessors`.
+- **D4** `SemanticAnalyzer` (so the compiler AND the LSP): BC31095 (explicit `Me`/`MyBase`) / BC31096
+  (implicit instance member) in `MyBase.New`'s arguments, lambdas and nested lambdas included.
+- **D5** `IRVerifier.CheckInvariantP`: def-before-use, one call / constructors only / prologue region,
+  expression-only closed prologue, no orphan lambda. Runs on UN-LOWERED IR only.
+
+**Tests (all Linux-measured):**
+- `Compiler/BaseConstructorCallLoweringTests.cs` — class `BaseConstructorCallLoweringExecutionTests`
+  (⚠ NOT `BaseConstructorCallExecutionTests`: that name is the pre-#170 JS fixture in
+  `BaseConstructorCallTests.cs`, which this work must not touch; the JS roster is now 92). B1-B5, W1, W2, C1,
+  E01/E02/E04/E04b/E06/E08/E09/E11/E12/E13/E14/E15, the array literal (C# refused by name), E10 (the D2a
+  foreign-rooted pure computed argument, through the REAL CLI: `#CppInclude` needs the Preprocessor), each
+  through the standard pipeline, the aggressive pipeline and `CompileProjectFiles`, plus `TheRealCli_…` which
+  spawns `BasicLang` (plain and `--optimize`) for the corpus. C++ per the amendment (refused by name or run).
+- `Compiler/BaseConstructorCallCppRefusalTests.cs` — 5a must-refuse list in all three modes, **#140's
+  regression fence** (below), E16, and the FE1 / CR1 witnesses.
+- `Compiler/BaseConstructorCallDiagnosticsTests.cs` — D4: V1-V4 + X01-X26 through the analyzer AND all four
+  backends, one BC31096 and one BC31095 through the LSP (`DocumentManager`), the two known gaps pinned.
+- `Compiler/IRVerifierBaseConstructorCallTests.cs` — D5: each invariant fails on a mutated real module; the
+  clean shapes pass on IRBuilder output and after both pipelines.
+- `Compiler/ControlFlowGraphExecutionSuccessorsTests.cs` — the three edge families on hand-built IR, and
+  `SuccessorsOf` / `Build` / `IdentifyLoops` pinned unchanged.
+- `Msil/MsilBaseConstructorOrderingTests.cs` — M3: the `stfld … '__me'` follows `call … Base::.ctor`, read off
+  the emitted `.il` (the suite has NO ILVerify; mutant M3 RUNS correctly on the CLR).
+
+**Moved pins** (each was pinned to the OLD behaviour; every other backend's leg is untouched):
+- Now RUN: `BaseConstructorDiagnosticTests.ANonLiteralOptionalDefault_…` (`base:5`, four backends);
+  `MsilBaseConstructorTests.AComputedBaseArgument_…` (`base:42`, four); `UserDelegateConversionExecutionTests`
+  E13 C# and MSIL (`101`); `CppMeAsValueTests` E15 (`True 5 4` on C++).
+- `JavaScriptCodeGenTests.UnimplementedNode_Throws_…`: the canary was `MyBase.New(n & "!")`, which now lowers
+  (`rex!`); re-pointed at `List.Sort` with two arguments (`NotYet`, `NotSupportedException`).
+- `KillVocabularyReflectionTotalityTests`: `IRBaseConstructorCall` added to the roster (a full barrier).
+- C++, a silent wrong answer → REFUSED BY NAME citing #140 (each asserts the variable, the creator and
+  `#140`): CopyPropagation CP2 ×2, DelegateMemberInvocation P8, DynamicUseSPrime L5, Licm L5 ×2,
+  MultiLineFunctionLambda F1/F2/F8, NameBinding K9, UserDelegateConversion E1, PerIterationLoopBodyDim
+  L7/E17/L8/L8b/Cl (arm a) and E03/E04/E07f/E12/E18 (arm b), IsIsNotOperator E3 + its E3b control (arm b).
+  **#140 flips every one of these to running.**
+
+**#140's regression fence** (`BaseConstructorCallCppRefusalTests.Cpp140RegressionFence_*`, all three modes):
+B5, t172 L2, E05, E06, E07, E07e, E07w, E07x, E10, E13, E20 run on C++ with VB's output. #140 must bind the
+per-iteration instance, not a hoisted local, and must keep these green when it deletes W2. E16 stays a named
+clang failure (task #229), neither refused nor run.
+
+**A wrong answer that escaped W2 was found by the test work and FIXED in production (one line).**
+`ExecutionSuccessors` never added the contract's **Catch → Finally** edge: `Region(clause.Block, stops)` was
+called with the catch block itself in `stops`, so the catch region was empty; a lambda created in a `Catch`
+whose captured variable the `Finally` writes was not refused, and C++ printed the stale copy (0 for VB's 5).
+`Region` now always contains its own entry block. Pinned by the contract's own assertions —
+`ControlFlowGraphExecutionSuccessorsTests.Catch_EveryBlockOfTheCatchRegion_ReachesTheFinally` (and a two-block,
+two-clause variant) and `BaseConstructorCallCppRefusalTests.CF1_…_IsRefusedByName` (variable `x`, creator `Main`,
+#140, in all three modes) — and the mutant that drops the edge again is killed by both (table below). The
+corpus refusal set is unchanged (66 programs).
+
+**Known gaps and follow-ups (filed, not fixed here):**
+- **#241** a lambda nested in a lambda inside a class member fails `ilasm` on MSIL
+  (`undefined class D/<>c__Env0/<>c__Env2`); base-args nesting only made it reachable (E01, X22, X25).
+- **#242** `BodyLocals` omits a name declared twice; W2's Dim-initializer rule works around it.
+- **D4 gap 1** `MyClass` in a base argument (X07) reports a TYPE error ("of type 'Object'"), not BC31095.
+- **D4 gap 2** `Me` as a bare value (X23) cannot be probed: `If(c, x, y)` does not parse in BasicLang.
+  `Inherits Box(Of Integer)` (a generic base) does not parse either (E09a).
+- The FE1 / CR1 witnesses can only be checked against JS (and C# for FE1): C# empties a multi-statement
+  lambda body (#136) and MSIL emits a bad image / cannot assemble a `For Each` over `List(Of Func(Of Integer))`.
+
+**Mutation-proven** (detached worktree, real NUnit, `S/t170/mutants.py` M1-M12 and `mutants2.py` 5d):
+
+| Mutant | Killed by (first names; the count is the whole kill set) |
+|---|---|
+| M1 CSE barrier removed | `E06_TheBaseCallIsAFullBarrier…` and the IRVerifier E06 clean-shape rows (3) |
+| M2 C# renders the lambda's name | B1-B5, W1/W2, C1, `Cli_*`, `AComputedBaseArgument_…` (36) |
+| M3 `Me` stored before the base call | `MsilBaseConstructorOrderingTests` E14/E15, standard and aggressive (4) — it RUNS on the CLR, only the IL text sees it |
+| M4 MSIL prologue after the call | B1-B5, W1/W2, `Cli_*`, the array literal, `AComputedBaseArgument_…` (40) |
+| M5 JS `super` before the prologue | E04/E04b (AndAlso/OrElse), the array literal, D4 X14/X17 (5) |
+| M6 BC31096 missed in a lambda | D4 V1, X09, X11, X13, by analyzer and by all backends (8) |
+| M7 C++ refusal dropped | the whole 5a list and every moved C++ pin (59) |
+| M8 orphan check dropped | IRVerifier `D_AnOrphanedLambda`, `D_ALambdaReferencedTwice`, `…OnLoweredIR_SkipsInvariantP` (3) |
+| M9 base call removable by DCE | every test that runs a constructor with a base argument (73) |
+| M10 "case a" prologue rewrite skipped | `E16_AComputedArgument_ThenABodyLambdaWritesTheParameter_…`, `E17_…` (2) — the pre-existing suite did NOT kill it |
+| M11 D4 ignores Shared | D4 X14/X15/X21, the LSP no-squiggle test, E11 (5) |
+| M12 verifier closedness dropped | IRVerifier `C_APrologueValueUsedAfterTheCall_Fails` (1) |
+| 5d no Try edges | PerIteration E03/E04/E07f (moved pins and 5a) and the two Try unit tests (9) |
+| 5d no For Each back edge | `FE1_…`, the two For Each unit tests, `RealIR_…` (4) |
+| 5d creation instruction excluded | `CR1_…` (1) |
+| 5d no per-iteration cut | `Cpp140RegressionFence_` t172 L2/E05/E06/E07/E07e/E07w/E07x/E10/E13 (9) |
+| 5d no Dim-initializer rule | `Cpp140RegressionFence_t172_E20`, `E16_StaysANamedClangFailure_…` (2) |
+| Catch → Finally edge dropped (the one-line `Region` fix reverted) | `Catch_EveryBlockOfTheCatchRegion_ReachesTheFinally`, `Catch_ACatchRegionOfTwoBlocks_AndTwoCatchClauses_…`, `CF1_…_IsRefusedByName` (3) |
+
+The unmutated tree passes the same tests (274 before the Catch → Finally fix; 275 after, 0 failures either way).
+No equivalent mutant: all 18 are killed. (`D163`, the #163 dry run in `mutants.py`, was not part of the brief and
+was not run.)
+
+
+**Gates measured this session (Linux, g++/clang++, ilasm found, no MSVC):** fast subset (`TestCategory!=Integration`) `Failed: 0, Passed: 9048, Skipped: 93, Total: 9141` (1 m 34 s); the filtered set (`Constructor|MyBase|Base|Lambda|Closure|Capture|Inherit|Cpp|Msil|JavaScript|Verifier|PerIteration|IsIsNot|Delegate|NameBinding|CopyPropagation|Licm|DynamicUse|MultiLine`, Integration included) `Failed: 1, Passed: 3638, Skipped: 26, Total: 3665` (39 m 28 s) — the one failure is `Split_ClassAcrossModules_SharedPtrRoundTrip`, #200's Direction B pin, EXPECTED red and untouched (an owner decision is pending). ⚠ The FULL suite (all Integration rows) was NOT run for this task — only the filtered set above; run it on Windows before calling #170 verified. After the Catch → Finally fix in `ExecutionSuccessors` (the numbers above predate it) the fast subset was re-run: `Failed: 0, Passed: 9049, Skipped: 93, Total: 9142`, and `BaseConstructorCall|ControlFlowGraph|PerIterationLoopBodyDim` with Integration included: `Failed: 0, Passed: 292, Skipped: 0, Total: 292`.
+
+**Only Windows can validate:** the MSVC leg (a BasicLang native build ALWAYS uses MSVC — every C++ program
+here, the fence included, was compiled with g++/clang++ only); the Release `.blproj` native path and the IDE
+build service's own entry to `CompileProjectFiles`; `ILVerify` over the MSIL for M3 (the IL-text test stands
+in); the M3-style ordering under a Windows `ilasm`.
+
+---
+
 ## 🚀 START HERE — 2026-09-29: #200 DONE, `Me` as a value on the C++ backend (ADR-0015 + D2a)
 
 Branch `claude/jolly-pasteur-l4mpzs`, `f6f6f16a`, draft PR #140. Scoped to the C++ backend's

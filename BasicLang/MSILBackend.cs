@@ -544,7 +544,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             {
                 // The lowered IR is new IR: verified under the same invariants as the optimizer's
                 // output. A no-op unless verification is enabled (tests, DEBUG, BASICLANG_VERIFY_IR).
-                BasicLang.Compiler.IR.Optimization.IRVerifier.VerifyAfterOptimization(lowered);
+                BasicLang.Compiler.IR.Optimization.IRVerifier.VerifyAfterOptimization(lowered, lowered: true);
                 module = lowered;
                 _module = lowered;
             }
@@ -1655,12 +1655,29 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 }
             }
 
-            // Call base constructor
+            // Call base constructor. ⭐ ADR-0016 D1: MyBase.New is an instruction of the body. With
+            // nothing before it (arguments that are parameters and literals, or the implicit call)
+            // it is written here, first, exactly as before; with a PROLOGUE before it — the
+            // instructions evaluating a computed or lambda argument, and the closure environment a
+            // lambda there needs (ClosureLowering, ADR-0016 D3) — it is written where the IR puts
+            // it, by Visit(IRBaseConstructorCall). IL allows any instruction before the base
+            // `.ctor` call that does not use the uninitialised `this` as a value.
             var baseClass = string.IsNullOrEmpty(irClass.BaseClass) ? "[mscorlib]System.Object" : IlTypeToken(irClass.BaseClass);
-            WriteLine("    ldarg.0");
-            EmitBaseConstructorCall(baseClass, irClass.BaseClass, ctor);
-
-            EmitInstanceFieldInitialization(irClass);
+            var baseCall = ctor.BaseCall;
+            var firstInstruction = ctor.Implementation?.EntryBlock?.Instructions.FirstOrDefault(i => i != null);
+            _pendingBaseCall = null;
+            _baseCallWrittenFirst = null;
+            if (baseCall == null || ReferenceEquals(firstInstruction, baseCall))
+            {
+                WriteLine("    ldarg.0");
+                EmitBaseConstructorCall(baseClass, irClass.BaseClass, baseCall?.Args ?? Array.Empty<IRValue>());
+                EmitInstanceFieldInitialization(irClass);
+                _baseCallWrittenFirst = baseCall;
+            }
+            else
+            {
+                _pendingBaseCall = (baseCall, baseClass, irClass);
+            }
 
             // Generate constructor body. The context was initialized above, before the locals
             // declaration was written from it — re-initializing here would just rebuild the same
@@ -1678,6 +1695,13 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 _currentFunction = null;
             }
 
+            // ⛔ A base call that was never written is a constructor that silently skipped its
+            // base and its field initializers — fail the build instead.
+            if (_pendingBaseCall != null)
+                throw new InvalidOperationException(
+                    $"MSIL: the MyBase.New call of '{irClass.Name}' was never reached by the body walk (ADR-0016 D1).");
+            _baseCallWrittenFirst = null;
+
             if (!EndsWithRet())
                 WriteLine("    ret");
 
@@ -1685,68 +1709,65 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             WriteLine();
         }
 
+        /// <summary>ADR-0016: the base call <see cref="GenerateConstructor"/> wrote first, which the
+        /// body walk skips.</summary>
+        private IRBaseConstructorCall _baseCallWrittenFirst;
+
+        /// <summary>ADR-0016: a base call with a prologue before it, waiting for the body walk to
+        /// reach it (<see cref="Visit(IRBaseConstructorCall)"/>).</summary>
+        private (IRBaseConstructorCall Call, string BaseClass, IRClass Class)? _pendingBaseCall;
+
+        /// <summary>
+        /// ⭐ ADR-0016 D1 on MSIL: <c>ldarg.0</c>, the arguments (already evaluated by the prologue
+        /// into their slots), <c>call Base::.ctor</c>, then this class's field initializers — the
+        /// same sequence <see cref="GenerateConstructor"/> writes at the top when nothing precedes
+        /// the call. Before this point <c>ldarg.0</c> appears only as this call's receiver: the
+        /// prologue never reads <c>Me</c> (D4), and ClosureLowering stores <c>Me</c> into a
+        /// closure environment only after it (D3).
+        /// </summary>
+        public override void Visit(IRBaseConstructorCall baseConstructorCall)
+        {
+            if (ReferenceEquals(baseConstructorCall, _baseCallWrittenFirst)) return;
+            if (_pendingBaseCall is not { } pending || !ReferenceEquals(pending.Call, baseConstructorCall))
+                throw new InvalidOperationException(
+                    "MSIL: an IRBaseConstructorCall outside the constructor it belongs to, or a second one in it "
+                    + "(ADR-0016 D5(b): one per constructor).");
+            _pendingBaseCall = null;
+            WriteLine("    ldarg.0");
+            EmitBaseConstructorCall(pending.BaseClass, pending.Class.BaseClass, baseConstructorCall.Args);
+            EmitInstanceFieldInitialization(pending.Class);
+        }
+
         /// <summary>
         /// The <c>call</c> to the base constructor, with the arguments <c>MyBase.New(…)</c> gave it.
         ///
-        /// <para>⛔ They used to be DROPPED. <c>IRConstructor.BaseConstructorArgs</c> was never read
-        /// here — the emission was a fixed <c>call instance void Base::.ctor()</c> whatever was
-        /// written — so <c>MyBase.New(7, 9)</c> against <c>Sub New(a As Integer, b As Integer)</c>
-        /// died with <c>MissingMethodException: Void Base..ctor()</c>. C#, JavaScript and C++ all
-        /// pass them; MSIL alone did not.</para>
+        /// <para>⛔ They used to be DROPPED. The emission was a fixed
+        /// <c>call instance void Base::.ctor()</c> whatever was written — so <c>MyBase.New(7, 9)</c>
+        /// against <c>Sub New(a As Integer, b As Integer)</c> died with
+        /// <c>MissingMethodException: Void Base..ctor()</c>. C#, JavaScript and C++ all pass them;
+        /// MSIL alone did not.</para>
         ///
-        /// <para>⛔ <b>A body-computed argument is REFUSED, not emitted.</b> The base call is
-        /// written BEFORE the constructor body, because IL requires it before any field access, so
-        /// an argument whose value is produced by an instruction IN that body does not exist yet.
-        /// Measured, <c>MyBase.New(v + 1)</c> hands this an <c>IRBinaryOp</c> temp: loading it here
-        /// would read an uninitialized local and pass a silent <b>0</b>, which is worse than the
-        /// exception it replaces. The same shape does not build on C# either — it emits
-        /// <c>: base(t0)</c> naming a temp that is not in scope (CS0103) — so this is an IR-level
-        /// gap, not an MSIL one, and refusing keeps MSIL honest about it rather than inventing an
-        /// answer.</para>
+        /// <para>⭐ A COMPUTED argument is no longer refused (ADR-0016 D1): it is the operand of the
+        /// IRBaseConstructorCall, evaluated by the prologue into its slot before this runs. The old
+        /// refusal's premise — "IL requires the base constructor call before the constructor body"
+        /// — was false: IL requires only that the uninitialised <c>this</c> is not used as a value
+        /// before it.</para>
         ///
         /// <para>⚠ The signature is spelled from the ARGUMENT types, the same way
         /// <see cref="Visit(IRNewObject)"/> spells <c>newobj</c>. That is sound because the IR
         /// builder coerces each base-constructor argument to its declared parameter type; the two
         /// sites share that contract, and spelling them differently is how they would drift.</para>
         /// </summary>
-        private void EmitBaseConstructorCall(string baseClass, string baseClassName, IRConstructor ctor)
+        private void EmitBaseConstructorCall(string baseClass, string baseClassName, IReadOnlyList<IRValue> args)
         {
             // ⚠ No special case for ZERO arguments: the loops below do nothing and the join is
-            // empty, so the general path writes exactly `::.ctor()` — the same text the dedicated
-            // early return produced. Measured: deleting that early return changed no emitted IL and
-            // killed no test, so it was redundancy rather than an untested branch, and it is gone.
-            // `BaseConstructorArgs` is created by IRConstructor's own constructor and never
-            // reassigned, so there is no null to guard either.
-            var args = ctor.BaseConstructorArgs;
-
-            foreach (var arg in args)
-            {
-                if (IsLoadableBeforeBody(arg)) continue;
-
-                throw new ForeignFeatureException(
-                    "MSIL: a MyBase.New argument that is COMPUTED (" + (arg?.Name ?? "?")
-                    + ") has no IL lowering. IL requires the base constructor call before the "
-                    + "constructor body, so a value the body computes does not exist yet — "
-                    + "emitting it would load an uninitialized local and pass 0 silently, which is "
-                    + "worse than failing. Pass a parameter or a literal (MyBase.New(v), not "
-                    + "MyBase.New(v + 1)); the computed form does not build on C# either "
-                    + "(it emits `: base(t0)`, CS0103).");
-            }
-
+            // empty, so the general path writes exactly `::.ctor()`.
             var baseParams = DeclaredCtorParams(baseClassName, args.Count);
             EmitArgumentsIntoSlots(args, baseParams?.Select(p => IlTypeSpec(p?.Type)).ToList());
 
             var paramTypes = DeclaredParamList(baseParams, args);
             WriteLine($"    call instance void {baseClass}::.ctor({paramTypes})");
         }
-
-        /// <summary>
-        /// Whether <paramref name="value"/> can be pushed at the top of a constructor, before any
-        /// of its body has run: a literal, or one of the constructor's own parameters (an
-        /// <c>ldarg</c>). Anything else is a temp some instruction has yet to produce.
-        /// </summary>
-        private static bool IsLoadableBeforeBody(IRValue value) =>
-            value is IRConstant || (value is IRVariable variable && variable.IsParameter);
 
         private void GenerateDefaultCtorForClass(IRClass irClass)
         {

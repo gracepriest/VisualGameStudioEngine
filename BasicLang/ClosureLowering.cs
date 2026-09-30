@@ -408,12 +408,10 @@ namespace BasicLang.Compiler.IR
             public static IRModule Clone(IRModule module)
             {
                 var functionMap = new Dictionary<IRFunction, IRFunction>(ReferenceEqualityComparer.Instance);
-                var instructionMaps = new Dictionary<IRFunction, Dictionary<IRInstruction, IRInstruction>>(ReferenceEqualityComparer.Instance);
                 foreach (var f in AllFunctions(module))
                 {
                     var map = new Dictionary<IRInstruction, IRInstruction>(ReferenceEqualityComparer.Instance);
                     functionMap[f] = CloneFunction(f, map);
-                    instructionMaps[f] = map;
                 }
 
                 IRFunction F(IRFunction f) => f != null && functionMap.TryGetValue(f, out var c) ? c : f;
@@ -482,13 +480,9 @@ namespace BasicLang.Compiler.IR
                         if (c == null) return null;
                         var ctor = Shallow(c);
                         ctor.Parameters = new List<IRVariable>(c.Parameters);
+                        // ADR-0016: the base call is an instruction of the implementation, cloned
+                        // with its blocks — there is no argument list outside them to carry over.
                         ctor.Implementation = F(c.Implementation);
-                        // A base-constructor argument may be one of the body's own instructions
-                        // (MSIL refuses those — see EmitBaseConstructorCall); keep the identity.
-                        var map = c.Implementation != null && instructionMaps.TryGetValue(c.Implementation, out var m) ? m : null;
-                        ctor.BaseConstructorArgs = c.BaseConstructorArgs
-                            .Select(a => a is IRInstruction ai && map != null && map.TryGetValue(ai, out var mapped) ? (IRValue)mapped : a)
-                            .ToList();
                         return ctor;
                     }).ToList();
                     clone.Classes[kv.Key] = cc;
@@ -633,6 +627,9 @@ namespace BasicLang.Compiler.IR
                         case IRTupleElement:
                         case IRDelegateCreate:
                             break;
+                        case IRBaseConstructorCall baseConstructorCall:
+                            baseConstructorCall.DetachArgs();
+                            break;
                         default:
                             // A node kind added after this was written: cloning it field-by-field
                             // might share a list the lowering then writes into the ORIGINAL module.
@@ -769,6 +766,10 @@ namespace BasicLang.Compiler.IR
             public HashSet<string> TakenNames;
             public int TempCounter;
             public IRVariable MeRef;                      // `Me` of a lambda: its host environment
+            public IRBaseConstructorCall BaseCall;        // ADR-0016: a constructor's MyBase.New, or null
+            public HashSet<IRInstruction> Prologue;       // ... and the instructions evaluating its arguments
+            public bool EnvironmentBeforeBaseCall;        // the prologue creates a lambda (D3), so the
+                                                          // environment must exist before it
 
             public bool Declares(string name) =>
                 Params.ContainsKey(name) || Locals.ContainsKey(name) || CatchVars.ContainsKey(name);
@@ -911,12 +912,11 @@ namespace BasicLang.Compiler.IR
                                 $"MSIL: the lambda initialising field '{cls.Name}.{field.Name}' has no IL lowering. A "
                                 + "field initializer runs outside every function body, so the lambda has no creator "
                                 + "to hold its environment. Assign it in a constructor instead.");
-                    foreach (var ctor in cls.Constructors)
-                        if (ctor?.BaseConstructorArgs != null && ctor.BaseConstructorArgs.Any(IsLambdaValue))
-                            throw new ForeignFeatureException(
-                                $"MSIL: a lambda passed to MyBase.New in '{cls.Name}' has no IL lowering. It is "
-                                + "invisible to the capture analysis (task #170), and IL requires the base "
-                                + "constructor call before any environment could exist.");
+                    // ⚠ A lambda in MyBase.New's arguments is NOT refused here any more (ADR-0016 D3):
+                    // it is an operand of the constructor's IRBaseConstructorCall, created by the
+                    // constructor like any other lambda, so its environment is allocated at entry
+                    // before the prologue and Me is stored into it right after the base call
+                    // (InsertPrologues).
                 }
                 foreach (var global in _module.GlobalVariables.Values)
                     if (IsLambdaValue(global?.InitialValue))
@@ -951,6 +951,7 @@ namespace BasicLang.Compiler.IR
 
                 if (ctx.Lambdas.Count > 0) BuildEnvironments(ctx);
 
+                PlanBaseConstructorCall(ctx);
                 LowerAddressOf(ctx);
                 DetermineHosts(ctx);
                 RewriteBody(ctx);
@@ -980,6 +981,80 @@ namespace BasicLang.Compiler.IR
                     for (var level = host; level != null; level = level.Parent) lctx.HostChain.Add(level);
                     Process(lctx);
                 }
+            }
+
+            /// <summary>
+            /// ⭐ ADR-0016 D3: where a CONSTRUCTOR's environment goes relative to its
+            /// <see cref="IRBaseConstructorCall"/>. IL may run any instruction before the base
+            /// <c>.ctor</c> call except one that uses the uninitialised <c>this</c> as a value, so:
+            /// <list type="bullet">
+            /// <item>when the PROLOGUE (the instructions evaluating MyBase.New's arguments) creates a
+            /// lambda, the environment is allocated and the captured parameters hoisted at entry,
+            /// BEFORE the prologue, and only the <c>Me</c> store waits until right after the base
+            /// call — what csc and vbc emit for <c>: base(() =&gt; p)</c>. D4 (BC31095/6) guarantees
+            /// no lambda written there reaches <c>Me</c>; a lowered one that did would be handed a
+            /// null <c>Me</c>, so that is refused here as a backstop;</item>
+            /// <item>otherwise the whole environment goes right AFTER the base call, where it always
+            /// was relative to it (MSIL wrote the base call before the body), and the prologue reads
+            /// the parameters themselves — nothing can have written one yet, because no lambda
+            /// exists before the environment does. This keeps a constructor whose arguments are
+            /// parameters and literals byte-identical.</item>
+            /// </list>
+            /// </summary>
+            private void PlanBaseConstructorCall(FunctionContext ctx)
+            {
+                if (ctx.IsLambda) return;
+                var g = ctx.Function;
+                var call = IRBaseConstructorCall.Find(g);
+                if (call == null) return;
+
+                ctx.BaseCall = call;
+                ctx.Prologue = new HashSet<IRInstruction>(ReferenceEqualityComparer.Instance);
+                var callBlock = g.Blocks.First(b => b.Instructions.Contains(call));
+                var region = new HashSet<BasicBlock>(ReferenceEqualityComparer.Instance);
+                var stack = new Stack<BasicBlock>();
+                stack.Push(g.EntryBlock ?? g.Blocks.First());
+                while (stack.Count > 0)
+                {
+                    var b = stack.Pop();
+                    if (b == null || !region.Add(b) || ReferenceEquals(b, callBlock)) continue;
+                    foreach (var next in ControlFlowGraph.SuccessorsOf(b)) stack.Push(next);
+                }
+                foreach (var b in region)
+                    foreach (var inst in b.Instructions)
+                    {
+                        if (inst == null) continue;
+                        if (ReferenceEquals(inst, call)) break;
+                        ctx.Prologue.Add(inst);
+                    }
+
+                var inPrologue = new List<IRFunction>();
+                foreach (var lambda in ctx.Lambdas)
+                    if (ctx.Prologue.Append(call).Any(i => ReferencesLambda(ctx, i, lambda.Name)))
+                        inPrologue.Add(lambda);
+                ctx.EnvironmentBeforeBaseCall = inPrologue.Count > 0;
+
+                foreach (var lambda in inPrologue)
+                    if (NeedsMeTransitive(lambda))
+                        throw new ForeignFeatureException(
+                            $"MSIL: lambda '{lambda.Name}', passed to MyBase.New in '{g.Name}', reaches Me. The object "
+                            + "under construction does not exist before the base constructor runs (VB refuses the "
+                            + "shape: BC31095 / BC31096), so its environment's Me would still be Nothing.");
+
+                // The environment follows the base call: the prologue reads the parameters
+                // themselves, through copies RewriteBody leaves alone (a hoisted parameter is read
+                // from its field everywhere ELSE, and the post-condition knows these are ours).
+                if (!ctx.EnvironmentBeforeBaseCall && ctx.FunctionEnv != null)
+                    foreach (var inst in ctx.Prologue.Append(call))
+                        OptimizationPass.MapOperands(inst, v =>
+                        {
+                            if (v is not IRVariable pv || _synthetic.Contains(pv) || !ctx.FunctionEnv.Holds(pv.Name)
+                                || !ctx.Params.ContainsKey(pv.Name))
+                                return v;
+                            var raw = new IRVariable(pv.Name, pv.Type) { IsParameter = true };
+                            _synthetic.Add(raw);
+                            return raw;
+                        });
             }
 
             private void CollectDeclarations(FunctionContext ctx)
@@ -1699,7 +1774,22 @@ namespace BasicLang.Compiler.IR
                         for (var i = 0; i < no.Arguments.Count; i++)
                             yield return (no.Arguments[i], ConstructorParameterType(no, i));
                         break;
+                    // ADR-0016: MyBase.New's arguments are target-typed by the base constructor's
+                    // parameters, like any constructor call's.
+                    case IRBaseConstructorCall baseCall:
+                        for (var i = 0; i < baseCall.Args.Count; i++)
+                            yield return (baseCall.Args[i], BaseConstructorParameterType(ctx, baseCall, i));
+                        break;
                 }
+            }
+
+            private TypeInfo BaseConstructorParameterType(FunctionContext ctx, IRBaseConstructorCall call, int index)
+            {
+                if (ctx.Root.Class?.BaseClass == null || !TryFindClass(_module, ctx.Root.Class.BaseClass, out var baseClass))
+                    return null;
+                var ctor = baseClass.Constructors.FirstOrDefault(c => c?.Implementation?.Parameters != null
+                                                                    && c.Implementation.Parameters.Count == call.Args.Count);
+                return ParameterType(ctor?.Implementation?.Parameters, index);
             }
 
             private TypeInfo MemberType(TypeInfo receiver, string member)
@@ -2273,18 +2363,27 @@ namespace BasicLang.Compiler.IR
                             $"ClosureLowering: the entry block of '{g.Name}' is a branch target, so an environment "
                             + "allocated there would be re-created on every pass through it.");
 
-                    var line = entry.Instructions.FirstOrDefault(i => i != null)?.SourceLine ?? 0;
+                    // ADR-0016 D3: a constructor's environment goes before or after its base call
+                    // (PlanBaseConstructorCall); either way Me is stored into it only AFTER the call.
+                    var baseCall = ctx.BaseCall;
+                    var callBlock = baseCall == null ? null : g.Blocks.First(b => b.Instructions.Contains(baseCall));
+                    var after = baseCall != null && !ctx.EnvironmentBeforeBaseCall;
+                    var line = (after
+                            ? callBlock.Instructions.Skip(callBlock.Instructions.IndexOf(baseCall) + 1).FirstOrDefault(i => i != null)
+                            : entry.Instructions.FirstOrDefault(i => i != null))?.SourceLine ?? 0;
                     var list = new List<IRInstruction>();
                     var create = new IRNewObject(NewTemp(ctx), fl.Env.Name, fl.EnvType) { SourceLine = line };
                     list.Add(create);
                     list.Add(new IRAssignment(fl.LocalRef, create) { SourceLine = line });
                     if (fl.ParentField != null)
                         list.Add(Store(fl.LocalRef, fl.ParentField, MeRef(ctx), true, line));
+                    IRInstruction meStore = null;
                     if (fl.MeField != null)
                     {
                         var me = new IRVariable("Me", fl.MeType);
                         _synthetic.Add(me);
-                        list.Add(Store(fl.LocalRef, fl.MeField, me, true, line));
+                        meStore = Store(fl.LocalRef, fl.MeField, me, true, line);
+                        if (baseCall == null) list.Add(meStore);
                     }
                     foreach (var p in g.Parameters)
                     {
@@ -2308,7 +2407,24 @@ namespace BasicLang.Compiler.IR
                             list.Add(Store(fl.LocalRef, fl.Vars[local.Name].Field, alloc, true, line));
                         }
                     }
-                    Prepend(entry, list);
+                    if (baseCall == null)
+                    {
+                        Prepend(entry, list);
+                    }
+                    else if (after)
+                    {
+                        // The whole environment right after the base call, in the order it always
+                        // had at entry: create, assign, Me (a constructor has no parent), the rest.
+                        if (meStore != null) list.Insert(2, meStore);
+                        InsertAfter(callBlock, baseCall, list);
+                    }
+                    else
+                    {
+                        // Before the prologue, with Me stored IMMEDIATELY after the base call: before
+                        // that, the only use of `this` is as the receiver of the base .ctor call.
+                        Prepend(entry, list);
+                        if (meStore != null) InsertAfter(callBlock, baseCall, new List<IRInstruction> { meStore });
+                    }
 
                     g.LocalVariables.RemoveAll(l => l?.Name != null && fl.Holds(l.Name) && !ReferenceEquals(l, fl.LocalRef));
                     g.LocalVariables.Insert(0, fl.LocalRef);
@@ -2425,6 +2541,12 @@ namespace BasicLang.Compiler.IR
             {
                 foreach (var i in list) i.ParentBlock = block;
                 block.Instructions.InsertRange(0, list);
+            }
+
+            private static void InsertAfter(BasicBlock block, IRInstruction anchor, List<IRInstruction> list)
+            {
+                foreach (var i in list) i.ParentBlock = block;
+                block.Instructions.InsertRange(block.Instructions.IndexOf(anchor) + 1, list);
             }
 
             // ---------------------------------------------------------------------------------

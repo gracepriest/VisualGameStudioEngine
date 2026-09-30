@@ -255,18 +255,21 @@ public class MsilBaseConstructorTests
     // ====================================================================================
 
     /// <summary>
-    /// ⛔ A COMPUTED base argument is refused rather than emitted. IL requires the base
-    /// constructor call before the constructor body, so a value the body produces does not exist
-    /// yet: measured, <c>MyBase.New(v + 1)</c> hands the generator an <c>IRBinaryOp</c> temp, and
-    /// loading it would read an uninitialized local and pass a silent <b>0</b>.
+    /// ⭐ MOVED PIN (ADR-0016 / #170). A COMPUTED base argument used to be refused rather than
+    /// emitted: IL requires the base constructor call before the constructor body, so a value the
+    /// body computed did not exist yet, and the same program did not build on C# either — it
+    /// emitted <c>: base(t0)</c>, naming a temp that was not in scope (CS0103). Both were the same
+    /// fault: the temp's DEFINING instruction sat in the entry block while the call site itself
+    /// sat off-stream in <c>IRConstructor.BaseConstructorArgs</c>, a list no block held.
     ///
-    /// <para>⚠ This is an IR-level gap, not an MSIL one, which is why MSIL refuses instead of
-    /// inventing an answer: the same program does not build on C# either — it emits
-    /// <c>: base(t0)</c>, naming a temp that is not in scope (CS0103). Pinned on BOTH so that
-    /// whoever makes the IR self-contained sees both halves.</para>
+    /// <para>#170's <c>IRBaseConstructorCall</c> terminates the entry block's prologue, so
+    /// <c>v + 1</c> is an ordinary prologue instruction the base call consumes in place — MSIL
+    /// emits it before <c>call instance void Base::.ctor(...)</c>, C# renders it as the
+    /// parenthesised expression <c>: base((v + 1))</c>. <c>base:42</c> now runs on C#, JavaScript,
+    /// MSIL AND C++ (measured, <c>S/t170/ctrlW/W1</c>'s shape; here with <c>v=41</c>).</para>
     /// </summary>
     [Test]
-    public void AComputedBaseArgument_IsRefused_NotSilentlyZero()
+    public void AComputedBaseArgument_RunsOnEveryBackend()
     {
         const string program = """
             Class Base
@@ -289,18 +292,7 @@ public class MsilBaseConstructorTests
             End Module
             """;
 
-        var run = Run(program);
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(run.Outcome, Is.EqualTo(MsilOutcome.GenerateFailed),
-                "refusing is the point: emitting this passes 0 and prints base:0");
-            Assert.That(run.Detail, Does.Contain("MyBase.New argument that is COMPUTED"));
-
-            Assert.That(ReturnCoercionTests.CompileEmittedCSharpForTest(program),
-                Has.Some.Contains("CS0103"),
-                "and C# does not build it either — `: base(t0)` names a temp out of scope");
-        });
+        FourBackends.RunsOnEveryBackend(program, "base:42");
     }
 
     // ⚠ The pin that used to live here — a derived class with NO constructor whose base requires

@@ -316,6 +316,26 @@ namespace BasicLang.Compiler.SemanticAnalysis
             new HashSet<ASTNode>(ReferenceEqualityComparer.Instance);
 
         /// <summary>
+        /// ADR-0016 D4: true while a <c>MyBase.New(...)</c> call's arguments — lambdas written there
+        /// included — are being analyzed. Any reference to the object under construction there is
+        /// VB's BC31095 (explicit) / BC31096 (implicit), reported once per node
+        /// (<see cref="_baseArgumentDiagnosticSites"/>).
+        /// </summary>
+        private bool _inBaseConstructorArguments;
+
+        private readonly HashSet<ASTNode> _baseArgumentDiagnosticSites =
+            new HashSet<ASTNode>(ReferenceEqualityComparer.Instance);
+
+        /// <summary>
+        /// ADR-0016 D4: the <c>Shared</c> members (fields, methods, properties, constants, events) each
+        /// BasicLang class DECLARES, by name, read off its <c>ClassNode</c> — what BC31096 needs to
+        /// tell an instance member from a shared one, which a field's or method's symbol does not
+        /// record. A class with no entry (a .NET base) is never judged.
+        /// </summary>
+        private readonly Dictionary<TypeInfo, HashSet<string>> _sharedMemberNames =
+            new Dictionary<TypeInfo, HashSet<string>>(ReferenceEqualityComparer.Instance);
+
+        /// <summary>
         /// The control variables of the <c>For</c> / <c>For Each</c> loops whose bodies are being
         /// analyzed, innermost last — VB's BC30069 question ("already in use by an enclosing
         /// loop"), asked only by a <c>For Each</c> that would REUSE a variable.
@@ -687,6 +707,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
         private void PopulateClassMemberSignatures(
             ClassNode classNode, TypeInfo classType, bool includeConstructors)
         {
+            RecordSharedMembers(classNode, classType);
             if (classNode.Members == null || classType?.Members == null) return;
 
             static bool Visible(AccessModifier access) => access != AccessModifier.Private;
@@ -1250,6 +1271,8 @@ namespace BasicLang.Compiler.SemanticAnalysis
             _lambdaScopes.Clear();
             _lambdaLocals.Clear();
             _lambdaDiagnosticSites.Clear();
+            _baseArgumentDiagnosticSites.Clear();
+            _sharedMemberNames.Clear();
             _synthesizedSymbols.Clear();
             _delegateMemberInvocations.Clear();
             _netNamespaces.Clear();
@@ -5961,6 +5984,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
             // Enter class scope
             var classScope = EnterScope(node.Name, ScopeKind.Class);
             classScope.ClassType = classType;
+            RecordSharedMembers(node, classType);   // ADR-0016 D4
 
             // Register generic type parameters in the class scope
             foreach (var genericParam in node.GenericParameters)
@@ -7208,13 +7232,22 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     ? ResolveConstructor(classScope.ClassType.BaseType, node.BaseConstructorArgs.Count)
                     : null;
                 var argTypes = new List<TypeInfo>();
-                for (int i = 0; i < node.BaseConstructorArgs.Count; i++)
+                var outerInBaseArguments = _inBaseConstructorArguments;
+                _inBaseConstructorArguments = true;   // ADR-0016 D4: BC31095 / BC31096
+                try
                 {
-                    var arg = node.BaseConstructorArgs[i];
-                    VisitWithDelegateTarget(arg,
-                        ArgumentTargetType(targetBaseConstructor, i, node.BaseConstructorArgs.Count, null));
-                    var argType = GetNodeType(arg);
-                    argTypes.Add(argType ?? _typeManager.ObjectType);
+                    for (int i = 0; i < node.BaseConstructorArgs.Count; i++)
+                    {
+                        var arg = node.BaseConstructorArgs[i];
+                        VisitWithDelegateTarget(arg,
+                            ArgumentTargetType(targetBaseConstructor, i, node.BaseConstructorArgs.Count, null));
+                        var argType = GetNodeType(arg);
+                        argTypes.Add(argType ?? _typeManager.ObjectType);
+                    }
+                }
+                finally
+                {
+                    _inBaseConstructorArguments = outerInBaseArguments;
                 }
 
                 // Validate base constructor exists and arguments match
@@ -7444,6 +7477,8 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
         public void Visit(MyBaseExpressionNode node)
         {
+            ReportReferenceToObjectUnderConstruction(node, implicitReference: false);   // ADR-0016 D4
+
             // MyBase refers to the base class
             // Validate we're inside a class that has a base class
             var classScope = _currentScope.GetClassScope();
@@ -11000,6 +11035,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
             // Handle 'Me' keyword - refers to current class instance
             if (node.Name.Equals("Me", StringComparison.OrdinalIgnoreCase))
             {
+                ReportReferenceToObjectUnderConstruction(node, implicitReference: false);   // ADR-0016 D4
                 var classScope = _currentScope.GetClassScope();
                 if (classScope == null)
                 {
@@ -11070,6 +11106,79 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 SetNodeType(node, symbol.Type);
                 CheckPropertyRead(node, symbol);   // task #178: bare `W` read
                 CheckByRefParameterInLambda(symbol, node);   // task #174: BC36639, read or write
+                if (_inBaseConstructorArguments && IsInstanceMemberUnderConstruction(symbol, node.Name))
+                    ReportReferenceToObjectUnderConstruction(node, implicitReference: true);   // ADR-0016 D4
+            }
+        }
+
+        /// <summary>
+        /// ⭐ ADR-0016 D4 — VB's BC31095 ("Reference to object under construction is not valid when
+        /// calling another constructor.") for an explicit <c>Me</c> / <c>MyBase</c>, and BC31096
+        /// ("Implicit reference ...") for an instance member named bare, anywhere in a
+        /// <c>MyBase.New(...)</c> call's arguments — a lambda written there, at any nesting depth,
+        /// included. It is the precondition of D3's closure lowering: a lambda there never needs a
+        /// <c>Me</c> that does not exist yet. Here, in the analyzer, so the compiler and the LSP
+        /// report it alike.
+        /// </summary>
+        private void ReportReferenceToObjectUnderConstruction(ASTNode at, bool implicitReference)
+        {
+            if (!_inBaseConstructorArguments || !_baseArgumentDiagnosticSites.Add(at)) return;
+            if (implicitReference)
+                VbCodedError("BC31096",
+                    "Implicit reference to object under construction is not valid when calling another constructor.", at);
+            else
+                VbCodedError("BC31095",
+                    "Reference to object under construction is not valid when calling another constructor.", at);
+        }
+
+        /// <summary>
+        /// ADR-0016 D4: whether a bare name resolved to <paramref name="symbol"/> is an INSTANCE member
+        /// of the object under construction — a field, property or method of the class, or of a
+        /// BasicLang base, that is not <c>Shared</c> and not a constant. A parameter, a local (the
+        /// constructor's, or a lambda's), a module member and a type are not; neither is a member of a
+        /// .NET base, whose shared-ness nothing here records (left to the backend, as before).
+        /// </summary>
+        private bool IsInstanceMemberUnderConstruction(Symbol symbol, string name)
+        {
+            if (symbol == null) return false;
+            if (symbol.IsConstant || symbol.Kind is not (SymbolKind.Variable or SymbolKind.Property
+                    or SymbolKind.Function or SymbolKind.Subroutine))
+                return false;
+            if (symbol.DeclaringScope != null && symbol.DeclaringScope.Kind != ScopeKind.Class) return false;
+
+            var classScope = _currentScope?.GetClassScope();
+            var classType = classScope?.ClassType;
+            var guard = 0;
+            for (var type = classType; type != null && guard++ < 64; type = type.BaseType)
+            {
+                // Declared by THIS class: in its member table, or — a member defined in pass 2 before
+                // the table has it — in its own class scope.
+                var declaresIt = (type.Members != null && type.Members.ContainsKey(name))
+                                 || (ReferenceEquals(type, classType) && ReferenceEquals(symbol.DeclaringScope, classScope));
+                if (!declaresIt) continue;
+                if (!_sharedMemberNames.TryGetValue(type, out var shared)) return false;
+                return !shared.Contains(name) && !symbol.IsShared;
+            }
+            return false;
+        }
+
+        /// <summary>ADR-0016 D4: record the members <paramref name="classNode"/> declares
+        /// <c>Shared</c> (and its constants), for <see cref="IsInstanceMemberUnderConstruction"/>.</summary>
+        private void RecordSharedMembers(ClassNode classNode, TypeInfo classType)
+        {
+            if (classNode?.Members == null || classType == null) return;
+            if (!_sharedMemberNames.TryGetValue(classType, out var shared))
+                _sharedMemberNames[classType] = shared = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var member in classNode.Members)
+            {
+                switch (member)
+                {
+                    case FunctionNode f when f.IsStatic: shared.Add(f.Name); break;
+                    case SubroutineNode sub when sub.IsStatic: shared.Add(sub.Name); break;
+                    case VariableDeclarationNode v when v.IsStatic: shared.Add(v.Name); break;
+                    case PropertyNode prop when prop.IsStatic: shared.Add(prop.Name); break;
+                    case ConstantDeclarationNode c: shared.Add(c.Name); break;
+                }
             }
         }
 

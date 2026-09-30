@@ -261,6 +261,11 @@ namespace BasicLang.Compiler.IR
             WriteLine(baseCall.ToString());
         }
 
+        public void Visit(IRBaseConstructorCall baseConstructorCall)
+        {
+            WriteLine(baseConstructorCall.ToString());
+        }
+
         public void Visit(IRFieldAccess fieldAccess)
         {
             WriteLine(fieldAccess.ToString());

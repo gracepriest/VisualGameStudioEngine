@@ -945,23 +945,50 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             // that ignores every argument. Parameters live on the implementation.
             var parameters = string.Join(", ", impl.Parameters.ConvertAll(p => SanitizeName(p.Name)));
 
+            // ⭐ ADR-0016 D1: `super(...)` is where the IR puts the base call. JavaScript may run
+            // statements before super() as long as they never touch `this`, and D4 (BC31095/6)
+            // guarantees no MyBase.New argument does — so a computed or lambda argument's
+            // PROLOGUE is emitted as ordinary statements (declarations, temporaries, an
+            // AndAlso's branches) and `super(...)` follows it in place. A base call with nothing
+            // before it keeps the old spelling: `super(...)` first, then the declarations —
+            // byte-identical for every constructor whose arguments are parameters and literals.
             var prologue = new List<string>();
+            IRBaseConstructorCall superFirst = null;
             if (!string.IsNullOrEmpty(irClass.BaseClass))
             {
-                // JS forbids touching `this` before super(), and a computed base argument
-                // would have emitted instructions that must run first — an ordering the IR
-                // does not mark. Only constants and plain parameters are safe here.
-                foreach (var arg in ctor.BaseConstructorArgs ?? new List<IRValue>())
-                {
-                    if (!(arg is IRConstant || arg is IRVariable))
-                        throw NotYet("a computed base-constructor argument");
-                }
-                var baseArgs = string.Join(", ",
-                    (ctor.BaseConstructorArgs ?? new List<IRValue>()).ConvertAll(Expr));
-                prologue.Add($"super({baseArgs});");
+                var baseCall = ctor.BaseCall;
+                if (baseCall == null)
+                    prologue.Add("super();");
+                else if (ReferenceEquals(FirstInstruction(impl), baseCall))
+                    superFirst = baseCall;
             }
 
-            EmitMemberBody($"constructor({parameters})", impl, members, prologue);
+            EmitMemberBody($"constructor({parameters})", impl, members, prologue, superFirst: superFirst);
+        }
+
+        /// <summary>The first instruction of <paramref name="impl"/>'s entry block, or null.</summary>
+        private static IRInstruction FirstInstruction(IRFunction impl) =>
+            (impl.EntryBlock ?? impl.Blocks?.FirstOrDefault())?.Instructions.FirstOrDefault(i => i != null);
+
+        /// <summary>The <c>super(...)</c> statement for <paramref name="baseCall"/>. Rendered inside the
+        /// constructor's own context (<see cref="EmitMemberBody"/>), so a lambda argument that assigns
+        /// a parameter assigns it — rendered before that context existed, the arrow function saw no
+        /// declared <c>p</c> and emitted <c>const p = …</c>, a TDZ ReferenceError (#170, B1).</summary>
+        private string SuperCall(IRBaseConstructorCall baseCall) =>
+            $"super({string.Join(", ", baseCall.Args.Select(Expr))});";
+
+        /// <summary>The base call a constructor emits FIRST (nothing precedes it in the IR); skipped
+        /// by the walk, which would otherwise write it twice.</summary>
+        private IRBaseConstructorCall _superFirst;
+
+        /// <summary>
+        /// ADR-0016 D1: a base call with a PROLOGUE before it — the statements evaluating its
+        /// arguments — is emitted in place, after them.
+        /// </summary>
+        public void Visit(IRBaseConstructorCall baseConstructorCall)
+        {
+            if (ReferenceEquals(baseConstructorCall, _superFirst)) return;
+            Line(SuperCall(baseConstructorCall));
         }
 
         private void EmitMethod(IRClass irClass, IRMethod method, HashSet<string> members)
@@ -993,7 +1020,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// <c>this.</c> call for it would hide the gap rather than leave it visible.</para>
         /// </summary>
         private void EmitMemberBody(string signature, IRFunction impl, HashSet<string> members,
-            List<string> prologue = null, bool isStatic = false)
+            List<string> prologue = null, bool isStatic = false, IRBaseConstructorCall superFirst = null)
         {
             var savedMembers = _memberNames;
             _memberNames = members;
@@ -1013,11 +1040,15 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             Line(signature + " {");
             _indentLevel++;
 
-            foreach (var line in prologue ?? new List<string>()) Line(line);
-
+            // The parameters are declared BEFORE the prologue is written, so a `super(...)` argument
+            // renders in this member's own scope (see SuperCall).
             _declaredNames = new HashSet<string>(StringComparer.Ordinal);
             foreach (var p in impl.Parameters ?? new List<IRVariable>())
                 _declaredNames.Add(p.Name);
+
+            foreach (var line in prologue ?? new List<string>()) Line(line);
+            _superFirst = superFirst;
+            if (superFirst != null) Line(SuperCall(superFirst));
 
             _perIter = PerIterationPlan.Build(_module, impl);
             foreach (var local in impl.LocalVariables ?? new List<IRVariable>())
@@ -1030,6 +1061,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             DeclareGlobals();
 
             EmitStructured(impl.EntryBlock ?? impl.Blocks?.FirstOrDefault());
+            _superFirst = null;
 
             _indentLevel--;
             Line("}");
@@ -2540,6 +2572,10 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             foreach (var instruction in block.Instructions)
             {
                 if (instruction is IRBranch || instruction is IRConditionalBranch || instruction is IRSwitch)
+                    continue;
+
+                // ADR-0016: the constructor already wrote this `super(...)` first — no mapping, no line.
+                if (instruction is IRBaseConstructorCall && ReferenceEquals(instruction, _superFirst))
                     continue;
 
                 RecordMapping(instruction.SourceLine);

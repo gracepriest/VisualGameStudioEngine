@@ -17,9 +17,10 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
     /// <c>#CppInclude</c>d C++ class). It alone carries <c>enable_shared_from_this</c> (D1).</item>
     /// <item>A FOREIGN-ROOTED hierarchy is one whose root's base is such a C++ class — an
     /// ANCESTOR walk, never a descendant scan (D2a).</item>
-    /// <item>The <c>MyBase.New</c> arguments of a constructor must be evaluable as a straight-line
-    /// PREFIX of the constructor's entry block, because <c>Base::ctor_</c> is placed right after
-    /// them (E11); in a foreign-rooted hierarchy they must also be PURE (D2a).</item>
+    /// <item>The <c>MyBase.New</c> arguments of a constructor are the operands of its
+    /// <see cref="IRBaseConstructorCall"/>, and <c>Base::ctor_</c> is written where that instruction
+    /// is (E11, ADR-0016 D1); in a foreign-rooted hierarchy the prologue must also be PURE
+    /// (D2a).</item>
     /// </list>
     /// </summary>
     public static class CppObjectModel
@@ -70,105 +71,26 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         public static bool IsForeignRooted(IRModule module, IRClass cls) => ForeignRootOf(module, cls) != null;
 
         /// <summary>
-        /// E11: where a <c>ctor_</c>'s base call goes, and how each <c>MyBase.New</c> argument is
-        /// spelled there — or a refusal naming why it cannot be placed.
+        /// D2a's purity rule, read off the constructor's PROLOGUE (ADR-0016 D1): the base call sits in
+        /// the entry block (a multi-block prologue is an <c>AndAlso</c>/<c>OrElse</c>, which builds its
+        /// value across statements), every instruction before it is a pure operator or a constant,
+        /// and every argument is pure (<see cref="IsPureBaseArgument"/>). Such a prologue has no
+        /// statement the tag constructor's initializer list could not repeat as an expression.
         ///
-        /// <para>IRBuilder evaluates the arguments FIRST, into the entry block, then the body.
-        /// <c>Base::ctor_</c> goes immediately after that evaluation, and nothing else may precede
-        /// it: <c>PrefixLength</c> counts the entry block's leading instructions that compute the
-        /// arguments — their operand closure, extended over the stores that fill an array literal
-        /// the closure allocated.</para>
-        ///
-        /// <para>⛔ THE ARGUMENT LIST CAN BE STALE. <see cref="IRConstructor.BaseConstructorArgs"/> is
-        /// not an instruction operand, so an optimizer pass that REPLACES an argument's node (strength
-        /// reduction turns <c>a * 2</c> into a new <c>a &lt;&lt; 1</c> node and re-points only
-        /// instruction operands; constant folding drops the node for a constant) leaves the list
-        /// pointing at a node no block holds — measured on the default pipeline, without
-        /// <c>-O</c>. Such a node is rendered INLINE (<c>Inline</c>) when it is an operator, whose
-        /// replacement is equivalent to it by construction; its operands are placed like any
-        /// argument's.</para>
-        ///
-        /// <para>Refused — never guessed — when an argument needs control flow
-        /// (<c>AndAlso</c>/<c>OrElse</c> build a local across blocks), when anything else is
-        /// interleaved with its evaluation, or when a later instruction still writes into a value
-        /// the call receives. Before ADR-0015 every computed argument was a C++ compile error
-        /// ("use of undeclared identifier"), so a refusal regresses nothing, while a WRONG
-        /// placement would compile and pass a value that is not yet computed.</para>
+        /// <para>ADR-0015's implementation note "the argument list can be STALE" is moot: the
+        /// arguments are the instruction's operands, which every pass re-points when it replaces a
+        /// node (strength reduction's <c>a * 2</c> → <c>a &lt;&lt; 1</c> included).</para>
         /// </summary>
-        public static (int PrefixLength, HashSet<IRValue> Inline, string Refusal) PlanBaseArguments(
-            IRModule module, IRConstructor ctor)
+        public static bool IsPurePrologue(IRModule module, IRFunction impl, IRBaseConstructorCall baseCall)
         {
-            var inline = new HashSet<IRValue>(ReferenceEqualityComparer.Instance);
-            var args = ctor?.BaseConstructorArgs;
-            if (args == null || args.Count == 0) return (0, inline, null);
-
-            var impl = ctor.Implementation;
-            var entry = impl?.EntryBlock;
-            var instructions = entry?.Instructions ?? new List<IRInstruction>();
-            var position = new Dictionary<IRInstruction, int>(ReferenceEqualityComparer.Instance);
-            for (var i = 0; i < instructions.Count; i++)
-                position.TryAdd(instructions[i], i);
-
-            var closure = new HashSet<IRValue>(ReferenceEqualityComparer.Instance);
-            string refusal = null;
-
-            void Visit(IRValue value)
-            {
-                if (refusal != null || value == null || value is IRConstant) return;
-                if (value is IRVariable variable)
-                {
-                    // A lambda renders INLINE at its use site (the generator's GetValueName), so it
-                    // needs no statement before the base call either.
-                    if (!IsParameterOf(impl, variable) && !IsGlobal(module, variable) && !IsLambda(module, variable))
-                        refusal = $"reads '{variable.Name}', which is neither a parameter, a module-level value " +
-                                  "nor a lambda (AndAlso / OrElse build such a value across several statements)";
-                    return;
-                }
-                if (position.ContainsKey(value))
-                {
-                    if (!closure.Add(value)) return;
-                }
-                else if (IsOperator(value))
-                {
-                    if (!inline.Add(value)) return;
-                }
-                else
-                {
-                    refusal = "is computed with control flow (AndAlso / OrElse)";
-                    return;
-                }
-                foreach (var operand in IROperandWalker.EnumerateOperands(value))
-                    Visit(operand);
-            }
-
-            foreach (var arg in args) Visit(arg);
-            if (refusal != null) return (0, inline, refusal);
-
-            var length = closure.Count == 0 ? 0 : closure.Max(v => position[v]) + 1;
-
-            // An array literal is its allocation followed by one store per element: the stores
-            // are part of evaluating the argument even though no operand edge leads to them.
-            while (length < instructions.Count && WritesInto(instructions[length], closure))
-            {
-                if (instructions[length] is IRValue gep) closure.Add(gep);
-                length++;
-            }
-
-            for (var i = 0; i < length; i++)
-            {
-                var inst = instructions[i];
-                if (inst is IRValue v && closure.Contains(v)) continue;
-                if (WritesInto(inst, closure) || inst is IRComment) continue;
-                return (0, inline, "is evaluated with other statements in between");
-            }
-
-            // A store into an argument AFTER Base::ctor_ would complete the value too late.
-            foreach (var block in impl?.Blocks ?? new List<BasicBlock>())
-                for (var i = block == entry ? length : 0; i < block.Instructions.Count; i++)
-                    if (WritesInto(block.Instructions[i], closure))
-                        return (0, inline, "is still being filled after it would be passed");
-
-            return (length, inline, null);
+            if (impl?.EntryBlock == null || baseCall == null) return false;
+            var entry = impl.EntryBlock.Instructions;
+            var at = entry.IndexOf(baseCall);
+            if (at < 0) return false;
+            for (var i = 0; i < at; i++)
+                if (entry[i] is not (IRConstant or IRVariable or IRComment) && !(entry[i] is IRValue v && IsOperator(v)))
+                    return false;
+            return baseCall.Args.All(a => IsPureBaseArgument(module, impl, a));
         }
 
         /// <summary>An operator node that renders as one expression with no statement of its own.</summary>
@@ -211,23 +133,9 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                                         || (variable.IsParameter
                                             && string.Equals(p.Name, variable.Name, StringComparison.OrdinalIgnoreCase)));
 
-        private static bool IsLambda(IRModule module, IRVariable variable) =>
-            variable.Name != null
-            && variable.Name.StartsWith("__lambda_", StringComparison.Ordinal)
-            && module?.Functions != null
-            && module.Functions.Any(f => f.IsLambda && f.Name == variable.Name);
-
         private static bool IsGlobal(IRModule module, IRVariable variable) =>
             module?.GlobalVariables != null
             && module.GlobalVariables.Values.Any(g => ReferenceEquals(g, variable)
                                                       || string.Equals(g.Name, variable.Name, StringComparison.OrdinalIgnoreCase));
-
-        private static bool WritesInto(IRInstruction inst, HashSet<IRValue> closure) => inst switch
-        {
-            IRArrayStore store => store.Array != null && closure.Contains(store.Array),
-            IRGetElementPtr gep => gep.BasePointer != null && closure.Contains(gep.BasePointer),
-            IRStore store => store.Address != null && closure.Contains(store.Address),
-            _ => false,
-        };
     }
 }
