@@ -184,11 +184,11 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // type and a global's initializer needs the globals declared before it.
             EmitDeclarationsClassBodiesNeed(module, standaloneFunctions, globalPrefix: "extern ");
 
-            // Generate classes
+            // Generate classes — base before derived (ClassesBaseFirst)
             if (module.Classes.Count > 0)
             {
                 WriteLine("// Classes");
-                foreach (var irClass in module.Classes.Values)
+                foreach (var irClass in module.ClassesBaseFirst())
                 {
                     GenerateClass(irClass);
                     WriteLine();
