@@ -14,12 +14,14 @@
 - **2.0a (Tasks 1–17) and 2.0b (Tasks 18–27): full TDD step granularity.** Each task has exact files, anchors verified on today's `origin/master`, complete failing test code, the command and the expected red, the implementation code (or precise quoted-anchor edits where the change is too large to paste), the expected green, the mutation(s) that must go red, and a commit step.
 - **2a, 2b, 2c, 2d (Tasks 28–47): TASK granularity.** Files and responsibilities, the tests each must add, risks, gate. **Each is expanded into full steps just before it starts, after a pre-flight against the tree as the earlier tasks leave it** — exactly as piece 1's Tasks 9–16 were. Their anchors WILL drift: 2.0 rewrites the preprocessor, the analyzer's base resolution, the JS event lowering and the prelude; property-grid slice 3 (in flight on `feat/property-grid-slice3`) rewrites catalog rows, `FormCss` and the root rows; `fix/unknown-dock-diagnostic` (merged, `bc29391e`) added `FormDock` and BL8033.
 
-Every `file:line` anchor below was verified by reading the file on **`origin/master` @ `bc29391e`** (2026-09-29), except where marked **[X]**: those were read on **`40e9c172`** (`fix/js-cross-file-calls`, in review, not merged). **Re-verify each anchor before editing; if a line has moved, find the code by its quoted text, never by the number.**
+Every `file:line` anchor below was verified by reading the file on **`origin/master` @ `bc29391e`** (2026-09-29), except where marked **[X]**: those are on **`098b4de9`** (`fix/js-cross-file-calls` head at revision 2 of this plan — `40e9c172` plus review fixes and a master merge; not merged to master), and **[S3]**: on **`e90a24bb`** (`feat/property-grid-slice3` head). ⚠ Master has since moved to **`5b4ca51e`** (#145 rewrote ~230 lines of `IROptimizer.cs` and moved the JS roster pin) — Task 0 re-anchors. **Re-verify each anchor before editing; if a line has moved, find the code by its quoted text, never by the number.**
+
+**Revision 2 (plan review of `e93985d5`)** changed: the Decimal oracle rule and a new Task 20A that fixes the C# backend where it diverges from VB (review CRITICAL); Task 10's library-shape tests; Task 15 no longer re-marks `Using` (guard rows added); .NET's Decimal↔Double algorithms and generated tables; project-route Decimal rows; Tasks 30/40 anchored on slice 3's handler rework; a new Task 35A (automated headless end-to-end); the O12 methods and collection members assigned to tasks with a manifest-driven gate; Task 9's C++/optimizer legs and concrete edits; and every minor.
 
 Spec: `docs/superpowers/specs/2026-09-29-portable-control-library-design.md` (cited "spec §N"; owner decisions O1–O19 are §0.2–§0.3; measured facts M1–M25 are §3; the final review's notes are §11b).
 
 ### ⛔ Dependency: 2.0 starts only after `fix/js-cross-file-calls` lands
-That branch (commit `40e9c172`) adds `ResolveTypeSymbol`, `TryResolveOtherUnitModuleBlockMember`, `LacksDeclaredMember`, `RecordDeclaredMembers`, `TypeInfo.DeclaredMemberNames`/`DeclaredBaseName` (`SymbolTable.cs:120`, `:123` [X]), sibling class shells that get their `BaseType` (pass 2, `SemanticAnalyzer.cs:588-605` [X]) and `CrossFileBindingTests` (17 tests [X]). It rewrites the missing-member / .NET-fallback path that Tasks 7, 11 and 15 build on. **Task 0 confirms it is merged and re-measures.** If it is still unmerged, stop and report; do not rebase this work onto an unmerged branch.
+That branch (`40e9c172` + review fixes `3073435a`, head `098b4de9`) adds `ResolveTypeSymbol`, `TryResolveOtherUnitModuleBlockMember`, `LacksDeclaredMember`, `RecordDeclaredMembers`, `TypeInfo.DeclaredMemberNames`/`DeclaredBaseName` (`SymbolTable.cs:120`, `:123` [X]), sibling class shells that get their `BaseType` (pass 2, `SemanticAnalyzer.cs:≈604-630` [X]) and `CrossFileBindingTests` [X]. It rewrites the missing-member / .NET-fallback path that Tasks 7, 11 and 15 build on. **Task 0 confirms it is merged and re-measures.** If it is still unmerged, stop and report; do not rebase this work onto an unmerged branch.
 
 ### How to build and run tests (used by every task)
 
@@ -61,9 +63,9 @@ Design codes are referred to by NAME (`DesktopOnlyKind`, `DomUsageFinding`, `Mix
 | S5 | §4.6 "Base-first class emission (JavaScript)" as a 2.0 task | **Already on master** (`27e8307c`, `IRModule.ClassesBaseFirst`, `IRNodes.cs:1681`, used at `JavaScriptBackend.cs:209`, `CppCodeGenerator.cs:191`, `CppCodeGenerator.Split.cs:273`). Re-measured: M5 runs (`Form1 Form`). This plan only adds the CROSS-FILE order case to Task 7. | Measured on `bc29391e`. |
 | S6 | §4.4 "the event store is a list of `{receiver, method}` entries" | Events become JS ARRAYS; `AddressOf recv.M` produces a function tagged with `__blTarget`/`__blMethod`; `RemoveHandler` removes the LAST matching entry; `RaiseEvent` iterates a SNAPSHOT. | .NET semantics: an invocation list, duplicates allowed, remove takes the last match, and a raise invokes the list as it was when the raise began. A `Set` dedupes a delegate stored in a variable and added twice. |
 | S7 | §4.8 "`AddHandler` checks the handler against a BasicLang event" | The check already exists (`ValidateHandlerWiring`, `SemanticAnalyzer.cs:8579-8632`) and is silent because (a) events are never class MEMBERS (`Visit(ClassNode)` member loop `:6146-6200` and `PopulateClassMemberSignatures` `:744-820` skip them), and (b) a `Private` handler declared below its wiring is unbound when the wiring is analyzed. Task 10 makes events members and DEFERS an unresolved handler's check to the end of its class. The message family stays (`the handler passed to AddHandler takes …`). | Fix the reason it is silent, not a second check. |
-| S8 | §4.9 "On a JavaScript build, a Using … that names a namespace DECLARED IN THE PROGRAM resolves to it" | The analyzer learns the target through a new `SemanticAnalyzer.ConfigureTarget(backend)` (called beside `ConfigureModuleSystem`, `Compiler.cs:750-751`, and by `JsTestSupport`). Gated on JavaScript. | The analyzer has no target today (only `_netNativeBackend`, `:390`). C# must stay byte-identical (spec §4.9). |
+| S8 | §4.9 "On a JavaScript build, a Using … that names a namespace DECLARED IN THE PROGRAM resolves to it" | **A `Using` is never re-marked** (revised on plan review): the library declares `Namespace System` (for `EventArgs`), so re-marking would make `Using System` stop counting as .NET and break `Console`/`Math`. Instead a bare name already resolves to a program type first (scope before `IsNetType`), and Task 15 adds only (a) dotted `Namespace` declarations and (b) a QUALIFIED name whose prefix is a program namespace resolving to the program's type when that type exists (else the existing .NET path, unchanged). The analyzer learns the target through `SemanticAnalyzer.ConfigureTarget(backend)` (beside `ConfigureModuleSystem`, `Compiler.cs:750-751`, and in `JsTestSupport`); (b) is gated on JavaScript. | The analyzer has no target today (only `_netNativeBackend`, `:390`). C# must stay byte-identical (spec §4.9). M8's failures were the parse error, the qualified name and the upcast that followed from it — not the bare name. |
 | S9 | §4.11 "D21 … it must fold EXACTLY … or not at all" | Measured: `IROptimizer` does not fold Decimal at all (`FoldAdd`/`Sub`/`Mul`/`Div` `:1829-1872` match int/long/float/double/string; `TryFoldCompare` skips decimal at `:1802`). Task 26 PINS "not folded through double" under standard and aggressive pipelines and adds no folding. | "Or not at all" is today's behaviour; adding a System.Decimal folder is optional work with its own risk and no user need. |
-| S10 | §4.11 "expected values COMPUTED BY .NET inside the test" | The oracle for every "in" row is **the same BasicLang program compiled by the C# backend and run in-process** (`FourBackends.RunEmittedCSharp`, real `System.Decimal`), under `InvariantCulture`; a handful of literal expectations (`1.10`, `0.3333333333333333333333333333`) guard against both backends being wrong the same way. | A hand table in the test would be a second implementation of Decimal to get wrong. Roslyn running the C# emission IS .NET computing it, for every case, with no transcription. |
+| S10 | §4.11 "expected values COMPUTED BY .NET inside the test" | **The oracle rule (revised on plan review):** BasicLang follows VB. The C# backend's run is the oracle **only for rows where the C# emission's Decimal semantics EQUAL VB's** — arithmetic, comparison of typed Decimals, printing, `Math`, `Decimal.Parse`, Decimal↔Double, widening. **Exception rows use VB-LITERAL expectations written in the test**, derived from VB/.NET semantics, and Task 20A FIXES the C# backend so it agrees: (E1) Decimal → integral narrowing by `CType` or implicitly — VB rounds half-to-even and throws `OverflowException` out of range; the C# backend emits `(int)(d)` = truncate (`CSharpBackend.EmitCastText`, ≈4467-4498 on `5b4ca51e`: only Double/Single round); (E2) `o = p` on boxed Decimals — VB compares VALUES (spec D19, owner-approved — **the spec stands; never "correct" it**); C# compares references; (E3) `CType(o, Decimal)` of a boxed Integer/Double — VB converts; C#'s unbox throws `InvalidCastException`; (E4) `CShort`/`CByte` of an out-of-range Decimal — `OverflowException`. Every other row: the oracle, plus a few literal expectations (`1.10`, `0.3333333333333333333333333333`) against both being wrong alike. | A hand table for EVERY row would be a second Decimal implementation to get wrong; but the C# backend is a BasicLang backend, not VB, and where it diverges it is the thing to fix, never the thing to copy. |
 | S11 | §4.2 "cross-file `Inherits` … Tests (JS + C#, CLI + IDE)" | Tests go INTO `CrossFileBindingTests` (Edit), reusing its `RunsOnEveryBackend(expected, files…)` (both compile orders; C#, JS, C++). The CLI leg reuses its `TheCli_BuildsAndRunsAJavaScriptProject_ThatCrossesFiles` shape. | One harness for cross-file behaviour; a second fixture would copy its helpers. |
 | S12 | (not in spec) chip `task_e7af351e` | Folded: item 1 (cross-file `Inherits` refused) → Task 7; item 2 (derived-before-base emission) → already fixed on master (S5), Task 7 adds the cross-file order test; items 3 (C# CS0101: a static class named like the FILE collides with a user class of that name when the class holds a lambda) and 4 (C# CS0542: a Sub named like its file) → Task 8. | Both C# items hit the shared form shape: a form class lives in a file of its own name (`LoginForm.bas` / `Class LoginForm`) and handlers use lambdas. |
 
@@ -525,7 +527,7 @@ namespace BasicLang.Compiler
         private void Fail(int lineNumber, string message) =>
             _errors.Add(new PreprocessorError { Line = lineNumber, Message = message });
 ```
-  ⚠ `Fail(string)` already exists at `:61` for `#JsImport` (it records at the current line). Name the new overload so it cannot collide — if the compiler reports ambiguity, name it `FailAt`.
+  (`Fail` near `:59` is a LOCAL function inside the `#JsImport` parser, not a member — no collision with this instance method.)
   - `ProcessElse` (`:502-526`): error text `"#Else without matching #If, #IfDef or #IfNDef"`; then `if (state.SeenElse) { … "Duplicate #Else in conditional block" … }`; then `state.BranchActive = !state.AnyBranchTaken; state.AnyBranchTaken = true; state.SeenElse = true;`.
   - `ProcessEndIf` (`:531-544`): error text `"#End If without matching #If, #IfDef or #IfNDef"`.
   - `:317`: `$"Unclosed conditional block: {_conditionalStack.Count} #End If missing"`.
@@ -797,8 +799,8 @@ In the `BasicCompiler` constructor, right after `_preprocessor = new Preprocesso
   - `Program.cs` project build (`:835-840`): add `Configuration = configuration,` and, after the initializer, `if (project.Configurations.TryGetValue(configuration, out var defineConfig)) options.DefineConstants.AddRange(defineConfig.DefineConstants);` (a new variable name: `config` is already the initializer's `out var`).
   - `Program.cs` single file (`:1423`): `var options = new BasicLang.Compiler.CompilerOptions { Configuration = "Debug" };` and two new flags in the loop: `--configuration=<name>` sets `options.Configuration`; `--define=<A;B>` adds to `options.DefineConstants`. Add both to the CLI help text next to `--optimize` (grep `--optimize` in `Program.cs` for the help block).
   - `BuildService.cs` (`:661-666`): add `Configuration = config.Name,` and after the initializer `if (!string.IsNullOrWhiteSpace(config.DefineConstants)) compilerOptions.DefineConstants.Add(config.DefineConstants);` (the IDE model's `DefineConstants` is one `;` string — `VisualGameStudio.Core/Models/BuildConfiguration.cs:9`; `BuildSymbols` splits it).
-  - `CppProjectBuilder.cs` (`:532-536`): add `Configuration = configuration,` and the project config's `DefineConstants` (lookup as `:927` does).
-  - `DebugSession.cs` (`:184`, `:208`): `new BasicCompiler(new CompilerOptions { Configuration = "Debug" })`.
+  - `CppProjectBuilder.cs` (`:532-536`): extract the options construction into `internal static CompilerOptions CompilerOptionsFor(ProjectFile project, string configuration)` (TargetBackend "cpp", `Configuration = configuration`, the project config's `DefineConstants` looked up as `:927` does; the `NetResolverFactory` stays at the call site) and call it — the unit test above reads it without MSVC; the native BUILD itself stays gated by `NativeBuildSkip`.
+  - `DebugSession.cs` (`:184`, `:208`): both sites use `internal static CompilerOptions CompilerOptionsForTests() => new CompilerOptions { Configuration = "Debug" };` (name it for what it is if a better name fits — the point is one construction the test can read). `VisualGameStudio.Tests` needs `InternalsVisibleTo` — check `BasicLang.csproj`/`AssemblyInfo` (it is already granted if other tests reach `internal` compiler members; grep `InternalsVisibleTo`).
   - `JsTestSupport.cs` `BuildModule` (`:44`): after `var pre = new Preprocessor();` add `foreach (var s in BuildSymbols.For("javascript", null, null)) pre.Define(s);` with a comment: "the JS helper builds for the web — WEB is defined as every JavaScript route defines it".
 
 - [ ] **Step 6: Write the route tests.** `BuildSymbolRouteTests.cs`:
@@ -879,8 +881,29 @@ public class BuildSymbolRouteTests
     public void TheCompilerApi_NoConfiguration_DefinesNeither()
     {
         var r = new BasicCompiler(new CompilerOptions { TargetBackend = "csharp" }).CompileProjectFiles(new[] { WriteMain() });
+        Assert.That(r.HasErrors, Is.False, string.Join(" | ", r.AllErrors.Select(e => e.Message)));
         var cs = new CSharpCodeGenerator().Generate(Optimized(r.CombinedIR!));
         Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharpText(cs)), Is.EqualTo("desktop other"));
+    }
+
+    /// <summary>The debugger route (DebugSession builds its own BasicCompiler) is a Debug, desktop build.</summary>
+    [Test]
+    public void TheDebuggerRoute_IsDesktopDebug()
+    {
+        var options = BasicLang.Debugger.DebugSession.CompilerOptionsForTests();
+        Assert.That(BuildSymbols.For(options.TargetBackend, options.Configuration, options.DefineConstants),
+            Is.EqualTo(new[] { "DESKTOP", "DEBUG" }));
+    }
+
+    /// <summary>The native route (CppProjectBuilder) passes its configuration; it always builds with MSVC, so it SKIPS
+    /// without it (Native/NativeBuildSkip — CLAUDE.md).</summary>
+    [Test]
+    public void TheNativeRoute_PassesItsConfiguration()
+    {
+        var options = BasicLang.Compiler.ProjectSystem.CppProjectBuilder.CompilerOptionsFor(
+            new BasicLang.Compiler.ProjectSystem.ProjectFile(), "Release");
+        Assert.That(BuildSymbols.For(options.TargetBackend, options.Configuration, options.DefineConstants),
+            Is.EqualTo(new[] { "DESKTOP", "RELEASE" }));
     }
 
     /// <summary>The CLI single-file route defaults to Debug.</summary>
@@ -1193,7 +1216,8 @@ public class LspConditionalCompilationTests
 - [ ] **Step 4: The LSP uses it.**
   - `LspProjectContext`: add `public string TargetBackend { get; }` (constructor parameter with default `null`, stored), and populate it where the `.blproj` is loaded (`GetBlprojSourceFiles`, `ProjectFile.Load(blprojPath)` at `:382` — keep the `Backend` beside the source list in `BlprojSnapshot`). An implicit (no `.blproj`) project: null → `DESKTOP`.
   - A helper in `LspProjectContext`: `public string Preprocess(string content, string path)` → `var pre = new Preprocessor(); foreach (var s in BuildSymbols.For(TargetBackend, "Debug", null)) pre.Define(s); return pre.ProcessForEditor(content, path);`. The editor is a Debug view **[impl]**.
-  - `DocumentManager.DocumentState.Parse` (`:518`): `var text = ProjectContext != null ? ProjectContext.Preprocess(Content, FilePath) : Content;` then `new Lexer(text)` and `ImplicitContainer.Parse(parser, FilePath ?? Uri?.Path, text)`. ⚠ `Content` stays the user's text (completion, hover and formatting read it); only the lexer sees the blanked copy.
+  - `DocumentManager.DocumentState.Parse` (`:518`): `var text = LspProjectContext.PreprocessFor(ProjectContext, Content, FilePath);` — a static helper that uses the context's backend, or, for a LOOSE file (null `ProjectContext`), `BuildSymbols.For(null, "Debug", null)` (DESKTOP, DEBUG) — then `new Lexer(text)` and `ImplicitContainer.Parse(parser, FilePath ?? Uri?.Path, text)`. ⚠ `Content` stays the user's text (completion, hover and formatting read it); only the lexer sees the blanked copy.
+  - **Dimming — decided [impl]: inactive branches are dimmed, as Visual Studio does.** `ProcessForEditor` also records the inactive line ranges (`Preprocessor.InactiveLines`, set by the editor mode); `DocumentState` keeps them; `SemanticTokensHandler` reports each inactive line as one `comment` token (every theme dims comments — no client extension needed). Add to Step 1 the test `AnInactiveBranch_IsReportedAsCommentTokens` (drive `SemanticTokensHandler` the way its existing tests do — grep `SemanticTokensHandler` in `VisualGameStudio.Tests/LSP`) and `ALooseFile_IsPreprocessedAsADesktopDebugBuild` (a `DocumentManager.UpdateDocument` on a file with no `.blproj` above it: the `#If DESKTOP` branch is analyzed, the `#Else` is not). The IDE's own editor (VisualGameStudio.Editor) is out of scope for dimming here — record it as a follow-up.
   - `LspProjectContext.ParseCached` (`:445`): the same `Preprocess` before `new Lexer`.
   - Web projects: when `BuildSymbols.IsWebBackend(TargetBackend)` and `File.Exists(BasicCompiler.DomDeclarationsPath)`, add that path to the project's source list (the sibling symbol table then carries `Document`/`Element`), exactly as `WithJavaScriptDeclarations` does for the build (`Compiler.cs:550-559`). The portable library joins here in Task 34.
 - [ ] **Step 5: Run — GREEN**, plus the LSP suite by name: `CrossFileAnalysisTests`, `LspMixedProjectTests`, `ModClsDocumentTests`, `CompletionServiceTests`, `BaseConstructorCallDiagnosticsTests`.
@@ -1204,10 +1228,10 @@ public class LspConditionalCompilationTests
 
 ## Task 7: Cross-file `Inherits`, on every backend
 
-Spec §4.2, M6, chip `task_e7af351e` items 1–2 (S12). Built ON `40e9c172`: sibling class shells already get their `BaseType` in pass 2 (`SemanticAnalyzer.cs:600-603` [X]); what is left is that `Visit(ClassNode)` and the pass-1 `RegisterClassBases` look the base up in the type manager ONLY, where a pending sibling's class is not.
+Spec §4.2, M6, chip `task_e7af351e` items 1–2 (S12). Built ON `fix/js-cross-file-calls` (`098b4de9` [X]): sibling class shells already get their `BaseType` in pass 2 (`SemanticAnalyzer.cs:≈604-630` [X]); what is left is that `Visit(ClassNode)` and the pass-1 `RegisterClassBases` look the base up in the type manager ONLY, where a pending sibling's class is not.
 
 **Files:**
-- Modify: `BasicLang/SemanticAnalyzer.cs` — `Visit(ClassNode)`'s base block (`:6060-6098` on `bc29391e`; quote: `var baseType = _typeManager.GetType(node.BaseClass);`) and `RegisterClassBases` (`:5593-5630`; the same lookup)
+- Modify: `BasicLang/SemanticAnalyzer.cs` — `Visit(ClassNode)`'s base block (`≈6421` [X]; `:6060-6098` on `bc29391e`; quote: `var baseType = _typeManager.GetType(node.BaseClass);`) and `RegisterClassBases` (`:5593-5630` on `bc29391e`; the same lookup)
 - Modify: `VisualGameStudio.Tests/Compiler/CrossFileBindingTests.cs` (Edit — S11)
 
 - [ ] **Step 1: Failing tests** — append a region to `CrossFileBindingTests` (it is `[Category("Integration")]`, `[NonParallelizable]`; `RunsOnEveryBackend` compiles both file orders and runs C#, JS and C++):
@@ -1382,7 +1406,7 @@ public class CsFileNamedContainerTests
 Spec §4.7, M12.
 
 **Files:**
-- Modify: `BasicLang/SemanticAnalyzer.cs` — `Visit(EnumNode)` (`:6329-6362`; each member becomes a scope constant `"{Enum}.{Member}"` at `:6347-6354` and `enumType.Members` is never populated); `BindMemberAccess` (`:11418-11638`; `objectType.ResolveMember(...)` `:11569`; the Object fallback `SetNodeType(node, memberType ?? _typeManager.ObjectType)` `:11615`); the pass-1 type sweep (find where types are pre-registered before bodies — grep `TypeKind.Enum` near `_preRegisteredClasses` `:5557`)
+- Modify: `BasicLang/SemanticAnalyzer.cs` — `Visit(EnumNode)` (`:6329-6362` on `bc29391e`, `:6687-6720` [X]; each member becomes a scope constant `"{Enum}.{Member}"` and `enumType.Members` is never populated; an Enum is defined ONLY here — no pass-1 registration exists, grep `TypeKind.Enum)` finds only this `DefineType` [X]); `RegisterClassTypes` (pass 1, sweep 1 — `:5908-5938` [X], the `case ClassNode`/`case InterfaceNode` pre-registration with `_preRegisteredClasses`/`_preRegisteredInterfaces` consumed by the visits); the pass-1 SIBLING loop that calls `RegisterSiblingClassShell` (`:592` on `bc29391e`); `BindMemberAccess` (`:11418-11638`; `objectType.ResolveMember(...)` `:11569`; the Object fallback `:11615`) — unchanged once Members is populated
 - Create: `VisualGameStudio.Tests/Compiler/EnumMemberTypingTests.cs`
 
 - [ ] **Step 1: Failing tests.**
@@ -1407,13 +1431,17 @@ namespace VisualGameStudio.Tests.Compiler;
 [NonParallelizable]
 public class EnumMemberTypingTests
 {
+    /// <summary>Every shipping backend, through the optimizer too (CLAUDE.md: validate through the optimizer).</summary>
     private static void OnJsAndCSharp(string program, string expected)
     {
         Assert.Multiple(() =>
         {
             Assert.That(FourBackends.Norm(JavaScriptExecutionTests.RunJs(program)), Is.EqualTo(expected), "JavaScript");
+            Assert.That(FourBackends.Norm(JavaScriptOptimizedExecutionTests.RunOptimized(program)), Is.EqualTo(expected), "JavaScript (optimized)");
             Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharp(program)), Is.EqualTo(expected), "C#");
         });
+        // Outside Assert.Multiple: CompileRun IGNORES when there is no C++ compiler (CrossFileBindingTests' rule).
+        Assert.That(FourBackends.Norm(BclE2E.CompileRun(BclE2E.CompileToCppOptimized(program))), Is.EqualTo(expected), "C++ (optimized)");
     }
 
     private const string Decl = "Enum Shade\n Light\n Dark\n Keyed = 65\nEnd Enum\n";
@@ -1460,10 +1488,25 @@ public class EnumMemberTypingTests
 ```
 - [ ] **Step 2: Run — RED:** `InvalidOperationException … Cannot assign value of type 'Object' to variable of type 'Shade'` from `JsTestSupport`.
 - [ ] **Step 3: Implement.**
-  - In `Visit(EnumNode)`, where each member constant is defined (`:6347-6354`), also `enumType.Members[member.Name] = <that constant symbol, with Type = enumType>`. If the constant symbol's type is Integer today, give the MEMBER entry the Enum type (a new Symbol copying Kind/Name) — the scope constant keeps its current type (other code reads it).
-  - Members must exist BEFORE a use above the declaration and for a sibling file: populate them where the Enum TYPE is first defined in pass 1 (find the sweep — grep `DefineType(` with `TypeKind.Enum`; if Enums are only defined in `Visit(EnumNode)`, add them to the pass-1 type sweep beside classes/interfaces, `:5557` region, with their members). A sibling file's Enum reaches the shells path (`RegisterSiblingClassShell`'s sibling of the same shape) — extend that sweep for `EnumNode` the same way.
-  - `BindMemberAccess`: `ResolveMember` now finds the member; no change needed there if Members is populated. Verify with the tests; do NOT add a special case after `:11615`.
-- [ ] **Step 4: Run — GREEN**, plus `SelectCase*`, `CppSelectCaseTests`, `TypeOfTests`, `CTypeConversionTests`, and every test that greps `Enum` in its name.
+  - A helper both passes call:
+
+```csharp
+        /// <summary>Spec §4.7 — an Enum's members are MEMBERS of its type (typed as the Enum), so `Shade.Dark` binds
+        /// through ResolveMember instead of falling to the PascalCase ".NET type" fallback (M12).</summary>
+        private static void RecordEnumMembers(EnumNode node, TypeInfo enumType)
+        {
+            foreach (var member in node.Members)
+            {
+                enumType.Members[member.Name] =
+                    new Symbol(member.Name, SymbolKind.Constant, enumType, member.Line, member.Column);
+            }
+        }
+```
+  - `RegisterClassTypes` gains `case EnumNode en: if (_typeManager.DefineType(en.Name, TypeKind.Enum) is { } pre) { _preRegisteredEnums.Add(en.Name); RecordEnumMembers(en, pre); } break;` with a new `private readonly HashSet<string> _preRegisteredEnums = new(StringComparer.OrdinalIgnoreCase);` beside `_preRegisteredClasses`.
+  - `Visit(EnumNode)`: `var enumType = _typeManager.DefineType(node.Name, TypeKind.Enum); if (enumType == null && _preRegisteredEnums.Remove(node.Name)) enumType = _typeManager.GetType(node.Name);` then the existing duplicate error when still null (the class pattern, `Visit(ClassNode)` `:5888-5897` on `bc29391e`); after the scope constants, `RecordEnumMembers(node, enumType);` (idempotent).
+  - Sibling file: in the pass-1 sibling loop beside the `RegisterSiblingClassShell` call, an `EnumNode` gets a shell — `GlobalScope.Define(new Symbol(en.Name, SymbolKind.Type, t, 0, 0) { IsImported = true, IsSiblingSignature = true, SourceModule = unit.ModuleName })` over `var t = new TypeInfo(en.Name, TypeKind.Enum)` with `RecordEnumMembers(en, t)` — skipped when `GlobalScope.Resolve(en.Name) != null` (the class-shell rule, `:656-673`).
+  - `BindMemberAccess`: no change (verify — do NOT add a special case after `:11615`).
+- [ ] **Step 4: Run — GREEN** (all four legs; C++ skips without a compiler), plus `SelectCase*`, `CppSelectCaseTests`, `TypeOfTests`, `CTypeConversionTests`, and every test that greps `Enum` in its name.
 - [ ] **Step 5: Mutations:** (1) skip the Members population → every row red; (2) populate only in `Visit(EnumNode)` (not pass 1) → `DeclaredBelowItsUse` + `DeclaredInASiblingFile` red.
 - [ ] **Step 6: Commit.**
 
@@ -1549,16 +1592,109 @@ public class HandlerSignatureTests
         Assert.That(Errors("Using System.Windows.Forms\nPublic Class Form1\n Private b As Button\n" +
                            " Public Sub New()\n  AddHandler b.Click, AddressOf H\n End Sub\n" +
                            " Private Sub H(n As Integer)\n End Sub\nEnd Class\n"), Is.Empty);
+
+    /// <summary>§11.7 — the diagnostic is assertable BY NAME.</summary>
+    [Test]
+    public void TheMismatch_IsNamed() =>
+        Assert.That(Errors(Button + Form(" Private Sub H(n As Integer)\n End Sub\n")), Has.Some.Contains("HandlerSignatureMismatch"));
+
+    /// <summary>The LIBRARY's shape: the event is declared on a BASE class and wired on a field of a DERIVED type.</summary>
+    [Test]
+    public void AnEventOfABaseClass_WiredOnADerivedField_IsChecked() =>
+        Assert.That(Errors(
+            "Public Class EventArgs2\nEnd Class\n" +
+            "Public Class Control\n Public Event Click(sender As Object, e As EventArgs2)\nEnd Class\n" +
+            "Public Class Button\n Inherits Control\nEnd Class\n" +
+            "Public Class Form1\n Private b As Button\n Public Sub New()\n  b = New Button()\n  AddHandler b.Click, AddressOf H\n End Sub\n" +
+            " Private Sub H(n As Integer)\n End Sub\nEnd Class\n"),
+            Has.Some.Contains("takes 1 parameter(s) but the event supplies 2"));
 }
 ```
-- [ ] **Step 2: Run — RED:** rows 1, 2, 4 have NO error (the defect); row 3 and 5 are green (guards — record them as such).
+  And `VisualGameStudio.Tests/Compiler/HandlerSignatureRouteTests.cs` (Integration) — the same library shape split over SIBLING files, on the project route, the CLI and the IDE (spec §4 preamble: CLI + IDE):
+
+```csharp
+using System.IO;
+using System.Linq;
+using System.Threading.Tasks;
+using BasicLang.Compiler;
+using NUnit.Framework;
+using VisualGameStudio.Core.Models;
+using VisualGameStudio.ProjectSystem.Serialization;
+using VisualGameStudio.ProjectSystem.Services;
+
+namespace VisualGameStudio.Tests.Compiler;
+
+/// <summary>§4.8 on the library's real shape: `Control` (declares Click) and `Button` (Inherits Control) in one file,
+/// the form wiring `AddHandler b.Click` on a `Button` field in ANOTHER — through every build route.</summary>
+[TestFixture]
+[Category("Integration")]
+public class HandlerSignatureRouteTests
+{
+    private string _dir = "";
+
+    [SetUp]
+    public void SetUp()
+    {
+        _dir = Directory.CreateDirectory(Path.Combine(Path.GetTempPath(), "bl-hsig-" + Path.GetRandomFileName())).FullName;
+        File.WriteAllText(Path.Combine(_dir, "Lib.bas"),
+            "Public Class EventArgs2\nEnd Class\n" +
+            "Public Class Control\n Public Event Click(sender As Object, e As EventArgs2)\nEnd Class\n" +
+            "Public Class Button\n Inherits Control\nEnd Class\n");
+        File.WriteAllText(Path.Combine(_dir, "Form1.bas"),
+            "Public Class Form1\n Private b As Button\n Public Sub New()\n  b = New Button()\n  AddHandler b.Click, AddressOf H\n End Sub\n" +
+            " Private Sub H(n As Integer)\n End Sub\nEnd Class\nModule Program\n Sub Main()\n  Dim f As New Form1()\n End Sub\nEnd Module\n");
+        File.WriteAllText(Path.Combine(_dir, "Site.blproj"),
+            "<Project>\n  <PropertyGroup>\n    <ProjectName>Site</ProjectName>\n    <TargetBackend>JavaScript</TargetBackend>\n" +
+            "  </PropertyGroup>\n  <ItemGroup>\n    <Compile Include=\"Lib.bas\" />\n    <Compile Include=\"Form1.bas\" />\n  </ItemGroup>\n</Project>\n");
+    }
+
+    [TearDown]
+    public void TearDown() { try { Directory.Delete(_dir, true); } catch { } }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public void TheProjectRoute_BothFileOrders(bool reversed)
+    {
+        var files = new[] { Path.Combine(_dir, "Lib.bas"), Path.Combine(_dir, "Form1.bas") };
+        if (reversed) files = files.Reverse().ToArray();
+        var r = new BasicCompiler(new CompilerOptions { TargetBackend = "javascript" }).CompileProjectFiles(files);
+        Assert.That(r.AllErrors.Select(e => e.Message), Has.Some.Contains("HandlerSignatureMismatch"));
+    }
+
+    [Test]
+    public async Task TheCli()
+    {
+        var (exit, stdout, stderr) = await CliTestHarness.RunCli(_dir, "build", "Site.blproj");
+        Assert.Multiple(() =>
+        {
+            Assert.That(exit, Is.Not.Zero);
+            Assert.That(stdout + stderr, Does.Contain("HandlerSignatureMismatch"));
+        });
+    }
+
+    [Test]
+    public async Task TheIde()
+    {
+        var project = await new ProjectSerializer().LoadAsync(Path.Combine(_dir, "Site.blproj"));
+        var result = await new BuildService(new RecordingOutput()).BuildProjectAsync(project);
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Success, Is.False);
+            Assert.That(result.Diagnostics.Select(d => d.Message), Has.Some.Contains("HandlerSignatureMismatch"));
+        });
+    }
+}
+```
+- [ ] **Step 2: Run — RED:** rows 1, 2, 4, the base-class row and `TheMismatch_IsNamed` have NO error (the defect); `HandlerSignatureRouteTests` fail on every route (the build succeeds); rows 3 and 5 are green (guards — record them as such).
 - [ ] **Step 3: Implement.**
   - Extract from `Visit(EventDeclarationNode)` (`:8507-8514`) a helper `private TypeInfo EventDelegateType(EventDeclarationNode node)` returning exactly what that code builds; the visit calls it.
   - `PopulateClassMemberSignatures`: a new case `case EventDeclarationNode ev:` (all access levels — an event raised and wired inside its own class is still its member) → `classType.Members[ev.Name] = new Symbol(ev.Name, SymbolKind.Event, EventDelegateType(ev), 0, 0) { Access = ev.Access };`. ⚠ `ResolveSiblingSignatureType` is what the neighbouring cases use for types from a sibling — `EventDelegateType` must resolve the parameter types the same way when called from here (pass a resolver or build the parameter list with `ResolveSiblingSignatureType`).
   - `Visit(ClassNode)` member loop: `else if (member is EventDeclarationNode evt && _nodeSymbols.TryGetValue(evt, out var evtSymbol)) classType.Members[evt.Name] = evtSymbol;` — confirm `Visit(EventDeclarationNode)` records `_nodeSymbols[node]`; add it if not.
   - `ValidateHandlerWiring`: when `expected != null` and `actual == null` and the handler is `AddressOf <simple name>` (or `AddressOf Me.<name>`) and the analyzer is inside a class, queue `(expected, name, keyword, line, column)` in a `List<PendingHandlerCheck>` for the current class instead of returning. Extract the count/type comparison (`:8616-8631`) into `CompareHandlerShapes(expected, actual, keyword, line, column)`.
   - At the end of `Visit(ClassNode)` (after the member loop), for each queued check of THIS class: `classType.Members.TryGetValue(name, out var h)` → `GetDelegateParameterTypes(DelegateTypeOf(h))` → `CompareHandlerShapes`. Clear the queue for the class.
-- [ ] **Step 4: Run — GREEN**, plus `JavaScriptEventTests`, `UserDelegateConversionExecutionTests`, `DelegateMemberInvocationExecutionTests`, `NetDelegateTests`, `WinFormsTemplateBuildTests`, `FormRegionWriterTests` by name (a WinForms region's `AddHandler` must stay silent — K14).
+  - The event side through a BASE class: `b.Click` on a `Button` field must find `Click` in `Control`'s Members through the `BaseType` chain — `ResolveMember` walks it (confirm; a sibling shell's members come from `RecordDeclaredMembers` [X] and `PopulateClassMemberSignatures`, which now includes events).
+  - **Name it:** both messages end `" (HandlerSignatureMismatch)"`. Grep the tests for `the handler passed to` — any exact-text assertion is updated in this commit.
+- [ ] **Step 4: Run — GREEN** (both fixtures), plus `JavaScriptEventTests`, `UserDelegateConversionExecutionTests`, `DelegateMemberInvocationExecutionTests`, `NetDelegateTests`, `WinFormsTemplateBuildTests`, `FormRegionWriterTests` by name (a WinForms region's `AddHandler` must stay silent — K14).
 - [ ] **Step 5: Mutations:** (1) no `EventDeclarationNode` case in `PopulateClassMemberSignatures` → row 4 red; (2) no deferral → rows 1–2 red; (3) the deferred check compares against the wrong class's members (use the outer class) → record which row catches it, add one if none.
 - [ ] **Step 6: Commit.** Message: "AddHandler/RemoveHandler check a BasicLang event's handler shape (HandlerSignatureMismatch)".
 
@@ -1718,6 +1854,21 @@ public class JavaScriptDelegateIdentityTests
         "Sub Main()\n Dim b As New Btn()\n AddHandler b.Clicked, AddressOf F\n b.Press()\n RemoveHandler b.Clicked, AddressOf F\n b.Press()\n Console.WriteLine(\"done\")\nEnd Sub\n",
         "f 1\ndone");
 
+    [Test]
+    public void RemovingANeverAddedHandler_ChangesNothing() => Same(Btn +
+        "Sub F(n As Integer)\n Console.WriteLine(\"f \" & n)\nEnd Sub\nSub G(n As Integer)\n Console.WriteLine(\"g \" & n)\nEnd Sub\n" +
+        "Sub Main()\n Dim b As New Btn()\n AddHandler b.Clicked, AddressOf F\n RemoveHandler b.Clicked, AddressOf G\n b.Press()\nEnd Sub\n",
+        "f 1");
+
+    /// <summary>A lambda is removed only by the SAME delegate value (as in .NET); a second, textually equal lambda is a
+    /// different delegate and removes nothing.</summary>
+    [Test]
+    public void ALambda_IsRemovedOnlyByTheSameDelegate() => Same(Btn +
+        "Sub Main()\n Dim b As New Btn()\n Dim h As Action(Of Integer) = Sub(n As Integer) Console.WriteLine(\"l \" & n)\n" +
+        " AddHandler b.Clicked, h\n RemoveHandler b.Clicked, Sub(n As Integer) Console.WriteLine(\"l \" & n)\n b.Press()\n" +
+        " RemoveHandler b.Clicked, h\n b.Press()\n Console.WriteLine(\"done\")\nEnd Sub\n",
+        "l 1\ndone");
+
     /// <summary>A handler that subscribes another during a raise: the new one runs from the NEXT raise.</summary>
     [Test]
     public void ARaise_InvokesTheListAsItWas() => Same(Btn +
@@ -1729,7 +1880,7 @@ public class JavaScriptDelegateIdentityTests
         "first 1\nfirst 2\nsecond 2");
 }
 ```
-- [ ] **Step 2: Run — RED:** row 1 JS prints `h 1\nh 1\nh 2\nh 2\nh 3\nh 3\ndone`-shaped output (nothing removed); row 2 green; row 3 green (a free function is one object); row 4 — record (a `Set` iterated live may call `second 1`). C# legs green throughout (the oracle).
+- [ ] **Step 2: Run — RED:** row 1 JS prints `h 1\nh 1\nh 2\nh 2\nh 3\nh 3\ndone`-shaped output (nothing removed); rows 2, 3 and `RemovingANeverAddedHandler_…` green (guards); the lambda row — record (a `Set` removes by identity, which is right for a lambda, so it may be green); the snapshot row — record (a `Set` iterated live may call `second 1`). C# legs green throughout (real .NET delegate equality is the oracle here — no exception row). ⚠ If the language refuses `AddHandler b.Clicked, h` with a delegate VARIABLE, record it and replace the lambda row's variable with `AddressOf` a Sub (the removal-by-identity property is then covered by rows 1–2).
 - [ ] **Step 3: Implement.**
   - Prelude (emitted when `UsesDelegateHelpers(module)`: any class declares an event, or any function contains an `IRUnaryOp` with `AddressOf`):
 
@@ -1774,7 +1925,7 @@ Spec §4.5, M4, scope call S4. ⚠ ADR-0016 (MyBase.New as an instruction) is un
 - Modify: every optimizer/IR pass that CLONES an `IRFieldAccess`/`IRFieldStore` (grep `new IRFieldAccess(` and `new IRFieldStore(` across `BasicLang/` outside `IRBuilder.cs`) — copy `ThroughBase`
 - Modify: `BasicLang/JavaScriptBackend.cs` — `FieldAccess` (`:4015-4054`): `if (fa.ThroughBase) return $"super.{SanitizeName(fa.FieldName)}";` first; `Visit(IRFieldStore)` (`:4061-4066`): `super.{member} = …` when `ThroughBase`
 - Modify: `BasicLang/CSharpBackend.cs` — the two `case IRFieldAccess fieldAccess:` renders (`:3776`, `:3869`) and `Visit(IRFieldStore)` (`:4711`): `base.{member}` when `ThroughBase`
-- Modify: `BasicLang/CppCodeGenerator.cs` — the field read path (find by grep from `:2311`/`:4895`) and `Visit(IRFieldStore)` (`:5764`): **measure first** how a property is emitted on C++ (accessor methods or a field). If accessors: `Base::get_X()` / `Base::set_X(v)` (base class name from the class's IR `BaseClass`). If a plain field: `ThroughBase` changes nothing on C++ (no virtual dispatch to bypass) — record which.
+- Modify: `BasicLang/CppCodeGenerator.cs` — a C++ property IS a pair of accessor methods, `get_X()` / `set_X(value)` (`PropertyAccessorSignature`, `:1927-1937` [X]), so a `ThroughBase` property READ renders `{Base}::get_{X}()` and a STORE renders `{Base}::set_{X}({value});`, where `{Base}` is the C++ class name of `fa.Object.Type` (the MyBase receiver carries the BASE type — `IRBuilder.cs:2423-2424`) mapped the way the generator names classes elsewhere (grep the helper the class header emission uses for a class's own name). The read site is the property-read arm of the field-access rendering (grep `get_` in the field-access paths near `:3664` / `:5615` [X]); the store site is `Visit(IRFieldStore)` (`:5764` on `bc29391e`). A qualified call to a base member from inside a member function is plain C++ (`Base::get_X()`), no `this->` needed.
 - Create: `VisualGameStudio.Tests/Compiler/MyBasePropertyExecutionTests.cs` (roster: its name ends with `ExecutionTests` → +1)
 
 - [ ] **Step 1: Failing tests.**
@@ -1819,7 +1970,7 @@ public class MyBasePropertyExecutionTests
             "Sub Main()\n Dim b As New B()\n Console.WriteLine(b.Get2())\nEnd Sub\n")), Is.EqualTo("10"));
 }
 ```
-- [ ] **Step 2: Run — RED:** JS `node exited …` with `RangeError: Maximum call stack size exceeded`; C# the in-process run throws `StackOverflowException` — ⚠ that KILLS the test host. Run `OnCSharp` LAST and alone, and expect a crashed run as the red (record it); every later run of it is after the fix. C++: record what the red is. The field row is green (guard).
+- [ ] **Step 2: Run — RED:** JS `node exited …` with `RangeError: Maximum call stack size exceeded`; C# the in-process run throws `StackOverflowException` — ⚠ that KILLS the test host. Run `OnCSharp` LAST and alone, and expect a crashed run as the red (record it); every later run of it is after the fix. C++: `this->get_Text()` inside `get_Text()` recurses the same way (a crash of the child process — `CompileRun` reports the exit code). The field row is green (guard).
 - [ ] **Step 3: Implement** (the files above). Confirm the symbol-kind test: `_semanticAnalyzer.GetNodeSymbol(memberExpr)?.Kind == SymbolKind.Property`.
 - [ ] **Step 4: Run — GREEN** (add the fixture to the roster first), plus `OverridablePropertyTests`, `InheritedMemberTests`, `BaseConstructorCall*`, `MsilBaseConstructor*` (ADR-0016 untouched), `ForwardDeclaredType*`, `IRVerifier*` by name.
 - [ ] **Step 5: Mutations:** (1) set `ThroughBase` for fields too → the field row red on JS; (2) drop the clone-copy in one optimizer pass → `OnJavaScript_Optimized` red (if not, find which pass clones and prove it); (3) JS renders `this.` despite `ThroughBase` → `OnJavaScript` red.
@@ -1891,8 +2042,8 @@ Spec §4.9, M8, scope call S8.
 
 **Files:**
 - Modify: `BasicLang/Parser.cs` — `ParseNamespace` (`:300-338`; `:305` quote `node.Name = Consume(TokenType.Identifier, "Expected namespace name").Lexeme;`): consume `Identifier ('.' Identifier)*`
-- Modify: `BasicLang/SemanticAnalyzer.cs` — new `public void ConfigureTarget(string targetBackend)` and `public void ConfigureProgramNamespaces(IEnumerable<string> names)`; the `UsingDirectiveNode` visit (`:7118-7128`; quote `_netNamespaces.Add(node.Namespace);`); `ResolveTypeName` (`:2927`)
-- Modify: `BasicLang/Compiler.cs` — beside `analyzer.ConfigureModuleSystem(_registry, _resolver, unit);` (`:750-751`): `analyzer.ConfigureTarget(_options.TargetBackend);` and `analyzer.ConfigureProgramNamespaces(<every NamespaceNode name, and each dotted prefix, across all parsed units>)` (collect once after Phase 1 parse, `:427-430`)
+- Modify: `BasicLang/SemanticAnalyzer.cs` — new `public void ConfigureTarget(string targetBackend)` and `public void ConfigureProgramNamespaces(IEnumerable<string> names)`; `ResolveTypeName` (`:2927`). **The `UsingDirectiveNode` visit (`:7118-7128`) is NOT changed** (S8 revised).
+- Modify: `BasicLang/Compiler.cs` — beside `analyzer.ConfigureModuleSystem(_registry, _resolver, unit);` (`:750-751`): `analyzer.ConfigureTarget(_options.TargetBackend);` and `analyzer.ConfigureProgramNamespaces(<every NamespaceNode's FULL name across all parsed units — no prefixes>)` (collect once after Phase 1 parse, `:427-430`)
 - Modify: `VisualGameStudio.Tests/Compiler/JsTestSupport.cs` (`BuildModule`: `analyzer.ConfigureTarget("javascript")` and the source's own namespaces)
 - Create: `VisualGameStudio.Tests/Compiler/JavaScriptProgramNamespaceTests.cs`; roster +1
 
@@ -1958,12 +2109,22 @@ public class JavaScriptProgramNamespaceTests
     public void ADottedNamespace_Parses() =>
         Assert.That(() => JsTestSupport.BuildModule("Namespace Acme.Widgets\nPublic Class W\nEnd Class\nEnd Namespace\nSub Main()\nEnd Sub"),
             Throws.Nothing);
+
+    /// <summary>⛔ Guard (plan review): the library declares `Namespace System` (EventArgs) and System.Windows.Forms. A
+    /// program that ALSO says `Using System` must keep Console, Math and a qualified System.Math working.</summary>
+    [Test]
+    public void TheStandardSurface_StillWorks_UnderUsingSystem_WhenTheProgramDeclaresSystemNamespaces() =>
+        Assert.That(RunProject(
+            ("Lib.bas", "Namespace System\nPublic Class EventArgs2\nEnd Class\nEnd Namespace\n" + Library),
+            ("Main.bas", "Using System\nUsing System.Windows.Forms\nModule Program\n Sub Main()\n  Console.WriteLine(Math.Max(2, 3))\n" +
+                         "  Console.WriteLine(System.Math.Abs(-4))\n  Dim b As New Button()\n  Console.WriteLine(b.Describe())\n End Sub\nEnd Module\n")),
+            Is.EqualTo("3\n4\nButton"));
 }
 ```
 - [ ] **Step 2: Run — RED:** row 3 `parse failed … Unexpected token at top level: '.'`; rows 1–2 `Cannot assign value of type 'Button' to variable of type 'Control'` / BL6016-shaped failures (M8).
-- [ ] **Step 3: Implement.** Parser: the dotted loop. Analyzer: `_isJavaScriptTarget` from `ConfigureTarget` (`BuildSymbols.IsWebBackend`); `_programNamespaces` set. In the `UsingDirectiveNode` visit: when `_isJavaScriptTarget && _programNamespaces.Contains(node.Namespace)` → `node.IsNetNamespace = false;` and do NOT add to `_netNamespaces` (the IR builder's heuristic reads `IsNetNamespace`, `IRBuilder.cs:6649`). In `ResolveTypeName`: when `_isJavaScriptTarget` and the name is dotted and its prefix (everything before the last `.`) is in `_programNamespaces`, resolve the LAST segment as a user type first. ⚠ Types are registered by bare name (`Visit(NamespaceNode)` `:5973-5986` only enters a scope) — two program namespaces declaring the same simple name is out of scope; record it as a known limit in the commit.
+- [ ] **Step 3: Implement.** Parser: the dotted loop. Analyzer: `_isJavaScriptTarget` from `ConfigureTarget` (`BuildSymbols.IsWebBackend`); `_programNamespaces` set (full names only). In `ResolveTypeName`: when `_isJavaScriptTarget` and the name is dotted and its prefix (everything before the last `.`) is in `_programNamespaces` AND the last segment names a program TYPE (`ResolveTypeSymbol` [X]), return that type; otherwise fall through to today's path unchanged (so `System.Math.Abs` is still the stdlib's `Math`). Nothing about `Using` changes: `IsNetNamespace` and `_netNamespaces` keep their meaning, so the IR builder's heuristic (`IsKnownNetStaticType`, `IRBuilder.cs:6636-6656`, which reads `u.IsNetNamespace` at `:6649`) still routes `Console.X`/`Math.X` as before, and a program class is claimed first by `exactClassMatch` (`IRBuilder.cs:5941`) — confirm with the guard row. ⚠ Types are registered by bare name (`Visit(NamespaceNode)` `:5973-5986` only enters a scope) — two program namespaces declaring the same simple name is out of scope; record it as a known limit in the commit.
 - [ ] **Step 4: Run — GREEN**, plus `NetBuildPipelineTests`, `CsFileScopeQualificationTests`, every test grepping `Namespace` in `BasicLang` parser tests, and the WinForms sweep's C# compile (`WinFormsTemplateBuildTests`) — C# must be unchanged.
-- [ ] **Step 5: Mutations:** (1) drop the `_isJavaScriptTarget` gate → a C# test that relies on a dotted Using being .NET goes red (find it; if none exists, add `ACSharpBuild_StillTreatsADottedUsingAsDotNet` asserting `IsNetNamespace` after analysis with target csharp); (2) skip the qualified-name arm → row 1 red on `q`.
+- [ ] **Step 5: Mutations:** (1) re-mark a `Using` of a program namespace as not-.NET (the rejected design) → the guard row red (`Console`/`Math`); (2) skip the qualified-name arm → row 1 red on `q`; (3) drop the `_isJavaScriptTarget` gate → compare the C# output of a program with `Namespace Acme.Widgets` + a qualified `Acme.Widgets.W` before/after (add `ACSharpBuild_QualifiedProgramType_IsByteIdentical` pinning today's C# text if no existing test catches it).
 - [ ] **Step 6: Commit.**
 
 ---
@@ -2052,6 +2213,16 @@ public class JavaScriptLibraryIdiomTests
         "Sub Main()\n Dim f As New Frm()\nEnd Sub\n"),
         Is.EqualTo((true, "sender ok")));
 
+    /// <summary>M4 fixed (Task 13) — the library's Text override calls through MyBase.</summary>
+    [Test]
+    public void M4_APropertyOverride_ThroughMyBase() => Assert.That(Run(
+        "Public Class Control\n Private _t As String = \"\"\n Public Overridable Property Text As String\n  Get\n   Return _t\n  End Get\n" +
+        "  Set(value As String)\n   _t = value\n  End Set\n End Property\nEnd Class\n" +
+        "Public Class Label\n Inherits Control\n Public Overrides Property Text As String\n  Get\n   Return MyBase.Text\n  End Get\n" +
+        "  Set(value As String)\n   MyBase.Text = \"[\" & value & \"]\"\n  End Set\n End Property\nEnd Class\n" +
+        "Sub Main()\n Dim l As New Label()\n l.Text = \"hi\"\n Console.WriteLine(l.Text)\nEnd Sub\n"),
+        Is.EqualTo((true, "[hi]")));
+
     /// <summary>M25 — the erasure: a listener declared BELOW its use is refused (the library's ordering rule).</summary>
     [Test]
     public void M25_AListenerDeclaredBelow_IsRefused()
@@ -2090,7 +2261,9 @@ public class JavaScriptLibraryIdiomTests
 
 Spec §4.11 (O14), rows D1–D22. May run in parallel with 2a (after Task 17); must land before Task 38 (NumericUpDown).
 
-**The oracle (scope call S10).** Every "in" row is asserted as: the SAME BasicLang program, compiled by the C# backend and run in-process (real `System.Decimal`), prints X; the JavaScript backend — plain AND optimized — prints X. A few literal expectations guard against both being wrong alike. The tests set `CultureInfo.CurrentCulture = InvariantCulture` for the C# leg (JS prints invariant — D11). Operands are passed through `Function Id(d As Decimal) As Decimal` so neither the BasicLang optimizer nor Roslyn folds them into constants (Roslyn rejects an overflowing CONSTANT expression at compile time, CS0463, where the program means a run-time `OverflowException`).
+**The oracle (scope call S10 — read it; it is the rule every 2.0b test follows).** BasicLang follows VB. For a row whose C# emission has VB's Decimal semantics, the assertion is: the SAME BasicLang program, compiled by the C# backend and run in-process (real `System.Decimal`), prints X; the JavaScript backend — plain AND optimized — prints X. **Exception rows E1–E4** (Decimal → integral narrowing by `CType`/implicit; boxed-Decimal `=`; `CType` of a boxed non-Decimal number to Decimal; `CShort`/`CByte` out of range) are asserted against **VB-literal expectations written in the test**, on BOTH backends, and Task 20A fixes the C# backend until it passes them. Never "change the expectation" to match a backend; never "correct the spec" (D19 stands). A few literal expectations on oracle rows guard against both being wrong alike. The tests set `CultureInfo.CurrentCulture = InvariantCulture` for the C# leg (JS prints invariant — D11). Operands are passed through `Function Id(d As Decimal) As Decimal` so neither the BasicLang optimizer nor Roslyn folds them into constants (Roslyn rejects an overflowing CONSTANT expression at compile time, CS0463, where the program means a run-time `OverflowException`).
+
+**Task order in 2.0b: 18 → 19 → 20 → 20A → 21 → 22 → 23 → 24 → 25 → 26 → 27** (20A fixes the C# backend before the VB-literal rows of 21–22 are written).
 
 **Every "out" row** is refused at compile time with `BL7014` (the next free BL70xx on `bc29391e`: BL7013 is the highest, `JavaScriptBackend.cs:3381`) and the message contains the NAME `DecimalNotSupportedOnWeb`, the construct, and the supported spelling where one exists. Tests assert the NAME, so the number can move.
 
@@ -2176,8 +2349,8 @@ D1, D2, D11, D22.
 
 **Files:**
 - Modify: `BasicLang/JsCapabilityChecker.cs` — `BuildAllowedTypeNames` (`:402-457`): allow `Decimal`/`System.Decimal`
-- Modify: `BasicLang/JavaScriptBackend.cs` — prelude (`:184-187`): `EmitDecimalPrelude(module)` BEFORE `EmitConversionPrelude` when `UsesDecimal(module)` (a scan: any local/parameter/field/return/constant/IR value typed `Decimal`); the constant renderer's `case decimal m:` (`:1727`) → `VgsDecimal.parse("<m invariant>")`; `__blStr` (in `EmitConversionPrelude`, `:476`) returns `v.toString()` for a `VgsDecimal`; the default value of a Decimal local/field/element → `VgsDecimal.ZERO`
-- Modify: `BasicLang/JsExceptionTypes.cs` — a module that uses Decimal needs `OverflowException`, `DivideByZeroException`, `FormatException`, `InvalidCastException` from the exception prelude (read how the prelude decides which types to emit, `EmitExceptionPrelude` `:611`, and count Decimal usage as needing them)
+- Modify: `BasicLang/JavaScriptBackend.cs` — prelude (`:184-187`): `EmitDecimalPrelude(module)` BEFORE `EmitConversionPrelude` when `UsesDecimal(module)` (a scan of the WHOLE module the generator receives — on the project route that is the merged module of every unit, `Compiler.cs:460-461` — covering every function's locals/parameters/returns/instructions, every class's fields/properties/methods, globals and constants; a Decimal only in a sibling file's field must be found — `DecimalOnlyInASiblingFilesField_OnEveryRoute`); the constant renderer's `case decimal m:` (`:1727`) → `VgsDecimal.parse("<m invariant>")`; `__blStr` (in `EmitConversionPrelude`, `:476`) returns `v.toString()` for a `VgsDecimal`; the default value of a Decimal local/field/element → `VgsDecimal.ZERO`
+- Modify: `BasicLang/JavaScriptBackend.cs` `EmitExceptionPrelude` (`:611`) and `BasicLang/JsExceptionTypes.cs` (the provided exception list) — a module that uses Decimal needs `OverflowException`, `DivideByZeroException`, `FormatException`, `InvalidCastException`: read how `EmitExceptionPrelude` decides which classes to emit and count Decimal usage as needing these four (the Decimal prelude is emitted AFTER the exception prelude — the TDZ comment at `:182-183`)
 - Create: `VisualGameStudio.Tests/Compiler/JavaScriptDecimalTests.cs` (roster +1); later 2.0b tasks Edit it
 
 - [ ] **Step 1: Failing tests.**
@@ -2220,9 +2393,25 @@ public class JavaScriptDecimalTests
         return cs;
     }
 
-    /// <summary>A BasicLang Decimal literal for <paramref name="d"/>, scale kept.</summary>
-    internal static string L(decimal d) =>
-        d < 0 ? $"(-{(-d).ToString(CultureInfo.InvariantCulture)}D)" : d.ToString(CultureInfo.InvariantCulture) + "D";
+    /// <summary>A BasicLang Decimal literal for <paramref name="d"/>, scale AND SIGN kept — `-0.0m` is not `&lt; 0`, so the
+    /// sign is read from the bits (decimal.GetBits' flags word), never from a comparison.</summary>
+    internal static string L(decimal d)
+    {
+        var negative = (decimal.GetBits(d)[3] & unchecked((int)0x80000000)) != 0;
+        var magnitude = (negative ? -d : d).ToString(CultureInfo.InvariantCulture);
+        return negative ? $"(-{magnitude}D)" : magnitude + "D";
+    }
+
+    /// <summary>VB-literal expectations (the exception rows E1–E4) are asserted on BOTH backends.</summary>
+    internal static void BothEqual(string program, string vbExpected)
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharp(program)), Is.EqualTo(vbExpected), "C# vs VB");
+            Assert.That(FourBackends.Norm(JavaScriptExecutionTests.RunJs(program)), Is.EqualTo(vbExpected), "JavaScript vs VB");
+            Assert.That(FourBackends.Norm(JavaScriptOptimizedExecutionTests.RunOptimized(program)), Is.EqualTo(vbExpected), "JavaScript (optimized) vs VB");
+        });
+    }
 
     /// <summary>Operands go through Id so no optimizer — BasicLang's or Roslyn's — folds them.</summary>
     internal const string Id = "Function Id(d As Decimal) As Decimal\n Return d\nEnd Function\n";
@@ -2239,8 +2428,49 @@ public class JavaScriptDecimalTests
     [Test]
     public void TheTextForms() => Assert.That(Both(Id +
         "Sub Main()\n Dim d As Decimal = Id(1.50D)\n Console.WriteLine(CStr(d))\n Console.WriteLine(d & \"!\")\n" +
-        " Console.WriteLine($\"[{d}]\")\n Console.WriteLine(d.ToString())\nEnd Sub\n"),
-        Is.EqualTo("1.50\n1.50!\n[1.50]\n1.50"));
+        " Console.WriteLine($\"[{d}]\")\n Console.WriteLine(d.ToString())\n Console.WriteLine(String.Format(\"<{0}>\", d))\nEnd Sub\n"),
+        Is.EqualTo("1.50\n1.50!\n[1.50]\n1.50\n<1.50>"));
+
+    // ------------------------------------------------------------ the PROJECT route: UsesDecimal cannot miss
+
+    /// <summary>
+    /// Decimal appears ONLY in a sibling file's class field. A `UsesDecimal` scan that looked at one unit, or at locals
+    /// only, would leave VgsDecimal out of App.js — "VgsDecimal is not defined" at run time from a green build.
+    /// Compiled through CompileProjectFiles, the real CLI and the IDE's BuildService.
+    /// </summary>
+    [Test]
+    public async System.Threading.Tasks.Task DecimalOnlyInASiblingFilesField_OnEveryRoute()
+    {
+        var dir = System.IO.Directory.CreateDirectory(System.IO.Path.Combine(System.IO.Path.GetTempPath(),
+            "bl-decproj-" + System.IO.Path.GetRandomFileName())).FullName;
+        try
+        {
+            System.IO.File.WriteAllText(System.IO.Path.Combine(dir, "Account.bas"),
+                "Public Class Account\n Public Balance As Decimal = 2.50D\n Public Function Show() As String\n  Return CStr(Balance)\n End Function\nEnd Class\n");
+            System.IO.File.WriteAllText(System.IO.Path.Combine(dir, "Main.bas"),
+                "Module Program\n Sub Main()\n  Dim a As New Account()\n  Console.WriteLine(a.Show())\n End Sub\nEnd Module\n");
+            System.IO.File.WriteAllText(System.IO.Path.Combine(dir, "Site.blproj"),
+                "<Project>\n  <PropertyGroup>\n    <ProjectName>Site</ProjectName>\n    <TargetBackend>JavaScript</TargetBackend>\n" +
+                "  </PropertyGroup>\n  <ItemGroup>\n    <Compile Include=\"Main.bas\" />\n    <Compile Include=\"Account.bas\" />\n  </ItemGroup>\n</Project>\n");
+
+            var r = new BasicLang.Compiler.BasicCompiler(new BasicLang.Compiler.CompilerOptions { TargetBackend = "javascript" })
+                .CompileProjectFiles(new[] { System.IO.Path.Combine(dir, "Main.bas"), System.IO.Path.Combine(dir, "Account.bas") });
+            Assert.That(r.HasErrors, Is.False);
+            Assert.That(FourBackends.Norm(JavaScriptExecutionTests.RunNodeScript(
+                new BasicLang.Compiler.CodeGen.JavaScript.JavaScriptCodeGenerator().Generate(r.CombinedIR!))), Is.EqualTo("2.50"), "API");
+
+            var (exit, stdout, stderr) = await CliTestHarness.RunCli(dir, "build", "Site.blproj");
+            Assert.That(exit, Is.Zero, stdout + stderr);
+            var js = System.IO.Directory.GetFiles(System.IO.Path.Combine(dir, "bin"), "Site.js", System.IO.SearchOption.AllDirectories).Single();
+            Assert.That(FourBackends.Norm(JavaScriptExecutionTests.RunNodeScript(System.IO.File.ReadAllText(js))), Is.EqualTo("2.50"), "CLI");
+
+            var project = await new VisualGameStudio.ProjectSystem.Serialization.ProjectSerializer().LoadAsync(System.IO.Path.Combine(dir, "Site.blproj"));
+            var built = await new VisualGameStudio.ProjectSystem.Services.BuildService(new RecordingOutput()).BuildProjectAsync(project);
+            Assert.That(built.Success, Is.True);
+            Assert.That(FourBackends.Norm(JavaScriptExecutionTests.RunNodeScript(built.GeneratedCode)), Is.EqualTo("2.50"), "IDE");
+        }
+        finally { System.IO.Directory.Delete(dir, true); }
+    }
 
     // ------------------------------------------------------------ D22: members, parameters, returns, defaults
 
@@ -2285,19 +2515,15 @@ public class JavaScriptDecimalTests
                 return [a.signed() * VgsDecimal.pow10(s - a.scale), b.signed() * VgsDecimal.pow10(s - b.scale), s];
               }
               static fromInt(n) { const v = BigInt(Math.trunc(n)); return new VgsDecimal(v < 0n, v < 0n ? -v : v, 0); }
-              // .NET's (decimal)double keeps 15 significant digits and drops trailing zeros.
-              static fromNumber(d) {
-                if (!Number.isFinite(d) || Math.abs(d) >= 7.9228162514264337593543950336e28)
-                  throw new OverflowException("Value was either too large or too small for a Decimal.");
-                if (d === 0) return VgsDecimal.ZERO;
-                const [coef, exp] = d.toExponential(14).split("e");
-                const neg = coef.startsWith("-");
-                let mant = BigInt(coef.replace("-", "").replace(".", ""));
-                let scale = 14 - Number(exp);
-                if (scale < 0) { mant *= VgsDecimal.pow10(-scale); scale = 0; }
-                while (scale > 0 && mant % 10n === 0n) { mant /= 10n; scale--; }
-                return VgsDecimal.reduce(neg, mant, scale);
-              }
+              // ⛔ (decimal)double is .NET's DecCalc.VarDecFromR8 — PORT IT, line for line (Task 22), from
+              // dotnet/runtime src/libraries/System.Private.CoreLib/src/System/Decimal.DecCalc.cs (MIT; add the
+              // attribution to THIRD-PARTY-NOTICES.md). It scales the DOUBLE by a double power of ten chosen from the
+              // binary exponent, rounds the scaled double half-to-even to an integer of ~15 significant digits, and
+              // strips trailing zeros — arithmetic in IEEE doubles, which JavaScript reproduces exactly when the same
+              // operations and the same power-of-ten table are used. A decimal-string approach (toExponential/
+              // toPrecision) rounds the EXACT binary value instead and differs from .NET on edge cases.
+              static fromNumber(d) { return VgsDecimal.varDecFromR8(d); }
+              static varDecFromR8(d) { /* the port — Task 22 */ throw new Error("VarDecFromR8 not yet ported"); }
               // NumberStyles.Number, invariant: white space, a leading or trailing sign, group separators, one point.
               static parse(text) {
                 const m = String(text).trim().match(/^([+-])?([\d,]*)(?:\.(\d*))?([+-])?$/);
@@ -2344,12 +2570,29 @@ public class JavaScriptDecimalTests
                 return new VgsDecimal(this.neg, q, n);
               }
               abs() { return new VgsDecimal(false, this.mant, this.scale); }
-              toInt32() {
+              // VB's Decimal → integral (CInt/CShort/CByte and CType/implicit narrowing — exception row E1/E4): round
+              // half-to-even, then OverflowException outside the target's range (never a wrap).
+              toIntegral(min, max, typeName) {
                 const v = this.roundTo(0, "even").signed();
-                if (v < -2147483648n || v > 2147483647n) throw new OverflowException("Value was either too large or too small for an Int32.");
+                if (v < min || v > max) throw new OverflowException("Value was either too large or too small for " + typeName + ".");
                 return Number(v);
               }
-              toNumber() { return Number(this.toString()); }
+              toInt32() { return this.toIntegral(-2147483648n, 2147483647n, "an Int32"); }
+              toInt16() { return this.toIntegral(-32768n, 32767n, "an Int16"); }
+              toByte() { return this.toIntegral(0n, 255n, "an unsigned byte"); }
+              // (double)decimal is .NET's DecCalc.VarR8FromDec: ((double)lo64 + (double)hi32 * 2^64) / 10^scale — the
+              // ulong→double conversion, the sum and the division each round in IEEE doubles, and JS rounds the same
+              // operations identically. 10^scale comes from the SAME table .NET uses (double literals 1e0 … 1e28;
+              // from 1e23 on a literal is not exact, which is why the table must be literals, not a computed power).
+              toNumber() {
+                const lo = this.mant & ((1n << 64n) - 1n), hi = this.mant >> 64n;
+                const d = (Number(lo) + Number(hi) * 18446744073709551616) / VgsDecimal.DOUBLE_POWERS_10[this.scale];
+                return this.neg ? -d : d;
+              }
+              static get DOUBLE_POWERS_10() {
+                return [1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11, 1e12, 1e13, 1e14, 1e15, 1e16,
+                        1e17, 1e18, 1e19, 1e20, 1e21, 1e22, 1e23, 1e24, 1e25, 1e26, 1e27, 1e28];
+              }
               toString() {
                 let digits = this.mant.toString();
                 if (this.scale > 0) {
@@ -2368,7 +2611,7 @@ public class JavaScriptDecimalTests
 ```
   Wire: `UsesDecimal`, `EmitDecimalPrelude` (before the conversion prelude — `__blStr` references the class), constants, defaults, `__blStr`, the allow-list, the exception types. Arithmetic/comparison/conversion lowering is Tasks 20–22; this task needs only literals, assignment, members and printing.
 - [ ] **Step 4: Run — GREEN**, plus `JsExecutionTierRosterTests`, `JavaScriptCodeGenTests`, every test grepping `BL7007` (a Decimal refusal test there becomes a lowering test — list them).
-- [ ] **Step 5: Mutations:** (1) render the constant with `m.ToString()` under `sv-SE` culture (drop `InvariantCulture`) → with the test run under `sv-SE` (set it in a one-off test) `LiteralsKeepTheirScale` red; (2) `__blStr` without the Decimal arm → `TheTextForms`/`LiteralsKeepTheirScale` red (`[object Object]`); (3) default `null` instead of `ZERO` → `FieldsProperties…` red.
+- [ ] **Step 5: Mutations:** (0) `UsesDecimal` scans only function bodies (not class fields) → `DecimalOnlyInASiblingFilesField_OnEveryRoute` red with `VgsDecimal is not defined`; (1) render the constant with `m.ToString()` under `sv-SE` culture (drop `InvariantCulture`) → with the test run under `sv-SE` (set it in a one-off test) `LiteralsKeepTheirScale` red; (2) `__blStr` without the Decimal arm → `TheTextForms`/`LiteralsKeepTheirScale` red (`[object Object]`); (3) default `null` instead of `ZERO` → `FieldsProperties…` red.
 - [ ] **Step 6: Commit.**
 
 ## Task 20: Arithmetic, overflow, division by zero
@@ -2384,13 +2627,20 @@ D3, D20.
 ```csharp
     // ------------------------------------------------------------ D3, D20: arithmetic, overflow, division by zero
 
-    private static readonly (decimal A, decimal B)[] Pairs =
+    /// <summary>
+    /// ≥ 200 cases (D3): every ordered pair of these 15 values = 225 pairs. The set covers scale alignment (1.10 vs
+    /// 2.205), the 28-digit cut (0.0000000000000000000000000001, 0.3333…3), 96-bit overflow (Max, Min), negative zero
+    /// (built from bits, since the literal -0.0m is not &lt; 0 — see L), zero divisors, and a mixed-scale large value.
+    /// </summary>
+    private static readonly decimal[] Values =
     {
-        (1.10m, 2.205m), (0.1m, 0.2m), (1m, 3m), (2m, 3m), (-7.5m, 2m), (1.00m, 0.5m), (10m, 4m),
-        (123456789.123456789m, 987654321.987654321m), (0.0000000000000000000000000001m, 3m), (-1m, 3m),
-        (7.123m, -0.001m), (79228162514264337593543950335m, 3m), (1.5m, 1.5m), (2.5m, -1m),
-        (0.3333333333333333333333333333m, 3m), (12345678901234567890.12345678m, 0.00000001m), (1m, 0m), (-0.0m, 1m),
+        1.10m, 2.205m, 0.1m, 3m, -7.5m, 0.5m, 123456789.123456789m, 0.0000000000000000000000000001m,
+        -0.001m, decimal.MaxValue, decimal.MinValue, 0.3333333333333333333333333333m,
+        12345678901234567890.12345678m, 0m, new decimal(0, 0, 0, true, 1) /* -0.0 */,
     };
+
+    private static readonly (decimal A, decimal B)[] Pairs =
+        Values.SelectMany(a => Values.Select(b => (a, b))).ToArray();
 
     private static string Guarded(string expression) =>
         $" Try\n  Console.WriteLine({expression})\n Catch ex As OverflowException\n  Console.WriteLine(\"overflow\")\n" +
@@ -2419,15 +2669,97 @@ D3, D20.
 - [ ] **Step 2: Run — RED:** JS prints JS string concatenations / `NaN`-shaped output or throws a `TypeError` (`node exited 1`) — record which.
 - [ ] **Step 3: Implement** (files above).
 - [ ] **Step 4: Run — GREEN.** Any row where the reference `div`/`reduce` disagrees with .NET: fix the runtime; record the case and the fix in the commit.
-- [ ] **Step 5: Mutations:** (1) `reduce` rounds digit by digit (the double-rounding loop) → a row red (if none, add a pair that exposes it — a product whose dropped digits are `…49…` followed by a non-zero tail — and record); (2) `div` rounds half up → `KnownAnswers` row 2 or a table row red; (3) no overflow throw → the max-value row red.
+- [ ] **Step 5: Mutations:** (1) `reduce` rounds digit by digit (the double-rounding loop) → a row red (if none, add a pair that exposes it — a product whose dropped digits are `…49…` followed by a non-zero tail — and record); (2) `div` rounds half up → `KnownAnswers` row 2 or a table row red; (3) no overflow throw → the Max/Min rows red; (4) **scale alignment** — `align` multiplies only the first operand → the 1.10 / 2.205 rows red; (5) **the 28-digit cut** — `reduce` starts `k` at `scale - 27` → the 0.3333… and 1e-28 rows red.
+  ⚠ The table prints `Pairs.Length * 6` = 1350 lines in one program; if node or the C# leg is slow, split the table into three programs (by the first value) in ONE test — never drop cases.
 - [ ] **Step 6: Commit.**
+
+## Task 20A: The C# backend follows VB for Decimal (exception rows E1–E4)
+
+Plan review CRITICAL; scope call S10. The C# backend is a BasicLang backend, and BasicLang follows VB. Measured by the reviewer on `5b4ca51e`: `EmitCastText` (≈4467-4498; `:4443-4477` [X]) rounds a narrowing only when the source is Double/Single (`IsFloatingTypeName(sourceName)`), so `CType(d, Integer)` and implicit Decimal → Integer emit `(int)(d)` — TRUNCATION; `o = p` on two `Object`s compares references; `CType(o, Decimal)` of a boxed Integer is a C# unbox that throws `InvalidCastException`. This task runs BEFORE Task 21, so the VB-literal rows of Tasks 21–22 are green on C# when they are written.
+
+**Files:**
+- Modify: `BasicLang/CSharpBackend.cs` — `EmitCastText`: (E1/E4) the rounding rule's condition becomes `(IsFloatingTypeName(sourceName) || sourceName == "Decimal") && IsIntegralTypeName(targetName)` → `Convert.To{Int32|Int16|Byte|…}(…)` (banker's rounding AND `OverflowException`, exactly VB's `CInt`/`CShort`/`CByte` on a Decimal); (E3) a new arm before the reference-cast arm: `sourceName == "Object" && targetName == "Decimal"` → `Convert.ToDecimal({valueExpr})` (VB converts a boxed Integer/Double; a non-convertible object still throws `InvalidCastException`); the `CShort`/`CByte` builtins with a Decimal argument (grep `CShort` in `CSharpBackend.cs`/`VbConversionText` `:240-275`) → `Convert.ToInt16`/`Convert.ToByte`; (E2) the `Eq`/`Ne` rendering for two `Object`-typed operands (grep `BinaryOpKind.Eq` in `CSharpBackend.cs`) → `__BlObjectEquals(a, b)` / `!__BlObjectEquals(a, b)` WHEN either operand is `Object`-typed, with the helper emitted once into the generated module class when used:
+
+```csharp
+    private static bool __BlObjectEquals(object a, object b)
+    {
+        // VB compares boxed NUMBERS by value (spec D19). Only the Decimal case is widened here — every other pair
+        // keeps the reference comparison this backend has always emitted, so nothing else changes behaviour.
+        if ((a is decimal || b is decimal) && __BlIsNumber(a) && __BlIsNumber(b))
+            return System.Convert.ToDecimal(a) == System.Convert.ToDecimal(b);
+        return a == b;
+    }
+    private static bool __BlIsNumber(object o) =>
+        o is byte or sbyte or short or ushort or int or uint or long or ulong or float or double or decimal;
+```
+- Create: `VisualGameStudio.Tests/Compiler/CSharpDecimalVbRulesTests.cs` (Integration, in-process Roslyn, `[NonParallelizable]`)
+
+- [ ] **Step 1: Failing tests** (VB-literal expectations, C# only here — the JS legs come in Tasks 21–22):
+
+```csharp
+using System.Globalization;
+using NUnit.Framework;
+
+namespace VisualGameStudio.Tests.Compiler;
+
+/// <summary>
+/// Plan review CRITICAL / S10 — BasicLang follows VB, and the C# backend diverged on four Decimal rules: a narrowing
+/// truncated (EmitCastText rounded only Double/Single), CShort/CByte of an out-of-range Decimal did not throw,
+/// boxed-Decimal `=` compared references (spec D19 says values — owner-approved), and CType of a boxed Integer to
+/// Decimal threw InvalidCastException. Expectations are VB's, written here; the backend is fixed to meet them.
+/// </summary>
+[TestFixture]
+[Category("Integration")]
+[NonParallelizable]
+public class CSharpDecimalVbRulesTests
+{
+    private CultureInfo _saved = CultureInfo.CurrentCulture;
+    [SetUp] public void Invariant() { _saved = CultureInfo.CurrentCulture; CultureInfo.CurrentCulture = CultureInfo.InvariantCulture; }
+    [TearDown] public void Restore() => CultureInfo.CurrentCulture = _saved;
+
+    private const string Id = "Function Id(d As Decimal) As Decimal\n Return d\nEnd Function\n";
+
+    private static string Overflow(string expr) =>
+        $" Try\n  Console.WriteLine({expr})\n Catch ex As OverflowException\n  Console.WriteLine(\"overflow\")\n End Try\n";
+
+    [Test]
+    public void E1_NarrowingRoundsHalfToEven() => Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharp(Id +
+        "Sub Main()\n Console.WriteLine(CType(Id(2.5D), Integer))\n Console.WriteLine(CType(Id(3.5D), Integer))\n" +
+        " Console.WriteLine(CType(Id(-2.5D), Integer))\n Dim j As Integer = Id(3.5D)\n Console.WriteLine(j)\n" +
+        Overflow("CType(Id(2147483648D), Integer)") + "End Sub\n")),
+        Is.EqualTo("2\n4\n-2\n4\noverflow"));
+
+    [Test]
+    public void E4_CShortAndCByte_OutOfRange_Overflow() => Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharp(Id +
+        "Sub Main()\n Console.WriteLine(CShort(Id(2.5D)))\n Console.WriteLine(CByte(Id(255.4D)))\n" +
+        Overflow("CShort(Id(40000D))") + Overflow("CByte(Id(256D))") + Overflow("CByte(Id(-1D))") + "End Sub\n")),
+        Is.EqualTo("2\n255\noverflow\noverflow\noverflow"));
+
+    [Test]
+    public void E2_E3_Boxing() => Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharp(Id +
+        "Public Class Thing\nEnd Class\n" +
+        "Sub Main()\n Dim o As Object = Id(1.10D)\n Dim p As Object = Id(1.1D)\n Console.WriteLine(o = p)\n Console.WriteLine(o <> p)\n" +
+        " Dim i As Object = 5\n Console.WriteLine(CType(i, Decimal))\n Dim five As Object = Id(5D)\n Console.WriteLine(i = five)\n" +
+        " Dim t As Object = New Thing()\n Try\n  Console.WriteLine(CType(t, Decimal))\n Catch ex As InvalidCastException\n  Console.WriteLine(\"invalid cast\")\n End Try\n" +
+        " Dim a As Object = New Thing()\n Dim b As Object = a\n Console.WriteLine(a = b)\nEnd Sub\n")),
+        Is.EqualTo("True\nFalse\n5\nTrue\ninvalid cast\nTrue"),
+        "the last row: two references to one object stay equal — non-Decimal comparisons are unchanged");
+}
+```
+  ⚠ If the analyzer refuses `Dim j As Integer = Id(3.5D)` (implicit narrowing), drop that row and record the refusal — it is then the same refusal on every target.
+- [ ] **Step 2: Run — RED:** E1 prints `2\n3\n-2\n3` (truncation); E4 prints wrapped/truncated values instead of `overflow`; E2/E3 prints `False\nTrue` then an uncaught `InvalidCastException` (test failure message from `RunEmittedCSharpText`).
+- [ ] **Step 3: Implement** (the four edits above).
+- [ ] **Step 4: Run — GREEN**, plus the C# fixtures that exercise casts and Object comparisons by name: `CTypeConversionTests`, `NarrowIntegerWrapTests`, `IsIsNotOperatorExecutionTests`, `MsilObjectBoxingExecutionTests` (MSIL is out of scope — record if its expectations diverge from the new C# ones), `WinFormsTemplateBuildTests`.
+- [ ] **Step 5: Mutations:** (1) drop `|| sourceName == "Decimal"` → E1 red; (2) `__BlObjectEquals` → `a == b` → E2 red; (3) drop the Object → Decimal arm → E3 red.
+- [ ] **Step 6: Commit.** Message: "C# backend: Decimal narrowing rounds and overflows like VB; boxed Decimals compare by value (spec D19); CType of a boxed number to Decimal converts".
 
 ## Task 21: Comparisons, `Select Case`, boxing
 
 D5, D6, D19.
 
 **Files:**
-- Modify: `BasicLang/JavaScriptBackend.cs` — `DecimalBinary` gains Eq/Ne/Lt/Le/Gt/Ge → `(l.cmp(r) === 0)` / `!== 0` / `< 0` / `<= 0` / `> 0` / `>= 0`; `RenderBinary`'s Object-typed `Eq`/`Ne` (`:1473-1474`) → `VgsDecimal.objEquals(l, r)` WHEN the module uses Decimal and either operand is typed `Object` (else unchanged); `.Equals(x)` on an Object receiver → the same helper; `TypeOf o Is Decimal` → `(o instanceof VgsDecimal)`; `CType(o, Decimal)` → a checked unbox throwing `InvalidCastException`
+- Modify: `BasicLang/JavaScriptBackend.cs` — `DecimalBinary` gains Eq/Ne/Lt/Le/Gt/Ge → `(l.cmp(r) === 0)` / `!== 0` / `< 0` / `<= 0` / `> 0` / `>= 0`; `RenderBinary`'s Object-typed `Eq`/`Ne` (`:1473-1474`) → `VgsDecimal.objEquals(l, r)` WHEN the module uses Decimal and either operand is typed `Object` (else unchanged); `objEquals` compares by VALUE when either side is a `VgsDecimal` and the other a `VgsDecimal` or a JS number (a number is converted with `fromInt` if integral, else `fromNumber`), else `===`; `.Equals(x)` on an Object receiver → the same helper; `TypeOf o Is Decimal` → `(o instanceof VgsDecimal)`; `CType(o, Decimal)` (the `IRCast` Object → Decimal arm of `TryNumericCast`/`TryReferenceCast`, `JavaScriptBackend.cs:3328-3424` [X]) → `VgsDecimal.fromObject(o)`: a `VgsDecimal` as is, an integral number `fromInt`, another number `fromNumber`, a string `parse`, anything else `InvalidCastException` (VB's `Conversions.ToDecimal` shape)
+- The C# side of E2/E3 was fixed in Task 20A (which runs BEFORE this task), so `Boxing_VbRules`' C# leg is green when this task starts and only its JavaScript legs are red.
 - Modify: the test file (Edit)
 
 - [ ] **Step 1: Failing tests** (append):
@@ -2458,17 +2790,26 @@ D5, D6, D19.
         "  Case Else\n   Console.WriteLine(\"else\")\n End Select\nEnd Sub\n" +
         "Sub Main()\n Show(Id(1.10D))\n Show(Id(2.50D))\n Show(Id(3.00D))\n Show(Id(10.01D))\n Show(Id(-1D))\nEnd Sub\n");
 
+    /// <summary>Oracle rows: Equals, TypeOf, unboxing a boxed DECIMAL.</summary>
     [Test]
     public void Boxing() => Both(Id +
         "Sub Main()\n Dim o As Object = Id(1.10D)\n Dim p As Object = Id(1.1D)\n Console.WriteLine(o.Equals(p))\n" +
-        " Console.WriteLine(TypeOf o Is Decimal)\n Dim back As Decimal = CType(o, Decimal)\n Console.WriteLine(back)\n" +
-        " Console.WriteLine(o = p)\nEnd Sub\n");
-```
-  ⚠ `o = p` on two `Object`s: the oracle decides. If the C# backend emits reference equality (`False`), JavaScript matches it and the spec's D19 wording ("value comparison") is corrected in this task's report — the rule is "the same answer as .NET running the C# emission", not the spec's guess.
+        " Console.WriteLine(TypeOf o Is Decimal)\n Dim back As Decimal = CType(o, Decimal)\n Console.WriteLine(back)\nEnd Sub\n");
+
+    /// <summary>EXCEPTION ROWS E2/E3 (VB-literal, S10): VB compares boxed numbers by VALUE (spec D19, owner-approved)
+    /// and converts a boxed Integer/Double to Decimal. The C# backend compares references and unboxes strictly
+    /// until Task 20A; this test drives that fix on C# too.</summary>
+    [Test]
+    public void Boxing_VbRules() => BothEqual(Id +
+        "Public Class Thing\nEnd Class\n" +
+        "Sub Main()\n Dim o As Object = Id(1.10D)\n Dim p As Object = Id(1.1D)\n Console.WriteLine(o = p)\n Console.WriteLine(o <> p)\n" +
+        " Dim i As Object = 5\n Console.WriteLine(CType(i, Decimal))\n Dim five As Object = Id(5D)\n Console.WriteLine(i = five)\n" +
+        " Dim t As Object = New Thing()\n Try\n  Console.WriteLine(CType(t, Decimal))\n Catch ex As InvalidCastException\n  Console.WriteLine(\"invalid cast\")\n End Try\nEnd Sub\n",
+        "True\nFalse\n5\nTrue\ninvalid cast");
 - [ ] **Step 2: Run — RED:** JS compares object identity (`1.10 = 1.1` prints `False`), `<` compares coerced strings, `Select Case` takes the wrong arm; record each.
 - [ ] **Step 3: Implement** (files above).
 - [ ] **Step 4: Run — GREEN**, plus `IsIsNotOperatorExecutionTests`, `TypeOfTests`, `SelectCase*` by name.
-- [ ] **Step 5: Mutations:** (1) `Eq` → `===` for Decimal → `ScaleDoesNotMatterToEquality` red; (2) `objEquals` → `===` → `Boxing` red (on `o.Equals(p)`).
+- [ ] **Step 5: Mutations:** (1) `Eq` → `===` for Decimal → `ScaleDoesNotMatterToEquality` red; (2) `objEquals` → `===` → `Boxing` (on `o.Equals(p)`) and `Boxing_VbRules` (on `o = p`) red; (3) `fromObject` rejects a number → `Boxing_VbRules` red on `CType(i, Decimal)`.
 - [ ] **Step 6: Commit.**
 
 ## Task 22: Conversions, and the numeric-mixing grid
@@ -2476,7 +2817,8 @@ D5, D6, D19.
 D7, D8, D9, D10.
 
 **Files:**
-- Modify: `BasicLang/JavaScriptBackend.cs` — the IR conversion node's rendering (find it: grep `class IRConvert`/`IRCast` in `IRNodes.cs` and its `case` in `JavaScriptBackend.cs`): integral → Decimal `VgsDecimal.fromInt`, Single/Double → Decimal `VgsDecimal.fromNumber`, String → Decimal `VgsDecimal.parse`, Decimal → Double/Single `.toNumber()`, Decimal → Integer/Short/Byte `.toInt32()` then the narrow wrap/range check the backend uses for integral narrowing, Decimal → String `.toString()`; `CallTarget`'s conversion switch (`:2028-2054`): `CDec` by argument type as above; `CInt`/`CDbl`/`CSng`/`CShort`/`CByte` of a Decimal argument as above
+- Modify: `BasicLang/JavaScriptBackend.cs` — the `IRCast` rendering (`Visit(IRCast)` `:3328`, `TryNumericCast` `:3424`, the inline twin `:1286` [X]): integral → Decimal `VgsDecimal.fromInt`, Single/Double → Decimal `VgsDecimal.fromNumber`, String → Decimal `VgsDecimal.parse`, Object → Decimal `VgsDecimal.fromObject` (Task 21), Decimal → Double/Single `.toNumber()`, Decimal → Integer `.toInt32()`, → Short `.toInt16()`, → Byte `.toByte()` (round half-to-even, then `OverflowException` out of range — VB, exception rows E1/E4; **never** the integral wrap), Decimal → String `.toString()`; `CallTarget`'s conversion switch (`:2028-2054`): `CDec` by argument type as above; `CInt`/`CShort`/`CByte`/`CDbl`/`CSng` of a Decimal argument as above
+- Modify: the prelude's `varDecFromR8` — **the port** of `DecCalc.VarDecFromR8` from dotnet/runtime `src/libraries/System.Private.CoreLib/src/System/Decimal.DecCalc.cs` (MIT): read the function at the runtime version this repo targets (.NET 8), translate it statement for statement into the prelude (doubles stay JS numbers; the 64/96-bit integer steps become BigInt; its power-of-ten double table is `DOUBLE_POWERS_10`, extended exactly as the source's table is), and add the attribution to `THIRD-PARTY-NOTICES.md`. `toNumber` is already the port of `VarR8FromDec` (Task 19).
 - Modify: the test file (Edit)
 
 - [ ] **Step 1: Failing tests** (append):
@@ -2484,15 +2826,59 @@ D7, D8, D9, D10.
 ```csharp
     // ------------------------------------------------------------ D7, D8: conversions
 
+    private const string IdD = "Function IdD(x As Double) As Double\n Return x\nEnd Function\n";
+
+    private static string Overflow(string expr) =>
+        $" Try\n  Console.WriteLine({expr})\n Catch ex As OverflowException\n  Console.WriteLine(\"overflow\")\n End Try\n";
+
+    /// <summary>Oracle rows: CInt (C# already lowers it through Convert — banker's), CDec, widening.</summary>
     [Test]
-    public void Conversions() => Both(Id +
-        "Function IdD(x As Double) As Double\n Return x\nEnd Function\n" +
-        "Sub Main()\n Console.WriteLine(CDbl(Id(1.1D)))\n Console.WriteLine(CSng(Id(1.1D)))\n" +
-        " Console.WriteLine(CInt(Id(2.5D)))\n Console.WriteLine(CInt(Id(3.5D)))\n Console.WriteLine(CInt(Id(-2.5D)))\n" +
-        " Try\n  Console.WriteLine(CInt(Id(2147483648D)))\n Catch ex As OverflowException\n  Console.WriteLine(\"overflow\")\n End Try\n" +
+    public void Conversions() => Both(Id + IdD +
+        "Sub Main()\n Console.WriteLine(CInt(Id(2.5D)))\n Console.WriteLine(CInt(Id(3.5D)))\n Console.WriteLine(CInt(Id(-2.5D)))\n" +
+        Overflow("CInt(Id(2147483648D))") +
         " Console.WriteLine(CDec(IdD(0.1)))\n Console.WriteLine(CDec(IdD(1.0 / 3.0)))\n Console.WriteLine(CDec(\"12.345\"))\n" +
         " Dim n As Integer = 5\n Dim d As Decimal = n\n Console.WriteLine(d)\n Dim s As Short = 7\n d = s\n Console.WriteLine(d)\n" +
         " Dim y As Byte = 9\n d = y\n Console.WriteLine(d)\nEnd Sub\n");
+
+    /// <summary>EXCEPTION ROWS E1/E4 (VB-literal, S10) — CType/implicit narrowing and CShort/CByte of a Decimal round
+    /// half-to-even and throw OverflowException out of range, on BOTH backends (C# fixed in Task 20A).</summary>
+    [Test]
+    public void Narrowing_VbRules() => BothEqual(Id +
+        "Sub Main()\n Console.WriteLine(CType(Id(2.5D), Integer))\n Console.WriteLine(CType(Id(3.5D), Integer))\n" +
+        " Dim j As Integer = Id(3.5D)\n Console.WriteLine(j)\n Console.WriteLine(CShort(Id(2.5D)))\n Console.WriteLine(CByte(Id(255.4D)))\n" +
+        Overflow("CType(Id(2147483648D), Integer)") + Overflow("CShort(Id(40000D))") + Overflow("CByte(Id(256D))") + Overflow("CByte(Id(-1D))") +
+        "End Sub\n",
+        "2\n4\n4\n2\n255\noverflow\noverflow\noverflow\noverflow");
+
+    /// <summary>
+    /// Decimal → Double (VarR8FromDec) and Double → Decimal (VarDecFromR8), GENERATED: 400 decimals and 400 doubles
+    /// from a fixed seed (random scale 0–28, random 96-bit mantissas, plus the edges: ±Max, 1e-28, values whose double
+    /// is inexact, doubles near 1e15/1e16 digit boundaries, subnormal-adjacent tiny values that .NET turns into 0,
+    /// ±7.9e28 overflow). Decimal → Double is asserted as `CDbl(Id(d)) = IdD(&lt;the C#-computed double, "R"&gt;)` printing
+    /// True (no double FORMATTING in the comparison); Double → Decimal prints the Decimal (exact text).
+    /// </summary>
+    [Test]
+    public void DoubleConversionTables_MatchDotNet()
+    {
+        var rng = new Random(20260929);
+        var sb = new StringBuilder(Id + IdD).Append("Sub Main()\n");
+        for (var i = 0; i < 400; i++)
+        {
+            var d = new decimal(rng.Next(), rng.Next(), rng.Next(), rng.Next(2) == 0, (byte)rng.Next(29));
+            var expected = ((double)d).ToString("R", CultureInfo.InvariantCulture);
+            if (!expected.Contains('E') && !expected.Contains('.')) expected += ".0";
+            sb.Append($" Console.WriteLine(CDbl(Id({L(d)})) = IdD({expected}))\n");
+        }
+        foreach (var x in new[] { 0.1, 1.0 / 3.0, 123456789012345.6, 1e15 - 0.5, 9999999999999999.0, 1e-28, 1e-29, 7.9e28, -2.5e-10 })
+            sb.Append(Overflow($"CDec(IdD({x.ToString("R", CultureInfo.InvariantCulture)}))"));
+        for (var i = 0; i < 400; i++)
+        {
+            var x = (rng.NextDouble() - 0.5) * Math.Pow(10, rng.Next(-20, 28));
+            sb.Append(Overflow($"CDec(IdD({x.ToString("R", CultureInfo.InvariantCulture)}))"));
+        }
+        var oracle = Both(sb.Append("End Sub\n").ToString());
+        Assert.That(oracle.Split('\n').Take(400), Is.All.EqualTo("True"), "the C# oracle agrees with (double)decimal itself");
+    }
 
     // ------------------------------------------------------------ D10: the mixing grid
 
@@ -2537,7 +2923,8 @@ D7, D8, D9, D10.
 - [ ] **Step 2: Run — RED:** `Conversions` fails on the JS legs (no conversion arms — `TypeError` or wrong text); the grid lists every JS cell that differs. Record the grid's C# column as it stands (it is the oracle; CSFAIL cells are findings).
 - [ ] **Step 3: Implement** (files above). A grid CSFAIL cell is fixed in the ANALYZER (`IsDecimalFloatingMix`, `SemanticAnalyzer.cs:2260-2264`; `GetCommonType` `SymbolTable.cs:905-912`) so both targets refuse it; list each such cell in the commit.
 - [ ] **Step 4: Run — GREEN**, plus `CTypeConversionTests`, `NarrowIntegerWrapTests`, `NarrowIntegerDivisionTests` by name.
-- [ ] **Step 5: Mutations:** (1) `CInt` of a Decimal truncates instead of banker's → `Conversions` red; (2) `fromNumber` uses 17 digits → the `1.0 / 3.0` row red.
+- [ ] **Step 5: Mutations:** (1) `CInt` of a Decimal truncates instead of banker's → `Conversions` red; (2) `toIntegral` wraps instead of throwing → `Narrowing_VbRules` red; (3) `toNumber` = `Number(this.toString())` (the rejected single-rounding spelling) → `DoubleConversionTables_MatchDotNet` red on at least one generated row (if none, add rows until one differs and record it — the two algorithms DO differ); (4) `varDecFromR8` replaced by `toPrecision(15)` parsing → the Double → Decimal half of the table red (same rule).
+  ⚠ A literal like `IdD(1E-28)` must be a valid BasicLang double literal — if the lexer does not accept the `R` format's `E` exponent, write the literal through the lexer's accepted form (check `ScanNumber`) and record.
 - [ ] **Step 6: Commit.**
 
 ## Task 23: `Math` on Decimal, and `Decimal.Parse`
@@ -2563,9 +2950,11 @@ D13, D14, D15.
 
     [Test]
     public void Parse() => Both(
-        "Sub Try1(s As String)\n Try\n  Console.WriteLine(Decimal.Parse(s))\n Catch ex As FormatException\n  Console.WriteLine(\"format\")\n End Try\nEnd Sub\n" +
+        "Sub Try1(s As String)\n Try\n  Console.WriteLine(Decimal.Parse(s))\n Catch ex As FormatException\n  Console.WriteLine(\"format\")\n" +
+        " Catch ex As OverflowException\n  Console.WriteLine(\"overflow\")\n End Try\nEnd Sub\n" +
         "Sub Main()\n Try1(\"1,234.50\")\n Try1(\" -3.14 \")\n Try1(\"12.345\")\n Try1(\"1.\")\n Try1(\".5\")\n Try1(\"5-\")\n" +
-        " Try1(\"abc\")\n Try1(\"1e5\")\n Try1(\"\")\n Try1(\"0.12345678901234567890123456789\")\nEnd Sub\n");
+        " Try1(\"abc\")\n Try1(\"1e5\")\n Try1(\"\")\n Try1(\"0.12345678901234567890123456789\")\n" +
+        " Try1(\"79228162514264337593543950336\")\n Try1(\"-79228162514264337593543950336\")\nEnd Sub\n");
 ```
   `DecimalRefusalTests.cs`:
 
@@ -2622,6 +3011,7 @@ D17, D18, D22.
     [Test] public void ListContains() => Refused(" Dim l As New List(Of Decimal)\n Console.WriteLine(l.Contains(d))", "Contains");
     [Test] public void ListIndexOf() => Refused(" Dim l As New List(Of Decimal)\n Console.WriteLine(l.IndexOf(d))", "IndexOf");
     [Test] public void ListRemove() => Refused(" Dim l As New List(Of Decimal)\n l.Remove(d)", "Remove");
+    [Test] public void ArrayIndexOf() => Refused(" Dim a() As Decimal = {1.5D}\n Console.WriteLine(Array.IndexOf(a, d))", "Array.IndexOf");
 ```
 - [ ] **Step 2: Run — RED:** the refusal rows compile (a Decimal key is silently an object-identity key); `ListsArraysAndOptional` fails if any collection path still lowers Decimal as a number — record.
 - [ ] **Step 3: Implement** (files above).
@@ -2645,6 +3035,7 @@ D4, D12, D16.
     [Test] public void AFormatSpecifier_InToString() => Refused(" Console.WriteLine(d.ToString(\"N2\"))", "ToString");
     [Test] public void AFormatSpecifier_InStringFormat() => Refused(" Console.WriteLine(String.Format(\"{0:F2}\", d))", "String.Format");
     [Test] public void AFormatSpecifier_InInterpolation() => Refused(" Console.WriteLine($\"{d:F2}\")", "interpolation");
+    [Test] public void VbFormat() => Refused(" Console.WriteLine(Format(d, \"0.00\"))", "Format");
 
     [Test]
     public void TryParse_IsTheByRefRefusal_WithTheSpellingThatWorks() =>
@@ -2692,7 +3083,7 @@ D21, scope call S9.
 
 ## Task 27: Gate for 2.0b
 
-- [ ] Clean build; fast subset by failure NAME vs `baseline-fast.txt`; Integration by name: `JavaScriptDecimalTests`, `DecimalRefusalTests`, `DecimalLiteralTests`, `JsExecutionTierRosterTests`, `JavaScriptCodeGenTests`, `CTypeConversionTests`, every fixture that grepped `BL7007`/`Decimal`; the mutation table; `docs/HANDOFF.md` and `docs/wiki/content/js-backend.md` (the BL70xx table gains BL7014; `Decimal` leaves the BL7007 list; `Char` leaves BL7004 — Task 14). Commit. No IDE drop.
+- [ ] Clean build; fast subset by failure NAME vs `baseline-fast.txt`; Integration by name: `JavaScriptDecimalTests`, `DecimalRefusalTests`, `DecimalLiteralTests`, `CSharpDecimalVbRulesTests`, `MsilObjectBoxingExecutionTests` (record any MSIL expectation that now differs from C# — MSIL is out of scope), `JsExecutionTierRosterTests`, `JavaScriptCodeGenTests`, `CTypeConversionTests`, every fixture that grepped `BL7007`/`Decimal`; the mutation table; `docs/HANDOFF.md` and `docs/wiki/content/js-backend.md` (the BL70xx table gains BL7014; `Decimal` leaves the BL7007 list; `Char` leaves BL7004 — Task 14). Commit. No IDE drop.
 
 ---
 
@@ -2720,7 +3111,9 @@ Spec §5.1, §5.2.
 ### Task 29: `Control`, `Form`, attaching, data flow, methods, events core
 Spec §5.3–§5.6, O10–O12.
 **Files and responsibilities:** `Control.bas`/`Form.bas`/`MessageBox.bas`/`EventArgs.bas` in `lib/js/forms/`. `Name` + element reference only; `Controls.Add` attaches by `getElementById(Name)` inside the parent's element; unattached access throws `InvalidOperationException`; `Element` property; the common members of §5.4 (Text, Enabled by the row's enable target with `data-vgs-enabled` propagation, Visible by the `hidden` attribute with ancestor semantics, ForeColor/BackColor/Font/Cursor/Padding through the §5.8 style rule and slice 3's converters); the methods of §5.5 (O12: Show/Hide/Focus/BringToFront, `MessageBox.Show` OK/OKCancel/YesNo, `Form.Close` hides the form area); `Protected Overridable Sub OnX(e)` + events of §5.6 (Click, TextChanged, MouseDown/Up/Move with `MouseEventArgs`, KeyDown/KeyUp with `KeyEventArgs` and the fixed `code`/`key` → `Keys` table, KeyPress with `KeyChar As Char` (Task 14), Enter via `focusin` + `relatedTarget` outside); change-only programmatic events.
-**Tests:** node tier (`PortableControlNodeTests`, roster +1): a recording stub DOM asserts every `DomMember` write, attach/unattached, `hidden`, enable propagation, change-only events, the caption double-click de-duplication, `relatedTarget` Enter, `MessageBox` button mapping, `<b>x</b>` never becomes markup (spec §5.1 security). Edge tier comes with Task 35.
+**Methods owned by this task (O12, plan review item 8):** `Control.Show`/`Hide`/`Focus`/`BringToFront`; `MessageBox.Show(text, Optional caption, Optional buttons)` (OK → `alert`; OKCancel/YesNo → `confirm` → `DialogResult`); `Form.Close` (hides the form area); `ControlCollection.Add`/`Remove`/`Count`/`Item(i)`. (`TextBox.Clear`/`AppendText`/`SelectAll` and `Button.PerformClick` → Task 31; `ObjectCollection` `Items.*` → Task 37.)
+**The method manifest (the catalog lists no methods):** `BasicLang/Forms/PortableMembers.cs` (new) — THE list of methods and collection members the library ships, per class, with each one's WinForms signature. Read by (a) a gate that the library declares exactly these public methods (a reflection-free check: parse the library's `.bas` and compare member names — no second copy), (b) `WebUnavailableMember` (Task 34: a method not in the manifest is the web-build error), (c) the method coverage gate (Task 35). A method added to the library without a manifest row, or a row without a library member, fails (a).
+**Tests:** node tier (`PortableControlNodeTests`, roster +1): a recording stub DOM asserts every `DomMember` write, attach/unattached, `hidden`, enable propagation, change-only events, the caption double-click de-duplication, `relatedTarget` Enter, `MessageBox` button mapping (a stubbed `alert`/`confirm`), `BringToFront` moving the element last, `Form.Close` setting `hidden` on the form area, `Controls.Remove`/`Count`/`Item`, `<b>x</b>` never becomes markup (spec §5.1 security); `PortableMembersManifestTests` (the (a) gate). Edge tier comes with Task 35.
 **Risks:** `Char` in `KeyPressEventArgs` needs Task 14; enum typing needs Task 9; `RemoveHandler` identity needs Task 12; a DOM listener declared below its attaching method is refused (M25) — follow the idiom.
 **Gate:** node fixtures by name + `JavaScriptLibraryIdiomTests`.
 
@@ -2730,7 +3123,8 @@ Spec §6, review C2/C3/I1/I5, O5.
 - `BasicLang/Forms/RegionMarkers.cs`: the open marker accepts `style="portable"` in ONE position (`region=… form=… style=… hash=…`); `FormatOpen` writes it; an unknown value or the two regions disagreeing → `RegionMarkersMalformed` (BL8012). ⚠ A pre-2a IDE reads the new marker as BL8012 (strict order, `:60-62`) — release note.
 - `BasicLang/Forms/FormCodeStyle.cs` (new): the ONE reader of a file's style from its markers.
 - `BasicLang/Forms/RegionWriter.cs`: for a portable file, the init is the WinForms walk (`GenerateInit` `:600-688`, `AppendSiblings` `:721-757`, `AppendControlInit` `:769-791`) with geometry lines, property lines, FormRoot rows and `Me.<FormProperty>`/reference lines DELETED — each generated line TAGGED (geometry/property/other) so the subset relation is testable (the seam for piece 3); tray components keep their property lines (I5); `x.Name = "x"` right after `New` on BOTH targets (closes chip `task_fa51e644`); field types = WinForms types; wiring = `AddHandler`. BL8013 (`CheckHandlerOrdering` `:478-517`) skips portable files.
-- `BasicLang/Forms/FormHandlers.cs` (`:157-162`, `:179-181`): signature AND placement by style (`WinFormsEventArgs ?? "EventArgs"`, after the init region) for portable files.
+- `BasicLang/Forms/FormHandlers.cs` — **anchor on property-grid slice 3's rework, which lands first** (not master's `:157-162`): slice 3 names a handler after the WinForms event on BOTH targets (`e90a24bb` — `FormHandlers.DefaultEventDef(definition, target)` `:60-61` [S3] via `FormControlDef.DefaultEventDefOn(target)` `FormControlCatalog.cs:1280` [S3] and `FormEvents.NameOn` `:1272` [S3]), plans every crossed bind (`995ca04c` — `PlanDefault` `:100`, `PlanBind` `:140` [S3]), and writes the stub signature in one place (`:219-222` [S3]: `()` for a parameterless web component, `(e As DomEvent)` on the web, `(sender As Object, e As {winFormsArgs ?? "EventArgs"})` on WinForms). This task makes that ONE signature site choose by STYLE (portable → the WinForms form on the web too) and the placement by style (after the init region). ⚠ The slice-3 rename is what makes spec §11.2's byte-identical NON-REGION text achievable — the same handler name on both targets — so the twin (Task 35) depends on it.
+- Slice 3's default-event changes the portable library must honour (read slice 3's catalog at the pre-flight, never this list): container kinds (Panel, FlowLayoutPanel, TableLayoutPanel) → `Paint`; TrackBar → `Scroll` (web `input`) with `ValueChanged` → `change`; DataGridView → `CellContentClick`; GroupBox → `Enter` (`focusin`, Click kept non-default and exempt); Form `Opacity` in percent. A default event with no web meaning (e.g. `Paint`, if slice 3 marks it WinForms-only) stubs as WinForms-only on a portable web form — the pre-flight decides from slice 3's rows.
 - `BasicLang/Forms/FormScaffolder.cs` (`:195-254`): a portable web scaffold (three `Using` lines, `Inherits Form`, init region after `New()`), the style passed EXPLICITLY into the empty regions before `RegionWriter.Write` (`:172-185`).
 - `VisualGameStudio.Shell`: the bound command **"Add Web Form (portable)"** (`[RelayCommand]` adjacent to its method — CLAUDE.md's attribute trap) in the same menu as Add New Form (`AddNewFormAsync`).
 **Tests:** portable region golden files per kind; the web init = WinForms init minus the tagged lines, per `FormCatalogShapes.Canonical` fixture, components excepted; `Name` line on both targets + the WinForms csc sweep re-run (`WinFormsCatalogSweepTests`); BL8012 for a malformed style; a new form with NO controls is portable (the marker, not content); DOM-style files byte-identical (golden); `FormScaffolderTests`; **the entry-point test**: drive the GENERATED command (`AddWebFormPortableCommand`) through the real view model and read the AXAML for its binding (a `[RelayCommand]` no menu binds is unreachable — CLAUDE.md).
@@ -2739,8 +3133,8 @@ Spec §6, review C2/C3/I1/I5, O5.
 
 ### Task 31: The first kinds — Button, Label, TextBox, CheckBox, RadioButton, Panel, GroupBox
 Spec §5.4 table rows for these kinds.
-**Files and responsibilities:** one `.bas` per kind in `lib/js/forms/`; TextBox `Multiline` element swap (keeping id/classes/attributes/listeners), `PasswordChar` (`Char`) → `type=password` + `data-vgs-passwordchar`, `MaxLength` default 32767; RadioButton raises `CheckedChanged` on the one that became unchecked; GroupBox `Text` → legend; CheckBox/RadioButton caption span.
-**Tests:** node tier per kind (every catalog property's `DomMember`, every listed event once, `sender` = the control); the first slice of the coverage gate (§11.1) for these kinds on node.
+**Files and responsibilities:** one `.bas` per kind in `lib/js/forms/`; TextBox `Multiline` element swap (keeping id/classes/attributes/listeners), `PasswordChar` (`Char`) → `type=password` + `data-vgs-passwordchar`, `MaxLength` default 32767; RadioButton raises `CheckedChanged` on the one that became unchecked; GroupBox `Text` → legend; CheckBox/RadioButton caption span. **Methods owned here (O12):** `TextBox.Clear()` (raises TextChanged once when the text was non-empty), `AppendText(s)` (TextChanged once), `SelectAll()` (`element.select()`); `Button.PerformClick()` (raises Click with `sender` = the button; WinForms' `CanSelect` rule — no-op when the button or an ancestor is hidden or disabled, CLAUDE.md's PerformClick note). Manifest rows for each (Task 29).
+**Tests:** node tier per kind (every catalog property's `DomMember`, every listed event once, `sender` = the control, each owned method's effect and event count); the first slice of the coverage gate (§11.1) for these kinds on node.
 **Risks:** WinForms event ORDER (CheckedChanged before Click) is asserted by the twin in Task 35 — the node tier only counts.
 **Gate:** node fixtures + roster.
 
@@ -2760,26 +3154,34 @@ Spec §5.8–§5.10, O15, reviews I7/R1/R2, §11b notes 1–2, 4.
 
 ### Task 34: The build errors and editor awareness
 Spec §5.11, O3, O11.
-**Files and responsibilities:** `WebUnavailableMember` (the analyzer's missing-member error reworded for a library receiver, and BL7007 for an undeclared `System.Windows.Forms`/`System.Drawing` type — on the path `40e9c172` rewrote; a `MessageBoxButtons` member beyond the three); `RuntimeControlCreation` (`New` of a library control outside the designer's init region); `ElementOnDesktop` (non-JS build, `.Element` on a receiver whose declared type NAME is a library class — works although WinForms members type as Object, K14); `MixedCodeStyle` (designer + web build: DOM-style markers + `Using System.Windows.Forms`/`Inherits Form` in a web code-behind — a token scan, §11b note 3); the LSP includes the portable library for web projects under the Task 28 trigger (Task 6's `LspProjectContext` hook).
+**Files and responsibilities:** `WebUnavailableMember` (the analyzer's missing-member error reworded for a library receiver — a METHOD is available exactly when `PortableMembers` (Task 29) lists it, a property/event exactly when the catalog does — and BL7007 for an undeclared `System.Windows.Forms`/`System.Drawing` type — on the path `40e9c172` rewrote; a `MessageBoxButtons` member beyond the three); `RuntimeControlCreation` (`New` of a library control outside the designer's init region); `ElementOnDesktop` (non-JS build, `.Element` on a receiver whose declared type NAME is a library class — works although WinForms members type as Object, K14); `MixedCodeStyle` (designer + web build: DOM-style markers + `Using System.Windows.Forms`/`Inherits Form` in a web code-behind — a token scan, §11b note 3); the LSP includes the portable library for web projects under the Task 28 trigger (Task 6's `LspProjectContext` hook).
 **Tests:** one per error, on the CLI and the IDE route; LSP completion lists a library member on a web control and flags `.Element` on a desktop project.
 **Gate:** the new fixtures + the LSP suite by name.
 
 ### Task 35: The coverage gate and the behaviour twin
 Spec §11.1–§11.4, O9, review I9.
 **Files and responsibilities:** `PortableCatalogCoverageTests` (catalog-driven program per web kind: every property applying to BOTH targets set to the sweep sample (`WinFormsCatalogSweepTests.cs:601-610`), read back, every listed event triggered once; compiled for desktop via the CLI + csc and for the web; RUN in the WinForms reference window (Task 12 harness, piece 1) and in Edge (Task 13 harness, piece 1) — **Edge is the authority**; web-only rows under `#If WEB`; WinForms-only rows asserted as `WebUnavailableMember`); `BehaviourTwinTests` (a pixel `.blform` and its Canvas `.blwebform` retarget twin; NON-REGION code-behind text byte-identical, asserted first; one neutral scenario — set Text, toggle Visible/Enabled/Checked, click, type, select, move a Right-anchored control, change a Dock, resize a container with docked children, resize the window; compare values, rectangles ±1px, and the event LOG (sender, event, key args) in order and count). Real input: window messages (`WM_LBUTTONDOWN`/`UP`, `WM_KEYDOWN`/`WM_CHAR`/`WM_KEYUP`) and Edge DevTools `Input.*` over `--remote-debugging-port` (fresh `--user-data-dir`; kill by our own PID tree). Rendering assertions of §11.4 in Edge; the §5.8 performance budget.
+**The method gate (plan review item 8):** `PortableMethodCoverageTests` — driven by `PortableMembers` (Task 29), the list the catalog cannot be for methods: for every manifest row, a generated shared program calls the member with a sample argument (the manifest carries one per parameter) and prints its observable effect (the property it changes, the event count it raises, the value it returns); compiled for desktop (CLI + csc) and web; run in the WinForms window and in Edge; the two outputs must be equal. A manifest row whose effect differs between the targets is a defect, not an exemption — except `MessageBox.Show` (a browser dialog vs a WinForms dialog: the gate asserts the RETURN mapping with the dialog answered by the harness — CDP `Page.handleJavaScriptDialog` on Edge, a `WM_COMMAND` to the dialog's button on WinForms — and records the missing title as the spec's divergence).
 **Risks:** the harness itself — mutation checks on it (never shown, input before layout, the wrong window); a synthetic `dispatchEvent` step is named where CDP cannot express it.
 **Gate:** Integration, Windows-gated, SKIP (never pass) where Edge or the Desktop SDK is absent.
 
+### Task 35A: The automated end-to-end test (spec §11.8)
+Plan review item 7 — the owner's click-through is not the only proof.
+**Files and responsibilities:** `VisualGameStudio.Tests/Shell/PortableFormEndToEndTests.cs` (Integration; `[AvaloniaTest]`, Skia via `DesignerHeadlessApp`, the REAL `CodeEditorDocumentView` with `AppStyles.axaml` — the rig of `FormPropertyGridRealViewTests.cs`): (1) invoke the GENERATED "Add Web Form (portable)" command through the real `MainWindowViewModel` (not a constructed scaffold) into a temp web project; (2) drop a Label, a TextBox and a Button through the real canvas (pointer events, zoom ≠ 1, a second window size); (3) double-click the Button → assert the stub `Private Sub btnX_Click(sender As Object, e As EventArgs)` lands AFTER the init region; (4) write the handler body through the editor (`lbl.Text = txt.Text & "!"`) and save via `SaveAsync`; (5) build the WEB target through `BuildService` AND the CLI, and run the page in Edge (Task 35's harness): type into the TextBox, click the Button, read the Label; (6) retarget to WinForms (`FormRetarget.ConvertToPair`), build through the CLI + csc, run in the WinForms reference window with the same input: the Label reads the same. Every step drives a shipping entry point (CLAUDE.md "a thing with no caller").
+**Risks:** headless traps (double-click timing, centred ListBox-style layouts, bound properties changed in `Render`); keep every fixture control's id stable.
+**Gate:** Integration, Windows-gated SKIPs; run twice (flakiness check) before the 2a gate.
+
 ### Task 36: 2a mutation pass, gate, and the owner's click-through
-- Mutation table over Tasks 28–35's load-bearing rules (spec §11.9 list).
+- Mutation table over Tasks 28–35A's load-bearing rules (spec §11.9 list), including the manifest gate (a library method with no `PortableMembers` row → red) and the E2E test (skip the Button's handler wiring in the region writer → red).
 - Fast subset by NAME vs the Task 0 baseline (+ the names 2.0 added); named Integration fixtures.
 - IDE drop (`robocopy VisualGameStudio.Shell\bin\Release\net8.0 IDE /E`, never `/MIR`; `IDE\lib\js\dom-core.bli` and `IDE\lib\js\forms\` included) — the owner needs to click the opt-in command.
+- **Drop-vs-source (spec §12):** `IdeDropLibraryMatchesSourceTests` (Integration, Windows) — every file under `BasicLang/lib/js/forms/` and `BasicLang/lib/js/dom-core.bli` is byte-equal to its `IDE/lib/js/…` copy. It is expected to fail BETWEEN drops, so it runs as a named gate step AFTER the drop (and at 2b's drop), never in the fast subset; a failure there means the drop step missed a file.
 - **Owner click-through:** (1) Add Web Form (portable) → the code-behind has three `Using` lines, `Inherits Form`, init after `New()`; (2) drop Button/Label/TextBox/CheckBox/RadioButton/Panel/GroupBox; double-click the Button → `(sender As Object, e As EventArgs)` below the region; (3) handler: `lblMsg.Text = txtUser.Text`, `chkRemember.Checked = True`, `btnLogin.Left = btnLogin.Left + 20`; (4) build web, open in Edge: captions, legend, borders visible; the click works; a right-anchored control moved at run time stays anchored on resize; (5) retarget to WinForms, build, run: same behaviour.
 
 ## 2b — the remaining kinds, then the default flips (Tasks 37–42)
 
 ### Task 37: ComboBox, ListBox, PictureBox, LinkLabel
-§5.4 rows (ComboBox `Text` = the selected option's text — a CHANGE from today's `title=`, FAE:338-342; `Items` via `ObjectCollection`; `SelectedIndexChanged` change-only; PictureBox `SizeMode` → `object-fit`; LinkLabel `LinkClicked` with navigation prevented). Tests: node tier per kind; coverage-gate rows; Edge rows.
+§5.4 rows (ComboBox `Text` = the selected option's text — a CHANGE from today's `title=`, FAE:338-342; `SelectedIndexChanged` change-only; PictureBox `SizeMode` → `object-fit`; LinkLabel `LinkClicked` with navigation prevented). **Methods owned here (O12):** `ObjectCollection` — `Items.Add`/`Insert`/`Remove`/`RemoveAt`/`Clear`/`Count`/`Item(i)`/`IndexOf`/`Contains` (options created with `createElement`/`textContent`, never `innerHTML`; removing the selected item raises `SelectedIndexChanged` as WinForms does — the twin measures the count). Manifest rows for each. Tests: node tier per kind and per `Items` member; coverage-gate rows; method-gate rows; Edge rows.
 
 ### Task 38: NumericUpDown (Decimal), DateTimePicker, TrackBar, ProgressBar
 Needs 2.0b. NumericUpDown `Minimum`/`Maximum`/`Value`/`Increment` are `Decimal` (O14) read by exact parse of the element's text and written by exact invariant format; the catalog's Int modelling (FCC:1497-1511) is reconciled with slice 3/5's type work in the pre-flight. Recorded divergence: `input` per keystroke vs WinForms' commit.
@@ -2788,7 +3190,7 @@ Needs 2.0b. NumericUpDown `Minimum`/`Maximum`/`Value`/`Increment` are `Decimal` 
 Timer replaces the web template for portable forms (`System.Windows.Forms.Timer`, constructed in init with its properties — the component exception; `Enabled` becomes a web row; runs only while enabled). MenuStrip/ToolStrip/StatusStrip + four item kinds attach by id; the host's item verb in DOCUMENT order (G4, `RegionWriter.cs:736-750`); `ItemClicked` with `ClickedItem`.
 
 ### Task 40: Slice 3 and slice 5 rows join the library
-Every web-applicable row slice 3 added (Font, Cursor, Padding on content controls, the FormRoot rows incl. AcceptButton/CancelButton if web rows — Enter/Escape inside the form area) and every event slice 5 listed gets a library member; the coverage gate picks them up from the catalog (no library-side list).
+Every web-applicable row slice 3 added (Font, Cursor, Padding on content controls, the FormRoot rows incl. AcceptButton/CancelButton if web rows — Enter/Escape inside the form area; `Opacity` as slice 3 stores it, in percent) and every event slice 5 listed gets a library member; the new default events of slice 3 (Paint on containers, TrackBar `Scroll`→`input` with `ValueChanged`→`change`, DataGridView `CellContentClick` — desktop-only kind, GroupBox `Enter`→`focusin`) are implemented as slice 3's catalog maps them; the coverage gate picks them up from the catalog (no library-side list for properties/events — methods live in `PortableMembers`, Task 29). ⚠ Slice 3's pre-flight B1 (retarget dropped non-default binds) was fixed by `995ca04c` (`PlanBind` for every crossed bind) — the twin's retargeted pair relies on it.
 
 ### Task 41: The default flips
 The ordinary Add New Form route scaffolds portable web forms; the opt-in command is REMOVED (its menu item and `[RelayCommand]`; the entry-point test becomes a test of the ordinary route); `FormScaffolderTests` expectations move INTENTIONALLY.
@@ -2821,6 +3223,8 @@ Spec §9, O8, P-D6. Toolbox (`FormToolboxViewModel.cs:64` lists every kind on a 
 - ⛔ **The JS roster moves on every merge.** Read `RosterIsPinned` (`JsExecutionTierRosterTests.cs:470-471`, 94 on `bc29391e`) before adding a fixture; any Integration fixture in `VisualGameStudio.Tests.Compiler` named `JavaScript*`/`Js*`/`*ExecutionTests` must be in `ExecutionTier`.
 - ⛔ **The C# leg of `FourBackends` runs in-process and redirects `Console.Out`** → `[NonParallelizable]`. A `StackOverflowException` there kills the test host (Task 13's red).
 - ⛔ **Roslyn folds constant expressions**: an overflowing Decimal CONSTANT is CS0463 at compile time. Pass operands through `Id(…)` (2.0b).
+- ⛔⛔ **The C# backend is an oracle only where it equals VB** (S10). Exception rows E1–E4 are VB-literal expectations on BOTH backends, and the C# backend is FIXED (Task 20A) — never copied, and the spec's D19 is never "corrected" to match a backend.
+- ⛔ **`-0.0m` is not `< 0`**: read a Decimal's sign from `decimal.GetBits(d)[3]`, never from a comparison (the `L` helper).
 - ⛔ **Preprocessor order is load-bearing**: `#IfDef`/`#IfNDef` before `#If`; `#ElseIf` before `#Else`; `#End If` and `#EndIf` both close. An `#Include`'s blocks are its own (Task 2).
 - ⛔ **One place defines build symbols** (`BuildSymbols`, the `BasicCompiler` constructor). Never `pre.Define("WEB")` in a route.
 - ⛔ **The analyzer's shape check is deliberately silent for .NET events** (K14): WinForms `AddHandler` must stay silent (Task 10's guard test).
@@ -2878,7 +3282,9 @@ Spec §9, O8, P-D6. Toolbox (`FormToolboxViewModel.cs:64` lists every kind on a 
 | `BasicLang/ASTNodes.cs`, `ASTPrettyPrinter.cs` | 5 | dormant node removed |
 | `BasicLang/LSP/LspProjectContext.cs`, `DocumentManager.cs` | 6, 34 | backend, blanking, DOM + library declarations |
 | `BasicLang/SemanticAnalyzer.cs` | 5, 7, 9, 10, 15, 18, 22 | base lookup; enum members; events as members + deferred check; target + namespaces; CDec; mixing rule |
-| `BasicLang/CSharpBackend.cs` | 8, 13, 18 | container naming; `base.`; `CDec` |
+| `BasicLang/CSharpBackend.cs` | 8, 13, 18, 20A | container naming; `base.`; `CDec`; VB Decimal narrowing, boxed-Decimal equality, boxed-number → Decimal |
+| `BasicLang/Forms/PortableMembers.cs` | 29 (new) | THE list of library methods/collection members (read by the manifest gate, `WebUnavailableMember`, the method gate) |
+| `THIRD-PARTY-NOTICES.md` | 22 | attribution for the `VarDecFromR8` port (dotnet/runtime, MIT) |
 | `BasicLang/IRBuilder.cs` | 5, 11, 13 | dormant visitor removed; value receivers; `ThroughBase` |
 | `BasicLang/IRNodes.cs` | 13 | `ThroughBase` |
 | `BasicLang/JavaScriptBackend.cs` | 12, 13, 14, 19–25 | delegate identity; `super.`; Char; Decimal runtime + lowering + refusals |
@@ -2894,7 +3300,7 @@ Spec §9, O8, P-D6. Toolbox (`FormToolboxViewModel.cs:64` lists every kind on a 
 | `BasicLang/Forms/FormCodeConversion.cs`, `DesignDiagnostic.cs` | 43, 46 | conversion; `DomUsageFinding`, `MixedCodeStyle`, `DesktopOnlyKind` |
 | `VisualGameStudio.Shell/…` (menu AXAML + VM command; toolbox/grid badges; conversion notification) | 30, 44, 46 | entry points |
 | `docs/wiki/content/language.md`, `js-backend.md`, `wiki-content.js`, `CLAUDE.md`, `docs/HANDOFF.md` | 4, 17, 27, gates | records |
-| Tests: `PreprocessorConditionalTests`, `BuildSymbolTests`, `BuildSymbolRouteTests`, `BuildSymbolGoldenTests`, `LspConditionalCompilationTests`, `CrossFileBindingTests` (Edit), `CsFileNamedContainerTests`, `EnumMemberTypingTests`, `HandlerSignatureTests`, `JavaScriptMeUnderUsingTests`, `JavaScriptDelegateIdentityTests`, `MyBasePropertyExecutionTests`, `JavaScriptCharTests`, `JavaScriptProgramNamespaceTests`, `JavaScriptLibraryIdiomTests`, `DecimalLiteralTests`, `JavaScriptDecimalTests`, `DecimalRefusalTests`, `JsExecutionTierRosterTests` (Edit), `JavaScriptEventTests` (Edit), `JsTestSupport` (Edit) | 1–26 | |
+| Tests: `PreprocessorConditionalTests`, `BuildSymbolTests`, `BuildSymbolRouteTests`, `BuildSymbolGoldenTests`, `LspConditionalCompilationTests`, `CrossFileBindingTests` (Edit), `CsFileNamedContainerTests`, `EnumMemberTypingTests`, `HandlerSignatureTests`, `HandlerSignatureRouteTests`, `CSharpDecimalVbRulesTests`, (2a) `PortableMembersManifestTests`, `PortableMethodCoverageTests`, `PortableFormEndToEndTests`, `IdeDropLibraryMatchesSourceTests`, `JavaScriptMeUnderUsingTests`, `JavaScriptDelegateIdentityTests`, `MyBasePropertyExecutionTests`, `JavaScriptCharTests`, `JavaScriptProgramNamespaceTests`, `JavaScriptLibraryIdiomTests`, `DecimalLiteralTests`, `JavaScriptDecimalTests`, `DecimalRefusalTests`, `JsExecutionTierRosterTests` (Edit), `JavaScriptEventTests` (Edit), `JsTestSupport` (Edit) | 1–26 | |
 
 ---
 
