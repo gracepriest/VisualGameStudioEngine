@@ -215,6 +215,78 @@ public class BuildSymbolRouteTests
         Assert.That(FourBackends.Norm(JavaScriptExecutionTests.RunNodeScript(File.ReadAllText(js))), Is.EqualTo("feature on"));
     }
 
+    // ---------------------------------------------------------------- #Define is per file (owner, 2026-09-30)
+
+    /// <summary>
+    /// Owner decision 2026-09-30: <c>#Define</c> is PER FILE, like VB's <c>#Const</c> — it reaches the rest of its own
+    /// file and any file it <c>#Include</c>s after it (an include is spliced in), never another file of the project.
+    /// Project-wide symbols come from the build only (target, configuration, DefineConstants). Before: one compiler
+    /// instance's preprocessor kept every <c>#Define</c> for the files it processed later.
+    /// A.bas defines LOCAL and includes Inc.bi; B.bas is a separate file. Every file prints whether it sees LOCAL and
+    /// whether it sees the build's DEBUG + WEB + FEATURE (DefineConstants).
+    /// </summary>
+    private const string DefineFileA =
+        "#Define LOCAL\n" +
+        "#Include \"Inc.bi\"\n" +
+        "Sub Main()\n" +
+        "#IfDef LOCAL\n    Console.WriteLine(\"a-local\")\n#Else\n    Console.WriteLine(\"a-not-local\")\n#EndIf\n" +
+        "#If DEBUG AndAlso WEB AndAlso FEATURE Then\n    Console.WriteLine(\"a-build\")\n#End If\n" +
+        "    IncProbe.Show()\n" +
+        "    BProbe.Show()\n" +
+        "End Sub\n";
+
+    private const string DefineFileB =
+        "Public Class BProbe\n    Public Shared Sub Show()\n" +
+        "#IfDef LOCAL\n        Console.WriteLine(\"b-local\")\n#Else\n        Console.WriteLine(\"b-not-local\")\n#EndIf\n" +
+        "#If DEBUG AndAlso WEB AndAlso FEATURE Then\n        Console.WriteLine(\"b-build\")\n#End If\n" +
+        "    End Sub\nEnd Class\n";
+
+    private const string DefineInclude =
+        "Public Class IncProbe\n    Public Shared Sub Show()\n" +
+        "#IfDef LOCAL\n        Console.WriteLine(\"inc-local\")\n#Else\n        Console.WriteLine(\"inc-not-local\")\n#EndIf\n" +
+        "#If DEBUG AndAlso WEB AndAlso FEATURE Then\n        Console.WriteLine(\"inc-build\")\n#End If\n" +
+        "    End Sub\nEnd Class\n";
+
+    private const string DefinePerFileExpected = "a-local\na-build\ninc-local\ninc-build\nb-not-local\nb-build";
+
+    private void WriteDefineFiles()
+    {
+        File.WriteAllText(Path.Combine(_dir, "A.bas"), DefineFileA);
+        File.WriteAllText(Path.Combine(_dir, "B.bas"), DefineFileB);
+        File.WriteAllText(Path.Combine(_dir, "Inc.bi"), DefineInclude);
+    }
+
+    [TestCase("A.bas", "B.bas")]
+    [TestCase("B.bas", "A.bas")]
+    public void ADefine_IsPerFile_OnTheProjectRoute(string first, string second)
+    {
+        WriteDefineFiles();
+        var options = new CompilerOptions { TargetBackend = "javascript", Configuration = "Debug" };
+        options.DefineConstants.Add("FEATURE");
+        var r = new BasicCompiler(options).CompileProjectFiles(new[] { Path.Combine(_dir, first), Path.Combine(_dir, second) });
+        Assert.That(r.HasErrors, Is.False, Errors(r));
+        var js = new JavaScriptCodeGenerator().Generate(Optimized(r.CombinedIR!));
+        Assert.That(FourBackends.Norm(JavaScriptExecutionTests.RunNodeScript(js)), Is.EqualTo(DefinePerFileExpected));
+    }
+
+    [TestCase("A.bas", "B.bas")]
+    [TestCase("B.bas", "A.bas")]
+    public async Task ADefine_IsPerFile_OnTheCliProjectBuild(string first, string second)
+    {
+        WriteDefineFiles();
+        File.WriteAllText(Path.Combine(_dir, "Site.blproj"),
+            "<Project>\n  <PropertyGroup>\n    <ProjectName>Site</ProjectName>\n" +
+            "    <TargetBackend>JavaScript</TargetBackend>\n  </PropertyGroup>\n" +
+            "  <PropertyGroup Condition=\"'$(Configuration)' == 'Debug'\">\n" +
+            "    <DefineConstants>FEATURE</DefineConstants>\n  </PropertyGroup>\n" +
+            "  <ItemGroup>\n    <Compile Include=\"" + first + "\" />\n    <Compile Include=\"" + second + "\" />\n" +
+            "  </ItemGroup>\n</Project>\n");
+        var (exit, stdout, stderr) = await CliTestHarness.RunCli(_dir, "build", "Site.blproj", "-c", "Debug");
+        Assert.That(exit, Is.Zero, stdout + stderr);
+        var js = Directory.GetFiles(Path.Combine(_dir, "bin", "Debug"), "Site.js", SearchOption.AllDirectories).Single();
+        Assert.That(FourBackends.Norm(JavaScriptExecutionTests.RunNodeScript(File.ReadAllText(js))), Is.EqualTo(DefinePerFileExpected));
+    }
+
     // ---------------------------------------------------------------- the IDE
 
     private static async Task<(BuildResult result, RecordingOutput output)> BuildInIde(string projectPath, string configuration)

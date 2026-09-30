@@ -332,7 +332,9 @@ VB-like syntax; classes / interfaces / modules; generics; pattern matching (`Whe
 guards); LINQ; Async/Await; conditional compilation (`#If`/`#ElseIf`/`#Else`/`#End If`
 beside `#IfDef`/`#IfNDef`/`#EndIf`, in the preprocessor; the build defines `WEB`/`DESKTOP` by
 target and `DEBUG`/`RELEASE` by configuration, plus `<DefineConstants>` — ONE place,
-`BuildSymbols.For`, called by the `BasicCompiler` constructor; never `Define` a build symbol in a route);
+`BuildSymbols.For`, called by the `BasicCompiler` constructor; never `Define` a build symbol in a route;
+`#Define` is PER FILE like VB's `#Const` — one preprocessor serves every file of a build, and `Process`
+clears the `#Define`'d set per top-level file while keeping the build's symbols);
 multi-file projects (Import/Using); .NET interop via `Using`; five backends. Source
 files: `.bas` (also `.mod`, `.cls`). In a `.cls` file, a
 first code-line `Option Public` marks the implicit class public (legacy bare `Public`

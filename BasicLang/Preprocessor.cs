@@ -14,7 +14,15 @@ namespace BasicLang.Compiler
         private readonly HashSet<string> _includedFiles;
         private readonly List<string> _includePaths;
         private readonly List<PreprocessorError> _errors;
+        /// <summary>The BUILD's symbols (<see cref="Define"/> — BuildSymbols: target, configuration,
+        /// DefineConstants). Project-wide: visible in every file this instance processes.</summary>
         private readonly HashSet<string> _definedSymbols;
+        /// <summary>⛔ <c>#Define</c>'d symbols are PER FILE, like VB's <c>#Const</c> (owner decision 2026-09-30):
+        /// they reach the rest of their own file and any file it <c>#Include</c>s after them (an include is spliced
+        /// in, so it shares the set), and are cleared when the next top-level file starts (<see cref="Process"/>).
+        /// One instance processes every file of a build, so without the reset a <c>#Define</c> leaked into every
+        /// file compiled after it.</summary>
+        private readonly HashSet<string> _fileSymbols = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private readonly Stack<ConditionalState> _conditionalStack;
         private readonly List<string> _cppIncludes = new List<string>();
         private readonly List<BasicLang.Compiler.IR.JsImportDirective> _jsImports =
@@ -216,6 +224,7 @@ namespace BasicLang.Compiler
         {
             _errors.Clear();
             _conditionalStack.Clear();
+            _fileSymbols.Clear();   // a new top-level file: the previous file's #Defines end here
 
             // Track this file to prevent circular includes
             var normalizedPath = Path.GetFullPath(filePath).ToLowerInvariant();
@@ -497,7 +506,7 @@ namespace BasicLang.Compiler
             if (match.Success)
             {
                 var symbol = match.Groups[1].Value;
-                _definedSymbols.Add(symbol);
+                _fileSymbols.Add(symbol);
             }
             else
             {
@@ -514,7 +523,7 @@ namespace BasicLang.Compiler
         /// </summary>
         public bool IsDefined(string symbol)
         {
-            return _definedSymbols.Contains(symbol);
+            return _definedSymbols.Contains(symbol) || _fileSymbols.Contains(symbol);
         }
 
         /// <summary>
@@ -541,7 +550,7 @@ namespace BasicLang.Compiler
             }
 
             var symbol = match.Groups[1].Value;
-            var isDefined = _definedSymbols.Contains(symbol);
+            var isDefined = IsDefined(symbol);
             var conditionTrue = isNegated ? !isDefined : isDefined;
 
             _conditionalStack.Push(new ConditionalState

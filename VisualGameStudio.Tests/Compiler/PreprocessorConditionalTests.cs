@@ -279,4 +279,24 @@ public class PreprocessorConditionalTests
         }
         finally { System.IO.Directory.Delete(dir, true); }
     }
+
+    /// <summary>Owner decision 2026-09-30: <c>#Define</c> is PER FILE (VB's <c>#Const</c>). The same preprocessor
+    /// instance processes every file of a build; a <c>#Define</c> in one file must not reach the next, while a symbol
+    /// the BUILD defined (<see cref="Preprocessor.Define"/>) stays visible in every file.</summary>
+    [Test]
+    public void ADefine_DoesNotReachTheNextFile_ButABuildSymbolDoes()
+    {
+        var pre = new Preprocessor();
+        pre.Define("BUILD");
+        pre.Process("#Define LOCAL\n#IfDef LOCAL\nA_LOCAL\n#EndIf", "a.bas");
+        var second = pre.Process("#IfDef LOCAL\nB_LOCAL\n#EndIf\n#IfDef BUILD\nB_BUILD\n#EndIf", "b.bas");
+        var active = second.Replace("\r\n", "\n").Split('\n')
+            .Where(l => l.Trim().Length > 0 && !l.TrimStart().StartsWith("'")).ToArray();
+        Assert.Multiple(() =>
+        {
+            Assert.That(active, Is.EqualTo(new[] { "B_BUILD" }));
+            Assert.That(pre.IsDefined("LOCAL"), Is.False, "b.bas never defined LOCAL");
+            Assert.That(pre.IsDefined("BUILD"), Is.True);
+        });
+    }
 }

@@ -397,7 +397,7 @@ Conditional compilation removes code before the compiler ever sees it. BasicLang
 #IfNDef SHIPPING         ' is SHIPPING NOT defined?
 #EndIf
 
-#Define LOCAL            ' defines LOCAL from this line on
+#Define LOCAL            ' defines LOCAL for the rest of THIS file
 
 #Region "Initialization"
 #End Region
@@ -407,6 +407,11 @@ An `#If` / `#ElseIf` condition is made of symbol names, `Not`, `And` / `AndAlso`
 `Or` / `OrElse`, parentheses and `True` / `False` (`Not` binds tightest, then `And`, then
 `Or`). There are no values or comparisons: a symbol is either defined or it is not, and a
 symbol nothing defines is simply false. Symbol names are not case-sensitive.
+
+`#Define` works per file, like VB's `#Const`: the symbol is defined from that line to the
+end of its own file, including any file that file `#Include`s after it (an include is
+spliced into the file). It never reaches another file of the project. For a symbol every
+file sees, use the build's symbols below or `<DefineConstants>`.
 
 The build defines these symbols for you:
 
@@ -427,6 +432,10 @@ you pass `--configuration=Release`, and `--define=A;B` adds symbols.
 > `WEB`/`DESKTOP` by the target — code under `#IfDef DEBUG` now compiles in Debug builds.
 > A program that never names these four symbols compiles exactly as before, and one that
 > writes its own `#Define DEBUG` behaves as it always did.
+>
+> **Changed:** a `#Define` no longer leaks into the files compiled after it in the same
+> project — it applies to its own file only. Move a symbol every file needs into
+> `<DefineConstants>`.
 
 Two more directives matter and are easy to confuse:
 
