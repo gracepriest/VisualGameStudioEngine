@@ -171,4 +171,85 @@ public class PreprocessorConditionalTests
             Assert.That(pre.CppIncludes, Is.EqualTo(new[] { "<unistd.h>" }));
         });
     }
+
+    // ------------------------------------------------------------ directive hygiene (Task 2)
+
+    [Test]
+    public void ADefineLine_KeepsItsLine_SoEveryLaterLineKeepsItsNumber()
+    {
+        var (lines, errors) = Run("Sub Main()\n#Define X\nCODE\nEnd Sub");
+        Assert.Multiple(() =>
+        {
+            Assert.That(errors, Is.Empty);
+            Assert.That(lines[1].TrimStart(), Does.StartWith("'"), "the directive is commented, not removed");
+            Assert.That(lines[2], Is.EqualTo("CODE"), "line 3 of the source is line 3 of the output");
+        });
+    }
+
+    [Test]
+    public void ADefine_InAnInactiveBranch_DefinesNothing() =>
+        Assert.That(Active("#If NOPE Then\n#Define Y\n#End If\n#If Y Then\nLEAKED\n#End If"), Is.Empty);
+
+    [Test]
+    public void AnInclude_InAnInactiveBranch_IsNotSpliced()
+    {
+        var dir = System.IO.Directory.CreateDirectory(System.IO.Path.Combine(System.IO.Path.GetTempPath(),
+            "bl-pre-" + Guid.NewGuid().ToString("N"))).FullName;
+        try
+        {
+            System.IO.File.WriteAllText(System.IO.Path.Combine(dir, "inc.bas"), "INCLUDED");
+            var pre = new Preprocessor();
+            var output = pre.Process("#If NOPE Then\n#Include \"inc.bas\"\n#End If",
+                System.IO.Path.Combine(dir, "main.bas"));
+            Assert.That(output, Does.Not.Contain("INCLUDED"));
+        }
+        finally { System.IO.Directory.Delete(dir, true); }
+    }
+
+    /// <summary>⛔ Before: the include's recursive Process() cleared the PARENT's conditional stack and errors,
+    /// so the parent's #End If was "without matching" and the lines after it were compiled unconditionally.</summary>
+    [Test]
+    public void AnInclude_InsideAnActiveIf_KeepsTheParentsBlock()
+    {
+        var dir = System.IO.Directory.CreateDirectory(System.IO.Path.Combine(System.IO.Path.GetTempPath(),
+            "bl-pre-" + Guid.NewGuid().ToString("N"))).FullName;
+        try
+        {
+            System.IO.File.WriteAllText(System.IO.Path.Combine(dir, "inc.bas"), "#If Z Then\nZED\n#End If\nINC");
+            var pre = new Preprocessor();
+            pre.Define("A");
+            var output = pre.Process("#If A Then\n#Include \"inc.bas\"\nAFTER\n#Else\nOTHER\n#End If",
+                System.IO.Path.Combine(dir, "main.bas"));
+            var active = output.Replace("\r\n", "\n").Split('\n')
+                .Where(l => l.Trim().Length > 0 && !l.TrimStart().StartsWith("'")).ToArray();
+            Assert.Multiple(() =>
+            {
+                Assert.That(pre.Errors, Is.Empty);
+                Assert.That(active, Is.EqualTo(new[] { "INC", "AFTER" }));
+            });
+        }
+        finally { System.IO.Directory.Delete(dir, true); }
+    }
+
+    /// <summary>⛔ Before: the include's recursive Process() cleared the PARENT's errors, so a mistake above an
+    /// #Include vanished and the build went green. Both the includer's error and the include's own survive.</summary>
+    [Test]
+    public void AnInclude_KeepsTheIncludersEarlierErrors()
+    {
+        var dir = System.IO.Directory.CreateDirectory(System.IO.Path.Combine(System.IO.Path.GetTempPath(),
+            "bl-pre-" + Guid.NewGuid().ToString("N"))).FullName;
+        try
+        {
+            System.IO.File.WriteAllText(System.IO.Path.Combine(dir, "inc.bas"), "INC\n#End If");
+            var pre = new Preprocessor();
+            pre.Process("#Define\n#Include \"inc.bas\"", System.IO.Path.Combine(dir, "main.bas"));
+            var messages = pre.Errors.Select(e => e.Message).ToArray();
+            Assert.Multiple(() =>
+            {
+                Assert.That(messages, Has.Some.Contains("Invalid #Define syntax"), "the includer's error, raised first");
+                Assert.That(messages, Has.Some.Contains("#End If without matching"), "the include's own error");
+            });
+        }
+        finally { System.IO.Directory.Delete(dir, true); }
+    }
 }

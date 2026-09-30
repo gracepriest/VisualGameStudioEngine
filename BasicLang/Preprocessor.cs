@@ -221,6 +221,15 @@ namespace BasicLang.Compiler
             var normalizedPath = Path.GetFullPath(filePath).ToLowerInvariant();
             _includedFiles.Add(normalizedPath);
 
+            return ProcessCore(source, filePath);
+        }
+
+        /// <summary>
+        /// The line loop and the unclosed-block check. Clears nothing: an <c>#Include</c> calls it with the
+        /// includer's errors kept and its conditional blocks set aside (see <see cref="ProcessInclude"/>).
+        /// </summary>
+        private string ProcessCore(string source, string filePath)
+        {
             var result = new StringBuilder();
             var lines = source.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None);
             var lineNumber = 0;
@@ -230,29 +239,40 @@ namespace BasicLang.Compiler
                 lineNumber++;
                 var trimmedLine = line.TrimStart();
 
-                // Check for #Include directive
+                // Check for #Include directive. Gated: an #Include in an inactive branch is not spliced
+                // (nor resolved — a missing file there is no error, exactly as any other skipped line).
                 if (trimmedLine.StartsWith("#Include", StringComparison.OrdinalIgnoreCase))
                 {
-                    var includeContent = ProcessInclude(trimmedLine, filePath, lineNumber);
-                    if (includeContent != null)
+                    if (IsConditionalActive())
                     {
-                        result.AppendLine(includeContent);
+                        var includeContent = ProcessInclude(trimmedLine, filePath, lineNumber);
+                        if (includeContent != null)
+                        {
+                            result.AppendLine(includeContent);
+                        }
+                        else
+                        {
+                            // Keep the original line if include failed (error already recorded)
+                            result.AppendLine($"' Error: Failed to include - {line}");
+                        }
                     }
                     else
                     {
-                        // Keep the original line if include failed (error already recorded)
-                        result.AppendLine($"' Error: Failed to include - {line}");
+                        result.AppendLine($"' [IFDEF SKIP] {line}");
                     }
                 }
-                // Check for #Define directive
+                // Check for #Define directive. Gated like #CppInclude: a #Define in an inactive branch defines
+                // nothing. Its line is ALWAYS commented out, never removed, so every later line keeps its number.
                 else if (trimmedLine.StartsWith("#Define", StringComparison.OrdinalIgnoreCase))
                 {
-                    ProcessDefine(trimmedLine, lineNumber);
+                    if (IsConditionalActive())
+                        ProcessDefine(trimmedLine, lineNumber);
+                    result.AppendLine($"' {line}");
                 }
                 // ⛔ ORDER IS LOAD-BEARING. #IfDef/#IfNDef before #If (\b stops "#If" matching "#IfDef" anyway);
                 // #ElseIf before #Else (\b: "#Else" + "If" has no word boundary, so ElseDirective cannot take it).
-                // Each conditional directive line is commented out, never removed, so line numbers survive.
-                // (#Define above still drops its line; Task 2 of the piece-2 plan makes it keep one too.)
+                // Each directive line (conditional or #Define) is commented out, never removed, so line numbers
+                // survive.
                 else if (trimmedLine.StartsWith("#IfDef", StringComparison.OrdinalIgnoreCase))
                 {
                     ProcessIfDef(trimmedLine, lineNumber, false);
@@ -407,7 +427,13 @@ namespace BasicLang.Compiler
                 // Add markers for source location tracking
                 var result = new StringBuilder();
                 result.AppendLine($"' Begin include: {includePath}");
-                result.Append(Process(includeContent, resolvedPath)); // Recursive processing
+                // ⛔ An included file has its OWN conditional blocks, and must not see or disturb the
+                // includer's. Before, the recursive public Process() cleared _errors and _conditionalStack.
+                var parentBlocks = _conditionalStack.ToArray();   // top first
+                _conditionalStack.Clear();
+                result.Append(ProcessCore(includeContent, resolvedPath));
+                _conditionalStack.Clear();
+                for (var i = parentBlocks.Length - 1; i >= 0; i--) _conditionalStack.Push(parentBlocks[i]);
                 result.AppendLine($"' End include: {includePath}");
 
                 return result.ToString();
