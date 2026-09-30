@@ -296,6 +296,27 @@ T3 `1cdbfe5f` · T4 `15060e7b` · T5 `269bed92` · T6 `faa117a8` · T7 `832d0288
   Named Integration fixtures ran 345/345 with 0 skipped: WinFormsCatalogParity, WinFormsCatalogSweep,
   FormDesignerAcceptance, FormMenuAcceptance, FormComponentAcceptance, FormBuildEmission, FormAnchorEmission,
   FormPropertyBatchAcceptance, PixelLayout, FormRetargetPair and WebMainStartup. Mutations: 36/36 killed across T1–T7.
+- **Review round + owner answers (2026-09-29/30)** — code review: Spec ✅, Quality "changes requested"; owner answered
+  the three report-back questions. Each its own commit, test-first, mutation-checked:
+  `995ca04c` a retargeted pair stubs EVERY crossed bind (found here: a crossed non-default bind wired a Sub the pair never
+  declared — red on csc AND the real web build) · `e90a24bb` handler names from the WinForms event name on both targets
+  (existing binds keep theirs) · `39b673a1` default events match WinForms (Panel/FlowLayoutPanel/TableLayoutPanel Paint,
+  TrackBar Scroll, DataGridView CellContentClick; web Panel opens its DECLARED web default Click with BL8035 Info; TrackBar
+  Scroll=`input`/ValueChanged=`change` — an existing web `input` bind now retargets as Scroll; parity gains the
+  default-event check it lacked) · `94328e02` Opacity typed/shown as a percentage by VS's measured OpacityConverter rules,
+  stored as the 0–1 Double · `731773c5` I1 inherited-font parts start from what the control inherits (`FormAmbient`) ·
+  `281be93d` I2 the page's inherit rules for a Font/ForeColor ANYWHERE (Edge: button in a bold GroupBox measured 700) ·
+  `63e93c44` M1 font size ≤ 2 decimals, M3 cursor table pinned per member, M7 font bound pinned.
+- **Review minors RECORDED as follow-ups (no code, per the coordinator):**
+  - **M2** — an unparseable composite PART snaps back without a reason ON THE PART (the reason shows on the parent) — spec §7
+    says the refused editor states why; give a part its own Refusal.
+  - **M4** — an old document carrying a colour attribute the catalog no longer offers (O2 removed the WinForms-hidden
+    colours) keeps it as an unknown attribute that is silently no longer emitted — suggest a reader WARNING for formerly
+    catalogued attributes (a small "retired rows" table), so the user learns why their PictureBox ForeColor stopped applying.
+  - **M5** — the web Cursor drop-down offers every Cursors member and refuses the 11 with no CSS equivalent only on commit;
+    it could exclude web-refused members from `Choices` on the web target.
+  - **M6** — AcceptButton/CancelButton are not updated when the referenced control is RENAMED (VS updates them); today the
+    reference dangles and BL8034 warns at build. Rename should rewrite every Reference row naming the old Id.
 - **Merge-check (trial merge of origin/master `bc29391e` into `832d0288`, done in a `--detach` worktree, aborted):** ONE
   conflicted file, `DesignDiagnostic.cs`, two hunks, both keep-both: the band table (master's BL8033 unknown Dock + this
   slice's BL8034; next free becomes BL8035) and `DesignCheck` (this slice's `form.DegradedRoot` loop + master's
