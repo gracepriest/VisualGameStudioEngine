@@ -376,24 +376,57 @@ End Try
 
 ## Preprocessor
 
+Conditional compilation removes code before the compiler ever sees it. BasicLang has VB's
+`#If` form and the older `#IfDef` family; both nest, and `#End If` and `#EndIf` close either.
+
 ```vb
-#Define DEBUG
-
-#IfDef DEBUG
-    Console.WriteLine("debug build")
+#If WEB Then
+    ' only in a web (JavaScript) build
+#ElseIf DESKTOP AndAlso DEBUG Then
+    ' a desktop build in the Debug configuration
 #Else
-    ' shipping
+    ' everything else
+#End If
+
+#IfDef TRACE             ' is TRACE defined?
+    Console.WriteLine("tracing")
+#Else
+    ' not defined
 #EndIf
 
-#IfNDef SHIPPING
+#IfNDef SHIPPING         ' is SHIPPING NOT defined?
 #EndIf
 
-#If PLATFORM = "WINDOWS" Then
-#EndIf
+#Define LOCAL            ' defines LOCAL from this line on
 
 #Region "Initialization"
 #End Region
 ```
+
+An `#If` / `#ElseIf` condition is made of symbol names, `Not`, `And` / `AndAlso`,
+`Or` / `OrElse`, parentheses and `True` / `False` (`Not` binds tightest, then `And`, then
+`Or`). There are no values or comparisons: a symbol is either defined or it is not, and a
+symbol nothing defines is simply false. Symbol names are not case-sensitive.
+
+The build defines these symbols for you:
+
+| Symbol | Defined when |
+|---|---|
+| `WEB` | the target is JavaScript |
+| `DESKTOP` | the target is anything else (C#, C++) |
+| `DEBUG` | the build configuration is Debug |
+| `RELEASE` | the build configuration is Release (any other configuration defines neither) |
+
+A project adds its own through `<DefineConstants>` (separated by `;` or `,`). As in VB,
+`NAME=False` or `NAME=0` means *not* defined, `NAME`, `NAME=True`, `NAME=1` or `NAME=-1`
+defines it, and the last entry for a name wins. `WEB` and `DESKTOP` come from the target and
+cannot be set or cleared there. From the CLI, a single-file compile is a Debug build unless
+you pass `--configuration=Release`, and `--define=A;B` adds symbols.
+
+> **Changed:** `DEBUG` and `RELEASE` are now defined by the build configuration, and
+> `WEB`/`DESKTOP` by the target — code under `#IfDef DEBUG` now compiles in Debug builds.
+> A program that never names these four symbols compiles exactly as before, and one that
+> writes its own `#Define DEBUG` behaves as it always did.
 
 Two more directives matter and are easy to confuse:
 

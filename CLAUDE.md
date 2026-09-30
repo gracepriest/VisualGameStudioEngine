@@ -329,7 +329,10 @@ a second document type.
 ## BasicLang language
 
 VB-like syntax; classes / interfaces / modules; generics; pattern matching (`When`
-guards); LINQ; Async/Await; conditional compilation (`#If`/`#IfDef`/`#Else`/`#EndIf`);
+guards); LINQ; Async/Await; conditional compilation (`#If`/`#ElseIf`/`#Else`/`#End If`
+beside `#IfDef`/`#IfNDef`/`#EndIf`, in the preprocessor; the build defines `WEB`/`DESKTOP` by
+target and `DEBUG`/`RELEASE` by configuration, plus `<DefineConstants>` — ONE place,
+`BuildSymbols.For`, called by the `BasicCompiler` constructor; never `Define` a build symbol in a route);
 multi-file projects (Import/Using); .NET interop via `Using`; five backends. Source
 files: `.bas` (also `.mod`, `.cls`). In a `.cls` file, a
 first code-line `Option Public` marks the implicit class public (legacy bare `Public`
