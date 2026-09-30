@@ -23,12 +23,18 @@ namespace VisualGameStudio.Tests.Compiler;
 //  Each of those is a LIVE value the old walker would let this pass DELETE, leaving its
 //  consumer holding an instruction that is no longer in the function — a dangling operand.
 //
-//  ⛔ THE REMOVAL GUARD IS DELIBERATELY UNCHANGED by task #118 (see IROptimizer.cs's remarks on
-//  DeadCodeEliminationPass). It skips every value whose name is non-empty and does not start
-//  with `_tmp`, and IRBuilder names every temp `t0`, `t1`, … — so in a REAL program this pass
-//  still removes nothing; only ControlFlowGraph.RemoveUnreachableBlocks has any effect. The use
-//  analysis fixed here is therefore observable ONLY in hand-built IR, where a `_tmp`-named or
-//  nameless value can reach the removal path. That is exactly what every shape below builds.
+//  ⛔ THE REMOVAL GUARD WAS LATENT WHEN #118 WROTE THESE, AND IS NOT ANY MORE. Task #163 (ADR-0017)
+//  switched the instruction removal ON, licensed by a MARKER: `IRValue.IsCompilerTemp`, set only by
+//  IRBuilder.MarkCompilerTemps. Until then the guard skipped every value whose name was non-empty
+//  and did not start with `_tmp`, so no real program lost an instruction and the use analysis fixed
+//  here showed only in hand-built IR. It still shows there — but a hand-built value reaches the
+//  removal path only if it is MARKED, and these shapes did not carry the marker when #163 landed:
+//  the three "unused value is removed" controls FAILED, and every "value is kept" test below kept
+//  passing VACUOUSLY (their values were never removable, so a broken use walker left them green).
+//  `Live` now marks its value, and `Run` asserts, before it runs the pass, that the value WOULD be
+//  removed if nothing used it (DeadCodeEliminationPass.IsRemovableWhenUnused): a kept test is only
+//  worth having if the value could have been removed. The controls each have a twin with the marker
+//  absent (the value is kept), which is #163's own contract in the smallest possible form.
 //
 //  Every shape is ported one-for-one from the implementer's scratch harness
 //  (S/t118/harness/Program.cs), cross-checked against its own before/after table (37 of 44
@@ -36,9 +42,8 @@ namespace VisualGameStudio.Tests.Compiler;
 //
 //    DeadCodeEliminationUseAnalysisTests        — hand-built IR, fast tier (no front end, no
 //                                                  backend, no process): every shape below.
-//    DeadCodeEliminationGuardTests (see the
-//    bottom of this file)                       — a one-paragraph pin on the guard itself,
-//                                                  restating why "latent" is deliberate.
+//    The controls at the bottom of this file    — the guard itself: marked values go, unmarked
+//                                                  ones stay whatever they are called.
 // =====================================================================================
 
 /// <summary>
@@ -48,15 +53,16 @@ namespace VisualGameStudio.Tests.Compiler;
 /// against the harness's own before/after table.
 ///
 /// <para>Every "missing arm" shape below builds ONE function with a single LIVE value <c>L</c> —
-/// an <c>IRBinaryOp</c> named <c>_tmpL</c>, so it reaches the removal guard — whose ONLY
+/// an <c>IRBinaryOp</c> named <c>_tmpL</c> and MARKED a compiler temp (<c>IsCompilerTemp</c>, ADR-0017:
+/// the marker is the licence to delete, the spelling never is) — whose ONLY
 /// consumer is one operand slot of the kind under test. <see cref="DeadCodeEliminationPass"/> is
 /// run ONCE directly (no pipeline, no iteration) and the assertion is whether <c>L</c> is still
 /// present in some block of the function afterward (KEPT) or not (REMOVED, which for a live
 /// shape means its consumer is left holding a dangling operand — an instruction reachable from
 /// nowhere else in the function). Every missing-arm, cross-block and operand-tree shape wants
 /// KEPT; the control shapes state their own expectation, including REMOVED ones and the guard
-/// pin (a named <c>tN</c> value that is genuinely unused is never removed — DCE stays latent by
-/// design).</para>
+/// pins (an unused value is deleted only if it is MARKED; a named <c>tN</c> value that no compiler
+/// minted is never deleted, whatever it is called).</para>
 /// </summary>
 [TestFixture]
 public class DeadCodeEliminationUseAnalysisTests
@@ -83,12 +89,14 @@ public class DeadCodeEliminationUseAnalysisTests
         return v;
     }
 
-    /// <summary>The LIVE value under test: an <c>IRBinaryOp</c> named <c>_tmpL</c> by default (a
-    /// name the removal guard lets DCE consider), added to <paramref name="b"/>.</summary>
-    private static IRBinaryOp Live(IRFunction f, BasicBlock b, string name = "_tmpL")
+    /// <summary>The LIVE value under test: an <c>IRBinaryOp</c> named <c>_tmpL</c> by default, added to
+    /// <paramref name="b"/>. ⭐ It is MARKED a compiler temp (<paramref name="marked"/>, the way IRBuilder
+    /// does) so that it is a value DCE would delete if nothing used it: the name is irrelevant to that
+    /// (ADR-0017), the marker is everything. An unmarked value is the negative twin.</summary>
+    private static IRBinaryOp Live(IRFunction f, BasicBlock b, string name = "_tmpL", bool marked = true)
     {
         var x = Local(f, "x" + f.LocalVariables.Count);
-        var v = new IRBinaryOp(name, BinaryOpKind.Add, x, C(1), I);
+        var v = new IRBinaryOp(name, BinaryOpKind.Add, x, C(1), I) { IsCompilerTemp = marked };
         b.AddInstruction(v);
         return v;
     }
@@ -105,9 +113,20 @@ public class DeadCodeEliminationUseAnalysisTests
 
     /// <summary>Runs <see cref="DeadCodeEliminationPass"/> once over <paramref name="m"/> and
     /// reports whether <paramref name="l"/> is still present in some block of <paramref
-    /// name="f"/> afterward.</summary>
-    private static bool Run(IRModule m, IRFunction f, IRValue l)
+    /// name="f"/> afterward.
+    ///
+    /// <para>⭐ <paramref name="armed"/> (the default) first asserts that <paramref name="l"/> WOULD be
+    /// deleted if nothing used it (<see cref="DeadCodeEliminationPass.IsRemovableWhenUnused"/>): the
+    /// marker, the kind and the kill vocabulary all allow it. Without this a "value is kept" test
+    /// passes for any reason at all — and 40 of them did, vacuously, the moment #163 made removal
+    /// depend on a marker these hand-built values did not carry. The negative twins pass
+    /// <c>armed: false</c>: their value is unmarked ON PURPOSE.</para></summary>
+    private static bool Run(IRModule m, IRFunction f, IRValue l, bool armed = true)
     {
+        if (armed)
+            Assert.That(DeadCodeEliminationPass.IsRemovableWhenUnused(l, f), Is.True,
+                "VACUITY GUARD: this test's value could not be deleted even if nothing used it (unmarked, or of a kind outside the licence), " +
+                "so 'it was kept' proves nothing about the use analysis.");
         new DeadCodeEliminationPass().Run(m);
         return InBlocks(f, l);
     }
@@ -535,9 +554,11 @@ public class DeadCodeEliminationUseAnalysisTests
     }
 
     // =================================================================================
-    //  Controls: shapes that already worked, or that establish DCE still removes what it
-    //  always removed. Includes the GUARD PIN (#5 in the brief): a named tN value that is
-    //  genuinely unused is NOT removed — DCE stays latent by design after task #118.
+    //  Controls: shapes that already worked, or that establish what DCE removes. Since #163
+    //  (ADR-0017) a value is removed only if it is MARKED a compiler temp; every control that
+    //  says "removed" marks its value, and has a NEGATIVE TWIN that leaves it unmarked and
+    //  says "kept". The three "removed" controls are the ones #163 moved (they hand-built
+    //  `_tmp`-named and nameless values that carried no marker, and failed).
     // =================================================================================
 
     [Test]
@@ -547,8 +568,20 @@ public class DeadCodeEliminationUseAnalysisTests
         var l = Live(f, e, "_tmpD");
         e.AddInstruction(new IRReturn());
         Assert.That(Run(m, f, l), Is.False,
-            "a genuinely unused _tmp-named pure value must still be removed — this pass's one " +
-            "real effect on hand-built IR, unchanged by task #118.");
+            "a genuinely unused MARKED pure value must be removed — whatever it is called.");
+    }
+
+    /// <summary>The negative twin, and #163's fix in one line: the value is spelled `_tmp` — the old guard's
+    /// licence — and is not a compiler temp, so it is user storage or unknown and stays. `Dim _tmp1 = a + b`
+    /// printed 0 for VB's 67 in 12 of 12 cells before this.</summary>
+    [Test]
+    public void Control_UnusedTempNamedValue_NotMarked_Kept()
+    {
+        var (m, f, e) = NewFn();
+        var l = Live(f, e, "_tmpD", marked: false);
+        e.AddInstruction(new IRReturn());
+        Assert.That(Run(m, f, l, armed: false), Is.True,
+            "an unused value spelled `_tmp…` that no compiler minted must NOT be removed (the spelling is never the licence).");
     }
 
     [Test]
@@ -558,56 +591,100 @@ public class DeadCodeEliminationUseAnalysisTests
         var l = Live(f, e, "");
         e.AddInstruction(new IRReturn());
         Assert.That(Run(m, f, l), Is.False,
-            "a genuinely unused nameless pure value must still be removed.");
+            "a genuinely unused nameless MARKED pure value must be removed.");
+    }
+
+    [Test]
+    public void Control_UnusedNamelessValue_NotMarked_Kept()
+    {
+        var (m, f, e) = NewFn();
+        var l = Live(f, e, "", marked: false);
+        e.AddInstruction(new IRReturn());
+        Assert.That(Run(m, f, l, armed: false), Is.True,
+            "a nameless value that no compiler minted is not removed: namelessness is not the licence either.");
+    }
+
+    /// <summary>The unary op, the compare and the load — the three other removable kinds beside IRBinaryOp.
+    /// All three are checked (the pre-#163 control asserted on the load alone).</summary>
+    private static (IRModule m, IRFunction f, IRValue[] values) UnaryCompareLoad(bool marked)
+    {
+        var (m, f, e) = NewFn();
+        var u = new IRUnaryOp("_tmpU", UnaryOpKind.Neg, Local(f, "a"), I) { IsCompilerTemp = marked };
+        var c = new IRCompare("_tmpC", CompareKind.Lt, Local(f, "b"), C(0), B) { IsCompilerTemp = marked };
+        var ld = new IRLoad("_tmpLd", Local(f, "p"), I) { IsCompilerTemp = marked };
+        e.AddInstruction(u);
+        e.AddInstruction(c);
+        e.AddInstruction(ld);
+        e.AddInstruction(new IRReturn());
+        return (m, f, new IRValue[] { u, c, ld });
     }
 
     [Test]
     public void Control_UnusedUnaryCompareLoad_Removed()
     {
-        var (m, f, e) = NewFn();
-        e.AddInstruction(new IRUnaryOp("_tmpU", UnaryOpKind.Neg, Local(f, "a"), I));
-        e.AddInstruction(new IRCompare("_tmpC", CompareKind.Lt, Local(f, "b"), C(0), B));
-        var ld = new IRLoad("_tmpLd", Local(f, "p"), I);
-        e.AddInstruction(ld);
-        e.AddInstruction(new IRReturn());
-        Assert.That(Run(m, f, ld), Is.False,
-            "an unused unary op, compare and load (the other three removable kinds, alongside " +
-            "IRBinaryOp) must still be removed when genuinely unused.");
+        var (m, f, values) = UnaryCompareLoad(marked: true);
+        Assert.That(values.Select(v => DeadCodeEliminationPass.IsRemovableWhenUnused(v, f)), Has.All.True, "precondition: all three are licensed");
+        new DeadCodeEliminationPass().Run(m);
+        Assert.That(values.Select(v => InBlocks(f, v)), Has.All.False,
+            "an unused MARKED unary op, compare and load (the other three removable kinds, alongside " +
+            "IRBinaryOp) must be removed when genuinely unused.");
     }
 
-    /// <summary>THE GUARD PIN (brief item #5). A named <c>t0</c> value — IRBuilder's own naming
-    /// scheme for every temp — that is genuinely unused is NOT removed, because the removal
-    /// guard (<c>!v.Name.StartsWith("_tmp")</c>) skips it before the (now-total, now-correct)
-    /// use analysis is even consulted. This is what keeps DCE latent in real programs: task
-    /// #118 fixed WHAT counts as a use, not WHICH values are eligible for removal. A future
-    /// change that widens the guard (e.g. to <see cref="OptimizationPass.IsTempDestination"/>)
-    /// is a separate, measured decision (ADR-0008 settled point 3's replicability hazard, and
-    /// the <c>T5</c> user-variable-spelled-like-a-temp caveat) — this test is the one that must
-    /// fail, deliberately, the day that decision ships, so the change shows up as an edit here
-    /// rather than a silent behaviour change.</summary>
     [Test]
-    public void GuardPin_UnusedNamedTempT0_NotRemoved_DceStaysLatentByDesign()
+    public void Control_UnusedUnaryCompareLoad_NotMarked_Kept()
+    {
+        var (m, f, values) = UnaryCompareLoad(marked: false);
+        new DeadCodeEliminationPass().Run(m);
+        Assert.That(values.Select(v => InBlocks(f, v)), Has.All.True,
+            "the same three values, unmarked, are all kept: the kind alone is not the licence.");
+    }
+
+    /// <summary>THE GUARD PIN, restated for #163. It used to say: a value named `t0` that is unused is not removed,
+    /// "because the removal guard only considers `_tmp`", and "this test is the one that must fail, deliberately, the
+    /// day that decision ships". It shipped (ADR-0017) and this still passes — for the OPPOSITE reason: the name
+    /// `t0` is IRBuilder's own spelling for a temp, and it is STILL not the licence. A value spelled `t0` that nothing
+    /// minted (a user's `Dim t0`, hand-built IR) is kept; the marked twin below is removed.</summary>
+    [Test]
+    public void GuardPin_UnusedValueNamedT0_NotMarked_Kept_TheSpellingIsNeverTheLicence()
+    {
+        var (m, f, e) = NewFn();
+        var l = Live(f, e, "t0", marked: false);
+        e.AddInstruction(new IRReturn());
+        Assert.That(Run(m, f, l, armed: false), Is.True,
+            "a genuinely unused value named 't0' that no compiler minted must NOT be removed. IRBuilder's temps are named " +
+            "t0, t1, … but so may a user's variables be; #118 measured 37 of 62 spelling-guard removals as user variables.");
+    }
+
+    [Test]
+    public void GuardPin_UnusedValueNamedT0_Marked_Removed()
     {
         var (m, f, e) = NewFn();
         var l = Live(f, e, "t0");
         e.AddInstruction(new IRReturn());
-        Assert.That(Run(m, f, l), Is.True,
-            "a genuinely unused value named 't0' must NOT be removed — the removal guard only " +
-            "considers a value whose name starts with '_tmp' (or is empty), and IRBuilder names " +
-            "every real temp t0, t1, …. If this test ever fails, the guard changed: that must be " +
-            "a deliberate, separately-measured decision, not a side effect of another change.");
+        Assert.That(Run(m, f, l), Is.False, "the same value, MARKED, is a compiler temp and goes: the marker decides, in either direction.");
     }
 
     [Test]
-    public void Control_UnusedT0InAnotherBlock_Kept()
+    public void Control_UnusedT0InAnotherBlock_NotMarked_Kept()
+    {
+        var (m, f, e) = NewFn();
+        var b2 = f.CreateBlock("b2");
+        e.AddInstruction(new IRBranch(b2));
+        var l = Live(f, b2, "t0", marked: false);
+        b2.AddInstruction(new IRReturn());
+        Assert.That(Run(m, f, l, armed: false), Is.True,
+            "same guard pin, in a non-entry block — the marker, not block placement, is what keeps it.");
+    }
+
+    [Test]
+    public void Control_UnusedT0InAnotherBlock_Marked_Removed()
     {
         var (m, f, e) = NewFn();
         var b2 = f.CreateBlock("b2");
         e.AddInstruction(new IRBranch(b2));
         var l = Live(f, b2, "t0");
         b2.AddInstruction(new IRReturn());
-        Assert.That(Run(m, f, l), Is.True,
-            "same guard pin, in a non-entry block — the guard, not block placement, is what keeps it.");
+        Assert.That(Run(m, f, l), Is.False, "removal is not confined to the entry block");
     }
 
     [Test]
@@ -627,10 +704,12 @@ public class DeadCodeEliminationUseAnalysisTests
         // next iteration would take it, but DeadCodeEliminationPass.Run is called only ONCE here).
         var (m, f, e) = NewFn();
         var a = Live(f, e, "_tmpA");
-        e.AddInstruction(new IRBinaryOp("_tmpB", BinaryOpKind.Mul, a, C(2), I));
+        var b = new IRBinaryOp("_tmpB", BinaryOpKind.Mul, a, C(2), I) { IsCompilerTemp = true };
+        e.AddInstruction(b);
         e.AddInstruction(new IRReturn());
         Assert.That(Run(m, f, a), Is.True,
             "one Run() only removes the dead chain's outermost link (_tmpB); _tmpA is used by " +
             "_tmpB at the moment `used` is computed, so it survives this single run.");
+        Assert.That(InBlocks(f, b), Is.False, "and the outermost link (_tmpB, marked like _tmpA) really did go: the chain is live, not vacuous");
     }
 }

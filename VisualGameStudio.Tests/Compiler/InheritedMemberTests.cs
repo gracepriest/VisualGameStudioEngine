@@ -396,14 +396,15 @@ public class InheritedMemberTests
     // ------------------------------------------------------------------ pinned, each with a control
 
     /// <summary>
-    /// ⛔ PINNED, NOT INHERITANCE'S: C++ and JavaScript emit classes in DECLARATION ORDER, so a
-    /// base declared BELOW its derived class is an incomplete type / a temporal-dead-zone
-    /// reference. The control proves it: the same order with NO member access at all fails
-    /// identically. MSIL and C# run both orders. If C++ and JavaScript start ordering their
-    /// classes, promote both to four-backend runs.
+    /// A base declared BELOW its derived class. This was PINNED as an emission-order gap, not
+    /// inheritance's: C++ and JavaScript emitted classes in DECLARATION ORDER, so the base was an
+    /// incomplete type / a temporal-dead-zone reference, and a control with NO member access
+    /// failed identically. Master's base-first class order on C++ and JavaScript (27e8307c,
+    /// "Classes and interfaces declared below their use") closed it and the pin went red as
+    /// designed. Promoted: the inherited read and the control both run on every backend.
     /// </summary>
     [Test]
-    public void ABaseDeclaredBelowItsDerivedClass_IsAnEmissionOrderGap_Pinned()
+    public void ABaseDeclaredBelowItsDerivedClass_RunsOnEveryBackend()
     {
         var withAccess = Prog(" Public Total As Integer = 7\n",
             " Public Function Run() As Integer\n  Return Total\n End Function\n", baseFirst: false);
@@ -422,15 +423,8 @@ public class InheritedMemberTests
              PrintLine(CStr(b.Run()))
             End Sub
             """;
-        Assert.Multiple(() =>
-        {
-            Assert.That(Msil(withAccess), Is.EqualTo("7"), "MSIL runs the inherited read in either order");
-            Assert.That(Cs(withAccess), Is.EqualTo("7"), "C# runs the inherited read in either order");
-            Assert.That(() => Cpp(control), Throws.Exception,
-                "CONTROL: C++ refuses a base declared below its derived class with NO member access");
-            Assert.That(() => Js(control), Throws.Exception,
-                "CONTROL: JavaScript refuses the same");
-        });
+        RunsOnEveryBackend(withAccess, "7");
+        RunsOnEveryBackend(control, "3");
     }
 
     /// <summary>
