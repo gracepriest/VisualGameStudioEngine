@@ -173,10 +173,16 @@ public static class FormRetarget
     /// SAME finding the destination's region writer would refuse the pair with. Empty when it can. Callers ask
     /// this before <see cref="ConvertToPair"/> and report it as they report a reader refusal: nothing written.
     ///
-    /// <para>⛔ Today one rule (Task 11 review): a Canvas page's Anchor crosses VERBATIM to the window, so an
-    /// unknown edge (<c>Top,Rigth</c>, hand-edited — the reader does not validate Anchor) is refused with the
-    /// region writer's own BL8015, the finding the page's own web build already gives. Going to the web the
-    /// anchor becomes a cell (BL8025) and is never emitted, so there is nothing to refuse.</para>
+    /// <para>⛔ The rule is whatever crosses VERBATIM and the destination's region writer refuses: going to WinForms, a
+    /// Canvas page's Anchor and Dock cross as written, so an unknown edge (<c>Top,Rigth</c>, BL8015 — Task 11 review)
+    /// or an unknown Dock (<c>Rigth</c>, BL8033) is refused with the region writer's own finding, the one the page's
+    /// own web build already gives. Without it, ConvertToPair's own region-writer call would refuse the pair and
+    /// surface as its "cannot happen" InvalidOperationException. Going to the web the anchor and dock become a cell
+    /// (BL8025) and are never emitted, so there is nothing to refuse.</para>
+    ///
+    /// <para>⚠ A strip's bad Dock (<c>Left</c>) crosses too, in either direction — as a Degraded catalog value, like
+    /// every other, never a refusal: the destination's writer skips it (BL8009) and the strip docks at its row's
+    /// default on both sides.</para>
     /// </summary>
     public static IReadOnlyList<DesignDiagnostic> Refusals(FormDocument source, FormTarget to)
     {
@@ -184,6 +190,7 @@ public static class FormRetarget
 
         return to == FormTarget.WinForms
             ? RegionWriter.AnchorRefusals(source.SourcePath, source)
+                .Concat(RegionWriter.DockRefusals(source.SourcePath, source)).ToList()
             : Array.Empty<DesignDiagnostic>();
     }
 
