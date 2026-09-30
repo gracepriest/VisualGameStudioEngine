@@ -1567,9 +1567,9 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             var initItems = new List<string>();
 
             // Base constructor call first
-            if (!string.IsNullOrEmpty(irClass.BaseClass) && ctor.BaseConstructorArgs.Count > 0)
+            if (!string.IsNullOrEmpty(irClass.BaseClass) && ctor.BaseCall is { } structBaseCall)
             {
-                var baseArgs = string.Join(", ", ctor.BaseConstructorArgs.Select(a =>
+                var baseArgs = string.Join(", ", structBaseCall.Args.Select(a =>
                     a is IRConstant c ? EmitConstant(c) : SanitizeName(a.Name)));
                 initItems.Add($"{SanitizeName(irClass.BaseClass)}({baseArgs})");
             }
@@ -1718,7 +1718,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                     var parameters = ConstructorParameterList(ctor?.Implementation);
                     var args = ctor == null
                         ? ""
-                        : string.Join(", ", ctor.BaseConstructorArgs.Select(RenderPureBaseArgument));
+                        : string.Join(", ", (ctor.BaseCall?.Args ?? Array.Empty<IRValue>()).Select(RenderPureBaseArgument));
                     var items = new List<string>
                     {
                         foreignBase != null
@@ -1763,9 +1763,10 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
 
         /// <summary>
         /// One <c>ctor_</c> overload (see <see cref="GenerateTwoPhaseConstruction"/>). Steps 1 and 2
-        /// are a PROLOGUE placed right after the instructions that evaluate the <c>MyBase.New</c>
-        /// arguments (<see cref="CppObjectModel.PlanBaseArguments"/>) — at the top of the body
-        /// when there are none — and the rest of the body follows.
+        /// are a PROLOGUE written where the IR places the base call — the constructor's
+        /// <see cref="IRBaseConstructorCall"/>, right after the instructions that evaluate its
+        /// arguments (ADR-0016 D1; E11's order, unchanged) — or at the top of the body when the base
+        /// call is the implicit parameterless one. The rest of the body follows.
         /// </summary>
         private void GenerateCtorPhase(IRClass irClass, IRConstructor ctor, string userBase)
         {
@@ -1774,29 +1775,17 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             WriteLine("{");
             Indent();
 
-            // The plan says where the prologue goes and which argument nodes render INLINE (an
-            // operator the optimizer replaced in the block but not in BaseConstructorArgs).
-            var (prefixLength, inlineNodes, refusal) = CppObjectModel.PlanBaseArguments(_module, ctor);
-            if (refusal != null)
-                throw new InvalidOperationException(
-                    $"C++ backend: '{irClass.Name}' reached emission with a MyBase.New argument that " +
-                    $"{refusal}; CppCapabilityChecker refuses that shape (ADR-0015 E11).");
+            // ⭐ ADR-0016: the arguments are the base call's live operands, so no plan is needed —
+            // what E11's PlanBaseArguments used to reconstruct (where the evaluation ends, which
+            // stale argument node renders inline) is now the instruction's own position and operands.
+            var baseCall = ctor?.BaseCall;
 
             void Prologue()
             {
                 if (userBase != null)
                 {
-                    var saved = _guardNodes;
-                    _guardNodes = inlineNodes;
-                    try
-                    {
-                        var args = ctor == null ? "" : string.Join(", ", ctor.BaseConstructorArgs.Select(GetValueName));
-                        WriteLine($"{userBase}::ctor_({args});");
-                    }
-                    finally
-                    {
-                        _guardNodes = saved;
-                    }
+                    var args = baseCall == null ? "" : string.Join(", ", baseCall.Args.Select(GetValueName));
+                    WriteLine($"{userBase}::ctor_({args});");
                 }
                 var declared = DeclaredInstanceFields(irClass).ToHashSet();
                 foreach (var field in irClass.Fields.Where(declared.Contains))
@@ -1818,13 +1807,13 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 InitializeFunctionContext(implementation);
                 DeclareLocalsAndTemporaries(implementation);
 
-                if (prefixLength == 0)
+                if (baseCall == null)
                 {
                     Prologue();
                 }
                 else
                 {
-                    _ctorPrologueAnchor = implementation.EntryBlock.Instructions[prefixLength - 1];
+                    _ctorPrologueAnchor = baseCall;
                     _ctorPrologue = Prologue;
                 }
 
@@ -1848,9 +1837,10 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         }
 
         /// <summary>
-        /// ADR-0015 E11: the <c>ctor_</c> prologue (base <c>ctor_</c>, field initializers) waiting to
-        /// be written right after <see cref="_ctorPrologueAnchor"/>, the last instruction that
-        /// evaluates a <c>MyBase.New</c> argument. Placed by <see cref="GenerateBlock"/>.
+        /// ADR-0015 E11 / ADR-0016 D1: the <c>ctor_</c> prologue (base <c>ctor_</c>, field
+        /// initializers) waiting to be written in place of <see cref="_ctorPrologueAnchor"/>, the
+        /// constructor's <see cref="IRBaseConstructorCall"/>. Placed by
+        /// <see cref="Visit(IRBaseConstructorCall)"/>.
         /// </summary>
         private Action _ctorPrologue;
         private IRInstruction _ctorPrologueAnchor;
@@ -2971,21 +2961,19 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // Instructions
             foreach (var instruction in block.Instructions)
             {
+                // ADR-0016: the base call is the ctor_ prologue (base ctor_ and field initializers),
+                // written where the IR places it and with no line directive of its own — exactly
+                // the text E11 wrote after the last argument-evaluating instruction.
+                if (instruction is IRBaseConstructorCall)
+                {
+                    instruction.Accept(this);
+                    continue;
+                }
                 if (instruction.SourceLine > 0)
                     EmitLineDirective(instruction.SourceLine, _currentFunction?.SourceFilePath);
                 else
                     EmitLineReset();
                 instruction.Accept(this);
-
-                // ADR-0015 E11: a ctor_'s base call and field initializers go right after the last
-                // instruction evaluating its MyBase.New arguments (see GenerateCtorPhase).
-                if (_ctorPrologue != null && ReferenceEquals(instruction, _ctorPrologueAnchor))
-                {
-                    var prologue = _ctorPrologue;
-                    _ctorPrologue = null;
-                    _ctorPrologueAnchor = null;
-                    prologue();
-                }
             }
 
             // Process successors (populated only when a CFG pass has run — e.g. the optimizer's
@@ -5221,6 +5209,24 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             {
                 WriteLine($"// {comment.Text}");
             }
+        }
+
+        /// <summary>
+        /// ADR-0016 D1 on C++: the base call is emitted IN PLACE inside <c>ctor_</c> — the pending
+        /// prologue <see cref="GenerateCtorPhase"/> registered for exactly this instruction (base
+        /// <c>ctor_</c>, then this class's field initializers). ADR-0015's order is unchanged: the
+        /// argument temporaries precede it because the IR puts them there.
+        /// </summary>
+        public override void Visit(IRBaseConstructorCall baseConstructorCall)
+        {
+            if (_ctorPrologue == null || !ReferenceEquals(baseConstructorCall, _ctorPrologueAnchor))
+                throw new InvalidOperationException(
+                    "C++ backend: an IRBaseConstructorCall outside the ctor_ it belongs to, or a second one "
+                    + "in it (ADR-0016 D5(b): one per constructor).");
+            var prologue = _ctorPrologue;
+            _ctorPrologue = null;
+            _ctorPrologueAnchor = null;
+            prologue();
         }
 
         public override void Visit(IRArrayAlloc arrayAlloc)

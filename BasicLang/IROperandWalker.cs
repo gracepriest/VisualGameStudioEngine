@@ -59,6 +59,9 @@ namespace BasicLang.Compiler.CodeGen
                 case IRBaseMethodCall bc:
                     foreach (var a in bc.Arguments) yield return a;
                     break;
+                case IRBaseConstructorCall baseConstructorCall:   // ADR-0016: MyBase.New's arguments
+                    foreach (var a in baseConstructorCall.Args) yield return a;
+                    break;
                 case IRNewObject no:
                     foreach (var a in no.Arguments) yield return a;
                     break;

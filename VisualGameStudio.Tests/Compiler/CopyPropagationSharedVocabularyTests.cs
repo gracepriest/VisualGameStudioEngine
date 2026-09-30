@@ -3,6 +3,7 @@ using System.IO;
 using System.Linq;
 using NUnit.Framework;
 using BasicLang.Compiler;
+using BasicLang.Compiler.CodeGen.CPlusPlus;
 using BasicLang.Compiler.IR;
 using BasicLang.Compiler.IR.Optimization;
 using BasicLang.Compiler.SemanticAnalysis;
@@ -355,22 +356,36 @@ public class CopyPropagationSharedVocabularyExecutionTests
                 Is.EqualTo(CopyPropagationSharedVocabularyProbes.CP2Expected), "MSIL, aggressive — was AssembleFailed/'Action' (task #155), now closed by ADR-0010");
         });
 
-    /// <summary>C++'s own lambda lowering captures BY COPY (<c>[=]</c>), not by reference — task
-    /// #140, MEASURED present even with NO optimizer pass running at all (matches
-    /// LicmKillVocabularyTests' L5 pin for the identical backend defect). Not a kill-vocabulary
-    /// defect task #146 could ever have closed; pinned here so a regression (or a fix) is
-    /// caught.</summary>
+    /// <summary>
+    /// ⭐ MOVED PIN (ADR-0016 D3/W2, task #170). C++'s own lambda lowering captures BY COPY
+    /// (<c>[=]</c>), not by reference — task #140, MEASURED present even with NO optimizer pass
+    /// running at all (matches LicmKillVocabularyTests' L5 pin for the identical backend defect).
+    /// This USED TO silently print 3,3 for 103,3 (the write inside <c>bump</c> never reached
+    /// <c>Main</c>'s own <c>p</c>). #170's <c>CppCapabilityChecker.CheckLambdaCaptureWrites</c>
+    /// now REFUSES it by name (arm (a): the lambda writes a variable it captures) rather than
+    /// compiling it wrong — a named refusal beats a silent wrong answer (ADR-0016's own rule
+    /// one). #140 deletes this refusal and flips CP2 to running; until then this is the correct
+    /// pin, not the value.
+    /// </summary>
     [Test]
-    public void CP2_Cpp_KnownWrong_PinnedForTask140_StandardPipeline()
-        => Assert.That(FourBackends.Norm(BclE2E.CompileRun(BclE2E.CompileToCppOptimized(CopyPropagationSharedVocabularyProbes.CP2))),
-            Is.EqualTo("3,3"),
-            "task #140 (C++ backend capture-by-copy) — if this changed, re-measure before touching it.");
+    public void CP2_Cpp_RefusedByName_PinnedForTask140_StandardPipeline()
+    {
+        var ex = Assert.Throws<CppCapabilityException>(
+            () => BclE2E.CompileToCppOptimized(CopyPropagationSharedVocabularyProbes.CP2));
+        Assert.That(ex!.Message, Does.Contain("captures 'p' of 'Main'").And.Contain("#140"),
+            "if this stops refusing (or refuses for a different variable), #140 has changed the "
+            + "rule — re-measure before touching it.\n" + ex.Message);
+    }
 
     [Test]
-    public void CP2_Cpp_KnownWrong_PinnedForTask140_AggressivePipeline()
-        => Assert.That(FourBackends.Norm(BclE2E.CompileRun(BclE2E.CompileToCppAggressive(CopyPropagationSharedVocabularyProbes.CP2))),
-            Is.EqualTo("3,3"),
-            "task #140, aggressive pipeline — same backend defect, unrelated to LICM or CopyPropagation.");
+    public void CP2_Cpp_RefusedByName_PinnedForTask140_AggressivePipeline()
+    {
+        var ex = Assert.Throws<CppCapabilityException>(
+            () => BclE2E.CompileToCppAggressive(CopyPropagationSharedVocabularyProbes.CP2));
+        Assert.That(ex!.Message, Does.Contain("captures 'p' of 'Main'").And.Contain("#140"),
+            "aggressive pipeline — the capability check runs before the optimizer, so the "
+            + "refusal is pipeline-independent; re-measure before touching it.\n" + ex.Message);
+    }
 
     // ---- CP5, CP6: all four backends agree, both pipelines --------------------------------------
 

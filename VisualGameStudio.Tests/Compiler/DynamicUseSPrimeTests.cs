@@ -1113,12 +1113,21 @@ public class DynamicUseSPrimeExecutionTests
                 + "ClosureLowering (x copied into bump's environment).");
         });
 
-    /// <summary>KNOWN-WRONG, task #140: the C++ backend's own lambda lowering captures BY COPY
-    /// (<c>[=]</c>) where BasicLang means by reference — MEASURED present even with NO optimizer
-    /// pass running, so unrelated to D2 or to LICM's kill vocabulary either way.</summary>
+    /// <summary>
+    /// ⭐ MOVED PIN (ADR-0016 D3/W2, task #140). The C++ backend's own lambda lowering captures BY
+    /// COPY (<c>[=]</c>) where BasicLang means by reference — MEASURED present even with NO
+    /// optimizer pass running, so unrelated to D2 or to LICM's kill vocabulary either way. This
+    /// USED TO silently print seed\n6 for seed\n12 (bump's write to x never reached the loop's
+    /// own x). #170's capability check now REFUSES it by name (arm (a): bump writes x, which it
+    /// captures) rather than compiling it wrong.
+    /// </summary>
     [Test]
-    public void L5_Cpp_AggressivePipeline_PinnedForTask140()
-        => Assert.That(FourBackends.Norm(BclE2E.CompileRun(BclE2E.CompileToCppAggressive(LicmKillVocabularyShapes.L5))),
-            Is.EqualTo("seed\n6"),
-            "task #140 (C++ BACKEND capture-by-copy, not a kill-vocabulary, LICM or D2 defect).");
+    public void L5_Cpp_AggressivePipeline_RefusedByName_PinnedForTask140()
+    {
+        var ex = Assert.Throws<CppCapabilityException>(
+            () => BclE2E.CompileToCppAggressive(LicmKillVocabularyShapes.L5));
+        Assert.That(ex!.Message, Does.Contain("captures 'x' of 'Main'").And.Contain("#140"),
+            "task #140 (C++ BACKEND capture-by-copy) flips this to running — re-measure before "
+            + "touching it.\n" + ex.Message);
+    }
 }
