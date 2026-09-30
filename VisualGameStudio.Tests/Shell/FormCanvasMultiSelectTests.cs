@@ -127,9 +127,16 @@ public class FormCanvasMultiSelectTests
         rig.Click(rig.Centre(rig.A));
         rig.Click(rig.Centre(rig.B), RawInputModifiers.Control);
 
-        rig.Click(rig.Centre(rig.B), RawInputModifiers.Control);
+        // ⚠ Offset: two presses at the IDENTICAL point arrive headless as a DOUBLE-click (ClickCount 2,
+        // then DoubleTapped), which is a different gesture from two Ctrl-clicks. This test used to pass
+        // only because that double-tap wrote the grid and not the selection store.
+        rig.Click(rig.Centre(rig.B) + new Point(8, 0), RawInputModifiers.Control);
 
-        Assert.That(rig.Selection.Controls, Is.EqualTo(new[] { rig.A }));
+        Assert.Multiple(() =>
+        {
+            Assert.That(rig.Selection.Controls, Is.EqualTo(new[] { rig.A }));
+            Assert.That(rig.Canvas.SelectedControl, Is.SameAs(rig.A), "and the grid's side agrees with the store");
+        });
     }
 
     [AvaloniaTest]

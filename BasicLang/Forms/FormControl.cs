@@ -139,11 +139,36 @@ public sealed class FormControl
     /// Degraded tier keeps a bad value so it round-trips). Without the guard, <c>""</c> is simply
     /// "not Bottom", so a StatusStrip written <c>Dock=""</c> docks to the TOP instead of falling
     /// back to its row's own Bottom.</para>
+    ///
+    /// <para>⛔ A value the row does NOT accept (<c>Left</c>, <c>Fill</c>, <c>None</c>, <c> Bottom </c>) falls back to
+    /// the row default too, for the same reason. Such a value is Degraded (D9: the reader freezes the row and keeps the
+    /// value), and the region writer never emits a Degraded value — so WinForms runs the strip at its DEFAULT edge.
+    /// Reading it as "not Bottom" put a StatusStrip written <c>Dock="Left"</c> at the TOP of the canvas and the page
+    /// while the window ran it at the bottom. One bad value costs one row, never the document: this is a fallback,
+    /// not a refusal. The one Degraded spelling the writer DOES emit — the row's own source form,
+    /// <c>DockStyle.Bottom</c> (<see cref="FormPropertyDef.IsSourceForm"/>) — is read as the member it names.</para>
     /// </summary>
-    private string DockEdge =>
-        Properties.TryGetValue("Dock", out var dock) && !string.IsNullOrEmpty(dock)
-            ? dock
-            : Definition?.Property("Dock")?.Default ?? "Top";
+    private string DockEdge
+    {
+        get
+        {
+            var row = Definition?.Property("Dock");
+            var fallback = row?.Default ?? "Top";
+            if (!Properties.TryGetValue("Dock", out var dock) || string.IsNullOrEmpty(dock) || row == null)
+            {
+                return string.IsNullOrEmpty(dock) ? fallback : dock!;
+            }
+
+            if (row.Accepts(dock))
+            {
+                return row.Canonical(dock);
+            }
+
+            return row.IsSourceForm(dock) && row.WinFormsEnumType is { } type
+                ? dock.Substring(type.Length + 1)
+                : fallback;
+        }
+    }
 
     /// <summary>
     /// Every control in this subtree, parents before children. The order the markup emitter and

@@ -542,7 +542,8 @@ namespace BasicLang.Compiler.Driver
             }
 
             // A document the reader accepts can still be one the DESTINATION's region writer refuses (a Canvas
-            // page's unknown Anchor edge, BL8015). Reported exactly as a reader refusal: exit 1, nothing written.
+            // page's unknown Anchor edge, BL8015, or a Dock it cannot honour, BL8033). Reported exactly as a reader
+            // refusal: exit 1, nothing written.
             var refusals = BasicLang.Forms.FormRetarget.Refusals(file.Model, to);
             if (refusals.Count > 0)
             {

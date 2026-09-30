@@ -1710,6 +1710,38 @@ namespace BasicLang.Compiler.IR
         public List<string> Namespaces { get; set; }
 
         /// <summary>
+        /// The classes with every base before the classes that derive from it, otherwise in
+        /// declaration order. Declaration order was the only order, and it held only because the
+        /// analyzer refused a derived class declared above its base. With that fixed, C++ failed
+        /// to compile `class Sq : public Base` ahead of `Base` ("invalid use of incomplete type"),
+        /// and JavaScript built clean and died on load, because `class Sq extends Base` ran first
+        /// ("ReferenceError: Cannot access 'Base' before initialization").
+        /// Every backend that emits class bodies in one pass orders them through here.
+        /// </summary>
+        public IEnumerable<IRClass> ClassesBaseFirst()
+        {
+            var emitted = new HashSet<IRClass>();
+            var ordered = new List<IRClass>();
+
+            void Place(IRClass cls, int depth)
+            {
+                if (cls == null || depth > 256 || !emitted.Add(cls)) return;
+                if (!string.IsNullOrEmpty(cls.BaseClass)
+                    && Classes.TryGetValue(cls.BaseClass, out var baseClass)
+                    && !ReferenceEquals(baseClass, cls))
+                {
+                    // `emitted` is filled before recursing, so a (refused) cycle still terminates.
+                    Place(baseClass, depth + 1);
+                }
+                ordered.Add(cls);
+            }
+
+            foreach (var cls in Classes.Values)
+                Place(cls, 0);
+            return ordered;
+        }
+
+        /// <summary>
         /// .NET namespace imports (e.g., System.IO, System.Text)
         /// These are passed through to the C# backend as using directives
         /// </summary>

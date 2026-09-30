@@ -880,6 +880,96 @@ public class FormDesignerRealViewTests
         AssertOverlayMatchesCanvasBounds(rig, "after widening the earlier item");
     }
 
+    // ==================================================================
+    // ⛔⛔ ONE selection store: every canvas gesture that selects goes through Selection
+    // ==================================================================
+
+    // ⚠ Both buttons carry the SAME caption, so they draw alike (the canvas labels Text ?? Id — the
+    // fixture-id rule); their ids must still differ, because a duplicate id is refused by the reader.
+    private const string TwoButtonsDoc = """
+        <Form Name="PairForm" Version="1" Width="640" Height="480" Text="PairForm">
+          <Controls>
+            <Button Id="btnA" Text="Button" X="40" Y="40" Width="120" Height="40" TabIndex="0"/>
+            <Button Id="btnB" Text="Button" X="360" Y="260" Width="120" Height="40" TabIndex="1"/>
+          </Controls>
+          <Components/>
+          <Resources/>
+        </Form>
+        """;
+
+    private static void AssertSelectedEverywhere(Rig rig, FormControl expected, string gesture)
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(rig.Vm.Selection.Primary, Is.SameAs(expected),
+                $"{gesture}: the ONE selection store must hold the control the gesture landed on");
+            Assert.That(rig.Vm.Selection.Controls, Has.Count.EqualTo(1), $"{gesture}: and only it");
+            Assert.That(rig.Vm.PropertyGrid.SelectedControl, Is.SameAs(expected),
+                $"{gesture}: and the property grid shows that same control");
+        });
+    }
+
+    /// <summary>
+    /// Right-clicking a control that is NOT selected selects it in the store, not only in the grid:
+    /// the canvas used to write its TwoWay <c>SelectedControl</c> alone, so the grid showed B while
+    /// Selection still held A — and Cut, which reads Selection, removed A.
+    /// </summary>
+    [AvaloniaTest]
+    public void RightClickingAnUnselectedControl_SelectsItInTheStore_AndCutRemovesThatControl()
+    {
+        var rig = Open(TwoButtonsDoc, "PairForm.blform");
+        var a = rig.Doc.FindById("btnA")!;
+        var b = rig.Doc.FindById("btnB")!;
+
+        rig.Click(rig.CentreOfEntry(a, FormLayoutRole.Control));
+        AssertSelectedEverywhere(rig, a, "precondition: a left click on A");
+
+        var at = rig.ToWindow(rig.CentreOfEntry(b, FormLayoutRole.Control));
+        rig.Window.MouseDown(at, MouseButton.Right);
+        rig.Window.MouseUp(at, MouseButton.Right);
+        Dispatcher.UIThread.RunJobs();
+
+        AssertSelectedEverywhere(rig, b, "a right click on B");
+
+        rig.Vm.CutControlsCommand.Execute(null);
+
+        Assert.That(rig.Doc.AllControls().Select(c => c.Id), Is.EqualTo(new[] { "btnA" }),
+            "Cut removes the right-clicked control, never the one selected before it");
+    }
+
+    /// <summary>
+    /// A double-click that ends with the store and the grid on different controls: Ctrl+double-click
+    /// on B while A is selected. The first press TOGGLES B in, the second (ClickCount 2) toggles it
+    /// back OUT, and the double-tap then wrote the grid alone — grid B, Selection A, and Cut removed A.
+    /// </summary>
+    [AvaloniaTest]
+    public void CtrlDoubleClickingAnUnselectedControl_SelectsItInTheStore_AndCutRemovesThatControl()
+    {
+        var rig = Open(TwoButtonsDoc, "PairForm.blform");
+        var a = rig.Doc.FindById("btnA")!;
+        var b = rig.Doc.FindById("btnB")!;
+
+        rig.Click(rig.CentreOfEntry(a, FormLayoutRole.Control));
+        AssertSelectedEverywhere(rig, a, "precondition: a left click on A");
+
+        // Both presses at the SAME point, deliberately: that is what makes the second one ClickCount 2.
+        var at = rig.ToWindow(rig.CentreOfEntry(b, FormLayoutRole.Control));
+        for (var i = 0; i < 2; i++)
+        {
+            rig.Window.MouseDown(at, MouseButton.Left, RawInputModifiers.Control);
+            rig.Window.MouseUp(at, MouseButton.Left, RawInputModifiers.Control);
+        }
+
+        Dispatcher.UIThread.RunJobs();
+
+        AssertSelectedEverywhere(rig, b, "a Ctrl+double-click on B");
+
+        rig.Vm.CutControlsCommand.Execute(null);
+
+        Assert.That(rig.Doc.AllControls().Select(c => c.Id), Is.EqualTo(new[] { "btnA" }),
+            "Cut removes the double-clicked control, never the one selected before it");
+    }
+
     private sealed class RecorderCommand : System.Windows.Input.ICommand
     {
         public int Executions { get; private set; }

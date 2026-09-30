@@ -113,6 +113,7 @@ public static class RegionWriter
         var initBody = GenerateInit(form, IndentOf(index, init), newline, filePath, diagnostics);
 
         CheckAnchors(filePath, form, diagnostics);
+        CheckDocks(filePath, form, diagnostics);
         CheckTargetProperties(filePath, form, diagnostics);
         CheckComponentTargets(filePath, form, diagnostics);
         CheckComponentBinds(filePath, form, diagnostics);
@@ -205,6 +206,60 @@ public static class RegionWriter
         ArgumentNullException.ThrowIfNull(form);
         var diagnostics = new List<DesignDiagnostic>();
         CheckAnchors(filePath, form, diagnostics);
+        return diagnostics;
+    }
+
+    /// <summary>
+    /// Refuses a POSITIONED control's <c>Dock</c> the designer cannot honour (BL8033) — the sibling of
+    /// <see cref="CheckAnchors"/>. Asked of every PIXEL document (FormVocabulary.IsPixel: a .blform and a Canvas page):
+    /// a <see cref="PixelGeometry.Dock"/> that is not a DockStyle member under <see cref="FormDock"/>'s rule — trimmed,
+    /// any case. <see cref="AppendPixelGeometry"/> emits exactly <see cref="FormDock.Canonical"/> and
+    /// <see cref="FormDockLayout.EdgeOf"/> resolves by the same rule, so the three can never disagree about what a
+    /// spelling means. A Grid/Flow page has no pixel geometry, so it has no such Dock.
+    ///
+    /// <para>⛔ A STRIP's Dock is deliberately NOT here. It is a catalog property, so a value its row does not accept
+    /// is Degraded (D9: one bad value costs one row, never the document) — the reader freezes the row, this writer
+    /// never emits it (BL8009), and <see cref="FormControl.IsDockedToBottom"/> falls back to the row default, which is
+    /// exactly where WinForms then runs it. Refusing it here would make every save fail on a row the grid will not let
+    /// the user edit.</para>
+    /// </summary>
+    /// <remarks>⛔ The ONE dock refusal: <see cref="DockRefusals"/> hands the same findings to the retarget, which must
+    /// refuse BEFORE writing, so the two cannot disagree.</remarks>
+    private static void CheckDocks(string filePath, FormDocument form, List<DesignDiagnostic> diagnostics)
+    {
+        if (!FormVocabulary.IsPixel(form))
+        {
+            return;
+        }
+
+        foreach (var control in form.AllControls())
+        {
+            if (control.Geometry is not PixelGeometry { Dock: var dock } || FormDock.IsBlank(dock))
+            {
+                continue;
+            }
+
+            if (FormDock.Canonical(dock) == null)
+            {
+                diagnostics.Add(Error(DesignCodes.UnknownDock,
+                    $"'{control.Id}' is docked '{dock}', which DockStyle does not have. The values are " +
+                    $"{string.Join(", ", FormDock.Styles.Take(FormDock.Styles.Count - 1))} and " +
+                    $"{FormDock.Styles[^1]} (any case; surrounding spaces are ignored). Emitting it would not " +
+                    "compile, and the canvas and the page would show the control undocked.",
+                    filePath, 0));
+            }
+        }
+    }
+
+    /// <summary>
+    /// The refusals <see cref="Write"/> would make for <paramref name="form"/>'s docks (BL8033) without writing
+    /// anything: an unknown positioned Dock on a pixel document. Empty for a Grid/Flow page.
+    /// </summary>
+    public static IReadOnlyList<DesignDiagnostic> DockRefusals(string filePath, FormDocument form)
+    {
+        ArgumentNullException.ThrowIfNull(form);
+        var diagnostics = new List<DesignDiagnostic>();
+        CheckDocks(filePath, form, diagnostics);
         return diagnostics;
     }
 
@@ -1056,9 +1111,13 @@ public static class RegionWriter
                 $"{inner}{control.Id}.Size = New Size({pixel.Width}, {pixel.Height})")).Append(newline);
         }
 
-        if (!string.IsNullOrWhiteSpace(pixel.Dock))
+        // ⛔ The enum's OWN spelling (FormDock.Canonical): `DockStyle.fill` is CS0117 at csc and BasicLang says
+        // nothing (plan 2026-09-27 S11). A value with no canonical member is refused by CheckDocks, which runs
+        // before any of this text is handed back — the fallback only keeps a refused body from throwing.
+        if (!FormDock.IsBlank(pixel.Dock))
         {
-            body.Append($"{inner}{control.Id}.Dock = DockStyle.{pixel.Dock.Trim()}").Append(newline);
+            var member = FormDock.Canonical(pixel.Dock) ?? pixel.Dock!.Trim();
+            body.Append($"{inner}{control.Id}.Dock = DockStyle.{member}").Append(newline);
         }
 
         if (!string.IsNullOrWhiteSpace(pixel.Anchor))

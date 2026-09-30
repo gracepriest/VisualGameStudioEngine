@@ -1442,7 +1442,8 @@ public partial class SolutionExplorerViewModel : ViewModelBase
         }
 
         // A document the reader accepts can still be one the DESTINATION's region writer refuses (a Canvas
-        // page's unknown Anchor edge, BL8015). Refused through the same dialog, before a folder is asked for.
+        // page's unknown Anchor edge, BL8015, or a Dock it cannot honour, BL8033). Refused through the same dialog,
+        // before a folder is asked for.
         var refusals = BasicLang.Forms.FormRetarget.Refusals(file.Model, to);
         if (refusals.Count > 0)
         {
