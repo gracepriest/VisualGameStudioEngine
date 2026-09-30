@@ -639,6 +639,30 @@ public class FormRootTests
         });
     }
 
+    /// <summary>
+    /// ⛔ Found by the RUN (task 7, Edge's computed style): a browser does NOT inherit the body's font into
+    /// &lt;button&gt;/&lt;input&gt;/&lt;select&gt;/&lt;textarea&gt; — their user-agent sheet sets their own — so a Form
+    /// Font on body left every button regular while the WinForms window made it bold (Font is ambient on every
+    /// control). With a Form Font the page tells its form controls to inherit it; a Form ForeColor reaches a button the
+    /// same way (Button's ForeColor is ambient; a TextBox's is WindowText in WinForms, so inputs keep their own).
+    /// Without either row nothing changes (the pixel harness's measured pages stay byte-identical).
+    /// </summary>
+    [Test]
+    public void AFormFont_ReachesThePagesFormControls_AsWinFormsAmbientFontDoes()
+    {
+        var withFont = new FormDocument { Target = FormTarget.Web, Name = "F", Layout = new FormLayout { Kind = FormLayoutKind.Canvas } };
+        withFont.Properties["Font"] = "Segoe UI, 10pt";
+        withFont.Properties["ForeColor"] = "Red";
+        var plain = new FormDocument { Target = FormTarget.Web, Name = "F", Layout = new FormLayout { Kind = FormLayoutKind.Canvas } };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(FormAssetEmitter.Css(withFont), Does.Contain("button, input, select, textarea { font: inherit; }"));
+            Assert.That(FormAssetEmitter.Css(withFont), Does.Contain("button { color: inherit; }"));
+            Assert.That(FormAssetEmitter.Css(plain), Does.Not.Contain("inherit"));
+        });
+    }
+
     [Test]
     public void APageWithNoFormRows_HasNoExtraBodyRule_AndAWinFormsOnlyRowNeverReachesIt()
     {

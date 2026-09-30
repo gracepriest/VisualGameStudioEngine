@@ -562,7 +562,28 @@ public static class FormAssetEmitter
         {
             sb.Append($"body {{ {string.Join("; ", declarations)}; }}\n");
         }
+
+        // ⛔ Measured (slice 3 task 7, Edge's computed style): a browser does NOT inherit the body's font into its FORM
+        // controls — the user-agent sheet gives <button>/<input>/<select>/<textarea> their own — so a Form Font on body
+        // left every button regular while the WinForms window made it bold (Font is ambient on every control). Only when
+        // the form HAS a Font, so a page without one keeps the user agent's look (and the measured pixel pages stay
+        // byte-identical). ForeColor likewise reaches a <button> (Button.ForeColor is ambient); a TextBox's is WindowText
+        // in WinForms, not the Form's, so inputs keep their own colour.
+        if (HasRootValue(form, "Font"))
+        {
+            sb.Append("button, input, select, textarea { font: inherit; }\n");
+        }
+
+        if (HasRootValue(form, "ForeColor"))
+        {
+            sb.Append("button { color: inherit; }\n");
+        }
     }
+
+    /// <summary>Whether the form carries a USABLE value for the FormRoot row <paramref name="name"/> on the web.</summary>
+    private static bool HasRootValue(FormDocument form, string name) =>
+        FormControlCatalog.FormRoot.Property(name) is { } row && FormRootValues.Applies(row, form) &&
+        FormRootValues.Get(form, row) is { } value && row.Accepts(value, FormTarget.Web);
 
     /// <summary>
     /// Per-KIND chrome styling, appended ONCE however many controls of that kind the page has (spec §4). A menu is the

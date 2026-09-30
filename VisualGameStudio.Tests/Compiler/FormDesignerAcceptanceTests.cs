@@ -280,7 +280,8 @@ public class FormDesignerAcceptanceTests
     /// "not recognized" text could reach stderr (Task 14 review). <paramref name="node"/> is the seam that proves it.</para>
     /// </summary>
     internal static string? RunPageUnderNode(
-        string outDir, string formName = "LoginForm", string? clickId = null, string node = "node")
+        string outDir, string formName = "LoginForm", string? clickId = null, string node = "node",
+        (string Id, string Event)? dispatch = null)
     {
         var script = Directory.GetFiles(outDir, "*.js").FirstOrDefault();
         if (script == null)
@@ -292,6 +293,13 @@ public class FormDesignerAcceptanceTests
         var clickScript = clickId == null
             ? "for (const [id, el] of els) { try { el.click(); } catch (e) { console.log(\"CLICK ERROR \" + id + \": \" + e); } }"
             : $"if (els.has(\"{clickId}\")) {{ try {{ els.get(\"{clickId}\").click(); }} catch (e) {{ console.log(\"CLICK ERROR {clickId}: \" + e); }} }} else {{ console.log(\"NO ELEMENT {clickId}\"); }}";
+
+        // Slice 3: an event other than click (a GroupBox's Enter is the fieldset's `focusin`), dispatched AFTER the clicks
+        // through the stub's own dispatch — so a handler registered on that DOM event name is the one that runs.
+        if (dispatch is { } d)
+        {
+            clickScript += $"\nif (els.has(\"{d.Id}\")) {{ try {{ els.get(\"{d.Id}\").dispatch(\"{d.Event}\"); }} catch (e) {{ console.log(\"DISPATCH ERROR {d.Id}: \" + e); }} }} else {{ console.log(\"NO ELEMENT {d.Id}\"); }}";
+        }
 
         // A DOM stub just real enough for the generated dispatch: elements by id, addEventListener,
         // and a click() that invokes what was registered.
