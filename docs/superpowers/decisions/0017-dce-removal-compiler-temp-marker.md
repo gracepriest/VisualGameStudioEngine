@@ -1,7 +1,10 @@
 # ADR 0017: DCE removes only COMPILER TEMPS — a minted-name marker, never spelling
 
 - **Date:** 2026-09-29
-- **Status:** Accepted
+- **Status:** Accepted. D2's by-name rule ("no `IRVariable` operand spells its name") and D4
+  (#121) are superseded by ADR-0018 D4 and D2: the names are reserved, the rule became the
+  verifier's Invariant T, and a pass mints through `IRFunction.DeclareTemp`, never
+  `GetNextTempName`.
 - **Decided by:**
   - The owner, bindingly: "fix #163" means switch `DeadCodeEliminationPass`'s instruction removal
     ON, guarded so that a user variable spelled like a temp is never removed. The guard is a real

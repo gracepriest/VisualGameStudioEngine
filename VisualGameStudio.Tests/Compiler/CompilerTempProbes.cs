@@ -428,15 +428,16 @@ internal static class TempProbes
         """, "10");
 
     // ---------------------------------------------------------------------------------------------
-    // The by-name rule's witness and the #121 collision family: a user variable that IRBuilder does
-    // not reserve (a For Each, Catch, pattern or LINQ range variable) spelled like a temp.
+    // The collision family (ADR-0017 Findings 3, closed by ADR-0018): a user variable that IRBuilder
+    // did not reserve (a For Each, Catch, pattern or LINQ range variable) spelled like a temp.
     // ---------------------------------------------------------------------------------------------
 
-    /// <summary>⭐ THE WITNESS, `CT_wbr_t0`. `Catch t0` with orphans BEFORE the Try. Without D2's
-    /// by-name rule (mutant M8) the orphan `t0 = -a` goes, the C++ backend's own temp counter
-    /// renumbers, and the surviving string temp becomes `t0` inside the catch:
-    /// `t0 = BasicLang::String(t0.what())`, "no viable overloaded '='". OK before #163, OK with the
-    /// rule, COMPILE-FAIL without it, on C++ in all three entry points.</summary>
+    /// <summary>⭐ `CT_wbr_t0`, ADR-0017's witness for its by-name rule. `Catch t0` with orphans BEFORE the
+    /// Try. When the orphan `t0 = -a` was deleted the C++ backend's own temp counter renumbered, and the
+    /// surviving string temp became `t0` inside the catch: `t0 = BasicLang::String(t0.what())`,
+    /// "no viable overloaded '='" — so ADR-0017 kept the orphan by name. ADR-0018 reserves the Catch
+    /// variable instead (the counter never hands out `t0`) and the rule is gone: this compiles and prints
+    /// VB's answer on all four backends, C# included (it did not compile there before #121).</summary>
     internal static readonly TempProbe CtWbrT0 = new("CT_wbr_t0", """
         Sub Show(n As Integer)
             Console.WriteLine(CStr(n))
@@ -481,8 +482,9 @@ internal static class TempProbes
         """, "5\n5\n5\nx");
 
     /// <summary>R11: two For Each loops whose variables are `t0` and `t1`. VB: `3 | 4 | 3 | 4`. Every
-    /// backend was already wrong (C# `-3|-4|3|4`, C++ `-3|-4|6|8`, MSIL `-3|-4|3|4`, JavaScript a TDZ
-    /// `ReferenceError`). The by-name rule holds it there; #121 fixes it.</summary>
+    /// backend was wrong before #121 (C# `-3|-4|3|4`, C++ `-3|-4|6|8` before #163 and `-3|-4|3|4` after,
+    /// MSIL `-3|-4|3|4`, JavaScript a TDZ `ReferenceError`): the loop variables shared their names with
+    /// minted temps. #121 reserves them, and every backend prints VB's answer.</summary>
     internal static readonly TempProbe R11 = new("R11_ForEachT0", """
         Sub Show(n As Integer)
             Console.WriteLine(CStr(n))
@@ -527,13 +529,18 @@ internal static class TempProbes
         End Sub
         """, "3\n4\n3\n4");
 
-    /// <summary>`LC_t0`: a For Each variable `t0` CAPTURED by a lambda. ⚠ The one change of #163 that is
-    /// not toward VB: MSIL WRONG (`7|-3|7|-4`) before, RUN-FAIL after. See the fence.</summary>
+    /// <summary>`LC_t0`: a For Each variable `t0` CAPTURED by a lambda. ADR-0017's one change that was not
+    /// toward VB (MSIL WRONG `7|-3|7|-4` before #163, `7` then a segmentation fault after it); C++ printed
+    /// `7|0|7|0` and JavaScript threw a ReferenceError. #121 reserves the name in the creator AND in the
+    /// lambda, and all four backends print VB's answer.</summary>
     internal static readonly TempProbe LcT0 = new("LC_t0", LambdaCapture("t0"), "7\n3\n7\n4");
 
     internal static readonly TempProbe LcT1 = new("LC_t1", LambdaCapture("t1"), "7\n3\n7\n4");
     internal static readonly TempProbe LcT3 = new("LC_t3", LambdaCapture("t3"), "7\n3\n7\n4");
     internal static readonly TempProbe LcControl = new("LC_x", LambdaCapture("x"), "7\n3\n7\n4");
+
+    /// <summary>`LC_&lt;variable&gt;`: <see cref="LcT0"/> with the For Each variable spelled <paramref name="variable"/>.</summary>
+    internal static TempProbe LambdaCaptureProbe(string variable) => new($"LC_{variable}", LambdaCapture(variable), "7\n3\n7\n4");
 
     private static string LambdaCapture(string variable) => $$"""
         Sub Show(n As Integer)
@@ -976,56 +983,6 @@ internal static class TempExec
         }
     }
 
-    /// <summary>What an execution cell ended as. <see cref="Ran"/> carries stdout; the failures carry what to look for.</summary>
-    internal enum Kind { Ran, RunFailed }
-
-    internal sealed record Cell(Kind Kind, string Output);
-
-    /// <summary>
-    /// Like <see cref="Run(Bk, string)"/> for the two backends whose failure to RUN is a pinned outcome
-    /// (JavaScript: a thrown ReferenceError; MSIL: an invalid program). The other two only ever ran here.
-    /// </summary>
-    internal static Cell Observe(Bk backend, string emitted)
-    {
-        switch (backend)
-        {
-            case Bk.JavaScript:
-            {
-                var (exit, stdout, stderr) = JavaScriptExecutionTests.RunNodeScriptForOutcome(emitted);
-                return exit == 0 ? new Cell(Kind.Ran, Norm(stdout)) : new Cell(Kind.RunFailed, Norm(stdout + "\n" + stderr));
-            }
-            case Bk.Msil:
-                return ObserveMsil(emitted);
-            default:
-                return new Cell(Kind.Ran, Norm(Run(backend, emitted)));
-        }
-    }
-
-    /// <summary>
-    /// MSIL, by EXIT CODE. <c>MsilHarness.RunIl</c> reads only the text ("Unhandled exception", InvalidProgramException) and
-    /// classes a process that prints `7` and then dies of a segmentation fault (exit 139; on Windows an access violation) as
-    /// <c>Ran</c> with output `7` — which is exactly what `LC_t0` does after #163, and what the fence must be able to see.
-    /// </summary>
-    private static Cell ObserveMsil(string il)
-    {
-        var ilasm = MsilHarness.RequireIlasm();
-        var dir = Path.Combine(Path.GetTempPath(), "bl-t163-msil-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(dir);
-        try
-        {
-            var ilPath = Path.Combine(dir, "T.il");
-            var exePath = Path.Combine(dir, "T.exe");
-            File.WriteAllText(ilPath, il);
-            var (asmExit, asmOut, asmErr) = CliTestHarness.RunProcess(ilasm, new[] { ilPath, "-exe", "-output=" + exePath }, dir, timeoutMs: 120_000);
-            Assert.That(asmExit == 0 && File.Exists(exePath), Is.True, $"ilasm rejected the emitted IL:\n{asmOut}{asmErr}");
-            File.WriteAllText(Path.Combine(dir, "T.runtimeconfig.json"),
-                "{\"runtimeOptions\":{\"tfm\":\"net8.0\",\"framework\":{\"name\":\"Microsoft.NETCore.App\",\"version\":\"8.0.0\"}}}");
-            var (exit, stdout, stderr) = CliTestHarness.RunProcess("dotnet", new[] { exePath }, dir, timeoutMs: 60_000);
-            return exit == 0 ? new Cell(Kind.Ran, Norm(stdout)) : new Cell(Kind.RunFailed, Norm(stdout + "\n" + stderr));
-        }
-        finally { try { Directory.Delete(dir, recursive: true); } catch { /* temp */ } }
-    }
-
     /// <summary>
     /// The LLVM leg. The backend has no console, and names its entry point `@Main`, so nothing it emits
     /// links on its own (`use of undefined value '@CStr'`, `undefined reference to main`, both before and
@@ -1077,45 +1034,6 @@ internal static class TempExec
             }
         }
         Assert.That(failures, Is.Empty, $"{label} on {backend}, through {string.Join(", ", Enum.GetValues<EntryPoint>())}:\n" + string.Join("\n", failures));
-    }
-
-    /// <summary>What a pinned cell must look like: it Ran and printed exactly <see cref="Text"/>; or it failed to run and its
-    /// output contains <see cref="Text"/> (a ReferenceError); or it printed <see cref="Text"/> and THEN died
-    /// (<see cref="AfterPrinting"/>: the `7` MSIL prints before its segmentation fault).</summary>
-    internal sealed record Pin(Kind Kind, string Text, bool AfterPrinting = false)
-    {
-        internal static Pin Ran(string text) => new(Kind.Ran, text);
-        internal static Pin RunFailed(string contains) => new(Kind.RunFailed, contains);
-        internal static Pin RunFailedAfterPrinting(string prefix) => new(Kind.RunFailed, prefix, true);
-
-        internal bool Matches(Cell cell) => cell.Kind == Kind && Kind switch
-        {
-            Kind.Ran => cell.Output == Norm(Text),
-            _ when AfterPrinting => cell.Output.StartsWith(Text, StringComparison.Ordinal),
-            _ => cell.Output.Contains(Text, StringComparison.Ordinal),
-        };
-    }
-
-    /// <summary>⭐ A CURRENT behaviour, pinned in every entry point. Used only for the #121 fence, where the pin is the point.</summary>
-    internal static void AssertPinnedInEveryEntryPoint(Bk backend, string source, Pin pin, string label)
-    {
-        RequireTool(backend);
-        var failures = new List<string>();
-        foreach (var entry in Enum.GetValues<EntryPoint>())
-        {
-            try
-            {
-                var cell = Observe(backend, Emit(backend, entry, source));
-                if (!pin.Matches(cell)) failures.Add($"{entry}: {cell.Kind} [{cell.Output.Replace("\n", " | ")}]");
-            }
-            catch (AssertionException ex)
-            {
-                failures.Add($"{entry}: {ex.Message.Split('\n')[0]}");
-            }
-        }
-        Assert.That(failures, Is.Empty,
-            $"{label} on {backend} was pinned as {pin.Kind} [{pin.Text.Replace("\n", " | ")}]. If #121 (reserving the temp-spelled names of For Each, Catch, pattern and LINQ " +
-            $"variables) has landed, this row flips deliberately: update it with ADR-0017 and HANDOFF.\n" + string.Join("\n", failures));
     }
 
     /// <summary>Whether <c>clang</c> is on PATH — the only gate the LLVM leg needs.</summary>

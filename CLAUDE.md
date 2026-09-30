@@ -125,10 +125,13 @@ Backends: `CSharpBackend.cs`, `LLVMBackend.cs`, `MSILBackend.cs`, `CppCodeGenera
 per-feature handlers, `CompletionService.cs`). `MyBase.New(...)` is an `IRBaseConstructorCall`
 **instruction** ending the constructor's entry-block prologue (ADR-0016) — not a list on
 `IRConstructor`; a use with no home in any block is invisible to every pass.
-`IRValue.IsCompilerTemp`, set only by `IRBuilder.MarkCompilerTemps`, is the dead-code pass's
-removal licence (ADR-0017): a temp is never recognized by spelling (a user may name a variable
-`t5`, `T5` or `_tmp1`), and a pass that mints a temp must mint through `IRFunction.GetNextTempName`
-and set the flag.
+`IRValue.IsCompilerTemp`, set by `IRBuilder.MarkCompilerTemps` (and `IRFunction.DeclareTemp`), is
+the dead-code pass's removal licence (ADR-0017): a temp is never recognized by spelling (a user may
+name a variable `t5`, `T5` or `_tmp1`). An optimizer pass mints ONLY through
+`IRFunction.DeclareTemp`, which skips every name the program owns (`IRFunction.ReservedNames` plus
+the module-level names), marks and DECLARES the temp (ADR-0018); never call `GetNextTempName` from a
+pass (a test reads the IL for it). `ReservedNames` is not a declaration list: no backend may read
+it, and `LocalVariables` stays "what the backend declares".
 
 ## Form designer (`BasicLang/Forms/`, `VisualGameStudio.Shell/Controls/`)
 

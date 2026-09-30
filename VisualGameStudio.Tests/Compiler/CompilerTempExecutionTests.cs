@@ -106,22 +106,19 @@ public class CompilerTempExecutionTests
     }
 
     // ============================================================================================
-    // ⭐ M8 — the by-name rule's WITNESS: `Catch t0` on C++
+    // ⭐ CT_wbr_t0 — ADR-0017's by-name witness, held by RESERVATION since ADR-0018 (#121)
     // ============================================================================================
 
-    private static IEnumerable<TestCaseData> WitnessCells()
-    {
-        // C#'s leg of this program does not compile, before and after #163 (measured): it is out.
-        var probe = TempProbes.CtWbrT0 with { Agrees = Bk.Cpp | Bk.JavaScript | Bk.Msil };
-        return Cells(probe);
-    }
+    private static IEnumerable<TestCaseData> WitnessCells() => Cells(TempProbes.CtWbrT0);
 
     /// <summary>
-    /// ⭐ THE WITNESS (ADR-0017 Findings 3): `Catch t0` with orphans before the Try. The orphan `t0 = -a` IS deleted, so the C++
-    /// backend's own temp counter renumbers, and WITHOUT D2's by-name rule the surviving string temp becomes `t0` inside the
-    /// catch — `t0 = BasicLang::String(t0.what())`, clang: "no viable overloaded '='". OK before #163, OK with the rule,
-    /// COMPILE-FAIL without it, in C++ through the CLI, the CLI with `--optimize` and the project route. **Mutant M8 (the
-    /// rule dropped) must fail this test.** It must compile AND print VB's answer in every entry point.
+    /// ⭐ `Catch t0` with orphans before the Try. ADR-0017 kept the orphan `t0 = -a` by NAME, because deleting it renumbered the C++
+    /// backend's own temp counter and put a surviving string temp on the user's `Catch t0`
+    /// (`t0 = BasicLang::String(t0.what())`, clang: "no viable overloaded '='"). ADR-0018 D4 removed that rule: IRBuilder now
+    /// RESERVES a Catch variable's name (D1), so no counter hands it out and the orphan is deleted like any other. The program
+    /// compiles AND prints VB's answer on all four backends in every entry point — C# included, which did not compile before #121.
+    /// <b>A build that does not reserve a Catch variable (ADR-0018's "Catch not reserved" mutant) returns the C++
+    /// COMPILE-FAIL and fails this test.</b>
     /// </summary>
     [TestCaseSource(nameof(WitnessCells))]
     public void CT_wbr_t0_CatchT0_StillCompilesAndRuns(TempProbe probe, Bk backend)
@@ -136,79 +133,73 @@ public class CompilerTempExecutionTests
 }
 
 /// <summary>
-/// ⭐ ADR-0017 D2's by-name rule and D4, pinned: <b>#121's regression fence</b>. A user variable IRBuilder does not reserve — a
-/// <c>For Each</c>, <c>Catch</c>, pattern or LINQ range variable (the #121 gap) — spelled like a temp collides with a minted
-/// name. Every program here was already wrong or failing before #163. The by-name rule holds each at its pre-#163 answer, and
-/// #163 moved a few cells; both kinds of row are pinned here as CURRENT behaviour, so that #121 (which reserves those names)
-/// flips each one deliberately, in the same commit, rather than as a surprise.
+/// ⭐ The collision fence, FLIPPED (ADR-0018, #121). A user variable that IRBuilder did not reserve — a <c>For Each</c>,
+/// <c>Catch</c>, pattern or LINQ range variable — spelled like a temp (<c>t0</c>) shared its name with a minted temp, so every
+/// program here was wrong or failing on some backend before #163 (ADR-0017 Findings 3: 99 witness cells). ADR-0017 fenced them
+/// as CURRENT behaviour and held one cell compiling with a by-name keep in dead-code elimination. ADR-0018 reserves every name
+/// the program owns and removes the keep, so each cell prints VB's answer and this fixture says so.
 ///
 /// <list type="bullet">
-/// <item><b>Pinned WRONG or failing</b> (<see cref="Fence"/>): `LC_t0` and R11. `LC_t0` on MSIL is the one #163 change that is
-/// not toward VB: it printed a wrong answer (`7|-3|7|-4`) BEFORE #163 and now prints `7` and then fails (3 cells) — with
-/// `-a`'s orphan gone, MSIL conflates the delegate's local with another slot. The by-name rule does not reach it (no variable in
-/// `Run` spells the deleted temp's name), so it is OPEN, and #121's to close.</item>
-/// <item><b>Pinned CORRECT</b> (<see cref="NowReachVb"/>): the 27 cells (9 program × backend pairs, three entry points each) that
-/// moved toward VB — C++ COMPILE-FAIL → OK in 12 and WRONG → OK in 9, C# WRONG → OK in 3, MSIL RUN-FAIL → OK in 3.</item>
-/// <item><b>Controls</b>: the same shapes with ordinary names are VB-correct everywhere and identical before and after.</item>
+/// <item><b>Moved by #121</b> (<see cref="MovedBy121"/>): <c>LC_t0</c> on C++, JavaScript and MSIL (it was a wrong answer, a
+/// ReferenceError and a segmentation fault) and R11 on all four backends (wrong on three, a ReferenceError on JavaScript).</item>
+/// <item><b>Moved by #163</b> (<see cref="NowReachVb"/>): the 27 cells (9 program × backend pairs, three entry points each) that
+/// reached VB's answer when dead-code elimination began deleting unused temps. Unchanged by #121.</item>
+/// <item><b>Controls</b> (<see cref="Controls"/>): the same shapes with ordinary names, VB-correct everywhere before and after.</item>
 /// </list>
+///
+/// <para>The rest of the ADR-0017 Findings 3 witness matrix (every program that now gives VB's answer, on every backend where it
+/// does, with its control) is <see cref="NameReservationExecutionTests"/>; the cells listed here are the ones it does not repeat
+/// (<see cref="Covered"/>).</para>
 /// </summary>
 [TestFixture]
 [Category("Integration")]
 [NonParallelizable]
 public class CompilerTempCollisionFenceTests
 {
-    // ---- pinned CURRENT behaviour: wrong or failing, #121's to fix ---------------------------------
+    // ---- moved by #121: pinned WRONG or failing until then, VB's answer now --------------------------
 
-    private static IEnumerable<TestCaseData> Fence()
+    // LC_t0: a For Each variable `t0` captured by a lambda. (Its C# cell moved to VB's output with #163: see NowReachVbCells.)
+    // R11: two For Each loops whose variables are t0 and t1. VB: 3 | 4 | 3 | 4.
+    private static readonly (TempProbe Probe, Bk Backend)[] MovedBy121Cells =
     {
-        var lc = TempProbes.LcT0;
-        // LC_t0: a For Each variable `t0` captured by a lambda. (Its C# cell moved to VB's output: see NowReachVb.)
-        yield return new TestCaseData(lc, Bk.Cpp, "ran", "7\n0\n7\n0").SetName("LC_t0_Cpp_WrongBefore163AndAfter");
-        yield return new TestCaseData(lc, Bk.JavaScript, "fails", "ReferenceError").SetName("LC_t0_JavaScript_ReferenceError_BeforeAndAfter");
-        yield return new TestCaseData(lc, Bk.Msil, "failsAfterPrinting", "7").SetName("LC_t0_Msil_RunFail_WasAWrongAnswerBefore163");
+        (TempProbes.LcT0, Bk.Cpp),        // was WRONG `7|0|7|0`
+        (TempProbes.LcT0, Bk.JavaScript), // was a ReferenceError
+        (TempProbes.LcT0, Bk.Msil),       // was WRONG `7|-3|7|-4` before #163, `7` then a segmentation fault after it
+        (TempProbes.R11, Bk.CSharp),      // was WRONG `-3|-4|3|4`
+        (TempProbes.R11, Bk.Cpp),         // was WRONG `-3|-4|3|4` (`-3|-4|6|8` before #163)
+        (TempProbes.R11, Bk.JavaScript),  // was a ReferenceError
+        (TempProbes.R11, Bk.Msil),        // was WRONG `-3|-4|3|4`
+    };
 
-        // R11: two For Each loops whose variables are t0 and t1. VB: 3 | 4 | 3 | 4.
-        var r11 = TempProbes.R11;
-        yield return new TestCaseData(r11, Bk.CSharp, "ran", "-3\n-4\n3\n4").SetName("R11_CSharp_MinusThreeMinusFourThreeFour");
-        yield return new TestCaseData(r11, Bk.Cpp, "ran", "-3\n-4\n3\n4").SetName("R11_Cpp_MinusThreeMinusFourThreeFour_Was_6_8_Before163");
-        yield return new TestCaseData(r11, Bk.JavaScript, "fails", "ReferenceError").SetName("R11_JavaScript_ReferenceError");
-        yield return new TestCaseData(r11, Bk.Msil, "ran", "-3\n-4\n3\n4").SetName("R11_Msil_MinusThreeMinusFourThreeFour");
-    }
+    private static IEnumerable<TestCaseData> MovedBy121()
+        => MovedBy121Cells.Select(c => new TestCaseData(c.Probe, c.Backend).SetName($"{c.Probe.Id}_{c.Backend}"));
 
     /// <summary>
-    /// The by-name rule holds these programs at their pre-#163 answers. Without it (mutant M8) R11 prints VB's `3 | 4 | 3 | 4` in
-    /// 12 of 12 cells — the removal of the orphan would have fixed it by accident, and would have broken `CT_wbr_t0` on C++. #121
-    /// reserves the names and flips every row here.
+    /// The seven cells ADR-0017 pinned as wrong or failing (its "held until #121" table). #121 reserves the For Each variable's name,
+    /// so the renamer separates it from the minted temp on every backend, and each cell prints VB's answer in all three entry
+    /// points. <b>A build that does not reserve a For Each variable (ADR-0018's "For Each not reserved" mutant) fails them.</b>
     /// </summary>
-    [TestCaseSource(nameof(Fence))]
-    public void TheCollision_IsHeldAtItsCurrentAnswer_Until121(TempProbe probe, Bk backend, string how, string text)
-        => TempExec.AssertPinnedInEveryEntryPoint(backend, probe.Source, how switch
-        {
-            "ran" => TempExec.Pin.Ran(text),
-            "fails" => TempExec.Pin.RunFailed(text),
-            "failsAfterPrinting" => TempExec.Pin.RunFailedAfterPrinting(text),
-            _ => throw new ArgumentException(how),
-        }, probe.Id);
+    [TestCaseSource(nameof(MovedBy121))]
+    public void ACollisionCellMovedBy121_PrintsVbsAnswer_InEveryEntryPoint(TempProbe probe, Bk backend)
+        => TempExec.AssertMatchesInEveryEntryPoint(backend, probe.Source, probe.Vb, probe.Id + " (moved to VB's answer by #121)");
 
-    // ---- pinned CORRECT: the cells #163 moved to VB's output --------------------------------------
+    // ---- moved by #163: the cells dead-code elimination moved to VB's output ------------------------
+
+    private static readonly (TempProbe Probe, Bk Backend)[] NowReachVbCells =
+    {
+        (TempProbes.CatchReadBeforeWrite("t2"), Bk.Cpp),   // C++ COMPILE-FAIL → OK
+        (TempProbes.CatchReadBeforeWrite("t3"), Bk.Cpp),   // C++ COMPILE-FAIL → OK
+        (TempProbes.CatchWriteBeforeRead("t2"), Bk.Cpp),   // C++ COMPILE-FAIL → OK
+        (TempProbes.CatchWriteBeforeRead("t3"), Bk.Cpp),   // C++ COMPILE-FAIL → OK
+        (TempProbes.ForEachReadBeforeWrite("t1"), Bk.Cpp), // C++ WRONG → OK  (3 | 7 | -3 before)
+        (TempProbes.ForEachWriteBeforeRead("t2"), Bk.Cpp), // C++ WRONG → OK  (… -7 | 7 | -7 before)
+        (TempProbes.LcT1, Bk.Cpp),                         // C++ WRONG → OK  (7 | 0 | 7 | 0 before)
+        (TempProbes.LcT0, Bk.CSharp),                      // C# WRONG → OK   (7 | -7 | 7 | -7 before)
+        (TempProbes.LcT3, Bk.Msil),                        // MSIL RUN-FAIL → OK (an AccessViolationException before)
+    };
 
     private static IEnumerable<TestCaseData> NowReachVb()
-    {
-        (TempProbe Probe, Bk Backend)[] cells =
-        {
-            (TempProbes.CatchReadBeforeWrite("t2"), Bk.Cpp),   // C++ COMPILE-FAIL → OK
-            (TempProbes.CatchReadBeforeWrite("t3"), Bk.Cpp),   // C++ COMPILE-FAIL → OK
-            (TempProbes.CatchWriteBeforeRead("t2"), Bk.Cpp),   // C++ COMPILE-FAIL → OK
-            (TempProbes.CatchWriteBeforeRead("t3"), Bk.Cpp),   // C++ COMPILE-FAIL → OK
-            (TempProbes.ForEachReadBeforeWrite("t1"), Bk.Cpp), // C++ WRONG → OK  (3 | 7 | -3 before)
-            (TempProbes.ForEachWriteBeforeRead("t2"), Bk.Cpp), // C++ WRONG → OK  (… -7 | 7 | -7 before)
-            (TempProbes.LcT1, Bk.Cpp),                         // C++ WRONG → OK  (7 | 0 | 7 | 0 before)
-            (TempProbes.LcT0, Bk.CSharp),                      // C# WRONG → OK   (7 | -7 | 7 | -7 before)
-            (TempProbes.LcT3, Bk.Msil),                        // MSIL RUN-FAIL → OK (an AccessViolationException before)
-        };
-        foreach (var (probe, backend) in cells)
-            yield return new TestCaseData(probe, backend).SetName($"{probe.Id}_{backend}");
-    }
+        => NowReachVbCells.Select(c => new TestCaseData(c.Probe, c.Backend).SetName($"{c.Probe.Id}_{c.Backend}"));
 
     [TestCaseSource(nameof(NowReachVb))]
     public void ACollisionCell_NowReachesVbsOutput_InEveryEntryPoint(TempProbe probe, Bk backend)
@@ -217,18 +208,28 @@ public class CompilerTempCollisionFenceTests
     // ---- the fence's own roster ------------------------------------------------------------------
 
     /// <summary>
-    /// The three tables above are the fence; a table that quietly loses a row is a fence with a hole in it. Pinned by count, and
-    /// (since every other test here is table-driven, which <c>JsExecutionTierRosterTests</c> cannot count) the one plain test that
-    /// lets this fixture be in that roster: its JavaScript cells run under Node.
+    /// The (probe, backend) pairs this fixture and <see cref="CompilerTempExecutionTests"/> already run, by probe id, so that
+    /// <see cref="NameReservationExecutionTests"/> repeats none of them: the two tables above and the `CT_wbr_t0` witness.
+    /// </summary>
+    internal static IReadOnlySet<(string Id, Bk Backend)> Covered { get; } = MovedBy121Cells.Concat(NowReachVbCells)
+        .Concat(TempExec.Backends(Bk.All).Select(b => (Probe: TempProbes.CtWbrT0, Backend: b)))
+        .Select(c => (c.Probe.Id, c.Backend))
+        .ToHashSet();
+
+    /// <summary>
+    /// The tables are the fence; a table that quietly loses a row is a fence with a hole in it. Pinned by count, and (since every
+    /// other test here is table-driven, which <c>JsExecutionTierRosterTests</c> cannot count) the one plain test that lets this
+    /// fixture be in that roster: its JavaScript cells run under Node.
     /// </summary>
     [Test]
     public void TheFenceTables_HaveTheirRows()
     {
         Assert.Multiple(() =>
         {
-            Assert.That(Fence().Count(), Is.EqualTo(7), "LC_t0 on C++, JavaScript and MSIL; R11 on all four");
+            Assert.That(MovedBy121().Count(), Is.EqualTo(7), "LC_t0 on C++, JavaScript and MSIL; R11 on all four");
             Assert.That(NowReachVb().Count(), Is.EqualTo(9), "9 program × backend pairs = 27 cells that #163 moved to VB's output");
             Assert.That(Controls().Count(), Is.EqualTo(8), "LC_x and R11_yz on four backends");
+            Assert.That(Covered, Has.Count.EqualTo(7 + 9 + 4), "the two tables and CT_wbr_t0 on four backends: no pair is listed twice");
         });
     }
 
@@ -238,8 +239,8 @@ public class CompilerTempCollisionFenceTests
         => new[] { TempProbes.LcControl, TempProbes.R11Control }
             .SelectMany(p => TempExec.Backends(Bk.All).Select(b => new TestCaseData(p, b).SetName($"{p.Id}_{b}")));
 
-    /// <summary>`LC_x` and `R11_yz`: the same shapes as `LC_t0` and R11 with ordinary names. Every temp-spelled failure above needs a
-    /// temp-spelled, unreserved USER name, and nothing else.</summary>
+    /// <summary>`LC_x` and `R11_yz`: the same shapes as `LC_t0` and R11 with ordinary names. Every temp-spelled failure ADR-0017
+    /// fenced needed a temp-spelled, unreserved USER name, and nothing else.</summary>
     [TestCaseSource(nameof(Controls))]
     public void TheSameShapeWithAnOrdinaryName_IsVbCorrectEverywhere(TempProbe probe, Bk backend)
         => TempExec.AssertMatchesInEveryEntryPoint(backend, probe.Source, probe.Vb, probe.Id);

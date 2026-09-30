@@ -2038,10 +2038,12 @@ namespace BasicLang.Compiler.IR.Optimization
     /// write their operand), a compare, an <c>Is</c>, and a load of a local's own storage (an
     /// element read can trap, and C++ folds the element pointer INTO the load). Never a call, a
     /// store, an <see cref="IRBaseConstructorCall"/>, a throw or an await.</item>
-    /// <item><b>Unused</b> — by identity (<see cref="UsedValues"/>), AND no variable operand
-    /// spells its name. That second half matters only for a temp-spelled user variable IRBuilder
-    /// does not reserve (For Each, Catch, pattern, LINQ). Its witness is C++ failing to compile
-    /// without it (ADR-0017, <c>CT_wbr_t0</c>).</item>
+    /// <item><b>Unused</b> — by identity (<see cref="UsedValues"/>). ⚠ ADR-0017's second half, "and no
+    /// variable operand spells its name", is GONE (ADR-0018 D4): it only ever held a temp that shared its
+    /// name with a user variable IRBuilder did not reserve, and the reservation is now total, so a minted
+    /// name never equals a name the program owns. That disjointness is an IR invariant the verifier
+    /// checks on every compile (<c>IRVerifier.CheckInvariantT</c>), where a leak is NAMED instead of held
+    /// at a wrong answer by a keep.</item>
     /// <item><b>ADR-0008 settled point 3</b>: removing it leaves every non-replicable operand
     /// materialised as it was (<see cref="KeepsOperandMaterialisation"/>).</item>
     /// </list>
@@ -2075,11 +2077,11 @@ namespace BasicLang.Compiler.IR.Optimization
                 // Remove dead instructions. The uses are collected over EVERY block before any
                 // block loses an instruction: a value defined in one block is routinely used in
                 // another (a loop body reading a value computed before the loop).
-                var used = UsedValues(function, out var namesRead);
+                var used = UsedValues(function);
                 var operandUses = OperandUseCounts(function);
                 foreach (var block in function.Blocks)
                 {
-                    RemoveDeadInstructions(function, block, used, namesRead, operandUses);
+                    RemoveDeadInstructions(function, block, used, operandUses);
                 }
             }
             
@@ -2095,22 +2097,17 @@ namespace BasicLang.Compiler.IR.Optimization
         /// off its <see cref="IRSwitch"/>; an expression tree hangs off its consumer).
         /// Reference identity: a use is of the <see cref="IRValue"/> object.
         ///
-        /// <para><paramref name="namesRead"/> is the one exception, and it only ever keeps a value:
-        /// the names of the <see cref="IRVariable"/> operands met on the way. A value whose name a
-        /// variable spells is kept even when no operand is the object. That happens only when a user
-        /// variable IRBuilder does not reserve (a For Each, Catch, pattern or LINQ range variable —
-        /// the #121 gap) is spelled like a temp. Such a program is already fragile on every backend,
-        /// and deleting the temp re-shuffles which cells break. MEASURED (ADR-0017, witness
-        /// <c>CT_wbr_t0</c>): without this rule, the C++ backend's own temp counter renumbers, puts a
-        /// surviving string temp on the user's <c>Catch t0</c>, and the program stops compiling
-        /// (<c>t0 = BasicLang::String(t0.what())</c>). It compiles and prints VB's output with the
-        /// rule, and did before #163. The C# backend's <c>_tempDefsByName</c> reads the same kind of
-        /// variable as the temp's definition.</para>
+        /// <para>⚠ Identity only. Until ADR-0018 this also collected the NAMES of the variable operands it
+        /// met, and a value whose name one of them spelled was kept even when no operand was the object
+        /// (ADR-0017's by-name rule; its witness, <c>CT_wbr_t0</c>, was a C++ compile failure when a temp
+        /// and a user's unreserved <c>Catch t0</c> shared a name). #121 reserves every such name, so the
+        /// minter never hands one out and the shape cannot arise; the rule became the verifier's
+        /// Invariant T (a compiler temp never carries a reserved name), measured with no witness left
+        /// (ADR-0018 D4).</para>
         /// </summary>
-        private static HashSet<IRValue> UsedValues(IRFunction function, out HashSet<string> namesRead)
+        private static HashSet<IRValue> UsedValues(IRFunction function)
         {
             var used = new HashSet<IRValue>(ReferenceEqualityComparer.Instance);
-            namesRead = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var pending = new Stack<IRValue>();
             foreach (var block in function.Blocks)
             {
@@ -2123,8 +2120,6 @@ namespace BasicLang.Compiler.IR.Optimization
                     {
                         var value = pending.Pop();
                         if (value == null || !used.Add(value)) continue;
-                        if (value is IRVariable variable && !string.IsNullOrEmpty(variable.Name))
-                            namesRead.Add(variable.Name);
                         foreach (var nested in UsesOf(value)) pending.Push(nested);
                     }
                 }
@@ -2156,13 +2151,12 @@ namespace BasicLang.Compiler.IR.Optimization
         }
 
         private void RemoveDeadInstructions(IRFunction function, BasicBlock block, HashSet<IRValue> used,
-            HashSet<string> namesRead, Dictionary<IRValue, int> operandUses)
+            Dictionary<IRValue, int> operandUses)
         {
             for (int i = block.Instructions.Count - 1; i >= 0; i--)
             {
                 if (block.Instructions[i] is not IRValue value) continue;
                 if (used.Contains(value)) continue;
-                if (!string.IsNullOrEmpty(value.Name) && namesRead.Contains(value.Name)) continue;
                 if (!IsRemovableWhenUnused(value, function)) continue;
                 if (!KeepsOperandMaterialisation(value, operandUses)) continue;
 
@@ -3289,7 +3283,8 @@ namespace BasicLang.Compiler.IR.Optimization
             // seventh only survives because IsInlineable REFUSES it for block count. All seven are
             // correct without this pass. FIVE separate defects, not one:
             //  1. Inlined locals are never added to the caller's LocalVariables, so every one is
-            //     emitted undeclared.
+            //     emitted undeclared. (ADR-0018: IRFunction.DeclareTemp is now the one door through
+            //     which a pass mints AND declares a temp; a re-enabled inliner must use it.)
             //  2. A definition is renamed by `tempCounter` while its USES are renamed by
             //     `prefix + name` (RemapValue) — two schemes that can never agree, which is the
             //     `_inline_t1_0` / `_inline_t1_x` mismatch above.

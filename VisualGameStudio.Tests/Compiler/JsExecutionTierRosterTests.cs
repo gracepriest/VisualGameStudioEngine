@@ -426,6 +426,16 @@ public class JsExecutionTierRosterTests
         // cells pin a Node ReferenceError). Named "...FenceTests", so the widened match below does NOT see it:
         // listed by hand, like every row that is not named "...ExecutionTests".
         typeof(CompilerTempCollisionFenceTests),
+        // Task #121 / ADR-0018 — the collision fence flipped, and the two fixtures that prove name reservation by RUNNING programs.
+        // TempMintingFacilityTests: a test-only optimizer pass, registered through OptimizationPipeline.AddPass, mints one temp through
+        // DeclareTemp in a function that spells the name it would take (Dim, parameter, For Each, Catch, pattern, lambda parameter,
+        // captured name, module function), and each program runs on C#, C++, JavaScript (Node: TempExec.Run -> RunNodeScript) and MSIL.
+        // Named "...FacilityTests", so the widened match below does NOT see it: listed by hand.
+        typeof(TempMintingFacilityTests),
+        // NameReservationExecutionTests: the whole ADR-0017 Findings 3 witness matrix (t0..t3, T0..T3 and the v0..v3 controls) through the
+        // CLI, the CLI with --optimize and CompileProjectFiles, on the same four backends. Named "...ExecutionTests", so the widened
+        // match below would catch it on its own; listed explicitly anyway.
+        typeof(NameReservationExecutionTests),
     };
 
     /// <summary>
@@ -477,7 +487,7 @@ public class JsExecutionTierRosterTests
 
     [Test]
     public void RosterIsPinned()
-        => Assert.That(ExecutionTier, Has.Length.EqualTo(96), // + CompilerTempExecutionTests + CompilerTempCollisionFenceTests (task #163, ADR-0017); + BaseConstructorCallLoweringExecutionTests + BaseConstructorCallCppRefusalTests (task #170, ADR-0016), MsilValueToStringExecutionTests (task #183), InterfaceMethodTypingExecutionTests, IsIsNotOperatorExecutionTests (task #185), MeReceiverTypingExecutionTests (task #176), UserDelegateConversionExecutionTests (task #187), DelegateMemberInvocationExecutionTests (task #188), NothingStringTextExecutionTests (task #189), MsilObjectBoxingExecutionTests (task #177), NotPrecedenceExecutionTests (#195), PropertyAccessExecutionTests (task #178), NameBindingExecutionTests (task #169/#199), PerIterationLoopBodyDimExecutionTests + PerIterationLoopBodyDimOptimizerExecutionTests (task #172, ADR-0014), LambdaBoundaryDiagnosticsExecutionTests (task #174); + WhenGuardCallRunTests, TypeOfExecutionTests (#197), ForwardDeclaredTypeExecutionTests
+        => Assert.That(ExecutionTier, Has.Length.EqualTo(98), // + TempMintingFacilityTests + NameReservationExecutionTests (task #121, ADR-0018); + CompilerTempExecutionTests + CompilerTempCollisionFenceTests (task #163, ADR-0017); + BaseConstructorCallLoweringExecutionTests + BaseConstructorCallCppRefusalTests (task #170, ADR-0016), MsilValueToStringExecutionTests (task #183), InterfaceMethodTypingExecutionTests, IsIsNotOperatorExecutionTests (task #185), MeReceiverTypingExecutionTests (task #176), UserDelegateConversionExecutionTests (task #187), DelegateMemberInvocationExecutionTests (task #188), NothingStringTextExecutionTests (task #189), MsilObjectBoxingExecutionTests (task #177), NotPrecedenceExecutionTests (#195), PropertyAccessExecutionTests (task #178), NameBindingExecutionTests (task #169/#199), PerIterationLoopBodyDimExecutionTests + PerIterationLoopBodyDimOptimizerExecutionTests (task #172, ADR-0014), LambdaBoundaryDiagnosticsExecutionTests (task #174); + WhenGuardCallRunTests, TypeOfExecutionTests (#197), ForwardDeclaredTypeExecutionTests
             "The execution-tier roster changed. That is fine — update the number — but it must " +
             "be a deliberate edit, not a silent shrink.");
 

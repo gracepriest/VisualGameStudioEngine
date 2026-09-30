@@ -326,6 +326,129 @@ public class ClosureLoweringRefusalTests
         Assert.That(ex!.Message, Does.Contain("'n'").And.Contain("'N'").And.Contain("only by case"));
     }
 
+    // ---- ADR-0018 (#121): the case-guard compares only the creator's VARIABLES the lambda uses -----
+
+    private static IRModule BuildIr(string program)
+    {
+        var ast = new Parser(new Lexer(program).Tokenize()).Parse();
+        var analyzer = new SemanticAnalyzer();
+        Assert.That(analyzer.Analyze(ast), Is.True,
+            "semantic errors:\n" + string.Join("\n", analyzer.Errors.Select(e => e.ToString())));
+        return new IRBuilder(analyzer).Build(ast, "MsilProbe");
+    }
+
+    private const string Show = """
+        Sub Show(n As Integer)
+            Console.WriteLine(CStr(n))
+        End Sub
+
+        """;
+
+    /// <summary>
+    /// Three programs VB accepts and C#, C++ and JavaScript run, each with a lambda parameter spelled <c>T0</c> whose body mints
+    /// temps. IRBuilder's build-time record of that lambda (<c>CapturedVariables</c>) holds its temps' names from BEFORE the renamer
+    /// ran, <c>t0</c> among them, and the guard used to compare every name in it with the parameter: <c>t0</c> differs from <c>T0</c>
+    /// only by case, so MSIL refused all three (MEASURED on the #121 base, every entry point).
+    /// <list type="bullet">
+    /// <item><b>LP_T0</b>: the matrix's own cell (<c>NameReservationExecutionTests</c>). Refused whatever the filter, before #121.</item>
+    /// <item><b>SiblingForEach</b>: a <c>For Each t0</c> the lambda cannot see. The reservation is function-wide, so the creator OWNS
+    /// <c>t0</c>: filtering the old set by ownership alone still refused it (MEASURED).</item>
+    /// <item><b>NestedLambda</b>: the <c>T0</c> lambda creates another, whose build-time record is folded into the capture set the
+    /// optimizer recomputes: reading that set alone, with ownership, still refused it (MEASURED).</item>
+    /// </list>
+    /// </summary>
+    private static IEnumerable<TestCaseData> UpperCaseLambdaParameterPrograms()
+    {
+        yield return new TestCaseData(Show + """
+            Sub Run(a As Integer)
+                Dim f As Func(Of Integer, Integer) = Function(T0 As Integer) -(-T0) + ((T0 * 2) * 0)
+                Show(f(a))
+            End Sub
+            Sub Main()
+                Run(5)
+            End Sub
+            """).SetName("TheCaseGuard_IgnoresATempsStaleName_LP_T0");
+        yield return new TestCaseData(Show + """
+            Sub Run(lst As List(Of Integer), a As Integer)
+                For Each t0 As Integer In lst
+                    Show(t0)
+                Next
+                Dim f As Func(Of Integer, Integer) = Function(T0 As Integer) -(-T0) + ((T0 * 2) * 0)
+                Show(f(a))
+            End Sub
+            Sub Main()
+                Dim lst As New List(Of Integer)
+                lst.Add(3)
+                Run(lst, 5)
+            End Sub
+            """).SetName("TheCaseGuard_IgnoresATempsStaleName_SiblingForEachT0");
+        yield return new TestCaseData(Show + """
+            Sub Run(lst As List(Of Integer), a As Integer)
+                For Each t0 As Integer In lst
+                    Show(t0)
+                Next
+                Dim f As Func(Of Integer, Integer) = Function(T0 As Integer)
+                                                         Dim h As Func(Of Integer) = Function() -(-T0) + ((T0 * 2) * 0)
+                                                         Return h()
+                                                     End Function
+                Show(f(a))
+            End Sub
+            Sub Main()
+                Dim lst As New List(Of Integer)
+                lst.Add(3)
+                Run(lst, 5)
+            End Sub
+            """).SetName("TheCaseGuard_IgnoresATempsStaleName_NestedLambda");
+    }
+
+    /// <summary>
+    /// ⭐ ADR-0018 (#121), direct: a lambda parameter spelled <c>T0</c> whose body mints temps is NOT refused on MSIL, standard or
+    /// aggressive. Not vacuous: the stale <c>t0</c> the old guard read is asserted present in IRBuilder's record first.
+    /// </summary>
+    [TestCaseSource(nameof(UpperCaseLambdaParameterPrograms))]
+    public void TheCaseGuard_IgnoresATempsStaleName(string program)
+    {
+        var lambdas = BuildIr(program).Functions.Where(f => f.IsLambda).ToList();
+        Assert.That(lambdas.SelectMany(l => l.CapturedVariables).Select(c => c.name), Does.Contain("t0"),
+            "precondition: IRBuilder's build-time record still holds the temp's pre-rename name t0");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(() => MsilHarness.CompileToIl(program), Throws.Nothing, "standard passes");
+            Assert.That(() => MsilHarness.CompileToIl(program, aggressive: true), Throws.Nothing, "aggressive passes");
+        });
+    }
+
+    /// <summary>
+    /// ⭐ ADR-0018 (#121), direct: the guard still refuses what it exists for — a VARIABLE OF THE CREATOR the lambda uses, spelled
+    /// like a lambda parameter in another case — here a temp-SHAPED one, the For Each <c>t0</c> the lambda captures. The shape is
+    /// unreachable from source since #169 (<see cref="R6_NameMatchesLambdaParameterOnlyByCase_Task169_NoLongerReachesTheBackstop"/>:
+    /// a case-differing reference binds to the parameter), so, as the backstop test above does, the built IR is tampered: the
+    /// lambda's parameter <c>p</c> is renamed <c>T0</c> after the build.
+    /// </summary>
+    [Test]
+    public void TheCaseGuard_StillRefusesACreatorVariable_ThatDiffersFromTheParameterOnlyByCase()
+    {
+        var module = BuildIr(Show + """
+            Sub Run(lst As List(Of Integer))
+                For Each t0 As Integer In lst
+                    Dim f As Func(Of Integer, Integer) = Function(p As Integer) t0 + p
+                    Show(f(1))
+                Next
+            End Sub
+            Sub Main()
+                Dim lst As New List(Of Integer)
+                lst.Add(3)
+                Run(lst)
+            End Sub
+            """);
+        var lambda = module.Functions.Single(f => f.Name == "__lambda_0");
+        lambda.Parameters[0].Name = "T0";
+
+        var ex = Assert.Throws<ForeignFeatureException>(() => new MSILCodeGenerator().Generate(module));
+        Assert.That(ex!.Message, Does.Contain("'t0'").And.Contain("'T0'").And.Contain("only by case"));
+    }
+
     // ---- R9/R17: an arity above the measured cap (D7) --------------------------------------
 
     [Test]

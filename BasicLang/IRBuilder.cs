@@ -108,12 +108,15 @@ namespace BasicLang.Compiler.IR
             _currentBlock = null;
             _bodyLocalSites.Clear();
             _lambdaCreator.Clear();
+            _pendingReservations.Clear();
 
             CollectSharedModuleGlobalNames(program);
 
             program.Accept(this);
 
             CanonicaliseMemberNames();
+
+            CompleteReservations();
 
             SeparateTempsFromUserNames();
 
@@ -150,6 +153,52 @@ namespace BasicLang.Compiler.IR
                     if (v is not IRVariable && v is not IRConstant && !v.NamedAfterVariable
                         && fn.IsMintedTempName(v.Name))
                         v.IsCompilerTemp = true;
+        }
+
+        /// <summary>
+        /// ⭐ ADR-0018 D1 / E1 / E3: PUBLISHES the reservation, once the whole module is built and
+        /// before anything reads it (<see cref="SeparateTempsFromUserNames"/>, then the optimizer and
+        /// every backend). From here on <see cref="IRFunction.GetNextTempName"/> skips the full set.
+        /// <list type="bullet">
+        /// <item><b>What the walk recorded</b> (<see cref="_pendingReservations"/>): every name the
+        /// push and <c>__with</c> saw, into its function's <see cref="IRFunction.ReservedNames"/>.</item>
+        /// <item><b>A lambda reserves every name of the function that creates it</b>, transitively.
+        /// Its body reads the creator's names — a captured <c>For Each t0</c> is an IR variable
+        /// <c>t0</c> in the lambda — and the lambda mints from its own counter, so without this the
+        /// lambda's <see cref="IRFunction.ReservedNames"/> would not hold a name that appears in it.
+        /// Written at the END of the build, not when the lambda is created: a name the creator
+        /// declares later cannot be read by the lambda, and seeding late changes no temp number
+        /// IRBuilder hands out (over-reserving is safe; the renamer reads the module-wide union
+        /// either way).</item>
+        /// <item><b>The module-level names</b> (globals, class members, every function's name), as
+        /// one set every function shares (<see cref="IRTempNames.PublishModuleNames"/>, E3).</item>
+        /// <item><b>Every function built here tracks its reservations</b>
+        /// (<see cref="IRFunction.TracksReservedNames"/>), which is what the verifier's
+        /// reservation invariant is checked on; hand-built IR does not.</item>
+        /// </list>
+        /// <para>Byte-neutral for every program whose temp-shaped names were already reserved:
+        /// nothing here changes a number the walk handed out, and the renamer's re-mint loop
+        /// already skipped everything <see cref="IRTempNames.UserOwned"/> holds.</para>
+        /// </summary>
+        private void CompleteReservations()
+        {
+            foreach (var (fn, names) in _pendingReservations)
+                foreach (var n in names) fn.Reserve(n);
+            _pendingReservations.Clear();
+
+            var seeded = new HashSet<IRFunction>(ReferenceEqualityComparer.Instance);
+            void Seed(IRFunction lambda)
+            {
+                if (!seeded.Add(lambda) || !_lambdaCreator.TryGetValue(lambda, out var creator) || creator == null) return;
+                Seed(creator);   // a lambda inside a lambda: its creator's set is complete first
+                lambda.ReservedNames.UnionWith(creator.ReservedNames);
+            }
+            foreach (var lambda in _lambdaCreator.Keys) Seed(lambda);
+
+            IRTempNames.PublishModuleNames(_module);
+
+            foreach (var fn in IRTempNames.AllFunctions(_module))
+                fn.TracksReservedNames = true;
         }
 
         /// <summary>Every value reachable from <paramref name="fn"/>'s body: its block instructions
@@ -734,15 +783,9 @@ namespace BasicLang.Compiler.IR
                     return _globalVariables[name];
             }
 
-            // Create new version
+            // Create new version — through the one push, which reserves the name (ADR-0018 D1).
             var variable = CreateVariable(name, type, _nextVersion++);
-
-            if (!_variableVersions.ContainsKey(name))
-            {
-                _variableVersions[name] = new Stack<IRVariable>();
-            }
-
-            _variableVersions[name].Push(variable);
+            PushVariableVersion(name, variable);
 
             return variable;
         }
@@ -803,6 +846,20 @@ namespace BasicLang.Compiler.IR
             return _globalVariables.ContainsKey(name);
         }
 
+        /// <summary>
+        /// Makes <paramref name="variable"/> what <paramref name="name"/> denotes from here on, and
+        /// ⭐ RECORDS both spellings as reserved in the current function (ADR-0018 D1). This is the
+        /// ONE primitive every declaration kind passes through — a <c>Dim</c>, a <c>Const</c>, every
+        /// parameter (a lambda's included), a counted <c>For</c>'s and a <c>For Each</c>'s control
+        /// variable, a <c>Catch</c> variable, a pattern binding, a LINQ range variable, a name
+        /// <see cref="GetOrCreateVariable"/> creates, and the <c>AndAlso</c>/<c>OrElse</c> carrier.
+        /// Both spellings, because a setter's declared parameter (<c>nv</c>) is an alias whose
+        /// storage is named <c>value</c> (ADR-0013 D5).
+        ///
+        /// <para>Recorded, not yet published: <see cref="CompleteReservations"/> publishes every
+        /// record into <see cref="IRFunction.ReservedNames"/> once the walk is over (see
+        /// <see cref="_pendingReservations"/> for why).</para>
+        /// </summary>
         private void PushVariableVersion(string name, IRVariable variable)
         {
             if (!_variableVersions.ContainsKey(name))
@@ -810,6 +867,38 @@ namespace BasicLang.Compiler.IR
                 _variableVersions[name] = new Stack<IRVariable>();
             }
             _variableVersions[name].Push(variable);
+
+            ReserveInCurrentFunction(name);
+            ReserveInCurrentFunction(variable?.Name);
+        }
+
+        /// <summary>
+        /// ⭐ ADR-0018 D1 / E1: the reservations the walk has RECORDED, per function, which
+        /// <see cref="CompleteReservations"/> publishes into <see cref="IRFunction.ReservedNames"/>
+        /// before anything reads the set.
+        ///
+        /// <para>⛔ DEFERRED ON PURPOSE. Published at the push, the set would make
+        /// <see cref="IRFunction.GetNextTempName"/> skip a name DURING the walk — a temp minted after
+        /// <c>Dim t1</c> would become <c>t2</c> where it has always been <c>t1</c> and renamed at the
+        /// end — renumbering the temps of programs whose only temp-shaped name was ALREADY reserved.
+        /// MEASURED (ADR-0018, the rejected Variant A): 6 programs / 30 cells changed text outside
+        /// the ruled set (U8's JavaScript <c>const t2</c> became <c>t3</c>; C# and JavaScript of the
+        /// four <c>ReDim t0()</c> programs; U5's JavaScript). Inside the walk
+        /// <see cref="SeparateTempsFromUserNames"/> already separates every collision, as it always
+        /// has; the skip is for the minters that run AFTER it — its own re-mint and
+        /// <see cref="IRFunction.DeclareTemp"/>.</para>
+        /// </summary>
+        private readonly Dictionary<IRFunction, HashSet<string>> _pendingReservations = new(ReferenceEqualityComparer.Instance);
+
+        /// <summary>Records <paramref name="name"/> as reserved in the current function (see
+        /// <see cref="_pendingReservations"/>). The one entry to the record: the push, and the one
+        /// lowering that never pushes (<c>__with</c>).</summary>
+        private void ReserveInCurrentFunction(string name)
+        {
+            if (_currentFunction == null || string.IsNullOrEmpty(name)) return;
+            if (!_pendingReservations.TryGetValue(_currentFunction, out var set))
+                _pendingReservations[_currentFunction] = set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            set.Add(name);
         }
 
         private void PopVariableVersion(string name)
@@ -2709,6 +2798,17 @@ namespace BasicLang.Compiler.IR
             // by hand.
             var scope = EnterProcedureScope();
 
+            // Save context and switch to operator function — BEFORE the parameters are pushed: the
+            // push reserves each name in the CURRENT function (ADR-0018 D1), and a parameter pushed
+            // while the enclosing function was current was reserved there and not here (MEASURED:
+            // the verifier's Invariant R named `Box.op_Equality`'s `a` and `b`).
+            var savedFunction = _currentFunction;
+            var savedBlock = _currentBlock;
+
+            _currentFunction = opFunc;
+            _currentFunction.SourceFilePath = _sourceFilePath;
+            _currentBlock = opFunc.CreateBlock("entry");
+
             // Add parameters
             foreach (var param in node.Parameters)
             {
@@ -2717,14 +2817,6 @@ namespace BasicLang.Compiler.IR
                 opFunc.Parameters.Add(paramVar);
                 PushVariableVersion(param.Name, paramVar);
             }
-
-            // Save context and switch to operator function
-            var savedFunction = _currentFunction;
-            var savedBlock = _currentBlock;
-
-            _currentFunction = opFunc;
-            _currentFunction.SourceFilePath = _sourceFilePath;
-            _currentBlock = opFunc.CreateBlock("entry");
 
             // Generate body
             if (node.Body != null)
@@ -4082,6 +4174,9 @@ namespace BasicLang.Compiler.IR
             // Store the object in a temporary variable for use in the body
             var objType = _semanticAnalyzer.GetNodeType(node.Object) ?? new TypeInfo("Object", TypeKind.Class);
             var withVar = CreateVariable("__with", objType, _nextVersion++);
+            // A lowering's own storage, never pushed (it is reached through _withObjectStack), so it
+            // reserves here (ADR-0018 D1).
+            ReserveInCurrentFunction(withVar.Name);
             EmitInstruction(new IRAssignment(withVar, withObject));
 
             // Push the With variable for implicit member access
@@ -4281,23 +4376,19 @@ namespace BasicLang.Compiler.IR
                     : new TypeInfo("Exception", TypeKind.Class);
                 if (!string.IsNullOrEmpty(catchClause.ExceptionVariable))
                 {
-                    // Create a local variable for the exception
+                    // Create a local variable for the exception, and push it so it's accessible in
+                    // the catch block — through the one push, which RESERVES the name (ADR-0018 D1).
+                    // Not a LocalVariables entry: the catch clause declares it.
                     var exVar = new IRVariable(catchClause.ExceptionVariable, exceptionType);
-                    // Push onto variable versions stack so it's accessible in the catch block
-                    if (!_variableVersions.ContainsKey(catchClause.ExceptionVariable))
-                    {
-                        _variableVersions[catchClause.ExceptionVariable] = new Stack<IRVariable>();
-                    }
-                    _variableVersions[catchClause.ExceptionVariable].Push(exVar);
+                    PushVariableVersion(catchClause.ExceptionVariable, exVar);
                 }
 
                 catchClause.Body.Accept(this);
 
                 // Pop the exception variable
-                if (!string.IsNullOrEmpty(catchClause.ExceptionVariable) &&
-                    _variableVersions.ContainsKey(catchClause.ExceptionVariable))
+                if (!string.IsNullOrEmpty(catchClause.ExceptionVariable))
                 {
-                    _variableVersions[catchClause.ExceptionVariable].Pop();
+                    PopVariableVersion(catchClause.ExceptionVariable);
                 }
 
                 if (!_currentBlock.IsTerminated())

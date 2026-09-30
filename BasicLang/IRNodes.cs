@@ -155,8 +155,10 @@ namespace BasicLang.Compiler.IR
         /// builder's last rename. An optimizer pass that REPLACES a value carries it to the
         /// replacement with the rest of the value's identity (<c>OptimizationPass.InheritIdentity</c>);
         /// a value built without it reads false, which only costs a removal. No REGISTERED optimizer
-        /// pass mints a temp name today; one that does (task #121) must mint through
-        /// <see cref="IRFunction.GetNextTempName"/> and set this where it mints.</para>
+        /// pass mints a temp name today; one that does mints through
+        /// <see cref="IRFunction.DeclareTemp"/>, which sets this on the variable it declares
+        /// (ADR-0018 D2). The minted name is never one the program owns, and the verifier refuses a
+        /// value carrying this flag under a reserved name (ADR-0018 D4, Invariant T).</para>
         /// </summary>
         public bool IsCompilerTemp { get; set; }
 
@@ -1619,6 +1621,83 @@ namespace BasicLang.Compiler.IR
         /// <summary>Every name <see cref="GetNextTempName"/> has handed out (ADR-0017).</summary>
         private readonly HashSet<string> _mintedTempNames = new HashSet<string>(StringComparer.Ordinal);
 
+        /// <summary>
+        /// ⭐ ADR-0018 D1: every name this function's PROGRAM owns — each name a user or a
+        /// lowering declares in it, whatever its shape: a <c>Dim</c>, a <c>Const</c>, a
+        /// parameter, a counted <c>For</c>'s variable, a <c>For Each</c> control variable, a
+        /// <c>Catch</c> variable, a pattern binding, a LINQ range variable, a lambda parameter,
+        /// a lowering's own local (<c>__sc</c>N, <c>__with</c>, <c>__foreach_</c>N,
+        /// ClosureLowering's environment locals and carriers), and — for a lambda — every name
+        /// of the function that creates it. Compared ignoring case (ADR-0013).
+        ///
+        /// <para>⛔ NOT a declaration list, and no backend may read it to decide what to emit.
+        /// <see cref="LocalVariables"/> keeps its one meaning, "what a backend declares at the top
+        /// of the function"; this set is a SUPERSET of what the function declares, and
+        /// over-reserving costs a temp number while under-reserving is a collision. A For Each or
+        /// Catch variable is declared by its own construct, so putting it in
+        /// <see cref="LocalVariables"/> would declare it twice and widen a clause scope to the
+        /// function (CS0136 for two <c>Catch ex</c> clauses).</para>
+        ///
+        /// <para><b>Who writes it.</b> IRBuilder RECORDS each name at the one primitive every
+        /// declaration passes through (the version-stack push; <c>__with</c>, which never pushes,
+        /// records at its site) and PUBLISHES the record here in <c>CompleteReservations</c>, once
+        /// the walk is over and before anything reads the set, together with a lambda's creator
+        /// set (ADR-0018 E1: published at the push, it renumbered programs whose temp-shaped names
+        /// were already reserved). ClosureLowering writes it at every local it adds and for every
+        /// lambda it hoists. <b>Who reads it.</b> <see cref="GetNextTempName"/> (it never mints a
+        /// reserved name), <see cref="IRTempNames.UserOwned"/> (the one reader that filters it by
+        /// shape, for IRBuilder's renamer and every backend's temp counter) and <c>IRVerifier</c>.
+        /// The program's MODULE-level names are not copied in: every function shares one
+        /// <see cref="ModuleReservedNames"/>, and every reader of "is this reserved" asks
+        /// <see cref="IsReserved"/>.</para>
+        ///
+        /// <para>⛔ A MINTED name never enters it: "reserved" means "the program owns this", and
+        /// the verifier refuses a compiler temp whose name is reserved (ADR-0018 D4), which needs
+        /// the two sets disjoint.</para>
+        /// </summary>
+        public ISet<string> ReservedNames { get; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// ⭐ ADR-0018 E3: the program's MODULE-level names — globals, class fields, properties and
+        /// methods, and every function's name (<see cref="IRTempNames.ModuleLevelNames"/>, the list
+        /// <see cref="IRTempNames.UserOwned"/> collects) — as ONE set SHARED by every function of the
+        /// module, published by <see cref="IRTempNames.PublishModuleNames"/> (IRBuilder at the end
+        /// of the build, <c>CombineIRModules</c> for a multi-file build). Shared rather than copied
+        /// into each <see cref="ReservedNames"/>: the names are the same for every function, and a
+        /// copy would be quadratic.
+        ///
+        /// <para>Why the skip needs it: <see cref="ReservedNames"/> is per function, so without it
+        /// <see cref="DeclareTemp"/> could mint <c>t9</c> in a function that CALLS a module
+        /// function <c>t9()</c> or reads a global <c>t9</c>, and the new local would hide it (C#:
+        /// "method name expected"; C++: the local shadows the function). Empty until published;
+        /// hand-built IR never publishes, and <see cref="IRTempNames.UserOwned"/> still reads
+        /// the module itself.</para>
+        /// </summary>
+        public ISet<string> ModuleReservedNames { get; set; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>Whether the program owns <paramref name="name"/> here: this function reserves it
+        /// (<see cref="ReservedNames"/>) or it is a module-level name (<see cref="ModuleReservedNames"/>).
+        /// Ignoring case. What <see cref="GetNextTempName"/> skips and ADR-0018 D4 refuses.</summary>
+        public bool IsReserved(string name) =>
+            !string.IsNullOrEmpty(name)
+            && (ReservedNames.Contains(name) || (ModuleReservedNames?.Contains(name) ?? false));
+
+        /// <summary>
+        /// True when the builder that made this function records every declaration in
+        /// <see cref="ReservedNames"/> — IRBuilder, and ClosureLowering's clones of what IRBuilder
+        /// built. The verifier's reservation invariant (ADR-0018 D1) applies only to such a
+        /// function; hand-built IR reads false, and <see cref="IRTempNames.UserOwned"/> still
+        /// reserves its locals and parameters through the union it reads.
+        /// </summary>
+        public bool TracksReservedNames { get; set; }
+
+        /// <summary>Adds <paramref name="name"/> to <see cref="ReservedNames"/> (null and empty are
+        /// ignored). ⛔ Never for a name this function minted (ADR-0018 D2).</summary>
+        public void Reserve(string name)
+        {
+            if (!string.IsNullOrEmpty(name)) ReservedNames.Add(name);
+        }
+
         public IRFunction(string name, TypeInfo returnType)
         {
             Name = name;
@@ -1654,13 +1733,49 @@ namespace BasicLang.Compiler.IR
         /// ⭐ THE ONE MINTER of compiler-temp names (<c>t0</c>, <c>t1</c>, …), and it RECORDS what
         /// it hands out: that record is what <see cref="IRValue.IsCompilerTemp"/> is read from
         /// (ADR-0017), so the flag says "the compiler made this name up", not "this name looks
-        /// made up". No optimizer pass calls it.
+        /// made up".
+        ///
+        /// <para>It never hands out a name the program owns (<see cref="IsReserved"/>: this
+        /// function's <see cref="ReservedNames"/> and the module-level names, ignoring case) or one it
+        /// already handed out (ADR-0018, clarification C1 as amended by E1). IRBuilder names its
+        /// VALUES through it during the walk, when nothing is published yet, so there it skips
+        /// nothing and <c>IRBuilder.SeparateTempsFromUserNames</c> separates every collision, as it
+        /// always has; every minter AFTER publication — that renamer's own re-mint and
+        /// <see cref="DeclareTemp"/> — skips the full set.</para>
+        ///
+        /// <para>⛔ An optimizer pass never calls it: a pass mints through <see cref="DeclareTemp"/>,
+        /// which also declares what it mints (a test enforces this).</para>
         /// </summary>
         public string GetNextTempName()
         {
-            var name = $"t{_nextTempId++}";
+            string name;
+            do { name = $"t{_nextTempId++}"; }
+            while (IsReserved(name) || _mintedTempNames.Contains(name));
             _mintedTempNames.Add(name);
             return name;
+        }
+
+        /// <summary>
+        /// ⭐ ADR-0018 D2: THE ONLY DOOR through which an optimizer pass gets a named temp. Mints a
+        /// name through <see cref="GetNextTempName"/> (so it skips every reserved and every
+        /// already-minted name, and is recorded), marks the variable a compiler temp, and DECLARES
+        /// it — adds it to <see cref="LocalVariables"/>, so every backend emits its declaration.
+        ///
+        /// <para>Post-condition: <c>v.IsCompilerTemp &amp;&amp; LocalVariables.Contains(v)
+        /// &amp;&amp; IsMintedTempName(v.Name) &amp;&amp; !IsReserved(v.Name)</c> — not a name this
+        /// function reserves, and not a module-level name (E3).</para>
+        ///
+        /// <para>Function level only. A pass that needs the temp fresh per loop iteration adds it
+        /// to the loop's <see cref="BasicBlock.BodyLocals"/> itself (ADR-0014's obligation on the
+        /// pass). Every defect of the three unregistered passes (inlining, loop unrolling,
+        /// induction variables) was "minted a name, declared nothing"; a bare minter invites that
+        /// shape again, which is why there is no other door.</para>
+        /// </summary>
+        public IRVariable DeclareTemp(TypeInfo type)
+        {
+            var variable = new IRVariable(GetNextTempName(), type) { IsCompilerTemp = true };
+            LocalVariables.Add(variable);
+            return variable;
         }
 
         /// <summary>
@@ -1669,6 +1784,21 @@ namespace BasicLang.Compiler.IR
         /// merely looks like it (a user's <c>T5</c> is not the minted <c>t5</c>).
         /// </summary>
         public bool IsMintedTempName(string name) => name != null && _mintedTempNames.Contains(name);
+
+        /// <summary>
+        /// Makes this function a COPY of <paramref name="original"/> as far as minting goes: the same
+        /// minted-name record and the same counter. For a clone (ClosureLowering's), whose values carry
+        /// <see cref="IRValue.IsCompilerTemp"/> over from the original: without the record the clone
+        /// would hold marked temps its minter never handed out, and a temp an optimizer pass declared
+        /// (<see cref="DeclareTemp"/>) would read as an undeclared-and-unreserved local to the
+        /// verifier's Invariant R (MEASURED: a lambda's minted temp, on MSIL, ADR-0018).
+        /// </summary>
+        internal void InheritTempRecordFrom(IRFunction original)
+        {
+            if (original == null) return;
+            _mintedTempNames.UnionWith(original._mintedTempNames);
+            _nextTempId = Math.Max(_nextTempId, original._nextTempId);
+        }
 
         public void Accept(IIRVisitor visitor)
         {
