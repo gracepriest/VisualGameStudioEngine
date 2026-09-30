@@ -1,7 +1,8 @@
 # The portable control library — piece 2 of "one form, either target" (design)
 
-Status: REVISION 2, 2026-09-29 — the owner's answers to revision 1's open questions are recorded as decisions (§0.3), and
-every spec-review finding (C1–C3, I1–I9, minors) is addressed; §11a lists where. Everything the decisions did not settle is
+Status: REVISION 3, 2026-09-29 — revision 2 recorded the owner's answers (§0.3) and the first review (C1–C3, I1–I9);
+revision 3 answers the re-review (R1 live docking, R2 the style cascade, R3 a plan-ready Decimal table, and its minors);
+§11a lists where. Everything the decisions did not settle is
 decided here as a reversible implementation choice (marked **[impl]**). Written against `origin/master` @ `14c2e17d`, which
 contains piece 1 (PR #139, `6c62417e`).
 Branch: `feat/portable-controls`, based on `origin/master` @ `14c2e17d`.
@@ -90,12 +91,14 @@ same number. Existing web forms keep building unchanged until the user accepts a
 
 The owner approved the whole design; the split is about delivery (each sub-piece: its own plan, per-task two-stage review,
 mutation pass, gate).
-**Order: [fix/js-cross-file-calls, fix/unknown-dock-diagnostic, slice 3 land] → 2.0 → 2a → 2b → 2c; 2d in parallel with
-2b or 2c.** Slice 5 (event lists) must land before 2b's gate is complete (§10.1).
+**Order: [fix/js-cross-file-calls, fix/unknown-dock-diagnostic, slice 3 land] → 2.0a → 2a → 2b → 2c; 2.0b (exact
+Decimal) runs in parallel with 2a and must land before 2b's NumericUpDown; 2d in parallel with 2b or 2c.** Slice 5 (event
+lists) must land before 2b's gate is complete (§10.1).
 
 | Sub-piece | Delivers | Why here |
 |---|---|---|
-| **2.0 Compiler + editor prerequisites** (§4) | `#If`/`#ElseIf`/`#Else`/`#End If`; WEB/DESKTOP/DEBUG/RELEASE symbols on every route; the LSP's `#If` (line-preserving blanking) and web-library awareness; cross-file `Inherits`; JS: `Using` vs `Me.M()`, `RemoveHandler` identity, `MyBase.Property`, base-first class order, `Char`, `Decimal` (exact); Enum member typing; `Decimal` literals and `CDec` typing; `AddHandler` signature check; BasicLang namespaces win on a web build; dotted `Namespace`; a library-idiom probe | Each is measured to break the library or the shared shape (§3). General fixes, each with its own tests. |
+| **2.0a Compiler + editor prerequisites** (§4.1–§4.10, §4.12–§4.13) | `#If`/`#ElseIf`/`#Else`/`#End If`; WEB/DESKTOP/DEBUG/RELEASE symbols on every route; the LSP's `#If` (line-preserving blanking) and web-library awareness; cross-file `Inherits`; JS: `Using` vs `Me.M()`, `RemoveHandler` identity, `MyBase.Property`, base-first class order, `Char`; Enum member typing; `AddHandler` signature check; BasicLang namespaces win on a web build; dotted `Namespace`; a library-idiom probe | Each is measured to break the library or the shared shape (§3). General fixes, each with its own tests. |
+| **2.0b Exact Decimal on JavaScript** (§4.11) | The §4.11 table: every "in" row lowered and checked against a .NET-computed table, every "out" row refused by name; `D` literals and `CDec` typing on all targets | R3's table shows it is a numeric runtime of its own — its own plan and gate. Only NumericUpDown (2b) needs it. |
 | **2a Library core + codegen + first kinds** (§5–§7) | Auto-include hook; `Control`, `Form`, event args, drawing types, collections, `MessageBox`; `Button`, `Label`, `TextBox`, `CheckBox`, `RadioButton`, `Panel`, `GroupBox`; the portable region style (marker, init, stubs); `.Element` and the web/desktop build errors; live geometry, Anchor, `hidden`, live Dock feed; the rendering fixes and client insets; the coverage gate and twin harness; **the opt-in route "Add Web Form (portable)"** (I1) | The login-form set proves every mechanism end to end, reachable from a shipping build. |
 | **2b The remaining kinds** (§5.12) | `ComboBox`, `ListBox`, `PictureBox`, `LinkLabel`, `NumericUpDown`, `DateTimePicker`, `TrackBar`, `ProgressBar`, `Timer`, 3 strips, 4 item kinds; **then the default flips**: every new web form is portable and the opt-in command is retired | The default flips only when every web kind has a class. |
 | **2c Conversion** (§8) | Offer on open; convert (regions, simple handlers, Using/Inherits, marker); DOM-line findings; decline = byte-identical; CLI verb | Needs the finished portable style to convert INTO. |
@@ -234,7 +237,9 @@ prelude defining `document.getElementById` over node's `EventTarget`.
 | M24 | `el.addEventListener("click", AddressOf Me.VgsOnDomClick)` (and unqualified `AddressOf VgsOnDomClick`) with the Sub declared ABOVE | ✅ runs, handler sees `Me` |
 | M25 | …with the Sub declared BELOW its use | ❌ "Argument 2: cannot convert from 'Pointer To Pointer To Object' to 'Action<DomEvent>'" — the BL8013 erasure, inside the library too |
 
-## 4. Sub-piece 2.0 — compiler and editor prerequisites
+## 4. Sub-pieces 2.0a and 2.0b — compiler and editor prerequisites
+
+(§4.11 is sub-piece 2.0b; every other item here is 2.0a.)
 
 Each item: the rule, then the test that pins it; verified through the CLI AND the IDE build (`CompileProjectFiles`), and
 through the optimizer (`CompileToCppOptimized`) where a front-end change can reach C++. **2.0 begins by re-measuring M6,
@@ -300,15 +305,44 @@ string concatenation, `Char` parameters/fields/`List(Of Char)`; conversions Char
 functions, as VB. BL7004 is retired (its tests become lowering tests). Test: a Char table run under node against the same
 program's C# output.
 
-### 4.11 `Decimal` on JavaScript, exactly (O14)
-- Front end, all targets: the `D` literal suffix (M19), `CDec` typed `Decimal` (M20).
-- JS: `Decimal` lowers to an exact decimal value **[impl — a small runtime class in the backend's prelude: a BigInt
-  mantissa + scale, .NET's 96-bit range and 28-digit scale]**, with `+ − * /`, `Mod`, comparisons, unary minus, `CDec`/
-  `CDbl`/`CInt`/`CStr`, and **exact invariant-culture parse/format** (what NumericUpDown reads from and writes to the page
-  text). Division and rounding follow .NET's `Decimal` (28 significant digits, banker's rounding where .NET rounds) —
-  pinned by a table of cases whose expected values are computed by .NET itself in the test.
-- BL7007 no longer lists `Decimal`. ⚠ The largest 2.0 item; it has its own mutation checks (scale alignment, rounding
-  mode, overflow).
+### 4.11 `Decimal` on JavaScript, exactly (O14) — sub-piece 2.0b
+**Representation [impl]:** a runtime class in the backend's prelude (`VgsDecimal`): a sign, a BigInt mantissa `< 2^96` and a
+scale `0…28` — .NET's `System.Decimal` model, so trailing zeros are REPRESENTED (1.10 has scale 2). Generated code never
+sees a raw BigInt: every operation is a prelude call.
+
+**The rule for every row:** "in" = lowered, with a test whose expected values are COMPUTED BY .NET inside the test (the same
+BasicLang source run on the C# target, or the C# expression evaluated in-process, under `InvariantCulture`) and compared
+with node's output; "out" = refused at compile time with the named JS diagnostic `DecimalNotSupportedOnWeb` (message names
+the construct and, where one exists, the supported spelling) — **never lowered wrong**.
+
+| # | Construct | In / out | Rule and test |
+|---|---|---|---|
+| D1 | Literal `1.10D`, `5D`; an untyped numeric literal in a Decimal context (`Dim d As Decimal = 0.1`) | in | Front end, all targets: `D` suffix parses (M19). **C# output:** in a Decimal context C# already emits `0.1m` (measured, `p2probe\j3\p.cs`), so `0.1D` there emits the SAME bytes (asserted); in an inferred context (`Dim x = 0.1D`) the suffix makes `x` Decimal (`0.1m`) where `0.1` stays Double — intended, asserted. Scale is kept: `1.10D` has scale 2 |
+| D2 | `Const c As Decimal = 1.5D` | in | folded as a Decimal constant |
+| D3 | `+ − * /`, `Mod`, unary `−` | in | .NET semantics: `+`/`−` align scale; `*` adds scales then rounds to 28; `/` 28 significant digits, banker's rounding where .NET rounds (e.g. `1D / 3D`). Table ≥ 200 cases incl. scale edges, max/min values, negative zero |
+| D4 | Integer division `\` on Decimal | **out** | VB converts `\` operands to `Long`, which the JS backend refuses (BL7003); suggestion `Math.Truncate(a / b)` |
+| D5 | `=`, `<>`, `<`, `>`, `<=`, `>=` | in | VALUE comparison, scale-insensitive (`1.10D = 1.1D` is True) — never `===`. Table |
+| D6 | `Select Case` on a Decimal | in | lowered through D5's comparison (values and `To`/`Is` ranges). Table |
+| D7 | Implicit widening Byte/Short/Integer → Decimal | in | the analyzer inserts an exact conversion; mixed `Integer + Decimal` is Decimal |
+| D8 | Decimal ↔ Double/Single, Decimal → Integer/Short/Byte | in, by the analyzer's EXISTING rule for the C# target (the same code is implicit or explicit on both targets — a JS-only rule would be a second type system) | `CDbl`, `CSng` nearest double; `CInt`/`CShort`/`CByte` banker's rounding as .NET (`CInt(2.5D) = 2`), out-of-range → `OverflowException`; Double → Decimal as .NET (`CDec(0.1)` = 0.1). Table |
+| D9 | Decimal ↔ `Long` | out | BL7003 already refuses Long |
+| D10 | Mixing that would reach BigInt/Number together | never reachable | a grid of every numeric type × every operator asserts each cell either lowers (and matches .NET) or is an analyzer error; no cell may produce a JS `TypeError` at run time |
+| D11 | `ToString()`, `CStr`, `&`, interpolation `$"{d}"`, `String.Format("{0}", d)`, `Console.WriteLine(d)` | in | the SCALE is printed: `1.10D` → `1.10`, `1D/3D` → `0.3333333333333333333333333333`. ⚠ JS prints invariant (the backend's policy for Double); .NET's no-arg `ToString` uses the CURRENT culture, so the table runs .NET under `InvariantCulture` and the culture divergence is recorded (it is the Double divergence already) |
+| D12 | Format specifiers (`d.ToString("N2")`, `{0:F2}`, `Format(d, …)`) | **out** | named, with "format the text yourself or use `Math.Round(d, 2).ToString()`" |
+| D13 | `Math.Round(d)`, `Math.Round(d, n)` (banker's), `Math.Abs`, `Math.Min`, `Math.Max`, `Math.Floor`, `Math.Ceiling`, `Math.Truncate` | in | Table |
+| D14 | `Math.Round` with a `MidpointRounding` argument; any other `Math`/`Decimal` member | out | named |
+| D15 | `Decimal.Parse(s)`, `CDec(s)` | in | exact invariant parse (what NumericUpDown reads from the page); bad text → `FormatException`, out of range → `OverflowException`. Table |
+| D16 | `Decimal.TryParse(s, result)` | out | its second parameter is ByRef, refused on JS (BL7002) — the existing diagnostic, with `Decimal.Parse` inside `Try` suggested |
+| D17 | Decimal in `List(Of Decimal)`/arrays: `Add`, index, `For Each`, `Count` | in | |
+| D18 | Decimal as a `Dictionary`/`HashSet` KEY; `List.Contains`/`IndexOf`/`Remove`/`Array.IndexOf` on Decimal | **out** | JS `Map`/`===` would compare object identity (`1.1D` ≠ `1.10D` ≠ another `1.1D`); refused rather than wrong |
+| D19 | Boxing to `Object`, `CType(o, Decimal)`, `TypeOf o Is Decimal`, `o1 = o2` / `o.Equals(x)` with boxed Decimals | in | the backend's Object-typed `=`/`<>`/`Equals` route through a prelude helper that recognizes `VgsDecimal` (value comparison); unboxing checks the class (`InvalidCastException` otherwise). Table |
+| D20 | Overflow (a result beyond ±79,228,162,514,264,337,593,543,950,335), division by zero | in | `OverflowException`, `DivideByZeroException` through the backend's exception prelude. Table |
+| D21 | IR optimizer constant folding of Decimal expressions | in | the optimizer already folds Decimal constants (the C# probe shows `s = 0.1m + 0.2m` folded into one statement); it must fold EXACTLY (System.Decimal) or not at all — never through Double. Verified with the optimizing helpers and the CLI (CLAUDE.md) |
+| D22 | Decimal fields, parameters, returns, properties, `Optional` Decimal parameters | in | |
+
+BL7007 stops listing `Decimal` only for the "in" rows. Mutation checks: scale alignment, rounding mode (banker's vs away),
+28-digit cut, `=` via `===`, overflow boundary, the invariant parse. **Why its own sub-piece:** 22 rows, a runtime numeric
+class, an analyzer grid and an optimizer rule — as large as the rest of 2.0 together, and needed only by NumericUpDown.
 
 ### 4.12 The editor: `#If` and the web controls in the LSP (O18)
 - **Line-preserving blanking** (new feature, own tests): the LSP runs the same preprocessor with the project's symbols
@@ -404,7 +438,7 @@ Per kind:
 | Panel | `BorderStyle` → the border (§7.3) |
 | GroupBox | `Text` → the `<legend>` (§7.2) |
 | PictureBox | `Image` → `src`; `SizeMode` → `object-fit`/`object-position` (Normal: none/top left; StretchImage: fill; Zoom: contain; CenterImage: none/center; AutoSize: natural size) |
-| NumericUpDown | `Minimum`/`Maximum`/`Value`/`Increment` are **`Decimal`** (O14): read by exact parse of the element's text, written by exact invariant format; `min`/`max`/`step` attributes likewise |
+| NumericUpDown | (needs 2.0b) `Minimum`/`Maximum`/`Value`/`Increment` are **`Decimal`** (O14): read by exact parse of the element's text, written by exact invariant format; `min`/`max`/`step` attributes likewise |
 | TrackBar, ProgressBar | `Minimum`/`Maximum`/`Value` (Integer) → `min`/`max`/`value` (ProgressBar `Minimum` WinForms-only) |
 | DateTimePicker | `Value` → `valueAsDate` |
 | Timer | `Interval`, `Enabled` (a web row, §10.3); `Start`/`Stop`; `Tick`; runs only while Enabled |
@@ -463,9 +497,18 @@ fire the reflow script's MutationObserver (P8) — a full reflow per `Left` writ
 - Visibility is the `hidden` attribute (O10) — honoured at every width by `.vgs-form [hidden] { display: none !important }`,
   which every PORTABLE page carries (Grid/Flow included; piece 1 put it only on Canvas pages). A design-time `Visible=False`
   is therefore emitted as `hidden` on a portable page (not `#id { display: none }`), so showing it is removing the attribute.
-- Rule edits mutate no attribute, so they do not wake the observer. The library calls the reflow itself, **coalesced to at
-  most one per microtask**, when a write can change docking: `Visible`/`Dock`, the size of a docked control, the size of a
-  container that has docked children, `BringToFront` of a docked control.
+- Rule edits mutate no attribute, so they do not wake the observer. When a write can change docking — `Visible`/`Dock`, the
+  requested size of a docked control, the size of a container that has docked children, `BringToFront` of a docked control
+  — the library calls the page's reflow hook `request()` (§5.10). **One scheduler, one reflow:** the MutationObserver ALSO
+  calls `request()` instead of reflowing directly, and `request()` schedules at most one reflow per microtask. So a
+  `Visible` write — which wakes the observer (the `hidden` attribute) AND asks for a reflow — reflows ONCE; a test counts
+  it.
+- ⛔ **The cascade rule (R2): the library never writes a geometry property (`left`/`top`/`right`/`bottom`/`width`/`height`)
+  for a control that is docked.** It records the request (§5.10's `data-vgs-w`/`data-vgs-h`) and asks for a reflow; the
+  script's `vgs-dock-live` rule owns every geometry property of a docked control. The two `<style>` elements therefore never
+  both write geometry for the same id, and their document order (both appended to `<head>`, `vgs-dock-live` lazily) does not
+  matter. Non-geometry properties of a docked control (colours, font) are the library's; the script never writes them. A
+  test docks, resizes and undocks a control in both orders of creation of the two style elements.
 - **Performance assertion (Edge):** 100 `Left` writes in one Timer tick → at most one reflow, the tick completes in under a
   stated budget **[impl: the plan measures and fixes the number]**, and the final position is exact.
 
@@ -478,19 +521,44 @@ fire the reflow script's MutationObserver (P8) — a full reflow per `Left` writ
   `calc(100% − …)` size; a centred axis `calc(50% ± …)`.
 - `Anchor` is read/write; the element carries it as `data-vgs-anchor` (the page emitter writes it for every non-default
   Anchor) **[impl]**; writing it re-derives from current bounds.
+- **Below the breakpoint** the page is stacked and anchors mean nothing (piece-1 §5), so a live measurement would compute
+  insets against a phone column. There, geometry READS return the desktop-layout value (the control's rule / its requested
+  bounds, `data-vgs-x`/`-y`/`-w`/`-h`), and WRITES compute the insets against the container's DESIGN client size (emitted
+  as `data-vgs-cw`/`data-vgs-ch` on every container and the form area) and land in the media-guarded rule, taking effect
+  when the viewport returns to desktop width **[impl]**. Recorded divergence: WinForms has no phone mode; the twin runs at
+  desktop width, and an Edge test pins the phone-width behaviour.
 - ⛔ **Mirrored pair** (C# `FormAnchorCss.Axis` ↔ the library), gated by §11.3. Invariant number formatting on both sides.
 
-### 5.10 Live docking (O15, review I7)
-- `Dock` is read/write on the web. The element carries it as `data-vgs-dock`, spelled by **`FormDock`'s canonical rule**
-  (P12) — never a second parser.
-- The reflow script stops treating its emitted JSON as the truth for anything that can change at run time: each node's
-  dock edge, visibility and own size are read from the LIVE element (`data-vgs-dock`, `hidden`, the §5.8 rule / measured
-  size) on every reflow, with the emitted data kept only for the design-time answer piece 1's B3 needs before the first
-  reflow. So a run-time Dock change, a docked control's resize, a container's resize and a hidden docked sibling all
-  re-dock — including a container resized with docked children (the I7 defect).
-- ⛔ This changes `FormDockScript.Core`, one half of piece 1's mirrored pair: the lock-step fixtures (`FormDockScriptTests`)
-  gain live-change cases (Dock changed, a docked control resized, a container resized), each compared with
-  `FormDockLayout.Resolve(…, Runtime)` of the correspondingly edited document.
+### 5.10 Live docking (O15, reviews I7 and R1)
+Piece 1's script cannot re-dock a run-time change as it stands (measured in `BasicLang/Forms/FormDockScript.cs`):
+`PageScript` returns null when nothing docks at design time (:115-123); `Nodes` drops every control that neither docks nor
+holds something that docks (:163-167), so a design-time-undocked control has no node to dock; the script is a private IIFE
+(:127-131), so nothing outside it can ask for a reflow; and its sizes are the EMITTED design sizes (`OwnSizeOf`, :169). For a
+PORTABLE page (DOM-style pages keep piece 1's script byte-for-byte, §7.7):
+- **Always emitted.** A portable page carries the script whether or not anything docks at design time.
+- **The walk reads the LIVE tree.** Each reflow enumerates the live CHILD ELEMENTS of the form area and of every container
+  (the positioned controls, in DOM order — DOM order is document order, and `BringToFront` changes it as WinForms' z-order
+  changes docking order), reading per element: `data-vgs-dock` (the edge, spelled by **`FormDock`'s canonical rule**, P12 —
+  never a second parser), the `hidden` attribute, the REQUESTED own size `data-vgs-w`/`data-vgs-h`, and the client-area
+  facts (`data-vgs-client`, the §7.5 insets). The emitted JSON only SEEDS the first reflow (piece 1's B3 answers before the
+  script has run); after that it is not consulted.
+- **The requested size is the docking input, never the measured one.** A docked control's rendered box IS the reflow's
+  output, so measuring it would be circular. The page emitter writes `data-vgs-w`/`-h` (and `-x`/`-y`) from the design; the
+  library's size/position writes update them (and, for an undocked control, its §5.8 rule). `Dock = None` restores the
+  requested bounds as a positioned rule — the twin checks that WinForms does the same.
+- **Complete live rules.** A control docked at RUN time still has its designed positioned CSS in the page stylesheet
+  (e.g. a stale `left` that, with `right` + `width` from a Right dock, over-constrains the box). So every live dock rule
+  writes all six geometry properties, `auto` for those its edge does not set **[impl: a live-only completion step in both
+  halves of the pair]**.
+- **A named hook.** The bootstrap exposes `window.vgsDock = { request, reflow }` (no other global). The library reaches it
+  through a typed declaration in a library-owned `lib/js/forms/vgs-page.bli` (`Extern Class VgsDockHook`), looked up
+  LAZILY at the first call (`::window.vgsDock`) — so the order in which the page's inline script and App.js run does not
+  matter, and a page without the hook (never for a portable page) fails loudly naming it.
+- ⛔ **Mirror discipline.** `FormDockLayout` (C#) and the script's core change in ONE commit, gated by `FormDockScriptTests`'
+  lock-step test. Its fixture table gains live cases, each compared with `FormDockLayout.Resolve(…, Runtime)` of the
+  correspondingly edited document: **undocked at design time, docked at run time**; docked → `None`; a docked control's
+  requested size changed; a container resized with docked children; a docked sibling hidden and shown; `BringToFront` of a
+  docked control; each on a bordered Panel and a GroupBox (§7.5).
 
 ### 5.11 The build errors (O3, O11)
 - **Web build, unavailable member** (`WebUnavailableMember`): a member on a library type the library does not declare, or an
@@ -524,6 +592,11 @@ in DOCUMENT order, as G4. After the last kind: the scaffold's default flips (§1
 - The scaffold passes the style EXPLICITLY (portable from the §1 opt-in command in 2a, and by default from 2b) into the
   EMPTY regions it writes before calling `RegionWriter.Write` (G10) — so a brand-new form with no controls is portable
   although its regions contain nothing to detect.
+- ⚠ **Older IDE drops refuse the new marker.** The open-marker regex takes the attributes in a STRICT order with no room
+  for another (`RegionMarkers.cs:60-62`: `region=… form=… hash=…`), so an IDE or CLI from before 2a reads a
+  `style="portable"` marker as `RegionMarkersMalformed` (BL8012) and refuses to regenerate — refusing, not corrupting.
+  Recorded for the release notes ("a portable form needs this version or later"); the new regex accepts `style` in that one
+  position only, and a test pins that a pre-2a marker (no `style`) still reads as today.
 - WinForms files carry no `style` (always the WinForms shape). One reader, `FormCodeStyle.Of(file)`, is used by the region
   writer, the handler stubs, the designer's conversion offer, the conversion and the page emitter (§7.7).
 
@@ -669,8 +742,14 @@ regeneration; they do not block the designer; the build will reject most of them
 
 ### 8.4 Declining
 **Not now** writes nothing: the file stays byte-identical, the designer keeps generating it in the DOM style (§6.3), its page
-keeps piece-1 markup (§7.7). A file hand-converted to the portable shape without the marker stays DOM style until converted
-(the marker, not the content, decides — §6.1).
+keeps piece-1 markup (§7.7).
+
+**A half-converted file is never built half-and-half.** The marker decides the style (§6.1), so a file whose markers say DOM
+but which the user hand-edited toward the portable shape — detected by `Using`/`Imports System.Windows.Forms` or
+`Inherits Form` in a web code-behind whose markers carry no `style` — would get a DOM-style region, a piece-1 page AND the
+library (§5.1's trigger). That combination is refused: the designer reports `MixedCodeStyle` (error) naming the file and
+offering Convert, the region writer does not regenerate it, and a web build stops with the same error. The reverse (a
+`style="portable"` marker over a region hand-edited back to DOM calls) is already BL8011 (hash mismatch).
 
 ## 9. Desktop-only controls (O8, P-D6) — sub-piece 2d
 - **Toolbox:** on a web form every kind is listed; desktop-only kinds carry a "desktop" badge (C13 changes from hide to
@@ -738,8 +817,10 @@ Dock; resize a container with docked children; resize the window. Compared: valu
 
 ### 11.3 Lock-step (O6, O15)
 The library's anchor axis rule under node vs `FormAnchorCss.Positioned` over one table (16 edge combinations × near/far/
-centred × negative sums × sizes ≤ 0); the client-inset rule and the live-dock cases (§5.10) vs `FormDockLayout` through
-`FormDockScriptTests`.
+centred × negative sums × sizes ≤ 0); the client-inset rule and every §5.10 live case — **undocked at design time, docked at
+run time** first among them — vs `FormDockLayout` through `FormDockScriptTests`, plus the script's glue harness on a real
+CLI-built portable page (a page with NOTHING docked at design time still carries the script and the `vgsDock` hook); the
+one-reflow-per-`Visible`-write count; the R2 cascade test.
 
 ### 11.4 Rendering and style (Edge)
 Caption, legend, borders and child offsets vs the WinForms window (P11's table becomes equality, or each residual gap a
@@ -759,7 +840,8 @@ conversion (convert, each finding, non-simple handlers left, decline byte-identi
 
 ### 11.7 Build errors
 `DesktopOnlyKind` on both routes; `ElementOnDesktop` (field, parameter, `Me`); `WebUnavailableMember` (member, type,
-MessageBoxButtons member); `RuntimeControlCreation`; `HandlerSignatureMismatch`; `PortableLibraryNameCollision`; `#If`
+MessageBoxButtons member); `RuntimeControlCreation`; `HandlerSignatureMismatch`; `PortableLibraryNameCollision`; `MixedCodeStyle` (designer and web
+build); `DecimalNotSupportedOnWeb` (one test per "out" row of §4.11); `#If`
 choosing correctly per target and configuration.
 
 ### 11.8 End to end, and reachability
@@ -771,7 +853,8 @@ build), the command (generated command + AXAML binding), the conversion offer (`
 ### 11.9 Reviews and mutations
 Per task: implementer, spec review, quality review, mutation checks — inclusion trigger; base-first order; RemoveHandler
 identity; `#If` prefix traps; DEBUG/RELEASE by configuration; line-preserving blanking; Decimal rounding/scale; the anchor
-axis (both sides); live-dock reads; reflow coalescing; client insets; relatedTarget; caption click de-dup; change-only
+axis (both sides); live-dock reads (a walk over the emitted JSON instead of the live tree; measured instead of requested
+size); reflow coalescing (observer + library = one); the R2 cascade rule; the phone-width anchor rule; client insets; relatedTarget; caption click de-dup; change-only
 events; the style marker; decline byte-identity; the `.Element` receiver-name check; the harness itself (never shown, wrong
 order of input).
 
@@ -790,6 +873,10 @@ order of input).
 | I7 phone + reflow | §5.8, §5.10; O10, O15 |
 | I8 sequencing | §0.4; §4 preamble |
 | I9 twin text | §11.2 |
+| R1 live docking | §5.10 (always emitted; live-tree walk; requested size `data-vgs-w/h`; complete rules; named lazy hook; lock-step incl. undocked→docked); §11.3 |
+| R2 style cascade | §5.8 (the library never writes geometry for a docked control) |
+| R3 Decimal | §4.11 table D1–D22, `DecimalNotSupportedOnWeb`; split out as 2.0b (§1) |
+| Re-review minors | one scheduler per reflow (§5.8); anchor writes below the breakpoint (§5.9); pre-2a drops read the marker as BL8012 (§6.1); half-converted files refused, `MixedCodeStyle` (§8.4) |
 | Minors | G11 (`WinFormsEventArgs`, placement by style §6.2); P2/§5.4 ComboBox `title=`; §5.4 enable targets; §5.1 security; §5.1 trigger widened; §6.3 WinForms rehash; §5.10 `FormDock`; §9 `Selection`; §10.4/§11.1 Edge authority; O2 wording |
 
 ## 12. Risks
@@ -798,10 +885,13 @@ order of input).
 - **In-flight branches move the ground**: `fix/js-cross-file-calls` (the missing-member path), `fix/unknown-dock-diagnostic`
   (codes, `FormDock`), slice 3 (rows, types, GroupBox), slice 5 (events). §0.4's re-measure step; codes by name; slice-3 rows
   consumed, not duplicated.
-- **Exact Decimal on JS** is a numeric library of its own; wrong rounding would be a silent miscompile. The .NET-computed table
-  and its mutations are the guard.
-- **The reflow script becomes live** (§5.10): one half of piece 1's mirrored pair changes; its lock-step fixtures must grow in
-  the same commit.
+- **Exact Decimal on JS** (2.0b) is a numeric runtime of its own; wrong rounding would be a silent miscompile. The
+  .NET-computed tables, the "out" rows refused by name, and the mutations are the guard; the IR optimizer's folding (D21) is
+  a second place it can go wrong.
+- **The reflow script becomes live** (§5.10): one half of piece 1's mirrored pair changes, it is now on every portable page,
+  and it gains a global (`window.vgsDock`); its lock-step fixtures must grow in the same commit.
+- **Two style owners** (`vgs-dock-live` and the library's `<style>`): safe only while §5.8's R2 rule holds — a mutation
+  check writes a docked control's `left` from the library and must turn a test red.
 - **A hand-written library drifts from the catalog** — §11.1, `DomMember`, the collision error.
 - **Harness fidelity** — CDP and window messages are new; mutation checks on the harness itself.
 - **Canvas expectations move** (§7.5), on WinForms documents too — listed, intended.
