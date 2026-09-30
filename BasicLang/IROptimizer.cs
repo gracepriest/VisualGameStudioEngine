@@ -1817,16 +1817,27 @@ namespace BasicLang.Compiler.IR.Optimization
             if (left.Value is decimal || right.Value is decimal)
                 return null;
 
+            // #123: two numeric constants of DIFFERENT widths are compared in the wider one, as VB
+            // converts them (Double beats Single beats the integral types; two integral types meet
+            // in Long). The switch below only knows same-type pairs, and answered a mixed pair
+            // with CompareGt/CompareLt's "false" and Equals' "unequal boxes": `3.14 <= 3` folded
+            // to True. An integral mix a Long cannot hold (a ULong past Long.MaxValue) is not
+            // folded at all.
+            var a = left.Value;
+            var b = right.Value;
+            if (!TryPromoteMixedNumeric(ref a, ref b))
+                return null;
+
             try
             {
                 bool result = cmp.Comparison switch
                 {
-                    CompareKind.Eq => CompareEq(left.Value, right.Value),
-                    CompareKind.Ne => !CompareEq(left.Value, right.Value),
-                    CompareKind.Lt => CompareLt(left.Value, right.Value),
-                    CompareKind.Le => !CompareGt(left.Value, right.Value),
-                    CompareKind.Gt => CompareGt(left.Value, right.Value),
-                    CompareKind.Ge => !CompareLt(left.Value, right.Value),
+                    CompareKind.Eq => CompareEq(a, b),
+                    CompareKind.Ne => !CompareEq(a, b),
+                    CompareKind.Lt => CompareLt(a, b),
+                    CompareKind.Le => !CompareGt(a, b),
+                    CompareKind.Gt => CompareGt(a, b),
+                    CompareKind.Ge => !CompareLt(a, b),
                     _ => false
                 };
                 
@@ -1985,6 +1996,48 @@ namespace BasicLang.Compiler.IR.Optimization
         }
         
         // Comparison operations
+        /// <summary>
+        /// #123 — converts two numeric constants of different CLR types to the type VB compares
+        /// them in; leaves every other pair (same type, or not both numeric) untouched. False only
+        /// for an integral pair no Long can hold, which the caller then declines to fold.
+        /// ⚠ The conversions are the run-time ones: an Integer compared with a Single is rounded
+        /// TO Single first (16777217 = 16777216F is True in VB), and a Single compared with a
+        /// Double widens exactly (CSng(0.1) = 0.1 is False).
+        /// </summary>
+        private static bool TryPromoteMixedNumeric(ref object a, ref object b)
+        {
+            if (a == null || b == null || a.GetType() == b.GetType()) return true;
+            if (!IsFoldNumeric(a) || !IsFoldNumeric(b)) return true;
+
+            if (a is double || b is double)
+            {
+                a = Convert.ToDouble(a); b = Convert.ToDouble(b);
+            }
+            else if (a is float || b is float)
+            {
+                a = ToSingle(a); b = ToSingle(b);
+            }
+            else
+            {
+                if (a is ulong ua && ua > long.MaxValue) return false;
+                if (b is ulong ub && ub > long.MaxValue) return false;
+                a = Convert.ToInt64(a); b = Convert.ToInt64(b);
+            }
+            return true;
+
+            // Straight to float, never through double: `(float)(double)x` can round twice.
+            static float ToSingle(object v) => v switch
+            {
+                float f => f,
+                long l => l,
+                ulong ul => ul,
+                _ => Convert.ToInt64(v),   // every smaller integral fits a Long exactly
+            };
+        }
+
+        private static bool IsFoldNumeric(object v) =>
+            v is int or long or float or double or short or byte or sbyte or ushort or uint or ulong;
+
         private bool CompareEq(object a, object b)
         {
             return Equals(a, b);
