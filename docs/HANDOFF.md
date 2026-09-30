@@ -17,7 +17,130 @@ facade (all five tasks of `2026-09-13-blnet-cpp-facade.md`).
 
 ---
 
-## 🚀 NEWEST — 2026-09-30: #121 DONE, every name the program owns is reserved, and a pass mints only through `DeclareTemp` (ADR-0018)
+## 🚀 NEWEST — 2026-09-30: #124 DONE, every remaining name reference is bound through the front end (ADR-0013 D3)
+
+The fix is `c55e91bd` on top of #121 and #163 (master `e092023d`); the tests are uncommitted work on top of it. Compiler only (`ASTNodes`, `SemanticAnalyzer`,
+`IRBuilder`); no backend changed. Design: the amendment at the end of `docs/superpowers/decisions/0013-case-insensitive-name-binding-front-end-to-ir.md`
+(read it; this section is what the test work adds and what to watch for). BasicLang is case-insensitive; #169 bound locals, parameters and lambda
+parameters through the analyzer's record and left every other reference on its WRITTEN spelling. For a name spelled unlike its declaration that was:
+C++ refusing to compile, JavaScript silently reading or writing an undeclared variable, C# and MSIL right by accident.
+
+**The consumed sites** (each is a place the IR names a thing; every one now takes the DECLARED spelling):
+- `IRBuilder.BoundVariable`, reached from `ReferencedVariable` (a read, an assignment target) and from the counted `For`: by `NameBinding.Kind`, keyed by
+  `DeclaredName`, in the store the kind names. Field and Property → `MemberVariable`; ModuleGlobal → `GlobalVariable` (a Module's own through `GlobalReference`,
+  another file's through `ImportedGlobal`, a file-scope one from the maps its declaration wrote); Method, Type and Event → a name, `GetOrCreateVariable(DeclaredName)`.
+- Module-member globals (`ModuleMemberGlobal`, read and write) and imported globals (read and write); `AccessorMemberOf` (a bare Get/Set property); an `Await` callee;
+  `RaiseEvent` (`raise_<declared>`; **`Event` joined `NameBindingKind`**, and the statement carries a synthesized `EventReference`).
+- **Member access and `New` consume the analyzer's symbol or type, not a `NameBinding`** (they are not identifier references): `DeclaredMemberSpelling` for a member
+  read, a store, an instance call, a Shared call (`C.m`) and `MyBase.m`; the resolved class for `New`. Only when the two spellings differ by case alone.
+- NOT changed: For Each (the analyzer's reuse decision was already case-insensitive), Catch (always a new declaration), Using (no statement form), ReDim (an assignment).
+
+**The For decision rule.** A counted `For` with no `As` drives WHATEVER its control name already denotes, decided by the analyzer (`ForLoopNode.ControlReference`, a synthesized
+reference bound at the one recording point) and reached by the declared spelling: Local, Parameter, LambdaParameter, Field, Property or ModuleGlobal, in any case (VB: `For total`
+over a field `Total` drives the field). The `As` form declares a NEW variable (no control reference). A Method or Type name is not storage: the loop declares its own. The Ordinal
+`ResolvesToExistingStorage` runs only when the analyzer bound no storage, for one job: not declaring twice a same-spelled local the function already declares (a `Dim` in an earlier,
+closed block: FOsb). The increment writes back under the storage's declared spelling.
+
+**The deliberate non-ICE (a deviation from the orchestrator's Q3).** A bound Local, Parameter, LambdaParameter or FILE-SCOPE ModuleGlobal whose declaration the IR did not register is an
+internal compiler error. A Field or Property miss is NOT, and neither is an owning-module or imported global (those are forward references): a member has no IR-side registration
+complete at the reference, so an ICE would refuse programs VB accepts. Reachable from source: a nested class reading its enclosing class's Shared field (fails on EVERY backend, control
+too, since before #124) and a base declared AFTER its derived class (NIb: prints VB's answer everywhere). NOT reachable: a Structure member (a Structure holds fields only) and a base in
+another file (refused: `InheritedMemberTests.ACrossFileBaseClass_IsNotFound_Pinned`). The file-scope ICE is not reachable from source either (the analyzer refuses use before declaration):
+it is tested on the real front end with a tampered binding, `NameBindingMissTests`.
+
+**Follow-ups #244–#251.**
+
+| # | What | Cells |
+|---|---|---|
+| #244 | cross-file module globals that differ only by case: qualified `A.Scale` / `B.scale` fail on all four backends | MF3, MF3u |
+| #245 | events: `AddHandler b.clicked` in another case is not in the class's member table; events broken on C++ and MSIL in ANY case | EVa; EVb/EVr on C++, MSIL |
+| #246 | C#: a For over ANOTHER module's global writes its increment to a plain variable (CS0103) | FOg, FOgc, MF5, MF5c on C# (pinned) |
+| #247 | `For x As T` leaves the loop variable bound after the loop; a later read of a same-named field gets it | FOac (prints 4, VB 50) |
+| #248 | `Catch err` with no `As` does not reuse an existing variable | CAn, CAnc |
+| #249 | a Function's own name used as its return value (`F = v`) prints 0 | MEr, MErc |
+| #250 | ARCHITECT: record that member access and `New` consume symbol/type (done: the ADR amendment); decide whether `IRBuilder.CanonicaliseMemberNames` is retired | — |
+| #251 | test infra: the `dotnet test --filter` trap (below) | — |
+
+**⚠ Pre-existing failing cells this work found and did NOT file** (measured identical before and after #124, and in the same-case control; the execution fixture asserts none of them):
+FL/FLc on C# (a lambda's field write prints 7, vbc 42), PRa/PRac on C++ (an auto-property written by its bare name prints 0, vbc 30), AWa/AWac on C++ (does not compile: `member reference
+type 'Task<int>'`), MSIL (`undefined class 'Task'`) and JavaScript (prints `undefined`), RDa/RDac on MSIL (`__BLReDim`), TYb/TYbc on C++ (`TypeOf`/`CType` to a class: BL-FAIL), TYe and USa on every
+backend (an Enum member in another case; `Using`).
+
+**Tests (Linux-measured; the oracle is `vbc`).**
+- `Compiler/NameBindingSiteTests.cs` (59 = 14 + 8 + 13 + 18 + 6, fast) — the IR per consumed site, as PAIRS: the case-differing program and its same-case control must build to the SAME IR text, plus explicit facts
+  (the declared spelling is named, the written one is not). Fixtures: `NameBindingBoundVariableSiteTests`, `NameBindingNamedThingSiteTests` (accessor, Await, RaiseEvent, `New`),
+  `NameBindingMemberSpellingSiteTests`, `NameBindingForDecisionSiteTests` (the four storage kinds, `ControlReference`, the `As` form, the fallback, For Each), `NameBindingMissTests`
+  (the file-scope ICE positive and negative, the Field/Property non-ICE, the unregistered-member shapes).
+- ⛔ **`BindingSiteIr.BuildBeforeCanonicalisation` is the only way to see a member site's own answer.** `IRBuilder.CanonicaliseMemberNames` rewrites every member reference to the receiver's declared
+  spelling AFTER the walk, so four mutants (M06 accessor member, M11a read, M11b store, M11c instance call) leave the final IR identical and survived 105 probes x 12 cells. The helper mirrors `Build`'s
+  first steps by reflection on `_module` and `CollectSharedModuleGlobalNames` (it fails loudly if either moves) and stops before the post-pass. Only member and callee spellings may be asserted on that IR.
+- `Compiler/NameBindingResolutionExecutionTests.cs` (203: 90 case-differing + 86 control + 11 + 11 project cells, 4 pins, 1 table test, Integration) — every probe the fix moved (FR FW FL FIn FShB PRa FEf FEla FOf FOg FOgf FOl FOla FOp MEa MEb MEs MEt TYa EVb AWa; MF1, MF2, MF5) plus
+  MGw, EVr, FOsb and NIb, each with its same-case control, on the backends where it now matches vbc: single-file through the CLI, the CLI `--optimize` and `CompileProjectFiles`; multi-file through
+  `BasicLang build P.blproj` (Debug, Release) and `CompileProjectFiles` (standard, aggressive). The C++ CLI project build is MSVC-only (BL6015), so its multi-file cells run the two in-process routes.
+  The cells with no expectation, by row and follow-up, are in the fixture's header. **Pinned known defects, so the day #246 lands they go red:** FOg, FOgc (C#, three entry points) and MF5, MF5c
+  (C#, `CompileProjectFiles` twice and `BasicLang build`) — CS0103 on the increment's undeclared variable.
+- Moved: `NameBindingTests.EventReference_IsBoundAsKindEvent_WithItsDeclaredSpelling_D7` (was `…IsExempt_BindingIsNull_D7`), `NameBindingExecutionTests.E18_ForFieldCase_DrivesTheField_OnEveryBackend` (was `…PinsTodaysWrongZeroOnJavaScript_Against124`; VB prints 4, all
+  12 cells), `InheritedMemberTests.ACaseDifferentBareSpelling_ReadsTheDeclaredMember_OnEveryBackend` (was `…IsACanonicalisationGap_Pinned`; own and inherited field, 7 on every backend), and
+  `JsExecutionTierRosterTests` (+1 fixture, pinned at **99**).
+
+**Mutation proof** (real NUnit; the mutant `BasicLang.dll`s built one at a time in detached worktrees at `2eafb6e4` + the fix + ONE mutation, `S/t124/mut/mutants.py` and the test-writer's `mutants_extra.py`, then swapped into a copy of
+the final test binaries; the unmutated control passes). The brief's "17 mutants" is 20 entries: M01–M16 with M11 split into a–e. **All 20 are killed, and so are the test-writer's 8 more (M17–M24), every one in the FAST tier.** `BV` =
+`NameBindingBoundVariableSiteTests`, `NT` = `NameBindingNamedThingSiteTests`, `MS` = `NameBindingMemberSpellingSiteTests` (`Pre` = its `BeforeCanonicalisation` row, `Fin` = its `Final` row), `FD` = `NameBindingForDecisionSiteTests`, `Miss` = `NameBindingMissTests`.
+
+| Mutant | Killed by |
+|---|---|
+| M01 Field/Property arm reads the written name | BV x5 (field r/w, inherited, Shared, lambda, auto-property), FD (loop over a field, the increment, For Each over a field), Miss x2 |
+| M02 ModuleGlobal arm reads the written name | Miss (file-scope ICE), FD (module global, another file's global) |
+| M03 Method/Type/Event arm reads the written name | BV (AddressOf, Type receiver, event value), MS (static and instance call, Pre and Fin), MS whole-program |
+| M04 imported global by written name | BV (`AnImportedGlobal_…`), FD (another file's global) |
+| M05 module-member global by written name | BV (`AModuleGlobalDeclaredLaterInTheFile_…`, the forward reference) |
+| M06 accessor member spelled as written | NT `ABareAccessorProperty_…Pre`, NT `ASharedBareAccessorProperty_…` — **Pre only; the final IR is identical** |
+| M07 For does not drive bound storage / M14 the analyzer never records the control | FD (local, parameter, field, file-scope, module, another file's global, the increment); M14 also `ControlReference_*` x5, the method-named control, the re-record test |
+| M08 the increment writes back under the written spelling | the same FD rows (`TheIncrementWritesBackUnderTheDeclaredSpelling`) |
+| M09 Await callee as written | NT `AnAwaitedUserFunction_IsCalledByItsDeclaredName` |
+| M10 RaiseEvent as written | NT `RaiseEvent_CallsTheEventByItsDeclaredName` — **the C# and JS backends re-look the event up, so no probe could see it** |
+| M11a member read / M11b member store / M11c instance call spelled as written | MS `AMemberRead_…Pre` / `AMemberStore_…Pre` / `AnInstanceCall_…Pre` — **Pre only; the post-pass repairs each in the final IR** |
+| M11d Shared call as written / M11e MyBase call as written | MS (Pre and Fin), MS whole-program; M11d also BV `ATypeReceiver_…` |
+| M12 `New` names the written class | NT `New_NamesTheClassAsDeclared`, MS (another file's class), MS whole-program |
+| M13 For Each reuse decided Ordinal | FD `AForEachOverAField_…`, FD (another file's global), `SynthesizedForeachHiddenVariable_…_D5` |
+| M15 Event never recorded | NT x3 (`RaiseEvent_…`, `AnEventReference_IsBoundAsKindEvent`, the re-record test), BV (event value), `NameBindingTests.EventReference_IsBoundAsKindEvent_…_D7` |
+| M16 the Ordinal fallback dropped | FD `AnEarlierClosedBlockLocal_IsNotDeclaredTwice` |
+| M17 the `As` form drives existing storage | FD `TheAsForm_DeclaresANewVariable_…` |
+| M18 a Method name counts as storage | FD `AControlNamedLikeAMethod_…` |
+| M19 a file-scope miss creates silently | Miss `AFileScopeGlobalMiss_IsAnInternalCompilerError` |
+| M20 a Field/Property miss IS an ICE (the orchestrator's original Q3) | Miss x2 (Field, Property), Miss `TheUnregisteredMemberShapes_StillCompile` |
+| M21 Await member callee as written / M22 owning-module global as written | NT `AnAwaitedUserFunction_…` / BV `AModuleGlobalDeclaredLaterInTheFile_…` |
+| M23 imported-global arm as written / M24 qualified module member (forward) as written | FD `ALoopOverAnotherFilesGlobal_…` / BV `AQualifiedModuleMemberBeforeItsModule_…`, BV `AnImportedGlobal_…` |
+
+The per-mutant failing-test lists (with the exact names) are in `S/t124/tw-mutres/<mutant>.fast.txt`.
+
+**Gates (Linux, g++/clang++/node/ilasm present, no MSVC), on the final test DLL (`c55e91bd` plus the test and doc changes).**
+- The fast subset (`TestCategory!=Integration`): `Failed: 0, Passed: 9815, Skipped: 93, Total: 9908` (2 m 31 s). On the fix commit alone it was `Total: 9849` with the 1 moved pin failing; +59 fast tests (`NameBindingSiteTests.cs`), the same 93 skips.
+- Integration, every term run ON ITS OWN and written `FullyQualifiedName~<term>` (see the filter trap below), all `Failed: 0, Skipped: 0`:
+
+  | Term | Passed | Time |
+  |---|---|---|
+  | `NameBinding` (my two new files, `NameBindingTests`, `NameBindingExecutionTests`: 203 + 59 + 36 + 15 + 1 stray match) | 314 | 7 m 48 s |
+  | `InheritedMember` | 36 | 55 s |
+  | `NameReservation` | 443 | 10 m 55 s |
+  | `ForEachVariable` | 20 | 20 s |
+  | `LambdaCapture` | 36 | 5 s |
+  | `JsExecutionTierRosterTests` (fast tier, no category; the roster is pinned at 99) | 5 | < 1 s |
+
+- ⚠ The FULL suite (~39 min plus) was NOT run for this task; the fast subset and the six terms above were. The mutants were measured in the FAST tier only; the execution fixture was not re-run per mutant.
+- **Only Windows can validate:** the MSVC leg of every C++ cell here (clang++/g++ only on Linux) and the C++ CLI project build itself (BL6015 without MSVC); MSIL under a Windows `ilasm`/CLR.
+
+**Traps this work found.**
+- ⛔ **`dotnet test --filter "FullyQualifiedName~A|B"` silently DROPS the bare terms** (measured, #251: the implementer's combined filter ran 0 classes for `NameBinding` and `Closure` and reported the rest green). Write every term as
+  `FullyQualifiedName~A|FullyQualifiedName~B`, or run the terms one at a time and read the per-term count.
+- ⚠ Re-analysing the SAME AST with the SAME `SemanticAnalyzer` fails for any program that declares a class (the class is registered twice). To test "overwritten on every pass", analyze with a second analyzer.
+- ⚠ `NameBindingProbe.FindByName` walks `ControlReference` and `EventReference` (synthesized copies of a name the statement also holds), so a name on a For's control line is found twice by it; `BindingSiteIr.FindAll` skips them.
+- ⚠ `AccessorMemberOf`'s lookup by the declared name is equivalent to a lookup by the written one (`TypeInfo.Members` is OrdinalIgnoreCase); only its RETURNED spelling is observable (M06).
+- ⚠ A `TestCaseSource` name replaces the test's name in the TRX; give it `"{m}_…"` or every row of every method reads the same.
+
+---
+
+## 🚀 2026-09-30 (earlier): #121 DONE, every name the program owns is reserved, and a pass mints only through `DeclareTemp` (ADR-0018)
 
 The fix is `f39d53e5` on top of #163 (`5b4ca51e`), the MSIL case-guard fix `7e5c2340`, and the tests `6353faef`. Compiler only (IRBuilder, IRNodes,
 IRTempNames, IRVerifier, ClosureLowering, `Compiler.CombineIRModules`, IROptimizer); no backend changed. Design and measurements:
@@ -2681,6 +2804,10 @@ is `CseInvalidationDecisionTests`' `ConstGlobalAcrossACall` / `ParametersAcrossA
 self-contained program that compiles. Prefer those.
 
 #### ⛔ The C++ and JavaScript backends DO NOT CASE-FOLD IDENTIFIERS (task #124)
+
+> ✅ **DONE 2026-09-30 — #124 consumed ADR-0013 D3; everything in this subsection is HISTORY.** Every remaining name reference (Field, Property, ModuleGlobal, Method, Type,
+> Event, a member access, `New`, an `Await` callee, a `RaiseEvent`, and the counted `For`'s control) now reaches the IR under its DECLARED spelling, on all four backends.
+> Read "#124 DONE" at the top of this file. What stays open from this subsection is #244–#249 (listed there), not the C++/JavaScript case-folding defect.
 
 BasicLang is case-insensitive; the front end accepts `P = Seed(100)` as a write to `p` and the IR
 records `IRCall("P")` alongside `IRVariable("p")`. Measured on that program:
@@ -6275,8 +6402,8 @@ single new failure against the 170-name baseline.
     identifier reference's `NameBinding` (`DeclaredName`, `Kind`, `Declaration`) is written — at
     the analyzer's own `SymbolTable` lookup, so the binding and the resolved symbol can never
     disagree. Fresh on every analysis pass; `Name` is never rewritten. Null (exempt) for `Me`, a
-    `::` foreign name, a .NET member with no BasicLang `Symbol`, an `Event` reference (D7, left
-    for #124), a compiler-SYNTHESIZED declaration (the `For Each` hidden `__foreach_N`), and a
+    `::` foreign name, a .NET member with no BasicLang `Symbol`, an `Event` reference (D7 — bound
+    since #124), a compiler-SYNTHESIZED declaration (the `For Each` hidden `__foreach_N`), and a
     symbol whose name fails the OrdinalIgnoreCase invariant against the written spelling (D8,
     counted — 0 on the corpus and every probe here).
   - **#169 — the one consuming site.** `IRBuilder.ReferencedVariable` is the ONLY site a bound

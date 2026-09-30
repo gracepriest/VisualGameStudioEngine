@@ -862,17 +862,16 @@ public class NameBindingExecutionTests
 
     /// <summary>
     /// E18 — <c>For total = 1 To 3</c> over a class field declared <c>Total</c> (case-differing):
-    /// this is a counted <c>For</c> loop's own control-variable RESOLUTION decision, which
-    /// ADR-0013 D6 leaves entirely to #124 (not #169's identifier-reference consuming site).
-    /// JavaScript's own symptom is the cleanest to pin precisely: it silently prints 0 instead of
-    /// 4 (the field is never touched; a SEPARATE, undeclared <c>total</c> is created and
-    /// discarded). C#/C++ fail to COMPILE (an undeclared identifier 'total'); MSIL throws
-    /// <c>MissingFieldException: 'C.total'</c> at run time (edge-p2.txt) -- none of these are
-    /// #169's ICE (a compile-time front-end/codegen failure and a .NET reflection exception are
-    /// both categorically different from <c>ReferencedVariable</c>'s own thrown message).
+    /// a counted <c>For</c> loop's own control-variable RESOLUTION decision, which ADR-0013 D6
+    /// left to #124. VB DRIVES THE FIELD: after the loop it holds 4 (vbc, re-measured by the
+    /// test-writer). This row PINNED the failure until #124 landed — JavaScript printed 0 (a
+    /// SEPARATE, undeclared <c>total</c> was created and discarded), C# and C++ failed to
+    /// COMPILE (an undeclared identifier <c>total</c>) and MSIL threw
+    /// <c>MissingFieldException: 'C.total'</c> — and is promoted to VB's answer on every backend,
+    /// through the standard and the aggressive pipeline and the Release <c>.blproj</c> leg.
     /// </summary>
     [Test]
-    public void E18_ForFieldCase_PinsTodaysWrongZeroOnJavaScript_Against124()
+    public void E18_ForFieldCase_DrivesTheField_OnEveryBackend()
     {
         const string e18 = """
             Class C
@@ -887,10 +886,6 @@ public class NameBindingExecutionTests
                 Console.WriteLine(New C().Run())
             End Sub
             """;
-        Assert.That(FourBackends.Norm(JavaScriptExecutionTests.RunJs(e18)), Is.EqualTo("0"),
-            "known gap #124 (D6): the For loop's control-variable resolution, not #169's identifier-reference site");
-
-        var (failed, _) = CSharpFailsToCompile(e18);
-        Assert.That(failed, Is.True, "C# is also known to fail to compile this shape (#124)");
+        RunsEverywhereAndThroughTheProjectEntryPoint(e18, "4");
     }
 }

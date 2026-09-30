@@ -452,12 +452,15 @@ namespace BasicLang.Compiler.IR
             // makes), which also names the DECLARING class — a Shared property's receiver. The
             // nearest member of that name must be the property itself: anything else there is
             // what the name denotes, and the analyzer and the class disagree.
+            // #124: looked up by the DECLARED spelling the analyzer recorded, so the member named is
+            // the one it bound, spelled as declared.
+            var name = DeclaredSpelling(node);
             var guard = 0;
             for (var type = _semanticAnalyzer.LookupType(_currentClassName); type != null && guard++ < 64;)
             {
-                if (type.Members != null && type.Members.TryGetValue(node.Name, out var member) && member != null)
+                if (type.Members != null && type.Members.TryGetValue(name, out var member) && member != null)
                     return member.Kind == SymbolKind.Property
-                        ? new BareAccessorMember(member.Name ?? node.Name, type, symbol.IsShared)
+                        ? new BareAccessorMember(member.Name ?? name, type, symbol.IsShared)
                         : null;
 
                 var baseType = type.BaseType;
@@ -801,6 +804,11 @@ namespace BasicLang.Compiler.IR
         /// <c>For</c>, which must give its induction variable a local when nothing else holds it
         /// and must NOT when something does — see <see cref="Visit(ForLoopNode)"/> for why each
         /// half matters.</para>
+        ///
+        /// <para>⭐ #124: asked ONLY when the analyzer bound the control name to no storage (the loop's
+        /// <c>ControlReference</c> is null, or names a Method or Type). Existing storage is decided by that binding; this
+        /// Ordinal test is left guarding one thing — a same-spelled local the function already
+        /// declares, which must not be declared twice.</para>
         ///
         /// <para>⚠ Must be asked BEFORE <c>GetOrCreateVariable</c>, which pushes a version and
         /// would then make every name look as though it already existed.</para>
@@ -2916,10 +2924,11 @@ namespace BasicLang.Compiler.IR
                 args.Add(_expressionResult);
             }
 
-            // Generate call to event invocation
+            // Generate call to event invocation — named after the event as DECLARED when the
+            // analyzer bound it (#124, ADR-0013 D7), as written otherwise.
             var eventCall = new IRCall(
                 _currentFunction.GetNextTempName(),
-                $"raise_{node.EventName}",
+                $"raise_{(node.EventReference != null ? DeclaredSpelling(node.EventReference) : node.EventName)}",
                 new TypeInfo("Void", TypeKind.Void)
             );
             foreach (var arg in args)
@@ -3077,16 +3086,19 @@ namespace BasicLang.Compiler.IR
             // Instead, create the IRCall and embed it in the IRAwait
             if (node.Expression is CallExpressionNode callNode)
             {
+                // ⭐ #124: each name as DECLARED when the analyzer bound it (a user Function, a Type
+                // receiver), as written otherwise (Task.Delay) — the spelling every other call site
+                // already takes from the resolved symbol.
                 string functionName = null;
                 if (callNode.Callee is IdentifierExpressionNode idExpr)
                 {
-                    functionName = idExpr.Name;
+                    functionName = DeclaredSpelling(idExpr);
                 }
                 else if (callNode.Callee is MemberAccessExpressionNode memberExpr &&
                          memberExpr.Object is IdentifierExpressionNode objExpr)
                 {
                     // Qualified call like Task.Delay(10)
-                    functionName = $"{objExpr.Name}.{memberExpr.MemberName}";
+                    functionName = $"{DeclaredSpelling(objExpr)}.{DeclaredMemberSpelling(memberExpr)}";
                 }
 
                 if (functionName != null)
@@ -3941,19 +3953,46 @@ namespace BasicLang.Compiler.IR
             // acquire a same-named local and the loop would silently stop mutating the member.
             // The already-a-local case is what keeps `Dim i As Integer = 100` followed by
             // `For i = 1 To 3` (which works today on all four backends) unchanged.
-            else if (!ResolvesToExistingStorage(node.Variable))
+            //
+            // ⭐ #124 (ADR-0013 D3/D6): WHICH storage is the analyzer's answer, not a string test.
+            // It bound the loop's ControlReference to what the name already denotes (a local, a
+            // parameter, a field or property, a module global), and the loop drives THAT, reached
+            // by its DECLARED spelling through the one lookup every bound reference uses
+            // (BoundVariable) — whatever case the loop spells it in, as VB does. Before, the
+            // Ordinal test below missed `For total` over a local or parameter `Total` (a second,
+            // shadowing local: the loop left `Total` untouched) and resolved `For total` over a
+            // field `Total` to a variable named `total` (undeclared on C++, a different property
+            // on JavaScript).
+            //
+            // ⚠ When the analyzer says the name denotes NOTHING yet, the loop declares it, and the
+            // Ordinal test is kept for exactly one job: not declaring twice a same-spelled local the
+            // function already declares (a `Dim` in an earlier, closed block), which the analyzer
+            // rightly no longer sees.
+            IdentifierExpressionNode drivenReference = null;
+            if (string.IsNullOrEmpty(node.VariableType)
+                && node.ControlReference?.Binding is { } controlBinding
+                && IsStorageBinding(controlBinding.Kind))
+            {
+                drivenReference = node.ControlReference;
+            }
+            else if (string.IsNullOrEmpty(node.VariableType) && !ResolvesToExistingStorage(node.Variable))
             {
                 _currentFunction.LocalVariables.Add(new IRVariable(node.Variable, loopVarType, 0));
             }
 
-            var loopVar = GetOrCreateVariable(node.Variable, loopVarType);
+            var loopVar = drivenReference != null
+                ? BoundVariable(drivenReference, drivenReference.Binding, loopVarType)
+                : GetOrCreateVariable(node.Variable, loopVarType);
             EmitInstruction(new IRAssignment(loopVar, startValue));
+
+            // The spelling the increment writes back under: the storage's declared one when the
+            // loop drives existing storage (#124), else the loop's own.
+            var storageSpelling = drivenReference?.Binding.DeclaredName ?? node.Variable;
 
             // ⭐ #169 (ADR-0013 D5): the analyzer declares the loop's control variable in the loop's
             // own scope, so the body's references to it are bound as a Local of this name — and
             // bind to WHATEVER the line above resolved it to, a module global included, which
-            // GetOrCreateVariable returns without registering. Registered for the loop only; the
-            // new-vs-existing decision above is untouched (#124's).
+            // GetOrCreateVariable returns without registering. Registered for the loop only.
             PushVariableVersion(node.Variable, loopVar);
 
             // Jump to condition
@@ -4001,7 +4040,7 @@ namespace BasicLang.Compiler.IR
             var inc = new IRBinaryOp(incTemp, BinaryOpKind.Add, loopVar, stepValue, loopVar.Type);
             EmitInstruction(inc);
 
-            var newLoopVar = CreateVariable(node.Variable, loopVar.Type, _nextVersion++);
+            var newLoopVar = CreateVariable(storageSpelling, loopVar.Type, _nextVersion++);
             EmitInstruction(new IRAssignment(newLoopVar, inc));
             PushVariableVersion(node.Variable, newLoopVar);
 
@@ -4994,14 +5033,12 @@ namespace BasicLang.Compiler.IR
                 if (ModuleMemberSymbolOf(idExpr2) is Symbol moduleMember)
                 {
                     // A Module's variable, its own or another's — the same global the read binds.
-                    targetVar = GlobalReference(moduleMember.Name, moduleMember.OwningModule, value.Type);
+                    targetVar = ModuleMemberGlobal(idExpr2, moduleMember, value.Type);
                 }
                 else if (symbol != null && symbol.IsImported && !string.IsNullOrEmpty(symbol.SourceModule))
                 {
-                    // This is an imported variable from another module
-                    targetVar = new IRVariable(idExpr2.Name, value.Type);
-                    targetVar.IsGlobal = true;
-                    targetVar.ModuleName = symbol.SourceModule;
+                    // This is an imported variable from another module — by its DECLARED spelling (#124).
+                    targetVar = ImportedGlobal(DeclaredSpelling(idExpr2), symbol.SourceModule, value.Type);
                 }
                 else
                 {
@@ -5023,7 +5060,7 @@ namespace BasicLang.Compiler.IR
                 // global — the SAME one the read binds, so the two cannot disagree about where it
                 // lives. Never an IRFieldStore on a phantom receiver ("cannot use arrow operator
                 // on a type" was the C++ reading of that).
-                var targetVar = GlobalReference(moduleMemberTarget.Name, moduleMemberTarget.OwningModule, value.Type);
+                var targetVar = ModuleMemberGlobal(moduleMemberExpr, moduleMemberTarget, value.Type);
                 if (!TryRenameToVariable(value, targetVar))
                 {
                     EmitInstruction(new IRAssignment(targetVar, value));
@@ -5035,7 +5072,7 @@ namespace BasicLang.Compiler.IR
                 memberExpr.Object.Accept(this);
                 var obj = _expressionResult;
 
-                var fieldStore = new IRFieldStore(obj, memberExpr.MemberName, value);
+                var fieldStore = new IRFieldStore(obj, DeclaredMemberSpelling(memberExpr), value);
 
                 // P2a-2 Task 7a: a .NET PROPERTY/FIELD write carries the SYNTHESIZED set_X
                 // accessor-method descriptor (NetAccessorSynthesis — the single synthesis
@@ -5660,8 +5697,7 @@ namespace BasicLang.Compiler.IR
             // to the real global, whatever the declaration order.
             if (ModuleMemberSymbolOf(node) is Symbol moduleMember)
             {
-                _expressionResult = GlobalReference(moduleMember.Name, moduleMember.OwningModule,
-                    _semanticAnalyzer.GetNodeType(node));
+                _expressionResult = ModuleMemberGlobal(node, moduleMember, _semanticAnalyzer.GetNodeType(node));
                 return;
             }
 
@@ -5681,11 +5717,9 @@ namespace BasicLang.Compiler.IR
             var symbol = _semanticAnalyzer.GetNodeSymbol(node);
             if (symbol != null && symbol.IsImported && !string.IsNullOrEmpty(symbol.SourceModule))
             {
-                // This is an imported variable from another module
-                var variable = new IRVariable(node.Name, _semanticAnalyzer.GetNodeType(node));
-                variable.IsGlobal = true;
-                variable.ModuleName = symbol.SourceModule;
-                _expressionResult = variable;
+                // This is an imported variable from another module — by its DECLARED spelling (#124).
+                _expressionResult = ImportedGlobal(DeclaredSpelling(node), symbol.SourceModule,
+                    _semanticAnalyzer.GetNodeType(node));
                 return;
             }
 
@@ -5716,34 +5750,189 @@ namespace BasicLang.Compiler.IR
         /// ReferenceError on JavaScript. Every declaration site registers its name first (ADR
         /// D5), so a miss means one was missed.</para>
         ///
+        /// <para>⭐ #124 (ADR-0013 D3/D6) extends it to every other kind the analyzer records, each
+        /// by its DECLARED spelling and through the store its kind names (<see cref="BoundVariable"/>):
+        /// a Field or Property is the member's own variable, a ModuleGlobal the global itself, a
+        /// Method or Type the name the declaration spells. Before, those kinds took the written
+        /// spelling: a field <c>Total</c> read as <c>total</c> was an undeclared identifier on C++
+        /// and a different, undefined property on JavaScript.</para>
+        ///
         /// <para>Everything unbound — <c>Me</c>, foreign and .NET names, the For Each hidden
-        /// variable, a Field, ModuleGlobal, Property, Method or Type reference — takes the
-        /// verbatim path it always took (#124 owns those kinds).</para>
+        /// variable, an unresolved name — takes the verbatim path it always took.</para>
         /// </summary>
         private IRVariable ReferencedVariable(IdentifierExpressionNode node, TypeInfo typeIfUnbound)
         {
             var binding = node.Binding;
-            if (binding == null || !IsVersionedBinding(binding.Kind))
-                return GetOrCreateVariable(node.Name, typeIfUnbound);
-
-            if (_variableVersions.TryGetValue(binding.DeclaredName, out var versions) && versions.Count > 0)
-                return versions.Peek();
-
-            throw new InvalidOperationException(
-                $"Internal compiler error: '{node.Name}' (line {node.Line}) resolved to the "
-                + $"{binding.Kind} declared as '{binding.DeclaredName}', but no variable of that name "
-                + "is registered in the IR builder's scope. A declaration site did not register it "
-                + "(#169, ADR-0013 D5); refusing to invent one.");
+            return binding == null
+                ? GetOrCreateVariable(node.Name, typeIfUnbound)
+                : BoundVariable(node, binding, typeIfUnbound);
         }
 
         /// <summary>
-        /// The binding kinds whose declarations <see cref="_variableVersions"/> holds, and so
-        /// the kinds <see cref="ReferencedVariable"/> binds through it (#169, ADR-0013 D3).
+        /// ⭐ #124 (ADR-0013 D1/D3) — THE ONE answer to "which IR variable does this BOUND reference
+        /// denote", by <see cref="NameBinding.Kind"/>, keyed by <see cref="NameBinding.DeclaredName"/>
+        /// and looked up only in the store the kind names. Asked by <see cref="ReferencedVariable"/>
+        /// (a read, an assignment target) and by the counted <c>For</c> that drives existing storage
+        /// (<see cref="Visit(ForLoopNode)"/>), so the loop and the body's references cannot disagree
+        /// about where a name lives.
+        ///
+        /// <para>For a program whose references all spell their declarations, every arm looks up
+        /// exactly what the verbatim path did — the declared spelling IS the written one.</para>
         /// </summary>
-        private static bool IsVersionedBinding(NameBindingKind kind) =>
+        private IRVariable BoundVariable(IdentifierExpressionNode node, NameBinding binding, TypeInfo type)
+        {
+            switch (binding.Kind)
+            {
+                case NameBindingKind.Local:
+                case NameBindingKind.Parameter:
+                case NameBindingKind.LambdaParameter:
+                    if (_variableVersions.TryGetValue(binding.DeclaredName, out var versions) && versions.Count > 0)
+                        return versions.Peek();
+
+                    throw new InvalidOperationException(
+                        $"Internal compiler error: '{node.Name}' (line {node.Line}) resolved to the "
+                        + $"{binding.Kind} declared as '{binding.DeclaredName}', but no variable of that name "
+                        + "is registered in the IR builder's scope. A declaration site did not register it "
+                        + "(#169, ADR-0013 D5); refusing to invent one.");
+
+                case NameBindingKind.Field:
+                case NameBindingKind.Property:
+                    return MemberVariable(binding, type);
+
+                case NameBindingKind.ModuleGlobal:
+                    return GlobalVariable(node, binding, type);
+
+                default:
+                    // Method, Type, Event: a name, not storage — the variable the IR has always
+                    // carried for one (a Shared receiver `C`, `AddressOf Show`, an event handed to
+                    // AddHandler), spelled as declared.
+                    return GetOrCreateVariable(binding.DeclaredName, type);
+            }
+        }
+
+        /// <summary>
+        /// The kinds that name STORAGE a counted <c>For</c> with no <c>As</c> can drive (#124): a
+        /// local, a parameter (a lambda's included), a field or property, a module global. A Method
+        /// or Type name is not storage, and the loop declares its own variable as it always did.
+        /// </summary>
+        private static bool IsStorageBinding(NameBindingKind kind) =>
             kind == NameBindingKind.Local
             || kind == NameBindingKind.Parameter
-            || kind == NameBindingKind.LambdaParameter;
+            || kind == NameBindingKind.LambdaParameter
+            || kind == NameBindingKind.Field
+            || kind == NameBindingKind.Property
+            || kind == NameBindingKind.ModuleGlobal;
+
+        /// <summary>
+        /// A bare Field or Property reference (#124): the variable named as the member is DECLARED —
+        /// the form a bare member has always had in the IR, which every backend renders as the
+        /// member — and never a module global, which is what the verbatim path consulted for a name
+        /// it could not place in the class being built (a base declared later in the file, or in
+        /// another one).
+        ///
+        /// <para>⚠ No "missing" refusal here, unlike a Local's: a member has no IR-side registration
+        /// that is complete at the reference. The IR class list is filled in declaration order and
+        /// holds this unit's classes only, and a Structure's members, an enclosing class's Shared
+        /// field read from a nested class and a base in another file are all members the IR builder
+        /// never registers — every one a program VB accepts. The analyzer's own declaration is the
+        /// evidence the member exists.</para>
+        /// </summary>
+        private IRVariable MemberVariable(NameBinding binding, TypeInfo type)
+        {
+            var name = binding.DeclaredName;
+            if (_variableVersions.TryGetValue(name, out var versions) && versions.Count > 0)
+                return versions.Peek();
+
+            var variable = CreateVariable(name, type, _nextVersion++);
+            PushVariableVersion(name, variable);
+            return variable;
+        }
+
+        /// <summary>
+        /// A ModuleGlobal reference (#124): the global itself, found by its DECLARED spelling where it
+        /// was registered — a Module's through <see cref="GlobalReference"/> (which also carries a
+        /// forward reference), another file's as the imported global, a file-scope one in the maps
+        /// its declaration wrote (<see cref="Visit(VariableDeclarationNode)"/>). Never the version
+        /// stack, which holds locals.
+        ///
+        /// <para>⛔ A file-scope global with nothing registered is an INTERNAL COMPILER ERROR, never a
+        /// silent create: the analyzer refuses a file-scope global used before its declaration, so a
+        /// miss means the declaration site did not register it.</para>
+        /// </summary>
+        private IRVariable GlobalVariable(IdentifierExpressionNode node, NameBinding binding, TypeInfo type)
+        {
+            var name = binding.DeclaredName;
+            var declaration = binding.Declaration;
+
+            if (!string.IsNullOrEmpty(declaration?.OwningModule))
+                return GlobalReference(name, declaration.OwningModule, type);
+
+            if (declaration != null && declaration.IsImported && !string.IsNullOrEmpty(declaration.SourceModule))
+                return ImportedGlobal(name, declaration.SourceModule, type);
+
+            if (_moduleGlobals.TryGetValue(ModuleGlobalKey(_currentModuleName ?? _module?.Name, name), out var own))
+                return own;
+            if (_globalVariables.TryGetValue(name, out var global))
+                return global;
+
+            throw new InvalidOperationException(
+                $"Internal compiler error: '{node.Name}' (line {node.Line}) resolved to the module-level "
+                + $"variable declared as '{name}', but no global of that name is registered in the IR "
+                + "builder (#124, ADR-0013 D3); refusing to invent one.");
+        }
+
+        /// <summary>
+        /// A reference the analyzer resolved to a Module's variable or constant (<see cref="ModuleMemberSymbolOf"/>),
+        /// bare or qualified: through the recorded binding when the node carries one (an identifier),
+        /// else by the resolved symbol's name — the same declaration, spelled as declared either way.
+        /// </summary>
+        private IRVariable ModuleMemberGlobal(ASTNode node, Symbol moduleMember, TypeInfo type) =>
+            node is IdentifierExpressionNode { Binding: { Kind: NameBindingKind.ModuleGlobal } binding } reference
+                ? GlobalVariable(reference, binding, type)
+                : GlobalReference(moduleMember.Name, moduleMember.OwningModule, type);
+
+        /// <summary>A variable of another file's module, as the importing unit refers to it: by name
+        /// and owner, resolved when the units are combined.</summary>
+        private static IRVariable ImportedGlobal(string name, string sourceModule, TypeInfo type) =>
+            new IRVariable(name, type) { IsGlobal = true, ModuleName = sourceModule };
+
+        /// <summary>
+        /// ⭐ #124: the spelling a MEMBER ACCESS (<c>obj.m</c>, <c>C.m</c>, <c>Me.m</c>, <c>MyBase.m</c>)
+        /// names its member by — the declaration's, as the ANALYZER resolved it for this node
+        /// (<c>GetNodeSymbol</c>), when that is a BasicLang member spelled like the written name but
+        /// for case; the written name otherwise. A member access carries no
+        /// <see cref="NameBinding"/> (that is an identifier's record), so the analyzer's resolved
+        /// symbol is the record here — never a second lookup by name.
+        ///
+        /// <para>⚠ Replaces the written name ONLY when the two differ by case alone, so a program
+        /// that spells every member as declared is emitted exactly as before, and a .NET member
+        /// (resolved through its descriptor, <c>NetMemberAnnotations</c>) is left as written.</para>
+        ///
+        /// <para>Before, only <see cref="CanonicaliseMemberNames"/> corrected a member's case — after
+        /// the walk, by looking the name up again in this unit's classes — so a member of another
+        /// FILE's module (<c>Data.counter</c>: CS0117 on C#) and a Shared method called through the
+        /// fused static form (<c>C.make(1)</c>: undeclared on C++, TypeError on JavaScript) kept the
+        /// written spelling.</para>
+        /// </summary>
+        private string DeclaredMemberSpelling(MemberAccessExpressionNode node)
+        {
+            var written = node.MemberName;
+            if (_semanticAnalyzer == null || string.IsNullOrEmpty(written)) return written;
+            if (_semanticAnalyzer.NetMemberAnnotations.ContainsKey(node)) return written;
+
+            var declared = _semanticAnalyzer.GetNodeSymbol(node)?.Name;
+            return declared != null && string.Equals(declared, written, StringComparison.OrdinalIgnoreCase)
+                ? declared
+                : written;
+        }
+
+        /// <summary>
+        /// The spelling an identifier reference is emitted by: its declaration's
+        /// (<see cref="NameBinding.DeclaredName"/>) when the analyzer bound it, else as written. For
+        /// the sites that name a thing rather than look up storage (#124).
+        /// </summary>
+        private static string DeclaredSpelling(IdentifierExpressionNode node) =>
+            node.Binding?.DeclaredName ?? node.Name;
 
         public void Visit(MemberAccessExpressionNode node)
         {
@@ -5772,8 +5961,7 @@ namespace BasicLang.Compiler.IR
             // JavaScript, MissingFieldException 'System.Object.Value' on MSIL.
             if (ModuleMemberSymbolOf(node) is Symbol moduleMember)
             {
-                _expressionResult = GlobalReference(moduleMember.Name, moduleMember.OwningModule,
-                    _semanticAnalyzer.GetNodeType(node));
+                _expressionResult = ModuleMemberGlobal(node, moduleMember, _semanticAnalyzer.GetNodeType(node));
                 return;
             }
 
@@ -5784,7 +5972,7 @@ namespace BasicLang.Compiler.IR
             var memberType = _semanticAnalyzer.GetNodeType(node);
             var tempName = _currentFunction.GetNextTempName();
 
-            var fieldAccess = new IRFieldAccess(tempName, obj, node.MemberName, memberType);
+            var fieldAccess = new IRFieldAccess(tempName, obj, DeclaredMemberSpelling(node), memberType);
 
             // P2a-2 Task 7a: a .NET PROPERTY/FIELD read carries its descriptor (the
             // getter-shaped slot) into IR. Gated to those two kinds on purpose: a METHOD
@@ -5934,7 +6122,7 @@ namespace BasicLang.Compiler.IR
                 if (memberExpr.Object is MyBaseExpressionNode)
                 {
                     // Base class method call: MyBase.Method(args)
-                    var baseCall = new IRBaseMethodCall(tempName, memberExpr.MemberName, returnType);
+                    var baseCall = new IRBaseMethodCall(tempName, DeclaredMemberSpelling(memberExpr), returnType);
 
                     foreach (var arg in node.Arguments)
                     {
@@ -6098,7 +6286,7 @@ namespace BasicLang.Compiler.IR
                 if (isStaticCall && obj is IRVariable staticVar)
                 {
                     // Static method call: ClassName.Method()
-                    var call = new IRCall(tempName, $"{staticVar.Name}.{memberExpr.MemberName}", returnType);
+                    var call = new IRCall(tempName, $"{staticVar.Name}.{DeclaredMemberSpelling(memberExpr)}", returnType);
 
                     // P2a-1 CARRIAGE (read by nobody until P2a-2). The fused name above is the
                     // ONLY place the receiver type survives as a distinct token — everything
@@ -6193,7 +6381,7 @@ namespace BasicLang.Compiler.IR
                 else
                 {
                     // Instance method call: obj.Method()
-                    var methodCall = new IRInstanceMethodCall(tempName, obj, memberExpr.MemberName, returnType);
+                    var methodCall = new IRInstanceMethodCall(tempName, obj, DeclaredMemberSpelling(memberExpr), returnType);
                     methodCall.GenericArguments.AddRange(BuildGenericArgTypes(node.GenericArguments));
 
                     // P2a-2 Task 2 (mirror of the fused static arm above): the annotation is
@@ -6450,6 +6638,14 @@ namespace BasicLang.Compiler.IR
             var type = _semanticAnalyzer.GetNodeType(node);
             var tempName = _currentFunction.GetNextTempName();
             var className = node.Type?.Name ?? "Object";
+
+            // ⭐ #124: the class as the ANALYZER resolved it for this node, when the written name
+            // differs from its declaration by case alone — `New BOX()` for a class `Box` was an
+            // undeclared type on C++ and an undefined class on MSIL. Anything else keeps the written
+            // name, so a program that spells its types as declared is emitted as before.
+            if (type?.Name != null && !string.Equals(type.Name, className, StringComparison.Ordinal)
+                && string.Equals(type.Name, className, StringComparison.OrdinalIgnoreCase))
+                className = type.Name;
 
             // Create new object instruction
             var newObj = new IRNewObject(tempName, className, type);
