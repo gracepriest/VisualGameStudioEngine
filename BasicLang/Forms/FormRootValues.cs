@@ -10,11 +10,13 @@ namespace BasicLang.Forms;
 /// the reader's and the retarget's "is this root attribute modelled?" test (<see cref="RowForAttribute"/>),
 /// and the property grid's Form rows (slice 2: <see cref="Get"/>, <see cref="Set"/>, <see cref="CanReset"/>; Task 9:
 /// <see cref="RefusalOf"/>, the reason the grid shows when <see cref="Set"/> refuses).
-/// NOT yet: the reader's typed parse and the writer still spell <c>Text</c>/<c>Width</c>/<c>Height</c>
-/// themselves (typed fields, one per row — slice 3's Properties-stored rows are where a generic path
-/// pays), and the retarget crosses Text and derives the layout edge itself. Until those land, a new row
-/// must be mapped here AND taught to them — FormRootRetargetTests' catalog sweep goes red for a row the
-/// retarget neither crosses nor names. The row's APPLICABILITY is <see cref="Applies(FormPropertyDef, FormTarget, FormLayoutKind?)"/>
+/// Slice 3: every FormRoot row that is not a typed field is PROPERTIES-STORED (<see cref="IsStoredInProperties"/>) and
+/// goes through the generic path end to end — the reader models it in <see cref="FormDocument.Properties"/> with its
+/// tier, the writer patches and removes it, the retarget crosses or names it, the region writer emits it — so a new
+/// Properties-stored row needs no code here. The TYPED rows are still spelled by hand in the reader's parse and the
+/// writer (Text/Width/Height/Layout) and the retarget crosses Text and derives the layout edge itself: a new TYPED row
+/// must be mapped here AND taught to them — FormRootRetargetTests' catalog sweep goes red for a row the retarget
+/// neither crosses nor names. The row's APPLICABILITY is <see cref="Applies(FormPropertyDef, FormTarget, FormLayoutKind?)"/>
 /// — the one predicate the reader's known-attribute test, the region writer, the grid, the tier and the
 /// retarget call (spec 2026-09-27 §2.3). ⚠ The reader's size PARSE and the writer's size WRITE ask
 /// <see cref="FormVocabulary.IsPixel(FormTarget, FormLayoutKind?)"/> instead — a second table for the same
@@ -23,6 +25,24 @@ namespace BasicLang.Forms;
 /// </summary>
 public static class FormRootValues
 {
+    /// <summary>The rows backed by TYPED FormDocument fields (Text, the client size, the web layout); every other FormRoot row is Properties-stored.</summary>
+    private static readonly HashSet<string> TypedRows = new(StringComparer.Ordinal)
+    {
+        "Text", "ClientSize", "Cols", "Rows", "Gap", "MobileBreakpoint"
+    };
+
+    /// <summary>
+    /// ⛔ A FormRoot row that is not a typed field (slice 3 — FormBorderStyle, BackColor, AcceptButton…): stored in
+    /// <see cref="FormDocument.Properties"/> as the root attribute of its OWN name. Asked BY REFERENCE of FormRoot's own
+    /// rows, so a row that is not in FormRoot (a stray definition, a typo in a test) still throws from every accessor —
+    /// never a guessed storage attribute the reader would call "known" while nothing models it.
+    /// </summary>
+    private static bool IsPropertiesStored(FormPropertyDef row) =>
+        !TypedRows.Contains(row.Name) && FormControlCatalog.FormRoot.Properties.Any(p => ReferenceEquals(p, row));
+
+    private static InvalidOperationException Unmapped(FormPropertyDef row) => new(
+        $"FormRoot row '{row.Name}' has no storage in FormRootValues — every root row must be mapped here.");
+
     /// <summary>The row's document value, or null when the document does not carry one.</summary>
     /// <exception cref="InvalidOperationException">A FormRoot row this map does not know — map it here.</exception>
     public static string? Get(FormDocument form, FormPropertyDef row) => row.Name switch
@@ -39,8 +59,8 @@ public static class FormRootValues
         "Rows" => form.Layout?.Rows,
         "Gap" => form.Layout?.Gap,
         "MobileBreakpoint" => form.Layout?.MobileBreakpoint,
-        _ => throw new InvalidOperationException(
-            $"FormRoot row '{row.Name}' has no storage in FormRootValues — every root row must be mapped here.")
+        _ when IsPropertiesStored(row) => form.Properties.TryGetValue(row.Name, out var value) ? value : null,
+        _ => throw Unmapped(row)
     };
 
     /// <summary>
@@ -107,8 +127,23 @@ public static class FormRootValues
                 return true;
 
             default:
-                throw new InvalidOperationException(
-                    $"FormRoot row '{row.Name}' has no storage in FormRootValues — every root row must be mapped here.");
+                if (!IsPropertiesStored(row))
+                {
+                    throw Unmapped(row);
+                }
+
+                // ⚠ The document's TEXT, as a control's bag holds it: the grid has already judged the value (Judge →
+                // Accepts), and a value the row cannot use is Degraded by its tier, not refused by the store.
+                if (value == null)
+                {
+                    form.Properties.Remove(row.Name);
+                }
+                else
+                {
+                    form.Properties[row.Name] = value;
+                }
+
+                return true;
         }
     }
 
@@ -129,8 +164,9 @@ public static class FormRootValues
             "ClientSize" => ClientSizeRefusal(value, out _, out _),
             "MobileBreakpoint" => MobileBreakpointRefusal(value, out _),
             "Text" or "Cols" or "Rows" or "Gap" => null,
-            _ => throw new InvalidOperationException(
-                $"FormRoot row '{row.Name}' has no storage in FormRootValues — every root row must be mapped here.")
+            // A Properties-stored row has no store rule of its own: its value rules are the catalog's (Accepts/Judge).
+            _ when IsPropertiesStored(row) => null,
+            _ => throw Unmapped(row)
         };
     }
 
@@ -151,9 +187,10 @@ public static class FormRootValues
     /// <summary>
     /// Whether "remove it from the document" is expressible for this row. ⚠ Not ClientSize: the writer
     /// deliberately never removes Width/Height on a null (FormDocumentWriter.ApplyFormAttributes — null
-    /// also means "present but unparseable"), and the designer always writes a size.
+    /// also means "present but unparseable"), and the designer always writes a size. ⚠ By NAME since slice 3: a
+    /// Properties-stored Size (MinimumSize) resets like any other attribute.
     /// </summary>
-    public static bool CanReset(FormPropertyDef row) => row.Type != FormPropertyType.Size;
+    public static bool CanReset(FormPropertyDef row) => row.Name != "ClientSize";
 
     /// <summary>
     /// The ROOT-ELEMENT attributes that carry a row's value. Empty for a row stored on a child element
@@ -169,9 +206,15 @@ public static class FormRootValues
         "Text" => new[] { "Text" },
         "ClientSize" => new[] { "Width", "Height" },
         "Cols" or "Rows" or "Gap" or "MobileBreakpoint" => Array.Empty<string>(),
-        _ => throw new InvalidOperationException(
-            $"FormRoot row '{row.Name}' has no storage in FormRootValues — every root row must be mapped here.")
+        _ when IsPropertiesStored(row) => new[] { row.Name },
+        _ => throw Unmapped(row)
     };
+
+    /// <summary>
+    /// True for a row stored in <see cref="FormDocument.Properties"/> — the reader and the writer route exactly these
+    /// through the bag (the typed rows keep their own fields). ⛔ The same predicate every accessor above uses.
+    /// </summary>
+    public static bool IsStoredInProperties(FormPropertyDef row) => IsPropertiesStored(row);
 
     /// <summary>
     /// ⛔⛔ Whether <paramref name="row"/> exists on a document of <paramref name="target"/> laid out

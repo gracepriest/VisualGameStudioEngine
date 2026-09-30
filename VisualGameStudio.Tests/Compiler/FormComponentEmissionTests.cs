@@ -262,6 +262,23 @@ public class FormComponentEmissionTests
         });
     }
 
+    /// <summary>
+    /// Slice 3 backlog (2): an Int the catalog ACCEPTS with spaces or leading zeros (TryParseInt) used to be
+    /// spliced into the template as its raw text. It is re-emitted from the parsed number, as every other Int
+    /// the region writer emits is — whatever the parser tolerated never reaches the user's file.
+    /// </summary>
+    [TestCase(" 250", "250")]
+    [TestCase("0250", "250")]
+    [TestCase("+250", "250")]
+    public void Web_ATemplateInt_IsReEmittedFromTheParsedNumber(string stored, string emitted)
+    {
+        var tmr = Timer("tmr", null, ("Interval", stored));
+        tmr.Binds.Add(new FormBind { Event = "tick", Handler = "tmr_Tick" });
+
+        Assert.That(Emit(WebWith(tmr)), Does.Contain($"w.setInterval(AddressOf tmr_Tick, {emitted})\n")
+            .Or.Contain($"w.setInterval(AddressOf tmr_Tick, {emitted})\r\n"));
+    }
+
     [Test]
     public void Web_TheTemplateUsesTheCatalogDefault_WhenThePropertyIsUnset()
     {

@@ -9,17 +9,23 @@ namespace BasicLang.Forms;
 public static class FormCss
 {
     /// <summary>
-    /// The declaration for <paramref name="property"/> = <paramref name="value"/>, or null when the row
-    /// has no CSS meaning, the value is not usable on the web (Degraded — never emitted), or the
-    /// converter says "no declaration" (Visible=true).
+    /// The declarations for <paramref name="property"/> = <paramref name="value"/> — empty when the row has no CSS
+    /// meaning, the value is not usable on the web (Degraded — never emitted), or the converter says "no declaration"
+    /// (Visible=true). Usually one; a Font is up to five (slice 3 pre-flight B2), each named by the converter.
     /// </summary>
-    public static (string Property, string Value)? Declaration(FormPropertyDef property, string value)
+    public static IReadOnlyList<(string Property, string Value)> Declarations(FormPropertyDef property, string value)
     {
         // ⛔ Accepts(value, WEB), never Accepts(value): a system colour with no CSS equivalent
         // (ActiveCaption) is valid on WinForms and Degraded here, and must not reach the stylesheet.
         if (property.CssProperty is not { } css || !property.Accepts(value, FormTarget.Web))
         {
-            return null;
+            return Array.Empty<(string, string)>();
+        }
+
+        // The multi-declaration converter names its own properties (font-family, font-size, …).
+        if (property.CssConverter == FormCssConverter.Font)
+        {
+            return FormFontValue.TryParse(value, out var font) ? font.Css : Array.Empty<(string, string)>();
         }
 
         var converted = property.CssConverter switch
@@ -29,13 +35,35 @@ public static class FormCss
             FormCssConverter.ContentAlignmentHorizontal => HorizontalPart(property.Canonical(value)),
             // ⛔ The one hidden rule, shared with the run-time dock resolver (FormControl.IsHidden).
             FormCssConverter.VisibleToDisplay => FormControl.IsHiddenValue(value) ? "none" : null,
+            FormCssConverter.Padding => FormPaddingValue.TryParse(value, out var padding) ? padding.Css : null,
+            // Accepts(value, Web) has already refused a member with no CSS equivalent.
+            FormCssConverter.Cursor => FormCursors.CssFor(value),
+            // AutoScroll=true → the element scrolls its overflow; false says nothing (the element's own overflow stands).
+            FormCssConverter.AutoScrollToOverflow => bool.TryParse(value, out var scroll) && scroll ? "auto" : null,
             // ⛔ Never a silent "no declaration": a converter added to the enum without an arm here
             // would drop its row from every page with nothing looking wrong.
             _ => throw new ArgumentOutOfRangeException(nameof(property), property.CssConverter,
                 $"FormCss has no arm for the converter on '{property.Name}'.")
         };
 
-        return converted == null ? null : (css, converted);
+        return converted == null ? Array.Empty<(string, string)>() : new[] { (css, converted) };
+    }
+
+    /// <summary>
+    /// The ONE declaration a single-declaration row produces, or null — for callers (and tests) that know the row has
+    /// one. ⛔ Throws for a value that produces SEVERAL (a Font): asking for "the" declaration there would silently
+    /// drop the rest.
+    /// </summary>
+    public static (string Property, string Value)? Declaration(FormPropertyDef property, string value)
+    {
+        var all = Declarations(property, value);
+        return all.Count switch
+        {
+            0 => null,
+            1 => all[0],
+            _ => throw new InvalidOperationException(
+                $"'{property.Name}' = '{value}' produces {all.Count} declarations; call FormCss.Declarations.")
+        };
     }
 
     /// <summary>

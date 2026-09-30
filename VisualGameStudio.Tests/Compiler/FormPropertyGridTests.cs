@@ -143,7 +143,9 @@ public class FormPropertyGridTests
         // already set, and no way to add one that is not.
         var grid = GridOver(WebForm, "chk");
 
-        var expected = FormControlCatalog.Find("CheckBox")!.Properties.Select(p => p.Name).ToList();
+        // ⚠ Slice 3: the rows that EXIST on this (web) document — CheckState, CheckAlign… are WinForms-only (D2).
+        var expected = FormControlCatalog.Find("CheckBox")!.Properties
+            .Where(p => p.AppliesTo(FormTarget.Web)).Select(p => p.Name).ToList();
 
         // ⚠ Compared over the CATALOG rows only. The grid now also shows the intrinsic rows VS puts
         // on every control — Name, Col/Row or X/Y/Width/Height, TabIndex — which are fields on the
@@ -185,13 +187,14 @@ public class FormPropertyGridTests
         var webGrid = new FormPropertyGridViewModel();
         webGrid.Load(web);
         webGrid.SelectedControl = web.Model.FindById("chk");
-        var webNames = webGrid.Rows.Select(r => r.Name).ToList();
+        var webNames = webGrid.AllRows().Select(r => r.Name).ToList();
 
         var winForms = FormDocumentReader.Read("F.blform", WinFormsForm);
         var winGrid = new FormPropertyGridViewModel();
         winGrid.Load(winForms);
         winGrid.SelectedControl = winForms.Model.FindById("chk");
-        var winNames = winGrid.Rows.Select(r => r.Name).ToList();
+        // Slice 3: X/Y/Width/Height are the PARTS of the Location/Size composites (spec §3), so the parts are included.
+        var winNames = winGrid.AllRows().Select(r => r.Name).ToList();
 
         Assert.Multiple(() =>
         {
@@ -271,7 +274,7 @@ public class FormPropertyGridTests
         grid.Load(file);
         grid.SelectedControl = file.Model.FindById("chk");
 
-        var x = grid.Rows.Single(r => r.Name == "X");
+        var x = grid.AllRows().Single(r => r.Name == "X");
         x.IntValue = 96;
 
         // A binding can push mid-edit text; coercing it to 0 would move the control across the form
@@ -332,7 +335,7 @@ public class FormPropertyGridTests
         grid.Load(file);
         grid.SelectedControl = file.Model.FindById("chk");
 
-        var x = grid.Rows.Single(r => r.Name == "X");
+        var x = grid.AllRows().Single(r => r.Name == "X");
         x.IntValue = -5;
 
         Assert.Multiple(() =>
@@ -358,7 +361,7 @@ public class FormPropertyGridTests
         grid.Load(file);
         grid.SelectedControl = file.Model.FindById("chk");
 
-        grid.Rows.Single(r => r.Name == "X").IntValue = -5;
+        grid.AllRows().Single(r => r.Name == "X").IntValue = -5;
         var written = FormDocumentWriter.Write(file);
 
         Assert.Multiple(() =>

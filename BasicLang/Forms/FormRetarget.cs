@@ -134,19 +134,18 @@ public static class FormRetarget
 
         foreach (var control in document.AllControls().Concat(document.AllComponents()))
         {
-            // Every non-reserved bind that crossed is on the kind's DEFAULT event — that is the only
-            // kind Convert lets through — so PlanDefault names exactly the Sub it wires. A control with
-            // no such bind is skipped: a stub nothing wires is dead code. Components too: a web
-            // Timer's tick handler is the setInterval callback, and the stub is parameterless.
-            if (!control.Binds.Any(b => !b.UsesReservedDataBinding))
+            // ⛔ One stub per bind that crossed — ANY event wired on both targets crosses (pre-flight B1), so the
+            // default event's stub alone left a crossed non-default bind (a GroupBox's Click beside its Enter)
+            // wiring a Sub the pair never declared (code review 2026-09-29). A control with no bind gets no stub: a
+            // stub nothing wires is dead code. Components too: a web Timer's tick handler is the setInterval
+            // callback, and the stub is parameterless.
+            foreach (var bind in control.Binds.Where(b => !b.UsesReservedDataBinding).ToList())
             {
-                continue;
-            }
-
-            var plan = FormHandlers.PlanDefault(document, control, code);
-            if (plan.Outcome == HandlerOutcome.Created)
-            {
-                code = plan.CodeText;
+                var plan = FormHandlers.PlanBind(document, control, bind, code);
+                if (plan.Outcome == HandlerOutcome.Created)
+                {
+                    code = plan.CodeText;
+                }
             }
         }
 
@@ -246,6 +245,8 @@ public static class FormRetarget
                 ? null
                 : _source.Text;
 
+            ConvertRootProperties();
+
             foreach (var (name, value) in _source.UnknownAttributes)
             {
                 var toRow = FormRootValues.RowForAttribute(name, _to, _toLayout);
@@ -301,6 +302,41 @@ public static class FormRetarget
             // Components (Task 25) cross in ConvertComponents, with the same kind/property/bind
             // rules as controls and no geometry pass — see FormRetargetTests.
             Document.Resources.AddRange(_source.Resources.Select(e => new XElement(e)));
+        }
+
+        /// <summary>
+        /// The form's Properties-stored rows (slice 3, spec §2.3 Retarget) — visited through FormRoot EXPLICITLY, with the
+        /// control rules at the root: a row that exists on the destination crosses (the user's text, verbatim); one that
+        /// does not is dropped AND NAMED ('form.X', RetargetPropertyLost); a value the destination refuses crosses
+        /// preserved and is named with the catalog's reason; a value already Degraded on the source lost nothing here and
+        /// is carried unnamed (its Degraded row on each side says so — backlog (4)).
+        /// </summary>
+        private void ConvertRootProperties()
+        {
+            foreach (var row in FormControlCatalog.FormRoot.Properties.Where(FormRootValues.IsStoredInProperties))
+            {
+                if (!_source.Properties.TryGetValue(row.Name, out var value))
+                {
+                    continue;
+                }
+
+                if (!FormRootValues.Applies(row, _to, _toLayout))
+                {
+                    Warn(DesignCodes.RetargetPropertyLost,
+                        $"'form.{row.Name}' = \"{value}\" does not exist on a {Describe(_to)} form, so it was dropped. " +
+                        "Re-express it on the other side if the page or window needs it.");
+                    continue;
+                }
+
+                Document.Properties[row.Name] = value;
+
+                if (row.Accepts(value, _from) && !row.Accepts(value, _to))
+                {
+                    Warn(DesignCodes.RetargetPropertyLost,
+                        $"'form.{row.Name}' = \"{value}\" crosses but is not usable on a {Describe(_to)} form: " +
+                        row.DescribeRefusal(value, _to));
+                }
+            }
         }
 
         /// <summary>
@@ -488,10 +524,13 @@ public static class FormRetarget
 
         private void ConvertBinds(FormControl source, FormControl control, FormControlDef definition)
         {
-            // ⚠ SLICE 5: unify with ConvertRootBinds on FormEvents.WiredOn (one crossing rule). Today a
-            // control crosses on its DefaultEvent only; the root asks WiredOn/NameOn.
-            var fromEvent = definition.DefaultEvent(_from);
-            var toEvent = definition.DefaultEvent(_to);
+            // ⛔ Through the ONE seam (slice 3 pre-flight B1, pulled forward from slice 5 Task 5.6 for controls): a bind
+            // crosses when its event is wired on BOTH targets, under the destination's name. It used to cross on the
+            // DEFAULT event only — so when GroupBox's default became Enter (owner decision O3) every existing GroupBox
+            // Click bind would have been dropped. ⚠ SLICE 5: ConvertRootBinds applies the same rule to the form; the two
+            // stay separate only because their findings name different owners.
+            var wiredFrom = FormEvents.WiredOn(definition, _from);
+            var wiredTo = FormEvents.WiredOn(definition, _to);
 
             foreach (var bind in source.Binds)
             {
@@ -502,18 +541,26 @@ public static class FormRetarget
                     continue;
                 }
 
-                if (fromEvent != null && toEvent != null &&
-                    string.Equals(bind.Event, fromEvent, StringComparison.OrdinalIgnoreCase))
+                var crossing = wiredFrom.FirstOrDefault(e =>
+                    string.Equals(FormEvents.NameOn(e, _from), bind.Event, StringComparison.OrdinalIgnoreCase));
+
+                if (crossing != null && wiredTo.Contains(crossing))
                 {
-                    control.Binds.Add(new FormBind { Event = toEvent, Handler = bind.Handler });
+                    control.Binds.Add(new FormBind { Event = FormEvents.NameOn(crossing, _to)!, Handler = bind.Handler });
                     continue;
                 }
 
+                var both = wiredFrom.Where(e => wiredTo.Contains(e))
+                    .Select(e => $"'{FormEvents.NameOn(e, _from)}' → '{FormEvents.NameOn(e, _to)}'")
+                    .ToList();
+
                 Warn(DesignCodes.RetargetBindLost,
                     $"'{source.Id}' wires its '{bind.Event}' event to {bind.Handler}, and the catalog knows no " +
-                    $"{Describe(_to)} name for that event on a {source.Kind} — only its default event " +
-                    $"('{fromEvent}' → '{toEvent}') has a measured name on both sides. The wiring was dropped; " +
-                    $"wire {bind.Handler} by hand on the other side.");
+                    $"{Describe(_to)} name for that event on a {source.Kind} — " +
+                    (both.Count > 0
+                        ? $"only {string.Join(", ", both)} {(both.Count == 1 ? "has" : "have")} a measured name on both sides. "
+                        : "none of its events has a measured name on both sides. ") +
+                    $"The wiring was dropped; wire {bind.Handler} by hand on the other side.");
             }
         }
 

@@ -91,7 +91,7 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
         _onChanged = onChanged;
         Name = definition.Name;
         _type = definition.Type;
-        _choices = definition.AllowedValues;
+        _choices = definition.Choices;
         _definition = definition;
         _target = target;
         FrozenReason = frozenReason;
@@ -143,7 +143,7 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
         _onChanged = onChanged;
         Name = definition.Name;
         _type = definition.Type;
-        _choices = definition.AllowedValues;
+        _choices = definition.Choices;
         _definition = definition;
         _target = target;
 
@@ -195,6 +195,65 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
         new(definition, target, read, write, remove, frozenReason, frozenText, onChanged, storeRefusal);
 
     private readonly FormRowEditor _editor = FormRowEditor.Default;
+
+    // ==================================================================
+    // Composite rows (spec §3, slice 3 Task 6): Font → Name/Size/Bold/Italic/Underline, Size → Width/Height,
+    // Location → X/Y, Padding → All/Left/Top/Right/Bottom. The PARENT still owns the value (and accepts typed text);
+    // each part reads its piece of it and writes the WHOLE value back through the parent — one statement per
+    // composite, the fan-in rule, and every no-op/refusal rule of the parent's own Commit.
+    // ==================================================================
+
+    private readonly List<FormPropertyRow> _children = new();
+
+    /// <summary>The parts of a composite row, in the order VS lists them. Empty for a plain row.</summary>
+    public IReadOnlyList<FormPropertyRow> Children => _children;
+
+    /// <summary>The composite this row is a part of, or null for a top-level row.</summary>
+    public FormPropertyRow? Parent { get; private set; }
+
+    /// <summary>True when the row has parts to expand.</summary>
+    public bool IsComposite => _children.Count > 0;
+
+    /// <summary>Whether the parts are shown (the display list inserts them right after this row).</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(Glyph))]
+    private bool _isExpanded;
+
+    /// <summary>VS's +/− box — a real minus sign, U+2212, as wide as the plus (the category header's glyph).</summary>
+    public string Glyph => IsExpanded ? ((char)0x2212).ToString() : "+";
+
+    /// <summary>
+    /// Where the name starts: a plain row 12px in (as it always was), a composite 2px after its 12px expander box — so
+    /// both names line up — and a part one step further in, under its parent.
+    /// </summary>
+    public Avalonia.Thickness NameMargin => new(Parent != null ? 26 : IsComposite ? 2 : 12, 0, 0, 0);
+
+    IReadOnlyList<IFormDisplayRow> IFormDisplayRow.SubRows => _children;
+
+    /// <summary>The catalog row, for a composite helper that needs its type; null for an intrinsic row.</summary>
+    internal FormPropertyDef? Definition => _definition;
+
+    /// <summary>Makes <paramref name="children"/> this row's parts. Called once, while the grid builds its rows.</summary>
+    internal void AdoptChildren(IEnumerable<FormPropertyRow> children)
+    {
+        foreach (var child in children)
+        {
+            child.Parent = this;
+            _children.Add(child);
+        }
+    }
+
+    /// <summary>
+    /// A part writing the WHOLE value (<paramref name="value"/>) through its parent — the same Commit a typed edit of the
+    /// parent takes, so the parent's no-op, reset and §7 refusal rules hold for a part edit too. Returns whether the
+    /// parent's value CHANGED (false for a refusal or the same value: the part then snaps back).
+    /// </summary>
+    internal bool CommitFromPart(string value)
+    {
+        var before = DisplayValue;
+        Commit(value);
+        return !string.Equals(before, DisplayValue, StringComparison.Ordinal);
+    }
 
     public string Name { get; }
 
@@ -260,11 +319,19 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
 
     public bool IsNumericUpDown => Typed && _type == FormPropertyType.Int;
 
-    public bool IsComboBox => Typed && _type == FormPropertyType.Enum;
+    /// <summary>An Enum's members, or a Cursor row's <c>Cursors</c> members (<see cref="FormPropertyDef.Choices"/>).</summary>
+    public bool IsComboBox => Typed && _type is FormPropertyType.Enum or FormPropertyType.Cursor;
 
-    /// <summary>Size is text for now (<c>800, 450</c>); its composite editor arrives in slice 3.</summary>
+    /// <summary>
+    /// Free text: a String, and the typed-text rows — a Color, a Size (<c>800, 450</c>), a Font (FontConverter text),
+    /// a Padding (<c>4</c> or <c>4, 2, 4, 2</c>), a Fraction (<c>0.85</c>) and a Reference (a control's Id). The composite
+    /// rows (slice 3 Task 6) and the colour, font and reference editors (slice 4) sit beside this text, which stays the
+    /// parent's own editor.
+    /// </summary>
     public bool IsTextBox => Typed &&
-        _type is FormPropertyType.String or FormPropertyType.Color or FormPropertyType.Size;
+        _type is FormPropertyType.String or FormPropertyType.Color or FormPropertyType.Size
+            or FormPropertyType.Font or FormPropertyType.Padding or FormPropertyType.Fraction or FormPropertyType.Reference
+            or FormPropertyType.CssClasses;
 
     /// <summary>The four-edge Anchor box (Task 26).</summary>
     public bool IsAnchorPicker => IsEditable && _editor == FormRowEditor.AnchorPicker;
@@ -608,6 +675,10 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
                 return;
         }
 
+        // ⛔ Stored in the DOCUMENT's vocabulary: an Opacity typed as "80%" is written as WinForms' "0.8" (owner decision
+        // 2026-09-29) — the catalog's one conversion, a no-op for every other type.
+        value = _definition?.ToDocument(value) ?? value;
+
         if (_write != null)
         {
             // ⛔ A write that changed nothing is not an edit: refused by the store (a non-positive
@@ -695,7 +766,26 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
         OnPropertyChanged(nameof(IntValue));
     }
 
+    /// <summary>
+    /// This row's value changed: every view of it re-reads — and, for a composite, every PART re-reads too (a part is a
+    /// view of the parent's value). A part that changed asks its PARENT, so its siblings follow (Padding's All and Left).
+    /// </summary>
     private void RaiseValueChanged()
+    {
+        if (Parent != null)
+        {
+            Parent.RaiseValueChanged();
+            return;
+        }
+
+        RaiseOwnValueChanged();
+        foreach (var child in _children)
+        {
+            child.RaiseOwnValueChanged();
+        }
+    }
+
+    private void RaiseOwnValueChanged()
     {
         foreach (var name in new[]
                  {

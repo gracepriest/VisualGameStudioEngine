@@ -12,4 +12,14 @@ public interface IFormDisplayRow
 
     /// <summary>The header the row is listed under in the Categorized view.</summary>
     string Category { get; }
+
+    /// <summary>
+    /// The rows nested under this one — a COMPOSITE row's parts (spec §3: Font → Name/Size/Bold…, Size → Width/Height,
+    /// Location → X/Y, Padding → All/Left/…). Shown right after it, in their own order, while <see cref="IsExpanded"/>.
+    /// Empty for a plain row.
+    /// </summary>
+    IReadOnlyList<IFormDisplayRow> SubRows => Array.Empty<IFormDisplayRow>();
+
+    /// <summary>Whether <see cref="SubRows"/> are shown. Always false for a plain row.</summary>
+    bool IsExpanded => false;
 }

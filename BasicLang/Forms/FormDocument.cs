@@ -107,6 +107,19 @@ public sealed class FormDocument
     /// </summary>
     public List<FormBind> Binds { get; } = new();
 
+    /// <summary>
+    /// The FORM's catalog-only root attributes (spec §2.3, slice 3) — every <see cref="FormControlCatalog.FormRoot"/> row
+    /// that is not one of the typed fields above (FormBorderStyle, StartPosition, BackColor, Font, AcceptButton…), keyed by
+    /// the row's name, holding the DOCUMENT's text exactly as a control's <see cref="FormControl.Properties"/> does: a
+    /// value the row cannot use stays here verbatim and is Degraded (<c>FormFile.DegradedRoot</c>), never coerced.
+    ///
+    /// <para>⚠ ORDINAL, unlike a control's case-insensitive bag: a root row IS its XML attribute's spelling, and the
+    /// reader, the tier lookup and <see cref="FormRootValues.RowForAttribute"/> all match attributes ordinally.</para>
+    /// <para>⛔ Read and written only through <see cref="FormRootValues"/> (the one row→storage map) by everything but
+    /// the reader and the writer, which own the attribute round trip.</para>
+    /// </summary>
+    public Dictionary<string, string> Properties { get; } = new(StringComparer.Ordinal);
+
     /// <summary>Reserved and empty in v1; parsed and re-emitted so a future document round-trips.</summary>
     public List<XElement> Resources { get; } = new();
 
@@ -126,6 +139,13 @@ public sealed class FormDocument
     /// </summary>
     public FormControl? FindById(string id) =>
         AllControls().Concat(Components).FirstOrDefault(c => string.Equals(c.Id, id, StringComparison.Ordinal));
+
+    /// <summary>
+    /// The CONTAINER control <paramref name="control"/> is a child of, or null when it sits on the form itself (or is a
+    /// tray component, or is not in this document).
+    /// </summary>
+    public FormControl? ParentOf(FormControl control) =>
+        AllControls().FirstOrDefault(candidate => candidate.Children.Any(c => ReferenceEquals(c, control)));
 
     /// <summary>
     /// The list <paramref name="control"/> lives in — this document's own, or its container's.

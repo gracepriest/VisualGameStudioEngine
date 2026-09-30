@@ -185,6 +185,160 @@ public class FormHandlerGestureTests
             Does.Contain("Private Sub btnLogin_Click(e As DomEvent)"));
     }
 
+    /// <summary>
+    /// ⛔ The substitution reaches the USER: a web Panel's double-click writes and opens the Click handler AND
+    /// publishes an Info finding naming it — a notice only the planner knew would be as silent as none.
+    /// </summary>
+    [Test]
+    public async Task AWebPanelsDoubleClick_OpensClick_AndReportsTheSubstitution()
+    {
+        var h = Open(FormTarget.Web, "Panel", "pnl");
+
+        await ActivateAsync(h);
+
+        var notice = h.Diagnostics.SelectMany(d => d.Diagnostics).SingleOrDefault();
+        Assert.Multiple(() =>
+        {
+            Assert.That(h.Files.Contents[h.CodePath], Does.Contain("Private Sub pnl_Click(e As DomEvent)"));
+            Assert.That(h.Navigations, Has.Count.EqualTo(1), "a notice does not stop the gesture");
+            Assert.That(notice, Is.Not.Null, "the substitution must be reported");
+            Assert.That(notice!.Id, Is.EqualTo(DesignCodes.DefaultEventNotOnTarget));
+            Assert.That(notice.Severity, Is.EqualTo(VisualGameStudio.Core.Models.DiagnosticSeverity.Info));
+            Assert.That(notice.Message, Does.Contain("Paint"));
+        });
+    }
+
+    [Test]
+    public async Task AnOrdinaryDoubleClick_ReportsNothing()
+    {
+        var h = Open(FormTarget.Web);
+
+        await ActivateAsync(h);
+
+        Assert.That(h.Diagnostics, Is.Empty);
+    }
+
+    // ==================================================================
+    // The code-behind already OPEN in its own tab (owner click-through D2, 2026-09-30)
+    // ==================================================================
+
+    /// <summary>
+    /// Opens the code-behind as a second document — as <c>MainWindowViewModel.OpenFileAsync</c> does — and hands the
+    /// designer the same lookup the shell gives it. Returns the open .bas document.
+    /// </summary>
+    private static CodeEditorDocumentViewModel OpenCodeBehind(Harness h)
+    {
+        var bas = new CodeEditorDocumentViewModel(h.Files.Service, new Mock<IEventAggregator>().Object)
+        {
+            FilePath = h.CodePath
+        };
+        bas.SetContent(h.Files.Contents[h.CodePath]);
+        h.Vm.OpenDocumentLookup = path => string.Equals(path, h.CodePath, StringComparison.OrdinalIgnoreCase) ? bas : null;
+        return bas;
+    }
+
+    /// <summary>
+    /// ⛔ D2: the handler was written to disk and the ALREADY-OPEN tab kept showing the old text until it was closed and
+    /// reopened. A clean open document is written THROUGH: the tab shows the stub at once, stays clean, and the disk has it.
+    /// </summary>
+    [Test]
+    public async Task AnOpenCleanCodeBehind_ShowsTheNewHandlerAtOnce_AndStaysClean()
+    {
+        var h = Open(FormTarget.WinForms);
+        var bas = OpenCodeBehind(h);
+
+        await ActivateAsync(h);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(bas.Text, Does.Contain("Private Sub btnLogin_Click(sender As Object, e As EventArgs)"),
+                "the open tab must show the handler without being reopened");
+            Assert.That(bas.IsDirty, Is.False, "the buffer and the disk hold the same text");
+            Assert.That(h.Files.Contents[h.CodePath], Is.EqualTo(bas.Text), "and the disk has it too");
+            Assert.That(h.Navigations, Has.Count.EqualTo(1));
+        });
+    }
+
+    /// <summary>
+    /// ⛔ D2, the other half: an open code-behind with UNSAVED edits is never clobbered. The stub is inserted INTO the
+    /// buffer (the user's edits and the handler both there, still unsaved), and nothing is written to disk — writing the
+    /// buffer would save the user's edits behind their back, and writing the old disk text would lose them on the next save.
+    /// </summary>
+    [Test]
+    public async Task AnOpenCodeBehindWithUnsavedEdits_GetsTheHandlerInItsBuffer_AndKeepsTheEdits()
+    {
+        var h = Open(FormTarget.WinForms);
+        var bas = OpenCodeBehind(h);
+        var onDisk = h.Files.Contents[h.CodePath];
+        bas.ReplaceContent(onDisk.Replace("End Class", "    ' my unsaved note\nEnd Class"));
+        Assert.That(bas.IsDirty, Is.True, "precondition: the tab has unsaved edits");
+
+        await ActivateAsync(h);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(bas.Text, Does.Contain("' my unsaved note"), "the user's unsaved edit survives");
+            Assert.That(bas.Text, Does.Contain("Private Sub btnLogin_Click("), "and the handler is in the buffer");
+            Assert.That(bas.IsDirty, Is.True, "still unsaved — the user decides when to save");
+            Assert.That(h.Files.Writes, Does.Not.Contain(h.CodePath), "nothing was written to disk behind the user's back");
+            Assert.That(h.Files.Contents[h.CodePath], Is.EqualTo(onDisk));
+            Assert.That(h.Navigations, Has.Count.EqualTo(1), "the gesture still opens the handler");
+        });
+    }
+
+    /// <summary>A second double-click on an open, dirty code-behind finds the handler IN THE BUFFER and writes nothing.</summary>
+    [Test]
+    public async Task ASecondDoubleClick_FindsTheHandlerInTheOpenBuffer()
+    {
+        var h = Open(FormTarget.WinForms);
+        var bas = OpenCodeBehind(h);
+        bas.ReplaceContent(h.Files.Contents[h.CodePath] + "' edit\n");
+
+        await ActivateAsync(h);
+        await ActivateAsync(h);
+
+        Assert.That(bas.Text.Split("Private Sub btnLogin_Click(").Length - 1, Is.EqualTo(1), "one handler, never two");
+    }
+
+    /// <summary>
+    /// The designer's SAVE regenerates its regions into the same file, through the same route: an open clean
+    /// code-behind shows the generated field/wiring at once (it used to be overwritten by the stale tab's next save).
+    /// </summary>
+    [Test]
+    public async Task SavingTheForm_RegeneratesIntoAnOpenCodeBehind()
+    {
+        var h = Open(FormTarget.WinForms);
+        var bas = OpenCodeBehind(h);
+        Assert.That(bas.Text, Does.Not.Contain("btnLogin = New Button"), "precondition: the scaffold has no field for it yet");
+
+        Assert.That(await h.Vm.SaveAsync(), Is.True);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(bas.Text, Does.Contain("btnLogin"), "the open tab shows the regenerated region");
+            Assert.That(bas.IsDirty, Is.False);
+            Assert.That(h.Files.Contents[h.CodePath], Is.EqualTo(bas.Text));
+        });
+    }
+
+    /// <summary>
+    /// ⛔ Who calls it in a shipping build: the shell's file-open route must hand every document the lookup, or none of the
+    /// above ever runs in the IDE. Read from the source, as the AXAML-binding checks do.
+    /// </summary>
+    [Test]
+    public void TheShellsFileOpenRoute_GivesEveryDocumentTheOpenDocumentLookup()
+    {
+        var source = File.ReadAllText(Path.Combine(TestContext.CurrentContext.TestDirectory, "..", "..", "..", "..",
+            "VisualGameStudio.Shell", "ViewModels", "MainWindowViewModel.cs"));
+        var openRoute = source.IndexOf("private async Task OpenFileAsync(string filePath)", StringComparison.Ordinal);
+        Assert.That(openRoute, Is.GreaterThan(0), "OpenFileAsync not found");
+
+        var creation = source.IndexOf("new CodeEditorDocumentViewModel(", openRoute, StringComparison.Ordinal);
+        var body = source.Substring(creation, 1200);
+
+        Assert.That(body, Does.Contain("OpenDocumentLookup ="), "the file-open route must wire the open-document lookup");
+    }
+
     // ==================================================================
     // Navigating
     // ==================================================================

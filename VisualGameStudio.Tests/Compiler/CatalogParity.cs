@@ -140,6 +140,13 @@ internal static class CatalogParity
         FormPropertyType.Bool => s.Type == "Boolean",
         FormPropertyType.Color => s.Type == "Color",
         FormPropertyType.Size => s.Type == "Size",
+        FormPropertyType.Font => s.Type == "Font",
+        FormPropertyType.Padding => s.Type == "Padding",
+        FormPropertyType.Cursor => s.Type == "Cursor",
+        FormPropertyType.Fraction => s.Type == "Double",
+        // A reference names a control the form holds; WinForms types AcceptButton/CancelButton as the interface its
+        // buttons implement.
+        FormPropertyType.Reference => s.Type == "IButtonControl",
         FormPropertyType.Enum => s.IsEnum && row.WinFormsEnumType != null &&
                                  string.Equals(LastSegment(row.WinFormsEnumType), s.Type, StringComparison.Ordinal),
         _ => false
@@ -197,6 +204,10 @@ internal static class CatalogParity
             FormPropertyType.Color => string.Equals(NormalColor(mine), NormalColor(theirs), StringComparison.OrdinalIgnoreCase),
             FormPropertyType.Size => FormPropertyDef.TryParseSize(mine, out var w1, out var h1) &&
                                      FormPropertyDef.TryParseSize(theirs, out var w2, out var h2) && (w1, h1) == (w2, h2),
+            // The slice-3 types compare in their own terms (the snapshot writes FontConverter/PaddingConverter text and a
+            // Cursors member name) — both sides must PARSE, so a malformed catalog default can never compare equal.
+            FormPropertyType.Font or FormPropertyType.Padding or FormPropertyType.Cursor or FormPropertyType.Fraction =>
+                row.Accepts(mine) && row.Accepts(theirs) && row.SameValue(mine, theirs),
             _ => string.Equals(mine, theirs, StringComparison.Ordinal)
         };
     }
