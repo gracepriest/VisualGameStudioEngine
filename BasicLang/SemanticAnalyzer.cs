@@ -517,6 +517,12 @@ namespace BasicLang.Compiler.SemanticAnalysis
         /// </summary>
         private void ImportImplicitProjectSymbols()
         {
+            // A sibling's Extension methods extend classes this unit may use (LacksDeclaredMember).
+            foreach (var unit in _implicitImportUnits)
+            {
+                RecordExtensionMethods(unit?.AST?.Declarations);
+            }
+
             // Full-fidelity symbols first: Define() keeps the first symbol
             // registered under a name, so completed units win over the
             // signature-level fallback below.
@@ -549,7 +555,13 @@ namespace BasicLang.Compiler.SemanticAnalysis
                         Parameters = symbol.Parameters,
                         ReturnType = symbol.ReturnType,
                         Access = symbol.Access,
-                        IsExtern = symbol.IsExtern
+                        IsExtern = symbol.IsExtern,
+                        // ⛔ A Module BLOCK's procedure keeps its Module. Dropped, the IR builder
+                        // owned a bare call by the FILE (SourceModule) instead, and C# — one static
+                        // class per Module — emitted `Program.Go()` for `Module M`'s Go: CS0103.
+                        // Procedures only: an imported Module VARIABLE already lowers through its
+                        // SourceModule, which the exporter stamps with the Module's name.
+                        OwningModule = IsProcedure(symbol) ? symbol.OwningModule : null
                     };
 
                     GlobalScope.Define(importedSymbol);
@@ -603,6 +615,26 @@ namespace BasicLang.Compiler.SemanticAnalysis
             {
                 PopulateClassMemberSignatures(
                     classNode, classType, includeConstructors: true);
+                RecordDeclaredMembers(classNode, classType);
+
+                // ⛔ The shell's base, when it is a type this unit can already see (a sibling shell,
+                // a completed sibling's class, a built-in). Without it an INHERITED member of a
+                // not-yet-compiled sibling's class found nothing: typed Object on a long name (C++
+                // then emitted `t1 = w->Inherited()` for a Sub) and "does not have a member" on a
+                // one-letter name. An unresolved base stays null, and LacksDeclaredMember stays
+                // permissive for it.
+                // ⛔ Never closes a cycle (see RegisterClassBases): several base-chain walks have
+                // no loop guard, and a pending `A Inherits B` / `B Inherits A` would spin them.
+                if (!string.IsNullOrEmpty(classNode.BaseClass) && classType.BaseType == null)
+                {
+                    var baseType = ResolveTypeSymbol(classNode.BaseClass)?.Type
+                                   ?? _typeManager.GetType(classNode.BaseClass);
+                    if (baseType != null && baseType.Kind == TypeKind.Class
+                        && !InheritanceWouldCycle(classType, baseType))
+                    {
+                        classType.BaseType = baseType;
+                    }
+                }
             }
 
             // Pass 3: functions, subs and public module-level fields/constants.
@@ -870,7 +902,8 @@ namespace BasicLang.Compiler.SemanticAnalysis
                             SourceModule = unit.ModuleName
                         });
                     }
-                    RegisterSiblingContainerMemberSignatures(moduleNode.Members, unit, applyDeclaredAccess: true);
+                    RegisterSiblingContainerMemberSignatures(moduleNode.Members, unit, applyDeclaredAccess: true,
+                        owningModule: moduleNode.Name);
                     break;
 
                 case NamespaceNode namespaceNode:
@@ -934,8 +967,13 @@ namespace BasicLang.Compiler.SemanticAnalysis
         /// it too — otherwise a <c>Private Function</c> was callable whenever its file was
         /// listed AFTER the caller's, and refused when it was listed before. A class's
         /// methods keep the default, as before.</para>
+        ///
+        /// <para><paramref name="owningModule"/> is the Module a procedure belongs to, stamped as
+        /// the compiled path's pass 1 stamps it (<see cref="RecordModuleProcedure"/>), so a bare
+        /// call into a not-yet-compiled sibling's Module is owned by that Module and not by the file.</para>
         /// </summary>
-        private void RegisterSiblingContainerMemberSignatures(IEnumerable<ASTNode> members, CompilationUnit unit, bool applyDeclaredAccess)
+        private void RegisterSiblingContainerMemberSignatures(IEnumerable<ASTNode> members, CompilationUnit unit,
+            bool applyDeclaredAccess, string owningModule = null)
         {
             if (members == null) return;
 
@@ -944,13 +982,14 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 switch (member)
                 {
                     case FunctionNode func:
-                        RegisterSiblingFunctionSignature(func, unit, applyDeclaredAccess);
+                        RegisterSiblingFunctionSignature(func, unit, applyDeclaredAccess, owningModule);
                         break;
                     case SubroutineNode sub:
-                        RegisterSiblingSubroutineSignature(sub, unit, applyDeclaredAccess);
+                        RegisterSiblingSubroutineSignature(sub, unit, applyDeclaredAccess, owningModule);
                         break;
                     case ModuleNode nestedModule:
-                        RegisterSiblingContainerMemberSignatures(nestedModule.Members, unit, applyDeclaredAccess: true);
+                        RegisterSiblingContainerMemberSignatures(nestedModule.Members, unit, applyDeclaredAccess: true,
+                            owningModule: nestedModule.Name);
                         break;
                     case ClassNode nestedClass:
                         RegisterSiblingContainerMemberSignatures(nestedClass.Members, unit, applyDeclaredAccess: false);
@@ -962,45 +1001,62 @@ namespace BasicLang.Compiler.SemanticAnalysis
             }
         }
 
-        private void RegisterSiblingFunctionSignature(FunctionNode func, CompilationUnit unit, bool applyDeclaredAccess)
+        private void RegisterSiblingFunctionSignature(FunctionNode func, CompilationUnit unit, bool applyDeclaredAccess,
+            string owningModule = null)
         {
             if (string.IsNullOrEmpty(func.Name)) return;
             if (GlobalScope.Resolve(func.Name) != null) return;
-
-            var returnType = ResolveSiblingSignatureType(func.ReturnType) ?? _typeManager.ObjectType;
-            var symbol = new Symbol(func.Name, SymbolKind.Function, returnType, 0, 0)
-            {
-                IsImported = true,
-                IsSiblingSignature = true,
-                SourceModule = unit.ModuleName,
-                ReturnType = returnType,
-                Parameters = BuildSiblingSignatureParameters(func.Parameters)
-            };
-            if (applyDeclaredAccess)
-            {
-                symbol.Access = func.Access;
-            }
-            GlobalScope.Define(symbol);
+            GlobalScope.Define(BuildSiblingProcedureSignature(func, unit, applyDeclaredAccess, owningModule));
         }
 
-        private void RegisterSiblingSubroutineSignature(SubroutineNode sub, CompilationUnit unit, bool applyDeclaredAccess)
+        private void RegisterSiblingSubroutineSignature(SubroutineNode sub, CompilationUnit unit, bool applyDeclaredAccess,
+            string owningModule = null)
         {
             if (string.IsNullOrEmpty(sub.Name)) return;
             if (GlobalScope.Resolve(sub.Name) != null) return;
+            GlobalScope.Define(BuildSiblingProcedureSignature(sub, unit, applyDeclaredAccess, owningModule));
+        }
 
-            var symbol = new Symbol(sub.Name, SymbolKind.Subroutine, _typeManager.VoidType, 0, 0)
+        /// <summary>
+        /// The signature symbol of a not-yet-compiled sibling's Function or Sub, from its declaration
+        /// alone. Not defined anywhere — the callers decide that (the global flattening above, or the
+        /// qualified <c>Module.Proc</c> channel, which must not be first-wins).
+        /// </summary>
+        private Symbol BuildSiblingProcedureSignature(ASTNode procedure, CompilationUnit unit, bool applyDeclaredAccess,
+            string owningModule)
+        {
+            Symbol symbol;
+            AccessModifier access;
+            if (procedure is FunctionNode func)
             {
-                IsImported = true,
-                IsSiblingSignature = true,
-                SourceModule = unit.ModuleName,
-                ReturnType = _typeManager.VoidType,
-                Parameters = BuildSiblingSignatureParameters(sub.Parameters)
-            };
+                var returnType = ResolveSiblingSignatureType(func.ReturnType) ?? _typeManager.ObjectType;
+                symbol = new Symbol(func.Name, SymbolKind.Function, returnType, 0, 0)
+                {
+                    ReturnType = returnType,
+                    Parameters = BuildSiblingSignatureParameters(func.Parameters)
+                };
+                access = func.Access;
+            }
+            else
+            {
+                var sub = (SubroutineNode)procedure;
+                symbol = new Symbol(sub.Name, SymbolKind.Subroutine, _typeManager.VoidType, 0, 0)
+                {
+                    ReturnType = _typeManager.VoidType,
+                    Parameters = BuildSiblingSignatureParameters(sub.Parameters)
+                };
+                access = sub.Access;
+            }
+
+            symbol.IsImported = true;
+            symbol.IsSiblingSignature = true;
+            symbol.SourceModule = unit.ModuleName;
+            symbol.OwningModule = owningModule;
             if (applyDeclaredAccess)
             {
-                symbol.Access = sub.Access;
+                symbol.Access = access;
             }
-            GlobalScope.Define(symbol);
+            return symbol;
         }
 
         private List<Symbol> BuildSiblingSignatureParameters(List<ParameterNode> parameters)
@@ -2936,21 +2992,12 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 return new TypeInfo(name, TypeKind.Foreign);
             }
 
-            // First, check if it's a type parameter in the current scope
-            var symbol = _currentScope.Resolve(name);
-            if (symbol != null && symbol.Kind == SymbolKind.TypeParameter)
-            {
-                return symbol.Type;
-            }
-
-            // A class/struct/interface/enum symbol in scope — including one
-            // imported from a sibling project file — carries the full type with
-            // its members. Prefer it over the permissive .NET fallback below,
-            // which would otherwise return a bare member-less TypeInfo and make
-            // cross-file field access resolve to Object.
-            if (symbol?.Type != null &&
-                (symbol.Kind == SymbolKind.Class || symbol.Kind == SymbolKind.Structure ||
-                 symbol.Kind == SymbolKind.Interface || symbol.Kind == SymbolKind.Type))
+            // First, a type parameter or a class/struct/interface symbol in scope — including one
+            // imported from a sibling project file, which carries the full type with its members.
+            // Preferred over the permissive .NET fallback below, which would otherwise return a
+            // bare member-less TypeInfo and make cross-file field access resolve to Object.
+            var symbol = ResolveTypeSymbol(name);
+            if (symbol != null)
             {
                 return symbol.Type;
             }
@@ -2998,6 +3045,33 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 return new TypeInfo(name, TypeKind.Class);
             }
 
+            return null;
+        }
+
+        private static bool IsTypeSymbolKind(SymbolKind kind) =>
+            kind == SymbolKind.TypeParameter || kind == SymbolKind.Class || kind == SymbolKind.Structure ||
+            kind == SymbolKind.Interface || kind == SymbolKind.Type;
+
+        /// <summary>
+        /// The nearest symbol named <paramref name="name"/> that can stand in a TYPE position, or null.
+        ///
+        /// <para>⛔ A value of the same name does not hide a type here. Scope lookup is
+        /// case-insensitive and <c>Dim c As New C()</c> defines the local <c>c</c> BEFORE its
+        /// initializer is analyzed, so a plain <c>Resolve</c> answered the variable and never reached
+        /// a class <c>C</c> declared in a SIBLING file — that class lives only in the global scope.
+        /// The build was refused ("Cannot assign value of type 'Object' to variable of type 'C'");
+        /// a two-letter-or-longer name compiled only because the .NET fallback minted a member-less
+        /// phantom of it. In a type position only types are candidates, so values are skipped.</para>
+        /// </summary>
+        private Symbol ResolveTypeSymbol(string name)
+        {
+            if (string.IsNullOrEmpty(name)) return null;
+            for (var scope = _currentScope; scope != null; scope = scope.Parent)
+            {
+                var symbol = scope.ResolveLocal(name);
+                if (symbol?.Type != null && IsTypeSymbolKind(symbol.Kind))
+                    return symbol;
+            }
             return null;
         }
 
@@ -5149,6 +5223,8 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 RegisterClassTypes(decl);
             }
 
+            RecordExtensionMethods(program.Declarations);
+
             // ⛔ Then each class's BASE, before anything is analyzed. `BaseType` used to be set
             // only when Visit(ClassNode) reached the class body, so for a class declared BELOW
             // the code using it, `Dim a As Animal = New Dog()`, `Return New Dog()` from an
@@ -5295,6 +5371,287 @@ namespace BasicLang.Compiler.SemanticAnalysis
         }
 
         /// <summary>
+        /// <c>Module.Member</c> where <c>Module</c> is a Module BLOCK declared in ANOTHER unit of the
+        /// project. Returns false when <paramref name="moduleName"/> is not such a Module, so the caller
+        /// goes on as before. Returns true with a symbol when the member resolves, and true with a null
+        /// symbol after reporting that the Module has no such member.
+        ///
+        /// <para>⛔ The cross-unit channels above find a unit by its FILE name, which is also the name
+        /// of the implicit module a file's top-level code lives in. A Module block is named by its
+        /// author: <c>Module Program</c> holding <c>Main</c> sits in <c>Main.bas</c> in every template,
+        /// and <c>Program.Helper()</c> from a class in another file found no unit called Program, fell to
+        /// the permissive path, and was lowered as an INSTANCE call on a phantom receiver —
+        /// <c>ReferenceError: Program is not defined</c> on JavaScript, <c>C2065</c> on C++, <c>CS0103</c>
+        /// on C#, from a build that reported success on the first. It worked when the file happened to
+        /// share the Module's name, which is why the report did not reproduce for everyone.</para>
+        ///
+        /// <para>The declaring unit's AST is the authority on what the Module declares (both compile
+        /// orders have it); a completed unit's exported symbol is preferred as the full-fidelity form,
+        /// and a not-yet-compiled one's procedure gets a signature built from its declaration — never
+        /// the global-scope flattening, which is first-wins across Modules. A Module VARIABLE is bound
+        /// only from a completed unit's exports (as the file-named channel binds it); otherwise it keeps
+        /// the old behaviour, since nothing lowers a pending sibling's variable.</para>
+        /// </summary>
+        private bool TryResolveOtherUnitModuleBlockMember(string moduleName, string memberName, int line, int column,
+            out Symbol symbol)
+        {
+            symbol = null;
+            if (_moduleRegistry == null) return false;
+
+            var moduleSymbol = GlobalScope.Resolve(moduleName);
+            if (moduleSymbol == null || moduleSymbol.Kind != SymbolKind.Module || !moduleSymbol.IsImported) return false;
+
+            var unit = FindModuleByName(moduleSymbol.SourceModule);
+            if (unit == null || unit == _currentUnit || unit.AST?.Declarations == null) return false;
+
+            var moduleNode = FindModuleBlock(unit.AST.Declarations, moduleName);
+            if (moduleNode == null) return false;
+
+            var declaration = moduleNode.Members.FirstOrDefault(m =>
+                string.Equals(DeclaredName(m), memberName, StringComparison.OrdinalIgnoreCase));
+
+            if (unit.IsComplete)
+            {
+                symbol = unit.ExportedSymbols.FirstOrDefault(s =>
+                    string.Equals(s.Name, memberName, StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(s.OwningModule, moduleName, StringComparison.OrdinalIgnoreCase));
+                if (symbol != null) return true;
+            }
+
+            if (declaration is FunctionNode || declaration is SubroutineNode)
+            {
+                symbol = BuildSiblingProcedureSignature(declaration, unit, applyDeclaredAccess: true, owningModule: moduleNode.Name);
+                // Written QUALIFIED, so it is never mistaken for a bare self-call of a same-named
+                // method of the calling class (the IR builder's guard for imports reached by bare name).
+                symbol.IsImported = false;
+                return true;
+            }
+
+            if (declaration != null)
+            {
+                // A variable, constant or nested type the channels above did not bind: unchanged.
+                return false;
+            }
+
+            var memberNames = moduleNode.Members.Select(DeclaredName).Where(n => !string.IsNullOrEmpty(n)).ToList();
+            var suggestion = GetSimilarIdentifierSuggestion(memberName, memberNames);
+            var errorMsg = $"Module '{moduleNode.Name}' does not have a public member '{memberName}'";
+            if (suggestion != null)
+                errorMsg += $". Did you mean '{suggestion}'?";
+            else if (memberNames.Count > 0 && memberNames.Count <= 5)
+                errorMsg += $". Available members: {string.Join(", ", memberNames)}";
+            Error(errorMsg, line, column);
+            return true;
+        }
+
+        /// <summary>
+        /// Records on <paramref name="classType"/> every member name <paramref name="classNode"/>
+        /// declares, and its <c>Inherits</c> name (see <see cref="TypeInfo.DeclaredMemberNames"/>).
+        /// Left null — "not known, stay permissive" — for an <c>Extern Class</c> (its members are the
+        /// runtime's) and for a declaration holding a member this cannot name.
+        /// </summary>
+        private static void RecordDeclaredMembers(ClassNode classNode, TypeInfo classType)
+        {
+            if (classNode?.Members == null || classType == null || classNode.IsExtern) return;
+
+            var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            bool Add(ASTNode member)
+            {
+                switch (member)
+                {
+                    case BlockNode block:
+                        return block.Statements.All(s => Add(s));
+                    case ConstructorNode:
+                    case OperatorDeclarationNode:
+                        return true;
+                }
+                var name = DeclaredName(member);
+                if (string.IsNullOrEmpty(name)) return false;
+                names.Add(name);
+                return true;
+            }
+
+            if (!classNode.Members.All(Add)) return;
+            classType.DeclaredMemberNames = names;
+            classType.DeclaredBaseName = classNode.BaseClass;
+        }
+
+        /// <summary>
+        /// True only when <paramref name="type"/> is a BasicLang class whose whole member set is known
+        /// — its own declaration and every base's, up a chain of BasicLang classes — and none of them
+        /// declares <paramref name="memberName"/>. False whenever anything is unknown: a .NET or
+        /// unresolved base, an <c>Extern Class</c>, a type no declaration was recorded for.
+        ///
+        /// <para>⛔ Asked BEFORE the permissive .NET arm of a member access, which claims any receiver
+        /// whose name is PascalCase and two letters or longer. A user class named <c>LoginForm</c> went
+        /// down that arm, so <c>Me.InitializeComponent()</c> with no such method compiled clean on every
+        /// backend and died at load on JavaScript (<c>TypeError: this.InitializeComponent is not a
+        /// function</c>); csc caught it on C# only because csc runs. A class named <c>F</c> fell through
+        /// to "does not have a member" — which is why the one-file probe looked right. Not a cross-file
+        /// defect: the name decided it.</para>
+        /// </summary>
+        private static bool LacksDeclaredMember(TypeInfo type, string memberName)
+        {
+            // Object's own members belong to every class.
+            if (string.IsNullOrEmpty(memberName) || ObjectMemberNames.Contains(memberName)
+                || string.Equals(memberName, "Finalize", StringComparison.OrdinalIgnoreCase)) return false;
+
+            var seen = new HashSet<TypeInfo>(ReferenceEqualityComparer.Instance);
+            for (var current = type; current != null; current = current.BaseType)
+            {
+                if (!seen.Add(current) || current.DeclaredMemberNames == null) return false;
+                if (current.DeclaredMemberNames.Contains(memberName)) return false;
+                if (string.IsNullOrEmpty(current.DeclaredBaseName)) return true;
+                // An Inherits whose base was not resolved to a type here: unknown, stay permissive.
+                if (current.BaseType == null) return false;
+            }
+            return false;
+        }
+
+        /// <summary>Extension method name → the type names it extends, from this unit and every unit it sees.</summary>
+        private readonly Dictionary<string, HashSet<string>> _extensionMethods = new(StringComparer.OrdinalIgnoreCase);
+
+        private void RecordExtensionMethods(IEnumerable<ASTNode> declarations)
+        {
+            if (declarations == null) return;
+            foreach (var declaration in declarations)
+            {
+                switch (declaration)
+                {
+                    case ExtensionMethodNode ext when !string.IsNullOrEmpty(ext.Method?.Name):
+                        if (!_extensionMethods.TryGetValue(ext.Method.Name, out var extended))
+                            _extensionMethods[ext.Method.Name] = extended = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                        extended.Add(ext.ExtendedType ?? "Object");
+                        break;
+                    case ModuleNode module:
+                        RecordExtensionMethods(module.Members);
+                        break;
+                    case NamespaceNode ns:
+                        RecordExtensionMethods(ns.Members);
+                        break;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Whether an <c>Extension</c> method named <paramref name="memberName"/> extends
+        /// <paramref name="type"/>, a base of it, or Object — a member the class declaration cannot
+        /// list, so <see cref="LacksDeclaredMember"/> must not refuse it (it is bound by the backend, as
+        /// before). ⚠ The LSP analyzes a file against the project symbol table with no sibling ASTs to
+        /// read, so there any project FUNCTION of that name keeps the access permissive.
+        /// </summary>
+        private bool HasExtensionMethod(TypeInfo type, string memberName)
+        {
+            if (string.IsNullOrEmpty(memberName)) return false;
+
+            if (_extensionMethods.TryGetValue(memberName, out var extended))
+            {
+                if (extended.Contains("Object")) return true;
+                var seen = new HashSet<TypeInfo>(ReferenceEqualityComparer.Instance);
+                for (var current = type; current != null && seen.Add(current); current = current.BaseType)
+                {
+                    if (extended.Contains(current.Name)) return true;
+                }
+            }
+
+            if (_moduleRegistry == null && _projectSymbols != null)
+            {
+                return _projectSymbols.GetAllPublicSymbols().Any(entry =>
+                    entry.Item2?.Kind == SymbolKind.Function &&
+                    string.Equals(entry.Item2.Name, memberName, StringComparison.OrdinalIgnoreCase));
+            }
+
+            return false;
+        }
+
+        /// <summary>Whether <paramref name="type"/> or a recorded base DECLARES <paramref name="memberName"/>.</summary>
+        private static bool DeclaresMember(TypeInfo type, string memberName)
+        {
+            if (string.IsNullOrEmpty(memberName)) return false;
+            var seen = new HashSet<TypeInfo>(ReferenceEqualityComparer.Instance);
+            for (var current = type; current != null && seen.Add(current); current = current.BaseType)
+            {
+                if (current.DeclaredMemberNames?.Contains(memberName) == true) return true;
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// <c>Game.Version</c> where <c>Game</c> is BOTH a class and the file <c>Game.bas</c>, and
+        /// <c>Version</c> is declared at FILE level there, not in the class. Refused, naming the real
+        /// problem. Returns false (nothing reported) for every other shape.
+        ///
+        /// <para>⛔ Before, the answer depended on compile order and was wrong both ways: with
+        /// <c>Game.bas</c> compiled first the file channel bound the constant and the IR lowered a read
+        /// of it off the CLASS — JavaScript printed an empty line from a clean build
+        /// (<c>Game.Version</c> is undefined on <c>class Game</c>); compiled second, the class won and
+        /// the message was "Type 'Game' does not have a member 'Version'", true but no help. (C# also
+        /// refuses the pair outright: the file becomes <c>static class Game</c> beside the class, CS0101.)</para>
+        /// </summary>
+        private bool RefuseFileMemberQualifiedByAClassName(string qualifier, MemberAccessExpressionNode node)
+        {
+            if (_moduleRegistry == null) return false;
+            if (ResolveTypeSymbol(qualifier) is not { Kind: SymbolKind.Class } classSymbol) return false;
+
+            var classType = classSymbol.Type;
+            if (classType?.ResolveMember(node.MemberName) != null || DeclaresMember(classType, node.MemberName)) return false;
+
+            var unit = FindModuleByName(qualifier);
+            if (unit?.AST?.Declarations == null) return false;
+
+            var fileLevel = unit.AST.Declarations.FirstOrDefault(d =>
+                d is not ClassNode && d is not ModuleNode && d is not NamespaceNode &&
+                string.Equals(DeclaredName(d), node.MemberName, StringComparison.OrdinalIgnoreCase));
+            if (fileLevel == null) return false;
+
+            Error($"'{qualifier}' here is the class '{classSymbol.Name}', which has no member '{node.MemberName}'. " +
+                  $"'{node.MemberName}' is declared at file level in {Path.GetFileName(unit.FilePath)} — refer to it " +
+                  $"unqualified ('{node.MemberName}'), or rename the class or the file so they differ",
+                  node.Line, node.Column);
+            SetNodeType(node, _typeManager.ObjectType);
+            return true;
+        }
+
+        /// <summary>The Module block named <paramref name="name"/> among these declarations, Namespaces and nested Modules included.</summary>
+        private static ModuleNode FindModuleBlock(IEnumerable<ASTNode> declarations, string name)
+        {
+            foreach (var declaration in declarations)
+            {
+                switch (declaration)
+                {
+                    case ModuleNode module when string.Equals(module.Name, name, StringComparison.OrdinalIgnoreCase):
+                        return module;
+                    case ModuleNode module when FindModuleBlock(module.Members, name) is { } nested:
+                        return nested;
+                    case NamespaceNode ns when FindModuleBlock(ns.Members, name) is { } inNamespace:
+                        return inNamespace;
+                }
+            }
+            return null;
+        }
+
+        /// <remarks>
+        /// ⚠ ONE name per node. That holds because the parser gives every declared name its own node;
+        /// if a multi-name declaration (<c>Public A, B As Integer</c>) ever parses into ONE node, the
+        /// second name is missed here — <see cref="TryResolveOtherUnitModuleBlockMember"/> would then
+        /// report it as not a member, and <see cref="RecordDeclaredMembers"/> would let
+        /// <see cref="LacksDeclaredMember"/> refuse it. Enumerate every name if that node shape changes.
+        /// </remarks>
+        private static string DeclaredName(ASTNode member) => member switch
+        {
+            FunctionNode f => f.Name,
+            SubroutineNode s => s.Name,
+            VariableDeclarationNode v => v.Name,
+            ConstantDeclarationNode c => c.Name,
+            ClassNode c => c.Name,
+            ModuleNode m => m.Name,
+            // Every other declaration kind (Structure, Enum, Delegate, Declare, …) by its Name, so a
+            // member of a kind not listed here is never reported as missing.
+            null => null,
+            _ => member.GetType().GetProperty("Name")?.GetValue(member) as string
+        };
+
+        /// <summary>
         /// A bare name that resolved to nothing in scope: is it a Public/Friend variable or
         /// constant of ANOTHER Module in this unit? Exactly one such module means the reference
         /// is that member; more than one is ambiguous and must be qualified; a match that is
@@ -5368,6 +5725,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 case ClassNode cls:
                     PopulateClassMemberSignatures(
                         cls, _typeManager.GetType(cls.Name), includeConstructors: false);
+                    RecordDeclaredMembers(cls, _typeManager.GetType(cls.Name));
                     RegisterUserOperators(cls);
                     foreach (var member in cls.Members)
                         RegisterClassMemberSignatures(member);
@@ -7256,6 +7614,8 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 // Module hasn't been compiled yet - this will be handled by the Compiler
                 return;
             }
+
+            RecordExtensionMethods(unit.AST?.Declarations);
 
             // Import exported symbols into current scope
             foreach (var symbol in unit.ExportedSymbols)
@@ -11426,6 +11786,11 @@ namespace BasicLang.Compiler.SemanticAnalysis
             {
                 var moduleName = objId.Name;
 
+                if (RefuseFileMemberQualifiedByAClassName(moduleName, node))
+                {
+                    return;
+                }
+
                 // A Module declared in THIS unit, before any cross-unit channel: its variables and
                 // constants are in _moduleMembers whatever the declaration order. Not found here
                 // means "not one of this unit's module variables" — a procedure, or another unit's
@@ -11516,6 +11881,23 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     }
                 }
 
+                // A Module BLOCK of another unit — `Module Program` inside Main.bas — reached by its
+                // own name, which no FILE carries. See TryResolveOtherUnitModuleBlockMember.
+                if (TryResolveOtherUnitModuleBlockMember(moduleName, node.MemberName, node.Line, node.Column,
+                        out var blockMember))
+                {
+                    if (blockMember == null)
+                    {
+                        SetNodeType(node, _typeManager.ObjectType);
+                        return;
+                    }
+
+                    BindCrossUnitProcedure(blockMember, moduleName, node.Line, node.Column);
+                    SetNodeSymbol(node, blockMember);
+                    SetNodeType(node, blockMember.Type);
+                    return;
+                }
+
                 // Check external libraries
                 if (_externalLibraries.TryGetValue(moduleName, out var library))
                 {
@@ -11586,7 +11968,18 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 // and chained access (a.b.c / m.foo().bar()) stays opaque recursively.
                 SetNodeType(node, new TypeInfo(objectType.Name + "::" + node.MemberName, TypeKind.Foreign));
             }
-            else if (IsNetType(objectType.Name))
+            // Declared on the class but not in Members — a Private member reached through Me, an
+            // Event, a nested type. Unbound and untyped as before, but never "does not have a member":
+            // that false error used to reach only classes with one-letter names, which alone missed
+            // the .NET arm below. An Extension method on the class (or a base, or Object) is the same:
+            // not in the declaration, bound by the backend, never refused here.
+            else if (DeclaresMember(objectType, node.MemberName)
+                     || (objectType.DeclaredMemberNames != null && HasExtensionMethod(objectType, node.MemberName)))
+            {
+                SetNodeType(node, _typeManager.ObjectType);
+            }
+            // A BasicLang class whose members are all known is never a .NET type, whatever its name.
+            else if (!LacksDeclaredMember(objectType, node.MemberName) && IsNetType(objectType.Name))
             {
                 // For .NET types, try to look up the member to get its return type
                 var memberType = LookupNetTypeMember(objectType.Name, node.MemberName);
@@ -11613,6 +12006,16 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 }
 
                 SetNodeType(node, memberType ?? _typeManager.ObjectType);
+            }
+            // `Me.New(3)` inside a constructor is VB's constructor chaining, which this compiler does
+            // not lower — say that, rather than "does not have a member 'New'. Did you mean 'N'?".
+            else if (string.Equals(node.MemberName, "New", StringComparison.OrdinalIgnoreCase)
+                     && node.Object is IdentifierExpressionNode { Name: var receiver }
+                     && string.Equals(receiver, "Me", StringComparison.OrdinalIgnoreCase))
+            {
+                Error("Constructor chaining via Me.New is not supported. Move the shared initialization " +
+                      "into a Private Sub and call it from each constructor", node.Line, node.Column);
+                SetNodeType(node, _typeManager.ObjectType);
             }
             else
             {
