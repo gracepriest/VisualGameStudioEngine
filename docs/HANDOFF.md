@@ -17,6 +17,100 @@ facade (all five tasks of `2026-09-13-blnet-cpp-facade.md`).
 
 ---
 
+## 🚀 START HERE — 2026-09-29: #200 DONE, `Me` as a value on the C++ backend (ADR-0015 + D2a)
+
+Branch `claude/jolly-pasteur-l4mpzs`, `f6f6f16a`, draft PR #140. Scoped to the C++ backend's
+object model only — unrelated to the form-designer section below, which stays the live handoff
+for that area.
+
+**What changed.** `docs/superpowers/decisions/0015-cpp-me-as-value-two-phase-construction.md`
+(ADR-0015). `Me` used as a VALUE (an argument, a return, a local, a field store, a collection
+add, from inside `Sub New`) used to fail to compile on C++ only — `this` is a raw pointer, every
+other use of a class value is `std::shared_ptr<T>`. Now: every hierarchy ROOT carries
+`public std::enable_shared_from_this<Root>` as its last base (D1); `BasicLang::Self(this)` is the
+one spelling of `Me` as a value; every class constructs in TWO PHASES — `BasicLang::New<T>(args)`
+runs a TAG constructor (leaves every field at its .NET default) inside `make_shared`, then
+`ctor_(args)` (base `ctor_`, then field initializers, then the body) once ownership exists (D2); a
+hierarchy rooted in a `#CppInclude`d C++ class keeps the same protocol with tag constructors that
+also carry the VB constructor's parameters, and a PURITY rule on `MyBase.New` arguments into that
+foreign base, checked by `CppCapabilityChecker` (D2a). `CppObjectModel.cs` / `CppObjectModelRuntime.cs`
+are new files; `CppCodeGenerator.cs` and `CppCapabilityChecker.cs` carry the rest.
+
+**Behaviour changes, both now matching VB (recorded, not accidental):** a virtual call from a
+base constructor now dispatches to the derived override, seeing its fields at their .NET default
+(previously the derived fields were already initialized — wrong); a constructor no longer
+silently stores a same-named parameter into a field it never explicitly assigns.
+
+**Tests** (`VisualGameStudio.Tests/Compiler/`):
+- `CppMeAsValueTests.cs` — the ADR's M1-M7 probe corpus and the D2 construction-order edge probes
+  (E01, E03, E04, E10-E12, E15-E17, plus a NEW call-argument probe this session added to kill the
+  "base call always at the top" mutant), every one COMPILED AND RUN on both the default and `-O`
+  C++ pipelines; a CLI-entry-point test (M4) and a Release-`.blproj`-entry-point test (E01, SKIPS
+  off Windows — `NativeBuildSkip`, MSVC-only per this file's own C++ backend rule); pins for two
+  PRE-EXISTING, UNRELATED gaps this work's own measurement surfaced (#234: C#/JS diverge from VB
+  on the SAME base-constructor-virtual-call shape, for reasons unrelated to #200 — field
+  initializers run too early on both; #237: C# throws `NullReferenceException` on a lambda that
+  captures `Me` and calls a captured object's method — the emitted lambda body renders EMPTY).
+- `CppMeAsValueForeignBaseTests.cs` — D2a: F6/F10/F11 (a hierarchy rooted in, and two levels
+  below, a foreign class; a direct child's own constructor forwarding a parameter to it), a
+  global AND a Const as pure `MyBase.New` arguments, a computed operator expression, the
+  `static_assert` firing for a foreign base that itself derives from `enable_shared_from_this`,
+  and a computed CALL refused by name. These go through the REAL CLI binary, not the in-process
+  helper — `BclE2E.CompileToCppOptimized` never runs the Preprocessor, so a `#CppInclude` line
+  never reaches the generated program and the foreign base is "undeclared identifier" for an
+  unrelated reason; measured this session, worth remembering before reaching for that helper on
+  any `#CppInclude` shape.
+- `CppMeAsValueEmissionTests.cs` — fast (no compiler) string-level pins: a member receiver
+  renders raw `this`, never `Self(this)->…` (the ONE mutant no runtime probe can see — it still
+  compiles and runs correctly, `shared_ptr::operator->` gives back the same object); a root's
+  head carries `enable_shared_from_this`, a derived class's does not; a `New` site is
+  `BasicLang::New<C>(`; a class-free program splices none of this in at all.
+- Moved pins: `CppBackendTests.Cpp_ClassInstance_UsesSharedPtr` (now asserts `BasicLang::New<Person>(`,
+  not `std::make_shared<Person>(`); `CppEmissionOrderTests`' two combined/split head-order pins
+  (the marker is now the full `class Box : public std::enable_shared_from_this<Box>` line);
+  `CppEmissionOrderTests.MeAsAnArgumentToAModuleProcedure_IsAGapOnCpp_Pinned` promoted to a
+  passing three-backend run (C++/JS/C#; MSIL still can't assemble the shape, unrelated);
+  `UserDelegateConversionExecutionTests`' `E13_MyBaseNewLambdaArgument_Cpp_…` promoted from a
+  pinned compile-failure to a passing run — **#201 is now PARTLY done** (its C++ leg; C# still
+  fails on the same shape).
+- **Direction B, owner-ruled:** hand-written C++ in a mixed project creates a BasicLang class with
+  `BasicLang::New<T>(args)`, never `std::make_shared<T>()` (which no longer compiles — a class has
+  only the tag constructor). `CppSplitCompileTests.Split_ClassAcrossModules_SharedPtrRoundTrip`,
+  spec `2026-07-11-cpp-language-support-design.md` §3 and the wiki (`cpp-interop`, `backends`)
+  were moved to that spelling. Do not add a public one-phase constructor "for C++ callers": `Me`
+  is unowned inside it.
+- **Mutation-proven** (detached worktree, `S/t200/mutants.py`'s mutant set, rebuilt against real
+  NUnit rather than the scratch harness): `enable_shared_from_this` on every class,
+  raw `this` at value sites, `Self` at member receivers, one-phase construction, field
+  initializers after the body, base call after field initializers, base call always at the top,
+  the tag constructor not resetting fields, no `static_assert`, no purity check — all killed. See
+  the PR / task handback for the per-mutant table.
+
+**Gates measured (Linux, no MSVC):** the full suite on 58ad8700 failed only the Direction-B pin
+(1/12049/328 of 12378), which the owner's ruling then moved to `BasicLang::New<T>()`. With the
+ruling applied the split tests pass 5/5, and the full suite, measured with #170 stacked on top,
+was 0 failed of 12550. Re-run on Windows before calling this fully verified — MSVC,
+the Release `.blproj` C++ path, and MSIL are all Linux-skips here (`NativeBuildSkip`,
+`MsilHarness.RequireIlasm`).
+
+**Follow-ups filed, not fixed here:**
+- **#234** (NEW, filed by this measurement) — a base constructor's virtual call sees the DERIVED
+  class's field initializers already applied on C# and JavaScript, not VB's (and now C++'s)
+  answer of the .NET default. Repro: `CppMeAsValueTests.E01_OnCSharpAndJavaScript_IsAPreExistingGap_PinnedAgainst234`.
+  Nothing about #200 changed either backend (no IR change, ADR-0015's own Obligations) — nail
+  down whose bug this is (field-initializer placement relative to the base-constructor call) on
+  each backend separately.
+- **#237** (NEW, filed by this measurement) — a lambda that captures `Me` and calls a captured
+  object's method (`Sub() k.Take(Me)`) emits an EMPTY body on the C# backend
+  (`Action f = () => { };`), so the call silently never happens and a later read of the
+  never-set field throws `NullReferenceException`. Repro:
+  `CppMeAsValueTests.E09_OnCSharp_ThrowsNullReferenceException_PinnedAgainst237` (both the
+  ordinary-method and the `Sub New` shape hit it identically).
+- **#201, still open** — the C++ leg of the `MyBase.New` lambda-argument gap is now fixed (see
+  above); C#'s undeclared-`__lambda_0` compile error on the same shape is untouched.
+
+---
+
 ## 🌐 NEWEST — 2026-09-27: web forms laid out in pixels (piece 1 of "one form, either target"), branch `feat/web-pixel-layout`
 
 Branch `feat/web-pixel-layout` (based on `feat/property-grid` @ `6af0bea1`; now carries master — see
@@ -5570,12 +5664,14 @@ single new failure against the 170-name baseline.
       body is deliberately NOT its own scope (it captures the creator's). See the dedicated
       "#169 + #199 DONE" entry further down this list for the mechanism and what #169 built on
       top of it.
-    - **#200 — the C++ backend cannot pass `Me` where a value (not the implicit receiver) is
-      expected.** `Me` as an ordinary argument, or as an `Is`/`IsNot` operand, fails to COMPILE:
-      `error: no viable conversion from 'Counter *' to 'std::shared_ptr<Counter>'`. `this` is a
-      raw pointer; every other place a `Counter` value is needed gets a `shared_ptr<Counter>`, and
-      nothing converts between them at a call/comparison site. Repro: `S/t176/edge/X1_me_arg.bas`,
-      `X2_me_is.bas`. Unrelated to #176 — measured unchanged before and after its fix.
+    - **#200 — CLOSED, 2026-09-29 (fix commit `f6f6f16a`, ADR-0015).** ~~the C++ backend cannot
+      pass `Me` where a value (not the implicit receiver) is expected~~ — `Me` now renders
+      `BasicLang::Self(this)` at every value site by default (an argument, a return, an `Is`
+      operand's raw `this` is unaffected — D3's own closed list), backed by every hierarchy
+      root's `enable_shared_from_this` (D1) and two-phase construction so `Me` is owned before any
+      user code runs, even inside `Sub New` (D2). See the dedicated "#200 DONE" START HERE entry
+      at the top of this file for the mechanism, the tests and what it exposed (#234, #237,
+      #201 partly).
     - **#136, WIDENED — a Sub lambda's write to a bare property is not observed by a later
       Function lambda's read, on C# only.** Previously scoped to a `For Each` variable capture;
       `S/t176/edge/X3b_sub_lambda_store.bas` (`Dim f = Function() V + 1 : Dim g = Sub() V = 3`)

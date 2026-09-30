@@ -20,8 +20,9 @@ namespace VisualGameStudio.Tests.Compiler;
 /// C++ (#201 — <c>AddressOf</c> an INSTANCE method fails to compile) and E9e on C++ (#201 — a
 /// branch that <c>Return</c>s an <c>AddressOf</c> result on one arm fails to compile, see that
 /// pin's own comment for what changed and what did not); E13 (#170, #201 — a lambda argument to
-/// <c>MyBase.New</c> has no IL lowering on MSIL and no lambda-hoisting on C#/C++ either, so only
-/// JavaScript runs it).
+/// <c>MyBase.New</c> has no IL lowering on MSIL and no lambda-hoisting on C# either, so only
+/// JavaScript and (since ADR-0015 / task #200's two-phase construction — #201's C++ leg is now
+/// PARTLY done) C++ run it).
 ///
 /// <para>⭐ <b>UPDATED for #188 (fix commit 5e82a786):</b> at the time this fixture was written,
 /// invoking a delegate-typed FIELD through its member spelling (not a local copy) was a
@@ -621,10 +622,13 @@ public class UserDelegateConversionExecutionTests
     }
 
     // ============================================================================================
-    // 6. E13 — a lambda argument to MyBase.New: runs on JavaScript only. C#/C++ fail to compile
-    //    (an undeclared `__lambda_0` — no lambda-hoisting for this IR position on either
-    //    backend, filed as #201); MSIL refuses outright with a named ForeignFeatureException
-    //    (#170 — "invisible to the capture analysis", predates #187, unaffected by it).
+    // 6. E13 — a lambda argument to MyBase.New. Runs on JavaScript AND, since ADR-0015 / task
+    //    #200's two-phase construction (E11 placement: "a lambda argument renders inline, like
+    //    any lambda use"), on C++ too — promoted from a PINNED "undeclared identifier"
+    //    (undeclared `__lambda_0`) to a passing run; #201 is now PARTLY done (its C++ leg).
+    //    C# still fails to compile the same undeclared `__lambda_0` (#201's remaining leg);
+    //    MSIL refuses outright with a named ForeignFeatureException (#170 — "invisible to the
+    //    capture analysis", predates #187, unaffected by it).
     // ============================================================================================
 
     private const string E13 = """
@@ -666,13 +670,19 @@ public class UserDelegateConversionExecutionTests
             + "DIFFERENT failure here means this pin is stale.\n" + ex.Message);
     }
 
+    /// <summary>
+    /// PROMOTED (ADR-0015 / task #200 — was <c>E13_MyBaseNewLambdaArgument_Cpp_PinsTodaysUndeclaredIdentifier_Against201</c>,
+    /// pinned against an undeclared-identifier compile error). A lambda argument to
+    /// <c>MyBase.New</c> renders INLINE at its use site — the same as any other lambda use — so
+    /// once <c>Base::ctor_</c> is correctly placed (two-phase construction's E11 rule) the
+    /// lambda compiles and runs, printing JavaScript's own answer. #201 is now PARTLY done: its
+    /// C++ leg is fixed by #200 as a side effect; C# still fails (the sibling test above).
+    /// </summary>
     [Test]
-    public void E13_MyBaseNewLambdaArgument_Cpp_PinsTodaysUndeclaredIdentifier_Against201()
+    public void E13_MyBaseNewLambdaArgument_Cpp_Runs()
     {
         var cpp = BclE2E.CompileToCppOptimized(E13);
-        var ex = Assert.Throws<AssertionException>(() => BclE2E.CompileRun(cpp));
-        Assert.That(ex!.Message, Does.Contain("__lambda_0").And.Contain("undeclared identifier"),
-            "the failure must still be the undeclared-lambda C++ compile error (#201).\n" + ex.Message);
+        Assert.That(Norm(BclE2E.CompileRun(cpp)), Is.EqualTo("101"));
     }
 
     /// <summary>

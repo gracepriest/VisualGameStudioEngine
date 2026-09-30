@@ -118,7 +118,7 @@ include:
 ```cpp
 #include "Logic.h"                                  // generated from logic.bas
 auto score  = Logic::CalculateScore(hits, combo);   // BasicLang Function
-auto player = std::make_shared<Logic::Player>();    // BasicLang Class → shared_ptr
+auto player = BasicLang::New<Logic::Player>();      // BasicLang Class → shared_ptr (ADR-0015; never make_shared)
 ```
 
 Boundary types are exactly the backend's existing two-layer model — `String` and
