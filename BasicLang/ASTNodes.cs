@@ -779,6 +779,14 @@ namespace BasicLang.Compiler.AST
         public string EventName { get; set; }
         public List<ExpressionNode> Arguments { get; set; }
 
+        /// <summary>
+        /// ⭐ #124 (ADR-0013 D7): the event <see cref="EventName"/> names, as a synthesized reference
+        /// the semantic analyzer binds at its one recording point — so the IR builder raises the
+        /// event by its DECLARED spelling. Null when the name resolved to no event. Overwritten on
+        /// every analysis pass; not a child of the statement.
+        /// </summary>
+        public IdentifierExpressionNode EventReference { get; set; }
+
         public RaiseEventStatementNode(int line, int column) : base(line, column)
         {
             Arguments = new List<ExpressionNode>();
@@ -1341,6 +1349,19 @@ namespace BasicLang.Compiler.AST
         public ExpressionNode Step { get; set; }
         public BlockNode Body { get; set; }
 
+        /// <summary>
+        /// ⭐ #124 (ADR-0013 D3/D6): what the control name of a <c>For</c> with NO <c>As</c> already
+        /// denotes where the loop starts — a synthesized reference to <see cref="Variable"/>, bound by
+        /// the semantic analyzer at its one recording point, so its
+        /// <see cref="IdentifierExpressionNode.Binding"/> carries the existing declaration's spelling
+        /// and kind. Null when the loop declares its own variable: an <c>As</c> clause, or a name that
+        /// denotes nothing yet. Overwritten on every analysis pass. Not part of the statement's
+        /// children: nothing visits it, the IR builder reads its binding to decide whether the loop
+        /// drives existing storage (VB: <c>For total = …</c> over a field <c>Total</c> drives the
+        /// field).
+        /// </summary>
+        public IdentifierExpressionNode ControlReference { get; set; }
+
         public ForLoopNode(int line, int column) : base(line, column) { }
 
         public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
@@ -1587,12 +1608,13 @@ namespace BasicLang.Compiler.AST
         /// the source spelling, and <see cref="NameBinding.DeclaredName"/> is the declaration's.
         ///
         /// <para>BasicLang is case-insensitive, but the IR builder keys its variables by name,
-        /// Ordinal. It binds a Local, Parameter or LambdaParameter reference by
-        /// <see cref="NameBinding.DeclaredName"/>, so <c>n</c> reaches the parameter declared
-        /// <c>N</c> instead of minting a second variable called <c>n</c>.</para>
+        /// Ordinal. It binds every bound reference by <see cref="NameBinding.DeclaredName"/> — a
+        /// Local, Parameter or LambdaParameter (#169), so <c>n</c> reaches the parameter declared
+        /// <c>N</c> instead of minting a second variable called <c>n</c>, and every other kind
+        /// (#124), so <c>total</c> reaches the field declared <c>Total</c>.</para>
         ///
         /// <para>Null when there is nothing to bind: <c>Me</c>, a <c>::</c> foreign name, a VB
-        /// string constant, a .NET name with no BasicLang symbol, an unresolved name, an Event,
+        /// string constant, a .NET name with no BasicLang symbol, an unresolved name,
         /// a compiler-synthesized declaration (the <c>For Each</c> hidden element variable), and
         /// a symbol whose name does not match this spelling case-insensitively.</para>
         /// </summary>
@@ -1606,8 +1628,8 @@ namespace BasicLang.Compiler.AST
     /// <summary>
     /// What kind of declaration a <see cref="NameBinding"/> names — and therefore which store
     /// the IR builder looks it up in. #169 consumes Local, Parameter and LambdaParameter (the
-    /// declarations the IR builder's version stack holds); the other kinds are recorded for
-    /// #124.
+    /// declarations the IR builder's version stack holds); #124 consumes every other kind
+    /// (<c>IRBuilder.BoundVariable</c>) and adds Event (ADR-0013 D7).
     /// </summary>
     public enum NameBindingKind
     {
@@ -1619,6 +1641,7 @@ namespace BasicLang.Compiler.AST
         Property,
         Method,
         Type,
+        Event,
     }
 
     /// <summary>

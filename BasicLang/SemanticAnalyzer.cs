@@ -1441,8 +1441,9 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
         /// <summary>
         /// The <see cref="NameBinding"/> a reference written <paramref name="reference"/> records
-        /// for <paramref name="symbol"/>, or null for a synthesized declaration, an Event (ADR-0013
-        /// D7), or a symbol whose name differs from the written one other than by case (ADR-0013 D8).
+        /// for <paramref name="symbol"/>, or null for a synthesized declaration or a symbol whose name
+        /// differs from the written one other than by case (ADR-0013 D8). An Event is recorded since
+        /// #124 consumes it (D7).
         /// </summary>
         private NameBinding? BindingOf(IdentifierExpressionNode reference, Symbol symbol)
         {
@@ -1480,7 +1481,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 case SymbolKind.Subroutine:
                     return NameBindingKind.Method;
                 case SymbolKind.Event:
-                    return null;   // ADR-0013 D7: unbound until #124 consumes it
+                    return NameBindingKind.Event;   // ADR-0013 D7: recorded since #124 consumes it
                 default:
                     return NameBindingKind.Type;
             }
@@ -8892,6 +8893,17 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 Error($"Event '{node.EventName}' is not defined", node.Line, node.Column);
             }
 
+            // ⭐ #124 (ADR-0013 D7): the event is RECORDED, at the one recording point, so the IR
+            // builder raises it by its declared spelling. Cleared first, so a re-analysis that no
+            // longer resolves an event keeps none.
+            node.EventReference = null;
+            if (eventSymbol?.Kind == SymbolKind.Event)
+            {
+                var eventReference = new IdentifierExpressionNode(node.Line, node.Column) { Name = node.EventName };
+                SetNodeSymbol(eventReference, eventSymbol);
+                node.EventReference = eventReference;
+            }
+
             // Analyze arguments
             foreach (var arg in node.Arguments)
             {
@@ -9674,12 +9686,25 @@ namespace BasicLang.Compiler.SemanticAnalysis
             // one write site, so a ReadOnly P is BC30526 and a WriteOnly one BC30524. (VB refuses
             // every property here, BC30039; BasicLang drives a ReadWrite one, as it did before.)
             // Asked BEFORE the loop scope exists, which is where the IR builder resolves it too.
+            //
+            // ⭐ #124 (ADR-0013 D3/D6): the same question, asked once, is also RECORDED — the loop's
+            // ControlReference is bound at the one recording point (SetNodeSymbol) to whatever the
+            // name already denotes, so the IR builder decides "drive existing storage" from this
+            // binding and reaches that storage by its DECLARED spelling. Before, it re-resolved the
+            // written spelling through its own Ordinal maps: `For total = …` over a local or
+            // parameter `Total` declared a second, shadowing local, and over a field `Total` wrote
+            // a variable named `total` (an undeclared identifier on C++, a different property on
+            // JavaScript).
+            node.ControlReference = null;
             if (string.IsNullOrEmpty(node.VariableType)
-                && ResolveBareName(node.Variable, node.Line, node.Column, report: false)?.Kind == SymbolKind.Property)
+                && ResolveBareName(node.Variable, node.Line, node.Column, report: false) is Symbol existing)
             {
-                VisitWriteTarget(
-                    new IdentifierExpressionNode(node.Line, node.Column) { Name = node.Variable },
-                    alsoRead: true);
+                var controlReference = new IdentifierExpressionNode(node.Line, node.Column) { Name = node.Variable };
+                if (existing.Kind == SymbolKind.Property)
+                    VisitWriteTarget(controlReference, alsoRead: true);   // task #178's check; records the binding too
+                else
+                    SetNodeSymbol(controlReference, existing);
+                node.ControlReference = controlReference;
             }
 
             // Task #174: `For n = …` with no `As` drives an existing `n` too, so inside a lambda it
