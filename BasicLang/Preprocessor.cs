@@ -185,7 +185,12 @@ namespace BasicLang.Compiler
         private static readonly Regex ElseIfDirective = new(@"^#ElseIf\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
         private static readonly Regex ElseDirective = new(@"^#Else\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
         private static readonly Regex EndIfDirective = new(@"^#End\s*If\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
-        private static readonly Regex IfForm = new(@"^#(?:Else)?If\s+(?<cond>.*?)\s+Then\s*(?:'.*)?$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+        // VB accepts "#If(B) Then": whitespace OR an opening parenthesis follows the keyword.
+        private static readonly Regex IfForm = new(@"^#(?:Else)?If(?:\s+|(?=\())(?<cond>.*?)\s+Then\s*(?:'.*)?$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+        // #Else and #End If take nothing but whitespace or a trailing ' comment.
+        private static readonly Regex BareElse = new(@"^#Else\s*(?:'.*)?$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+        private static readonly Regex ElseIfAsTwoWords = new(@"^#Else\s+If\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+        private static readonly Regex BareEndIf = new(@"^#End\s*If\s*(?:'.*)?$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
         /// <summary>
         /// Add a path to search for include files
@@ -246,7 +251,8 @@ namespace BasicLang.Compiler
                 }
                 // ⛔ ORDER IS LOAD-BEARING. #IfDef/#IfNDef before #If (\b stops "#If" matching "#IfDef" anyway);
                 // #ElseIf before #Else (\b: "#Else" + "If" has no word boundary, so ElseDirective cannot take it).
-                // Every directive line is commented out, never removed, so line numbers survive.
+                // Each conditional directive line is commented out, never removed, so line numbers survive.
+                // (#Define above still drops its line; Task 2 of the piece-2 plan makes it keep one too.)
                 else if (trimmedLine.StartsWith("#IfDef", StringComparison.OrdinalIgnoreCase))
                 {
                     ProcessIfDef(trimmedLine, lineNumber, false);
@@ -264,12 +270,12 @@ namespace BasicLang.Compiler
                 }
                 else if (ElseDirective.IsMatch(trimmedLine))
                 {
-                    ProcessElse(lineNumber);
+                    ProcessElse(trimmedLine, lineNumber);
                     result.AppendLine($"' {line}");
                 }
                 else if (EndIfDirective.IsMatch(trimmedLine))
                 {
-                    ProcessEndIf(lineNumber);
+                    ProcessEndIf(trimmedLine, lineNumber);
                     result.AppendLine($"' {line}");
                 }
                 else if (IfDirective.IsMatch(trimmedLine))
@@ -554,10 +560,23 @@ namespace BasicLang.Compiler
             _errors.Add(new PreprocessorError { Line = lineNumber, Message = message });
 
         /// <summary>
-        /// Process #Else directive
+        /// Process #Else directive. Only whitespace or a ' comment may follow it.
         /// </summary>
-        private void ProcessElse(int lineNumber)
+        private void ProcessElse(string line, int lineNumber)
         {
+            // ⛔ "#Else If B Then" is a slip for "#ElseIf". Taken as a plain #Else it would compile its branch
+            // UNCONDITIONALLY with a green build; taken as #ElseIf it would bless a spelling VB refuses. It is an
+            // error, and the branch it opens is never taken (no SeenElse: it was not an #Else).
+            if (ElseIfAsTwoWords.IsMatch(line))
+            {
+                Fail(lineNumber, "'#Else If' is not a directive: write #ElseIf (one word)");
+                if (_conditionalStack.Count > 0) _conditionalStack.Peek().BranchActive = false;
+                return;
+            }
+
+            if (!BareElse.IsMatch(line))
+                Fail(lineNumber, $"Unexpected text after #Else: {line}");   // reported, then read as #Else
+
             if (_conditionalStack.Count == 0)
             {
                 _errors.Add(new PreprocessorError
@@ -585,10 +604,13 @@ namespace BasicLang.Compiler
         }
 
         /// <summary>
-        /// Process #EndIf directive
+        /// Process #EndIf / #End If directive. Only whitespace or a ' comment may follow it.
         /// </summary>
-        private void ProcessEndIf(int lineNumber)
+        private void ProcessEndIf(string line, int lineNumber)
         {
+            if (!BareEndIf.IsMatch(line))
+                Fail(lineNumber, $"Unexpected text after #End If: {line}");   // reported, then read as #End If
+
             if (_conditionalStack.Count == 0)
             {
                 _errors.Add(new PreprocessorError

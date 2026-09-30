@@ -51,6 +51,9 @@ public class PreprocessorConditionalTests
     [TestCase("WEB", "Not (WEB Or DEBUG)", false)]
     [TestCase("WEB", "WEB Or DEBUG And False", true)]    // VB precedence: And binds tighter than Or
     [TestCase("WEB", "False And WEB Or WEB", true)]      // (False And WEB) Or WEB — never False And (WEB Or WEB)
+    [TestCase("WEB", "not DEBUG or DESKTOP", true)]      // operator keywords are case-insensitive too
+    [TestCase("WEB", "WEB andalso WEB orelse DEBUG", true)]
+    [TestCase("WEB", "Not Not WEB", true)]               // Not applies to a Not
     public void TheCondition_IsEvaluatedWithVbOperators(string defined, string condition, bool taken) =>
         Assert.That(Active($"#If {condition} Then\nYES\n#Else\nNO\n#End If", defined),
             Is.EqualTo(new[] { taken ? "YES" : "NO" }));
@@ -85,6 +88,41 @@ public class PreprocessorConditionalTests
         });
     }
 
+    /// <summary>
+    /// ⛔ "#Else If B Then" (two words) is a likely slip for "#ElseIf". Read as a plain #Else it would turn a
+    /// conditional branch unconditional with a green build; read as #ElseIf it would bless a spelling VB
+    /// refuses. It is an error that names #ElseIf, and the branch it opens is never taken.
+    /// </summary>
+    [Test]
+    public void ElseIf_WrittenAsTwoWords_IsAnError_NeverAPlainElse()
+    {
+        var (_, errors) = Run("#If A Then\nONE\n#Else If B Then\nTWO\n#End If");
+        Assert.Multiple(() =>
+        {
+            Assert.That(errors.Select(e => e.Message), Has.Some.Contains("write #ElseIf"));
+            Assert.That(Active("#If A Then\nONE\n#Else If B Then\nTWO\n#End If"), Is.Empty,
+                "nothing is defined: neither ONE nor TWO may be compiled");
+            Assert.That(Active("#If A Then\nONE\n#Else If B Then\nTWO\n#End If", "A"), Is.EqualTo(new[] { "ONE" }),
+                "A is defined: the malformed line still ends ONE's branch, and TWO is never compiled");
+        });
+    }
+
+    [Test]
+    public void ATrailingComment_IsAllowedAfterElseAndEndIf() =>
+        Assert.That(Run("#If A Then\nX\n#Else ' otherwise\nY\n#End If ' done\n#IfDef A\n#EndIf  'x").Errors, Is.Empty);
+
+    /// <summary>VB accepts a parenthesis straight after the keyword: <c>#If(B) Then</c>.</summary>
+    [Test]
+    public void AParenthesis_MayFollowTheKeywordDirectly()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(Active("#If(A) Then\nX\n#ElseIf(B) Then\nY\n#End If", "A"), Is.EqualTo(new[] { "X" }));
+            Assert.That(Active("#If(A) Then\nX\n#ElseIf(B) Then\nY\n#End If", "B"), Is.EqualTo(new[] { "Y" }));
+            Assert.That(Run("#If(A) Then\nX\n#ElseIf(B) Then\nY\n#End If").Errors, Is.Empty);
+        });
+    }
+
     [Test]
     public void IfAndIfDef_Mix() =>
         Assert.That(Active("#IfDef A\n#If Not B Then\nX\n#End If\n#EndIf", "A"), Is.EqualTo(new[] { "X" }));
@@ -114,6 +152,10 @@ public class PreprocessorConditionalTests
     [TestCase("#End If", "#End If without matching #If, #IfDef or #IfNDef")]
     [TestCase("#If A Then\nX", "Unclosed conditional block")]
     [TestCase("#If A Then\n#Else\n#Else\n#End If", "Duplicate #Else in conditional block")]
+    [TestCase("#If A Then\n#Else junk\n#End If", "Unexpected text after #Else")]
+    [TestCase("#IfDef A\n#Else If B Then\n#EndIf", "write #ElseIf")]
+    [TestCase("#If A Then\n#End If garbage", "Unexpected text after #End If")]
+    [TestCase("#IfDef A\n#EndIf garbage", "Unexpected text after #End If")]
     public void MalformedConditionals_AreReported(string source, string expected) =>
         Assert.That(Run(source).Errors.Select(e => e.Message), Has.Some.Contains(expected));
 
