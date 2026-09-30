@@ -970,7 +970,13 @@ namespace BasicLang.Compiler.IR
 
         /// <summary>True for TryCast - backends emit a null-on-failure cast (C# 'as')</summary>
         public bool IsTryCast { get; set; }
-        
+
+        /// <summary>
+        /// The TryCast is a <c>TypeOf x Is T</c> test (#197). JavaScript refuses one it cannot
+        /// actually test (BL7013) — its TryCast to an interface passes the value through.
+        /// </summary>
+        public bool IsTypeOfTest { get; set; }
+
         public IRCast(string resultName, IRValue value, TypeInfo sourceType, TypeInfo targetType, CastKind kind)
             : base(resultName, targetType)
         {

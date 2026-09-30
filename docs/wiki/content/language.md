@@ -211,6 +211,16 @@ On the C++ backend these become **real C++ templates**, not type-erased containe
 
 ## Pattern matching
 
+`TypeOf x Is T` tests an object's runtime type (`TypeOf x IsNot T` is the negation):
+
+```vb
+If TypeOf pet Is Dog Then Console.WriteLine("woof")
+```
+
+`T` is a class or an interface. `TypeOf` on a value type, or between two classes neither of
+which derives from the other, is refused. JavaScript tests a class target but refuses an
+interface (BL7013) — it has no interfaces to test.
+
 `Select Case` carries the full pattern surface.
 
 ```vb

@@ -6380,6 +6380,7 @@ namespace BasicLang.Compiler.IR
 
             var cast = new IRCast(tempName, value, sourceType, targetType, castKind);
             cast.IsTryCast = node.IsTryCast;
+            cast.IsTypeOfTest = node.IsTypeOfTest;
             EmitInstruction(cast);
 
             _expressionResult = cast;

@@ -76,6 +76,7 @@ wrong code.**
 | `BL7010` | A `#JsImport` that cannot be lowered |
 | `BL7011` | A declared type colliding with a provided global (e.g. `console`) |
 | `BL7012` | A non-provided exception type |
+| `BL7013` | `TypeOf x Is IShape` — JavaScript has no interfaces to test (a class target works) |
 
 ## Control flow, once more with feeling
 

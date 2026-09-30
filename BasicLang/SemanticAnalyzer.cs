@@ -12159,6 +12159,13 @@ namespace BasicLang.Compiler.SemanticAnalysis
             node.Expression.Accept(this);
             var targetType = ResolveTypeReference(node.TargetType);
 
+            if (node.IsTypeOfTest)
+            {
+                CheckTypeOfTest(node, targetType);
+                SetNodeType(node, targetType);
+                return;
+            }
+
             // TryCast maps to C# 'as', which requires a reference target type
             if (node.IsTryCast && targetType != null &&
                 (targetType.IsNumeric() || targetType.Name == "Boolean" || targetType.Name == "Char"))
@@ -12170,6 +12177,58 @@ namespace BasicLang.Compiler.SemanticAnalysis
             RejectImpossibleConversion(node, targetType);
 
             SetNodeType(node, targetType);
+        }
+
+        /// <summary>
+        /// <c>TypeOf x Is T</c> (#197), which the parser desugars to a flagged TryCast. Each
+        /// refusal names its fix:
+        /// <list type="bullet">
+        /// <item>T must be a class or an interface — a value-type T (VB allows <c>TypeOf o Is
+        /// Integer</c> on an Object) is not supported: the TryCast it lowers to has no value
+        /// form;</item>
+        /// <item>x must be a reference — a value never changes type;</item>
+        /// <item>two unrelated classes can never match (VB BC31430) — and C# refuses the
+        /// <c>as</c> outright (CS0039).</item>
+        /// </list>
+        /// </summary>
+        private void CheckTypeOfTest(CastExpressionNode node, TypeInfo targetType)
+        {
+            var sourceType = GetNodeType(node.Expression);
+            if (targetType == null || sourceType == null) return;
+
+            static bool IsClassOrInterface(TypeInfo t) =>
+                (t.Kind == TypeKind.Class || t.Kind == TypeKind.Interface)
+                && !t.IsNumeric() && t.Name != "Boolean" && t.Name != "Char" && t.Name != "String";
+
+            if (!IsClassOrInterface(targetType) || targetType.Name == "Object")
+            {
+                Error($"'TypeOf … Is {targetType.Name}' is not supported: the type must be a class " +
+                      "or an interface", node.Line, node.Column);
+                return;
+            }
+
+            var sourceIsReference = IsClassOrInterface(sourceType) || sourceType.Name == "Object"
+                || sourceType.Kind is TypeKind.TypeParameter or TypeKind.Foreign;
+            if (!sourceIsReference)
+            {
+                Error($"'TypeOf' needs a reference, but the expression has type '{sourceType.Name}', " +
+                      "which is a value and never changes type", node.Line, node.Column);
+                return;
+            }
+
+            // BC31430: two CLASSES neither of which derives from the other. Walked by declared
+            // `Inherits` name (DeclaringClassesOf), so a class declared below the test is judged
+            // on its real ancestry.
+            if (sourceType.Kind == TypeKind.Class && targetType.Kind == TypeKind.Class
+                && sourceType.Name != "Object"
+                && _typeManager.GetType(sourceType.Name) != null && _typeManager.GetType(targetType.Name) != null
+                && !DeclaringClassesOf(sourceType).Contains(targetType.Name, StringComparer.OrdinalIgnoreCase)
+                && !DeclaringClassesOf(targetType).Contains(sourceType.Name, StringComparer.OrdinalIgnoreCase)
+                && !targetType.IsAssignableFrom(sourceType) && !sourceType.IsAssignableFrom(targetType))
+            {
+                Error($"Expression of type '{sourceType.Name}' can never be of type '{targetType.Name}': " +
+                      "neither class derives from the other", node.Line, node.Column);
+            }
         }
 
         /// <summary>

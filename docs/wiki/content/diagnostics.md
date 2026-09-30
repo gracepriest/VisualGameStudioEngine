@@ -118,6 +118,7 @@ member cannot cross).
 | `BL7010` | Unlowerable `#JsImport` |
 | `BL7011` | Type name colliding with a provided global |
 | `BL7012` | Non-provided exception type |
+| `BL7013` | `TypeOf … Is` an interface (or `Extern` class) — nothing to test |
 
 ## Where diagnostics surface
 
