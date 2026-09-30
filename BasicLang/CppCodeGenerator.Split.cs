@@ -448,6 +448,11 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // blnet_runtime.hpp (single definition).
             SpliceRuntimeSource(CppNetRefRuntime.GuardedSource);
 
+            // ADR-0015: the object model, on demand over the COMBINED module — mirroring the
+            // combined mode (keep in sync).
+            if (DeclaresClass(module))
+                SpliceRuntimeSource(CppObjectModelRuntime.Source);
+
             EmitFrameworkCatalog();
         }
 

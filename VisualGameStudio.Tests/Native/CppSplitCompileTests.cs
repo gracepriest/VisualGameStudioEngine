@@ -191,10 +191,14 @@ public class CppSplitCompileTests
     {
         // A class defined in one module crosses a module boundary as std::shared_ptr (the
         // reference-semantics lowering) AND crosses into hand-written user C++, which creates
-        // the instance itself with std::make_shared and round-trips it through a BasicLang
+        // the instance itself with BasicLang::New and round-trips it through a BasicLang
         // function. The consumer C++ below matches the emitted API surface exactly:
-        //   class Player { public: std::string Name; ... };            (public field, default-constructible)
+        //   class Player { public: std::string Name; ... };            (public field)
         //   std::string Describe(std::shared_ptr<Player> p);           (global scope, D10)
+        // ADR-0015 D2: BasicLang::New<T>(args) is the ONE way to create a BasicLang class, from
+        // generated and hand-written C++ alike. A class has only the tag constructor, so
+        // std::make_shared<Player>() does not compile — that is the point: one-phase construction
+        // would leave Me unowned inside Sub New (a bad_weak_ptr at run time).
         var compiler = RequireCompiler();
         var r = Split(emitMain: false,
             ("Models.bas",
@@ -215,7 +219,7 @@ public class CppSplitCompileTests
                 "#include \"Game.g.h\"\n" +
                 "\n" +
                 "int main() {\n" +
-                "    auto p = std::make_shared<Player>();\n" +
+                "    auto p = BasicLang::New<Player>();\n" +
                 "    p->Name = \"Rex\";\n" +
                 "    std::cout << Describe(p) << std::endl;\n" +
                 "    std::cout << p->Tag() << std::endl;\n" +

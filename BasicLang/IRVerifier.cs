@@ -55,7 +55,11 @@ namespace BasicLang.Compiler.IR.Optimization
         /// <summary>For Invariant S″: the pass after which it was checked.</summary>
         public string Pass { get; init; }
 
-        public override string ToString() => Invariant == "S″"
+        public override string ToString() => Invariant == "P"
+            ? $"Invariant P violated in {Function}: {UseBlock} (ADR-0016 D5: MyBase.New is ONE IRBaseConstructorCall "
+              + "per constructor, after the closed, expression-only prologue that evaluates its arguments; "
+              + "every IR lambda is created exactly once)."
+            : Invariant == "S″"
             ? $"Invariant S″ violated in {Function}{(Pass != null ? " after " + Pass : "")}: {Writer?.GetType().Name} in "
               + $"{WriterBlock} references '{Variable}', which is per-iteration in the loop whose body is "
               + $"{UseBlock} (a loop-body Dim a lambda captures), outside that body (ADR-0014 A2: no pass "
@@ -269,15 +273,240 @@ namespace BasicLang.Compiler.IR.Optimization
         /// <summary>
         /// Run by <see cref="OptimizationPipeline.Run"/> after its last iteration. Does nothing in
         /// <see cref="IRVerifierMode.Off"/>.
+        ///
+        /// <para><paramref name="lowered"/>: the module is ClosureLowering's output (ADR-0010), whose
+        /// constructor prologue legitimately holds the closure environment's stores (ADR-0016 D3), so
+        /// Invariant P — a property of the IR the optimizer sees — is not checked on it.</para>
         /// </summary>
-        public static void VerifyAfterOptimization(IRModule module)
+        public static void VerifyAfterOptimization(IRModule module, bool lowered = false)
         {
             var mode = Mode;
             if (mode == IRVerifierMode.Off || module == null) return;
 
             var violations = CheckInvariantV(module).Concat(CheckInvariantF(module))
-                .Concat(CheckInvariantSPrime(module)).Concat(CheckInvariantB(module)).ToList();
+                .Concat(CheckInvariantSPrime(module)).Concat(CheckInvariantB(module))
+                .Concat(lowered ? Enumerable.Empty<InvariantViolation>() : CheckInvariantP(module)).ToList();
             Report(mode, violations);
+        }
+
+        /// <summary>
+        /// ⭐ Invariant P (ADR-0016 D5): the base-constructor call is an instruction, and what that
+        /// instruction relies on is checked here, on un-lowered IR.
+        /// <list type="bullet">
+        /// <item><b>(a)</b> Its operands are defined before it: every operand that is an instruction
+        /// is one of the prologue's (an <see cref="IRVariable"/> is a name, an operand-less
+        /// <see cref="IRConstant"/> a literal).</item>
+        /// <item><b>(b)</b> At most one per function, only in a class constructor, in the PROLOGUE
+        /// REGION: the blocks reachable from the entry without passing the call's own block. Nothing
+        /// outside the region branches into it, and every region block but the call's continues
+        /// into the region (no Return, no dead end), so every path runs the call exactly once.</item>
+        /// <item><b>(c)</b> The prologue — the region's instructions before the call — is expression
+        /// only: no Return, Throw, member or collection store, write to a variable, call with no
+        /// result, Try, For Each, Select, Await, Yield or inline code, and no
+        /// <c>Me</c>/<c>MyBase</c>/<c>MyClass</c> as a value (D4). Admitted as
+        /// the lowering of an argument itself: a branch terminating a region block
+        /// (<c>AndAlso</c>/<c>OrElse</c>), an assignment to a local nothing outside the prologue
+        /// mentions (their carrier), and a store into an array the prologue allocated (an array
+        /// literal). It is CLOSED: no value it defines is used after the call.</item>
+        /// <item><b>(d)</b> Every IR lambda (<see cref="IRFunction.IsLambda"/>) is referenced by
+        /// exactly one operand in some function's blocks — no orphan, which is what #170's lambda in
+        /// the old argument list was.</item>
+        /// </list>
+        /// </summary>
+        public static IReadOnlyList<InvariantViolation> CheckInvariantP(IRModule module)
+        {
+            var violations = new List<InvariantViolation>();
+            if (module?.Functions == null) return violations;
+
+            void Breach(IRFunction f, IRInstruction at, string what) => violations.Add(new InvariantViolation
+            {
+                Invariant = "P",
+                Function = f?.Name,
+                Writer = at,
+                WriterBlock = at?.ParentBlock?.Name,
+                UseBlock = what,
+            });
+
+            var constructors = new HashSet<IRFunction>(ReferenceEqualityComparer.Instance);
+            foreach (var cls in module.Classes?.Values ?? Enumerable.Empty<IRClass>())
+                foreach (var ctor in cls?.Constructors ?? new List<IRConstructor>())
+                    if (ctor?.Implementation != null) constructors.Add(ctor.Implementation);
+
+            var lambdaReferences = new Dictionary<string, int>(StringComparer.Ordinal);
+            foreach (var f in module.Functions)
+                if (f != null && f.IsLambda && f.Name != null) lambdaReferences[f.Name] = 0;
+
+            foreach (var function in module.Functions)
+            {
+                if (function?.Blocks == null || function.IsExternal) continue;
+
+                // (d) — every operand slot of every block instruction, and of the operand trees that
+                // live in no block (a When guard's).
+                if (lambdaReferences.Count > 0)
+                {
+                    var inBlocks = new Dictionary<IRInstruction, BasicBlock>(ReferenceEqualityComparer.Instance);
+                    foreach (var block in function.Blocks)
+                        foreach (var inst in block?.Instructions ?? new List<IRInstruction>())
+                            if (inst != null) inBlocks.TryAdd(inst, block);
+                    foreach (var inst in inBlocks.Keys)
+                        foreach (var v in OperandTree(inst, inBlocks))
+                            if (v is IRVariable lv && lv.Name != null && lambdaReferences.ContainsKey(lv.Name))
+                                lambdaReferences[lv.Name]++;
+                }
+
+                var calls = function.Blocks.Where(b => b?.Instructions != null)
+                    .SelectMany(b => b.Instructions.Where(i => i is IRBaseConstructorCall).Select(i => (Block: b, Call: (IRBaseConstructorCall)i)))
+                    .ToList();
+                if (calls.Count == 0) continue;
+                if (calls.Count > 1)
+                    Breach(function, calls[1].Call, "a second IRBaseConstructorCall (D5(b))");
+                if (!constructors.Contains(function))
+                    Breach(function, calls[0].Call, "an IRBaseConstructorCall in a function that is no class constructor (D5(b))");
+                CheckPrologue(function, calls[0].Block, calls[0].Call, Breach);
+            }
+
+            foreach (var (name, count) in lambdaReferences)
+                if (count != 1)
+                {
+                    var lambda = module.Functions.First(f => f.Name == name);
+                    Breach(lambda, null, count == 0
+                        ? $"the lambda '{name}' is referenced by no instruction of any block — an orphan (D5(d))"
+                        : $"the lambda '{name}' is referenced {count} times — it must be created exactly once (D5(d))");
+                }
+            return violations;
+        }
+
+        private static void CheckPrologue(IRFunction function, BasicBlock callBlock, IRBaseConstructorCall call,
+            Action<IRFunction, IRInstruction, string> breach)
+        {
+            var entry = function.EntryBlock ?? function.Blocks.FirstOrDefault();
+            var blockOf = new Dictionary<IRInstruction, BasicBlock>(ReferenceEqualityComparer.Instance);
+            foreach (var b in function.Blocks)
+                foreach (var inst in b?.Instructions ?? new List<IRInstruction>())
+                    if (inst != null) blockOf.TryAdd(inst, b);
+
+            // (b) the region: reachable from the entry without passing the call's own block.
+            var region = new HashSet<BasicBlock>(ReferenceEqualityComparer.Instance);
+            var stack = new Stack<BasicBlock>();
+            stack.Push(entry);
+            while (stack.Count > 0)
+            {
+                var b = stack.Pop();
+                if (b == null || !region.Add(b) || ReferenceEquals(b, callBlock)) continue;
+                foreach (var next in ControlFlowGraph.SuccessorsOf(b)) stack.Push(next);
+            }
+            if (!region.Contains(callBlock))
+            {
+                breach(function, call, "the IRBaseConstructorCall is not reachable from the entry block (D5(b))");
+                return;
+            }
+            foreach (var b in function.Blocks)
+            {
+                if (b == null || (region.Contains(b) && !ReferenceEquals(b, callBlock))) continue;
+                foreach (var next in ControlFlowGraph.SuccessorsOf(b))
+                    if (region.Contains(next))
+                        breach(function, b.GetTerminator(), $"block {b.Name} branches into the prologue region ({next.Name}) (D5(b))");
+            }
+            foreach (var b in region)
+                if (!ReferenceEquals(b, callBlock) && !ControlFlowGraph.SuccessorsOf(b).Any())
+                    breach(function, b.GetTerminator(), $"prologue block {b.Name} ends without reaching the IRBaseConstructorCall (D5(b))");
+
+            // The prologue: the region's instructions before the call.
+            var prologue = new List<IRInstruction>();
+            foreach (var b in function.Blocks.Where(region.Contains))
+                foreach (var inst in b.Instructions)
+                {
+                    if (inst == null) continue;
+                    if (ReferenceEquals(inst, call)) break;
+                    prologue.Add(inst);
+                }
+            var defined = new HashSet<IRInstruction>(prologue, ReferenceEqualityComparer.Instance);
+
+            // (a) def before use.
+            foreach (var arg in call.Args)
+                if (arg is not IRVariable && !(arg is IRConstant && !blockOf.ContainsKey(arg)) && !defined.Contains(arg))
+                    breach(function, call, $"the argument '{arg?.Name}' is not defined by the prologue before the call (D5(a))");
+
+            // (c) expression only.
+            var carriers = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var inst in prologue)
+            {
+                var home = blockOf.TryGetValue(inst, out var hb) ? hb : null;
+                if (inst is IRAssignment carrierWrite && carrierWrite.Target?.Name != null)
+                    carriers.Add(carrierWrite.Target.Name);
+                var admitted = inst switch
+                {
+                    IRBranch or IRConditionalBranch => !ReferenceEquals(home, callBlock) && ReferenceEquals(home?.GetTerminator(), inst),
+                    IRAssignment assignment => assignment.Target?.Name != null,
+                    IRArrayStore arrayStore => arrayStore.Array is IRInstruction arr && defined.Contains(arr),
+                    IRStore store => store.Address is IRInstruction addr && defined.Contains(addr),
+                    IRReturn or IRThrow or IRFieldStore or IRIndexerStore or IRTryCatch or IRForEach or IRSwitch
+                        or IRAwait or IRYield or IRInlineCode or IRBaseConstructorCall => false,
+                    // A value is an expression — unless it WRITES a variable (IRBuilder renames the
+                    // result of `x = …` after x) or is a call with no result (a statement).
+                    IRValue value => OptimizationPass.NamedDestination(value) == null || value is IRVariable or IRConstant
+                                     ? !IsStatementCall(value)
+                                     : false,
+                    _ => true,
+                };
+                if (!admitted)
+                    breach(function, inst, $"the prologue holds a {inst.GetType().Name}, which is not part of evaluating an argument (D5(c))");
+                foreach (var v in OperandTree(inst, blockOf))
+                    if (v is IRVariable me && IsSelfName(me.Name))
+                        breach(function, inst, $"the prologue uses '{me.Name}' — the object under construction (D5(c), D4)");
+            }
+            foreach (var v in OperandTree(call, blockOf))
+                if (v is IRVariable me && IsSelfName(me.Name))
+                    breach(function, call, $"MyBase.New's arguments use '{me.Name}' — the object under construction (D5(c), D4)");
+
+            // (c) closed: nothing after the call uses a prologue value or a carrier.
+            foreach (var b in function.Blocks)
+            {
+                var afterCall = !ReferenceEquals(b, callBlock);
+                foreach (var inst in b.Instructions)
+                {
+                    if (inst == null) continue;
+                    if (ReferenceEquals(inst, call)) { afterCall = true; continue; }
+                    if (!afterCall || (region.Contains(b) && !ReferenceEquals(b, callBlock))) continue;
+                    foreach (var v in OperandTree(inst, blockOf))
+                    {
+                        if (v is IRInstruction used && defined.Contains(used))
+                            breach(function, inst, $"'{v.Name}', defined by the prologue, is used after the call (D5(c))");
+                        else if (v is IRVariable carrier && carrier.Name != null && carriers.Contains(carrier.Name))
+                            breach(function, inst, $"'{carrier.Name}', assigned by the prologue, is used after the call (D5(c))");
+                    }
+                    if (inst is IRAssignment later && later.Target?.Name != null && carriers.Contains(later.Target.Name))
+                        breach(function, inst, $"'{later.Target.Name}', assigned by the prologue, is assigned again after the call (D5(c))");
+                }
+            }
+        }
+
+        private static bool IsStatementCall(IRValue value) =>
+            value is IRCall or IRInstanceMethodCall or IRBaseMethodCall
+            && (value.Type == null || value.Type.Name.Equals("Void", StringComparison.OrdinalIgnoreCase));
+
+        private static bool IsSelfName(string name) =>
+            name != null && (name.Equals("Me", StringComparison.OrdinalIgnoreCase)
+                             || name.Equals("MyBase", StringComparison.OrdinalIgnoreCase)
+                             || name.Equals("MyClass", StringComparison.OrdinalIgnoreCase));
+
+        /// <summary>Every value <paramref name="inst"/> uses: its operand slots
+        /// (<see cref="OptimizationPass.UsesOf"/>), descending only into an operand tree that lives in
+        /// no block (a When guard's), whose uses are its consumer's. A block instruction reached as an
+        /// operand is a use of that value, checked where it is defined.</summary>
+        private static IEnumerable<IRValue> OperandTree(IRInstruction inst, Dictionary<IRInstruction, BasicBlock> blockOf)
+        {
+            var seen = new HashSet<IRValue>(ReferenceEqualityComparer.Instance);
+            var stack = new Stack<IRValue>();
+            foreach (var used in OptimizationPass.UsesOf(inst)) stack.Push(used);
+            while (stack.Count > 0)
+            {
+                var v = stack.Pop();
+                if (v == null || !seen.Add(v)) continue;
+                yield return v;
+                if (v is IRVariable || (blockOf != null && blockOf.ContainsKey(v))) continue;
+                foreach (var used in OptimizationPass.UsesOf(v)) stack.Push(used);
+            }
         }
 
         /// <summary>

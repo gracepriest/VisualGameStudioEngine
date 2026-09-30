@@ -234,12 +234,28 @@ public static class CppCompile
     /// contract is that the source is REFUSED (a static_assert, say). Returns whether the compiler
     /// exited 0 and its combined output.
     /// </summary>
-    public static (bool Compiled, string Output) TryCompile(string cppSource, (string exe, string argsTemplate) compiler)
+    public static (bool Compiled, string Output) TryCompile(string cppSource, (string exe, string argsTemplate) compiler) =>
+        TryCompile(cppSource, compiler, extraFiles: null);
+
+    /// <summary>
+    /// <see cref="TryCompile(string,ValueTuple{string,string})"/>, but first writes each
+    /// (fileName -> content) in <paramref name="extraFiles"/> into the temp compile dir — for a
+    /// generated program whose refusal (ADR-0015 D2a's <c>static_assert</c>, say) depends on a
+    /// <c>#CppInclude</c>d sibling header the source quote-includes.
+    /// </summary>
+    public static (bool Compiled, string Output) TryCompile(
+        string cppSource,
+        (string exe, string argsTemplate) compiler,
+        IEnumerable<KeyValuePair<string, string>>? extraFiles)
     {
         var tmpDir = Path.Combine(Path.GetTempPath(), "blcpp_" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(tmpDir);
         try
         {
+            if (extraFiles != null)
+                foreach (var kv in extraFiles)
+                    File.WriteAllText(Path.Combine(tmpDir, kv.Key), kv.Value);
+
             var srcPath = Path.Combine(tmpDir, "prog.cpp");
             var exePath = Path.Combine(tmpDir, "prog" + (OperatingSystem.IsWindows() ? ".exe" : ""));
             File.WriteAllText(srcPath, cppSource);

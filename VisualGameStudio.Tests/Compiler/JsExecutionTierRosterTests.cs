@@ -49,6 +49,14 @@ public class JsExecutionTierRosterTests
         typeof(JavaScriptExceptionTests),
         typeof(JavaScriptCatchDiscriminationTests),
         typeof(BaseConstructorCallExecutionTests),
+        // Task #170 / ADR-0016 — B1-B5, W1/W2, C1 and the S/t170/edge probes through the standard
+        // pipeline, the aggressive pipeline and CompileProjectFiles; the JavaScript legs run under
+        // Node (JavaScriptExecutionTests.RunJs / FourBackends.RunAggressiveJs / RunNodeScript).
+        // Named "...ExecutionTests", so the discovery guard below WOULD catch it on its own.
+        typeof(BaseConstructorCallLoweringExecutionTests),
+        // ADR-0016 D3 (amended) — the C++ refusal, #140's regression fence and the FE1/CR1 witnesses. Its
+        // FE1/CR1 rows run the other three backends, JavaScript under Node (RunJs), so it is in the tier.
+        typeof(BaseConstructorCallCppRefusalTests),
         typeof(JavaScriptLambdaTests),
         typeof(JavaScriptMethodLambdaTests),
         typeof(JavaScriptModuleVariableTests),
@@ -456,7 +464,7 @@ public class JsExecutionTierRosterTests
 
     [Test]
     public void RosterIsPinned()
-        => Assert.That(ExecutionTier, Has.Length.EqualTo(91), // + MsilValueToStringExecutionTests (task #183), InterfaceMethodTypingExecutionTests, IsIsNotOperatorExecutionTests (task #185), MeReceiverTypingExecutionTests (task #176), UserDelegateConversionExecutionTests (task #187), DelegateMemberInvocationExecutionTests (task #188), NothingStringTextExecutionTests (task #189), MsilObjectBoxingExecutionTests (task #177), NotPrecedenceExecutionTests (#195), PropertyAccessExecutionTests (task #178), NameBindingExecutionTests (task #169/#199), PerIterationLoopBodyDimExecutionTests + PerIterationLoopBodyDimOptimizerExecutionTests (task #172, ADR-0014), LambdaBoundaryDiagnosticsExecutionTests (task #174); + WhenGuardCallRunTests, TypeOfExecutionTests (#197)
+        => Assert.That(ExecutionTier, Has.Length.EqualTo(93), // + BaseConstructorCallLoweringExecutionTests + BaseConstructorCallCppRefusalTests (task #170, ADR-0016), MsilValueToStringExecutionTests (task #183), InterfaceMethodTypingExecutionTests, IsIsNotOperatorExecutionTests (task #185), MeReceiverTypingExecutionTests (task #176), UserDelegateConversionExecutionTests (task #187), DelegateMemberInvocationExecutionTests (task #188), NothingStringTextExecutionTests (task #189), MsilObjectBoxingExecutionTests (task #177), NotPrecedenceExecutionTests (#195), PropertyAccessExecutionTests (task #178), NameBindingExecutionTests (task #169/#199), PerIterationLoopBodyDimExecutionTests + PerIterationLoopBodyDimOptimizerExecutionTests (task #172, ADR-0014), LambdaBoundaryDiagnosticsExecutionTests (task #174); + WhenGuardCallRunTests, TypeOfExecutionTests (#197)
             "The execution-tier roster changed. That is fine — update the number — but it must " +
             "be a deliberate edit, not a silent shrink.");
 

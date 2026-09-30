@@ -344,6 +344,12 @@ End Module";
     // Task 3: reference semantics - classes are std::shared_ptr, structures stay values
     // ========================================================================
 
+    /// <summary>
+    /// ADR-0015 (task #200): a user class is created by <c>BasicLang::New&lt;T&gt;</c> (the
+    /// two-phase constructor), never a bare <c>std::make_shared&lt;T&gt;</c>, since a class no
+    /// longer has a default constructor — only the tag constructor. MOVED from asserting
+    /// <c>std::make_shared&lt;Person&gt;(</c>, which #200 made false.
+    /// </summary>
     [Test]
     public void Cpp_ClassInstance_UsesSharedPtr()
     {
@@ -361,7 +367,8 @@ End Sub";
 
         Assert.That(errors, Is.Empty, string.Join("; ", errors));
         Assert.That(output, Does.Contain("std::shared_ptr<Person>"));
-        Assert.That(output, Does.Contain("std::make_shared<Person>("));
+        Assert.That(output, Does.Contain("BasicLang::New<Person>("));
+        Assert.That(output, Does.Not.Contain("std::make_shared<Person>("));
         Assert.That(output, Does.Contain("->Name"));
     }
 
