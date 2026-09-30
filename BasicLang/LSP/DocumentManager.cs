@@ -434,6 +434,9 @@ namespace BasicLang.Compiler.LSP
         /// they are dimmed (as Visual Studio does).</summary>
         public IReadOnlyList<int> InactiveLines { get; private set; } = Array.Empty<int>();
 
+        /// <summary>Is 0-based LSP <paramref name="line"/> in an inactive #If branch?</summary>
+        public bool IsInactiveLine(int line) => InactiveLines != null && InactiveLines.Contains(line + 1);
+
         /// <summary>What the preprocessor refused (a malformed or unbalanced directive) — the build fails on these,
         /// so the editor reports them beside the analyzer's diagnostics.</summary>
         public IReadOnlyList<Diagnostic> PreprocessorDiagnostics { get; private set; } = Array.Empty<Diagnostic>();

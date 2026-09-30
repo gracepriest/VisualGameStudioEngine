@@ -80,6 +80,11 @@ namespace BasicLang.Compiler.LSP
             var completions = new List<CompletionItem>();
             TriggerContext triggerContext = null;
 
+            // A line in an inactive #If branch is code the build never sees (spec §4.12): offer nothing there, as
+            // Visual Studio does, rather than members for text that is not compiled.
+            if (state != null && state.IsInactiveLine(line))
+                return completions;
+
             // Check context - only if we have a document
             if (state != null)
             {

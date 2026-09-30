@@ -182,12 +182,14 @@ public class LspConditionalCompilationTests
         });
     }
 
-    /// <summary>Inactive branches are dimmed as Visual Studio does: each inactive line is ONE comment token.</summary>
-    [Test]
-    public void AnInactiveBranch_IsReportedAsCommentTokens()
+    /// <summary>Inactive branches are dimmed as Visual Studio does: each inactive line is ONE comment token, as long
+    /// as the line WITHOUT its carriage return (a CRLF file's token must not run onto the line break).</summary>
+    [TestCase("\n")]
+    [TestCase("\r\n")]
+    public void AnInactiveBranch_IsReportedAsCommentTokens(string newline)
     {
         var manager = new DocumentManager();
-        var state = Open("JavaScript", Source, manager);
+        var state = Open("JavaScript", Source.Replace("\n", newline), manager);
         var handler = new SemanticTokensHandler(manager);
 
         var result = handler.Handle(new SemanticTokensParams { TextDocument = new TextDocumentIdentifier(state.Uri) },
@@ -204,6 +206,39 @@ public class LspConditionalCompilationTests
             Assert.That(tokens.Where(t => t.Type == comment).Select(t => t.Line), Is.EqualTo(new[] { 5 }),
                 "no other line is dimmed — the active branch and the directives are not");
             Assert.That(tokens.Any(t => t.Line == 3), Is.True, "the active branch is still highlighted");
+        });
+    }
+
+    /// <summary>Completion on a line of an inactive branch offers NOTHING — the build never sees that code —
+    /// while the same text on a live line still completes (through the real CompletionHandler).</summary>
+    [Test]
+    public void CompletionOnAnInactiveLine_OffersNothing()
+    {
+        const string source =
+            "Module M\n" +                              // 0-based 0
+            "Sub Main()\n" +                            // 1
+            "#If WEB Then\n" +                          // 2
+            "    Console.WriteLine(\"live\")\n" +       // 3
+            "#Else\n" +                                 // 4
+            "    Console.WriteLine(\"dead\")\n" +       // 5
+            "#End If\n" +                               // 6
+            "End Sub\n" +
+            "End Module\n";
+        var manager = new DocumentManager();
+        var state = Open("JavaScript", source, manager);
+        var handler = new CompletionHandler(manager, new CompletionService());
+        int AfterTheDot(int line) =>
+            handler.Handle(new CompletionParams
+                {
+                    TextDocument = new TextDocumentIdentifier(state.Uri),
+                    Position = new Position(line, "    Console.".Length)
+                }, CancellationToken.None)
+                .GetAwaiter().GetResult().Items.Count();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(AfterTheDot(3), Is.GreaterThan(0), "the live line completes Console's members");
+            Assert.That(AfterTheDot(5), Is.EqualTo(0), "the dead line offers nothing");
         });
     }
 
