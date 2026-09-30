@@ -91,7 +91,7 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
         _onChanged = onChanged;
         Name = definition.Name;
         _type = definition.Type;
-        _choices = definition.AllowedValues;
+        _choices = definition.Choices;
         _definition = definition;
         _target = target;
         FrozenReason = frozenReason;
@@ -143,7 +143,7 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
         _onChanged = onChanged;
         Name = definition.Name;
         _type = definition.Type;
-        _choices = definition.AllowedValues;
+        _choices = definition.Choices;
         _definition = definition;
         _target = target;
 
@@ -260,11 +260,17 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
 
     public bool IsNumericUpDown => Typed && _type == FormPropertyType.Int;
 
-    public bool IsComboBox => Typed && _type == FormPropertyType.Enum;
+    /// <summary>An Enum's members, or a Cursor row's <c>Cursors</c> members (<see cref="FormPropertyDef.Choices"/>).</summary>
+    public bool IsComboBox => Typed && _type is FormPropertyType.Enum or FormPropertyType.Cursor;
 
-    /// <summary>Size is text for now (<c>800, 450</c>); its composite editor arrives in slice 3.</summary>
+    /// <summary>
+    /// Free text: a String, and the typed-text rows — a Color, a Size (<c>800, 450</c>), a Font (FontConverter text)
+    /// and a Padding (<c>4</c> or <c>4, 2, 4, 2</c>). The composite rows (slice 3 Task 6) and the colour and font editors
+    /// (slice 4) sit beside this text, which stays the parent's own editor.
+    /// </summary>
     public bool IsTextBox => Typed &&
-        _type is FormPropertyType.String or FormPropertyType.Color or FormPropertyType.Size;
+        _type is FormPropertyType.String or FormPropertyType.Color or FormPropertyType.Size
+            or FormPropertyType.Font or FormPropertyType.Padding;
 
     /// <summary>The four-edge Anchor box (Task 26).</summary>
     public bool IsAnchorPicker => IsEditable && _editor == FormRowEditor.AnchorPicker;

@@ -97,8 +97,10 @@ chosen over Paint).
 - **AcceptButton/CancelButton are a new `Reference` type** (plan: "decide the shape"): the document stores a control Id; the
   row states which kinds it may name (`FormPropertyDef.ReferenceKinds`, Button here — the catalog's only
   `IButtonControl`); `Accepts` checks the Id is a legal identifier (document-free); the region writer, which HAS the
-  document, warns **BL8033** `ReferenceNotFound` and emits nothing when the Id names no control of those kinds (renamed,
-  deleted, or a Label). Emitted after the add run (B4). WinForms-only.
+  document, warns **BL8034** `ReferenceNotFound` and emits nothing when the Id names no control of those kinds (renamed,
+  deleted, or a Label). Emitted after the add run (B4). WinForms-only. ⚠ Renumbered from BL8033 (coordination note
+  2026-09-29): `fix/unknown-dock-diagnostic`, landing first, claims BL8033 for an unknown Dock value — re-check the next
+  free number in `DesignDiagnostic.cs` when this merges.
 - **CssClass / Style (D2 web-only extras).** `Style` is `HtmlAttribute: "style"` (the emitter's `Attr` escaping already
   handles quotes; an inline style is exactly "raw CSS" and cannot break out of the attribute). `CssClass` is appended to
   the element's own `class="vgs-Kind …"` — the emitter reads it exactly as it reads `GroupName` (a second `class=` would be
@@ -185,15 +187,15 @@ attribute → Properties + target-aware Degraded into DegradedRoot), `FormDocume
 remove-dropped for Properties-stored rows; Create in catalog order), `FormRetarget.cs` (Properties-stored rows cross when
 they apply on the destination, else `RetargetPropertyLost 'form.X'`; a value the destination refuses crosses preserved
 and named), `FormFile.cs` (TierOfRoot already generic — verify), `RegionWriter.cs` (reference rows after the add run;
-BL8033), `FormAssetEmitter.cs` (`AppendRootCss` on both stylesheets — B3), `FormControlCatalog.cs` (`Double`, `Reference`
+BL8034), `FormAssetEmitter.cs` (`AppendRootCss` on both stylesheets — B3), `FormControlCatalog.cs` (`Double`, `Reference`
 types; the 18 FormRoot rows with WinForms' metadata; web: BackColor/ForeColor/Font with `WebDefault: ""`).
 Tests: `FormRootTests` (round trip; Degraded FormBorderStyle frozen + preserved + BL8009 at emission — the unreachable
 branch now reached; reset removes; Create order), `FormRootRetargetTests` (sweep's RetargetPropertyLost arm now
 non-vacuous; the degraded-on-both-targets branch — backlog (4)), root csc sweep (automatic per row), `FormCssTests`/
 `FormAssetEmitterTests` (`body { background-color… }` on Grid and Canvas pages; a docked strip inherits it — asserted as
-the rule being on body, which every descendant inherits), `FormRegionWriterTests` (AcceptButton after the adds; BL8033 for
+the rule being on body, which every descendant inherits), `FormRegionWriterTests` (AcceptButton after the adds; BL8034 for
 a missing id and for a Label id), `FormPropertyGridDisplayTests.TheFormsRows_ComeFromFormRoot` (expected set grows).
-Mutations: default arm → throw; reader Degraded check; writer remove-dropped; reference emitted before controls; BL8033
+Mutations: default arm → throw; reader Degraded check; writer remove-dropped; reference emitted before controls; BL8034
 kind check; body rule not emitted on Canvas.
 
 ### Task 5 — The controls' D1 batches + CssClass/Style + the D2 test (plan 3.4)

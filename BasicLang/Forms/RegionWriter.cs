@@ -1216,7 +1216,8 @@ public static class RegionWriter
             // before calling this. Quoting it (the default arm) would emit `X.ClientSize = "800x450"`,
             // CS0029 at csc with BasicLang silent; verbatim would splice unparsed text — `5\r\n` — into
             // source. Both hide a broken invariant as a broken build, so this names the invariant.
-            FormPropertyType.Int or FormPropertyType.Size => throw new InvalidOperationException(
+            FormPropertyType.Int or FormPropertyType.Size or FormPropertyType.Font or FormPropertyType.Padding
+                or FormPropertyType.Cursor => throw new InvalidOperationException(
                 $"'{property.Name}' = '{value}' is not a parsable {property.Type} and reached the region " +
                 "writer; a Degraded value must be skipped before Literal is called."),
             _ => FormPropertyDef.StringLiteral(value)

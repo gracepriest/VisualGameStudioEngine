@@ -605,9 +605,10 @@ public static class FormAssetEmitter
                 continue;
             }
 
-            if (FormCss.Declaration(property, raw) is { } declaration)
+            // ⛔ Every declaration the row produces — a Font is five (slice 3 pre-flight B2).
+            foreach (var (css, value) in FormCss.Declarations(property, raw))
             {
-                declarations.Add($"{declaration.Property}: {declaration.Value}");
+                declarations.Add($"{css}: {value}");
             }
         }
 

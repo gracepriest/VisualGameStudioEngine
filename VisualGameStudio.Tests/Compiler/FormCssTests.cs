@@ -190,14 +190,51 @@ public class FormCssTests
             FormCssConverter.ContentAlignmentHorizontal => (FormControlCatalog.Find("Label")!.Property("TextAlign")!, "MiddleLeft"),
             FormCssConverter.VisibleToDisplay => (new FormPropertyDef("X", FormPropertyType.Bool, "true",
                 CssProperty: "display", CssConverter: converter), "false"),
+            FormCssConverter.Font => (new FormPropertyDef("X", FormPropertyType.Font, CssProperty: "font",
+                CssConverter: converter), "Segoe UI, 9pt"),
+            FormCssConverter.Padding => (new FormPropertyDef("X", FormPropertyType.Padding, CssProperty: "padding",
+                CssConverter: converter), "4"),
+            FormCssConverter.Cursor => (new FormPropertyDef("X", FormPropertyType.Cursor, CssProperty: "cursor",
+                CssConverter: converter), "Hand"),
             _ => throw new ArgumentOutOfRangeException(nameof(converter), converter, "add a sample for the new converter")
         };
 
         Assert.Multiple(() =>
         {
             Assert.That(def.CssConverter, Is.EqualTo(converter), "the sample must exercise the converter it names");
-            Assert.That(FormCss.Declaration(def, value), Is.Not.Null);
+            Assert.That(FormCss.Declarations(def, value), Is.Not.Empty);
         });
+    }
+
+    /// <summary>
+    /// Slice 3 (plan re-check table): the Font converter writes FIVE declarations; none may be emitted twice, and
+    /// none may collide with another row's (ForeColor writes <c>color</c>; Font never does).
+    /// </summary>
+    [Test]
+    public void NoDeclarationIsEmittedTwice_WithAFontBesideTheColours()
+    {
+        var rule = RuleFor(PageWith("Label",
+            ("Font", "Segoe UI, 9pt, style=Bold, Italic, Underline"), ("ForeColor", "Red"), ("TextAlign", "MiddleLeft")));
+
+        Assert.Multiple(() =>
+        {
+            foreach (var property in new[] { "font-family", "font-size", "font-weight", "font-style", "text-decoration", "color", "text-align" })
+            {
+                Assert.That(rule.Split(property + ":").Length - 1, Is.EqualTo(1), $"'{property}' in: {rule}");
+            }
+        });
+    }
+
+    /// <summary>
+    /// ⛔ The single-declaration wrapper refuses a converter that yields several — a caller that asked for "the"
+    /// declaration of a Font would silently drop four of them.
+    /// </summary>
+    [Test]
+    public void TheSingleDeclarationWrapper_RefusesAMultiDeclarationValue()
+    {
+        var font = new FormPropertyDef("X", FormPropertyType.Font, CssProperty: "font", CssConverter: FormCssConverter.Font);
+
+        Assert.Throws<InvalidOperationException>(() => FormCss.Declaration(font, "Segoe UI, 9pt"));
     }
 
     private static IEnumerable<FormCssConverter> EveryConverter() => Enum.GetValues<FormCssConverter>();
@@ -208,7 +245,7 @@ public class FormCssTests
         var def = new FormPropertyDef("X", FormPropertyType.Int, CssProperty: "z-index",
             CssConverter: (FormCssConverter)999);
 
-        Assert.Throws<ArgumentOutOfRangeException>(() => FormCss.Declaration(def, "5"));
+        Assert.Throws<ArgumentOutOfRangeException>(() => FormCss.Declarations(def, "5"));
     }
 
     /// <summary>

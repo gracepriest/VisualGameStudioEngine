@@ -1733,7 +1733,7 @@ public class FormRetargetTests
     /// equivalent, and a CSS colour name System.Drawing.Color lacks. The sweep picks, per row, whichever
     /// one the source accepts and the destination refuses, so a new refusal kind needs only a new entry.
     /// </summary>
-    private static readonly string[] TargetRefusedSamples = { "ActiveCaption", "RebeccaPurple" };
+    private static readonly string[] TargetRefusedSamples = { "ActiveCaption", "RebeccaPurple", "UpArrow" };
 
     /// <summary>
     /// ⛔ Catalog-driven companion of the sweep above: every property that APPLIES on both targets but
@@ -1791,6 +1791,9 @@ public class FormRetargetTests
         FormPropertyType.Color => "#ff0000",
         FormPropertyType.Enum => property.AllowedValues![0],
         FormPropertyType.Size => "75, 23",
+        FormPropertyType.Font => "Arial, 10pt",
+        FormPropertyType.Padding => "4",
+        FormPropertyType.Cursor => "Hand",
         _ => "x"
     };
 }

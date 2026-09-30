@@ -18,7 +18,19 @@ public enum FormPropertyType
     /// <c>75, 23</c> — WinForms' <c>SizeConverter</c> text. Emitted as ONE <c>New Size(w, h)</c>
     /// statement: the fan-in rule, because <c>X.Width = …</c> through a struct return is CS1612.
     /// </summary>
-    Size
+    Size,
+
+    /// <summary>
+    /// <c>Segoe UI, 9pt, style=Bold, Italic</c> — WinForms' <c>FontConverter</c> text (<see cref="FormFontValue"/>).
+    /// ONE <c>New Font(…)</c> statement; five CSS declarations at most.
+    /// </summary>
+    Font,
+
+    /// <summary><c>4</c> or <c>4, 2, 4, 2</c> (Left, Top, Right, Bottom — <see cref="FormPaddingValue"/>). ONE <c>New Padding(…)</c>.</summary>
+    Padding,
+
+    /// <summary>A <c>System.Windows.Forms.Cursors</c> member (<see cref="FormCursors"/>). The web's cursor through ONE table.</summary>
+    Cursor
 }
 
 /// <summary>
@@ -55,7 +67,16 @@ public enum FormCssConverter
     ContentAlignmentHorizontal,
 
     /// <summary><c>Visible=false</c> → <c>display: none</c>; <c>true</c> → no declaration.</summary>
-    VisibleToDisplay
+    VisibleToDisplay,
+
+    /// <summary>A Font → <c>font-family</c>, <c>font-size</c> and, only when set, <c>font-weight</c>/<c>font-style</c>/<c>text-decoration</c>.</summary>
+    Font,
+
+    /// <summary>A Padding → <c>padding</c>, in CSS order (top right bottom left).</summary>
+    Padding,
+
+    /// <summary>A Cursors member → its CSS <c>cursor</c> keyword (<see cref="FormCursors.CssFor"/>).</summary>
+    Cursor
 }
 
 /// <summary>What the property grid does with a value an editor pushed — see <see cref="FormPropertyDef.Judge"/>.</summary>
@@ -265,8 +286,22 @@ public sealed record FormPropertyDef(
             return colour;
         }
 
-        return value;
+        // The slice-3 types: each in its converter's own shape, re-emitted from what was parsed (FontConverter's
+        // "Family, 9pt, style=Bold", PaddingConverter's "4" or "4, 2, 4, 2", a Cursors member's spelling).
+        return Type switch
+        {
+            FormPropertyType.Font when FormFontValue.TryParse(value, out var font) => font.Canonical,
+            FormPropertyType.Padding when FormPaddingValue.TryParse(value, out var padding) => padding.Canonical,
+            FormPropertyType.Cursor when FormCursors.TryCanonical(value, out var cursor) => cursor,
+            _ => value
+        };
     }
+
+    /// <summary>
+    /// What an editor OFFERS for this row: an Enum's <see cref="AllowedValues"/>, a Cursor row's
+    /// <see cref="FormCursors.Names"/>, null for a free-text row. ⛔ The grid asks this, never the type itself.
+    /// </summary>
+    public IReadOnlyList<string>? Choices => Type == FormPropertyType.Cursor ? FormCursors.Names : AllowedValues;
 
     /// <summary>
     /// Equality in this row's own terms: <c>True</c> and <c>true</c> are one Bool; <c>Left</c> and
@@ -280,7 +315,9 @@ public sealed record FormPropertyDef(
     /// </summary>
     public bool SameValue(string a, string b) =>
         string.Equals(Canonical(a), Canonical(b),
-            Type is FormPropertyType.Enum or FormPropertyType.Color
+            // ⚠ A Font's family is case-insensitive on Windows ("segoe ui" IS Segoe UI), and a Cursor canonicalises
+            // to its member — both compare like an Enum.
+            Type is FormPropertyType.Enum or FormPropertyType.Color or FormPropertyType.Font or FormPropertyType.Cursor
                 ? StringComparison.OrdinalIgnoreCase
                 : StringComparison.Ordinal);
 
@@ -374,6 +411,9 @@ public sealed record FormPropertyDef(
             FormPropertyType.Color => ColorLiteral(value),
             FormPropertyType.Size => TryParseSize(value, out var w, out var h) ? SizeLiteral(w, h) : null,
             FormPropertyType.Int => TryParseInt(value, out var n) ? n.ToString(CultureInfo.InvariantCulture) : null,
+            FormPropertyType.Font => FormFontValue.TryParse(value, out var font) ? font.WinFormsLiteral : null,
+            FormPropertyType.Padding => FormPaddingValue.TryParse(value, out var padding) ? padding.WinFormsLiteral : null,
+            FormPropertyType.Cursor => FormCursors.TryCanonical(value, out var cursor) ? "Cursors." + cursor : null,
             _ => null
         };
     }
@@ -614,6 +654,9 @@ public sealed record FormPropertyDef(
                                      (AllowedValues.Any(v => string.Equals(v, value, StringComparison.OrdinalIgnoreCase)) ||
                                       Aliases?.ContainsKey(value) == true),
             FormPropertyType.Size => TryParseSize(value, out _, out _),
+            FormPropertyType.Font => FormFontValue.TryParse(value, out _),
+            FormPropertyType.Padding => FormPaddingValue.TryParse(value, out _),
+            FormPropertyType.Cursor => FormCursors.TryCanonical(value, out _),
             _ => false
         };
     }
@@ -670,8 +713,28 @@ public sealed record FormPropertyDef(
                    "member, and it is not a system colour), so a WinForms form cannot use it.";
         }
 
+        if (IsCursorRefusedOn(value, target))
+        {
+            _ = FormCursors.TryCanonical(value, out var cursor);
+            return $"'{value}' is the WinForms cursor Cursors.{cursor}, which has no CSS equivalent, so a web form " +
+                   "cannot use it.";
+        }
+
+        if (Type == FormPropertyType.Cursor)
+        {
+            return $"'{value}' is not a member of System.Windows.Forms.Cursors (expected one of: " +
+                   $"{string.Join(", ", FormCursors.Names)}).";
+        }
+
         return $"'{value}' is not a valid {Type}" +
                (AllowedValues is { Count: > 0 } ? $" (expected one of: {string.Join(", ", AllowedValues)})" : "") +
+               Type switch
+               {
+                   FormPropertyType.Font => " (expected WinForms' font text: a family of letters, digits, spaces or " +
+                                            "hyphens, a size in points, optional styles — e.g. 'Segoe UI, 9pt, style=Bold')",
+                   FormPropertyType.Padding => " (expected one non-negative whole number, or four: Left, Top, Right, Bottom)",
+                   _ => ""
+               } +
                ".";
     }
 
@@ -682,7 +745,16 @@ public sealed record FormPropertyDef(
     /// member named "Menu" is that enum's business.
     /// </summary>
     private bool IsRefusedOn(string value, FormTarget target) =>
-        IsSystemColourRefusedOn(value, target) || IsUnknownColourNameRefusedOn(value, target);
+        IsSystemColourRefusedOn(value, target) || IsUnknownColourNameRefusedOn(value, target) ||
+        IsCursorRefusedOn(value, target);
+
+    /// <summary>
+    /// A Cursors member with no CSS equivalent (<see cref="FormCursors.CssFor"/> null — the up arrow, the pan cursors) on
+    /// a web form: WinForms-only as a VALUE, the system-colour rule.
+    /// </summary>
+    private bool IsCursorRefusedOn(string value, FormTarget target) =>
+        Type == FormPropertyType.Cursor && target == FormTarget.Web &&
+        FormCursors.TryCanonical(value, out _) && FormCursors.CssFor(value) == null;
 
     private bool IsSystemColourRefusedOn(string value, FormTarget target) =>
         Type == FormPropertyType.Color && target == FormTarget.Web &&
@@ -1324,6 +1396,35 @@ public static class FormControlCatalog
     private static readonly FormPropertyDef LinkLabelTextAlign =
         TextAlignDefaulting("TopLeft", "Determines the position of the text within the label.");
 
+    // ==================================================================
+    // Slice 3 — the shared Font / Cursor / Padding rows (spec §2.2, D1). WinForms' own metadata (the snapshot);
+    // the web through the named converters in FormCss.
+    //
+    // ⛔ Font and Cursor are AMBIENT on every kind that has them (no static default — spec §2.7), except where the
+    // snapshot says otherwise (TextBox's Cursor resets to IBeam). WinForms hides Font on PictureBox, TrackBar,
+    // ProgressBar and DataGridView: those kinds pass NULL for it (ControlRows), exactly as a hidden colour is not
+    // offered (owner decision O2) — the parity test names a row the snapshot lacks.
+    // ==================================================================
+    private static readonly FormPropertyDef FontRow = new("Font", FormPropertyType.Font,
+        Category: FormPropertyCategory.Appearance, Description: "The font used to display text in the control.",
+        CssProperty: "font", CssConverter: FormCssConverter.Font);
+
+    private static readonly FormPropertyDef CursorRow = new("Cursor", FormPropertyType.Cursor,
+        Category: FormPropertyCategory.Appearance,
+        Description: "The cursor that appears when the pointer moves over the control.",
+        CssProperty: "cursor", CssConverter: FormCssConverter.Cursor);
+
+    // ⚠ Not ambient on a TextBox (the snapshot's 'reset'); on the page an <input> already shows the text cursor, so the
+    // browser — not WinForms — decides what an absent value looks like (WebDefault empty).
+    private static readonly FormPropertyDef IBeamCursorRow = CursorRow with { Default = "IBeam", WebDefault = "" };
+
+    // ⚠ Content controls only (slice 3 pre-flight §3): a CONTAINER's Padding moves its docked children in WinForms,
+    // and FormDockLayout does not model it — so no container carries this row until it does. WebDefault empty: the
+    // browser's own padding (a <button>'s is not 0) is what an absent value means on the page.
+    private static readonly FormPropertyDef PaddingRow = new("Padding", FormPropertyType.Padding, "0",
+        Category: FormPropertyCategory.Layout, Description: "Specifies the interior spacing of a control.",
+        CssProperty: "padding", CssConverter: FormCssConverter.Padding, WebDefault: "");
+
     private static IReadOnlyList<FormPropertyDef> Common(params FormPropertyDef[] own) =>
         CommonColoured(ForeColor, BackColor, own);
 
@@ -1334,7 +1435,17 @@ public static class FormControlCatalog
     /// </summary>
     private static IReadOnlyList<FormPropertyDef> CommonColoured(
         FormPropertyDef? foreColor, FormPropertyDef? backColor, params FormPropertyDef[] own) =>
-        own.Concat(new[] { Enabled, Visible, foreColor, backColor }.OfType<FormPropertyDef>()).ToList();
+        ControlRows(foreColor, backColor, FontRow, CursorRow, own);
+
+    /// <summary>
+    /// Every shared row a positioned control carries, each chosen per kind — NULL where WinForms does not browse it
+    /// (O2 for colours, the snapshot for Font). Order: the kind's own rows, then Enabled, Visible, the colours, Font,
+    /// Cursor.
+    /// </summary>
+    private static IReadOnlyList<FormPropertyDef> ControlRows(
+        FormPropertyDef? foreColor, FormPropertyDef? backColor, FormPropertyDef? font, FormPropertyDef cursor,
+        params FormPropertyDef[] own) =>
+        own.Concat(new[] { Enabled, Visible, foreColor, backColor, font, cursor }.OfType<FormPropertyDef>()).ToList();
 
     // Control.Click's WinForms metadata — the most-shared default event (Task 8's parity run).
     private const string ClickedDescription = "Occurs when the component is clicked.";
@@ -1373,10 +1484,11 @@ public static class FormControlCatalog
     /// </summary>
     public static readonly IReadOnlyList<FormControlDef> All = new List<FormControlDef>
     {
-        new("Label",       "Label",       "label",    null,       false, Common(Text, LabelTextAlign),
+        new("Label",       "Label",       "label",    null,       false, Common(Text, LabelTextAlign, PaddingRow),
             DefaultWidth: 100, DefaultHeight: 23, Schematic: FormSchematic.Text,
             Events: Ev("Click", "click", category: FormEventCategory.Action, description: ClickedDescription)),
-        new("TextBox",     "TextBox",     "input",    "text",     false, CommonColoured(WindowTextForeColor, WindowBackColor,
+        new("TextBox",     "TextBox",     "input",    "text",     false, ControlRows(WindowTextForeColor, WindowBackColor,
+            FontRow, IBeamCursorRow,
             Text,
             new FormPropertyDef("Multiline", FormPropertyType.Bool, "false",
                 Category: FormPropertyCategory.Behavior,
@@ -1400,10 +1512,10 @@ public static class FormControlCatalog
             Events: Ev("TextChanged", "input", category: FormEventCategory.PropertyChanged,
                 description: "Event raised when the value of the Text property is changed on Control."),
             StretchesWhenStacked: true),
-        new("Button",      "Button",      "button",   null,       false, Common(Text, ButtonTextAlign),
+        new("Button",      "Button",      "button",   null,       false, Common(Text, ButtonTextAlign, PaddingRow),
             DefaultWidth: 75, DefaultHeight: 23, Schematic: FormSchematic.Button,
             Events: Ev("Click", "click", category: FormEventCategory.Action, description: ClickedDescription)),
-        new("CheckBox",    "CheckBox",    "input",    "checkbox", false, Common(Text, Checked),
+        new("CheckBox",    "CheckBox",    "input",    "checkbox", false, Common(Text, Checked, PaddingRow),
             DefaultWidth: 104, DefaultHeight: 24, Schematic: FormSchematic.Check,
             Events: Ev("CheckedChanged", "change", category: FormEventCategory.Misc,
                 description: "Occurs whenever the Check property is changed.")),
@@ -1415,7 +1527,8 @@ public static class FormControlCatalog
             new FormPropertyDef("GroupName", FormPropertyType.String,
                 Targets: new[] { FormTarget.Web },
                 Category: FormPropertyCategory.Behavior,
-                Description: "The radio group this button belongs to on the page: buttons sharing a name are mutually exclusive.")),
+                Description: "The radio group this button belongs to on the page: buttons sharing a name are mutually exclusive."),
+            PaddingRow),
             DefaultWidth: 104, DefaultHeight: 24, Schematic: FormSchematic.Radio,
             Events: Ev("CheckedChanged", "change", category: FormEventCategory.Misc,
                 description: "Occurs whenever the 'checked' property changes value.")),
@@ -1474,8 +1587,8 @@ public static class FormControlCatalog
                                      "Task 8); kept as a non-default event so documents that bind it keep working; " +
                                      "csc gates the name")
             }),
-        new("PictureBox",  "PictureBox",  "img",      null,       false, CommonColoured(
-            null, BackColor,
+        new("PictureBox",  "PictureBox",  "img",      null,       false, ControlRows(
+            null, BackColor, null, CursorRow,
             // WinForms Image is a System.Drawing.Image, not a path string (CS0029).
             new FormPropertyDef("Image", FormPropertyType.String,
                 WinFormsFactory: "Image.FromFile",
@@ -1502,7 +1615,7 @@ public static class FormControlCatalog
         // friends are deliberately omitted: they are Color properties whose WinForms defaults are
         // system colours, and a designer that wrote them out would freeze today's theme into the
         // form.
-        new("LinkLabel",   "LinkLabel",   "a",        null,       false, Common(Text, LinkLabelTextAlign),
+        new("LinkLabel",   "LinkLabel",   "a",        null,       false, Common(Text, LinkLabelTextAlign, PaddingRow),
             DefaultWidth: 100, DefaultHeight: 23, Schematic: FormSchematic.Link,
             // ⚠ The typed args (Task 8's parity run): EventArgs compiled by contravariance but hid e.Link.
             Events: Ev("LinkClicked", "click", args: "LinkLabelLinkClickedEventArgs",
@@ -1557,8 +1670,8 @@ public static class FormControlCatalog
             Events: Ev("ValueChanged", "change", category: FormEventCategory.Action,
                 description: ControlValueChangedDescription)),
 
-        new("TrackBar",    "TrackBar",    "input",    "range",    false, CommonColoured(
-            null, BackColor,
+        new("TrackBar",    "TrackBar",    "input",    "range",    false, ControlRows(
+            null, BackColor, null, CursorRow,
             new FormPropertyDef("Minimum", FormPropertyType.Int, "0", HtmlAttribute: "min",
                 Category: FormPropertyCategory.Behavior,
                 Description: "The minimum value for the position of the slider on the TrackBar."),
@@ -1582,7 +1695,7 @@ public static class FormControlCatalog
             Events: Ev("ValueChanged", "input", category: FormEventCategory.Action,
                 description: ControlValueChangedDescription)),
 
-        new("ProgressBar", "ProgressBar", "progress", null,       false, CommonColoured(HighlightForeColor, BackColor,
+        new("ProgressBar", "ProgressBar", "progress", null,       false, ControlRows(HighlightForeColor, BackColor, null, CursorRow,
             new FormPropertyDef("Minimum", FormPropertyType.Int, "0",
                 Targets: new[] { FormTarget.WinForms },
                 Category: FormPropertyCategory.Behavior,
@@ -1660,8 +1773,8 @@ public static class FormControlCatalog
             Events: Ev("AfterSelect", args: "TreeViewEventArgs", category: FormEventCategory.Behavior,
                 description: "Occurs when the selection has been changed.")),
 
-        new("DataGridView", "DataGridView", null,     null,       false, CommonColoured(
-            null, null,
+        new("DataGridView", "DataGridView", null,     null,       false, ControlRows(
+            null, null, null, CursorRow,
             new FormPropertyDef("AllowUserToAddRows", FormPropertyType.Bool, "true",
                 Category: FormPropertyCategory.Behavior,
                 Description: "Indicates whether the option to add rows is displayed to the user."),
