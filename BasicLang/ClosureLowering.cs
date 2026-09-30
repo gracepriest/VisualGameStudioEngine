@@ -1251,6 +1251,25 @@ namespace BasicLang.Compiler.IR
                     foreach (var (name, _) in lambda.CapturedVariables) if (name != null) caps.Add(name);
                     foreach (var name in recomputed.Keys) caps.Add(name);
 
+                    // The VARIABLES the lambda's IR — and the IR of every lambda nested in it — reads or
+                    // writes NOW, which the #169 guard below reads (ADR-0018): a variable operand, a value
+                    // renamed after the variable it assigns, an assignment's target. Never a record:
+                    // `CapturedVariables` (and a creator's `LambdaCapturedNames`, which `recomputed`
+                    // folds in for nested lambdas) is IRBuilder's list from when the lambda was built —
+                    // every value's name, a temp's and a constant's included, before the renamer ran.
+                    // ⚠ ORDINAL: two spellings of one name are exactly what the guard looks for, and a
+                    // case-insensitive set keeps whichever it met first (MEASURED: the parameter's own
+                    // `T0` hid the creator's `t0`).
+                    var mentioned = new HashSet<string>(StringComparer.Ordinal);
+                    foreach (var body in new[] { lambda }.Concat(TransitiveLambdas(lambda)))
+                    {
+                        foreach (var v in ValuesIn(body))
+                            if ((v is IRVariable || v.NamedAfterVariable) && v.Name != null) mentioned.Add(v.Name);
+                        foreach (var b in body.Blocks)
+                            foreach (var inst in b.Instructions)
+                                if (inst is IRAssignment { Target.Name: { } target }) mentioned.Add(target);
+                    }
+
                     // A delegate VARIABLE invoked by name — `greet(s)` — is a read of that variable
                     // (D8's canonical form is a CalleeValue read of it), but the name-form call carries
                     // it as a FunctionName, which #122's set does not list. Every bare call name of the
@@ -1260,14 +1279,31 @@ namespace BasicLang.Compiler.IR
                     foreach (var body in new[] { lambda }.Concat(TransitiveLambdas(lambda)))
                         foreach (var v in ValuesIn(body))
                             if (v is IRCall { CalleeValue: null } bare && IsBareName(bare.FunctionName))
+                            {
                                 caps.Add(bare.FunctionName);
+                                mentioned.Add(bare.FunctionName);
+                            }
 
                     ctx.Captures[lambda] = caps;
                     capSet.UnionWith(caps);
 
                     // #169: a name spelled like a lambda parameter in another case binds to the
                     // creator in the IR, while VB binds it to the parameter.
-                    foreach (var name in caps)
+                    //
+                    // ⚠ ADR-0018: only a VARIABLE the lambda's IR reads or writes now (`mentioned`) AND
+                    // the creator OWNS (`g.ReservedNames`, complete by Invariant R, and disjoint from
+                    // every compiler temp by Invariant T) is "a variable of the creator". Comparing all
+                    // of `caps` refused `Function(T0 As Integer) T0 * 2` on MSIL alone: `caps` carries
+                    // IRBuilder's STALE record of the lambda's own temps (`t0,t1,t2,const_2,…`, names
+                    // the renamer later changed), and the temp `t0` differs from the parameter `T0`
+                    // only by case (LP_T0..T3, every entry point, before #121 too). MEASURED, both
+                    // halves are needed: ownership alone still refused a program VB accepts, because
+                    // the reservation is function-wide and a sibling `For Each t0` / `Catch t0` the
+                    // lambda cannot see owned the stale `t0`; and `recomputed` alone still refused one,
+                    // because it folds in a NESTED lambda's build-time record.
+                    foreach (var name in mentioned)
+                    {
+                        if (!g.ReservedNames.Contains(name)) continue;
                         foreach (var p in lambda.Parameters)
                             if (p?.Name != null && !string.Equals(p.Name, name, StringComparison.Ordinal) && NameEquals(p.Name, name))
                                 throw new ForeignFeatureException(
@@ -1275,6 +1311,7 @@ namespace BasicLang.Compiler.IR
                                     + "only by case. VB binds it to the parameter; the IR binds it to a variable of "
                                     + "the creator (task #169). Closure conversion never re-resolves a name, so the "
                                     + "shape is refused until the front end binds it. Spell it like the parameter.");
+                    }
                 }
 
                 // D4: a captured ByRef parameter.
