@@ -88,6 +88,40 @@ public class BuildSymbolTests
         });
     }
 
+    // ---- WEB and DESKTOP are facts about the target: DefineConstants can neither set nor clear them.
+
+    [TestCase("WEB=False")]
+    [TestCase("web=0")]
+    [TestCase(" WEB ")]
+    [TestCase("WEB=True")]
+    public void AWebEntry_OnAJavaScriptBuild_KeepsWeb_AndWarns(string entry)
+    {
+        var warnings = new List<string>();
+        Assert.That(BuildSymbols.For("javascript", null, new[] { entry }, warnings), Is.EqualTo(new[] { "WEB" }));
+        Assert.That(warnings, Has.Count.EqualTo(1));
+        Assert.That(warnings[0], Does.Contain(entry.Trim()).And.Contain("set by the build target"));
+    }
+
+    [TestCase("DESKTOP")]
+    [TestCase("Desktop=1")]
+    [TestCase("DESKTOP=yes")]
+    public void ADesktopEntry_OnAJavaScriptBuild_DoesNotDefineDesktop_AndWarns(string entry)
+    {
+        var warnings = new List<string>();
+        Assert.That(BuildSymbols.For("javascript", null, new[] { entry }, warnings), Is.EqualTo(new[] { "WEB" }));
+        Assert.That(warnings, Has.Count.EqualTo(1));
+        Assert.That(warnings[0], Does.Contain(entry.Trim()).And.Contain("set by the build target"));
+    }
+
+    [Test]
+    public void ADesktopFalseEntry_OnADesktopBuild_KeepsDesktop_AndWarns()
+    {
+        var warnings = new List<string>();
+        Assert.That(BuildSymbols.For("csharp", "Release", new[] { "DESKTOP=False;WEB" }, warnings),
+            Is.EqualTo(new[] { "DESKTOP", "RELEASE" }));
+        Assert.That(warnings, Has.Count.EqualTo(2));
+    }
+
     /// <summary>The warning reaches the build's warning channel: a Warning-severity entry in AllErrors, which the
     /// CLI prints and the IDE lists — and it never fails the build.</summary>
     [Test]

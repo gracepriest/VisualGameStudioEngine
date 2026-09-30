@@ -11,7 +11,8 @@ namespace BasicLang.Compiler
     /// <c>&lt;DefineConstants&gt;</c>, split on ';' or ',', trimmed. A <c>NAME=value</c> entry follows VB:
     /// <c>False</c>/<c>0</c> means NOT defined (and un-defines an earlier definition — the last word wins),
     /// <c>True</c>/<c>-1</c>/<c>1</c>/no value defines NAME, and any other value defines NAME with a warning that
-    /// names the entry. Case-insensitive and de-duplicated, first spelling wins. Called by the <see cref="BasicCompiler"/>
+    /// names the entry. An entry naming WEB or DESKTOP (with or without a value) is ignored with a warning — the
+    /// target decides those, never DefineConstants. Case-insensitive and de-duplicated, first spelling wins. Called by the <see cref="BasicCompiler"/>
     /// constructor (every build route) and the LSP (Task 6) — never re-derived.
     /// </summary>
     public static class BuildSymbols
@@ -50,6 +51,16 @@ namespace BasicLang.Compiler
                     var equals = part.IndexOf('=');
                     var name = (equals < 0 ? part : part.Substring(0, equals)).Trim();
                     if (name.Length == 0) continue;
+
+                    // ⛔ WEB and DESKTOP are facts about the TARGET, never settable here: a web build with
+                    // WEB=False would take the #If DESKTOP code and break. Ignored, with a warning.
+                    if (string.Equals(name, Web, StringComparison.OrdinalIgnoreCase)
+                        || string.Equals(name, Desktop, StringComparison.OrdinalIgnoreCase))
+                    {
+                        warnings?.Add($"DefineConstants entry '{part.Trim()}' is ignored: " +
+                            "WEB/DESKTOP are set by the build target and can't be changed in DefineConstants.");
+                        continue;
+                    }
 
                     switch (DefineValue(equals < 0 ? null : part.Substring(equals + 1)))
                     {
