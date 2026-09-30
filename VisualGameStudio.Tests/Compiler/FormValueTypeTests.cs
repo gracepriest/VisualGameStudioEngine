@@ -176,6 +176,48 @@ public class FormValueTypeTests
     public void AnUnknownCursor_IsDegraded(string value) => Assert.That(Cursor.Accepts(value), Is.False);
 
     // ==================================================================
+    // Task 4 — Fraction (the Form's Opacity) and Reference (AcceptButton/CancelButton)
+    // ==================================================================
+
+    private static readonly FormPropertyDef Fraction = Def(FormPropertyType.Fraction);
+    private static readonly FormPropertyDef Reference = new("X", FormPropertyType.Reference, ReferenceKinds: new[] { "Button" });
+
+    [TestCase("0.85", true)]
+    [TestCase("1", true)]
+    [TestCase("0", true)]
+    [TestCase(" 0.5 ", true)]
+    [TestCase("1.5", false)]      // Opacity is a proportion: WinForms would clamp it, the designer refuses it
+    [TestCase("-0.1", false)]
+    [TestCase("0,85", false)]     // an invariant decimal point only
+    [TestCase("85%", false)]
+    [TestCase("", false)]
+    public void AFraction_IsAnInvariantNumberFromZeroToOne(string value, bool accepted) =>
+        Assert.That(Fraction.Accepts(value), Is.EqualTo(accepted));
+
+    [TestCase("0.850", "0.85")]
+    [TestCase("1.0", "1")]
+    [TestCase(".5", "0.5")]
+    public void AFraction_IsReEmittedFromItsNumber(string value, string canonical)
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(Fraction.Canonical(value), Is.EqualTo(canonical));
+            Assert.That(Fraction.WinFormsLiteral(value), Is.EqualTo(canonical));
+        });
+    }
+
+    [TestCase("btnOk", true)]
+    [TestCase("_ok", true)]
+    [TestCase("1btn", false)]
+    [TestCase("btn-ok", false)]
+    [TestCase("", false)]
+    public void AReference_IsALegalControlId(string value, bool accepted) =>
+        Assert.That(Reference.Accepts(value), Is.EqualTo(accepted));
+
+    [Test]
+    public void AReference_IsTheFieldItNames() => Assert.That(Reference.WinFormsLiteral("btnOk"), Is.EqualTo("btnOk"));
+
+    // ==================================================================
     // The type-level invariants
     // ==================================================================
 

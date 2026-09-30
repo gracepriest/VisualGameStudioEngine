@@ -264,13 +264,14 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
     public bool IsComboBox => Typed && _type is FormPropertyType.Enum or FormPropertyType.Cursor;
 
     /// <summary>
-    /// Free text: a String, and the typed-text rows — a Color, a Size (<c>800, 450</c>), a Font (FontConverter text)
-    /// and a Padding (<c>4</c> or <c>4, 2, 4, 2</c>). The composite rows (slice 3 Task 6) and the colour and font editors
-    /// (slice 4) sit beside this text, which stays the parent's own editor.
+    /// Free text: a String, and the typed-text rows — a Color, a Size (<c>800, 450</c>), a Font (FontConverter text),
+    /// a Padding (<c>4</c> or <c>4, 2, 4, 2</c>), a Fraction (<c>0.85</c>) and a Reference (a control's Id). The composite
+    /// rows (slice 3 Task 6) and the colour, font and reference editors (slice 4) sit beside this text, which stays the
+    /// parent's own editor.
     /// </summary>
     public bool IsTextBox => Typed &&
         _type is FormPropertyType.String or FormPropertyType.Color or FormPropertyType.Size
-            or FormPropertyType.Font or FormPropertyType.Padding;
+            or FormPropertyType.Font or FormPropertyType.Padding or FormPropertyType.Fraction or FormPropertyType.Reference;
 
     /// <summary>The four-edge Anchor box (Task 26).</summary>
     public bool IsAnchorPicker => IsEditable && _editor == FormRowEditor.AnchorPicker;

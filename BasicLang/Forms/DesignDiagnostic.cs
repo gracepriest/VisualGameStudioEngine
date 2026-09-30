@@ -75,9 +75,12 @@ public static class DesignCodes
     //                   collision between a user's own top-level name and the dispatch helper.
     //                   BL8018 below is a different finding and takes a different number.
     //   BL8032          a web <Bind> on an event the control's row does not declare (here)
+    //   BL8033          claimed by fix/unknown-dock-diagnostic (an unknown Dock value) — coordination
+    //                   note 2026-09-29; that branch lands first and defines it
+    //   BL8034          a form reference row (AcceptButton) naming no control of the kinds it allows (here)
     //
-    // The ENUMERATED table above is now exhausted: the next claim starts at BL8033. That is not
-    // the band being full — BL8033..BL8999 are simply unclaimed, and "full" would wrongly send the
+    // The ENUMERATED table above is now exhausted: the next claim starts at BL8035. That is not
+    // the band being full — BL8035..BL8999 are simply unclaimed, and "full" would wrongly send the
     // next task looking for another band.
     //
     // Nothing in this band lives in BasicLang.Compiler.ErrorCode as a string; the enum registration
@@ -297,6 +300,13 @@ public static class DesignCodes
     /// written to widen with rather than around.</para>
     /// </summary>
     public const string UnknownWebEvent = "BL8032";
+
+    /// <summary>
+    /// A WARNING: a form reference row (<c>AcceptButton</c>, <c>CancelButton</c> — slice 3) names an Id this form has no
+    /// control of the allowed kinds for — renamed, deleted, or a Label. Nothing is written for it (csc would reject the
+    /// assignment, BasicLang silent); the document keeps the reference.
+    /// </summary>
+    public const string ReferenceNotFound = "BL8034";
 
     /// <summary>The form document itself is not well-formed XML, or its root/version is not one we know.</summary>
     public const string MalformedDocument = "BL8008";

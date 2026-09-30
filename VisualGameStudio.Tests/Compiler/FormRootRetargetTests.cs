@@ -18,6 +18,14 @@ public class FormRootRetargetTests
         FormPropertyType.Size => "641, 481",
         // ⚠ Not 600: MobileBreakpoint's default, which a sweep could satisfy by accident.
         FormPropertyType.Int => "480",
+        // Slice 3's Properties-stored rows — each a value usable on BOTH targets where the row exists on both, so a
+        // crossing row crosses clean and a single-target row is the RetargetPropertyLost arm.
+        FormPropertyType.Bool => "true",
+        FormPropertyType.Enum => row.AllowedValues![^1],
+        FormPropertyType.Color => "#123456",
+        FormPropertyType.Font => "Arial, 11pt, style=Bold",
+        FormPropertyType.Fraction => "0.75",
+        FormPropertyType.Reference => "btnSample",
         _ => "sample" + row.Name
     };
 
@@ -203,6 +211,69 @@ public class FormRootRetargetTests
             Assert.That(result.Document.Binds, Is.Empty);
             Assert.That(result.Document.UnknownChildren, Is.Empty);
             Assert.That(result.Diagnostics.Count(d => d.Code == DesignCodes.RetargetBindLost), Is.EqualTo(1));
+        });
+    }
+
+    /// <summary>
+    /// Slice 3: the sweep above now has a broad RetargetPropertyLost arm (every WinForms-only Form row), and this pins
+    /// the crossing arm for a Properties-stored row that exists on both targets.
+    /// </summary>
+    [Test]
+    public void AFormRowOnBothTargets_Crosses_AndAWinFormsOnlyOne_IsNamed()
+    {
+        var win = new FormDocument { Target = FormTarget.WinForms, Name = "Login" };
+        win.Properties["BackColor"] = "Red";
+        win.Properties["FormBorderStyle"] = "FixedDialog";
+
+        var result = FormRetarget.Convert(win, FormTarget.Web);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Document.Properties["BackColor"], Is.EqualTo("Red"));
+            Assert.That(result.Document.Properties, Does.Not.ContainKey("FormBorderStyle"));
+            Assert.That(result.Diagnostics.Any(d => d.Code == DesignCodes.RetargetPropertyLost &&
+                                                    d.Message.Contains("'form.FormBorderStyle'") &&
+                                                    d.Message.Contains("FixedDialog")), Is.True);
+        });
+    }
+
+    /// <summary>
+    /// The control rule, at the root: a value the destination REFUSES (a system colour with no CSS equivalent) crosses
+    /// PRESERVED — the user's text, opened Degraded on the other side — and is NAMED with the catalog's own reason.
+    /// </summary>
+    [Test]
+    public void AFormValueTheDestinationRefuses_CrossesPreserved_AndIsNamed()
+    {
+        var win = new FormDocument { Target = FormTarget.WinForms, Name = "Login" };
+        win.Properties["BackColor"] = "ActiveCaption";
+        var row = FormControlCatalog.FormRoot.Property("BackColor")!;
+
+        var result = FormRetarget.Convert(win, FormTarget.Web);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Document.Properties["BackColor"], Is.EqualTo("ActiveCaption"));
+            Assert.That(result.Diagnostics.Single(d => d.Code == DesignCodes.RetargetPropertyLost).Message,
+                Does.Contain("'form.BackColor'").And.Contain(row.DescribeRefusal("ActiveCaption", FormTarget.Web)));
+        });
+    }
+
+    /// <summary>
+    /// Backlog (4): a root value ALREADY Degraded on the source (refused on both targets) lost nothing in the retarget — it
+    /// crosses preserved and is NOT named (its Degraded row on each side already says so), exactly as a control's does.
+    /// </summary>
+    [Test]
+    public void AFormValueDegradedOnBothTargets_CrossesPreserved_Unnamed()
+    {
+        var win = new FormDocument { Target = FormTarget.WinForms, Name = "Login" };
+        win.Properties["BackColor"] = "12345";
+
+        var result = FormRetarget.Convert(win, FormTarget.Web);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Document.Properties["BackColor"], Is.EqualTo("12345"));
+            Assert.That(result.Diagnostics.Where(d => d.Code == DesignCodes.RetargetPropertyLost), Is.Empty);
         });
     }
 

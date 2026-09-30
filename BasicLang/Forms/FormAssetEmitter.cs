@@ -524,6 +524,8 @@ public static class FormAssetEmitter
 
         sb.Append("}\n");
 
+        AppendRootCss(sb, form);
+
         foreach (var control in form.AllControls())
         {
             AppendControlCss(sb, control, layout);
@@ -532,6 +534,31 @@ public static class FormAssetEmitter
         AppendKindCss(sb, form);
 
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// The FORM's own web rows (spec §2.3, slice 3): BackColor, ForeColor and Font become ONE <c>body { … }</c> rule — the
+    /// whole page is the client area, so every control and every Docked strip inherits them exactly as WinForms' ambient
+    /// properties inherit from the Form. Walked from <see cref="FormControlCatalog.FormRoot"/> through <see cref="FormCss"/>,
+    /// the same converters a control's rows use — never a list here.
+    ///
+    /// <para>⚠ A SEPARATE rule (pre-flight B3): the Canvas stylesheet already owns a <c>body { margin: 0; display: flex; … }</c>
+    /// layout rule, and CSS merges the two; nothing rewrites it. Nothing is written when the form carries none of these.</para>
+    /// </summary>
+    private static void AppendRootCss(StringBuilder sb, FormDocument form)
+    {
+        var declarations = FormControlCatalog.FormRoot.Properties
+            .Where(p => FormRootValues.IsStoredInProperties(p) && FormRootValues.Applies(p, form))
+            .SelectMany(p => FormRootValues.Get(form, p) is { } value
+                ? FormCss.Declarations(p, value)
+                : Array.Empty<(string Property, string Value)>())
+            .Select(d => $"{d.Property}: {d.Value}")
+            .ToList();
+
+        if (declarations.Count > 0)
+        {
+            sb.Append($"body {{ {string.Join("; ", declarations)}; }}\n");
+        }
     }
 
     /// <summary>
@@ -662,6 +689,7 @@ public static class FormAssetEmitter
         // (a <div> or <p>) to keep it on one line. No pure-CSS layout gives both "the form area takes the remaining
         // height" and "loose inline body children share a line".
         sb.Append("body { margin: 0; display: flex; flex-direction: column; align-items: flex-start; min-height: 100vh; }\n");
+        AppendRootCss(sb, form);
         sb.Append(".vgs-form {\n");
         sb.Append("  position: relative;\n");
 

@@ -239,6 +239,8 @@ public static class FormRetarget
                 ? null
                 : _source.Text;
 
+            ConvertRootProperties();
+
             foreach (var (name, value) in _source.UnknownAttributes)
             {
                 var toRow = FormRootValues.RowForAttribute(name, _to, _toLayout);
@@ -294,6 +296,41 @@ public static class FormRetarget
             // Components (Task 25) cross in ConvertComponents, with the same kind/property/bind
             // rules as controls and no geometry pass — see FormRetargetTests.
             Document.Resources.AddRange(_source.Resources.Select(e => new XElement(e)));
+        }
+
+        /// <summary>
+        /// The form's Properties-stored rows (slice 3, spec §2.3 Retarget) — visited through FormRoot EXPLICITLY, with the
+        /// control rules at the root: a row that exists on the destination crosses (the user's text, verbatim); one that
+        /// does not is dropped AND NAMED ('form.X', RetargetPropertyLost); a value the destination refuses crosses
+        /// preserved and is named with the catalog's reason; a value already Degraded on the source lost nothing here and
+        /// is carried unnamed (its Degraded row on each side says so — backlog (4)).
+        /// </summary>
+        private void ConvertRootProperties()
+        {
+            foreach (var row in FormControlCatalog.FormRoot.Properties.Where(FormRootValues.IsStoredInProperties))
+            {
+                if (!_source.Properties.TryGetValue(row.Name, out var value))
+                {
+                    continue;
+                }
+
+                if (!FormRootValues.Applies(row, _to, _toLayout))
+                {
+                    Warn(DesignCodes.RetargetPropertyLost,
+                        $"'form.{row.Name}' = \"{value}\" does not exist on a {Describe(_to)} form, so it was dropped. " +
+                        "Re-express it on the other side if the page or window needs it.");
+                    continue;
+                }
+
+                Document.Properties[row.Name] = value;
+
+                if (row.Accepts(value, _from) && !row.Accepts(value, _to))
+                {
+                    Warn(DesignCodes.RetargetPropertyLost,
+                        $"'form.{row.Name}' = \"{value}\" crosses but is not usable on a {Describe(_to)} form: " +
+                        row.DescribeRefusal(value, _to));
+                }
+            }
         }
 
         /// <summary>

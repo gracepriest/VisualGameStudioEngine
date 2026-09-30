@@ -39,6 +39,13 @@ public class FormRootTests
             [FormPropertyType.String] = "sample",
             [FormPropertyType.Size] = "75, 23",
             [FormPropertyType.Int] = "600",
+            // Slice 3's Properties-stored rows (the store keeps the document's text — the tiers judge it).
+            [FormPropertyType.Bool] = "true",
+            [FormPropertyType.Enum] = "sample",
+            [FormPropertyType.Color] = "Red",
+            [FormPropertyType.Font] = "Arial, 10pt",
+            [FormPropertyType.Fraction] = "0.5",
+            [FormPropertyType.Reference] = "btnOk",
         };
 
         Assert.Multiple(() =>
@@ -409,6 +416,240 @@ public class FormRootTests
             {
                 Assert.That(FormRootValues.RefusalOf(FormControlCatalog.FormRoot.Property(name)!, "anything at all"), Is.Null, name);
             }
+        });
+    }
+
+    // ==================================================================
+    // Slice 3 Task 4 (plan 3.2 + 3.3) — Properties-stored root rows: the Form's D1 set
+    // ==================================================================
+
+    private const string WinFormWithRootProperties = """
+        <Form Name="F" Version="1" Text="Hi" Width="400" Height="300" FormBorderStyle="FixedDialog" TopMost="true" Opacity="0.85">
+          <Controls/>
+        </Form>
+        """;
+
+    /// <summary>
+    /// A catalog-only root attribute lives in <see cref="FormDocument.Properties"/> (spec §2.3) — read, modelled, written
+    /// back byte-identically when nothing changed, and never also kept as an unknown attribute.
+    /// </summary>
+    [Test]
+    public void APropertiesStoredRootRow_IsModelled_AndRoundTripsByteIdentical()
+    {
+        var file = FormDocumentReader.Read("F.blform", WinFormWithRootProperties);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(file.Model.Properties["FormBorderStyle"], Is.EqualTo("FixedDialog"));
+            Assert.That(file.Model.Properties["TopMost"], Is.EqualTo("true"));
+            Assert.That(file.Model.UnknownAttributes, Does.Not.ContainKey("FormBorderStyle"));
+            Assert.That(FormRootValues.Get(file.Model, FormControlCatalog.FormRoot.Property("Opacity")!), Is.EqualTo("0.85"));
+            Assert.That(file.TierOfRoot("FormBorderStyle"), Is.EqualTo(PropertyTier.Canon));
+            Assert.That(FormDocumentWriter.Write(file), Is.EqualTo(WinFormWithRootProperties), "a no-op is byte-identical");
+        });
+    }
+
+    [Test]
+    public void AnEditedRootProperty_IsWritten_AndAResetOneLeavesTheDocument()
+    {
+        var file = FormDocumentReader.Read("F.blform", WinFormWithRootProperties);
+        var border = FormControlCatalog.FormRoot.Property("FormBorderStyle")!;
+        var topMost = FormControlCatalog.FormRoot.Property("TopMost")!;
+
+        Assert.That(FormRootValues.Set(file.Model, border, "None"), Is.True);
+        Assert.That(FormRootValues.Set(file.Model, topMost, null), Is.True);
+        Assert.That(FormRootValues.CanReset(topMost), Is.True, "only ClientSize cannot be removed");
+
+        var written = FormDocumentWriter.Write(file);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(written, Does.Contain("FormBorderStyle=\"None\""));
+            Assert.That(written, Does.Not.Contain("TopMost"), "Reset REMOVES the attribute (spec §2.7)");
+        });
+    }
+
+    [Test]
+    public void Create_WritesRootProperties_InCatalogOrder()
+    {
+        var form = new FormDocument { Target = FormTarget.WinForms, Name = "F", Width = 400, Height = 300 };
+        form.Properties["TopMost"] = "true";
+        form.Properties["FormBorderStyle"] = "FixedSingle";
+
+        var created = FormDocumentWriter.Create(form);
+
+        Assert.That(created.IndexOf("FormBorderStyle=", StringComparison.Ordinal),
+            Is.GreaterThan(created.IndexOf("Height=", StringComparison.Ordinal))
+              .And.LessThan(created.IndexOf("TopMost=", StringComparison.Ordinal)),
+            "catalog order after the typed attributes: " + created);
+    }
+
+    /// <summary>A WinForms-only root row on a web page is not a row there: it stays an unknown attribute, untouched.</summary>
+    [Test]
+    public void AWinFormsOnlyRootAttributeOnAPage_IsKeptAsUnknown()
+    {
+        const string xml = """
+            <WebForm Name="F" Version="1" FormBorderStyle="FixedDialog"><Controls/></WebForm>
+            """;
+        var file = FormDocumentReader.Read("F.blwebform", xml);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(file.Model.Properties, Does.Not.ContainKey("FormBorderStyle"));
+            Assert.That(file.Model.UnknownAttributes["FormBorderStyle"], Is.EqualTo("FixedDialog"));
+            Assert.That(FormDocumentWriter.Write(file), Is.EqualTo(xml));
+        });
+    }
+
+    /// <summary>
+    /// D9 at the root: a Properties-stored value the row cannot use is Degraded — frozen with the catalog's reason,
+    /// preserved on save — and (the branch GenerateInit carried as UNREACHABLE since slice 1, plan :6100) it never reaches
+    /// the generated code: BL8009 names it instead.
+    /// </summary>
+    [Test]
+    public void ADegradedRootProperty_IsFrozen_Preserved_AndNeverEmitted()
+    {
+        const string xml = """
+            <Form Name="F" Version="1" Width="400" Height="300" FormBorderStyle="Bogus"><Controls/></Form>
+            """;
+        var file = FormDocumentReader.Read("F.blform", xml);
+        var row = FormControlCatalog.FormRoot.Property("FormBorderStyle")!;
+
+        var result = RegionWriter.Write("F.bas", FormScaffolder.Create("F", FormTarget.WinForms).CodeText, file.Model, "F.blform");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(file.TierOfRoot("FormBorderStyle"), Is.EqualTo(PropertyTier.Degraded));
+            Assert.That(file.DegradedReasonOfRoot("FormBorderStyle"), Is.EqualTo(row.DescribeRefusal("Bogus", FormTarget.WinForms)));
+            Assert.That(FormDocumentWriter.Write(file), Is.EqualTo(xml));
+            Assert.That(result.Text, Does.Not.Contain("Me.FormBorderStyle"));
+            Assert.That(result.Diagnostics.Single(d => d.Code == DesignCodes.DegradedProperty).Message,
+                Does.Contain("'form.FormBorderStyle'").And.Contain("Bogus"));
+        });
+    }
+
+    [Test]
+    public void TheRegionWriter_EmitsARootPropertyAsOneMeStatement()
+    {
+        var form = new FormDocument { Target = FormTarget.WinForms, Name = "F", Width = 400, Height = 300 };
+        form.Properties["FormBorderStyle"] = "FixedDialog";
+        form.Properties["Font"] = "Segoe UI, 10pt, style=Bold";
+        form.Properties["Opacity"] = "0.85";
+        form.Properties["MinimumSize"] = "200, 100";
+
+        var text = RegionWriter.Write("F.bas", FormScaffolder.Create("F", FormTarget.WinForms).CodeText, form, "F.blform").Text;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(text, Does.Contain("Me.FormBorderStyle = FormBorderStyle.FixedDialog"));
+            Assert.That(text, Does.Contain("Me.Font = New Font(\"Segoe UI\", 10F, FontStyle.Bold)"));
+            Assert.That(text, Does.Contain("Me.Opacity = 0.85"));
+            Assert.That(text, Does.Contain("Me.MinimumSize = New Size(200, 100)"));
+        });
+    }
+
+    // ==================================================================
+    // AcceptButton / CancelButton — a reference to a control (pre-flight §3, B4)
+    // ==================================================================
+
+    private static FormDocument FormWithButton(string buttonKind = "Button")
+    {
+        var form = new FormDocument { Target = FormTarget.WinForms, Name = "F", Width = 400, Height = 300 };
+        form.Controls.Add(new FormControl
+        {
+            Kind = buttonKind, Id = "btnOk", TabIndex = 0,
+            Geometry = new PixelGeometry { X = 8, Y = 8, Width = 75, Height = 23 }
+        });
+        return form;
+    }
+
+    /// <summary>
+    /// ⛔ B4: emitted AFTER the controls are constructed and added. Before them, <c>btnOk</c> is still Nothing, so the
+    /// form would compile and have no accept button.
+    /// </summary>
+    [Test]
+    public void AcceptButton_IsEmittedAfterTheControls()
+    {
+        var form = FormWithButton();
+        form.Properties["AcceptButton"] = "btnOk";
+        form.Properties["CancelButton"] = "btnOk";
+
+        var result = RegionWriter.Write("F.bas", FormScaffolder.Create("F", FormTarget.WinForms).CodeText, form, "F.blform");
+        var text = result.Text;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Diagnostics.Where(d => !d.IsWarning), Is.Empty);
+            Assert.That(text.IndexOf("Me.AcceptButton = btnOk", StringComparison.Ordinal),
+                Is.GreaterThan(text.IndexOf("Me.Controls.Add(btnOk)", StringComparison.Ordinal)));
+            Assert.That(text.IndexOf("Me.CancelButton = btnOk", StringComparison.Ordinal),
+                Is.GreaterThan(text.IndexOf("Me.Controls.Add(btnOk)", StringComparison.Ordinal)));
+            Assert.That(text.IndexOf("btnOk = New Button()", StringComparison.Ordinal), Is.GreaterThan(0));
+        });
+    }
+
+    /// <summary>
+    /// A reference that names no control of the kinds its row allows (renamed, deleted, or a Label) is WARNED — BL8034 —
+    /// and not emitted: <c>Me.AcceptButton = lblTitle</c> is CS0029 at csc, <c>= btnGone</c> CS0103, BasicLang silent.
+    /// </summary>
+    [TestCase("btnGone", "Button")]
+    [TestCase("btnOk", "Label")]
+    public void ADanglingReference_IsWarned_AndNotEmitted(string reference, string kindOfBtnOk)
+    {
+        var form = FormWithButton(kindOfBtnOk);
+        form.Properties["AcceptButton"] = reference;
+
+        var result = RegionWriter.Write("F.bas", FormScaffolder.Create("F", FormTarget.WinForms).CodeText, form, "F.blform");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Refused, Is.False, "a warning, never a refusal — the document is preserved");
+            Assert.That(result.Text, Does.Not.Contain("Me.AcceptButton"));
+            var warning = result.Diagnostics.Single(d => d.Code == DesignCodes.ReferenceNotFound);
+            Assert.That(warning.IsWarning, Is.True);
+            Assert.That(warning.Message, Does.Contain("'form.AcceptButton'").And.Contain(reference).And.Contain("Button"));
+        });
+    }
+
+    [Test]
+    public void TheReferenceCode_IsBL8034() =>
+        Assert.That(DesignCodes.ReferenceNotFound, Is.EqualTo("BL8034"));
+
+    // ==================================================================
+    // The Form on the web: BackColor, ForeColor, Font on body (spec §2.3)
+    // ==================================================================
+
+    [TestCase(FormLayoutKind.Grid)]
+    [TestCase(FormLayoutKind.Canvas)]
+    public void TheFormsWebRows_AreTheBodysCss_OnEveryLayout(FormLayoutKind layout)
+    {
+        var form = new FormDocument { Target = FormTarget.Web, Name = "F", Layout = new FormLayout { Kind = layout } };
+        form.Properties["BackColor"] = "#102030";
+        form.Properties["ForeColor"] = "Control";
+        form.Properties["Font"] = "Segoe UI, 10pt, style=Italic";
+
+        var css = FormAssetEmitter.Css(form);
+        var body = css.Split('\n').Single(l => l.StartsWith("body {", StringComparison.Ordinal) && l.Contains("background-color"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(body, Does.Contain("background-color: #102030"));
+            Assert.That(body, Does.Contain("color: ButtonFace"), "system colours map through the ONE table");
+            Assert.That(body, Does.Contain("font-family: \"Segoe UI\"").And.Contain("font-size: 10pt").And.Contain("font-style: italic"));
+        });
+    }
+
+    [Test]
+    public void APageWithNoFormRows_HasNoExtraBodyRule_AndAWinFormsOnlyRowNeverReachesIt()
+    {
+        var plain = new FormDocument { Target = FormTarget.Web, Name = "F", Layout = new FormLayout() };
+        var withForeignRow = new FormDocument { Target = FormTarget.Web, Name = "F", Layout = new FormLayout() };
+        withForeignRow.Properties["TopMost"] = "true";   // an in-memory model only — the reader keeps it unknown
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(FormAssetEmitter.Css(plain), Does.Not.Contain("body {"), "a Grid page's stylesheet is unchanged");
+            Assert.That(FormAssetEmitter.Css(withForeignRow), Is.EqualTo(FormAssetEmitter.Css(plain)));
         });
     }
 }

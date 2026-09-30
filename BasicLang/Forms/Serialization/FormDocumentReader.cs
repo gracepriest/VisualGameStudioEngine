@@ -176,9 +176,28 @@ public static class FormDocumentReader
 
         foreach (var attribute in root.Attributes())
         {
-            if (!IsKnownRootAttribute(attribute.Name.LocalName, target.Value, layout, root))
+            var name = attribute.Name.LocalName;
+
+            // ⛔ Slice 3: a Properties-stored FormRoot row (FormBorderStyle, BackColor, AcceptButton…) that exists on this
+            // (target, layout) is MODELLED in FormDocument.Properties — the document's text, exactly as a control's bag
+            // holds it — and judged there: a value the row cannot use HERE is Degraded (frozen, preserved, explained by
+            // the catalog's own reason), never coerced and never an unknown attribute. On a document where the row does
+            // not exist (FormBorderStyle on a page) RowForAttribute answers null and it round-trips as unknown below.
+            if (FormRootValues.RowForAttribute(name, target.Value, layout) is { } row && FormRootValues.IsStoredInProperties(row))
             {
-                model.UnknownAttributes[attribute.Name.LocalName] = attribute.Value;
+                model.Properties[name] = attribute.Value;
+                if (!row.Accepts(attribute.Value, target.Value))
+                {
+                    degradedRoot.Add(new DegradedProperty("", row.Name, attribute.Value,
+                        row.DescribeRefusal(attribute.Value, target.Value)));
+                }
+
+                continue;
+            }
+
+            if (!IsKnownRootAttribute(name, target.Value, layout, root))
+            {
+                model.UnknownAttributes[name] = attribute.Value;
             }
         }
 
@@ -335,7 +354,9 @@ public static class FormDocumentReader
             return false;
         }
 
-        return row.Type == FormPropertyType.Size ? IntAttribute(root, name) != null : true;
+        // ⚠ ClientSize's own storage (Width/Height, one integer each) — by NAME since slice 3: a Properties-stored Size
+        // (MinimumSize="200, 100") is one attribute, modelled whether or not it parses (its tier says whether it can be used).
+        return row.Name == "ClientSize" ? IntAttribute(root, name) != null : true;
     }
 
     // ==================================================================

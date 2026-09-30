@@ -97,6 +97,15 @@ public static class FormDocumentWriter
             root.SetAttributeValue("Height", model.Height);
         }
 
+        // Slice 3: the Properties-stored FormRoot rows, in CATALOG order (the grid's order), after the typed attributes.
+        foreach (var row in PropertiesStoredRows(model))
+        {
+            if (model.Properties.TryGetValue(row.Name, out var value))
+            {
+                root.SetAttributeValue(row.Name, value);
+            }
+        }
+
         if (model.Target == FormTarget.Web && model.Layout != null)
         {
             root.Add(LayoutElement(model.Layout));
@@ -207,6 +216,8 @@ public static class FormDocumentWriter
             ApplyFormAttributes(root, model);
         }
 
+        ApplyRootProperties(root, model);
+
         if (model.Target == FormTarget.Web)
         {
             ApplyLayout(root, model);
@@ -297,6 +308,28 @@ public static class FormDocumentWriter
         if (!FormPropertyDef.TryParseInt(existing.Value, out var current) || current != value)
         {
             existing.Value = Number(value);
+        }
+    }
+
+    /// <summary>
+    /// The FormRoot rows that live in <see cref="FormDocument.Properties"/> AND exist on this document's (target, layout)
+    /// — the only ones the writer may set or remove. ⛔ A row that does not exist here (FormBorderStyle on a page) is an
+    /// UNKNOWN attribute in this document; removing it because the bag lacks it would delete text the reader preserved.
+    /// </summary>
+    private static IEnumerable<FormPropertyDef> PropertiesStoredRows(FormDocument model) =>
+        FormControlCatalog.FormRoot.Properties
+            .Where(r => FormRootValues.IsStoredInProperties(r) && FormRootValues.Applies(r, model));
+
+    /// <summary>
+    /// The root's Properties-stored rows (slice 3), patched in place like a control's: set-if-changed (text compare —
+    /// the bag holds the document's own text, so an untouched value is byte-identical), and a row the model dropped
+    /// (a Reset) leaves the document.
+    /// </summary>
+    private static void ApplyRootProperties(XElement root, FormDocument model)
+    {
+        foreach (var row in PropertiesStoredRows(model))
+        {
+            SetAttributeIfChanged(root, row.Name, model.Properties.TryGetValue(row.Name, out var value) ? value : null);
         }
     }
 

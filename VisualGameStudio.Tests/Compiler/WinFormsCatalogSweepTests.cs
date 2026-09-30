@@ -514,6 +514,17 @@ public class WinFormsCatalogSweepTests
         var row = FormControlCatalog.FormRoot.Property(name)!;
         var form = new FormDocument { Target = FormTarget.WinForms, Name = "SweepForm" };
 
+        // A reference row (AcceptButton) names a control: the sample's control must exist, of a kind the row allows,
+        // or the region writer rightly declines it (BL8034) and csc would see nothing.
+        if (row.Type == FormPropertyType.Reference)
+        {
+            form.Controls.Add(new FormControl
+            {
+                Kind = row.ReferenceKinds![0], Id = SampleValue(row), TabIndex = 0,
+                Geometry = new PixelGeometry { X = 8, Y = 8, Width = 75, Height = 23 }
+            });
+        }
+
         // SampleValue's Size arm ("75, 23") is a valid, positive ClientSize.
         Assert.That(FormRootValues.Set(form, row, SampleValue(row)),
             Is.True, $"the sample for form.{name} must be storable");
@@ -609,6 +620,8 @@ public class WinFormsCatalogSweepTests
         FormPropertyType.Font => "Segoe UI, 9.75pt, style=Bold, Italic",
         FormPropertyType.Padding => "4, 2, 4, 2",
         FormPropertyType.Cursor => "Hand",
+        FormPropertyType.Fraction => "0.5",
+        FormPropertyType.Reference => "btnSample",
         _ => "sample"
     };
 

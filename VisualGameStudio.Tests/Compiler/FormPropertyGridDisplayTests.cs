@@ -339,7 +339,12 @@ public class FormPropertyGridDisplayTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(grid.Rows.Select(r => r.Name), Is.EquivalentTo(new[] { "Name", "Text", "ClientSize" }));
+            // ⚠ Slice 3 re-check: the Form's D1 rows grew (FormBorderStyle, StartPosition, …). The set is exactly
+            // FormRoot's rows that apply to this document, plus the frozen Name — never a hand list of them.
+            Assert.That(grid.Rows.Select(r => r.Name), Is.EquivalentTo(new[] { "Name" }.Concat(
+                FormControlCatalog.FormRoot.Properties.Where(p => FormRootValues.Applies(p, file.Model)).Select(p => p.Name))));
+            Assert.That(grid.Rows.Select(r => r.Name), Does.Contain("FormBorderStyle").And.Contain("AcceptButton"),
+                "the slice-3 Form rows reach the grid");
             Assert.That(clientSize.StringValue, Is.EqualTo("400, 300"));
             Assert.That(grid.Rows.Single(r => r.Name == "Text").IsBold, Is.True);
             Assert.That(clientSize.Description, Is.EqualTo("The size of the client area of the form, in pixels."),
@@ -538,7 +543,9 @@ public class FormPropertyGridDisplayTests
         var edits = 0;
         grid.Edited += (_, _) => edits++;
 
-        Assert.That(grid.Rows.Select(r => r.Name), Is.EquivalentTo(new[] { "Name", "Text", "Cols", "Rows", "Gap" }));
+        // Slice 3: plus the Form's web rows (BackColor, ForeColor, Font on body).
+        Assert.That(grid.Rows.Select(r => r.Name),
+            Is.EquivalentTo(new[] { "Name", "Text", "Cols", "Rows", "Gap", "BackColor", "ForeColor", "Font" }));
 
         grid.Rows.Single(r => r.Name == "Cols").StringValue = "120px,1fr";
         var written = FormDocumentWriter.Write(file);

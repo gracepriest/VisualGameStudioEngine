@@ -30,7 +30,21 @@ public enum FormPropertyType
     Padding,
 
     /// <summary>A <c>System.Windows.Forms.Cursors</c> member (<see cref="FormCursors"/>). The web's cursor through ONE table.</summary>
-    Cursor
+    Cursor,
+
+    /// <summary>
+    /// A proportion from 0 to 1, stored as an invariant decimal (<c>0.85</c>) — WinForms' <c>Double</c> Opacity, the one
+    /// row of this shape (slice 3 pre-flight §3). Out of range is Degraded rather than clamped as WinForms would. ⚠ A
+    /// Double row with a different range needs a range facet, not this type.
+    /// </summary>
+    Fraction,
+
+    /// <summary>
+    /// The Id of another control on the same form (<c>AcceptButton</c>) — emitted as that field, AFTER the controls are
+    /// constructed. <see cref="FormPropertyDef.ReferenceKinds"/> names the kinds it may point at; the region writer,
+    /// which has the document, warns BL8034 for a reference that names none of them.
+    /// </summary>
+    Reference
 }
 
 /// <summary>
@@ -172,6 +186,10 @@ public enum FormEditVerdict
 /// (<c>FormRootLayoutTests.WebLayouts_IsDeclaredOnlyOnFormRootRows_ThatExistOnTheWeb</c>) refuses it on a
 /// control row, where no consumer reads it.
 /// </param>
+/// <param name="ReferenceKinds">
+/// For a <see cref="FormPropertyType.Reference"/> row: the control kinds it may name (<c>AcceptButton</c> → Button, the
+/// catalog's one <c>IButtonControl</c>). Null on every other row.
+/// </param>
 public sealed record FormPropertyDef(
     string Name,
     FormPropertyType Type,
@@ -189,7 +207,8 @@ public sealed record FormPropertyDef(
     string? WebDefault = null,
     IReadOnlyDictionary<string, string>? Aliases = null,
     string? OracleExemption = null,
-    IReadOnlyList<FormLayoutKind>? WebLayouts = null)
+    IReadOnlyList<FormLayoutKind>? WebLayouts = null,
+    IReadOnlyList<string>? ReferenceKinds = null)
 {
     // ⛔ Normalised to OrdinalIgnoreCase whatever comparer the caller built the dictionary with —
     // Accepts and Canonical are case-insensitive for members, and an alias lookup that silently
@@ -293,9 +312,25 @@ public sealed record FormPropertyDef(
             FormPropertyType.Font when FormFontValue.TryParse(value, out var font) => font.Canonical,
             FormPropertyType.Padding when FormPaddingValue.TryParse(value, out var padding) => padding.Canonical,
             FormPropertyType.Cursor when FormCursors.TryCanonical(value, out var cursor) => cursor,
+            FormPropertyType.Fraction when TryParseFraction(value, out var fraction) => FractionText(fraction),
             _ => value
         };
     }
+
+    /// <summary>
+    /// A <see cref="FormPropertyType.Fraction"/>: an invariant decimal (point, no grouping, no exponent) from 0 to 1, with
+    /// only ASCII spaces around it — the TryParseInt rule for what may surround a number.
+    /// </summary>
+    public static bool TryParseFraction(string? value, out decimal fraction)
+    {
+        fraction = 0;
+        return value != null &&
+               decimal.TryParse(value.Trim(' '), NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out fraction) &&
+               fraction is >= 0 and <= 1;
+    }
+
+    /// <summary>The number as a BasicLang/C# literal and as canonical document text: invariant, no trailing zeros.</summary>
+    private static string FractionText(decimal fraction) => fraction.ToString("0.##########", CultureInfo.InvariantCulture);
 
     /// <summary>
     /// What an editor OFFERS for this row: an Enum's <see cref="AllowedValues"/>, a Cursor row's
@@ -414,6 +449,9 @@ public sealed record FormPropertyDef(
             FormPropertyType.Font => FormFontValue.TryParse(value, out var font) ? font.WinFormsLiteral : null,
             FormPropertyType.Padding => FormPaddingValue.TryParse(value, out var padding) ? padding.WinFormsLiteral : null,
             FormPropertyType.Cursor => FormCursors.TryCanonical(value, out var cursor) ? "Cursors." + cursor : null,
+            FormPropertyType.Fraction => TryParseFraction(value, out var fraction) ? FractionText(fraction) : null,
+            // The field the Id names. ⚠ Whether such a field EXISTS is a document question — the region writer's (BL8034).
+            FormPropertyType.Reference => FormDocument.IsLegalControlId(value) ? value : null,
             _ => null
         };
     }
@@ -657,6 +695,8 @@ public sealed record FormPropertyDef(
             FormPropertyType.Font => FormFontValue.TryParse(value, out _),
             FormPropertyType.Padding => FormPaddingValue.TryParse(value, out _),
             FormPropertyType.Cursor => FormCursors.TryCanonical(value, out _),
+            FormPropertyType.Fraction => TryParseFraction(value, out _),
+            FormPropertyType.Reference => FormDocument.IsLegalControlId(value),
             _ => false
         };
     }
@@ -733,6 +773,8 @@ public sealed record FormPropertyDef(
                    FormPropertyType.Font => " (expected WinForms' font text: a family of letters, digits, spaces or " +
                                             "hyphens, a size in points, optional styles — e.g. 'Segoe UI, 9pt, style=Bold')",
                    FormPropertyType.Padding => " (expected one non-negative whole number, or four: Left, Top, Right, Bottom)",
+                   FormPropertyType.Fraction => " (expected a number from 0 to 1 with a decimal point, e.g. 0.85)",
+                   FormPropertyType.Reference => " (expected the Id of a control on this form)",
                    _ => ""
                } +
                ".";
@@ -2110,7 +2152,8 @@ public static class FormControlCatalog
     ///
     /// <para>⚠ Its values do NOT live in an attribute dictionary: Text, the client size and the web
     /// layout are typed FormDocument fields. <see cref="FormRootValues"/> is the ONE map from a row to
-    /// its storage. Properties-stored root rows (FormBorderStyle…) arrive in slice 3.</para>
+    /// its storage. Every other root row (slice 3's FormBorderStyle…) is Properties-stored: the root attribute of its
+    /// own name, in <see cref="FormDocument.Properties"/>.</para>
     ///
     /// <para>⚠ Below <see cref="All"/> is fine: it reads no shared field (textual init order).</para>
     /// </summary>
@@ -2161,6 +2204,78 @@ public static class FormControlCatalog
                 Category: FormPropertyCategory.Layout,
                 Description: "Below this page width, in pixels, the controls stack into one column for phones. 0 never stacks.",
                 WebLayouts: new[] { FormLayoutKind.Canvas }),
+
+            // ==========================================================
+            // Slice 3 — the Form's D1 set (spec §2.3), PROPERTIES-STORED: each lives in FormDocument.Properties as the
+            // root attribute of its own name (FormRootValues' default arm). WinForms' own metadata (the snapshot);
+            // WinForms-only unless it maps cleanly onto the page's body (D2): BackColor, ForeColor, Font.
+            // ⚠ Icon waits for slice 4's image machinery.
+            // ==========================================================
+            new("FormBorderStyle", FormPropertyType.Enum, "Sizable",
+                new[] { "None", "FixedSingle", "Fixed3D", "FixedDialog", "Sizable", "FixedToolWindow", "SizableToolWindow" },
+                WinFormsEnumType: "FormBorderStyle", Targets: new[] { FormTarget.WinForms },
+                Category: FormPropertyCategory.Appearance,
+                Description: "Indicates the appearance and behavior of the border and title bar of the form."),
+            new("StartPosition", FormPropertyType.Enum, "WindowsDefaultLocation",
+                new[] { "Manual", "CenterScreen", "WindowsDefaultLocation", "WindowsDefaultBounds", "CenterParent" },
+                WinFormsEnumType: "FormStartPosition", Targets: new[] { FormTarget.WinForms },
+                Category: FormPropertyCategory.Layout,
+                Description: "Determines the position of a form when it first appears."),
+            new("WindowState", FormPropertyType.Enum, "Normal", new[] { "Normal", "Minimized", "Maximized" },
+                WinFormsEnumType: "FormWindowState", Targets: new[] { FormTarget.WinForms },
+                Category: FormPropertyCategory.Layout,
+                Description: "Determines the initial visual state of the form."),
+            new("MinimumSize", FormPropertyType.Size, "0, 0", Targets: new[] { FormTarget.WinForms },
+                Category: FormPropertyCategory.Layout,
+                Description: "The minimum size the form can be resized to."),
+            new("MaximumSize", FormPropertyType.Size, "0, 0", Targets: new[] { FormTarget.WinForms },
+                Category: FormPropertyCategory.Layout,
+                Description: "The maximum size the form can be resized to."),
+            new("ControlBox", FormPropertyType.Bool, "true", Targets: new[] { FormTarget.WinForms },
+                Category: FormPropertyCategory.WindowStyle,
+                Description: "Determines whether a form has a Control/System menu box."),
+            new("MaximizeBox", FormPropertyType.Bool, "true", Targets: new[] { FormTarget.WinForms },
+                Category: FormPropertyCategory.WindowStyle,
+                Description: "Determines whether a form has a maximize box in the upper-right corner of its caption bar."),
+            new("MinimizeBox", FormPropertyType.Bool, "true", Targets: new[] { FormTarget.WinForms },
+                Category: FormPropertyCategory.WindowStyle,
+                Description: "Determines whether a form has a minimize box in the upper-right corner of its caption bar."),
+            new("ShowIcon", FormPropertyType.Bool, "true", Targets: new[] { FormTarget.WinForms },
+                Category: FormPropertyCategory.WindowStyle,
+                Description: "Indicates whether an icon is displayed in the title bar of the form."),
+            new("ShowInTaskbar", FormPropertyType.Bool, "true", Targets: new[] { FormTarget.WinForms },
+                Category: FormPropertyCategory.WindowStyle,
+                Description: "Determines whether the form appears in the Windows Taskbar."),
+            new("TopMost", FormPropertyType.Bool, "false", Targets: new[] { FormTarget.WinForms },
+                Category: FormPropertyCategory.WindowStyle,
+                Description: "Indicates whether the form always appears above all other forms that do not have this property set to true."),
+            // ⛔ References: emitted AFTER the controls (pre-flight B4) — before them the field is still Nothing.
+            new("AcceptButton", FormPropertyType.Reference, Targets: new[] { FormTarget.WinForms },
+                Category: FormPropertyCategory.Misc,
+                Description: "The accept button of the form. If this is set, the button is 'clicked' whenever the user presses the 'ENTER' key.",
+                ReferenceKinds: new[] { "Button" }),
+            new("CancelButton", FormPropertyType.Reference, Targets: new[] { FormTarget.WinForms },
+                Category: FormPropertyCategory.Misc,
+                Description: "The cancel button of the form. If this property is set, the button is 'clicked' whenever the user presses the 'ESC' key.",
+                ReferenceKinds: new[] { "Button" }),
+            new("KeyPreview", FormPropertyType.Bool, "false", Targets: new[] { FormTarget.WinForms },
+                Category: FormPropertyCategory.Misc,
+                Description: "Determines whether keyboard events for controls on the form are registered with the form."),
+            // ⛔ Both targets (D2): the page's BODY, so every control inherits them as WinForms' ambient properties
+            // inherit from the Form — the Docked strips included. WebDefault empty: with nothing written the browser's
+            // own body colours and font stand, not WinForms' Control/ControlText/Segoe UI.
+            new("BackColor", FormPropertyType.Color, "Control", WebDefault: "",
+                Category: FormPropertyCategory.Appearance, Description: "The background color of the component.",
+                CssProperty: "background-color", CssConverter: FormCssConverter.Color),
+            new("ForeColor", FormPropertyType.Color, "ControlText", WebDefault: "",
+                Category: FormPropertyCategory.Appearance,
+                Description: "The foreground color of this component, which is used to display text.",
+                CssProperty: "color", CssConverter: FormCssConverter.Color),
+            new("Font", FormPropertyType.Font, "Segoe UI, 9pt", WebDefault: "",
+                Category: FormPropertyCategory.Appearance, Description: "The font used to display text in the control.",
+                CssProperty: "font", CssConverter: FormCssConverter.Font),
+            new("Opacity", FormPropertyType.Fraction, "1", Targets: new[] { FormTarget.WinForms },
+                Category: FormPropertyCategory.WindowStyle, Description: "The opacity percentage of the control."),
         },
         Schematic: FormSchematic.Container);
 

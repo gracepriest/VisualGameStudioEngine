@@ -672,34 +672,11 @@ public static class RegionWriter
             // shipped VSIX template uses, and the shape Owner decision 3 makes canonical. ⛔ ONE
             // `Me.X = …` statement per row: ClientSize fans in exactly as a control's Size does, for
             // the same CS1612 reason.
-            foreach (var row in FormControlCatalog.FormRoot.Properties.Where(p => FormRootValues.Applies(p, FormTarget.WinForms, null)))
+            // ⚠ A REFERENCE row (AcceptButton) is NOT emitted here: its control is constructed below, and until then the
+            // field is Nothing (pre-flight B4) — it follows the add run, beside the FormProperty line.
+            foreach (var row in RootRows(form).Where(r => r.Type != FormPropertyType.Reference))
             {
-                var value = FormRootValues.Get(form, row);
-                if (value == null)
-                {
-                    continue;
-                }
-
-                // ⛔ A Degraded root value never reaches generated source — the control rule, at the
-                // root. DescribeRefusal is reached only for a value truly refused (it throws otherwise).
-                //
-                // ⚠ RE-CHECK IN SLICE 3: add a test that reaches this. It is UNREACHABLE today: Text is a
-                // String (accepts anything) and FormRootValues.Get yields ClientSize only for two positive
-                // ints, which always parse. Slice 3's Properties-stored root rows make it reachable.
-                if (!row.Accepts(value, FormTarget.WinForms) && !row.IsSourceForm(value))
-                {
-                    diagnostics.Add(new DesignDiagnostic(
-                        DesignCodes.DegradedProperty,
-                        // Composed from the ONE refusal text, exactly as AppendProperties' control site
-                        // is — never a hand-written "is not a valid" copy.
-                        $"{DesignCodes.DegradedProperty}: 'form.{row.Name}': " +
-                        row.DescribeRefusal(value, FormTarget.WinForms) +
-                        " It is not written into the generated code.",
-                        filePath, 0, 0, IsWarning: true));
-                    continue;
-                }
-
-                body.Append($"{inner}Me.{row.Name} = {Literal(row, value)}").Append(newline);
+                AppendRootRow(body, form, row, inner, newline, filePath, diagnostics);
             }
         }
 
@@ -726,11 +703,73 @@ public static class RegionWriter
             {
                 body.Append($"{inner}Me.{main.Definition!.FormProperty} = {main.Id}").Append(newline);
             }
+
+            // The form's REFERENCE rows (AcceptButton, CancelButton), after every control exists — VS's own place for them.
+            foreach (var row in RootRows(form).Where(r => r.Type == FormPropertyType.Reference))
+            {
+                AppendRootRow(body, form, row, inner, newline, filePath, diagnostics);
+            }
         }
 
         body.Append($"{indent}End Sub").Append(newline);
         return body.ToString();
     }
+
+    /// <summary>The FormRoot rows that exist on a WinForms form — the ones its InitializeComponent sets on <c>Me</c>.</summary>
+    private static IEnumerable<FormPropertyDef> RootRows(FormDocument form) =>
+        FormControlCatalog.FormRoot.Properties.Where(p => FormRootValues.Applies(p, FormTarget.WinForms, null));
+
+    /// <summary>
+    /// One FormRoot row as ONE <c>Me.X = …</c> statement (spec §2.3; the fan-in rule — ClientSize, MinimumSize and Font
+    /// are one statement each), or a warning and nothing.
+    /// </summary>
+    private static void AppendRootRow(
+        StringBuilder body, FormDocument form, FormPropertyDef row, string inner, string newline,
+        string filePath, List<DesignDiagnostic> diagnostics)
+    {
+        var value = FormRootValues.Get(form, row);
+        if (value == null)
+        {
+            return;
+        }
+
+        // ⛔ A Degraded root value never reaches generated source — the control rule, at the root. DescribeRefusal is
+        // reached only for a value truly refused (it throws otherwise). Reachable since slice 3's Properties-stored rows
+        // (FormRootTests.ADegradedRootProperty_IsFrozen_Preserved_AndNeverEmitted).
+        if (!row.Accepts(value, FormTarget.WinForms) && !row.IsSourceForm(value))
+        {
+            diagnostics.Add(new DesignDiagnostic(
+                DesignCodes.DegradedProperty,
+                // Composed from the ONE refusal text, exactly as AppendProperties' control site is — never a
+                // hand-written "is not a valid" copy.
+                $"{DesignCodes.DegradedProperty}: 'form.{row.Name}': " +
+                row.DescribeRefusal(value, FormTarget.WinForms) +
+                " It is not written into the generated code.",
+                filePath, 0, 0, IsWarning: true));
+            return;
+        }
+
+        // ⛔ A reference must name a control of a kind the row allows (BL8034): csc rejects `Me.AcceptButton = lblTitle`
+        // (CS0029) and `= btnGone` (CS0103), and BasicLang types both as Object and says nothing.
+        if (row.Type == FormPropertyType.Reference && !NamesAnAllowedControl(form, row, value))
+        {
+            var kinds = string.Join(" or ", row.ReferenceKinds ?? Array.Empty<string>());
+            diagnostics.Add(new DesignDiagnostic(
+                DesignCodes.ReferenceNotFound,
+                $"{DesignCodes.ReferenceNotFound}: 'form.{row.Name}' names '{value}', but this form has no {kinds} with " +
+                $"that Id (renamed, deleted, or another kind of control), so it is not written into the generated code. " +
+                "The document keeps it.",
+                filePath, 0, 0, IsWarning: true));
+            return;
+        }
+
+        body.Append($"{inner}Me.{row.Name} = {Literal(row, value)}").Append(newline);
+    }
+
+    /// <summary>Whether a reference names a control (or component) of this form whose kind its row allows.</summary>
+    private static bool NamesAnAllowedControl(FormDocument form, FormPropertyDef row, string id) =>
+        form.FindById(id) is { } target &&
+        (row.ReferenceKinds ?? Array.Empty<string>()).Contains(target.Kind, StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// Emits a run of siblings: each control's initialization in DOCUMENT order, then — on WinForms —
@@ -1217,7 +1256,8 @@ public static class RegionWriter
             // CS0029 at csc with BasicLang silent; verbatim would splice unparsed text — `5\r\n` — into
             // source. Both hide a broken invariant as a broken build, so this names the invariant.
             FormPropertyType.Int or FormPropertyType.Size or FormPropertyType.Font or FormPropertyType.Padding
-                or FormPropertyType.Cursor => throw new InvalidOperationException(
+                or FormPropertyType.Cursor or FormPropertyType.Fraction or FormPropertyType.Reference
+                => throw new InvalidOperationException(
                 $"'{property.Name}' = '{value}' is not a parsable {property.Type} and reached the region " +
                 "writer; a Degraded value must be skipped before Literal is called."),
             _ => FormPropertyDef.StringLiteral(value)
