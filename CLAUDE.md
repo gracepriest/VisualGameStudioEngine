@@ -125,6 +125,10 @@ Backends: `CSharpBackend.cs`, `LLVMBackend.cs`, `MSILBackend.cs`, `CppCodeGenera
 per-feature handlers, `CompletionService.cs`). `MyBase.New(...)` is an `IRBaseConstructorCall`
 **instruction** ending the constructor's entry-block prologue (ADR-0016) — not a list on
 `IRConstructor`; a use with no home in any block is invisible to every pass.
+`IRValue.IsCompilerTemp`, set only by `IRBuilder.MarkCompilerTemps`, is the dead-code pass's
+removal licence (ADR-0017): a temp is never recognized by spelling (a user may name a variable
+`t5`, `T5` or `_tmp1`), and a pass that mints a temp must mint through `IRFunction.GetNextTempName`
+and set the flag.
 
 ## Form designer (`BasicLang/Forms/`, `VisualGameStudio.Shell/Controls/`)
 

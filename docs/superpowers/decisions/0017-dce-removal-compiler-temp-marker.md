@@ -145,8 +145,9 @@ A minted `IRVariable` is never a compiler temp in this sense.
 
 ## Findings (implementer, measured; ruled by the orchestrator)
 
-All of these are in probes written for #163. The 854 pre-existing corpus programs are
-byte-identical, and DCE removes nothing in them. The brief's STOP list was stricter than the
+All of these are in probes written for #163. The 854 programs of the scratch corpus are
+byte-identical, and DCE removes nothing in them. (The in-repo test programs are a different set,
+where two do lose an orphan: see "Measured at landing".) The brief's STOP list was stricter than the
 owner's "STOP if unsafe". The orchestrator ruled findings 1 and 2 not unsafe, since they are
 output changes toward VB (the oracle is `vbc`) with no regression, and settled 3 by a witness
 search.
@@ -241,7 +242,15 @@ search.
   - Return codes changed: 0. Verifier (`BASICLANG_VERIFY_IR`, log mode): 0 fires in either tree.
 - **Removals** (per-cell trace, scratch build): 140, all in the #163 probes. By kind: `Neg` 56,
   `Not` 56, `Mul` 14, `Shl` 14. The counts are identical on every backend and mode, since the IR is
-  backend-independent. **0 removals in the 854 pre-existing programs.**
+  backend-independent. **0 removals in the 854 pre-existing scratch-corpus programs.**
+- **The in-repo test programs (test-writer, measured).** A harvest of the 674 buildable program
+  strings in the test assembly finds DCE removing orphans in exactly two:
+  - `NotPrecedenceExecutionTests.Program` loses one `Not`;
+  - `OptimizerOrphanedTempTests.FoldProgram` loses one `Neg` and one `Not`.
+
+  Both are marked, minted, pure temps with no use, which is the licence working as intended, and
+  both tests still pass. `DeadCodeRemovalOnRealIrTests` pins exactly these two and 0 everywhere
+  else.
 - **Kept on purpose.**
   - Every unused value spelled like a temp that is user storage (t118's `T5`; U1–U8's `t5`, `T5`,
     `_tmp1`, `_t3`, `_t0`, fields `t0`/`t1`, global `t3`) carries no marker. The spelling guard
