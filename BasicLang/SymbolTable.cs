@@ -108,6 +108,20 @@ public class TypeInfo
         /// </summary>
         public Symbol DelegateSignature { get; set; }
 
+        /// <summary>
+        /// For a BasicLang <c>Class</c> declaration (not an <c>Extern Class</c>): the name of every
+        /// member its declaration spells — Private ones, events and nested types included, which
+        /// <see cref="Members"/> does not all carry. Null for every other type. With
+        /// <see cref="DeclaredBaseName"/> it is what lets a member access say "this class does not
+        /// have that" rather than handing the receiver to the permissive .NET-name fallback, which
+        /// claims any PascalCase name (<c>SemanticAnalyzer.LacksDeclaredMember</c>). Recorded on the
+        /// type so a class that arrives from another unit carries it.
+        /// </summary>
+        public HashSet<string> DeclaredMemberNames { get; set; }
+
+        /// <summary>The <c>Inherits</c> name of the declaration <see cref="DeclaredMemberNames"/> came from, or null.</summary>
+        public string DeclaredBaseName { get; set; }
+
         public Dictionary<string, Symbol> Members { get; set; }
 
         public TypeInfo(string name, TypeKind kind)
