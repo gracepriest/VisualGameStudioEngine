@@ -256,6 +256,52 @@ then A/B on a detached `origin/master` worktree.
 | `WinFormsCatalogParityTests.TheSnapshot_Covers…` | no new kind in slice 3 | none |
 | `FormPropertyGridViewTests.TheDocumentView_NoLongerCarriesTheGridsOwnBindings` | must stay green | 6 |
 
+## 5a. EXECUTION NOTES (added while executing slice 3)
+
+Commits on `feat/property-grid-slice3` (off master `14c2e17d`): pre-flight `5f2136d5` · T1 `f2af84cf` · T2 `d6ef1808` ·
+T3 `1cdbfe5f` · T4 `15060e7b` · T5 `269bed92` · T6 `faa117a8` · T7 `832d0288`.
+
+- **Owner correction the same day (O3):** GroupBox's default event is ENTER (not Click, as the first brief said), web
+  `focusin`; Click kept non-default. Implemented as corrected. The container check found Panel, FlowLayoutPanel and
+  TableLayoutPanel are `Paint` in WinForms (catalog Click), TrackBar `Scroll` (catalog ValueChanged), DataGridView
+  `CellContentClick` (catalog CellClick) — reported, unchanged.
+- **Coordination:** the dangling-reference warning is **BL8034** (`fix/unknown-dock-diagnostic` claims BL8033). The band
+  table in `DesignDiagnostic.cs` lists both; re-check the next free number when either lands.
+- **T1:** an XML attribute's LITERAL tab is normalised to a space by the XML reader (then TryParseInt accepts it) — the
+  degraded-geometry fixtures write the `&#9;` character reference.
+- **T3 measured:** `CType(n, FontStyle)` emits `((FontStyle)(n))`; `9F`/`9.75F` lex; `9.75!` does not parse. A probe class
+  named `M` breaks `Me.` resolution (chip `task_ef845b99`), so every fixture uses a multi-letter name.
+- **T5 found a live D2 leak:** the emitter's boolean flags read `Enabled`/`Checked` by NAME, so a MenuStrip's WinForms-only
+  Enabled=false wrote `disabled` on its `<nav>` and a menu item's Checked wrote `checked` on its `<li>`. Fixed (a flag
+  is honoured only through a row that exists on the web). ⚠ ProgressBar keeps WinForms' own `Style` enum: a row is found
+  by NAME, never by target, so the web-only raw `Style` is not added there (pinned).
+- **T6:** a part's change that does not go through the parent's Commit (the geometry parts) must NOTIFY the parent — a
+  mutant that dropped it survived every getter-reading test and was killed only by a PropertyChanged test.
+- **T7 found a live web/WinForms divergence:** Edge measured `font-weight: 400` on a button under a bold Form Font — a
+  browser does not inherit body's font into `<button>/<input>/<select>/<textarea>`. Fixed: with a Form Font the page adds
+  `button, input, select, textarea { font: inherit; }` (and with a Form ForeColor, `button { color: inherit; }`), only
+  when the row is present. The Edge harness gained a `style` probe (computed value, element or body).
+- **Recorded, not changed (follow-ups):** pre-existing web rows with no page meaning (TextBox Multiline/PasswordChar,
+  Panel BorderStyle, PictureBox SizeMode — piece 2); a container's Padding (FormDockLayout does not model it); a
+  document that still carries a removed hidden colour (PictureBox `ForeColor`) keeps it as an unknown attribute that is
+  no longer emitted to the page, silently; the web GroupBox handler is named after the DOM event (`GroupBox1_Focusin`,
+  the existing web naming rule), not VS's `GroupBox1_Enter`; `FormRetarget`'s unknown-attribute `fromRow` arm whose
+  destination HAS the row is still unreachable (only ClientSize is stored as an unknown attribute when Degraded, and a
+  WinForms → web retarget produces a Grid page without ClientSize) — backlog (4) is met by the Properties-stored
+  equivalent (a root value Degraded on both targets crosses unnamed, tested).
+- **Gate @ `832d0288` (Windows, Release):** fast subset 9315 total / 9290 passed / 6 failed / 19 skipped. That compares with
+  base `14c2e17d` at 9111 / 9086 / 6 / 19, and the 6 failures are the SAME NAMES: EveryTextRoute_UsesTheFormatter…,
+  Emit_ReplacesAnImportedModuleThatAnotherHandleHasMapped, Emit_ReplacesAScriptThatAnotherHandleHasMapped,
+  Emit_ReplacingAnImportedModule_LeavesNoTempFileBehind, SearchSnippets_EmptyQuery/WhitespaceQuery_ReturnsAll.
+  Named Integration fixtures ran 345/345 with 0 skipped: WinFormsCatalogParity, WinFormsCatalogSweep,
+  FormDesignerAcceptance, FormMenuAcceptance, FormComponentAcceptance, FormBuildEmission, FormAnchorEmission,
+  FormPropertyBatchAcceptance, PixelLayout, FormRetargetPair and WebMainStartup. Mutations: 36/36 killed across T1–T7.
+- **Merge-check (trial merge of origin/master `bc29391e` into `832d0288`, done in a `--detach` worktree, aborted):** ONE
+  conflicted file, `DesignDiagnostic.cs`, two hunks, both keep-both: the band table (master's BL8033 unknown Dock + this
+  slice's BL8034; next free becomes BL8035) and `DesignCheck` (this slice's `form.DegradedRoot` loop + master's
+  `RegionWriter.AnchorRefusals` line). `FormRetarget.cs`, `RegionWriter.cs` and `FormDesignerAcceptanceTests.cs` auto-merge
+  — re-run the form fixtures on the merged tree before any PR.
+
 ## 6. Traps that apply (repo-wide, restated where slice 3 touches them)
 Catalog is the single source of truth (no hand lists); a WinForms row is unfalsifiable without csc (sweep + parity green);
 fan-in (one statement per composite: `New Font(…)`, `New Padding(…)`); never `With`; ask the catalog what a value means;
