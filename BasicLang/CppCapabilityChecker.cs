@@ -362,40 +362,325 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                             CheckType(prop.Type, $"interface property '{iface.Name}.{prop.Name}'", diags);
                 }
 
+            // ADR-0016 D3 (amended): a write that a by-copy capture loses (#140).
+            CheckLambdaCaptureWrites(module, diags);
+
             return diags.Distinct().ToList();
         }
 
         /// <summary>
-        /// ADR-0015: a class's <c>MyBase.New</c> arguments must be ones the two-phase constructor
-        /// can place (<see cref="CppObjectModel.PlanBaseArguments"/>), and — in a hierarchy built on
-        /// a <c>#CppInclude</c>d C++ class — PURE (<see cref="CppObjectModel.IsPureBaseArgument"/>),
-        /// because there each argument is evaluated in the tag constructor's initializer list as
-        /// well as in <c>ctor_</c>. Both are refused here by name; neither shape compiled before
-        /// ADR-0015 (every computed argument was "use of undeclared identifier" in clang).
+        /// ⭐ ADR-0016 D3 (amended — "W2"): the C++ backend captures a lambda's free variables BY
+        /// COPY (<c>[=]</c>), so a WRITE to a captured variable is lost to the side that did not
+        /// make it. ONE rule, two arms, one deletion point for #140:
+        /// <list type="bullet">
+        /// <item><b>(a)</b> the lambda writes a variable it captures — its own copy, never stored
+        /// back (#170's B1–B4, the C1 control);</item>
+        /// <item><b>(b)</b> the lambda's CREATOR writes a captured variable at a point reachable in
+        /// the creator's CFG from the instruction that creates the lambda, that instruction
+        /// included — the lambda keeps the copy taken at creation (B2, a counted <c>For</c>
+        /// variable, a Finally that runs after the capture, <c>f = Function() f()</c>).</item>
+        /// </list>
+        /// Every observable case is a silent wrong answer, so it is refused by name until #140 gives
+        /// C++ by-reference capture. Position-independent on purpose (not keyed on
+        /// <c>MyBase.New</c>).
+        ///
+        /// <para><b>Assigns</b> (<see cref="NamesAssignedBy"/>) is precise, not the kill vocabulary's
+        /// over-approximation: an assignment target, a value renamed after a variable, a store to a
+        /// variable, <c>++</c>/<c>--</c>, a variable passed to a ByRef parameter. A For Each, Catch
+        /// or pattern variable is a DECLARATION, never a write. <b>Captured</b>, for (a): a parameter
+        /// or local of the creator chain the lambda does not declare; for (b): the lambda's capture
+        /// set (<c>LambdaCapturesOf</c>, nested lambdas included) that is the creator's own
+        /// parameter or local, minus what the lambda declares. A class field is never captured — it
+        /// is reached through the captured <c>this</c>, by reference.</para>
+        ///
+        /// <para><b>Reachable</b> is over <see cref="ControlFlowGraph.ExecutionSuccessors"/> (the one
+        /// shared edge set: the laid-out edges plus For Each's next iteration and Try's handlers),
+        /// with two cuts that make the copy CORRECT, measured: a per-iteration variable (ADR-0014
+        /// <c>BodyLocals</c>, or the For Each's own control variable) is a fresh instance once
+        /// control re-enters that loop's body entry, so the search stops there; and a <c>Dim</c>
+        /// initializer (<see cref="IRInstruction.IsDimInitializer"/>) declares a fresh variable of
+        /// that spelling and ends the path — which also covers a name <c>BodyLocals</c> omits
+        /// because it is declared twice (#242).</para>
+        ///
+        /// <para>#140's obligation: delete this method (and <see cref="NamesAssignedBy"/>); B1–B4,
+        /// C1 and arm (b)'s fifteen flip to running, and the ten per-iteration programs ADR-0016
+        /// names stay running (#140's regression fence).</para>
+        /// </summary>
+        private static void CheckLambdaCaptureWrites(IRModule module, List<string> diags)
+        {
+            if (module?.Functions == null || !module.Functions.Any(f => f != null && f.IsLambda)) return;
+
+            var lambdas = new Dictionary<string, IRFunction>(StringComparer.Ordinal);
+            foreach (var f in module.Functions)
+                if (f != null && f.IsLambda && f.Name != null) lambdas.TryAdd(f.Name, f);
+            var creatorOf = new Dictionary<IRFunction, IRFunction>(ReferenceEqualityComparer.Instance);
+            foreach (var f in module.Functions)
+            {
+                if (f?.Blocks == null) continue;
+                foreach (var name in BasicLang.Compiler.IR.Optimization.OptimizationPass.LambdaReferences(f))
+                    if (lambdas.TryGetValue(name, out var lambda) && !ReferenceEquals(lambda, f))
+                        creatorOf.TryAdd(lambda, f);
+            }
+
+            string Line(IRInstruction inst) => inst?.SourceLine > 0 ? $" at line {inst.SourceLine}" : "";
+            void Refuse(string variable, string creatorName, IRInstruction creation, string writer, IRInstruction write) =>
+                diags.Add($"the lambda created{Line(creation)} captures '{variable}' of '{DisplayName(creatorName)}', " +
+                          $"and {writer} writes it{Line(write)} — not supported on C++ (#140): the C++ backend " +
+                          "captures by copy, so that write and the lambda's copy never meet (ADR-0016 D3)");
+
+            foreach (var lambda in lambdas.Values)
+            {
+                if (!creatorOf.TryGetValue(lambda, out var creator)) continue;
+                var creations = CreationsOf(creator, lambda.Name);
+                var own = Declared(lambda);
+
+                // ---- arm (a): the lambda writes a variable of its creator chain.
+                var enclosing = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                var guard = 0;
+                for (var c = creator; c != null && guard++ < 1000;
+                     c = creatorOf.TryGetValue(c, out var outer) ? outer : null)
+                {
+                    foreach (var p in c.Parameters) if (p?.Name != null) enclosing.TryAdd(p.Name, c.Name);
+                    foreach (var l in c.LocalVariables) if (l?.Name != null) enclosing.TryAdd(l.Name, c.Name);
+                    if (!c.IsLambda) break;
+                }
+                var reported = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var block in lambda.Blocks ?? new List<BasicBlock>())
+                    foreach (var inst in block.Instructions)
+                        foreach (var written in NamesAssignedBy(inst))
+                            if (!own.Contains(written) && enclosing.TryGetValue(written, out var ownerName) && reported.Add(written))
+                                Refuse(written, ownerName, creations.Count > 0 ? creations[0].Block.Instructions[creations[0].Index] : null,
+                                       "the lambda itself", inst);
+
+                // ---- arm (b): the creator writes a captured variable after the lambda is created.
+                if (creations.Count == 0) continue;
+                var declared = Declared(creator);
+                // THE capture set (ADR-0006); null when an instruction's names cannot be enumerated
+                // (raw inline code) — then the names its operands mention, which is what C++ copies.
+                var captures = (IEnumerable<string>)BasicLang.Compiler.IR.Optimization.OptimizationPass.LambdaCapturesOf(lambda)?.Keys
+                               ?? MentionedNames(module, lambda);
+                var searched = captures.Concat(DelegatesCalledByName(module, lambda))
+                    .Where(n => declared.Contains(n) && !own.Contains(n))
+                    .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+                if (searched.Count == 0) continue;
+
+                var successors = ControlFlowGraph.ExecutionSuccessors(creator);
+                var loops = IRLoops.Of(creator);
+                foreach (var variable in searched)
+                {
+                    // ADR-0014: a per-iteration variable is a FRESH instance past its loop's body entry.
+                    var freshAt = new HashSet<BasicBlock>(ReferenceEqualityComparer.Instance);
+                    foreach (var loop in loops)
+                        if (loop.Body != null
+                            && ((loop.Body.BodyLocals?.Any(b => string.Equals(b?.Name, variable, StringComparison.OrdinalIgnoreCase)) ?? false)
+                                || string.Equals(loop.ForEach?.VariableName, variable, StringComparison.OrdinalIgnoreCase)))
+                            freshAt.Add(loop.Body);
+
+                    foreach (var (block, index) in creations)
+                    {
+                        var write = WriteReachedAfter(creator, block, index, variable, freshAt, successors);
+                        if (write == null) continue;
+                        Refuse(variable, creator.Name, block.Instructions[index], $"'{DisplayName(creator.Name)}'", write);
+                        break;
+                    }
+                }
+            }
+        }
+
+        /// <summary>ADR-0016 D3 arm (b)'s search: the first instruction that writes
+        /// <paramref name="variable"/> on a path from the creation at
+        /// (<paramref name="start"/>, <paramref name="index"/>) — the creation itself included —
+        /// never entering a block of <paramref name="freshAt"/> and ending a path at a
+        /// <c>Dim</c> initializer of the variable (a fresh declaration); null when none is.</summary>
+        private static IRInstruction WriteReachedAfter(IRFunction creator, BasicBlock start, int index, string variable,
+            HashSet<BasicBlock> freshAt, Func<BasicBlock, IEnumerable<BasicBlock>> successors)
+        {
+            var inFunction = new HashSet<BasicBlock>((creator.Blocks ?? new List<BasicBlock>()).Where(b => b != null),
+                ReferenceEqualityComparer.Instance);
+            // null: no write here; true: stale-making write; false: a Dim — a fresh variable from here on.
+            bool? Classify(IRInstruction inst, bool isCreation) =>
+                !NamesAssignedBy(inst).Contains(variable) ? null : (isCreation || !inst.IsDimInitializer);
+
+            for (var i = index; i < start.Instructions.Count; i++)
+                switch (Classify(start.Instructions[i], i == index))
+                {
+                    case true: return start.Instructions[i];
+                    case false: return null;
+                }
+
+            var seen = new HashSet<BasicBlock>(ReferenceEqualityComparer.Instance);
+            var pending = new Stack<BasicBlock>();
+            void Follow(BasicBlock from)
+            {
+                foreach (var next in successors(from))
+                    if (next != null && inFunction.Contains(next) && !freshAt.Contains(next)) pending.Push(next);
+            }
+            Follow(start);
+            while (pending.Count > 0)
+            {
+                var block = pending.Pop();
+                if (!seen.Add(block)) continue;
+                var declaredHere = false;
+                foreach (var inst in block.Instructions)
+                {
+                    var kind = Classify(inst, false);
+                    if (kind == true) return inst;
+                    if (kind == false) { declaredHere = true; break; }
+                }
+                if (!declaredHere) Follow(block);
+            }
+            return null;
+        }
+
+        /// <summary>Where <paramref name="creator"/> creates the lambda <paramref name="lambdaName"/>:
+        /// every instruction whose operand tree names it, in block order.</summary>
+        private static List<(BasicBlock Block, int Index)> CreationsOf(IRFunction creator, string lambdaName)
+        {
+            var found = new List<(BasicBlock, int)>();
+            foreach (var block in creator.Blocks ?? new List<BasicBlock>())
+                for (var i = 0; i < block.Instructions.Count; i++)
+                {
+                    var seen = new HashSet<IRValue>(ReferenceEqualityComparer.Instance);
+                    var pending = new Stack<IRValue>(BasicLang.Compiler.IR.Optimization.OptimizationPass.UsesOf(block.Instructions[i]));
+                    while (pending.Count > 0)
+                    {
+                        var value = pending.Pop();
+                        if (value == null || !seen.Add(value)) continue;
+                        if (value is IRVariable v) { if (v.Name == lambdaName) { found.Add((block, i)); break; } continue; }
+                        foreach (var operand in BasicLang.Compiler.IR.Optimization.OptimizationPass.UsesOf(value)) pending.Push(operand);
+                    }
+                }
+            return found;
+        }
+
+        /// <summary>
+        /// The names <paramref name="lambda"/> (and every lambda nested in it) CALLS as delegates —
+        /// <c>f(n - 1)</c> is an <see cref="IRCall"/> whose <see cref="IRCall.FunctionName"/> is the
+        /// variable, not an operand, so the capture set (<c>LambdaCapturesOf</c>) does not list it;
+        /// C++'s <c>[=]</c> copies it all the same. The creator's own names are selected by the
+        /// caller. Without it, <c>f = Function(n) … f(n - 1)</c> captures an empty <c>f</c> and
+        /// throws <c>bad_function_call</c> (measured).
+        /// </summary>
+        private static IEnumerable<string> DelegatesCalledByName(IRModule module, IRFunction lambda,
+            HashSet<IRFunction> visited = null)
+        {
+            visited ??= new HashSet<IRFunction>(ReferenceEqualityComparer.Instance);
+            if (lambda?.Blocks == null || !visited.Add(lambda)) yield break;
+            var own = Declared(lambda);
+            foreach (var block in lambda.Blocks)
+                foreach (var inst in block.Instructions)
+                    if (inst is IRCall { FunctionName: { } name } && !own.Contains(name))
+                        yield return name;
+            foreach (var nestedName in BasicLang.Compiler.IR.Optimization.OptimizationPass.LambdaReferences(lambda))
+            {
+                var nested = module.Functions.FirstOrDefault(f => f != null && f.IsLambda && f.Name == nestedName);
+                if (nested == null) continue;
+                foreach (var name in DelegatesCalledByName(module, nested, visited))
+                    if (!own.Contains(name)) yield return name;
+            }
+        }
+
+        /// <summary>Every variable name <paramref name="lambda"/>'s operands (and those of the
+        /// lambdas nested in it) mention or assign, minus what each declares — the capture set's
+        /// fallback when <c>LambdaCapturesOf</c> cannot enumerate a lambda's names.</summary>
+        private static HashSet<string> MentionedNames(IRModule module, IRFunction lambda, HashSet<IRFunction> visited = null)
+        {
+            visited ??= new HashSet<IRFunction>(ReferenceEqualityComparer.Instance);
+            var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (lambda?.Blocks == null || !visited.Add(lambda)) return names;
+            foreach (var block in lambda.Blocks)
+                foreach (var inst in block.Instructions)
+                {
+                    names.UnionWith(NamesAssignedBy(inst));
+                    var seen = new HashSet<IRValue>(ReferenceEqualityComparer.Instance);
+                    var pending = new Stack<IRValue>(BasicLang.Compiler.IR.Optimization.OptimizationPass.UsesOf(inst));
+                    while (pending.Count > 0)
+                    {
+                        var value = pending.Pop();
+                        if (value == null || !seen.Add(value)) continue;
+                        if (value is IRVariable v) { if (v.Name != null) names.Add(v.Name); continue; }
+                        foreach (var operand in BasicLang.Compiler.IR.Optimization.OptimizationPass.UsesOf(value)) pending.Push(operand);
+                    }
+                }
+            foreach (var nestedName in BasicLang.Compiler.IR.Optimization.OptimizationPass.LambdaReferences(lambda))
+            {
+                var nested = module.Functions.FirstOrDefault(f => f != null && f.IsLambda && f.Name == nestedName);
+                if (nested != null) names.UnionWith(MentionedNames(module, nested, visited));
+            }
+            names.ExceptWith(Declared(lambda));
+            return names;
+        }
+
+        private static HashSet<string> Declared(IRFunction function)
+        {
+            var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var p in function.Parameters ?? new List<IRVariable>()) if (p?.Name != null) names.Add(p.Name);
+            foreach (var l in function.LocalVariables ?? new List<IRVariable>()) if (l?.Name != null) names.Add(l.Name);
+            return names;
+        }
+
+        private static string DisplayName(string irFunctionName) =>
+            irFunctionName != null && irFunctionName.EndsWith("__ctor", StringComparison.Ordinal)
+                ? irFunctionName.Substring(0, irFunctionName.Length - "__ctor".Length) + ".New"
+                : irFunctionName;
+
+        /// <summary>The variable names <paramref name="inst"/> ASSIGNS (see
+        /// <see cref="CheckLambdaCaptureWrites"/> for why this is not the kill vocabulary).</summary>
+        private static HashSet<string> NamesAssignedBy(IRInstruction inst)
+        {
+            var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            void Add(string name) { if (!string.IsNullOrEmpty(name)) names.Add(name); }
+            void AddByRef(List<IRValue> args, List<bool> flags)
+            {
+                if (args == null || flags == null) return;
+                for (var i = 0; i < args.Count && i < flags.Count; i++)
+                    if (flags[i] && args[i] is IRVariable v) Add(v.Name);
+            }
+
+            switch (inst)
+            {
+                case IRAssignment assignment: Add(assignment.Target?.Name); break;
+                case IRStore { Address: IRVariable stored }: Add(stored.Name); break;
+                case IRStore { Address: IRAlloca slot } when slot.Name != null
+                                                             && slot.Name.EndsWith("_addr", StringComparison.OrdinalIgnoreCase):
+                    Add(slot.Name.Substring(0, slot.Name.Length - "_addr".Length)); break;
+                case IRCall call: AddByRef(call.Arguments, call.ByRefArguments); break;
+                case IRInstanceMethodCall methodCall: AddByRef(methodCall.Arguments, methodCall.ByRefArguments); break;
+            }
+            if (inst is IRUnaryOp { Operation: UnaryOpKind.Inc or UnaryOpKind.Dec, Operand: IRVariable incremented })
+                Add(incremented.Name);
+            if (inst is IRValue value && value is not IRVariable && value is not IRConstant
+                && BasicLang.Compiler.IR.Optimization.OptimizationPass.NamedDestination(value) is string destination)
+                Add(destination);
+            return names;
+        }
+
+        /// <summary>
+        /// ADR-0015 D2a, reading the PROLOGUE (ADR-0016 D1): in a hierarchy built on a
+        /// <c>#CppInclude</c>d C++ class, a constructor's <c>MyBase.New</c> arguments are evaluated
+        /// in the tag constructor's initializer list as well as in <c>ctor_</c>, so the prologue must
+        /// be PURE (<see cref="CppObjectModel.IsPurePrologue"/>). Refused here by name.
+        ///
+        /// <para>⚠ E11's other refusal — an argument that cannot be PLACED (control flow, other
+        /// statements interleaved, a value still being filled after the call) — is gone with
+        /// <c>CppObjectModel.PlanBaseArguments</c>: the base call is an instruction now, written where
+        /// the IR puts it, after its own argument evaluation by construction.</para>
         /// </summary>
         private static void CheckBaseConstructorArguments(IRModule module, IRClass cls, List<string> diags)
         {
             if (cls == null || cls.IsStruct || cls.Constructors == null) return;
             var foreignRoot = CppObjectModel.ForeignRootOf(module, cls);
+            if (foreignRoot == null) return;
             foreach (var ctor in cls.Constructors)
             {
-                if (ctor?.BaseConstructorArgs == null || ctor.BaseConstructorArgs.Count == 0) continue;
-                if (foreignRoot != null
-                    && ctor.BaseConstructorArgs.Any(a => !CppObjectModel.IsPureBaseArgument(module, ctor.Implementation, a)))
-                {
-                    diags.Add($"'{cls.Name}' passes a computed value to MyBase.New in a class built on the " +
-                              $"C++ class '{foreignRoot}' — on the C++ backend such an argument must be a " +
-                              "parameter, a constant, a module-level variable, or an operator expression over " +
-                              "those, because it is evaluated both when the C++ base is built and when the " +
-                              "BasicLang constructor runs (ADR-0015 D2a); compute it in the caller and pass " +
-                              "it in as a parameter");
-                    continue;
-                }
-                var (_, _, refusal) = CppObjectModel.PlanBaseArguments(module, ctor);
-                if (refusal != null)
-                    diags.Add($"'{cls.Name}': a MyBase.New argument {refusal} — the C++ backend calls the " +
-                              "base constructor immediately after evaluating its arguments (ADR-0015), so " +
-                              "compute the value in the caller and pass it in as a parameter");
+                var baseCall = ctor?.BaseCall;
+                if (baseCall == null || CppObjectModel.IsPurePrologue(module, ctor.Implementation, baseCall)) continue;
+                diags.Add($"'{cls.Name}' passes a computed value to MyBase.New in a class built on the " +
+                          $"C++ class '{foreignRoot}' — on the C++ backend such an argument must be a " +
+                          "parameter, a constant, a module-level variable, or an operator expression over " +
+                          "those, because it is evaluated both when the C++ base is built and when the " +
+                          "BasicLang constructor runs (ADR-0015 D2a); compute it in the caller and pass " +
+                          "it in as a parameter");
             }
         }
 

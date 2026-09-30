@@ -66,7 +66,6 @@ namespace BasicLang.Compiler.IR
         private string _currentNamespace;
         private string _currentModuleName;  // Track current module for constants/globals
         private string _sourceFilePath;
-        private List<IRValue> _pendingBaseConstructorArgs;  // Temporary storage for base constructor args
 
         // For SSA construction
         private int _nextVersion = 0;
@@ -120,7 +119,55 @@ namespace BasicLang.Compiler.IR
 
             AssignBodyLocals();
 
+            // LAST: every rename (TryRenameToVariable, SeparateTempsFromUserNames) has happened.
+            MarkCompilerTemps();
+
             return _module;
+        }
+
+        /// <summary>
+        /// ⭐ ADR-0017: the ONE place <see cref="IRValue.IsCompilerTemp"/> is set. A value is a
+        /// compiler temp when its function's minter handed out its name
+        /// (<see cref="IRFunction.IsMintedTempName"/>) and it is not storage the program declared:
+        /// <list type="bullet">
+        /// <item>not an <see cref="IRVariable"/> or <see cref="IRConstant"/> — a user's local,
+        /// parameter, global or field is an <c>IRVariable</c>;</item>
+        /// <item>not <see cref="IRValue.NamedAfterVariable"/> — <c>Dim t5 = a + b</c> is ONE
+        /// IRBinaryOp renamed <c>t5</c> (<see cref="TryRenameToVariable"/>), whose later reads are
+        /// reads of the VARIABLE, so it has no operand use and must never be taken for dead;</item>
+        /// <item>and a name the program itself declares never survives on a value that is neither:
+        /// <see cref="SeparateTempsFromUserNames"/>, which runs first, renames every such
+        /// collision to a freshly minted name.</item>
+        /// </list>
+        /// <para>Run after the builder's last rename, so what it records is final. The spelling
+        /// of the name is never consulted (a user <c>T5</c> is not the minted <c>t5</c>; a user
+        /// <c>t5</c> is NamedAfterVariable or an IRVariable).</para>
+        /// </summary>
+        private void MarkCompilerTemps()
+        {
+            foreach (var fn in IRTempNames.AllFunctions(_module))
+                foreach (var v in ValuesReachableFrom(fn))
+                    if (v is not IRVariable && v is not IRConstant && !v.NamedAfterVariable
+                        && fn.IsMintedTempName(v.Name))
+                        v.IsCompilerTemp = true;
+        }
+
+        /// <summary>Every value reachable from <paramref name="fn"/>'s body: its block instructions
+        /// and their operand trees (a When guard's tree lives in no block).</summary>
+        private static List<IRValue> ValuesReachableFrom(IRFunction fn)
+        {
+            var values = new List<IRValue>();
+            var seen = new HashSet<IRInstruction>();
+            var pending = new Stack<IRInstruction>(fn.Blocks.SelectMany(b => b.Instructions).Reverse());
+            while (pending.Count > 0)
+            {
+                var inst = pending.Pop();
+                if (inst == null || !seen.Add(inst)) continue;
+                if (inst is IRValue v) values.Add(v);
+                foreach (var operand in CodeGen.IROperandWalker.EnumerateOperands(inst))
+                    pending.Push(operand);
+            }
+            return values;
         }
 
         /// <summary>
@@ -150,17 +197,7 @@ namespace BasicLang.Compiler.IR
             foreach (var fn in IRTempNames.AllFunctions(_module))
             {
                 // Every value reachable from the body: instructions and their operand trees.
-                var values = new List<IRValue>();
-                var seen = new HashSet<IRInstruction>();
-                var pending = new Stack<IRInstruction>(fn.Blocks.SelectMany(b => b.Instructions).Reverse());
-                while (pending.Count > 0)
-                {
-                    var inst = pending.Pop();
-                    if (inst == null || !seen.Add(inst)) continue;
-                    if (inst is IRValue v) values.Add(v);
-                    foreach (var operand in CodeGen.IROperandWalker.EnumerateOperands(inst))
-                        pending.Push(operand);
-                }
+                var values = ValuesReachableFrom(fn);
 
                 var taken = new HashSet<string>(reserved, StringComparer.OrdinalIgnoreCase);
                 foreach (var v in values)
@@ -1193,7 +1230,7 @@ namespace BasicLang.Compiler.IR
                             .LastOrDefault(a => a.Name == $"{node.Name}_addr");
                         if (alloca != null)
                         {
-                            EmitInstruction(new IRStore(initValue, alloca));
+                            EmitInstruction(new IRStore(initValue, alloca) { IsDimInitializer = true });
                         }
                     }
 
@@ -1208,7 +1245,11 @@ namespace BasicLang.Compiler.IR
                     if (!TryRenameToVariable(initValue, localVar))
                     {
                         // For constants, variables, or other values, emit an assignment
-                        EmitInstruction(new IRAssignment(localVar, initValue));
+                        EmitInstruction(new IRAssignment(localVar, initValue) { IsDimInitializer = true });
+                    }
+                    else
+                    {
+                        initValue.IsDimInitializer = true;   // ADR-0016 D3: the renamed value IS the Dim
                     }
                 }
                 // No initializer - C# backend will use default(T), no IR needed
@@ -1254,7 +1295,8 @@ namespace BasicLang.Compiler.IR
                 // Emit instruction to get tuple element
                 var elementAccess = new IRTupleElement(tupleValue, i, varType)
                 {
-                    Name = localVar.Name
+                    Name = localVar.Name,
+                    IsDimInitializer = true,   // ADR-0016 D3: `Dim (a, b) = …` declares
                 };
                 EmitInstruction(elementAccess);
             }
@@ -1629,8 +1671,8 @@ namespace BasicLang.Compiler.IR
                 }
                 else if (member is ConstructorNode ctorNode)
                 {
-                    // Process constructor - this also processes base constructor args
-                    _pendingBaseConstructorArgs = null;
+                    // Process constructor. Its base call, when it has arguments, is an instruction
+                    // of the implementation itself (ADR-0016 D1) — nothing to carry over here.
                     var declaredAt = _module.Functions.Count;
                     member.Accept(this);
 
@@ -1639,13 +1681,6 @@ namespace BasicLang.Compiler.IR
                         Access = MapAccessModifier(ctorNode.Access),
                         Implementation = MemberFunctionAt(declaredAt)
                     };
-
-                    // Use the base constructor args collected during constructor processing
-                    if (_pendingBaseConstructorArgs != null)
-                    {
-                        ctor.BaseConstructorArgs.AddRange(_pendingBaseConstructorArgs);
-                    }
-                    _pendingBaseConstructorArgs = null;
 
                     irClass.Constructors.Add(ctor);
                 }
@@ -1785,6 +1820,7 @@ namespace BasicLang.Compiler.IR
 
             var baseArgs = new List<IRValue>();
             AppendOmittedOptionalArguments(baseArgs, null, implicitBase);
+            EmitBaseConstructorCall(baseArgs);
 
             if (!_currentBlock.IsTerminated())
             {
@@ -1812,8 +1848,25 @@ namespace BasicLang.Compiler.IR
                 Access = AccessModifier.Public,
                 Implementation = synthesized,
             };
-            ctor.BaseConstructorArgs.AddRange(baseArgs);
             irClass.Constructors.Add(ctor);
+        }
+
+        /// <summary>
+        /// ⭐ ADR-0016 D1: the base-constructor call as an INSTRUCTION, emitted right after its
+        /// arguments were evaluated into the current block — the constructor's PROLOGUE — and
+        /// before anything of the body. Its arguments are its operands, so the capture analysis,
+        /// <c>UsesOf</c>, DCE, CSE and the verifier all see them where they are used; before this
+        /// they lived in a list outside every block (#170, #240).
+        ///
+        /// <para>Only when there ARE arguments — written ones, or Optional defaults filled for an
+        /// implicit call. The parameterless base call (written <c>MyBase.New()</c> or implicit) is
+        /// emitted by each backend on its own, exactly as before, which keeps every program with no
+        /// base arguments byte-identical by construction.</para>
+        /// </summary>
+        private void EmitBaseConstructorCall(List<IRValue> baseArgs)
+        {
+            if (baseArgs == null || baseArgs.Count == 0) return;
+            EmitInstruction(new IRBaseConstructorCall(baseArgs));
         }
 
         /// <summary>
@@ -2242,8 +2295,10 @@ namespace BasicLang.Compiler.IR
                 PushVariableVersion(param.Name, irParam);
             }
 
-            // Process base constructor arguments and store them for the IRConstructor
-            _pendingBaseConstructorArgs = new List<IRValue>();
+            // The base constructor's arguments: evaluated here, into the entry block (and, for an
+            // AndAlso / OrElse argument, the blocks its control flow makes), then consumed by ONE
+            // IRBaseConstructorCall before any of the body (ADR-0016 D1).
+            var baseArgs = new List<IRValue>();
             if (node.BaseConstructorArgs.Count > 0)
             {
                 // The base constructor the analyzer bound this `MyBase.New(…)` to — the third
@@ -2260,12 +2315,12 @@ namespace BasicLang.Compiler.IR
                     arg.Accept(this);
                     if (_expressionResult != null)
                     {
-                        _pendingBaseConstructorArgs.Add(CoerceToParameterType(
-                            _expressionResult, baseCtor, _pendingBaseConstructorArgs.Count));
+                        baseArgs.Add(CoerceToParameterType(
+                            _expressionResult, baseCtor, baseArgs.Count));
                     }
                 }
 
-                AppendOmittedOptionalArguments(_pendingBaseConstructorArgs, null, baseCtor);
+                AppendOmittedOptionalArguments(baseArgs, null, baseCtor);
             }
             else if (_semanticAnalyzer.ConstructorBindings.TryGetValue(node, out var implicitBase))
             {
@@ -2273,8 +2328,9 @@ namespace BasicLang.Compiler.IR
                 // still take OPTIONAL parameters — the implicit call has to fill them exactly as an
                 // explicit one would. The analyzer records a binding here only when the base IS
                 // callable with no arguments, so reaching this means filling is all that is left.
-                AppendOmittedOptionalArguments(_pendingBaseConstructorArgs, null, implicitBase);
+                AppendOmittedOptionalArguments(baseArgs, null, implicitBase);
             }
+            EmitBaseConstructorCall(baseArgs);
 
             // Generate body
             if (node.Body != null)
@@ -4564,7 +4620,7 @@ namespace BasicLang.Compiler.IR
                 // for a callee to write back into — and IRCall documents ByRefArguments as indexed
                 // in lockstep with Arguments, so the entry has to exist either way.
                 //
-                // ⚠ NULL for a construction: IRNewObject and IRConstructor.BaseConstructorArgs
+                // ⚠ NULL for a construction: IRNewObject and IRBaseConstructorCall (ADR-0016)
                 // carry no by-ref list at all, so there is no lockstep to keep.
                 byRefFlags?.Add(false);
             }

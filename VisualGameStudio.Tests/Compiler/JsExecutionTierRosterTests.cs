@@ -49,6 +49,14 @@ public class JsExecutionTierRosterTests
         typeof(JavaScriptExceptionTests),
         typeof(JavaScriptCatchDiscriminationTests),
         typeof(BaseConstructorCallExecutionTests),
+        // Task #170 / ADR-0016 — B1-B5, W1/W2, C1 and the S/t170/edge probes through the standard
+        // pipeline, the aggressive pipeline and CompileProjectFiles; the JavaScript legs run under
+        // Node (JavaScriptExecutionTests.RunJs / FourBackends.RunAggressiveJs / RunNodeScript).
+        // Named "...ExecutionTests", so the discovery guard below WOULD catch it on its own.
+        typeof(BaseConstructorCallLoweringExecutionTests),
+        // ADR-0016 D3 (amended) — the C++ refusal, #140's regression fence and the FE1/CR1 witnesses. Its
+        // FE1/CR1 rows run the other three backends, JavaScript under Node (RunJs), so it is in the tier.
+        typeof(BaseConstructorCallCppRefusalTests),
         typeof(JavaScriptLambdaTests),
         typeof(JavaScriptMethodLambdaTests),
         typeof(JavaScriptModuleVariableTests),
@@ -403,8 +411,21 @@ public class JsExecutionTierRosterTests
         // the fast-subset analyzer/LSP fixture) is NOT here.
         typeof(LambdaBoundaryDiagnosticsExecutionTests),
 
+        // A class or interface used above its declaration; its JS legs run under Node (the
+        // base-first class order is what keeps `class D extends B` out of the TDZ).
+        typeof(ForwardDeclaredTypeExecutionTests),
+
         // #197 — `TypeOf x Is T`; its JS legs run under Node (a class target; interfaces are BL7013).
         typeof(TypeOfExecutionTests),
+        // Task #163 / ADR-0017 — every probe of the dead-code temp marker (R1-R11, U1-U8, the by-name rule's
+        // CT_wbr_t0 witness) through the CLI, the CLI with --optimize and CompileProjectFiles on C#, C++,
+        // JavaScript (Node: TempExec.Run -> JavaScriptExecutionTests.RunNodeScript) and MSIL. Named
+        // "...ExecutionTests", so the widened match below would catch it on its own; listed explicitly anyway.
+        typeof(CompilerTempExecutionTests),
+        // ...and #121's regression fence, which runs the same programs on the same four backends (its JavaScript
+        // cells pin a Node ReferenceError). Named "...FenceTests", so the widened match below does NOT see it:
+        // listed by hand, like every row that is not named "...ExecutionTests".
+        typeof(CompilerTempCollisionFenceTests),
     };
 
     /// <summary>
@@ -456,7 +477,7 @@ public class JsExecutionTierRosterTests
 
     [Test]
     public void RosterIsPinned()
-        => Assert.That(ExecutionTier, Has.Length.EqualTo(91), // + MsilValueToStringExecutionTests (task #183), InterfaceMethodTypingExecutionTests, IsIsNotOperatorExecutionTests (task #185), MeReceiverTypingExecutionTests (task #176), UserDelegateConversionExecutionTests (task #187), DelegateMemberInvocationExecutionTests (task #188), NothingStringTextExecutionTests (task #189), MsilObjectBoxingExecutionTests (task #177), NotPrecedenceExecutionTests (#195), PropertyAccessExecutionTests (task #178), NameBindingExecutionTests (task #169/#199), PerIterationLoopBodyDimExecutionTests + PerIterationLoopBodyDimOptimizerExecutionTests (task #172, ADR-0014), LambdaBoundaryDiagnosticsExecutionTests (task #174); + WhenGuardCallRunTests, TypeOfExecutionTests (#197)
+        => Assert.That(ExecutionTier, Has.Length.EqualTo(96), // + CompilerTempExecutionTests + CompilerTempCollisionFenceTests (task #163, ADR-0017); + BaseConstructorCallLoweringExecutionTests + BaseConstructorCallCppRefusalTests (task #170, ADR-0016), MsilValueToStringExecutionTests (task #183), InterfaceMethodTypingExecutionTests, IsIsNotOperatorExecutionTests (task #185), MeReceiverTypingExecutionTests (task #176), UserDelegateConversionExecutionTests (task #187), DelegateMemberInvocationExecutionTests (task #188), NothingStringTextExecutionTests (task #189), MsilObjectBoxingExecutionTests (task #177), NotPrecedenceExecutionTests (#195), PropertyAccessExecutionTests (task #178), NameBindingExecutionTests (task #169/#199), PerIterationLoopBodyDimExecutionTests + PerIterationLoopBodyDimOptimizerExecutionTests (task #172, ADR-0014), LambdaBoundaryDiagnosticsExecutionTests (task #174); + WhenGuardCallRunTests, TypeOfExecutionTests (#197), ForwardDeclaredTypeExecutionTests
             "The execution-tier roster changed. That is fine — update the number — but it must " +
             "be a deliberate edit, not a silent shrink.");
 

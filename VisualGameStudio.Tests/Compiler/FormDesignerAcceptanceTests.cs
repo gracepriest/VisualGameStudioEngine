@@ -169,14 +169,8 @@ public class FormDesignerAcceptanceTests
 
     private static void SetProperty(CodeEditorDocumentViewModel vm, string id, string name, string value)
     {
-        var control = vm.DesignDocument!.AllControls().Single(c => c.Id == id);
-        vm.PropertyGrid.SelectedControl = control;
-
-        var row = vm.PropertyGrid.Rows.FirstOrDefault(r =>
-            string.Equals(r.Name, name, StringComparison.OrdinalIgnoreCase));
-
-        Assert.That(row, Is.Not.Null, $"the property grid has no '{name}' row for '{id}'");
-        row!.StringValue = value;
+        // ⛔ Through the ONE selection store, never PropertyGrid.SelectedControl (CLAUDE.md).
+        SetThroughGrid(vm, vm.DesignDocument!.AllControls().Single(c => c.Id == id), name, value);
     }
 
     // ==================================================================

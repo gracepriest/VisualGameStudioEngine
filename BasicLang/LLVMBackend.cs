@@ -1816,6 +1816,15 @@ namespace BasicLang.Compiler.CodeGen.LLVM
             }
         }
 
+        /// <summary>
+        /// ADR-0016 D1: emits NOTHING, deliberately and as before. This backend's constructor
+        /// allocates the object and never chains to a base constructor at all (it never read
+        /// <c>MyBase.New</c>'s arguments either); the prologue's argument instructions are still
+        /// emitted as ordinary instructions, exactly as they were when they sat in the entry
+        /// block with no consumer.
+        /// </summary>
+        public override void Visit(IRBaseConstructorCall baseConstructorCall) { }
+
         public override void Visit(IRArrayAlloc arrayAlloc)
         {
             var elementType = MapType(arrayAlloc.ElementType);

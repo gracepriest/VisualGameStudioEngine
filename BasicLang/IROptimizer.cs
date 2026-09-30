@@ -153,6 +153,14 @@ namespace BasicLang.Compiler.IR.Optimization
         /// a debug build emit a <c>#line</c> reset onto generated glue for a line the user wrote,
         /// so stepping lands in the wrong place.</para>
         ///
+        /// <para><see cref="IRValue.IsCompilerTemp"/> rides along for the same reason as the flag
+        /// above (ADR-0017): the replacement keeps the original's minted name and its consumers
+        /// (<see cref="ReplaceUses"/>), so it IS the same compiler temp. Dropped, the replacement
+        /// reads "not a temp" and <see cref="DeadCodeEliminationPass"/> keeps it when it goes
+        /// dead — MEASURED on <c>Show((a * 2) * 0)</c>, where strength reduction replaces the
+        /// multiply and the peephole's <c>x * 0</c> arm then orphans the replacement. That
+        /// direction costs code size only; it can never delete a user's store.</para>
+        ///
         /// <para>⚠ The NAME is deliberately NOT copied here: every call site already passes it to
         /// the replacement's constructor, so an assignment would act and change nothing. MEASURED —
         /// removing it left all 18 tests green, while corrupting it failed 11, so the tests are
@@ -165,6 +173,7 @@ namespace BasicLang.Compiler.IR.Optimization
             if (replacement == null || original == null) return replacement;
 
             replacement.NamedAfterVariable = original.NamedAfterVariable;
+            replacement.IsCompilerTemp = original.IsCompilerTemp;
             replacement.SourceLine = original.SourceLine;
             return replacement;
         }
@@ -1004,6 +1013,16 @@ namespace BasicLang.Compiler.IR.Optimization
                 case IRThrow:
                     return WriteSet.Nothing;
 
+                // ---- ADR-0016 D1 / C2: MyBase.New is a FULL BARRIER. The base constructor runs
+                // user code (a call), and nothing computed in the prologue may be available after
+                // it: C# renders the prologue as expressions inside `: base(...)`, where no body
+                // statement can reach it, and a merge of `p + 1` in the arguments with `p + 1` in
+                // the body is also wrong outright when a lambda the base invokes writes `p`. So it
+                // is classified — deliberately, like IRInlineCode — as writing everything: no
+                // expression, copy or fact survives it.
+                case IRBaseConstructorCall:
+                    return WriteSet.Everything;
+
                 // ---- Raw target-language text can assign ANY variable: classified UNIVERSAL
                 // (explicitly — unlike an unclassified kind, this is a decision, not a gap).
                 case IRInlineCode:
@@ -1332,6 +1351,12 @@ namespace BasicLang.Compiler.IR.Optimization
                     break;
                 case IRBaseMethodCall baseCall:
                     MapList(baseCall.Arguments, map);
+                    break;
+                // ADR-0016 D1: MyBase.New's arguments are this instruction's operands — the one
+                // arm that makes them visible to every walker (the capture scan, DCE, CSE, the
+                // verifier, ClosureLowering's rewrite) with no special case anywhere else.
+                case IRBaseConstructorCall baseConstructorCall:
+                    MapList(baseConstructorCall.ArgSlots, map);
                     break;
                 case IRFieldAccess fieldAccess:
                     fieldAccess.Object = map(fieldAccess.Object);
@@ -1995,16 +2020,37 @@ namespace BasicLang.Compiler.IR.Optimization
     /// another read as unused. Each of those is a LIVE value this pass would delete, leaving its
     /// consumer holding an instruction that is no longer in the function.</para>
     ///
-    /// <para>⛔ STILL LATENT, DELIBERATELY. The removal guard below skips every value whose name
-    /// is non-empty and does not start with <c>_tmp</c>, and IRBuilder names every temp
-    /// <c>t0</c>, <c>t1</c>, … — so in a real program this pass removes no instruction; only
-    /// <see cref="ControlFlowGraph.RemoveUnreachableBlocks"/> has an effect. Task #118 made the
-    /// use analysis total and left the guard alone, so emitted code is unchanged. Switching the
-    /// removal on (e.g. <see cref="OptimizationPass.IsTempDestination"/>) is a separate, measured
-    /// decision: ADR-0008 settled point 3 — removing a use can leave a NON-replicable value
-    /// single-use and not adjacent to its definition, which the C# backend then inlines away
-    /// from where it was computed — and the <c>T5</c> caveat on
-    /// <see cref="OptimizationPass.IsTempDestination"/> (a user variable spelled like a temp).</para>
+    /// <para>⭐ THE REMOVAL IS ON, AND ITS LICENCE IS A MARKER (task #163, ADR-0017). An unused
+    /// value instruction is deleted only when <see cref="IsRemovableWhenUnused"/> and
+    /// <see cref="KeepsOperandMaterialisation"/> both say so:</para>
+    /// <list type="bullet">
+    /// <item><b>It is a compiler temp</b> — <see cref="IRValue.IsCompilerTemp"/>, which IRBuilder
+    /// sets from the record its temp minter keeps, and never on a value
+    /// <see cref="IRValue.NamedAfterVariable"/>. ⛔ Never the name's spelling: until #163 the
+    /// guard skipped every named value, and the obvious switch-on
+    /// (<see cref="OptimizationPass.IsTempDestination"/>) MEASURED 37 user-variable removals
+    /// in 62 — <c>Dim t5 As Integer = a + b</c> printed 12 for 82 on every backend and entry
+    /// point, because <c>t5</c>'s later reads are reads of the VARIABLE and never an operand use
+    /// of the renamed binop.</item>
+    /// <item><b>Pure and non-trapping</b> by kind and by the one kill vocabulary
+    /// (<see cref="OptimizationPass.NamesWrittenBy"/> answers "its own name, no call"): a binop
+    /// other than <c>/</c>, <c>\</c> and <c>Mod</c>, a unary other than <c>++</c>/<c>--</c> (which
+    /// write their operand), a compare, an <c>Is</c>, and a load of a local's own storage (an
+    /// element read can trap, and C++ folds the element pointer INTO the load). Never a call, a
+    /// store, an <see cref="IRBaseConstructorCall"/>, a throw or an await.</item>
+    /// <item><b>Unused</b> — by identity (<see cref="UsedValues"/>), AND no variable operand
+    /// spells its name. That second half matters only for a temp-spelled user variable IRBuilder
+    /// does not reserve (For Each, Catch, pattern, LINQ). Its witness is C++ failing to compile
+    /// without it (ADR-0017, <c>CT_wbr_t0</c>).</item>
+    /// <item><b>ADR-0008 settled point 3</b>: removing it leaves every non-replicable operand
+    /// materialised as it was (<see cref="KeepsOperandMaterialisation"/>).</item>
+    /// </list>
+    /// <para>What it buys, MEASURED (ADR-0017): the orphan a peephole rewrite leaves behind (the
+    /// inner op of <c>-(-a)</c> and <c>Not (Not b)</c>, a multiply the <c>x * 0</c> arm discards).
+    /// C# never emitted those; the other backends lose the temp's definition and declaration.
+    /// ⚠ One knock-on is visible on every backend, C# included: with the orphan gone, two stores
+    /// to the same variable can become adjacent, and the peephole's dead-store arm then drops the
+    /// first (<c>Dim n As Integer = 0 : n = (a * 3) * 0</c>).</para>
     /// </summary>
     public class DeadCodeEliminationPass : OptimizationPass
     {
@@ -2029,10 +2075,11 @@ namespace BasicLang.Compiler.IR.Optimization
                 // Remove dead instructions. The uses are collected over EVERY block before any
                 // block loses an instruction: a value defined in one block is routinely used in
                 // another (a loop body reading a value computed before the loop).
-                var used = UsedValues(function);
+                var used = UsedValues(function, out var namesRead);
+                var operandUses = OperandUseCounts(function);
                 foreach (var block in function.Blocks)
                 {
-                    RemoveDeadInstructions(block, used);
+                    RemoveDeadInstructions(function, block, used, namesRead, operandUses);
                 }
             }
             
@@ -2046,11 +2093,24 @@ namespace BasicLang.Compiler.IR.Optimization
         /// <see cref="IRVerifier"/> makes. The descent is what finds a block value whose only
         /// consumer is an instruction that is not itself in a block (a When guard's tree hangs
         /// off its <see cref="IRSwitch"/>; an expression tree hangs off its consumer).
-        /// Reference identity, never names: a use is of the <see cref="IRValue"/> object.
+        /// Reference identity: a use is of the <see cref="IRValue"/> object.
+        ///
+        /// <para><paramref name="namesRead"/> is the one exception, and it only ever keeps a value:
+        /// the names of the <see cref="IRVariable"/> operands met on the way. A value whose name a
+        /// variable spells is kept even when no operand is the object. That happens only when a user
+        /// variable IRBuilder does not reserve (a For Each, Catch, pattern or LINQ range variable —
+        /// the #121 gap) is spelled like a temp. Such a program is already fragile on every backend,
+        /// and deleting the temp re-shuffles which cells break. MEASURED (ADR-0017, witness
+        /// <c>CT_wbr_t0</c>): without this rule, the C++ backend's own temp counter renumbers, puts a
+        /// surviving string temp on the user's <c>Catch t0</c>, and the program stops compiling
+        /// (<c>t0 = BasicLang::String(t0.what())</c>). It compiles and prints VB's output with the
+        /// rule, and did before #163. The C# backend's <c>_tempDefsByName</c> reads the same kind of
+        /// variable as the temp's definition.</para>
         /// </summary>
-        private static HashSet<IRValue> UsedValues(IRFunction function)
+        private static HashSet<IRValue> UsedValues(IRFunction function, out HashSet<string> namesRead)
         {
             var used = new HashSet<IRValue>(ReferenceEqualityComparer.Instance);
+            namesRead = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var pending = new Stack<IRValue>();
             foreach (var block in function.Blocks)
             {
@@ -2063,54 +2123,140 @@ namespace BasicLang.Compiler.IR.Optimization
                     {
                         var value = pending.Pop();
                         if (value == null || !used.Add(value)) continue;
+                        if (value is IRVariable variable && !string.IsNullOrEmpty(variable.Name))
+                            namesRead.Add(variable.Name);
                         foreach (var nested in UsesOf(value)) pending.Push(nested);
                     }
                 }
             }
             return used;
         }
-        
-        private void RemoveDeadInstructions(BasicBlock block, HashSet<IRValue> used)
+
+        /// <summary>
+        /// How many operand slots of <paramref name="function"/>'s BLOCK instructions hold each
+        /// value — the count the C# backend's materialisation rule reads (use count &gt; 1 and
+        /// non-replicable ⇒ a declared local), and nothing deeper: a use inside an operand tree
+        /// that lives in no block is not counted, which can only make
+        /// <see cref="KeepsOperandMaterialisation"/> refuse more.
+        /// </summary>
+        private static Dictionary<IRValue, int> OperandUseCounts(IRFunction function)
         {
-            // Remove unused assignments
-            for (int i = block.Instructions.Count - 1; i >= 0; i--)
+            var counts = new Dictionary<IRValue, int>(ReferenceEqualityComparer.Instance);
+            foreach (var block in function.Blocks)
             {
-                var inst = block.Instructions[i];
-
-                // Don't remove instructions that represent assignments to named variables
-                // (non-temp names indicate the result is assigned to a real variable)
-                if (inst is IRValue v && !string.IsNullOrEmpty(v.Name) && !v.Name.StartsWith("_tmp"))
+                if (block?.Instructions == null) continue;
+                foreach (var inst in block.Instructions)
                 {
-                    continue;
-                }
-
-                if (inst is IRBinaryOp binaryOp && !used.Contains(binaryOp))
-                {
-                    block.Instructions.RemoveAt(i);
-                    ReportModification();
-                }
-                else if (inst is IRUnaryOp unaryOp && !used.Contains(unaryOp))
-                {
-                    block.Instructions.RemoveAt(i);
-                    ReportModification();
-                }
-                else if (inst is IRCompare compare && !used.Contains(compare))
-                {
-                    block.Instructions.RemoveAt(i);
-                    ReportModification();
-                }
-                // Pure (ADR-0011 D5), so an unused one is dead exactly as an unused IRCompare is.
-                else if (inst is IRIdentityCompare identity && !used.Contains(identity))
-                {
-                    block.Instructions.RemoveAt(i);
-                    ReportModification();
-                }
-                else if (inst is IRLoad load && !used.Contains(load))
-                {
-                    block.Instructions.RemoveAt(i);
-                    ReportModification();
+                    if (inst == null) continue;
+                    foreach (var operand in UsesOf(inst))
+                        counts[operand] = counts.TryGetValue(operand, out var n) ? n + 1 : 1;
                 }
             }
+            return counts;
+        }
+
+        private void RemoveDeadInstructions(IRFunction function, BasicBlock block, HashSet<IRValue> used,
+            HashSet<string> namesRead, Dictionary<IRValue, int> operandUses)
+        {
+            for (int i = block.Instructions.Count - 1; i >= 0; i--)
+            {
+                if (block.Instructions[i] is not IRValue value) continue;
+                if (used.Contains(value)) continue;
+                if (!string.IsNullOrEmpty(value.Name) && namesRead.Contains(value.Name)) continue;
+                if (!IsRemovableWhenUnused(value, function)) continue;
+                if (!KeepsOperandMaterialisation(value, operandUses)) continue;
+
+                block.Instructions.RemoveAt(i);
+                // Later decisions in this run see the operand counts as they now are.
+                foreach (var operand in UsesOf(value))
+                    if (operandUses.TryGetValue(operand, out var n)) operandUses[operand] = n - 1;
+                ReportModification();
+            }
+        }
+
+        /// <summary>
+        /// ⭐ ADR-0017 D2: whether <paramref name="value"/>, once nothing uses it, may be deleted —
+        /// a COMPILER TEMP (<see cref="IRValue.IsCompilerTemp"/>, and not
+        /// <see cref="IRValue.NamedAfterVariable"/>) of a pure, non-trapping kind.
+        /// <list type="bullet">
+        /// <item><see cref="IRBinaryOp"/> but not <c>/</c>, <c>\</c> or <c>Mod</c>: an integer
+        /// division by zero throws, and deleting it would delete the exception — the rule
+        /// <see cref="LoopInvariantCodeMotionPass"/> already keeps for hoisting.</item>
+        /// <item><see cref="IRUnaryOp"/> but not <c>++</c> / <c>--</c>, which WRITE their operand
+        /// (the kill vocabulary says so).</item>
+        /// <item><see cref="IRCompare"/> and <see cref="IRIdentityCompare"/> (ADR-0011 D5: pure).</item>
+        /// <item><see cref="IRLoad"/> of a local's own storage (a variable or an alloca slot) only.
+        /// An element read goes through an <see cref="IRGetElementPtr"/>, which C++ FOLDS into the
+        /// load: deleting the load deletes the index check there, and not on MSIL.</item>
+        /// </list>
+        /// <para>And the one kill vocabulary must agree
+        /// (<see cref="OptimizationPass.NamesWrittenBy"/>): classified, not Universal, not a call,
+        /// and writing nothing but the value's own name. A call, a store, an
+        /// <see cref="IRBaseConstructorCall"/>, a throw and an await never get here: they are not
+        /// among the kinds above.</para>
+        /// </summary>
+        internal static bool IsRemovableWhenUnused(IRValue value, IRFunction function)
+        {
+            if (value == null || !value.IsCompilerTemp || value.NamedAfterVariable) return false;
+
+            switch (value)
+            {
+                case IRBinaryOp binary when binary.Operation is BinaryOpKind.Div or BinaryOpKind.Mod or BinaryOpKind.IntDiv:
+                    return false;
+                case IRUnaryOp unary when unary.Operation is UnaryOpKind.Inc or UnaryOpKind.Dec:
+                    return false;
+                case IRLoad load when load.Address is not (IRVariable or IRAlloca):
+                    return false;
+                case IRBinaryOp:
+                case IRUnaryOp:
+                case IRCompare:
+                case IRIdentityCompare:
+                case IRLoad:
+                    break;
+                default:
+                    return false;
+            }
+
+            var writes = NamesWrittenBy(value, function);
+            if (!writes.IsClassified || writes.IsUniversal || writes.IsCall) return false;
+            foreach (var name in writes.Names)
+                if (!string.Equals(name, value.Name, StringComparison.Ordinal)) return false;
+            return true;
+        }
+
+        /// <summary>
+        /// ⭐ ADR-0008 settled point 3, ENFORCED (ADR-0017 D3): deleting <paramref name="value"/>
+        /// must not change how a backend materialises any of its operands. The C# backend
+        /// declares a local for a non-replicable value with MORE THAN ONE use and inlines every
+        /// other value at its use (a call with no use becomes a statement). So an operand that is
+        /// an instruction (not a variable or constant) and NOT replicable
+        /// (<see cref="IRReplicability.IsReplicable(IRValue)"/>) must keep at least two operand
+        /// uses (<paramref name="operandUses"/>) after the deletion, or the deletion is refused.
+        /// <list type="bullet">
+        /// <item>From two uses to one is settled point 3 itself: C# would now evaluate the value
+        /// AT its one remaining use, away from its definition, past whatever lies between.</item>
+        /// <item>From one to none is its twin: C# had inlined the value into the dead temp (and so
+        /// never evaluated it) and would now emit it as a statement.</item>
+        /// </list>
+        /// <para>Deliberately stricter than "single-use and not adjacent": an adjacent use still
+        /// changes C#'s text (a declared local becomes an inline expression), and #163's contract
+        /// is that a removal changes nothing but the removed temp's own lines. MEASURED on the
+        /// corpus: see ADR-0017.</para>
+        /// </summary>
+        internal static bool KeepsOperandMaterialisation(IRValue value, IReadOnlyDictionary<IRValue, int> operandUses)
+        {
+            var mine = new Dictionary<IRValue, int>(ReferenceEqualityComparer.Instance);
+            foreach (var operand in UsesOf(value))
+                mine[operand] = mine.TryGetValue(operand, out var n) ? n + 1 : 1;
+
+            foreach (var (operand, slots) in mine)
+            {
+                if (operand is IRVariable || operand is IRConstant) continue;
+                if (IRReplicability.IsReplicable(operand)) continue;
+                var total = operandUses != null && operandUses.TryGetValue(operand, out var t) ? t : 0;
+                if (total - slots <= 1) return false;
+            }
+            return true;
         }
     }
     

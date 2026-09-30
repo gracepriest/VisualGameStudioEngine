@@ -17,6 +17,234 @@ facade (all five tasks of `2026-09-13-blnet-cpp-facade.md`).
 
 ---
 
+## 🚀 NEWEST — 2026-09-29: #163 DONE, DCE removes unused compiler temps, by marker (ADR-0017)
+
+The fix is `ec021f8f` on top of #200, #170 and the SCRATCH option-(a) commit (`b0f12d90`); the TEST side is uncommitted work on top
+of it. Compiler only (IRBuilder, IRNodes, IROptimizer); no backend changed. Design and measurements:
+`docs/superpowers/decisions/0017-dce-removal-compiler-temp-marker.md` (read it; this section is what the test work adds and what to
+watch for).
+
+**The marker contract (D1).** `IRValue.IsCompilerTemp` is the ONE licence `DeadCodeEliminationPass` has to delete an unused
+instruction, and it says where a NAME came from, never how it is SPELLED.
+- `IRFunction.GetNextTempName()` is the one minter and RECORDS each name (`IsMintedTempName`, ordinal: a user `T5` is not the minted `t5`).
+- `IRBuilder.MarkCompilerTemps()` is the ONLY place the flag is set, the last step of `Build`, after every rename. It flags a value only
+  if it is not an `IRVariable`/`IRConstant`, not `NamedAfterVariable`, and its function minted its name. User storage (`Dim t5 = a + b`
+  is ONE binop renamed `t5`, `NamedAfterVariable`) never carries it.
+- `OptimizationPass.InheritIdentity` copies it when a pass REPLACES a value. A value built anywhere else reads false, and DCE keeps it.
+- ⛔ Any pass that mints a temp (#121) must mint through `GetNextTempName` and set the flag. CLAUDE.md carries the one durable clause.
+
+**The removal licence (D2, D3).** An unused value is deleted only if ALL hold: marked and not `NamedAfterVariable`; a pure, non-trapping
+KIND (binary except `/` `\` `Mod`; unary except `++` `--`; compare; `Is`; a load of a variable or an alloca — never an element read);
+the kill vocabulary agrees (writes only its own name, no call); unused by identity; NO `IRVariable` operand spells its name (the
+by-name rule); and ADR-0008 settled point 3 holds (`KeepsOperandMaterialisation`: a non-replicable operand must keep at least two
+operand uses, or its one). Calls, stores, `IRBaseConstructorCall`, throw and await are never among the kinds.
+
+**The witness for the by-name rule: `CT_wbr_t0`.** `Catch t0` with orphans before the Try. Without the rule the orphan `t0 = -a` goes, the
+C++ backend's own temp counter renumbers and the surviving string temp becomes `t0` in the catch (`t0 = BasicLang::String(t0.what())`,
+"no viable overloaded '='"): OK before, OK with the rule, COMPILE-FAIL without it, C++ in all three entry points. Pinned by
+`CompilerTempExecutionTests.CT_wbr_t0_CatchT0_StillCompilesAndRuns`; mutant M8 fails it (below).
+
+**#121's regression fence** (`CompilerTempCollisionFenceTests`, all three entry points). A user variable IRBuilder does not reserve (For Each,
+Catch, pattern, LINQ range) spelled like a temp collides with a minted name; every such program was already wrong or failing before #163.
+CURRENT behaviour, pinned so #121 flips each row deliberately (each message names #121):
+- `LC_t0` (a For Each `t0` captured by a lambda): ⚠ **the one #163 change that is not toward VB** — MSIL was a WRONG ANSWER (`7|-3|7|-4`)
+  before #163 and is now `7` then a segmentation fault (RUN-FAIL, 3 cells): with `-a`'s orphan gone the MSIL output conflates the
+  delegate's local with another slot. OPEN. C++ prints `7|0|7|0`, JavaScript a ReferenceError, both unchanged.
+- `R11` (For Each `t0`/`t1`): C++ `-3|-4|3|4` (VB `3|4|3|4`; it was `-3|-4|6|8`), C# and MSIL `-3|-4|3|4`, JavaScript a ReferenceError.
+- The 27 cells that reached VB's output, pinned CORRECT: C++ `CT_rbw_t2`, `CT_rbw_t3`, `CT_wbr_t2`, `CT_wbr_t3` (were COMPILE-FAIL), `FE_rbw_t1`,
+  `FE_wbr_t2`, `LC_t1` (were WRONG); C# `LC_t0` (was `7|-7|7|-7`); MSIL `LC_t3` (was an AccessViolationException).
+- Controls: `LC_x`, `R11_yz`, `CT_wbr_k` (ordinary names) are VB-correct everywhere.
+- ⚠ Without the by-name rule R11 prints VB's answer in 12 of 12 cells: the rule costs those, and buys `CT_wbr_t0`. #121 (reserving the names) removes the trade.
+
+**The U2 fix.** `Dim _tmp1 As Integer = a + b` printed `0` for VB's `67` in 12 of 12 cells BEFORE #163: the old guard deleted every unused value
+whose name started with `_tmp`, and the renamed binop of a `Dim _tmp1` is one. The "latent" removal was not latent for that spelling.
+Pinned by `U2` in the execution tier and `U2_TheUserVariablesCalledTmp_SurviveTheDeadCodePass`.
+
+**Tests (Linux-measured; the oracle is `vbc`, re-run by the test-writer for every expected value).** 298 new tests in five files, and the
+moved file:
+- `Compiler/CompilerTempProbes.cs` — support: the probes, `TempIr` (pipeline surgery: the DCE pass removed or replaced by
+  `RecordingDeadCodePass`), `TempExec` (a program through CLI / CLI `--optimize` / `CompileProjectFiles` on C#, C++, JavaScript, MSIL, and LLVM by exit code).
+- `Compiler/CompilerTempMarkerTests.cs` (54) — the minter's record; the marker never on user storage, whatever the spelling (M4a); `InheritIdentity` (M2).
+- `Compiler/DeadCodeRemovalLicenceTests.cs` (98) — hand-built IR: the licence kind by kind, the marker-not-spelling rows (M1, M4b), the by-name rule (M8),
+  the base-call operand (M5), settled point 3 (M6), and the isolation rows where the kind guard is the only defence (M7, M9, M10).
+- `Compiler/DeadCodeRemovalOnRealIrTests.cs` (41) — real IR: what is removed per probe (R1 Neg+Not, R2 Shl, R7 Mul+Neg, R8 Not×3, U4/U5 Neg — the ADR's
+  totals Neg 4 / Not 4 / Mul 1 / Shl 1), the U spellings, R3/R5 refusals, R6/R9/R10 survivors, R4's base-call operand, the R7 dead-store cascade
+  (one store of `n` with the pass, two without), the verifier silent, and the in-repo corpus test (below).
+- `Compiler/CompilerTempExecutionTests.cs` (80 execution + 25 fence) — `[Category("Integration")]`: the execution tier (R1 R2 R8 U4 U5; R3 R4 R5 R6 R7 R10; U1-U8; R7 on LLVM by exit code 135;
+  the witness) and `CompilerTempCollisionFenceTests` (the fence). Both are in `JsExecutionTierRosterTests` (pinned at 94).
+- `DeadCodeEliminationUseAnalysisTests.cs` (44 → 49) — see the moved pins.
+
+**Moved pins (3), and the vacuity they hid.** `Control_UnusedTempNamedValue_Removed`, `Control_UnusedNamelessValue_Removed` and
+`Control_UnusedUnaryCompareLoad_Removed` hand-built values with no marker, so nothing was removed. They now mark their value; each has a
+negative twin (the same value UNMARKED is kept — `Dim _tmp1`'s fix in one line). ⛔ The file's ~40 "value is kept" tests were passing VACUOUSLY: their
+values were never removable. `Live` now marks its value and `Run` asserts, before running the pass, that the value would be deleted if unused
+(`IsRemovableWhenUnused`). Proven with two use-walker mutants outside M1-M10: dropping the descent into operand trees (X1) passes 0 of the kept
+tests in the ORIGINAL file (only the 3 stale controls fail) and fails the 2 `OperandTree_*` tests in the re-armed one; removing the `IRCast` arm of
+`MapUses` (X2) likewise fails `Cast_Value_OnlyUseIsACastsValue_Kept` only in the re-armed file. Two stale guard pins were renamed
+(`GuardPin_UnusedNamedTempT0_NotRemoved_DceStaysLatentByDesign` → `GuardPin_UnusedValueNamedT0_NotMarked_Kept_TheSpellingIsNeverTheLicence`).
+
+**⚠ FINDING: "the pre-existing corpus has 0 removals" is true of the implementer's 854-program scratch corpus and NOT of the in-repo tests.**
+`DeadCodeRemovalOnRealIrTests.ExistingTestPrograms_LoseNothing_ExceptTheTwoThatContainTheOrphanShape` harvests every program string in the test assembly
+(720 candidates, 674 build) and runs both pipelines with the pass recorded: DCE deletes something in exactly TWO — `NotPrecedenceExecutionTests.Program`
+(`Not Not n < 3`: one `Not`) and `OptimizerOrphanedTempTests.FoldProgram` (`-(-n)` and `Not (Not b)`: one `Neg`, one `Not`) — orphan shapes by design, each a flagged,
+minted, pure temp. Their own tests pass. The test pins exactly those two and asserts 0 everywhere else, so a new removal is a decision.
+
+**Mutation proof** (detached worktrees, real NUnit, `S/t163/mutants163.py` M1-M10; the 346 new and moved tests of that run pass unmutated and every mutant is killed. The run predates `TheFenceTables_HaveTheirRows` and the roster edit, which no mutant reaches):
+
+| Mutant | Killed by (the count is the whole kill set) |
+|---|---|
+| M1 licence reverted to spelling | `AnUnmarkedValue_IsKept_WhateverItsName` ×7, `AMarkedValue_IsRemoved_WhateverItsName` ×2, the four `…_NotMarked_Kept` controls, `GuardPin_…NotMarked_Kept`, the `SettledPoint3_*`, and U5/U6 execution on all four backends (40) |
+| M2 flag not copied on replace | `InheritIdentity_*` ×2, `TheShiftStrengthReductionMakes_…` ×2, `R2_standard/aggressive`, `TheEighteenProbes…(False)`, and the C++ collision cells `CT_rbw_t2`, `CT_rbw_t3`, R11 (11) |
+| M3 call removable | `Call` (kind table), `R3_BothCallsToTagSurvive` ×2, R3 / R5 / R6 / R10 execution, `OneRun_UpdatesTheCountsAsItDeletes`, the corpus test (21) |
+| M4a flag on a user Dim | IR ONLY: `EverySpellingOfADim`, U1-U8 marker rows, `U2_TheUserVariablesCalledTmp…` (21). No execution test fails: D2's own `NamedAfterVariable` re-check masks it, as the implementer measured |
+| M4b M4a + the guard trusts the flag | `AMarkedValue_ThatIsNamedAfterAVariable_IsKept`, the marker rows, U5 / U6 execution ×4 backends, the corpus test (41) |
+| M5 base-call operands invisible | `ATemp_WhoseOnlyUseIsTheBaseConstructorCall…`, `R4_*` execution on C++ / JavaScript / MSIL, `R4_TheBaseCallsOperandSurvives…` ×2, the verifier test, the corpus test (13) |
+| M6 settled point 3 not enforced | `SettledPoint3_*` ×5, `Unit_*` ×4, `R3_OneAdjacentRefusal`, `R5_TheNotAdjacentRefusal…`, `NoDeletion_TakesANonReplicableOperand…` ×2 (15) |
+| M7 `/` `\` `Mod` removable | the three kind rows and the three isolation rows, `R6_TheDivisionSurvives…` ×2, R6 execution on C++ / JavaScript / MSIL (13) |
+| M8 no by-name use | ⭐ `CT_wbr_t0_Cpp` (the witness), `ByName_*` ×3, the R11 fence ×4 and `LC_t0` C++ / JavaScript (10) |
+| M9 `++` `--` removable | `Unary_Inc_overAnElement`, `Unary_Dec_overAnElement` — NOTHING else (2) |
+| M10 element load removable | `Load_throughAnElementPointer`, `R10_TheElementReadSurvives…` ×2 (3) |
+
+M9 and M10 are masked on real programs, and were killed by isolation, not by an argument. M9: on real IR `++a` also writes `a`, so the kill vocabulary refuses
+it on its own (`R9_TheIncrementSurvives…` passes under M9); the isolated shape — a `++` over a non-variable operand, where the kill vocabulary names only the
+result — is the only kill. M10: settled point 3 also refuses an element load (the pointer would lose its only use), so no execution test moves; the real-IR
+`R10_…` test kills it through the licence (`IsRemovableWhenUnused`), and the isolated shape gives the pointer two other uses so D3 lets it go.
+
+**Test-tier facts worth knowing.**
+- LLVM has no console and names its entry point `@Main`, so nothing it emits links, before or after #163. R7's LLVM leg returns 135 from `Main` and links with a two-line C shim.
+- `MsilHarness.RunIl` reads only the TEXT of a run: a process that prints `7` and then segfaults (exit 139) is `Ran`. The fence's MSIL cells use their own exit-code-aware run (`TempExec.ObserveMsil`).
+- Backends left out of a probe are defects that predate #163, measured identical before and after: R4 on C# (CS0103), R6 on C# (prints `0`), R10 on C#, C++, JavaScript (print `0|0`), R9 everywhere, `CT_wbr_t0` on C# (does not compile).
+- `NamedAfterVariable` and the marker together: DCE re-checks the former although IRBuilder already excludes it. Do not "simplify" that away: M4b shows it is the only thing between a mis-set flag and a deleted store.
+
+**Gates (Linux, g++/clang++/node/ilasm present, no MSVC), on the final test DLL:** the fast subset (`TestCategory!=Integration`) `Failed: 0, Passed: 9247, Skipped: 93, Total: 9340` (2 m 11 s; the #170 baseline was 9142 with the 3 moved pins red, and the same 93 skips). The filter `FullyQualifiedName~DeadCode|Dce|Optimizer|Pipeline|Aggressive|Verifier|Temp|Kill|CopyProp|Cse|BaseConstructorCall`, Integration included: `Failed: 0, Passed: 1611, Skipped: 18, Total: 1629` (19 m 20 s); the 18 skips are BuildServicePipelineTests 7, NetShimPipelineTests 7, TemplateBuildSweepTests 4 and SettingsServicePersistenceTests 2 (all pre-existing); none of the 347 new and moved tests skipped. ⚠ The FULL suite was NOT run for this task.
+
+**Only Windows can validate:** the MSVC leg of every C++ probe (`CT_wbr_t0` above all: the by-name rule's witness was compiled with clang/g++ only, and MSVC reports its own
+diagnostics for the collision); the Release `.blproj` path through the IDE build service into `CompileProjectFiles`; the MSIL fence under a Windows `ilasm` and CLR (LC_t0 is a Linux
+segmentation fault; on Windows it is an access violation and the pin only asserts "printed 7, then failed"); the LLVM leg does not run on Windows without a `clang` and the shim; Win32 glob
+over-matching is unrelated to this task.
+
+---
+
+## 2026-09-29 (earlier): #170 DONE, `MyBase.New(...)` is an IR instruction (ADR-0016; absorbs #240)
+
+The fix is `af1c7e60` on top of #200's `58ad8700`; the TEST side is uncommitted work on top of it.
+Scoped to the compiler (IR, all five backends, the front end, the verifier) plus one new C++ capability
+rule — unrelated to the form-designer section further down, which stays the live handoff for that area.
+
+**What changed.** `docs/superpowers/decisions/0016-base-constructor-call-as-instruction.md` (ADR-0016).
+A lambda or computed argument in `MyBase.New(...)` lived in `IRConstructor.BaseConstructorArgs`, a list
+no block held: the capture scan, `UsesOf`, DCE, CSE and the verifier never saw it, so every backend was
+wrong (C# `CS0103 '__lambda_0'` / `'t0'`, a JS TDZ `ReferenceError`, a named MSIL refusal, a silent wrong
+answer on C++). Now:
+- **D1** the list has no storage; argument evaluation is ordinary instructions in the entry block,
+  terminated by `IRBaseConstructorCall` (a full barrier: `NamesWrittenBy` answers `WriteSet.Everything`).
+  C# renders its operands as expressions into `: base(...)` (a multi-block prologue — `AndAlso`/`OrElse`
+  — is refused by name, C# only); JS emits the prologue before `super(...)`; MSIL before `call Base::.ctor`
+  with the environment allocated first and `Me` stored into it **immediately after** the call; C++ in place.
+- **D3 (amended, "W2")** C++ REFUSES BY NAME a lambda that could go stale under `[=]`: (a) the lambda writes
+  a variable it captures, or (b) its creator writes one at a point reachable in the creator's CFG from the
+  creation instruction. ⚠ It is stated over ANY lambda, not only `MyBase.New` arguments — it refuses
+  `Dim bump = Sub() p = p + 100` in an ordinary `Main` too. One rule, one deletion point:
+  `CppCapabilityChecker.CheckLambdaCaptureWrites` over `ControlFlowGraph.ExecutionSuccessors`.
+- **D4** `SemanticAnalyzer` (so the compiler AND the LSP): BC31095 (explicit `Me`/`MyBase`) / BC31096
+  (implicit instance member) in `MyBase.New`'s arguments, lambdas and nested lambdas included.
+- **D5** `IRVerifier.CheckInvariantP`: def-before-use, one call / constructors only / prologue region,
+  expression-only closed prologue, no orphan lambda. Runs on UN-LOWERED IR only.
+
+**Tests (all Linux-measured):**
+- `Compiler/BaseConstructorCallLoweringTests.cs` — class `BaseConstructorCallLoweringExecutionTests`
+  (⚠ NOT `BaseConstructorCallExecutionTests`: that name is the pre-#170 JS fixture in
+  `BaseConstructorCallTests.cs`, which this work must not touch; the JS roster is now 92). B1-B5, W1, W2, C1,
+  E01/E02/E04/E04b/E06/E08/E09/E11/E12/E13/E14/E15, the array literal (C# refused by name), E10 (the D2a
+  foreign-rooted pure computed argument, through the REAL CLI: `#CppInclude` needs the Preprocessor), each
+  through the standard pipeline, the aggressive pipeline and `CompileProjectFiles`, plus `TheRealCli_…` which
+  spawns `BasicLang` (plain and `--optimize`) for the corpus. C++ per the amendment (refused by name or run).
+- `Compiler/BaseConstructorCallCppRefusalTests.cs` — 5a must-refuse list in all three modes, **#140's
+  regression fence** (below), E16, and the FE1 / CR1 witnesses.
+- `Compiler/BaseConstructorCallDiagnosticsTests.cs` — D4: V1-V4 + X01-X26 through the analyzer AND all four
+  backends, one BC31096 and one BC31095 through the LSP (`DocumentManager`), the two known gaps pinned.
+- `Compiler/IRVerifierBaseConstructorCallTests.cs` — D5: each invariant fails on a mutated real module; the
+  clean shapes pass on IRBuilder output and after both pipelines.
+- `Compiler/ControlFlowGraphExecutionSuccessorsTests.cs` — the three edge families on hand-built IR, and
+  `SuccessorsOf` / `Build` / `IdentifyLoops` pinned unchanged.
+- `Msil/MsilBaseConstructorOrderingTests.cs` — M3: the `stfld … '__me'` follows `call … Base::.ctor`, read off
+  the emitted `.il` (the suite has NO ILVerify; mutant M3 RUNS correctly on the CLR).
+
+**Moved pins** (each was pinned to the OLD behaviour; every other backend's leg is untouched):
+- Now RUN: `BaseConstructorDiagnosticTests.ANonLiteralOptionalDefault_…` (`base:5`, four backends);
+  `MsilBaseConstructorTests.AComputedBaseArgument_…` (`base:42`, four); `UserDelegateConversionExecutionTests`
+  E13 C# and MSIL (`101`); `CppMeAsValueTests` E15 (`True 5 4` on C++).
+- `JavaScriptCodeGenTests.UnimplementedNode_Throws_…`: the canary was `MyBase.New(n & "!")`, which now lowers
+  (`rex!`); re-pointed at `List.Sort` with two arguments (`NotYet`, `NotSupportedException`).
+- `KillVocabularyReflectionTotalityTests`: `IRBaseConstructorCall` added to the roster (a full barrier).
+- C++, a silent wrong answer → REFUSED BY NAME citing #140 (each asserts the variable, the creator and
+  `#140`): CopyPropagation CP2 ×2, DelegateMemberInvocation P8, DynamicUseSPrime L5, Licm L5 ×2,
+  MultiLineFunctionLambda F1/F2/F8, NameBinding K9, UserDelegateConversion E1, PerIterationLoopBodyDim
+  L7/E17/L8/L8b/Cl (arm a) and E03/E04/E07f/E12/E18 (arm b), IsIsNotOperator E3 + its E3b control (arm b).
+  **#140 flips every one of these to running.**
+
+**#140's regression fence** (`BaseConstructorCallCppRefusalTests.Cpp140RegressionFence_*`, all three modes):
+B5, t172 L2, E05, E06, E07, E07e, E07w, E07x, E10, E13, E20 run on C++ with VB's output. #140 must bind the
+per-iteration instance, not a hoisted local, and must keep these green when it deletes W2. E16 stays a named
+clang failure (task #229), neither refused nor run.
+
+**A wrong answer that escaped W2 was found by the test work and FIXED in production (one line).**
+`ExecutionSuccessors` never added the contract's **Catch → Finally** edge: `Region(clause.Block, stops)` was
+called with the catch block itself in `stops`, so the catch region was empty; a lambda created in a `Catch`
+whose captured variable the `Finally` writes was not refused, and C++ printed the stale copy (0 for VB's 5).
+`Region` now always contains its own entry block. Pinned by the contract's own assertions —
+`ControlFlowGraphExecutionSuccessorsTests.Catch_EveryBlockOfTheCatchRegion_ReachesTheFinally` (and a two-block,
+two-clause variant) and `BaseConstructorCallCppRefusalTests.CF1_…_IsRefusedByName` (variable `x`, creator `Main`,
+#140, in all three modes) — and the mutant that drops the edge again is killed by both (table below). The
+corpus refusal set is unchanged (66 programs).
+
+**Known gaps and follow-ups (filed, not fixed here):**
+- **#241** a lambda nested in a lambda inside a class member fails `ilasm` on MSIL
+  (`undefined class D/<>c__Env0/<>c__Env2`); base-args nesting only made it reachable (E01, X22, X25).
+- **#242** `BodyLocals` omits a name declared twice; W2's Dim-initializer rule works around it.
+- **D4 gap 1** `MyClass` in a base argument (X07) reports a TYPE error ("of type 'Object'"), not BC31095.
+- **D4 gap 2** `Me` as a bare value (X23) cannot be probed: `If(c, x, y)` does not parse in BasicLang.
+  `Inherits Box(Of Integer)` (a generic base) does not parse either (E09a).
+- The FE1 / CR1 witnesses can only be checked against JS (and C# for FE1): C# empties a multi-statement
+  lambda body (#136) and MSIL emits a bad image / cannot assemble a `For Each` over `List(Of Func(Of Integer))`.
+
+**Mutation-proven** (detached worktree, real NUnit, `S/t170/mutants.py` M1-M12 and `mutants2.py` 5d):
+
+| Mutant | Killed by (first names; the count is the whole kill set) |
+|---|---|
+| M1 CSE barrier removed | `E06_TheBaseCallIsAFullBarrier…` and the IRVerifier E06 clean-shape rows (3) |
+| M2 C# renders the lambda's name | B1-B5, W1/W2, C1, `Cli_*`, `AComputedBaseArgument_…` (36) |
+| M3 `Me` stored before the base call | `MsilBaseConstructorOrderingTests` E14/E15, standard and aggressive (4) — it RUNS on the CLR, only the IL text sees it |
+| M4 MSIL prologue after the call | B1-B5, W1/W2, `Cli_*`, the array literal, `AComputedBaseArgument_…` (40) |
+| M5 JS `super` before the prologue | E04/E04b (AndAlso/OrElse), the array literal, D4 X14/X17 (5) |
+| M6 BC31096 missed in a lambda | D4 V1, X09, X11, X13, by analyzer and by all backends (8) |
+| M7 C++ refusal dropped | the whole 5a list and every moved C++ pin (59) |
+| M8 orphan check dropped | IRVerifier `D_AnOrphanedLambda`, `D_ALambdaReferencedTwice`, `…OnLoweredIR_SkipsInvariantP` (3) |
+| M9 base call removable by DCE | every test that runs a constructor with a base argument (73) |
+| M10 "case a" prologue rewrite skipped | `E16_AComputedArgument_ThenABodyLambdaWritesTheParameter_…`, `E17_…` (2) — the pre-existing suite did NOT kill it |
+| M11 D4 ignores Shared | D4 X14/X15/X21, the LSP no-squiggle test, E11 (5) |
+| M12 verifier closedness dropped | IRVerifier `C_APrologueValueUsedAfterTheCall_Fails` (1) |
+| 5d no Try edges | PerIteration E03/E04/E07f (moved pins and 5a) and the two Try unit tests (9) |
+| 5d no For Each back edge | `FE1_…`, the two For Each unit tests, `RealIR_…` (4) |
+| 5d creation instruction excluded | `CR1_…` (1) |
+| 5d no per-iteration cut | `Cpp140RegressionFence_` t172 L2/E05/E06/E07/E07e/E07w/E07x/E10/E13 (9) |
+| 5d no Dim-initializer rule | `Cpp140RegressionFence_t172_E20`, `E16_StaysANamedClangFailure_…` (2) |
+| Catch → Finally edge dropped (the one-line `Region` fix reverted) | `Catch_EveryBlockOfTheCatchRegion_ReachesTheFinally`, `Catch_ACatchRegionOfTwoBlocks_AndTwoCatchClauses_…`, `CF1_…_IsRefusedByName` (3) |
+
+The unmutated tree passes the same tests (274 before the Catch → Finally fix; 275 after, 0 failures either way).
+No equivalent mutant: all 18 are killed. (`D163`, the #163 dry run in `mutants.py`, was not part of the brief and
+was not run.)
+
+
+**Gates measured this session (Linux, g++/clang++, ilasm found, no MSVC):** fast subset (`TestCategory!=Integration`) `Failed: 0, Passed: 9048, Skipped: 93, Total: 9141` (1 m 34 s); the filtered set (`Constructor|MyBase|Base|Lambda|Closure|Capture|Inherit|Cpp|Msil|JavaScript|Verifier|PerIteration|IsIsNot|Delegate|NameBinding|CopyPropagation|Licm|DynamicUse|MultiLine`, Integration included) `Failed: 1, Passed: 3638, Skipped: 26, Total: 3665` (39 m 28 s) — the one failure is `Split_ClassAcrossModules_SharedPtrRoundTrip`, #200's Direction B pin, EXPECTED red and untouched (an owner decision is pending). ⚠ The FULL suite (all Integration rows) was NOT run for this task — only the filtered set above; run it on Windows before calling #170 verified. After the Catch → Finally fix in `ExecutionSuccessors` (the numbers above predate it) the fast subset was re-run: `Failed: 0, Passed: 9049, Skipped: 93, Total: 9142`, and `BaseConstructorCall|ControlFlowGraph|PerIterationLoopBodyDim` with Integration included: `Failed: 0, Passed: 292, Skipped: 0, Total: 292`.
+
+**Only Windows can validate:** the MSVC leg (a BasicLang native build ALWAYS uses MSVC — every C++ program
+here, the fence included, was compiled with g++/clang++ only); the Release `.blproj` native path and the IDE
+build service's own entry to `CompileProjectFiles`; `ILVerify` over the MSIL for M3 (the IL-text test stands
+in); the M3-style ordering under a Windows `ilasm`.
+
+---
+
 ## 🚀 START HERE — 2026-09-29: #200 DONE, `Me` as a value on the C++ backend (ADR-0015 + D2a)
 
 Branch `claude/jolly-pasteur-l4mpzs`, `f6f6f16a`, draft PR #140. Scoped to the C++ backend's

@@ -68,5 +68,6 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         public void Visit(IRForEach forEach) => _generator.Visit(forEach);
         public void Visit(IRIndexerAccess indexer) => _generator.Visit(indexer);
         public void Visit(IRIndexerStore indexerStore) => _generator.Visit(indexerStore);
+        public void Visit(IRBaseConstructorCall baseConstructorCall) => _generator.Visit(baseConstructorCall);
     }
 }

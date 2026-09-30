@@ -1,5 +1,6 @@
 using System.IO;
 using NUnit.Framework;
+using BasicLang.Compiler.CodeGen.CPlusPlus;
 using VisualGameStudio.Tests.Native;
 
 namespace VisualGameStudio.Tests.Compiler;
@@ -19,10 +20,11 @@ namespace VisualGameStudio.Tests.Compiler;
 /// E1 on C++ (#140 — a captured local lambda variable is captured BY COPY on this backend); E8 on
 /// C++ (#201 — <c>AddressOf</c> an INSTANCE method fails to compile) and E9e on C++ (#201 — a
 /// branch that <c>Return</c>s an <c>AddressOf</c> result on one arm fails to compile, see that
-/// pin's own comment for what changed and what did not); E13 (#170, #201 — a lambda argument to
-/// <c>MyBase.New</c> has no IL lowering on MSIL and no lambda-hoisting on C# either, so only
-/// JavaScript and (since ADR-0015 / task #200's two-phase construction — #201's C++ leg is now
-/// PARTLY done) C++ run it).
+/// pin's own comment for what changed and what did not). E13 USED TO be here too (a lambda
+/// argument to <c>MyBase.New</c> had no IL lowering on MSIL and no lambda-hoisting on C#) — ADR-
+/// 0016 / #170's <c>IRBaseConstructorCall</c> closes both, so E13 now runs on ALL FOUR backends
+/// (JavaScript and C++ already did, since ADR-0015 / task #200's two-phase construction) and its
+/// pins below are plain <c>_Runs</c> assertions, not known-wrong ones.
 ///
 /// <para>⭐ <b>UPDATED for #188 (fix commit 5e82a786):</b> at the time this fixture was written,
 /// invoking a delegate-typed FIELD through its member spelling (not a local copy) was a
@@ -397,7 +399,8 @@ public class UserDelegateConversionExecutionTests
 
     // ============================================================================================
     // 3. E1 — zero-parameter user delegates: runs on C#/JavaScript/MSIL; C++'s capturing lambda
-    //    (Tick) prints 0 instead of 2 (#140 — captured BY COPY, not by reference).
+    //    (inc) is REFUSED BY NAME (#140/ADR-0016 D3/W2 — captured BY COPY, not by reference, so
+    //    the write would be silently lost — a named refusal beats that).
     // ============================================================================================
 
     private const string E1 = """
@@ -431,15 +434,20 @@ public class UserDelegateConversionExecutionTests
         });
     }
 
+    /// <summary>
+    /// ⭐ MOVED PIN (ADR-0016 D3/W2, task #170). A pre-existing, UNRELATED C++ lambda-capture
+    /// defect (#140): `count` is captured BY VALUE, so `inc()` twice never mutates the caller's
+    /// own `count`. Measured identically for Action-typed captures before #187. This USED TO
+    /// silently print tick\n42\n0 for tick\n42\n2; #170's capability check now REFUSES it by name
+    /// (arm (a): <c>inc</c> writes <c>count</c>, which it captures) rather than compiling it
+    /// wrong. Filed against #140, not fixed here.
+    /// </summary>
     [Test]
-    public void E1_ZeroParameterDelegates_Cpp_PinsTodaysWrongCount_Against140()
+    public void E1_ZeroParameterDelegates_Cpp_RefusedByName_PinnedForTask140()
     {
-        // A pre-existing, UNRELATED C++ lambda-capture defect (#140): `count` is captured BY
-        // VALUE, so `inc()` twice never mutates the caller's own `count`. Measured identically
-        // for Action-typed captures before #187. Filed, not fixed here.
-        var cpp = BclE2E.CompileToCppOptimized(E1);
-        Assert.That(Norm(BclE2E.CompileRun(cpp)), Is.EqualTo("tick\n42\n0"),
-            "if this now prints 2, #140 has been fixed — update this pin deliberately");
+        var ex = Assert.Throws<CppCapabilityException>(() => BclE2E.CompileToCppOptimized(E1));
+        Assert.That(ex!.Message, Does.Contain("captures 'count' of 'Main'").And.Contain("#140"),
+            "if this stops refusing, #140 has been fixed — update this pin deliberately.\n" + ex.Message);
     }
 
     // ============================================================================================
@@ -622,13 +630,13 @@ public class UserDelegateConversionExecutionTests
     }
 
     // ============================================================================================
-    // 6. E13 — a lambda argument to MyBase.New. Runs on JavaScript AND, since ADR-0015 / task
+    // 6. E13 — a lambda argument to MyBase.New. Ran on JavaScript AND, since ADR-0015 / task
     //    #200's two-phase construction (E11 placement: "a lambda argument renders inline, like
-    //    any lambda use"), on C++ too — promoted from a PINNED "undeclared identifier"
-    //    (undeclared `__lambda_0`) to a passing run; #201 is now PARTLY done (its C++ leg).
-    //    C# still fails to compile the same undeclared `__lambda_0` (#201's remaining leg);
-    //    MSIL refuses outright with a named ForeignFeatureException (#170 — "invisible to the
-    //    capture analysis", predates #187, unaffected by it).
+    //    any lambda use"), on C++ too. ADR-0016 / #170's IRBaseConstructorCall now closes the
+    //    remaining two: C# no longer fails on an undeclared `__lambda_0` (the lambda creation is
+    //    an ordinary prologue instruction the body emitter already knows how to render inline),
+    //    and MSIL no longer refuses with a named ForeignFeatureException ("invisible to the
+    //    capture analysis") for the same reason. E13 runs on ALL FOUR backends, printing 101.
     // ============================================================================================
 
     private const string E13 = """
@@ -661,13 +669,19 @@ public class UserDelegateConversionExecutionTests
         Assert.That(Norm(JavaScriptExecutionTests.RunJs(E13)), Is.EqualTo("101"));
     }
 
+    /// <summary>
+    /// ⭐ MOVED PIN (ADR-0016 / #170). This used to pin C#'s undeclared-<c>__lambda_0</c> compile
+    /// error (#201): the base-args lambda's creation instruction lived off-stream in
+    /// <c>IRConstructor.BaseConstructorArgs</c>, so nothing in the body ever saw it declared.
+    /// #170's <c>IRBaseConstructorCall</c> puts the creation instruction back in the entry
+    /// block's prologue, and D1's C# rule renders a lambda creation there as an inline C# lambda
+    /// through the existing body emitter — the same shared capture as any other lambda use.
+    /// Prints 101, matching the JavaScript leg above.
+    /// </summary>
     [Test]
-    public void E13_MyBaseNewLambdaArgument_CSharp_PinsTodaysUndeclaredLambda_Against201()
+    public void E13_MyBaseNewLambdaArgument_CSharp_Runs()
     {
-        var ex = Assert.Throws<AssertionException>(() => FourBackends.RunEmittedCSharp(E13));
-        Assert.That(ex!.Message, Does.Contain("__lambda_0").And.Contain("CS0103"),
-            "the failure must still be the undeclared-lambda C# compile error (#201). A "
-            + "DIFFERENT failure here means this pin is stale.\n" + ex.Message);
+        Assert.That(Norm(FourBackends.RunEmittedCSharp(E13)), Is.EqualTo("101"));
     }
 
     /// <summary>
@@ -675,8 +689,9 @@ public class UserDelegateConversionExecutionTests
     /// pinned against an undeclared-identifier compile error). A lambda argument to
     /// <c>MyBase.New</c> renders INLINE at its use site — the same as any other lambda use — so
     /// once <c>Base::ctor_</c> is correctly placed (two-phase construction's E11 rule) the
-    /// lambda compiles and runs, printing JavaScript's own answer. #201 is now PARTLY done: its
-    /// C++ leg is fixed by #200 as a side effect; C# still fails (the sibling test above).
+    /// lambda compiles and runs, printing JavaScript's own answer. #201's C++ leg was fixed by
+    /// #200 as a side effect; its C# leg is #170's own moved pin above — the sibling test now
+    /// runs too, so all four backends agree here.
     /// </summary>
     [Test]
     public void E13_MyBaseNewLambdaArgument_Cpp_Runs()
@@ -686,19 +701,24 @@ public class UserDelegateConversionExecutionTests
     }
 
     /// <summary>
-    /// MSIL refuses <see cref="E13"/> with a named <c>ForeignFeatureException</c> BEFORE any
-    /// process runs (#170: "a lambda passed to MyBase.New... is invisible to the capture
-    /// analysis"). On a machine with no <c>ilasm</c> (this container) the harness skips before
-    /// even reaching that refusal — <c>MsilHarness.Run</c> calls <c>RequireIlasm()</c> first — so
-    /// this pin can only be MEASURED on Windows; it is written correctly here for that run.
+    /// ⭐ MOVED PIN (ADR-0016 / #170). MSIL used to refuse <see cref="E13"/> outright with a named
+    /// <c>ForeignFeatureException</c> ("a lambda passed to MyBase.New... is invisible to the
+    /// capture analysis") — the base-args lambda's creation instruction was off-stream, so
+    /// <c>ScanForLambdas</c> / <c>LambdaReferences</c> never found it and ClosureLowering had no
+    /// environment to build. #170 makes the lambda creation an ordinary prologue instruction
+    /// ClosureLowering DOES see; D3's contract places the environment allocation and hoists
+    /// before the prologue and writes <c>Me</c> into it immediately after
+    /// <c>IRBaseConstructorCall</c> (this lambda captures no <c>Me</c> at all, so that ordering
+    /// is moot here — <see cref="CppMeAsValueTests"/>'s own class covers a base-args lambda that
+    /// reads <c>Me</c> from the body). Prints 101, same as every other backend.
+    ///
+    /// <para>On a machine with no <c>ilasm</c> (this container) the harness skips before even
+    /// building — <c>MsilHarness.RunExpectingSuccess</c> calls <c>RequireIlasm()</c> first — so
+    /// this pin can only be MEASURED on Windows; written correctly here for that run.</para>
     /// </summary>
     [Test]
-    public void E13_MyBaseNewLambdaArgument_Msil_PinsTodaysForeignFeatureException_Against170()
+    public void E13_MyBaseNewLambdaArgument_Msil_Runs()
     {
-        var r = Msil.MsilHarness.Run(E13);
-        Assert.That(r.Outcome, Is.EqualTo(Msil.MsilHarness.MsilOutcome.GenerateFailed));
-        Assert.That(r.Report, Does.Contain("has no IL lowering").And.Contain("#170"),
-            "the refusal must still name #170's capture-analysis gap. A DIFFERENT refusal here "
-            + "means this pin is stale.\n" + r.Report);
+        Assert.That(Norm(Msil.MsilHarness.RunExpectingSuccess(E13)), Is.EqualTo("101"));
     }
 }

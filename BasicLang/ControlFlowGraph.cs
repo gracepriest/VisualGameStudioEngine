@@ -137,6 +137,105 @@ namespace BasicLang.Compiler.IR
             }
         }
 
+        /// <summary>
+        /// ⭐ ADR-0016 D3 (amended): the blocks control can reach next from a block of
+        /// <paramref name="function"/> when the structured nodes are EXECUTED rather than laid
+        /// out — <see cref="SuccessorsOf"/>'s edges plus the three families it leaves implicit:
+        /// <list type="bullet">
+        /// <item><b>For Each</b>: a body block whose edge to <see cref="IRForEach.EndBlock"/> is the
+        /// normal end of an iteration (not an <see cref="IRBranch.IsLoopExit"/> branch) also reaches
+        /// <see cref="IRForEach.BodyBlock"/> — the next iteration, which the node repeats implicitly.</item>
+        /// <item><b>Try</b>: every block of the try region reaches each Catch block and the Finally
+        /// block (an exception, and every exit); every block of a Catch region reaches the Finally
+        /// block.</item>
+        /// <item><b>Finally</b>: the Finally block reaches the Try's end block. Over-approximate on
+        /// purpose: an Exit or a Return that runs the Finally is modelled as continuing there.</item>
+        /// </list>
+        /// A region is what <see cref="SuccessorsOf"/> reaches from its entry without passing
+        /// through the node's end, Finally or Catch blocks.
+        ///
+        /// <para>⚠ An ANALYSIS edge set, deliberately separate from <see cref="SuccessorsOf"/>:
+        /// <see cref="Build"/>, DCE's reachability and <see cref="IdentifyLoops"/> keep the laid-out
+        /// edges (the back edges here would create natural loops those passes do not expect).
+        /// Its one consumer today is the C++ backend's captured-variable rule
+        /// (<c>CppCapabilityChecker.CheckLambdaCaptureWrites</c>); each family carries a pinned
+        /// witness there, so an edit here cannot silently drop one.</para>
+        /// </summary>
+        public static Func<BasicBlock, IEnumerable<BasicBlock>> ExecutionSuccessors(IRFunction function)
+        {
+            var extra = new Dictionary<BasicBlock, List<BasicBlock>>(ReferenceEqualityComparer.Instance);
+            var inFunction = new HashSet<BasicBlock>((function?.Blocks ?? new List<BasicBlock>()).Where(b => b != null),
+                ReferenceEqualityComparer.Instance);
+
+            void Add(BasicBlock from, BasicBlock to)
+            {
+                if (from == null || to == null) return;
+                if (!extra.TryGetValue(from, out var list)) extra[from] = list = new List<BasicBlock>();
+                if (!list.Contains(to)) list.Add(to);
+            }
+
+            // ⚠ The entry is always in its own region, even when it is one of the stops: a Catch
+            // block is a stop for the try region and for every OTHER Catch's region, and a Catch
+            // region that stopped at its own entry was empty — no Catch → Finally edge at all, so a
+            // lambda created in a Catch escaped a Finally that writes its capture (CF1, measured).
+            HashSet<BasicBlock> Region(BasicBlock entry, HashSet<BasicBlock> stops)
+            {
+                var region = new HashSet<BasicBlock>(ReferenceEqualityComparer.Instance);
+                var pending = new Stack<BasicBlock>();
+                pending.Push(entry);
+                while (pending.Count > 0)
+                {
+                    var b = pending.Pop();
+                    if (b == null || (stops.Contains(b) && !ReferenceEquals(b, entry))
+                        || !inFunction.Contains(b) || !region.Add(b)) continue;
+                    foreach (var s in SuccessorsOf(b)) pending.Push(s);
+                }
+                return region;
+            }
+
+            foreach (var block in function?.Blocks ?? new List<BasicBlock>())   // block order: deterministic edges
+                foreach (var inst in block?.Instructions ?? new List<IRInstruction>())
+                {
+                    if (inst is IRForEach forEach && forEach.BodyBlock != null && forEach.EndBlock != null)
+                    {
+                        var stops = new HashSet<BasicBlock>(ReferenceEqualityComparer.Instance) { forEach.EndBlock };
+                        foreach (var b in Region(forEach.BodyBlock, stops))
+                        {
+                            var exit = b.GetTerminator() as IRBranch;
+                            var normal = SuccessorsOf(b).Any(s => ReferenceEquals(s, forEach.EndBlock)
+                                && !(exit != null && exit.IsLoopExit && ReferenceEquals(exit.Target, s)));
+                            if (normal) Add(b, forEach.BodyBlock);
+                        }
+                    }
+                    else if (inst is IRTryCatch tryCatch)
+                    {
+                        var stops = new HashSet<BasicBlock>(ReferenceEqualityComparer.Instance);
+                        if (tryCatch.EndBlock != null) stops.Add(tryCatch.EndBlock);
+                        if (tryCatch.FinallyBlock != null) stops.Add(tryCatch.FinallyBlock);
+                        foreach (var clause in tryCatch.CatchClauses)
+                            if (clause.Block != null) stops.Add(clause.Block);
+
+                        if (tryCatch.TryBlock != null)
+                            foreach (var b in Region(tryCatch.TryBlock, stops))
+                            {
+                                foreach (var clause in tryCatch.CatchClauses) Add(b, clause.Block);
+                                Add(b, tryCatch.FinallyBlock);
+                            }
+                        foreach (var clause in tryCatch.CatchClauses)
+                            if (clause.Block != null)
+                                foreach (var b in Region(clause.Block, stops)) Add(b, tryCatch.FinallyBlock);
+                        Add(tryCatch.FinallyBlock, tryCatch.EndBlock);
+                    }
+                }
+
+            return block =>
+            {
+                if (block == null) return Enumerable.Empty<BasicBlock>();
+                var laidOut = SuccessorsOf(block);
+                return extra.TryGetValue(block, out var implicitEdges) ? laidOut.Concat(implicitEdges) : laidOut;
+            };
+        }
+
         private void AddEdge(BasicBlock from, BasicBlock to)
         {
             if (!from.Successors.Contains(to))
