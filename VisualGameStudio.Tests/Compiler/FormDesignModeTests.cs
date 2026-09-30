@@ -291,9 +291,13 @@ public class FormDesignModeTests
     /// selection is invisible: the grid is empty, yet Cut used to copy the OLD parse's button (its old
     /// caption) to the clipboard, remove nothing from the new document, and hand a stale copy to the
     /// next Paste.
+    ///
+    /// <para>⚠ This drives the <c>vm.Text</c> SETTER, which re-parses and resets the panels at once. In
+    /// the IDE, typing goes through <c>UpdateTextFromEditor</c> and reaches that same reset when the user
+    /// returns to Design view — the same <c>SyncDesignerPanels</c>, reached later.</para>
     /// </summary>
     [Test]
-    public void AfterAnEditInCodeView_CutAndPasteActOnNothingStale()
+    public void AfterAnEditInCodeView_ViaTheTextSetter_CutAndPasteActOnNothingStale()
     {
         var vm = NewViewModel();
         vm.FilePath = "/tmp/LoginForm.blwebform";

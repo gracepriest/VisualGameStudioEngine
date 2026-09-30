@@ -308,6 +308,12 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
     /// subscribes to. The grid write below is redundant when the selection actually changes and
     /// load-bearing when it does not: <c>Set</c> is a no-op for a control that is already the whole
     /// selection, and the grid must still show it.</para>
+    ///
+    /// <para>⚠ The one other place that writes the store here is <see cref="SyncDesignerPanels"/>,
+    /// which CLEARS it after <c>PropertyGrid.Load</c> empties the grid on a reload (a Code-view edit,
+    /// undo/redo, re-entering Design view), so the two never disagree about a control of an old parse.
+    /// The canvas's own gestures reach the store through its bound <c>Selection</c>, never by writing
+    /// the grid alone.</para>
     /// </summary>
     private void SelectInDesigner(BasicLang.Forms.FormControl? control)
     {
