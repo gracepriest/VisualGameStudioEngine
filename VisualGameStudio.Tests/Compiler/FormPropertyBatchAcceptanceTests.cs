@@ -355,4 +355,68 @@ public class FormPropertyBatchAcceptanceTests
             Assert.That(probes["textAlign"], Is.EqualTo("center"));
         });
     }
+
+    /// <summary>
+    /// ⛔ Code review I2 (2026-09-29), measured in the BROWSER: a Button inside a GroupBox whose Font is bold (and whose
+    /// ForeColor is set) renders bold and in that colour — as WinForms' ambient Font/ForeColor make it — with NO Form-level
+    /// Font. The rule used to be written only for a Form Font, so the fieldset was bold and its button regular.
+    /// </summary>
+    [Test]
+    [Category("Integration")]
+    public async Task Web_AButtonInAGroupBoxWithABoldFont_RendersBold_InTheBrowser()
+    {
+        var vm = NewForm(FormTarget.Web);
+        var group = Place(vm, "GroupBox", 40, 40);
+        var button = Place(vm, "Button", 70, 80);
+        Assert.That(vm.DesignDocument!.ParentOf(button), Is.SameAs(group), "the button was dropped INTO the GroupBox");
+
+        SetThroughGrid(vm, group, "Font", "Segoe UI, 10pt, style=Bold");
+        SetThroughGrid(vm, group, "ForeColor", "#C00000");
+        SetThroughGrid(vm, button, "Text", "OK");
+        Assert.That(await vm.SaveAsync(), Is.True, "the save failed");
+        var saved = FormDocumentReader.Read(vm.FilePath!, File.ReadAllText(vm.FilePath!)).Model;
+
+        Write("App.blproj", """
+            <BasicLangProject Version="1.0">
+              <PropertyGroup>
+                <ProjectName>App</ProjectName>
+                <OutputType>Exe</OutputType>
+                <TargetBackend>JavaScript</TargetBackend>
+                <StartupForm>BatchForm</StartupForm>
+              </PropertyGroup>
+            </BasicLangProject>
+            """);
+        Write("Main.bas", "Sub Main()\n    Console.WriteLine(\"App loaded\")\nEnd Sub\n");
+
+        var (exit, stdout, stderr) = CliTestHarness.RunProcess(
+            CliTestHarness.CliPath(), new[] { "build", Path_("App.blproj") }, _dir, timeoutMs: 180_000);
+        Assert.That(exit, Is.Zero, $"the real CLI refused the designer's output.\n{stdout}\n{stderr}");
+
+        var outDir = Path.Combine(_dir, "bin", "Debug", "net8.0");
+        var css = File.ReadAllText(Path.Combine(outDir, "BatchForm.css"));
+        Log("[css]\n" + css);
+        Assert.That(css, Does.Contain("button, input, select, textarea { font: inherit; }"));
+
+        if (EdgeLayoutHarness.EdgePath() == null)
+        {
+            Assert.Ignore("Edge is not installed here, so the browser's computed style cannot be measured");
+        }
+
+        var edge = EdgeLayoutHarness.Measure(outDir, new[]
+        {
+            EdgeCase.Of(saved, 800, 450,
+                EdgeStep.Style("groupWeight", group.Id, "font-weight"),
+                EdgeStep.Style("buttonWeight", button.Id, "font-weight"),
+                EdgeStep.Style("buttonColor", button.Id, "color"))
+        });
+        var probes = edge.Results["BatchForm@800x450"].Probes;
+        Log("[edge] " + string.Join(", ", probes.Select(p => $"{p.Key}={p.Value}")));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(probes["groupWeight"], Is.EqualTo("700"), "the GroupBox's own font");
+            Assert.That(probes["buttonWeight"], Is.EqualTo("700"), "the GroupBox's bold Font reaches its button");
+            Assert.That(probes["buttonColor"], Is.EqualTo("rgb(192, 0, 0)"), "and its ForeColor does too");
+        });
+    }
 }

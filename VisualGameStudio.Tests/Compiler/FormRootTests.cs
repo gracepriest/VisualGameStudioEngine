@@ -697,6 +697,43 @@ public class FormRootTests
         });
     }
 
+    /// <summary>
+    /// ⛔ Code review I2 (2026-09-29): a CONTAINER's Font is ambient too — a Button in a GroupBox with a bold Font is bold
+    /// in WinForms — so the inherit rules are written when a Font (resp. ForeColor) is present ANYWHERE on the page, not
+    /// only on the Form. A Grid or Flow page with none anywhere is byte-identical to before.
+    /// </summary>
+    [TestCase(FormLayoutKind.Canvas)]
+    [TestCase(FormLayoutKind.Grid)]
+    [TestCase(FormLayoutKind.Flow)]
+    public void AContainersFontOrForeColor_ReachesThePagesFormControls_AsWinFormsAmbientPropertiesDo(FormLayoutKind kind)
+    {
+        FormDocument Page(string? font, string? fore)
+        {
+            var page = new FormDocument { Target = FormTarget.Web, Name = "F", Layout = new FormLayout { Kind = kind } };
+            var group = new FormControl { Kind = "GroupBox", Id = "grp", TabIndex = 0, Geometry = new GridGeometry() };
+            if (font != null) group.Properties["Font"] = font;
+            if (fore != null) group.Properties["ForeColor"] = fore;
+            group.Children.Add(new FormControl { Kind = "Button", Id = "btn", TabIndex = 0, Geometry = new GridGeometry() });
+            page.Controls.Add(group);
+            return page;
+        }
+
+        var withFont = FormAssetEmitter.Css(Page("Segoe UI, 10pt, style=Bold", null));
+        var withFore = FormAssetEmitter.Css(Page(null, "#C00000"));
+        var plain = FormAssetEmitter.Css(Page(null, null));
+        var unreadable = FormAssetEmitter.Css(Page("Arial", null));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(withFont, Does.Contain("button, input, select, textarea { font: inherit; }"));
+            Assert.That(withFont, Does.Not.Contain("button { color: inherit; }"), "each rule only for its own property");
+            Assert.That(withFore, Does.Contain("button { color: inherit; }"));
+            Assert.That(withFore, Does.Not.Contain("font: inherit"));
+            Assert.That(plain, Does.Not.Contain("inherit"), "a page with no Font or ForeColor anywhere is unchanged");
+            Assert.That(unreadable, Does.Not.Contain("inherit"), "a Degraded font is never emitted, so nothing inherits it");
+        });
+    }
+
     [Test]
     public void APageWithNoFormRows_HasNoExtraBodyRule_AndAWinFormsOnlyRowNeverReachesIt()
     {
