@@ -307,6 +307,12 @@ T3 `1cdbfe5f` · T4 `15060e7b` · T5 `269bed92` · T6 `faa117a8` · T7 `832d0288
   stored as the 0–1 Double · `731773c5` I1 inherited-font parts start from what the control inherits (`FormAmbient`) ·
   `281be93d` I2 the page's inherit rules for a Font/ForeColor ANYWHERE (Edge: button in a bold GroupBox measured 700) ·
   `63e93c44` M1 font size ≤ 2 decimals, M3 cursor table pinned per member, M7 font bound pinned.
+- **Gate after the review round, on the MERGED tree `1799af1f` (origin/master `5b4ca51e` merged in; Windows,
+  Release):** fast subset 9770 total / 9745 passed / 6 failed / 19 skipped — the six failures are the SAME known names
+  (EveryTextRoute_UsesTheFormatter…, Emit_ReplacesAnImportedModuleThatAnotherHandleHasMapped,
+  Emit_ReplacesAScriptThatAnotherHandleHasMapped, Emit_ReplacingAnImportedModule_LeavesNoTempFileBehind,
+  SearchSnippets_EmptyQuery/WhitespaceQuery_ReturnsAll). Named Integration fixtures 351/351, 0 skipped (the new Edge
+  GroupBox probe and the pair-compile tests included). Review-round mutations 23/23 killed.
 - **Review minors RECORDED as follow-ups (no code, per the coordinator):**
   - **M2** — an unparseable composite PART snaps back without a reason ON THE PART (the reason shows on the parent) — spec §7
     says the refused editor states why; give a part its own Refusal.
