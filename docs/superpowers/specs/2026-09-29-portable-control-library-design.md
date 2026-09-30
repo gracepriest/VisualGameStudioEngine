@@ -1,9 +1,9 @@
 # The portable control library — piece 2 of "one form, either target" (design)
 
-Status: DRAFT for spec review, 2026-09-29. Implements the owner's piece-2 decisions of 2026-09-29 (§0.2) exactly;
-everything the decisions did not settle is either decided here as a reversible implementation choice (marked
-**[impl]**) or listed as an owner question (§13). Written against `origin/master` @ `14c2e17d`, which contains piece 1
-(PR #139, `6c62417e`).
+Status: REVISION 2, 2026-09-29 — the owner's answers to revision 1's open questions are recorded as decisions (§0.3), and
+every spec-review finding (C1–C3, I1–I9, minors) is addressed; §11a lists where. Everything the decisions did not settle is
+decided here as a reversible implementation choice (marked **[impl]**). Written against `origin/master` @ `14c2e17d`, which
+contains piece 1 (PR #139, `6c62417e`).
 Branch: `feat/portable-controls`, based on `origin/master` @ `14c2e17d`.
 
 ## 0. The programme and this piece
@@ -18,11 +18,11 @@ containing one stops with an error naming it.
 ### 0.2 Piece-2 owner decisions (2026-09-29)
 - **O1 — API scope = what the designer lists.** Every property and event the catalog lists for a control works at run
   time on the web. One list drives both targets.
-- **O2 — old web code converts on save, by offer.** New forms use the WinForms style from the start. Opening an old web
-  form OFFERS to convert: generated regions rewritten; simple handler signatures `(e As DomEvent)` →
-  `(sender As Object, e As EventArgs)`; DOM-style lines inside handlers are NOT rewritten — each is listed in the Error
-  List with a suggested replacement. Declining leaves the file byte-identical, and the designer does not regenerate it
-  in the new style until accepted.
+- **O2 — old web code converts: OFFER ON OPEN, WRITE ON CONVERT.** New forms use the WinForms style from the start.
+  Opening an old web form offers to convert; nothing is written until the user accepts. Converting rewrites the generated
+  regions and simple handler signatures `(e As DomEvent)` → `(sender As Object, e As EventArgs)`; DOM-style lines inside
+  handlers are NOT rewritten — each is listed in the Error List with a suggested replacement. Declining leaves the file
+  byte-identical, and the designer does not regenerate it in the new style until accepted.
 - **O3 — target-specific code.** `#If WEB` / `#If DESKTOP`, the symbol defined by the build's target; a web-only escape
   hatch `.Element` on every web control; `.Element` outside `#If WEB` is a DESKTOP-build error; a WinForms member not
   available on the web (e.g. `Form.ShowDialog`, an uncatalogued property) is a WEB-build error naming it and suggesting
@@ -33,49 +33,80 @@ containing one stops with an error naming it.
   objects (passable, storable in lists).
 - **O5 — one code shape on both targets.** `Private btnLogin As Button`; `AddHandler btnLogin.Click, AddressOf
   btnLogin_Click`; `Sub btnLogin_Click(sender As Object, e As EventArgs)`. On the web the generated init ATTACHES each
-  control object to the element the page already rendered — the markup still paints the initial design exactly as
-  piece 1; code takes over after.
-- **O6 — data flow.** Properties read and write the LIVE element (no shadow copy), following the catalog's existing web
-  mapping. `Visible` writes an explicit non-empty display. Run-time `Left/Top/Width/Height/Location/Size` respect Anchor
-  like WinForms — FormAnchorCss's rules in the library, a MIRRORED PAIR with a lock-step test. Events map DOM →
-  WinForms with `sender` = the control (click→Click; input→TextChanged; change→CheckedChanged/SelectedIndexChanged/
-  ValueChanged; mouse→MouseDown/Up/Move with `MouseEventArgs`; keys→KeyDown/KeyUp (`KeyCode`) and KeyPress
-  (`KeyChar`)). The library fires TextChanged/CheckedChanged itself on a programmatic set, matching WinForms' counts.
-  GroupBox's default event is **Enter** → web `focusin`.
-- **O7 — rendering gaps fixed here.** CheckBox/RadioButton captions rendered; GroupBox caption as a `<legend>` in the
-  border; bordered Panels draw their border — the page matches WinForms, or the gap is re-recorded with measurements.
+  control object to the element the page already rendered — the markup paints the initial design exactly as piece 1;
+  code takes over after.
+- **O6 — data flow.** Properties read and write the LIVE element (no shadow copy), following the catalog's web mapping.
+  Run-time `Left/Top/Width/Height/Location/Size` respect Anchor like WinForms — FormAnchorCss's rules in the library, a
+  MIRRORED PAIR with a lock-step test. Events map DOM → WinForms with `sender` = the control (click→Click;
+  input→TextChanged; change→CheckedChanged/SelectedIndexChanged/ValueChanged; mouse→MouseDown/Up/Move with
+  `MouseEventArgs`; keys→KeyDown/KeyUp (`KeyCode`) and KeyPress (`KeyChar`)). The library raises TextChanged/
+  CheckedChanged itself on a programmatic set, matching WinForms' counts. GroupBox's default event is **Enter** → `focusin`.
+  (O6's "Visible writes an explicit display" is SUPERSEDED by O10.)
+- **O7 — rendering gaps fixed here.** CheckBox/RadioButton captions; GroupBox caption as a `<legend>` in the border;
+  bordered Panels draw their border — the page matches WinForms, or the gap is re-recorded with measurements.
 - **O8 — desktop-only controls.** Toolbox and property grid show a "desktop" badge; a web build using one stops with an
   error naming control and form.
-- **O9 — testing** (§11): catalog-coverage gate; a BEHAVIOUR TWIN (the same form code in the real WinForms window and in
-  Edge); an anchor lock-step test; rendering assertions in Edge; conversion; desktop-only; `#If`; `.Element`;
-  end-to-end. Two reviews per task and a mutation pass, as piece 1.
+- **O9 — testing** (§11): catalog-coverage gate; a BEHAVIOUR TWIN; an anchor lock-step test; rendering assertions in Edge;
+  conversion; desktop-only; `#If`; `.Element`; end-to-end. Two reviews per task and a mutation pass, as piece 1.
 
-### 0.3 What this spec found that changes the shape of the work
-Measuring before designing (§3) found that **the language is not yet able to host the library**: `#If` does not exist
-(only `#IfDef`, and no build defines any symbol); a class cannot `Inherits` a class from another file on ANY backend; any
-`Using` line breaks `Me.Method()` on JavaScript; `RemoveHandler` is a silent no-op on JavaScript; `MyBase.Property`
-recurses forever on JavaScript; a user `Enum` member types as `Object`; and a derived class declared before its base
-dies at load. Each is a green build or a clear refusal of the exact shape the library and the shared code-behind need.
-They become sub-piece **2.0** (§4), which lands first and is valuable on its own.
+### 0.3 Owner answers to revision 1's questions (2026-09-29) — decisions
+- **O10 (Q1) — `Visible` uses the `hidden` ATTRIBUTE.** The phone layout (`.vgs-form [hidden] { display: none !important }`)
+  and the reflow script (observes `hidden`) already honour it. Combined with §5.8's style-sheet rule (review I7).
+- **O11 (Q2) — controls created at run time are OUT of this piece**: a clear web-build error, "not supported yet" (§5.10).
+- **O12 (Q3) — methods on the web: all four groups.** `Show`/`Hide`/`Focus`/`BringToFront`; `TextBox.Clear`/`AppendText`/
+  `SelectAll`; `MessageBox.Show` (the browser's dialog; buttons OK, OKCancel, YesNo only); `Form.Close` (hides the form
+  area). Any other method is a web-build error.
+- **O13 (Q4) — `Char` on the JavaScript backend** (a 2.0 item) so `KeyChar` is a real `Char` on both targets.
+- **O14 (Q5) — NumericUpDown `Value` is `Decimal` on both targets**, converted EXACTLY to and from the page text (no
+  floating point). Decimal is not supported on the JS backend today (M20) → a 2.0 item.
+- **O15 (Q6) — a run-time `Dock` change RE-DOCKS LIVE** through piece 1's reflow script, which the library feeds CURRENT
+  values (the script today reads emitted design sizes — review I7).
+- **O16 (Q7) — `DESKTOP` is defined for every non-web backend.**
+- **O17 (Q8) — the catalog's event lists DEPEND on property-grid slice 3 (in flight, `feat/property-grid-slice3`) and
+  slice 5.** This spec does not add them (§10.1); slice 3's new rows (Font, Cursor, Padding, AcceptButton, CancelButton,
+  TopMost, … — §10.2) are library scope under O1.
+- **O18 (Q9) — editor support is IN 2.0**: the LSP understands `#If WEB`/`#If DESKTOP` (line-preserving blanking of
+  inactive branches, a new feature) and knows the web controls (§4.12).
+- **O19 (review I4) — `DEBUG` in Debug builds and `RELEASE` in Release builds**, like VB; a golden test over existing
+  `#IfDef` fixtures and a release-notes line (§4.1).
+
+### 0.4 What measuring found, and the sequencing it forces
+The language is not yet able to host the library (§3): `#If` does not exist; no build defines a symbol; a class cannot
+`Inherits` a class from another file on ANY backend; `Using` breaks `Me.Method()` on JavaScript; `RemoveHandler` is a
+silent no-op on JavaScript; `MyBase.Property` recurses forever on JavaScript; a user `Enum` member types as `Object`;
+derived-before-base dies at load; `Decimal` and `Char` are refused on JavaScript. These become sub-piece **2.0**.
+**Sequencing:** `fix/js-cross-file-calls` (in flight, `wt-jsx`) rewrites the missing-member / .NET-fallback path that §4.2,
+§4.3 and §5.11 depend on → **2.0 starts after it lands, and first re-measures M6, M7, M16 and the §3 listener rows on the
+merged tree.** `fix/unknown-dock-diagnostic` (takes the next design code, adds `FormDock`) and property-grid slice 3 land
+before 2a (§10).
 
 ## 1. Goal, and the delivery split
 
-A form's code-behind — fields, wiring, handlers, and the property/event code users write in handlers — is the SAME text
-for a WinForms build and a web build. On the web, `btnLogin.Text = "Wait…"`, `chkRemember.Checked`, `AddHandler …Click`,
-`(sender As Object, e As EventArgs)` behave as they do in the WinForms window: same values read back, same positions after
-a run-time move, same events in the same number. Existing web forms keep building unchanged until the user accepts a
-conversion.
+A form's code-behind — fields, wiring, handlers, and the property/event code users write — is the SAME text for a
+WinForms build and a web build, apart from the designer's init region (piece 3 unifies that). On the web,
+`btnLogin.Text = "Wait…"`, `chkRemember.Checked`, `AddHandler …Click`, `(sender As Object, e As EventArgs)` behave as they
+do in the WinForms window: same values read back, same positions after a run-time move or re-dock, same events in the
+same number. Existing web forms keep building unchanged until the user accepts a conversion.
 
 The owner approved the whole design; the split is about delivery (each sub-piece: its own plan, per-task two-stage review,
-mutation pass, gate). **Order: 2.0 → 2a → 2b → 2c; 2d may run in parallel with 2b or 2c.**
+mutation pass, gate).
+**Order: [fix/js-cross-file-calls, fix/unknown-dock-diagnostic, slice 3 land] → 2.0 → 2a → 2b → 2c; 2d in parallel with
+2b or 2c.** Slice 5 (event lists) must land before 2b's gate is complete (§10.1).
 
 | Sub-piece | Delivers | Why here |
 |---|---|---|
-| **2.0 Compiler prerequisites** (§4) | `#If`/`#ElseIf`/`#Else`/`#End If` + WEB/DESKTOP symbols on every entry point; cross-file `Inherits`; `Using` vs `Me.M()` on JS; `RemoveHandler` identity on JS; `MyBase.Property` on JS; Enum member typing; base-first class order on JS; `AddHandler` signature check; BasicLang namespaces win over .NET for `Using`/qualified names on a web build; dotted `Namespace` declarations | Every one is measured to break the library or the shared code shape (§3). All are general compiler fixes with their own tests, independent of forms. |
-| **2a Library core + codegen + first kinds** (§5–§7, §10) | Auto-include hook; `Control`, `Form`, event-args family, `Color`/`Point`/`Size`/`Image`, collections; `Button`, `Label`, `TextBox`, `CheckBox`, `RadioButton`, `Panel`, `GroupBox`; the portable region-writer style; `.Element` + both build errors; run-time geometry with Anchor + lock-step; catalog event lists + GroupBox Enter + `DomMember`; the three rendering gaps + client insets; the coverage gate and behaviour-twin harness | The login-form set, end to end, proves every mechanism once. |
-| **2b The remaining kinds** (§5.8) | `ComboBox`, `ListBox`, `PictureBox`, `LinkLabel`, `NumericUpDown`, `DateTimePicker`, `TrackBar`, `ProgressBar`, `Timer`, the three strips and four item kinds; **then** the web scaffold's default flips to the portable style | Mechanical once 2a's gate exists; each kind is one gated row. The default flips only when every web kind has a class (else a new form's ComboBox would be a web-build error). |
-| **2c Conversion** (§8) | Style detector, convert-on-open offer, handler rewrite, DOM-line findings, decline = byte-identical, CLI verb | Needs the finished portable style to convert INTO. |
-| **2d Desktop-only controls** (§9) | Badges, drop allowed on a web form, the web-build error | Independent of the library. |
+| **2.0 Compiler + editor prerequisites** (§4) | `#If`/`#ElseIf`/`#Else`/`#End If`; WEB/DESKTOP/DEBUG/RELEASE symbols on every route; the LSP's `#If` (line-preserving blanking) and web-library awareness; cross-file `Inherits`; JS: `Using` vs `Me.M()`, `RemoveHandler` identity, `MyBase.Property`, base-first class order, `Char`, `Decimal` (exact); Enum member typing; `Decimal` literals and `CDec` typing; `AddHandler` signature check; BasicLang namespaces win on a web build; dotted `Namespace`; a library-idiom probe | Each is measured to break the library or the shared shape (§3). General fixes, each with its own tests. |
+| **2a Library core + codegen + first kinds** (§5–§7) | Auto-include hook; `Control`, `Form`, event args, drawing types, collections, `MessageBox`; `Button`, `Label`, `TextBox`, `CheckBox`, `RadioButton`, `Panel`, `GroupBox`; the portable region style (marker, init, stubs); `.Element` and the web/desktop build errors; live geometry, Anchor, `hidden`, live Dock feed; the rendering fixes and client insets; the coverage gate and twin harness; **the opt-in route "Add Web Form (portable)"** (I1) | The login-form set proves every mechanism end to end, reachable from a shipping build. |
+| **2b The remaining kinds** (§5.12) | `ComboBox`, `ListBox`, `PictureBox`, `LinkLabel`, `NumericUpDown`, `DateTimePicker`, `TrackBar`, `ProgressBar`, `Timer`, 3 strips, 4 item kinds; **then the default flips**: every new web form is portable and the opt-in command is retired | The default flips only when every web kind has a class. |
+| **2c Conversion** (§8) | Offer on open; convert (regions, simple handlers, Using/Inherits, marker); DOM-line findings; decline = byte-identical; CLI verb | Needs the finished portable style to convert INTO. |
+| **2d Desktop-only controls** (§9) | Badges, drop allowed on a web form, `DesktopOnlyKind` build error | Independent of the library. |
+
+**I1 — how 2a is reachable [impl, the option chosen of the two the review offered].** 2a ships a bound command **"Add Web
+Form (portable)"** beside the existing Add New Form route: it scaffolds a portable web form (§6.2) and is the only way to
+make one in 2a. An entry-point test drives the real generated command and reads the AXAML for its binding (CLAUDE.md: a
+`[RelayCommand]` no menu binds is unreachable). In 2b the ordinary route scaffolds portable and this command is removed.
+The rejected option (flipping the default in 2a behind 2d's error) would have made a new web form's ComboBox a build error
+for the length of 2b.
 
 ## 2. Grounded facts (today's master, `14c2e17d`)
 
@@ -85,374 +116,423 @@ FAE = `BasicLang/Forms/FormAssetEmitter.cs`, JSB = `BasicLang/JavaScriptBackend.
 ### 2.1 Code-behind generation
 | # | Fact | Where |
 |---|---|---|
-| G1 | Field type: web `WebScript?.FieldType ?? "Element"`, WinForms `WinFormsType ?? "Control"` | RW:1183-1191 (web :1187) |
+| G1 | Field type: web `WebScript?.FieldType ?? "Element"`, WinForms `WinFormsType ?? "Control"` | RW:1183-1191 |
 | G2 | Fields written components first, then controls, `Private {Id} As {DeclaredType}` | RW:579-598 |
-| G3 | Web init opens with `Dim doc As Document = ::document` UNCONDITIONALLY; `Dim w As Window = ::window` only when a component has a web script | RW:612, :619-621 |
-| G4 | Per control: web `{Id} = doc.getElementById("{Id}")`; WinForms `New`, geometry, properties | RW:769-791 (web :775) |
-| G5 | WinForms geometry fans in: `Location = New Point`, `Size = New Size`, `Dock = DockStyle.X`, `Anchor` | RW:1021-1068 |
-| G6 | `Controls.Add` reversed (z-order); returns early on the web | RW:721-757 (web :731, reversal :753-756) |
-| G7 | Wiring: web `addEventListener("{dom}", AddressOf H)`, WinForms `AddHandler {Id}.{Event}, AddressOf H` | RW:987, :993 |
-| G8 | BL8013 handler-ordering is web-only, matched by NAME only (`Sub <name>` text scan) | RW:478-517 (web gate :482), :520-545 |
-| G9 | `IsEmittedBind`: a web component is wired only on its declared web events | RW:437-452 |
-| G10 | Regions: `' <vgs:designer region="controls|init" form="…" hash="…">` … `' </vgs:designer>`; hash-guarded; hand edit → BL8011, malformed → BL8012 | `BasicLang/Forms/RegionMarkers.cs:53-176`; RW:44-103 |
-| G11 | Scaffold: WinForms writes `Using System` / `System.Drawing` / `System.Windows.Forms` + `Inherits Form`; web writes neither; both `Me.InitializeComponent()`; web puts the init region LAST (BL8013) | `BasicLang/Forms/FormScaffolder.cs:201-212`, :221-231, :234-250 |
-| G12 | Handler stubs: web `(e As DomEvent)` (or `()` when `WebHandlerTakesEvent` is false — the Timer), WinForms `(sender As Object, e As {WinFormsArgs ?? "EventArgs"})`; web stub ABOVE the init region, WinForms after | `BasicLang/Forms/FormHandlers.cs:157-162`, :179-181 |
-| G13 | Timer on the web: field `Integer`, construct `w.setInterval(AddressOf {handler}, {Interval})`, implied `Enabled=true` (the "wired means running" rule); `Enabled` is WinForms-only | FCC:1756-1778 (Enabled :1764), `FormWebScript` :1003 |
-| G14 | Dispatch `Public Class VgsForms` with once-per-page guard; auto-start after `Main` unless user code calls/references it (decided on the IR) | FAE:931-969; JSB:1063-1150 |
-| G15 | Diagnostics reach the Error List via `DesignerDiagnosticsEvent`, source "Form designer" | `VisualGameStudio.Shell/ViewModels/Documents/CodeEditorDocumentViewModel.cs:1729-1768`; `MainWindowViewModel.cs:582`, :1598-1619 |
-| G16 | Next free design code is **BL8033**; BL8018 retired (never reuse); BL8031 reserved | `BasicLang/Forms/DesignDiagnostic.cs:54-84` |
-| G17 | Nothing checks a web handler's PARAMETERS; the only old-dialect recogniser is the import `DomDialect` (`::document`/`createElement`, `addEventListener`) | RW:520-545; `BasicLang/Forms/Recognizer/DomDialect.cs:114-115`, :145-147 |
+| G3 | Web init opens with `Dim doc As Document = ::document`; `Dim w As Window = ::window` only when a component has a web script | RW:612, :619-621 |
+| G4 | **WinForms init order:** FormRoot rows as `Me.X = …` (:630-658) → components (:661-665) → controls via `AppendSiblings`, where each control is `New` → geometry → properties → `AddHandler` (binds) → its children (recursively) (:769-791), and after a run of siblings their `Controls.Add` in REVERSE (:753-756) or a host's item verb in document order (:736-750) → the `Me.<FormProperty>` line (MainMenuStrip) after the whole add run (:673-684) | RW:600-791 |
+| G5 | Web per control: `{Id} = doc.getElementById("{Id}")`, then binds, then children; no adds (`AppendSiblings` returns early) | RW:773-775, :731 |
+| G6 | Wiring: web `addEventListener("{dom}", AddressOf H)`, WinForms `AddHandler {Id}.{Event}, AddressOf H` | RW:987, :993 |
+| G7 | BL8013 handler ordering is web-only, matched by NAME only | RW:478-517, :520-545 |
+| G8 | `IsEmittedBind`: a web component is wired only on its declared web events | RW:437-452 |
+| G9 | Regions: `' <vgs:designer region="controls|init" form="…" hash="…">` … `' </vgs:designer>`, regexes, hash, `Scan` (Canon/HashMismatch/Malformed); hand edit → BL8011, malformed → BL8012 | `BasicLang/Forms/RegionMarkers.cs:53-176`; RW:44-103 |
+| G10 | Scaffold: WinForms writes three `Using` lines + `Inherits Form`; web writes neither; both `Me.InitializeComponent()`; web puts the init region LAST. It writes EMPTY regions, then runs `RegionWriter.Write` to fill them | `BasicLang/Forms/FormScaffolder.cs:195-254`, :172-185 |
+| G11 | Handler stubs: web `(e As DomEvent)` (`()` when `WebHandlerTakesEvent` is false), WinForms `(sender As Object, e As {WinFormsEventArgs ?? "EventArgs"})`; placement web ABOVE the init region, WinForms AFTER it | `BasicLang/Forms/FormHandlers.cs:157-162`, :179-181 |
+| G12 | Timer on the web: field `Integer`, construct `w.setInterval(AddressOf {handler}, {Interval})`, implied `Enabled=true`; `Enabled` is WinForms-only | FCC:1756-1778 (Enabled :1764) |
+| G13 | Dispatch `Public Class VgsForms` with once-per-page guard; auto-start after `Main` unless user code calls/references it | FAE:931-969; JSB:1063-1150 |
+| G14 | Design diagnostics reach the Error List via `DesignerDiagnosticsEvent`, source "Form designer" | `CodeEditorDocumentViewModel.cs:1729-1768`; `MainWindowViewModel.cs:582`, :1598-1619 |
+| G15 | Design codes are allocated in `DesignDiagnostic.cs:54-84`; on master today the next free is BL8033 — but `fix/unknown-dock-diagnostic` takes BL8033 and slice 3 the next (C1). **This spec names its codes; numbers are assigned in the plan from `DesignDiagnostic.cs` on master that day.** | `BasicLang/Forms/DesignDiagnostic.cs:54-84` |
+| G16 | Nothing checks a web handler's PARAMETERS; the only old-dialect recogniser is the import `DomDialect` | RW:520-545; `Forms/Recognizer/DomDialect.cs:114-115`, :145-147 |
 
 ### 2.2 The catalog
 | # | Fact | Where |
 |---|---|---|
-| C1 | **Every row declares exactly ONE event, its default** (`Ev(...)` "declares only its DEFAULT one — every row today (the D1 event lists arrive in slice 5)") | FCC:1350-1358 |
-| C2 | `FormEventDef(Name, WinFormsArgs, WebEvent, Category, Description, IsDefault, OracleExemption)`; a null `WebEvent` = WinForms-only | `BasicLang/Forms/FormEvents.cs:37-44`, :28 |
-| C3 | `FormPropertyDef` fields incl. `Targets` (null = both), `HtmlAttribute`, `CssProperty`, `CssConverter`, `WinFormsFactory`, `IsItemCollection`, `WebDefault`, `OracleExemption` | FCC:154-171, `AppliesTo` :195 |
-| C4 | `FormControlDef` fields incl. `WinFormsType`, `HtmlTag`, `HtmlInputType`, `IsContainer`, `Place`, `WebScript`, `WebHandlerTakesEvent`, `HtmlChildrenWrapper`; `SupportsTarget(Web)` = `HtmlTag != null || WebScript != null` | FCC:1062-1110 |
-| C5 | `Common(...)` appends Enabled, Visible, ForeColor, BackColor to every kind's own rows | FCC:1323-1333 |
-| C6 | GroupBox's default event is still **Click**, with an oracle exemption naming VS's Enter | FCC:1454-1462 |
-| C7 | 15 positioned web kinds, 3 strips, 4 items, 1 web component (Timer); 11 WinForms-only kinds (8 controls + ToolTip, ErrorProvider, BackgroundWorker), pinned by `FormCatalogCoverageTests.TheControlsWithNoHonestHtmlEquivalentAreWinFormsOnly` | FCC:1370-1973; tests `FormCatalogCoverageTests.cs:186` |
-| C8 | Web-only rows: RadioButton `GroupName`, ListBox `MultiSelect`; WinForms-only rows incl. NumericUpDown `DecimalPlaces`, DateTimePicker `Format`/`CustomFormat`/`ShowUpDown`, TrackBar `TickFrequency`/`Orientation`, ProgressBar `Minimum`/`Style` | FCC:1411-1414, :1435-1438, :1515-1588 |
-| C9 | TextBox `Multiline` and `PasswordChar` have no web mapping and the emitter never reads them (a TextBox is always `<input type="text">`) | FCC:1377-1392 |
-| C10 | Panel `BorderStyle` has no `CssProperty` | FCC:1443-1448 |
-| C11 | FormRoot: Text (both), ClientSize (WinForms + web Canvas), Cols/Rows (Grid), Gap (Grid/Flow), MobileBreakpoint (Canvas); **no events** (no `Load`) | FCC:1991-2039 |
-| C12 | Toolbox shows only `FormControlCatalog.For(Target)` — desktop-only kinds are HIDDEN on a web form, no badge; a drop of one is refused BL8019 | `VisualGameStudio.Shell/ViewModels/Designer/FormToolboxViewModel.cs:64`; `FormPlacement.cs:48-51` |
-| C13 | Parity oracle: `WinFormsCatalogParityTests` vs `VisualGameStudio.Tests/Data/winforms-metadata.json` (per-event args/category/description; stale exemptions fail); compile sweep `WinFormsCatalogSweepTests` (every property, every enum value, every default-event stub + wiring, via the real CLI and csc) | tests `WinFormsCatalogParityTests.cs:64-189`; `WinFormsCatalogSweepTests.cs:139-248`, samples :601-610 |
+| C1 | Every row declares exactly ONE event, its default ("the D1 event lists arrive in slice 5") | FCC:1350-1358 |
+| C2 | `FormEventDef(Name, WinFormsArgs, WebEvent, Category, Description, IsDefault, OracleExemption)`; null `WebEvent` = WinForms-only | `Forms/FormEvents.cs:37-44` |
+| C3 | `FormPropertyDef` incl. `Targets` (null = both), `HtmlAttribute`, `CssProperty`, `CssConverter`, `WinFormsFactory`, `IsItemCollection`, `WebDefault`, `OracleExemption` | FCC:154-171 |
+| C4 | `FormControlDef` incl. `WinFormsType`, `HtmlTag`, `HtmlInputType`, `IsContainer`, `Place`, `WebScript`, `WebHandlerTakesEvent`, `HtmlChildrenWrapper`; `SupportsTarget(Web)` = `HtmlTag != null || WebScript != null` | FCC:1062-1110 |
+| C5 | `Common(...)` appends Enabled, Visible, ForeColor, BackColor to every kind | FCC:1323-1333 |
+| C6 | GroupBox's default event is Click on master; slice 3 changes it to Enter/`focusin` and keeps Click non-default WITH its oracle exemption (`[Browsable(false)]`) | FCC:1454-1462; `wt-pg3/docs/superpowers/plans/2026-09-29-property-grid-slice3-preflight.md:42-45`, :157 |
+| C7 | 15 positioned web kinds, 3 strips, 4 items, 1 web component (Timer); 11 WinForms-only kinds | FCC:1370-1973; tests `FormCatalogCoverageTests.cs:186` |
+| C8 | Web-only rows: RadioButton `GroupName`, ListBox `MultiSelect`; WinForms-only incl. NumericUpDown `DecimalPlaces`, DateTimePicker `Format`/`CustomFormat`/`ShowUpDown`, TrackBar `TickFrequency`/`Orientation`, ProgressBar `Minimum`/`Style` | FCC:1411-1438, :1515-1588 |
+| C9 | NumericUpDown's rows are modelled Int (WinForms Decimal; "a decimal default written as 0.00 would not round-trip through Int") | FCC:1497-1511 |
+| C10 | TextBox `Multiline`/`PasswordChar` have no web mapping | FCC:1377-1392 |
+| C11 | Panel `BorderStyle` has no `CssProperty` | FCC:1443-1448 |
+| C12 | FormRoot: Text, ClientSize, Cols/Rows, Gap, MobileBreakpoint; no events; slice 3 adds 18 root rows (FormBorderStyle, AcceptButton/CancelButton as a new `Reference` type, …) | FCC:1991-2039; slice-3 pre-flight :184-197 |
+| C13 | Toolbox shows only `FormControlCatalog.For(Target)` — desktop-only kinds hidden on a web form; a drop refused BL8019 | `Shell/ViewModels/Designer/FormToolboxViewModel.cs:64`; `FormPlacement.cs:48-51` |
+| C14 | Parity oracle `WinFormsCatalogParityTests` (stale exemptions fail) and compile sweep `WinFormsCatalogSweepTests` (every property/enum/default stub via real CLI + csc) | tests `WinFormsCatalogParityTests.cs:64-189`; `WinFormsCatalogSweepTests.cs:139-248`, samples :601-610 |
 
 ### 2.3 The page
 | # | Fact | Where |
 |---|---|---|
-| P1 | CheckBox/RadioButton `Text` → `value=` on a bare `<input>`: the caption is never rendered | FAE:332-336 |
-| P2 | GroupBox `Text` → a bare text node inside `<fieldset>`; no `<legend>` anywhere in `Forms/` | FAE:436-438 |
-| P3 | `Enabled=False` → ` disabled` on ANY tag — on a Panel's `<div>` it does nothing | FAE:344 |
-| P4 | Radio `name=` only from `GroupName`: two radios in a Panel with no GroupName are NOT mutually exclusive on the web, while WinForms groups them by container | FAE:383-388 |
-| P5 | Visible=False → CSS `display:none` from the catalog row, keyed on `#id` | FCC:1167-1169; `BasicLang/Forms/FormCss.cs:31` |
-| P6 | A kind with no tag → `<!-- id: 'Kind' has no web catalog row -->`, no diagnostic | FAE:277-284 |
-| P7 | The reflow script observes `.vgs-form`'s subtree for `style`/`class`/`hidden` | `BasicLang/Forms/FormDockScript.cs:106` |
-| P8 | `FormAnchorCss.Positioned(geometry, W, H)` / `Docked(bounds)`; `Docked` is mirrored by `vgsDockCss`, gated by `FormDockScriptTests.TheScriptsResolver_AgreesWithFormDockLayout_OnEveryFixture` | `BasicLang/Forms/FormAnchorCss.cs:94-132`; tests `FormDockScriptTests.cs:316` |
-| P9 | A container's client size is its resolved/stored OUTER size — no border or caption inset ("the one rule") | `BasicLang/Forms/FormDockLayout.cs:268-274` |
-| P10 | Recorded gaps (Task 12/13): WinForms Panel FixedSingle insets children 1px, Fixed3D 2px (positioned AND docked); GroupBox docks inside +3/+19/+3/+3 but does NOT inset positioned children; the web fieldset insets every child 2px; web Panels draw no border | `docs/superpowers/plans/2026-09-27-web-pixel-layout-task12-preflight.md:128-135`; `…-task13-preflight.md:140-141` |
+| P1 | CheckBox/RadioButton `Text` → `value=` on a bare `<input>`: caption never rendered | FAE:332-336 |
+| P2 | ComboBox `Text` → `title=` | FAE:338-342 |
+| P3 | GroupBox `Text` → a bare text node in `<fieldset>`; no `<legend>` | FAE:436-438 |
+| P4 | `Enabled=False` → ` disabled` on ANY tag (does nothing on `<div>`, `<label>`, `<img>`, `<a>`, `<progress>`) | FAE:344 |
+| P5 | Radio `name=` only from `GroupName`: radios in a Panel with no GroupName are not exclusive | FAE:383-388 |
+| P6 | Visible=False → CSS `display:none` keyed on `#id` | FCC:1167-1169; `Forms/FormCss.cs:31` |
+| P7 | A kind with no tag → an HTML comment, no diagnostic | FAE:277-284 |
+| P8 | The reflow script: pure core `FormDockScript.Core` (:29-75), bootstrap (:78-109), observer on `.vgs-form` for `style`/`class`/`hidden` (:106); its data is `DataJson` (:142) of `FormDockNode`s built from the DOCUMENT (design sizes) | `Forms/FormDockScript.cs` |
+| P9 | `FormAnchorCss.Positioned`/`Docked`; `Docked` mirrored by `vgsDockCss` and gated by `FormDockScriptTests.TheScriptsResolver_AgreesWithFormDockLayout_OnEveryFixture` | `Forms/FormAnchorCss.cs:94-132`; tests `FormDockScriptTests.cs:316` |
+| P10 | A container's client size is its outer size ("the one rule") | `Forms/FormDockLayout.cs:268-274` |
+| P11 | Recorded gaps: Panel FixedSingle insets children 1px, Fixed3D 2px (positioned AND docked); GroupBox docks inside +3/+19/+3/+3 but does not inset positioned children; web fieldset insets 2px; web Panels no border | `plans/2026-09-27-web-pixel-layout-task12-preflight.md:128-135`; `…-task13-preflight.md:140-141` |
+| P12 | `FormDock` (in `fix/unknown-dock-diagnostic`) is THE parser of a positioned control's `DockStyle` (trimmed, case-insensitive, canonical spelling) | `wt-dock/BasicLang/Forms/FormDock.cs:3-40` |
 
 ### 2.4 The compiler and the web build
 | # | Fact | Where |
 |---|---|---|
-| K1 | `WithJavaScriptDeclarations` APPENDS the one hard-coded `lib/js/dom-core.bli` (beside the running exe) on a JS target; every route (CLI file, CLI project, IDE build, debugger) passes through `CompileProjectFiles` | `BasicLang/Compiler.cs:538-559`, :237-238, :354 |
-| K2 | No mechanism includes a BasicLang SOURCE library; the LSP never includes `dom-core.bli` | Compiler.cs (sole `DomDeclarationsPath` users) |
-| K3 | `dom-core.bli` is copied by the csproj; `IDE/lib/js/dom-core.bli` is a hand-committed, load-bearing copy; **no test keeps the two equal** | `BasicLang/BasicLang.csproj:43`; `docs/wiki/content/js-backend.md:46-48` |
-| K4 | `dom-core.bli` `Element` has no `getBoundingClientRect`/`clientWidth`/`offsetParent`; `CSSStyleDeclaration` has no `position`/`left`/`top`/`right`/`bottom`; `DomEvent` has no `button`/`buttons`/`relatedTarget`/`ctrlKey`/`shiftKey`/`altKey`/`code`/`detail` | `BasicLang/lib/js/dom-core.bli:32-95` |
-| K5 | Preprocessor knows `#Include`, `#Define`, `#IfDef`, `#IfNDef`, `#Else`, `#EndIf`, `#CppInclude`, `#JsImport` — **no `#If`/`#ElseIf`/`#End If`**; nothing predefines a symbol (`Preprocessor.Define` has no production caller); `<DefineConstants>` is parsed but never reaches the compiler; no CLI `--define` | `BasicLang/Preprocessor.cs:221-308`, :194-197; `Compiler.cs:186`; `ProjectFile.cs:313-315` |
-| K6 | Any dotted or `System*`/`Microsoft*`/`Windows*` `Using`/`Imports` is marked a .NET namespace at PARSE time | `BasicLang/Parser.cs:714-720` |
-| K7 | A base class is resolved through the type manager only; a sibling file's class is registered as a SYMBOL shell, so `Inherits` of it fails; an unresolved base is assumed .NET when any `Using` is present | `BasicLang/SemanticAnalyzer.cs:5907-5924`, :636-643 |
-| K8 | JS: events are a per-instance `new Set()`; `RaiseEvent` iterates it; `AddHandler`/`RemoveHandler` → `add`/`delete`; `AddressOf` on an instance method → `.bind(recv)` (a NEW function each time) | JSB:802-807, :3113-3132, :1505-1522 |
-| K9 | JS: classes emitted in `module.Classes.Values` order, no base-first sort; classes keyed by SIMPLE name, namespace dropped; first class of a name wins in the merge | JSB:208-225; `IRBuilder.cs:1532`; Compiler.cs:986-991 |
-| K10 | JS refusals: ByRef BL7002, Long BL7003, **Char BL7004**, value **Structure BL7005**, operator overloading BL7006, .NET BCL types BL7007; no method overloading (duplicate name is an analyzer error) | `BasicLang/JsCapabilityChecker.cs:34-50`, :304-308 |
-| K11 | Parser: `Friend` not accepted on class members; `Delegate` only unmodified at top level; no `Handles`/`WithEvents`; non-constant field initializers refused ("assign it in a constructor instead") | `Parser.cs:866-942`, :118-119, :275-277; `IRBuilder.cs:1930-1933` |
-| K12 | Web forms are discovered by `FormDocumentLoader.LoadWebForms` (skips non-web documents), dispatch written by `FormDispatch.Write`, passed to `JavaScriptEmitter.Emit(forms:)` — IDE and CLI mirror each other | `VisualGameStudio.ProjectSystem/Services/BuildService.cs:614-651`, :1017; `BasicLang/Program.cs:807-832`, :953-962; `BasicLang/Forms/FormDocumentLoader.cs:30,42` |
-| K13 | A WinForms build compiles the same `.bas` through `CompileProjectFiles` with `UseWindowsForms`; `EnableNetResolution` returns early, so every WinForms member types as `Object` with no diagnostic | Compiler.cs:145-146; Program.cs:1037-1051 |
-| K14 | Opening a form: `OpenFileAsync` → `EnterDesignModeForFormDocument`; the document VM gets no dialog service; toasts with action buttons exist (`ShowNotification(..., actions)`), and `IDialogService.ConfirmAsync` | `MainWindowViewModel.cs:2473-2526`, :2140-2146; `VisualGameStudio.Core/Abstractions/Services/IDialogService.cs:9`, :133-137 |
+| K1 | `WithJavaScriptDeclarations` APPENDS the one hard-coded `lib/js/dom-core.bli` on a JS target; every route passes through `CompileProjectFiles` | `BasicLang/Compiler.cs:538-559`, :237-238, :354 |
+| K2 | No mechanism includes a BasicLang SOURCE library; the LSP never includes `dom-core.bli` and has NO preprocessor (no `Preprocessor` use under `BasicLang/LSP/`) | Compiler.cs; `BasicLang/LSP/` |
+| K3 | `IDE/lib/js/dom-core.bli` is a hand-committed, load-bearing copy; no test keeps it equal to the source | `BasicLang/BasicLang.csproj:43`; `docs/wiki/content/js-backend.md:46-48` |
+| K4 | `dom-core.bli` lacks `getBoundingClientRect`, `clientWidth`…, style `position`/`left`/…, event `button`/`relatedTarget`/`ctrlKey`/`code`…, and style-sheet access | `BasicLang/lib/js/dom-core.bli:32-95` |
+| K5 | Preprocessor: `#Include`, `#Define`, `#IfDef`, `#IfNDef`, `#Else`, `#EndIf`, `#CppInclude`, `#JsImport` — no `#If`/`#ElseIf`/`#End If`; nothing predefines a symbol; `<DefineConstants>` never reaches the compiler; no CLI `--define`; a `#Define` line is not echoed (line numbers shift) | `BasicLang/Preprocessor.cs:221-308`, :194-197, :235-238; `Compiler.cs:186`; `ProjectFile.cs:313-315` |
+| K6 | DORMANT `#If` machinery: the lexer produces `TokenType.PreprocessorIf` (`BasicLangLexer.cs:229`, :867) and a `PreprocessorIfNode` exists with visitors in the analyzer, IR builder and printer (`ASTNodes.cs:112`, :1864-1871; `SemanticAnalyzer.cs:8884`; `IRBuilder.cs:3222`; `ASTPrettyPrinter.cs:1174`) — but the parser never builds it (M9) | as cited |
+| K7 | Any dotted or `System*`/`Microsoft*`/`Windows*` `Using`/`Imports` is marked .NET at PARSE time | `BasicLang/Parser.cs:714-720` |
+| K8 | A base class is resolved through the type manager only; a sibling file's class is a symbol shell | `SemanticAnalyzer.cs:5907-5924`, :636-643 |
+| K9 | JS events: a per-instance `new Set()`; `AddressOf` on an instance method → `.bind(recv)`, a NEW function each time | JSB:802-807, :3113-3132, :1505-1522 |
+| K10 | JS classes emitted in dictionary order, no base-first sort; keyed by SIMPLE name; first class of a name wins in the merge | JSB:208-225; `IRBuilder.cs:1532`; Compiler.cs:986-991 |
+| K11 | JS refusals: ByRef BL7002, Long BL7003, Char BL7004, value Structure BL7005, operator overloading BL7006, .NET BCL types BL7007 (Decimal among them, M20); no overloading | `BasicLang/JsCapabilityChecker.cs:34-50`, :304-308 |
+| K12 | Parser: no `Friend` on class members; `Delegate` only unmodified at top level; no `Handles`; non-constant field initializers refused | `Parser.cs:866-942`, :118-119; `IRBuilder.cs:1930-1933` |
+| K13 | Web forms: `FormDocumentLoader.LoadWebForms` → `FormDispatch.Write` → `JavaScriptEmitter.Emit(forms:)`, IDE and CLI mirrored | `ProjectSystem/Services/BuildService.cs:614-651`, :1017; `Program.cs:807-832`, :953-962 |
+| K14 | A WinForms build: `EnableNetResolution` returns early, every WinForms member types as `Object` | Compiler.cs:145-146 |
+| K15 | Opening a form: `OpenFileAsync` → `EnterDesignModeForFormDocument`; toasts with actions (`ShowNotification(…, actions)`), `IDialogService.ConfirmAsync` | `MainWindowViewModel.cs:2473-2526`, :2140-2146; `Core/Abstractions/Services/IDialogService.cs:9`, :133-137 |
+| K16 | No `.bas`/`.cls`/`.mod` in the repo uses `#IfDef`/`#IfNDef`; the existing `#IfDef` coverage is in the test suite (e.g. `CppPassthroughTests.cs:205`, the only `Preprocessor.Define` caller) | repo grep |
 
-### 2.5 Claims found FALSE (in the brief, the docs, or the premises of a decision)
+### 2.5 Claims found FALSE
 | # | Claim | Truth |
 |---|---|---|
-| F1 | CLAUDE.md: "conditional compilation (`#If`/`#IfDef`/`#Else`/`#EndIf`)"; O3: "conditional compilation exists — the build defines the symbol by target" | `#If` does not exist and no build defines any symbol (K5, M9). O3's mechanism is BUILT here (§4.1); its product behaviour is unchanged. |
-| F2 | O1 "every event the designer's catalog lists" covers the O6 mouse/key events | The catalog lists ONE event per kind (C1). The O6 events must become catalog rows (§10.1) for "one list drives both" to hold. |
-| F3 | "GroupBox's default event is Enter" | Still Click in the catalog (C6); changed here (§10.2). |
-| F4 | Brief: WinForms handlers are "user-written" | The designer writes the stub with the row's `WinFormsArgs` (G12). |
-| F5 | O7 lists three rendering gaps | O1 implies more: TextBox `Multiline`/`PasswordChar` do nothing on the web (C9), radios without GroupName don't group (P4), a disabled Panel disables nothing (P3). Fixed here (§7). |
-| F6 | Research note: "`Me.X()` is the safe spelling on the JS backend" | Not once any `Using` line is present — then `Me.X()` fails to build (M7), and the WinForms scaffold always has `Using` lines. |
-| F7 | The piece-1 note "`Visible` must write a non-empty `style.display`" (task-10 pre-flight B1) is a complete rule | It conflicts with phone stacking for CONTAINERS (§5.4, Q1). |
+| F1 | CLAUDE.md "conditional compilation (`#If`/…)"; O3 "the build defines the symbol by target" | `#If` does not exist and no build defines a symbol (K5, M9). Built in §4.1. |
+| F2 | O1's "every event the catalog lists" covers the O6 mouse/key events | One event per kind (C1) until slice 5 (O17). |
+| F3 | "GroupBox's default is Enter" | Click on master; slice 3 changes it (C6). |
+| F4 | Brief: WinForms handlers are user-written | The designer writes the stub (G11). |
+| F5 | O7 lists every rendering gap | Also `Multiline`/`PasswordChar` (C10), radios (P5), disabled non-form elements (P4), ComboBox `title=` (P2). Fixed in §7. |
+| F6 | "`Me.X()` is the safe spelling on JS" | Not once any `Using` line is present (M7). |
+| F7 | Piece 1's "Visible must write a non-empty `style.display`" | Conflicts with phone stacking for containers; superseded by O10. |
+| F8 | CLAUDE.md: an unqualified self-call is a bare global on JS; `Me.` inside a lambda hard-errors | NOT reproduced on `14c2e17d` (M22, M23) — likely fixed by #57/#200-era work. The library still uses `Me.` (§5.1); re-measured after `fix/js-cross-file-calls` (§0.4). |
 
 ## 3. Measured facts (2026-09-29)
 
-Compiler built from this worktree (`dotnet build BasicLang/BasicLang.csproj -c Release`), probes under the session
-scratchpad `p2probe\*`, JavaScript run with `node` v22.19.0. Single-file probes: `BasicLang.exe p.bas --target=javascript`;
-multi-file: a `.blproj` with `<TargetBackend>JavaScript</TargetBackend>` and `BasicLang.exe build Site.blproj`.
+Compiler built from this worktree (`dotnet build BasicLang/BasicLang.csproj -c Release`); probes under the session
+scratchpad `p2probe\*`; node v22.19.0. Single file: `BasicLang.exe p.bas --target=javascript`; multi-file: a `.blproj`
+(`<TargetBackend>JavaScript</TargetBackend>`) and `BasicLang.exe build Site.blproj`. Listener probes run with a small
+prelude defining `document.getElementById` over node's `EventTarget`.
 
 | # | Shape | Result |
 |---|---|---|
-| M1 | One file: `Public Event Click(sender As Object, e As EventArgs2)` on a base `Control`, `RaiseEvent Click(Me, …)` from a base method, `AddHandler btn.Click, AddressOf btn_Click` on a derived `Button` instance, handler `(sender As Object, e As …)` | ✅ builds and runs; `sender` is the control; adding the same handler twice fires it twice (matches .NET) |
-| M2 | …then `RemoveHandler btn.Click, AddressOf btn_Click` | ❌ **silent no-op**: the next raise still fires both (4 calls where .NET makes 3). Emitted `t1 = this.btn_Click.bind(this); t0.delete(t1)` — a new function never in the Set (K8) |
-| M3 | `Overridable`/`Overrides` Sub and Function, `MyBase.OnTextChanged()`, `MyBase.Describe()`, a call through a base-typed variable | ✅ `super.` calls and prototype dispatch run correctly |
-| M4 | `Public Overrides Property Text` whose getter/setter use `MyBase.Text` | ❌ builds green; emits `this.Text` → `RangeError: Maximum call stack size exceeded` at run time |
-| M5 | `Public Class Form1 : Inherits Form` declared ABOVE `Public Class Form` in one file | ❌ builds green; `ReferenceError: Cannot access 'Form' before initialization` at load (K9) |
-| M6 | `Inherits Base` where `Base` is in ANOTHER file of the project | ❌ "Unknown base class 'Base'" + "MyBase can only be used…" + upcast refused — on **JavaScript AND C#** (K7). Cross-file `New Base()`/member calls work |
-| M7 | Any `Using` line (`System`, `System.Drawing` or `System.Windows.Forms`) + a class calling `Me.Init()` (Private Sub), with or without `Inherits` | ❌ JS: "no lowering for 'Me.Init'" — build fails. Without the `Using` line: ✅ runs |
-| M8 | `Namespace System.Windows.Forms` | ❌ parse error "Unexpected token at top level: '.'"; nested `Namespace System`/`Windows`/`Forms` parses, but `System.Windows.Forms.Button` then resolves as a .NET type (three BL6016 warnings) and `Dim c As …Control = btn` is refused |
-| M9 | `#If WEB Then` / `#Else` / `#End If` | ❌ "Unexpected token in expression: '#If'", "#Else without matching #IfDef or #IfNDef". `#IfDef WEB` parses (symbol undefined, so its else-branch is taken) |
-| M10 | `Public Structure Pt` with `Public Sub New(x, y)` | ❌ parse error "Expected member name but found Sub" (any target). Without the constructor, on JS: ❌ BL7005 (value Structure refused) |
-| M11 | `Using System` + a handler `(sender As Object, e As EventArgs)` | ❌ BL7007 "'EventArgs' is not available on the JavaScript backend" |
-| M12 | `Enum Shade … End Enum` then `Dim k As Shade = Shade.Dark` (top level or inside a Module) | ❌ "Cannot assign value of type 'Object' to variable of type 'Shade'" on JS **and C#**; same on the older `IDE\BasicLang.exe` drop. `CType(Shade.Dark, Shade)` compiles |
-| M13 | `AddHandler btn.Click, AddressOf btn_Click` where `btn_Click(n As Integer)` does not match the event | ❌ builds green and runs, passing `sender` as `n` — no signature check |
-| M14 | `AddHandler btn.Click, Sub(s As Object, e As EventArgs) …` | ✅ runs |
-| M15 | Handler declared AFTER the `InitializeComponent` that wires it with `AddHandler` to a BasicLang `Event` | ✅ builds and runs on JS — BL8013's cause (an erased handler failing `Action(Of DomEvent)`, `docs/HANDOFF.md:1173-1188`) does not arise |
-| M16 | A class named `F` calling `Me.Init()` | ❌ "Type 'F' does not have a member 'Init'" — the existing chip `task_ef845b99`, reproduced |
-| M17 | `BasicLang.exe a.bas b.bas` | refused: "compiling a file directly takes exactly one" — multi-file probes must use a `.blproj` |
+| M1 | One file: `Event Click(sender As Object, e As …)` on a base `Control`, `RaiseEvent` from a base method, `AddHandler` on a derived `Button` instance | ✅ runs; `sender` is the control; added twice fires twice (as .NET) |
+| M2 | …then `RemoveHandler btn.Click, AddressOf btn_Click` | ❌ silent no-op (4 calls where .NET makes 3): `delete` of a fresh `.bind` (K9) |
+| M3 | `Overridable`/`Overrides`, `MyBase.Method()`, call through a base-typed variable | ✅ |
+| M4 | `Overrides Property Text` using `MyBase.Text` | ❌ green; emits `this.Text` → `RangeError: Maximum call stack size exceeded` |
+| M5 | Derived class declared above its base in one file | ❌ green; `ReferenceError: Cannot access 'Form' before initialization` |
+| M6 | `Inherits Base` where `Base` is in another project file | ❌ "Unknown base class" on **JavaScript AND C#** (K8); cross-file `New`/calls ✅ |
+| M7 | Any `Using` line + `Me.PrivateMethod()` | ❌ JS build fails ("no lowering for 'Me.Init'"); without `Using` ✅ |
+| M8 | `Namespace System.Windows.Forms` | ❌ parse error; nested `Namespace System/Windows/Forms` parses, but the qualified name resolves as .NET (BL6016) |
+| M9 | `#If WEB Then` / `#Else` / `#End If` | ❌ "Unexpected token '#If'"; "#Else without matching #IfDef". `#IfDef` parses |
+| M10 | `Structure` with `Sub New` | ❌ parse error (any target); without it, on JS ❌ BL7005 |
+| M11 | `EventArgs` on JS | ❌ BL7007 |
+| M12 | `Enum Shade …`, `Dim k As Shade = Shade.Dark` | ❌ "Cannot assign … 'Object' … 'Shade'" on JS and C#; also the older IDE drop |
+| M13 | `AddHandler` with a non-matching handler signature | ❌ green, runs with the wrong arguments |
+| M14 | `AddHandler btn.Click, Sub(s, e) …` | ✅ |
+| M15 | Handler declared AFTER the `AddHandler` wiring (BasicLang event) | ✅ builds and runs |
+| M16 | A class named `F` calling `Me.Init()` | ❌ "Type 'F' does not have a member" (chip `task_ef845b99`) |
+| M17 | `BasicLang.exe a.bas b.bas` | refused — use a `.blproj` |
+| M18 | `Char` local `"a"c` on JS | ❌ BL7004 |
+| M19 | `0.1D` (Decimal literal suffix) | ❌ parse error "End of statement expected, found 'D'" (any target) |
+| M20 | `Dim d As Decimal = 0.1` on JS | ❌ BL7007 "'Decimal' is not available on the JavaScript backend"; on C# ✅. `CDec("0.1")` types as `Object` ("Cannot assign … 'Object' … 'Decimal'") |
+| M21 | `Optional` parameters on a class method (`Describe()`, `Describe("y")`, `Describe("z", 7)`) | ✅ `x3`, `y3`, `z7` |
+| M22 | Unqualified self-call `Unq()` in a constructor | ✅ emits `this.Unq();` — F8 |
+| M23 | `el.addEventListener("click", Sub(e As DomEvent) Me.Hit())` and the unqualified `Hit()` form | ✅ both run — F8 |
+| M24 | `el.addEventListener("click", AddressOf Me.VgsOnDomClick)` (and unqualified `AddressOf VgsOnDomClick`) with the Sub declared ABOVE | ✅ runs, handler sees `Me` |
+| M25 | …with the Sub declared BELOW its use | ❌ "Argument 2: cannot convert from 'Pointer To Pointer To Object' to 'Action<DomEvent>'" — the BL8013 erasure, inside the library too |
 
-## 4. Sub-piece 2.0 — compiler prerequisites
+## 4. Sub-piece 2.0 — compiler and editor prerequisites
 
-Each item: the rule, then the test that pins it. All are front-end or JS-backend fixes, verified through the CLI AND the
-IDE build (`CompileProjectFiles`) and, where the optimizer runs, through it too.
+Each item: the rule, then the test that pins it; verified through the CLI AND the IDE build (`CompileProjectFiles`), and
+through the optimizer (`CompileToCppOptimized`) where a front-end change can reach C++. **2.0 begins by re-measuring M6,
+M7, M16, M22–M25 on master after `fix/js-cross-file-calls` lands** (§0.4); an item that no longer reproduces is dropped with
+the measurement recorded.
 
-### 4.1 `#If` and the target symbols (O3)
-- The preprocessor accepts VB's form: `#If <cond> Then`, `#ElseIf <cond> Then`, `#Else`, `#End If`, nestable, alongside
-  the existing `#IfDef`/`#IfNDef`/`#EndIf` (kept). `<cond>` is a defined-symbol name, `Not`, `And`, `Or`, `AndAlso`,
-  `OrElse`, parentheses, and `True`/`False` **[impl]** — symbols only, no values or comparisons (VB's `#Const X = 1`
-  values are out of scope).
-- ⚠ Prefix traps (K5): `#ElseIf` must not match the `#Else` arm and `#End If` must not fall to the default arm.
-- **Symbols by target:** `WEB` when the backend is JavaScript; `DESKTOP` for every other backend **[impl — Q7]**.
-  Defined in ONE place (the compiler's options → `Preprocessor.Define`) so the CLI file route, the CLI project route, the
-  IDE build and the debugger all get them (K1's routes); a test per route. `<DefineConstants>` (already parsed, K5) is
-  passed through as additional symbols **[impl]** — cheap, and it is what users of `#If` will expect.
-- The LSP defines the project's target symbol, so an inactive `#If` branch produces no editor diagnostics.
-- Fix the recorded line-number shift: a `#Define` line is not echoed, so every later line is off by one (K5, :235-238).
-- Tests: every directive shape; nesting; unknown symbol = false; `#If WEB` chooses by target through CLI + IDE builds on
-  JS and C#; `#ElseIf`/`#Else` prefix traps; line numbers after `#Define` and inside skipped branches.
+### 4.1 `#If` and the build symbols (O3, O16, O19)
+- VB's form: `#If <cond> Then`, `#ElseIf <cond> Then`, `#Else`, `#End If`, nestable, beside the kept `#IfDef`/`#IfNDef`/
+  `#EndIf`. `<cond>`: symbol names, `Not`, `And`, `Or`, `AndAlso`, `OrElse`, parentheses, `True`/`False` **[impl]** — no
+  values or comparisons.
+- Prefix traps: `#ElseIf` must not match `#Else`; `#End If` must not fall to the default arm (K5).
+- **Symbols:** `WEB` when the backend is JavaScript, `DESKTOP` for every other backend (O16); `DEBUG` in a Debug
+  configuration, `RELEASE` in a Release configuration (O19); plus `<DefineConstants>` **[impl]**. Defined in ONE place
+  (compiler options → `Preprocessor.Define`) so the CLI file route, CLI project route, IDE build and debugger all get
+  them; a test per route.
+- **Dormant machinery (K6) [impl — DELETE]:** the preprocessor removes inactive branches before lexing, so the lexer's
+  `PreprocessorIf` token, `PreprocessorIfNode` and its four visitors can never be reached; they are deleted (a green build
+  proves no caller), rather than half-revived into a second, parse-time conditional-compilation path.
+- Fix the `#Define` line-number shift (K5).
+- **O19's golden test:** every `#IfDef`/`#IfNDef` fixture in the suite (K16) produces byte-identical output before and
+  after the symbols exist, except where it names `DEBUG`/`RELEASE`/`WEB`/`DESKTOP`, which is listed. Release notes: "`DEBUG`
+  and `RELEASE` are now defined by the build configuration, `WEB`/`DESKTOP` by the target — code under `#IfDef DEBUG` now
+  compiles in Debug builds."
+- Tests: every directive; nesting; unknown symbol = false; each symbol on each target/configuration through CLI and IDE;
+  prefix traps; line numbers after `#Define` and inside skipped branches.
 
 ### 4.2 Cross-file `Inherits` (all backends)
-A class may inherit a class declared in another file of the project, including across `.bas`/`.cls`/`.mod` and the
-library (§5.1). The base must be resolved against the sibling class shells, not only the type manager (K7). Tests (JS and
-C#, CLI + IDE): cross-file `Inherits`, `MyBase`, upcast, override dispatch, a three-level chain split over three files.
+A class may inherit a class declared in another file (incl. `.cls`/`.mod` and the library). Tests (JS + C#, CLI + IDE):
+cross-file `Inherits`, `MyBase`, upcast, override dispatch, a three-file chain.
 
 ### 4.3 `Using` must not break `Me.M()` on JavaScript
-M7's failure mode is a build error today; after the fix `Me.PrivateMethod()` lowers to `this.PrivateMethod()` whatever
-`Using` lines the file has. Test: M7's matrix (each `Using`, with/without `Inherits`) builds and runs under node.
+M7's matrix builds and runs under node.
 
 ### 4.4 `RemoveHandler` removes (JavaScript)
-`AddressOf recv.M` must produce the SAME function for the same `(recv, M)` pair, so `RemoveHandler` finds what
-`AddHandler` added, while adding twice still fires twice (M1) and removing once leaves one. **[impl]** the event store
-becomes a list of `{target, method}` entries (or a per-receiver memo of bound functions); a `Set` of bound functions
-cannot both dedupe identity and count duplicates. Tests: M2's sequence yields 3; remove of a never-added handler is a
-no-op; lambdas are removed only by the same delegate variable.
+`AddressOf recv.M` yields the SAME delegate identity for the same `(recv, M)` pair; added twice fires twice; removed once
+leaves one. **[impl]** the event store is a list of `{receiver, method}` entries (a `Set` of bound functions cannot both
+match identity and count duplicates). Tests: M2 yields 3; remove-never-added is a no-op; a lambda is removed only by the
+same delegate value.
 
 ### 4.5 `MyBase.Property` (JavaScript)
-`MyBase.P` in a property getter/setter lowers to `super.P` (M4). Test: M4 prints `B:hi`; a three-level chain.
+Lowers to `super.P`. Test: M4 prints `B:hi`; a three-level chain.
 
 ### 4.6 Base-first class emission (JavaScript)
-Classes are emitted base before derived (topological over `Inherits`, stable otherwise), fixing M5 for user code and
-making library placement irrelevant. Test: M5 runs; a cycle is already an analyzer error.
+Topological over `Inherits`, stable otherwise. Test: M5 runs.
 
 ### 4.7 Enum member typing (all backends)
-`Shade.Dark` has type `Shade` (M12). The library's `Keys`, `MouseButtons`, `DockStyle`, `AnchorStyles`,
-`BorderStyle`, `ContentAlignment`, `PictureBoxSizeMode` depend on it. Test: M12 on JS and C#, member access in
-assignment, comparison, `Select Case`, and as an argument.
+`Shade.Dark` has type `Shade` (M12) — in assignment, comparison, `Select Case`, arguments. The library's `Keys`,
+`MouseButtons`, `DockStyle`, `AnchorStyles`, `BorderStyle`, `ContentAlignment`, `DialogResult`, `MessageBoxButtons`,
+`FontStyle` depend on it.
 
-### 4.8 `AddHandler` checks the handler against the event (all backends, BasicLang events)
-When the event is a BasicLang-declared `Event` (including the library's), a handler whose parameter list is not
-assignment-compatible with the event's is an error naming both signatures (M13). .NET events (typed `Object` on a
-WinForms build, K13) are unchanged — csc still checks those. This is what makes an unconverted `(e As DomEvent)`
-handler a build error on the web instead of a page receiving the control as `e` (§8).
+### 4.8 `AddHandler` checks the handler against a BasicLang event (all backends)
+A handler whose parameters are not assignment-compatible with the event's is an error naming both signatures
+(`HandlerSignatureMismatch`, new compiler code). .NET events (typed `Object` on WinForms builds, K14) are unchanged.
 
 ### 4.9 BasicLang namespaces win on a web build
-- `Namespace System.Windows.Forms` (dotted) parses as the nested form (M8).
-- On a JavaScript build, a `Using`/`Imports` or a qualified type name that names a namespace DECLARED IN THE PROGRAM
-  (the library's `System`, `System.Drawing`, `System.Windows.Forms`) resolves to it, before the parse-time .NET marking
-  (K6) applies. `System.Windows.Forms.Timer` and `Timer` under `Using System.Windows.Forms` are then the library's class
-  (the designer writes components FULLY QUALIFIED — CLAUDE.md, tray components). C# builds are unchanged (the real .NET
-  namespace always wins there; the library is never included).
-- Test: M8's program builds and runs on JS; the same text builds on C# against real WinForms.
+Dotted `Namespace` declarations parse (M8). On a JavaScript build, a `Using`/`Imports` or a qualified type name that names
+a namespace DECLARED IN THE PROGRAM resolves to it before K7's .NET marking — so `System.Windows.Forms.Timer` and `Timer`
+under `Using System.Windows.Forms` are the library's. C# builds unchanged.
 
-### 4.10 Not fixed here (recorded, worked around)
-- **Structure constructors / value Structures on JS (M10, K10):** `Point`, `Size`, `Color` are CLASSES in the library
-  (§5.6).
-- **`Char` on JS (K10):** blocks `KeyPressEventArgs.KeyChar As Char` — §5.5, Q4.
-- **Chip `task_ef845b99` (class `F`, M16):** not on this path; left as filed.
+### 4.10 `Char` on JavaScript (O13)
+`Char` lowers to a one-character JS string; `"a"c` literals, `AscW`/`ChrW`/`Asc`/`Chr`, comparison (ordinal), `CStr`,
+string concatenation, `Char` parameters/fields/`List(Of Char)`; conversions Char ↔ numeric only through the conversion
+functions, as VB. BL7004 is retired (its tests become lowering tests). Test: a Char table run under node against the same
+program's C# output.
+
+### 4.11 `Decimal` on JavaScript, exactly (O14)
+- Front end, all targets: the `D` literal suffix (M19), `CDec` typed `Decimal` (M20).
+- JS: `Decimal` lowers to an exact decimal value **[impl — a small runtime class in the backend's prelude: a BigInt
+  mantissa + scale, .NET's 96-bit range and 28-digit scale]**, with `+ − * /`, `Mod`, comparisons, unary minus, `CDec`/
+  `CDbl`/`CInt`/`CStr`, and **exact invariant-culture parse/format** (what NumericUpDown reads from and writes to the page
+  text). Division and rounding follow .NET's `Decimal` (28 significant digits, banker's rounding where .NET rounds) —
+  pinned by a table of cases whose expected values are computed by .NET itself in the test.
+- BL7007 no longer lists `Decimal`. ⚠ The largest 2.0 item; it has its own mutation checks (scale alignment, rounding
+  mode, overflow).
+
+### 4.12 The editor: `#If` and the web controls in the LSP (O18)
+- **Line-preserving blanking** (new feature, own tests): the LSP runs the same preprocessor with the project's symbols
+  and replaces every inactive-branch line with an EMPTY line, so every position the editor reports still maps to the
+  user's file. Diagnostics, completion, hover and go-to-definition see only the active branch; the inactive branch is
+  reported to the client for dimming **[impl: the existing semantic-tokens/decoration path, or none if the client has
+  none]**.
+- **Web projects:** the LSP includes `dom-core.bli` and, under §5.1's trigger, the portable library, so `btnLogin.`
+  completes the library's members and `.Element` is known inside `#If WEB`.
+- Tests: an LSP session over a file with `#If WEB`/`#Else` reports diagnostics at the right lines on a web and a desktop
+  project; completion on a library control.
+
+### 4.13 Library-idiom probe (review I6)
+A committed probe program exercising the idioms the library relies on, run under node on every 2.0 change: a DOM
+listener to an instance method via `AddressOf Me.VgsOnDom…` declared ABOVE its use (M24), a lambda with `Me.` (M23),
+`Optional` parameters (M21), `RaiseEvent` from a base-class `OnX` (M1), a property override through `MyBase` (M4 fixed).
+It also pins M25 (a later-declared Sub is refused) so the library's ordering rule stays grounded.
+
+### 4.14 Not fixed here
+Structure constructors / value Structures on JS (M10) — `Point`, `Size`, `Color`, `Padding`, `Font` are classes (§5.7);
+chip `task_ef845b99` (M16).
 
 ## 5. The library
 
-### 5.1 Shape, location, inclusion
-- Source files `BasicLang/lib/js/forms/*.bas` **[impl]**: one file per class family (`Control.bas`, `Form.bas`,
-  `EventArgs.bas`, `Drawing.bas`, one per kind). Copied to the output beside `dom-core.bli` by the csproj, and to
-  `IDE/lib/js/forms/` in the IDE drop — load-bearing exactly as `IDE/lib/js/dom-core.bli` is (CLAUDE.md). A test asserts
-  the csproj copies every library file (as `BliDeclarationFileTests` does for `dom-core.bli`).
-- Declared in `Namespace System` (`EventArgs`), `Namespace System.Drawing` (`Color`, `Point`, `Size`, `Image`) and
-  `Namespace System.Windows.Forms` (everything else) — so the scaffold's three `Using` lines (G11) mean the same thing on
-  both targets (§4.9).
-- **The hook:** `WithWebFormsLibrary(files)` beside `WithJavaScriptDeclarations` (K1), called on the same route. It adds
-  the library **only when the target is JavaScript AND some compiled source file has `Using`/`Imports
-  System.Windows.Forms`** **[impl]**. Consequences: every existing web project — including every DOM-style web form, which
-  never has that line (G11) — compiles byte-for-byte as today (a golden test pins this), and a JS program with its own
-  class named `Timer` or `Label` is not affected unless it opts in.
-- **Name collisions:** JS drops namespaces and the first class of a name wins silently (K9). When the library is
-  included, a program class with the simple name of a library class is an ERROR naming both (new compiler code, next free
-  in its range) — never a silent merge.
-- The library is ordinary BasicLang: it compiles through the same front end, IR, optimizer and `JsCapabilityChecker`
-  as user code. It reaches the DOM through `dom-core.bli`'s typed surface, extended (both copies, in lock-step — a new
-  test compares `BasicLang/lib/js/dom-core.bli` with `IDE/lib/js/dom-core.bli`, K3) with what the library needs:
-  `getBoundingClientRect`, `clientWidth`/`clientHeight`/`clientLeft`/`clientTop`, `closest`, `contains`; style
-  `position`/`left`/`top`/`right`/`bottom`/`objectFit`/`objectPosition`/`removeProperty`/`getPropertyValue`; event
-  `button`, `buttons`, `detail`, `deltaY`, `relatedTarget`, `code`, `ctrlKey`, `shiftKey`, `altKey`; `Window.getComputedStyle`.
-  Untyped `::` is used only where no typed declaration is honest.
-- Library constraints from the language (K10, K11): no overloading (optional parameters instead, e.g.
-  `Color.FromArgb(r, g, b, Optional a = 255)` **[impl]**), no `Friend` (library-internal members are `Public` with a
-  `Vgs` prefix, excluded from the coverage gate and documented as internal), no non-constant field initializers
-  (constructors assign), no Structures.
+### 5.1 Shape, location, inclusion, idioms
+- Source `BasicLang/lib/js/forms/*.bas` **[impl]**, copied beside `dom-core.bli` by the csproj and into `IDE/lib/js/forms/`
+  (load-bearing, like `IDE/lib/js/dom-core.bli`); a test asserts the csproj copies every file.
+- Namespaces `System` (`EventArgs`), `System.Drawing` (`Color`, `Point`, `Size`, `Image`, `Font`, `FontStyle`),
+  `System.Windows.Forms` (the rest) — so the scaffold's three `Using` lines mean the same thing on both targets (§4.9).
+- **The hook** `WithWebFormsLibrary(files)`, beside `WithJavaScriptDeclarations` on the same route, adds the library when
+  the target is JavaScript AND a compiled source file has `Using`/`Imports System.Windows.Forms` or `System.Drawing`, **or
+  a qualified reference `System.Windows.Forms.`/`System.Drawing.`** (a token scan) — the review's widening. Every existing
+  web project, including every DOM-style form, compiles byte-for-byte as today (golden test).
+- **Name collisions:** a program class with a library class's simple name, when the library is included, is an error
+  naming both (`PortableLibraryNameCollision`) — never K10's silent first-wins.
+- **DOM surface:** `dom-core.bli` extended (both copies in lock-step, a new equality test, K3) with rect/client metrics,
+  `closest`/`contains`, positional style properties, event fields (`button`, `buttons`, `detail`, `relatedTarget`, `code`,
+  `ctrlKey`/`shiftKey`/`altKey`), `getComputedStyle`, `alert`/`confirm`, and CSS-rule access for §5.8 (`CSSStyleSheet.
+  insertRule`/`deleteRule`, `CSSMediaRule`, the rule's `style`).
+- **Language constraints:** no overloading (Optional parameters, M21); no `Friend` (internals `Public` with a `Vgs` prefix,
+  excluded from the gate); constructors assign (no non-constant initializers); no Structures.
+- **Idioms (review I6), enforced by §4.13's probe:** a DOM listener that calls the instance is `AddressOf Me.VgsOnDom<Event>`
+  to a `Private Sub VgsOnDom<Event>(e As DomEvent)` **declared ABOVE the method that attaches it** (M24; M25 refuses the
+  reverse); every self-call is `Me.`-qualified (defensive, F8); lambdas are used only where M23 measured them. User code
+  never sees a DOM listener.
+- **Security:** `Text`, captions, legends, `Items.Add` and `MessageBox` text go through `textContent`/`createElement`/
+  `createTextNode` — never `innerHTML`. A test sets `Text = "<b>x</b>"` on every text-bearing kind and asserts the literal
+  characters are shown and no `<b>` element exists.
 
 ### 5.2 Classes
-`System.EventArgs` (+ `Empty`); `System.Drawing.Color`, `Point`, `Size`, `Image` (`Image.FromFile(path)`);
-`System.Windows.Forms.Control`, `Form`, `ControlCollection`, `ObjectCollection` (Items), `MouseEventArgs`,
-`KeyEventArgs`, `KeyPressEventArgs`, `LinkLabelLinkClickedEventArgs`, `ToolStripItemClickedEventArgs`, enums `Keys`,
-`MouseButtons`, `DockStyle`, `AnchorStyles`, `BorderStyle`, `ContentAlignment`, `PictureBoxSizeMode`; one class per web
-kind (C7): `Label`, `TextBox`, `Button`, `CheckBox`, `RadioButton`, `ComboBox`, `ListBox`, `Panel`, `GroupBox`,
-`PictureBox`, `LinkLabel`, `NumericUpDown`, `DateTimePicker`, `TrackBar`, `ProgressBar`, `Timer`, `MenuStrip`,
-`ToolStrip`, `StatusStrip`, `ToolStripMenuItem`, `ToolStripSeparator`, `ToolStripButton`, `ToolStripStatusLabel`. The
-hierarchy follows WinForms where it matters to shared code (`CheckBox`/`RadioButton`/`Button` are `Control`s;
-`LinkLabel Inherits Label`; strip items share a `ToolStripItem` base, which is not a `Control`, as in WinForms).
-**The WinForms-only kinds have NO class** (§9).
+`System.EventArgs` (+ `Empty`); `System.Drawing.Color`, `Point`, `Size`, `Image` (`Image.FromFile`), `Font`, `FontStyle`;
+`System.Windows.Forms.Control`, `Form`, `ControlCollection`, `ObjectCollection`, `Padding`, `Cursor`/`Cursors`,
+`MessageBox`, `MessageBoxButtons` (OK, OKCancel, YesNo), `DialogResult`, `MouseEventArgs`, `KeyEventArgs`,
+`KeyPressEventArgs`, `LinkLabelLinkClickedEventArgs`, `ToolStripItemClickedEventArgs`, enums `Keys`, `MouseButtons`,
+`DockStyle`, `AnchorStyles`, `BorderStyle`, `ContentAlignment`, `PictureBoxSizeMode`; one class per web kind (C7). The
+hierarchy follows WinForms where shared code can see it (`LinkLabel Inherits Label`; strip items share `ToolStripItem`,
+which is not a `Control`). The WinForms-only kinds have NO class (§9). Slice 3's types (`Font`, `Padding`, `Cursor`) are
+included for the rows slice 3 adds (§10.2).
 
-### 5.3 Attaching: the object and its element
-- A control object holds exactly two things of its own: its `Name` and a reference to its element. Everything else is
-  read from and written to the element (O6, "no shadow copy"). Where WinForms has state the DOM has no slot for, the
-  state lives ON THE ELEMENT as a `data-vgs-*` attribute (e.g. `PasswordChar`, a child's own `Enabled` under a disabled
-  parent) — still the live element, never a field.
-- `New Button()` creates an UNATTACHED object. `parent.Controls.Add(child)` attaches it: the element is
-  `document.getElementById(child.Name)` (ids are unique on a page — one form per page), and, when the parent is
-  attached, the element must be inside the parent's element. A child may be attached before its parent is (the WinForms
-  region adds children to a Panel before the Panel to the form, G6).
-- Reading or writing a property of an unattached control throws an `InvalidOperationException` naming the control and
-  "not attached to a page element" **[impl]**. A `Controls.Add` whose `Name` has no element on the page throws naming the
-  name — the case of a control CREATED at run time (`Dim b As New Button(): Me.Controls.Add(b)`) is Q2.
-- `Form`'s own constructor attaches the form object to the page's form area (the element `FormAssetEmitter.Html` writes
-  for the form) **[impl — the attach key is chosen in the plan: the `data-form` name the dispatch already reads]**.
-- `Element As Element` (read-only) on `Control`, `Form` and `ToolStripItem` returns the live element (O3).
+### 5.3 Attaching
+- A control object holds exactly its `Name` and its element reference; everything else is read from and written to the
+  element (O6). State the DOM has no slot for lives ON the element as a `data-vgs-*` attribute (e.g. `PasswordChar`, a
+  child's own `Enabled` under a disabled parent, `Anchor`, `Dock`).
+- `New Button()` makes an unattached object; `Name` is assigned next (§6.2). `parent.Controls.Add(child)` attaches:
+  `document.getElementById(child.Name)`, which, when the parent is attached, must lie inside the parent's element. A child
+  may attach before its parent (G4: a Panel's children are added before the Panel). DOM listeners are attached here.
+- Reading or writing a property of an unattached control throws `InvalidOperationException` naming it **[impl]**.
+- `Form`'s constructor attaches to the page's form area (keyed by the `data-form` name the dispatch reads **[impl]**).
+- `Element As Element` (read-only) on `Control`, `Form`, `ToolStripItem` (O3).
 
 ### 5.4 Data flow (the catalog's web mapping, made live)
-Common to every control (C5 plus geometry):
+Common members:
 
-| Member | Web, read / write the live element |
+| Member | Web |
 |---|---|
-| `Text` | per kind (table below); setting a DIFFERENT value raises `TextChanged` once |
-| `Enabled` | the kind's focusable element `disabled`; **a container propagates**: its descendants' elements are disabled while it is, and each child's OWN value is kept in `data-vgs-enabled`; `child.Enabled` reads False while any ancestor is disabled — WinForms semantics (fixes P3) |
-| `Visible` | see below; `child.Visible` reads False while an ancestor is hidden (WinForms semantics) |
-| `ForeColor` / `BackColor` | `style.color` / `style.backgroundColor`; read from the computed style, returned as a `Color` |
-| `Left`/`Top`/`Width`/`Height`/`Location`/`Size` | §5.7 |
-| `Name` | the element id (read-only once attached) |
-| `Parent`, `Controls` | the attached tree |
-| `Focus()` | `element.focus()` |
+| `Text` | per kind; a DIFFERENT value raises `TextChanged` once |
+| `Enabled` | the row's **enable target** (new catalog field, §7.8): `disabled` on the focusable element for form elements (`button`, `input`, `select`, `textarea`, `fieldset`, the CheckBox wrapper's inner input); for non-form elements (Label's `label`, LinkLabel's `a`, PictureBox's `img`, ProgressBar's `progress`, Panel's `div`) `aria-disabled="true"` + class `vgs-disabled` (greyed by the page CSS; LinkLabel's click is suppressed). A container propagates to its descendants, each child's own value kept in `data-vgs-enabled`; `child.Enabled` reads False while an ancestor is disabled (WinForms) |
+| `Visible` | the `hidden` attribute (O10); `child.Visible` reads False while an ancestor is hidden (WinForms) |
+| `ForeColor` / `BackColor` / `Font` / `Cursor` / `Padding` | §5.8's per-id style rules, through slice 3's CSS converters (one table, never a second); read back from the computed style |
+| geometry | §5.9 |
+| `Name`, `Parent`, `Controls` | the attached tree |
 
-**`Visible` (O6, and the piece-1 note).** Hiding writes `style.display = "none"`. Showing writes an explicit NON-EMPTY
-display — the row's `WebDisplay` value (new catalog field, default `block`; the CheckBox/RadioButton wrapper's is the
-wrapper's display) — because `style.display = ""` leaves a design-hidden control hidden by its `#id { display: none }`
-rule (task-10 pre-flight B1). Either write is a `style` mutation, so the piece-1 reflow script re-docks (P7).
-⚠ **Measured conflict to resolve (Q1):** below the phone breakpoint the stylesheet switches a CONTAINER to
-`display: flex` (piece-1 §5); an inline `display: block` from `Visible = True` overrides it and the container's children
-stop stacking. The spec's default follows O6 for every control and asserts the conflict as a recorded gap in Edge for
-containers; Q1 offers the alternative (the `hidden` attribute, which the reflow script and the phone rule
-`.vgs-form [hidden] { display: none !important }` already honour).
-
-Per kind (the "Text" column follows the catalog's existing web mapping, P1/P2 corrected by §7):
+Per kind:
 
 | Kind | Properties → element |
 |---|---|
-| Label, Button, LinkLabel | `Text` → `textContent`; `TextAlign` → `style.textAlign` (horizontal part, as `FormCssConverter.ContentAlignmentHorizontal`) |
-| TextBox | `Text` → `value`; `ReadOnly` → `readOnly`; `MaxLength` → `maxLength` (reads 32767 when absent, WinForms' cap); `PasswordChar` → `type="password"` when non-empty, the char kept in `data-vgs-passwordchar`; `Multiline` → the element IS a `<textarea>` when True (§7.4); a run-time change swaps the element in place, keeping id, classes, inline style and the library's listeners **[impl]** |
-| CheckBox | `Text` → the caption span; `Checked` → the inner input's `checked` (raises `CheckedChanged` when it changes) |
-| RadioButton | as CheckBox, plus `GroupName` → the input's `name` (web-only row); checking one raises `CheckedChanged` on the one that became unchecked as well — the DOM fires `change` only on the newly checked radio, so the library raises the other itself |
-| ComboBox | `Items` → `<option>`s; `SelectedIndex` → `selectedIndex` (raises `SelectedIndexChanged` when it changes); `Text` → the selected option's text; setting it selects the first option with that text, or none **[impl — a `<select>` cannot hold free text; WinForms' editable DropDown can: recorded divergence]** |
-| ListBox | `Items`, `SelectedIndex` as ComboBox; `MultiSelect` → `multiple` (web-only row) |
+| Label, Button, LinkLabel | `Text` → `textContent`; `TextAlign` → `text-align` (horizontal, as `FormCssConverter.ContentAlignmentHorizontal`) |
+| TextBox | `Text` → `value`; `ReadOnly` → `readOnly`; `MaxLength` → `maxLength` (reads 32767 when absent); `PasswordChar` (a `Char`, O13) → `type="password"` when set, kept in `data-vgs-passwordchar`; `Multiline` → the element is a `<textarea>` (§7.4); a run-time change swaps the element in place keeping id, classes, attributes and listeners **[impl]** |
+| CheckBox | `Text` → the caption span; `Checked` → the inner input (raises `CheckedChanged` when it changes) |
+| RadioButton | as CheckBox, plus `GroupName` → `name` (web-only row); checking one also raises `CheckedChanged` on the radio that became unchecked (the DOM fires `change` only on the new one) |
+| ComboBox | `Items` → `<option>`s; `SelectedIndex` → `selectedIndex`; `Text` → the selected option's text (**a change from today's `title=`, P2**); setting `Text` selects the first matching option or none **[impl — a `<select>` holds no free text; recorded divergence]** |
+| ListBox | `Items`, `SelectedIndex`; `MultiSelect` → `multiple` (web-only) |
 | Panel | `BorderStyle` → the border (§7.3) |
-| GroupBox | `Text` → the `<legend>` text (§7.2) |
-| PictureBox | `Image` → `src` (`Image.FromFile(path)` carries the path); `SizeMode` → `object-fit`/`object-position` (Normal: none + top left; StretchImage: fill; Zoom: contain; CenterImage: none + center; AutoSize: the image's natural size) |
-| NumericUpDown, TrackBar | `Minimum`/`Maximum`/`Value`/`Increment` → `min`/`max`/`valueAsNumber`/`step`; `Value` is a Double on the web (WinForms Decimal — recorded; Q5) |
-| DateTimePicker | `Value` → `valueAsDate`, a `DateTime` |
-| ProgressBar | `Maximum`/`Value` → `max`/`value` (`Minimum` is WinForms-only, C8) |
-| Timer | `Interval`, `Enabled` (now a web row too, §10.4); `Start()`/`Stop()`; `Tick(sender, e)`; runs only while Enabled, as WinForms |
-| MenuStrip / ToolStrip / StatusStrip | `Visible`; `Dock` read-only; `ItemClicked` with `ToolStripItemClickedEventArgs.ClickedItem` |
-| ToolStrip items | per their catalog rows (FCC:1913-1973): `Text`, `ToolTipText` → `title`, `Visible`; `Click` |
-| Form | `Text` → `document.title`; `ClientSize` read-only (the form area's client size); `Controls` |
+| GroupBox | `Text` → the `<legend>` (§7.2) |
+| PictureBox | `Image` → `src`; `SizeMode` → `object-fit`/`object-position` (Normal: none/top left; StretchImage: fill; Zoom: contain; CenterImage: none/center; AutoSize: natural size) |
+| NumericUpDown | `Minimum`/`Maximum`/`Value`/`Increment` are **`Decimal`** (O14): read by exact parse of the element's text, written by exact invariant format; `min`/`max`/`step` attributes likewise |
+| TrackBar, ProgressBar | `Minimum`/`Maximum`/`Value` (Integer) → `min`/`max`/`value` (ProgressBar `Minimum` WinForms-only) |
+| DateTimePicker | `Value` → `valueAsDate` |
+| Timer | `Interval`, `Enabled` (a web row, §10.3); `Start`/`Stop`; `Tick`; runs only while Enabled |
+| strips | `Visible`, `Dock` (read); `ItemClicked` (`ClickedItem`) |
+| strip items | per their rows (FCC:1913-1973): `Text`, `ToolTipText` → `title`, `Visible`; `Click` |
+| Form | `Text` → `document.title`; `ClientSize` (read); `Controls`; slice-3 root rows per §10.2 |
 
-**Methods.** The catalog lists no methods. The library ships the ones the generated code and the twin need —
-`Controls.Add/Remove/Count/Item`, `Items.Add/Insert/Remove/RemoveAt/Clear/Count/Item/IndexOf/Contains`, `Focus`,
-`Timer.Start/Stop`, `Button.PerformClick` — **[impl]**; any other method is a web-build error (§5.9). Whether more ship
-(Show/Hide/BringToFront/`TextBox.Clear`, `MessageBox.Show`) is Q3.
+### 5.5 Methods (O12)
+`Show()`/`Hide()` (= `Visible`), `Focus()`, `BringToFront()` (moves the element last among its siblings — DOM order is
+paint order; a DOCKED control's z-order is also its docking order in WinForms, so BringToFront on one re-docks through
+§5.10's feed); `TextBox.Clear()`, `AppendText(s)` (raises TextChanged once), `SelectAll()`; `MessageBox.Show(text,
+Optional caption, Optional buttons)` → OK: `alert`, OKCancel/YesNo: `confirm` returning `DialogResult.OK`/`Cancel` or
+`Yes`/`No` (browser dialogs have no title: the caption is the first line **[impl]**); `Form.Close()` → `hidden` on the form
+area. Plus what the generated code and collections need: `Controls.Add/Remove/Count/Item`, `Items.Add/Insert/Remove/
+RemoveAt/Clear/Count/Item/IndexOf/Contains`, `Timer.Start/Stop`, `Button.PerformClick`. Every other method — and every
+`MessageBoxButtons` member other than the three — is §5.11's web-build error.
 
-### 5.5 Events
-- Declared on the library class that WinForms declares them on (Control's Click/TextChanged/Mouse*/Key*/Enter on
-  `Control`), raised through `Protected Overridable Sub OnX(e)` — the VB pattern, and the one M1/M3 measured working
-  (an event can only be raised from its declaring class, JSB:745-746).
-- **`sender` is always the control.** The DOM listener lives in the library, attached once per element at attach time
-  (and moved on a `Multiline` swap); user code only ever sees BasicLang events.
-- DOM → WinForms mapping (the catalog's `WebEvent` column — §10.1 makes it the one list):
+### 5.6 Events
+- Declared on the class WinForms declares them on, raised through `Protected Overridable Sub OnX(e)` (M1, M3; an event
+  can only be raised from its declaring class, JSB:745-746). `sender` is always the control.
+- DOM → WinForms (the catalog's `WebEvent` column is the one list, §10.1):
 
 | WinForms event | DOM source | Args |
 |---|---|---|
-| Click | `click` (a wrapped caption's second, synthetic `click` is not counted — a `<label>` wrapping an `<input>` dispatches click twice) | `EventArgs` |
-| TextChanged | `input` (TextBox), and any programmatic `Text` change | `EventArgs` |
-| CheckedChanged | `change`, programmatic `Checked` change, and the radio that became unchecked | `EventArgs` |
-| SelectedIndexChanged / ValueChanged | `change` / `input` per the row's `WebEvent` (C1), and programmatic change | `EventArgs` |
-| MouseDown / MouseUp / MouseMove | `mousedown` / `mouseup` / `mousemove` | `MouseEventArgs`: `Button` (`button`/`buttons` → `MouseButtons`), `X`/`Y` relative to the control's CLIENT area (border excluded), `Location`, `Clicks` (`detail`), `Delta` (0) |
-| KeyDown / KeyUp | `keydown` / `keyup` | `KeyEventArgs`: `KeyCode` (`code`/`key` → `Keys`, a fixed table), `Shift`/`Control`/`Alt`, `Modifiers`, `KeyData`, `Handled`, `SuppressKeyPress` (→ `preventDefault` on the keydown) |
-| KeyPress | a character-producing `keydown` (`key` of length 1, or Enter) | `KeyPressEventArgs`: `KeyChar`, `Handled` (→ the character is not inserted) — ⚠ `Char` is refused on JS (K10): Q4 |
-| Enter (GroupBox default, and every Control) | `focusin` whose `relatedTarget` is OUTSIDE the control — WinForms raises Enter when focus enters from outside, not on every move between children | `EventArgs` |
+| Click | `click` (a caption `<label>`'s second, synthetic click is not counted) | `EventArgs` |
+| TextChanged | `input` (TextBox) and programmatic change | `EventArgs` |
+| CheckedChanged | `change`, programmatic change, the radio that became unchecked | `EventArgs` |
+| SelectedIndexChanged / ValueChanged | the row's `WebEvent`, and programmatic change | `EventArgs` |
+| MouseDown / MouseUp / MouseMove | `mousedown` / `mouseup` / `mousemove` | `MouseEventArgs`: `Button`, `X`/`Y` in the control's client area, `Location`, `Clicks`, `Delta` |
+| KeyDown / KeyUp | `keydown` / `keyup` | `KeyEventArgs`: `KeyCode` (a fixed `code`/`key` → `Keys` table), `Shift`/`Control`/`Alt`, `Modifiers`, `KeyData`, `Handled`, `SuppressKeyPress` (→ `preventDefault`) |
+| KeyPress | a character-producing `keydown` | `KeyPressEventArgs`: `KeyChar As Char` (O13), `Handled` (→ not inserted) |
+| Enter | `focusin` whose `relatedTarget` is outside the control | `EventArgs` |
 | Tick | the library's `setInterval` | `EventArgs` |
 | LinkClicked | `click` (navigation prevented) | `LinkLabelLinkClickedEventArgs` |
 | ItemClicked | `click` on an item | `ToolStripItemClickedEventArgs` |
 
-- **Counts and order match WinForms**, measured by the behaviour twin (§11.2): e.g. a CheckBox click raises
-  CheckedChanged then Click (WinForms' `OnClick` toggles first); a programmatic set to the SAME value raises nothing; a
-  TextBox raises TextChanged per keystroke (as WinForms does). A divergence the browser forces (NumericUpDown's `input`
-  per keystroke vs WinForms' commit — the catalog already chose `input`, FCC:1520) is asserted as a recorded literal.
-- The web event name the generated code no longer uses directly (`addEventListener`) stays in the catalog: the library's
-  mapping and the §10 gate read it.
+- **Counts and order match WinForms**, measured by the twin (§11.2): a CheckBox click raises CheckedChanged then Click; a
+  programmatic set to the same value raises nothing; TextChanged per keystroke. A browser-forced divergence (NumericUpDown's
+  per-keystroke `input`, FCC:1520) is asserted as a literal.
+- **Until slice 5 lists them (O17)** the Mouse/Key/Enter events are implemented on `Control` per O6 and proven by the
+  twin; the coverage gate (§11.1), which reads the catalog, covers each one the day it is listed — no library-side list is
+  kept.
 
-### 5.6 Drawing types
-`Point`, `Size`, `Color` are value types in .NET and classes here (M10, K10). To keep .NET's copy semantics observable
-in shared code, **every getter returns a NEW object and every setter copies** (`Dim p = btn.Location: p.X = 5` does not
-move the button, as in WinForms; `btn.Location.X = 5` is already CS1612 on desktop, CLAUDE.md). `Color`: the named
-colours the catalog accepts (FCC `Color` rows) as `Shared ReadOnly` properties, `FromArgb`, `R`/`G`/`B`/`A`, `Name`,
-`Equals`; computed-style `rgb()`/`rgba()` parse to a Color whose `Name` is the matching named colour when one matches.
+### 5.7 Value-like types
+`Point`, `Size`, `Color`, `Padding`, `Font` are classes (M10); every getter returns a NEW object and every setter copies, so
+.NET's copy semantics hold in shared code (`Dim p = btn.Location: p.X = 5` does not move the button). `Color`: the catalog's
+named colours as `Shared ReadOnly`, `FromArgb(r, g, b, Optional a = 255)`, `R`/`G`/`B`/`A`, `Name`, `Equals`.
 
-### 5.7 Run-time geometry and Anchor — the mirrored pair
+### 5.8 How the library writes style — rules, not inline style (review I7, O10)
+Inline style would beat the phone media query (every run-time move would un-stack a phone layout) and every write would
+fire the reflow script's MutationObserver (P8) — a full reflow per `Left` write. So:
+- The library owns ONE `<style>` element on the page, holding **one `#id { … }` rule per touched control INSIDE the same
+  `@media (width >= <breakpoint>px)` block the reflow script's live rules use** (unwrapped when the breakpoint is 0, piece-1
+  task-10 decision 9). Run-time geometry, colours, font, cursor and padding are written into that rule. Below the
+  breakpoint the phone layout wins, exactly as for the designed geometry.
+- Visibility is the `hidden` attribute (O10) — honoured at every width by `.vgs-form [hidden] { display: none !important }`,
+  which every PORTABLE page carries (Grid/Flow included; piece 1 put it only on Canvas pages). A design-time `Visible=False`
+  is therefore emitted as `hidden` on a portable page (not `#id { display: none }`), so showing it is removing the attribute.
+- Rule edits mutate no attribute, so they do not wake the observer. The library calls the reflow itself, **coalesced to at
+  most one per microtask**, when a write can change docking: `Visible`/`Dock`, the size of a docked control, the size of a
+  container that has docked children, `BringToFront` of a docked control.
+- **Performance assertion (Edge):** 100 `Left` writes in one Timer tick → at most one reflow, the tick completes in under a
+  stated budget **[impl: the plan measures and fixes the number]**, and the final position is exact.
+
+### 5.9 Run-time geometry and Anchor — the mirrored pair
 - `Left`/`Top`/`Width`/`Height`/`Location`/`Size`/`Right`/`Bottom` READ the element's rectangle in its container's CLIENT
-  coordinates (`getBoundingClientRect` minus the container's client origin — the same measurement piece 1's harness
-  uses, spec §7 item 2).
-- WRITING a position or size re-derives the control's CSS **by the rule `FormAnchorCss.Positioned` uses**, with two
-  differences that are WinForms' own semantics: the container size is its CURRENT client size (WinForms captures anchor
-  distances when bounds are SET, against the container's size at that moment), and the offsets are the NEW bounds. So a
-  Right-anchored control moved to `Left = 50` writes `right: (Wc − 50 − w)px` and keeps its right distance from there on
-  (O6); Left+Right writes both insets and the `calc(100% − (near+far)px)` size (piece-1 §4, the `<img>` rule); a centred
-  axis writes `calc(50% ± …)` from the current size.
-- `Anchor` is readable and writable (WinForms `AnchorStyles`); the element carries it as `data-vgs-anchor` (written by
-  the page emitter for every positioned control whose Anchor is not the default) **[impl]**; writing it re-derives the
-  CSS from the current bounds, as WinForms re-captures.
-- A DOCKED control ignores position/size writes on the docked axis, as WinForms' layout overrides them; `Dock` is
-  read-only on the web in this piece (a run-time `Dock` change → web-build error; Q6).
-- ⛔ **Mirrored pair:** the axis rule now exists in C# (`FormAnchorCss.Axis`) and in the library (BasicLang). Like
-  `FormDockLayout`/`FormDockScript.Core`, the two are held in lock-step by a test (§11.3) over one fixture table.
-  `FormAnchorCss`'s number formatting rules (invariant digits, sign outside the length) apply to both.
+  coordinates (piece 1's harness measurement).
+- WRITING re-derives the control's rule **by `FormAnchorCss.Positioned`'s axis rule**, with WinForms' semantics: the
+  container size is its CURRENT client size and the offsets are the NEW bounds. A Right-anchored control moved to
+  `Left = 50` gets `right: (Wc − 50 − w)px` and keeps its right distance from there; Left+Right writes both insets and the
+  `calc(100% − …)` size; a centred axis `calc(50% ± …)`.
+- `Anchor` is read/write; the element carries it as `data-vgs-anchor` (the page emitter writes it for every non-default
+  Anchor) **[impl]**; writing it re-derives from current bounds.
+- ⛔ **Mirrored pair** (C# `FormAnchorCss.Axis` ↔ the library), gated by §11.3. Invariant number formatting on both sides.
 
-### 5.8 The kinds in 2b
-Each 2b kind is added by the same recipe as 2a's: its class, its rows in the coverage gate (§11.1), its twin fixture, its
-Edge assertions. `Timer` replaces the web template (G13) for PORTABLE forms: its field is `System.Windows.Forms.Timer`,
-constructed in the init region like WinForms'; the `FormWebScript` path stays for DOM-style forms until they convert.
-Strips/items attach by id like controls; `Controls.Add` of a strip and the host's item verb (`Items.Add`/`DropDownItems.Add`,
-the rows' `FormItemRule`) attach in DOCUMENT order, as the region writer already emits them (CLAUDE.md, strips).
+### 5.10 Live docking (O15, review I7)
+- `Dock` is read/write on the web. The element carries it as `data-vgs-dock`, spelled by **`FormDock`'s canonical rule**
+  (P12) — never a second parser.
+- The reflow script stops treating its emitted JSON as the truth for anything that can change at run time: each node's
+  dock edge, visibility and own size are read from the LIVE element (`data-vgs-dock`, `hidden`, the §5.8 rule / measured
+  size) on every reflow, with the emitted data kept only for the design-time answer piece 1's B3 needs before the first
+  reflow. So a run-time Dock change, a docked control's resize, a container's resize and a hidden docked sibling all
+  re-dock — including a container resized with docked children (the I7 defect).
+- ⛔ This changes `FormDockScript.Core`, one half of piece 1's mirrored pair: the lock-step fixtures (`FormDockScriptTests`)
+  gain live-change cases (Dock changed, a docked control resized, a container resized), each compared with
+  `FormDockLayout.Resolve(…, Runtime)` of the correspondingly edited document.
 
-### 5.9 The two build errors (O3)
-- **Web build, unavailable member.** A member access on a library type that the library does not declare, or a type in
-  `System.Windows.Forms`/`System.Drawing` that the library does not declare (e.g. `MessageBox`, `DataGridView`), is an
-  error: *"'Form.ShowDialog' is a WinForms member that is not available on the web. Put desktop-only code inside
-  `#If DESKTOP Then … #End If`."* Implemented as a rewording of the analyzer's existing missing-member error (M16's
-  message shape) when the receiver is a library type, and of the JS "not available" refusal (BL7007) for an undeclared
-  `System.Windows.Forms` type. New compiler code(s), next free in range.
-- **Desktop build, `.Element`.** On a non-JS build, a member access named `Element` on an expression whose static type
-  NAME is a library class name (`Button`, `Form`, …) is an error: *"'.Element' is web-only; wrap it in `#If WEB Then …
-  #End If`."* ⚠ It must fire although WinForms members type as `Object` there (K13): the check is on the declared type
-  NAME of the receiver (a field `As Button`, a parameter, `Me` in a class that `Inherits Form`), not on member
-  resolution. A receiver typed `Object` is not diagnosed (csc will say CS1061) — recorded.
-- Both are ordinary compile errors: they appear in the Error List, the CLI output and the LSP.
+### 5.11 The build errors (O3, O11)
+- **Web build, unavailable member** (`WebUnavailableMember`): a member on a library type the library does not declare, or an
+  undeclared type in `System.Windows.Forms`/`System.Drawing` (e.g. `DataGridView`), or a `MessageBoxButtons` member beyond
+  the three: *"'Form.ShowDialog' is a WinForms member that is not available on the web. Put desktop-only code inside
+  `#If DESKTOP Then … #End If`."* A rewording of the analyzer's missing-member error and of BL7007 for these receivers —
+  on the path `fix/js-cross-file-calls` rewrites (§0.4).
+- **Web build, control created at run time** (`RuntimeControlCreation`, O11): `New` of a library control class anywhere
+  except inside the designer's init region: *"Creating a Button at run time is not supported on the web yet."* A run-time
+  throw on an unmatched `Controls.Add` remains as the backstop.
+- **Desktop build, `.Element`** (`ElementOnDesktop`): on a non-JS build, `.Element` on an expression whose static type NAME
+  is a library class name (a field `As Button`, a parameter, `Me` in a class that `Inherits Form`): *"'.Element' is web-only;
+  wrap it in `#If WEB Then … #End If`."* Checked on the declared type name because WinForms members type as `Object` (K14);
+  a receiver typed `Object` is left to csc (recorded).
+- All are compile errors: Error List, CLI, LSP (§4.12). Numbers assigned in the plan (G15).
+
+### 5.12 The kinds in 2b
+Each by 2a's recipe (class, gate rows, twin fixture, Edge assertions). **Timer** replaces the web template (G12) for
+portable forms: field `System.Windows.Forms.Timer`, constructed in the init region with its properties (§6.2's component
+exception); the `FormWebScript` path stays for DOM-style forms. Strips and items attach by id; the host's item verb attaches
+in DOCUMENT order, as G4. After the last kind: the scaffold's default flips (§1).
 
 ## 6. Code generation — the portable style
 
-### 6.1 One detector for "which style is this file" **[impl]**
-`FormCodeStyle.Of(codeBehindText)` → `Dom` | `Portable` | `Unknown`. A web init region containing
-`Dim doc As Document = ::document` is DOM style — the region writer writes that line unconditionally on the web (G3) and
-the region is hash-guarded (G10), so its content is trustworthy. A file with no regions is `Unknown` (BL8014 today).
-Read by the region writer, the designer (whether to offer conversion), the conversion, and the page emitter (§7.6).
-WinForms files are always portable-shaped and need no detection.
+### 6.1 The style is RECORDED, never guessed (review C2)
+- The hash-guarded region open marker carries it: `' <vgs:designer region="init" form="LoginForm.blwebform" style="portable"
+  hash="…">` (both regions **[impl]**). A marker WITHOUT `style` is the DOM style — every existing web file. An unknown
+  `style` value, or the two regions disagreeing, is `RegionMarkersMalformed` (BL8012) — the existing refusal, never a guess.
+  `RegionMarkers`' regexes (`RegionMarkers.cs:60-66`) and `FormatOpen` learn the attribute; the hash is unchanged (it covers
+  content, not the marker).
+- The scaffold passes the style EXPLICITLY (portable from the §1 opt-in command in 2a, and by default from 2b) into the
+  EMPTY regions it writes before calling `RegionWriter.Write` (G10) — so a brand-new form with no controls is portable
+  although its regions contain nothing to detect.
+- WinForms files carry no `style` (always the WinForms shape). One reader, `FormCodeStyle.Of(file)`, is used by the region
+  writer, the handler stubs, the designer's conversion offer, the conversion and the page emitter (§7.7).
 
-### 6.2 The portable web code-behind
-The WinForms shape (G11), on the web:
+### 6.2 The portable web code-behind (review C3, I5)
+**Definition: the portable web init is the WinForms init walk (G4) with the geometry lines and the property lines deleted**
+— FormRoot `Me.X = …` rows, per-control `Location`/`Size`/`Dock`/`Anchor`, per-control property lines, and the
+`Me.<FormProperty>`/reference-row lines after the add run. **`x.Name = "x"` is written immediately after `New` on BOTH
+targets.** Everything else — order included — is the WinForms walk. **Exception (I5): a tray component keeps its property
+lines on the web** (a Timer has no markup; `Interval`/`Enabled` exist only in code).
 ```
 Using System
 Using System.Drawing
@@ -460,307 +540,284 @@ Using System.Windows.Forms
 
 Public Class LoginForm
     Inherits Form
-    ' <vgs:designer region="controls" …>
-    Private btnLogin As Button
+
+    ' <vgs:designer region="controls" form="LoginForm.blwebform" style="portable" hash="…">
     Private txtUser As TextBox
+    Private btnLogin As Button
     ' </vgs:designer>
+
     Public Sub New()
         Me.InitializeComponent()
     End Sub
-    ' <vgs:designer region="init" …>
+
+    ' <vgs:designer region="init" form="LoginForm.blwebform" style="portable" hash="…">
     Private Sub InitializeComponent()
-        btnLogin = New Button()
         txtUser = New TextBox()
-        btnLogin.Name = "btnLogin"
         txtUser.Name = "txtUser"
-        Me.Controls.Add(txtUser)
-        Me.Controls.Add(btnLogin)
+        btnLogin = New Button()
+        btnLogin.Name = "btnLogin"
         AddHandler btnLogin.Click, AddressOf btnLogin_Click
+        Me.Controls.Add(btnLogin)
+        Me.Controls.Add(txtUser)
     End Sub
     ' </vgs:designer>
+
     Private Sub btnLogin_Click(sender As Object, e As EventArgs)
     End Sub
 End Class
 ```
-- **The web scaffold `Inherits Form`** (O5's "decide and state": yes). One shape; `Me.Controls`, `Me.Text` work alike.
-- **Field types** are the WinForms types (`DeclaredType` → the row's `WinFormsType` for a portable file, G1); tray
-  components FULLY QUALIFIED as today (`System.Windows.Forms.Timer`).
-- **Init = construct → `Name` → `Controls.Add` (reversed, as G6) → components → `AddHandler`.** It writes NO geometry and
-  NO properties on the web: the markup paints the design (O5), and re-applying geometry at init would capture anchor
-  distances against the browser's CURRENT size rather than the design size (§5.7; piece-1 §4's designer-size rule).
-- **`x.Name = "x"` is written on BOTH targets** — the web attaches by it; on WinForms it is what Visual Studio writes and
-  closes chip `task_fa51e644` ("control.Name never emitted"). The WinForms sweep gate re-runs over it.
-- **The seam for piece 3:** the portable web init is a strict SUBSET of the WinForms init — the same statements, in the
-  same order, minus geometry and property lines. Piece 3 (one file building both ways) can wrap exactly those lines in
-  `#If DESKTOP` (§4.1); nothing else in the file differs by target. A test pins the subset relation for every catalog
-  fixture.
-- **Handler stubs** use the WinForms signature on both targets (`FormHandlers`, G12) for a portable file; the Timer's
-  becomes `(sender As Object, e As EventArgs)`.
-- **BL8013 (handler ordering) does not apply to a portable file** (M15: `AddHandler` to a BasicLang event is not the
-  `Action(Of DomEvent)` conversion that motivated it). It stays for DOM-style files. The portable web scaffold puts the
-  init region where WinForms does (right after `New()`, handlers below).
-- The dispatch (G14) is unchanged: `Dim f As New LoginForm()` runs `Form`'s constructor (attach the form) then
-  `InitializeComponent` (attach the controls).
+(The WinForms init for the same document is these lines plus `Me.ClientSize = …`, each control's `Location`/`Size`/property
+lines after its `Name` line.)
+- **The web scaffold `Inherits Form`** (O5: yes). **Field types** are the WinForms types for a portable file; components
+  FULLY QUALIFIED as today.
+- **Why no geometry/properties on the web:** the markup paints the design (O5), and re-applying geometry at init would
+  capture anchor distances against the browser's current size, not the design size (§5.9; piece-1 §4).
+- **The seam for piece 3:** the portable web init equals the WinForms init minus a set of lines that are each tagged, by
+  the region writer, as geometry or property lines (component property lines excepted). Piece 3 wraps exactly that set in
+  `#If DESKTOP`. A test pins the relation per catalog fixture (§11.6).
+- **Handler stubs** (G11): the WinForms signature (`WinFormsEventArgs ?? "EventArgs"`) AND the WinForms placement (after the
+  init region) for a portable file; the DOM signature and placement for a DOM-style file — switched by §6.1's style, not by
+  target. The portable Timer stub is `(sender As Object, e As EventArgs)`.
+- **BL8013 does not apply to a portable file** (M15); it stays for DOM-style files. The portable scaffold places the init
+  region as WinForms does.
+- The dispatch (G13) is unchanged.
 
-### 6.3 What stays exactly as today
-DOM-style files: regions, stubs, BL8013, the Timer template — byte-for-byte (a golden test over every existing web
-fixture). WinForms files: unchanged except the added `Name` line.
+### 6.3 Changed and unchanged expectations
+- DOM-style files: regions, stubs, BL8013, the Timer template — byte-for-byte (golden test).
+- **WinForms files: the new `Name` line changes every existing WinForms region's content, so its hash is rewritten on the
+  next designer save** (not a hand edit — the old region is Canon, so it is regenerated). Every test with an expected WinForms
+  region changes intentionally; the plan lists them. The WinForms sweep re-runs over it; it also closes chip
+  `task_fa51e644` ("control.Name never emitted").
 
-## 7. Page rendering fixes (O7, and F5)
+## 7. Page rendering fixes (O7, F5)
 
-All are catalog-driven — a row field read by the emitter, never a `control.Kind` switch (CLAUDE.md) — and apply to
-PORTABLE-style pages (§7.6).
+Catalog-driven — a row field read by the emitter, never a `control.Kind` switch — and applied to PORTABLE pages (§7.7).
 
 ### 7.1 CheckBox / RadioButton captions
-The rows gain a caption wrapper **[impl: a catalog field, e.g. `HtmlCaptionWrapper: "label"`]**: the positioned element
-(carrying the id, the geometry CSS and `class="vgs-CheckBox"`) is `<label>`, containing the `<input>` (margin 0) and a
-`<span>` with `Text`. The id stays on the element that has the control's bounds, so piece 1's invariants hold (CSS by id,
-the reflow script's ids, the harness's measurement, the reading order). `Text` is no longer written as `value=` for these
-rows. Assertions: the caption is present, inside the control's box, the glyph's left edge within 1px of the control's
-left (WinForms' glyph sits at the left for the default `CheckAlign`), and a click on the caption toggles once and counts
-one Click.
+A caption-wrapper field on the rows: the positioned element (id, geometry, `class="vgs-CheckBox"`) is a `<label>`
+containing the `<input>` (margin 0) and a `<span>` caption (via `textContent`). Piece 1's invariants hold (id on the element
+with the control's bounds). Assertions: caption present and inside the box; glyph left edge within 1px of the control's
+left; a click on the caption toggles once and counts one Click.
 
 ### 7.2 GroupBox caption in the border
-The `<fieldset>` has `border: 0; padding: 0; margin: 0` so positioned children land at their stored X/Y RELATIVE TO THE
-BOX — WinForms does not inset a GroupBox's positioned children (P10). The frame is drawn by a pseudo-element inset from
-the box, and the caption is a `<legend>` positioned over the frame's top line **[impl; exact offsets measured against the
-WinForms window in the harness]**. Docked children dock inside the DOCK AREA (§7.5).
+`<fieldset>` with `border: 0; padding: 0; margin: 0` (positioned children at stored X/Y relative to the box — WinForms does
+not inset them, P11); the frame drawn by a pseudo-element; the caption a `<legend>` over the frame line **[impl; offsets
+measured against the WinForms window]**. Docked children dock inside the dock padding (§7.5).
 
 ### 7.3 Bordered Panels
-`BorderStyle` gains its CSS: FixedSingle `1px solid`, Fixed3D `2px inset` **[impl; the Fixed3D colours are matched to
-the WinForms window within the harness's tolerance or recorded]**. With `box-sizing: border-box`, a positioned child's
-containing block is inside the border — which is where WinForms positions it (+1 / +2, P10).
+`BorderStyle` CSS: FixedSingle `1px solid`, Fixed3D `2px inset` **[impl; colours matched or recorded]**; with
+`border-box`, children sit inside the border as WinForms places them (+1/+2, P11).
 
 ### 7.4 TextBox Multiline and PasswordChar
-`Multiline = True` renders `<textarea>` (a second tag on the row, chosen by the property — a catalog field, not a Kind
-switch); `PasswordChar` non-empty renders `type="password"`. The phone-stacking and CSS rules treat the textarea as the
-TextBox.
+`Multiline = True` renders `<textarea>` (a second tag chosen by the property — a catalog field); `PasswordChar` set renders
+`type="password"`.
 
-### 7.5 Client area — one rule, now with insets
-Today a container's client size is its outer size (P9). For the page to match WinForms (O7) the model learns two
-catalog-driven insets **[impl: e.g. `FormClientArea.Of(control)`]**:
-- **Origin inset** — where a child's (0,0) is: Panel by `BorderStyle` (None 0, FixedSingle 1, Fixed3D 2); GroupBox 0.
-  `ClientSizeOf(container)` = outer − 2 × origin inset. This is the size anchored children's insets are computed against
-  (piece-1 §4), so a Right-anchored child of a FixedSingle Panel stays exactly where WinForms puts it.
-- **Dock padding** — GroupBox 3/19/3/3 (its `DisplayRectangle` at 96 DPI with the default font, measured, P10); others 0.
-  Docked children dock inside it.
-Consumers — the ONE rule, called by all: `FormDockLayout` (client sizes and dock origins, Designer and Runtime), the
-canvas (so the designer draws children where they run, as Visual Studio does), the page emitter, the reflow script's JS
-mirror (`FormDockScript.Core` — lock-step fixtures gain bordered and GroupBox containers), the library's run-time anchor
-math (§5.7), and the WinForms region writer's Designer-resolved docked `Size` (piece-1 §4). ⚠ Like piece 1's `BoundsOf`
-change, this MOVES children of bordered Panels and docked children of GroupBoxes on the `.blform` canvas by 1–19px —
-intended; the plan lists every changed expectation. The 19px is font-dependent in WinForms; the page's legend is styled to
-fit it, and a different WinForms font or DPI is a recorded divergence.
+### 7.5 Client area — one rule, with insets
+Catalog-driven **[impl: `FormClientArea.Of(control)`]**: an **origin inset** (Panel by `BorderStyle` 0/1/2; GroupBox 0;
+`ClientSizeOf` = outer − 2 × inset — the anchor reference) and a **dock padding** (GroupBox 3/19/3/3, P11; others 0).
+Consumers, all calling the one rule: `FormDockLayout` (Designer and Runtime), the canvas, the page emitter, the reflow
+script's core (§5.10), the library's anchor math (§5.9), and the WinForms region writer's Designer-resolved docked `Size`.
+⚠ This MOVES children of bordered Panels and docked children of GroupBoxes on the `.blform` canvas by 1–19px —
+intended; the plan lists every changed expectation. The 19px is WinForms' default-font value; another font/DPI is a recorded
+divergence. (Slice 3's container `Padding` is excluded there because `FormDockLayout` does not model it — slice-3 pre-flight
+:91-92; if slice 3 later adds it, it joins this rule.)
 
-### 7.6 Radios group like WinForms; disabled containers
-- A RadioButton with no `GroupName` gets `name` = its CONTAINER's id (the form area's for top-level radios), so radios are
-  mutually exclusive per container as in WinForms (P4). A set `GroupName` still wins (web-only row).
-- A design-time `Enabled=False` container renders its descendants disabled (P3), with their own design value in
-  `data-vgs-enabled`, matching §5.4.
+### 7.6 Radios, disabled containers, security
+- A RadioButton with no `GroupName` gets `name` = its container's id (the form area's at top level), matching WinForms'
+  per-container grouping (P5).
+- A design-time `Enabled=False` renders per the enable-target rule (§5.4, §7.8), and a disabled container renders its
+  descendants disabled with their own value in `data-vgs-enabled`.
+- The emitter already escapes text; the §5.1 `<b>x</b>` test covers markup and run time alike.
 
 ### 7.7 DOM-style pages are unchanged
-A DOM-style form's page is emitted byte-for-byte as piece 1 emits it (golden hash, as piece 1's C8 guard). Reason: its
-code addresses elements directly (`chkRemember.checked`), and moving the id onto a `<label>` would make that code read
-`undefined` from a green build — the decline path of O2 must not change behaviour. Conversion (§8) is the gate to the
-fixed rendering. The emitter learns the style through §6.1 (the build already knows each form's code-behind path,
+A DOM-style form's page is emitted byte-for-byte as piece 1 emits it (golden hash): its code addresses elements directly
+(`chkRemember.checked`), and moving the id onto a `<label>` would make it read `undefined` from a green build. Conversion is
+the gate to the new rendering. The emitter reads the style through §6.1 (the build knows each form's code-behind,
 `FormCodeBehind.PathFor`).
 
-## 8. Conversion (O2) — sub-piece 2c
+### 7.8 Catalog fields added
+`WebDisplay` is NOT needed (O10 replaced it). Added: the caption wrapper (§7.1), the Multiline tag (§7.4), `BorderStyle` CSS
+(§7.3), client insets (§7.5), the **enable target** (§5.4), `DomMember` (§10.4).
 
-### 8.1 When it is offered
-Opening a web form whose code-behind is DOM style (§6.1) in the designer (`EnterDesignModeForFormDocument`, K14) shows a
-notification with actions **Convert** / **Not now** **[impl: the existing `ShowNotification(…, actions)` toast; no new
-dialog service in the document VM]**. It is offered on OPEN only, once per open (not on reload — CLAUDE.md's open-route
-rule). A refused document is not offered.
+## 8. Conversion (O2 — offer on open, write on Convert) — sub-piece 2c
 
-### 8.2 What Convert does (one pure function, one write)
-`FormCodeConversion.Convert(document, codeBehindText)` → new text + findings. The IDE writes the result once; the CLI
-exposes the same function as `design --convert <form>` **[impl]** so the conversion is testable through both entry points.
-1. Adds the three `Using` lines and `Inherits Form` when absent (a different existing `Inherits` → refused with a
-   finding; nothing written).
-2. Regenerates both regions in the portable style (§6.2).
-3. For each handler NAMED BY A BIND of the document whose declaration is SIMPLE — a `Sub` (any access) with exactly one
-   parameter typed `DomEvent`, or no parameter for a Timer — rewrites ONLY its parameter list to
-   `(sender As Object, <name> As <args>)`, keeping the user's parameter name and choosing `<args>` from the event's
-   `WinFormsArgs` (`EventArgs` by default). Anything else (a Function, extra parameters, a lambda bind, a handler shared by
-   binds of different args) is not rewritten and gets a finding.
-4. Moves nothing else. Handler BODIES are never edited.
-5. Timer: a wired DOM-style Timer implied `Enabled=true` (G13); the conversion sets `Enabled="true"` on the component in
-   the document when it had a wired Tick, so the converted form still runs its timer (the "wired means running" rule,
-   BL8027, applied as retarget applies it).
+### 8.1 The offer
+Opening a DOM-style web form in the designer (`EnterDesignModeForFormDocument`, K15) shows a notification with **Convert** /
+**Not now** (the existing `ShowNotification(…, actions)` toast) **[impl]**. On OPEN only, once per open, never on reload; a
+refused document is not offered. Nothing is written by the offer.
 
-### 8.3 Findings in the Error List
-Every line inside a handler body (and anywhere else in the file outside the regions) that uses the DOM directly is listed
-as a warning with a suggested replacement — **new design code BL8034** (G16). Suggestions come from the catalog's
-`DomMember` column (§10.3), never a hand list:
-- `txtUser.value` → `txtUser.Text`; `lblMsg.textContent` → `lblMsg.Text`; `chkRemember.checked` → `chkRemember.Checked`;
-  `btn.disabled = True` → `btn.Enabled = False`; `x.style.display = "none"` → `x.Visible = False`; `x.hidden` →
-  `x.Visible` (inverted); `e.target` → `sender`; `doc.getElementById("x")` → `x`.
-- A DOM use with no catalog equivalent → *"uses the DOM directly: wrap it in `#If WEB Then` and use `x.Element`"*.
-Findings are recomputed whenever the designer regenerates the file and disappear when the line changes. They do not
-block the designer; the BUILD will fail on most of them anyway (a `TextBox` has no `value`, and §4.8 rejects a handler
-left as `(e As DomEvent)`), which is the point: nothing silently runs differently.
+### 8.2 Convert (one pure function, one write)
+`FormCodeConversion.Convert(document, codeBehindText)` → new text + findings; the IDE writes once; the CLI exposes it as
+`design --convert <form>` **[impl]** (both entry points tested).
+1. Adds the three `Using` lines and `Inherits Form` if absent (a different `Inherits` → refused, nothing written).
+2. Regenerates both regions in the portable style, with `style="portable"` on the markers (§6.1).
+3. Rewrites the parameter list of each SIMPLE handler named by a bind — a `Sub` with exactly one `DomEvent` parameter, or
+   none for a Timer — to `(sender As Object, <name> As <WinFormsEventArgs ?? EventArgs>)`, keeping the user's parameter
+   name. Non-simple handlers (Function, extra parameters, lambda binds, a handler shared across different args) are left and
+   reported.
+4. Never edits a handler body; moves nothing.
+5. A wired DOM-style Timer implied `Enabled=true` (G12): the conversion writes `Enabled="true"` on the component when it had
+   a wired Tick (the BL8027 rule, as retarget applies it).
+
+### 8.3 Findings (`DomUsageFinding`, warning)
+Every DOM use outside the regions is listed with a suggestion derived from the catalog's `DomMember` (§10.4): `txtUser.value`
+→ `txtUser.Text`; `lblMsg.textContent` → `lblMsg.Text`; `chk.checked` → `chk.Checked`; `x.disabled = True` → `x.Enabled =
+False`; `x.style.display = "none"` / `x.hidden = True` → `x.Visible = False`; `e.target` → `sender`; `doc.getElementById("x")`
+→ `x`; anything else → *"uses the DOM directly: wrap it in `#If WEB Then` and use `x.Element`"*. Recomputed on every
+regeneration; they do not block the designer; the build will reject most of them anyway (§4.8 rejects an unconverted
+`(e As DomEvent)` handler), so nothing runs differently in silence.
 
 ### 8.4 Declining
-**Not now** writes nothing — the file stays byte-identical — and the designer keeps generating that file in the DOM style
-(§6.3), and its page keeps piece-1 markup (§7.7), until the user converts. A file that is later converted by hand into the
-portable shape is detected as portable (§6.1) and handled as such.
+**Not now** writes nothing: the file stays byte-identical, the designer keeps generating it in the DOM style (§6.3), its page
+keeps piece-1 markup (§7.7). A file hand-converted to the portable shape without the marker stays DOM style until converted
+(the marker, not the content, decides — §6.1).
 
 ## 9. Desktop-only controls (O8, P-D6) — sub-piece 2d
-- **Toolbox:** on a web form the toolbox lists every kind; desktop-only kinds (`SupportsTarget(Web)` false, C4) carry a
-  "desktop" badge (C12 changes from hide to badge). Dropping one is ALLOWED (the BL8019 refusal for a kind that exists on
-  WinForms but not the web is removed; kinds that exist on neither target are unaffected).
-- **Property grid:** the selected control's header carries the same badge.
-- **Canvas:** draws it from its catalog schematic, as on a WinForms form.
-- **Web build:** a web form containing one stops with **BL8033** (error) — *"LoginForm: 'dgvUsers' is a DataGridView, which
-  is desktop-only; a web build cannot include it."* — raised where web forms are loaded for a build (K12), on both the IDE
-  and CLI routes. The HTML comment (P6) is no longer reached by a successful build.
-- A component (Timer aside) keeps BL8029's existing warning path for tray kinds — no change there.
+- **Toolbox:** on a web form every kind is listed; desktop-only kinds carry a "desktop" badge (C13 changes from hide to
+  badge). Dropping one is allowed (BL8019's refusal for a WinForms-but-not-web kind is removed).
+- **Property grid:** the badge on the selected control's header, **read through the ONE selection store (`Selection`)** —
+  never by setting `PropertyGrid.SelectedControl` from the view model (CLAUDE.md).
+- **Canvas:** draws it from its catalog schematic.
+- **Web build:** `DesktopOnlyKind` (error) — *"LoginForm: 'dgvUsers' is a DataGridView, which is desktop-only; a web build
+  cannot include it."* — raised where web forms load for a build (K13), IDE and CLI. P7's comment is no longer reached by a
+  successful build.
 
-## 10. Catalog changes (one list drives both)
+## 10. Catalog dependencies and changes (one list drives both)
 
-### 10.1 Event lists (F2)
-The events O6 names become catalog rows on every positioned web kind: Click, TextChanged, MouseDown, MouseUp, MouseMove,
-KeyDown, KeyUp, KeyPress, Enter — each a `FormEventDef` with WinForms' args/category/description (the parity oracle, C13,
-checks them against the WinForms snapshot) and its `WebEvent`. The row's existing default event keeps `IsDefault`. This is
-the shape the property grid's slice 5 ("D1 event lists", C1) was going to introduce; landing it here must be coordinated
-with that plan (Q8). `FormEvents.WiredOn` (tray rule) is unchanged.
+### 10.1 Event lists — a DEPENDENCY (O17, review I2)
+The catalog's per-kind event lists (Click, TextChanged, Mouse*, Key*, Enter, …) are property-grid **slice 5**'s work; this
+spec adds none. Slice 3's pre-flight B1 (a non-default bind is dropped by `ConvertBinds`/retarget) is slice 3's to fix, and
+matters here because every new event is non-default.
 
-### 10.2 GroupBox's default event → Enter
-`Enter`, `WebEvent: "focusin"` (with the relatedTarget rule of §5.5), `IsDefault: true`; its oracle exemption is
-removed (a stale exemption FAILS the parity test, C13). **Click stays listed** (non-default) so existing documents that
-bind it keep working **[impl]**.
+### 10.2 Slice 3 lands first — its rows are library scope (O1, O17)
+Slice 3 (`feat/property-grid-slice3`) brings: GroupBox's default event Enter/`focusin` with Click kept non-default and
+exempt (C6 — **this spec no longer changes GroupBox; it implements slice 3's rows**, incl. §5.6's relatedTarget rule for
+Enter); new types `Font`, `Padding`, `Cursor` and their rows (Font/Cursor per kind as the snapshot lists them; Padding on
+Label/Button/CheckBox/RadioButton/LinkLabel); the 18 FormRoot rows (FormBorderStyle, AcceptButton/CancelButton as
+`Reference`, TopMost, Opacity, BackColor/ForeColor/Font, …); `Double` and `Reference` types; the CSS list API
+(`FormCss.Declaration` returning several declarations). **Under O1, every such row that APPLIES TO THE WEB gets a library
+member**, whose run-time mapping reuses slice 3's CSS converters and `FormCursors.CssFor` (one table); a row slice 3 marks
+WinForms-only is `WebUnavailableMember` in shared code. A web root row with no honest page meaning (e.g. a web `TopMost`)
+is slice 3's call to make WinForms-only, not this spec's to fake. AcceptButton/CancelButton, if slice 3 makes them web rows,
+map to Enter/Escape inside the form area clicking the referenced button (the twin checks it).
 
-### 10.3 `DomMember` per property
+### 10.3 Timer `Enabled` on the web
+The Timer's `Enabled` row applies to the web (G12), so a portable Timer runs only when enabled, as WinForms.
+
+### 10.4 `DomMember` per property
 Each property row records the live DOM member its web value lives in (`value`, `textContent`, `checked`, …). Read by the
-conversion's suggestions (§8.3) and by a gate that runs the library against a recording stub DOM and checks that writing
-the property writes that member (§11.1) — which is what makes the HAND-WRITTEN library (O4) falsifiable against the
-catalog.
-
-### 10.4 Other row changes
-Timer `Enabled` applies to the web (C8/G13); `WebDisplay` (§5.4); the caption wrapper (§7.1); the Multiline tag (§7.4);
-`BorderStyle` CSS (§7.3); client-area insets (§7.5).
+conversion's suggestions (§8.3) and by the node stub tier of the gate (§11.1). ⚠ That tier asserts ONLY what `DomMember`
+states; **Edge remains the gate that can fail** on real rendering and behaviour.
 
 ## 11. Testing
 
-Every Edge / WinForms-window test: `[Category("Integration")]`, Windows-gated, and SKIPS with a reason where Edge or the
-Windows Desktop SDK is absent (CLAUDE.md). Node-tier tests run everywhere.
+Edge / WinForms-window tests: `[Category("Integration")]`, Windows-gated, SKIP with a reason where absent. Node-tier tests run
+everywhere.
 
 ### 11.1 Catalog-coverage gate (O4, O9)
-Driven from the catalog (never a hand `[TestCase]` list): for every web kind, one generated shared program that sets
-every property that applies to BOTH targets to the sweep's sample value (C13, :601-610), reads it back and prints it, and
-wires every listed event.
-- **Compiles** for desktop (real CLI `--target=csharp` + csc, as `WinFormsCatalogSweepTests`) and for the web (real CLI,
-  JavaScript).
-- **Runs** on both and reads the values back: desktop in the WinForms reference window (Task 12 harness); web in Edge
-  (Task 13 harness) — the authority — and under node with a recording stub DOM (fast tier) that also asserts each
-  property's `DomMember` write (§10.3).
-- **Events:** each listed event is triggered once on each side and its handler runs once with `sender` = the control.
-- **Web-only rows** (GroupName, MultiSelect) compile and run on the web only, inside `#If WEB`; **WinForms-only rows**
-  referenced from shared code are the §5.9 web-build error, asserted by name.
-- A new catalog row with no library member fails this gate — "add a row" stays the whole workflow.
+Catalog-driven (no hand `[TestCase]` list): per web kind, a generated shared program that sets every property applying to
+BOTH targets to the sweep's sample value (C14), reads it back and prints it, and wires every listed event.
+- **Compiles** for desktop (real CLI `--target=csharp` + csc) and web (real CLI, JavaScript).
+- **Runs** both and reads values back: WinForms reference window (Task 12 harness) and **Edge (Task 13 harness) — the
+  authority**; plus a fast node tier with a recording stub DOM that asserts only each property's `DomMember` write.
+- **Events:** each listed event triggered once per side; handler runs once, `sender` = the control.
+- Web-only rows run on the web inside `#If WEB`; WinForms-only rows in shared code are `WebUnavailableMember`, asserted by name.
+- Slice 3's and slice 5's rows join automatically when they land.
 
-### 11.2 The behaviour twin (O9)
-The same form (a pixel `.blform` and its Canvas `.blwebform` twin, piece 1's retarget) and the SAME code-behind text, run
-in the real WinForms window and in Edge, driven by one neutral scenario: set Text; toggle Visible/Enabled/Checked; click;
-type; select; move a Right-anchored control at run time, then resize the window. Compared: property values read back, every
-control's rectangle (±1px, form-client coordinates, piece 1's walk), and the EVENT LOG (sender, event, key args) — order
-and counts.
-- Input is real on both sides **[impl — the riskiest harness decision]**: WinForms by window messages
-  (`WM_LBUTTONDOWN`/`UP`, `WM_KEYDOWN`/`WM_CHAR`/`WM_KEYUP` to the control handle — what Task 8 used for Click); Edge by
-  the DevTools protocol's `Input.dispatchMouseEvent`/`dispatchKeyEvent`/`insertText` over `--remote-debugging-port`
-  (trusted events). Synthetic `dispatchEvent` is the fallback only where CDP cannot express a step, and every step that
-  uses it is named in the test.
-- Recorded divergences are asserted as literals (a change turns the test red): NumericUpDown per-keystroke ValueChanged,
-  the centring half pixel (piece 1), GroupBox caption offsets beyond ±1px if any.
+### 11.2 The behaviour twin (O9, review I9)
+A pixel `.blform` and its Canvas `.blwebform` twin (piece 1's retarget), each with a code-behind whose **NON-REGION text is
+byte-identical** (asserted first — the regions legitimately differ until piece 3), run in the WinForms window and in Edge by
+one neutral scenario: set Text; toggle Visible/Enabled/Checked; click; type; select; move a Right-anchored control; change a
+Dock; resize a container with docked children; resize the window. Compared: values read back, every control's rectangle
+(±1px, form-client coordinates), and the EVENT LOG (sender, event, key args) — order and counts.
+- Real input both sides **[impl — the riskiest harness decision]**: WinForms by window messages (`WM_LBUTTONDOWN`/`UP`,
+  `WM_KEYDOWN`/`WM_CHAR`/`WM_KEYUP`); Edge by the DevTools protocol (`Input.dispatchMouseEvent`/`dispatchKeyEvent`/
+  `insertText`, trusted). Synthetic `dispatchEvent` only where CDP cannot express a step, each such step named.
+- Recorded divergences asserted as literals (NumericUpDown per-keystroke ValueChanged; the centring half pixel; MessageBox's
+  missing title).
 
-### 11.3 Anchor lock-step (O6)
-The library's axis rule (§5.7) run under node against `FormAnchorCss.Positioned` over one fixture table (all 16 edge
-combinations × near/far/centred offsets × negative sums × sizes ≤ 0), in the style of `FormDockScriptTests`. The client
-inset rule (§7.5) gets the same treatment against `FormDockScript.Core`.
+### 11.3 Lock-step (O6, O15)
+The library's anchor axis rule under node vs `FormAnchorCss.Positioned` over one table (16 edge combinations × near/far/
+centred × negative sums × sizes ≤ 0); the client-inset rule and the live-dock cases (§5.10) vs `FormDockLayout` through
+`FormDockScriptTests`.
 
-### 11.4 Rendering (Edge)
-Caption present and toggling once; legend in the frame; bordered Panel border and child offsets equal to the WinForms
-window (P10's table becomes EQUALITY, or each residual gap is re-recorded as a literal with its measurement); GroupBox
-positioned children uninset and docked children inside 3/19/3/3; radios exclusive per container; a disabled Panel's
-children disabled; `<textarea>`/`type=password`; Visible toggle incl. the phone-container case (Q1).
+### 11.4 Rendering and style (Edge)
+Caption, legend, borders and child offsets vs the WinForms window (P11's table becomes equality, or each residual gap a
+literal); radios exclusive per container; enable targets; `<textarea>`/password; `hidden` at desktop and phone widths
+(incl. a design-hidden Panel shown on a phone); run-time geometry below the breakpoint does not un-stack; the §5.8
+performance assertion; `<b>x</b>` shown literally.
 
-### 11.5 Compiler (2.0)
-Per §4, on JS and C#, through the CLI and the IDE build; `CompileToCppOptimized` where a front-end change can reach C++.
+### 11.5 Compiler and editor (2.0)
+Per §4, on JS and C#, CLI and IDE; the Decimal .NET-computed table; the Char table; the LSP blanking session; the §4.13 probe;
+O19's golden test.
 
 ### 11.6 Code generation and conversion
-Portable region golden files per kind; the web-init ⊂ WinForms-init subset relation (§6.2) per catalog fixture; DOM-style
-regions, stubs and pages byte-for-byte unchanged; the library-inclusion trigger (a JS project without the `Using` line
-is byte-identical); conversion: convert (regions, simple handlers, Using/Inherits, Timer Enabled), each finding kind with
-its suggestion, non-simple handlers left alone and listed, decline = byte-identical, CLI and IDE produce the same bytes.
+Portable region golden files per kind; the style marker (scaffold writes it; malformed → BL8012; absent → DOM); the
+web-init = WinForms-init-minus-tagged-lines relation per catalog fixture, component exception included; DOM-style regions,
+stubs and pages byte-for-byte; the inclusion trigger (with and without `Using`, qualified-only); the WinForms `Name` line;
+conversion (convert, each finding, non-simple handlers left, decline byte-identical, CLI = IDE bytes).
 
 ### 11.7 Build errors
-BL8033 on both routes; `.Element` in a desktop build (field, parameter, `Me`); an unavailable member and an undeclared
-WinForms type in a web build, each message naming the member and suggesting `#If DESKTOP`; `#If WEB`/`#If DESKTOP` choosing
-correctly on each target; the library-collision error.
+`DesktopOnlyKind` on both routes; `ElementOnDesktop` (field, parameter, `Me`); `WebUnavailableMember` (member, type,
+MessageBoxButtons member); `RuntimeControlCreation`; `HandlerSignatureMismatch`; `PortableLibraryNameCollision`; `#If`
+choosing correctly per target and configuration.
 
-### 11.8 End to end
-Design a form in the IDE (real view, headless) → double-click a Button (stub `(sender As Object, e As EventArgs)`) → write
-a handler body that uses only the portable API → build web (CLI and IDE) and desktop → run both: the page (Edge) and the
-window show the same result of the click. And the owner's question "who calls it in a shipping build" (CLAUDE.md) for
-each new piece: the hook, the conversion offer (the real `OpenFileAsync` route), the CLI verb, the badges.
+### 11.8 End to end, and reachability
+Through the real IDE view (headless): "Add Web Form (portable)" (2a; the ordinary route in 2b) → drop controls →
+double-click a Button → write a handler using only the portable API → build web (CLI and IDE) and desktop → run both: page
+(Edge) and window show the same result. For each new piece, the test drives its shipping entry point: the hook (a real
+build), the command (generated command + AXAML binding), the conversion offer (`OpenFileAsync`), the CLI verb, the badges.
 
 ### 11.9 Reviews and mutations
-Per task: implementer, spec review, quality review, mutation checks on the load-bearing rules — the inclusion trigger;
-base-first order; `RemoveHandler` identity; `#If` prefix traps; the anchor axis (both sides); client insets; the
-`relatedTarget` rule; caption click de-duplication; programmatic-set events only on change; the style detector; decline
-byte-identity; the `.Element` receiver-name check.
+Per task: implementer, spec review, quality review, mutation checks — inclusion trigger; base-first order; RemoveHandler
+identity; `#If` prefix traps; DEBUG/RELEASE by configuration; line-preserving blanking; Decimal rounding/scale; the anchor
+axis (both sides); live-dock reads; reflow coalescing; client insets; relatedTarget; caption click de-dup; change-only
+events; the style marker; decline byte-identity; the `.Element` receiver-name check; the harness itself (never shown, wrong
+order of input).
 
-## 11a. Notes for the plan (reviewers)
-
-*(Left for the spec reviewers.)*
+## 11a. Review resolution (revision 2)
+| Finding | Where resolved |
+|---|---|
+| C1 code collisions | G15; codes named throughout, numbers in the plan |
+| C2 style detector | §6.1 (marker `style="portable"`, BL8012, scaffold passes it) |
+| C3 init order | G4; §6.2 definition + corrected sample; `Name` after `New` on both |
+| I1 reachability | §1 (opt-in command in 2a, default flip in 2b); §11.8 |
+| I2 slice-3 overlap | §10.1–10.2 (dependency; GroupBox left to slice 3) |
+| I3 LSP | §4.12 |
+| I4 DEBUG/RELEASE | O19; §4.1 |
+| I5 components | §6.2 exception; §5.12 |
+| I6 library traps | §3 M21–M25; §4.13; §5.1 idioms; F8 |
+| I7 phone + reflow | §5.8, §5.10; O10, O15 |
+| I8 sequencing | §0.4; §4 preamble |
+| I9 twin text | §11.2 |
+| Minors | G11 (`WinFormsEventArgs`, placement by style §6.2); P2/§5.4 ComboBox `title=`; §5.4 enable targets; §5.1 security; §5.1 trigger widened; §6.3 WinForms rehash; §5.10 `FormDock`; §9 `Selection`; §10.4/§11.1 Edge authority; O2 wording |
 
 ## 12. Risks
-- **The JS backend's traps are the library's substrate.** Every class of defect measured in §3 hits library code first;
-  2.0 fixes them, but the library will find more. Mitigation: the library is built and RUN under node from its first
-  commit, and every behaviour is pinned by the twin, never by string assertions (CLAUDE.md, "a green build is not a
-  running page").
-- **A hand-written library drifts from the catalog.** Mitigation: §11.1's gate, `DomMember`, and the collision error.
-- **Two mirrored pairs grow** (anchor axis; client insets in `FormDockScript.Core`). Mitigation: lock-step tests from the
-  first commit.
-- **Harness fidelity.** CDP and window-message input are new; a wrong harness can make both sides agree for the wrong
-  reason. Mitigation: mutation checks on the harness itself (as Task 12 did: never `Show()`n, measured before the resize).
-- **Canvas expectations move** (§7.5) on WinForms documents too; must be listed and intended, not rubber-stamped.
-- **`Char` (Q4) and `Decimal` (Q5)** may leave KeyPress and NumericUpDown with no spelling that compiles on both targets.
-- **The IDE drop**: the library under `IDE/lib/js/forms/` is load-bearing and hand-refreshed; a stale drop ships an old
-  library with a green build. Mitigation: the drop refresh step lists it; an Integration test compares drop and source
-  on the gate run.
-- **LSP**: the editor does not include `dom-core.bli` today (K2) and will not see the library either; completions on a
-  web form's controls will show nothing library-specific until that is added (Q9).
-- **Size**: the whole library is emitted into every opted-in page; no tree-shaking in this piece.
+- **The JS backend is the library's substrate**; 2.0 fixes what was measured, the library will find more. The library runs
+  under node from its first commit and every behaviour is pinned by the twin, never by strings.
+- **In-flight branches move the ground**: `fix/js-cross-file-calls` (the missing-member path), `fix/unknown-dock-diagnostic`
+  (codes, `FormDock`), slice 3 (rows, types, GroupBox), slice 5 (events). §0.4's re-measure step; codes by name; slice-3 rows
+  consumed, not duplicated.
+- **Exact Decimal on JS** is a numeric library of its own; wrong rounding would be a silent miscompile. The .NET-computed table
+  and its mutations are the guard.
+- **The reflow script becomes live** (§5.10): one half of piece 1's mirrored pair changes; its lock-step fixtures must grow in
+  the same commit.
+- **A hand-written library drifts from the catalog** — §11.1, `DomMember`, the collision error.
+- **Harness fidelity** — CDP and window messages are new; mutation checks on the harness itself.
+- **Canvas expectations move** (§7.5), on WinForms documents too — listed, intended.
+- **Every WinForms region rehashes** once (§6.3) — a large, intentional expectation diff.
+- **The IDE drop**: `IDE/lib/js/forms/` is load-bearing and hand-refreshed; a stale drop ships an old library green. The drop
+  step lists it; an Integration test compares drop and source on the gate run.
+- **Size**: the whole library ships in every opted-in page (no tree-shaking).
 
-## 13. Open questions for the owner
-1. **Q1 — `Visible` on containers below the phone breakpoint.** O6's explicit `display` overrides the phone rule's
-   `display: flex` for a container (§5.4). Keep O6's rule and accept the gap for containers on phones, or hide/show with
-   the `hidden` attribute (which the reflow script and the phone rule already honour, and which never writes `display`)?
-2. **Q2 — controls created at run time** (`Dim b As New Button(): Me.Controls.Add(b)`): out of scope (clear run-time
-   error), or in scope (the library creates the element — a second emitter of markup, mirrored with `FormAssetEmitter`)?
-3. **Q3 — methods.** Beyond §5.4's list, which WinForms methods should work on the web: `Show`/`Hide`, `BringToFront`/
-   `SendToBack`, `TextBox.Clear`/`SelectAll`, `MessageBox.Show` (→ the browser's alert), `Form.Close`? Default: none —
-   each is the §5.9 web-build error.
-4. **Q4 — `KeyPress.KeyChar`.** WinForms types it `Char`; the JS backend refuses `Char` (BL7004). Add `Char` support to
-   the JS backend (a one-character string), or ship KeyPress with `KeyChar As String` on the web (then shared code
-   comparing it to a `Char` literal compiles only on desktop)?
-5. **Q5 — NumericUpDown `Value`** is `Decimal` in WinForms and a Double on the web. Accept, or restrict the web control to
-   whole numbers as the catalog's defaults already are (FCC:1498-1501)?
-6. **Q6 — run-time `Dock` changes** on the web: web-build error in this piece (default), or re-dock through the reflow
-   script (its data would have to become live)?
-7. **Q7 — `DESKTOP` on C++/native targets**: defined for every non-web backend (default), or only for WinForms/C# builds?
-8. **Q8 — the catalog's event lists** (§10.1) are the property grid's slice-5 shape; land them here (default), or wait
-   for slice 5?
-9. **Q9 — editor support**: should the LSP include the library (and `dom-core.bli`) for web projects in this piece, or is
-   it a follow-up?
+## 13. Remaining open questions
+None blocking. Two reversible choices the owner may want to see: the opt-in command name "Add Web Form (portable)" for 2a
+(§1), and `MessageBox`'s caption shown as the dialog's first line (§5.5).
 
 ## 14. Out of scope, and seams left
-- **Piece 3** (toolbar switch, one file building both ways): the seam is §6.2's subset relation — the only target-specific
-  lines a portable file has are the WinForms init's geometry/property lines, ready to sit under `#If DESKTOP`.
-- **Piece 4** (retire `.blwebform`): the conversion function (§8.2) and the style detector are reusable by
-  convert-on-open; nothing here assumes `.blwebform` persists.
-- WinForms → web retarget still produces Grid (piece 4); run-time-created controls (Q2); tree-shaking; per-control phone
-  overrides; LSP library awareness (Q9); a `MessageBox` (Q3); DataGridView and the other desktop-only kinds on the web
-  (P-D6's "web versions arrive over time").
+- **Piece 3**: §6.2's tagged-line relation is the seam — the only target-specific lines a portable file has are the WinForms
+  init's geometry/property lines.
+- **Piece 4**: the conversion function and the style marker are reusable by convert-on-open; nothing assumes `.blwebform`
+  persists.
+- Run-time-created controls (O11); WinForms → web retarget still producing Grid; tree-shaking; per-control phone overrides;
+  desktop-only kinds on the web (P-D6's "web versions arrive over time"); the catalog event lists themselves (slice 5).
