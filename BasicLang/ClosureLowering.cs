@@ -507,6 +507,12 @@ namespace BasicLang.Compiler.IR
                 };
                 nf.Parameters = new List<IRVariable>(f.Parameters);
                 nf.LocalVariables = new List<IRVariable>(f.LocalVariables);
+                // ADR-0018 D1: the clone owns what the original owns — UserOwned (this pass's
+                // TakenNames, the MSIL backend's temp counter) reads it on the LOWERED module.
+                nf.ReservedNames.UnionWith(f.ReservedNames);
+                nf.ModuleReservedNames = f.ModuleReservedNames;   // E3: the one shared module-level set
+                nf.TracksReservedNames = f.TracksReservedNames;
+                nf.InheritTempRecordFrom(f);   // its values keep IsCompilerTemp; so does the record behind it
                 nf.GenericParameters = new List<string>(f.GenericParameters);
                 nf.GenericTypeParams = new List<BasicLang.Compiler.AST.GenericTypeParameter>(f.GenericTypeParams);
                 nf.CapturedVariables = new List<(string name, TypeInfo type)>(f.CapturedVariables ?? new List<(string, TypeInfo)>());
@@ -970,6 +976,13 @@ namespace BasicLang.Compiler.IR
                         Implementation = lambda,
                     });
                     lambda.IsLambda = false;
+
+                    // ⭐ ADR-0018 D1: the hoisted lambda starts with its parameters plus EVERY name of
+                    // the function that creates it — as that function stands now, this pass's own
+                    // environment locals and carriers included. Its body reads those names, and it
+                    // is a function of its own from here on. Over-reserving is safe.
+                    foreach (var p in lambda.Parameters) lambda.Reserve(p?.Name);
+                    lambda.ReservedNames.UnionWith(g.ReservedNames);
 
                     var lctx = new FunctionContext
                     {
@@ -2339,13 +2352,18 @@ namespace BasicLang.Compiler.IR
                     foreach (var (variable, carrier) in level.PerIteration)
                         list.Add(Store(level.LocalRef, level.Vars[variable.Name].Field, carrier, true, line));
                     g.LocalVariables.Add(level.LocalRef);
+                    g.Reserve(level.LocalRef.Name);   // ADR-0018 D1: every local this pass declares
 
                     if (level.PerIteration.Count == 0)
                     {
                         Prepend(body, list);
                         continue;
                     }
-                    foreach (var (_, carrier) in level.PerIteration) g.LocalVariables.Add(carrier);
+                    foreach (var (_, carrier) in level.PerIteration)
+                    {
+                        g.LocalVariables.Add(carrier);
+                        g.Reserve(carrier.Name);
+                    }
                     WrapIterationInTry(ctx, level, list, line);
                     rebuildEdges = true;
                 }
@@ -2428,6 +2446,9 @@ namespace BasicLang.Compiler.IR
 
                     g.LocalVariables.RemoveAll(l => l?.Name != null && fl.Holds(l.Name) && !ReferenceEquals(l, fl.LocalRef));
                     g.LocalVariables.Insert(0, fl.LocalRef);
+                    // ADR-0018 D1. A hoisted local keeps its reservation: it moved into a field, and
+                    // the name is still the program's.
+                    g.Reserve(fl.LocalRef.Name);
                 }
             }
 
