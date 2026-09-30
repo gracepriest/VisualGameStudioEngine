@@ -141,6 +141,13 @@ public sealed class FormDocument
         AllControls().Concat(Components).FirstOrDefault(c => string.Equals(c.Id, id, StringComparison.Ordinal));
 
     /// <summary>
+    /// The CONTAINER control <paramref name="control"/> is a child of, or null when it sits on the form itself (or is a
+    /// tray component, or is not in this document).
+    /// </summary>
+    public FormControl? ParentOf(FormControl control) =>
+        AllControls().FirstOrDefault(candidate => candidate.Children.Any(c => ReferenceEquals(c, control)));
+
+    /// <summary>
     /// The list <paramref name="control"/> lives in — this document's own, or its container's.
     ///
     /// <para>⚠ The list, not the parent control, because removing and re-adding are what callers

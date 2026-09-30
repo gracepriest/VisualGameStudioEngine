@@ -646,7 +646,10 @@ public partial class FormPropertyGridViewModel : ObservableObject
                     target,
                     _file?.DegradedReason(control.Id, property.Name),
                     RaiseEdited);
-                FormCompositeRows.Attach(row);
+                // A part of an ambient row starts from what this control INHERITS (code review I1).
+                var model = _file?.Model;
+                var name = property.Name;
+                FormCompositeRows.Attach(row, model == null ? null : () => FormAmbient.Inherited(model, control, name));
                 Rows.Add(row);
             }
         }

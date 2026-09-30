@@ -117,6 +117,89 @@ public class FormCompositeRowTests
         Assert.That(file.Model.FindById("btn")!.Properties["Font"], Is.EqualTo("Segoe UI, 9pt, style=Bold"));
     }
 
+    /// <summary>
+    /// ⛔ Code review I1 (2026-09-29): an inherited font's parts start from the font the control ACTUALLY inherits — the
+    /// nearest container's Font, else the Form's, else the catalog default — never the catalog default regardless. On a
+    /// form with <c>Segoe UI, 10pt, style=Bold</c>, ticking a Label's Italic used to write <c>Segoe UI, 9pt,
+    /// style=Italic</c>: the label shrank and lost its bold. VS writes <c>…10pt, style=Bold, Italic</c>.
+    /// </summary>
+    [Test]
+    public void APartOfAnInheritedFont_StartsFromTheFormsFont_NotTheCatalogDefault()
+    {
+        var file = FormDocumentReader.Read("F.blform", """
+            <Form Name="F" Version="1" Width="400" Height="300" Font="Segoe UI, 10pt, style=Bold">
+              <Controls>
+                <Label Id="lbl" X="16" Y="60" Width="100" Height="23" TabIndex="0" Text="Name"/>
+              </Controls>
+            </Form>
+            """);
+        var grid = new FormPropertyGridViewModel();
+        grid.Load(file);
+        grid.SelectedControl = file.Model.FindById("lbl");
+        var font = Top(grid, "Font");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Part(font, "Size").StringValue, Is.EqualTo("10"), "the parts show the inherited font");
+            Assert.That(Part(font, "Bold").BoolValue, Is.True);
+        });
+
+        Part(font, "Italic").BoolValue = true;
+
+        Assert.That(file.Model.FindById("lbl")!.Properties["Font"], Is.EqualTo("Segoe UI, 10pt, style=Bold, Italic"));
+    }
+
+    /// <summary>The NEAREST container's font wins over the Form's — a Button in a GroupBox inherits the GroupBox's.</summary>
+    [Test]
+    public void APartOfAnInheritedFont_StartsFromTheNearestContainersFont()
+    {
+        var file = FormDocumentReader.Read("F.blform", """
+            <Form Name="F" Version="1" Width="400" Height="300" Font="Segoe UI, 10pt, style=Bold">
+              <Controls>
+                <GroupBox Id="grp" X="8" Y="8" Width="200" Height="120" TabIndex="0" Text="Options" Font="Tahoma, 12pt">
+                  <Button Id="btn" X="16" Y="24" Width="75" Height="23" TabIndex="0" Text="Go"/>
+                </GroupBox>
+              </Controls>
+            </Form>
+            """);
+        var grid = new FormPropertyGridViewModel();
+        grid.Load(file);
+        grid.SelectedControl = file.Model.FindById("btn");
+        var font = Top(grid, "Font");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Part(font, "Name").StringValue, Is.EqualTo("Tahoma"));
+            Assert.That(Part(font, "Bold").BoolValue, Is.False, "the GroupBox's font, not the Form's bold");
+        });
+
+        Part(font, "Underline").BoolValue = true;
+
+        Assert.That(file.Model.FindById("btn")!.Properties["Font"], Is.EqualTo("Tahoma, 12pt, style=Underline"));
+    }
+
+    /// <summary>A container font nothing can read (Degraded) inherits nothing: the walk goes on up, to the Form's.</summary>
+    [Test]
+    public void AnUnreadableContainerFont_IsSkipped_AndTheFormsIsInherited()
+    {
+        var file = FormDocumentReader.Read("F.blform", """
+            <Form Name="F" Version="1" Width="400" Height="300" Font="Segoe UI, 10pt, style=Bold">
+              <Controls>
+                <Panel Id="pnl" X="8" Y="8" Width="200" Height="120" TabIndex="0" Font="Arial">
+                  <Button Id="btn" X="16" Y="24" Width="75" Height="23" TabIndex="0" Text="Go"/>
+                </Panel>
+              </Controls>
+            </Form>
+            """);
+        var button = file.Model.FindById("btn")!;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(file.Model.ParentOf(button)?.Id, Is.EqualTo("pnl"), "the fixture really nests the button");
+            Assert.That(FormAmbient.Inherited(file.Model, button, "Font"), Is.EqualTo("Segoe UI, 10pt, style=Bold"));
+        });
+    }
+
     /// <summary>A part's value the parent refuses (a family that could break out of a string) is refused — nothing written.</summary>
     [Test]
     public void APartValueTheParentRefuses_IsNotWritten_AndTheParentSaysWhy()

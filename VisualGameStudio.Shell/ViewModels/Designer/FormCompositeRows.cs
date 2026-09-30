@@ -16,11 +16,16 @@ namespace VisualGameStudio.Shell.ViewModels.Designer;
 public static class FormCompositeRows
 {
     /// <summary>Gives <paramref name="parent"/> its parts when its type has them; otherwise does nothing.</summary>
-    public static void Attach(FormPropertyRow parent)
+    /// <param name="inherited">
+    /// What the row's control INHERITS for this property when it sets none (<see cref="FormAmbient.Inherited"/> — the
+    /// nearest container's, else the Form's, else the catalog default). Null for a row with no parent to inherit from
+    /// (the Form's own rows): its parts then start from the Form row's catalog default.
+    /// </param>
+    public static void Attach(FormPropertyRow parent, Func<string?>? inherited = null)
     {
         var parts = parent.Definition?.Type switch
         {
-            FormPropertyType.Font => FontParts(parent),
+            FormPropertyType.Font => FontParts(parent, inherited),
             FormPropertyType.Padding => PaddingParts(parent),
             FormPropertyType.Size => SizeParts(parent),
             _ => null
@@ -51,19 +56,23 @@ public static class FormCompositeRows
     // ==================================================================
 
     /// <summary>
-    /// The font the parts start from when the row shows none (an ambient Font is absent and displays empty): the FORM's
-    /// WinForms default — what an ambient font inherits from — read from the catalog, never a second copy.
+    /// The font the parts start from when the row shows none (an ambient Font is absent and displays empty): the font the
+    /// control actually INHERITS — ⛔ code review I1: the catalog default regardless shrank a Label on a 10pt Bold form to
+    /// 9pt and dropped its bold the moment Italic was ticked. The Form row's catalog default only when there is nothing to
+    /// inherit from.
     /// </summary>
-    private static string BaseFont => FormControlCatalog.FormRoot.Property("Font")!.Default!;
+    private static string BaseFont(Func<string?>? inherited) =>
+        inherited?.Invoke() ?? FormControlCatalog.FormRoot.Property("Font")!.Default!;
 
-    private static FormFontValue? Font(FormPropertyRow parent) =>
+    private static FormFontValue? Font(FormPropertyRow parent, Func<string?>? inherited) =>
         FormFontValue.TryParse(parent.DisplayValue, out var font) ? font
-        : parent.DisplayValue.Length == 0 && FormFontValue.TryParse(BaseFont, out var fallback) ? fallback
+        : parent.DisplayValue.Length == 0 && FormFontValue.TryParse(BaseFont(inherited), out var fallback) ? fallback
         : null;
 
-    private static IReadOnlyList<FormPropertyRow> FontParts(FormPropertyRow parent)
+    private static IReadOnlyList<FormPropertyRow> FontParts(FormPropertyRow parent, Func<string?>? inherited)
     {
         string Style(FormFontValue f, Func<FormFontValue, bool> on) => on(f) ? "true" : "false";
+        FormFontValue? Font(FormPropertyRow row) => FormCompositeRows.Font(row, inherited);
 
         return new[]
         {

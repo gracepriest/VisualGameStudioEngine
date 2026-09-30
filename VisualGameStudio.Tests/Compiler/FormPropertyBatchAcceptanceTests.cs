@@ -238,8 +238,9 @@ public class FormPropertyBatchAcceptanceTests
             Assert.That(runOut, Does.Contain("CONTROL TextBox text='TextBox1'").And.Contain("placeholder='Your name' align=Center"));
             Assert.That(runOut, Does.Contain("CONTROL Button text='OK'").And.Contain("cursor=Hand padding=4,2,4,2"));
             Assert.That(runOut, Does.Contain("checkalign=MiddleRight"));
-            Assert.That(runOut, Does.Contain("CONTROL Label text='Name' italic=True bold=False"),
-                "the Font PART wrote a whole font — and an explicit control font does not inherit the Form's bold");
+            Assert.That(runOut, Does.Contain("CONTROL Label text='Name' italic=True bold=True"),
+                "the Font PART wrote a whole font starting from the one the Label INHERITS (the Form's 10pt Bold) — " +
+                "VS writes '…10pt, style=Bold, Italic' (code review I1)");
             Assert.That(runOut, Does.Contain("ENTER handled=True"), "Enter reached the AcceptButton");
             Assert.That(runOut, Does.Contain("HANDLER FIRED"), "the AcceptButton's Click handler ran — AcceptButton was wired to a live button");
             Assert.That(runOut, Does.Contain("DONE"));
