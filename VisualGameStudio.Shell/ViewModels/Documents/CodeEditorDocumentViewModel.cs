@@ -218,6 +218,17 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
         }
 
         Tray.Rebuild(file?.Model);
+
+        // ⛔⛔ The ONE selection store resets WITH the panels. Load above empties the grid — a reload
+        // is "start from nothing selected", the same rule as a Code-view edit, an undo and entering
+        // Design view — and every one of those routes can hand us a FRESH parse whose objects are
+        // not the ones Selection holds. Left behind, those are ghosts: the grid shows nothing while
+        // Cut copies the old parse's control and Paste brings it back (measured: a second button).
+        // Cleared, not re-resolved by id, because the grid does not re-resolve either.
+        // ⚠ AFTER Load: Load already nulled the grid, so the Changed this raises (the grid follows it
+        // in the constructor) finds nothing to change and the grid rebuilds exactly once. It also
+        // runs the Type Here leave-rule, which is right — the editor's host is from the old parse.
+        Selection.Clear();
     }
 
     /// <summary>
@@ -297,6 +308,12 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
     /// subscribes to. The grid write below is redundant when the selection actually changes and
     /// load-bearing when it does not: <c>Set</c> is a no-op for a control that is already the whole
     /// selection, and the grid must still show it.</para>
+    ///
+    /// <para>⚠ The one other place that writes the store here is <see cref="SyncDesignerPanels"/>,
+    /// which CLEARS it after <c>PropertyGrid.Load</c> empties the grid on a reload (a Code-view edit,
+    /// undo/redo, re-entering Design view), so the two never disagree about a control of an old parse.
+    /// The canvas's own gestures reach the store through its bound <c>Selection</c>, never by writing
+    /// the grid alone.</para>
     /// </summary>
     private void SelectInDesigner(BasicLang.Forms.FormControl? control)
     {
@@ -591,8 +608,9 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
             file.Model.ListContaining(control)?.Remove(control);
         }
 
+        // ⛔ The grid follows Selection.Changed (constructor) — never written here directly. The
+        // selection was non-empty (guarded above), so Clear always raises Changed.
         Selection.Clear();
-        PropertyGrid.SelectedControl = null;
         WriteDesignerEditBack();
     }
 
@@ -701,8 +719,9 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
         }
 
         file.Model.RenumberTabIndexes();
+        // ⛔ The grid follows Selection.Changed (constructor) — never written here directly. Every
+        // pasted control is a new object, so SetRange always changes the selection and raises it.
         Selection.SetRange(added);
-        PropertyGrid.SelectedControl = Selection.Primary;
         WriteDesignerEditBack();
     }
 

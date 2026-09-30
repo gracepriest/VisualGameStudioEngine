@@ -717,7 +717,7 @@ public class FormCanvasControl : Control
             return;
         }
 
-        SelectedControl = control;
+        SelectForGesture(control);
 
         // A double-click is its own gesture, not a selecting press: the click after it starts
         // afresh rather than reading as the "second click" of a rename.
@@ -812,6 +812,39 @@ public class FormCanvasControl : Control
         SelectedControl = selection.Primary;
     }
 
+    /// <summary>
+    /// What a right-click or a double-click does to the selection: it lands on <paramref name="hit"/>
+    /// THROUGH the one selection store, exactly as a left click does via <see cref="ApplyClickSelection"/>.
+    ///
+    /// <para>⛔⛔ Never <c>SelectedControl = hit</c> alone. SelectedControl is TwoWay-bound to the
+    /// property grid, so writing it without <see cref="Selection"/> made the grid show B while the
+    /// store still held A — and Cut, Delete and Arrange, which read the store, acted on A (the defect
+    /// CLAUDE.md's one-selection-store rule exists for).</para>
+    ///
+    /// <para>A control already in the selection keeps the group, as VS does for a right-click on one
+    /// member of a multi-selection; empty background clears it, which puts the form in the grid.</para>
+    /// </summary>
+    private void SelectForGesture(FormControl? hit)
+    {
+        var selection = Selection;
+        if (selection == null)
+        {
+            SelectedControl = hit;
+            return;
+        }
+
+        if (hit == null)
+        {
+            selection.Clear();
+        }
+        else if (!selection.Contains(hit))
+        {
+            selection.Set(hit);
+        }
+
+        SelectedControl = selection.Primary;
+    }
+
     private void BeginMarquee(Point point)
     {
         _marqueeOrigin = point;
@@ -845,7 +878,7 @@ public class FormCanvasControl : Control
         // moves the control the user was about to right-click.
         if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
         {
-            SelectedControl = _transform.HitTest(document, point, SelectedControl);
+            SelectForGesture(_transform.HitTest(document, point, SelectedControl));
             e.Handled = true;
             return;
         }
