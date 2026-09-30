@@ -103,6 +103,40 @@ public static class FormHandlers
                  !string.IsNullOrEmpty(b.Handler));
         var handler = bind?.Handler ?? NameFor(control.Id, eventName);
 
+        return Plan(form, codeText, eventName, handler, control.Definition?.DefaultEventDef?.WinFormsArgs, control.Definition);
+    }
+
+    /// <summary>
+    /// Plans the stub for ONE existing bind — the handler it names, with ITS event's signature.
+    ///
+    /// <para>⛔ The retarget's pair needs this for every bind that crossed, not only the default event's
+    /// (code review, 2026-09-29): a crossed non-default bind — a GroupBox's Click beside its Enter — wired a Sub the
+    /// pair never declared, and the retargeted form stopped compiling on both targets.</para>
+    /// </summary>
+    /// <returns>A plan, or a refusal when the bind names no handler or no event of the kind.</returns>
+    public static FormHandlerPlan PlanBind(FormDocument form, FormControl control, FormBind bind, string codeText)
+    {
+        var definition = control.Definition;
+        var evt = definition == null ? null : EventOn(definition, bind.Event, form.Target);
+        if (evt == null || string.IsNullOrEmpty(bind.Handler))
+        {
+            return Refuse(codeText,
+                $"'{control.Id}' has a bind on '{bind.Event}', which is not an event '{control.Kind}' has on " +
+                $"{Describe(form.Target)}, so no handler was written for it.");
+        }
+
+        return Plan(form, codeText, bind.Event, bind.Handler, evt.WinFormsArgs, definition);
+    }
+
+    /// <summary>The kind's event that <paramref name="name"/> names in <paramref name="target"/>'s vocabulary, or null.</summary>
+    private static FormEventDef? EventOn(FormControlDef definition, string name, FormTarget target) =>
+        definition.Events?.FirstOrDefault(e =>
+            string.Equals(FormEvents.NameOn(e, target), name, StringComparison.OrdinalIgnoreCase));
+
+    private static FormHandlerPlan Plan(
+        FormDocument form, string codeText, string eventName, string handler, string? winFormsArgs,
+        FormControlDef? definition)
+    {
         var index = new Recognizer.SourceIndex(codeText);
 
         var existing = FindDeclarationLine(index, handler);
@@ -130,15 +164,17 @@ public static class FormHandlers
                 "not written. Fix the '<vgs:designer>' markers and try again.");
         }
 
-        return Insert(form, codeText, index, init, eventName, handler, control.Definition);
+        return Insert(form, codeText, index, init, eventName, handler, winFormsArgs, definition);
     }
 
+    /// <param name="winFormsArgs">
+    /// The EVENT's <c>e</c> type on WinForms (Task 25; null means <c>EventArgs</c>): <c>DoWorkEventArgs</c> for a
+    /// BackgroundWorker — the <c>EventArgs</c> stub compiles by contravariance but cannot reach <c>e.Argument</c>.
+    /// ⚠ The event's, not the row's default event's: a non-default bind carries its own.
+    /// </param>
     /// <param name="definition">
-    /// The control's catalog row, which owns the stub's SIGNATURE (Task 25): the <c>e</c> type of
-    /// a WinForms handler (<c>DoWorkEventArgs</c> for a BackgroundWorker — the <c>EventArgs</c>
-    /// stub compiles by contravariance but cannot reach <c>e.Argument</c>), and whether a web
-    /// callback takes the event at all (a Timer's does not: <c>Window.setInterval</c> takes an
-    /// <c>Action</c> and refuses <c>Action(Of DomEvent)</c>, measured).
+    /// The control's catalog row, which says whether a web callback takes the event at all (a Timer's does not:
+    /// <c>Window.setInterval</c> takes an <c>Action</c> and refuses <c>Action(Of DomEvent)</c>, measured).
     /// </param>
     private static FormHandlerPlan Insert(
         FormDocument form,
@@ -147,6 +183,7 @@ public static class FormHandlers
         FormRegion init,
         string eventName,
         string handler,
+        string? winFormsArgs,
         FormControlDef? definition)
     {
         // ⚠ The file's own terminator, not the platform's. A stub inserted with the wrong one leaves
@@ -159,7 +196,7 @@ public static class FormHandlers
                 ? $"{indent}Private Sub {handler}()"
                 // ⛔ addEventListener will not accept anything but Action(Of DomEvent).
                 : $"{indent}Private Sub {handler}(e As DomEvent)"
-            : $"{indent}Private Sub {handler}(sender As Object, e As {definition?.WinFormsEventArgs ?? "EventArgs"})";
+            : $"{indent}Private Sub {handler}(sender As Object, e As {winFormsArgs ?? "EventArgs"})";
 
         var stub = new StringBuilder()
             .Append(signature).Append(newline)

@@ -134,19 +134,18 @@ public static class FormRetarget
 
         foreach (var control in document.AllControls().Concat(document.AllComponents()))
         {
-            // Every non-reserved bind that crossed is on the kind's DEFAULT event — that is the only
-            // kind Convert lets through — so PlanDefault names exactly the Sub it wires. A control with
-            // no such bind is skipped: a stub nothing wires is dead code. Components too: a web
-            // Timer's tick handler is the setInterval callback, and the stub is parameterless.
-            if (!control.Binds.Any(b => !b.UsesReservedDataBinding))
+            // ⛔ One stub per bind that crossed — ANY event wired on both targets crosses (pre-flight B1), so the
+            // default event's stub alone left a crossed non-default bind (a GroupBox's Click beside its Enter)
+            // wiring a Sub the pair never declared (code review 2026-09-29). A control with no bind gets no stub: a
+            // stub nothing wires is dead code. Components too: a web Timer's tick handler is the setInterval
+            // callback, and the stub is parameterless.
+            foreach (var bind in control.Binds.Where(b => !b.UsesReservedDataBinding).ToList())
             {
-                continue;
-            }
-
-            var plan = FormHandlers.PlanDefault(document, control, code);
-            if (plan.Outcome == HandlerOutcome.Created)
-            {
-                code = plan.CodeText;
+                var plan = FormHandlers.PlanBind(document, control, bind, code);
+                if (plan.Outcome == HandlerOutcome.Created)
+                {
+                    code = plan.CodeText;
+                }
             }
         }
 
