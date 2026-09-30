@@ -21,6 +21,7 @@ Every `file:line` anchor below was verified by reading the file on **`origin/mas
 Spec: `docs/superpowers/specs/2026-09-29-portable-control-library-design.md` (cited "spec §N"; owner decisions O1–O19 are §0.2–§0.3; measured facts M1–M25 are §3; the final review's notes are §11b).
 
 ### ⛔ Dependency: 2.0 starts only after `fix/js-cross-file-calls` lands
+✅ **Landed** — PR #146, merged at `6fbde6a5` (final head `214af384`). Confirmed and re-anchored in the **Task 0 RECORD**, whose corrections win over the anchors below.
 That branch (`40e9c172` + review fixes `3073435a`, head `098b4de9`) adds `ResolveTypeSymbol`, `TryResolveOtherUnitModuleBlockMember`, `LacksDeclaredMember`, `RecordDeclaredMembers`, `TypeInfo.DeclaredMemberNames`/`DeclaredBaseName` (`SymbolTable.cs:120`, `:123` [X]), sibling class shells that get their `BaseType` (pass 2, `SemanticAnalyzer.cs:≈604-630` [X]) and `CrossFileBindingTests` [X]. It rewrites the missing-member / .NET-fallback path that Tasks 7, 11 and 15 build on. **Task 0 confirms it is merged and re-measures.** If it is still unmerged, stop and report; do not rebase this work onto an unmerged branch.
 
 ### How to build and run tests (used by every task)
@@ -92,7 +93,7 @@ Design codes are referred to by NAME (`DesktopOnlyKind`, `DomUsageFinding`, `Mix
 
 **Files:** none modified (the probe script lives in `$sp`).
 
-- [ ] **Step 1: Confirm the dependency landed.**
+- [x] **Step 1: Confirm the dependency landed.**
 
 ```powershell
 git -C C:\Users\melvi\source\repos\VisualGameStudioEngine fetch origin
@@ -100,9 +101,9 @@ git -C C:\Users\melvi\source\repos\VisualGameStudioEngine merge-base --is-ancest
 ```
 `landed=0` is required. Anything else: stop and report.
 
-- [ ] **Step 2: Bring this branch up to master — trial first.** `git merge-tree` is NOT a conflict check here (CLAUDE.md). Trial in a detached worktree: `git worktree add --detach "$sp\wt-trial" HEAD`, `git -C "$sp\wt-trial" merge origin/master`, read the result, remove the worktree. Then do the real merge on `feat/portable-controls` (message file, `git commit -F`).
+- [x] **Step 2: Bring this branch up to master — trial first.** `git merge-tree` is NOT a conflict check here (CLAUDE.md). Trial in a detached worktree: `git worktree add --detach "$sp\wt-trial" HEAD`, `git -C "$sp\wt-trial" merge origin/master`, read the result, remove the worktree. Then do the real merge on `feat/portable-controls` (message file, `git commit -F`).
 
-- [ ] **Step 3: Build and record the baseline.**
+- [x] **Step 3: Build and record the baseline.**
 
 ```powershell
 dotnet build VisualGameStudio.Shell/VisualGameStudio.Shell.csproj -c Release
@@ -112,7 +113,7 @@ cmd /c "dotnet test VisualGameStudio.Tests\VisualGameStudio.Tests.csproj -c Rele
 ```
 Record for both, **with the base SHA**: total / passed / failed / skipped and the SORTED failure NAMES. Known fast-subset machine failures: `Emit_ReplacesAnImportedModuleThatAnotherHandleHasMapped`, `Emit_ReplacesAScriptThatAnotherHandleHasMapped`, `Emit_ReplacingAnImportedModule_LeavesNoTempFileBehind` (intermittent), `SearchSnippets_EmptyQuery_ReturnsAll`, `SearchSnippets_WhitespaceQuery_ReturnsAll`. Any other name is new at this base and goes into the record.
 
-- [ ] **Step 4: Re-measure the spec's rows on the merged tree.** Copy the probe programs of spec §3 into `$sp\p2probe\` (their sources are in the Appendix of this plan) and run each with the freshly built `BasicLang\bin\Release\net8.0\BasicLang.exe`: single files with `--target=javascript` then `node`, projects with `build Site.blproj`. Record, per row, "still reproduces" or "fixed by <sha>":
+- [x] **Step 4: Re-measure the spec's rows on the merged tree.** Copy the probe programs of spec §3 into `$sp\p2probe\` (their sources are in the Appendix of this plan) and run each with the freshly built `BasicLang\bin\Release\net8.0\BasicLang.exe`: single files with `--target=javascript` then `node`, projects with `build Site.blproj`. Record, per row, "still reproduces" or "fixed by <sha>":
 
 | Row | Probe | Measured on `bc29391e` (this plan) | Task |
 |---|---|---|---|
@@ -135,7 +136,90 @@ Record for both, **with the base SHA**: total / passed / failed / skipped and th
 
 A row that no longer reproduces: its task is reduced to its regression test (write the test, see it GREEN, commit it with "already fixed by <sha>"). Never delete a task silently.
 
-- [ ] **Step 5: Re-verify every anchor Tasks 1–27 cite** (search by the quoted code). Note any move in the task's first checkbox before starting it.
+- [x] **Step 5: Re-verify every anchor Tasks 1–27 cite** (search by the quoted code). Note any move in the task's first checkbox before starting it.
+
+### Task 0 RECORD — pre-flight on the merged tree (2026-09-30) · ⛔ these corrections WIN over the task text below
+
+**Base of every number here: `feat/portable-controls` @ `3c1713c8`** = the plan branch (docs only) merged with `origin/master` **`6fbde6a5`** (PR #146 `fix/js-cross-file-calls`, final head `214af384` — which had already merged `5b4ca51e`: #145 emission order, #163 DCE temps; plus #143 selection store, #144 Dock). `git diff 214af384 6fbde6a5` is empty.
+
+- [x] **Step 1 — the dependency landed.** `merge-base --is-ancestor` exit 0 for `40e9c172`, `098b4de9`, `214af384`, `5b4ca51e` against `origin/master` `6fbde6a5`. PR #146's later commits (`3073435a` review fixes — extension-method tolerance in `LacksDeclaredMember`, `Me.New` / file-level `Const` messages, CLAUDE.md rewrites — and the `5b4ca51e` merge) are all in.
+- [x] **Step 2 — merged.** Trial merge of `03b13887` + `origin/master` in `git worktree add --detach`: clean. Real merge `3c1713c8`: clean, no conflicts (the branch adds docs only).
+- [x] **Step 3 — baseline** (Shell and Tests built at project level, 0 errors).
+  - **Fast subset** (`TestCategory!=Integration`) on `3c1713c8`: **Total 9474 · Passed 9447 · Failed 8 · Skipped 19** (6 m 33 s). Sorted failure names:
+    `Emit_ReplacesAScriptThatAnotherHandleHasMapped` · `Emit_ReplacesAnImportedModuleThatAnotherHandleHasMapped` · `Emit_ReplacingAnImportedModule_LeavesNoTempFileBehind` · `EveryTextRoute_UsesTheFormatter_NeverToStringOrABareCout` · `Resolve_AgainstTheRealBasicLangServer_FillsLazyDocs` · `Save_CalledTwice_DoesNotWriteThePreEditDocumentBack` · `SearchSnippets_EmptyQuery_ReturnsAll` · `SearchSnippets_WhitespaceQuery_ReturnsAll`.
+    Six are the known machine rows (`ReadingAnMvidTakesNoLockOnTheFile`, also known, passed this time). The two others were environmental under load — the probe MSVC builds ran concurrently: `Resolve_AgainstTheRealBasicLangServer_FillsLazyDocs` = "Initialize timed out after 10 seconds" (the `--lsp` server never connected), `Save_CalledTwice_DoesNotWriteThePreEditDocumentBack` = `UnauthorizedAccessException` in `File.Move` (`XmlTextIO.SaveIfChanged`). **Re-run alone with `--no-build --filter`: 2/2 passed.** Neither is a product regression; treat both as intermittent machine rows when comparing later runs.
+  - **Named Integration set** (the Step 3 filter) on `3c1713c8`: **Total 262 · Passed 262 · Failed 0 · Skipped 0** (22 m 27 s — MSVC compiles dominate). No failure names.
+
+- [x] **Step 4 — re-measure** (fresh `BasicLang\bin\Release\net8.0\BasicLang.exe` of `3c1713c8`; probes copied to `$sp\p2probe\_run_merged\`; single files `--target=javascript` + node with the stub prelude, projects `build Site.blproj`; C# emission read from `--target=csharp`; C# / C++ projects built and their `Site.exe` RUN — the C++ route compiles with MSVC):
+
+| Row | Probe | On `6fbde6a5` | Task |
+|---|---|---|---|
+| M2 RemoveHandler no-op | `d` | **reproduces** — `clicked 1..4` | 12 |
+| M4 MyBase.Property recursion | `a` | **reproduces** — JS `RangeError: Maximum call stack size exceeded` at `this.Text = value`; C# emits `this.Text`, never `base.Text` | 13 |
+| M5 derived above base | `h` | fixed (runs: `Form1 Form`) | — (S5) |
+| M6 cross-file Inherits | `e2` (JS), `e3` (C#), **`e3cpp` (C++, new)**, `c3` (JS) | **reproduces on all THREE backends** — `Unknown base class 'Base'` + `MyBase can only be used in a class that inherits…` + `Cannot assign value of type 'D' to variable of type 'Base'` (C++ as `BL3001`); `c3`: `Unknown base class 'Form'`. `e1` (cross-file `New`) runs `base`. | 7 |
+| M7 `Using` + `Me.M()` | `v1`, `v2`, `u1` | **reproduces** — `no lowering for 'Me.Init'` / `'Me.InitializeComponent'`; `v3` (no `Using`) runs `init` | 11 |
+| M8 dotted Namespace | `b`, `b2`, `c` | **reproduces** — `b`: `Unexpected token at top level: '.'`; `b2`: `Cannot assign … 'System.Windows.Forms.Button' to … 'System.Windows.Forms.Control'`; `c` (project): `Cannot assign … 'Button' to … 'Control'` | 15 |
+| M9 `#If` | `i` | **reproduces** — `#Else without matching #IfDef or #IfNDef` | 1 |
+| M12 Enum member typing | `g`, `f2` | **reproduces** — `Cannot assign value of type 'Object' to variable of type 'Shade'` / `'MyKeys'` | 9 |
+| M13 handler signature | `w1` | **reproduces** — builds silently, runs `clicked 1..4` | 10 |
+| M16 class named `F` | `vF` (= `v3` with the class renamed `F`) | **FIXED on JS and C#** — JS runs `init`; C# project builds and runs `init`. (Claimed by `40e9c172`; not bisected.) The C++ project fails, but NOT because of the name — see C6. | none — chip `task_ef845b99` can be closed for JS/C# |
+| M18 Char | `j4` | **reproduces** — `BL7004` | 14 |
+| M20 Decimal | `j3` | **reproduces** — `BL7007` | 18–26 |
+| M21 Optional | `j2` | works (`x3`, `y3`, `z7`) | — |
+| M22 unqualified self-call | `j5` | works (`unqualified ok`) | — |
+| M23 lambda `Me.` | `j1d` | works (`hit`) | 16 (pinned) |
+| M24 `AddressOf Me.X` above | `j1a` | works (`above via Me 1`) | 16 (pinned) |
+| M25 `AddressOf Me.X` below | `j1c` | refused, same message (`Argument 2: cannot convert from 'Pointer To Pointer To Object' to 'Action<DomEvent>'`) | 16 (pinned) |
+
+  **No task is made unnecessary by master**: every row a task owns still reproduces. The only row that moved is M16, which no task owned.
+
+- [x] **Step 5 — anchor drift.** Only 8 files cited by Tasks 1–27 changed between the anchor bases and `6fbde6a5`: `IRBuilder.cs`, `IRNodes.cs`, `IROptimizer.cs`, `SemanticAnalyzer.cs`, `SymbolTable.cs` (BasicLang) and `CrossFileBindingTests.cs`, `InheritedMemberTests.cs`, `JsExecutionTierRosterTests.cs` (tests). **Every anchor in any other file (`CSharpBackend.cs`, `JavaScriptBackend.cs`, `CppCodeGenerator.cs`, `Preprocessor.cs`, `BasicLangLexer.cs`, `Parser.cs`, `Compiler.cs`, `Program.cs`, `BuildService.cs`, the LSP, `JsCapabilityChecker.cs`, the Forms files) is unchanged and stands.** Between `098b4de9` and `6fbde6a5` `SemanticAnalyzer.cs`, `SymbolTable.cs` and `CrossFileBindingTests.cs` did NOT change, so every **[X]** anchor in them stands verbatim (`SymbolTable.cs:120`/`:123`, `SemanticAnalyzer.cs:≈604-630`, `≈6421`, `:5908-5938`, `:6687-6720`, `CrossFileBindingTests.cs:149`). ⚠ But `CrossFileBindingTests` holds **26 test cases** (16 `[Test]` + 5 methods × 2 `[TestCase]`), not "17" — see C3. The **`bc29391e`** anchors in the changed files moved; each was mapped through the diff hunks AND re-found by its quoted code:
+
+| Task | Anchor as written (base) | Now on `6fbde6a5` | Verified by |
+|---|---|---|---|
+| S1, 5 | `IRBuilder.cs:3240` | **`:3281`** | `public void Visit(PreprocessorIfNode node)` |
+| S1, 5 | `SemanticAnalyzer.cs:9064` | **`:9424`** | `public void Visit(PreprocessorIfNode node)` |
+| S4, 13 | `IRBuilder.cs:2409-2425` (MyBase), `:2411-2413`, `:2423-2424` | **`:2450-2466`**, `:2452-2454`, `:2464-2465` | `public void Visit(MyBaseExpressionNode node)` at 2450 |
+| S5, 8 | `IRNodes.cs:1681` (`ClassesBaseFirst`; `IRModule` collections) | **`:1721`** (`class IRModule` at 1699) | quote |
+| S7, 10 | `SemanticAnalyzer.cs:8579-8632` `ValidateHandlerWiring` | **`:8939-8992`** | quote |
+| S7, 10 | `SemanticAnalyzer.cs:6146-6200` `Visit(ClassNode)` member loop | **`:6504-6558`** (`Visit(ClassNode)` at 6389) | `foreach (var member in node.Members)` at 6504 |
+| S7, 10 | `SemanticAnalyzer.cs:744-820` `PopulateClassMemberSignatures` | **`:776-852`** — still no `EventDeclarationNode` case | quote |
+| 10 | `SemanticAnalyzer.cs:8494-8524` `Visit(EventDeclarationNode)`, `:8507-8510`, `:8514` | **`:8854-8884`**, `:8867-8870`, **`:8874`** (`GetType("EventHandler")`) | quote |
+| S9, 26 | `IROptimizer.cs:1829-1872` fold arms, `:1829` `FoldAdd`, `:1802` decimal skip | **`:1838-1881`**, **`:1838`**, **`:1811`** — still no decimal arm anywhere (S9 holds) | quote |
+| §-list 6, 18 | `SemanticAnalyzer.cs:2189-2210` `TryRetypeLiteralToDecimal` | **`:2245-2266`** | quote |
+| §-list 7, 18 | `SemanticAnalyzer.cs:1557-1602` conversion functions | **`:1613-1658`** (`CDbl` 1619, `CBool` 1658) | quote |
+| 18 | `SemanticAnalyzer.cs:440` `CommonNetTypes` | **`:434`** (the declaration; `:440` pointed into the set) | quote |
+| §-list 9, 11, 15 | `IRBuilder.cs:6636-6656` `IsKnownNetStaticType`, `:6649` | **`:6677-6697`**, **`:6690`** (`u.IsNetNamespace`) | quote |
+| §-list 9, 15 | `IRBuilder.cs:5914`, `:5941` | **`:5955`** (`bool isNetType = …`), **`:5982`** (`isStaticCall = (exactClassMatch || isNetType) && !isLocalOrParam;`) | quote |
+| 11 | `IRBuilder.cs:5905-5942` call-routing block | **`:5946-5983`** | quotes |
+| §-list 10, 11–16, 19 | `JsExecutionTierRosterTests.cs:470-471`, pin **94** | **`:479-480`, pin 96** | read |
+| 7 | `SemanticAnalyzer.cs:6060-6098` (`bc29391e`) `Visit(ClassNode)` base block | **`:6418-6456`**; the quote `var baseType = _typeManager.GetType(node.BaseClass);` is at **`:6421`** (= the [X] number) | quote |
+| 7 | `SemanticAnalyzer.cs:5593-5630` `RegisterClassBases` | **`:5951-5988`**; its lookup is `var baseType = _typeManager.GetType(cls.BaseClass);` at **`:5959`** (variable `cls`) | quote |
+| 8 | `IRBuilder.cs:2485` lambda `ModuleName` | **`:2526`** | quote |
+| 9 | `SemanticAnalyzer.cs:592` sibling loop | **`:604`** (`RegisterSiblingClassShell(classNode, unit)`) | quote |
+| 9 | `SemanticAnalyzer.cs:6329-6362` `Visit(EnumNode)` | **`:6687-6720`** (= the [X] number) | quote |
+| 9 | `SemanticAnalyzer.cs:11418-11638` `BindMemberAccess`, `:11569`, `:11615` | **`:11778-12041`**, **`:11951`** (`objectType.ResolveMember`), `:12008` — these were `bc29391e` numbers despite the line's [X] tag | quote |
+| 13 | `IRNodes.cs:2457` `IRFieldAccess`, `:2515` `IRFieldStore` | **`:2497`**, **`:2555`** | quote |
+| 13 | `IRBuilder.cs:5655` member read, `:4906` member store | **`:5696`**, **`:4947`** | quotes |
+| 15 | `SemanticAnalyzer.cs:2927` `ResolveTypeName` | **`:2983`** (`ResolveTypeSymbol` at 3066) | quote |
+| 15 | `SemanticAnalyzer.cs:7118-7128` the `UsingDirectiveNode` marking | **`:7476-7486`** (method at 7442) | quote |
+| 15 | `Visit(NamespaceNode)` `:5973-5986` (it is `SemanticAnalyzer.cs`, not `IRBuilder.cs`) | **`:6331-6344`** | quote |
+| 18 | `IRBuilder.cs:5412-5417` Decimal `IRConstant` | **`:5453-5458`** | quote |
+| 20A | `IRBuilder.cs:5236-5239` `new IRCompare(tempName, cmpKind, …)` | **`:5277`** | quote |
+| 22 | `SemanticAnalyzer.cs:2260-2264` `IsDecimalFloatingMix` | **`:2316-2320`** | quote |
+| 22 | `SymbolTable.cs:905-912` `GetCommonType` | **`:907`** — unchanged (this one was a `098b4de9` number) | quote |
+
+  Unchanged and re-confirmed in passing: `SemanticAnalyzer.cs:390` (`_netNativeBackend`), `CSharpBackend.cs:240` / `:415` / `:496` / `:3451` / `:3637` / `:3776` / `:3841` / `:3869` / `:4017` / `:4711`, and `EmitCastText` starts at **`CSharpBackend.cs:4443`** (the [X] number; "≈4467-4498 on `5b4ca51e`" is the rounding rule inside it — `CSharpBackend.cs` has not changed since `bc29391e`, so both are the same code).
+
+**Corrections to Tasks 1–27 (these WIN):**
+
+- **C1 — the dependency section and the header's "⚠ Master has since moved to `5b4ca51e`" are resolved**: the branch is on `6fbde6a5`; use the table above, never the old numbers.
+- **C2 — the JS roster pin is 96** (`JsExecutionTierRosterTests.cs:479-480`). Every "`RosterIsPinned` +1" in Tasks 11–14, 16, 19 starts from the number read that day (96 now).
+- **C3 — Task 7 Step 2's RED is broader than written**: the defect reproduces on C++ too (`e3cpp`, `BL3001`), so all three `RunsOnEveryBackend` legs go red for the same reason, not only JS and C#. `RegisterClassBases`' variable is `cls` (Step 3's "keep its own name"). Step 2's "the existing 17 stay green" and Step 4's "all 17 + 5 new" read **26** and **26 + 5** (the fixture has 26 test cases on `6fbde6a5`; 17 was a miscount — the file is unchanged since `098b4de9`).
+- **C4 — Task 7 / Task 13 C++ legs: a PRE-EXISTING C++ defect can masquerade as their red.** Measured on `6fbde6a5`, project route, MSVC: `Me.X()` calling a `Sub` declared **BELOW** the call in the same class emits `void* t0 = {}; … t0 = this->Init();` → **MSVC `C2440: '=': cannot convert from 'void' to 'void *'`**. Unqualified `Init()` below, and `Me.Init()` above, both build and run (`init`). Independent of `Inherits` and of the class name. It is not a premise of any task (C++ is not a forms target), but Task 7's `DerivedFile` calls `Me.Hello()` on an inherited Sub and Task 13's rows may call `Me.` members: if a C++ leg fails with that C2440 after the task's own fix, it is this defect — isolate it with the three shapes above and report it; do not fold a fix into Task 7/13 without the coordinator's say. (New chip candidate.)
+- **C5 — M16 no longer reproduces on JS/C#.** The trap "never name a probe class `F`" is now only a caution; chip `task_ef845b99` can be closed for JS and C# (its C++ symptom is C4).
+- **C6 — no task is removed.** M2, M4, M6, M7, M8, M9, M12, M13, M18, M20 all reproduce; M25 is still refused (Task 16 pins it). Task 8 (C# container naming) was not in Task 0's table; `CSharpBackend.cs` is unchanged since `bc29391e`, so its measured premise stands untouched.
 
 ---
 
