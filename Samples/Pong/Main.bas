@@ -8,7 +8,14 @@ Const PADDLE_WIDTH = 20
 Const PADDLE_HEIGHT = 100
 Const BALL_SIZE = 15
 Const PADDLE_SPEED = 400.0
-Const BALL_SPEED = 350.0
+Const BALL_SPEED As Single = 350.0
+
+' Key codes (GLFW/raylib values, declared the way the other samples declare them)
+Const KEY_SPACE As Integer = 32
+Const KEY_S As Integer = 83
+Const KEY_W As Integer = 87
+Const KEY_DOWN As Integer = 264
+Const KEY_UP As Integer = 265
 
 ' Game state
 Dim player1Y As Single = 250
@@ -22,41 +29,40 @@ Dim score2 As Integer = 0
 Dim gameOver As Boolean = False
 
 Sub Main()
-    Framework_Initialize(SCREEN_WIDTH, SCREEN_HEIGHT, "Pong")
-    Framework_SetFixedStep(1.0 / 60.0)
+    GameInit(SCREEN_WIDTH, SCREEN_HEIGHT, "Pong")
 
-    While Not Framework_ShouldClose()
+    While Not GameShouldClose()
         Update()
         Draw()
     End While
 
-    Framework_Shutdown()
+    GameShutdown()
 End Sub
 
 Sub Update()
-    Dim dt = Framework_GetDeltaTime()
+    Dim dt = GameGetDeltaTime()
 
     If gameOver Then
-        If Framework_IsKeyPressed(KEY_SPACE) Then
+        If IsKeyPressed(KEY_SPACE) Then
             ResetGame()
         End If
         Return
     End If
 
     ' Player 1 controls (W/S keys)
-    If Framework_IsKeyDown(KEY_W) Then
-        player1Y -= PADDLE_SPEED * dt
+    If IsKeyDown(KEY_W) Then
+        player1Y -= CSng(PADDLE_SPEED * dt)
     End If
-    If Framework_IsKeyDown(KEY_S) Then
-        player1Y += PADDLE_SPEED * dt
+    If IsKeyDown(KEY_S) Then
+        player1Y += CSng(PADDLE_SPEED * dt)
     End If
 
     ' Player 2 controls (Up/Down arrows)
-    If Framework_IsKeyDown(KEY_UP) Then
-        player2Y -= PADDLE_SPEED * dt
+    If IsKeyDown(KEY_UP) Then
+        player2Y -= CSng(PADDLE_SPEED * dt)
     End If
-    If Framework_IsKeyDown(KEY_DOWN) Then
-        player2Y += PADDLE_SPEED * dt
+    If IsKeyDown(KEY_DOWN) Then
+        player2Y += CSng(PADDLE_SPEED * dt)
     End If
 
     ' Clamp paddle positions
@@ -77,19 +83,19 @@ Sub Update()
     ' Player 1 paddle (left side)
     If ballX <= PADDLE_WIDTH + 30 And ballX >= 30 Then
         If ballY + BALL_SIZE >= player1Y And ballY <= player1Y + PADDLE_HEIGHT Then
-            ballVX = Abs(ballVX)  ' Bounce right
+            ballVX = CSng(Abs(ballVX))  ' Bounce right
             ' Add spin based on where ball hits paddle
             Dim hitPos = (ballY - player1Y) / PADDLE_HEIGHT
-            ballVY = (hitPos - 0.5) * BALL_SPEED
+            ballVY = CSng((hitPos - 0.5) * BALL_SPEED)
         End If
     End If
 
     ' Player 2 paddle (right side)
     If ballX + BALL_SIZE >= SCREEN_WIDTH - PADDLE_WIDTH - 30 And ballX <= SCREEN_WIDTH - 30 Then
         If ballY + BALL_SIZE >= player2Y And ballY <= player2Y + PADDLE_HEIGHT Then
-            ballVX = -Abs(ballVX)  ' Bounce left
+            ballVX = -CSng(Abs(ballVX))  ' Bounce left
             Dim hitPos = (ballY - player2Y) / PADDLE_HEIGHT
-            ballVY = (hitPos - 0.5) * BALL_SPEED
+            ballVY = CSng((hitPos - 0.5) * BALL_SPEED)
         End If
     End If
 
@@ -109,10 +115,10 @@ Sub Update()
 End Sub
 
 Sub ResetBall()
-    ballX = SCREEN_WIDTH / 2
-    ballY = SCREEN_HEIGHT / 2
+    ballX = CSng(SCREEN_WIDTH / 2)
+    ballY = CSng(SCREEN_HEIGHT / 2)
     ballVX = BALL_SPEED * If(ballVX > 0, -1, 1)
-    ballVY = (Rnd() - 0.5) * BALL_SPEED
+    ballVY = CSng((Rnd() - 0.5) * BALL_SPEED)
 End Sub
 
 Sub ResetGame()
@@ -129,34 +135,34 @@ Function Clamp(value As Single, min As Single, max As Single) As Single
 End Function
 
 Sub Draw()
-    Framework_BeginDrawing()
-    Framework_ClearBackground(20, 20, 30, 255)
+    GameBeginFrame()
+    ClearBackground(20, 20, 30)
 
     ' Draw center line
     For i = 0 To SCREEN_HEIGHT Step 30
-        Framework_DrawRectangle(SCREEN_WIDTH / 2 - 2, i, 4, 15, 100, 100, 100, 255)
+        DrawRectangle(SCREEN_WIDTH / 2 - 2, i, 4, 15, 100, 100, 100, 255)
     Next
 
     ' Draw paddles
-    Framework_DrawRectangle(30, player1Y, PADDLE_WIDTH, PADDLE_HEIGHT, 255, 255, 255, 255)
-    Framework_DrawRectangle(SCREEN_WIDTH - 30 - PADDLE_WIDTH, player2Y, PADDLE_WIDTH, PADDLE_HEIGHT, 255, 255, 255, 255)
+    DrawRectangle(30, player1Y, PADDLE_WIDTH, PADDLE_HEIGHT, 255, 255, 255, 255)
+    DrawRectangle(SCREEN_WIDTH - 30 - PADDLE_WIDTH, player2Y, PADDLE_WIDTH, PADDLE_HEIGHT, 255, 255, 255, 255)
 
     ' Draw ball
-    Framework_DrawRectangle(ballX, ballY, BALL_SIZE, BALL_SIZE, 255, 200, 0, 255)
+    DrawRectangle(ballX, ballY, BALL_SIZE, BALL_SIZE, 255, 200, 0, 255)
 
     ' Draw scores
-    Framework_DrawText($"{score1}", SCREEN_WIDTH / 4, 50, 60, 255, 255, 255, 255)
-    Framework_DrawText($"{score2}", 3 * SCREEN_WIDTH / 4, 50, 60, 255, 255, 255, 255)
+    DrawText($"{score1}", SCREEN_WIDTH / 4, 50, 60, 255, 255, 255, 255)
+    DrawText($"{score2}", 3 * SCREEN_WIDTH / 4, 50, 60, 255, 255, 255, 255)
 
     ' Draw game over message
     If gameOver Then
         Dim winner = If(score1 >= 10, "Player 1", "Player 2")
-        Framework_DrawText($"{winner} Wins!", SCREEN_WIDTH / 2 - 120, SCREEN_HEIGHT / 2 - 40, 40, 255, 255, 0, 255)
-        Framework_DrawText("Press SPACE to restart", SCREEN_WIDTH / 2 - 150, SCREEN_HEIGHT / 2 + 20, 24, 200, 200, 200, 255)
+        DrawText($"{winner} Wins!", SCREEN_WIDTH / 2 - 120, SCREEN_HEIGHT / 2 - 40, 40, 255, 255, 0, 255)
+        DrawText("Press SPACE to restart", SCREEN_WIDTH / 2 - 150, SCREEN_HEIGHT / 2 + 20, 24, 200, 200, 200, 255)
     End If
 
     ' Draw instructions
-    Framework_DrawText("P1: W/S  |  P2: Up/Down", 10, SCREEN_HEIGHT - 30, 18, 150, 150, 150, 255)
+    DrawText("P1: W/S  |  P2: Up/Down", 10, SCREEN_HEIGHT - 30, 18, 150, 150, 150, 255)
 
-    Framework_EndDrawing()
+    GameEndFrame()
 End Sub
