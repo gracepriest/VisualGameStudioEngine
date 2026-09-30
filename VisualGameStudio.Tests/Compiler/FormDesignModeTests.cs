@@ -25,6 +25,19 @@ public class FormDesignModeTests
     private static CodeEditorDocumentViewModel NewViewModel() =>
         new(new Mock<IFileService>().Object, new Mock<IEventAggregator>().Object);
 
+    /// <summary>
+    /// Selects through the ONE selection store and checks the grid followed. ⛔ Never
+    /// <c>PropertyGrid.SelectedControl</c> directly (CLAUDE.md) — these tests are of the view model's
+    /// write-back, not of the grid alone, and a direct write would let the two stores disagree.
+    /// </summary>
+    private static void Select(CodeEditorDocumentViewModel vm, FormControl? control)
+    {
+        Assert.That(control, Is.Not.Null, "fixture control not found");
+        vm.Selection.Set(control);
+        Assert.That(vm.PropertyGrid.SelectedControl, Is.SameAs(control),
+            "selecting through the selection store did not put the control in the property grid");
+    }
+
     private const string WebForm = """
         <WebForm Name="LoginForm" Version="1">
           <Controls>
@@ -157,7 +170,7 @@ public class FormDesignModeTests
         vm.Text = WebForm;
         vm.ToggleDesignModeCommand.Execute(null);
 
-        vm.PropertyGrid.SelectedControl = vm.DesignDocument!.FindById("btnLogin");
+        Select(vm, vm.DesignDocument!.FindById("btnLogin"));
         vm.PropertyGrid.Rows.Single(r => r.Name == "Text").StringValue = "Log in";
 
         Assert.That(vm.Text, Does.Contain("Log in"),
@@ -177,12 +190,13 @@ public class FormDesignModeTests
         vm.ToggleDesignModeCommand.Execute(null);
 
         var button = vm.DesignDocument!.FindById("btnLogin");
-        vm.PropertyGrid.SelectedControl = button;
+        Select(vm, button);
         vm.PropertyGrid.Rows.Single(r => r.Name == "Text").StringValue = "Log in";
 
         Assert.Multiple(() =>
         {
             Assert.That(vm.PropertyGrid.SelectedControl, Is.SameAs(button), "still the same control");
+            Assert.That(vm.Selection.Primary, Is.SameAs(button), "in the selection store too");
             Assert.That(vm.PropertyGrid.Rows, Is.Not.Empty, "and the grid still shows it");
             Assert.That(vm.DesignDocument!.FindById("btnLogin"), Is.SameAs(button),
                 "the canvas and the grid must still be looking at ONE object graph");
@@ -200,7 +214,7 @@ public class FormDesignModeTests
         vm.FilePath = "/tmp/LoginForm.blwebform";
         vm.Text = WebForm;
         vm.ToggleDesignModeCommand.Execute(null);
-        vm.PropertyGrid.SelectedControl = vm.DesignDocument!.FindById("btnLogin");
+        Select(vm, vm.DesignDocument!.FindById("btnLogin"));
 
         var before = vm.DesignModelRevision;
         vm.PropertyGrid.Rows.Single(r => r.Name == "Text").StringValue = "Log in";
@@ -216,7 +230,7 @@ public class FormDesignModeTests
         vm.FilePath = "/tmp/LoginForm.blwebform";
         vm.Text = WebForm;
         vm.ToggleDesignModeCommand.Execute(null);
-        vm.PropertyGrid.SelectedControl = vm.DesignDocument!.FindById("btnLogin");
+        Select(vm, vm.DesignDocument!.FindById("btnLogin"));
 
         var before = vm.DesignModelRevision;
         var row = vm.PropertyGrid.Rows.Single(r => r.Name == "Text");
@@ -234,14 +248,90 @@ public class FormDesignModeTests
         vm.FilePath = "/tmp/LoginForm.blwebform";
         vm.Text = WebForm;
         vm.ToggleDesignModeCommand.Execute(null);
-        vm.PropertyGrid.SelectedControl = vm.DesignDocument!.FindById("btnLogin");
+        Select(vm, vm.DesignDocument!.FindById("btnLogin"));
 
         vm.Text = WebForm.Replace("btnLogin", "btnRenamed");
 
         Assert.Multiple(() =>
         {
             Assert.That(vm.PropertyGrid.SelectedControl, Is.Null, "the old selection is gone");
+            Assert.That(vm.Selection.IsEmpty, Is.True,
+                "from the ONE selection store too — a control of the OLD parse left in Selection is a ghost " +
+                "the grid does not show and every command would act on");
             Assert.That(vm.DesignDocument!.FindById("btnRenamed"), Is.Not.Null);
+        });
+    }
+
+    /// <summary>
+    /// Re-entering Design view reloads the panels WITHOUT any text change, and the grid comes back
+    /// empty; the selection store must agree, or the canvas outlines (and every command acts on) a
+    /// control the grid is not showing.
+    /// </summary>
+    [Test]
+    public void ReenteringDesignView_TheSelectionAgreesWithTheEmptiedGrid()
+    {
+        var vm = NewViewModel();
+        vm.FilePath = "/tmp/LoginForm.blwebform";
+        vm.Text = WebForm;
+        vm.ToggleDesignModeCommand.Execute(null);
+        Select(vm, vm.DesignDocument!.FindById("btnLogin"));
+
+        vm.ToggleDesignModeCommand.Execute(null);
+        vm.ToggleDesignModeCommand.Execute(null);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(vm.PropertyGrid.SelectedControl, Is.Null, "the reload starts the grid from nothing selected");
+            Assert.That(vm.Selection.IsEmpty, Is.True, "and the ONE selection store agrees with it");
+        });
+    }
+
+    /// <summary>
+    /// ⛔ After a Code-view edit, a Cut acts on NOTHING stale. The id survives the edit, so a ghost
+    /// selection is invisible: the grid is empty, yet Cut used to copy the OLD parse's button (its old
+    /// caption) to the clipboard, remove nothing from the new document, and hand a stale copy to the
+    /// next Paste.
+    ///
+    /// <para>⚠ This drives the <c>vm.Text</c> SETTER, which re-parses and resets the panels at once. In
+    /// the IDE, typing goes through <c>UpdateTextFromEditor</c> and reaches that same reset when the user
+    /// returns to Design view — the same <c>SyncDesignerPanels</c>, reached later.</para>
+    /// </summary>
+    [Test]
+    public void AfterAnEditInCodeView_ViaTheTextSetter_CutAndPasteActOnNothingStale()
+    {
+        var vm = NewViewModel();
+        vm.FilePath = "/tmp/LoginForm.blwebform";
+        vm.Text = WebForm;
+        vm.ToggleDesignModeCommand.Execute(null);
+        Select(vm, vm.DesignDocument!.FindById("btnLogin"));
+
+        vm.Text = WebForm.Replace("Sign in", "Log in");
+        var afterEdit = vm.Text;
+
+        // ⚠ The designer clipboard is STATIC (one per IDE session), so seed it with a known control from
+        // ANOTHER document — a Cut of the ghost would overwrite it with the old parse's button.
+        var seed = NewViewModel();
+        seed.FilePath = "/tmp/SeedForm.blwebform";
+        seed.Text = WebForm.Replace("btnLogin", "seed").Replace("Sign in", "SEED");
+        seed.ToggleDesignModeCommand.Execute(null);
+        Select(seed, seed.DesignDocument!.FindById("seed"));
+        seed.CopyControlsCommand.Execute(null);
+
+        vm.CutControlsCommand.Execute(null);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(vm.Text, Is.EqualTo(afterEdit), "nothing was selected, so Cut changes nothing");
+            Assert.That(vm.DesignDocument!.Controls.Single().Properties["Text"], Is.EqualTo("Log in"));
+        });
+
+        vm.PasteControlsCommand.Execute(null);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(vm.Text, Does.Contain("SEED"), "the clipboard still holds the seeded control");
+            Assert.That(vm.Text, Does.Not.Contain("Sign in"),
+                "the old parse's caption never comes back — the Cut copied nothing stale");
         });
     }
 
@@ -260,7 +350,7 @@ public class FormDesignModeTests
         }
 
         vm.ToggleDesignModeCommand.Execute(null);
-        vm.PropertyGrid.SelectedControl = vm.DesignDocument!.FindById("btnLogin");
+        Select(vm, vm.DesignDocument!.FindById("btnLogin"));
 
         var texts = new List<string>();
         vm.PropertyChanged += (_, e) => { if (e.PropertyName == nameof(vm.Text)) texts.Add(vm.Text); };

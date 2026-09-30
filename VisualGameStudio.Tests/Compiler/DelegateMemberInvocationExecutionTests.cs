@@ -719,13 +719,14 @@ public class DelegateMemberInvocationExecutionTests
     // ============================================================================================
 
     /// <summary>
-    /// t155edge/P8: a bare field call (<c>Click()</c>) directly AND from inside a lambda
-    /// (<c>Dim again = Sub() Click()</c>) in the SAME method. #188 makes this COMPILE on C++ for
-    /// the first time (it used to fail with the "assigning to 'void *'" defect); once it compiles,
-    /// it exposes #140 (a C++ lambda captures its enclosing object BY COPY, not by reference), so
-    /// the lambda's own call mutates a stale copy of <c>n</c> and the count is lost. A silent WRONG
-    /// ANSWER (2 expected), not a build failure — the caveat the implementer's own commit message
-    /// names. If this ever prints 2, #140 has been fixed — update this pin deliberately.
+    /// ⭐ MOVED PIN (ADR-0016 D3/W2, task #170). t155edge/P8: a bare field call (<c>Click()</c>)
+    /// directly AND from inside a lambda (<c>Dim again = Sub() Click()</c>) in the SAME method.
+    /// #188 makes this COMPILE on C++ for the first time (it used to fail with the "assigning to
+    /// 'void *'" defect); once it compiled, it exposed #140 (a C++ lambda captures its enclosing
+    /// object BY COPY, not by reference) and USED TO silently print 0 for 2. #170's capability
+    /// check now REFUSES it by name (arm (a): the lambda assigned to <c>b.Click</c> writes
+    /// <c>Main</c>'s captured <c>n</c> directly) rather than compiling it wrong. If this ever
+    /// prints 2, #140 has been fixed — update this pin deliberately.
     /// </summary>
     private const string P8 = """
         Class Btn
@@ -746,12 +747,12 @@ public class DelegateMemberInvocationExecutionTests
         """;
 
     [Test]
-    public void P8_FieldCalledDirectlyAndFromALambda_Cpp_PinsTodaysWrongCount_Against140()
+    public void P8_FieldCalledDirectlyAndFromALambda_Cpp_RefusedByName_PinnedForTask140()
     {
-        var cpp = BclE2E.CompileToCppOptimized(P8);
-        Assert.That(Norm(BclE2E.CompileRun(cpp)), Is.EqualTo("0"),
-            "if this now prints 2, #140 (C++ captures the enclosing object by copy) has been " +
-            "fixed — update this pin deliberately");
+        var ex = Assert.Throws<CppCapabilityException>(() => BclE2E.CompileToCppOptimized(P8));
+        Assert.That(ex!.Message, Does.Contain("captures 'n' of 'Main'").And.Contain("#140"),
+            "if this stops refusing, #140 (C++ captures the enclosing object by copy) has been " +
+            "fixed — update this pin deliberately.\n" + ex.Message);
     }
 
     /// <summary>

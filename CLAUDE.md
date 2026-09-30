@@ -122,7 +122,13 @@ Pipeline: `Preprocessor.cs` → `BasicLangLexer.cs` → `Parser.cs` → `Semanti
 Backends: `CSharpBackend.cs`, `LLVMBackend.cs`, `MSILBackend.cs`, `CppCodeGenerator.cs`
 (+ `CppCapabilityChecker.cs`). Resolution/types: `ModuleResolver.cs`,
 `ModuleTypeWalker.cs`, `TypeMapper.cs`. LSP: `BasicLang/LSP/` (server +
-per-feature handlers, `CompletionService.cs`).
+per-feature handlers, `CompletionService.cs`). `MyBase.New(...)` is an `IRBaseConstructorCall`
+**instruction** ending the constructor's entry-block prologue (ADR-0016) — not a list on
+`IRConstructor`; a use with no home in any block is invisible to every pass.
+`IRValue.IsCompilerTemp`, set only by `IRBuilder.MarkCompilerTemps`, is the dead-code pass's
+removal licence (ADR-0017): a temp is never recognized by spelling (a user may name a variable
+`t5`, `T5` or `_tmp1`), and a pass that mints a temp must mint through `IRFunction.GetNextTempName`
+and set the flag.
 
 ## Form designer (`BasicLang/Forms/`, `VisualGameStudio.Shell/Controls/`)
 
@@ -278,43 +284,38 @@ a second document type.
   module's members to bare globals while emitting the call site qualified**, so the script referenced
   an object that appears nowhere in the file. No string assertion can see that. `FormBuildEmissionTests`
   now RUNS the emitted script under node. The dispatch is generated as `Public Class` + `Public Shared
-  Sub`, which emits a real `class` with a `static` member. The backend bug itself is UNFIXED
-  (`docs/form-designer-followups.md` 14) and will bite anyone calling a module across files.
-- ⛔⛔ **An UNQUALIFIED call to the enclosing class's own method is a runtime `ReferenceError` on the
-  JavaScript backend** — it emits a **bare global** where it must emit `this.M()`. Green build,
-  *"Compilation successful!"*, dead page. `Me.M()` emits `this.M()` and is correct.
-  ⚠ **This is BROADER than the spec's Measured-facts row**, which scoped it to *a lambda* calling an
-  unqualified method. Measured 2026-09-18 from an ordinary **constructor**, no lambda involved:
-  `Unqualified()` → `Unqualified();`, `Me.Qualified()` → `this.Qualified();`. Any unqualified
-  self-call in a class is affected. ⚠ The `Me.` workaround holds only OUTSIDE a lambda — inside one
-  the spec measured `Me.` hard-erroring, so the two rows are both true and neither generalises.
-  ⛔ Every scaffolded web form carried exactly this shape (`InitializeComponent()` in `Public Sub
-  New()`) and **every one of them was dead on load**; nothing caught it because no test ran a
-  generated FORM, only the dispatch. `FormScaffolder` now emits `Me.InitializeComponent()`
-  (`FormScaffolderTests.TheScaffoldQualifiesItsInitializeComponentCall`). The backend defect is
-  UNFIXED and hits hand-written user code.
-- ⚠ A bare top-level `Sub` in one `.bas` is not callable from another at all
-  (*"no lowering for 'Helper.Helper'"*). Between that and the above, **a class is the only shape that
-  works across files on the JavaScript backend** — both are compiler gaps, not designer ones.
-- ⛔⛔ **A MODULE member call is broken on all three backends, in DIFFERENT directions** — measured
-  by generating, compiling and RUNNING the same eight-line program on each:
+  Sub`, which emits a real `class` with a `static` member; module calls across files work now (next
+  bullets), but the dispatch stays a class.
+- ✅ **Unqualified self-calls and bare cross-file `Sub`s work** on JavaScript, C# and C++ (measured by
+  RUNNING, 2026-09-29): `Unqualified()` in a constructor emits `this.Unqualified()`, and a top-level
+  `Sub Helper` in `Util.bas` is callable bare from `Main.bas`. `FormScaffolder`'s
+  `Me.InitializeComponent()` is harmless.
+  ⚠ **A file's name is a C# class name.** Each file's top level becomes `static class <FileName>`, so
+  a top-level `Sub Helper` in `Helper.bas` is CS0542, and a `Class Widget` in `Widget.bas` beside
+  top-level code (or a lambda) is CS0101. Name the file differently.
+- ⛔ **A Module member is reachable in every spelling, from any file** (JavaScript / C# / C++,
+  measured by RUNNING):
 
-  | | `M.Go()` qualified | `Go()` unqualified |
-  |---|---|---|
-  | JavaScript | builds clean, `ReferenceError` at RUN time | ✅ |
-  | C# | ✅ | `CS0103: The name 'Go' does not exist` |
-  | C++ | clang: `undeclared identifier 'M'` | ✅ |
+  | | same file | Module in own-named file | Module block in another file |
+  |---|---|---|---|
+  | `M.Go()` qualified | ✅ | ✅ | ✅ |
+  | `Go()` bare | ✅ | ✅ | ✅ |
 
-  **No spelling works everywhere**, so a program calling a module member is silently locked to a
-  subset of targets. JS/C++ hoist members to bare top-level functions
-  (`IRBuilder.Visit(ModuleNode)`, `IRBuilder.cs:385`) and emit the call qualified anyway; C# gets the
-  container right (`public static class M`) and breaks the unqualified call instead. Repro, matrix
-  and per-backend fix shapes in `docs/form-designer-followups.md` 14. **PR #6 fixes JavaScript
-  only** — C# and C++ still need theirs.
-  ⚠ **Superseded on master by #57 (`e486382d`)**, which reports both spellings, cross-file included
-  (the dotted `'Helper.Helper'` wire form above is gone too), compiling and running on every backend
-  through one `EmitProcedureCall`. This table and the bullet above are kept as the measured history
-  until they are RE-MEASURED on the merged tree — do not rely on either direction without doing so.
+  ⚠ A Module BLOCK is named by its author, not its file (`Module Program` holding `Main` sits in
+  `Main.bas`), so any cross-unit lookup keyed on the FILE name misses it — that is what broke the
+  right-hand column. `SemanticAnalyzer.TryResolveOtherUnitModuleBlockMember` is the channel, and an
+  imported procedure must keep its `OwningModule` or C# qualifies it by the file.
+  `CrossFileBindingTests` runs every shape in both compile orders.
+- ⛔ **A member access on a user class never reaches the "PascalCase = .NET" fallback when the class's
+  members are all known** (`SemanticAnalyzer.LacksDeclaredMember`). That fallback claims any receiver
+  named with two letters or more, so a missing member on `LoginForm` compiles clean and dies at load
+  on JavaScript (`TypeError: this.X is not a function`) — only csc catches it on C#. Stays permissive
+  for an `Extern Class`, a .NET or unresolved base, and anything it cannot enumerate; an `Extension`
+  method on the class (or a base, or Object) is never refused — typed Object and bound by the
+  backend, which today means C# only (JavaScript `TypeError`, C++ `C2039`). ⚠ Still open:
+  `Inherits` or `Extension Function` over a class from ANOTHER file ("Unknown base class" / "Cannot
+  extend unknown type" — both ask only the type manager). A base declared BELOW its derived class
+  in the same file does run on every backend.
 - ⛔ **`Place` decides "strip" vs "item" vs "positioned", and each has its own rule.** A **strip**
   (`FormPlace.Docked`) is geometry-less — `Geometry == null`, its edge is a `Dock` PROPERTY not a
   rect, it draws as a BAND on the canvas, and it is page chrome on the web (before/after the form
@@ -355,6 +356,11 @@ with the `Dim` path — see `docs/superpowers/specs/2026-09-19-menus-toolbars-st
   bare `make_shared` — two-phase construction (tag constructor, then `ctor_`), so `Me` is owned
   before any user code runs and is spelled `BasicLang::Self(this)` as a value everywhere but a
   member receiver / `Is` operand (ADR-0015).
+- **A lambda whose by-copy capture could go stale is refused by name (ADR-0016 D3/W2) until #140;
+  the refusal is ONE rule in `CppCapabilityChecker.CheckLambdaCaptureWrites` over
+  `ControlFlowGraph.ExecutionSuccessors`.** It is stated over ANY lambda, never keyed on
+  `MyBase.New` position; #140 deletes it and must keep `BaseConstructorCallCppRefusalTests`'s
+  regression fence running.
 - Exceptions via the `IRThrow` node; a `Return` or `Exit` out of a `Try` carries its own copy
   of every `Finally` it leaves (a C++ `return`/`goto` runs no handler); iterators are real C++20 coroutines (`Generator<T>` /
   `co_yield`); async is synchronous `Task<T>` emulation (no scheduler).

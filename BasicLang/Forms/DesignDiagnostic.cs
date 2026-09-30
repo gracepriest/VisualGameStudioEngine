@@ -75,9 +75,10 @@ public static class DesignCodes
     //                   collision between a user's own top-level name and the dispatch helper.
     //                   BL8018 below is a different finding and takes a different number.
     //   BL8032          a web <Bind> on an event the control's row does not declare (here)
+    //   BL8033          a positioned control's Dock that is not a DockStyle member (here)
     //
-    // The ENUMERATED table above is now exhausted: the next claim starts at BL8033. That is not
-    // the band being full — BL8033..BL8999 are simply unclaimed, and "full" would wrongly send the
+    // The ENUMERATED table above is now exhausted: the next claim starts at BL8034. That is not
+    // the band being full — BL8034..BL8999 are simply unclaimed, and "full" would wrongly send the
     // next task looking for another band.
     //
     // Nothing in this band lives in BasicLang.Compiler.ErrorCode as a string; the enum registration
@@ -156,6 +157,19 @@ public static class DesignCodes
     /// to nothing.</para>
     /// </summary>
     public const string AnchorNotExpressible = "BL8015";
+
+    /// <summary>
+    /// A POSITIONED control's <c>Dock</c>, on a pixel document, that is not a <c>DockStyle</c> member under
+    /// <see cref="FormDock"/>'s rule (trimmed, any case). A REFUSAL: emitted verbatim it was <c>DockStyle.Rigth</c> —
+    /// CS0117 at csc with BasicLang silent, because a WinForms member degrades to <c>Object</c> — while a Canvas page's
+    /// dock resolver read the same value as "not docked". Geometry is not a catalog property, so there is no Degraded
+    /// row to freeze it in; the refusal is the only honest answer (as BL8015 is for Anchor).
+    ///
+    /// <para>⚠ A case or whitespace variant of a member (<c>fill</c>, <c> Top </c>) is not this finding: it is
+    /// accepted and emitted as the member's own spelling. ⚠ A STRIP's Dock is not this finding either: it is a
+    /// catalog property, so a value its row does not accept is Degraded (BL8009) and docks at the row default.</para>
+    /// </summary>
+    public const string UnknownDock = "BL8033";
 
     /// <summary>
     /// A property the document carries that does not exist on the target being generated — a
@@ -352,8 +366,9 @@ public static class DesignCheck
             : CheckSource(filePath, text);
 
     /// <summary>
-    /// Findings for a form document: everything the reader reported, plus the per-property Degraded
-    /// rows as warnings. Both formats — the reader picks the vocabulary from the document itself.
+    /// Findings for a form document: everything the reader reported, the per-property Degraded rows as
+    /// warnings, and the region writer's document-only refusals (Anchor, Dock) as errors. Both formats — the
+    /// reader picks the vocabulary from the document itself.
     /// </summary>
     public static IReadOnlyList<DesignDiagnostic> CheckFormDocument(string filePath, string text)
     {
@@ -375,6 +390,16 @@ public static class DesignCheck
                 $"frozen in the property grid — {degraded.Reason}",
                 filePath, 0, 0, IsWarning: true));
         }
+
+        // ⛔ The document-only refusals the designer's SAVE would make (the region writer's own checks, asked without
+        // a code-behind): an unknown Anchor edge (BL8015) and a Dock it cannot honour (BL8033). Neither the reader
+        // validates, so without these `--check` passed a document the first save then refused — the checker a CI
+        // step runs must not be more lenient than the designer. ⚠ Not every region-writer check is here: these two
+        // are the ones with a public refusal entry point (shared with the retarget). The .bas-dependent checks
+        // (region state, handler ordering) cannot run on a document alone; the bind/component checks could, and
+        // are not wired yet.
+        findings.AddRange(RegionWriter.AnchorRefusals(filePath, form.Model));
+        findings.AddRange(RegionWriter.DockRefusals(filePath, form.Model));
 
         return findings;
     }

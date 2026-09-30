@@ -171,7 +171,17 @@ retired** — nothing emits it and the number stays claimed. Neither option once
 inserting the call into `Main()`, or a template whose `Main()` dispatches) was needed, so no user code
 is edited. Tests: `WebMainStartupTests`.
 
-### 14. ⛔⛔ The JavaScript backend emits calls to module objects it never defines
+### 14. ✅ FIXED — The JavaScript backend emits calls to module objects it never defines
+
+> **Status 2026-09-29, branch `fix/js-cross-file-calls`:** closed on all three backends. #57
+> (`e486382d`) fixed the same-file and own-named-file cases; the last hole — a Module BLOCK named
+> unlike its file (`Module Program` in `Main.bas`), called qualified from another file, which was
+> still `ReferenceError` / `CS0103` / `C2065` — is fixed by
+> `SemanticAnalyzer.TryResolveOtherUnitModuleBlockMember`, and a bare import now keeps its Module so
+> C# qualifies it correctly. Every qualified/bare × same-file/own-file/other-file shape builds and
+> RUNS on JavaScript, C# and C++ (`CrossFileBindingTests`, CLI-measured). The text below is the
+> original record.
+
 **This is a runtime failure from a clean, green build**, and it is a COMPILER bug.
 
 ⛔⛔ **File this as the same issue as the third bullet of entry 3, not as a new one.** That bullet
@@ -623,3 +633,13 @@ the caption clips against its control's bounds rather than scaling with it. Sepa
 Type Here editing surface or the strip/item model 24d and 24e shipped; it is a pre-existing canvas
 rendering gap in the simple-control caption path, found while eyeballing the IDE for the owner's
 acceptance pass and left for its own investigation.
+
+### 34. The property grid's Dock row accepts any text — found 2026-09-29, review of the BL8033 fix
+
+`FormPropertyGridViewModel`'s pixel `Dock` row (≈380-386) writes whatever is typed straight into
+`PixelGeometry.Dock` (`v => pixel.Dock = string.IsNullOrWhiteSpace(v) ? null : v`). Since BL8033 a value
+that is not a `DockStyle` member is refused by the region writer, so the typo no longer reaches generated
+code — but it is caught on SAVE, with the canvas showing the control undocked until then. The write lambda
+should go through `FormDock.Canonical` (store the member's own spelling) and snap back on null, the way a
+refused catalog value already snaps back in the real TextBox (the posted two-step echo, property-grid slice
+2). No code yet.

@@ -171,6 +171,57 @@ public class SolutionExplorerRetargetTests
             "a form that cannot be retargeted must not ask for a folder first");
     }
 
+    /// <summary>
+    /// A Canvas page with a hand-edited unknown Dock: refused through the same dialog, with the region writer's
+    /// own BL8033 — no exception on the UI thread, no folder asked for, nothing written.
+    /// </summary>
+    [Test]
+    public async Task RetargetFormCommand_ACanvasPageWithAnUnknownDock_ShowsTheRefusal_AndWritesNothing()
+    {
+        SelectDocument("LoginForm.blwebform", """
+            <WebForm Name="LoginForm" Version="1" Width="640" Height="400">
+              <Layout Kind="Canvas"/>
+              <Controls><Button Id="btn" X="8" Y="8" Width="75" Height="23" Dock="Rigth" TabIndex="0"/></Controls>
+            </WebForm>
+            """);
+        var winOut = Path.Combine(_dir, "win");
+        ChooseFolder(winOut);
+
+        Assert.DoesNotThrowAsync(async () => await _vm.RetargetFormCommand.ExecuteAsync(null));
+
+        Assert.That(Directory.Exists(winOut) && Directory.GetFiles(winOut).Length > 0, Is.False, "nothing written");
+        _dialogService.Verify(d => d.ShowMessageAsync(
+                "Cannot retarget",
+                It.Is<string>(m => m.Contains("BL8033") && m.Contains("'btn'") && m.Contains("Rigth")),
+                It.IsAny<DialogButtons>(), It.IsAny<DialogIcon>()),
+            Times.Once);
+        _dialogService.Verify(d => d.ShowFolderDialogAsync(It.IsAny<FolderDialogOptions>()), Times.Never);
+    }
+
+    /// <summary>
+    /// A window's StatusStrip docked Left is a Degraded catalog value (D9), so it crosses like every other one — the pair
+    /// is written, the value carried as written, and no refusal dialog is shown.
+    /// </summary>
+    [Test]
+    public async Task RetargetFormCommand_AWindowWithAStripDockedLeft_CarriesItAsDegraded_AndWritesThePair()
+    {
+        SelectDocument("LoginForm.blform", """
+            <Form Name="LoginForm" Version="1" Width="400" Height="300" Text="Sign in">
+              <Controls><StatusStrip Id="statusStrip1" Dock="Left"/></Controls>
+            </Form>
+            """);
+        ChooseFolder(Out);
+
+        Assert.DoesNotThrowAsync(async () => await _vm.RetargetFormCommand.ExecuteAsync(null));
+
+        var document = Path.Combine(Out, "LoginForm.blwebform");
+        Assert.That(File.Exists(document), Is.True, "the pair is written");
+        Assert.That(File.ReadAllText(document), Does.Contain("Dock=\"Left\""), "carried as written");
+        _dialogService.Verify(d => d.ShowMessageAsync(
+                "Cannot retarget", It.IsAny<string>(), It.IsAny<DialogButtons>(), It.IsAny<DialogIcon>()),
+            Times.Never);
+    }
+
     [Test]
     public async Task RetargetFormCommand_PublishesEveryLoss_ToTheErrorList_AgainstTheNewCodeBehind()
     {

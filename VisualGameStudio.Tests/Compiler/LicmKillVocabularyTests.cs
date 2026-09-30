@@ -627,28 +627,33 @@ public class LicmKillVocabularyKnownGapsTask122Tests
         });
 
     /// <summary>
-    /// STAYS known-wrong, but the STALE attribution is fixed: this is NOT "ConstantFolding +
-    /// CopyPropagation fold across the capture on their own" (that claim named the wrong cause).
-    /// MEASURED with NO optimizer pass running at all: the C++ backend itself emits
-    /// <c>bump = [=]() { int32_t t0 = {}; t0 = x + 1; return; };</c> — a lambda captured BY COPY
-    /// (<c>[=]</c>), so the write inside never reaches the caller's <c>x</c> no matter what the
-    /// optimizer does or does not run. This is task #140, a C++ BACKEND lambda-capture defect;
-    /// LICM (or any kill-vocabulary fix) could never have closed it.
+    /// ⭐ MOVED PIN (ADR-0016 D3/W2, task #170). STAYS attributed to #140, a C++ BACKEND
+    /// lambda-capture defect LICM (or any kill-vocabulary fix) could never have closed: the C++
+    /// backend itself emits <c>bump = [=]() { ...; t0 = x + 1; return; };</c> — a lambda captured
+    /// BY COPY (<c>[=]</c>), so the write inside never reaches the caller's <c>x</c>. This USED TO
+    /// silently print seed\n6 for seed\n12; #170's capability check now REFUSES it by name (arm
+    /// (a): bump writes x, which it captures) rather than compiling it wrong — a named refusal
+    /// beats a silent wrong answer (ADR-0016's rule one). MEASURED refused with NO optimizer pass
+    /// running too, so this remains, as before, NOT a kill-vocabulary or LICM defect.
     /// </summary>
     [Test]
-    public void L5_LambdaCapturedLocal_Cpp_StandardPipeline_PinnedForTask140()
-        => Assert.That(FourBackends.Norm(BclE2E.CompileRun(BclE2E.CompileToCppOptimized(LicmKillVocabularyShapes.L5))),
-            Is.EqualTo("seed\n6"),
-            "task #140 (C++ BACKEND capture-by-copy, NOT a kill-vocabulary or LICM defect — MEASURED "
-            + "wrong even with zero optimizer passes running); if this changed, re-measure before "
-            + "touching it.");
+    public void L5_LambdaCapturedLocal_Cpp_StandardPipeline_RefusedByName_PinnedForTask140()
+    {
+        var ex = Assert.Throws<CppCapabilityException>(
+            () => BclE2E.CompileToCppOptimized(LicmKillVocabularyShapes.L5));
+        Assert.That(ex!.Message, Does.Contain("captures 'x' of 'Main'").And.Contain("#140"),
+            "task #140 (C++ BACKEND capture-by-copy) flips this to running — re-measure before "
+            + "touching it.\n" + ex.Message);
+    }
 
     [Test]
-    public void L5_LambdaCapturedLocal_Cpp_AggressivePipeline_PinnedForTask140()
-        => Assert.That(FourBackends.Norm(BclE2E.CompileRun(BclE2E.CompileToCppAggressive(LicmKillVocabularyShapes.L5))),
-            Is.EqualTo("seed\n6"),
-            "task #140 — same backend capture-by-copy defect, aggressive pipeline: wrong \"at every "
-            + "level\" (both C++ pins here agree with each other, not just with the standard-"
-            + "pipeline one above) because the cause is the backend's lambda lowering, not LICM.");
+    public void L5_LambdaCapturedLocal_Cpp_AggressivePipeline_RefusedByName_PinnedForTask140()
+    {
+        var ex = Assert.Throws<CppCapabilityException>(
+            () => BclE2E.CompileToCppAggressive(LicmKillVocabularyShapes.L5));
+        Assert.That(ex!.Message, Does.Contain("captures 'x' of 'Main'").And.Contain("#140"),
+            "aggressive pipeline — the capability check runs independent of which optimizer "
+            + "passes execute, so this agrees with the standard-pipeline pin above.\n" + ex.Message);
+    }
 
 }

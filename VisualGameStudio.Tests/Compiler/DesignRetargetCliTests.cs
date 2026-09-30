@@ -149,6 +149,53 @@ public class DesignRetargetCliTests
         });
     }
 
+    /// <summary>
+    /// A Canvas page with a hand-edited unknown Dock: its Dock crosses verbatim to the window, so it is refused
+    /// with the region writer's own BL8033 — exit 1, nothing written.
+    /// </summary>
+    [Test]
+    [Category("Integration")]
+    public async Task Cli_DesignRetarget_ACanvasPageWithAnUnknownDock_IsRefused_ExitsOne_AndWritesNothing()
+    {
+        var source = Write("LoginForm.blwebform", """
+            <WebForm Name="LoginForm" Version="1" Width="640" Height="400">
+              <Layout Kind="Canvas"/>
+              <Controls><Button Id="btn" X="8" Y="8" Width="75" Height="23" Dock="Rigth" TabIndex="0"/></Controls>
+            </WebForm>
+            """);
+
+        var (exit, stdout, stderr) = await CliTestHarness.RunCli(_dir, "design", "--retarget", source, "--out", Out);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(exit, Is.EqualTo(1), $"stdout:\n{stdout}\nstderr:\n{stderr}");
+            Assert.That(stdout, Does.Contain("BL8033").And.Contain("'btn'").And.Contain("Rigth"));
+            Assert.That(stdout, Does.Contain("nothing was written"));
+            Assert.That(stdout + stderr, Does.Not.Contain("design failed"));
+            Assert.That(Directory.Exists(Out) && Directory.GetFiles(Out).Length > 0, Is.False);
+        });
+    }
+
+    /// <summary>`design --check` names what the designer's save would refuse — an unknown Dock among it.</summary>
+    [Test]
+    [Category("Integration")]
+    public async Task Cli_DesignCheck_AWindowWithAnUnknownDock_ReportsBL8033_AndExitsOne()
+    {
+        var source = Write("LoginForm.blform", """
+            <Form Name="LoginForm" Version="1" Width="400" Height="300" Text="Sign in">
+              <Controls><Button Id="btn" X="8" Y="8" Width="75" Height="23" Dock="Fil" TabIndex="0"/></Controls>
+            </Form>
+            """);
+
+        var (exit, stdout, stderr) = await CliTestHarness.RunCli(_dir, "design", "--check", source);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(exit, Is.EqualTo(1), $"stdout:\n{stdout}\nstderr:\n{stderr}");
+            Assert.That(stdout, Does.Contain("BL8033").And.Contain("'btn'").And.Contain("Fil"));
+        });
+    }
+
     [Test]
     [Category("Integration")]
     public async Task Cli_DesignRetarget_WithoutOut_IsAnArgumentError_ThatExplainsThePairing()
