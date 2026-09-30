@@ -17,7 +17,38 @@ facade (all five tasks of `2026-09-13-blnet-cpp-facade.md`).
 
 ---
 
-## 🚀 NEWEST — 2026-09-29: #163 DONE, DCE removes unused compiler temps, by marker (ADR-0017)
+## 🧩 NEWEST — 2026-09-30: property grid SLICE 3 done (branch `feat/property-grid-slice3`), owner-approved
+
+Pre-flight + execution notes (the full record, every commit, measured facts, gates):
+`docs/superpowers/plans/2026-09-29-property-grid-slice3-preflight.md` §5a. Plan: `docs/superpowers/plans/2026-09-25-property-grid-vs-parity.md`.
+
+**What landed.** Degraded geometry frozen + listed by `design --check`; Font/Padding/Cursor value types (one parser each,
+`New Font(…)` fan-in, measured `CType(n, FontStyle)`); 18 Form rows stored in `FormDocument.Properties` (AcceptButton/
+CancelButton as Reference rows, emitted after the controls); control D1 batches + web `CssClass`/`Style`; expandable
+Font/Padding/Size/Location composites; `FormAmbient.Inherited` (container → Form → catalog default — the ONE ambient rule the grid's
+Font parts and the canvas both use); the page's `font/color: inherit` rules when a Font/ForeColor is set anywhere; a retargeted pair
+stubs EVERY crossed bind; the canvas draws each caption in its effective font, inherited ForeColor and the Form's BackColor; the
+designer writes a form's code-behind THROUGH an open `.bas` tab (clean: tab + disk; unsaved edits: tab only — pre-existing on master).
+
+**Owner decisions (2026-09-29/30, do not relitigate):** TableLayoutPanel drops 2×2 · the colours WinForms hides are not offered ·
+default events MATCH WinForms (GroupBox Enter/web `focusin`; Panel/FlowLayoutPanel/TableLayoutPanel Paint; TrackBar Scroll = web
+`input`, ValueChanged = `change`; DataGridView CellContentClick) — a web Panel double-click opens its declared web default Click and says
+so (BL8035) · handler NAMES come from the WinForms event name on both targets (existing binds keep theirs) · Opacity shown/typed as a
+percentage by VS's measured OpacityConverter rules (bare ≤1 is a fraction, `1` = 100%), stored as the 0–1 Double · BackgroundWorker
+descriptions are WinForms' own text.
+
+**BL numbers:** BL8033 unknown Dock (master) · BL8034 a Reference row naming no allowed control · BL8035 double-click opened a fallback
+event (Info) · **next free BL8036**.
+
+**Follow-ups (recorded, not done):** M2 a refused composite PART shows its reason on the parent, not the part · M4 old documents carrying a
+retired colour attribute lose it silently (suggest a reader warning) · M5 the web Cursor drop-down could omit web-refused members · M6
+AcceptButton/CancelButton are not rewritten on control rename (VS does) · the canvas fills the GroupBox caption gap with the system face,
+so on a coloured Form it shows a grey patch · a positioned control's DEFAULT (no-font) caption still does not scale with zoom
+(pre-existing). **Slices 4–6 remain per the plan** (expand each before it starts).
+
+---
+
+## 🚀 2026-09-29: #163 DONE, DCE removes unused compiler temps, by marker (ADR-0017)
 
 The fix is `ec021f8f` on top of #200, #170 and the SCRATCH option-(a) commit (`b0f12d90`); the TEST side is uncommitted work on top
 of it. Compiler only (IRBuilder, IRNodes, IROptimizer); no backend changed. Design and measurements:
