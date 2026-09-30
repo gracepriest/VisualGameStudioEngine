@@ -254,15 +254,17 @@ public class NameReservationTests
         throw new DirectoryNotFoundException("VisualGameStudioEngine.sln not found above " + AppContext.BaseDirectory);
     }
 
-    /// <summary>The five shipped samples. Two of them do not compile on this base (an untyped `Const`, a parse error in the front end,
-    /// nothing to do with #121): they are listed so that the day they do compile they are checked too.</summary>
+    /// <summary>The five shipped samples. All five compile since #123 (an untyped `Const` and VB's `If(c, a, b)` parse and type, and
+    /// Samples/Pong and Samples/SpaceShooter were made valid code). A sample that stops compiling is a failure here, not a skip. This
+    /// is the FAST guard that a front-end verdict is never ignored for a sample: the CSE corpus fixture builds IR past a rejected
+    /// front end on purpose, and its own verdict pins are the only other thing that notices.</summary>
     private static readonly (string Path, bool Compiles)[] Samples =
     {
         ("SampleGames/Pong/Main.bas", true),
         ("SampleGames/SpaceShooter/Main.bl", true),
         ("Samples/Platformer/Main.bas", true),
-        ("Samples/Pong/Main.bas", false),
-        ("Samples/SpaceShooter/Main.bas", false),
+        ("Samples/Pong/Main.bas", true),
+        ("Samples/SpaceShooter/Main.bas", true),
     };
 
     /// <summary>Every program a probe fixture holds: the #163 probes, the D2 positions, the witness families, and the two

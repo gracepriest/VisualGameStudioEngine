@@ -17,7 +17,140 @@ facade (all five tasks of `2026-09-13-blnet-cpp-facade.md`).
 
 ---
 
-## 🚀 NEWEST — 2026-09-30: #124 DONE, every remaining name reference is bound through the front end (ADR-0013 D3)
+## 🚀 NEWEST — 2026-09-30: #123 DONE, an untyped `Const`, VB's `If(cond, a, b)` and the repo's samples compile
+
+The fix is `e776dc64` and the sample edits `e611cd5d`, on master `78b00b85`; the tests and this section are uncommitted work on top of them. Compiler (`Parser`, `ASTNodes`, `ASTPrettyPrinter`,
+`SemanticAnalyzer`, `IRBuilder`, `IROptimizer`, `LSP/CallHierarchyHandler`) and two sample files; **no IR node and no backend changed.** Two valid VB constructs BasicLang refused — vbc
+accepts both — are why `Samples/Pong` and `Samples/SpaceShooter` did not even parse. The owner's ruling was "fix compiler + samples" (the samples were not valid VB either, see below).
+
+**D1 — an untyped `Const`.** `Const X = expr` with no `As` takes the type of its constant expression, as VB does: `800` Integer, `800L` and `3000000000` Long, `3.14` Double, `1.5F` Single,
+`"s"` String, `True` Boolean, `"a"c` Char, `&HFF` Integer, `-2147483648` Long, and an expression over other constants gets the EXPRESSION's type (`I / 2` Double, `I \ 2` Integer, `I > 3` Boolean).
+At local, module and class level, verified against vbc's `TypeName` (33 rows, vbc answers identically at all three levels). The parser's `As` is optional (`Type == null`), `SemanticAnalyzer.Visit(ConstantDeclarationNode)` decides
+the type AFTER the value is analyzed (`InferUntypedConstantType`), and every existing rule then runs against it: BC30439, folding, module-scope initializers. A sibling file's untyped Const gets its
+LITERAL's type from the signature pass (`SignatureTypeOfConstant`, sharing `LiteralTypeOf` with `Visit(LiteralExpressionNode)`); anything else stays Object until that unit is analyzed.
+`Const X = Nothing` is refused ("Cannot infer a type for constant 'X' from 'Nothing'"), as `Dim x = Nothing` is; vbc makes it Object. ⚠ The message's advice (`Const X As <Type> = Nothing`) only works for Object:
+`Const X As String = Nothing` is refused too, on the before build as well.
+
+**D2 — VB's conditional `If(cond, a, b)`.** `ConditionalExpressionNode`. Only the CHOSEN operand runs (`If(n <= 1, 1, n * Fact(n - 1))`, `If(d = 0, -1, a \ d)`). `IRBuilder.Visit(ConditionalExpressionNode)` lowers it
+exactly as `AndAlso`/`OrElse` are lowered: the condition, then `if{N}.then` / `if{N}.else` / `if{N}.end` blocks and ONE carrier local `__sc{N}`, each arm coerced to the result type in its own block. **No IR node, no backend change**
+(`ConditionalExpressionTests.NoIrNodeExists_ForTheConditional` holds it). The result type is VB's dominant type (`DominantReturnType`): Double for Integer and Double, Long for Integer and Long, Single for Long and Single,
+the base for a class and its derived, the interface for a class and an interface it implements, **Object when neither widens** (vbc, Option Strict Off); a `Nothing` operand takes the other's type and is then judged like any
+`= Nothing` (a value type is refused with advice: vbc would give 0, BasicLang follows the `Dim` rule). The two-argument `If(value, fallback)` is a parse diagnostic (**follow-up**); `If()`, `If(a)` and `If(a, b, c, d)` are refused with "If() takes three arguments … but was given N".
+**An `If()` where control flow cannot live is refused with the compile-time message, never a crash or a wrong program:** a `Select Case` `When` guard, a module `Dim`/`Const` initializer (vbc FOLDS a constant one, `Const K = If(True, 1, 2.5)`; BasicLang refuses it at module
+level and accepts it locally), a class field initializer. A non-Boolean condition is a warning, as an If statement's.
+
+**What the samples forced, each only turning a refusal into an acceptance:**
+1. `IRBuilder.SubstituteFoldedConstGlobals` — a module `Const` is a leaf of a constant expression, so `Dim ballVY As Single = BALL_SPEED / 2` folds (175f) instead of "cannot be computed at compile time".
+   Only the `Const` globals whose own value already folded, and only as operands of binary/compare/unary/cast.
+2. `WideningCastFoldingPass` — Integer → Single folds exactly within ±2^24 (inclusive) and NOT outside it (16777217 rounds).
+3. `SemanticAnalyzer` — `DrawTriangle` is registered in the analyzer's MIRROR of `FrameworkStdLib`. Without it a call had no signature: C# passed Single positions raw (CS1503) and C++ stored a Sub's "result" in a temp.
+
+**The samples (owner decision, `e611cd5d`).** Both samples used code that VB itself refuses: undeclared `KEY_*` (BC30451), RaylibWrapper's `Framework_*` names, implicit Double→Single narrowing. The edits are minimal and follow
+`Samples/Platformer`: `KEY_*` constants declared as Platformer declares them, BasicLang's engine API names, `SetFixedStep` dropped (Platformer's port), `ClearBackground` with three arguments, `CSng` at 16 sites, `Const BALL_SPEED As Single`.
+**Kept on purpose:** every other `Const` untyped (6 of 7 in Pong, all 7 in SpaceShooter) and both `If(` expressions — they are what D1 and D2 are for. `Samples/Platformer` and `SampleGames/**` were not touched.
+Result: all three samples pass the parser, the analyzer (no error and no warning), the IR builder on every route, and generate C# and C++. **C#** builds against RaylibWrapper through the CLI, Roslyn, `BasicLang build`
+and the IDE's `BuildService`. **Not asserted, each measured:** C++ is REJECTED by clang for two defects that predate #123 and hit Platformer and `SampleGames/*` too (a `Dim` redeclared per branch: `redefinition of 'hitPos'`; a non-const lvalue reference to an `Array<bool>` element; no task);
+JavaScript and MSIL refuse every engine program by design (`no lowering for 'GameInit'`); a sample opens a window, so none runs (the two Pong shapes that decide its behaviour run as probe `i12pong`); vbc cannot check the BasicLang-only API names
+(it accepted both edited samples against a stub module declaring FrameworkStdLib's signatures).
+
+**The CSE corpus re-measure (D4).** With the front end CLEAN: **Platformer 6, SpaceShooter 0, Pong 1**, each `(parseClean, analyzeClean) = (true, true)`. SpaceShooter's 0 was measured past a parse error before; same number, different provenance.
+Pong had no row (IRBuilder threw); it has one now. "The 11 merges in shipping code" is **7**. See the rewritten subsection further down ("`Samples/*` COMPILE NOW").
+
+**Known and inherited, NOT introduced by #123** (the carrier lowering shares them with `AndAlso`/`OrElse`; none has an expectation anywhere):
+- **#256** C#: a `While`/`Do While`/`Loop Until` whose condition holds control flow (`AndAlso`, `If()`) computes that condition ONCE, before the loop, so the loop never ends. ⛔ **Never run such a loop on C# without a timeout.**
+- **#257** MSIL: `Not` of a non-constant Boolean is bitwise (`If(Not t, …)` takes the wrong arm; `Not E` over a Boolean Const prints True), and JavaScript refuses a loop header with control flow ("a loop header whose branch does not target the loop's own .end block").
+- C#: arguments are evaluated OUT OF ORDER once one has control flow (`Pair(Note("first"), If(…), Note("third"))` prints second first); a lambda whose body has control flow loses its return paths (CS1643; #136). No task for the first.
+- JavaScript refuses a `Char` (BL7004) and a `Long` (BL7003) constant, and C++ has no `Object`, by design.
+- A user variable named `__sc0` collides with the carrier (`AndAlso` and `If()` alike): silent wrong value on C# and JavaScript, redefinition on C++, a type conflict on MSIL (`Dim __sc0 As Integer = 99` beside any `If()` or `AndAlso`; measured). The carriers are not minted through `IRFunction.DeclareTemp` (ADR-0018).
+
+**⛔ Defects the test work found and did NOT file or fix** (measured; none has an expectation):
+- ⛔⛔ **A mixed Double/Integer CONSTANT compare folds WRONG.** `Const E As Boolean = D <= 3` with `D = 3.14` is `true` (vbc: False); `D > 3` is `false` (vbc True); `3 >= D` is `true` (vbc False). `IROptimizer.TryFoldCompare` has no arm for a Double/Integer pair, so `<`/`>`
+  report false and `<=`/`>=` true. The LITERAL form (`Const E As Boolean = 3.14 <= 3`) was wrong on the before build too; what #123 changed is that `SubstituteFoldedConstGlobals` now lets a Const operand reach that folder, so the Const form (and `Dim g As Boolean = D <= 3` at module scope)
+  went from a refusal ("cannot be computed at compile time") to a SILENT WRONG ANSWER on every backend. A local `Dim` is computed at run time and is right. No test asserts a value for it.
+- Module-scope initializers over a MIX of numeric types are refused with "cannot be computed at compile time" — `Const X = I * 1.5`, `I + 1L`, `SF * 2`, `L * 2`, `D * SF`, and the literal-only `Const X As Double = 800 * 1.5` (typed too; before too). A class `Const` over another class `Const` is refused the same way (`Public Const B As Integer = A * 2`, typed too).
+- An `Enum` member initialised from a file-scope `Const` (`Red = LIM`) crashes the compiler with a NullReferenceException ("Error compiling X: Object reference not set …"); typed Const too; before too.
+- LSP: hover and completion say `Const X As Variant = 800` for an untyped Const (`SymbolService.FormatConstantHover`, `CompletionService` read `constDecl.Type?.Name ?? "Variant"`; `LspProjectContext` converts a null type reference). The front end is right; the IDE's text is not.
+- `For j = 10 To 0 Step s` with a VARIABLE negative step runs ZERO iterations on all four backends (vbc: 10, 5, 0); a literal `Step -5` is right.
+- MSIL: `x.ToString()` on an Integer is a NullReferenceException. `Xor` is not an operator. Implicit line continuation after a comma in a call's arguments does not parse. `Integer & Integer` is refused (VB allows it). `CByte(1)`/`CShort(1)` are typed Object.
+- A `Module` block's `Const` in a file that comes AFTER its user is Object, typed or not (`Settings.Limit + 1` is refused): MC2 in the execution fixture's header.
+- vbc refuses `Const X = "v" & I` (BC30060) and BasicLang accepts it. `Const M As String = Nothing` is refused by BasicLang and accepted by vbc.
+- 111 of `FrameworkStdLib`'s 134 rows have NO analyzer mirror (`Camera*`, `AnimCtrl*`, `LoadFont`, `Particles*`, …) — a call to one is accepted with no signature, which is what `DrawTriangle` was. The 23 that are mirrored all agree (`EveryMirroredRow_AgreesWithFrameworkStdLib`).
+
+**Tests (Linux-measured; the oracle is `vbc`, never a BasicLang backend).** 423 new fast tests and 119 new Integration tests; the suite total went 9908 → 10333 fast.
+- `Compiler/UntypedConstTests.cs` (263, fast) — D1. The 33-row table of initializers is asked of vbc's `TypeName` (`S/t123/tw/d1gen.py`; vbc answers identically at module, local and class level) and the analyzer's type, the module symbol's type, the IR global's type and the
+  emitted C# declaration (`const double EDIV`, `double LD`, `public static long …`) must all match; the BC30439 fit check (`2147483647 + 1` refused, `+ 1L` fine, a chain names the overflowing constant, the typed `Byte = 300` check unchanged); `Const N = Nothing`
+  refused; a Const with no value refused; the parse shape (`Type == null`); and MC1/MC3, the signature pass across files in BOTH compile orders, standard and aggressive. **Rows with no lowering expectation are named in the file header** (mixed-type module/class initializers; the wrong-folding `ELE`).
+- `Compiler/ConditionalExpressionTests.cs` (71, fast) — D2. The 30-row result-type table (vbc's static type via `GetType(T)` of a generic argument), ten expression positions parse to ten nodes, an If STATEMENT stays a statement, arity diagnostics through the parser AND both compiler entry points, the warning, the Sub operand, the `Nothing` rules, the four refused
+  positions through the IR builder and through `CompileFile`/`CompileProjectFiles` standard and aggressive (plus the four controls that build), and the IR shape: four blocks named as an If statement's, one carrier typed as the result, each arm coerced in its own arm, a call only in its own arm, the same blocks and terminators as the hand-written If/Else, distinct ids beside an `AndAlso`, no IR node named for it, and the verifier clean after the optimizer.
+- `Compiler/ConstFoldingFixTests.cs` (52, fast) — the three fixes: substitution (10 positive rows with their VALUES and CLR types, through four entry points; 6 neighbours that must stay refused: a non-Const global, a Const in a call, a narrowing, a mixed product), `WideningCastFoldingPass` driven with hand-built IR (±2^24 folds to the exact float, ±2^24±1 and the extremes do not; the other widenings unchanged) and through a module initializer,
+  and `DrawTriangle` (its row in both tables, EVERY mirrored row agreeing with `FrameworkStdLib`, and the call's positions coerced to Integer on the IR and on the C#).
+- `LSP/ConditionalCallHierarchyTests.cs` (4, fast) — `CallHierarchyHandler` walks expressions with two hand-written switches that silently skip a node they do not name; a call whose only appearance is an `If()` operand or condition is seen in both directions.
+- `Compiler/SampleProgramBuildTests.cs` — `SampleProgramFrontEndTests` (33, fast): all three samples have no diagnostic of ANY severity, reach the IR on every route, generate C# with each constant declared at its literal's type (`const double PADDLE_SPEED` — **this is where mutant M1int shows; "it builds" does not**), show the fixes they forced (`ballVY = 175.0f`, `Convert.ToInt32(` in DrawTriangle) and generate C++.
+  `SampleProgramBuildTests` (25, Integration): the CLI on a COPY (C# and C++, standard and `--optimize`, exit 0, no `Main.cs` appears next to the repo's sample), Roslyn against RaylibWrapper from the CLI's text and from `CompileProjectFiles`, and `BasicLang build` of a project (a real `dotnet build`).
+  `Services/BuildServicePipelineTests.Build_SampleGame_DotNet_Succeeds` (3, Integration): the IDE's `BuildService` on the game-app template with its `Main.bas` replaced by each sample (Platformer is the control). ⚠ **Never compile a sample in place** — the CLI writes `Main.cs`/`Main.cpp` next to its input.
+- `Compiler/UntypedConstAndConditionalExecutionTests.cs` (91, Integration, **in `JsExecutionTierRosterTests`, now pinned at 100**) — 25 probes (the implementer's 18 plus 7 test-writer variants) × the four backends × the CLI, the CLI `--optimize` and `CompileProjectFiles`, each with vbc's answer, plus MC1/MC3/MC3r through `BasicLang build` (Debug, Release) and `CompileProjectFiles`.
+  **The side-effect contract (only the chosen operand runs) is held on all four backends, not on C# alone**: `i3nest`, `i10sc` (all four), `i1side` (C#, C++, JavaScript) and its `Not`-free twin `i1sideB` (MSIL). The cells with no expectation, each named with its task, and the twin that stands in for it, are in the fixture's header.
+  The variants — `c1modB` (no Char, no `Not`), `i1sideB`, `i6argB`, `i13objB` (no `Not`), `i4forB` (For bounds: C# runs them), `i14pos` (ten positions), `c6use` (Case label, Optional default, array and For bound, an inherited Const) — were written by the test-writer and have vbc's answer of their own.
+- **Moved pins:** `NameReservationTests` samples row (Pong and SpaceShooter `Compiles = true`; the fast guard that a sample's front-end verdict is never ignored); `CseSampleCorpusTests` (SpaceShooter `(0, true, true)`, NEW Pong row `(1, true, true)`, Platformer stays 6; the docstring now explains the clean-front-end measurement);
+  `BaseConstructorCallDiagnosticsTests` (the X23 parse pin is deleted and X23 is a row of `Refused()` — BC31095 on every backend — so the "TWO KNOWN GAPS" doc is ONE); `JsExecutionTierRosterTests` 99 → 100.
+
+**Mutation proof** (real NUnit; each mutant's `BasicLang.dll` built alone in a detached worktree at `e611cd5d` + ONE mutation, `S/t123/tw/mut/mutants2.py`, then swapped into a COPY of the final test binaries (kept under `VisualGameStudio.Tests/bin/Release/` so `RepoRoot()` still finds the sln). The unmutated control passes.
+**All 28 are killed, and every one in the FAST tier.** The execution cells were also run for the mutants where a backend matters.
+
+| Mutant | Fast tests that kill it | Execution cells that kill it |
+|---|---|---|
+| **M1int** an untyped Const is always Integer | `UntypedConstTests` 203, `SampleProgramFrontEndTests` 6 (the constant's C# declaration) | 16/16 of c1mod, c1modB, c2loc, c3cls, c6use |
+| **M1obj** always Object | `UntypedConstTests` 244, `SampleProgramFrontEndTests` 22, `ConstFoldingFixTests` 4, `CseSampleCorpusTests` 2, `NameReservationTests` 3 | 16/16 |
+| **M2both** both operands evaluated before the branch | `ConditionalExpressionTests.AnOperandsCall_LivesOnlyInItsOwnArm` | 10/12: **i3nest on all four backends**, i1side on C++ and JavaScript, i1sideB on MSIL, i10sc on C++, JavaScript and MSIL — C# sees M2both ONLY through i3nest (its i1side and i10sc rows still pass) |
+| **M3swap** branch targets swapped | `…IsACarrierAndBranches…` | 12/12, every backend |
+| **M4first** the result type is the first operand's | `ConditionalExpressionTests` 16 | 6/7: i2types on all four, i13obj on C#, i13objB on MSIL |
+| **M5bypass** the verdict asserts of `CseSampleCorpusTests` removed | **alone: nothing fails** (it is silent while the front end is healthy). **With `D1parse`** (the `As` clause required again): the Pong CSE row, `NameReservationTests`' 3 sample rows, `SampleProgramFrontEndTests` 22, `UntypedConstTests` 254 — all fast. SpaceShooter's CSE row stays green (0 either way) | — |
+| D1parse | `UntypedConstTests` 254, `SampleProgramFrontEndTests` 22, `CseSampleCorpusTests` 2, `NameReservationTests` 3, `ConditionalExpressionTests` 3, `ConstFoldingFixTests` 4 | — |
+| D1_localAsObject the Symbol (not the node) of an untyped Const is Object | `UntypedConstTests` 157, `SampleProgramFrontEndTests` 22, `CseSampleCorpusTests` 2, `NameReservationTests` 3, `ConstFoldingFixTests` 4 | — |
+| SIG_standInNull the signature pass gives no type | `UntypedConstTests.AnUntypedConstInAnotherFile_TypeChecks` MC3 (both aggressive values) | — |
+| D1_nothingAccepted / D1_fitSkipped | `ConstNothing_IsRefused` ×3 / the BC30439 rows ×7 | — |
+| F1_substituteOff (`SubstituteFoldedConstGlobals` not called) | `ConstFoldingFixTests` 23, `SampleProgramFrontEndTests` 11, `UntypedConstTests` 52, the Pong CSE row, `NameReservationTests` 3 | — |
+| F1_substituteAnyGlobal (drop the `IsConst` condition) | the three `APlainGlobal_*` rows of `ConstFoldingFixTests` | — |
+| F2_singleOff / F2_singleUnbounded / F2_singleExclusive (`<` for `<=`) / F2_singleNegativeOnly | 31 / 10 / 4 / 4 (`ConstFoldingFixTests`; the first also the samples and the Pong CSE row) | — |
+| DT_mirrorDropped / DT_singleParams (DrawTriangle takes Single) | `ConstFoldingFixTests` 3, `SampleProgramFrontEndTests` 2 | `SampleProgramBuildTests` 4 and `BuildServicePipelineTests.Build_SampleGame…(SpaceShooter)` 1 — **C# CS1503** |
+| D2_foldGuardDropped | `ConditionalExpressionTests` 4 (the module-scope rows) | — |
+| D2_armsUncoerced | `…WithEachArmCoercedInItsOwnBlock` | i2types on C++ and MSIL |
+| D2_carrierObject | the same, and `SampleProgramFrontEndTests` 3 | i2types on C#, C++, MSIL; i13obj on C# |
+| D2_twoArgAccepted / D2_warningDropped / D2_nothingUnjudged / D2_blockNames | 2 / 1 / 3 / 3 (`ConditionalExpressionTests`) | — |
+| LSP_outgoingDropped / LSP_incomingDropped | `ConditionalCallHierarchyTests` 1 / 3 | — |
+
+⚠ M5bypass is the mutant whose kill the brief asked to be FAST: the Pong CSE row (`Corpus_Pong_Makes1Merge`) and `NameReservationTests`' samples row are both in the fast tier, and so are the new rows.
+
+**Gates (Linux, g++/clang++/node/ilasm present, no MSVC), on the final test DLL (`e611cd5d` plus the test and doc changes).**
+- The fast subset (`TestCategory!=Integration`): `Failed: 0, Passed: 10240, Skipped: 93, Total: 10333` (2 m 19 s). On the two commits alone it was `Failed: 5, Passed: 9810, Skipped: 93, Total: 9908` — the five moved pins (the Cse SpaceShooter row, `NameReservationTests` ×3, X23); +425 tests, the same 93 skips.
+- Integration, every term run ON ITS OWN and written `FullyQualifiedName~<term>` (see the filter trap under #124), all `Failed: 0`:
+
+  | Term | Passed | Skipped | Time |
+  |---|---|---|---|
+  | `Const` (960: `UntypedConstTests`, `ConstFoldingFixTests`, `ConstantRange`, `SingleConstant`, every `Constructor` fixture, …) | 960 | 0 | 7 m 57 s |
+  | `Conditional` (`ConditionalExpressionTests` 71, `ConditionalCallHierarchyTests` 4, `UntypedConstAndConditionalExecutionTests` 91, …) | 174 | 0 | 3 m 34 s |
+  | `CseSample` | 3 | 0 | 3 s |
+  | `NameReservation` | 443 | 0 | 10 m 25 s |
+  | `BaseConstructorCallDiagnostics` | 50 | 0 | 19 s |
+  | `EngineDeployment` | 16 | 0 | < 1 s |
+  | `VisualGameStudio.Tests.Compiler.UntypedConstAndConditionalExecutionTests` | 91 | 0 | 3 m 12 s |
+  | `VisualGameStudio.Tests.Compiler.SampleProgram` (`SampleProgramFrontEndTests` 33 + `SampleProgramBuildTests` 25) | 58 | 0 | 19 s |
+  | `VisualGameStudio.Tests.Services.BuildServicePipelineTests` (3 new rows) | 14 | 7 | 22 s |
+  | `VisualGameStudio.Tests.Compiler.JsExecutionTierRosterTests` (pinned at **100**) | 5 | 0 | < 1 s |
+
+  The 7 skips are `BuildServicePipelineTests`' pre-existing MSVC / Windows-only rows (C++ native builds, WinForms, the mixed project); none of the 119 new Integration tests skipped.
+- ⚠ The FULL suite (~39 min plus) was NOT run for this task; the fast subset and the ten terms above were.
+- **Only Windows can validate:** the MSVC leg of every C++ cell (clang++/g++ only on Linux), the C++ CLI project build (BL6015 without MSVC), MSIL under a Windows `ilasm`/CLR, and the samples' `BasicLang.exe`/native-engine steps. A sample's C++ is not compiled by any test here (see the header of `SampleProgramBuildTests.cs`).
+
+**Traps this work found.**
+- ⛔ **The execution tier's C# leg is in-process Roslyn with NO timeout** (`TempExec.Run` → `FourBackends.RunEmittedCSharpText`). A C# `While If(…)` / `Loop Until If(…)` (#256) freezes the whole test host, not just the test. `i4loop` has no C# cell and a table test pins that; if you pin the hang's current behaviour, spawn a process with a timeout.
+- ⛔ **A Double/Integer constant compare is not safe to fold** (above): assert no VALUE for a module-scope initializer that compares mixed types until `TryFoldCompare` is fixed.
+- ⚠ A mutated COPY of the test binaries must live under the repo tree: `RepoRoot()` walks up from `AppContext.BaseDirectory` for the sln, so a copy under `VisualGameStudio.Tests/bin/Release/mut-<id>/` finds `Samples/` and a copy in the scratchpad does not (the sample and CSE rows fail for that reason alone). `dotnet test <copy>/VisualGameStudio.Tests.dll` works, and swapping `BasicLang.dll` mutates both the in-process compiler and the spawned CLI (the `BasicLang` apphost loads the dll beside it).
+- ⚠ A sample is not compiled in place: the CLI writes `Main.cs` / `Main.cpp` next to its input. `SampleProgramBuildTests` copies first and asserts nothing appeared next to the repo's sample.
+
+---
+
+## 🚀 2026-09-30: #124 DONE, every remaining name reference is bound through the front end (ADR-0013 D3)
 
 The fix is `c55e91bd` on top of #121 and #163 (master `e092023d`); the tests are uncommitted work on top of it. Compiler only (`ASTNodes`, `SemanticAnalyzer`,
 `IRBuilder`); no backend changed. Design: the amendment at the end of `docs/superpowers/decisions/0013-case-insensitive-name-binding-front-end-to-ir.md`
@@ -517,8 +650,8 @@ corpus refusal set is unchanged (66 programs).
   (`undefined class D/<>c__Env0/<>c__Env2`); base-args nesting only made it reachable (E01, X22, X25).
 - **#242** `BodyLocals` omits a name declared twice; W2's Dim-initializer rule works around it.
 - **D4 gap 1** `MyClass` in a base argument (X07) reports a TYPE error ("of type 'Object'"), not BC31095.
-- **D4 gap 2** `Me` as a bare value (X23) cannot be probed: `If(c, x, y)` does not parse in BasicLang.
-  `Inherits Box(Of Integer)` (a generic base) does not parse either (E09a).
+- **D4 gap 2** `Me` as a bare value (X23) could not be probed because `If(c, x, y)` did not parse — **CLOSED by #123**: it parses, and X23 is a row of `BaseConstructorCallDiagnosticsTests.Refused()`
+  (BC31095, as vbc). `Inherits Box(Of Integer)` (a generic base) does not parse either (E09a).
 - The FE1 / CR1 witnesses can only be checked against JS (and C# for FE1): C# empties a multi-statement
   lambda body (#136) and MSIL emits a bad image / cannot assemble a `For Each` over `List(Of Func(Of Integer))`.
 
@@ -2780,28 +2913,27 @@ found (a lambda passed as a `MyBase.New(...)` argument — pre-existing, not wid
 #170) are in `docs/superpowers/decisions/0006-kill-vocabulary-totality-dynamic-use-call-visibility.md`'s
 implementation note for D1. Tests: `VisualGameStudio.Tests/Compiler/LambdaCaptureSetTests.cs`.
 
-#### ⛔ `Samples/*` DO NOT COMPILE — and the "11 merges in shipping code" number rests on that
+#### ✅ `Samples/*` COMPILE NOW (task #123) — this subsection was written while two of them did not
 
-Measured through the CLI at this commit:
+> ✅ **DONE 2026-09-30 — #123 fixed the compiler and the samples; everything below the rule is HISTORY.** All three samples pass the parser, the analyzer (no error AND no warning)
+> and the IR builder, and generate C# and C++. Read "#123 DONE" at the top of this file. The CSE corpus was re-measured with the front end CLEAN:
+> **Platformer 6, SpaceShooter 0, Pong 1 merges, each `(parseClean, analyzeClean) = (true, true)`** — `CseSampleCorpusTests` pins all three, and Pong has a row now.
+> "The repo's sample programs" is THREE programs again, and "the 11 merges in shipping code" is **7** (6 + 0 + 1).
 
-- `Samples/Platformer/Main.bas` — **2 SEMANTIC errors** (line 276, "cannot convert from 'Double' to
-  'Single'", twice). The PARSE is clean, so its IR is faithful; `TILE_SIZE` really is
-  `IsGlobal=true, IsConst=true` and its 6 merges really do depend on the `Const` exemption.
-- `Samples/SpaceShooter/Main.bas` — **PARSE errors**: `Const SCREEN_WIDTH = 800` has no `As`
-  clause. The parser records the error and synchronizes past the whole `Const` block, so those
-  identifiers reach the IR as `IsGlobal=false, IsConst=false` — measured. **SpaceShooter's 5 merges
-  read plain locals and say NOTHING about the `Const` exemption**, contrary to how the 11 were
-  described.
-- `Samples/Pong/Main.bas` — parse errors too, and then **`IRBuilder` THROWS** on it ("the
-  module-level variable 'ballVY' has an initializer that cannot be computed at compile time"). It
-  has no CSE count at all. "The repo's sample programs" is **two** programs, not three.
+What was true when this subsection was written, kept because the CSE docstrings cite it (`S/t123/brief.md` has the measurement):
 
-⚠ The counts 6 and 5 are real properties of the IR, but of IR built by **ignoring the front end's
-verdict** — which is exactly what `JsTestSupport.BuildModule` refuses to do, on purpose.
-`CseSampleCorpusTests` pins both the counts AND the current front-end verdict, so fixing a sample
-fails loudly and forces a re-measure instead of drifting. **The robust form of that contract item
-is `CseInvalidationDecisionTests`' `ConstGlobalAcrossACall` / `ParametersAcrossACall` rows** — a
-self-contained program that compiles. Prefer those.
+- `Samples/Platformer/Main.bas` — was measured with **2 SEMANTIC errors** (line 276, "cannot convert from 'Double' to 'Single'", twice). **Fixed on master by #66 (`9e76128`)**, before #123.
+  The PARSE was clean, so its IR was faithful; `TILE_SIZE` really is `IsGlobal=true, IsConst=true` and its 6 merges really do depend on the `Const` exemption.
+- `Samples/SpaceShooter/Main.bas` — **PARSE errors**: `Const SCREEN_WIDTH = 800` has no `As` clause. The parser recorded the error and synchronized past the whole `Const` block, so those
+  identifiers reached the IR as `IsGlobal=false, IsConst=false` — measured. **SpaceShooter's 5 merges read plain locals and said NOTHING about the `Const` exemption**, contrary to how the
+  11 were described. (Re-measured with clean front ends: 0.)
+- `Samples/Pong/Main.bas` — parse errors too, and then **`IRBuilder` THROWS** on it ("the module-level variable 'ballVY' has an initializer that cannot be computed at compile time"). It had no CSE
+  count at all. (Now 1.)
+
+⚠ A count taken from IR built by **ignoring the front end's verdict** — which is exactly what `JsTestSupport.BuildModule` refuses to do, on purpose — is a count about IR no build ever produces.
+`CseSampleCorpusTests` keeps pinning the counts AND the front-end verdict, so a sample that STOPS compiling now fails loudly there (and in `NameReservationTests`' samples row, the fast guard)
+instead of drifting. **The robust form of that contract item is `CseInvalidationDecisionTests`' `ConstGlobalAcrossACall` / `ParametersAcrossACall` rows** — a self-contained program that compiles.
+Prefer those.
 
 #### ⛔ The C++ and JavaScript backends DO NOT CASE-FOLD IDENTIFIERS (task #124)
 
