@@ -207,11 +207,13 @@ namespace BasicLang {
   byte-identical; C++ byte-identical for all 973 class-free cells; every differing C++ line one of
   the ruled kinds or the runtime block; no C++ program that compiled and ran before stopped; the
   only output changes are V1 (a virtual call from a base constructor, now .NET's answer) and E12.
-- ⚠ **OPEN, not ruled:** hand-written C++ in a mixed project (spec
-  `2026-07-11-cpp-language-support-design.md` §3, "Direction B") that creates a BasicLang class with
-  `std::make_shared<T>()` no longer compiles — a class has no default constructor, only the tag
-  constructor. It must call `BasicLang::New<T>()`. `Split_ClassAcrossModules_SharedPtrRoundTrip`
-  pins the old spelling.
+- **Hand-written C++ (owner ruling, "Direction B"):** hand-written C++ in a mixed project (spec
+  `2026-07-11-cpp-language-support-design.md` §3) creates a BasicLang class with
+  `BasicLang::New<T>(args)`, exactly like generated code. `std::make_shared<T>()` no longer
+  compiles — a class has only the tag constructor — and that is intended: a public one-phase
+  constructor would be a second protocol in which `Me` is unowned (`bad_weak_ptr` on the first
+  value use inside `Sub New`). The spec, the wiki and `Split_ClassAcrossModules_SharedPtrRoundTrip`
+  say `BasicLang::New`.
 
 ## Rejected
 

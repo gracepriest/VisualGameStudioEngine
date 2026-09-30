@@ -73,12 +73,12 @@ silently stores a same-named parameter into a field it never explicitly assigns.
   `UserDelegateConversionExecutionTests`' `E13_MyBaseNewLambdaArgument_Cpp_…` promoted from a
   pinned compile-failure to a passing run — **#201 is now PARTLY done** (its C++ leg; C# still
   fails on the same shape).
-- **Left untouched, on purpose:** `CppSplitCompileTests.Split_ClassAcrossModules_SharedPtrRoundTrip`
-  (`:218`) still fails — hand-written C++ in a mixed project calling `std::make_shared<T>()` on a
-  BasicLang class no longer compiles (a class has no default constructor any more), and the fix
-  shape (call `BasicLang::New<T>()` from hand-written C++ too) is an OWNER decision pending on
-  spec `2026-07-11-cpp-language-support-design.md` §3 "Direction B". Do not "fix" this pin without
-  that decision.
+- **Direction B, owner-ruled:** hand-written C++ in a mixed project creates a BasicLang class with
+  `BasicLang::New<T>(args)`, never `std::make_shared<T>()` (which no longer compiles — a class has
+  only the tag constructor). `CppSplitCompileTests.Split_ClassAcrossModules_SharedPtrRoundTrip`,
+  spec `2026-07-11-cpp-language-support-design.md` §3 and the wiki (`cpp-interop`, `backends`)
+  were moved to that spelling. Do not add a public one-phase constructor "for C++ callers": `Me`
+  is unowned inside it.
 - **Mutation-proven** (detached worktree, `S/t200/mutants.py`'s mutant set, rebuilt against real
   NUnit rather than the scratch harness): `enable_shared_from_this` on every class,
   raw `this` at value sites, `Self` at member receivers, one-phase construction, field
@@ -86,9 +86,10 @@ silently stores a same-named parameter into a field it never explicitly assigns.
   the tag constructor not resetting fields, no `static_assert`, no purity check — all killed. See
   the PR / task handback for the per-mutant table.
 
-**Gates measured this session (Linux, no MSVC):** fast subset green; the filtered Integration set
-(`Cpp|Class|Constructor|Inherit|Me|Interface|Generic|Delegate`) green except the one Direction-B
-pin above, which is EXPECTED red. Re-run on Windows before calling this fully verified — MSVC,
+**Gates measured (Linux, no MSVC):** the full suite on 58ad8700 failed only the Direction-B pin
+(1/12049/328 of 12378), which the owner's ruling then moved to `BasicLang::New<T>()`. With the
+ruling applied the split tests pass 5/5, and the full suite, measured with #170 stacked on top,
+was 0 failed of 12550. Re-run on Windows before calling this fully verified — MSVC,
 the Release `.blproj` C++ path, and MSIL are all Linux-skips here (`NativeBuildSkip`,
 `MsilHarness.RequireIlasm`).
 
