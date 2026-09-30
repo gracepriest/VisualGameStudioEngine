@@ -71,6 +71,16 @@ public partial class FormPropertyGridView : UserControl
     /// </summary>
     private void OnListKeyDown(object? sender, KeyEventArgs e)
     {
+        // A COMPOSITE row (Font, Size, Location, Padding) expands with Right and collapses with Left, as in VS — only when
+        // focus is on the row's CONTAINER itself: in its editor the arrows move the caret.
+        if (e.KeyModifiers == KeyModifiers.None && e.Source is ListBoxItem { DataContext: FormPropertyRow { IsComposite: true } row } &&
+            e.Key is Key.Left or Key.Right)
+        {
+            row.IsExpanded = e.Key == Key.Right;
+            e.Handled = true;
+            return;
+        }
+
         if (e.KeyModifiers != KeyModifiers.None ||
             e.Source is not Visual source ||
             source.FindAncestorOfType<ListBoxItem>(includeSelf: true) is not { DataContext: FormPropertyCategoryHeader header })

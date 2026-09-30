@@ -217,8 +217,11 @@ public class FormPropertyGridDisplayTests
 
         Assert.Multiple(() =>
         {
+            // Slice 3: Location and Size are composites over X/Y and Width/Height (spec §3, §2.4).
             Assert.That(grid.Rows.Select(r => r.Name),
-                Is.EqualTo(new[] { "Name", "X", "Y", "Width", "Height", "Anchor", "Dock", "TabIndex" }));
+                Is.EqualTo(new[] { "Name", "Location", "Size", "Anchor", "Dock", "TabIndex" }));
+            Assert.That(grid.AllRows().Select(r => r.Name),
+                Is.EqualTo(new[] { "Name", "Location", "X", "Y", "Size", "Width", "Height", "Anchor", "Dock", "TabIndex" }));
             Assert.That(grid.Header, Is.EqualTo("mystery1"));
         });
     }
@@ -481,8 +484,8 @@ public class FormPropertyGridDisplayTests
         var edits = 0;
         grid.Edited += (_, _) => edits++;
 
-        grid.Rows.Single(r => r.Name == "Y").StringValue = "020";
-        grid.Rows.Single(r => r.Name == "Width").StringValue = "abc";
+        grid.AllRows().Single(r => r.Name == "Y").StringValue = "020";
+        grid.AllRows().Single(r => r.Name == "Width").StringValue = "abc";
 
         Assert.Multiple(() =>
         {
@@ -498,7 +501,7 @@ public class FormPropertyGridDisplayTests
         var edits = 0;
         grid.Edited += (_, _) => edits++;
 
-        grid.Rows.Single(r => r.Name == "Y").StringValue = "40";
+        grid.AllRows().Single(r => r.Name == "Y").StringValue = "40";
 
         Assert.Multiple(() =>
         {

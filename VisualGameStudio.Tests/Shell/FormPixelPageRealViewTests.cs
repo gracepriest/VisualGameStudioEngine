@@ -101,7 +101,19 @@ public class FormPixelPageRealViewTests
         public TextBox Search => Grid.FindControl<TextBox>("SearchBox")!;
         public FormDocument Doc => Vm.DesignDocument!;
         public FormControl Control(string id) => Doc.FindById(id)!;
-        public FormPropertyRow Row(string name) => GridVm.Rows.Single(r => r.Name == name);
+        /// <summary>A top-level row, or a composite's part with its parent expanded first (slice 3: X is Location's part).</summary>
+        public FormPropertyRow Row(string name)
+        {
+            var row = GridVm.Rows.SingleOrDefault(r => r.Name == name) ?? GridVm.AllRows().Single(r => r.Name == name);
+            if (row.Parent is { IsExpanded: false } parent)
+            {
+                parent.IsExpanded = true;
+                Window.UpdateLayout();
+                Dispatcher.UIThread.RunJobs();
+            }
+
+            return row;
+        }
         private FormCanvasTransform Fit => FormCanvasControl.Fit(Doc, Canvas.Bounds.Size);
         public double Zoom => Fit.Zoom;
 

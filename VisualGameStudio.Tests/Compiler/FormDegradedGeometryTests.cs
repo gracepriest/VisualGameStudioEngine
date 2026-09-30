@@ -143,11 +143,13 @@ public class FormDegradedGeometryTests
         grid.Load(file);
         grid.SelectedControl = file.Model.FindById("btn");
 
-        var x = grid.Rows.Single(r => r.Name == "X");
-        var y = grid.Rows.Single(r => r.Name == "Y");
+        var x = grid.AllRows().Single(r => r.Name == "X");
+        var y = grid.AllRows().Single(r => r.Name == "Y");
+        var location = grid.Rows.Single(r => r.Name == "Location");
 
         Assert.Multiple(() =>
         {
+            Assert.That(location.IsFrozen, Is.True, "the composite over a Degraded part is frozen too (task 6)");
             Assert.That(x.IsFrozen, Is.True);
             Assert.That(x.StringValue, Is.EqualTo("5\t"), "a frozen row shows the document's own text (slice 2 B1)");
             Assert.That(x.FrozenReason, Does.Contain("preserved exactly as written"));

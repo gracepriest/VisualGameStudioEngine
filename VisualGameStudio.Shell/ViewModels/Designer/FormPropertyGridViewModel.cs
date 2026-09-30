@@ -368,10 +368,17 @@ public partial class FormPropertyGridViewModel : ObservableObject
         switch (control.Geometry)
         {
             case PixelGeometry pixel:
-                Rows.Add(IntRow("X", () => pixel.X, v => pixel.X = v, Changed, "Layout", LocationDescription));
-                Rows.Add(IntRow("Y", () => pixel.Y, v => pixel.Y = v, Changed, "Layout", LocationDescription));
-                Rows.Add(IntRow("Width", () => pixel.Width, v => pixel.Width = Math.Max(1, v), Changed, "Layout", SizeDescription));
-                Rows.Add(IntRow("Height", () => pixel.Height, v => pixel.Height = Math.Max(1, v), Changed, "Layout", SizeDescription));
+                // ⛔ Spec §3 / §2.4: Location and Size are COMPOSITE rows OVER the canvas's own geometry — never a second
+                // copy of it. The parent reads/writes "x, y" (VS's PointConverter/SizeConverter text); its parts are
+                // the X/Y and Width/Height rows the grid always had.
+                Rows.Add(GeometryComposite("Location", LocationDescription,
+                    IntRow("X", () => pixel.X, v => pixel.X = v, Changed, "Layout", LocationDescription),
+                    IntRow("Y", () => pixel.Y, v => pixel.Y = v, Changed, "Layout", LocationDescription),
+                    (x, y) => { pixel.X = x; pixel.Y = y; }));
+                Rows.Add(GeometryComposite("Size", SizeDescription,
+                    IntRow("Width", () => pixel.Width, v => pixel.Width = Math.Max(1, v), Changed, "Layout", SizeDescription),
+                    IntRow("Height", () => pixel.Height, v => pixel.Height = Math.Max(1, v), Changed, "Layout", SizeDescription),
+                    (w, h) => { pixel.Width = Math.Max(1, w); pixel.Height = Math.Max(1, h); }));
 
                 // ⛔⛔ PIXEL GEOMETRY ONLY, and that is D3 rather than an oversight: Anchor and Dock
                 // are the PIXEL vocabulary — a .blform's, and a Canvas page's (spec 2026-09-27) — and
@@ -424,6 +431,40 @@ public partial class FormPropertyGridViewModel : ObservableObject
                 "TabIndex", () => control.TabIndex, v => control.TabIndex = Math.Max(0, v), Changed,
                 "Behavior", TabIndexDescription));
         }
+    }
+
+    /// <summary>
+    /// A geometry composite (Location, Size): "a, b" over its two part rows. Typed text sets both numbers at once;
+    /// a part sets its own. ⚠ Frozen when either part is (a Degraded coordinate): the parent must not rewrite text the
+    /// reader could not read.
+    /// </summary>
+    private FormPropertyRow GeometryComposite(
+        string name, string description, FormPropertyRow first, FormPropertyRow second, Action<int, int> write)
+    {
+        var frozen = first.FrozenReason ?? second.FrozenReason;
+        var parent = new FormPropertyRow(
+            name, FormPropertyType.Size,
+            () => $"{first.DisplayValue}, {second.DisplayValue}",
+            frozen != null
+                ? null
+                : text =>
+                {
+                    if (!FormPropertyDef.TryParseSize(text, out var a, out var b))
+                    {
+                        return false;
+                    }
+
+                    var before = $"{first.DisplayValue}, {second.DisplayValue}";
+                    write(a, b);
+                    return !string.Equals(before, $"{first.DisplayValue}, {second.DisplayValue}", StringComparison.Ordinal);
+                },
+            RaiseEdited,
+            frozen,
+            category: "Layout",
+            description: description);
+
+        parent.AdoptChildren(new[] { first, second });
+        return parent;
     }
 
     /// <summary>
@@ -500,7 +541,7 @@ public partial class FormPropertyGridViewModel : ObservableObject
             var degraded = _file?.DegradedRoot.FirstOrDefault(d =>
                 string.Equals(d.Property, definition.Name, StringComparison.Ordinal));
 
-            Rows.Add(FormPropertyRow.ForStoredValue(
+            Rows.Add(Composite(FormPropertyRow.ForStoredValue(
                 definition,
                 form.Target,
                 read: () => FormRootValues.Get(form, definition),
@@ -519,8 +560,43 @@ public partial class FormPropertyGridViewModel : ObservableObject
                 Changed,
                 frozenReason: degraded?.Reason,
                 frozenText: degraded?.Value,
-                storeRefusal: value => FormRootValues.RefusalOf(definition, value)));
+                storeRefusal: value => FormRootValues.RefusalOf(definition, value))));
         }
+    }
+
+    /// <summary>Gives a catalog row its composite parts (a Font, a Size, a Padding), and returns it.</summary>
+    private static FormPropertyRow Composite(FormPropertyRow row)
+    {
+        FormCompositeRows.Attach(row);
+        return row;
+    }
+
+    /// <summary>Every row, parts included, in display order within each parent — for callers that look a row up by name.</summary>
+    public IEnumerable<FormPropertyRow> AllRows() => Rows.SelectMany(r => r.Children.Prepend(r));
+
+    /// <summary>
+    /// The composites the user has expanded, by NAME — remembered across selections, as VS remembers an expanded Font
+    /// when you click the next control.
+    /// </summary>
+    private readonly HashSet<string> _expanded = new(StringComparer.Ordinal);
+
+    private void OnCompositeToggled(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName != nameof(FormPropertyRow.IsExpanded) || sender is not FormPropertyRow row || !Rows.Contains(row))
+        {
+            return;
+        }
+
+        if (row.IsExpanded)
+        {
+            _expanded.Add(row.Name);
+        }
+        else
+        {
+            _expanded.Remove(row.Name);
+        }
+
+        _display.RowToggled(row, SearchText);
     }
 
     private void Rebuild()
@@ -536,6 +612,7 @@ public partial class FormPropertyGridViewModel : ObservableObject
         foreach (var old in Rows)
         {
             old.PropertyChanged -= OnRowPropertyChanged;
+            old.PropertyChanged -= OnCompositeToggled;
         }
 
         Rows.Clear();
@@ -563,12 +640,14 @@ public partial class FormPropertyGridViewModel : ObservableObject
                     continue;
                 }
 
-                Rows.Add(new FormPropertyRow(
+                var row = new FormPropertyRow(
                     control,
                     property,
                     target,
                     _file?.DegradedReason(control.Id, property.Name),
-                    RaiseEdited));
+                    RaiseEdited);
+                FormCompositeRows.Attach(row);
+                Rows.Add(row);
             }
         }
         else if (_file?.Model is { } form)
@@ -594,6 +673,13 @@ public partial class FormPropertyGridViewModel : ObservableObject
         foreach (var row in Rows)
         {
             row.PropertyChanged += OnRowPropertyChanged;
+
+            if (row.IsComposite)
+            {
+                // Restored BEFORE subscribing: the display list below lays out the remembered expansion in one pass.
+                row.IsExpanded = _expanded.Contains(row.Name);
+                row.PropertyChanged += OnCompositeToggled;
+            }
         }
 
         RefreshObjects();

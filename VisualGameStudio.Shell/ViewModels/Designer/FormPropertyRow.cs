@@ -196,6 +196,65 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
 
     private readonly FormRowEditor _editor = FormRowEditor.Default;
 
+    // ==================================================================
+    // Composite rows (spec §3, slice 3 Task 6): Font → Name/Size/Bold/Italic/Underline, Size → Width/Height,
+    // Location → X/Y, Padding → All/Left/Top/Right/Bottom. The PARENT still owns the value (and accepts typed text);
+    // each part reads its piece of it and writes the WHOLE value back through the parent — one statement per
+    // composite, the fan-in rule, and every no-op/refusal rule of the parent's own Commit.
+    // ==================================================================
+
+    private readonly List<FormPropertyRow> _children = new();
+
+    /// <summary>The parts of a composite row, in the order VS lists them. Empty for a plain row.</summary>
+    public IReadOnlyList<FormPropertyRow> Children => _children;
+
+    /// <summary>The composite this row is a part of, or null for a top-level row.</summary>
+    public FormPropertyRow? Parent { get; private set; }
+
+    /// <summary>True when the row has parts to expand.</summary>
+    public bool IsComposite => _children.Count > 0;
+
+    /// <summary>Whether the parts are shown (the display list inserts them right after this row).</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(Glyph))]
+    private bool _isExpanded;
+
+    /// <summary>VS's +/− box — a real minus sign, U+2212, as wide as the plus (the category header's glyph).</summary>
+    public string Glyph => IsExpanded ? ((char)0x2212).ToString() : "+";
+
+    /// <summary>
+    /// Where the name starts: a plain row 12px in (as it always was), a composite 2px after its 12px expander box — so
+    /// both names line up — and a part one step further in, under its parent.
+    /// </summary>
+    public Avalonia.Thickness NameMargin => new(Parent != null ? 26 : IsComposite ? 2 : 12, 0, 0, 0);
+
+    IReadOnlyList<IFormDisplayRow> IFormDisplayRow.SubRows => _children;
+
+    /// <summary>The catalog row, for a composite helper that needs its type; null for an intrinsic row.</summary>
+    internal FormPropertyDef? Definition => _definition;
+
+    /// <summary>Makes <paramref name="children"/> this row's parts. Called once, while the grid builds its rows.</summary>
+    internal void AdoptChildren(IEnumerable<FormPropertyRow> children)
+    {
+        foreach (var child in children)
+        {
+            child.Parent = this;
+            _children.Add(child);
+        }
+    }
+
+    /// <summary>
+    /// A part writing the WHOLE value (<paramref name="value"/>) through its parent — the same Commit a typed edit of the
+    /// parent takes, so the parent's no-op, reset and §7 refusal rules hold for a part edit too. Returns whether the
+    /// parent's value CHANGED (false for a refusal or the same value: the part then snaps back).
+    /// </summary>
+    internal bool CommitFromPart(string value)
+    {
+        var before = DisplayValue;
+        Commit(value);
+        return !string.Equals(before, DisplayValue, StringComparison.Ordinal);
+    }
+
     public string Name { get; }
 
     /// <summary>The Visual Studio group this row is listed under (spec §3).</summary>
@@ -703,7 +762,26 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
         OnPropertyChanged(nameof(IntValue));
     }
 
+    /// <summary>
+    /// This row's value changed: every view of it re-reads — and, for a composite, every PART re-reads too (a part is a
+    /// view of the parent's value). A part that changed asks its PARENT, so its siblings follow (Padding's All and Left).
+    /// </summary>
     private void RaiseValueChanged()
+    {
+        if (Parent != null)
+        {
+            Parent.RaiseValueChanged();
+            return;
+        }
+
+        RaiseOwnValueChanged();
+        foreach (var child in _children)
+        {
+            child.RaiseOwnValueChanged();
+        }
+    }
+
+    private void RaiseOwnValueChanged()
     {
         foreach (var name in new[]
                  {
