@@ -381,7 +381,7 @@ public class JsExecutionTierRosterTests
         // Task #169 (plus #199), ADR-0013 — case-insensitive name binding between the front end
         // and the IR. Named "...ExecutionTests", so the widened match below WOULD catch it on
         // its own; listed explicitly anyway, matching every row above. Its JS legs run through
-        // FourBackends.RunsOnEveryBackend[Aggressive] (the K/leak/X1/edge probes and E18's pin)
+        // FourBackends.RunsOnEveryBackend[Aggressive] (the K/leak/X1/edge probes and E18)
         // and JavaScriptExecutionTests.RunJs/RunNodeScript directly (the K4/K9 pins' JS leg and
         // E19's multi-file project-entry-point leg). NameBindingTests (front end/IR only, no
         // process spawned, no [Category("Integration")]) is NOT here.
@@ -436,6 +436,14 @@ public class JsExecutionTierRosterTests
         // CLI, the CLI with --optimize and CompileProjectFiles, on the same four backends. Named "...ExecutionTests", so the widened
         // match below would catch it on its own; listed explicitly anyway.
         typeof(NameReservationExecutionTests),
+
+        // Task #124 / ADR-0013 D3 — every probe the fix moved to vbc's answer (a bare field, an inherited field, a Shared field,
+        // a property, a For / For Each control over a local, a parameter, a field or a global, AddressOf, MyBase.m, a Shared method
+        // through its class, New, AddHandler, RaiseEvent, an Await callee, a Module variable before its Module, and the multi-file
+        // MF1/MF2/MF5), each in another case from its declaration and with its same-case control, through the CLI, the CLI with
+        // --optimize and CompileProjectFiles. Named "...ExecutionTests", so the widened match below would catch it on its own; listed
+        // explicitly anyway. Its JavaScript cells run under Node (TempExec.Run -> JavaScriptExecutionTests.RunNodeScript).
+        typeof(NameBindingResolutionExecutionTests),
     };
 
     /// <summary>
@@ -487,7 +495,7 @@ public class JsExecutionTierRosterTests
 
     [Test]
     public void RosterIsPinned()
-        => Assert.That(ExecutionTier, Has.Length.EqualTo(98), // + TempMintingFacilityTests + NameReservationExecutionTests (task #121, ADR-0018); + CompilerTempExecutionTests + CompilerTempCollisionFenceTests (task #163, ADR-0017); + BaseConstructorCallLoweringExecutionTests + BaseConstructorCallCppRefusalTests (task #170, ADR-0016), MsilValueToStringExecutionTests (task #183), InterfaceMethodTypingExecutionTests, IsIsNotOperatorExecutionTests (task #185), MeReceiverTypingExecutionTests (task #176), UserDelegateConversionExecutionTests (task #187), DelegateMemberInvocationExecutionTests (task #188), NothingStringTextExecutionTests (task #189), MsilObjectBoxingExecutionTests (task #177), NotPrecedenceExecutionTests (#195), PropertyAccessExecutionTests (task #178), NameBindingExecutionTests (task #169/#199), PerIterationLoopBodyDimExecutionTests + PerIterationLoopBodyDimOptimizerExecutionTests (task #172, ADR-0014), LambdaBoundaryDiagnosticsExecutionTests (task #174); + WhenGuardCallRunTests, TypeOfExecutionTests (#197), ForwardDeclaredTypeExecutionTests
+        => Assert.That(ExecutionTier, Has.Length.EqualTo(99), // + TempMintingFacilityTests + NameReservationExecutionTests (task #121, ADR-0018); + CompilerTempExecutionTests + CompilerTempCollisionFenceTests (task #163, ADR-0017); + BaseConstructorCallLoweringExecutionTests + BaseConstructorCallCppRefusalTests (task #170, ADR-0016), MsilValueToStringExecutionTests (task #183), InterfaceMethodTypingExecutionTests, IsIsNotOperatorExecutionTests (task #185), MeReceiverTypingExecutionTests (task #176), UserDelegateConversionExecutionTests (task #187), DelegateMemberInvocationExecutionTests (task #188), NothingStringTextExecutionTests (task #189), MsilObjectBoxingExecutionTests (task #177), NotPrecedenceExecutionTests (#195), PropertyAccessExecutionTests (task #178), NameBindingExecutionTests (task #169/#199), PerIterationLoopBodyDimExecutionTests + PerIterationLoopBodyDimOptimizerExecutionTests (task #172, ADR-0014), LambdaBoundaryDiagnosticsExecutionTests (task #174); + WhenGuardCallRunTests, TypeOfExecutionTests (#197), ForwardDeclaredTypeExecutionTests; + NameBindingResolutionExecutionTests (task #124, ADR-0013 D3)
             "The execution-tier roster changed. That is fine — update the number — but it must " +
             "be a deliberate edit, not a silent shrink.");
 

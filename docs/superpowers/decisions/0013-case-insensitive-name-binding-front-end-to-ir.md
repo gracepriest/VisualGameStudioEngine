@@ -154,3 +154,82 @@ public NameBinding? Binding { get; set; }
   is any ICE on the corpus (a declaration site was missed).
 - **D6:** #124 needs to touch a declaration-registration site, rather than a resolution site or a
   new Kind.
+
+## Amendment (2026-09-30): #124 consumed D3
+
+This section records facts, not a new ruling. It states what #124 built on D1, D3, D6 and D7, where it
+went past what this ADR wrote down, and one deliberate deviation from the orchestrator's answer to the
+brief's Q3, which is left for the architect (#250). Sources: the #124 fix (`c55e91bd`), the orchestrator's
+binding answers (Q1/Q2: the counted `For`; Q3, option (A): consume where the IR node is created), and
+the test-writer's measurements.
+
+- **What #124 consumed (D3, D6).** Every reference kind the analyzer records, at every path that creates
+  its IR node: "a Kind is bound through the record everywhere or nowhere, never half".
+  - `IRBuilder.ReferencedVariable` goes through `BoundVariable`, keyed by `Binding.DeclaredName` and
+    looking only in the store its Kind names. Local, Parameter and LambdaParameter: `_variableVersions`,
+    a miss an ICE (#169, unchanged). Field and Property: the member's own variable, by declared name.
+    ModuleGlobal: the global itself, by declared name (a Module's own, another file's, or a file-scope
+    one). Method, Type and Event: a name, not storage, by declared spelling.
+  - Module-member globals and imported globals, read and write; `AccessorMemberOf`; an `Await` callee;
+    `RaiseEvent`; and the counted `For` (below).
+  - Not changed: `For Each` (the analyzer already decides reuse case-insensitively), `Catch` (always a new
+    declaration; a `Catch err` with no `As` that should reuse a variable is #248), `Using` (no statement
+    form exists), `ReDim` (lowered to an assignment, so covered).
+- **Member access and `New` consume the analyzer's symbol or type, not a `NameBinding`.** D1 puts the
+  binding on `IdentifierExpressionNode`. `MemberAccessExpressionNode` (`obj.m`, `C.m`, `Me.m`,
+  `MyBase.m`) and `NewExpressionNode` are not identifier references, so they carry none. They take the
+  spelling from what the analyzer RESOLVED for that node (`GetNodeSymbol`, `GetNodeType`):
+  `DeclaredMemberSpelling` for a member read, a member store, an instance call, a Shared call and a
+  `MyBase` call, and the resolved class for `New`. The declared spelling replaces the written one ONLY when
+  the two differ by case alone; a .NET member (resolved through its descriptor) keeps the spelling it was
+  written in. There is no second lookup by name.
+  - `IRBuilder.CanonicaliseMemberNames` predates this ADR and still rewrites member names after the walk,
+    by its own lookup of the receiver's class. It is a second resolver, and the sites above make it
+    redundant for an instance member of a class the analyzer knows. Whether it is retired is **#250**.
+  - ⚠ While it stays, the sites and the post-pass mask each other in the final IR: four of the twenty
+    #124 mutants (the accessor member, the member read, the member store and the instance call spelled
+    as written) changed nothing observable end to end. A test that must see a member site's own answer
+    reads the IR BEFORE the post-pass (`BindingSiteIr.BuildBeforeCanonicalisation`). A fifth mutant
+    (`raise_<written spelling>`) was masked the same way one layer down: the C# and JavaScript backends
+    look the event up again by their own case-insensitive name.
+- **D7: `Event` joined `NameBindingKind`.** `BindingKindOf` maps `SymbolKind.Event` to
+  `NameBindingKind.Event`, so an event named as an `AddHandler` operand is bound like any identifier. A
+  `RaiseEvent` statement carries the event by name, not as an identifier node, so the analyzer records it
+  through a synthesized `RaiseEventStatementNode.EventReference`, bound at the one recording point
+  (`SetNodeSymbol`); the IR builder raises `raise_<declared spelling>`. The reference is metadata, not a
+  child of the statement: nothing visits it, and it is overwritten on every analysis pass.
+- **D3/D6: the counted `For` with no `As`.** The decision "existing storage, or declare a variable" is the
+  analyzer's, recorded as `ForLoopNode.ControlReference`: a synthesized reference to the loop's control
+  name, bound at the one recording point to whatever the name already denotes. When that binding is a Local,
+  Parameter, LambdaParameter, Field, Property or ModuleGlobal, the loop DRIVES that storage, reached by its
+  declared spelling through `BoundVariable`, in any case (VB: `For total = ...` over a field `Total` drives
+  the field). The `As` form declares a new variable and records no control reference. A Method or Type name
+  is not storage. The Ordinal `ResolvesToExistingStorage` is asked only when the analyzer bound no storage;
+  it stays, for one job: not declaring twice a same-spelled local the function already declares (a `Dim` in
+  an earlier, closed block, which the analyzer rightly no longer sees).
+- **The deliberate absence of a Field / Property internal compiler error.** The orchestrator's answer to Q3
+  was that a bound Field or ModuleGlobal reference whose declaration is not found is an ICE, mirroring
+  `ReferencedVariable`. #124 applies the ICE to Local, Parameter and LambdaParameter (D1, unchanged) and to
+  a FILE-SCOPE ModuleGlobal, and does NOT apply it to a Field or a Property, nor to an owning-module or
+  imported ModuleGlobal (a Module may be declared after its use, so an absent declaration is a forward
+  reference, as it always was). Why: a member has no IR-side registration that is complete at the
+  reference. The IR class list is filled in declaration order and holds THIS unit's classes only, so an ICE
+  would refuse programs VB accepts. The analyzer's own declaration is the evidence the member exists.
+  - Measured by the test-writer: two shapes reach it from source and still build and print VB's answer or
+    fail in their own backend, never in the IR builder (an enclosing class's Shared field read from a nested
+    class, and a base declared after its derived class; the nested-class shape fails on every backend for a
+    reason that predates #124, in the same-case control too). A Structure's member cannot be named bare (a
+    Structure holds fields only) and a base class in another file is refused today (`Unknown base class`).
+    Those two are covered by hand-built input: a Field or Property binding whose declared name nothing
+    registers builds without throwing.
+  - ⚠ The file-scope ICE cannot be reached from source either (the analyzer refuses a file-scope global
+    used before its declaration, and the declaration always registers it); it is tested on a real front end
+    with a hand-tampered binding, the idiom the Local ICE's test uses.
+- **Obligations, checked.** MSIL's "differs only by case" backstop fired 0 times across the corpus (7,602
+  common cells before and after, and the probe matrix). The byte diff of 1,091 programs x 14 cells was
+  confined to programs that spell a name in a different case from its declaration (280 cells, 25
+  programs); 0 cells differ outside that set, 0 verifier fires, 0 return-code changes.
+- **Follow-ups this work filed:** #244 (cross-file module globals that differ only by case), #245 (events),
+  #246 (C#: a `For` over another module's global), #247 (`For x As T` leaves the variable bound), #248
+  (`Catch err` with no `As`), #249 (a Function's own name as its return value), #250 (the architect
+  question above), #251 (the `dotnet test --filter` trap; see `docs/HANDOFF.md`).
