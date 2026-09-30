@@ -1442,9 +1442,10 @@ namespace BasicLang.Compiler.IR.Optimization
     /// keeps its own cast (<c>7 / (double)(x)</c>) which still promotes. So this pass staying out
     /// of the pipeline is a SCOPE decision, not a safety one, and no test holds it.</para>
     ///
-    /// <para>⛔ WIDENING ONLY, and only the three conversions that are EXACT: Integer→Long,
-    /// Integer→Double (32 bits fit a 53-bit mantissa) and Single→Double. Integer→Single is not
-    /// exact past 2^24, and Long→Double is not exact past 2^53.</para>
+    /// <para>⛔ WIDENING ONLY, and only conversions that are EXACT: Integer→Long,
+    /// Integer→Double (32 bits fit a 53-bit mantissa), Single→Double, and (#123) Integer→Single
+    /// for a value within ±2^24 — past that the float rounds, so it is not folded. Long→Double is
+    /// not exact past 2^53 and is not folded at all.</para>
     ///
     /// <para>⚠ The widening-only restriction is, today, UNREACHABLE — measured: adding a
     /// Double→Integer arm to <see cref="TryWiden"/> leaves every test passing, because no
@@ -1509,6 +1510,11 @@ namespace BasicLang.Compiler.IR.Optimization
                 case "Integer" when value is int i:
                     if (targetName == "Long") return (long)i;
                     if (targetName == "Double") return (double)i;
+                    // #123: Integer → Single is a VB widening, but EXACT only up to 2^24 — past it
+                    // the float rounds, and a fold must not choose a rounding the backends might
+                    // not. Inside that range every backend's run-time conversion gives this value.
+                    // (Samples/Pong: `Dim ballVY As Single = BALL_SPEED / 2`.)
+                    if (targetName == "Single" && Math.Abs((long)i) <= (1L << 24)) return (float)i;
                     return null;
                 case "Single" when value is float f:
                     if (targetName == "Double") return (double)f;

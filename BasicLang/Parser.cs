@@ -2765,8 +2765,10 @@ namespace BasicLang.Compiler
             var node = new ConstantDeclarationNode(token.Line, token.Column);
 
             node.Name = Consume(TokenType.Identifier, "Expected constant name").Lexeme;
-            Consume(TokenType.As, "Expected 'As'");
-            node.Type = ParseTypeReference();
+            // #123: the As clause is optional, as in VB. `Const X = 800` leaves Type null and the
+            // analyzer gives the constant the type of its constant expression (Integer here).
+            if (Match(TokenType.As))
+                node.Type = ParseTypeReference();
 
             // Value is required for Const, but parse it optionally
             // so semantic analyzer can report a better error
@@ -4651,6 +4653,51 @@ namespace BasicLang.Compiler
         /// and the ADR-0011 identity node. The cast is flagged <c>IsTypeOfTest</c> so the analyzer
         /// judges it by TypeOf's rules and speaks about TypeOf, not TryCast.</para>
         /// </summary>
+        /// <summary>
+        /// <c>If(condition, whenTrue, whenFalse)</c> (#123) — see <see cref="ConditionalExpressionNode"/>.
+        /// ⚠ The two-argument coalescing form <c>If(value, fallback)</c> is REFUSED here rather than
+        /// read as something else: it needs a <c>value Is Nothing</c> test on the carrier, and what
+        /// that test means for a String or a nullable value type differs between backends — its own
+        /// characterization, not a ride-along.
+        /// </summary>
+        private ExpressionNode ParseConditionalExpression()
+        {
+            var ifToken = Consume(TokenType.If, "Expected 'If'");
+            Consume(TokenType.LeftParen, "Expected '(' after 'If'");
+
+            var arguments = new List<ExpressionNode>();
+            if (!Check(TokenType.RightParen))
+            {
+                do
+                {
+                    arguments.Add(ParseExpression());
+                } while (Match(TokenType.Comma));
+            }
+            var closing = Consume(TokenType.RightParen, "Expected ')' after the arguments of 'If('");
+
+            if (arguments.Count == 2)
+            {
+                throw new ParseException(
+                    "The two-argument If(value, fallback) is not supported yet; write " +
+                    "If(value IsNot Nothing, value, fallback), or test the value in an If statement",
+                    ifToken, "Use the three-argument form If(condition, whenTrue, whenFalse).");
+            }
+
+            if (arguments.Count != 3)
+            {
+                throw new ParseException(
+                    $"If() takes three arguments — If(condition, whenTrue, whenFalse) — but was given {arguments.Count}",
+                    closing, "Write If(condition, whenTrue, whenFalse).");
+            }
+
+            return new ConditionalExpressionNode(ifToken.Line, ifToken.Column)
+            {
+                Condition = arguments[0],
+                WhenTrue = arguments[1],
+                WhenFalse = arguments[2]
+            };
+        }
+
         private ExpressionNode ParseTypeOfExpression()
         {
             var typeOf = Consume(TokenType.TypeOf, "Expected 'TypeOf'");
@@ -4718,6 +4765,12 @@ namespace BasicLang.Compiler
 
             if (Check(TokenType.TypeOf))
                 return ParseTypeOfExpression();
+
+            // #123: VB's conditional operator `If(condition, whenTrue, whenFalse)`. In EXPRESSION
+            // position only — a statement that begins with `If` never reaches ParsePrimary, so
+            // `If (x > 0) Then` stays an If statement.
+            if (Check(TokenType.If) && PeekNext().Type == TokenType.LeftParen)
+                return ParseConditionalExpression();
 
             // Interpolated string: $"Hello {name}"
             if (Check(TokenType.InterpolatedStringLiteral))

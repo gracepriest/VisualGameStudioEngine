@@ -1574,7 +1574,13 @@ namespace BasicLang.Compiler.IR
 
             try
             {
+                var conditionalsBefore = _conditionalLowerings;
                 initializer.Accept(this);
+
+                // #123: an If(c, a, b) is control flow — its value is a carrier written in two
+                // blocks, and the fold below reads only the LAST block, which would hand back the
+                // carrier of a function that is thrown away. Not constant, so the caller refuses it.
+                if (_conditionalLowerings != conditionalsBefore) return null;
 
                 // ⛔ THE COERCION THE GLOBAL PATH NEVER HAD, and the whole reason a module-scope
                 // `Dim v As Integer = 7.9` produced GARBAGE. The LOCAL branch of
@@ -1594,6 +1600,14 @@ namespace BasicLang.Compiler.IR
                 // folded. Note this can be a NON-constant IRValue; each caller decides whether it
                 // can use one.
                 if (emitted.Count == 0) return lowered;
+
+                // #123: a module-level Const is a leaf of a constant expression, as in VB —
+                // `Dim ballVY As Single = BALL_SPEED / 2` (Samples/Pong) was refused as "cannot be
+                // computed at compile time" because a read of BALL_SPEED lowers to its global, which
+                // no fold pass looks through. Each read of a Const global whose OWN initializer
+                // already folded is replaced by that value first. Only initializers that were
+                // refused change: before this, a Const operand always left the fold incomplete.
+                SubstituteFoldedConstGlobals(emitted);
 
                 var scratchModule = new IRModule("<init>");
                 scratchModule.Functions.Add(scratch);
@@ -1630,6 +1644,42 @@ namespace BasicLang.Compiler.IR
                 // scratch MODULE, not the cursor, so restoring after it is equivalent.
                 _currentFunction = savedFunction;
                 _currentBlock = savedBlock;
+            }
+        }
+
+        /// <summary>
+        /// #123 — for <see cref="TryFoldInitializerToConstant"/> only: rewrites, in the SCRATCH
+        /// function's instructions, every operand that reads a module-level <c>Const</c> whose
+        /// initial value is already a constant into a copy of that constant. The operand kinds are
+        /// exactly those the fixpoint's two passes fold (binary, compare, unary, cast); a Const read
+        /// anywhere else still leaves the fold incomplete, and the caller still refuses it.
+        /// </summary>
+        private static void SubstituteFoldedConstGlobals(IEnumerable<IRInstruction> instructions)
+        {
+            static IRValue Folded(IRValue operand) =>
+                operand is IRVariable { IsGlobal: true, IsConst: true, InitialValue: IRConstant value }
+                    ? new IRConstant(value.Value, value.Type)
+                    : operand;
+
+            foreach (var instruction in instructions)
+            {
+                switch (instruction)
+                {
+                    case IRBinaryOp binary:
+                        binary.Left = Folded(binary.Left);
+                        binary.Right = Folded(binary.Right);
+                        break;
+                    case IRCompare compare:
+                        compare.Left = Folded(compare.Left);
+                        compare.Right = Folded(compare.Right);
+                        break;
+                    case IRUnaryOp unary:
+                        unary.Operand = Folded(unary.Operand);
+                        break;
+                    case IRCast cast:
+                        cast.Value = Folded(cast.Value);
+                        break;
+                }
             }
         }
 
@@ -5321,6 +5371,69 @@ namespace BasicLang.Compiler.IR
             _currentBlock = mergeBlock;
             _expressionResult = result;
         }
+
+        /// <summary>
+        /// #123 — VB's <c>If(condition, whenTrue, whenFalse)</c>, lowered as CONTROL FLOW so only
+        /// the chosen operand is evaluated (<c>If(n &lt;= 1, 1, n * Fact(n - 1))</c> must not
+        /// recurse forever, <c>If(d = 0, 0, 10 \ d)</c> must not divide by zero).
+        ///
+        /// <para>⛔ The shape is exactly <see cref="Visit(IfStatementNode)"/>'s If/Else — condition
+        /// first, then <c>if{id}.then</c> / <c>if{id}.else</c> / <c>if{id}.end</c> — with the
+        /// <see cref="BuildShortCircuit"/> carrier <c>__sc{id}</c> written in each arm, for the same
+        /// reason that method gives: the C# backend recognises structure by those NAMES, and every
+        /// backend already lowers this construct. No IR node, no backend change.</para>
+        ///
+        /// <para>⚠ Each arm is coerced to the result type (the analyzer's dominant type), as a
+        /// store is: <c>If(c, 1, 2.5)</c> is Double, so the Integer arm widens in its own arm.</para>
+        ///
+        /// <para>⚠ Two places cannot hold control flow and refuse it rather than miscompile: a
+        /// <c>When</c> guard (built with emission suppressed — its existing block check in
+        /// <see cref="ConvertPatternToIR"/> reports it), and an initializer that must fold to a
+        /// constant (<see cref="TryFoldInitializerToConstant"/> reads
+        /// <see cref="_conditionalLowerings"/> and declines, so the caller's "cannot be computed at
+        /// compile time" diagnostic fires).</para>
+        /// </summary>
+        public void Visit(ConditionalExpressionNode node)
+        {
+            _conditionalLowerings++;
+
+            var resultType = _semanticAnalyzer.GetNodeType(node)
+                             ?? new TypeInfo("Object", TypeKind.Class);
+
+            node.Condition.Accept(this);
+            var condition = _expressionResult;
+
+            var id = _ifCounter++;
+            var thenBlock = _currentFunction.CreateBlock($"if{id}.then");
+            var elseBlock = _currentFunction.CreateBlock($"if{id}.else");
+            var mergeBlock = _currentFunction.CreateBlock($"if{id}.end");
+
+            // The carrier, registered with the function exactly as BuildShortCircuit's is.
+            var result = CreateVariable($"__sc{id}", resultType, _nextVersion++);
+            PushVariableVersion(result.Name, result);
+            _currentFunction.LocalVariables.Add(result);
+
+            EmitInstruction(new IRConditionalBranch(condition, thenBlock, elseBlock));
+
+            _currentBlock = thenBlock;
+            node.WhenTrue.Accept(this);
+            EmitInstruction(new IRAssignment(result, CoerceToDeclaredType(_expressionResult, resultType)));
+            if (!_currentBlock.IsTerminated())
+                EmitInstruction(new IRBranch(mergeBlock));
+
+            _currentBlock = elseBlock;
+            node.WhenFalse.Accept(this);
+            EmitInstruction(new IRAssignment(result, CoerceToDeclaredType(_expressionResult, resultType)));
+            if (!_currentBlock.IsTerminated())
+                EmitInstruction(new IRBranch(mergeBlock));
+
+            _currentBlock = mergeBlock;
+            _expressionResult = result;
+        }
+
+        /// <summary>How many <see cref="Visit(ConditionalExpressionNode)"/> lowerings have run —
+        /// read across a fold by <see cref="TryFoldInitializerToConstant"/>.</summary>
+        private int _conditionalLowerings;
 
         public void Visit(BinaryExpressionNode node)
         {
