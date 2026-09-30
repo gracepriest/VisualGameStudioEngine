@@ -61,13 +61,16 @@ public class JavaScriptCodeGenTests
     /// <para><b>This is a MOVING canary and is meant to be re-pointed.</b> It must always
     /// name a construct just beyond the implemented frontier, so as Phase 2 lands features
     /// this test goes green-by-accident and has to be aimed further out. It has already moved
-    /// five times: `x = x + 1` (task 13), Try/Catch (task 19), Async (task 21), Iterator
-    /// (task 22), a second Catch clause (now an instanceof ladder). It now names a COMPUTED
-    /// base-constructor argument — `MyBase.New(n &amp; "!")` — which JS forbids before
-    /// <c>super()</c> because the argument's instructions would have to run first, an ordering
-    /// the IR does not mark; only constants and plain parameters lower. (Reachable at all only
-    /// since <c>MyBase.New</c> parses.) Re-point it rather than deleting it — the principle it
-    /// guards outlives any one node.</para>
+    /// SIX times: `x = x + 1` (task 13), Try/Catch (task 19), Async (task 21), Iterator
+    /// (task 22), a second Catch clause (now an instanceof ladder), a COMPUTED base-constructor
+    /// argument — `MyBase.New(n &amp; "!")` (task #170's own gap, closed by ADR-0016's
+    /// <c>IRBaseConstructorCall</c>: the argument is now an ordinary prologue instruction, so
+    /// <c>n &amp; "!"</c> is emitted as a statement before <c>super(...)</c> and the program RUNS,
+    /// printing <c>rex!</c> — measured, <c>S/t170/</c>'s own CLI probe). It now names
+    /// <c>List(Of T).Sort</c> called with MORE THAN ONE argument (<c>JavaScriptBackend.ListSort</c>'s
+    /// own <c>NotYet("List.Sort with more than one argument")</c>) — unrelated to #170, still
+    /// unimplemented. Re-point it rather than deleting it — the principle it guards outlives any
+    /// one node.</para>
     ///
     /// <para><b>What it must NOT name: a construct the capability checker REFUSES.</b> Those
     /// throw ForeignFeatureException by design and are permanent, so they would pin the canary
@@ -80,13 +83,37 @@ public class JavaScriptCodeGenTests
     public void UnimplementedNode_Throws_RatherThanEmittingNothing()
     {
         var ex = Assert.Catch(() => JsTestSupport.Compile(
+            "Sub Main()\n" +
+            "Dim lst As New List(Of Integer)()\n" +
+            "lst.Add(3)\nlst.Add(1)\n" +
+            "lst.Sort(Function(a As Integer, b As Integer) a - b, " +
+            "Function(a As Integer, b As Integer) b - a)\n" +
+            "End Sub"));
+
+        Assert.That(ex, Is.InstanceOf<System.NotSupportedException>(),
+            "unimplemented lowering must surface as NotSupportedException, not silence");
+        Assert.That(ex.Message, Does.Contain("List.Sort with more than one argument"),
+            "a DIFFERENT message here means this moved or was implemented — re-point the canary");
+    }
+
+    /// <summary>
+    /// ⭐ MOVED PIN (ADR-0016 / #170) — what <see cref="UnimplementedNode_Throws_RatherThanEmittingNothing"/>
+    /// used to name. A COMPUTED <c>MyBase.New</c> argument now LOWERS on JavaScript: the entry
+    /// block's prologue (here, one <c>IRBinaryOp</c> for <c>n &amp; "!"</c>) is emitted as a
+    /// statement before <c>super(...)</c>, never inside it. If this canary's own gap is ever
+    /// closed and this test starts failing for a DIFFERENT reason than "it now emits code", that
+    /// is the signal to look here.
+    /// </summary>
+    [Test]
+    public void FormerCanary_AComputedBaseConstructorArgument_NowLowers()
+    {
+        var js = JsTestSupport.Compile(
             "Class Animal\nPublic Name As String\n" +
             "Public Sub New(n As String)\nName = n\nEnd Sub\nEnd Class\n" +
             "Class Dog\nInherits Animal\n" +
             "Public Sub New(n As String)\nMyBase.New(n & \"!\")\nEnd Sub\nEnd Class\n" +
-            "Sub Main()\nDim d As New Dog(\"rex\")\nConsole.WriteLine(d.Name)\nEnd Sub"));
+            "Sub Main()\nDim d As New Dog(\"rex\")\nConsole.WriteLine(d.Name)\nEnd Sub");
 
-        Assert.That(ex, Is.InstanceOf<System.NotSupportedException>(),
-            "unimplemented lowering must surface as NotSupportedException, not silence");
+        Assert.That(JavaScriptExecutionTests.RunNodeScript(js), Is.EqualTo("rex!"));
     }
 }

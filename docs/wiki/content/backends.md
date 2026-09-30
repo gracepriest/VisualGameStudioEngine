@@ -34,7 +34,8 @@ means a CFG bug that breaks C# can pass silently here.
 
 Key semantic decisions, all deliberate:
 
-- Classes and interfaces → `std::shared_ptr<T>` with `make_shared` and `->`.
+- Classes and interfaces → `std::shared_ptr<T>` with `->`, created by `BasicLang::New<T>(args)`
+  (two-phase construction, so `Me` is owned before `Sub New` runs — ADR-0015).
 - `Structure` → a value `struct`.
 - Collections → `std::shared_ptr<BasicLang::List<T>>` — **reference** semantics to match
   .NET. Value wrappers were tried, diverged from .NET, and were wrong.

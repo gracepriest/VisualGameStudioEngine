@@ -520,19 +520,30 @@ public class CppEmissionOrderTests
         });
     }
 
-    /// <summary>The combined emission: prototype and `extern` before the class, the definition after it.</summary>
+    /// <summary>
+    /// The combined emission: prototype and `extern` before the class, the definition after it.
+    /// MOVED (ADR-0015, task #200): <c>Box</c> is a hierarchy ROOT (no Basic Lang base), so its
+    /// head now carries <c>enable_shared_from_this&lt;Box&gt;</c> unconditionally (D1) — the head
+    /// marker is the DEFINITION's full first line, not the bare "class Box\n" a one-phase class
+    /// used to have.
+    /// </summary>
     [Test]
     public void TheCombinedEmission_DeclaresPrototypesAndGlobalsBeforeTheClasses_AndDefinesGlobalsAfter()
     {
         var cpp = CppText(OrderProgram);
-        // "class Box\n" is the DEFINITION; the forward declaration is "class Box;".
+        // "class Box : public std::enable_shared_from_this<Box>\n" is the DEFINITION; the
+        // forward declaration is "class Box;".
         AssertOrdered(cpp, "combined",
             "// Function declarations", "int32_t Twice(int32_t n);", "extern int32_t Count;",
-            "// Classes", "class Box\n", "int32_t Count = 5;", "// Function implementations");
+            "// Classes", "class Box : public std::enable_shared_from_this<Box>\n",
+            "int32_t Count = 5;", "// Function implementations");
         Assert.That(Cpp(OrderProgram), Is.EqualTo("10"));
     }
 
-    /// <summary>The split header: the same order, with the `inline` definition after the classes.</summary>
+    /// <summary>
+    /// The split header: the same order, with the `inline` definition after the classes. MOVED
+    /// alongside the combined-emission pin above, for the same reason (ADR-0015 D1).
+    /// </summary>
     [Test]
     public void TheSplitHeader_DeclaresPrototypesAndGlobalsBeforeTheClasses_AndDefinesGlobalsInlineAfter()
     {
@@ -540,7 +551,7 @@ public class CppEmissionOrderTests
         var header = r.Files["Game.g.h"];
         AssertOrdered(header, "split header",
             "// Function declarations", "int32_t Twice(int32_t n);", "extern int32_t Count;",
-            "// Classes", "class Box\n", "inline int32_t Count = 5;");
+            "// Classes", "class Box : public std::enable_shared_from_this<Box>\n", "inline int32_t Count = 5;");
     }
 
     // ------------------------------------------------------------------ split emission, compiled and run
@@ -675,12 +686,15 @@ public class CppEmissionOrderTests
     }
 
     /// <summary>
-    /// ⛔ PINNED: <c>Me</c> passed to a free function taking the class — <c>this</c> is a raw
-    /// pointer where the prototype wants <c>std::shared_ptr&lt;Box&gt;</c> ("no matching
-    /// function"). JavaScript and C# print 5; MSIL cannot assemble the shape (recorded).
+    /// PROMOTED (ADR-0015, task #200 — was <c>MeAsAnArgumentToAModuleProcedure_IsAGapOnCpp_Pinned</c>,
+    /// PINNED against "no matching function"): <c>Me</c> passed to a free function taking the
+    /// class now renders <c>BasicLang::Self(this)</c> (D3's value-by-default rule applies to ANY
+    /// value site, not only a class method's own parameters), which converts to the
+    /// <c>std::shared_ptr&lt;Box&gt;</c> the prototype wants. JavaScript and C# already printed 5;
+    /// MSIL still cannot assemble the shape (a pre-existing, unrelated gap, unchanged by #200).
     /// </summary>
     [Test]
-    public void MeAsAnArgumentToAModuleProcedure_IsAGapOnCpp_Pinned()
+    public void MeAsAnArgumentToAModuleProcedure_RunsOnEveryBackendButMsil()
     {
         const string program = """
             Class Box
@@ -704,8 +718,7 @@ public class CppEmissionOrderTests
             """;
         Assert.Multiple(() =>
         {
-            Assert.That(() => Cpp(program), Throws.Exception.With.Message.Contains("no matching function"),
-                "PINNED: if this compiles, promote it");
+            Assert.That(Cpp(program), Is.EqualTo("5"), "C++");
             Assert.That(Js(program), Is.EqualTo("5"), "JavaScript");
             Assert.That(Cs(program), Is.EqualTo("5"), "C#");
         });

@@ -270,7 +270,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             if (module.Classes.Count > 0)
             {
                 WriteLine("// Classes");
-                foreach (var irClass in module.Classes.Values)
+                foreach (var irClass in module.ClassesBaseFirst())   // KEEP IN SYNC with Generate()
                 {
                     GenerateClass(irClass);
                     WriteLine();
@@ -447,6 +447,11 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // empty surface. Include-guarded and self-including; shared verbatim with
             // blnet_runtime.hpp (single definition).
             SpliceRuntimeSource(CppNetRefRuntime.GuardedSource);
+
+            // ADR-0015: the object model, on demand over the COMBINED module — mirroring the
+            // combined mode (keep in sync).
+            if (DeclaresClass(module))
+                SpliceRuntimeSource(CppObjectModelRuntime.Source);
 
             EmitFrameworkCatalog();
         }

@@ -54,7 +54,7 @@ End Sub
 
 | BasicLang | C++ |
 |---|---|
-| `Class` / `Interface` | `std::shared_ptr<T>`, constructed with `make_shared`, accessed with `->` |
+| `Class` / `Interface` | `std::shared_ptr<T>`, constructed with `BasicLang::New<T>(args)` (never `std::make_shared` — a class has no ordinary constructor), accessed with `->` |
 | `Structure` | value `struct` |
 | `List(Of T)` etc. | `std::shared_ptr<BasicLang::List<T>>` — reference semantics |
 | `String` | value |

@@ -1268,13 +1268,14 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                     FormatParameter(p)));
             }
 
-            // Base constructor call
+            // Base constructor call — ADR-0016 D1: the IRBaseConstructorCall's operands, rendered as
+            // EXPRESSIONS into `: base(...)` (see BaseArguments).
             var baseCtor = "";
-            if (!string.IsNullOrEmpty(irClass.BaseClass) && ctor.BaseConstructorArgs.Count > 0)
+            _constructorPrologue.Clear();
+            var baseCall = ctor.BaseCall;
+            if (!string.IsNullOrEmpty(irClass.BaseClass) && baseCall != null)
             {
-                var baseArgs = string.Join(", ", ctor.BaseConstructorArgs.Select(a =>
-                    a is IRConstant c ? EmitConstant(c) : SanitizeName(a.Name)));
-                baseCtor = $" : base({baseArgs})";
+                baseCtor = $" : base({BaseArguments(irClass, ctor.Implementation, baseCall)})";
             }
 
             WriteLine($"{access} {className}({paramList}){baseCtor}");
@@ -1296,9 +1297,77 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 GenerateStructuredBlock(ctor.Implementation.EntryBlock);
                 _currentFunction = null;
             }
+            _constructorPrologue.Clear();
 
             Unindent();
             WriteLine("}");
+        }
+
+        /// <summary>ADR-0016: the constructor prologue rendered into <c>: base(...)</c> — its
+        /// instructions and the base call itself, never emitted as body statements.</summary>
+        private readonly HashSet<IRInstruction> _constructorPrologue = new(ReferenceEqualityComparer.Instance);
+
+        /// <summary>
+        /// ⭐ ADR-0016 D1 on C#: <c>: base(e1, …, en)</c>, each <c>ei</c> rendered by substituting the
+        /// prologue's definitions — a parameter by its name, a constant as a literal, a temp by its
+        /// defining expression, a lambda as an inline C# lambda (the body emitter every lambda use
+        /// goes through). C# can run no statement before <c>: base(...)</c>, but it can take any
+        /// EXPRESSION there, a lambda included — and a lambda written there shares its captured
+        /// parameters with the body, which is VB's semantics exactly (B1: <c>11 12</c>).
+        ///
+        /// <para>⛔ REFUSED BY NAME, on C# only, when the prologue is not one expression tree: an
+        /// argument lowered to control flow (<c>AndAlso</c>/<c>OrElse</c> make a local across
+        /// blocks), a statement (an array literal's element stores), or a value used twice that
+        /// may not be evaluated twice. JavaScript, MSIL and C++ run such a prologue as ordinary
+        /// statements before the base call.</para>
+        /// </summary>
+        private string BaseArguments(IRClass irClass, IRFunction implementation, IRBaseConstructorCall baseCall)
+        {
+            ForeignFeatureException Refuse(string why) => new(
+                $"C#: a MyBase.New argument of '{irClass.Name}' {why}. C# can place only EXPRESSIONS in "
+                + "`: base(...)` — no statement runs before the base constructor there (ADR-0016 D1) — so this "
+                + "shape has no C# lowering; compute the value in the caller and pass it in as a parameter.");
+
+            var entry = implementation?.EntryBlock?.Instructions;
+            var at = entry?.IndexOf(baseCall) ?? -1;
+            if (at < 0) throw Refuse("is computed with control flow (AndAlso / OrElse build its value across several blocks)");
+
+            // The context the operands render in: use counts, temp definitions, materialised temps.
+            _currentFunction = implementation;
+            InitializeFunctionContext(implementation);
+
+            var tree = new HashSet<IRValue>(ReferenceEqualityComparer.Instance);
+            void Walk(IRValue v)
+            {
+                if (v == null || v is IRVariable || v is IRConstant || !tree.Add(v)) return;
+                foreach (var operand in GetOperands(v)) Walk(operand);
+            }
+            foreach (var arg in baseCall.Args) Walk(arg);
+
+            for (var i = 0; i < at; i++)
+            {
+                var inst = entry[i];
+                if (inst == null || inst is IRComment) continue;
+                if (inst is IRConstant or IRVariable)
+                {
+                    _constructorPrologue.Add(inst);   // a value with no computation of its own
+                    continue;
+                }
+                if (inst is IRValue v && tree.Contains(v) && !_materialised.Contains(v)
+                    && v is not (IRArrayAlloc or IRAlloca or IRPhi or IRTupleElement))
+                {
+                    _constructorPrologue.Add(inst);
+                    continue;
+                }
+                throw Refuse(inst is IRValue value && _materialised.Contains(value)
+                    ? $"computes '{value.Name}' once and uses it twice, which an expression cannot say"
+                    : $"needs a statement before the base call ({inst.GetType().Name})");
+            }
+            _constructorPrologue.Add(baseCall);
+
+            var rendered = string.Join(", ", baseCall.Args.Select(a => EmitExpression(a)));
+            _currentFunction = null;
+            return rendered;
         }
 
         /// <summary>
@@ -2160,6 +2229,11 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             for (int i = 0; i < instructions.Count; i++)
             {
                 var instruction = instructions[i];
+
+                // ADR-0016: the constructor prologue and its base call live in `: base(...)`, never
+                // in the body — skipped before a #line is written for them.
+                if (instruction is IRBaseConstructorCall || _constructorPrologue.Contains(instruction))
+                    continue;
 
                 // Skip control flow - we handle it structurally
                 if (instruction is IRBranch or IRConditionalBranch or IRSwitch)
@@ -3781,6 +3855,9 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                     return new[] { methodCall.Object }.Concat(methodCall.Arguments);
                 case IRBaseMethodCall baseMethodCall:
                     return baseMethodCall.Arguments;
+                // ADR-0016: MyBase.New's arguments — a prologue temp's one use.
+                case IRBaseConstructorCall baseConstructorCall:
+                    return baseConstructorCall.Args;
                 case IRNewObject newObject:
                     return newObject.Arguments;
                 case IRIndexerAccess indexerAccess:
@@ -4580,6 +4657,10 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 WriteLine($"{resultType} {methodCall.Name} = {obj}.{methodName}{generics}({args});");
             }
         }
+
+        /// <summary>ADR-0016: rendered into the constructor header (<see cref="BaseArguments"/>) and
+        /// skipped by the body walk — reaching it here writes nothing.</summary>
+        public void Visit(IRBaseConstructorCall baseConstructorCall) { }
 
         public void Visit(IRBaseMethodCall baseCall)
         {

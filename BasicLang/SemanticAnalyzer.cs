@@ -316,6 +316,26 @@ namespace BasicLang.Compiler.SemanticAnalysis
             new HashSet<ASTNode>(ReferenceEqualityComparer.Instance);
 
         /// <summary>
+        /// ADR-0016 D4: true while a <c>MyBase.New(...)</c> call's arguments — lambdas written there
+        /// included — are being analyzed. Any reference to the object under construction there is
+        /// VB's BC31095 (explicit) / BC31096 (implicit), reported once per node
+        /// (<see cref="_baseArgumentDiagnosticSites"/>).
+        /// </summary>
+        private bool _inBaseConstructorArguments;
+
+        private readonly HashSet<ASTNode> _baseArgumentDiagnosticSites =
+            new HashSet<ASTNode>(ReferenceEqualityComparer.Instance);
+
+        /// <summary>
+        /// ADR-0016 D4: the <c>Shared</c> members (fields, methods, properties, constants, events) each
+        /// BasicLang class DECLARES, by name, read off its <c>ClassNode</c> — what BC31096 needs to
+        /// tell an instance member from a shared one, which a field's or method's symbol does not
+        /// record. A class with no entry (a .NET base) is never judged.
+        /// </summary>
+        private readonly Dictionary<TypeInfo, HashSet<string>> _sharedMemberNames =
+            new Dictionary<TypeInfo, HashSet<string>>(ReferenceEqualityComparer.Instance);
+
+        /// <summary>
         /// The control variables of the <c>For</c> / <c>For Each</c> loops whose bodies are being
         /// analyzed, innermost last — VB's BC30069 question ("already in use by an enclosing
         /// loop"), asked only by a <c>For Each</c> that would REUSE a variable.
@@ -684,9 +704,47 @@ namespace BasicLang.Compiler.SemanticAnalysis
         /// keep one owner rather than because a test demands it. Unifying the two builders onto the
         /// more capable one is a real improvement and its own change.</para>
         /// </summary>
+        /// <summary>
+        /// Pass 1: an interface's method and property signatures, the twin of
+        /// <see cref="PopulateClassMemberSignatures"/> — so a call through an interface declared
+        /// BELOW it has its declared type (`s.Area() + 1` was "Arithmetic operator '+' requires
+        /// numeric operands": the member was unknown, so Object). Visit(InterfaceNode) overwrites
+        /// every entry with the fully analyzed symbol.
+        /// </summary>
+        private void PopulateInterfaceMemberSignatures(InterfaceNode iface, TypeInfo interfaceType)
+        {
+            if (interfaceType?.Kind != TypeKind.Interface || interfaceType.Members == null) return;
+
+            foreach (var method in iface.Methods ?? new List<FunctionNode>())
+            {
+                var returnType = method.ReturnType == null
+                    ? _typeManager.VoidType
+                    : ResolveSiblingSignatureType(method.ReturnType) ?? _typeManager.ObjectType;
+                interfaceType.Members[method.Name] = new Symbol(method.Name,
+                    method.ReturnType == null ? SymbolKind.Subroutine : SymbolKind.Function, returnType, 0, 0)
+                {
+                    ReturnType = returnType,
+                    Parameters = BuildSiblingSignatureParameters(method.Parameters),
+                    Access = AccessModifier.Public
+                };
+            }
+
+            foreach (var prop in iface.Properties ?? new List<PropertyNode>())
+            {
+                interfaceType.Members[prop.Name] = new Symbol(prop.Name, SymbolKind.Property,
+                    ResolveSiblingSignatureType(prop.PropertyType) ?? _typeManager.ObjectType, 0, 0)
+                {
+                    Access = AccessModifier.Public,
+                    IsReadOnly = prop.IsReadOnly,
+                    IsWriteOnly = prop.IsWriteOnly
+                };
+            }
+        }
+
         private void PopulateClassMemberSignatures(
             ClassNode classNode, TypeInfo classType, bool includeConstructors)
         {
+            RecordSharedMembers(classNode, classType);
             if (classNode.Members == null || classType?.Members == null) return;
 
             static bool Visible(AccessModifier access) => access != AccessModifier.Private;
@@ -1250,6 +1308,8 @@ namespace BasicLang.Compiler.SemanticAnalysis
             _lambdaScopes.Clear();
             _lambdaLocals.Clear();
             _lambdaDiagnosticSites.Clear();
+            _baseArgumentDiagnosticSites.Clear();
+            _sharedMemberNames.Clear();
             _synthesizedSymbols.Clear();
             _delegateMemberInvocations.Clear();
             _netNamespaces.Clear();
@@ -5089,6 +5149,16 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 RegisterClassTypes(decl);
             }
 
+            // ⛔ Then each class's BASE, before anything is analyzed. `BaseType` used to be set
+            // only when Visit(ClassNode) reached the class body, so for a class declared BELOW
+            // the code using it, `Dim a As Animal = New Dog()`, `Return New Dog()` from an
+            // `As Animal` function, an argument and a field assignment were all refused
+            // ("Cannot assign value of type 'Dog' to variable of type 'Animal'") — measured.
+            foreach (var decl in program.Declarations)
+            {
+                RegisterClassBases(decl);
+            }
+
             // ⛔ Class MEMBERS next, in their own sweep, because a class type with no members is
             // only half a forward reference. Measured on a class declared AFTER the module that
             // uses it, with a plain literal field: every member kind read as Object, so the temp
@@ -5302,6 +5372,9 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     foreach (var member in cls.Members)
                         RegisterClassMemberSignatures(member);
                     break;
+                case InterfaceNode iface:
+                    PopulateInterfaceMemberSignatures(iface, _typeManager.GetType(iface.Name));
+                    break;
                 case ModuleNode module:
                     foreach (var member in module.Members)
                         RegisterClassMemberSignatures(member);
@@ -5486,6 +5559,15 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     foreach (var member in cls.Members)
                         RegisterClassTypes(member);
                     break;
+                // An interface declared below its use was not a type at all until its own visit:
+                // `Implements IShape` above it was "Unknown interface 'IShape'", and a variable of
+                // it resolved to a fabricated member-less class.
+                case InterfaceNode iface:
+                    if (_typeManager.DefineType(iface.Name, TypeKind.Interface) != null)
+                    {
+                        _preRegisteredInterfaces.Add(iface.Name);
+                    }
+                    break;
                 case ModuleNode module:
                     foreach (var member in module.Members)
                         RegisterClassTypes(member);
@@ -5498,10 +5580,81 @@ namespace BasicLang.Compiler.SemanticAnalysis
         }
 
         /// <summary>
+        /// Pass 1, sweep 1b: link each class to its base when the base is a class declared in
+        /// this program, so a class declared below its use is judged on its real ancestry.
+        /// Visit(ClassNode) still owns every diagnostic (unknown base, not a class, a cycle) and
+        /// the .NET-base fallback; this only sets what it would set, earlier.
+        ///
+        /// <para>⛔ Never closes a cycle. Several walks of the base chain have no loop guard
+        /// (<c>TypeInfo.IsAssignableFrom</c>, <c>GetCommonType</c>), so `A Inherits B` /
+        /// `B Inherits A` linked both ways would spin forever; the link that would close it is
+        /// left for Visit(ClassNode) to refuse (BC30257).</para>
+        /// </summary>
+        private void RegisterClassBases(ASTNode node)
+        {
+            switch (node)
+            {
+                case ClassNode cls:
+                    if (!string.IsNullOrEmpty(cls.BaseClass))
+                    {
+                        var classType = _typeManager.GetType(cls.Name);
+                        var baseType = _typeManager.GetType(cls.BaseClass);
+                        if (classType != null && classType.BaseType == null
+                            && baseType != null && baseType.Kind == TypeKind.Class
+                            && !InheritanceWouldCycle(classType, baseType))
+                        {
+                            classType.BaseType = baseType;
+                        }
+                    }
+                    // …and its interfaces, for `Dim s As IShape = New Sq()` above `Class Sq`.
+                    var implementing = _typeManager.GetType(cls.Name);
+                    if (implementing != null)
+                    {
+                        foreach (var interfaceName in cls.Interfaces)
+                        {
+                            var interfaceType = _typeManager.GetType(interfaceName);
+                            if (interfaceType?.Kind == TypeKind.Interface && !implementing.Interfaces.Contains(interfaceType))
+                                implementing.Interfaces.Add(interfaceType);
+                        }
+                    }
+                    foreach (var member in cls.Members)
+                        RegisterClassBases(member);
+                    break;
+                case ModuleNode module:
+                    foreach (var member in module.Members)
+                        RegisterClassBases(member);
+                    break;
+                case NamespaceNode ns:
+                    foreach (var member in ns.Members)
+                        RegisterClassBases(member);
+                    break;
+            }
+        }
+
+        /// <summary>
+        /// True when making <paramref name="baseType"/> the base of <paramref name="classType"/>
+        /// would put <paramref name="classType"/> among its own ancestors. Guarded, so it
+        /// terminates even on a chain that already loops.
+        /// </summary>
+        private static bool InheritanceWouldCycle(TypeInfo classType, TypeInfo baseType)
+        {
+            var guard = 0;
+            for (var t = baseType; t != null && guard++ < 256; t = t.BaseType)
+            {
+                if (ReferenceEquals(t, classType)) return true;
+            }
+            return guard >= 256;
+        }
+
+        /// <summary>
         /// Class names whose <see cref="TypeInfo"/> <see cref="RegisterClassTypes"/> created, each
         /// consumed by that class's own <see cref="Visit(ClassNode)"/>. See there for why.
         /// </summary>
         private readonly HashSet<string> _preRegisteredClasses =
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>The interface twin of <see cref="_preRegisteredClasses"/>, consumed by Visit(InterfaceNode).</summary>
+        private readonly HashSet<string> _preRegisteredInterfaces =
             new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         private void RegisterDeclaration(ASTNode node, ClassNode owner = null, string moduleName = null)
@@ -5927,6 +6080,17 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 {
                     Error($"'{node.BaseClass}' is not a class", node.Line, node.Column);
                 }
+                else if (InheritanceWouldCycle(classType, baseType))
+                {
+                    // VB BC30257. Linking it would loop every unguarded base-chain walk; before
+                    // the pass-1 link (RegisterClassBases) the cycle was closed here silently and
+                    // `Class A Inherits B` / `Class B Inherits A` reported "Compilation successful".
+                    Error(string.Equals(node.Name, node.BaseClass, StringComparison.OrdinalIgnoreCase)
+                            ? $"Class '{node.Name}' cannot inherit from itself"
+                            : $"Class '{node.Name}' cannot inherit from itself: '{node.BaseClass}' already " +
+                              $"inherits from '{node.Name}'",
+                          node.Line, node.Column);
+                }
                 else
                 {
                     classType.BaseType = baseType;
@@ -5945,7 +6109,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 {
                     Error($"'{interfaceName}' is not an interface", node.Line, node.Column);
                 }
-                else
+                else if (!classType.Interfaces.Contains(interfaceType))   // pass 1 may have linked it (RegisterClassBases)
                 {
                     classType.Interfaces.Add(interfaceType);
                 }
@@ -5961,6 +6125,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
             // Enter class scope
             var classScope = EnterScope(node.Name, ScopeKind.Class);
             classScope.ClassType = classType;
+            RecordSharedMembers(node, classType);   // ADR-0016 D4
 
             // Register generic type parameters in the class scope
             foreach (var genericParam in node.GenericParameters)
@@ -6074,6 +6239,10 @@ namespace BasicLang.Compiler.SemanticAnalysis
         public void Visit(InterfaceNode node)
         {
             var interfaceType = _typeManager.DefineType(node.Name, TypeKind.Interface);
+            // Pass 1 pre-registered it (RegisterClassTypes): consume the record and reuse the type,
+            // exactly as Visit(ClassNode) does, so a genuine second `Interface I` still reports.
+            if (interfaceType == null && _preRegisteredInterfaces.Remove(node.Name))
+                interfaceType = _typeManager.GetType(node.Name);
             if (interfaceType == null)
             {
                 Error($"Interface '{node.Name}' is already defined", node.Line, node.Column);
@@ -7208,13 +7377,22 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     ? ResolveConstructor(classScope.ClassType.BaseType, node.BaseConstructorArgs.Count)
                     : null;
                 var argTypes = new List<TypeInfo>();
-                for (int i = 0; i < node.BaseConstructorArgs.Count; i++)
+                var outerInBaseArguments = _inBaseConstructorArguments;
+                _inBaseConstructorArguments = true;   // ADR-0016 D4: BC31095 / BC31096
+                try
                 {
-                    var arg = node.BaseConstructorArgs[i];
-                    VisitWithDelegateTarget(arg,
-                        ArgumentTargetType(targetBaseConstructor, i, node.BaseConstructorArgs.Count, null));
-                    var argType = GetNodeType(arg);
-                    argTypes.Add(argType ?? _typeManager.ObjectType);
+                    for (int i = 0; i < node.BaseConstructorArgs.Count; i++)
+                    {
+                        var arg = node.BaseConstructorArgs[i];
+                        VisitWithDelegateTarget(arg,
+                            ArgumentTargetType(targetBaseConstructor, i, node.BaseConstructorArgs.Count, null));
+                        var argType = GetNodeType(arg);
+                        argTypes.Add(argType ?? _typeManager.ObjectType);
+                    }
+                }
+                finally
+                {
+                    _inBaseConstructorArguments = outerInBaseArguments;
                 }
 
                 // Validate base constructor exists and arguments match
@@ -7444,6 +7622,8 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
         public void Visit(MyBaseExpressionNode node)
         {
+            ReportReferenceToObjectUnderConstruction(node, implicitReference: false);   // ADR-0016 D4
+
             // MyBase refers to the base class
             // Validate we're inside a class that has a base class
             var classScope = _currentScope.GetClassScope();
@@ -11000,6 +11180,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
             // Handle 'Me' keyword - refers to current class instance
             if (node.Name.Equals("Me", StringComparison.OrdinalIgnoreCase))
             {
+                ReportReferenceToObjectUnderConstruction(node, implicitReference: false);   // ADR-0016 D4
                 var classScope = _currentScope.GetClassScope();
                 if (classScope == null)
                 {
@@ -11070,6 +11251,79 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 SetNodeType(node, symbol.Type);
                 CheckPropertyRead(node, symbol);   // task #178: bare `W` read
                 CheckByRefParameterInLambda(symbol, node);   // task #174: BC36639, read or write
+                if (_inBaseConstructorArguments && IsInstanceMemberUnderConstruction(symbol, node.Name))
+                    ReportReferenceToObjectUnderConstruction(node, implicitReference: true);   // ADR-0016 D4
+            }
+        }
+
+        /// <summary>
+        /// ⭐ ADR-0016 D4 — VB's BC31095 ("Reference to object under construction is not valid when
+        /// calling another constructor.") for an explicit <c>Me</c> / <c>MyBase</c>, and BC31096
+        /// ("Implicit reference ...") for an instance member named bare, anywhere in a
+        /// <c>MyBase.New(...)</c> call's arguments — a lambda written there, at any nesting depth,
+        /// included. It is the precondition of D3's closure lowering: a lambda there never needs a
+        /// <c>Me</c> that does not exist yet. Here, in the analyzer, so the compiler and the LSP
+        /// report it alike.
+        /// </summary>
+        private void ReportReferenceToObjectUnderConstruction(ASTNode at, bool implicitReference)
+        {
+            if (!_inBaseConstructorArguments || !_baseArgumentDiagnosticSites.Add(at)) return;
+            if (implicitReference)
+                VbCodedError("BC31096",
+                    "Implicit reference to object under construction is not valid when calling another constructor.", at);
+            else
+                VbCodedError("BC31095",
+                    "Reference to object under construction is not valid when calling another constructor.", at);
+        }
+
+        /// <summary>
+        /// ADR-0016 D4: whether a bare name resolved to <paramref name="symbol"/> is an INSTANCE member
+        /// of the object under construction — a field, property or method of the class, or of a
+        /// BasicLang base, that is not <c>Shared</c> and not a constant. A parameter, a local (the
+        /// constructor's, or a lambda's), a module member and a type are not; neither is a member of a
+        /// .NET base, whose shared-ness nothing here records (left to the backend, as before).
+        /// </summary>
+        private bool IsInstanceMemberUnderConstruction(Symbol symbol, string name)
+        {
+            if (symbol == null) return false;
+            if (symbol.IsConstant || symbol.Kind is not (SymbolKind.Variable or SymbolKind.Property
+                    or SymbolKind.Function or SymbolKind.Subroutine))
+                return false;
+            if (symbol.DeclaringScope != null && symbol.DeclaringScope.Kind != ScopeKind.Class) return false;
+
+            var classScope = _currentScope?.GetClassScope();
+            var classType = classScope?.ClassType;
+            var guard = 0;
+            for (var type = classType; type != null && guard++ < 64; type = type.BaseType)
+            {
+                // Declared by THIS class: in its member table, or — a member defined in pass 2 before
+                // the table has it — in its own class scope.
+                var declaresIt = (type.Members != null && type.Members.ContainsKey(name))
+                                 || (ReferenceEquals(type, classType) && ReferenceEquals(symbol.DeclaringScope, classScope));
+                if (!declaresIt) continue;
+                if (!_sharedMemberNames.TryGetValue(type, out var shared)) return false;
+                return !shared.Contains(name) && !symbol.IsShared;
+            }
+            return false;
+        }
+
+        /// <summary>ADR-0016 D4: record the members <paramref name="classNode"/> declares
+        /// <c>Shared</c> (and its constants), for <see cref="IsInstanceMemberUnderConstruction"/>.</summary>
+        private void RecordSharedMembers(ClassNode classNode, TypeInfo classType)
+        {
+            if (classNode?.Members == null || classType == null) return;
+            if (!_sharedMemberNames.TryGetValue(classType, out var shared))
+                _sharedMemberNames[classType] = shared = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var member in classNode.Members)
+            {
+                switch (member)
+                {
+                    case FunctionNode f when f.IsStatic: shared.Add(f.Name); break;
+                    case SubroutineNode sub when sub.IsStatic: shared.Add(sub.Name); break;
+                    case VariableDeclarationNode v when v.IsStatic: shared.Add(v.Name); break;
+                    case PropertyNode prop when prop.IsStatic: shared.Add(prop.Name); break;
+                    case ConstantDeclarationNode c: shared.Add(c.Name); break;
+                }
             }
         }
 

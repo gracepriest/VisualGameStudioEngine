@@ -392,6 +392,118 @@ public class FormDesignerCommandTests
         });
     }
 
+    // ==================================================================
+    // ⛔⛔ ONE selection store: Cut and Paste reach the grid THROUGH Selection.Changed
+    // ==================================================================
+    //
+    // Each of these starts from a DROP, whose SelectInDesigner writes both stores explicitly — so the
+    // grid is already showing a control by a route that does not depend on the constructor's
+    // Selection.Changed follow. The only way the grid then moves is that follow; a Cut or Paste that
+    // wrote the grid directly (or not at all) would be the only thing these could be satisfied by.
+
+    [Test]
+    public void AfterCut_TheGridFollowsTheSelectionToNothing()
+    {
+        var vm = Open();
+        Assert.That(vm.PlaceControl("Button", 300, 300), Is.Null);
+        var dropped = vm.Selection.Primary;
+        Assert.That(vm.PropertyGrid.SelectedControl, Is.SameAs(dropped).And.Not.Null,
+            "precondition: the drop put the new button in the grid");
+
+        vm.CutControlsCommand.Execute(null);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(vm.Selection.IsEmpty, Is.True);
+            Assert.That(vm.PropertyGrid.SelectedControl, Is.Null,
+                "the grid must follow the emptied selection — it was showing the control just cut");
+        });
+    }
+
+    [Test]
+    public void AfterPaste_TheGridShowsTheSelectionsPrimary_ThePastedCopy()
+    {
+        var vm = Open();
+        Assert.That(vm.PlaceControl("Button", 300, 300), Is.Null);
+        var original = vm.Selection.Primary!;
+        Assert.That(vm.PropertyGrid.SelectedControl, Is.SameAs(original), "precondition: the drop is in the grid");
+
+        vm.CopyControlsCommand.Execute(null);
+        vm.PasteControlsCommand.Execute(null);
+
+        var pasted = vm.DesignDocument!.Controls.Last();
+        Assert.Multiple(() =>
+        {
+            Assert.That(pasted, Is.Not.SameAs(original), "sanity: a copy landed");
+            Assert.That(vm.Selection.Primary, Is.SameAs(pasted));
+            Assert.That(vm.PropertyGrid.SelectedControl, Is.SameAs(vm.Selection.Primary),
+                "the grid must follow the selection to the pasted copy, not keep showing the original");
+        });
+    }
+
+    /// <summary>
+    /// A multi-control paste: the grid shows the PRIMARY (the last selected), and it keeps following
+    /// the store after the command — a Toggle that removes the primary moves the grid to the new one.
+    /// Catches a direct write that picks any other member of the selection.
+    /// </summary>
+    [Test]
+    public void AfterAMultiPaste_TheGridTracksThePrimary_AndKeepsFollowingTheStore()
+    {
+        var vm = Open();
+        vm.Selection.Set(Control(vm, "a"));
+        vm.Selection.Add(Control(vm, "c"));
+
+        vm.CopyControlsCommand.Execute(null);
+        vm.PasteControlsCommand.Execute(null);
+
+        var pasted = vm.Selection.Controls.ToList();
+        Assert.That(pasted, Has.Count.EqualTo(2), "sanity: both copies are the selection");
+        Assert.That(vm.PropertyGrid.SelectedControl, Is.SameAs(vm.Selection.Primary).And.SameAs(pasted[1]),
+            "the grid shows the selection's primary — the last pasted — and no other member");
+
+        vm.Selection.Toggle(pasted[1]);
+
+        Assert.That(vm.PropertyGrid.SelectedControl, Is.SameAs(pasted[0]),
+            "the grid keeps following the one selection store after the paste");
+    }
+
+    /// <summary>
+    /// ⛔ An undo re-parses the text into a FRESH model, so every control the selection held belongs
+    /// to a document nobody draws. The store must empty with the grid — otherwise a following
+    /// BringToFront/Cut acts on the ghost (and silently does nothing to the document on screen).
+    /// </summary>
+    [Test]
+    public void AnUndo_LeavesNoStaleSelection_AndAFollowingCutCopiesNothingStale()
+    {
+        var vm = Open();
+        vm.Selection.Set(Control(vm, "a"));
+        vm.Selection.Add(Control(vm, "c"));
+        vm.ArrangeCommand.Execute(FormArrangeKind.AlignLeft);
+
+        vm.UndoDesignerEditCommand.Execute(null);
+        var afterUndo = vm.Text;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(vm.Selection.IsEmpty, Is.True, "no control of the discarded model stays selected");
+            Assert.That(vm.PropertyGrid.SelectedControl, Is.Null, "and the grid agrees");
+        });
+
+        // ⚠ The designer clipboard is STATIC (one per IDE session), so seed it with a known control from
+        // ANOTHER document — a Cut of a ghost selection would overwrite it with the old parse's a and c.
+        var seed = Open();
+        seed.Selection.Set(Control(seed, "b"));
+        seed.CopyControlsCommand.Execute(null);
+
+        vm.CutControlsCommand.Execute(null);
+        Assert.That(vm.Text, Is.EqualTo(afterUndo), "nothing was selected, so Cut changes nothing");
+
+        vm.PasteControlsCommand.Execute(null);
+        var added = vm.DesignDocument!.Controls.Except(new[] { Control(vm, "a"), Control(vm, "b"), Control(vm, "c") }).ToList();
+        Assert.That(added.Select(c => (G(c).Width, G(c).Height)), Is.EqualTo(new[] { (80, 40) }),
+            "the clipboard still holds the seeded 'b' (80x40) — the Cut copied nothing from the discarded model");
+    }
+
     [Test]
     public void ACopyReachesTheDocumentTextOnPaste()
     {

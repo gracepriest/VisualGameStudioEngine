@@ -209,6 +209,13 @@ namespace BasicLang.Compiler.CodeGen
                 + "(ADR-0010 D1).");
 
         /// <summary>
+        /// ABSTRACT (ADR-0016 D1): the explicit base-constructor call is an instruction in the
+        /// constructor's prologue, and a backend that emitted nothing for it would construct an
+        /// object whose base never ran. C++, MSIL and LLVM each say what they do with it.
+        /// </summary>
+        public abstract void Visit(IRBaseConstructorCall baseConstructorCall);
+
+        /// <summary>
         /// Map IR type to target language type
         /// </summary>
         protected virtual string MapType(TypeInfo type)
