@@ -481,10 +481,13 @@ public static class FormRetarget
 
         private void ConvertBinds(FormControl source, FormControl control, FormControlDef definition)
         {
-            // ⚠ SLICE 5: unify with ConvertRootBinds on FormEvents.WiredOn (one crossing rule). Today a
-            // control crosses on its DefaultEvent only; the root asks WiredOn/NameOn.
-            var fromEvent = definition.DefaultEvent(_from);
-            var toEvent = definition.DefaultEvent(_to);
+            // ⛔ Through the ONE seam (slice 3 pre-flight B1, pulled forward from slice 5 Task 5.6 for controls): a bind
+            // crosses when its event is wired on BOTH targets, under the destination's name. It used to cross on the
+            // DEFAULT event only — so when GroupBox's default became Enter (owner decision O3) every existing GroupBox
+            // Click bind would have been dropped. ⚠ SLICE 5: ConvertRootBinds applies the same rule to the form; the two
+            // stay separate only because their findings name different owners.
+            var wiredFrom = FormEvents.WiredOn(definition, _from);
+            var wiredTo = FormEvents.WiredOn(definition, _to);
 
             foreach (var bind in source.Binds)
             {
@@ -495,18 +498,26 @@ public static class FormRetarget
                     continue;
                 }
 
-                if (fromEvent != null && toEvent != null &&
-                    string.Equals(bind.Event, fromEvent, StringComparison.OrdinalIgnoreCase))
+                var crossing = wiredFrom.FirstOrDefault(e =>
+                    string.Equals(FormEvents.NameOn(e, _from), bind.Event, StringComparison.OrdinalIgnoreCase));
+
+                if (crossing != null && wiredTo.Contains(crossing))
                 {
-                    control.Binds.Add(new FormBind { Event = toEvent, Handler = bind.Handler });
+                    control.Binds.Add(new FormBind { Event = FormEvents.NameOn(crossing, _to)!, Handler = bind.Handler });
                     continue;
                 }
 
+                var both = wiredFrom.Where(e => wiredTo.Contains(e))
+                    .Select(e => $"'{FormEvents.NameOn(e, _from)}' → '{FormEvents.NameOn(e, _to)}'")
+                    .ToList();
+
                 Warn(DesignCodes.RetargetBindLost,
                     $"'{source.Id}' wires its '{bind.Event}' event to {bind.Handler}, and the catalog knows no " +
-                    $"{Describe(_to)} name for that event on a {source.Kind} — only its default event " +
-                    $"('{fromEvent}' → '{toEvent}') has a measured name on both sides. The wiring was dropped; " +
-                    $"wire {bind.Handler} by hand on the other side.");
+                    $"{Describe(_to)} name for that event on a {source.Kind} — " +
+                    (both.Count > 0
+                        ? $"only {string.Join(", ", both)} {(both.Count == 1 ? "has" : "have")} a measured name on both sides. "
+                        : "none of its events has a measured name on both sides. ") +
+                    $"The wiring was dropped; wire {bind.Handler} by hand on the other side.");
             }
         }
 

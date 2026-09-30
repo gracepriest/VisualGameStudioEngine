@@ -511,6 +511,71 @@ public class FormRetargetTests
         });
     }
 
+    /// <summary>
+    /// Slice 3 pre-flight B1: GroupBox's default event became Enter (owner decision O3), and a control bind used to
+    /// cross ONLY on the default event — so every existing GroupBox <c>Click</c> bind would have been dropped. A bind
+    /// crosses when its event is wired on BOTH targets (through <see cref="FormEvents.WiredOn"/>, the one seam),
+    /// under the destination's name.
+    /// </summary>
+    [TestCase(FormTarget.WinForms, "Click", "click")]
+    [TestCase(FormTarget.Web, "click", "Click")]
+    [TestCase(FormTarget.WinForms, "Enter", "focusin")]
+    [TestCase(FormTarget.Web, "focusin", "Enter")]
+    public void AGroupBoxBind_OnAnyEventWiredOnBothTargets_Crosses(FormTarget from, string fromEvent, string toEvent)
+    {
+        var source = new FormDocument { Target = from, Name = "Sweep" };
+        var group = FormCatalogShapes.Canonical(source, FormControlCatalog.Find("GroupBox")!, "grp");
+        group.Binds.Add(new FormBind { Event = fromEvent, Handler = "grp_Handler" });
+
+        var result = FormRetarget.Convert(source, Other(from));
+        var crossed = result.Document.FindById("grp")!;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(crossed.Binds.Select(b => (b.Event, b.Handler)), Is.EqualTo(new[] { (toEvent, "grp_Handler") }));
+            Assert.That(Of(result, DesignCodes.RetargetBindLost), Is.Empty);
+        });
+    }
+
+    /// <summary>
+    /// ⛔ Catalog-driven: EVERY event of every kind that exists on both targets and is wired on both crosses under
+    /// the destination's name, and nothing else is reported lost for it. A row whose event lists widen (slice 5) is
+    /// covered the day it widens.
+    /// </summary>
+    [Test]
+    public void EveryEventWiredOnBothTargets_Crosses_UnderTheDestinationsName(
+        [Values(FormTarget.WinForms, FormTarget.Web)] FormTarget from)
+    {
+        var to = Other(from);
+        var exercised = 0;
+
+        Assert.Multiple(() =>
+        {
+            foreach (var definition in FormControlCatalog.For(from).Where(d => d.SupportsTarget(to)))
+            {
+                var there = FormEvents.WiredOn(definition, to);
+                foreach (var evt in FormEvents.WiredOn(definition, from).Where(e => there.Contains(e)))
+                {
+                    var source = new FormDocument { Target = from, Name = "Sweep" };
+                    var control = FormCatalogShapes.Canonical(source, definition, "c");
+                    control.Binds.Add(new FormBind { Event = FormEvents.NameOn(evt, from)!, Handler = "c_Handler" });
+
+                    var result = FormRetarget.Convert(source, to);
+                    var crossed = result.Document.AllControls().Concat(result.Document.AllComponents())
+                        .Single(c => c.Kind == definition.Kind);
+
+                    Assert.That(crossed.Binds.Select(b => b.Event), Is.EqualTo(new[] { FormEvents.NameOn(evt, to) }),
+                        $"{definition.Kind}.{evt.Name} {from}→{to}");
+                    Assert.That(Of(result, DesignCodes.RetargetBindLost), Is.Empty, $"{definition.Kind}.{evt.Name} {from}→{to}");
+                    exercised++;
+                }
+            }
+        });
+
+        Assert.That(exercised, Is.GreaterThan(FormControlCatalog.For(from).Count(d => d.SupportsTarget(to)) / 2),
+            "the sweep reaches most kinds, or it passes by absence");
+    }
+
     // ==================================================================
     // Web → WinForms: cells become pixels by a rule the finding can state
     // ==================================================================

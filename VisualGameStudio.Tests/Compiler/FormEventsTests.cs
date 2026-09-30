@@ -157,6 +157,31 @@ public class FormEventsTests
         });
     }
 
+    /// <summary>
+    /// Owner decision O3 (2026-09-29, re-checked in Visual Studio): double-clicking a GroupBox creates an ENTER
+    /// handler, as VS does (the snapshot's DefaultEvent agrees); on the page Enter is the fieldset's
+    /// <c>focusin</c> — focus moving into the box, which bubbles from its children exactly as WinForms' Enter is
+    /// raised for them. Click stays wired as a NON-default event (its existing binds keep working).
+    /// </summary>
+    [Test]
+    public void AGroupBox_DefaultsToEnter_FocusinOnThePage_AndKeepsClick()
+    {
+        var group = FormControlCatalog.Find("GroupBox")!;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(group.DefaultEvent(FormTarget.WinForms), Is.EqualTo("Enter"));
+            Assert.That(group.DefaultEvent(FormTarget.Web), Is.EqualTo("focusin"));
+            Assert.That(group.WinFormsEventArgs, Is.Null, "Enter is an EventHandler: e As EventArgs");
+            Assert.That(FormEvents.WiredOn(group, FormTarget.WinForms).Select(e => e.Name),
+                Is.EquivalentTo(new[] { "Enter", "Click" }));
+            Assert.That(FormEvents.WiredOn(group, FormTarget.Web).Select(e => FormEvents.NameOn(e, FormTarget.Web)),
+                Is.EquivalentTo(new[] { "focusin", "click" }));
+            Assert.That(group.Events!.Single(e => e.Name == "Enter").OracleExemption, Is.Null,
+                "the snapshot agrees with Enter — nothing to exempt");
+        });
+    }
+
     [Test]
     public void TheRegionWriter_AcceptsTheCatalogsWebEvent_ThroughTheSeam()
     {

@@ -1059,6 +1059,13 @@ public sealed record FormImpliedProperty(string Name, string Value);
 /// on a Positioned row the web has (FormAssetEmitterTests pins it). ⛔ The emitter reads this; it never switches on
 /// the kind.
 /// </param>
+/// <param name="DropValues">
+/// What a control of this kind is given when it is DROPPED from the toolbox, beyond its caption — a designer
+/// PREFERENCE, which spec §2.7 says is written explicitly at placement, never encoded as a false default. Owner
+/// decision O1 (2026-09-29): a TableLayoutPanel drops 2×2, as Visual Studio drops one, while its WinForms default stays
+/// 0×0. ⛔ Read by <c>FormPlacement</c> and nothing else; <c>FormPlacementTests.EveryDropValue_…</c> requires each
+/// entry to be a row of the kind with a value that row accepts. Null for every other kind.
+/// </param>
 public sealed record FormControlDef(
     string Kind,
     string? WinFormsType,
@@ -1078,7 +1085,8 @@ public sealed record FormControlDef(
     string? HtmlChildrenWrapper = null,
     string? HtmlRole = null,
     string? WebCss = null,
-    bool StretchesWhenStacked = false)
+    bool StretchesWhenStacked = false,
+    IReadOnlyDictionary<string, string>? DropValues = null)
 {
     /// <summary>Task 25's flag, now derived: the eleven sites that read it keep reading it.</summary>
     public bool IsComponent => Place == FormPlace.Tray;
@@ -1201,19 +1209,12 @@ public static class FormControlCatalog
 
     private static readonly FormPropertyDef HighlightForeColor = ForeColor with { Default = "Highlight", WebDefault = "" };
 
-    /// <summary>
-    /// A shared colour row on a kind where WinForms marks it <c>[Browsable(false)]</c> (measured by
-    /// reflection, Task 8): VS does not list it, so the snapshot has nothing to judge. The designer keeps
-    /// offering it — removing a row is a product decision recorded for slice 3, not a parity fix.
-    /// </summary>
-    private static FormPropertyDef HiddenInWinForms(FormPropertyDef shared, string kind, bool onTheWeb) =>
-        shared with
-        {
-            OracleExemption = $"{kind}.{shared.Name} is [Browsable(false)] in WinForms (measured by reflection) — " +
-                              "VS does not list it. The designer offers it through the shared colour rows; csc " +
-                              "gates the name" + (onTheWeb ? ", and on the web it is the element's CSS" : "") +
-                              ". Whether a WinForms-hidden colour should be offered at all is a slice-3 decision."
-        };
+    // ⛔ Owner decision O2 (2026-09-29): a colour WinForms marks [Browsable(false)] on a kind is NOT offered — the
+    // grid shows what VS shows, on both targets (one vocabulary, D2). The slice-1 HiddenInWinForms rows (PictureBox's
+    // ForeColor, DateTimePicker's two, TrackBar's ForeColor, DataGridView's and TabControl's two) were removed; those
+    // kinds pass NULL for the missing colour to CommonColoured. WinFormsCatalogParityTests.EveryWinFormsColourRow_…
+    // fails if one comes back. A document that still carries such an attribute keeps it as an unknown attribute
+    // (preserved, round-tripped, no longer emitted).
 
     private static readonly FormPropertyDef Checked = new("Checked", FormPropertyType.Bool, "false",
         Category: FormPropertyCategory.Appearance, Description: "Indicates whether the component is in the checked state.");
@@ -1270,10 +1271,13 @@ public static class FormControlCatalog
 
     // ⚠ Timer/ToolTip/ErrorProvider-style tray rows are compared like any other; BackgroundWorker is not
     // (see its row): on .NET it carries no [DefaultValue], [Category] or [Description] at all.
+    // ⛔ Owner decision O4 (2026-09-29): its descriptions are WinForms' OWN text all the same — .NET Framework 4.8's
+    // [Description]s, measured on the owner's machine with TypeDescriptor over System.dll (Windows PowerShell 5.1).
     private const string BackgroundWorkerHasNoMetadata =
         "System.ComponentModel.BackgroundWorker carries no [DefaultValue]/[Category]/[Description] on .NET " +
         "(measured by reflection), so the snapshot's 'serialized'/Misc/empty text records the ABSENCE of " +
-        "metadata, not a value. A fresh instance reads False (measured) — what an absent attribute means.";
+        "metadata, not a value. A fresh instance reads False (measured) — what an absent attribute means. The " +
+        "description is .NET Framework 4.8's own [Description] for the same property (owner decision O4).";
 
     // ==================================================================
     // TextAlign — spec §2.8. ONE definition used to serve Label, Button and LinkLabel with default
@@ -1325,12 +1329,12 @@ public static class FormControlCatalog
 
     /// <summary>
     /// <see cref="Common"/> with a kind's OWN colour rows — where the parity run showed the colour is not
-    /// ambient on that kind (TextBox's Window) or is hidden there. Same order as <see cref="Common"/>, so
-    /// the grid does not reshuffle.
+    /// ambient on that kind (TextBox's Window) — or NULL where WinForms hides it (owner decision O2: not
+    /// offered). Same order as <see cref="Common"/>, so the grid does not reshuffle.
     /// </summary>
     private static IReadOnlyList<FormPropertyDef> CommonColoured(
-        FormPropertyDef foreColor, FormPropertyDef backColor, params FormPropertyDef[] own) =>
-        own.Concat(new[] { Enabled, Visible, foreColor, backColor }).ToList();
+        FormPropertyDef? foreColor, FormPropertyDef? backColor, params FormPropertyDef[] own) =>
+        own.Concat(new[] { Enabled, Visible, foreColor, backColor }.OfType<FormPropertyDef>()).ToList();
 
     // Control.Click's WinForms metadata — the most-shared default event (Task 8's parity run).
     private const string ClickedDescription = "Occurs when the component is clicked.";
@@ -1453,15 +1457,25 @@ public static class FormControlCatalog
             Events: Ev("Click", "click", category: FormEventCategory.Action, description: ClickedDescription)),
         new("GroupBox",    "GroupBox",    "fieldset", null,       true,  Common(Text),
             DefaultWidth: 200, DefaultHeight: 100, Schematic: FormSchematic.Group,
-            // ⚠ GroupBox.Click is [Browsable(false)] (VS's default event is Enter) — measured by reflection
-            // in Task 8, which also measured that a real click DOES raise it. Kept: it is the gesture a
-            // double-click here can honestly stub on both targets. Metadata is Control.Click's.
-            Events: Ev("Click", "click", category: FormEventCategory.Action, description: ClickedDescription,
-                exemption: "GroupBox.Click is [Browsable(false)] in WinForms — VS lists Enter as the default " +
-                           "event instead — but it is raised by a real click (measured by reflection and a " +
-                           "simulated WM_LBUTTONDOWN/UP, Task 8), so the stub is live; csc gates the name")),
+            // ⛔ Owner decision O3 (2026-09-29, checked in Visual Studio): a double-click creates an ENTER handler,
+            // as VS does — the snapshot's DefaultEvent agrees, so Enter needs no exemption. On the page Enter is the
+            // fieldset's `focusin`: focus moving INTO the box, which bubbles from its children exactly as WinForms
+            // raises Enter for a container when one of its children becomes active (a fieldset itself takes no focus).
+            // ⚠ Click stays, NON-default: existing documents bind it, and the retarget crosses any event wired on
+            // both targets (FormRetarget.ConvertBinds through FormEvents.WiredOn — pre-flight B1).
+            Events: new[]
+            {
+                new FormEventDef("Enter", WebEvent: "focusin", Category: FormEventCategory.Focus,
+                    Description: "Occurs when the control becomes the active control of the form.", IsDefault: true),
+                new FormEventDef("Click", WebEvent: "click", Category: FormEventCategory.Action,
+                    Description: ClickedDescription,
+                    OracleExemption: "GroupBox.Click is [Browsable(false)] in WinForms — VS does not list it — but a " +
+                                     "real click raises it (measured by reflection and a simulated WM_LBUTTONDOWN/UP, " +
+                                     "Task 8); kept as a non-default event so documents that bind it keep working; " +
+                                     "csc gates the name")
+            }),
         new("PictureBox",  "PictureBox",  "img",      null,       false, CommonColoured(
-            HiddenInWinForms(ForeColor, "PictureBox", onTheWeb: true), BackColor,
+            null, BackColor,
             // WinForms Image is a System.Drawing.Image, not a path string (CS0029).
             new FormPropertyDef("Image", FormPropertyType.String,
                 WinFormsFactory: "Image.FromFile",
@@ -1521,8 +1535,7 @@ public static class FormControlCatalog
                 description: "Occurs when the value in the up-down control changes.")),
 
         new("DateTimePicker", "DateTimePicker", "input", "date",  false, CommonColoured(
-            HiddenInWinForms(ForeColor, "DateTimePicker", onTheWeb: true),
-            HiddenInWinForms(BackColor, "DateTimePicker", onTheWeb: true),
+            null, null,
             // ⛔ All WinForms-only. <input type="date"> renders per the user's locale and has no
             // format control at all, so emitting these to the web would be describing a behaviour
             // the page cannot have.
@@ -1545,7 +1558,7 @@ public static class FormControlCatalog
                 description: ControlValueChangedDescription)),
 
         new("TrackBar",    "TrackBar",    "input",    "range",    false, CommonColoured(
-            HiddenInWinForms(ForeColor, "TrackBar", onTheWeb: true), BackColor,
+            null, BackColor,
             new FormPropertyDef("Minimum", FormPropertyType.Int, "0", HtmlAttribute: "min",
                 Category: FormPropertyCategory.Behavior,
                 Description: "The minimum value for the position of the slider on the TrackBar."),
@@ -1648,8 +1661,7 @@ public static class FormControlCatalog
                 description: "Occurs when the selection has been changed.")),
 
         new("DataGridView", "DataGridView", null,     null,       false, CommonColoured(
-            HiddenInWinForms(ForeColor, "DataGridView", onTheWeb: false),
-            HiddenInWinForms(BackColor, "DataGridView", onTheWeb: false),
+            null, null,
             new FormPropertyDef("AllowUserToAddRows", FormPropertyType.Bool, "true",
                 Category: FormPropertyCategory.Behavior,
                 Description: "Indicates whether the option to add rows is displayed to the user."),
@@ -1671,8 +1683,7 @@ public static class FormControlCatalog
                 description: "Occurs when any part of the cell is clicked.")),
 
         new("TabControl",  "TabControl",  null,       null,       true,  CommonColoured(
-            HiddenInWinForms(ForeColor, "TabControl", onTheWeb: false),
-            HiddenInWinForms(BackColor, "TabControl", onTheWeb: false),
+            null, null,
             new FormPropertyDef("Alignment", FormPropertyType.Enum, "Top",
                 new[] { "Top", "Bottom", "Left", "Right" },
                 WinFormsEnumType: "TabAlignment",
@@ -1726,8 +1737,7 @@ public static class FormControlCatalog
         new("TableLayoutPanel", "TableLayoutPanel", null, null,   true,  Common(
             // ⚠ WinForms' [DefaultValue] is 0 for both (the parity run). VS DROPS a TableLayoutPanel as
             // 2×2 — a designer PREFERENCE, which spec §2.7 says is written at placement, never encoded as
-            // a false default. Placement does not write it in slice 1 (plan Task 8 step 4); recorded for
-            // the owner as a slice-3 decision.
+            // a false default: DropValues below (owner decision O1, 2026-09-29).
             new FormPropertyDef("ColumnCount", FormPropertyType.Int, "0",
                 Category: FormPropertyCategory.Layout,
                 Description: "The number of columns on the table."),
@@ -1740,7 +1750,8 @@ public static class FormControlCatalog
                 Category: FormPropertyCategory.Appearance,
                 Description: "Indicates the appearance of cell borders in a table.")),
             DefaultWidth: 220, DefaultHeight: 120, Schematic: FormSchematic.TableContainer,
-            Events: Ev("Click", category: FormEventCategory.Action, description: ClickedDescription)),
+            Events: Ev("Click", category: FormEventCategory.Action, description: ClickedDescription),
+            DropValues: new Dictionary<string, string> { ["ColumnCount"] = "2", ["RowCount"] = "2" }),
 
         // ==================================================================
         // Task 25 — the component tray. Non-visual: no place on the canvas, no Controls.Add.
@@ -1824,24 +1835,26 @@ public static class FormControlCatalog
 
         // ⚠ Every row and the event carry an OracleExemption (BackgroundWorkerHasNoMetadata): on .NET the
         // type has no designer metadata, so the snapshot records absence, not values. Category Misc is
-        // what VS shows for it on .NET; the descriptions are the designer's own.
+        // what VS shows for it on .NET (Framework files it under Asynchronous); the descriptions are WinForms'
+        // own .NET Framework text (owner decision O4), never the designer's invention.
         new("BackgroundWorker", "System.ComponentModel.BackgroundWorker", null, null, false, new List<FormPropertyDef>
             {
                 new("WorkerReportsProgress", FormPropertyType.Bool, "false",
                     Category: FormPropertyCategory.Misc,
-                    Description: "Whether the worker can report progress (ReportProgress raises ProgressChanged).",
+                    Description: "Whether the worker will report progress.",
                     OracleExemption: BackgroundWorkerHasNoMetadata),
                 new("WorkerSupportsCancellation", FormPropertyType.Bool, "false",
                     Category: FormPropertyCategory.Misc,
-                    Description: "Whether the worker supports cancellation (CancelAsync sets CancellationPending).",
+                    Description: "Whether the worker supports cancellation.",
                     OracleExemption: BackgroundWorkerHasNoMetadata)
             },
             Schematic: FormSchematic.Worker,
             Events: Ev("DoWork", args: "System.ComponentModel.DoWorkEventArgs", category: FormEventCategory.Misc,
-                description: "Occurs when RunWorkerAsync is called; the handler runs on a background thread.",
+                description: "Event handler to be run on a different thread when the operation begins.",
                 exemption: "System.ComponentModel.BackgroundWorker carries no [Category]/[Description] on .NET " +
                            "(measured), so the snapshot's Misc/empty text records the absence of metadata; the " +
-                           "description is the designer's own. The args are still WinForms' (DoWorkEventArgs)."),
+                           "description is .NET Framework 4.8's own [Description] (owner decision O4). The args are " +
+                           "still WinForms' (DoWorkEventArgs)."),
             Place: FormPlace.Tray),
 
         // ==================================================================
