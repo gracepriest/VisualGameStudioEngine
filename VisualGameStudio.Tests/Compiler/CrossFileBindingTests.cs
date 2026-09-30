@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Linq;
+using System.Threading.Tasks;
 using NUnit.Framework;
 using BasicLang.Compiler;
 using BasicLang.Compiler.IR;
@@ -8,6 +9,10 @@ using BasicLang.Compiler.IR.Optimization;
 using BasicLang.Compiler.CodeGen.CSharp;
 using BasicLang.Compiler.CodeGen.CPlusPlus;
 using BasicLang.Compiler.CodeGen.JavaScript;
+using VisualGameStudio.Core.Models;
+using VisualGameStudio.ProjectSystem.Serialization;
+using VisualGameStudio.ProjectSystem.Services;
+using RecordingOutput = VisualGameStudio.Tests.Services.JavaScriptProjectBuildTests.RecordingOutput;
 
 namespace VisualGameStudio.Tests.Compiler;
 
@@ -414,5 +419,160 @@ public class CrossFileBindingTests
             ("AppError.bas", "Public Class AppError\n Inherits Exception\n Public Sub New(m As String)\n  MyBase.New(m)\n End Sub\nEnd Class\n"));
         var result = Compile(paths);
         Assert.That(result.HasErrors, Is.False, Messages(result));
+    }
+
+    // ------------------------------------------------------------------ item 4: Inherits across files
+    // Portable-controls plan Task 7 (spec §4.2, M6; chip task_e7af351e item 1). Measured on bc29391e, 40e9c172
+    // and 6fbde6a5: "Unknown base class 'Base'" + "MyBase can only be used in a class that inherits from another
+    // class" + the upcast refused, on JavaScript, C# AND C++ (BL3001). With any Using line the base silently became
+    // an opaque .NET class instead. Visit(ClassNode) and RegisterClassBases looked the base up in the unit's own
+    // type manager only, where a sibling file's class never is.
+
+    private const string BaseFile =
+        "Public Class Base\n Public Overridable Function Hi() As String\n  Return \"base\"\n End Function\n" +
+        " Public Sub Hello()\n  PrintLine(\"hello from base\")\n End Sub\nEnd Class\n";
+
+    private const string DerivedFile =
+        "Public Class D\n Inherits Base\n Public Overrides Function Hi() As String\n  Return \"D:\" & MyBase.Hi()\n" +
+        " End Function\n Public Sub Greet()\n  Me.Hello()\n End Sub\nEnd Class\n";
+
+    private const string UseBaseAndDerived =
+        "Module Program\n Sub Main()\n  Dim x As Base = New D()\n  PrintLine(x.Hi())\n  Dim d As New D()\n  d.Greet()\n End Sub\nEnd Module\n";
+
+    private const string CrossFileBaseOutput = "D:base\nhello from base";
+
+    [Test]
+    public void AClassInheritsAClassFromAnotherFile() => RunsOnEveryBackend(CrossFileBaseOutput,
+        ("Base.bas", BaseFile), ("Derived.bas", DerivedFile), ("Main.bas", UseBaseAndDerived));
+
+    /// <summary>
+    /// ⛔ The Using shape: the analyzer's "unresolved base + a .NET Using = an opaque .NET class" must not win
+    /// over a sibling's real class. The WinForms scaffold always has Using lines (FormScaffolder).
+    /// ⚠ <c>Greet</c> calls the inherited Sub UNQUALIFIED here: <c>Me.Hello()</c> under a .NET Using is M7 (the IR
+    /// builder takes <c>Me</c> for a .NET static type — JavaScript "no lowering for 'Me.Hello'"), a separate defect
+    /// owned by portable-controls Task 11, which switches this row back to <c>Me.Hello()</c>.
+    /// </summary>
+    [Test]
+    public void AClassInheritsAClassFromAnotherFile_UnderAUsing() => RunsOnEveryBackend(CrossFileBaseOutput,
+        ("Base.bas", BaseFile),
+        ("Derived.bas", "Using System\n" + DerivedFile.Replace("  Me.Hello()\n", "  Hello()\n")),
+        ("Main.bas", UseBaseAndDerived));
+
+    /// <summary>
+    /// ⛔ An UNQUALIFIED call to an inherited Sub, the base in a file named unlike it. Pass 1 flattens the base's
+    /// methods into the global scope as imports owned by their FILE, and the IR builder spelled the call against
+    /// that owner: C# emitted <c>Shapes.Hello()</c> / <c>Base.Hello()</c> (CS0120/CS0103) once the base resolved.
+    /// </summary>
+    [Test]
+    public void AnUnqualifiedCallToAnInheritedSub_FromAnotherFile() => RunsOnEveryBackend("hello from base\nhello from base",
+        ("Shapes.bas", BaseFile),
+        ("Derived.bas", "Public Class D\n Inherits Base\n Public Sub Greet()\n  Hello()\n End Sub\nEnd Class\n"),
+        ("Main.bas", "Sub Main()\n Dim d As New D()\n d.Greet()\n d.Hello()\nEnd Sub\n"));
+
+    /// <summary>
+    /// Chip task_e7af351e item 2 across files: every class must be emitted AFTER its base (a JavaScript
+    /// <c>class C extends B</c> above <c>class B</c> is a TDZ ReferenceError at load; C++ needs the complete base).
+    /// Both file orders put the derived file first once.
+    /// </summary>
+    [Test]
+    public void AThreeLevelChain_SplitOverThreeFiles() => RunsOnEveryBackend("C>B>A",
+        ("A.bas", "Public Class A\n Public Overridable Function Name() As String\n  Return \"A\"\n End Function\nEnd Class\n"),
+        ("B.bas", "Public Class B\n Inherits A\n Public Overrides Function Name() As String\n  Return \"B>\" & MyBase.Name()\n End Function\nEnd Class\n"),
+        ("C.bas", "Public Class C\n Inherits B\n Public Overrides Function Name() As String\n  Return \"C>\" & MyBase.Name()\n End Function\nEnd Class\n"),
+        ("Main.bas", "Module Program\n Sub Main()\n  Dim a As A = New C()\n  PrintLine(a.Name())\n End Sub\nEnd Module\n"));
+
+    /// <summary>
+    /// The rest of what a derived class inherits across a file boundary: a field, a property (read and written
+    /// through <c>Me</c> and from outside) and a base constructor with a parameter reached by <c>MyBase.New</c>.
+    /// </summary>
+    [Test]
+    public void FieldsPropertiesAndMyBaseNew_AreInheritedAcrossFiles() => RunsOnEveryBackend("box:3\nbox4",
+        ("Shape.bas",
+            "Public Class Shape\n Public Name As String\n Private _size As Integer\n" +
+            " Public Sub New(n As String)\n  Name = n\n End Sub\n" +
+            " Public Property Size As Integer\n  Get\n   Return _size\n  End Get\n  Set(value As Integer)\n   _size = value\n  End Set\n End Property\nEnd Class\n"),
+        ("Box.bas",
+            "Public Class Box\n Inherits Shape\n Public Sub New()\n  MyBase.New(\"box\")\n  Me.Size = 3\n End Sub\n" +
+            " Public Function Describe() As String\n  Return Me.Name & \":\" & CStr(Me.Size)\n End Function\nEnd Class\n"),
+        ("Main.bas", "Sub Main()\n Dim b As New Box()\n PrintLine(b.Describe())\n b.Size = b.Size + 1\n PrintLine(b.Name & CStr(b.Size))\nEnd Sub\n"));
+
+    /// <summary>The strict missing-member check walks the cross-file base chain: what the base has binds, what
+    /// neither class has is still refused by name — through <c>Me</c> and through a local, in both orders.</summary>
+    [Test]
+    public void AMemberNeitherClassHas_IsStillReported_AcrossACrossFileBase()
+    {
+        var paths = Write(
+            ("Base.bas", BaseFile),
+            ("Derived.bas", "Public Class D\n Inherits Base\n Public Sub Greet()\n  Me.Hello()\n  Me.Vanish()\n End Sub\nEnd Class\n"),
+            ("Main.bas", "Sub Main()\n Dim d As New D()\n d.Hello()\n d.Frobnicate()\nEnd Sub\n"));
+        foreach (var order in new[] { paths, paths.Reverse().ToArray() })
+        {
+            var label = string.Join(",", order.Select(Path.GetFileName));
+            var messages = Messages(Compile(order));
+            Assert.Multiple(() =>
+            {
+                Assert.That(messages, Does.Contain("does not have a member 'Vanish'"), label);
+                Assert.That(messages, Does.Contain("does not have a member 'Frobnicate'"), label);
+                Assert.That(messages, Does.Not.Contain("'Hello'"), label);
+                Assert.That(messages, Does.Not.Contain("Unknown base class"), label);
+            });
+        }
+    }
+
+    /// <summary>A JavaScript project over the three files, listed in the given order.</summary>
+    private string WriteCrossFileBaseProject(bool reversed)
+    {
+        var files = new[] { "Base.bas", "Derived.bas", "Main.bas" };
+        if (reversed) Array.Reverse(files);
+        Write(
+            ("App.blproj",
+                "<BasicLangProject Version=\"1.0\">\n  <PropertyGroup>\n    <ProjectName>App</ProjectName>\n" +
+                "    <OutputType>Exe</OutputType>\n    <TargetBackend>JavaScript</TargetBackend>\n  </PropertyGroup>\n" +
+                "  <ItemGroup>\n" + string.Concat(files.Select(f => $"    <Compile Include=\"{f}\" />\n")) +
+                "  </ItemGroup>\n</BasicLangProject>\n"),
+            ("Base.bas", BaseFile), ("Derived.bas", DerivedFile), ("Main.bas", UseBaseAndDerived));
+        return Path.Combine(_dir, "App.blproj");
+    }
+
+    /// <summary>⛔ The CLI entry point: the real <c>BasicLang.exe build</c> of a JavaScript project whose class
+    /// inherits a class from another file, RUN under node.</summary>
+    [TestCase(false)]
+    [TestCase(true)]
+    public void TheCli_BuildsAndRunsAJavaScriptProject_WithACrossFileBase(bool reversed)
+    {
+        var project = WriteCrossFileBaseProject(reversed);
+
+        var (exit, stdout, stderr) = CliTestHarness.RunProcess(
+            CliTestHarness.CliPath(), new[] { "build", project }, _dir, timeoutMs: 180_000);
+        Assert.That(exit, Is.Zero, $"the CLI refused the project\n{stdout}\n{stderr}");
+
+        var script = Path.Combine(_dir, "bin", "Debug", "net8.0", "App.js");
+        Assert.That(File.Exists(script), Is.True, stdout);
+
+        (int, string, string) ran;
+        try
+        {
+            ran = CliTestHarness.RunProcess("node", new[] { script }, _dir, timeoutMs: 60_000);
+        }
+        catch (System.ComponentModel.Win32Exception e)
+        {
+            Assert.Ignore($"node could not be started ({e.Message})");
+            return;
+        }
+        Assert.That(FourBackends.Norm(ran.Item2), Is.EqualTo(CrossFileBaseOutput), "a green build is not a running page\n" + ran.Item3);
+    }
+
+    /// <summary>⛔ The IDE entry point: <see cref="BuildService.BuildProjectAsync"/> (which delegates to the CLI
+    /// engine's CompileProjectFiles) over the same project, its generated script RUN under node.</summary>
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task TheIde_BuildsAJavaScriptProject_WithACrossFileBase(bool reversed)
+    {
+        var project = await new ProjectSerializer().LoadAsync(WriteCrossFileBaseProject(reversed));
+        var output = new RecordingOutput();
+        var service = new BuildService(output) { CurrentConfiguration = new BuildConfiguration { Name = "Debug" } };
+        var result = await service.BuildProjectAsync(project);
+        Assert.That(result.Success, Is.True, output.Dump());
+        Assert.That(FourBackends.Norm(JavaScriptExecutionTests.RunNodeScript(result.GeneratedCode!)), Is.EqualTo(CrossFileBaseOutput));
     }
 }

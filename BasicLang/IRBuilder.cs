@@ -295,8 +295,11 @@ namespace BasicLang.Compiler.IR
             // to declare the same name last (two forms' InitializeComponent). See
             // IsCurrentClassMethod. A qualified `Module.M()` never reaches this arm — it carries
             // its OwningModule and is answered above.
+            // ⛔ ...nor when a BASE declares it: the base may live in another file, and pass 1 flattens
+            // its methods into the global scope as imports owned by that FILE, so an unqualified call
+            // to an inherited method was emitted `Base.Hello()` on C# — CS0120 (portable-controls Task 7).
             if (callee.IsImported && !string.IsNullOrEmpty(callee.SourceModule)
-                && !IsCurrentClassMethod(callee.Name))
+                && !IsCurrentClassMethod(callee.Name) && !IsCurrentClassProcedure(callee.Name))
                 return (callee.Name, callee.SourceModule);
             if (isProcedure && IsFileScopeProcedure(callee))
                 return (GlobalIrName(_module.Name, callee.Name), _module.Name);

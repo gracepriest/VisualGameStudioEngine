@@ -539,12 +539,13 @@ public class InheritedMemberTests
             """, "10");
 
     /// <summary>
-    /// ⛔ PINNED, pre-existing and untouched: a class declared in ANOTHER FILE cannot be a base —
-    /// "Unknown base class". The whole cross-file inheritance surface is unreachable, so none of
-    /// the shapes above could be measured across files.
+    /// A class declared in ANOTHER FILE is a base, and its field is inherited. This was PINNED as
+    /// "Unknown base class" until portable-controls Task 7 (spec §4.2, M6); the cross-file surface
+    /// itself — methods, overrides, MyBase, properties, both file orders, every backend, the CLI and
+    /// IDE routes — is covered by <see cref="CrossFileBindingTests"/>.
     /// </summary>
     [Test]
-    public void ACrossFileBaseClass_IsNotFound_Pinned()
+    public void ACrossFileBaseClass_IsFound_AndItsFieldIsInherited()
     {
         var dir = Directory.CreateDirectory(Path.Combine(Path.GetTempPath(),
             "BasicLang_Inherited_" + Path.GetRandomFileName())).FullName;
@@ -557,8 +558,12 @@ public class InheritedMemberTests
                 "Sub Main()\n Dim b As New Box()\n PrintLine(CStr(b.Total))\nEnd Sub\n");
 
             var result = new BasicCompiler().CompileProjectFiles(new[] { basePath, mainPath });
-            Assert.That(string.Join(" | ", result.AllErrors.Select(e => e.Message)),
-                Does.Contain("Unknown base class 'Base'"));
+            Assert.That(result.HasErrors, Is.False, string.Join(" | ", result.AllErrors.Select(e => e.Message)));
+            var pipeline = new BasicLang.Compiler.IR.Optimization.OptimizationPipeline();
+            pipeline.AddStandardPasses();
+            pipeline.Run(result.CombinedIR!);
+            var cs = new BasicLang.Compiler.CodeGen.CSharp.CSharpCodeGenerator().Generate(result.CombinedIR!);
+            Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharpText(cs)), Is.EqualTo("7"), cs);
         }
         finally { try { Directory.Delete(dir, true); } catch { } }
     }

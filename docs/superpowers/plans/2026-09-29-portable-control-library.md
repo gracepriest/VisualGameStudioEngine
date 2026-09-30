@@ -3448,6 +3448,7 @@ Spec §9, O8, P-D6. Toolbox (`FormToolboxViewModel.cs:64` lists every kind on a 
 | `LexerTests.Lexer_PreprocessorIf` | Pins a token the parser never consumes (S1) | Task 5 (kept deliberately) |
 | `JavaScriptEventTests` (`:189`, `:192`, summary `:26-29`) | Pins `new Set()`/`.add(` and "RemoveHandler removes nothing" | Task 12 (changed) |
 | `NetBuildPipelineTests.InstanceCallOnAPascalCaseLocal_UnderANetUsing_…` | The M7 guard must not reopen the C1 shape | Task 11 |
+| `CrossFileBindingTests.AClassInheritsAClassFromAnotherFile_UnderAUsing` | Task 7 calls the inherited Sub UNQUALIFIED because `Me.Hello()` under a Using is M7 (JS "no lowering for 'Me.Hello'") — switch it back to `DerivedFile` verbatim (`Me.Hello()`) | Task 11 |
 | `HandlerSignatureTests.AnUnresolvedDotNetEvent_StaysSilent` / `TheWinFormsShape_…` | Guards, green from the start | Task 10 (mutations prove the others) |
 | `JavaScriptLibraryIdiomTests` (most rows) | Guards of today's behaviour | Task 16 (mutation) |
 | `ConstantExpressions_AreExact_UnderEveryPipeline` | Guards "not folded" — becomes a real test if anyone adds Decimal folding | Task 26 |

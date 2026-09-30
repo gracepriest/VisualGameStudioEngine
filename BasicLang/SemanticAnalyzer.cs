@@ -5956,7 +5956,9 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     if (!string.IsNullOrEmpty(cls.BaseClass))
                     {
                         var classType = _typeManager.GetType(cls.Name);
-                        var baseType = _typeManager.GetType(cls.BaseClass);
+                        // ⛔ The same lookup as Visit(ClassNode): a base from another file lives in GlobalScope
+                        // (a sibling shell or a completed sibling's class), never in this unit's type manager.
+                        var baseType = ResolveTypeSymbol(cls.BaseClass)?.Type ?? _typeManager.GetType(cls.BaseClass);
                         if (classType != null && classType.BaseType == null
                             && baseType != null && baseType.Kind == TypeKind.Class
                             && !InheritanceWouldCycle(classType, baseType))
@@ -6418,7 +6420,12 @@ namespace BasicLang.Compiler.SemanticAnalysis
             // Set base class
             if (node.BaseClass != null)
             {
-                var baseType = _typeManager.GetType(node.BaseClass);
+                // ⛔ A base declared in ANOTHER file is not a type-manager entry of this unit: it is a sibling
+                // SHELL (RegisterSiblingClassShell) or a completed sibling's imported class symbol, both in
+                // GlobalScope. ResolveTypeSymbol finds a TYPE symbol through the scopes — a value of the same
+                // name is skipped — so the sibling's class is found before the "unresolved + a .NET Using =
+                // opaque .NET class" fallback below can claim it (portable-controls Task 7, M6).
+                var baseType = ResolveTypeSymbol(node.BaseClass)?.Type ?? _typeManager.GetType(node.BaseClass);
                 if (baseType == null)
                 {
                     if (_netNamespaces.Count > 0)
