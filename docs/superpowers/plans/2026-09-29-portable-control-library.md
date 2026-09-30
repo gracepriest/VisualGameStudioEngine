@@ -2488,10 +2488,17 @@ public class JavaScriptDecimalTests
 
 ```csharp
         private const string DecimalPrelude = """
+            // VgsDecimal — exact System.Decimal semantics for BasicLang's JavaScript backend.
+            // Portions derived from dotnet/runtime (System.Decimal.DecCalc: VarR8FromDec, VarDecFromR8 and its
+            // power-of-ten table) — (c) .NET Foundation and Contributors, MIT License.
             class VgsDecimal {
+              static MAX = (1n << 96n) - 1n;
+              static ZERO = new VgsDecimal(false, 0n, 0);
+              // .NET's double powers of ten, as double LITERALS (from 1e23 on a literal is not exact — the table must
+              // be literals, never a computed power). A static FIELD: built once, not per call.
+              static DOUBLE_POWERS_10 = [1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11, 1e12, 1e13, 1e14,
+                                         1e15, 1e16, 1e17, 1e18, 1e19, 1e20, 1e21, 1e22, 1e23, 1e24, 1e25, 1e26, 1e27, 1e28];
               constructor(neg, mant, scale) { this.neg = neg && mant !== 0n; this.mant = mant; this.scale = scale; }
-              static get MAX() { return (1n << 96n) - 1n; }
-              static get ZERO() { return new VgsDecimal(false, 0n, 0); }
               static pow10(n) { return 10n ** BigInt(n); }
               signed() { return this.neg ? -this.mant : this.mant; }
               // .NET's rule: at most 28 fractional digits and a 96-bit magnitude; drop digits with ONE banker's
@@ -2517,7 +2524,7 @@ public class JavaScriptDecimalTests
               static fromInt(n) { const v = BigInt(Math.trunc(n)); return new VgsDecimal(v < 0n, v < 0n ? -v : v, 0); }
               // ⛔ (decimal)double is .NET's DecCalc.VarDecFromR8 — PORT IT, line for line (Task 22), from
               // dotnet/runtime src/libraries/System.Private.CoreLib/src/System/Decimal.DecCalc.cs (MIT; add the
-              // attribution to THIRD-PARTY-NOTICES.md). It scales the DOUBLE by a double power of ten chosen from the
+              // attribution is the notice at the top of this prelude + THIRD-PARTY-NOTICES.md). It scales the DOUBLE by a double power of ten chosen from the
               // binary exponent, rounds the scaled double half-to-even to an integer of ~15 significant digits, and
               // strips trailing zeros — arithmetic in IEEE doubles, which JavaScript reproduces exactly when the same
               // operations and the same power-of-ten table are used. A decimal-string approach (toExponential/
@@ -2582,16 +2589,11 @@ public class JavaScriptDecimalTests
               toByte() { return this.toIntegral(0n, 255n, "an unsigned byte"); }
               // (double)decimal is .NET's DecCalc.VarR8FromDec: ((double)lo64 + (double)hi32 * 2^64) / 10^scale — the
               // ulong→double conversion, the sum and the division each round in IEEE doubles, and JS rounds the same
-              // operations identically. 10^scale comes from the SAME table .NET uses (double literals 1e0 … 1e28;
-              // from 1e23 on a literal is not exact, which is why the table must be literals, not a computed power).
+              // operations identically; 10^scale is DOUBLE_POWERS_10 (the same literals .NET uses).
               toNumber() {
                 const lo = this.mant & ((1n << 64n) - 1n), hi = this.mant >> 64n;
                 const d = (Number(lo) + Number(hi) * 18446744073709551616) / VgsDecimal.DOUBLE_POWERS_10[this.scale];
                 return this.neg ? -d : d;
-              }
-              static get DOUBLE_POWERS_10() {
-                return [1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11, 1e12, 1e13, 1e14, 1e15, 1e16,
-                        1e17, 1e18, 1e19, 1e20, 1e21, 1e22, 1e23, 1e24, 1e25, 1e26, 1e27, 1e28];
               }
               toString() {
                 let digits = this.mant.toString();
@@ -2609,7 +2611,7 @@ public class JavaScriptDecimalTests
 
             """;
 ```
-  Wire: `UsesDecimal`, `EmitDecimalPrelude` (before the conversion prelude — `__blStr` references the class), constants, defaults, `__blStr`, the allow-list, the exception types. Arithmetic/comparison/conversion lowering is Tasks 20–22; this task needs only literals, assignment, members and printing.
+  Wire: `UsesDecimal`, `EmitDecimalPrelude` (before the conversion prelude — `__blStr` references the class), constants, defaults, `__blStr`, the allow-list, the exception types. **Licence:** the prelude's first lines are the dotnet/runtime notice comment above (it is emitted into every user's App.js), and `THIRD-PARTY-NOTICES.md` gains one entry covering `VarR8FromDec`, `VarDecFromR8` and the power-of-ten table (the pattern of the existing dotnet/winforms entry for the catalog's descriptions). A test asserts the emitted App.js of a Decimal program contains the notice line. Arithmetic/comparison/conversion lowering is Tasks 20–22; this task needs only literals, assignment, members and printing.
 - [ ] **Step 4: Run — GREEN**, plus `JsExecutionTierRosterTests`, `JavaScriptCodeGenTests`, every test grepping `BL7007` (a Decimal refusal test there becomes a lowering test — list them).
 - [ ] **Step 5: Mutations:** (0) `UsesDecimal` scans only function bodies (not class fields) → `DecimalOnlyInASiblingFilesField_OnEveryRoute` red with `VgsDecimal is not defined`; (1) render the constant with `m.ToString()` under `sv-SE` culture (drop `InvariantCulture`) → with the test run under `sv-SE` (set it in a one-off test) `LiteralsKeepTheirScale` red; (2) `__blStr` without the Decimal arm → `TheTextForms`/`LiteralsKeepTheirScale` red (`[object Object]`); (3) default `null` instead of `ZERO` → `FieldsProperties…` red.
 - [ ] **Step 6: Commit.**
@@ -2678,13 +2680,14 @@ D3, D20.
 Plan review CRITICAL; scope call S10. The C# backend is a BasicLang backend, and BasicLang follows VB. Measured by the reviewer on `5b4ca51e`: `EmitCastText` (≈4467-4498; `:4443-4477` [X]) rounds a narrowing only when the source is Double/Single (`IsFloatingTypeName(sourceName)`), so `CType(d, Integer)` and implicit Decimal → Integer emit `(int)(d)` — TRUNCATION; `o = p` on two `Object`s compares references; `CType(o, Decimal)` of a boxed Integer is a C# unbox that throws `InvalidCastException`. This task runs BEFORE Task 21, so the VB-literal rows of Tasks 21–22 are green on C# when they are written.
 
 **Files:**
-- Modify: `BasicLang/CSharpBackend.cs` — `EmitCastText`: (E1/E4) the rounding rule's condition becomes `(IsFloatingTypeName(sourceName) || sourceName == "Decimal") && IsIntegralTypeName(targetName)` → `Convert.To{Int32|Int16|Byte|…}(…)` (banker's rounding AND `OverflowException`, exactly VB's `CInt`/`CShort`/`CByte` on a Decimal); (E3) a new arm before the reference-cast arm: `sourceName == "Object" && targetName == "Decimal"` → `Convert.ToDecimal({valueExpr})` (VB converts a boxed Integer/Double; a non-convertible object still throws `InvalidCastException`); the `CShort`/`CByte` builtins with a Decimal argument (grep `CShort` in `CSharpBackend.cs`/`VbConversionText` `:240-275`) → `Convert.ToInt16`/`Convert.ToByte`; (E2) the `Eq`/`Ne` rendering for two `Object`-typed operands (grep `BinaryOpKind.Eq` in `CSharpBackend.cs`) → `__BlObjectEquals(a, b)` / `!__BlObjectEquals(a, b)` WHEN either operand is `Object`-typed, with the helper emitted once into the generated module class when used:
+- Modify: `BasicLang/CSharpBackend.cs` — `EmitCastText`: (E1/E4) the rounding rule's condition becomes `(IsFloatingTypeName(sourceName) || sourceName == "Decimal") && IsIntegralTypeName(targetName)` → `Convert.To{Int32|Int16|Byte|…}(…)` (banker's rounding AND `OverflowException`, exactly VB's `CInt`/`CShort`/`CByte` on a Decimal); (E3) a new arm before the reference-cast arm: `sourceName == "Object" && targetName == "Decimal"` → `Convert.ToDecimal({valueExpr})` (VB converts a boxed Integer/Double; a non-convertible object still throws `InvalidCastException`); the `CShort`/`CByte` builtins with a Decimal argument (grep `CShort` in `CSharpBackend.cs`/`VbConversionText` `:240-275`) → `Convert.ToInt16`/`Convert.ToByte`; (E2) a comparison `=`/`<>` reaches the C# backend as an **`IRCompare`** (built by `IRBuilder.Visit(BinaryExpressionNode)` — `IsComparisonOperator` → `new IRCompare(tempName, cmpKind, left, right, resultType)`, `IRBuilder.cs:5236-5239` [X]; never an `IRBinaryOp` Eq/Ne) and is rendered in THREE places that must agree: `Visit(IRCompare)` (`CSharpBackend.cs:4017-4029` [X], `WriteLine($"{target} = {left} {op} {right};")`) and the two inline renderers `case IRCompare cmp:` (`:3637` and `:3841` [X]). One private method `CompareText(IRCompare, Func<IRValue,string> render)` replaces the three spellings, and routes `Equal`/`NotEqual` to `__BlObjectEquals(a, b)` / `!__BlObjectEquals(a, b)` **ONLY WHEN (both static types are `Object`) OR (one is `Object` and the other `Decimal`)** — ⛔ the plan-review decision: an `Object` compared with any OTHER primitive (`o = 5`, `o = 5.0`, a Long) stays EXACTLY as emitted today (CS0019 — a refusal, never a silently-false comparison: two boxed ints are never reference-equal). VB value equality for boxed numbers IN GENERAL is out of this piece — a recorded follow-up. The helper is emitted once into the generated module class when used:
 
 ```csharp
     private static bool __BlObjectEquals(object a, object b)
     {
-        // VB compares boxed NUMBERS by value (spec D19). Only the Decimal case is widened here — every other pair
-        // keeps the reference comparison this backend has always emitted, so nothing else changes behaviour.
+        // VB compares boxed NUMBERS by value (spec D19). Only a pair involving a Decimal is widened — every other
+        // pair keeps the reference comparison this backend has always emitted for two Objects (a KNOWN VB divergence
+        // for two boxed Integers of equal value, recorded as a follow-up), so nothing else changes behaviour.
         if ((a is decimal || b is decimal) && __BlIsNumber(a) && __BlIsNumber(b))
             return System.Convert.ToDecimal(a) == System.Convert.ToDecimal(b);
         return a == b;
@@ -2744,13 +2747,40 @@ public class CSharpDecimalVbRulesTests
         " Dim a As Object = New Thing()\n Dim b As Object = a\n Console.WriteLine(a = b)\nEnd Sub\n")),
         Is.EqualTo("True\nFalse\n5\nTrue\ninvalid cast\nTrue"),
         "the last row: two references to one object stay equal — non-Decimal comparisons are unchanged");
+
+    /// <summary>⛔ Scope guard (plan re-review): an Object compared with a NON-Decimal primitive is emitted exactly as
+    /// before — still refused by csc (CS0019), never a silently-false comparison.</summary>
+    [TestCase("5")]
+    [TestCase("5.0")]
+    [TestCase("CLng(5)")]
+    public void ObjectVersusAnotherPrimitive_IsStillRefusedByCsc(string other)
+    {
+        var cs = ReturnCoercionTests.EmitCSharpForTest(
+            "Sub Main()\n Dim o As Object = 5\n Console.WriteLine(o = " + other + ")\nEnd Sub\n");
+        Assert.Multiple(() =>
+        {
+            Assert.That(cs, Does.Not.Contain("__BlObjectEquals"));
+            Assert.That(() => FourBackends.RunEmittedCSharpText(cs), Throws.InstanceOf<AssertionException>()
+                .With.Message.Contains("CS0019"), "csc still refuses it, as on the base");
+        });
+    }
+
+    /// <summary>Two Objects holding DIFFERENT boxes of the same Integer: unchanged from today (reference compare →
+    /// False). A known divergence from VB (True), recorded as the follow-up "VB value equality for boxed numbers in
+    /// general" — pinned here so the Decimal widening cannot drift into it unnoticed.</summary>
+    [Test]
+    public void TwoObjectsHoldingEqualBoxedIntegers_AreUnchanged() => Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharp(
+        "Function Box(n As Integer) As Object\n Return n\nEnd Function\n" +
+        "Sub Main()\n Dim a As Object = Box(5)\n Dim b As Object = Box(5)\n Console.WriteLine(a = b)\nEnd Sub\n")),
+        Is.EqualTo("False"));
 }
 ```
+  ⚠ If `Dim o As Object = 5 : o = 5` is refused by the ANALYZER rather than csc on the base, assert that refusal instead (and that it is unchanged) — the property is "not newly accepted"; confirm on the base first (Step 2).
   ⚠ If the analyzer refuses `Dim j As Integer = Id(3.5D)` (implicit narrowing), drop that row and record the refusal — it is then the same refusal on every target.
 - [ ] **Step 2: Run — RED:** E1 prints `2\n3\n-2\n3` (truncation); E4 prints wrapped/truncated values instead of `overflow`; E2/E3 prints `False\nTrue` then an uncaught `InvalidCastException` (test failure message from `RunEmittedCSharpText`).
 - [ ] **Step 3: Implement** (the four edits above).
 - [ ] **Step 4: Run — GREEN**, plus the C# fixtures that exercise casts and Object comparisons by name: `CTypeConversionTests`, `NarrowIntegerWrapTests`, `IsIsNotOperatorExecutionTests`, `MsilObjectBoxingExecutionTests` (MSIL is out of scope — record if its expectations diverge from the new C# ones), `WinFormsTemplateBuildTests`.
-- [ ] **Step 5: Mutations:** (1) drop `|| sourceName == "Decimal"` → E1 red; (2) `__BlObjectEquals` → `a == b` → E2 red; (3) drop the Object → Decimal arm → E3 red.
+- [ ] **Step 5: Mutations:** (1) drop `|| sourceName == "Decimal"` → E1 red; (2) `__BlObjectEquals` → `a == b` → E2 red; (3) drop the Object → Decimal arm → E3 red; (4) **route EVERY comparison with an Object operand through the helper** (the rejected scope) → `ObjectVersusAnotherPrimitive_IsStillRefusedByCsc` red (it now builds); (5) route one of the three `IRCompare` render sites around `CompareText` → the row that renders through that site red (find which test inlines vs binds a named temp; add one if a site is uncovered).
 - [ ] **Step 6: Commit.** Message: "C# backend: Decimal narrowing rounds and overflows like VB; boxed Decimals compare by value (spec D19); CType of a boxed number to Decimal converts".
 
 ## Task 21: Comparisons, `Select Case`, boxing
@@ -2758,7 +2788,7 @@ public class CSharpDecimalVbRulesTests
 D5, D6, D19.
 
 **Files:**
-- Modify: `BasicLang/JavaScriptBackend.cs` — `DecimalBinary` gains Eq/Ne/Lt/Le/Gt/Ge → `(l.cmp(r) === 0)` / `!== 0` / `< 0` / `<= 0` / `> 0` / `>= 0`; `RenderBinary`'s Object-typed `Eq`/`Ne` (`:1473-1474`) → `VgsDecimal.objEquals(l, r)` WHEN the module uses Decimal and either operand is typed `Object` (else unchanged); `objEquals` compares by VALUE when either side is a `VgsDecimal` and the other a `VgsDecimal` or a JS number (a number is converted with `fromInt` if integral, else `fromNumber`), else `===`; `.Equals(x)` on an Object receiver → the same helper; `TypeOf o Is Decimal` → `(o instanceof VgsDecimal)`; `CType(o, Decimal)` (the `IRCast` Object → Decimal arm of `TryNumericCast`/`TryReferenceCast`, `JavaScriptBackend.cs:3328-3424` [X]) → `VgsDecimal.fromObject(o)`: a `VgsDecimal` as is, an integral number `fromInt`, another number `fromNumber`, a string `parse`, anything else `InvalidCastException` (VB's `Conversions.ToDecimal` shape)
+- Modify: `BasicLang/JavaScriptBackend.cs` — comparisons are `IRCompare` here too, rendered by `RenderCompare` (`:1695` [X]; reached from `CompareExpr`/`CompareExprInline` `:1660-1661` and `Visit(IRCompare)` `:3448` [X] — NOT `RenderBinary`'s Eq/Ne arms): a Decimal comparison → `(l.cmp(r) === 0)` / `!== 0` / `< 0` / `<= 0` / `> 0` / `>= 0`; `Equal`/`NotEqual` → `VgsDecimal.objEquals(l, r)` under the SAME scope rule as the C# backend (Task 20A): both static types `Object`, or one `Object` and the other `Decimal` — else unchanged; `objEquals` compares by VALUE when either side is a `VgsDecimal` and the other a `VgsDecimal` or a JS number (a number is converted with `fromInt` if integral, else `fromNumber`), else `===`; `.Equals(x)` on an Object receiver → the same helper; `TypeOf o Is Decimal` → `(o instanceof VgsDecimal)`; `CType(o, Decimal)` (the `IRCast` Object → Decimal arm of `TryNumericCast`/`TryReferenceCast`, `JavaScriptBackend.cs:3328-3424` [X]) → `VgsDecimal.fromObject(o)`: a `VgsDecimal` as is, an integral number `fromInt`, another number `fromNumber`, a string `parse`, anything else `InvalidCastException` (VB's `Conversions.ToDecimal` shape)
 - The C# side of E2/E3 was fixed in Task 20A (which runs BEFORE this task), so `Boxing_VbRules`' C# leg is green when this task starts and only its JavaScript legs are red.
 - Modify: the test file (Edit)
 
@@ -2818,7 +2848,7 @@ D7, D8, D9, D10.
 
 **Files:**
 - Modify: `BasicLang/JavaScriptBackend.cs` — the `IRCast` rendering (`Visit(IRCast)` `:3328`, `TryNumericCast` `:3424`, the inline twin `:1286` [X]): integral → Decimal `VgsDecimal.fromInt`, Single/Double → Decimal `VgsDecimal.fromNumber`, String → Decimal `VgsDecimal.parse`, Object → Decimal `VgsDecimal.fromObject` (Task 21), Decimal → Double/Single `.toNumber()`, Decimal → Integer `.toInt32()`, → Short `.toInt16()`, → Byte `.toByte()` (round half-to-even, then `OverflowException` out of range — VB, exception rows E1/E4; **never** the integral wrap), Decimal → String `.toString()`; `CallTarget`'s conversion switch (`:2028-2054`): `CDec` by argument type as above; `CInt`/`CShort`/`CByte`/`CDbl`/`CSng` of a Decimal argument as above
-- Modify: the prelude's `varDecFromR8` — **the port** of `DecCalc.VarDecFromR8` from dotnet/runtime `src/libraries/System.Private.CoreLib/src/System/Decimal.DecCalc.cs` (MIT): read the function at the runtime version this repo targets (.NET 8), translate it statement for statement into the prelude (doubles stay JS numbers; the 64/96-bit integer steps become BigInt; its power-of-ten double table is `DOUBLE_POWERS_10`, extended exactly as the source's table is), and add the attribution to `THIRD-PARTY-NOTICES.md`. `toNumber` is already the port of `VarR8FromDec` (Task 19).
+- Modify: the prelude's `varDecFromR8` — **the port** of `DecCalc.VarDecFromR8` from dotnet/runtime `src/libraries/System.Private.CoreLib/src/System/Decimal.DecCalc.cs` (MIT): read the function at the runtime version this repo targets (.NET 8), translate it statement for statement into the prelude (doubles stay JS numbers; the 64/96-bit integer steps become BigInt; its power-of-ten double table is `DOUBLE_POWERS_10`, extended exactly as the source's table is). The emitted prelude's notice comment and the `THIRD-PARTY-NOTICES.md` entry (both added in Task 19) already cover this port. `toNumber` is already the port of `VarR8FromDec` (Task 19).
 - Modify: the test file (Edit)
 
 - [ ] **Step 1: Failing tests** (append):
@@ -3083,7 +3113,7 @@ D21, scope call S9.
 
 ## Task 27: Gate for 2.0b
 
-- [ ] Clean build; fast subset by failure NAME vs `baseline-fast.txt`; Integration by name: `JavaScriptDecimalTests`, `DecimalRefusalTests`, `DecimalLiteralTests`, `CSharpDecimalVbRulesTests`, `MsilObjectBoxingExecutionTests` (record any MSIL expectation that now differs from C# — MSIL is out of scope), `JsExecutionTierRosterTests`, `JavaScriptCodeGenTests`, `CTypeConversionTests`, every fixture that grepped `BL7007`/`Decimal`; the mutation table; `docs/HANDOFF.md` and `docs/wiki/content/js-backend.md` (the BL70xx table gains BL7014; `Decimal` leaves the BL7007 list; `Char` leaves BL7004 — Task 14). Commit. No IDE drop.
+- [ ] Clean build; fast subset by failure NAME vs `baseline-fast.txt`; Integration by name: `JavaScriptDecimalTests`, `DecimalRefusalTests`, `DecimalLiteralTests`, `CSharpDecimalVbRulesTests`, `MsilObjectBoxingExecutionTests` (record any MSIL expectation that now differs from C# — MSIL is out of scope), `JsExecutionTierRosterTests`, `JavaScriptCodeGenTests`, `CTypeConversionTests`, every fixture that grepped `BL7007`/`Decimal`; the mutation table; `docs/HANDOFF.md` and `docs/wiki/content/js-backend.md` (the BL70xx table gains BL7014; `Decimal` leaves the BL7007 list; `Char` leaves BL7004 — Task 14). **Record the follow-up** in `docs/HANDOFF.md`: "VB value equality for boxed numbers in general" — `o = 5` (Object vs a non-Decimal primitive) is still CS0019 on C#, and two Objects holding equal boxed Integers still compare by reference (`TwoObjectsHoldingEqualBoxedIntegers_AreUnchanged` pins today's False; VB says True). Commit. No IDE drop.
 
 ---
 
@@ -3284,7 +3314,7 @@ Spec §9, O8, P-D6. Toolbox (`FormToolboxViewModel.cs:64` lists every kind on a 
 | `BasicLang/SemanticAnalyzer.cs` | 5, 7, 9, 10, 15, 18, 22 | base lookup; enum members; events as members + deferred check; target + namespaces; CDec; mixing rule |
 | `BasicLang/CSharpBackend.cs` | 8, 13, 18, 20A | container naming; `base.`; `CDec`; VB Decimal narrowing, boxed-Decimal equality, boxed-number → Decimal |
 | `BasicLang/Forms/PortableMembers.cs` | 29 (new) | THE list of library methods/collection members (read by the manifest gate, `WebUnavailableMember`, the method gate) |
-| `THIRD-PARTY-NOTICES.md` | 22 | attribution for the `VarDecFromR8` port (dotnet/runtime, MIT) |
+| `THIRD-PARTY-NOTICES.md` | 19 | one dotnet/runtime (MIT) entry covering BOTH ports in the emitted Decimal prelude — `VarR8FromDec` (Task 19) and `VarDecFromR8` (Task 22) — and the `DOUBLE_POWERS_10` table; the emitted prelude carries a short notice comment because it ships inside every user's App.js |
 | `BasicLang/IRBuilder.cs` | 5, 11, 13 | dormant visitor removed; value receivers; `ThroughBase` |
 | `BasicLang/IRNodes.cs` | 13 | `ThroughBase` |
 | `BasicLang/JavaScriptBackend.cs` | 12, 13, 14, 19–25 | delegate identity; `super.`; Char; Decimal runtime + lowering + refusals |
