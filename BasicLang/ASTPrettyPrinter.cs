@@ -1171,53 +1171,6 @@ namespace BasicLang.Compiler
             WriteLine($"#Undefine {node.Name}");
         }
 
-        public void Visit(PreprocessorIfNode node)
-        {
-            WriteLine("#If:");
-            Indent();
-            WriteLine("Condition:");
-            Indent();
-            node.Condition?.Accept(this);
-            Unindent();
-            WriteLine("Then:");
-            Indent();
-            foreach (var stmt in node.ThenBody)
-            {
-                stmt.Accept(this);
-            }
-            Unindent();
-
-            foreach (var elseIf in node.ElseIfClauses)
-            {
-                WriteLine("#ElseIf:");
-                Indent();
-                WriteLine("Condition:");
-                Indent();
-                elseIf.Condition?.Accept(this);
-                Unindent();
-                WriteLine("Body:");
-                Indent();
-                foreach (var stmt in elseIf.Body)
-                {
-                    stmt.Accept(this);
-                }
-                Unindent();
-                Unindent();
-            }
-
-            if (node.ElseBody.Count > 0)
-            {
-                WriteLine("#Else:");
-                Indent();
-                foreach (var stmt in node.ElseBody)
-                {
-                    stmt.Accept(this);
-                }
-                Unindent();
-            }
-            Unindent();
-        }
-
         public void Visit(PreprocessorIncludeNode node)
         {
             WriteLine($"#Include \"{node.FilePath}\"");

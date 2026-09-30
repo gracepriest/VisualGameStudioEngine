@@ -9421,35 +9421,6 @@ namespace BasicLang.Compiler.SemanticAnalysis
             }
         }
 
-        public void Visit(PreprocessorIfNode node)
-        {
-            // Evaluate the condition at compile time
-            // The condition should reference defined preprocessor symbols
-            node.Condition?.Accept(this);
-
-            // Analyze the then body
-            foreach (var stmt in node.ThenBody)
-            {
-                stmt.Accept(this);
-            }
-
-            // Analyze else-if clauses
-            foreach (var elseIf in node.ElseIfClauses)
-            {
-                elseIf.Condition?.Accept(this);
-                foreach (var stmt in elseIf.Body)
-                {
-                    stmt.Accept(this);
-                }
-            }
-
-            // Analyze else body
-            foreach (var stmt in node.ElseBody)
-            {
-                stmt.Accept(this);
-            }
-        }
-
         public void Visit(PreprocessorIncludeNode node)
         {
             if (string.IsNullOrEmpty(node.FilePath))

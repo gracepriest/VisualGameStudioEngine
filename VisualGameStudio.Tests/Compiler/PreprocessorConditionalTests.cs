@@ -299,4 +299,20 @@ public class PreprocessorConditionalTests
             Assert.That(pre.IsDefined("BUILD"), Is.True);
         });
     }
+
+    /// <summary>S1 — the parser never built PreprocessorIfNode; #If is the preprocessor's (Task 1). A second,
+    /// parse-time conditional path would be a mirrored pair of the first. The sibling lookup proves the name
+    /// lookup itself is live (a mistyped namespace would make the absence assertions pass vacuously).</summary>
+    [Test]
+    public void TheDormantParseTimeIfNode_IsGone()
+    {
+        var asm = typeof(BasicLang.Compiler.AST.ASTNode).Assembly;
+        Assert.Multiple(() =>
+        {
+            Assert.That(asm.GetType("BasicLang.Compiler.AST.PreprocessorIncludeNode"), Is.Not.Null,
+                "control: a surviving sibling node resolves by the same lookup");
+            Assert.That(asm.GetType("BasicLang.Compiler.AST.PreprocessorIfNode"), Is.Null);
+            Assert.That(asm.GetType("BasicLang.Compiler.AST.PreprocessorElseIfClause"), Is.Null);
+        });
+    }
 }

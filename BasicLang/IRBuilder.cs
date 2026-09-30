@@ -3278,36 +3278,6 @@ namespace BasicLang.Compiler.IR
             _currentBlock.AddInstruction(new IRComment($"#Undefine {node.Name}"));
         }
 
-        public void Visit(PreprocessorIfNode node)
-        {
-            // In a true preprocessor, this would conditionally include/exclude code
-            // For now, emit all branches with comments
-            _currentBlock.AddInstruction(new IRComment("#If block"));
-            foreach (var stmt in node.ThenBody)
-            {
-                stmt.Accept(this);
-            }
-
-            foreach (var elseIf in node.ElseIfClauses)
-            {
-                _currentBlock.AddInstruction(new IRComment("#ElseIf block"));
-                foreach (var stmt in elseIf.Body)
-                {
-                    stmt.Accept(this);
-                }
-            }
-
-            if (node.ElseBody.Count > 0)
-            {
-                _currentBlock.AddInstruction(new IRComment("#Else block"));
-                foreach (var stmt in node.ElseBody)
-                {
-                    stmt.Accept(this);
-                }
-            }
-            _currentBlock.AddInstruction(new IRComment("#EndIf"));
-        }
-
         public void Visit(PreprocessorIncludeNode node)
         {
             _currentBlock.AddInstruction(new IRComment($"#Include \"{node.FilePath}\""));

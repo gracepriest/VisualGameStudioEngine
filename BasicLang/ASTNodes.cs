@@ -109,7 +109,6 @@ namespace BasicLang.Compiler.AST
         void Visit(InlineCodeNode node);
         void Visit(PreprocessorDefineNode node);
         void Visit(PreprocessorUndefineNode node);
-        void Visit(PreprocessorIfNode node);
         void Visit(PreprocessorIncludeNode node);
         void Visit(PreprocessorConstNode node);
         void Visit(PreprocessorRegionNode node);
@@ -1861,37 +1860,8 @@ namespace BasicLang.Compiler.AST
         public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
     }
 
-    public class PreprocessorIfNode : ASTNode
-    {
-        public ExpressionNode Condition { get; set; }
-        public List<ASTNode> ThenBody { get; set; }
-        public List<PreprocessorElseIfClause> ElseIfClauses { get; set; }
-        public List<ASTNode> ElseBody { get; set; }
-
-        public PreprocessorIfNode(int line, int column) : base(line, column)
-        {
-            ThenBody = new List<ASTNode>();
-            ElseIfClauses = new List<PreprocessorElseIfClause>();
-            ElseBody = new List<ASTNode>();
-        }
-
-        public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
-    }
-
-    public class PreprocessorElseIfClause
-    {
-        public ExpressionNode Condition { get; set; }
-        public List<ASTNode> Body { get; set; }
-        public int Line { get; set; }
-        public int Column { get; set; }
-
-        public PreprocessorElseIfClause(int line, int column)
-        {
-            Body = new List<ASTNode>();
-            Line = line;
-            Column = column;
-        }
-    }
+    // #If / #ElseIf / #Else / #End If have no AST node: the Preprocessor resolves them before the parser
+    // runs (PreprocessorCondition.cs). The lexer's PreprocessorIf* tokens remain for raw-text tooling.
 
     public class PreprocessorIncludeNode : ASTNode
     {
