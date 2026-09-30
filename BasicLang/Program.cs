@@ -334,6 +334,8 @@ namespace BasicLang.Compiler.Driver
             Console.WriteLine("  --target=X        Target backend (csharp, cpp, javascript, llvm, msil)");
             Console.WriteLine("  --output=FILE     Output file path");
             Console.WriteLine("  --optimize        Enable aggressive optimizations");
+            Console.WriteLine("  --configuration=X Build configuration for a file compile (default Debug)");
+            Console.WriteLine("  --define=A;B      Extra conditional-compilation symbols for a file compile");
             Console.WriteLine("  --search-path=DIR Add module search path");
             Console.WriteLine("  --show-generated  Show generated code (useful for debugging)");
             Console.WriteLine();
@@ -836,8 +838,16 @@ namespace BasicLang.Compiler.Driver
             {
                 TargetBackend = project.Backend.ToLowerInvariant(),
                 OutputPath = outputDir,
+                Configuration = configuration,
                 OptimizeAggressive = project.Configurations.TryGetValue(configuration, out var config) && config.OptimizationsEnabled
             };
+
+            // Spec §4.1: the build's symbols come from BuildSymbols in the BasicCompiler constructor;
+            // this route only supplies the configuration's <DefineConstants>.
+            if (project.Configurations.TryGetValue(configuration, out var defineConfig))
+            {
+                options.DefineConstants.AddRange(defineConfig.DefineConstants);
+            }
 
             // Add package assemblies to search paths
             foreach (var assembly in restoreResult.ResolvedAssemblies)
@@ -1420,7 +1430,8 @@ namespace BasicLang.Compiler.Driver
             Console.WriteLine();
 
             // Parse options
-            var options = new BasicLang.Compiler.CompilerOptions();
+            // A single-file compile is a Debug build unless --configuration says otherwise (spec §4.1).
+            var options = new BasicLang.Compiler.CompilerOptions { Configuration = "Debug" };
             string targetBackend = "csharp";
             string outputPath = null;
             bool showGenerated = false;
@@ -1444,6 +1455,14 @@ namespace BasicLang.Compiler.Driver
                 else if (arg.StartsWith("--search-path="))
                 {
                     options.SearchPaths.Add(arg.Substring("--search-path=".Length));
+                }
+                else if (arg.StartsWith("--configuration="))
+                {
+                    options.Configuration = arg.Substring("--configuration=".Length);
+                }
+                else if (arg.StartsWith("--define="))
+                {
+                    options.DefineConstants.Add(arg.Substring("--define=".Length));
                 }
                 else if (arg == "--show-generated" || arg == "--show-cs")
                 {

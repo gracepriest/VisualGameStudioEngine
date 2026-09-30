@@ -95,6 +95,12 @@ namespace BasicLang.Compiler
         public string TargetBackend { get; set; } = "csharp";
         public List<string> SearchPaths { get; set; } = new List<string>();
 
+        /// <summary>The build configuration ("Debug"/"Release"). Null defines neither DEBUG nor RELEASE (spec §4.1).</summary>
+        public string Configuration { get; set; }
+
+        /// <summary>Extra conditional-compilation symbols — the project's &lt;DefineConstants&gt;.</summary>
+        public List<string> DefineConstants { get; set; } = new List<string>();
+
         /// <summary>
         /// P2a-1 (spec §6.5): supplies the .NET type resolver to every unit's
         /// <see cref="SemanticAnalysis.SemanticAnalyzer"/>. <b>WARNING-ONLY</b> — nothing reachable
@@ -184,6 +190,13 @@ namespace BasicLang.Compiler
             _registry = new ModuleRegistry(_resolver);
             _dependencyGraph = new DependencyGraph();
             _preprocessor = new Preprocessor();
+
+            // ⛔ The ONE place a build's symbols are defined (BuildSymbols). Every route — CLI file, CLI project,
+            // IDE, native, debugger — constructs a BasicCompiler from options, so none can forget them.
+            foreach (var symbol in BuildSymbols.For(_options.TargetBackend, _options.Configuration, _options.DefineConstants))
+            {
+                _preprocessor.Define(symbol);
+            }
 
             // Add configured search paths
             foreach (var path in _options.SearchPaths)

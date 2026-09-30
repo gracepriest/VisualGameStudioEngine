@@ -40,6 +40,13 @@ namespace BasicLang.Debugger
             _outputStream = output;
         }
 
+        /// <summary>
+        /// The debugger route's compiler options — ONE construction for both of its compile sites, so a test
+        /// can read what they define: a Debug build (spec §4.1; the symbols come from <see cref="BuildSymbols"/>
+        /// in the <see cref="BasicCompiler"/> constructor). The interpreter runs the IR, so it is a desktop build.
+        /// </summary>
+        internal static CompilerOptions CompilerOptionsForDebugging() => new CompilerOptions { Configuration = "Debug" };
+
         public async Task RunAsync()
         {
             var buffer = new StringBuilder();
@@ -181,7 +188,7 @@ namespace BasicLang.Debugger
                         var sourceFiles = project.GetSourceFiles().ToList();
 
                         // Find the entry point file and compile with all project files
-                        var compiler = new BasicCompiler();
+                        var compiler = new BasicCompiler(CompilerOptionsForDebugging());
                         var additionalFiles = sourceFiles.Where(f =>
                             !string.Equals(f, _currentFile, StringComparison.OrdinalIgnoreCase)).ToList();
 
@@ -205,7 +212,7 @@ namespace BasicLang.Debugger
                     else
                     {
                         // Single file or no project: use compiler which handles Import directives
-                        var compiler = new BasicCompiler();
+                        var compiler = new BasicCompiler(CompilerOptionsForDebugging());
                         var compilationResult = compiler.CompileFile(_currentFile);
 
                         if (!compilationResult.Success || compilationResult.CombinedIR == null)

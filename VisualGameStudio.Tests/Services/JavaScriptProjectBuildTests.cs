@@ -262,7 +262,8 @@ public class JavaScriptProjectBuildTests
         });
     }
 
-    private sealed class RecordingOutput : IOutputService
+    // internal: BuildSymbolRouteTests drives the same IDE route with it.
+    internal sealed class RecordingOutput : IOutputService
     {
         private readonly ConcurrentQueue<string> _lines = new();
 

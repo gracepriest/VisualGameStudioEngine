@@ -42,6 +42,9 @@ internal static class JsTestSupport
         if (runPreprocessor)
         {
             var pre = new Preprocessor();
+            // The JS helper builds for the web — WEB is defined as every JavaScript route defines it
+            // (BuildSymbols; no configuration here, so neither DEBUG nor RELEASE).
+            foreach (var s in BuildSymbols.For("javascript", null, null)) pre.Define(s);
             processed = pre.Process(source, "test.bas");
             Fail(pre.Errors.Count > 0, "preprocess",
                 string.Join("; ", pre.Errors.ConvertAll(e => e.Message)), source);

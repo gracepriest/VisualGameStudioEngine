@@ -330,6 +330,26 @@ namespace BasicLang.Compiler.ProjectSystem
         }
 
         /// <summary>
+        /// The native route's compiler options: the C++ backend, the build's configuration and that
+        /// configuration's <c>&lt;DefineConstants&gt;</c> (looked up exactly as the compile request does).
+        /// The symbols themselves are defined by the <see cref="BasicCompiler"/> constructor through
+        /// <see cref="BuildSymbols"/> (spec §4.1). The .NET resolver factory stays at the call site.
+        /// </summary>
+        internal static CompilerOptions CompilerOptionsFor(ProjectFile project, string configuration)
+        {
+            var options = new CompilerOptions
+            {
+                TargetBackend = "cpp",
+                Configuration = configuration,
+            };
+            if (configuration != null && project.Configurations.TryGetValue(configuration, out var config))
+            {
+                options.DefineConstants.AddRange(config.DefineConstants);
+            }
+            return options;
+        }
+
+        /// <summary>
         /// The shared emission core: partition sources, transpile, generate and write
         /// obj/gen, resolve the toolchain, assemble the compile request, write
         /// obj/compile_commands.json. Used by <see cref="Build"/> (which continues to
@@ -529,11 +549,9 @@ namespace BasicLang.Compiler.ProjectSystem
             var basicLangMainCount = 0;
             if (blSources.Count > 0)
             {
-                var compiler = new BasicCompiler(new CompilerOptions
-                {
-                    TargetBackend = "cpp",
-                    NetResolverFactory = netResolverFactory,
-                });
+                var compilerOptions = CompilerOptionsFor(project, configuration);
+                compilerOptions.NetResolverFactory = netResolverFactory;
+                var compiler = new BasicCompiler(compilerOptions);
                 compilation = compiler.CompileProjectFiles(blSources);
 
                 // The analyzer's §6.5 findings. MERGED into the closure's existing bag — not

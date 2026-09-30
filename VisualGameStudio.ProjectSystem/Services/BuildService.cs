@@ -662,8 +662,16 @@ public class BuildService : IBuildService
             {
                 TargetBackend = backend,
                 OutputPath = outputDir,
+                Configuration = config.Name,
                 OptimizeAggressive = config.Optimize
             };
+
+            // Spec §4.1: the symbols themselves come from BuildSymbols in the BasicCompiler constructor
+            // (CLI parity); the IDE model's <DefineConstants> is one ';' string, which BuildSymbols splits.
+            if (!string.IsNullOrWhiteSpace(config.DefineConstants))
+            {
+                compilerOptions.DefineConstants.Add(config.DefineConstants);
+            }
 
             // Resolved package assemblies join the compiler search paths (CLI parity)
             foreach (var assembly in restoredAssemblies)
