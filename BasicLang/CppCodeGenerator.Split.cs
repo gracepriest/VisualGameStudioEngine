@@ -270,7 +270,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             if (module.Classes.Count > 0)
             {
                 WriteLine("// Classes");
-                foreach (var irClass in module.Classes.Values)
+                foreach (var irClass in module.ClassesBaseFirst())   // KEEP IN SYNC with Generate()
                 {
                     GenerateClass(irClass);
                     WriteLine();

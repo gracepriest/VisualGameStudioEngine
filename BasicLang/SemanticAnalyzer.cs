@@ -684,6 +684,43 @@ namespace BasicLang.Compiler.SemanticAnalysis
         /// keep one owner rather than because a test demands it. Unifying the two builders onto the
         /// more capable one is a real improvement and its own change.</para>
         /// </summary>
+        /// <summary>
+        /// Pass 1: an interface's method and property signatures, the twin of
+        /// <see cref="PopulateClassMemberSignatures"/> — so a call through an interface declared
+        /// BELOW it has its declared type (`s.Area() + 1` was "Arithmetic operator '+' requires
+        /// numeric operands": the member was unknown, so Object). Visit(InterfaceNode) overwrites
+        /// every entry with the fully analyzed symbol.
+        /// </summary>
+        private void PopulateInterfaceMemberSignatures(InterfaceNode iface, TypeInfo interfaceType)
+        {
+            if (interfaceType?.Kind != TypeKind.Interface || interfaceType.Members == null) return;
+
+            foreach (var method in iface.Methods ?? new List<FunctionNode>())
+            {
+                var returnType = method.ReturnType == null
+                    ? _typeManager.VoidType
+                    : ResolveSiblingSignatureType(method.ReturnType) ?? _typeManager.ObjectType;
+                interfaceType.Members[method.Name] = new Symbol(method.Name,
+                    method.ReturnType == null ? SymbolKind.Subroutine : SymbolKind.Function, returnType, 0, 0)
+                {
+                    ReturnType = returnType,
+                    Parameters = BuildSiblingSignatureParameters(method.Parameters),
+                    Access = AccessModifier.Public
+                };
+            }
+
+            foreach (var prop in iface.Properties ?? new List<PropertyNode>())
+            {
+                interfaceType.Members[prop.Name] = new Symbol(prop.Name, SymbolKind.Property,
+                    ResolveSiblingSignatureType(prop.PropertyType) ?? _typeManager.ObjectType, 0, 0)
+                {
+                    Access = AccessModifier.Public,
+                    IsReadOnly = prop.IsReadOnly,
+                    IsWriteOnly = prop.IsWriteOnly
+                };
+            }
+        }
+
         private void PopulateClassMemberSignatures(
             ClassNode classNode, TypeInfo classType, bool includeConstructors)
         {
@@ -5089,6 +5126,16 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 RegisterClassTypes(decl);
             }
 
+            // ⛔ Then each class's BASE, before anything is analyzed. `BaseType` used to be set
+            // only when Visit(ClassNode) reached the class body, so for a class declared BELOW
+            // the code using it, `Dim a As Animal = New Dog()`, `Return New Dog()` from an
+            // `As Animal` function, an argument and a field assignment were all refused
+            // ("Cannot assign value of type 'Dog' to variable of type 'Animal'") — measured.
+            foreach (var decl in program.Declarations)
+            {
+                RegisterClassBases(decl);
+            }
+
             // ⛔ Class MEMBERS next, in their own sweep, because a class type with no members is
             // only half a forward reference. Measured on a class declared AFTER the module that
             // uses it, with a plain literal field: every member kind read as Object, so the temp
@@ -5302,6 +5349,9 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     foreach (var member in cls.Members)
                         RegisterClassMemberSignatures(member);
                     break;
+                case InterfaceNode iface:
+                    PopulateInterfaceMemberSignatures(iface, _typeManager.GetType(iface.Name));
+                    break;
                 case ModuleNode module:
                     foreach (var member in module.Members)
                         RegisterClassMemberSignatures(member);
@@ -5486,6 +5536,15 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     foreach (var member in cls.Members)
                         RegisterClassTypes(member);
                     break;
+                // An interface declared below its use was not a type at all until its own visit:
+                // `Implements IShape` above it was "Unknown interface 'IShape'", and a variable of
+                // it resolved to a fabricated member-less class.
+                case InterfaceNode iface:
+                    if (_typeManager.DefineType(iface.Name, TypeKind.Interface) != null)
+                    {
+                        _preRegisteredInterfaces.Add(iface.Name);
+                    }
+                    break;
                 case ModuleNode module:
                     foreach (var member in module.Members)
                         RegisterClassTypes(member);
@@ -5498,10 +5557,81 @@ namespace BasicLang.Compiler.SemanticAnalysis
         }
 
         /// <summary>
+        /// Pass 1, sweep 1b: link each class to its base when the base is a class declared in
+        /// this program, so a class declared below its use is judged on its real ancestry.
+        /// Visit(ClassNode) still owns every diagnostic (unknown base, not a class, a cycle) and
+        /// the .NET-base fallback; this only sets what it would set, earlier.
+        ///
+        /// <para>⛔ Never closes a cycle. Several walks of the base chain have no loop guard
+        /// (<c>TypeInfo.IsAssignableFrom</c>, <c>GetCommonType</c>), so `A Inherits B` /
+        /// `B Inherits A` linked both ways would spin forever; the link that would close it is
+        /// left for Visit(ClassNode) to refuse (BC30257).</para>
+        /// </summary>
+        private void RegisterClassBases(ASTNode node)
+        {
+            switch (node)
+            {
+                case ClassNode cls:
+                    if (!string.IsNullOrEmpty(cls.BaseClass))
+                    {
+                        var classType = _typeManager.GetType(cls.Name);
+                        var baseType = _typeManager.GetType(cls.BaseClass);
+                        if (classType != null && classType.BaseType == null
+                            && baseType != null && baseType.Kind == TypeKind.Class
+                            && !InheritanceWouldCycle(classType, baseType))
+                        {
+                            classType.BaseType = baseType;
+                        }
+                    }
+                    // …and its interfaces, for `Dim s As IShape = New Sq()` above `Class Sq`.
+                    var implementing = _typeManager.GetType(cls.Name);
+                    if (implementing != null)
+                    {
+                        foreach (var interfaceName in cls.Interfaces)
+                        {
+                            var interfaceType = _typeManager.GetType(interfaceName);
+                            if (interfaceType?.Kind == TypeKind.Interface && !implementing.Interfaces.Contains(interfaceType))
+                                implementing.Interfaces.Add(interfaceType);
+                        }
+                    }
+                    foreach (var member in cls.Members)
+                        RegisterClassBases(member);
+                    break;
+                case ModuleNode module:
+                    foreach (var member in module.Members)
+                        RegisterClassBases(member);
+                    break;
+                case NamespaceNode ns:
+                    foreach (var member in ns.Members)
+                        RegisterClassBases(member);
+                    break;
+            }
+        }
+
+        /// <summary>
+        /// True when making <paramref name="baseType"/> the base of <paramref name="classType"/>
+        /// would put <paramref name="classType"/> among its own ancestors. Guarded, so it
+        /// terminates even on a chain that already loops.
+        /// </summary>
+        private static bool InheritanceWouldCycle(TypeInfo classType, TypeInfo baseType)
+        {
+            var guard = 0;
+            for (var t = baseType; t != null && guard++ < 256; t = t.BaseType)
+            {
+                if (ReferenceEquals(t, classType)) return true;
+            }
+            return guard >= 256;
+        }
+
+        /// <summary>
         /// Class names whose <see cref="TypeInfo"/> <see cref="RegisterClassTypes"/> created, each
         /// consumed by that class's own <see cref="Visit(ClassNode)"/>. See there for why.
         /// </summary>
         private readonly HashSet<string> _preRegisteredClasses =
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>The interface twin of <see cref="_preRegisteredClasses"/>, consumed by Visit(InterfaceNode).</summary>
+        private readonly HashSet<string> _preRegisteredInterfaces =
             new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         private void RegisterDeclaration(ASTNode node, ClassNode owner = null, string moduleName = null)
@@ -5927,6 +6057,17 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 {
                     Error($"'{node.BaseClass}' is not a class", node.Line, node.Column);
                 }
+                else if (InheritanceWouldCycle(classType, baseType))
+                {
+                    // VB BC30257. Linking it would loop every unguarded base-chain walk; before
+                    // the pass-1 link (RegisterClassBases) the cycle was closed here silently and
+                    // `Class A Inherits B` / `Class B Inherits A` reported "Compilation successful".
+                    Error(string.Equals(node.Name, node.BaseClass, StringComparison.OrdinalIgnoreCase)
+                            ? $"Class '{node.Name}' cannot inherit from itself"
+                            : $"Class '{node.Name}' cannot inherit from itself: '{node.BaseClass}' already " +
+                              $"inherits from '{node.Name}'",
+                          node.Line, node.Column);
+                }
                 else
                 {
                     classType.BaseType = baseType;
@@ -5945,7 +6086,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 {
                     Error($"'{interfaceName}' is not an interface", node.Line, node.Column);
                 }
-                else
+                else if (!classType.Interfaces.Contains(interfaceType))   // pass 1 may have linked it (RegisterClassBases)
                 {
                     classType.Interfaces.Add(interfaceType);
                 }
@@ -6074,6 +6215,10 @@ namespace BasicLang.Compiler.SemanticAnalysis
         public void Visit(InterfaceNode node)
         {
             var interfaceType = _typeManager.DefineType(node.Name, TypeKind.Interface);
+            // Pass 1 pre-registered it (RegisterClassTypes): consume the record and reuse the type,
+            // exactly as Visit(ClassNode) does, so a genuine second `Interface I` still reports.
+            if (interfaceType == null && _preRegisteredInterfaces.Remove(node.Name))
+                interfaceType = _typeManager.GetType(node.Name);
             if (interfaceType == null)
             {
                 Error($"Interface '{node.Name}' is already defined", node.Line, node.Column);

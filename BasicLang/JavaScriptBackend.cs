@@ -204,8 +204,9 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
             // Classes BEFORE free functions: JS class declarations are not hoisted the way
             // function declarations are, so a `new Person()` reached from the entry point
-            // would hit the temporal dead zone.
-            foreach (var irClass in module.Classes.Values)
+            // would hit the temporal dead zone. Base before derived for the same reason:
+            // `class Sq extends Base` ahead of `class Base` is a ReferenceError on load.
+            foreach (var irClass in module.ClassesBaseFirst())
             {
                 // ⛔ An EXTERN type already exists in the runtime — emit nothing for it.
                 //
