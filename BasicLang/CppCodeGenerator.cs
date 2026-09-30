@@ -3614,8 +3614,16 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             }
 
             // Regular function call
-            var sanitizedName = StaticCallTarget(functionName)
-                                ?? SanitizeName(ResolveFlattenedFunctionName(functionName));
+            var staticTarget = StaticCallTarget(functionName);
+            var sanitizedName = staticTarget ?? SanitizeName(ResolveFlattenedFunctionName(functionName));
+            // ⛔ Module procedures are flattened to the GLOBAL namespace, and inside a member body C++ finds a
+            // class member (own or inherited, whatever its access) before a global of the same name. A call the
+            // IR builder owned by a Module (CalleeModule) is the Module's procedure — a written `Util.Hello()`,
+            // or a bare call a base's Private method must not capture — so it is spelled `::Hello()` there.
+            // Without it C++ called Base::Hello where C# called Util.Hello (Task 7 review).
+            if (staticTarget == null && _emittingClass != null && !string.IsNullOrEmpty(call.CalleeModule)
+                && !sanitizedName.Contains("::"))
+                sanitizedName = "::" + sanitizedName;
             return $"{sanitizedName}({string.Join(", ", args)})";
         }
 

@@ -307,6 +307,7 @@ namespace BasicLang.Compiler.LSP
                         indeterminate.Add(Path.GetFileNameWithoutExtension(path));
                     }
                 }
+                LspModuleSymbolCollector.LinkClassBases(table);
 
                 // The compiler's ModuleResolver can resolve `Import X` via a
                 // subdirectory named X; the LSP scan is top-directory-only, so
@@ -614,6 +615,36 @@ namespace BasicLang.Compiler.LSP
     /// </summary>
     internal static class LspModuleSymbolCollector
     {
+        /// <summary>
+        /// Give every collected class its base, when the base is another class in the table. Run once, after
+        /// EVERY file is collected — a base may be declared in a file collected later.
+        ///
+        /// <para>⛔ Without it a class from a sibling file had no base in the editor: <c>Dim x As Base = New D()</c>
+        /// was "Cannot assign value of type 'D' to variable of type 'Base'" and an inherited member was "Type 'D'
+        /// does not have a member 'Hello'" — while the build accepted both (portable-controls Task 7 review).
+        /// Never closes a cycle: the analyzer's base-chain walks are not all guarded.</para>
+        /// </summary>
+        public static void LinkClassBases(ProjectSymbolTable table)
+        {
+            if (table == null) return;
+            var classes = new Dictionary<string, TypeInfo>(StringComparer.OrdinalIgnoreCase);
+            foreach (var (_, symbol) in table.GetAllPublicSymbols())
+                if (symbol?.Kind == SymbolKind.Class && symbol.Type != null && !classes.ContainsKey(symbol.Name))
+                    classes[symbol.Name] = symbol.Type;
+
+            foreach (var type in classes.Values)
+            {
+                if (type.BaseType != null || string.IsNullOrEmpty(type.DeclaredBaseName)) continue;
+                if (!classes.TryGetValue(type.DeclaredBaseName, out var baseType)) continue;
+
+                var cycles = false;
+                var guard = 0;
+                for (var t = baseType; t != null && guard++ < 256; t = t.BaseType)
+                    if (ReferenceEquals(t, type)) { cycles = true; break; }
+                if (!cycles && guard < 256) type.BaseType = baseType;
+            }
+        }
+
         public static void Collect(ProgramNode ast, string filePath, ProjectSymbolTable table)
         {
             if (ast?.Declarations == null || table == null)
@@ -717,6 +748,9 @@ namespace BasicLang.Compiler.LSP
                 {
                     var classType = new TypeInfo(classNode.Name, TypeKind.Class);
                     PopulateClassTypeMembers(classType, classNode, filePath);
+                    // Linked to the base's table entry by LinkClassBases once every file is collected.
+                    // (DeclaredMemberNames stays null here, so LacksDeclaredMember stays permissive.)
+                    classType.DeclaredBaseName = classNode.BaseClass;
 
                     var symbol = new Symbol(classNode.Name, SymbolKind.Class,
                         classType, classNode.Line, classNode.Column)

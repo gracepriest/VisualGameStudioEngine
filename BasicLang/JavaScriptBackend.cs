@@ -2011,7 +2011,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             return result != null;
         }
 
-        private string CallTarget(string functionName)
+        private string CallTarget(string functionName, bool mayBeMember = true)
         {
             if (string.IsNullOrEmpty(functionName)) throw NotYet("a call with no target name");
 
@@ -2072,7 +2072,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 // A SIBLING method called unqualified from inside the class. Checked after the
                 // stdlib refusal (a builtin's name is not silently captured by a class member)
                 // and before the passthrough, which would emit the bare name and ReferenceError.
-                if (MethodReference(functionName) is string sibling) return sibling;
+                if (mayBeMember && MethodReference(functionName) is string sibling) return sibling;
 
                 return SanitizeName(functionName);
             }
@@ -3235,7 +3235,11 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             if (TryStdLib(call.FunctionName, rendered, out var stdlib))
                 return stdlib;
 
-            return $"{CallTarget(call.FunctionName)}({string.Join(", ", rendered)})";
+            // ⛔ A call the IR builder OWNED by a Module (CalleeModule) is the Module's procedure even
+            // where the class, or a base, has a method of that name: the IR builder already applied VB's
+            // class-scope-first rule (a written `Util.Hello()`, or a base's inaccessible Private method).
+            // Resolving it against the class again here called Base.Hello where C# called Util.Hello.
+            return $"{CallTarget(call.FunctionName, mayBeMember: string.IsNullOrEmpty(call.CalleeModule))}({string.Join(", ", rendered)})";
         }
 
         /// <summary>

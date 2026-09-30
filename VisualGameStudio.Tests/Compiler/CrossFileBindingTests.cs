@@ -519,6 +519,110 @@ public class CrossFileBindingTests
         }
     }
 
+    // ---- a class member (inherited included) shadows a Module procedure of the same name (VB's rule)
+
+    private const string UtilModuleWithHello =
+        "Module Util\n Public Sub Hello()\n  PrintLine(\"module\")\n End Sub\nEnd Module\n";
+
+    private const string BaseWithHello =
+        "Public Class Base\n Public Sub Hello()\n  PrintLine(\"base\")\n End Sub\nEnd Class\n";
+
+    private const string DerivedCallsHello =
+        "Public Class D\n Inherits Base\n Public Sub Greet()\n  Hello()\n End Sub\nEnd Class\n";
+
+    private const string MainGreets = "Sub Main()\n Dim d As New D()\n d.Greet()\nEnd Sub\n";
+
+    /// <summary>
+    /// ⛔ Task 7 review: C# and JavaScript called DIFFERENT methods. JavaScript ran the inherited <c>Hello</c>
+    /// (VB: a member, inherited included, shadows a Module's); C# emitted <c>Util.Hello();</c> inside
+    /// <c>class D</c> — the IR builder handed the call its Module owner without consulting the base chain.
+    /// </summary>
+    [Test]
+    public void AnInheritedSub_ShadowsAModuleSubOfTheSameName_AcrossFiles() => RunsOnEveryBackend("base",
+        ("Base.bas", BaseWithHello), ("Util.bas", UtilModuleWithHello), ("Derived.bas", DerivedCallsHello),
+        ("Main.bas", MainGreets));
+
+    /// <summary>The same collision with Base and D in ONE file: C# depended on the file order.</summary>
+    [Test]
+    public void AnInheritedSub_ShadowsAModuleSubOfTheSameName_BaseAndDerivedInOneFile() => RunsOnEveryBackend("base",
+        ("Classes.bas", BaseWithHello + DerivedCallsHello), ("Util.bas", UtilModuleWithHello), ("Main.bas", MainGreets));
+
+    /// <summary>A QUALIFIED <c>Util.Hello()</c> inside the derived class still reaches the Module.</summary>
+    [Test]
+    public void AQualifiedModuleCall_InsideADerivedClass_StillReachesTheModule() => RunsOnEveryBackend("module\nbase",
+        ("Base.bas", BaseWithHello), ("Util.bas", UtilModuleWithHello),
+        ("Derived.bas", "Public Class D\n Inherits Base\n Public Sub Greet()\n  Util.Hello()\n  Hello()\n End Sub\nEnd Class\n"),
+        ("Main.bas", MainGreets));
+
+    /// <summary>
+    /// A PRIVATE base method is inaccessible from the derived class, so VB skips it and the Module's
+    /// <c>Hello</c> is called; inside the base itself its own Private <c>Hello</c> still wins.
+    /// </summary>
+    [Test]
+    public void APrivateBaseSub_DoesNotShadowAModuleSub_ButStillWinsInsideItsOwnClass() => RunsOnEveryBackend("module\nprivate base",
+        ("Base.bas", "Public Class Base\n Private Sub Hello()\n  PrintLine(\"private base\")\n End Sub\n" +
+                     " Public Sub Run()\n  Hello()\n End Sub\nEnd Class\n"),
+        ("Util.bas", UtilModuleWithHello), ("Derived.bas", DerivedCallsHello),
+        ("Main.bas", "Sub Main()\n Dim d As New D()\n d.Greet()\n d.Run()\nEnd Sub\n"));
+
+    /// <summary>⛔ The CLI route of the collision, on the backend that got it wrong: a C# project built by the real
+    /// <c>BasicLang.exe build</c> and its App.exe RUN, in both Compile orders.</summary>
+    [TestCase(false)]
+    [TestCase(true)]
+    public void TheCli_BuildsAndRunsACSharpProject_WhereAnInheritedSubShadowsAModuleSub(bool reversed)
+    {
+        var files = new[] { "Base.bas", "Util.bas", "Derived.bas", "Main.bas" };
+        if (reversed) Array.Reverse(files);
+        Write(
+            ("App.blproj",
+                "<BasicLangProject Version=\"1.0\">\n  <PropertyGroup>\n    <ProjectName>App</ProjectName>\n" +
+                "    <OutputType>Exe</OutputType>\n    <TargetBackend>CSharp</TargetBackend>\n  </PropertyGroup>\n" +
+                "  <ItemGroup>\n" + string.Concat(files.Select(f => $"    <Compile Include=\"{f}\" />\n")) +
+                "  </ItemGroup>\n</BasicLangProject>\n"),
+            ("Base.bas", BaseWithHello), ("Util.bas", UtilModuleWithHello), ("Derived.bas", DerivedCallsHello),
+            ("Main.bas", MainGreets));
+
+        var (exit, stdout, stderr) = CliTestHarness.RunProcess(
+            CliTestHarness.CliPath(), new[] { "build", Path.Combine(_dir, "App.blproj") }, _dir, timeoutMs: 300_000);
+        Assert.That(exit, Is.Zero, $"the CLI refused the project\n{stdout}\n{stderr}");
+
+        var exe = Path.Combine(_dir, "bin", "Debug", "net8.0", OperatingSystem.IsWindows() ? "App.exe" : "App");
+        Assert.That(File.Exists(exe), Is.True, stdout);
+        var ran = CliTestHarness.RunProcess(exe, Array.Empty<string>(), _dir, timeoutMs: 60_000);
+        Assert.That(FourBackends.Norm(ran.Item2), Is.EqualTo("base"), ran.Item3);
+    }
+
+    // ---- an inheritance cycle across files
+
+    /// <summary>
+    /// ⛔ Task 7 review: <c>A Inherits B</c> / <c>B Inherits A</c> in two files compiled CLEAN (csc refused it, the
+    /// JavaScript run failed) while the same pair in one file reports VB's BC30257. The cycle check compared
+    /// TypeInfo references, and a sibling file's class reaches this unit as a SHELL — another object for the same class.
+    /// </summary>
+    [Test]
+    public void AnInheritanceCycle_AcrossFiles_IsReported()
+    {
+        var paths = Write(
+            ("A.bas", "Public Class A\n Inherits B\nEnd Class\n"),
+            ("B.bas", "Public Class B\n Inherits A\nEnd Class\n"),
+            ("Main.bas", "Sub Main()\n Dim a As New A()\nEnd Sub\n"));
+        foreach (var order in new[] { paths, paths.Reverse().ToArray() })
+        {
+            var label = string.Join(",", order.Select(Path.GetFileName));
+            var result = Compile(order);
+            Assert.That(result.HasErrors, Is.True, label);
+            Assert.That(Messages(result), Does.Contain("cannot inherit from itself"), label);
+        }
+    }
+
+    /// <summary>The cycle check must not fire on a legal cross-file chain whose classes share nothing but a base.</summary>
+    [Test]
+    public void TwoSiblingsOverOneCrossFileBase_AreNotACycle() => RunsOnEveryBackend("X\nY",
+        ("Base.bas", "Public Class Base\n Public Overridable Function Name() As String\n  Return \"?\"\n End Function\nEnd Class\n"),
+        ("X.bas", "Public Class X\n Inherits Base\n Public Overrides Function Name() As String\n  Return \"X\"\n End Function\nEnd Class\n"),
+        ("Y.bas", "Public Class Y\n Inherits Base\n Public Overrides Function Name() As String\n  Return \"Y\"\n End Function\nEnd Class\n"),
+        ("Main.bas", "Sub Main()\n Dim a As Base = New X()\n Dim b As Base = New Y()\n PrintLine(a.Name())\n PrintLine(b.Name())\nEnd Sub\n"));
+
     /// <summary>A JavaScript project over the three files, listed in the given order.</summary>
     private string WriteCrossFileBaseProject(bool reversed)
     {

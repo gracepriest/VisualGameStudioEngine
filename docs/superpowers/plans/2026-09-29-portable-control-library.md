@@ -1382,6 +1382,11 @@ Spec §4.2, M6, chip `task_e7af351e` items 1–2 (S12). Built ON `fix/js-cross-f
 - [ ] **Step 5: Mutations:** (1) revert the lookup in `Visit(ClassNode)` only → the rows go red (record whether `RegisterClassBases` alone rescues any); (2) put the `_netNamespaces` fallback BEFORE the sibling lookup → the Using row red.
 - [ ] **Step 6: Commit.** Message names chip `task_e7af351e` items 1–2 as closed (item 2: already fixed on master by `27e8307c`; the cross-file order is now pinned by `AThreeLevelChain_…` in both file orders).
 
+**Task 7 follow-ups (recorded by the Task 7 review, 2026-09-30 — not fixed here):**
+- `Implements` an interface declared in ANOTHER file → "Unknown interface" (the interface counterpart of this task: `Visit(ClassNode)`'s interface loop and `RegisterClassBases` still read `_typeManager.GetType(interfaceName)` only).
+- `Inherits Box(Of Integer)` (a generic base) and a `MustOverride Function` without a body do not parse — pre-existing parser gaps, independent of files.
+- A bare call that a class member (own or inherited) shadows is now EMITTED as the member on every backend (`ProcedureCallTarget` + `IRCall.CalleeModule`), but the ANALYZER still binds the bare name to the Module's symbol when the member is inherited, so a same-named Module `Function` with a different signature would type (and check arguments of) the call by the Module's declaration. Same-signature Subs are correct today.
+
 ---
 
 ## Task 8: C# — the file-named static class never collides with a user type or member

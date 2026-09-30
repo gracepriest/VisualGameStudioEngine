@@ -627,8 +627,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 // no loop guard, and a pending `A Inherits B` / `B Inherits A` would spin them.
                 if (!string.IsNullOrEmpty(classNode.BaseClass) && classType.BaseType == null)
                 {
-                    var baseType = ResolveTypeSymbol(classNode.BaseClass)?.Type
-                                   ?? _typeManager.GetType(classNode.BaseClass);
+                    var baseType = ResolveClassBaseType(classNode.BaseClass);
                     if (baseType != null && baseType.Kind == TypeKind.Class
                         && !InheritanceWouldCycle(classType, baseType))
                     {
@@ -5958,7 +5957,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                         var classType = _typeManager.GetType(cls.Name);
                         // ⛔ The same lookup as Visit(ClassNode): a base from another file lives in GlobalScope
                         // (a sibling shell or a completed sibling's class), never in this unit's type manager.
-                        var baseType = ResolveTypeSymbol(cls.BaseClass)?.Type ?? _typeManager.GetType(cls.BaseClass);
+                        var baseType = ResolveClassBaseType(cls.BaseClass);
                         if (classType != null && classType.BaseType == null
                             && baseType != null && baseType.Kind == TypeKind.Class
                             && !InheritanceWouldCycle(classType, baseType))
@@ -5995,13 +5994,32 @@ namespace BasicLang.Compiler.SemanticAnalysis
         /// True when making <paramref name="baseType"/> the base of <paramref name="classType"/>
         /// would put <paramref name="classType"/> among its own ancestors. Guarded, so it
         /// terminates even on a chain that already loops.
+        ///
+        /// <para>⛔ Matched by NAME as well as by reference. A class from another file reaches this unit
+        /// as a sibling SHELL or an imported TypeInfo — a different object for the same class — so
+        /// `A Inherits B` (A.bas) / `B Inherits A` (B.bas) passed a reference-only check in both files
+        /// and compiled clean (csc refused it; the JavaScript run failed). Class names are unique
+        /// across a project, which is what makes the name a sound identity here (Task 7 review).</para>
         /// </summary>
+        /// <summary>
+        /// The type an <c>Inherits</c> clause names, for both base lookups (<see cref="RegisterClassBases"/>
+        /// and <see cref="Visit(ClassNode)"/>), or null. In order: a TYPE symbol in scope — a class of
+        /// this unit, a sibling file's shell or a completed sibling's import, all in GlobalScope
+        /// (<see cref="ResolveTypeSymbol"/>); this unit's type manager; the language server's project
+        /// symbol table (<see cref="ResolveProjectSymbolType"/>), which is how the EDITOR sees a sibling.
+        /// </summary>
+        private TypeInfo ResolveClassBaseType(string name) =>
+            ResolveTypeSymbol(name)?.Type ?? _typeManager.GetType(name) ?? ResolveProjectSymbolType(name);
+
         private static bool InheritanceWouldCycle(TypeInfo classType, TypeInfo baseType)
         {
             var guard = 0;
             for (var t = baseType; t != null && guard++ < 256; t = t.BaseType)
             {
                 if (ReferenceEquals(t, classType)) return true;
+                if (t.Kind == TypeKind.Class && classType?.Name != null
+                    && string.Equals(t.Name, classType.Name, StringComparison.OrdinalIgnoreCase))
+                    return true;
             }
             return guard >= 256;
         }
@@ -6425,7 +6443,10 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 // GlobalScope. ResolveTypeSymbol finds a TYPE symbol through the scopes — a value of the same
                 // name is skipped — so the sibling's class is found before the "unresolved + a .NET Using =
                 // opaque .NET class" fallback below can claim it (portable-controls Task 7, M6).
-                var baseType = ResolveTypeSymbol(node.BaseClass)?.Type ?? _typeManager.GetType(node.BaseClass);
+                // The EDITOR supplies sibling files' classes through the project symbol table instead
+                // (ResolveProjectSymbolType) — the last candidate, or the language server underlined a
+                // base the build accepts.
+                var baseType = ResolveClassBaseType(node.BaseClass);
                 if (baseType == null)
                 {
                     if (_netNamespaces.Count > 0)

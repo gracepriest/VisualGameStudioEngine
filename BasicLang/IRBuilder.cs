@@ -280,14 +280,23 @@ namespace BasicLang.Compiler.IR
         /// owner carried beside it — one wire form for a same-unit call, a cross-unit call and a
         /// qualified call alike.</para>
         /// </summary>
-        private (string irName, string calleeModule) ProcedureCallTarget(Symbol callee, string writtenName)
+        /// <param name="qualified">The call was WRITTEN <c>Module.M()</c>: the writer chose the Module, so no
+        /// class member — own or inherited — can capture it.</param>
+        private (string irName, string calleeModule) ProcedureCallTarget(Symbol callee, string writtenName,
+            bool qualified = false)
         {
             if (callee == null) return (writtenName, null);
             var isProcedure = callee.Kind == SymbolKind.Function || callee.Kind == SymbolKind.Subroutine;
-            // An IMPORT carries its Module too (so C# qualifies it by the Module, not the file), and
-            // takes the same class-method guard as the arm below.
+            // A Module's procedure (an IMPORT too, so C# qualifies it by the Module, not the file) is
+            // owned by its Module — unless a BARE call inside a class names a member of that class or
+            // of a base. ⛔ VB's rule: class scope (inherited members included) is nearer than module
+            // scope, so `Hello()` in `D Inherits Base` is Base.Hello even when Module Util has a Hello
+            // the analyzer bound it to. Before this, C# emitted `Util.Hello();` inside class D while
+            // JavaScript (which resolves a bare name against the class first) called Base.Hello —
+            // two backends, two methods (Task 7 review). CalleeModule is now the ONE answer: set means
+            // "the Module's procedure", and every backend reads it that way inside a class body.
             if (isProcedure && !string.IsNullOrEmpty(callee.OwningModule)
-                && !(callee.IsImported && IsCurrentClassMethod(callee.Name)))
+                && (qualified || !IsClassScopeProcedure(callee.Name)))
                 return (GlobalIrName(callee.OwningModule, callee.Name), callee.OwningModule);
             // ⛔ ...but NEVER owner an import when the class being built declares that method
             // itself. One symbol table entry per name means the last declaration wins, so without
@@ -299,7 +308,7 @@ namespace BasicLang.Compiler.IR
             // its methods into the global scope as imports owned by that FILE, so an unqualified call
             // to an inherited method was emitted `Base.Hello()` on C# — CS0120 (portable-controls Task 7).
             if (callee.IsImported && !string.IsNullOrEmpty(callee.SourceModule)
-                && !IsCurrentClassMethod(callee.Name) && !IsCurrentClassProcedure(callee.Name))
+                && (qualified || !IsClassScopeProcedure(callee.Name)))
                 return (callee.Name, callee.SourceModule);
             if (isProcedure && IsFileScopeProcedure(callee))
                 return (GlobalIrName(_module.Name, callee.Name), _module.Name);
@@ -354,8 +363,12 @@ namespace BasicLang.Compiler.IR
             var guard = 0;
             for (var type = _semanticAnalyzer.LookupType(_currentClassName); type != null && guard++ < 64;)
             {
+                // ⚠ A BASE's Private method is inaccessible from the derived class, and VB skips an
+                // inaccessible member, so it captures nothing (a same-named Module procedure wins).
+                // The class's OWN Private methods still count (guard == 1 is the class itself).
                 if (type.Members != null && type.Members.TryGetValue(name, out var member) && member != null
-                    && (member.Kind == SymbolKind.Function || member.Kind == SymbolKind.Subroutine))
+                    && (member.Kind == SymbolKind.Function || member.Kind == SymbolKind.Subroutine)
+                    && (guard == 1 || member.Access != BasicLang.Compiler.AST.AccessModifier.Private))
                     return true;
 
                 var baseType = type.BaseType;
@@ -363,6 +376,15 @@ namespace BasicLang.Compiler.IR
             }
             return false;
         }
+
+        /// <summary>
+        /// Whether a BARE call to <paramref name="name"/> inside the class being built names a member
+        /// — a method of the class itself (<see cref="IsCurrentClassMethod"/>, the IR's own list) or an
+        /// accessible one of a base (<see cref="IsCurrentClassProcedure"/>) — rather than a Module's
+        /// procedure. The single class-scope-first rule <see cref="ProcedureCallTarget"/> applies.
+        /// </summary>
+        private bool IsClassScopeProcedure(string name) =>
+            IsCurrentClassMethod(name) || IsCurrentClassProcedure(name);
 
         /// <summary>An accessor-backed property a bare name denotes: its declared spelling, the
         /// class that declares it, and whether it is Shared. See <see cref="AccessorMemberOf"/>.</summary>
@@ -6258,7 +6280,8 @@ namespace BasicLang.Compiler.IR
         private void EmitProcedureCall(CallExpressionNode node, Symbol funcSymbol, string writtenName,
             string tempName, TypeInfo returnType)
         {
-            var (functionName, calleeModule) = ProcedureCallTarget(funcSymbol, funcSymbol?.Name ?? writtenName);
+            var (functionName, calleeModule) = ProcedureCallTarget(funcSymbol, funcSymbol?.Name ?? writtenName,
+                qualified: node.Callee is MemberAccessExpressionNode);
             var call = new IRCall(tempName, functionName, returnType) { CalleeModule = calleeModule };
             call.GenericArguments.AddRange(BuildGenericArgTypes(node.GenericArguments));
 
