@@ -108,12 +108,15 @@ namespace BasicLang.Compiler.IR
             _currentBlock = null;
             _bodyLocalSites.Clear();
             _lambdaCreator.Clear();
+            _pendingReservations.Clear();
 
             CollectSharedModuleGlobalNames(program);
 
             program.Accept(this);
 
             CanonicaliseMemberNames();
+
+            CompleteReservations();
 
             SeparateTempsFromUserNames();
 
@@ -150,6 +153,52 @@ namespace BasicLang.Compiler.IR
                     if (v is not IRVariable && v is not IRConstant && !v.NamedAfterVariable
                         && fn.IsMintedTempName(v.Name))
                         v.IsCompilerTemp = true;
+        }
+
+        /// <summary>
+        /// ⭐ ADR-0018 D1 / E1 / E3: PUBLISHES the reservation, once the whole module is built and
+        /// before anything reads it (<see cref="SeparateTempsFromUserNames"/>, then the optimizer and
+        /// every backend). From here on <see cref="IRFunction.GetNextTempName"/> skips the full set.
+        /// <list type="bullet">
+        /// <item><b>What the walk recorded</b> (<see cref="_pendingReservations"/>): every name the
+        /// push and <c>__with</c> saw, into its function's <see cref="IRFunction.ReservedNames"/>.</item>
+        /// <item><b>A lambda reserves every name of the function that creates it</b>, transitively.
+        /// Its body reads the creator's names — a captured <c>For Each t0</c> is an IR variable
+        /// <c>t0</c> in the lambda — and the lambda mints from its own counter, so without this the
+        /// lambda's <see cref="IRFunction.ReservedNames"/> would not hold a name that appears in it.
+        /// Written at the END of the build, not when the lambda is created: a name the creator
+        /// declares later cannot be read by the lambda, and seeding late changes no temp number
+        /// IRBuilder hands out (over-reserving is safe; the renamer reads the module-wide union
+        /// either way).</item>
+        /// <item><b>The module-level names</b> (globals, class members, every function's name), as
+        /// one set every function shares (<see cref="IRTempNames.PublishModuleNames"/>, E3).</item>
+        /// <item><b>Every function built here tracks its reservations</b>
+        /// (<see cref="IRFunction.TracksReservedNames"/>), which is what the verifier's
+        /// reservation invariant is checked on; hand-built IR does not.</item>
+        /// </list>
+        /// <para>Byte-neutral for every program whose temp-shaped names were already reserved:
+        /// nothing here changes a number the walk handed out, and the renamer's re-mint loop
+        /// already skipped everything <see cref="IRTempNames.UserOwned"/> holds.</para>
+        /// </summary>
+        private void CompleteReservations()
+        {
+            foreach (var (fn, names) in _pendingReservations)
+                foreach (var n in names) fn.Reserve(n);
+            _pendingReservations.Clear();
+
+            var seeded = new HashSet<IRFunction>(ReferenceEqualityComparer.Instance);
+            void Seed(IRFunction lambda)
+            {
+                if (!seeded.Add(lambda) || !_lambdaCreator.TryGetValue(lambda, out var creator) || creator == null) return;
+                Seed(creator);   // a lambda inside a lambda: its creator's set is complete first
+                lambda.ReservedNames.UnionWith(creator.ReservedNames);
+            }
+            foreach (var lambda in _lambdaCreator.Keys) Seed(lambda);
+
+            IRTempNames.PublishModuleNames(_module);
+
+            foreach (var fn in IRTempNames.AllFunctions(_module))
+                fn.TracksReservedNames = true;
         }
 
         /// <summary>Every value reachable from <paramref name="fn"/>'s body: its block instructions
@@ -428,12 +477,15 @@ namespace BasicLang.Compiler.IR
             // makes), which also names the DECLARING class — a Shared property's receiver. The
             // nearest member of that name must be the property itself: anything else there is
             // what the name denotes, and the analyzer and the class disagree.
+            // #124: looked up by the DECLARED spelling the analyzer recorded, so the member named is
+            // the one it bound, spelled as declared.
+            var name = DeclaredSpelling(node);
             var guard = 0;
             for (var type = _semanticAnalyzer.LookupType(_currentClassName); type != null && guard++ < 64;)
             {
-                if (type.Members != null && type.Members.TryGetValue(node.Name, out var member) && member != null)
+                if (type.Members != null && type.Members.TryGetValue(name, out var member) && member != null)
                     return member.Kind == SymbolKind.Property
-                        ? new BareAccessorMember(member.Name ?? node.Name, type, symbol.IsShared)
+                        ? new BareAccessorMember(member.Name ?? name, type, symbol.IsShared)
                         : null;
 
                 var baseType = type.BaseType;
@@ -759,15 +811,9 @@ namespace BasicLang.Compiler.IR
                     return _globalVariables[name];
             }
 
-            // Create new version
+            // Create new version — through the one push, which reserves the name (ADR-0018 D1).
             var variable = CreateVariable(name, type, _nextVersion++);
-
-            if (!_variableVersions.ContainsKey(name))
-            {
-                _variableVersions[name] = new Stack<IRVariable>();
-            }
-
-            _variableVersions[name].Push(variable);
+            PushVariableVersion(name, variable);
 
             return variable;
         }
@@ -783,6 +829,11 @@ namespace BasicLang.Compiler.IR
         /// <c>For</c>, which must give its induction variable a local when nothing else holds it
         /// and must NOT when something does — see <see cref="Visit(ForLoopNode)"/> for why each
         /// half matters.</para>
+        ///
+        /// <para>⭐ #124: asked ONLY when the analyzer bound the control name to no storage (the loop's
+        /// <c>ControlReference</c> is null, or names a Method or Type). Existing storage is decided by that binding; this
+        /// Ordinal test is left guarding one thing — a same-spelled local the function already
+        /// declares, which must not be declared twice.</para>
         ///
         /// <para>⚠ Must be asked BEFORE <c>GetOrCreateVariable</c>, which pushes a version and
         /// would then make every name look as though it already existed.</para>
@@ -828,6 +879,20 @@ namespace BasicLang.Compiler.IR
             return _globalVariables.ContainsKey(name);
         }
 
+        /// <summary>
+        /// Makes <paramref name="variable"/> what <paramref name="name"/> denotes from here on, and
+        /// ⭐ RECORDS both spellings as reserved in the current function (ADR-0018 D1). This is the
+        /// ONE primitive every declaration kind passes through — a <c>Dim</c>, a <c>Const</c>, every
+        /// parameter (a lambda's included), a counted <c>For</c>'s and a <c>For Each</c>'s control
+        /// variable, a <c>Catch</c> variable, a pattern binding, a LINQ range variable, a name
+        /// <see cref="GetOrCreateVariable"/> creates, and the <c>AndAlso</c>/<c>OrElse</c> carrier.
+        /// Both spellings, because a setter's declared parameter (<c>nv</c>) is an alias whose
+        /// storage is named <c>value</c> (ADR-0013 D5).
+        ///
+        /// <para>Recorded, not yet published: <see cref="CompleteReservations"/> publishes every
+        /// record into <see cref="IRFunction.ReservedNames"/> once the walk is over (see
+        /// <see cref="_pendingReservations"/> for why).</para>
+        /// </summary>
         private void PushVariableVersion(string name, IRVariable variable)
         {
             if (!_variableVersions.ContainsKey(name))
@@ -835,6 +900,38 @@ namespace BasicLang.Compiler.IR
                 _variableVersions[name] = new Stack<IRVariable>();
             }
             _variableVersions[name].Push(variable);
+
+            ReserveInCurrentFunction(name);
+            ReserveInCurrentFunction(variable?.Name);
+        }
+
+        /// <summary>
+        /// ⭐ ADR-0018 D1 / E1: the reservations the walk has RECORDED, per function, which
+        /// <see cref="CompleteReservations"/> publishes into <see cref="IRFunction.ReservedNames"/>
+        /// before anything reads the set.
+        ///
+        /// <para>⛔ DEFERRED ON PURPOSE. Published at the push, the set would make
+        /// <see cref="IRFunction.GetNextTempName"/> skip a name DURING the walk — a temp minted after
+        /// <c>Dim t1</c> would become <c>t2</c> where it has always been <c>t1</c> and renamed at the
+        /// end — renumbering the temps of programs whose only temp-shaped name was ALREADY reserved.
+        /// MEASURED (ADR-0018, the rejected Variant A): 6 programs / 30 cells changed text outside
+        /// the ruled set (U8's JavaScript <c>const t2</c> became <c>t3</c>; C# and JavaScript of the
+        /// four <c>ReDim t0()</c> programs; U5's JavaScript). Inside the walk
+        /// <see cref="SeparateTempsFromUserNames"/> already separates every collision, as it always
+        /// has; the skip is for the minters that run AFTER it — its own re-mint and
+        /// <see cref="IRFunction.DeclareTemp"/>.</para>
+        /// </summary>
+        private readonly Dictionary<IRFunction, HashSet<string>> _pendingReservations = new(ReferenceEqualityComparer.Instance);
+
+        /// <summary>Records <paramref name="name"/> as reserved in the current function (see
+        /// <see cref="_pendingReservations"/>). The one entry to the record: the push, and the one
+        /// lowering that never pushes (<c>__with</c>).</summary>
+        private void ReserveInCurrentFunction(string name)
+        {
+            if (_currentFunction == null || string.IsNullOrEmpty(name)) return;
+            if (!_pendingReservations.TryGetValue(_currentFunction, out var set))
+                _pendingReservations[_currentFunction] = set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            set.Add(name);
         }
 
         private void PopVariableVersion(string name)
@@ -1502,7 +1599,13 @@ namespace BasicLang.Compiler.IR
 
             try
             {
+                var conditionalsBefore = _conditionalLowerings;
                 initializer.Accept(this);
+
+                // #123: an If(c, a, b) is control flow — its value is a carrier written in two
+                // blocks, and the fold below reads only the LAST block, which would hand back the
+                // carrier of a function that is thrown away. Not constant, so the caller refuses it.
+                if (_conditionalLowerings != conditionalsBefore) return null;
 
                 // ⛔ THE COERCION THE GLOBAL PATH NEVER HAD, and the whole reason a module-scope
                 // `Dim v As Integer = 7.9` produced GARBAGE. The LOCAL branch of
@@ -1522,6 +1625,14 @@ namespace BasicLang.Compiler.IR
                 // folded. Note this can be a NON-constant IRValue; each caller decides whether it
                 // can use one.
                 if (emitted.Count == 0) return lowered;
+
+                // #123: a module-level Const is a leaf of a constant expression, as in VB —
+                // `Dim ballVY As Single = BALL_SPEED / 2` (Samples/Pong) was refused as "cannot be
+                // computed at compile time" because a read of BALL_SPEED lowers to its global, which
+                // no fold pass looks through. Each read of a Const global whose OWN initializer
+                // already folded is replaced by that value first. Only initializers that were
+                // refused change: before this, a Const operand always left the fold incomplete.
+                SubstituteFoldedConstGlobals(emitted);
 
                 var scratchModule = new IRModule("<init>");
                 scratchModule.Functions.Add(scratch);
@@ -1558,6 +1669,42 @@ namespace BasicLang.Compiler.IR
                 // scratch MODULE, not the cursor, so restoring after it is equivalent.
                 _currentFunction = savedFunction;
                 _currentBlock = savedBlock;
+            }
+        }
+
+        /// <summary>
+        /// #123 — for <see cref="TryFoldInitializerToConstant"/> only: rewrites, in the SCRATCH
+        /// function's instructions, every operand that reads a module-level <c>Const</c> whose
+        /// initial value is already a constant into a copy of that constant. The operand kinds are
+        /// exactly those the fixpoint's two passes fold (binary, compare, unary, cast); a Const read
+        /// anywhere else still leaves the fold incomplete, and the caller still refuses it.
+        /// </summary>
+        private static void SubstituteFoldedConstGlobals(IEnumerable<IRInstruction> instructions)
+        {
+            static IRValue Folded(IRValue operand) =>
+                operand is IRVariable { IsGlobal: true, IsConst: true, InitialValue: IRConstant value }
+                    ? new IRConstant(value.Value, value.Type)
+                    : operand;
+
+            foreach (var instruction in instructions)
+            {
+                switch (instruction)
+                {
+                    case IRBinaryOp binary:
+                        binary.Left = Folded(binary.Left);
+                        binary.Right = Folded(binary.Right);
+                        break;
+                    case IRCompare compare:
+                        compare.Left = Folded(compare.Left);
+                        compare.Right = Folded(compare.Right);
+                        break;
+                    case IRUnaryOp unary:
+                        unary.Operand = Folded(unary.Operand);
+                        break;
+                    case IRCast cast:
+                        cast.Value = Folded(cast.Value);
+                        break;
+                }
             }
         }
 
@@ -2734,6 +2881,17 @@ namespace BasicLang.Compiler.IR
             // by hand.
             var scope = EnterProcedureScope();
 
+            // Save context and switch to operator function — BEFORE the parameters are pushed: the
+            // push reserves each name in the CURRENT function (ADR-0018 D1), and a parameter pushed
+            // while the enclosing function was current was reserved there and not here (MEASURED:
+            // the verifier's Invariant R named `Box.op_Equality`'s `a` and `b`).
+            var savedFunction = _currentFunction;
+            var savedBlock = _currentBlock;
+
+            _currentFunction = opFunc;
+            _currentFunction.SourceFilePath = _sourceFilePath;
+            _currentBlock = opFunc.CreateBlock("entry");
+
             // Add parameters
             foreach (var param in node.Parameters)
             {
@@ -2742,14 +2900,6 @@ namespace BasicLang.Compiler.IR
                 opFunc.Parameters.Add(paramVar);
                 PushVariableVersion(param.Name, paramVar);
             }
-
-            // Save context and switch to operator function
-            var savedFunction = _currentFunction;
-            var savedBlock = _currentBlock;
-
-            _currentFunction = opFunc;
-            _currentFunction.SourceFilePath = _sourceFilePath;
-            _currentBlock = opFunc.CreateBlock("entry");
 
             // Generate body
             if (node.Body != null)
@@ -2849,10 +2999,11 @@ namespace BasicLang.Compiler.IR
                 args.Add(_expressionResult);
             }
 
-            // Generate call to event invocation
+            // Generate call to event invocation — named after the event as DECLARED when the
+            // analyzer bound it (#124, ADR-0013 D7), as written otherwise.
             var eventCall = new IRCall(
                 _currentFunction.GetNextTempName(),
-                $"raise_{node.EventName}",
+                $"raise_{(node.EventReference != null ? DeclaredSpelling(node.EventReference) : node.EventName)}",
                 new TypeInfo("Void", TypeKind.Void)
             );
             foreach (var arg in args)
@@ -3010,16 +3161,19 @@ namespace BasicLang.Compiler.IR
             // Instead, create the IRCall and embed it in the IRAwait
             if (node.Expression is CallExpressionNode callNode)
             {
+                // ⭐ #124: each name as DECLARED when the analyzer bound it (a user Function, a Type
+                // receiver), as written otherwise (Task.Delay) — the spelling every other call site
+                // already takes from the resolved symbol.
                 string functionName = null;
                 if (callNode.Callee is IdentifierExpressionNode idExpr)
                 {
-                    functionName = idExpr.Name;
+                    functionName = DeclaredSpelling(idExpr);
                 }
                 else if (callNode.Callee is MemberAccessExpressionNode memberExpr &&
                          memberExpr.Object is IdentifierExpressionNode objExpr)
                 {
                     // Qualified call like Task.Delay(10)
-                    functionName = $"{objExpr.Name}.{memberExpr.MemberName}";
+                    functionName = $"{DeclaredSpelling(objExpr)}.{DeclaredMemberSpelling(memberExpr)}";
                 }
 
                 if (functionName != null)
@@ -3844,19 +3998,46 @@ namespace BasicLang.Compiler.IR
             // acquire a same-named local and the loop would silently stop mutating the member.
             // The already-a-local case is what keeps `Dim i As Integer = 100` followed by
             // `For i = 1 To 3` (which works today on all four backends) unchanged.
-            else if (!ResolvesToExistingStorage(node.Variable))
+            //
+            // ⭐ #124 (ADR-0013 D3/D6): WHICH storage is the analyzer's answer, not a string test.
+            // It bound the loop's ControlReference to what the name already denotes (a local, a
+            // parameter, a field or property, a module global), and the loop drives THAT, reached
+            // by its DECLARED spelling through the one lookup every bound reference uses
+            // (BoundVariable) — whatever case the loop spells it in, as VB does. Before, the
+            // Ordinal test below missed `For total` over a local or parameter `Total` (a second,
+            // shadowing local: the loop left `Total` untouched) and resolved `For total` over a
+            // field `Total` to a variable named `total` (undeclared on C++, a different property
+            // on JavaScript).
+            //
+            // ⚠ When the analyzer says the name denotes NOTHING yet, the loop declares it, and the
+            // Ordinal test is kept for exactly one job: not declaring twice a same-spelled local the
+            // function already declares (a `Dim` in an earlier, closed block), which the analyzer
+            // rightly no longer sees.
+            IdentifierExpressionNode drivenReference = null;
+            if (string.IsNullOrEmpty(node.VariableType)
+                && node.ControlReference?.Binding is { } controlBinding
+                && IsStorageBinding(controlBinding.Kind))
+            {
+                drivenReference = node.ControlReference;
+            }
+            else if (string.IsNullOrEmpty(node.VariableType) && !ResolvesToExistingStorage(node.Variable))
             {
                 _currentFunction.LocalVariables.Add(new IRVariable(node.Variable, loopVarType, 0));
             }
 
-            var loopVar = GetOrCreateVariable(node.Variable, loopVarType);
+            var loopVar = drivenReference != null
+                ? BoundVariable(drivenReference, drivenReference.Binding, loopVarType)
+                : GetOrCreateVariable(node.Variable, loopVarType);
             EmitInstruction(new IRAssignment(loopVar, startValue));
+
+            // The spelling the increment writes back under: the storage's declared one when the
+            // loop drives existing storage (#124), else the loop's own.
+            var storageSpelling = drivenReference?.Binding.DeclaredName ?? node.Variable;
 
             // ⭐ #169 (ADR-0013 D5): the analyzer declares the loop's control variable in the loop's
             // own scope, so the body's references to it are bound as a Local of this name — and
             // bind to WHATEVER the line above resolved it to, a module global included, which
-            // GetOrCreateVariable returns without registering. Registered for the loop only; the
-            // new-vs-existing decision above is untouched (#124's).
+            // GetOrCreateVariable returns without registering. Registered for the loop only.
             PushVariableVersion(node.Variable, loopVar);
 
             // Jump to condition
@@ -3904,7 +4085,7 @@ namespace BasicLang.Compiler.IR
             var inc = new IRBinaryOp(incTemp, BinaryOpKind.Add, loopVar, stepValue, loopVar.Type);
             EmitInstruction(inc);
 
-            var newLoopVar = CreateVariable(node.Variable, loopVar.Type, _nextVersion++);
+            var newLoopVar = CreateVariable(storageSpelling, loopVar.Type, _nextVersion++);
             EmitInstruction(new IRAssignment(newLoopVar, inc));
             PushVariableVersion(node.Variable, newLoopVar);
 
@@ -4077,6 +4258,9 @@ namespace BasicLang.Compiler.IR
             // Store the object in a temporary variable for use in the body
             var objType = _semanticAnalyzer.GetNodeType(node.Object) ?? new TypeInfo("Object", TypeKind.Class);
             var withVar = CreateVariable("__with", objType, _nextVersion++);
+            // A lowering's own storage, never pushed (it is reached through _withObjectStack), so it
+            // reserves here (ADR-0018 D1).
+            ReserveInCurrentFunction(withVar.Name);
             EmitInstruction(new IRAssignment(withVar, withObject));
 
             // Push the With variable for implicit member access
@@ -4276,23 +4460,19 @@ namespace BasicLang.Compiler.IR
                     : new TypeInfo("Exception", TypeKind.Class);
                 if (!string.IsNullOrEmpty(catchClause.ExceptionVariable))
                 {
-                    // Create a local variable for the exception
+                    // Create a local variable for the exception, and push it so it's accessible in
+                    // the catch block — through the one push, which RESERVES the name (ADR-0018 D1).
+                    // Not a LocalVariables entry: the catch clause declares it.
                     var exVar = new IRVariable(catchClause.ExceptionVariable, exceptionType);
-                    // Push onto variable versions stack so it's accessible in the catch block
-                    if (!_variableVersions.ContainsKey(catchClause.ExceptionVariable))
-                    {
-                        _variableVersions[catchClause.ExceptionVariable] = new Stack<IRVariable>();
-                    }
-                    _variableVersions[catchClause.ExceptionVariable].Push(exVar);
+                    PushVariableVersion(catchClause.ExceptionVariable, exVar);
                 }
 
                 catchClause.Body.Accept(this);
 
                 // Pop the exception variable
-                if (!string.IsNullOrEmpty(catchClause.ExceptionVariable) &&
-                    _variableVersions.ContainsKey(catchClause.ExceptionVariable))
+                if (!string.IsNullOrEmpty(catchClause.ExceptionVariable))
                 {
-                    _variableVersions[catchClause.ExceptionVariable].Pop();
+                    PopVariableVersion(catchClause.ExceptionVariable);
                 }
 
                 if (!_currentBlock.IsTerminated())
@@ -4898,14 +5078,12 @@ namespace BasicLang.Compiler.IR
                 if (ModuleMemberSymbolOf(idExpr2) is Symbol moduleMember)
                 {
                     // A Module's variable, its own or another's — the same global the read binds.
-                    targetVar = GlobalReference(moduleMember.Name, moduleMember.OwningModule, value.Type);
+                    targetVar = ModuleMemberGlobal(idExpr2, moduleMember, value.Type);
                 }
                 else if (symbol != null && symbol.IsImported && !string.IsNullOrEmpty(symbol.SourceModule))
                 {
-                    // This is an imported variable from another module
-                    targetVar = new IRVariable(idExpr2.Name, value.Type);
-                    targetVar.IsGlobal = true;
-                    targetVar.ModuleName = symbol.SourceModule;
+                    // This is an imported variable from another module — by its DECLARED spelling (#124).
+                    targetVar = ImportedGlobal(DeclaredSpelling(idExpr2), symbol.SourceModule, value.Type);
                 }
                 else
                 {
@@ -4927,7 +5105,7 @@ namespace BasicLang.Compiler.IR
                 // global — the SAME one the read binds, so the two cannot disagree about where it
                 // lives. Never an IRFieldStore on a phantom receiver ("cannot use arrow operator
                 // on a type" was the C++ reading of that).
-                var targetVar = GlobalReference(moduleMemberTarget.Name, moduleMemberTarget.OwningModule, value.Type);
+                var targetVar = ModuleMemberGlobal(moduleMemberExpr, moduleMemberTarget, value.Type);
                 if (!TryRenameToVariable(value, targetVar))
                 {
                     EmitInstruction(new IRAssignment(targetVar, value));
@@ -4939,7 +5117,7 @@ namespace BasicLang.Compiler.IR
                 memberExpr.Object.Accept(this);
                 var obj = _expressionResult;
 
-                var fieldStore = new IRFieldStore(obj, memberExpr.MemberName, value);
+                var fieldStore = new IRFieldStore(obj, DeclaredMemberSpelling(memberExpr), value);
 
                 // P2a-2 Task 7a: a .NET PROPERTY/FIELD write carries the SYNTHESIZED set_X
                 // accessor-method descriptor (NetAccessorSynthesis — the single synthesis
@@ -5188,6 +5366,69 @@ namespace BasicLang.Compiler.IR
             _currentBlock = mergeBlock;
             _expressionResult = result;
         }
+
+        /// <summary>
+        /// #123 — VB's <c>If(condition, whenTrue, whenFalse)</c>, lowered as CONTROL FLOW so only
+        /// the chosen operand is evaluated (<c>If(n &lt;= 1, 1, n * Fact(n - 1))</c> must not
+        /// recurse forever, <c>If(d = 0, 0, 10 \ d)</c> must not divide by zero).
+        ///
+        /// <para>⛔ The shape is exactly <see cref="Visit(IfStatementNode)"/>'s If/Else — condition
+        /// first, then <c>if{id}.then</c> / <c>if{id}.else</c> / <c>if{id}.end</c> — with the
+        /// <see cref="BuildShortCircuit"/> carrier <c>__sc{id}</c> written in each arm, for the same
+        /// reason that method gives: the C# backend recognises structure by those NAMES, and every
+        /// backend already lowers this construct. No IR node, no backend change.</para>
+        ///
+        /// <para>⚠ Each arm is coerced to the result type (the analyzer's dominant type), as a
+        /// store is: <c>If(c, 1, 2.5)</c> is Double, so the Integer arm widens in its own arm.</para>
+        ///
+        /// <para>⚠ Two places cannot hold control flow and refuse it rather than miscompile: a
+        /// <c>When</c> guard (built with emission suppressed — its existing block check in
+        /// <see cref="ConvertPatternToIR"/> reports it), and an initializer that must fold to a
+        /// constant (<see cref="TryFoldInitializerToConstant"/> reads
+        /// <see cref="_conditionalLowerings"/> and declines, so the caller's "cannot be computed at
+        /// compile time" diagnostic fires).</para>
+        /// </summary>
+        public void Visit(ConditionalExpressionNode node)
+        {
+            _conditionalLowerings++;
+
+            var resultType = _semanticAnalyzer.GetNodeType(node)
+                             ?? new TypeInfo("Object", TypeKind.Class);
+
+            node.Condition.Accept(this);
+            var condition = _expressionResult;
+
+            var id = _ifCounter++;
+            var thenBlock = _currentFunction.CreateBlock($"if{id}.then");
+            var elseBlock = _currentFunction.CreateBlock($"if{id}.else");
+            var mergeBlock = _currentFunction.CreateBlock($"if{id}.end");
+
+            // The carrier, registered with the function exactly as BuildShortCircuit's is.
+            var result = CreateVariable($"__sc{id}", resultType, _nextVersion++);
+            PushVariableVersion(result.Name, result);
+            _currentFunction.LocalVariables.Add(result);
+
+            EmitInstruction(new IRConditionalBranch(condition, thenBlock, elseBlock));
+
+            _currentBlock = thenBlock;
+            node.WhenTrue.Accept(this);
+            EmitInstruction(new IRAssignment(result, CoerceToDeclaredType(_expressionResult, resultType)));
+            if (!_currentBlock.IsTerminated())
+                EmitInstruction(new IRBranch(mergeBlock));
+
+            _currentBlock = elseBlock;
+            node.WhenFalse.Accept(this);
+            EmitInstruction(new IRAssignment(result, CoerceToDeclaredType(_expressionResult, resultType)));
+            if (!_currentBlock.IsTerminated())
+                EmitInstruction(new IRBranch(mergeBlock));
+
+            _currentBlock = mergeBlock;
+            _expressionResult = result;
+        }
+
+        /// <summary>How many <see cref="Visit(ConditionalExpressionNode)"/> lowerings have run —
+        /// read across a fold by <see cref="TryFoldInitializerToConstant"/>.</summary>
+        private int _conditionalLowerings;
 
         public void Visit(BinaryExpressionNode node)
         {
@@ -5564,8 +5805,7 @@ namespace BasicLang.Compiler.IR
             // to the real global, whatever the declaration order.
             if (ModuleMemberSymbolOf(node) is Symbol moduleMember)
             {
-                _expressionResult = GlobalReference(moduleMember.Name, moduleMember.OwningModule,
-                    _semanticAnalyzer.GetNodeType(node));
+                _expressionResult = ModuleMemberGlobal(node, moduleMember, _semanticAnalyzer.GetNodeType(node));
                 return;
             }
 
@@ -5585,11 +5825,9 @@ namespace BasicLang.Compiler.IR
             var symbol = _semanticAnalyzer.GetNodeSymbol(node);
             if (symbol != null && symbol.IsImported && !string.IsNullOrEmpty(symbol.SourceModule))
             {
-                // This is an imported variable from another module
-                var variable = new IRVariable(node.Name, _semanticAnalyzer.GetNodeType(node));
-                variable.IsGlobal = true;
-                variable.ModuleName = symbol.SourceModule;
-                _expressionResult = variable;
+                // This is an imported variable from another module — by its DECLARED spelling (#124).
+                _expressionResult = ImportedGlobal(DeclaredSpelling(node), symbol.SourceModule,
+                    _semanticAnalyzer.GetNodeType(node));
                 return;
             }
 
@@ -5620,34 +5858,189 @@ namespace BasicLang.Compiler.IR
         /// ReferenceError on JavaScript. Every declaration site registers its name first (ADR
         /// D5), so a miss means one was missed.</para>
         ///
+        /// <para>⭐ #124 (ADR-0013 D3/D6) extends it to every other kind the analyzer records, each
+        /// by its DECLARED spelling and through the store its kind names (<see cref="BoundVariable"/>):
+        /// a Field or Property is the member's own variable, a ModuleGlobal the global itself, a
+        /// Method or Type the name the declaration spells. Before, those kinds took the written
+        /// spelling: a field <c>Total</c> read as <c>total</c> was an undeclared identifier on C++
+        /// and a different, undefined property on JavaScript.</para>
+        ///
         /// <para>Everything unbound — <c>Me</c>, foreign and .NET names, the For Each hidden
-        /// variable, a Field, ModuleGlobal, Property, Method or Type reference — takes the
-        /// verbatim path it always took (#124 owns those kinds).</para>
+        /// variable, an unresolved name — takes the verbatim path it always took.</para>
         /// </summary>
         private IRVariable ReferencedVariable(IdentifierExpressionNode node, TypeInfo typeIfUnbound)
         {
             var binding = node.Binding;
-            if (binding == null || !IsVersionedBinding(binding.Kind))
-                return GetOrCreateVariable(node.Name, typeIfUnbound);
-
-            if (_variableVersions.TryGetValue(binding.DeclaredName, out var versions) && versions.Count > 0)
-                return versions.Peek();
-
-            throw new InvalidOperationException(
-                $"Internal compiler error: '{node.Name}' (line {node.Line}) resolved to the "
-                + $"{binding.Kind} declared as '{binding.DeclaredName}', but no variable of that name "
-                + "is registered in the IR builder's scope. A declaration site did not register it "
-                + "(#169, ADR-0013 D5); refusing to invent one.");
+            return binding == null
+                ? GetOrCreateVariable(node.Name, typeIfUnbound)
+                : BoundVariable(node, binding, typeIfUnbound);
         }
 
         /// <summary>
-        /// The binding kinds whose declarations <see cref="_variableVersions"/> holds, and so
-        /// the kinds <see cref="ReferencedVariable"/> binds through it (#169, ADR-0013 D3).
+        /// ⭐ #124 (ADR-0013 D1/D3) — THE ONE answer to "which IR variable does this BOUND reference
+        /// denote", by <see cref="NameBinding.Kind"/>, keyed by <see cref="NameBinding.DeclaredName"/>
+        /// and looked up only in the store the kind names. Asked by <see cref="ReferencedVariable"/>
+        /// (a read, an assignment target) and by the counted <c>For</c> that drives existing storage
+        /// (<see cref="Visit(ForLoopNode)"/>), so the loop and the body's references cannot disagree
+        /// about where a name lives.
+        ///
+        /// <para>For a program whose references all spell their declarations, every arm looks up
+        /// exactly what the verbatim path did — the declared spelling IS the written one.</para>
         /// </summary>
-        private static bool IsVersionedBinding(NameBindingKind kind) =>
+        private IRVariable BoundVariable(IdentifierExpressionNode node, NameBinding binding, TypeInfo type)
+        {
+            switch (binding.Kind)
+            {
+                case NameBindingKind.Local:
+                case NameBindingKind.Parameter:
+                case NameBindingKind.LambdaParameter:
+                    if (_variableVersions.TryGetValue(binding.DeclaredName, out var versions) && versions.Count > 0)
+                        return versions.Peek();
+
+                    throw new InvalidOperationException(
+                        $"Internal compiler error: '{node.Name}' (line {node.Line}) resolved to the "
+                        + $"{binding.Kind} declared as '{binding.DeclaredName}', but no variable of that name "
+                        + "is registered in the IR builder's scope. A declaration site did not register it "
+                        + "(#169, ADR-0013 D5); refusing to invent one.");
+
+                case NameBindingKind.Field:
+                case NameBindingKind.Property:
+                    return MemberVariable(binding, type);
+
+                case NameBindingKind.ModuleGlobal:
+                    return GlobalVariable(node, binding, type);
+
+                default:
+                    // Method, Type, Event: a name, not storage — the variable the IR has always
+                    // carried for one (a Shared receiver `C`, `AddressOf Show`, an event handed to
+                    // AddHandler), spelled as declared.
+                    return GetOrCreateVariable(binding.DeclaredName, type);
+            }
+        }
+
+        /// <summary>
+        /// The kinds that name STORAGE a counted <c>For</c> with no <c>As</c> can drive (#124): a
+        /// local, a parameter (a lambda's included), a field or property, a module global. A Method
+        /// or Type name is not storage, and the loop declares its own variable as it always did.
+        /// </summary>
+        private static bool IsStorageBinding(NameBindingKind kind) =>
             kind == NameBindingKind.Local
             || kind == NameBindingKind.Parameter
-            || kind == NameBindingKind.LambdaParameter;
+            || kind == NameBindingKind.LambdaParameter
+            || kind == NameBindingKind.Field
+            || kind == NameBindingKind.Property
+            || kind == NameBindingKind.ModuleGlobal;
+
+        /// <summary>
+        /// A bare Field or Property reference (#124): the variable named as the member is DECLARED —
+        /// the form a bare member has always had in the IR, which every backend renders as the
+        /// member — and never a module global, which is what the verbatim path consulted for a name
+        /// it could not place in the class being built (a base declared later in the file, or in
+        /// another one).
+        ///
+        /// <para>⚠ No "missing" refusal here, unlike a Local's: a member has no IR-side registration
+        /// that is complete at the reference. The IR class list is filled in declaration order and
+        /// holds this unit's classes only, and a Structure's members, an enclosing class's Shared
+        /// field read from a nested class and a base in another file are all members the IR builder
+        /// never registers — every one a program VB accepts. The analyzer's own declaration is the
+        /// evidence the member exists.</para>
+        /// </summary>
+        private IRVariable MemberVariable(NameBinding binding, TypeInfo type)
+        {
+            var name = binding.DeclaredName;
+            if (_variableVersions.TryGetValue(name, out var versions) && versions.Count > 0)
+                return versions.Peek();
+
+            var variable = CreateVariable(name, type, _nextVersion++);
+            PushVariableVersion(name, variable);
+            return variable;
+        }
+
+        /// <summary>
+        /// A ModuleGlobal reference (#124): the global itself, found by its DECLARED spelling where it
+        /// was registered — a Module's through <see cref="GlobalReference"/> (which also carries a
+        /// forward reference), another file's as the imported global, a file-scope one in the maps
+        /// its declaration wrote (<see cref="Visit(VariableDeclarationNode)"/>). Never the version
+        /// stack, which holds locals.
+        ///
+        /// <para>⛔ A file-scope global with nothing registered is an INTERNAL COMPILER ERROR, never a
+        /// silent create: the analyzer refuses a file-scope global used before its declaration, so a
+        /// miss means the declaration site did not register it.</para>
+        /// </summary>
+        private IRVariable GlobalVariable(IdentifierExpressionNode node, NameBinding binding, TypeInfo type)
+        {
+            var name = binding.DeclaredName;
+            var declaration = binding.Declaration;
+
+            if (!string.IsNullOrEmpty(declaration?.OwningModule))
+                return GlobalReference(name, declaration.OwningModule, type);
+
+            if (declaration != null && declaration.IsImported && !string.IsNullOrEmpty(declaration.SourceModule))
+                return ImportedGlobal(name, declaration.SourceModule, type);
+
+            if (_moduleGlobals.TryGetValue(ModuleGlobalKey(_currentModuleName ?? _module?.Name, name), out var own))
+                return own;
+            if (_globalVariables.TryGetValue(name, out var global))
+                return global;
+
+            throw new InvalidOperationException(
+                $"Internal compiler error: '{node.Name}' (line {node.Line}) resolved to the module-level "
+                + $"variable declared as '{name}', but no global of that name is registered in the IR "
+                + "builder (#124, ADR-0013 D3); refusing to invent one.");
+        }
+
+        /// <summary>
+        /// A reference the analyzer resolved to a Module's variable or constant (<see cref="ModuleMemberSymbolOf"/>),
+        /// bare or qualified: through the recorded binding when the node carries one (an identifier),
+        /// else by the resolved symbol's name — the same declaration, spelled as declared either way.
+        /// </summary>
+        private IRVariable ModuleMemberGlobal(ASTNode node, Symbol moduleMember, TypeInfo type) =>
+            node is IdentifierExpressionNode { Binding: { Kind: NameBindingKind.ModuleGlobal } binding } reference
+                ? GlobalVariable(reference, binding, type)
+                : GlobalReference(moduleMember.Name, moduleMember.OwningModule, type);
+
+        /// <summary>A variable of another file's module, as the importing unit refers to it: by name
+        /// and owner, resolved when the units are combined.</summary>
+        private static IRVariable ImportedGlobal(string name, string sourceModule, TypeInfo type) =>
+            new IRVariable(name, type) { IsGlobal = true, ModuleName = sourceModule };
+
+        /// <summary>
+        /// ⭐ #124: the spelling a MEMBER ACCESS (<c>obj.m</c>, <c>C.m</c>, <c>Me.m</c>, <c>MyBase.m</c>)
+        /// names its member by — the declaration's, as the ANALYZER resolved it for this node
+        /// (<c>GetNodeSymbol</c>), when that is a BasicLang member spelled like the written name but
+        /// for case; the written name otherwise. A member access carries no
+        /// <see cref="NameBinding"/> (that is an identifier's record), so the analyzer's resolved
+        /// symbol is the record here — never a second lookup by name.
+        ///
+        /// <para>⚠ Replaces the written name ONLY when the two differ by case alone, so a program
+        /// that spells every member as declared is emitted exactly as before, and a .NET member
+        /// (resolved through its descriptor, <c>NetMemberAnnotations</c>) is left as written.</para>
+        ///
+        /// <para>Before, only <see cref="CanonicaliseMemberNames"/> corrected a member's case — after
+        /// the walk, by looking the name up again in this unit's classes — so a member of another
+        /// FILE's module (<c>Data.counter</c>: CS0117 on C#) and a Shared method called through the
+        /// fused static form (<c>C.make(1)</c>: undeclared on C++, TypeError on JavaScript) kept the
+        /// written spelling.</para>
+        /// </summary>
+        private string DeclaredMemberSpelling(MemberAccessExpressionNode node)
+        {
+            var written = node.MemberName;
+            if (_semanticAnalyzer == null || string.IsNullOrEmpty(written)) return written;
+            if (_semanticAnalyzer.NetMemberAnnotations.ContainsKey(node)) return written;
+
+            var declared = _semanticAnalyzer.GetNodeSymbol(node)?.Name;
+            return declared != null && string.Equals(declared, written, StringComparison.OrdinalIgnoreCase)
+                ? declared
+                : written;
+        }
+
+        /// <summary>
+        /// The spelling an identifier reference is emitted by: its declaration's
+        /// (<see cref="NameBinding.DeclaredName"/>) when the analyzer bound it, else as written. For
+        /// the sites that name a thing rather than look up storage (#124).
+        /// </summary>
+        private static string DeclaredSpelling(IdentifierExpressionNode node) =>
+            node.Binding?.DeclaredName ?? node.Name;
 
         public void Visit(MemberAccessExpressionNode node)
         {
@@ -5676,8 +6069,7 @@ namespace BasicLang.Compiler.IR
             // JavaScript, MissingFieldException 'System.Object.Value' on MSIL.
             if (ModuleMemberSymbolOf(node) is Symbol moduleMember)
             {
-                _expressionResult = GlobalReference(moduleMember.Name, moduleMember.OwningModule,
-                    _semanticAnalyzer.GetNodeType(node));
+                _expressionResult = ModuleMemberGlobal(node, moduleMember, _semanticAnalyzer.GetNodeType(node));
                 return;
             }
 
@@ -5688,7 +6080,7 @@ namespace BasicLang.Compiler.IR
             var memberType = _semanticAnalyzer.GetNodeType(node);
             var tempName = _currentFunction.GetNextTempName();
 
-            var fieldAccess = new IRFieldAccess(tempName, obj, node.MemberName, memberType);
+            var fieldAccess = new IRFieldAccess(tempName, obj, DeclaredMemberSpelling(node), memberType);
 
             // P2a-2 Task 7a: a .NET PROPERTY/FIELD read carries its descriptor (the
             // getter-shaped slot) into IR. Gated to those two kinds on purpose: a METHOD
@@ -5838,7 +6230,7 @@ namespace BasicLang.Compiler.IR
                 if (memberExpr.Object is MyBaseExpressionNode)
                 {
                     // Base class method call: MyBase.Method(args)
-                    var baseCall = new IRBaseMethodCall(tempName, memberExpr.MemberName, returnType);
+                    var baseCall = new IRBaseMethodCall(tempName, DeclaredMemberSpelling(memberExpr), returnType);
 
                     foreach (var arg in node.Arguments)
                     {
@@ -6002,7 +6394,7 @@ namespace BasicLang.Compiler.IR
                 if (isStaticCall && obj is IRVariable staticVar)
                 {
                     // Static method call: ClassName.Method()
-                    var call = new IRCall(tempName, $"{staticVar.Name}.{memberExpr.MemberName}", returnType);
+                    var call = new IRCall(tempName, $"{staticVar.Name}.{DeclaredMemberSpelling(memberExpr)}", returnType);
 
                     // P2a-1 CARRIAGE (read by nobody until P2a-2). The fused name above is the
                     // ONLY place the receiver type survives as a distinct token — everything
@@ -6097,7 +6489,7 @@ namespace BasicLang.Compiler.IR
                 else
                 {
                     // Instance method call: obj.Method()
-                    var methodCall = new IRInstanceMethodCall(tempName, obj, memberExpr.MemberName, returnType);
+                    var methodCall = new IRInstanceMethodCall(tempName, obj, DeclaredMemberSpelling(memberExpr), returnType);
                     methodCall.GenericArguments.AddRange(BuildGenericArgTypes(node.GenericArguments));
 
                     // P2a-2 Task 2 (mirror of the fused static arm above): the annotation is
@@ -6355,6 +6747,14 @@ namespace BasicLang.Compiler.IR
             var type = _semanticAnalyzer.GetNodeType(node);
             var tempName = _currentFunction.GetNextTempName();
             var className = node.Type?.Name ?? "Object";
+
+            // ⭐ #124: the class as the ANALYZER resolved it for this node, when the written name
+            // differs from its declaration by case alone — `New BOX()` for a class `Box` was an
+            // undeclared type on C++ and an undefined class on MSIL. Anything else keeps the written
+            // name, so a program that spells its types as declared is emitted as before.
+            if (type?.Name != null && !string.Equals(type.Name, className, StringComparison.Ordinal)
+                && string.Equals(type.Name, className, StringComparison.OrdinalIgnoreCase))
+                className = type.Name;
 
             // Create new object instruction
             var newObj = new IRNewObject(tempName, className, type);

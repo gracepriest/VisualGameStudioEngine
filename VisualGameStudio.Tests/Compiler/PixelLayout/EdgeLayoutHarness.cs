@@ -37,6 +37,13 @@ internal sealed record EdgeStep(string Label, string Kind, string Id = "", strin
 
     /// <summary>The element <paramref name="id"/>'s border box in VIEWPORT px, as the probe JSON <c>{"x":…,"y":…,"w":…,"h":…}</c>.</summary>
     public static EdgeStep Rect(string label, string id) => new(label, "rect", id);
+
+    /// <summary>
+    /// The COMPUTED value of CSS property <paramref name="cssProperty"/> on element <paramref name="id"/> — or on the page's
+    /// &lt;body&gt; when <paramref name="id"/> is empty (slice 3: the Form's own web rows are body CSS). What the browser
+    /// actually resolved, not what the stylesheet says.
+    /// </summary>
+    public static EdgeStep Style(string label, string id, string cssProperty) => new(label, "style", id, cssProperty);
 }
 
 /// <summary>One page loaded into an iframe of exactly <see cref="Width"/>×<see cref="Height"/> CSS px.</summary>
@@ -560,6 +567,9 @@ internal static class EdgeLayoutHarness
                 break;
               case "text":
                 probes[step.label] = String(formArea().innerText.indexOf(step.value) >= 0);
+                break;
+              case "style":
+                probes[step.label] = nativeStyle(step.id ? element(step.id) : document.body).getPropertyValue(step.value);
                 break;
               case "inview":
                 var v = element(step.id).getBoundingClientRect();

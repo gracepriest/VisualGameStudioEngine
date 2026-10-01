@@ -514,6 +514,17 @@ public class WinFormsCatalogSweepTests
         var row = FormControlCatalog.FormRoot.Property(name)!;
         var form = new FormDocument { Target = FormTarget.WinForms, Name = "SweepForm" };
 
+        // A reference row (AcceptButton) names a control: the sample's control must exist, of a kind the row allows,
+        // or the region writer rightly declines it (BL8034) and csc would see nothing.
+        if (row.Type == FormPropertyType.Reference)
+        {
+            form.Controls.Add(new FormControl
+            {
+                Kind = row.ReferenceKinds![0], Id = SampleValue(row), TabIndex = 0,
+                Geometry = new PixelGeometry { X = 8, Y = 8, Width = 75, Height = 23 }
+            });
+        }
+
         // SampleValue's Size arm ("75, 23") is a valid, positive ClientSize.
         Assert.That(FormRootValues.Set(form, row, SampleValue(row)),
             Is.True, $"the sample for form.{name} must be storable");
@@ -606,6 +617,97 @@ public class WinFormsCatalogSweepTests
         FormPropertyType.Color => "Red",
         FormPropertyType.Enum => property.AllowedValues![0],
         FormPropertyType.Size => "75, 23",
+        FormPropertyType.Font => "Segoe UI, 9.75pt, style=Bold, Italic",
+        FormPropertyType.Padding => "4, 2, 4, 2",
+        FormPropertyType.Cursor => "Hand",
+        FormPropertyType.Fraction => "0.5",
+        FormPropertyType.Reference => "btnSample",
         _ => "sample"
     };
+
+    // ==================================================================
+    // Slice 3 Task 3 — one csc compile per new value SHAPE (spec §8)
+    // ==================================================================
+
+    /// <summary>
+    /// Every <c>Cursors</c> member the table names, through csc in ONE compile — the name table is the unfalsifiable part
+    /// (a misspelled member types as Object in BasicLang), exactly as <see cref="EverySystemColour_EmitsCSharpThatCscAccepts"/>.
+    /// </summary>
+    [Test]
+    [Category("Integration")]
+    public void EveryCursor_EmitsCSharpThatCscAccepts()
+    {
+        var form = new FormDocument
+        {
+            Target = FormTarget.WinForms, Name = "SweepForm", Width = 800, Height = 450, Text = "Sweep"
+        };
+
+        for (var i = 0; i < FormCursors.Names.Count; i++)
+        {
+            var label = new FormControl
+            {
+                Kind = "Label", Id = $"lbl{i}", TabIndex = i,
+                Geometry = new PixelGeometry { X = 0, Y = i * 4, Width = 10, Height = 4 }
+            };
+            label.Properties["Cursor"] = FormCursors.Names[i];
+            form.Controls.Add(label);
+        }
+
+        var written = RegionWriter.Write("SweepForm.bas", Scaffold(), form, "SweepForm.blform");
+        Assert.That(written.Refused, Is.False, string.Join("; ", written.Diagnostics.Select(d => d.Format())));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(written.Diagnostics.Where(d => d.Code == DesignCodes.DegradedProperty).Select(d => d.Format()),
+                Is.Empty, "every Cursors member is a valid WinForms value");
+            for (var n = 0; n < FormCursors.Names.Count; n++)
+            {
+                Assert.That(written.Text, Does.Contain($"lbl{n}.Cursor = Cursors.{FormCursors.Names[n]}"));
+            }
+        });
+
+        WinFormsCompile.AssertCompiles(CompileToCSharp(written.Text), "every Cursors name the catalog emits must be a member csc knows.");
+    }
+
+    /// <summary>A Font with no style, one style, several (the CType cast) and a fractional size; a uniform and a four-sided Padding.</summary>
+    [Test]
+    [Category("Integration")]
+    public void EveryFontAndPaddingShape_EmitsCSharpThatCscAccepts()
+    {
+        var form = new FormDocument
+        {
+            Target = FormTarget.WinForms, Name = "SweepForm", Width = 800, Height = 450, Text = "Sweep"
+        };
+
+        var shapes = new (string Font, string Padding)[]
+        {
+            ("Segoe UI, 9pt", "4"),
+            ("Segoe UI, 9.75pt, style=Bold", "4, 2, 4, 2"),
+            ("Courier New, 12pt, style=Bold, Italic, Underline, Strikeout", "0")
+        };
+
+        for (var i = 0; i < shapes.Length; i++)
+        {
+            var button = new FormControl
+            {
+                Kind = "Button", Id = $"btn{i}", TabIndex = i,
+                Geometry = new PixelGeometry { X = 8, Y = 8 + i * 30, Width = 120, Height = 24 }
+            };
+            button.Properties["Font"] = shapes[i].Font;
+            button.Properties["Padding"] = shapes[i].Padding;
+            form.Controls.Add(button);
+        }
+
+        var generated = GenerateCSharp(form);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(generated, Does.Contain("btn0.Font = new Font(\"Segoe UI\", 9.0f)"));
+            Assert.That(generated, Does.Contain("btn1.Font = new Font(\"Segoe UI\", 9.75f, FontStyle.Bold)"));
+            Assert.That(generated, Does.Contain("btn2.Font = new Font(\"Courier New\", 12.0f, ((FontStyle)(15)))"));
+            Assert.That(generated, Does.Contain("btn0.Padding = new Padding(4)"));
+            Assert.That(generated, Does.Contain("btn1.Padding = new Padding(4, 2, 4, 2)"));
+        });
+        WinFormsCompile.AssertCompiles(generated, "every Font and Padding shape the designer writes must compile.");
+    }
 }

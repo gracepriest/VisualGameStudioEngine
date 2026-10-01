@@ -14,8 +14,8 @@ namespace VisualGameStudio.Tests.Compiler;
 /// deletion may never leave behind. Fast tier — no front end, no backend, no process.
 ///
 /// <para>The licence is: <b>marked</b> (<c>IsCompilerTemp &amp;&amp; !NamedAfterVariable</c>) ∧ <b>a pure,
-/// non-trapping kind</b> ∧ the kill vocabulary agrees ∧ <b>unused</b> by identity ∧ no variable spells
-/// its name ∧ <b>settled point 3</b> holds. Each clause has a test that removes it and watches the
+/// non-trapping kind</b> ∧ the kill vocabulary agrees ∧ <b>unused</b>, by identity and by identity ONLY (ADR-0018
+/// D4 removed ADR-0017's "and no variable spells its name" keep) ∧ <b>settled point 3</b> holds. Each clause has a test that removes it and watches the
 /// value survive, and a twin that holds the clause and watches the value go — because a test that
 /// only says "kept" passes vacuously the moment the value stops being removable for an unrelated
 /// reason. That is exactly how the three moved pins in
@@ -282,31 +282,37 @@ public class DeadCodeRemovalLicenceTests
     }
 
     // ============================================================================================
-    // "Unused" is by identity AND by name (M8)
+    // "Unused" is by IDENTITY only — ADR-0018 D4 removed ADR-0017's by-name keep (was M8)
     // ============================================================================================
 
-    [TestCase("t0", true, TestName = "ByName_AVariableSpellingTheTempsName_KeepsIt")]
-    [TestCase("T0", true, TestName = "ByName_TheSpellingIsCaseInsensitive_LikeBasicLang")]
-    [TestCase("k", false, TestName = "ByName_ADifferentName_KeepsNothing")]
-    public void AVariableThatSpellsATempsName_KeepsTheTemp(string variableName, bool kept)
+    /// <summary>
+    /// ⭐ The keep is gone. ADR-0017 kept an unused marked temp when an <c>IRVariable</c> operand SPELLED its name (`t0`, any case),
+    /// because a user variable IRBuilder did not reserve (a Catch, For Each, pattern or LINQ variable) could share the name and the
+    /// C++ counter then collided with it. IRBuilder reserves every such name now, so the minter never hands one out, and the rule
+    /// had no witness left (ADR-0018 D4, measured: 0 collision cells with the keep and 0 without it). DCE decides by identity: a
+    /// variable spelled like the temp does not keep it, in either case, and neither does any other name. The three rows are the
+    /// old rule's three, flipped; <b>reinstating the keep fails the first two.</b>
+    /// </summary>
+    [TestCase("t0", TestName = "ByIdentity_AVariableSpellingTheTempsName_DoesNotKeepIt")]
+    [TestCase("T0", TestName = "ByIdentity_TheSpellingIsCaseInsensitive_SoItDoesNotKeepItEither")]
+    [TestCase("k", TestName = "ByIdentity_ADifferentName_KeepsNothing")]
+    public void AVariableThatSpellsATempsName_DoesNotKeepTheTemp(string variableName)
     {
         var (m, f, e) = NewFn();
         var temp = Temp(Add(e, new IRBinaryOp("t0", BinaryOpKind.Add, V(f, "a"), C(1), I)));
         Add(e, new IRReturn(new IRVariable(variableName, I)));
 
-        Assert.That(DeadCodeEliminationPass.IsRemovableWhenUnused(temp, f), Is.True, "precondition: the licence alone would delete it");
+        Assert.That(DeadCodeEliminationPass.IsRemovableWhenUnused(temp, f), Is.True, "precondition: the licence alone deletes it");
         new DeadCodeEliminationPass().Run(m);
 
-        Assert.That(InBlocks(f, temp), Is.EqualTo(kept),
-            kept
-                ? "a variable IRBuilder does not reserve (For Each, Catch, pattern, LINQ) can be spelled like a temp, and C++'s own temp counter then " +
-                  "collides with it: the by-name rule keeps the temp (ADR-0017 Findings 3, witness CT_wbr_t0). #121 removes the collision."
-                : "no variable spells the temp's name, so it is unused and goes");
+        Assert.That(InBlocks(f, temp), Is.False,
+            $"the temp is unused by identity, and a variable spelled '{variableName}' is not the temp: nothing about a NAME keeps a value (ADR-0018 D4)");
     }
 
-    /// <summary>The variable need not be a direct operand of a block instruction: the descent through operand trees finds it.</summary>
+    /// <summary>The variable need not be a direct operand of a block instruction: the old rule's descent through operand trees found
+    /// it. It finds nothing now, and the temp goes all the same.</summary>
     [Test]
-    public void ByName_AVariableInsideAnOperandTree_KeepsTheTemp()
+    public void ByIdentity_AVariableInsideAnOperandTree_DoesNotKeepTheTemp()
     {
         var (m, f, e) = NewFn();
         var temp = Temp(Add(e, new IRBinaryOp("t0", BinaryOpKind.Add, V(f, "a"), C(1), I)));
@@ -315,7 +321,65 @@ public class DeadCodeRemovalLicenceTests
 
         new DeadCodeEliminationPass().Run(m);
 
-        Assert.That(InBlocks(f, temp), Is.True);
+        Assert.That(InBlocks(f, temp), Is.False);
+    }
+
+    /// <summary>The twin of the two above, so "removed" cannot pass because the temp had become removable for an unrelated reason: the
+    /// SAME temp, used by identity — directly by the return, or as an operand inside a tree that lives in no block — is kept.</summary>
+    [TestCase(false, TestName = "ByIdentity_ATempTheReturnUses_IsKept")]
+    [TestCase(true, TestName = "ByIdentity_ATempInsideAnOperandTree_IsKept")]
+    public void ByIdentity_AUsedTemp_IsKept(bool insideATree)
+    {
+        var (m, f, e) = NewFn();
+        var temp = Temp(Add(e, new IRBinaryOp("t0", BinaryOpKind.Add, V(f, "a"), C(1), I)));
+        IRValue used = insideATree ? new IRBinaryOp("s", BinaryOpKind.Add, temp, C(2), I) : temp; // the tree is in no block
+        Add(e, new IRReturn(used));
+
+        new DeadCodeEliminationPass().Run(m);
+
+        Assert.That(InBlocks(f, temp), Is.True, "a value some instruction uses, by identity, is never deleted");
+    }
+
+    /// <summary>
+    /// ⭐ The shape the keep used to hold is now a VERIFIER refusal (ADR-0018 D4, Invariant T). It was: an unused, marked, pure temp
+    /// under the name of a variable the function's declarations own (ADR-0017's `CT_wbr_t0`: a Catch variable `t0`). With every such
+    /// name reserved, a minted temp never carries one; if a future leak lets it, the verifier NAMES the temp instead of a keep
+    /// hiding the leak as a wrong answer. Either spelling refuses (the reservation ignores case), and the temp is no longer held.
+    /// </summary>
+    [TestCase("t0", TestName = "TheShapeTheKeepUsedToHold_IsAVerifierRefusal")]
+    [TestCase("T0", TestName = "TheShapeTheKeepUsedToHold_IsAVerifierRefusal_WhateverTheCase")]
+    public void ACompilerTempUnderAReservedName_IsRefusedByTheVerifier_AndNoLongerKept(string reservedSpelling)
+    {
+        var (m, f, e) = NewFn();
+        f.Reserve(reservedSpelling); // what IRBuilder does for a `Catch t0` / `For Each t0`
+        var temp = Temp(Add(e, new IRBinaryOp("t0", BinaryOpKind.Add, V(f, "a"), C(1), I)));
+        Add(e, new IRReturn());
+
+        var violations = IRVerifier.CheckInvariantT(m);
+        new DeadCodeEliminationPass().Run(m);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(violations, Has.Count.EqualTo(1), string.Join(" | ", violations));
+            Assert.That(violations[0].Invariant, Is.EqualTo("T"));
+            Assert.That(violations[0].Function, Is.EqualTo("Main"));
+            Assert.That(violations[0].Variable, Is.EqualTo("t0"));
+            Assert.That(violations[0].Value, Is.SameAs(temp));
+            Assert.That(InBlocks(f, temp), Is.False, "the refusal replaced the keep: DCE deletes an unused marked temp whatever its name");
+        });
+    }
+
+    /// <summary>The twin: the same temp with NO reservation under its name is not a violation. Invariant T is about a name the
+    /// program owns, never about a name's shape.</summary>
+    [Test]
+    public void ACompilerTemp_UnderANameNobodyReserved_IsNotAViolation()
+    {
+        var (m, f, e) = NewFn();
+        f.Reserve("k");
+        Temp(Add(e, new IRBinaryOp("t0", BinaryOpKind.Add, V(f, "a"), C(1), I)));
+        Add(e, new IRReturn());
+
+        Assert.That(IRVerifier.CheckInvariantT(m), Is.Empty);
     }
 
     // ============================================================================================

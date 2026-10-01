@@ -66,8 +66,9 @@ public class FormAnchorDockPickerTests
 
     private static PixelGeometry GeometryOf(FormControl control) => (PixelGeometry)control.Geometry!;
 
+    // ⚠ A top-level row first, then a composite's part (slice 3: X is Location's part).
     private static FormPropertyRow Row(FormPropertyGridViewModel grid, string name) =>
-        grid.Rows.Single(r => r.Name == name);
+        grid.Rows.SingleOrDefault(r => r.Name == name) ?? grid.AllRows().Single(r => r.Name == name);
 
     // ==================================================================
     // Which rows exist — D3

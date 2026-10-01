@@ -152,9 +152,23 @@
             <!-- Reset (spec §2.7) is on the ListBoxItem container's context menu: see OnContainerPrepared. -->
             <Border BorderBrush="{DynamicResource IdeBorder}" BorderThickness="0,0,0,1" Background="Transparent">
               <Grid ColumnDefinitions="96,1,*" MinHeight="22">
-                <TextBlock Grid.Column="0" Text="{Binding Name}" Classes.bold="{Binding IsBold}"
-                           FontSize="11" VerticalAlignment="Center" Margin="12,0,4,0"
-                           TextTrimming="CharacterEllipsis"/>
+                <!-- The name cell. A COMPOSITE row (Font, Size, Location, Padding — spec §3) carries VS's +/- box
+                     before its name; a PART is indented under its parent (NameMargin), in the room the box takes.
+                     ⚠ The box is not focusable: focus stays on the list item, where Left/Right collapse and expand
+                     (FormPropertyGridView.OnListKeyDown). -->
+                <DockPanel Grid.Column="0" Margin="0,0,4,0">
+                  <ToggleButton DockPanel.Dock="Left" Classes="edge" Focusable="False"
+                                Width="12" Height="14" Margin="0,0,0,0" VerticalAlignment="Center"
+                                IsVisible="{Binding IsComposite}"
+                                IsChecked="{Binding IsExpanded, Mode=TwoWay}"
+                                ToolTip.Tip="Expand or collapse this property's parts"
+                                AutomationProperties.Name="Expand or collapse this property's parts">
+                    <TextBlock Text="{Binding Glyph}" FontSize="10" HorizontalAlignment="Center"/>
+                  </ToggleButton>
+                  <TextBlock Text="{Binding Name}" Classes.bold="{Binding IsBold}"
+                             FontSize="11" VerticalAlignment="Center" Margin="{Binding NameMargin}"
+                             TextTrimming="CharacterEllipsis"/>
+                </DockPanel>
 
                 <Border Grid.Column="1" Background="{DynamicResource IdeBorder}"/>
 

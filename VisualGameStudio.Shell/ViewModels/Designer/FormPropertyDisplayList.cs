@@ -50,7 +50,7 @@ public sealed class FormPropertyDisplayList
         {
             foreach (var row in ByName(visible))
             {
-                Items.Add(row);
+                AddWithParts(row);
             }
         }
         else
@@ -70,7 +70,7 @@ public sealed class FormPropertyDisplayList
                 {
                     foreach (var row in ByName(group))
                     {
-                        Items.Add(row);
+                        AddWithParts(row);
                     }
                 }
             }
@@ -85,10 +85,67 @@ public sealed class FormPropertyDisplayList
         };
     }
 
+    /// <summary>
+    /// A top-level row matches a search by its own name OR a part's (searching "Bold" finds the Font it belongs to).
+    /// </summary>
     private IEnumerable<IFormDisplayRow> VisibleRows() =>
         _searchText.Length == 0
             ? _rows
-            : _rows.Where(r => r.Name.Contains(_searchText, StringComparison.OrdinalIgnoreCase));
+            : _rows.Where(r => Matches(r) || r.SubRows.Any(Matches));
+
+    private bool Matches(IFormDisplayRow row) => row.Name.Contains(_searchText, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// A row, then — while it is expanded — its parts in their OWN order (VS lists a Font's parts Name, Size, Bold…, not
+    /// A–Z). ⛔ While searching, a composite whose PART matched shows that part even collapsed (display only, as a
+    /// matching category is shown expanded): a lone parent row for "Bold" would hide what the user asked to see.
+    /// </summary>
+    private void AddWithParts(IFormDisplayRow row)
+    {
+        Items.Add(row);
+        foreach (var part in PartsShown(row))
+        {
+            Items.Add(part);
+        }
+    }
+
+    private IEnumerable<IFormDisplayRow> PartsShown(IFormDisplayRow row) =>
+        row.IsExpanded ? row.SubRows
+        : _searchText.Length > 0 ? row.SubRows.Where(Matches)
+        : Array.Empty<IFormDisplayRow>();
+
+    /// <summary>
+    /// A composite was expanded or collapsed: its parts go in or out right after it, IN PLACE — the row's own expander is
+    /// mid-click, exactly as a header's toggle is (see <see cref="OnHeaderToggled"/>).
+    /// </summary>
+    public void RowToggled(IFormDisplayRow row, string searchText)
+    {
+        _searchText = searchText;
+        var at = Items.IndexOf(row);
+        if (at < 0)
+        {
+            return;
+        }
+
+        // Out first: whatever parts are shown now (all of them, or a search's matches).
+        var removed = false;
+        while (at + 1 < Items.Count && Items[at + 1] is IFormDisplayRow next && row.SubRows.Contains(next))
+        {
+            Items.RemoveAt(at + 1);
+            removed = true;
+        }
+
+        var insert = at + 1;
+        foreach (var part in PartsShown(row))
+        {
+            Items.Insert(insert++, part);
+        }
+
+        if (removed && !row.IsExpanded)
+        {
+            RowsHidden?.Invoke(this, EventArgs.Empty);
+        }
+    }
 
     private static IEnumerable<IFormDisplayRow> ByName(IEnumerable<IFormDisplayRow> rows) =>
         rows.OrderBy(r => r.Name, StringComparer.OrdinalIgnoreCase);
@@ -143,6 +200,10 @@ public sealed class FormPropertyDisplayList
         foreach (var row in ByName(VisibleRows().Where(r => r.Category == header.Name)))
         {
             Items.Insert(insert++, row);
+            foreach (var part in PartsShown(row))
+            {
+                Items.Insert(insert++, part);
+            }
         }
     }
 }

@@ -18,13 +18,19 @@ public enum HandlerOutcome
 /// <summary>The result of double-clicking a control: the code-behind as it should now read, and where to put the caret.</summary>
 /// <param name="CodeText">The <c>.bas</c> after any insert — unchanged when navigating or refusing.</param>
 /// <param name="CaretLine">1-based line to reveal, or 0 when refused.</param>
+/// <param name="Notice">
+/// Set when the double-click opened an event OTHER than the kind's default because the default has no meaning on
+/// this target (a web Panel: Paint → Click). The host must show it — a substitution only the planner knew would be
+/// as silent as a Paint handler that never fires. Null for every ordinary gesture.
+/// </param>
 public sealed record FormHandlerPlan(
     HandlerOutcome Outcome,
     string EventName,
     string Handler,
     string CodeText,
     int CaretLine,
-    string? Refusal);
+    string? Refusal,
+    string? Notice = null);
 
 /// <summary>
 /// Task 22 — the double-click gesture: create the control's default handler if it is absent, navigate
@@ -50,10 +56,14 @@ public static class FormHandlers
     public static string? DefaultEvent(string kind, FormTarget target) =>
         FormControlCatalog.Find(kind)?.DefaultEvent(target);
 
+    /// <summary>The EVENT a double-click on <paramref name="definition"/> opens on <paramref name="target"/>, or null.</summary>
+    public static FormEventDef? DefaultEventDef(FormControlDef definition, FormTarget target) =>
+        definition.DefaultEventDefOn(target);
+
     /// <summary>
-    /// <c>btnLogin_Click</c> — VS's shape, kept on BOTH targets even though the DOM's event is
-    /// lowercase. <c>btnLogin_click</c> would be the literal event name and would read, in a file
-    /// full of PascalCase Subs, like a mistake.
+    /// <c>btnLogin_Click</c> — VS's shape. ⛔ Callers pass the WinForms event NAME on both targets (owner decision
+    /// 2026-09-29): <c>GroupBox1_Enter</c> on the page too, never the DOM's <c>GroupBox1_Focusin</c>. The PascalCase
+    /// step remains for a caller that has only a DOM name.
     /// </summary>
     public static string NameFor(string controlId, string eventName) =>
         $"{controlId}_{Pascal(eventName)}";
@@ -89,20 +99,67 @@ public static class FormHandlers
     /// </summary>
     public static FormHandlerPlan PlanDefault(FormDocument form, FormControl control, string codeText)
     {
-        var eventName = DefaultEvent(control.Kind, form.Target);
-        if (string.IsNullOrEmpty(eventName))
+        var definition = control.Definition;
+        var evt = definition?.DefaultEventDefOn(form.Target);
+        var eventName = evt == null ? null : FormEvents.NameOn(evt, form.Target);
+        if (evt == null || string.IsNullOrEmpty(eventName))
         {
             return Refuse(codeText,
                 $"'{control.Kind}' has no default event for {Describe(form.Target)}, so there is " +
                 "nothing for a double-click to open. Add one to the control catalog.");
         }
 
-        // An existing wiring names the handler; otherwise the convention does.
+        // An existing wiring names the handler — never renamed, whichever rule named it; otherwise the convention
+        // does, from the WinForms event name on BOTH targets (owner decision 2026-09-29).
         var bind = control.Binds.FirstOrDefault(
             b => string.Equals(b.Event, eventName, StringComparison.OrdinalIgnoreCase) &&
                  !string.IsNullOrEmpty(b.Handler));
-        var handler = bind?.Handler ?? NameFor(control.Id, eventName);
+        var handler = bind?.Handler ?? NameFor(control.Id, evt.Name);
 
+        var plan = Plan(form, codeText, eventName, handler, evt.WinFormsArgs, definition);
+
+        // A substitution is named (owner decision 2026-09-29): the kind's default has no meaning here, so the
+        // gesture opened the row's declared fallback instead — and says so, rather than leaving the user waiting
+        // for a Paint handler a page can never raise.
+        var notice = definition?.DefaultEventDef is { } preferred && !ReferenceEquals(preferred, evt)
+            ? $"{DesignCodes.DefaultEventNotOnTarget}: a {control.Kind}'s default event, {preferred.Name}, has no " +
+              $"{Describe(form.Target)} equivalent, so the double-click opened {evt.Name} ('{eventName}') instead."
+            : null;
+
+        return plan.Outcome == HandlerOutcome.Refused || notice == null ? plan : plan with { Notice = notice };
+    }
+
+    /// <summary>
+    /// Plans the stub for ONE existing bind — the handler it names, with ITS event's signature.
+    ///
+    /// <para>⛔ The retarget's pair needs this for every bind that crossed, not only the default event's
+    /// (code review, 2026-09-29): a crossed non-default bind — a GroupBox's Click beside its Enter — wired a Sub the
+    /// pair never declared, and the retargeted form stopped compiling on both targets.</para>
+    /// </summary>
+    /// <returns>A plan, or a refusal when the bind names no handler or no event of the kind.</returns>
+    public static FormHandlerPlan PlanBind(FormDocument form, FormControl control, FormBind bind, string codeText)
+    {
+        var definition = control.Definition;
+        var evt = definition == null ? null : EventOn(definition, bind.Event, form.Target);
+        if (evt == null || string.IsNullOrEmpty(bind.Handler))
+        {
+            return Refuse(codeText,
+                $"'{control.Id}' has a bind on '{bind.Event}', which is not an event '{control.Kind}' has on " +
+                $"{Describe(form.Target)}, so no handler was written for it.");
+        }
+
+        return Plan(form, codeText, bind.Event, bind.Handler, evt.WinFormsArgs, definition);
+    }
+
+    /// <summary>The kind's event that <paramref name="name"/> names in <paramref name="target"/>'s vocabulary, or null.</summary>
+    private static FormEventDef? EventOn(FormControlDef definition, string name, FormTarget target) =>
+        definition.Events?.FirstOrDefault(e =>
+            string.Equals(FormEvents.NameOn(e, target), name, StringComparison.OrdinalIgnoreCase));
+
+    private static FormHandlerPlan Plan(
+        FormDocument form, string codeText, string eventName, string handler, string? winFormsArgs,
+        FormControlDef? definition)
+    {
         var index = new Recognizer.SourceIndex(codeText);
 
         var existing = FindDeclarationLine(index, handler);
@@ -130,15 +187,17 @@ public static class FormHandlers
                 "not written. Fix the '<vgs:designer>' markers and try again.");
         }
 
-        return Insert(form, codeText, index, init, eventName, handler, control.Definition);
+        return Insert(form, codeText, index, init, eventName, handler, winFormsArgs, definition);
     }
 
+    /// <param name="winFormsArgs">
+    /// The EVENT's <c>e</c> type on WinForms (Task 25; null means <c>EventArgs</c>): <c>DoWorkEventArgs</c> for a
+    /// BackgroundWorker — the <c>EventArgs</c> stub compiles by contravariance but cannot reach <c>e.Argument</c>.
+    /// ⚠ The event's, not the row's default event's: a non-default bind carries its own.
+    /// </param>
     /// <param name="definition">
-    /// The control's catalog row, which owns the stub's SIGNATURE (Task 25): the <c>e</c> type of
-    /// a WinForms handler (<c>DoWorkEventArgs</c> for a BackgroundWorker — the <c>EventArgs</c>
-    /// stub compiles by contravariance but cannot reach <c>e.Argument</c>), and whether a web
-    /// callback takes the event at all (a Timer's does not: <c>Window.setInterval</c> takes an
-    /// <c>Action</c> and refuses <c>Action(Of DomEvent)</c>, measured).
+    /// The control's catalog row, which says whether a web callback takes the event at all (a Timer's does not:
+    /// <c>Window.setInterval</c> takes an <c>Action</c> and refuses <c>Action(Of DomEvent)</c>, measured).
     /// </param>
     private static FormHandlerPlan Insert(
         FormDocument form,
@@ -147,6 +206,7 @@ public static class FormHandlers
         FormRegion init,
         string eventName,
         string handler,
+        string? winFormsArgs,
         FormControlDef? definition)
     {
         // ⚠ The file's own terminator, not the platform's. A stub inserted with the wrong one leaves
@@ -159,7 +219,7 @@ public static class FormHandlers
                 ? $"{indent}Private Sub {handler}()"
                 // ⛔ addEventListener will not accept anything but Action(Of DomEvent).
                 : $"{indent}Private Sub {handler}(e As DomEvent)"
-            : $"{indent}Private Sub {handler}(sender As Object, e As {definition?.WinFormsEventArgs ?? "EventArgs"})";
+            : $"{indent}Private Sub {handler}(sender As Object, e As {winFormsArgs ?? "EventArgs"})";
 
         var stub = new StringBuilder()
             .Append(signature).Append(newline)

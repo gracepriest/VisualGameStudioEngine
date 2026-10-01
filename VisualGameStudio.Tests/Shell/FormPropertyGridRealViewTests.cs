@@ -99,7 +99,22 @@ public class FormPropertyGridRealViewTests
 
         public FormControl Control(string id) => Doc.FindById(id)!;
 
-        public FormPropertyRow Row(string name) => GridVm.Rows.Single(r => r.Name == name);
+        /// <summary>
+        /// A top-level row by name — or, failing that, a composite's PART (slice 3: Width is Size's part), its parent
+        /// EXPANDED first so the part's container exists in the real list.
+        /// </summary>
+        public FormPropertyRow Row(string name)
+        {
+            var row = GridVm.Rows.SingleOrDefault(r => r.Name == name) ?? GridVm.AllRows().Single(r => r.Name == name);
+            if (row.Parent is { IsExpanded: false } parent)
+            {
+                parent.IsExpanded = true;
+                Window.UpdateLayout();
+                Dispatcher.UIThread.RunJobs();
+            }
+
+            return row;
+        }
 
         /// <summary>The row's (or header's) container, scrolled into view first — the real list virtualises.</summary>
         public ListBoxItem Container(object item)
@@ -565,6 +580,102 @@ public class FormPropertyGridRealViewTests
             Assert.That(rig.Vm.Text, Is.EqualTo(before), "the file is unchanged");
             Assert.That(edits, Is.Zero, "no change, no edit");
         });
+    }
+
+    // ==================================================================
+    // Slice 3 Task 6 — composite rows through the real view (spec §3), at two window sizes
+    // ==================================================================
+
+    /// <summary>
+    /// A real click on a Font's +/- box expands it in the real list; a real click on the Bold part's switch writes the
+    /// WHOLE font into the file (one value — the fan-in rule), starting from the Form's default for an ambient Font; the
+    /// box then collapses it again. At two window sizes (the grid is narrower in the first).
+    /// </summary>
+    [AvaloniaTest]
+    public void ExpandingAFont_AndSwitchingBold_WritesTheWholeFont_AtTwoSizes()
+    {
+        foreach (var (w, h) in TwoZooms)
+        {
+            using var rig = Open(w, h);
+            SelectOnCanvas(rig, "lbl");
+            var font = rig.Row("Font");
+            ToggleButton Expander() => rig.Container(font).GetVisualDescendants().OfType<ToggleButton>()
+                .Single(t => t.Classes.Contains("edge") && t.IsEffectivelyVisible);
+
+            rig.Click(Expander());
+
+            Assert.That(font.IsExpanded, Is.True, $"{w}x{h}: the real box expanded the Font");
+            var bold = font.Children.Single(c => c.Name == "Bold");
+            var textIndent = rig.NameCell(rig.Row("Text")).Margin.Left;
+            Assert.That(rig.NameCell(bold).Margin.Left, Is.GreaterThan(textIndent), $"{w}x{h}: a part is indented under its parent");
+
+            // ⚠ Fetched right before the click: Container() scrolls the real list, which recycles containers.
+            var toggle = rig.Container(bold).GetVisualDescendants().OfType<ToggleSwitch>().Single(t => t.IsEffectivelyVisible);
+            rig.Click(toggle);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(rig.Control("lbl").Properties["Font"], Is.EqualTo("Segoe UI, 9pt, style=Bold"), $"{w}x{h}: the model");
+                Assert.That(rig.Vm.Text, Does.Contain("Font=\"Segoe UI, 9pt, style=Bold\""), $"{w}x{h}: the .blform text");
+                Assert.That(font.StringValue, Is.EqualTo("Segoe UI, 9pt, style=Bold"), $"{w}x{h}: the parent re-read");
+            });
+
+            rig.Click(Expander(), dx: 1);
+            Assert.That(rig.GridVm.DisplayItems, Has.No.Member(bold), $"{w}x{h}: the box collapsed it");
+        }
+    }
+
+    /// <summary>
+    /// The composite's OWN text still edits (VS's "the parent also accepts typed text"): typing "30, 40" into Location's
+    /// real TextBox and clicking away moves the control — the canvas geometry, the file, and the X part all agree.
+    /// </summary>
+    [AvaloniaTest]
+    public void TypingIntoLocationsText_MovesTheControl_AndItsPartsReRead()
+    {
+        foreach (var (w, h) in TwoZooms)
+        {
+            using var rig = Open(w, h);
+            SelectOnCanvas(rig, "btn");
+            var location = rig.Row("Location");
+            var box = rig.EditorBox(location);
+
+            rig.Click(box);
+            rig.Window.KeyPress(Key.A, RawInputModifiers.Control);
+            rig.Window.KeyRelease(Key.A, RawInputModifiers.Control);
+            rig.Window.KeyTextInput("30, 40");
+            Dispatcher.UIThread.RunJobs();
+            rig.Click(rig.Search);
+
+            var pixel = (PixelGeometry)rig.Control("btn").Geometry!;
+            Assert.Multiple(() =>
+            {
+                Assert.That((pixel.X, pixel.Y), Is.EqualTo((30, 40)), $"{w}x{h}: the geometry moved");
+                Assert.That(rig.Vm.Text, Does.Contain("X=\"30\"").And.Contain("Y=\"40\""), $"{w}x{h}: the .blform text");
+                Assert.That(location.Children.Single(c => c.Name == "X").IntValue, Is.EqualTo(30), $"{w}x{h}: the X part re-read");
+            });
+        }
+    }
+
+    /// <summary>Right expands a composite and Left collapses it — only while focus is on the row's own container.</summary>
+    [AvaloniaTest]
+    public void RightAndLeft_ExpandAndCollapseTheFocusedComposite()
+    {
+        using var rig = Open();
+        SelectOnCanvas(rig, "lbl");
+        var font = rig.Row("Font");
+        var container = rig.Container(font);
+
+        container.Focus();
+        rig.Window.KeyPress(Key.Right, RawInputModifiers.None);
+        rig.Window.KeyRelease(Key.Right, RawInputModifiers.None);
+        Dispatcher.UIThread.RunJobs();
+        Assert.That(font.IsExpanded, Is.True, "Right expands");
+
+        rig.Container(font).Focus();
+        rig.Window.KeyPress(Key.Left, RawInputModifiers.None);
+        rig.Window.KeyRelease(Key.Left, RawInputModifiers.None);
+        Dispatcher.UIThread.RunJobs();
+        Assert.That(font.IsExpanded, Is.False, "Left collapses");
     }
 
     // ==================================================================

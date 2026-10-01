@@ -5982,6 +5982,9 @@ git commit -F "$sp\slice2-commit.txt"
 
 ## Slice 3 — The D1 property batches, both targets (TASK granularity — expand before starting)
 
+> ✅ **EXPANDED AND EXECUTED 2026-09-29** — `docs/superpowers/plans/2026-09-29-property-grid-slice3-preflight.md` (it wins
+> over the task text below; its §5a EXECUTION NOTES record what the run found), branch `feat/property-grid-slice3`.
+
 > ⚠ **CARRIED FROM SLICE 1 (culture review, 951fcf46) — backlog, fold into slice 3's first task:**
 > (1) Unreadable control geometry / TabIndex (`X="5\t"`, `X="−5"` from a pre-951fcf46 writer on an sv-SE machine)
 > now reads as 0 with NO diagnostic (`FormDocumentReader.cs` ~:655-675, ~:456; `FormDocument.cs` ~:557-576) — the

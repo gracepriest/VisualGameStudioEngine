@@ -486,13 +486,16 @@ public class InheritedMemberTests
     }
 
     /// <summary>
-    /// ⛔ PINNED, NOT INHERITANCE'S: a bare name spelled with different CASE from the declaration
-    /// reaches the backends verbatim — the bare-name path is not canonicalised to the declared
-    /// spelling. The control is the class's own field. On JavaScript it is a SILENT
-    /// <c>undefined</c>, which is why this is recorded rather than left to be rediscovered.
+    /// A bare name spelled with different CASE from the declaration reads the declared member, on
+    /// every backend, for the class's own field AND for an inherited one. This row was
+    /// <c>ACaseDifferentBareSpelling_IsACanonicalisationGap_Pinned</c>: the bare-name path reached the
+    /// backends verbatim (C++ would not compile it; on JavaScript it was a SILENT
+    /// <c>undefined</c>) and the gap was recorded rather than left to be rediscovered. #124
+    /// (ADR-0013 D3) binds every bare reference through the analyzer's recorded declaration, so the
+    /// pin is promoted to VB's answer.
     /// </summary>
     [Test]
-    public void ACaseDifferentBareSpelling_IsACanonicalisationGap_Pinned()
+    public void ACaseDifferentBareSpelling_ReadsTheDeclaredMember_OnEveryBackend()
     {
         const string own = """
             Class Box
@@ -506,11 +509,11 @@ public class InheritedMemberTests
              PrintLine(CStr(b.Run()))
             End Sub
             """;
-        Assert.Multiple(() =>
-        {
-            Assert.That(() => Cpp(own), Throws.Exception, "CONTROL: C++ on the class's OWN field");
-            Assert.That(Js(own), Is.Not.EqualTo("7"), "CONTROL: JavaScript reads the wrong property, silently");
-        });
+        RunsOnEveryBackend(own, "7");
+
+        var inherited = Prog(" Public Total As Integer = 7\n",
+            " Public Function Run() As Integer\n  Return total\n End Function\n");
+        RunsOnEveryBackend(inherited, "7");
     }
 
     /// <summary>

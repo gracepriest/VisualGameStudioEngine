@@ -25,8 +25,9 @@ public class FormPropertyRowDefaultTests
         return (form, grid);
     }
 
+    // ⚠ A top-level row first, then a composite's part (slice 3: X is Location's part).
     private static FormPropertyRow Row(FormPropertyGridViewModel grid, string name) =>
-        grid.Rows.Single(r => r.Name == name);
+        grid.Rows.SingleOrDefault(r => r.Name == name) ?? grid.AllRows().Single(r => r.Name == name);
 
     [Test]
     public void AnAbsentBoolRow_DisplaysTheTargetsDefault_NotFalse()

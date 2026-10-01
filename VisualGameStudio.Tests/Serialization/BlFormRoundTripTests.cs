@@ -265,11 +265,12 @@ public class BlFormRoundTripTests
     {
         var form = Read("""
             <Form Name="F" Version="1">
-              <Controls><Button Id="b" X="0" Y="0" TabIndex="0" FlatStyle="Popup"/></Controls>
+              <Controls><Button Id="b" X="0" Y="0" TabIndex="0" UseMnemonic="false"/></Controls>
             </Form>
             """, "F.blform");
 
-        Assert.That(form.TierOf("b", "FlatStyle"), Is.EqualTo(PropertyTier.Unknown));
+        // ⚠ Slice 3 made FlatStyle a catalog row (Button's D1 set); UseMnemonic is still one the catalog does not know.
+        Assert.That(form.TierOf("b", "UseMnemonic"), Is.EqualTo(PropertyTier.Unknown));
     }
 
     [Test]

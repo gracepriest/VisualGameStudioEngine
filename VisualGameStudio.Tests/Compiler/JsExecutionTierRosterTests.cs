@@ -365,9 +365,9 @@ public class JsExecutionTierRosterTests
         // namespace filter cannot discover it automatically — listed here by hand, same as
         // MsilValueToStringExecutionTests above. Its JS legs run through
         // JavaScriptExecutionTests.RunJs directly (most O/E/C/L probes) and
-        // JavaScriptOptimizedExecutionTests.RunOptimized (L11's #214 pin, which needs the
-        // STANDARD-pipeline runner — JavaScriptExecutionTests.RunJs runs no optimizer at all and
-        // would silently miss the mixed-type constant fold this pin is about, the same trap
+        // JavaScriptOptimizedExecutionTests.RunOptimized (L11 and L11b, the folded Object compares of
+        // #214, which need the STANDARD-pipeline runner — JavaScriptExecutionTests.RunJs runs no
+        // optimizer at all and would silently miss the mixed-type constant fold they are about, the same trap
         // BarePropertyLoweringExecutionTests' own note above names).
         typeof(MsilObjectBoxingExecutionTests),
 
@@ -381,7 +381,7 @@ public class JsExecutionTierRosterTests
         // Task #169 (plus #199), ADR-0013 — case-insensitive name binding between the front end
         // and the IR. Named "...ExecutionTests", so the widened match below WOULD catch it on
         // its own; listed explicitly anyway, matching every row above. Its JS legs run through
-        // FourBackends.RunsOnEveryBackend[Aggressive] (the K/leak/X1/edge probes and E18's pin)
+        // FourBackends.RunsOnEveryBackend[Aggressive] (the K/leak/X1/edge probes and E18)
         // and JavaScriptExecutionTests.RunJs/RunNodeScript directly (the K4/K9 pins' JS leg and
         // E19's multi-file project-entry-point leg). NameBindingTests (front end/IR only, no
         // process spawned, no [Category("Integration")]) is NOT here.
@@ -426,6 +426,36 @@ public class JsExecutionTierRosterTests
         // cells pin a Node ReferenceError). Named "...FenceTests", so the widened match below does NOT see it:
         // listed by hand, like every row that is not named "...ExecutionTests".
         typeof(CompilerTempCollisionFenceTests),
+        // Task #121 / ADR-0018 — the collision fence flipped, and the two fixtures that prove name reservation by RUNNING programs.
+        // TempMintingFacilityTests: a test-only optimizer pass, registered through OptimizationPipeline.AddPass, mints one temp through
+        // DeclareTemp in a function that spells the name it would take (Dim, parameter, For Each, Catch, pattern, lambda parameter,
+        // captured name, module function), and each program runs on C#, C++, JavaScript (Node: TempExec.Run -> RunNodeScript) and MSIL.
+        // Named "...FacilityTests", so the widened match below does NOT see it: listed by hand.
+        typeof(TempMintingFacilityTests),
+        // NameReservationExecutionTests: the whole ADR-0017 Findings 3 witness matrix (t0..t3, T0..T3 and the v0..v3 controls) through the
+        // CLI, the CLI with --optimize and CompileProjectFiles, on the same four backends. Named "...ExecutionTests", so the widened
+        // match below would catch it on its own; listed explicitly anyway.
+        typeof(NameReservationExecutionTests),
+
+        // Task #124 / ADR-0013 D3 — every probe the fix moved to vbc's answer (a bare field, an inherited field, a Shared field,
+        // a property, a For / For Each control over a local, a parameter, a field or a global, AddressOf, MyBase.m, a Shared method
+        // through its class, New, AddHandler, RaiseEvent, an Await callee, a Module variable before its Module, and the multi-file
+        // MF1/MF2/MF5), each in another case from its declaration and with its same-case control, through the CLI, the CLI with
+        // --optimize and CompileProjectFiles. Named "...ExecutionTests", so the widened match below would catch it on its own; listed
+        // explicitly anyway. Its JavaScript cells run under Node (TempExec.Run -> JavaScriptExecutionTests.RunNodeScript).
+        typeof(NameBindingResolutionExecutionTests),
+
+        // Task #123 — an untyped Const (D1) and VB's conditional If(cond, a, b) (D2), every probe vbc answers, through the CLI, the CLI with
+        // --optimize and CompileProjectFiles on C#, C++, JavaScript (Node: TempExec.Run -> JavaScriptExecutionTests.RunNodeScript) and MSIL, plus
+        // the multi-file MC1/MC3 through BasicLang build. Named "...ExecutionTests", so the widened match below would catch it on its own; listed
+        // explicitly anyway. The only-the-chosen-operand side-effect rows run on JavaScript too (i1side, i3nest, i10sc).
+        typeof(UntypedConstAndConditionalExecutionTests),
+
+        // Task #123 — the mixed-width numeric compare fold (ConstantFoldingPass.TryFoldCompare), executed on every backend under
+        // both pipelines against vbc's output. Its JavaScript legs run RunJs (no optimizer) AND JavaScriptOptimizedExecutionTests.
+        // RunOptimized, the one that reaches the fold. Named "...ExecutionTests", so the widened match below would catch it on
+        // its own; listed explicitly anyway.
+        typeof(MixedNumericCompareFoldExecutionTests),
     };
 
     /// <summary>
@@ -477,7 +507,7 @@ public class JsExecutionTierRosterTests
 
     [Test]
     public void RosterIsPinned()
-        => Assert.That(ExecutionTier, Has.Length.EqualTo(96), // + CompilerTempExecutionTests + CompilerTempCollisionFenceTests (task #163, ADR-0017); + BaseConstructorCallLoweringExecutionTests + BaseConstructorCallCppRefusalTests (task #170, ADR-0016), MsilValueToStringExecutionTests (task #183), InterfaceMethodTypingExecutionTests, IsIsNotOperatorExecutionTests (task #185), MeReceiverTypingExecutionTests (task #176), UserDelegateConversionExecutionTests (task #187), DelegateMemberInvocationExecutionTests (task #188), NothingStringTextExecutionTests (task #189), MsilObjectBoxingExecutionTests (task #177), NotPrecedenceExecutionTests (#195), PropertyAccessExecutionTests (task #178), NameBindingExecutionTests (task #169/#199), PerIterationLoopBodyDimExecutionTests + PerIterationLoopBodyDimOptimizerExecutionTests (task #172, ADR-0014), LambdaBoundaryDiagnosticsExecutionTests (task #174); + WhenGuardCallRunTests, TypeOfExecutionTests (#197), ForwardDeclaredTypeExecutionTests
+        => Assert.That(ExecutionTier, Has.Length.EqualTo(101), // + MixedNumericCompareFoldExecutionTests (task #123, the compare fold); + UntypedConstAndConditionalExecutionTests (task #123, D1/D2); + TempMintingFacilityTests + NameReservationExecutionTests (task #121, ADR-0018); + CompilerTempExecutionTests + CompilerTempCollisionFenceTests (task #163, ADR-0017); + BaseConstructorCallLoweringExecutionTests + BaseConstructorCallCppRefusalTests (task #170, ADR-0016), MsilValueToStringExecutionTests (task #183), InterfaceMethodTypingExecutionTests, IsIsNotOperatorExecutionTests (task #185), MeReceiverTypingExecutionTests (task #176), UserDelegateConversionExecutionTests (task #187), DelegateMemberInvocationExecutionTests (task #188), NothingStringTextExecutionTests (task #189), MsilObjectBoxingExecutionTests (task #177), NotPrecedenceExecutionTests (#195), PropertyAccessExecutionTests (task #178), NameBindingExecutionTests (task #169/#199), PerIterationLoopBodyDimExecutionTests + PerIterationLoopBodyDimOptimizerExecutionTests (task #172, ADR-0014), LambdaBoundaryDiagnosticsExecutionTests (task #174); + WhenGuardCallRunTests, TypeOfExecutionTests (#197), ForwardDeclaredTypeExecutionTests; + NameBindingResolutionExecutionTests (task #124, ADR-0013 D3)
             "The execution-tier roster changed. That is fine — update the number — but it must " +
             "be a deliberate edit, not a silent shrink.");
 

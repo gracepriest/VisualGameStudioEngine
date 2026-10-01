@@ -139,8 +139,22 @@ public static class FormPlacement
             control.Properties["Text"] = control.Id;
         }
 
+        ApplyDropValues(control, definition);
         siblings.Add(control);
         return new FormPlacementResult(control, null);
+    }
+
+    /// <summary>
+    /// The row's designer preference for a fresh drop (<see cref="FormControlDef.DropValues"/> — a TableLayoutPanel
+    /// starts 2×2, owner decision O1). ⛔ Read from the ROW, never a switch on the kind here; written EXPLICITLY, as spec
+    /// §2.7 says a preference must be, so the kind's WinForms default (0×0) stays what an absent attribute means.
+    /// </summary>
+    private static void ApplyDropValues(FormControl control, FormControlDef definition)
+    {
+        foreach (var (name, value) in definition.DropValues ?? new Dictionary<string, string>())
+        {
+            control.Properties[name] = value;
+        }
     }
 
     /// <summary>
@@ -202,6 +216,7 @@ public static class FormPlacement
             control.Properties["Text"] = control.Id;
         }
 
+        ApplyDropValues(control, definition);
         document.Controls.Add(control);
         return new FormPlacementResult(control, null);
     }

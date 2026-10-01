@@ -696,6 +696,16 @@ namespace BasicLang.Compiler
             Unindent();
         }
 
+        public void Visit(ConditionalExpressionNode node)
+        {
+            WriteLine("If():");
+            Indent();
+            node.Condition.Accept(this);
+            node.WhenTrue.Accept(this);
+            node.WhenFalse.Accept(this);
+            Unindent();
+        }
+
         public void Visit(ArrayResizeExpressionNode node)
         {
             WriteLine(node.Preserve ? "ReDim Preserve:" : "ReDim:");

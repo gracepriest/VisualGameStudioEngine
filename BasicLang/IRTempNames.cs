@@ -40,8 +40,17 @@ namespace BasicLang.Compiler.IR
 
         /// <summary>
         /// The temp-shaped names the program itself declares: globals, class fields, properties
-        /// and methods, functions, parameters and locals. Empty for almost every program, and
-        /// every consumer treats empty as "change nothing", so output is byte-identical then.
+        /// and methods, functions, parameters and locals — and every name a function RESERVES
+        /// (<see cref="IRFunction.ReservedNames"/>, ADR-0018 D1): a For Each, Catch, pattern,
+        /// LINQ range or lambda-captured variable no <see cref="IRFunction.LocalVariables"/> lists.
+        /// Empty for almost every program, and every consumer treats empty as "change nothing",
+        /// so output is byte-identical then.
+        ///
+        /// <para>⭐ The ONE reader that filters the reservation by shape, and it reads the UNION
+        /// (reserved ∪ locals ∪ parameters ∪ module-level names), so a declaration that bypassed
+        /// reservation still cannot collide — the verifier names the gap instead. Its two
+        /// consumers are <c>IRBuilder.SeparateTempsFromUserNames</c> and every backend's temp
+        /// counter (<see cref="CodeGen.CodeGeneratorBase"/>); ClosureLowering's is a third.</para>
         /// </summary>
         public static HashSet<string> UserOwned(IRModule module)
         {
@@ -53,20 +62,53 @@ namespace BasicLang.Compiler.IR
                 if (IsTempShaped(name)) reserved.Add(name);
             }
 
-            foreach (var global in module.GlobalVariables) { Reserve(global.Key); Reserve(global.Value?.Name); }
-            foreach (var cls in module.Classes.Values)
-            {
-                foreach (var f in cls.Fields) Reserve(f.Name);
-                foreach (var p in cls.Properties) Reserve(p.Name);
-                foreach (var m in cls.Methods) Reserve(m.Name);
-            }
+            foreach (var name in ModuleLevelNames(module)) Reserve(name);
             foreach (var fn in AllFunctions(module))
             {
-                Reserve(fn.Name);
                 foreach (var p in fn.Parameters) Reserve(p.Name);
                 foreach (var l in fn.LocalVariables) Reserve(l.Name);
+                foreach (var r in fn.ReservedNames) Reserve(r);
             }
             return reserved;
+        }
+
+        /// <summary>
+        /// ⭐ ADR-0018 E3: the program's MODULE-level names, whatever their shape — every global
+        /// (its key and its name), every class field, property and method, and every function's
+        /// name (class member bodies and lambdas included). The one list both
+        /// <see cref="UserOwned"/> (filtered by shape) and <see cref="PublishModuleNames"/>
+        /// (unfiltered) read, so the two cannot disagree about what "module-level" means.
+        /// </summary>
+        public static IEnumerable<string> ModuleLevelNames(IRModule module)
+        {
+            if (module == null) yield break;
+            foreach (var global in module.GlobalVariables) { yield return global.Key; yield return global.Value?.Name; }
+            foreach (var cls in module.Classes.Values)
+            {
+                foreach (var f in cls.Fields) yield return f.Name;
+                foreach (var p in cls.Properties) yield return p.Name;
+                foreach (var m in cls.Methods) yield return m.Name;
+            }
+            foreach (var fn in AllFunctions(module)) yield return fn.Name;
+        }
+
+        /// <summary>
+        /// ⭐ ADR-0018 E3: publishes <see cref="ModuleLevelNames"/> as ONE set shared by every
+        /// function of <paramref name="module"/> (<see cref="IRFunction.ModuleReservedNames"/>), so
+        /// <see cref="IRFunction.GetNextTempName"/> and <see cref="IRFunction.DeclareTemp"/> never
+        /// mint a module-level name and the verifier's D4 refusal covers them. Called where a
+        /// module's set of functions becomes final: the end of <c>IRBuilder.Build</c>, and
+        /// <c>CombineIRModules</c> for a multi-file build (a unit cannot see another unit's names,
+        /// and the optimizer runs on the combined module). Byte-neutral: the renamer's union
+        /// (<see cref="UserOwned"/>) already holds every temp-shaped module-level name.
+        /// </summary>
+        public static void PublishModuleNames(IRModule module)
+        {
+            if (module == null) return;
+            var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var name in ModuleLevelNames(module))
+                if (!string.IsNullOrEmpty(name)) names.Add(name);
+            foreach (var fn in AllFunctions(module)) fn.ModuleReservedNames = names;
         }
     }
 }

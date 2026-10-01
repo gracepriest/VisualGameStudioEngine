@@ -17,7 +17,454 @@ facade (all five tasks of `2026-09-13-blnet-cpp-facade.md`).
 
 ---
 
-## 🚀 NEWEST — 2026-09-29: #163 DONE, DCE removes unused compiler temps, by marker (ADR-0017)
+## 🚀 NEWEST — 2026-09-30: #123 DONE, an untyped `Const`, VB's `If(cond, a, b)` and the repo's samples compile
+
+The fix is `e776dc64` and the sample edits `e611cd5d`, on master `78b00b85`; the tests and this section are uncommitted work on top of them. Compiler (`Parser`, `ASTNodes`, `ASTPrettyPrinter`,
+`SemanticAnalyzer`, `IRBuilder`, `IROptimizer`, `LSP/CallHierarchyHandler`) and two sample files; **no IR node and no backend changed.** Two valid VB constructs BasicLang refused — vbc
+accepts both — are why `Samples/Pong` and `Samples/SpaceShooter` did not even parse. The owner's ruling was "fix compiler + samples" (the samples were not valid VB either, see below).
+
+**D1 — an untyped `Const`.** `Const X = expr` with no `As` takes the type of its constant expression, as VB does: `800` Integer, `800L` and `3000000000` Long, `3.14` Double, `1.5F` Single,
+`"s"` String, `True` Boolean, `"a"c` Char, `&HFF` Integer, `-2147483648` Long, and an expression over other constants gets the EXPRESSION's type (`I / 2` Double, `I \ 2` Integer, `I > 3` Boolean).
+At local, module and class level, verified against vbc's `TypeName` (33 rows, vbc answers identically at all three levels). The parser's `As` is optional (`Type == null`), `SemanticAnalyzer.Visit(ConstantDeclarationNode)` decides
+the type AFTER the value is analyzed (`InferUntypedConstantType`), and every existing rule then runs against it: BC30439, folding, module-scope initializers. A sibling file's untyped Const gets its
+LITERAL's type from the signature pass (`SignatureTypeOfConstant`, sharing `LiteralTypeOf` with `Visit(LiteralExpressionNode)`); anything else stays Object until that unit is analyzed.
+`Const X = Nothing` is refused ("Cannot infer a type for constant 'X' from 'Nothing'"), as `Dim x = Nothing` is; vbc makes it Object. ⚠ The message's advice (`Const X As <Type> = Nothing`) only works for Object:
+`Const X As String = Nothing` is refused too, on the before build as well.
+
+**D2 — VB's conditional `If(cond, a, b)`.** `ConditionalExpressionNode`. Only the CHOSEN operand runs (`If(n <= 1, 1, n * Fact(n - 1))`, `If(d = 0, -1, a \ d)`). `IRBuilder.Visit(ConditionalExpressionNode)` lowers it
+exactly as `AndAlso`/`OrElse` are lowered: the condition, then `if{N}.then` / `if{N}.else` / `if{N}.end` blocks and ONE carrier local `__sc{N}`, each arm coerced to the result type in its own block. **No IR node, no backend change**
+(`ConditionalExpressionTests.NoIrNodeExists_ForTheConditional` holds it). The result type is VB's dominant type (`DominantReturnType`): Double for Integer and Double, Long for Integer and Long, Single for Long and Single,
+the base for a class and its derived, the interface for a class and an interface it implements, **Object when neither widens** (vbc, Option Strict Off); a `Nothing` operand takes the other's type and is then judged like any
+`= Nothing` (a value type is refused with advice: vbc would give 0, BasicLang follows the `Dim` rule). The two-argument `If(value, fallback)` is a parse diagnostic (**follow-up**); `If()`, `If(a)` and `If(a, b, c, d)` are refused with "If() takes three arguments … but was given N".
+**An `If()` where control flow cannot live is refused with the compile-time message, never a crash or a wrong program:** a `Select Case` `When` guard, a module `Dim`/`Const` initializer (vbc FOLDS a constant one, `Const K = If(True, 1, 2.5)`; BasicLang refuses it at module
+level and accepts it locally), a class field initializer. A non-Boolean condition is a warning, as an If statement's.
+
+**What the samples forced, each only turning a refusal into an acceptance:**
+1. `IRBuilder.SubstituteFoldedConstGlobals` — a module `Const` is a leaf of a constant expression, so `Dim ballVY As Single = BALL_SPEED / 2` folds (175f) instead of "cannot be computed at compile time".
+   Only the `Const` globals whose own value already folded, and only as operands of binary/compare/unary/cast.
+2. `WideningCastFoldingPass` — Integer → Single folds exactly within ±2^24 (inclusive) and NOT outside it (16777217 rounds).
+3. `SemanticAnalyzer` — `DrawTriangle` is registered in the analyzer's MIRROR of `FrameworkStdLib`. Without it a call had no signature: C# passed Single positions raw (CS1503) and C++ stored a Sub's "result" in a temp.
+
+**The samples (owner decision, `e611cd5d`).** Both samples used code that VB itself refuses: undeclared `KEY_*` (BC30451), RaylibWrapper's `Framework_*` names, implicit Double→Single narrowing. The edits are minimal and follow
+`Samples/Platformer`: `KEY_*` constants declared as Platformer declares them, BasicLang's engine API names, `SetFixedStep` dropped (Platformer's port), `ClearBackground` with three arguments, `CSng` at 16 sites, `Const BALL_SPEED As Single`.
+**Kept on purpose:** every other `Const` untyped (6 of 7 in Pong, all 7 in SpaceShooter) and both `If(` expressions — they are what D1 and D2 are for. `Samples/Platformer` and `SampleGames/**` were not touched.
+Result: all three samples pass the parser, the analyzer (no error and no warning), the IR builder on every route, and generate C# and C++. **C#** builds against RaylibWrapper through the CLI, Roslyn, `BasicLang build`
+and the IDE's `BuildService`. **Not asserted, each measured:** C++ is REJECTED by clang for two defects that predate #123 and hit Platformer and `SampleGames/*` too (a `Dim` redeclared per branch: `redefinition of 'hitPos'`; a non-const lvalue reference to an `Array<bool>` element; no task);
+JavaScript and MSIL refuse every engine program by design (`no lowering for 'GameInit'`); a sample opens a window, so none runs (the two Pong shapes that decide its behaviour run as probe `i12pong`); vbc cannot check the BasicLang-only API names
+(it accepted both edited samples against a stub module declaring FrameworkStdLib's signatures).
+
+**The CSE corpus re-measure (D4).** With the front end CLEAN: **Platformer 6, SpaceShooter 0, Pong 1**, each `(parseClean, analyzeClean) = (true, true)`. SpaceShooter's 0 was measured past a parse error before; same number, different provenance.
+Pong had no row (IRBuilder threw); it has one now. "The 11 merges in shipping code" is **7**. See the rewritten subsection further down ("`Samples/*` COMPILE NOW").
+
+**Known and inherited, NOT introduced by #123** (the carrier lowering shares them with `AndAlso`/`OrElse`; none has an expectation anywhere):
+- **#256** C#: a `While`/`Do While`/`Loop Until` whose condition holds control flow (`AndAlso`, `If()`) computes that condition ONCE, before the loop, so the loop never ends. ⛔ **Never run such a loop on C# without a timeout.**
+- **#257** MSIL: `Not` of a non-constant Boolean is bitwise (`If(Not t, …)` takes the wrong arm; `Not E` over a Boolean Const prints True), and JavaScript refuses a loop header with control flow ("a loop header whose branch does not target the loop's own .end block").
+- C#: arguments are evaluated OUT OF ORDER once one has control flow (`Pair(Note("first"), If(…), Note("third"))` prints second first); a lambda whose body has control flow loses its return paths (CS1643; #136). No task for the first.
+- JavaScript refuses a `Char` (BL7004) and a `Long` (BL7003) constant, and C++ has no `Object`, by design.
+- A user variable named `__sc0` collides with the carrier (`AndAlso` and `If()` alike): silent wrong value on C# and JavaScript, redefinition on C++, a type conflict on MSIL (`Dim __sc0 As Integer = 99` beside any `If()` or `AndAlso`; measured). The carriers are not minted through `IRFunction.DeclareTemp` (ADR-0018).
+
+**⛔ Defects the test work found and did NOT file or fix** (measured; none has an expectation):
+- ⛔⛔ **A mixed Double/Integer CONSTANT compare folds WRONG.** `Const E As Boolean = D <= 3` with `D = 3.14` is `true` (vbc: False); `D > 3` is `false` (vbc True); `3 >= D` is `true` (vbc False). `IROptimizer.TryFoldCompare` has no arm for a Double/Integer pair, so `<`/`>`
+  report false and `<=`/`>=` true. The LITERAL form (`Const E As Boolean = 3.14 <= 3`) was wrong on the before build too; what #123 changed is that `SubstituteFoldedConstGlobals` now lets a Const operand reach that folder, so the Const form (and `Dim g As Boolean = D <= 3` at module scope)
+  went from a refusal ("cannot be computed at compile time") to a SILENT WRONG ANSWER on every backend. A local `Dim` is computed at run time and is right. No test asserts a value for it.
+- Module-scope initializers over a MIX of numeric types are refused with "cannot be computed at compile time" — `Const X = I * 1.5`, `I + 1L`, `SF * 2`, `L * 2`, `D * SF`, and the literal-only `Const X As Double = 800 * 1.5` (typed too; before too). A class `Const` over another class `Const` is refused the same way (`Public Const B As Integer = A * 2`, typed too).
+- An `Enum` member initialised from a file-scope `Const` (`Red = LIM`) crashes the compiler with a NullReferenceException ("Error compiling X: Object reference not set …"); typed Const too; before too.
+- LSP: hover and completion say `Const X As Variant = 800` for an untyped Const (`SymbolService.FormatConstantHover`, `CompletionService` read `constDecl.Type?.Name ?? "Variant"`; `LspProjectContext` converts a null type reference). The front end is right; the IDE's text is not.
+- `For j = 10 To 0 Step s` with a VARIABLE negative step runs ZERO iterations on all four backends (vbc: 10, 5, 0); a literal `Step -5` is right.
+- MSIL: `x.ToString()` on an Integer is a NullReferenceException. `Xor` is not an operator. Implicit line continuation after a comma in a call's arguments does not parse. `Integer & Integer` is refused (VB allows it). `CByte(1)`/`CShort(1)` are typed Object.
+- A `Module` block's `Const` in a file that comes AFTER its user is Object, typed or not (`Settings.Limit + 1` is refused): MC2 in the execution fixture's header.
+- vbc refuses `Const X = "v" & I` (BC30060) and BasicLang accepts it. `Const M As String = Nothing` is refused by BasicLang and accepted by vbc.
+- 111 of `FrameworkStdLib`'s 134 rows have NO analyzer mirror (`Camera*`, `AnimCtrl*`, `LoadFont`, `Particles*`, …) — a call to one is accepted with no signature, which is what `DrawTriangle` was. The 23 that are mirrored all agree (`EveryMirroredRow_AgreesWithFrameworkStdLib`).
+
+**Tests (Linux-measured; the oracle is `vbc`, never a BasicLang backend).** 423 new fast tests and 119 new Integration tests; the suite total went 9908 → 10333 fast.
+- `Compiler/UntypedConstTests.cs` (263, fast) — D1. The 33-row table of initializers is asked of vbc's `TypeName` (`S/t123/tw/d1gen.py`; vbc answers identically at module, local and class level) and the analyzer's type, the module symbol's type, the IR global's type and the
+  emitted C# declaration (`const double EDIV`, `double LD`, `public static long …`) must all match; the BC30439 fit check (`2147483647 + 1` refused, `+ 1L` fine, a chain names the overflowing constant, the typed `Byte = 300` check unchanged); `Const N = Nothing`
+  refused; a Const with no value refused; the parse shape (`Type == null`); and MC1/MC3, the signature pass across files in BOTH compile orders, standard and aggressive. **Rows with no lowering expectation are named in the file header** (mixed-type module/class initializers; the wrong-folding `ELE`).
+- `Compiler/ConditionalExpressionTests.cs` (71, fast) — D2. The 30-row result-type table (vbc's static type via `GetType(T)` of a generic argument), ten expression positions parse to ten nodes, an If STATEMENT stays a statement, arity diagnostics through the parser AND both compiler entry points, the warning, the Sub operand, the `Nothing` rules, the four refused
+  positions through the IR builder and through `CompileFile`/`CompileProjectFiles` standard and aggressive (plus the four controls that build), and the IR shape: four blocks named as an If statement's, one carrier typed as the result, each arm coerced in its own arm, a call only in its own arm, the same blocks and terminators as the hand-written If/Else, distinct ids beside an `AndAlso`, no IR node named for it, and the verifier clean after the optimizer.
+- `Compiler/ConstFoldingFixTests.cs` (52, fast) — the three fixes: substitution (10 positive rows with their VALUES and CLR types, through four entry points; 6 neighbours that must stay refused: a non-Const global, a Const in a call, a narrowing, a mixed product), `WideningCastFoldingPass` driven with hand-built IR (±2^24 folds to the exact float, ±2^24±1 and the extremes do not; the other widenings unchanged) and through a module initializer,
+  and `DrawTriangle` (its row in both tables, EVERY mirrored row agreeing with `FrameworkStdLib`, and the call's positions coerced to Integer on the IR and on the C#).
+- `LSP/ConditionalCallHierarchyTests.cs` (4, fast) — `CallHierarchyHandler` walks expressions with two hand-written switches that silently skip a node they do not name; a call whose only appearance is an `If()` operand or condition is seen in both directions.
+- `Compiler/SampleProgramBuildTests.cs` — `SampleProgramFrontEndTests` (33, fast): all three samples have no diagnostic of ANY severity, reach the IR on every route, generate C# with each constant declared at its literal's type (`const double PADDLE_SPEED` — **this is where mutant M1int shows; "it builds" does not**), show the fixes they forced (`ballVY = 175.0f`, `Convert.ToInt32(` in DrawTriangle) and generate C++.
+  `SampleProgramBuildTests` (25, Integration): the CLI on a COPY (C# and C++, standard and `--optimize`, exit 0, no `Main.cs` appears next to the repo's sample), Roslyn against RaylibWrapper from the CLI's text and from `CompileProjectFiles`, and `BasicLang build` of a project (a real `dotnet build`).
+  `Services/BuildServicePipelineTests.Build_SampleGame_DotNet_Succeeds` (3, Integration): the IDE's `BuildService` on the game-app template with its `Main.bas` replaced by each sample (Platformer is the control). ⚠ **Never compile a sample in place** — the CLI writes `Main.cs`/`Main.cpp` next to its input.
+- `Compiler/UntypedConstAndConditionalExecutionTests.cs` (91, Integration, **in `JsExecutionTierRosterTests`, now pinned at 100**) — 25 probes (the implementer's 18 plus 7 test-writer variants) × the four backends × the CLI, the CLI `--optimize` and `CompileProjectFiles`, each with vbc's answer, plus MC1/MC3/MC3r through `BasicLang build` (Debug, Release) and `CompileProjectFiles`.
+  **The side-effect contract (only the chosen operand runs) is held on all four backends, not on C# alone**: `i3nest`, `i10sc` (all four), `i1side` (C#, C++, JavaScript) and its `Not`-free twin `i1sideB` (MSIL). The cells with no expectation, each named with its task, and the twin that stands in for it, are in the fixture's header.
+  The variants — `c1modB` (no Char, no `Not`), `i1sideB`, `i6argB`, `i13objB` (no `Not`), `i4forB` (For bounds: C# runs them), `i14pos` (ten positions), `c6use` (Case label, Optional default, array and For bound, an inherited Const) — were written by the test-writer and have vbc's answer of their own.
+- **Moved pins:** `NameReservationTests` samples row (Pong and SpaceShooter `Compiles = true`; the fast guard that a sample's front-end verdict is never ignored); `CseSampleCorpusTests` (SpaceShooter `(0, true, true)`, NEW Pong row `(1, true, true)`, Platformer stays 6; the docstring now explains the clean-front-end measurement);
+  `BaseConstructorCallDiagnosticsTests` (the X23 parse pin is deleted and X23 is a row of `Refused()` — BC31095 on every backend — so the "TWO KNOWN GAPS" doc is ONE); `JsExecutionTierRosterTests` 99 → 100.
+
+**Mutation proof** (real NUnit; each mutant's `BasicLang.dll` built alone in a detached worktree at `e611cd5d` + ONE mutation, `S/t123/tw/mut/mutants2.py`, then swapped into a COPY of the final test binaries (kept under `VisualGameStudio.Tests/bin/Release/` so `RepoRoot()` still finds the sln). The unmutated control passes.
+**All 28 are killed, and every one in the FAST tier.** The execution cells were also run for the mutants where a backend matters.
+
+| Mutant | Fast tests that kill it | Execution cells that kill it |
+|---|---|---|
+| **M1int** an untyped Const is always Integer | `UntypedConstTests` 203, `SampleProgramFrontEndTests` 6 (the constant's C# declaration) | 16/16 of c1mod, c1modB, c2loc, c3cls, c6use |
+| **M1obj** always Object | `UntypedConstTests` 244, `SampleProgramFrontEndTests` 22, `ConstFoldingFixTests` 4, `CseSampleCorpusTests` 2, `NameReservationTests` 3 | 16/16 |
+| **M2both** both operands evaluated before the branch | `ConditionalExpressionTests.AnOperandsCall_LivesOnlyInItsOwnArm` | 10/12: **i3nest on all four backends**, i1side on C++ and JavaScript, i1sideB on MSIL, i10sc on C++, JavaScript and MSIL — C# sees M2both ONLY through i3nest (its i1side and i10sc rows still pass) |
+| **M3swap** branch targets swapped | `…IsACarrierAndBranches…` | 12/12, every backend |
+| **M4first** the result type is the first operand's | `ConditionalExpressionTests` 16 | 6/7: i2types on all four, i13obj on C#, i13objB on MSIL |
+| **M5bypass** the verdict asserts of `CseSampleCorpusTests` removed | **alone: nothing fails** (it is silent while the front end is healthy). **With `D1parse`** (the `As` clause required again): the Pong CSE row, `NameReservationTests`' 3 sample rows, `SampleProgramFrontEndTests` 22, `UntypedConstTests` 254 — all fast. SpaceShooter's CSE row stays green (0 either way) | — |
+| D1parse | `UntypedConstTests` 254, `SampleProgramFrontEndTests` 22, `CseSampleCorpusTests` 2, `NameReservationTests` 3, `ConditionalExpressionTests` 3, `ConstFoldingFixTests` 4 | — |
+| D1_localAsObject the Symbol (not the node) of an untyped Const is Object | `UntypedConstTests` 157, `SampleProgramFrontEndTests` 22, `CseSampleCorpusTests` 2, `NameReservationTests` 3, `ConstFoldingFixTests` 4 | — |
+| SIG_standInNull the signature pass gives no type | `UntypedConstTests.AnUntypedConstInAnotherFile_TypeChecks` MC3 (both aggressive values) | — |
+| D1_nothingAccepted / D1_fitSkipped | `ConstNothing_IsRefused` ×3 / the BC30439 rows ×7 | — |
+| F1_substituteOff (`SubstituteFoldedConstGlobals` not called) | `ConstFoldingFixTests` 23, `SampleProgramFrontEndTests` 11, `UntypedConstTests` 52, the Pong CSE row, `NameReservationTests` 3 | — |
+| F1_substituteAnyGlobal (drop the `IsConst` condition) | the three `APlainGlobal_*` rows of `ConstFoldingFixTests` | — |
+| F2_singleOff / F2_singleUnbounded / F2_singleExclusive (`<` for `<=`) / F2_singleNegativeOnly | 31 / 10 / 4 / 4 (`ConstFoldingFixTests`; the first also the samples and the Pong CSE row) | — |
+| DT_mirrorDropped / DT_singleParams (DrawTriangle takes Single) | `ConstFoldingFixTests` 3, `SampleProgramFrontEndTests` 2 | `SampleProgramBuildTests` 4 and `BuildServicePipelineTests.Build_SampleGame…(SpaceShooter)` 1 — **C# CS1503** |
+| D2_foldGuardDropped | `ConditionalExpressionTests` 4 (the module-scope rows) | — |
+| D2_armsUncoerced | `…WithEachArmCoercedInItsOwnBlock` | i2types on C++ and MSIL |
+| D2_carrierObject | the same, and `SampleProgramFrontEndTests` 3 | i2types on C#, C++, MSIL; i13obj on C# |
+| D2_twoArgAccepted / D2_warningDropped / D2_nothingUnjudged / D2_blockNames | 2 / 1 / 3 / 3 (`ConditionalExpressionTests`) | — |
+| LSP_outgoingDropped / LSP_incomingDropped | `ConditionalCallHierarchyTests` 1 / 3 | — |
+
+⚠ M5bypass is the mutant whose kill the brief asked to be FAST: the Pong CSE row (`Corpus_Pong_Makes1Merge`) and `NameReservationTests`' samples row are both in the fast tier, and so are the new rows.
+
+**Gates (Linux, g++/clang++/node/ilasm present, no MSVC), on the final test DLL (`e611cd5d` plus the test and doc changes).**
+- The fast subset (`TestCategory!=Integration`): `Failed: 0, Passed: 10240, Skipped: 93, Total: 10333` (2 m 19 s). On the two commits alone it was `Failed: 5, Passed: 9810, Skipped: 93, Total: 9908` — the five moved pins (the Cse SpaceShooter row, `NameReservationTests` ×3, X23); +425 tests, the same 93 skips.
+- Integration, every term run ON ITS OWN and written `FullyQualifiedName~<term>` (see the filter trap under #124), all `Failed: 0`:
+
+  | Term | Passed | Skipped | Time |
+  |---|---|---|---|
+  | `Const` (960: `UntypedConstTests`, `ConstFoldingFixTests`, `ConstantRange`, `SingleConstant`, every `Constructor` fixture, …) | 960 | 0 | 7 m 57 s |
+  | `Conditional` (`ConditionalExpressionTests` 71, `ConditionalCallHierarchyTests` 4, `UntypedConstAndConditionalExecutionTests` 91, …) | 174 | 0 | 3 m 34 s |
+  | `CseSample` | 3 | 0 | 3 s |
+  | `NameReservation` | 443 | 0 | 10 m 25 s |
+  | `BaseConstructorCallDiagnostics` | 50 | 0 | 19 s |
+  | `EngineDeployment` | 16 | 0 | < 1 s |
+  | `VisualGameStudio.Tests.Compiler.UntypedConstAndConditionalExecutionTests` | 91 | 0 | 3 m 12 s |
+  | `VisualGameStudio.Tests.Compiler.SampleProgram` (`SampleProgramFrontEndTests` 33 + `SampleProgramBuildTests` 25) | 58 | 0 | 19 s |
+  | `VisualGameStudio.Tests.Services.BuildServicePipelineTests` (3 new rows) | 14 | 7 | 22 s |
+  | `VisualGameStudio.Tests.Compiler.JsExecutionTierRosterTests` (pinned at **100**) | 5 | 0 | < 1 s |
+
+  The 7 skips are `BuildServicePipelineTests`' pre-existing MSVC / Windows-only rows (C++ native builds, WinForms, the mixed project); none of the 119 new Integration tests skipped.
+- ⚠ The FULL suite (~39 min plus) was NOT run for this task; the fast subset and the ten terms above were.
+- **Only Windows can validate:** the MSVC leg of every C++ cell (clang++/g++ only on Linux), the C++ CLI project build (BL6015 without MSVC), MSIL under a Windows `ilasm`/CLR, and the samples' `BasicLang.exe`/native-engine steps. A sample's C++ is not compiled by any test here (see the header of `SampleProgramBuildTests.cs`).
+
+**Traps this work found.**
+- ⛔ **The execution tier's C# leg is in-process Roslyn with NO timeout** (`TempExec.Run` → `FourBackends.RunEmittedCSharpText`). A C# `While If(…)` / `Loop Until If(…)` (#256) freezes the whole test host, not just the test. `i4loop` has no C# cell and a table test pins that; if you pin the hang's current behaviour, spawn a process with a timeout.
+- ⛔ **A Double/Integer constant compare is not safe to fold** (above): assert no VALUE for a module-scope initializer that compares mixed types until `TryFoldCompare` is fixed.
+- ⚠ A mutated COPY of the test binaries must live under the repo tree: `RepoRoot()` walks up from `AppContext.BaseDirectory` for the sln, so a copy under `VisualGameStudio.Tests/bin/Release/mut-<id>/` finds `Samples/` and a copy in the scratchpad does not (the sample and CSE rows fail for that reason alone). `dotnet test <copy>/VisualGameStudio.Tests.dll` works, and swapping `BasicLang.dll` mutates both the in-process compiler and the spawned CLI (the `BasicLang` apphost loads the dll beside it).
+- ⚠ A sample is not compiled in place: the CLI writes `Main.cs` / `Main.cpp` next to its input. `SampleProgramBuildTests` copies first and asserts nothing appeared next to the repo's sample.
+
+---
+
+## 🚀 2026-09-30: #124 DONE, every remaining name reference is bound through the front end (ADR-0013 D3)
+
+The fix is `c55e91bd` on top of #121 and #163 (master `e092023d`); the tests are uncommitted work on top of it. Compiler only (`ASTNodes`, `SemanticAnalyzer`,
+`IRBuilder`); no backend changed. Design: the amendment at the end of `docs/superpowers/decisions/0013-case-insensitive-name-binding-front-end-to-ir.md`
+(read it; this section is what the test work adds and what to watch for). BasicLang is case-insensitive; #169 bound locals, parameters and lambda
+parameters through the analyzer's record and left every other reference on its WRITTEN spelling. For a name spelled unlike its declaration that was:
+C++ refusing to compile, JavaScript silently reading or writing an undeclared variable, C# and MSIL right by accident.
+
+**The consumed sites** (each is a place the IR names a thing; every one now takes the DECLARED spelling):
+- `IRBuilder.BoundVariable`, reached from `ReferencedVariable` (a read, an assignment target) and from the counted `For`: by `NameBinding.Kind`, keyed by
+  `DeclaredName`, in the store the kind names. Field and Property → `MemberVariable`; ModuleGlobal → `GlobalVariable` (a Module's own through `GlobalReference`,
+  another file's through `ImportedGlobal`, a file-scope one from the maps its declaration wrote); Method, Type and Event → a name, `GetOrCreateVariable(DeclaredName)`.
+- Module-member globals (`ModuleMemberGlobal`, read and write) and imported globals (read and write); `AccessorMemberOf` (a bare Get/Set property); an `Await` callee;
+  `RaiseEvent` (`raise_<declared>`; **`Event` joined `NameBindingKind`**, and the statement carries a synthesized `EventReference`).
+- **Member access and `New` consume the analyzer's symbol or type, not a `NameBinding`** (they are not identifier references): `DeclaredMemberSpelling` for a member
+  read, a store, an instance call, a Shared call (`C.m`) and `MyBase.m`; the resolved class for `New`. Only when the two spellings differ by case alone.
+- NOT changed: For Each (the analyzer's reuse decision was already case-insensitive), Catch (always a new declaration), Using (no statement form), ReDim (an assignment).
+
+**The For decision rule.** A counted `For` with no `As` drives WHATEVER its control name already denotes, decided by the analyzer (`ForLoopNode.ControlReference`, a synthesized
+reference bound at the one recording point) and reached by the declared spelling: Local, Parameter, LambdaParameter, Field, Property or ModuleGlobal, in any case (VB: `For total`
+over a field `Total` drives the field). The `As` form declares a NEW variable (no control reference). A Method or Type name is not storage: the loop declares its own. The Ordinal
+`ResolvesToExistingStorage` runs only when the analyzer bound no storage, for one job: not declaring twice a same-spelled local the function already declares (a `Dim` in an earlier,
+closed block: FOsb). The increment writes back under the storage's declared spelling.
+
+**The deliberate non-ICE (a deviation from the orchestrator's Q3).** A bound Local, Parameter, LambdaParameter or FILE-SCOPE ModuleGlobal whose declaration the IR did not register is an
+internal compiler error. A Field or Property miss is NOT, and neither is an owning-module or imported global (those are forward references): a member has no IR-side registration
+complete at the reference, so an ICE would refuse programs VB accepts. Reachable from source: a nested class reading its enclosing class's Shared field (fails on EVERY backend, control
+too, since before #124) and a base declared AFTER its derived class (NIb: prints VB's answer everywhere). NOT reachable: a Structure member (a Structure holds fields only) and a base in
+another file (refused: `InheritedMemberTests.ACrossFileBaseClass_IsNotFound_Pinned`). The file-scope ICE is not reachable from source either (the analyzer refuses use before declaration):
+it is tested on the real front end with a tampered binding, `NameBindingMissTests`.
+
+**Follow-ups #244–#251.**
+
+| # | What | Cells |
+|---|---|---|
+| #244 | cross-file module globals that differ only by case: qualified `A.Scale` / `B.scale` fail on all four backends | MF3, MF3u |
+| #245 | events: `AddHandler b.clicked` in another case is not in the class's member table; events broken on C++ and MSIL in ANY case | EVa; EVb/EVr on C++, MSIL |
+| #246 | C#: a For over ANOTHER module's global writes its increment to a plain variable (CS0103) | FOg, FOgc, MF5, MF5c on C# (pinned) |
+| #247 | `For x As T` leaves the loop variable bound after the loop; a later read of a same-named field gets it | FOac (prints 4, VB 50) |
+| #248 | `Catch err` with no `As` does not reuse an existing variable | CAn, CAnc |
+| #249 | a Function's own name used as its return value (`F = v`) prints 0 | MEr, MErc |
+| #250 | ARCHITECT: record that member access and `New` consume symbol/type (done: the ADR amendment); decide whether `IRBuilder.CanonicaliseMemberNames` is retired | — |
+| #251 | test infra: the `dotnet test --filter` trap (below) | — |
+
+**⚠ Pre-existing failing cells this work found and did NOT file** (measured identical before and after #124, and in the same-case control; the execution fixture asserts none of them):
+FL/FLc on C# (a lambda's field write prints 7, vbc 42), PRa/PRac on C++ (an auto-property written by its bare name prints 0, vbc 30), AWa/AWac on C++ (does not compile: `member reference
+type 'Task<int>'`), MSIL (`undefined class 'Task'`) and JavaScript (prints `undefined`), RDa/RDac on MSIL (`__BLReDim`), TYb/TYbc on C++ (`TypeOf`/`CType` to a class: BL-FAIL), TYe and USa on every
+backend (an Enum member in another case; `Using`).
+
+**Tests (Linux-measured; the oracle is `vbc`).**
+- `Compiler/NameBindingSiteTests.cs` (59 = 14 + 8 + 13 + 18 + 6, fast) — the IR per consumed site, as PAIRS: the case-differing program and its same-case control must build to the SAME IR text, plus explicit facts
+  (the declared spelling is named, the written one is not). Fixtures: `NameBindingBoundVariableSiteTests`, `NameBindingNamedThingSiteTests` (accessor, Await, RaiseEvent, `New`),
+  `NameBindingMemberSpellingSiteTests`, `NameBindingForDecisionSiteTests` (the four storage kinds, `ControlReference`, the `As` form, the fallback, For Each), `NameBindingMissTests`
+  (the file-scope ICE positive and negative, the Field/Property non-ICE, the unregistered-member shapes).
+- ⛔ **`BindingSiteIr.BuildBeforeCanonicalisation` is the only way to see a member site's own answer.** `IRBuilder.CanonicaliseMemberNames` rewrites every member reference to the receiver's declared
+  spelling AFTER the walk, so four mutants (M06 accessor member, M11a read, M11b store, M11c instance call) leave the final IR identical and survived 105 probes x 12 cells. The helper mirrors `Build`'s
+  first steps by reflection on `_module` and `CollectSharedModuleGlobalNames` (it fails loudly if either moves) and stops before the post-pass. Only member and callee spellings may be asserted on that IR.
+- `Compiler/NameBindingResolutionExecutionTests.cs` (203: 90 case-differing + 86 control + 11 + 11 project cells, 4 pins, 1 table test, Integration) — every probe the fix moved (FR FW FL FIn FShB PRa FEf FEla FOf FOg FOgf FOl FOla FOp MEa MEb MEs MEt TYa EVb AWa; MF1, MF2, MF5) plus
+  MGw, EVr, FOsb and NIb, each with its same-case control, on the backends where it now matches vbc: single-file through the CLI, the CLI `--optimize` and `CompileProjectFiles`; multi-file through
+  `BasicLang build P.blproj` (Debug, Release) and `CompileProjectFiles` (standard, aggressive). The C++ CLI project build is MSVC-only (BL6015), so its multi-file cells run the two in-process routes.
+  The cells with no expectation, by row and follow-up, are in the fixture's header. **Pinned known defects, so the day #246 lands they go red:** FOg, FOgc (C#, three entry points) and MF5, MF5c
+  (C#, `CompileProjectFiles` twice and `BasicLang build`) — CS0103 on the increment's undeclared variable.
+- Moved: `NameBindingTests.EventReference_IsBoundAsKindEvent_WithItsDeclaredSpelling_D7` (was `…IsExempt_BindingIsNull_D7`), `NameBindingExecutionTests.E18_ForFieldCase_DrivesTheField_OnEveryBackend` (was `…PinsTodaysWrongZeroOnJavaScript_Against124`; VB prints 4, all
+  12 cells), `InheritedMemberTests.ACaseDifferentBareSpelling_ReadsTheDeclaredMember_OnEveryBackend` (was `…IsACanonicalisationGap_Pinned`; own and inherited field, 7 on every backend), and
+  `JsExecutionTierRosterTests` (+1 fixture, pinned at **99**).
+
+**Mutation proof** (real NUnit; the mutant `BasicLang.dll`s built one at a time in detached worktrees at `2eafb6e4` + the fix + ONE mutation, `S/t124/mut/mutants.py` and the test-writer's `mutants_extra.py`, then swapped into a copy of
+the final test binaries; the unmutated control passes). The brief's "17 mutants" is 20 entries: M01–M16 with M11 split into a–e. **All 20 are killed, and so are the test-writer's 8 more (M17–M24), every one in the FAST tier.** `BV` =
+`NameBindingBoundVariableSiteTests`, `NT` = `NameBindingNamedThingSiteTests`, `MS` = `NameBindingMemberSpellingSiteTests` (`Pre` = its `BeforeCanonicalisation` row, `Fin` = its `Final` row), `FD` = `NameBindingForDecisionSiteTests`, `Miss` = `NameBindingMissTests`.
+
+| Mutant | Killed by |
+|---|---|
+| M01 Field/Property arm reads the written name | BV x5 (field r/w, inherited, Shared, lambda, auto-property), FD (loop over a field, the increment, For Each over a field), Miss x2 |
+| M02 ModuleGlobal arm reads the written name | Miss (file-scope ICE), FD (module global, another file's global) |
+| M03 Method/Type/Event arm reads the written name | BV (AddressOf, Type receiver, event value), MS (static and instance call, Pre and Fin), MS whole-program |
+| M04 imported global by written name | BV (`AnImportedGlobal_…`), FD (another file's global) |
+| M05 module-member global by written name | BV (`AModuleGlobalDeclaredLaterInTheFile_…`, the forward reference) |
+| M06 accessor member spelled as written | NT `ABareAccessorProperty_…Pre`, NT `ASharedBareAccessorProperty_…` — **Pre only; the final IR is identical** |
+| M07 For does not drive bound storage / M14 the analyzer never records the control | FD (local, parameter, field, file-scope, module, another file's global, the increment); M14 also `ControlReference_*` x5, the method-named control, the re-record test |
+| M08 the increment writes back under the written spelling | the same FD rows (`TheIncrementWritesBackUnderTheDeclaredSpelling`) |
+| M09 Await callee as written | NT `AnAwaitedUserFunction_IsCalledByItsDeclaredName` |
+| M10 RaiseEvent as written | NT `RaiseEvent_CallsTheEventByItsDeclaredName` — **the C# and JS backends re-look the event up, so no probe could see it** |
+| M11a member read / M11b member store / M11c instance call spelled as written | MS `AMemberRead_…Pre` / `AMemberStore_…Pre` / `AnInstanceCall_…Pre` — **Pre only; the post-pass repairs each in the final IR** |
+| M11d Shared call as written / M11e MyBase call as written | MS (Pre and Fin), MS whole-program; M11d also BV `ATypeReceiver_…` |
+| M12 `New` names the written class | NT `New_NamesTheClassAsDeclared`, MS (another file's class), MS whole-program |
+| M13 For Each reuse decided Ordinal | FD `AForEachOverAField_…`, FD (another file's global), `SynthesizedForeachHiddenVariable_…_D5` |
+| M15 Event never recorded | NT x3 (`RaiseEvent_…`, `AnEventReference_IsBoundAsKindEvent`, the re-record test), BV (event value), `NameBindingTests.EventReference_IsBoundAsKindEvent_…_D7` |
+| M16 the Ordinal fallback dropped | FD `AnEarlierClosedBlockLocal_IsNotDeclaredTwice` |
+| M17 the `As` form drives existing storage | FD `TheAsForm_DeclaresANewVariable_…` |
+| M18 a Method name counts as storage | FD `AControlNamedLikeAMethod_…` |
+| M19 a file-scope miss creates silently | Miss `AFileScopeGlobalMiss_IsAnInternalCompilerError` |
+| M20 a Field/Property miss IS an ICE (the orchestrator's original Q3) | Miss x2 (Field, Property), Miss `TheUnregisteredMemberShapes_StillCompile` |
+| M21 Await member callee as written / M22 owning-module global as written | NT `AnAwaitedUserFunction_…` / BV `AModuleGlobalDeclaredLaterInTheFile_…` |
+| M23 imported-global arm as written / M24 qualified module member (forward) as written | FD `ALoopOverAnotherFilesGlobal_…` / BV `AQualifiedModuleMemberBeforeItsModule_…`, BV `AnImportedGlobal_…` |
+
+The per-mutant failing-test lists (with the exact names) are in `S/t124/tw-mutres/<mutant>.fast.txt`.
+
+**Gates (Linux, g++/clang++/node/ilasm present, no MSVC), on the final test DLL (`c55e91bd` plus the test and doc changes).**
+- The fast subset (`TestCategory!=Integration`): `Failed: 0, Passed: 9815, Skipped: 93, Total: 9908` (2 m 31 s). On the fix commit alone it was `Total: 9849` with the 1 moved pin failing; +59 fast tests (`NameBindingSiteTests.cs`), the same 93 skips.
+- Integration, every term run ON ITS OWN and written `FullyQualifiedName~<term>` (see the filter trap below), all `Failed: 0, Skipped: 0`:
+
+  | Term | Passed | Time |
+  |---|---|---|
+  | `NameBinding` (my two new files, `NameBindingTests`, `NameBindingExecutionTests`: 203 + 59 + 36 + 15 + 1 stray match) | 314 | 7 m 48 s |
+  | `InheritedMember` | 36 | 55 s |
+  | `NameReservation` | 443 | 10 m 55 s |
+  | `ForEachVariable` | 20 | 20 s |
+  | `LambdaCapture` | 36 | 5 s |
+  | `JsExecutionTierRosterTests` (fast tier, no category; the roster is pinned at 99) | 5 | < 1 s |
+
+- ⚠ The FULL suite (~39 min plus) was NOT run for this task; the fast subset and the six terms above were. The mutants were measured in the FAST tier only; the execution fixture was not re-run per mutant.
+- **Only Windows can validate:** the MSVC leg of every C++ cell here (clang++/g++ only on Linux) and the C++ CLI project build itself (BL6015 without MSVC); MSIL under a Windows `ilasm`/CLR.
+
+**Traps this work found.**
+- ⛔ **`dotnet test --filter "FullyQualifiedName~A|B"` silently DROPS the bare terms** (measured, #251: the implementer's combined filter ran 0 classes for `NameBinding` and `Closure` and reported the rest green). Write every term as
+  `FullyQualifiedName~A|FullyQualifiedName~B`, or run the terms one at a time and read the per-term count.
+- ⚠ Re-analysing the SAME AST with the SAME `SemanticAnalyzer` fails for any program that declares a class (the class is registered twice). To test "overwritten on every pass", analyze with a second analyzer.
+- ⚠ `NameBindingProbe.FindByName` walks `ControlReference` and `EventReference` (synthesized copies of a name the statement also holds), so a name on a For's control line is found twice by it; `BindingSiteIr.FindAll` skips them.
+- ⚠ `AccessorMemberOf`'s lookup by the declared name is equivalent to a lookup by the written one (`TypeInfo.Members` is OrdinalIgnoreCase); only its RETURNED spelling is observable (M06).
+- ⚠ A `TestCaseSource` name replaces the test's name in the TRX; give it `"{m}_…"` or every row of every method reads the same.
+
+---
+
+## 🚀 2026-09-30 (earlier): #121 DONE, every name the program owns is reserved, and a pass mints only through `DeclareTemp` (ADR-0018)
+
+The fix is `f39d53e5` on top of #163 (`5b4ca51e`), the MSIL case-guard fix `7e5c2340`, and the tests `6353faef`. Compiler only (IRBuilder, IRNodes,
+IRTempNames, IRVerifier, ClosureLowering, `Compiler.CombineIRModules`, IROptimizer); no backend changed. Design and measurements:
+`docs/superpowers/decisions/0018-name-reservation-and-temp-minting.md` (read it; this section is what the test work adds and what to
+watch for). It supersedes ADR-0017's by-name DCE rule and its D4, and closes the 99 collision cells of ADR-0017 Findings 3.
+
+**What it is.**
+- `IRFunction.ReservedNames` (OrdinalIgnoreCase) holds every name the program owns in that function, whatever its shape: `Dim`, `Const`,
+  parameters, a counted `For`'s and a `For Each`'s variable (the hidden `__foreach_N` of a reused control included), a `Catch`
+  variable, a pattern binding, a LINQ range variable, a lambda parameter, a lowering's own names (`__scN`, `__with`, ClosureLowering's
+  `__closure_envN` and `__carry_x`), and, for a lambda, EVERY name of the function that creates it, transitively. It is NOT a declaration
+  list: `LocalVariables` still means "what a backend declares at the top of the function", and **no backend may read `ReservedNames`**.
+- `IRFunction.ModuleReservedNames` (E3) is the module's own names (globals, class fields, properties, methods, every function's name) as
+  ONE set every function shares; `Compiler.CombineIRModules` publishes it again on the combined module, because each unit can only see its own.
+- `IRFunction.IsReserved(name)` reads both sets, ignoring case. `IRTempNames.UserOwned` reads the union and filters by shape (`t<digits>`);
+  it is the one reader the renamer and every backend's temp counter use. Reserving is the OVER-approximation: an extra name costs a temp number.
+- **Timing (E1).** IRBuilder RECORDS at the ONE primitive (`PushVariableVersion`) and PUBLISHES in `CompleteReservations`, after the walk and
+  before `SeparateTempsFromUserNames`. Publishing at the push renumbered temps in 6 programs outside the ruled set (the ADR's Variant A).
+- `IRFunction.DeclareTemp(type)` is THE ONE DOOR for an optimizer pass: it mints through `GetNextTempName` (which skips `IsReserved` and
+  every name it already handed out), marks the variable `IsCompilerTemp`, records the name as minted, and adds it to `LocalVariables`.
+  A minted name never enters `ReservedNames`; the two stay disjoint.
+- `IRFunction.TracksReservedNames` is set on every function IRBuilder builds and copied by ClosureLowering's clone (with the minted record,
+  `InheritTempRecordFrom`). Hand-built IR tracks nothing.
+
+**The verifier (`IRVerifier`, run by `VerifyAfterOptimization` on every compile when verification is on, and on ClosureLowering's module).**
+- **Invariant R**, for a function with `TracksReservedNames`: every parameter, every `LocalVariables` name, and every For Each, Catch and
+  pattern-binding name (through Or and tuple alternatives) is in `ReservedNames`. The ONE exemption is exact: `IsCompilerTemp &&
+  IsMintedTempName(name)`, both together. A LINQ range variable has no declaring IR node, so R cannot see one: a test pins it.
+- **Invariant T** (ADR-0017's by-name keep, converted): a value with `IsCompilerTemp` whose name `IsReserved` (this function's, or the module's)
+  is a violation, for every value reachable from the blocks (operand trees included) and every `LocalVariables` entry.
+- ⚠ Both are refusals that NAME a leak. A firing means a declaration site skipped the push: fix the writer, never the invariant. The CLI
+  subprocess runs with the verifier OFF in Release (`BASICLANG_VERIFY_IR` unset); the in-process suite runs it in Throw mode.
+
+**The rule for any future pass.** Inlining, LoopUnrolling and InductionVariable are unregistered, and all three have the defect "minted a
+name, declared nothing". A pass that is re-enabled mints ONLY through `IRFunction.DeclareTemp`, never `GetNextTempName` (a test reads the IL
+of the compiler assembly: only IRBuilder and `DeclareTemp` may call it, and a decoy proves the scanner sees a call from a lambda). A temp
+that must be fresh per loop iteration is ALSO added to `BodyLocals` by the pass (ADR-0014). A pass that needs a name in a function it was not
+handed (cross-function inlining) needs a target-function form of the facility first (ADR-0018 "Revisit if").
+
+**The fence that moved.** `CompilerTempCollisionFenceTests` no longer pins anything wrong:
+- `LC_t0` on C++, JavaScript and MSIL and `R11` on all four backends were pinned WRONG or failing until #121 (`7|0|7|0`, a ReferenceError, a
+  segmentation fault; `-3|-4|3|4`, a ReferenceError). They print VB's answer in all three entry points, in `ACollisionCellMovedBy121_PrintsVbsAnswer_InEveryEntryPoint`
+  (7 rows). The 9 rows #163 moved stay (`ACollisionCell_NowReachesVbsOutput_InEveryEntryPoint`), and so do the 8 controls.
+- `CT_wbr_t0` (ADR-0017's by-name witness) is held by RESERVATION now, and C# runs it too (it did not compile there before).
+- `DeadCodeRemovalLicenceTests.ByName_*` (3) became `ByIdentity_*` (DCE decides by identity ONLY: an unused marked temp goes even with a
+  variable spelled like it, in either case, and a used one stays) plus `TheShapeTheKeepUsedToHold_*` (that shape is now Invariant T).
+- `TempExec.Observe`, `Pin` and `AssertPinnedInEveryEntryPoint` had no caller left and were removed. The gotcha they carried is still true:
+  `MsilHarness.RunIl` reads only the TEXT of a run, so a process that prints `7` and then segfaults is `Ran`.
+
+**⭐ FOUND BY THE MATRIX AND FIXED IN #121: MSIL refused `Function(T0 As Integer) T0 * 2`.** ClosureLowering's #169 guard ("'t0' differs from
+its parameter 'T0' only by case", `ClosureLowering.BuildEnvironments`) compared the lambda's `CapturedVariables` with its parameters, and IRBuilder
+fills that list at lambda-build time with COMPILER-TEMP and constant names too (`t0,t1,t2,const_2,t3,const_0,t4`, before the renamer ran), so a
+lambda parameter spelled `T0`..`T4` whose body holds a binary op was refused for a `t0` the user never wrote — on the #163 base and on #121's first
+cut, in every entry point (`LP_T0`..`LP_T3` on MSIL). The guard now compares only the VARIABLES the lambda's IR (and every lambda nested in it) reads
+or writes NOW that the creator OWNS (`g.ReservedNames`, complete by Invariant R, disjoint from temps by Invariant T), in an ORDINAL set. MEASURED,
+every half is needed: ownership alone still refused two programs VB accepts (a sibling `For Each t0` / `Catch t0` the lambda cannot see — the
+reservation is function-wide); the optimizer's recomputed capture set still refused a NESTED lambda (it folds in the nested lambda's build-time
+record); and a case-insensitive set let the parameter's own `T0` hide the creator's `t0`. The four cells are in `UpperCaseCells` (120); the direct
+tests are `ClosureLoweringRefusalTests.TheCaseGuard_*` (fast). ⚠ `CapturedVariables` itself is unchanged and still carries stale names: read it
+for nothing that compares names.
+
+**Tests (Linux-measured; the oracle is `vbc`).**
+- `Compiler/NameReservationTests.cs` (101, fast) — the reservation as a property of the IR: the flag on every function IRBuilder builds and on every
+  clone ClosureLowering makes, and on every function of a REAL compile through `CompileFile` and `CompileProjectFiles` (standard and aggressive),
+  the probe corpus and three samples included (two of the five samples do not compile on this base: an untyped `Const`, a parse error); one row per
+  declaration kind of D1's writer table (LINQ range variable and the operator fix among them); a lambda holds its creator's names, transitively;
+  Falsifier 6 (`LC_t0`'s hoisted lambda has a populated set) and P2 (each of ClosureLowering's three write sites); Invariant R positive, negative and
+  out-of-scope for every construct incl. Or and tuple patterns, and its EXACT exemption; Invariant T incl. module names and operand trees; the minter
+  skips a reserved name in either case; `UserOwned` reads the union; module-level names, and A's `t3()` skipped in B's `Main` (`CombineIRModules`).
+- `Compiler/NameReservationExecutionTests.cs` (342: 338 run, 4 ignored, Integration) — the ADR-0017 Findings 3 witness matrix: 34 programs in 10 families, spelled `t{K}`,
+  `T{K}` and (as controls) `v{K}`, on every backend where the control prints VB's answer, through the CLI, the CLI `-O` and `CompileProjectFiles`.
+  Rows the fence and `CompilerTempExecutionTests` already run are not repeated (`CompilerTempCollisionFenceTests.Covered`). Templates are byte-equal to
+  `S/t163/witness/*.bas` and `S/t121/witctl/*.bas`.
+- `Compiler/TempMintingFacilityTests.cs` (the implementer's D2 proof: 117 Integration tests in `TempMintingFacilityTests` and 4 fast ones in `TempMintingDoorTests`): a test-only
+  pass registered through `OptimizationPipeline.AddPass` mints one temp in a function that spells the name it would take. Added here: the plain roster row, a hardened IL
+  guard that cannot pass vacuously, and a scanner self-test.
+- Moved and edited: `CompilerTempExecutionTests.cs` (fence flipped), `CompilerTempProbes.cs` (docs; `LambdaCaptureProbe`), `DeadCodeRemovalLicenceTests.cs`
+  (`ByIdentity_*`), `JsExecutionTierRosterTests.cs` (+2 fixtures, pinned at 98).
+
+**Mutation proof** (a detached worktree, real NUnit, `S/t121/twm-tools/mut.py`; ADR-0018's M01-M16 plus the test-writer's M17-M37).
+
+Every mutant was built ONE AT A TIME in a detached worktree (removed afterwards), against the FINAL tests without the implementer's `MutantProbeTests.cs`, and measured on the FULL fast subset first, the Integration fixtures only if it survived. **All 38 are killed, every one in the fast tier**; the unmutated control passes (fast 9,441; D2 facility 117; matrix, fence and `CompilerTempExecutionTests` 444). M01-M16 are ADR-0018's; M17-M37 are the test-writer's (the reserve sites of ClosureLowering, each branch of R and T, the operator fix, `CombineIRModules`, the E1 timing, and ADR-0017's keep put back). `NRT` = `NameReservationTests`, `Door` = `TempMintingDoorTests`, `Licence` = `DeadCodeRemovalLicenceTests`, `Marker` = `CompilerTempMarkerTests`; "other" = pre-existing tests that fire through the verifier. M01-M16 ran before the E1 numbering pin (`TheWalkPublishesNothing_…`, which M36 needs) was added, and all of them before the corpus zero-fire lines in the flag test; both only add assertions.
+
+The four ADR-0018 mutants no witness can see are killed by direct assertions only: M06 (three `ANameClosureLoweringAddsToTheCreator_…` rows), M10 (`ACompilerTempUnderAReservedName_IsRefused_ByVerifyAfterOptimization`), M12 and M13 (`EveryFunctionIRBuilderBuilds_TracksReservedNames`, `EveryFunctionClosureLoweringProduces_TracksReservedNames`); M15 by `AClone_KeepsTheMintedRecord_AndTheCounter` alone.
+
+| Mutant | Killed by (failing tests, fast tier) |
+|---|---|
+| M01 For Each variable not reserved | 53: NRT x21, Door x2, Marker x2, 28 other |
+| M02 Catch variable not reserved | 80: NRT x14, Marker x3, 63 other |
+| M03 pattern binding not reserved | 15: NRT x14, 1 other |
+| M04 LINQ range variable not reserved | 3: Door x2, NRT x1 |
+| M05 lambda parameter not reserved | 23: NRT x13, 10 other |
+| M06 ClosureLowering does not seed the hoisted lambda | 3: NRT x3 |
+| M07 `GetNextTempName` ignores reserved names | 9: NRT x7, Door x2 |
+| M08 `DeclareTemp` does not declare | 2: NRT x2 |
+| M09 `DeclareTemp` does not flag | 5: NRT x3, Door x2 |
+| M10 D4 refusal (Invariant T) dropped from the verifier | 1: NRT x1 |
+| M11 case-sensitive reservation | 25: NRT x23, Door x1, Licence x1 |
+| M12 IRBuilder does not set `TracksReservedNames` | 19: NRT x19 |
+| M13 ClosureLowering does not copy the flag | 7: NRT x7 |
+| M14 module names not published (IRBuilder and `CombineIRModules`) | 8: NRT x8 |
+| M15 clone without the minted record | 1: NRT x1 |
+| M16 IRBuilder does not seed lambdas | 2: NRT x2 |
+| M17 `CombineIRModules` does not publish (E3, multi-file) | 2: NRT x2 |
+| M18 operator parameters reserved in the wrong function (the fix reverted) | 17: NRT x15, 2 other |
+| M19a ClosureLowering: loop-level environment local not reserved | 5: NRT x4, 1 other |
+| M19b ClosureLowering: per-iteration carrier not reserved | 2: NRT x1, 1 other |
+| M19c ClosureLowering: function-level environment local not reserved | 13: NRT x4, 9 other |
+| M20 R exempts ANY flagged local | 2: NRT x2 |
+| M21 R exempts ANY minted name | 1: NRT x1 |
+| M22 R ignores Or patterns | 3: NRT x3 |
+| M23 R ignores tuple patterns | 2: NRT x2 |
+| M24 R ignores Catch variables | 2: NRT x2 |
+| M25 R ignores For Each variables | 3: NRT x3 |
+| M26 R ignores parameters | 3: NRT x3 |
+| M27 R ignores locals | 6: NRT x6 |
+| M28 R applies to untracked (hand-built) functions | 10: NRT x8, 2 other |
+| M29 T ignores module-level names | 1: NRT x1 |
+| M30 T skips `LocalVariables` | 1: NRT x1 |
+| M31 T does not descend operand trees | 1: NRT x1 |
+| M32 ADR-0017's by-name DCE keep reinstated | 3: Licence x3 |
+| M33 minter skips only the function's own names, not the module's | 3: NRT x3 |
+| M34 `UserOwned` ignores `ReservedNames` | 7: NRT x6, 1 other |
+| M36 reservation published AT the push (the rejected Variant A) | 1: NRT x1 |
+| M37 reservation published AFTER the renamer | 5: NRT x4, 1 other |
+
+**Gates (Linux, g++/clang++/node/ilasm present, no MSVC).**
+
+On the final test DLL (`f39d53e5` plus the test and doc changes):
+- The fast subset (`TestCategory!=Integration`): `Failed: 0, Passed: 9442, Skipped: 93, Total: 9535` (2 m 1 s; the same 93 skips as before, and `TerminalServiceTests` passed).
+- The filter `CompilerTemp|DeadCode|Temp|Collision|Verifier|Closure|Lambda|ForEach|Catch|Pattern|Linq|NameBinding|Reserv|Minting` (each as `FullyQualifiedName~`), Integration
+  included: `Failed: 0, Passed: 2032, Skipped: 25, Total: 2057` (1 h 1 m). The 25 skips are the 21 that predate this work (Windows, MSVC or the engine; the same 21 the ADR's run reports) and the 4
+  `KnownDefectCells` that were ignored THEN; none of the other ~590 new tests skipped. ⚠ Those four are fixed since (the case-guard, above) and
+  are ordinary `UpperCaseCells` rows; see the follow-up gates below.
+- **After the case-guard fix** (same tree plus the fix): the fast subset `Failed: 0, Passed: 9446, Skipped: 93, Total: 9539`; the filter
+  `Closure|Lambda|NameReservation|TempMinting|CompilerTemp` (each as `FullyQualifiedName~`), Integration included: `Failed: 0, Passed: 1125,
+  Skipped: 0, Total: 1125` (20 m 40 s). MSIL byte compare of the whole corpus (982 programs × 3 entry points): 2,946 of 2,946 identical, no
+  cell of it was refused by the guard before; the only cells that change are the 21 the guard refused (`LP_T0`..`LP_T3`, and the three probes
+  in `ClosureLoweringRefusalTests.TheCaseGuard_*`, × 3 entry points), which now compile and print VB's answer. Verifier fires 0.
+- The tests-first state, for the record: before the tests moved, the five fixtures the fix touches ran 327 tests with exactly 10 failures (the 7 fence pins and `ByName_*` x3).
+- ⚠ The FULL suite (~39 min plus) was NOT run for this task; the two gates above were.
+
+**Only Windows can validate:** the MSVC leg of every C++ collision cell (`LC_t0`, `R11`, the `CT_*` and `FE_*` rows compile with clang/g++ only, and MSVC reports
+its own diagnostics); MSIL under a Windows `ilasm` and CLR (`LC_t0` was a Linux segmentation fault before #121, an access violation on Windows); the Release
+`.blproj` route through the IDE build service into `CompileProjectFiles`.
+
+**Traps this work found.**
+- ⛔ NUnit's `Does.Contain(x)` on a `HashSet<string>(OrdinalIgnoreCase)` compares item by item, CASE-SENSITIVELY. A case-insensitivity assertion on a reservation set
+  must call the set's own `Contains`.
+- ⚠ A fixture whose tests are all `[TestCaseSource]` has `CaseCount == 0` in `JsExecutionTierRosterTests` and fails `EveryFixtureStillHasTests`: give it one plain `[Test]`
+  that pins its table (`ThePositionTable_HasItsRows`, `TheMatrix_HasItsRows`, `TheFenceTables_HaveTheirRows`).
+- ⚠ `ClosureLowering.Run` returns the module ITSELF when there is nothing to lower, so "the clone carries the flag" is only tested on a program with a lambda.
+
+---
+
+## 🧩 2026-09-30: property grid SLICE 3 done (branch `feat/property-grid-slice3`), owner-approved
+
+Pre-flight + execution notes (the full record, every commit, measured facts, gates):
+`docs/superpowers/plans/2026-09-29-property-grid-slice3-preflight.md` §5a. Plan: `docs/superpowers/plans/2026-09-25-property-grid-vs-parity.md`.
+
+**What landed.** Degraded geometry frozen + listed by `design --check`; Font/Padding/Cursor value types (one parser each,
+`New Font(…)` fan-in, measured `CType(n, FontStyle)`); 18 Form rows stored in `FormDocument.Properties` (AcceptButton/
+CancelButton as Reference rows, emitted after the controls); control D1 batches + web `CssClass`/`Style`; expandable
+Font/Padding/Size/Location composites; `FormAmbient.Inherited` (container → Form → catalog default — the ONE ambient rule the grid's
+Font parts and the canvas both use); the page's `font/color: inherit` rules when a Font/ForeColor is set anywhere; a retargeted pair
+stubs EVERY crossed bind; the canvas draws each caption in its effective font, inherited ForeColor and the Form's BackColor; the
+designer writes a form's code-behind THROUGH an open `.bas` tab (clean: tab + disk; unsaved edits: tab only — pre-existing on master).
+
+**Owner decisions (2026-09-29/30, do not relitigate):** TableLayoutPanel drops 2×2 · the colours WinForms hides are not offered ·
+default events MATCH WinForms (GroupBox Enter/web `focusin`; Panel/FlowLayoutPanel/TableLayoutPanel Paint; TrackBar Scroll = web
+`input`, ValueChanged = `change`; DataGridView CellContentClick) — a web Panel double-click opens its declared web default Click and says
+so (BL8035) · handler NAMES come from the WinForms event name on both targets (existing binds keep theirs) · Opacity shown/typed as a
+percentage by VS's measured OpacityConverter rules (bare ≤1 is a fraction, `1` = 100%), stored as the 0–1 Double · BackgroundWorker
+descriptions are WinForms' own text.
+
+**BL numbers:** BL8033 unknown Dock (master) · BL8034 a Reference row naming no allowed control · BL8035 double-click opened a fallback
+event (Info) · **next free BL8036**.
+
+**Follow-ups (recorded, not done):** M2 a refused composite PART shows its reason on the parent, not the part · M4 old documents carrying a
+retired colour attribute lose it silently (suggest a reader warning) · M5 the web Cursor drop-down could omit web-refused members · M6
+AcceptButton/CancelButton are not rewritten on control rename (VS does) · the canvas fills the GroupBox caption gap with the system face,
+so on a coloured Form it shows a grey patch · a positioned control's DEFAULT (no-font) caption still does not scale with zoom
+(pre-existing). **Slices 4–6 remain per the plan** (expand each before it starts).
+
+---
+
+## 2026-09-29 (earlier): #163 DONE, DCE removes unused compiler temps, by marker (ADR-0017)
+
+> ⚠ **Partly HISTORY since #121 (the section above).** Superseded: the by-name DCE rule (gone; Invariant T replaces it), the fence's PINNED rows (every one now prints
+> VB's answer), the clause "a pass mints through `GetNextTempName`" (a pass mints through `DeclareTemp`), `TempExec.ObserveMsil` (removed), and `CT_wbr_t0` on C# (it
+> compiles now). The marker contract, the removal licence's other clauses, the U2 fix and the mutation table below still stand.
 
 The fix is `ec021f8f` on top of #200, #170 and the SCRATCH option-(a) commit (`b0f12d90`); the TEST side is uncommitted work on top
 of it. Compiler only (IRBuilder, IRNodes, IROptimizer); no backend changed. Design and measurements:
@@ -31,7 +478,7 @@ instruction, and it says where a NAME came from, never how it is SPELLED.
   if it is not an `IRVariable`/`IRConstant`, not `NamedAfterVariable`, and its function minted its name. User storage (`Dim t5 = a + b`
   is ONE binop renamed `t5`, `NamedAfterVariable`) never carries it.
 - `OptimizationPass.InheritIdentity` copies it when a pass REPLACES a value. A value built anywhere else reads false, and DCE keeps it.
-- ⛔ Any pass that mints a temp (#121) must mint through `GetNextTempName` and set the flag. CLAUDE.md carries the one durable clause.
+- ⛔ Any pass that mints a temp must mint through `IRFunction.DeclareTemp`, which sets the flag and declares the temp (#121, ADR-0018; it was "through `GetNextTempName`" here). CLAUDE.md carries the one durable clause.
 
 **The removal licence (D2, D3).** An unused value is deleted only if ALL hold: marked and not `NamedAfterVariable`; a pure, non-trapping
 KIND (binary except `/` `\` `Mod`; unary except `++` `--`; compare; `Is`; a load of a variable or an alloca — never an element read);
@@ -44,7 +491,7 @@ C++ backend's own temp counter renumbers and the surviving string temp becomes `
 "no viable overloaded '='"): OK before, OK with the rule, COMPILE-FAIL without it, C++ in all three entry points. Pinned by
 `CompilerTempExecutionTests.CT_wbr_t0_CatchT0_StillCompilesAndRuns`; mutant M8 fails it (below).
 
-**#121's regression fence** (`CompilerTempCollisionFenceTests`, all three entry points). A user variable IRBuilder does not reserve (For Each,
+**#121's regression fence** (`CompilerTempCollisionFenceTests`, all three entry points). ⚠ HISTORICAL: #121 flipped every pinned row below to VB's answer. A user variable IRBuilder does not reserve (For Each,
 Catch, pattern, LINQ range) spelled like a temp collides with a minted name; every such program was already wrong or failing before #163.
 CURRENT behaviour, pinned so #121 flips each row deliberately (each message names #121):
 - `LC_t0` (a For Each `t0` captured by a lambda): ⚠ **the one #163 change that is not toward VB** — MSIL was a WRONG ANSWER (`7|-3|7|-4`)
@@ -203,8 +650,8 @@ corpus refusal set is unchanged (66 programs).
   (`undefined class D/<>c__Env0/<>c__Env2`); base-args nesting only made it reachable (E01, X22, X25).
 - **#242** `BodyLocals` omits a name declared twice; W2's Dim-initializer rule works around it.
 - **D4 gap 1** `MyClass` in a base argument (X07) reports a TYPE error ("of type 'Object'"), not BC31095.
-- **D4 gap 2** `Me` as a bare value (X23) cannot be probed: `If(c, x, y)` does not parse in BasicLang.
-  `Inherits Box(Of Integer)` (a generic base) does not parse either (E09a).
+- **D4 gap 2** `Me` as a bare value (X23) could not be probed because `If(c, x, y)` did not parse — **CLOSED by #123**: it parses, and X23 is a row of `BaseConstructorCallDiagnosticsTests.Refused()`
+  (BC31095, as vbc). `Inherits Box(Of Integer)` (a generic base) does not parse either (E09a).
 - The FE1 / CR1 witnesses can only be checked against JS (and C# for FE1): C# empties a multi-statement
   lambda body (#136) and MSIL emits a bad image / cannot assemble a `For Each` over `List(Of Func(Of Integer))`.
 
@@ -2466,30 +2913,33 @@ found (a lambda passed as a `MyBase.New(...)` argument — pre-existing, not wid
 #170) are in `docs/superpowers/decisions/0006-kill-vocabulary-totality-dynamic-use-call-visibility.md`'s
 implementation note for D1. Tests: `VisualGameStudio.Tests/Compiler/LambdaCaptureSetTests.cs`.
 
-#### ⛔ `Samples/*` DO NOT COMPILE — and the "11 merges in shipping code" number rests on that
+#### ✅ `Samples/*` COMPILE NOW (task #123) — this subsection was written while two of them did not
 
-Measured through the CLI at this commit:
+> ✅ **DONE 2026-09-30 — #123 fixed the compiler and the samples; everything below the rule is HISTORY.** All three samples pass the parser, the analyzer (no error AND no warning)
+> and the IR builder, and generate C# and C++. Read "#123 DONE" at the top of this file. The CSE corpus was re-measured with the front end CLEAN:
+> **Platformer 6, SpaceShooter 0, Pong 1 merges, each `(parseClean, analyzeClean) = (true, true)`** — `CseSampleCorpusTests` pins all three, and Pong has a row now.
+> "The repo's sample programs" is THREE programs again, and "the 11 merges in shipping code" is **7** (6 + 0 + 1).
 
-- `Samples/Platformer/Main.bas` — **2 SEMANTIC errors** (line 276, "cannot convert from 'Double' to
-  'Single'", twice). The PARSE is clean, so its IR is faithful; `TILE_SIZE` really is
-  `IsGlobal=true, IsConst=true` and its 6 merges really do depend on the `Const` exemption.
-- `Samples/SpaceShooter/Main.bas` — **PARSE errors**: `Const SCREEN_WIDTH = 800` has no `As`
-  clause. The parser records the error and synchronizes past the whole `Const` block, so those
-  identifiers reach the IR as `IsGlobal=false, IsConst=false` — measured. **SpaceShooter's 5 merges
-  read plain locals and say NOTHING about the `Const` exemption**, contrary to how the 11 were
-  described.
-- `Samples/Pong/Main.bas` — parse errors too, and then **`IRBuilder` THROWS** on it ("the
-  module-level variable 'ballVY' has an initializer that cannot be computed at compile time"). It
-  has no CSE count at all. "The repo's sample programs" is **two** programs, not three.
+What was true when this subsection was written, kept because the CSE docstrings cite it (`S/t123/brief.md` has the measurement):
 
-⚠ The counts 6 and 5 are real properties of the IR, but of IR built by **ignoring the front end's
-verdict** — which is exactly what `JsTestSupport.BuildModule` refuses to do, on purpose.
-`CseSampleCorpusTests` pins both the counts AND the current front-end verdict, so fixing a sample
-fails loudly and forces a re-measure instead of drifting. **The robust form of that contract item
-is `CseInvalidationDecisionTests`' `ConstGlobalAcrossACall` / `ParametersAcrossACall` rows** — a
-self-contained program that compiles. Prefer those.
+- `Samples/Platformer/Main.bas` — was measured with **2 SEMANTIC errors** (line 276, "cannot convert from 'Double' to 'Single'", twice). **Fixed on master by #66 (`9e76128`)**, before #123.
+  The PARSE was clean, so its IR was faithful; `TILE_SIZE` really is `IsGlobal=true, IsConst=true` and its 6 merges really do depend on the `Const` exemption.
+- `Samples/SpaceShooter/Main.bas` — **PARSE errors**: `Const SCREEN_WIDTH = 800` has no `As` clause. The parser recorded the error and synchronized past the whole `Const` block, so those
+  identifiers reached the IR as `IsGlobal=false, IsConst=false` — measured. **SpaceShooter's 5 merges read plain locals and said NOTHING about the `Const` exemption**, contrary to how the
+  11 were described. (Re-measured with clean front ends: 0.)
+- `Samples/Pong/Main.bas` — parse errors too, and then **`IRBuilder` THROWS** on it ("the module-level variable 'ballVY' has an initializer that cannot be computed at compile time"). It had no CSE
+  count at all. (Now 1.)
+
+⚠ A count taken from IR built by **ignoring the front end's verdict** — which is exactly what `JsTestSupport.BuildModule` refuses to do, on purpose — is a count about IR no build ever produces.
+`CseSampleCorpusTests` keeps pinning the counts AND the front-end verdict, so a sample that STOPS compiling now fails loudly there (and in `NameReservationTests`' samples row, the fast guard)
+instead of drifting. **The robust form of that contract item is `CseInvalidationDecisionTests`' `ConstGlobalAcrossACall` / `ParametersAcrossACall` rows** — a self-contained program that compiles.
+Prefer those.
 
 #### ⛔ The C++ and JavaScript backends DO NOT CASE-FOLD IDENTIFIERS (task #124)
+
+> ✅ **DONE 2026-09-30 — #124 consumed ADR-0013 D3; everything in this subsection is HISTORY.** Every remaining name reference (Field, Property, ModuleGlobal, Method, Type,
+> Event, a member access, `New`, an `Await` callee, a `RaiseEvent`, and the counted `For`'s control) now reaches the IR under its DECLARED spelling, on all four backends.
+> Read "#124 DONE" at the top of this file. What stays open from this subsection is #244–#249 (listed there), not the C++/JavaScript case-folding defect.
 
 BasicLang is case-insensitive; the front end accepts `P = Seed(100)` as a write to `p` and the IR
 records `IRCall("P")` alongside `IRVariable("p")`. Measured on that program:
@@ -6084,8 +6534,8 @@ single new failure against the 170-name baseline.
     identifier reference's `NameBinding` (`DeclaredName`, `Kind`, `Declaration`) is written — at
     the analyzer's own `SymbolTable` lookup, so the binding and the resolved symbol can never
     disagree. Fresh on every analysis pass; `Name` is never rewritten. Null (exempt) for `Me`, a
-    `::` foreign name, a .NET member with no BasicLang `Symbol`, an `Event` reference (D7, left
-    for #124), a compiler-SYNTHESIZED declaration (the `For Each` hidden `__foreach_N`), and a
+    `::` foreign name, a .NET member with no BasicLang `Symbol`, an `Event` reference (D7 — bound
+    since #124), a compiler-SYNTHESIZED declaration (the `For Each` hidden `__foreach_N`), and a
     symbol whose name fails the OrdinalIgnoreCase invariant against the written spelling (D8,
     counted — 0 on the corpus and every probe here).
   - **#169 — the one consuming site.** `IRBuilder.ReferencedVariable` is the ONLY site a bound

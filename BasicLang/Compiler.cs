@@ -1064,6 +1064,10 @@ namespace BasicLang.Compiler
                 }
             }
 
+            // ADR-0018 E3: each unit published only ITS module-level names; a function of one file
+            // can call another file's module function `t9`, and the optimizer mints on THIS module.
+            IRTempNames.PublishModuleNames(combined);
+
             return combined;
         }
 

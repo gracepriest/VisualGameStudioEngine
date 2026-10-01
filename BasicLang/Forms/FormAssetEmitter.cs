@@ -285,7 +285,10 @@ public static class FormAssetEmitter
         }
 
         sb.Append($"{indent}<{tag} id=\"{Attr(control.Id)}\"");
-        sb.Append($" class=\"vgs-{Attr(control.Kind)}\"");
+
+        // D2's web-only CssClass JOINS the element's own class (a second class= attribute is invalid HTML) — only a value
+        // the row accepts (class-name tokens): anything else is Degraded and the element keeps its own class alone.
+        sb.Append($" class=\"vgs-{Attr(control.Kind)}{Attr(ExtraClasses(control))}\"");
 
         // Chrome is the one part of a form whose meaning the DOM cannot infer from its tag — a
         // <menu> is not a toolbar and an <li> is not a separator to a screen reader. Stated on the
@@ -524,6 +527,8 @@ public static class FormAssetEmitter
 
         sb.Append("}\n");
 
+        AppendRootCss(sb, form);
+
         foreach (var control in form.AllControls())
         {
             AppendControlCss(sb, control, layout);
@@ -533,6 +538,60 @@ public static class FormAssetEmitter
 
         return sb.ToString();
     }
+
+    /// <summary>
+    /// The FORM's own web rows (spec §2.3, slice 3): BackColor, ForeColor and Font become ONE <c>body { … }</c> rule — the
+    /// whole page is the client area, so every control and every Docked strip inherits them exactly as WinForms' ambient
+    /// properties inherit from the Form. Walked from <see cref="FormControlCatalog.FormRoot"/> through <see cref="FormCss"/>,
+    /// the same converters a control's rows use — never a list here.
+    ///
+    /// <para>⚠ A SEPARATE rule (pre-flight B3): the Canvas stylesheet already owns a <c>body { margin: 0; display: flex; … }</c>
+    /// layout rule, and CSS merges the two; nothing rewrites it. Nothing is written when the form carries none of these.</para>
+    /// </summary>
+    private static void AppendRootCss(StringBuilder sb, FormDocument form)
+    {
+        var declarations = FormControlCatalog.FormRoot.Properties
+            .Where(p => FormRootValues.IsStoredInProperties(p) && FormRootValues.Applies(p, form))
+            .SelectMany(p => FormRootValues.Get(form, p) is { } value
+                ? FormCss.Declarations(p, value)
+                : Array.Empty<(string Property, string Value)>())
+            .Select(d => $"{d.Property}: {d.Value}")
+            .ToList();
+
+        if (declarations.Count > 0)
+        {
+            sb.Append($"body {{ {string.Join("; ", declarations)}; }}\n");
+        }
+
+        // ⛔ Measured (slice 3 task 7, Edge's computed style): a browser does NOT inherit the body's font into its FORM
+        // controls — the user-agent sheet gives <button>/<input>/<select>/<textarea> their own — so a Form Font on body
+        // left every button regular while the WinForms window made it bold (Font is ambient on every control). ⛔ Code
+        // review I2: a CONTAINER's Font is ambient too (a Button in a bold GroupBox is bold), so the rule is written when a
+        // Font is present ANYWHERE on the page — the Form or any control — and a page with none keeps the user agent's look
+        // (the measured pixel pages stay byte-identical). ForeColor likewise reaches a <button> (Button.ForeColor is
+        // ambient); a TextBox's is WindowText in WinForms, not its parent's, so inputs keep their own colour.
+        if (HasValueAnywhere(form, "Font"))
+        {
+            sb.Append("button, input, select, textarea { font: inherit; }\n");
+        }
+
+        if (HasValueAnywhere(form, "ForeColor"))
+        {
+            sb.Append("button { color: inherit; }\n");
+        }
+    }
+
+    /// <summary>
+    /// Whether the page carries a USABLE web value for <paramref name="name"/> anywhere — on the Form (its FormRoot row) or
+    /// on any control. ⚠ Usable: a Degraded value is never emitted, so nothing on the page could inherit it.
+    /// </summary>
+    private static bool HasValueAnywhere(FormDocument form, string name) =>
+        (FormControlCatalog.FormRoot.Property(name) is { } row && FormRootValues.Applies(row, form) &&
+         FormRootValues.Get(form, row) is { } value && row.Accepts(value, FormTarget.Web)) ||
+        form.AllControls().Any(c =>
+            c.Properties.TryGetValue(name, out var own) &&
+            c.Definition?.Property(name) is { } controlRow && controlRow.AppliesTo(FormTarget.Web) &&
+            controlRow.Accepts(own, FormTarget.Web));
 
     /// <summary>
     /// Per-KIND chrome styling, appended ONCE however many controls of that kind the page has (spec §4). A menu is the
@@ -605,9 +664,10 @@ public static class FormAssetEmitter
                 continue;
             }
 
-            if (FormCss.Declaration(property, raw) is { } declaration)
+            // ⛔ Every declaration the row produces — a Font is five (slice 3 pre-flight B2).
+            foreach (var (css, value) in FormCss.Declarations(property, raw))
             {
-                declarations.Add($"{declaration.Property}: {declaration.Value}");
+                declarations.Add($"{css}: {value}");
             }
         }
 
@@ -661,6 +721,7 @@ public static class FormAssetEmitter
         // (a <div> or <p>) to keep it on one line. No pure-CSS layout gives both "the form area takes the remaining
         // height" and "loose inline body children share a line".
         sb.Append("body { margin: 0; display: flex; flex-direction: column; align-items: flex-start; min-height: 100vh; }\n");
+        AppendRootCss(sb, form);
         sb.Append(".vgs-form {\n");
         sb.Append("  position: relative;\n");
 
@@ -975,11 +1036,25 @@ public static class FormAssetEmitter
     private static string Tracks(string commaSeparated) =>
         string.Join(" ", commaSeparated.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
 
-    /// <summary>True/false for a boolean-ish property, or null when it is unset or unparseable.</summary>
+    /// <summary>
+    /// True/false for a boolean-ish property, or null when it is unset, unparseable — or not a WEB row of this control.
+    ///
+    /// <para>⛔ Through the catalog row (slice 3, found by the D2 sweep): a flag read by NAME alone put <c>disabled</c> on a
+    /// MenuStrip's &lt;nav&gt; for its WinForms-only Enabled, and <c>checked</c> on a menu item's &lt;li&gt; for its
+    /// WinForms-only Checked — rows D2 says never reach a page.</para>
+    /// </summary>
     private static bool? Flag(FormControl control, string name) =>
+        control.Definition?.Property(name) is { } row && row.AppliesTo(FormTarget.Web) &&
         control.Properties.TryGetValue(name, out var value) && bool.TryParse(value, out var parsed)
             ? parsed
             : null;
+
+    /// <summary>The web-only CssClass tokens, space-led and single-spaced, or "" — asked of the catalog row.</summary>
+    private static string ExtraClasses(FormControl control) =>
+        control.Definition?.Property("CssClass") is { } row && row.AppliesTo(FormTarget.Web) &&
+        control.Properties.TryGetValue(row.Name, out var value) && row.Accepts(value, FormTarget.Web)
+            ? " " + string.Join(" ", value.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+            : "";
 
     private static string Text(string value) => value
         .Replace("&", "&amp;")

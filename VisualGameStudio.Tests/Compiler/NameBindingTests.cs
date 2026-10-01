@@ -25,9 +25,10 @@ namespace VisualGameStudio.Tests.Compiler;
 //    `SymbolTable` lookup — so the binding and the resolved symbol can never disagree. Set fresh
 //    on every analysis pass (`Visit(IdentifierExpressionNode)` clears it first), never rewriting
 //    `Name`. Null (exempt) for `Me`, a `::` foreign name, a .NET member with no BasicLang
-//    `Symbol`, an `Event` reference (D7, left for #124), a compiler-SYNTHESIZED declaration (the
-//    `For Each` hidden element variable, D5), and a symbol whose name fails the OrdinalIgnoreCase
-//    invariant against the written spelling (D8, counted in `UnboundByNameMismatch`).
+//    `Symbol`, a compiler-SYNTHESIZED declaration (the `For Each` hidden element variable, D5),
+//    and a symbol whose name fails the OrdinalIgnoreCase invariant against the written spelling
+//    (D8, counted in `UnboundByNameMismatch`). An `Event` reference was exempt here (D7) until
+//    #124 consumed it: it is now recorded as Kind `Event`.
 //  - **Consuming** — `IRBuilder.ReferencedVariable` is the ONE site: for a Local/Parameter/
 //    LambdaParameter binding it looks up `Binding.DeclaredName` in `_variableVersions` ONLY
 //    (never a module global or a class member — the K8 fix), and a miss is an INTERNAL COMPILER
@@ -307,14 +308,18 @@ public class NameBindingRecordingTests
         });
     }
 
-    /// <summary>D7 — an Event reference (here, <c>AddHandler</c>'s event-expression operand,
-    /// the one place an event name reaches <c>Visit(IdentifierExpressionNode)</c> as an ordinary
-    /// reference rather than a bare string) is left unbound. #124 adds <c>Event</c> to
-    /// <see cref="NameBindingKind"/> when it consumes this kind; #169 records nothing for it.</summary>
+    /// <summary>D7, as #124 consumed it — an Event reference (here, <c>AddHandler</c>'s
+    /// event-expression operand, the one place an event name reaches
+    /// <c>Visit(IdentifierExpressionNode)</c> as an ordinary reference rather than a bare string)
+    /// IS bound: Kind <see cref="NameBindingKind.Event"/>, the declaration's spelling, the event's
+    /// own symbol. #169 left it unbound and said <c>Event</c> would join
+    /// <see cref="NameBindingKind"/> when #124 consumed it; this row was that pin (it asserted a
+    /// null binding) and moves with it. The IR-level consequence — the name reaches the IR as
+    /// declared — is <c>NameBindingBoundVariableSiteTests.AnEventNameAsAValue_BindsAsDeclared</c>.</summary>
     [Test]
-    public void EventReference_IsExempt_BindingIsNull_D7()
+    public void EventReference_IsBoundAsKindEvent_WithItsDeclaredSpelling_D7()
     {
-        var (ast, _) = NameBindingProbe.Analyze("""
+        var (ast, analyzer) = NameBindingProbe.Analyze("""
             Class C
                 Public Event Ping()
                 Public Sub Handler()
@@ -322,11 +327,28 @@ public class NameBindingRecordingTests
                 Public Sub Wire()
                     AddHandler Ping, AddressOf Handler
                 End Sub
+                Public Sub WireAgain()
+                    AddHandler PING, AddressOf Handler
+                End Sub
             End Class
             """);
 
-        var ping = NameBindingProbe.FindByName(ast, "Ping").Single();
-        Assert.That(ping.Binding, Is.Null);
+        var pings = NameBindingProbe.FindByName(ast, "Ping").OrderBy(id => id.Line).ToList();
+        Assert.That(pings, Has.Count.EqualTo(2), "test is broken if AddHandler no longer reaches Visit(IdentifierExpressionNode)");
+        Assert.Multiple(() =>
+        {
+            foreach (var ping in pings)
+            {
+                Assert.That(ping.Binding, Is.Not.Null, $"line {ping.Line}: an Event reference is bound (D7)");
+                Assert.That(ping.Binding!.Kind, Is.EqualTo(NameBindingKind.Event), $"line {ping.Line}");
+                Assert.That(ping.Binding.DeclaredName, Is.EqualTo("Ping"), $"line {ping.Line}: the DECLARATION's spelling");
+                Assert.That(ping.Binding.Declaration.Kind, Is.EqualTo(SymbolKind.Event), $"line {ping.Line}");
+            }
+            Assert.That(pings[1].Name, Is.EqualTo("PING"), "Name stays the written spelling");
+            Assert.That(pings[1].Binding!.Declaration, Is.SameAs(pings[0].Binding!.Declaration),
+                "both spellings name the SAME event symbol");
+            Assert.That(analyzer.UnboundByNameMismatch, Is.EqualTo(0));
+        });
     }
 
     /// <summary>D5 — the <c>For Each</c> hidden element variable (<c>__foreach_N</c>) the

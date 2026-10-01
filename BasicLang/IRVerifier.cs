@@ -55,7 +55,15 @@ namespace BasicLang.Compiler.IR.Optimization
         /// <summary>For Invariant S″: the pass after which it was checked.</summary>
         public string Pass { get; init; }
 
-        public override string ToString() => Invariant == "P"
+        public override string ToString() => Invariant == "R"
+            ? $"Invariant R violated in {Function}: '{Variable}', {UseBlock}{(WriterBlock != null ? " in " + WriterBlock : "")}, "
+              + "is not in the function's ReservedNames (ADR-0018 D1: every name a user or a lowering declares "
+              + "is reserved where it is declared, so no temp can be minted under it)."
+            : Invariant == "T"
+            ? $"Invariant T violated in {Function}: the compiler temp '{Variable}' ({Value?.GetType().Name}, in "
+              + $"{WriterBlock}) carries a name the program owns (ADR-0018 D4: minted and reserved names are "
+              + "disjoint; a temp under a program-owned name is a reservation leak)."
+            : Invariant == "P"
             ? $"Invariant P violated in {Function}: {UseBlock} (ADR-0016 D5: MyBase.New is ONE IRBaseConstructorCall "
               + "per constructor, after the closed, expression-only prologue that evaluates its arguments; "
               + "every IR lambda is created exactly once)."
@@ -285,8 +293,154 @@ namespace BasicLang.Compiler.IR.Optimization
 
             var violations = CheckInvariantV(module).Concat(CheckInvariantF(module))
                 .Concat(CheckInvariantSPrime(module)).Concat(CheckInvariantB(module))
+                .Concat(CheckInvariantR(module)).Concat(CheckInvariantT(module))
                 .Concat(lowered ? Enumerable.Empty<InvariantViolation>() : CheckInvariantP(module)).ToList();
             Report(mode, violations);
+        }
+
+        /// <summary>
+        /// ⭐ Invariant R (ADR-0018 D1): the reservation is COMPLETE. In every function whose builder
+        /// tracks reservations (<see cref="IRFunction.TracksReservedNames"/>: IRBuilder's output and
+        /// ClosureLowering's clones of it), <see cref="IRFunction.ReservedNames"/> holds
+        /// <list type="bullet">
+        /// <item>every parameter's name;</item>
+        /// <item>every <see cref="IRFunction.LocalVariables"/> entry's name, except a temp the
+        /// function itself minted and declared (<see cref="IRFunction.DeclareTemp"/>:
+        /// <see cref="IRValue.IsCompilerTemp"/> and <see cref="IRFunction.IsMintedTempName"/>),
+        /// which D2 keeps OUT of the set;</item>
+        /// <item>every name a declaring construct in its blocks introduces: an
+        /// <see cref="IRForEach"/>'s control variable, an <see cref="IRCatchClause"/>'s variable, a
+        /// pattern case's <see cref="IRPatternCase.BindingVariable"/> (through Or and tuple
+        /// alternatives). A lambda parameter is a parameter of its lambda. A LINQ range variable
+        /// has no declaring node in the IR, so this cannot name it: it is reserved at the same
+        /// push as every other kind, and a test pins it.</item>
+        /// </list>
+        /// <para>A breach is a declaration that bypassed the reservation — a name
+        /// <see cref="IRFunction.GetNextTempName"/> could hand out again, which
+        /// <see cref="IRTempNames.UserOwned"/> only still keeps apart because it reads the union.
+        /// Hand-built IR tracks nothing and is not checked. Reads the IR only.</para>
+        /// </summary>
+        public static IReadOnlyList<InvariantViolation> CheckInvariantR(IRModule module)
+        {
+            var violations = new List<InvariantViolation>();
+            if (module == null) return violations;
+            foreach (var function in IRTempNames.AllFunctions(module))
+            {
+                if (!function.TracksReservedNames) continue;
+
+                void Require(string name, string kind, string block = null)
+                {
+                    if (string.IsNullOrEmpty(name) || function.ReservedNames.Contains(name)) return;
+                    violations.Add(new InvariantViolation
+                    {
+                        Invariant = "R",
+                        Function = function.Name,
+                        Variable = name,
+                        UseBlock = kind,
+                        WriterBlock = block,
+                    });
+                }
+
+                foreach (var p in function.Parameters ?? new List<IRVariable>())
+                    Require(p?.Name, "a parameter");
+                foreach (var l in function.LocalVariables ?? new List<IRVariable>())
+                {
+                    if (l == null || (l.IsCompilerTemp && function.IsMintedTempName(l.Name))) continue;
+                    Require(l.Name, "a local (LocalVariables)");
+                }
+
+                void Patterns(IEnumerable<IRPatternCase> cases, string block)
+                {
+                    foreach (var c in cases ?? Enumerable.Empty<IRPatternCase>())
+                    {
+                        if (c == null) continue;
+                        Require(c.BindingVariable, "a pattern binding", block);
+                        if (c is IROrPatternCase or) Patterns(or.Alternatives, block);
+                        if (c is IRTuplePatternCase tuple) Patterns(tuple.Elements, block);
+                    }
+                }
+
+                foreach (var block in function.Blocks ?? new List<BasicBlock>())
+                {
+                    if (block?.Instructions == null) continue;
+                    foreach (var inst in block.Instructions)
+                    {
+                        switch (inst)
+                        {
+                            case IRForEach forEach:
+                                Require(forEach.VariableName, "a For Each control variable", block.Name);
+                                break;
+                            case IRTryCatch tryCatch:
+                                foreach (var clause in tryCatch.CatchClauses ?? new List<IRCatchClause>())
+                                    Require(clause?.VariableName, "a Catch variable", block.Name);
+                                break;
+                            case IRSwitch sw:
+                                Patterns(sw.PatternCases, block.Name);
+                                break;
+                        }
+                    }
+                }
+            }
+            return violations;
+        }
+
+        /// <summary>
+        /// ⭐ Invariant T (ADR-0018 D4): a COMPILER TEMP never carries a name the program owns —
+        /// <c>IsCompilerTemp &amp;&amp; IsReserved(name)</c> is a violation: a name its function
+        /// reserves (<see cref="IRFunction.ReservedNames"/>) or a module-level name
+        /// (<see cref="IRFunction.ModuleReservedNames"/>, E3), for every value reachable from the
+        /// function's blocks (operand trees included) and every
+        /// <see cref="IRFunction.LocalVariables"/> entry.
+        ///
+        /// <para>This is ADR-0017's by-name KEEP in <c>DeadCodeEliminationPass</c>, converted. That
+        /// rule kept an unused temp whose name a variable spelled; its only witness was a temp that
+        /// shared its name with a user variable IRBuilder did not reserve (<c>CT_wbr_t0</c>). With
+        /// the reservation total, the minter never hands out such a name and the renamer separates
+        /// one minted before the declaration, so the shape cannot arise — and if a future leak lets
+        /// it, this names it instead of a keep hiding it as a wrong answer. Minted and reserved
+        /// names are disjoint by D2. Reads the IR only.</para>
+        /// </summary>
+        public static IReadOnlyList<InvariantViolation> CheckInvariantT(IRModule module)
+        {
+            var violations = new List<InvariantViolation>();
+            if (module == null) return violations;
+            foreach (var function in IRTempNames.AllFunctions(module))
+            {
+                if (function.ReservedNames.Count == 0 && (function.ModuleReservedNames?.Count ?? 0) == 0) continue;
+
+                void Check(IRValue value, string where)
+                {
+                    if (value == null || !value.IsCompilerTemp || string.IsNullOrEmpty(value.Name)) return;
+                    if (!function.IsReserved(value.Name)) return;
+                    violations.Add(new InvariantViolation
+                    {
+                        Invariant = "T",
+                        Function = function.Name,
+                        Value = value,
+                        Variable = value.Name,
+                        WriterBlock = where,
+                    });
+                }
+
+                foreach (var l in function.LocalVariables ?? new List<IRVariable>())
+                    Check(l, "LocalVariables");
+
+                var seen = new HashSet<IRInstruction>(ReferenceEqualityComparer.Instance);
+                foreach (var block in function.Blocks ?? new List<BasicBlock>())
+                {
+                    if (block?.Instructions == null) continue;
+                    var pending = new Stack<IRInstruction>(block.Instructions.Where(i => i != null));
+                    while (pending.Count > 0)
+                    {
+                        var inst = pending.Pop();
+                        if (inst == null || !seen.Add(inst)) continue;
+                        if (inst is IRValue v) Check(v, block.Name);
+                        foreach (var operand in CodeGen.IROperandWalker.EnumerateOperands(inst))
+                            pending.Push(operand);
+                    }
+                }
+            }
+            return violations;
         }
 
         /// <summary>

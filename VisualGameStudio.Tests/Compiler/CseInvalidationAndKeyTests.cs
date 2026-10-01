@@ -913,37 +913,35 @@ public class CseKeyEncodingUnitTests
 /// must SURVIVE the fix. Over-killing is invisible by value, so this is a COUNT from a single
 /// <c>pass.Run</c>.
 ///
-/// <para>⛔⛔ READ THIS BEFORE TRUSTING THE NUMBERS. <b>Not all of the sample programs compile
-/// today.</b> Measured through the CLI at this commit:</para>
+/// <para>✅ <b>All three sample programs compile since #123</b> (re-measured, D4): an untyped
+/// <c>Const</c> takes its constant's type, VB's <c>If(c, a, b)</c> parses, and Samples/Pong and
+/// Samples/SpaceShooter were made valid code (the <c>KEY_*</c> constants, BasicLang's engine API
+/// names, explicit <c>CSng</c>). The parser and the analyzer are CLEAN on each, and the IR is
+/// built from a front end that accepts the sample:</para>
 /// <list type="bullet">
-/// <item><c>Samples/Platformer/Main.bas</c> — PARSE and SEMANTIC ANALYSIS are both clean. The old
-/// 2 SEMANTIC errors at line 276 ("cannot convert from 'Double' to 'Single'") were FIXED on master
-/// by #66, "make the game template build again" (9e76128), which touched
-/// <c>BasicLang/SemanticAnalyzer.cs</c> and <c>StdLib/FrameworkStdLib.cs</c>. Its IR is faithful; in
-/// particular <c>TILE_SIZE</c> really is <c>IsGlobal=true, IsConst=true</c> and its merges really do
-/// depend on the <c>Const</c> exemption. Re-measured through the CLI: it now compiles end to end on
-/// the C#, C++, and LLVM backends (JavaScript and MSIL still fail there, but on unrelated,
-/// pre-existing gaps — an undeclared <c>GameInit</c> lowering and 2D-array MSIL support,
-/// respectively, not this fixture's concern).</item>
-/// <item><c>Samples/SpaceShooter/Main.bas</c> — PARSE errors:
-/// <c>Const SCREEN_WIDTH = 800</c> has no <c>As</c> clause. The parser records the error and
-/// synchronizes past the whole <c>Const</c> block, so those identifiers reach the IR as
-/// <c>IsGlobal=false, IsConst=false</c> — MEASURED. Under ADR-0006 D3 an undeclared name like
-/// this defaults to call-visible (see <c>SampleGameMergesSurviveTheFixTest</c>'s remarks), so
-/// SpaceShooter now makes 0 merges; its former merges read these plain, undeclared-looking names
-/// and said NOTHING about the <c>Const</c> exemption even when there were some.</item>
-/// <item><c>Samples/Pong/Main.bas</c> has NO ROW HERE AT ALL: it does not reach the IR. With the
-/// parse damage above, <c>IRBuilder</c> THROWS on it — "the module-level variable 'ballVY' has an
-/// initializer that cannot be computed at compile time". There is no CSE count to pin. "The repo's
-/// sample programs" is therefore TWO programs, not three.</item>
+/// <item><c>Samples/Platformer/Main.bas</c> — 6 merges, unchanged. <c>TILE_SIZE</c> really is
+/// <c>IsGlobal=true, IsConst=true</c> and its merges really do depend on the <c>Const</c>
+/// exemption.</item>
+/// <item><c>Samples/SpaceShooter/Main.bas</c> — <b>0 merges</b>, now measured on a CLEAN front end.
+/// The earlier 0 was measured on IR built PAST a parse error (<c>Const SCREEN_WIDTH = 800</c> had
+/// no <c>As</c>; the parser synchronized past the whole <c>Const</c> block, so those names reached
+/// the IR as undeclared and call-visible). The number is the same and its provenance is not:
+/// every <c>Const</c> is now a real <c>IsGlobal, IsConst</c> global and still nothing merges,
+/// because the <c>/</c> casts both operands to <c>Double</c> through fresh temps.</item>
+/// <item><c>Samples/Pong/Main.bas</c> — <b>1 merge</b>. It had no row: with the parse damage
+/// <c>IRBuilder</c> THREW on it ("the module-level variable 'ballVY' has an initializer that
+/// cannot be computed at compile time"), so there was nothing to count. "The repo's sample
+/// programs" is three programs again.</item>
 /// </list>
 ///
 /// <para>This fixture builds the IR the way the measurement did — front end run, its verdict
 /// IGNORED — which is deliberately NOT what <c>JsTestSupport.BuildModule</c> does (that helper
 /// throws on a rejected front end, on purpose, and it is right to). The front-end status is
 /// asserted alongside the counts so the numbers' provenance is part of the test rather than a
-/// comment: if a sample is ever FIXED, this fails loudly and the counts must be re-measured rather
-/// than silently drifting.</para>
+/// comment: if a sample STOPS compiling (the front end regresses, or the sample is edited into
+/// something the front end refuses), this fails loudly and the counts must be re-measured rather
+/// than silently drifting. ⛔ Every row is pinned <c>(true, true)</c>; a <c>false</c> here would
+/// mean the count was taken from IR the compiler never builds for a user.</para>
 ///
 /// <para>⚠ The robust, program-independent form of this contract item is
 /// <see cref="CseInvalidationDecisionTests"/>'s <c>ConstGlobalAcrossACall</c> and
@@ -968,10 +966,15 @@ public class CseSampleCorpusTests
     /// <param name="analyzeClean">Whether the SEMANTIC ANALYZER accepts it today.</param>
     ///
     /// <remarks>
-    /// ⭐ SpaceShooter: 5 → 4 (ADR-0001 Obligations / ADR-0004 D2, see 8b17c47) → <b>4 → 0 under
+    /// ✅ #123 (D4): RE-MEASURED with the front end CLEAN — Platformer 6, SpaceShooter 0, Pong 1, each
+    /// <c>(parseClean, analyzeClean) = (true, true)</c>. Below is the history of the SpaceShooter
+    /// number, measured while the front end REJECTED that sample; it is kept because it explains why
+    /// 0 is the right count and not an over-kill.
+    ///
+    /// <para>⭐ SpaceShooter: 5 → 4 (ADR-0001 Obligations / ADR-0004 D2, see 8b17c47) → <b>4 → 0 under
     /// ADR-0006 D3</b>, a deviation from D3's own Contract ("the corpus pins as they stand ... are
     /// preserved") DECIDED BY THE ORCHESTRATOR, recorded here rather than by the architect — see
-    /// the ADR-0006 implementation note.
+    /// the ADR-0006 implementation note.</para>
     ///
     /// <para>MEASURED, both sides, against the same <c>Samples/SpaceShooter/Main.bas</c> (which
     /// does not build — 7 PARSE errors, <c>Const SCREEN_WIDTH = 800</c> has no <c>As</c> clause,
@@ -999,7 +1002,8 @@ public class CseSampleCorpusTests
     /// asserted unchanged for that reason, not by accident.</para>
     /// </remarks>
     [TestCase("Platformer", 6, true, true, TestName = "Corpus_Platformer_Makes6Merges")]
-    [TestCase("SpaceShooter", 0, false, false, TestName = "Corpus_SpaceShooter_Makes0Merges")]
+    [TestCase("SpaceShooter", 0, true, true, TestName = "Corpus_SpaceShooter_Makes0Merges")]
+    [TestCase("Pong", 1, true, true, TestName = "Corpus_Pong_Makes1Merge")]
     public void SampleGameMergesSurviveTheFixTest(string sample, int expectedMerges, bool parseClean, bool analyzeClean)
     {
         var path = FindRepoFile("Samples", sample, "Main.bas");

@@ -1415,33 +1415,56 @@ public class MsilObjectBoxingExecutionTests
             + $"'{L09Expected}') means #215 moved — update this pin, do not just delete it.");
     }
 
-    // #214 — the optimizer folds a mixed-type Object constant compare WRONG, on every backend
-    // that runs it at all (C#, JavaScript, MSIL); C++ refuses (Object has no C++ mapping).
-    // Silent wrong answer, so pinned VISIBLY as today's "False | False" rather than left
-    // undiscovered.
+    // #214, NARROWED by #123. The optimizer used to fold this mixed-type constant compare WRONG
+    // ("False | False") on every backend that runs it (C#, JavaScript, MSIL): copy propagation puts
+    // the Object's constant into the compare, and ConstantFoldingPass.TryFoldCompare knew only
+    // same-type pairs. #123 compares two numeric constants of different widths in the WIDER one,
+    // as VB does — and for two NUMERIC boxes VB's late-bound compare widens the same way, so the
+    // fold now gives VB's own answer here. C++ still refuses (Object has no C++ mapping).
+    // ⚠ #214 stays OPEN for what the fold cannot see: a boxed String compared with a number (VB
+    // converts the String late-bound; the fold's Equals says "unequal") — pinned as L11b.
     private const string L11 = "Sub Main()\n Dim o As Object = 20\n Console.WriteLine(o = 20.0)\n"
         + " Dim d As Object = 2.5\n Console.WriteLine(d > 2)\nEnd Sub\n";
 
     [Test]
-    public void L11_FoldedObjectConstants_PinsPreExistingWrongAnswer_Against214_OnEveryBackend()
+    public void L11_FoldedNumericObjectConstants_AnswerLikeVb_OnEveryBackend()
     {
-        const string wrongToday = "False\nFalse";
+        const string vb = "True\nTrue";   // 20 = 20.0 and 2.5 > 2, measured with vbc
         Assert.Multiple(() =>
         {
-            Assert.That(Norm(FourBackends.RunEmittedCSharp(L11)), Is.EqualTo(wrongToday), "C#");
+            Assert.That(Norm(FourBackends.RunEmittedCSharp(L11)), Is.EqualTo(vb), "C#");
             // JavaScriptExecutionTests.RunJs does not run the IR optimizer at all (FourBackends'
-            // own doc comment), so it never reaches the fold this pin is about and prints VB's
-            // correct "True | True" instead — the STANDARD-pipeline JS run is the one that goes
-            // through the same OptimizationPipeline.AddStandardPasses() the CLI always runs, and
-            // is where the wrong fold actually shows up (measured while writing this probe).
-            Assert.That(Norm(JavaScriptOptimizedExecutionTests.RunOptimized(L11)), Is.EqualTo(wrongToday),
+            // own doc comment), so it never reaches the fold this test is about — the
+            // STANDARD-pipeline JS run is the one that goes through the same
+            // OptimizationPipeline.AddStandardPasses() the CLI always runs.
+            Assert.That(Norm(JavaScriptOptimizedExecutionTests.RunOptimized(L11)), Is.EqualTo(vb),
                 "JavaScript (optimizer-running pipeline)");
             AssertCppRefuses(L11);
         });
-        AssertMsilAllEntryPoints(L11, wrongToday);
-        // VB's actual answer is "True | True" — 20 = 20.0 and 2.5 > 2 are both true. A change
-        // to "True | True" on every backend above means task #214 (the optimizer's mixed-type
-        // constant fold) is fixed; update this pin's `wrongToday` rather than deleting the test.
+        AssertMsilAllEntryPoints(L11, vb);
+    }
+
+    // #214 — what REMAINS after #123: a boxed String against a number is not a numeric pair, so
+    // the fold still answers with Equals ("unequal") where VB converts the String to Double
+    // late-bound. Silent wrong answer, pinned VISIBLY as today's output rather than left
+    // undiscovered.
+    private const string L11b = "Sub Main()\n Dim s As Object = \"20\"\n Console.WriteLine(s = 20)\n"
+        + " Console.WriteLine(s <> 20)\nEnd Sub\n";
+
+    [Test]
+    public void L11b_FoldedStringVersusNumberObjectConstants_PinsWrongAnswer_Against214()
+    {
+        const string wrongToday = "False\nTrue";   // vbc: "True | False"
+        Assert.Multiple(() =>
+        {
+            Assert.That(Norm(FourBackends.RunEmittedCSharp(L11b)), Is.EqualTo(wrongToday), "C#");
+            Assert.That(Norm(JavaScriptOptimizedExecutionTests.RunOptimized(L11b)), Is.EqualTo(wrongToday),
+                "JavaScript (optimizer-running pipeline)");
+            AssertCppRefuses(L11b);
+        });
+        AssertMsilAllEntryPoints(L11b, wrongToday);
+        // A change to vbc's "True | False" on every backend above means the rest of #214 is fixed;
+        // update `wrongToday` rather than deleting the test.
     }
 
     // #216 — an Optional parameter typed Object with a non-null default refuses to compile on
