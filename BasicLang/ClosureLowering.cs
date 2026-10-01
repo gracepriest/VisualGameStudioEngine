@@ -13,11 +13,13 @@ namespace BasicLang.Compiler.IR
     /// and every lambda value and <c>AddressOf</c> into an <see cref="IRDelegateCreate"/>.
     ///
     /// <para><b>Opt-in, after the optimizer and the verifier (D1).</b> Only a backend that asks
-    /// for it runs it — MSIL today, from the top of <c>MSILCodeGenerator.Generate</c>, which is the
-    /// one seam every MSIL entry point (the CLI, a <c>.blproj</c> build, the IDE, the test harness)
-    /// goes through. It lowers a CLONE: the module it is handed is never written, so a pipeline
-    /// that emits MSIL and then C# from one module gives C# exactly what it got before. C#,
-    /// JavaScript and C++ lower lambdas their own way and never see the output.</para>
+    /// for it runs it, each from the one seam all of its entry points share: MSIL from the top of
+    /// <c>MSILCodeGenerator.Generate</c> (<see cref="ClosureLoweringOptions.Msil"/>: refusals throw),
+    /// C++ from <c>CppCodeGenerator.LowerClosures</c> (#140: a root the pass cannot lower is
+    /// skipped, see <see cref="UnloweredRootPolicy.Skip"/>). It lowers a CLONE: the module it is
+    /// handed is never written, so a pipeline that emits MSIL and then C# from one module gives C#
+    /// exactly what it got before. C# and JavaScript lower lambdas their own way and never see the
+    /// output.</para>
     ///
     /// <para><b>The environment model (D2 as amended, D5, D6).</b></para>
     /// <list type="bullet">

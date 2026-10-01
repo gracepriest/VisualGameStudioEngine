@@ -48,6 +48,9 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             if (capabilityDiags.Count > 0)
                 throw new CppCapabilityException(capabilityDiags);
 
+            // #140: closures through ClosureLowering — the same seam as Generate().
+            combined = LowerClosures(combined);
+
             // Same per-Generate state reset as Generate()
             _module = combined;
             _output.Clear();
@@ -223,6 +226,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 WriteLine("// Forward declarations");
                 foreach (var irClass in module.Classes.Values)
                 {
+                    if (ClosureLowering.IsEnvironmentClass(irClass)) continue;   // nested (EmitNestedEnvironments)
                     var fwdTemplate = TemplatePrefix(irClass.GenericParameters);
                     if (fwdTemplate != null) WriteLine(fwdTemplate);
                     WriteLine($"{(irClass.IsStruct ? "struct" : "class")} {SanitizeName(irClass.Name)};");
@@ -272,9 +276,11 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 WriteLine("// Classes");
                 foreach (var irClass in module.ClassesBaseFirst())   // KEEP IN SYNC with Generate()
                 {
+                    if (ClosureLowering.IsEnvironmentClass(irClass)) continue;   // nested (EmitNestedEnvironments)
                     GenerateClass(irClass);
                     WriteLine();
                 }
+                EmitClosureHolder();
 
                 // Static member definitions as C++17 inline variables: header-safe under
                 // multiple inclusion across translation units (D3).

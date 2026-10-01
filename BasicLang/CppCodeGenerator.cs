@@ -96,6 +96,10 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             if (capabilityDiags.Count > 0)
                 throw new CppCapabilityException(capabilityDiags);
 
+            // #140: closures through ClosureLowering, after the checker (which reads the IR as the
+            // optimizer left it) and before anything is emitted.
+            module = LowerClosures(module);
+
             _module = module;
             _output.Clear();
             _valueNames.Clear();
@@ -127,6 +131,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 WriteLine("// Forward declarations");
                 foreach (var irClass in module.Classes.Values)
                 {
+                    if (ClosureLowering.IsEnvironmentClass(irClass)) continue;   // nested (EmitNestedEnvironments)
                     var fwdTemplate = TemplatePrefix(irClass.GenericParameters);
                     if (fwdTemplate != null) WriteLine(fwdTemplate);
                     WriteLine($"{(irClass.IsStruct ? "struct" : "class")} {SanitizeName(irClass.Name)};");
@@ -190,9 +195,11 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 WriteLine("// Classes");
                 foreach (var irClass in module.ClassesBaseFirst())
                 {
+                    if (ClosureLowering.IsEnvironmentClass(irClass)) continue;   // nested (EmitNestedEnvironments)
                     GenerateClass(irClass);
                     WriteLine();
                 }
+                EmitClosureHolder();
 
                 // Generate static member initializations outside class
                 WriteLine("// Static member initializations");
@@ -632,6 +639,8 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // already get.
             if (type == null) return "void*";
             if (type.Kind == TypeKind.TypeParameter) return SanitizeName(type.Name);
+            // #140: a closure environment is a class nested in its creator's class (or the holder).
+            if (IsEnvironmentClassName(type.Name)) return $"std::shared_ptr<{EnvironmentTypeName(type.Name)}>";
 
             // P2a-2 Task 9 (spec §8.5) — THE CATEGORY MARKER, TESTED FIRST. ORDER IS THE WHOLE
             // POINT and is pinned by a mutation test
@@ -1419,7 +1428,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 foreach (var field in privateFields)
                 {
                     var staticMod = field.IsStatic ? "static " : "";
-                    var type = MapType(field.Type);
+                    var type = FieldCppType(irClass, field);
                     var name = SanitizeName(field.Name);
                     var init = field.IsStatic ? "" : FieldInitializer(field);
                     WriteLine($"{staticMod}{type} {name}{init};");
@@ -1437,7 +1446,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 foreach (var field in protectedFields)
                 {
                     var staticMod = field.IsStatic ? "static " : "";
-                    var type = MapType(field.Type);
+                    var type = FieldCppType(irClass, field);
                     var name = SanitizeName(field.Name);
                     var init = field.IsStatic ? "" : FieldInitializer(field);
                     WriteLine($"{staticMod}{type} {name}{init};");
@@ -1450,12 +1459,16 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             WriteLine("public:");
             Indent();
 
+            // #140: the closure environments this class's members create, nested so that their
+            // inline bodies and this class's see each other complete.
+            EmitNestedEnvironments(irClass);
+
             // Public fields
             var publicFields = irClass.Fields.Where(f => f.Access == AccessModifier.Public).ToList();
             foreach (var field in publicFields)
             {
                 var staticMod = field.IsStatic ? "static " : "";
-                var type = MapType(field.Type);
+                var type = FieldCppType(irClass, field);
                 var name = SanitizeName(field.Name);
                 var init = field.IsStatic ? "" : FieldInitializer(field);
                 WriteLine($"{staticMod}{type} {name}{init};");
@@ -2554,11 +2567,14 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 // prevents, and for a Sub it would be `Pointer To Void`, which the void check
                 // above does NOT catch: it tests the literal "void", not "Pointer To Void".
                 .Where(t => t is not IRUnaryOp { Operation: UnaryOpKind.AddressOf })
-                .Where(t => !CppExceptionTypes.IsNetException(t.Type?.Name))
+                // #140: a captured Catch variable read from its environment IS a value (exception_ptr).
+                .Where(t => !CppExceptionTypes.IsNetException(t.Type?.Name) || IsCapturedExceptionValue(t))
                 // §11.1: a `<catchVar>.Message` read lowers to
                 // BasicLang::String(v.what()) — its temp must be std::string
                 // regardless of what the analyzer inferred (often Object -> void*).
-                .GroupBy(t => _catchMessageAccesses.Contains(t) ? "std::string" : MapType(t.Type))
+                .GroupBy(t => _catchMessageAccesses.Contains(t) || IsCapturedExceptionMessage(t) ? "std::string"
+                              : IsCapturedExceptionValue(t) ? CapturedExceptionType
+                              : MapType(t.Type))
                 .ToList();
 
             foreach (var group in tempsByType)
@@ -2881,6 +2897,18 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             bool OwnedByOuterConstruct(BasicBlock b) =>
                 entryIndex >= 0 && creationIndex.TryGetValue(b, out var bi) && bi < entryIndex;
 
+            // An Exit out of a loop whose body this region does not contain LEAVES the region (MSIL's
+            // #226 rule, MSILCodeGenerator.CollectRegionBlocks; IRLoops.BodyRegion's too). The
+            // creation-order test above cannot see it when the region's entry was created AFTER the
+            // loop's end block, which is exactly ClosureLowering's per-iteration try (ADR-0014 A1):
+            // its entry block is inserted into an existing loop body, so the walk followed the Exit
+            // into everything after the loop and wrote it inside the try ("cannot jump from this goto
+            // statement to its label", measured on t172 E06/E07 under #140).
+            var loopByEnd = IRLoops.ByEnd(IRLoops.Of(_currentFunction));
+            bool LeavesRegion(BasicBlock from, BasicBlock to) =>
+                from.GetTerminator() is IRBranch { IsLoopExit: true } exit && ReferenceEquals(exit.Target, to)
+                && loopByEnd.TryGetValue(to, out var exited) && exited.Body != null && !region.Contains(exited.Body);
+
             var stack = new Stack<BasicBlock>();
             stack.Push(entry);
             while (stack.Count > 0)
@@ -2888,7 +2916,8 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 var block = stack.Pop();
                 if (block == null || block == boundary || !region.Add(block)) continue;
                 foreach (var succ in ControlFlowTargets(block))
-                    if (succ != null && succ != boundary && !region.Contains(succ) && !OwnedByOuterConstruct(succ))
+                    if (succ != null && succ != boundary && !region.Contains(succ) && !OwnedByOuterConstruct(succ)
+                        && !LeavesRegion(block, succ))
                         stack.Push(succ);
             }
 
@@ -5370,7 +5399,9 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             }
             else
             {
-                bareName = SanitizeName(newObj.ClassName);
+                bareName = IsEnvironmentClassName(newObj.ClassName)
+                    ? EnvironmentTypeName(newObj.ClassName)
+                    : SanitizeName(newObj.ClassName);
             }
 
             var args = string.Join(", ", newObj.Arguments.Select(a => GetValueName(a)));
@@ -5612,6 +5643,13 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // Result temps are pre-declared by DeclareLocalsAndTemporaries: assign, don't redeclare.
             var result = GetValueName(fieldAccess);
 
+            // #140: the Message of a captured Catch variable — the what() of its exception_ptr.
+            if (IsCapturedExceptionMessage(fieldAccess))
+            {
+                WriteLine($"{result} = {CapturedExceptionMessage(GetValueName(fieldAccess.Object))};");
+                return;
+            }
+
             // P2a-2 Task 7a: a resolved .NET property/field READ lowers to the getter-shaped
             // property slot (§9.2); a STATIC one drops the phantom type-name receiver. A catch
             // variable's Message is tested FIRST (see FieldReadExpression).
@@ -5777,7 +5815,9 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // would be wrong the moment an index variable changes between the read and its use.
             // Classes are unaffected either way — a shared_ptr copy still aliases one object.
             var fieldName = SanitizeName(fieldStore.FieldName);
-            var value = GetValueName(fieldStore.Value);
+            // #140: a handler copying its caught exception into the closure environment keeps the
+            // exception itself (its dynamic type included), not a copy sliced to a base class.
+            var value = IsCapturedExceptionStore(fieldStore) ? "std::current_exception()" : GetValueName(fieldStore.Value);
 
             // The write half of AccessorPropertyOf: a property with a Set body has no member to
             // assign — call its setter.
@@ -6342,6 +6382,13 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             if (throwInst.Exception == null)
             {
                 WriteLine("throw;");
+                return;
+            }
+
+            // #140: Throw of a captured Catch variable rethrows the very exception that was caught.
+            if (IsCapturedExceptionValue(throwInst.Exception))
+            {
+                WriteLine($"std::rethrow_exception({GetValueName(throwInst.Exception)});");
                 return;
             }
 
