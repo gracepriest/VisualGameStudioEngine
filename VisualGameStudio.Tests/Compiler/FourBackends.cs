@@ -135,26 +135,7 @@ internal static class FourBackends
 
     internal static string RunEmittedCSharpText(string csharp)
     {
-        var references = AppDomain.CurrentDomain.GetAssemblies()
-            .Where(a => !a.IsDynamic && !string.IsNullOrEmpty(a.Location))
-            .Select(a => MetadataReference.CreateFromFile(a.Location))
-            .Cast<MetadataReference>()
-            .ToImmutableArray();
-
-        var compilation = CSharpCompilation.Create(
-            "FourBackendsProbe_" + Guid.NewGuid().ToString("N"),
-            new[] { CSharpSyntaxTree.ParseText(csharp) },
-            references,
-            new CSharpCompilationOptions(OutputKind.ConsoleApplication));
-
-        using var ms = new MemoryStream();
-        var emitted = compilation.Emit(ms);
-        Assert.That(emitted.Success, Is.True,
-            "the emitted C# does not compile:\n" + string.Join("\n",
-                emitted.Diagnostics.Where(d => d.Severity == DiagnosticSeverity.Error).Select(d => d.ToString()))
-            + "\n--- emitted ---\n" + csharp);
-
-        var assembly = Assembly.Load(ms.ToArray());
+        var assembly = Assembly.Load(CompileEmittedCSharp(csharp));
         var entry = assembly.EntryPoint;
         Assert.That(entry, Is.Not.Null, "no entry point in the emitted program");
 
@@ -175,5 +156,34 @@ internal static class FourBackends
             Console.SetOut(original);
         }
         return captured.ToString();
+    }
+
+    /// <summary>
+    /// The Roslyn half of <see cref="RunEmittedCSharpText"/>: emitted C# in, a console assembly's bytes out,
+    /// asserting it compiles. ⭐ SHARED, not copied: <see cref="CSharpProcessRunner"/> (the out-of-process,
+    /// time-limited runner, #256) compiles through this and only RUNS differently, so the two runners cannot
+    /// disagree about what "the emitted C# compiles" means.
+    /// </summary>
+    internal static byte[] CompileEmittedCSharp(string csharp)
+    {
+        var references = AppDomain.CurrentDomain.GetAssemblies()
+            .Where(a => !a.IsDynamic && !string.IsNullOrEmpty(a.Location))
+            .Select(a => MetadataReference.CreateFromFile(a.Location))
+            .Cast<MetadataReference>()
+            .ToImmutableArray();
+
+        var compilation = CSharpCompilation.Create(
+            "FourBackendsProbe_" + Guid.NewGuid().ToString("N"),
+            new[] { CSharpSyntaxTree.ParseText(csharp) },
+            references,
+            new CSharpCompilationOptions(OutputKind.ConsoleApplication));
+
+        using var ms = new MemoryStream();
+        var emitted = compilation.Emit(ms);
+        Assert.That(emitted.Success, Is.True,
+            "the emitted C# does not compile:\n" + string.Join("\n",
+                emitted.Diagnostics.Where(d => d.Severity == DiagnosticSeverity.Error).Select(d => d.ToString()))
+            + "\n--- emitted ---\n" + csharp);
+        return ms.ToArray();
     }
 }

@@ -32,9 +32,6 @@ namespace VisualGameStudio.Tests.Compiler;
 //    c1mod   MSIL        `Not E` over a Boolean Const prints True: MSIL's `Not` is bitwise.       #257     twin c1modB
 //    c5big   JavaScript  BL7003 — a Long constant, by design (a JS number is a double).           none
 //    i1side  MSIL        `If(Not t, …)` takes the wrong arm, same MSIL `Not`.                     #257     twin i1sideB
-//    i4loop  C#          ⛔⛔ HANGS. `While If(…)` / `Do While If(…)` / `Loop Until If(…)` compute the condition's control flow ONCE,
-//                        before the loop, so the loop never ends (the same is true of AndAlso on master).   #256
-//                        NEVER run it on C# without a timeout. i4forB runs the For bounds on C#.
 //    i4loop  JavaScript  "a loop header whose branch does not target the loop's own .end block" — refused.   #257
 //    i4forB  JavaScript  the same refusal, for an If() in a For bound.                                        #257
 //    i5lambda C#         CS1643 — a lambda whose body has control flow is emitted without its return paths.  #136
@@ -46,7 +43,11 @@ namespace VisualGameStudio.Tests.Compiler;
 //    MC2     all         a Module-block Const in a file that comes AFTER its user is Object, typed or not — pre-existing,
 //                        no task; MC1 (first) and MC3 (last, no Module block) are the rows.
 //
-//  ⚠ #256 and #257 are the inherited defects the carrier lowering shares with `AndAlso`/`OrElse`; they are not introduced by #123.
+//  ✅ i4loop on C# is a row since #256 was fixed (it HUNG: `While If(…)` / `Do While If(…)` / `Loop Until If(…)` computed the condition's control
+//     flow ONCE, before the loop, so the loop never ended — as AndAlso did). ⛔ Its C# cell is HANG-SAFE (`TempProbe.HangSafe`): it runs in a child
+//     process with a 20 s limit (CSharpProcessRunner), because a regression of #256 hangs it again and the in-process runner would freeze the whole
+//     test host, not just the test. The loop family is exercised in full by LoopConditionReevaluationExecutionTests.
+//  ⚠ #257 is the inherited defect the carrier lowering shares with `AndAlso`/`OrElse`; it is not introduced by #123. (#256, the other one, is fixed.)
 //  ⚠ Every other row is one the conditional and the constant DO run correctly on, in all three entry points.
 // ================================================================================================
 
@@ -517,10 +518,10 @@ internal static class UntypedConstAndConditionalProbes
         for 1
         for 2
         for 3
-        """, Bk.Cpp | Bk.Msil);
+        """, Bk.CSharp | Bk.Cpp | Bk.Msil, HangSafe: true);
 
     internal static readonly TempProbe i4forB = new("i4forB", """
-        ' D2 (For bounds): If() in a counted For's bounds (C# #256 covers the While/Do condition forms only; JavaScript refuses a loop header with control flow)
+        ' D2 (For bounds): If() in a counted For's bounds (computed ONCE before the loop, as VB does: the #256 fix leaves a counted For alone; JavaScript refuses a loop header with control flow, #257)
         Sub Main()
             Dim useTick As Boolean = True
             For j = If(useTick, 1, 5) To If(useTick, 3, 9)
@@ -1015,8 +1016,8 @@ public class UntypedConstAndConditionalExecutionTests
     /// <summary>
     /// The tables ARE the proof, so their shape is pinned: a row cannot vanish (or a backend be dropped from a row) without this
     /// test saying so. It is also the fixture's one plain <c>[Test]</c> — <c>JsExecutionTierRosterTests</c> counts attributes, and a
-    /// fixture whose tests are all <c>[TestCaseSource]</c> counts as empty. When #256 or #257 lands the excluded cells gain their
-    /// backend and this changes on purpose.
+    /// fixture whose tests are all <c>[TestCaseSource]</c> counts as empty. #256 landed and i4loop gained its C# cell (56 cells now); when
+    /// #257 lands the excluded cells gain their backend and this changes on purpose.
     /// </summary>
     [Test]
     public void TheTables_HaveTheirRows()
@@ -1030,7 +1031,7 @@ public class UntypedConstAndConditionalExecutionTests
             Assert.That(Ids(ConditionalCells()), Is.EqualTo("i1side,i1sideB,i2types,i3nest,i4loop,i4forB,i5lambda,i6arg,i6argB,i7guard,i8const,i9select,i10sc,i11cls,i12pong,i13obj,i13objB,i14pos"));
             Assert.That(Ids(ProjectConstCells()), Is.EqualTo("MC1,MC3,MC3r"));
             Assert.That(ConstCells().Count(), Is.EqualTo(23), "D1 cells (probe x backend)");
-            Assert.That(ConditionalCells().Count(), Is.EqualTo(55), "D2 cells (probe x backend)");
+            Assert.That(ConditionalCells().Count(), Is.EqualTo(56), "D2 cells (probe x backend)");
             Assert.That(ProjectConstCells().Count(), Is.EqualTo(12), "MC1 x4, MC3 x4, MC3r x4");
 
             // The side-effect contract is held on all four backends: every backend has a row that prints which arm ran.
@@ -1038,8 +1039,10 @@ public class UntypedConstAndConditionalExecutionTests
             foreach (var backend in new[] { Bk.CSharp, Bk.Cpp, Bk.JavaScript, Bk.Msil })
                 Assert.That(sideEffect.Any(p => p.Agrees.HasFlag(backend)), Is.True, $"no only-the-chosen-operand row on {backend}");
 
-            // ⛔ i4loop must never reach C#: it hangs (#256).
-            Assert.That(UntypedConstAndConditionalProbes.i4loop.Agrees.HasFlag(Bk.CSharp), Is.False, "i4loop on C# hangs (#256)");
+            // ✅ #256 is fixed: i4loop has its C# cell. ⛔ And that cell must stay HANG-SAFE — a regression hangs the loop, and an in-process run of a
+            // hanging C# loop freezes the whole test host (no timeout reaches a synchronous spin).
+            Assert.That(UntypedConstAndConditionalProbes.i4loop.Agrees.HasFlag(Bk.CSharp), Is.True, "i4loop runs on C# since #256");
+            Assert.That(UntypedConstAndConditionalProbes.i4loop.HangSafe, Is.True, "i4loop's C# cell goes through the time-limited child-process runner");
         });
     }
 
@@ -1076,5 +1079,5 @@ public class UntypedConstAndConditionalExecutionTests
     /// </summary>
     [TestCaseSource(nameof(ConditionalCells))]
     public void AConditionalExpression_PrintsVbsAnswer_InEveryEntryPoint(TempProbe probe, Bk backend)
-        => TempExec.AssertMatchesInEveryEntryPoint(backend, probe.Source, probe.Vb, probe.Id);
+        => TempExec.AssertMatchesInEveryEntryPoint(backend, probe.Source, probe.Vb, probe.Id, probe.HangSafe);
 }

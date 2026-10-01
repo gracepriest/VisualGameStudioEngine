@@ -85,6 +85,9 @@ another test goes green.
 - **Validate codegen through the CLI *and* the IR optimizer**, not only the non-optimizing
   unit-test helper — the green suite has hidden bugs the optimizer/CLI exposed. Run the CLI,
   or use the optimizer-running test helper (`CompileToCppOptimized` in `CppCollectionTests.cs`).
+- **A test that RUNS a loop on C# goes through `CSharpProcessRunner` (or `TempProbe.HangSafe`)**,
+  never the in-process `FourBackends.RunEmittedCSharp*`: those have no timeout, so a hanging
+  loop freezes the whole test host instead of failing one test (#256; #227 can still hang).
 - **Test both entry points.** The IDE build delegates to the CLI engine
   (`CompileProjectFiles`); a fix verified only through the test helper can still break
   via the IDE or the CLI. Exercise both.
