@@ -1,8 +1,8 @@
 # ADR 0019: C++ closures — ClosureLowering by default, with a W2-gated by-copy fallback
 
 - **Date:** 2026-10-01
-- **Status:** Accepted. One question inside it, E16 (D4), is an OWNER DECISION and is PENDING; the
-  default in force is stated there.
+- **Status:** Accepted. The one question inside it the architect left to the owner, E16 (D4), was
+  decided by the owner on 2026-10-01: **admit** (the architect's default).
 - **Decided by:** the architect's ruling for #140 (D1–D5, binding), transcribed from its saved text.
   Nothing under the Decision headings is editorialised. The two implementer interpretations
   ("Implementation: what the ruling left to the implementer") and the measurements are marked as
@@ -171,12 +171,13 @@ pinned as a clang failure named for the `List.ForEach` gap, not as a lambda defe
 
 **Revisit if:** #229 is fixed on one backend and E16's four-backend pin cannot flip together.
 
-**E16 — OWNER DECISION PENDING.** The default in force is "admit": C++ runs E16 and prints 20|20|20|20,
-the #229 output, as C#, JavaScript and MSIL do (VB prints 1|2|10|20). The test is
+**E16 — OWNER DECISION (2026-10-01): ADMIT.** The owner chose the architect's default: C++ runs E16 and
+prints 20|20|20|20, the #229 output, as C#, JavaScript and MSIL do (VB prints 1|2|10|20). Rule one is read
+per CLASS of wrong answer, not per backend: E16 joins the filed #229 class, and one fix flips all four
+backends together. The test is
 `PerIterationLoopBodyDimExecutionTests.E16_SiblingLoopsSameName_KnownWrongOnAllFourBackends_PinnedForTask229`,
-one `[TestCase]` row per backend, so that if the owner rules rule one is per BACKEND — C++ refuses E16 by
-name until #229 is fixed — only the `cpp` row flips (to an `Assert.Throws<CppCapabilityException>`). The
-implementer's estimate of that alternative (not part of the ruling): the predicate already exists as a
+one `[TestCase]` row per backend. The rejected alternative — C++ refuses E16 by name until #229 is fixed —
+is recorded for a future revisit. The implementer's estimate of it (not part of the ruling): the predicate already exists as a
 DECISION in `IRBuilder.AssignBodyLocals`, which leaves a loop-body `Dim` out of `BodyLocals` when its name is
 declared more than once in the function; recording that omission (one list beside `BodyLocals`, copied by
 `ModuleCloner`/`ClosureLowering` and read by the verifier's membership check) and refusing in the C++

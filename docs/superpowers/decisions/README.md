@@ -48,4 +48,4 @@ ADR they produced. Amendments are appended to the ADR they amend ("Amended by" i
 | 0016 | `MyBase.New(...)` is an instruction. **Amended by 0019** (D3's C++ arm: W2 is the by-copy fallback's soundness proof) |
 | 0017 | DCE removal licence: the compiler-temp marker |
 | 0018 | One reservation set per function; one door for an optimizer temp |
-| 0019 | C++ closures: ClosureLowering by default, with a W2-gated by-copy fallback (#140). E16 (#229) is an owner decision, PENDING |
+| 0019 | C++ closures: ClosureLowering by default, with a W2-gated by-copy fallback (#140). E16 (#229): the owner decided to admit it |

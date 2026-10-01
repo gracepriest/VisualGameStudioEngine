@@ -388,4 +388,4 @@ unchanged.*
 - **The refusal text.** W2's text is unchanged. A both-refused program's message continues with
   `closure lowering cannot lower '<root>' either (#140): C++: <reason>`.
 - **5b's "E16 stays a named clang failure" no longer holds:** E16 runs and prints the #229 output
-  (20|20|20|20) — ADR-0019 D4, the owner's decision pending.
+  (20|20|20|20) — ADR-0019 D4; the owner decided to admit it (2026-10-01).

@@ -40,9 +40,9 @@ master accepts change bytes, all lowered. MSIL: 3,423/3,423 cells identical agai
 D09 (a module-initializer lambda: non-local `[=]`; also the ONE pre-existing verifier fire, Invariant P(d)); D16 and L6 are lowered and fail clang (generic parameter `T`; `List.ForEach`). **Both-refused:** D07/R15, D14, M07/R12, E09, K13,
 RI1, RI2 (root identity — W2 and the lowering share `ClosureLowering.CreatorsOf`/`RootOf`).
 
-⚠ **E16 (#229) is an OWNER DECISION, PENDING.** Default in force: admitted — C++ prints 20|20|20|20 like the other three backends (VB: 1|2|10|20), pinned in ONE test over all four backends
-(`PerIterationLoopBodyDimExecutionTests.E16_SiblingLoopsSameName_KnownWrongOnAllFourBackends_PinnedForTask229`, one `[TestCase]` per backend). If the owner rules that C++ must refuse it by name until #229, only the `cpp` row
-flips. ADR-0019 D4 has the implementer's estimate of that alternative.
+⚠ **E16 (#229): the owner decided ADMIT (2026-10-01).** C++ prints 20|20|20|20 like the other three backends (VB: 1|2|10|20), pinned in ONE test over all four backends
+(`PerIterationLoopBodyDimExecutionTests.E16_SiblingLoopsSameName_KnownWrongOnAllFourBackends_PinnedForTask229`, one `[TestCase]` per backend); fixing #229 flips all four rows together. The rejected
+alternative (C++ refuses it by name until #229) and the implementer's estimate of it are in ADR-0019 D4.
 
 **#241 is fixed, not worked around.** A lambda nested in a lambda inside a class member (instance method, constructor, Shared method, property getter) failed `ilasm` — the root loop processed a creator lambda a second time.
 X22, X25 and E01_nested_lambda now run on MSIL (vbc: 2, 1, 21); N3-N6 print 403, 12, 203, 8 (`ClosureLoweringNestedCreatorExecutionTests`; the IR-level invariant is `ClosureLoweringOptionsContractTests`).

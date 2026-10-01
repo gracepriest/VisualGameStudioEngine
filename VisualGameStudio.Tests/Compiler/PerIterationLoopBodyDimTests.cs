@@ -1251,16 +1251,15 @@ public class PerIterationLoopBodyDimExecutionTests
     /// and prints the #229 answer. When #229 is fixed the four rows flip TOGETHER, to
     /// <c>E16Expected</c>.
     ///
-    /// <para>⚠ <b>OWNER DECISION PENDING (ruling D4).</b> The default in force is "admit": C++ runs E16 and
-    /// is pinned to the #229 output. If the owner rules that rule one ("never a wrong answer where there
-    /// was a loud failure") is per BACKEND, C++ must instead REFUSE E16 by name until #229 is fixed. That
-    /// flips ONLY the <c>cpp</c> row below to an <c>Assert.Throws&lt;CppCapabilityException&gt;</c>; the
-    /// other three rows are untouched.</para>
+    /// <para><b>Owner decision (ADR-0019 D4, 2026-10-01): ADMIT.</b> C++ runs E16 and is pinned to the #229
+    /// output with the other three backends; rule one is read per class of wrong answer, so fixing #229
+    /// flips all four rows together. The rejected alternative (C++ refuses E16 by name until #229) is
+    /// recorded in ADR-0019 D4.</para>
     /// </summary>
     [TestCase("csharp", TestName = "E16_SiblingLoopsSameName_KnownWrong_PinnedForTask229_csharp")]
     [TestCase("javascript", TestName = "E16_SiblingLoopsSameName_KnownWrong_PinnedForTask229_javascript")]
     [TestCase("msil", TestName = "E16_SiblingLoopsSameName_KnownWrong_PinnedForTask229_msil")]
-    [TestCase("cpp", TestName = "E16_SiblingLoopsSameName_KnownWrong_PinnedForTask229_cpp_OwnerDecisionPending")]
+    [TestCase("cpp", TestName = "E16_SiblingLoopsSameName_KnownWrong_PinnedForTask229_cpp")]
     public void E16_SiblingLoopsSameName_KnownWrongOnAllFourBackends_PinnedForTask229(string backend)
     {
         var source = PerIterationLoopBodyDimProbes.E16;
