@@ -213,6 +213,53 @@ public class BuildServicePipelineTests
     }
 
     // ------------------------------------------------------------------
+    // 3a. The repo's sample games through the IDE's BuildService (task #123)
+    // ------------------------------------------------------------------
+
+    /// <summary>
+    /// Samples/Pong, Samples/SpaceShooter and Samples/Platformer, built the way the IDE builds a project (BuildService, the
+    /// C# backend, `dotnet build` of the generated project, RaylibWrapper referenced by hint path) — the IDE entry point of the
+    /// sample tests in SampleProgramBuildTests, which drive the CLI and Roslyn. The project is the game-app template with its
+    /// Main.bas replaced by the sample and the template's other two files removed. Platformer is the control: it built before #123.
+    /// </summary>
+    [Test]
+    public async Task Build_SampleGame_DotNet_Succeeds([Values("Pong", "SpaceShooter", "Platformer")] string sample)
+    {
+        var repoRoot = new DirectoryInfo(AppContext.BaseDirectory);
+        while (repoRoot != null && !File.Exists(Path.Combine(repoRoot.FullName, "VisualGameStudioEngine.sln")))
+            repoRoot = repoRoot.Parent;
+        Assert.That(repoRoot, Is.Not.Null, "VisualGameStudioEngine.sln not found above the test binaries");
+
+        var template = ProjectTemplates.All.Single(t => t.Id == "game-app");
+        var creation = await _templates.CreateProjectAsync(new CreateProjectOptions
+        {
+            Name = "Sample" + sample,
+            Location = _rootDir,
+            Template = template,
+            SolutionType = SolutionTypes.DotNet,
+            CreateSolutionFolder = true,
+            CreateGitRepository = false
+        });
+        Assert.That(creation.Success, Is.True, $"project creation failed: {creation.Error}");
+
+        var projectDir = Path.GetDirectoryName(creation.ProjectPath)!;
+        File.Copy(Path.Combine(repoRoot!.FullName, "Samples", sample, "Main.bas"), Path.Combine(projectDir, "Main.bas"), overwrite: true);
+        File.Delete(Path.Combine(projectDir, "GameState.mod"));
+        File.Delete(Path.Combine(projectDir, "Player.cls"));
+        var projectText = string.Join("\n", File.ReadAllLines(creation.ProjectPath!)
+            .Where(l => !l.Contains("GameState.mod") && !l.Contains("Player.cls")));
+        File.WriteAllText(creation.ProjectPath!, projectText);
+
+        var project = await new ProjectSerializer().LoadAsync(creation.ProjectPath!);
+        var (result, output) = await BuildAsync(project);
+
+        Assert.That(result.Success, Is.True, $"Samples/{sample} failed to build in the IDE's pipeline.\n" + Describe(result, output));
+        Assert.That(result.ErrorCount, Is.Zero, Describe(result, output));
+        Assert.That(result.ExecutablePath, Is.Not.Null.And.Not.Empty, "the build reported no executable.\n" + Describe(result, output));
+        Assert.That(File.Exists(result.ExecutablePath), Is.True, $"Reported executable does not exist: {result.ExecutablePath}");
+    }
+
+    // ------------------------------------------------------------------
     // 3b. CLI-parity paths that were missing from the IDE pipeline:
     //     NuGet restore (avalonia has PackageReferences) and the
     //     UseWindowsForms → net*-windows TFM flow (winforms).

@@ -25,9 +25,10 @@ namespace VisualGameStudio.Tests.Compiler;
 /// <c>MyBase.New</c>'s own parameters and a Shared member reached through the class name are NOT
 /// refused" — an over-firing diagnostic is worse than none, so those are half of this file.</para>
 ///
-/// <para>⚠ TWO KNOWN GAPS, pinned as current behaviour with the gap named (never "fixed" by
-/// loosening a pin): <see cref="X07_MyClass_IsAGap_ATypeErrorInsteadOfBC31095"/> and
-/// <see cref="X23_MeAsABareValue_IsAGap_TheProbeDoesNotEvenParse"/>.</para>
+/// <para>⚠ ONE KNOWN GAP, pinned as current behaviour with the gap named (never "fixed" by
+/// loosening a pin): <see cref="X07_MyClass_IsAGap_ATypeErrorInsteadOfBC31095"/>. The other one, X23
+/// (`Me` as a bare value, which needs VB's conditional <c>If(c, x, y)</c> to write), CLOSED with #123:
+/// it parses now and is a row of <c>Refused()</c>, BC31095 like vbc.</para>
 /// </summary>
 [TestFixture]
 public class BaseConstructorCallDiagnosticsTests
@@ -267,6 +268,10 @@ public class BaseConstructorCallDiagnosticsTests
         yield return new TestCaseData(Fn("Function() Apply(Function(x As Integer) x + Me.A, 1)"), Explicit).SetName("X12_nestedLambdaMe");
         yield return new TestCaseData(V2, Explicit).SetName("V2_lambdaMe");
         yield return new TestCaseData(V3, Explicit).SetName("V3_meField");
+
+        // `Me` as a bare VALUE in the arguments. It needed VB's conditional `If(c, x, y)` to write (#123 made it
+        // parse); vbc reports BC31095 for it, and so does the analyzer, on every backend.
+        yield return new TestCaseData(Int("CType(If(Me Is Nothing, 1, 2), Integer)"), Explicit).SetName("X23_meAsABareValue");
     }
 
     /// <summary>The same rows under distinct names, so every case has a unique full name.</summary>
@@ -451,24 +456,5 @@ public class BaseConstructorCallDiagnosticsTests
             "KNOWN GAP: MyClass is a type error, not BC31095. If this now says BC31095 the gap is closed — "
             + "update the pin deliberately.\n" + errors[0]);
         Assert.That(errors[0], Does.Not.Contain(Explicit));
-    }
-
-    /// <summary>
-    /// ⚠ KNOWN GAP 2 (X23). VB rejects <c>Me</c> used as a bare VALUE in the arguments
-    /// (<c>CType(If(Me Is Nothing, 1, 2), Integer)</c>) with BC31095. The probe cannot be written:
-    /// <c>If(c, x, y)</c> does not PARSE in BasicLang at all (<c>Unexpected token in expression:
-    /// 'If'</c>, on every backend, before and after #170), and no other spelling puts <c>Me</c>
-    /// there as a bare value in a way the parser accepts. So D4's bare-value path is untested by
-    /// construction, not by choice. When the ternary parses, add the X23 shape to <c>Refused()</c>.
-    /// </summary>
-    [Test]
-    public void X23_MeAsABareValue_IsAGap_TheProbeDoesNotEvenParse()
-    {
-        var parser = new BasicLang.Compiler.Parser(new BasicLang.Compiler.Lexer(Int("CType(If(Me Is Nothing, 1, 2), Integer)")).Tokenize());
-        parser.Parse();
-
-        Assert.That(parser.Errors.Select(e => e.Message), Has.Some.Contains("Unexpected token in expression: 'If'"),
-            "KNOWN GAP: `If(c, x, y)` does not parse, so `Me` as a bare value cannot be probed. "
-            + "If it parses now, add X23 to Refused() and delete this pin.");
     }
 }

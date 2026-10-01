@@ -9,6 +9,14 @@ Const ENEMY_SPEED = 100.0
 Const MAX_BULLETS = 50
 Const MAX_ENEMIES = 20
 
+' Key codes (GLFW/raylib values, declared the way the other samples declare them)
+Const KEY_SPACE As Integer = 32
+Const KEY_A As Integer = 65
+Const KEY_D As Integer = 68
+Const KEY_RIGHT As Integer = 262
+Const KEY_LEFT As Integer = 263
+Const KEY_UP As Integer = 265
+
 ' Player state
 Dim playerX As Single = 400
 Dim playerY As Single = 500
@@ -32,21 +40,20 @@ Dim spawnTimer As Single = 0
 Dim shootCooldown As Single = 0
 
 Sub Main()
-    Framework_Initialize(SCREEN_WIDTH, SCREEN_HEIGHT, "Space Shooter")
-    Framework_SetFixedStep(1.0 / 60.0)
+    GameInit(SCREEN_WIDTH, SCREEN_HEIGHT, "Space Shooter")
 
     InitializeGame()
 
-    While Not Framework_ShouldClose()
+    While Not GameShouldClose()
         Update()
         Draw()
     End While
 
-    Framework_Shutdown()
+    GameShutdown()
 End Sub
 
 Sub InitializeGame()
-    playerX = SCREEN_WIDTH / 2
+    playerX = CSng(SCREEN_WIDTH / 2)
     playerY = SCREEN_HEIGHT - 80
     score = 0
     lives = 3
@@ -64,21 +71,21 @@ Sub InitializeGame()
 End Sub
 
 Sub Update()
-    Dim dt = Framework_GetDeltaTime()
+    Dim dt = GameGetDeltaTime()
 
     If gameOver Then
-        If Framework_IsKeyPressed(KEY_SPACE) Then
+        If IsKeyPressed(KEY_SPACE) Then
             InitializeGame()
         End If
         Return
     End If
 
     ' Player movement
-    If Framework_IsKeyDown(KEY_LEFT) Or Framework_IsKeyDown(KEY_A) Then
-        playerX -= PLAYER_SPEED * dt
+    If IsKeyDown(KEY_LEFT) Or IsKeyDown(KEY_A) Then
+        playerX -= CSng(PLAYER_SPEED * dt)
     End If
-    If Framework_IsKeyDown(KEY_RIGHT) Or Framework_IsKeyDown(KEY_D) Then
-        playerX += PLAYER_SPEED * dt
+    If IsKeyDown(KEY_RIGHT) Or IsKeyDown(KEY_D) Then
+        playerX += CSng(PLAYER_SPEED * dt)
     End If
 
     ' Clamp player position
@@ -86,15 +93,15 @@ Sub Update()
 
     ' Shooting
     shootCooldown -= dt
-    If (Framework_IsKeyDown(KEY_SPACE) Or Framework_IsKeyDown(KEY_UP)) And shootCooldown <= 0 Then
+    If (IsKeyDown(KEY_SPACE) Or IsKeyDown(KEY_UP)) And shootCooldown <= 0 Then
         SpawnBullet(playerX + 10, playerY - 10)
-        shootCooldown = 0.15  ' Fire rate
+        shootCooldown = CSng(0.15)  ' Fire rate
     End If
 
     ' Update bullets
     For i = 0 To MAX_BULLETS - 1
         If bulletActive(i) Then
-            bulletY(i) -= BULLET_SPEED * dt
+            bulletY(i) -= CSng(BULLET_SPEED * dt)
             If bulletY(i) < -10 Then
                 bulletActive(i) = False
             End If
@@ -105,13 +112,13 @@ Sub Update()
     spawnTimer -= dt
     If spawnTimer <= 0 Then
         SpawnEnemy()
-        spawnTimer = 1.0 + Rnd() * 1.5  ' Random spawn interval
+        spawnTimer = CSng(1.0 + Rnd() * 1.5)  ' Random spawn interval
     End If
 
     ' Update enemies
     For i = 0 To MAX_ENEMIES - 1
         If enemyActive(i) Then
-            enemyY(i) += ENEMY_SPEED * dt
+            enemyY(i) += CSng(ENEMY_SPEED * dt)
 
             ' Check collision with player
             If CheckCollision(enemyX(i), enemyY(i), 30, 30, playerX, playerY, 30, 30) Then
@@ -160,7 +167,7 @@ End Sub
 Sub SpawnEnemy()
     For i = 0 To MAX_ENEMIES - 1
         If Not enemyActive(i) Then
-            enemyX(i) = 30 + Rnd() * (SCREEN_WIDTH - 60)
+            enemyX(i) = CSng(30 + Rnd() * (SCREEN_WIDTH - 60))
             enemyY(i) = -30
             enemyActive(i) = True
             Return
@@ -180,14 +187,14 @@ Function Clamp(value As Single, min As Single, max As Single) As Single
 End Function
 
 Sub Draw()
-    Framework_BeginDrawing()
-    Framework_ClearBackground(10, 10, 25, 255)
+    GameBeginFrame()
+    ClearBackground(10, 10, 25)
 
     ' Draw stars background
     DrawStars()
 
     ' Draw player (spaceship triangle)
-    Framework_DrawTriangle(playerX + 15, playerY, _
+    DrawTriangle(playerX + 15, playerY, _
                           playerX, playerY + 30, _
                           playerX + 30, playerY + 30, _
                           0, 200, 255, 255)
@@ -195,32 +202,32 @@ Sub Draw()
     ' Draw bullets
     For i = 0 To MAX_BULLETS - 1
         If bulletActive(i) Then
-            Framework_DrawRectangle(bulletX(i), bulletY(i), 5, 15, 255, 255, 0, 255)
+            DrawRectangle(bulletX(i), bulletY(i), 5, 15, 255, 255, 0, 255)
         End If
     Next
 
     ' Draw enemies
     For i = 0 To MAX_ENEMIES - 1
         If enemyActive(i) Then
-            Framework_DrawRectangle(enemyX(i), enemyY(i), 30, 30, 255, 50, 50, 255)
-            Framework_DrawRectangle(enemyX(i) + 5, enemyY(i) + 5, 8, 8, 255, 200, 0, 255)
-            Framework_DrawRectangle(enemyX(i) + 17, enemyY(i) + 5, 8, 8, 255, 200, 0, 255)
+            DrawRectangle(enemyX(i), enemyY(i), 30, 30, 255, 50, 50, 255)
+            DrawRectangle(enemyX(i) + 5, enemyY(i) + 5, 8, 8, 255, 200, 0, 255)
+            DrawRectangle(enemyX(i) + 17, enemyY(i) + 5, 8, 8, 255, 200, 0, 255)
         End If
     Next
 
     ' Draw UI
-    Framework_DrawText($"Score: {score}", 20, 20, 24, 255, 255, 255, 255)
-    Framework_DrawText($"Lives: {lives}", SCREEN_WIDTH - 120, 20, 24, 255, 100, 100, 255)
+    DrawText($"Score: {score}", 20, 20, 24, 255, 255, 255, 255)
+    DrawText($"Lives: {lives}", SCREEN_WIDTH - 120, 20, 24, 255, 100, 100, 255)
 
     ' Draw game over
     If gameOver Then
-        Framework_DrawRectangle(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, 0, 0, 0, 180)
-        Framework_DrawText("GAME OVER", SCREEN_WIDTH / 2 - 100, SCREEN_HEIGHT / 2 - 40, 40, 255, 0, 0, 255)
-        Framework_DrawText($"Final Score: {score}", SCREEN_WIDTH / 2 - 90, SCREEN_HEIGHT / 2 + 10, 24, 255, 255, 255, 255)
-        Framework_DrawText("Press SPACE to restart", SCREEN_WIDTH / 2 - 130, SCREEN_HEIGHT / 2 + 50, 20, 200, 200, 200, 255)
+        DrawRectangle(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, 0, 0, 0, 180)
+        DrawText("GAME OVER", SCREEN_WIDTH / 2 - 100, SCREEN_HEIGHT / 2 - 40, 40, 255, 0, 0, 255)
+        DrawText($"Final Score: {score}", SCREEN_WIDTH / 2 - 90, SCREEN_HEIGHT / 2 + 10, 24, 255, 255, 255, 255)
+        DrawText("Press SPACE to restart", SCREEN_WIDTH / 2 - 130, SCREEN_HEIGHT / 2 + 50, 20, 200, 200, 200, 255)
     End If
 
-    Framework_EndDrawing()
+    GameEndFrame()
 End Sub
 
 Sub DrawStars()
@@ -229,6 +236,6 @@ Sub DrawStars()
         Dim starX = (i * 137 + 17) Mod SCREEN_WIDTH
         Dim starY = (i * 251 + 31) Mod SCREEN_HEIGHT
         Dim brightness = 100 + (i * 23) Mod 155
-        Framework_DrawRectangle(starX, starY, 2, 2, brightness, brightness, brightness, 255)
+        DrawRectangle(starX, starY, 2, 2, brightness, brightness, brightness, 255)
     Next
 End Sub

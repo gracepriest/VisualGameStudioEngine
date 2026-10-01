@@ -853,7 +853,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     case ConstantDeclarationNode constant when Visible(constant.Access):
                     {
                         classType.Members[constant.Name] = new Symbol(constant.Name, SymbolKind.Constant,
-                            ResolveSiblingSignatureType(constant.Type) ?? _typeManager.ObjectType, 0, 0)
+                            SignatureTypeOfConstant(constant) ?? _typeManager.ObjectType, 0, 0)
                         {
                             Access = constant.Access,
                             IsConstant = true
@@ -936,7 +936,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 {
                     if (GlobalScope.Resolve(constant.Name) != null) return;
                     GlobalScope.Define(new Symbol(constant.Name, SymbolKind.Constant,
-                        ResolveSiblingSignatureType(constant.Type) ?? _typeManager.ObjectType, 0, 0)
+                        SignatureTypeOfConstant(constant) ?? _typeManager.ObjectType, 0, 0)
                     {
                         IsImported = true,
                         IsSiblingSignature = true,
@@ -1989,6 +1989,13 @@ namespace BasicLang.Compiler.SemanticAnalysis
                         ("r", _typeManager.GetType("Integer")), ("g", _typeManager.GetType("Integer")), ("b", _typeManager.GetType("Integer")), ("a", _typeManager.GetType("Integer")) });
             RegisterStdLibFunction("DrawText", SymbolKind.Subroutine, _typeManager.VoidType,
                 new[] { ("text", _typeManager.GetType("String")), ("x", _typeManager.GetType("Integer")), ("y", _typeManager.GetType("Integer")), ("fontSize", _typeManager.GetType("Integer")),
+                        ("r", _typeManager.GetType("Integer")), ("g", _typeManager.GetType("Integer")), ("b", _typeManager.GetType("Integer")), ("a", _typeManager.GetType("Integer")) });
+            // #123 (Samples/SpaceShooter): FrameworkStdLib's DrawTriangle row had no mirror here, so a call
+            // was accepted with NO signature — Single positions reached C# uncoerced (CS1503) and C++ stored
+            // the Sub's "result" in a temp ("assigning to 'void *' from incompatible type 'void'").
+            RegisterStdLibFunction("DrawTriangle", SymbolKind.Subroutine, _typeManager.VoidType,
+                new[] { ("x1", _typeManager.GetType("Integer")), ("y1", _typeManager.GetType("Integer")), ("x2", _typeManager.GetType("Integer")), ("y2", _typeManager.GetType("Integer")),
+                        ("x3", _typeManager.GetType("Integer")), ("y3", _typeManager.GetType("Integer")),
                         ("r", _typeManager.GetType("Integer")), ("g", _typeManager.GetType("Integer")), ("b", _typeManager.GetType("Integer")), ("a", _typeManager.GetType("Integer")) });
 
             // Textures
@@ -5303,7 +5310,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     break;
                 case ConstantDeclarationNode constant when moduleName != null:
                     RecordModuleMember(new Symbol(constant.Name, SymbolKind.Constant,
-                        ResolveSiblingSignatureType(constant.Type) ?? _typeManager.ObjectType,
+                        SignatureTypeOfConstant(constant) ?? _typeManager.ObjectType,
                         constant.Line, constant.Column)
                     {
                         Access = constant.Access,
@@ -7201,15 +7208,22 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
         public void Visit(ConstantDeclarationNode node)
         {
-            var constType = ResolveTypeReference(node.Type);
+            // #123: `Const X = expr` with no As clause takes the type of its constant expression,
+            // as VB does — 800 is Integer, 800L Long, 3.14 Double, "s" String, A * 2.0 Double. It is
+            // decided AFTER the value is analyzed, and every rule below then runs against it
+            // unchanged (it trivially fits the type it came from).
+            var inferred = node.Type == null;
+            var constType = inferred ? null : ResolveTypeReference(node.Type);
 
             if (node.Value == null)
             {
                 Error($"Constant '{node.Name}' must have a value", node.Line, node.Column);
+                if (inferred) constType = _typeManager.ObjectType;
             }
             else
             {
                 node.Value.Accept(this);
+                if (inferred) constType = InferUntypedConstantType(node);
                 // Same two rules as a Dim initializer (see Visit(VariableDeclarationNode)), which
                 // this site used to skip: `Const X As Single = 2.5` and `Const D As Decimal = 2.5`
                 // were rejected ("Constant value type 'Double' is not compatible with declared type
@@ -7254,6 +7268,52 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
             SetNodeSymbol(node, symbol);
             SetNodeType(node, constType);
+        }
+
+        /// <summary>
+        /// #123 — the type of <c>Const X = expr</c> written without an As clause: the analyzed type
+        /// of the (already visited) value, exactly as VB types it. ⚠ <c>Nothing</c> has no type to
+        /// give, and is refused with the same advice as <c>Dim x = Nothing</c>: VB would make the
+        /// constant Object, which BasicLang does not infer for a Dim either.
+        /// </summary>
+        private TypeInfo InferUntypedConstantType(ConstantDeclarationNode node)
+        {
+            if (IsNothingLiteral(node.Value))
+            {
+                Error($"Cannot infer a type for constant '{node.Name}' from 'Nothing'. Specify a type: " +
+                      $"Const {node.Name} As <Type> = Nothing", node.Line, node.Column);
+                return _typeManager.ObjectType;
+            }
+
+            var valueType = GetNodeType(node.Value);
+            if (valueType == null || valueType.Kind == TypeKind.Void)
+            {
+                Error($"Cannot infer a type for constant '{node.Name}'. Specify a type: " +
+                      $"Const {node.Name} As <Type> = ...", node.Line, node.Column);
+                return _typeManager.ObjectType;
+            }
+
+            return valueType;
+        }
+
+        /// <summary>
+        /// #123 — the type a SIGNATURE pass (a sibling unit's stand-in, a module member recorded
+        /// before its unit is analyzed) gives a constant: its declared type, or for an untyped
+        /// <c>Const X = 800</c> the type of a literal initializer (optionally signed), by the SAME
+        /// mapping <see cref="Visit(LiteralExpressionNode)"/> uses. Anything else is null — the
+        /// caller's Object stand-in, exactly what an untyped <c>Dim x = …</c> gets there — until the
+        /// unit's own analysis records the real type.
+        /// </summary>
+        private TypeInfo SignatureTypeOfConstant(ConstantDeclarationNode constant)
+        {
+            if (constant.Type != null) return ResolveSiblingSignatureType(constant.Type);
+
+            var value = constant.Value is UnaryExpressionNode { Operator: "-" or "+", IsPostfix: false } sign
+                ? sign.Operand
+                : constant.Value;
+            return value is LiteralExpressionNode literal && literal.LiteralType != TokenType.Nothing
+                ? LiteralTypeOf(literal.LiteralType)
+                : null;
         }
 
         public void Visit(TypeDefineNode node)
@@ -11497,38 +11557,22 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
         public void Visit(LiteralExpressionNode node)
         {
-            TypeInfo type;
-
-            switch (node.LiteralType)
-            {
-                case TokenType.IntegerLiteral:
-                    type = _typeManager.IntegerType;
-                    break;
-                case TokenType.LongLiteral:
-                    type = _typeManager.LongType;
-                    break;
-                case TokenType.SingleLiteral:
-                    type = _typeManager.SingleType;
-                    break;
-                case TokenType.DoubleLiteral:
-                    type = _typeManager.DoubleType;
-                    break;
-                case TokenType.StringLiteral:
-                    type = _typeManager.StringType;
-                    break;
-                case TokenType.CharLiteral:
-                    type = _typeManager.CharType;
-                    break;
-                case TokenType.BooleanLiteral:
-                    type = _typeManager.BooleanType;
-                    break;
-                default:
-                    type = _typeManager.ObjectType;
-                    break;
-            }
-
-            SetNodeType(node, type);
+            SetNodeType(node, LiteralTypeOf(node.LiteralType));
         }
+
+        /// <summary>The type of a literal of this token kind — the one mapping, shared with the
+        /// signature pass's untyped-Const stand-in (<see cref="SignatureTypeOfConstant"/>).</summary>
+        private TypeInfo LiteralTypeOf(TokenType literalType) => literalType switch
+        {
+            TokenType.IntegerLiteral => _typeManager.IntegerType,
+            TokenType.LongLiteral => _typeManager.LongType,
+            TokenType.SingleLiteral => _typeManager.SingleType,
+            TokenType.DoubleLiteral => _typeManager.DoubleType,
+            TokenType.StringLiteral => _typeManager.StringType,
+            TokenType.CharLiteral => _typeManager.CharType,
+            TokenType.BooleanLiteral => _typeManager.BooleanType,
+            _ => _typeManager.ObjectType,
+        };
 
         public void Visit(InterpolatedStringNode node)
         {
@@ -12834,6 +12878,50 @@ namespace BasicLang.Compiler.SemanticAnalysis
             ProbeNetConstruction(node, type);
 
             SetNodeType(node, type);
+        }
+
+        /// <summary>
+        /// #123 — <c>If(condition, whenTrue, whenFalse)</c>. The condition is judged as an If
+        /// statement's is (a warning when it is not Boolean). The result type is VB's: the DOMINANT
+        /// type of the two operands, by the same rule a multi-line lambda's returns use
+        /// (<see cref="DominantReturnType"/> — the operand type the other one widens to, Object
+        /// when neither widens); a <c>Nothing</c> operand is not a candidate, so it takes the
+        /// other operand's type and is then judged against it like any <c>= Nothing</c>
+        /// (<see cref="JudgeNothingConversion"/>: admitted into a reference type, refused with
+        /// advice for a value type, where VB would silently produce the default).
+        /// </summary>
+        public void Visit(ConditionalExpressionNode node)
+        {
+            node.Condition.Accept(this);
+            var conditionType = GetNodeType(node.Condition);
+            if (conditionType != null && !conditionType.Equals(_typeManager.BooleanType))
+            {
+                Warning($"If() condition should be Boolean, got '{conditionType}'",
+                        node.Condition.Line, node.Condition.Column);
+            }
+
+            node.WhenTrue.Accept(this);
+            node.WhenFalse.Accept(this);
+
+            var candidates = new List<TypeInfo>();
+            foreach (var operand in new[] { node.WhenTrue, node.WhenFalse })
+            {
+                if (IsNothingLiteral(operand)) continue;
+                var operandType = GetNodeType(operand);
+                if (operandType != null && operandType.Kind == TypeKind.Void)
+                {
+                    Error("An operand of If() does not produce a value", operand.Line, operand.Column);
+                    continue;
+                }
+                candidates.Add(operandType);
+            }
+
+            var resultType = candidates.Count == 0 ? _typeManager.ObjectType : DominantReturnType(candidates);
+
+            JudgeNothingConversion(node.WhenTrue, resultType, node.WhenTrue.Line, node.WhenTrue.Column);
+            JudgeNothingConversion(node.WhenFalse, resultType, node.WhenFalse.Line, node.WhenFalse.Column);
+
+            SetNodeType(node, resultType);
         }
 
         public void Visit(CastExpressionNode node)

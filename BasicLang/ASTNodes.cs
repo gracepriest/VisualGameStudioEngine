@@ -77,6 +77,7 @@ namespace BasicLang.Compiler.AST
         void Visit(ArrayAccessExpressionNode node);
         void Visit(NewExpressionNode node);
         void Visit(CastExpressionNode node);
+        void Visit(ConditionalExpressionNode node);
         void Visit(ArrayResizeExpressionNode node);
         void Visit(LambdaExpressionNode node);
         void Visit(TemplateDeclarationNode node);
@@ -1743,6 +1744,26 @@ namespace BasicLang.Compiler.AST
         public bool IsTypeOfTest { get; set; }
 
         public CastExpressionNode(int line, int column) : base(line, column) { }
+
+        public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
+    }
+
+    /// <summary>
+    /// VB's conditional operator <c>If(condition, whenTrue, whenFalse)</c> (#123). Only the CHOSEN
+    /// operand is evaluated — it is control flow, not a function call: the IR builder lowers it to
+    /// the same If/Else shape a statement produces, writing one carrier variable in each arm
+    /// (the <c>AndAlso</c>/<c>OrElse</c> pattern), so no IR node and no backend knows about it.
+    /// Its type is the dominant type of the two operands (the analyzer's widening rule; a
+    /// <c>Nothing</c> operand takes the other's type). The two-argument coalescing form
+    /// <c>If(value, fallback)</c> is refused by the parser.
+    /// </summary>
+    public class ConditionalExpressionNode : ExpressionNode
+    {
+        public ExpressionNode Condition { get; set; }
+        public ExpressionNode WhenTrue { get; set; }
+        public ExpressionNode WhenFalse { get; set; }
+
+        public ConditionalExpressionNode(int line, int column) : base(line, column) { }
 
         public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
     }

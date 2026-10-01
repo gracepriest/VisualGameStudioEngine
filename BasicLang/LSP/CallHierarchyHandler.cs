@@ -410,6 +410,12 @@ namespace BasicLang.Compiler.LSP
                 case CastExpressionNode cast:
                     FindCallsInExpression(cast.Expression, targetName, calls);
                     break;
+
+                case ConditionalExpressionNode conditional:
+                    FindCallsInExpression(conditional.Condition, targetName, calls);
+                    FindCallsInExpression(conditional.WhenTrue, targetName, calls);
+                    FindCallsInExpression(conditional.WhenFalse, targetName, calls);
+                    break;
             }
         }
 
@@ -749,6 +755,12 @@ namespace BasicLang.Compiler.LSP
 
                 case CastExpressionNode cast:
                     FindCallsInExpression(cast.Expression, callsByTarget);
+                    break;
+
+                case ConditionalExpressionNode conditional:
+                    FindCallsInExpression(conditional.Condition, callsByTarget);
+                    FindCallsInExpression(conditional.WhenTrue, callsByTarget);
+                    FindCallsInExpression(conditional.WhenFalse, callsByTarget);
                     break;
             }
         }
