@@ -539,7 +539,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             // all call Generate on the optimized module and nothing else. The pass lowers a CLONE
             // and hands back the module itself when there is nothing to lower, so C#, JavaScript
             // and C++ never see the lowered form even when one module feeds several backends.
-            var lowered = ClosureLowering.Run(module);
+            var lowered = ClosureLowering.Run(module, ClosureLoweringOptions.Msil).Module;
             if (!ReferenceEquals(lowered, module))
             {
                 // The lowered IR is new IR: verified under the same invariants as the optimizer's

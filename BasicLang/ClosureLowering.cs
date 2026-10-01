@@ -45,6 +45,43 @@ namespace BasicLang.Compiler.IR
     /// for the lambda from its creator's context — a bare member of the creator's class — so the
     /// lowered lambda, emitted in the environment's context, still means the same member.</para>
     /// </summary>
+    /// <summary>What <see cref="ClosureLowering.Run(IRModule, ClosureLoweringOptions)"/> does with a
+    /// root it cannot lower (ADR-0010 D9 and the refusals beyond it).</summary>
+    public enum UnloweredRootPolicy
+    {
+        /// <summary>Throw the refusal (MSIL: a backend with no other lambda lowering).</summary>
+        Throw,
+        /// <summary>Leave the root un-lowered, report it in
+        /// <see cref="ClosureLoweringResult.SkippedRoots"/>, and lower every other root (C++).</summary>
+        Skip,
+    }
+
+    /// <summary>
+    /// A backend's own limits for <see cref="ClosureLowering.Run(IRModule, ClosureLoweringOptions)"/>.
+    /// <see cref="BackendName"/> prefixes every refusal text; <see cref="MaxActionArity"/> and
+    /// <see cref="MaxFuncArity"/> cap the delegate type arguments (null = unbounded — the caps are a
+    /// .NET delegate-facade fact, not a lowering fact); <see cref="Policy"/> says what an unlowerable
+    /// root does.
+    /// </summary>
+    public sealed record ClosureLoweringOptions(
+        string BackendName, int? MaxActionArity, int? MaxFuncArity, UnloweredRootPolicy Policy)
+    {
+        /// <summary>MSIL's: the measured facade caps (8 / 9) and <see cref="UnloweredRootPolicy.Throw"/>.</summary>
+        public static ClosureLoweringOptions Msil { get; } = new(
+            "MSIL", ClosureLowering.MaxActionTypeArguments, ClosureLowering.MaxFuncTypeArguments, UnloweredRootPolicy.Throw);
+    }
+
+    /// <summary>
+    /// What <see cref="ClosureLowering.Run(IRModule, ClosureLoweringOptions)"/> produced: the module
+    /// (the input itself when there was nothing to lower, else a lowered clone) and every root it left
+    /// un-lowered under <see cref="UnloweredRootPolicy.Skip"/>, with the refusal that stopped it. A
+    /// skipped root is a function OF <see cref="Module"/> whose IR is untouched; a lambda outside every
+    /// function body (a field or module initializer) is its own root. Always empty under
+    /// <see cref="UnloweredRootPolicy.Throw"/>.
+    /// </summary>
+    public sealed record ClosureLoweringResult(
+        IRModule Module, IReadOnlyList<(IRFunction Root, ForeignFeatureException Reason)> SkippedRoots);
+
     public static class ClosureLowering
     {
         /// <summary>Every environment class's name starts with this. <c>&lt;&gt;</c> is not an
@@ -79,14 +116,172 @@ namespace BasicLang.Compiler.IR
         /// a former lambda body names a variable of an enclosing function. A construct the first
         /// cut does not lower (D9) throws <see cref="ForeignFeatureException"/> naming it.</para>
         /// </summary>
-        public static IRModule Run(IRModule module)
-        {
-            if (module == null) return null;
-            if (!NeedsLowering(module)) return module;
+        public static IRModule Run(IRModule module) => Run(module, ClosureLoweringOptions.Msil).Module;
 
-            var lowered = ModuleCloner.Clone(module);
-            new Lowerer(lowered).Run();
-            return lowered;
+        private static readonly IReadOnlyList<(IRFunction Root, ForeignFeatureException Reason)> NoSkippedRoots =
+            Array.Empty<(IRFunction, ForeignFeatureException)>();
+
+        /// <summary>
+        /// ⭐ THE ENTRY POINT with a backend's options. Under <see cref="UnloweredRootPolicy.Throw"/>
+        /// this is <see cref="Run(IRModule)"/>: the first refusal is thrown and nothing is returned.
+        ///
+        /// <para>Under <see cref="UnloweredRootPolicy.Skip"/> a ROOT — a non-lambda function, with
+        /// every lambda it creates, transitively — is lowered entirely or not at all. The pass owns that
+        /// decision: it lowers a fresh clone, and when a root is refused it records the root and starts
+        /// again from a fresh clone that leaves it (and every root refused before it) alone, until a
+        /// clone lowers with no refusal. So a skipped root's IR in the result is exactly the input's,
+        /// no refusal check of a root ever runs against a partly lowered one, and each attempt removes
+        /// at least one root (a program has as many attempts as it has refused roots, plus one). A
+        /// root is never processed twice within an attempt.</para>
+        /// </summary>
+        public static ClosureLoweringResult Run(IRModule module, ClosureLoweringOptions options)
+        {
+            if (options == null) throw new ArgumentNullException(nameof(options));
+            if (module == null) return new ClosureLoweringResult(null, NoSkippedRoots);
+            if (!NeedsLowering(module)) return new ClosureLoweringResult(module, NoSkippedRoots);
+
+            // Keyed by the INPUT's functions: every attempt starts from a fresh clone of the input.
+            var refused = new Dictionary<IRFunction, ForeignFeatureException>(ReferenceEqualityComparer.Instance);
+            while (true)
+            {
+                var lowered = ModuleCloner.Clone(module, out var cloneOf);
+                var originalOf = new Dictionary<IRFunction, IRFunction>(ReferenceEqualityComparer.Instance);
+                foreach (var (original, clone) in cloneOf) originalOf[clone] = original;
+                var skip = new HashSet<IRFunction>(refused.Keys.Select(r => cloneOf[r]), ReferenceEqualityComparer.Instance);
+
+                var lowerer = new Lowerer(lowered, options, skip);
+                try
+                {
+                    lowerer.Run();
+                }
+                catch (RootNotLowered notLowered)
+                {
+                    var root = originalOf.TryGetValue(notLowered.Root, out var original) ? original : notLowered.Root;
+                    if (!refused.TryAdd(root, notLowered.Reason))
+                        throw new InvalidOperationException(
+                            $"ClosureLowering: root '{root.Name}' was refused again after being skipped.", notLowered.Reason);
+                    continue;
+                }
+
+                var order = AllFunctions(lowered).Select((f, i) => (f, i))
+                    .ToDictionary(x => x.f, x => x.i, ReferenceEqualityComparer.Instance);
+                var skipped = refused.Select(kv => (Root: cloneOf[kv.Key], Reason: kv.Value))
+                    .Concat(lowerer.InitializerRoots)
+                    .OrderBy(x => order.TryGetValue(x.Root, out var i) ? i : int.MaxValue)
+                    .ToList();
+                return new ClosureLoweringResult(lowered, skipped);
+            }
+        }
+
+        /// <summary>A root's refusal under <see cref="UnloweredRootPolicy.Skip"/>: carries the root
+        /// (a function of the attempt's clone) out of the attempt, which is then abandoned.</summary>
+        private sealed class RootNotLowered : Exception
+        {
+            public RootNotLowered(IRFunction root, ForeignFeatureException reason) : base(reason.Message, reason)
+            {
+                Root = root;
+                Reason = reason;
+            }
+            public IRFunction Root { get; }
+            public ForeignFeatureException Reason { get; }
+        }
+
+        // =====================================================================================
+        // Root identity: who creates which lambda. ONE definition, shared by the lowering and by
+        // every backend rule that reasons about a lambda's root (the C++ by-copy soundness rule).
+        // =====================================================================================
+
+        /// <summary>
+        /// Every lambda of <paramref name="module"/> mapped to the ONE function that creates it — the
+        /// function whose IR (operand trees included, When guards too) names it. A function is a ROOT
+        /// when it is not a lambda; a lambda's root is found by following this map until it ends
+        /// (<see cref="RootOf"/>). A lambda nothing creates (a field or module initializer's, or dead
+        /// code) is its own root.
+        /// </summary>
+        public static IReadOnlyDictionary<IRFunction, IRFunction> CreatorsOf(IRModule module)
+        {
+            if (module == null) return new Dictionary<IRFunction, IRFunction>(ReferenceEqualityComparer.Instance);
+            CreatedBy(module, LambdasByName(module), out var creators);
+            return creators;
+        }
+
+        /// <summary>The ONE walk behind <see cref="CreatorsOf"/> and the lowering's own discovery:
+        /// for every function, the lambdas it creates in the order its IR first names them, and
+        /// (<paramref name="creators"/>) each lambda's one creator.</summary>
+        private static Dictionary<IRFunction, List<IRFunction>> CreatedBy(IRModule module,
+            IReadOnlyDictionary<string, IRFunction> lambdas, out Dictionary<IRFunction, IRFunction> creators)
+        {
+            var created = new Dictionary<IRFunction, List<IRFunction>>(ReferenceEqualityComparer.Instance);
+            creators = new Dictionary<IRFunction, IRFunction>(ReferenceEqualityComparer.Instance);
+            foreach (var f in AllFunctions(module))
+            {
+                var mine = LambdasReferencedBy(f, lambdas);
+                created[f] = mine;
+                foreach (var lambda in mine)
+                {
+                    if (creators.TryGetValue(lambda, out var other) && !ReferenceEquals(other, f))
+                        throw new InvalidOperationException(
+                            $"ClosureLowering: lambda '{lambda.Name}' is referenced by both '{other.Name}' and "
+                            + $"'{f.Name}'. IRBuilder gives every lambda exactly one creator.");
+                    creators[lambda] = f;
+                }
+            }
+            return created;
+        }
+
+        /// <summary>The root of <paramref name="function"/>: the outermost function of its creator
+        /// chain under <see cref="CreatorsOf"/> (itself when nothing creates it).</summary>
+        public static IRFunction RootOf(IRFunction function, IReadOnlyDictionary<IRFunction, IRFunction> creators)
+        {
+            var guard = 0;
+            while (function != null && creators.TryGetValue(function, out var creator) && guard++ < 1000) function = creator;
+            return function;
+        }
+
+        private static Dictionary<string, IRFunction> LambdasByName(IRModule module)
+        {
+            var lambdas = new Dictionary<string, IRFunction>(StringComparer.Ordinal);
+            foreach (var f in module.Functions)
+                if (f != null && f.IsLambda && f.Name != null) lambdas[f.Name] = f;
+            return lambdas;
+        }
+
+        /// <summary>Every value a function's blocks reach, operand trees included.</summary>
+        private static IEnumerable<IRValue> ValuesIn(IRFunction f)
+        {
+            var seen = new HashSet<IRValue>(ReferenceEqualityComparer.Instance);
+            var stack = new Stack<IRValue>();
+            foreach (var b in f.Blocks)
+            {
+                foreach (var inst in b.Instructions)
+                {
+                    if (inst == null) continue;
+                    if (inst is IRValue self && seen.Add(self)) yield return self;
+                    foreach (var u in OptimizationPass.UsesOf(inst)) stack.Push(u);
+                    while (stack.Count > 0)
+                    {
+                        var v = stack.Pop();
+                        if (v == null || !seen.Add(v)) continue;
+                        yield return v;
+                        if (v is IRInstruction nested && !(v is IRVariable))
+                            foreach (var u in OptimizationPass.UsesOf(nested)) stack.Push(u);
+                    }
+                }
+            }
+        }
+
+        /// <summary>The lambdas <paramref name="f"/> creates, in the order its IR first names them.</summary>
+        private static List<IRFunction> LambdasReferencedBy(IRFunction f, IReadOnlyDictionary<string, IRFunction> lambdas)
+        {
+            var result = new List<IRFunction>();
+            if (f?.Blocks == null) return result;
+            var seen = new HashSet<IRFunction>(ReferenceEqualityComparer.Instance);
+            foreach (var v in ValuesIn(f))
+                if (v is IRVariable variable && IsLambdaReferenceName(variable.Name)
+                    && lambdas.TryGetValue(variable.Name, out var lambda) && !ReferenceEquals(lambda, f)
+                    && seen.Add(lambda))
+                    result.Add(lambda);
+            return result;
         }
 
         // =====================================================================================
@@ -277,6 +472,12 @@ namespace BasicLang.Compiler.IR
         /// </summary>
         internal static bool TryInvokeSignature(IRModule module, TypeInfo type,
             out List<TypeInfo> parameters, out TypeInfo returnType, out string problem)
+            => TryInvokeSignature(ClosureLoweringOptions.Msil, module, type, out parameters, out returnType, out problem);
+
+        /// <inheritdoc cref="TryInvokeSignature(IRModule, TypeInfo, out List{TypeInfo}, out TypeInfo, out string)"/>
+        /// <remarks>The arity caps and the refusal prefix are <paramref name="options"/>'s.</remarks>
+        internal static bool TryInvokeSignature(ClosureLoweringOptions options, IRModule module, TypeInfo type,
+            out List<TypeInfo> parameters, out TypeInfo returnType, out string problem)
         {
             parameters = null;
             returnType = null;
@@ -306,10 +507,10 @@ namespace BasicLang.Compiler.IR
             var args = type.GenericArguments ?? new List<TypeInfo>();
             if (NameEquals(bare, "Action"))
             {
-                if (args.Count > MaxActionTypeArguments)
+                if (options.MaxActionArity is int actionCap && args.Count > actionCap)
                     throw new ForeignFeatureException(
-                        $"MSIL: 'Action' with {args.Count} type arguments is above the supported arity. "
-                        + $"Action`1..`{MaxActionTypeArguments} are the ones the generated [mscorlib] "
+                        $"{options.BackendName}: 'Action' with {args.Count} type arguments is above the supported arity. "
+                        + $"Action`1..`{actionCap} are the ones the generated [mscorlib] "
                         + "reference reaches on .NET 8 (measured: Action`9 is a TypeLoadException at run "
                         + "time — the facade does not forward it), so this is refused here rather than "
                         + "emitted. Declare your own Delegate type, or pass fewer arguments.");
@@ -324,10 +525,10 @@ namespace BasicLang.Compiler.IR
                     problem = "'Func' arrived with its type arguments lost";
                     return false;
                 }
-                if (args.Count > MaxFuncTypeArguments)
+                if (options.MaxFuncArity is int funcCap && args.Count > funcCap)
                     throw new ForeignFeatureException(
-                        $"MSIL: 'Func' with {args.Count} type arguments is above the supported arity. "
-                        + $"Func`1..`{MaxFuncTypeArguments} are the ones the generated [mscorlib] "
+                        $"{options.BackendName}: 'Func' with {args.Count} type arguments is above the supported arity. "
+                        + $"Func`1..`{funcCap} are the ones the generated [mscorlib] "
                         + "reference reaches on .NET 8 (measured: Func`10 is a TypeLoadException at run "
                         + "time — the facade does not forward it), so this is refused here rather than "
                         + "emitted. Declare your own Delegate type, or pass fewer arguments.");
@@ -405,16 +606,17 @@ namespace BasicLang.Compiler.IR
 
             private static T Shallow<T>(T value) where T : class => (T)MemberwiseCloneMethod.Invoke(value, null);
 
-            public static IRModule Clone(IRModule module)
+            public static IRModule Clone(IRModule module, out Dictionary<IRFunction, IRFunction> functionMap)
             {
-                var functionMap = new Dictionary<IRFunction, IRFunction>(ReferenceEqualityComparer.Instance);
+                functionMap = new Dictionary<IRFunction, IRFunction>(ReferenceEqualityComparer.Instance);
                 foreach (var f in AllFunctions(module))
                 {
                     var map = new Dictionary<IRInstruction, IRInstruction>(ReferenceEqualityComparer.Instance);
                     functionMap[f] = CloneFunction(f, map);
                 }
 
-                IRFunction F(IRFunction f) => f != null && functionMap.TryGetValue(f, out var c) ? c : f;
+                var cloned = functionMap;
+                IRFunction F(IRFunction f) => f != null && cloned.TryGetValue(f, out var c) ? c : f;
 
                 var clone = new IRModule(module.Name);
                 foreach (var f in module.Functions) clone.Functions.Add(F(f));
@@ -812,35 +1014,34 @@ namespace BasicLang.Compiler.IR
             private readonly HashSet<string> _userTempNames;
             private readonly List<FunctionContext> _lowered = new();
             private int _envCounter;
+            private readonly ClosureLoweringOptions _options;
+            private readonly string _backend;
+            /// <summary>The roots (of this attempt's clone) a previous attempt was refused on.</summary>
+            private readonly HashSet<IRFunction> _skip;
+            /// <summary>Lambdas outside every function body, left un-lowered under Skip (their own roots).</summary>
+            public readonly List<(IRFunction Root, ForeignFeatureException Reason)> InitializerRoots = new();
 
-            public Lowerer(IRModule module)
+            public Lowerer(IRModule module, ClosureLoweringOptions options, HashSet<IRFunction> skip)
             {
                 _module = module;
+                _options = options;
+                _backend = options.BackendName;
+                _skip = skip;
                 _classMembers = module.CollectMemberImplementations();
                 _userTempNames = IRTempNames.UserOwned(module);
             }
 
             public void Run()
             {
-                foreach (var f in _module.Functions)
-                    if (f != null && f.IsLambda && f.Name != null) _lambdas[f.Name] = f;
+                foreach (var (name, lambda) in LambdasByName(_module)) _lambdas[name] = lambda;
 
                 var functions = AllFunctions(_module);
                 RefuseLambdasOutsideFunctionBodies();
 
-                foreach (var f in functions)
-                {
-                    var created = LambdasReferencedBy(f);
-                    _created[f] = created;
-                    foreach (var lambda in created)
-                    {
-                        if (_creatorOf.TryGetValue(lambda, out var other) && !ReferenceEquals(other, f))
-                            throw new InvalidOperationException(
-                                $"ClosureLowering: lambda '{lambda.Name}' is referenced by both '{other.Name}' and "
-                                + $"'{f.Name}'. IRBuilder gives every lambda exactly one creator.");
-                        _creatorOf[lambda] = f;
-                    }
-                }
+                // Root identity: the one shared walk (CreatorsOf).
+                var createdBy = CreatedBy(_module, _lambdas, out var creators);
+                foreach (var (f, created) in createdBy) _created[f] = created;
+                foreach (var (lambda, creator) in creators) _creatorOf[lambda] = creator;
 
                 foreach (var f in functions)
                 {
@@ -850,14 +1051,24 @@ namespace BasicLang.Compiler.IR
                     // root: a second, unused function environment and a dead duplicate of every
                     // lambda it creates, nested in its environment (#241 on MSIL; C++ type-checks it).
                     if (_lowered.Any(c => ReferenceEquals(c.Function, f))) continue;
+                    if (_skip.Contains(f)) continue;
                     var ownerClass = OwnerClassOf(_module, f, out var isInstance);
                     var root = new Root { Function = f, Class = ownerClass, IsInstance = isInstance };
-                    Process(new FunctionContext { Function = f, IsLambda = false, Root = root });
+                    try
+                    {
+                        Process(new FunctionContext { Function = f, IsLambda = false, Root = root });
+                    }
+                    catch (ForeignFeatureException refusal) when (_options.Policy == UnloweredRootPolicy.Skip)
+                    {
+                        // This attempt has partly lowered f: abandon it (Run starts a fresh clone).
+                        throw new RootNotLowered(f, refusal);
+                    }
                 }
 
                 // A lambda nobody reachable creates is dead code: it is never called and has no
-                // environment to live on. Dropped rather than emitted as a free static method.
-                _module.Functions.RemoveAll(f => f != null && f.IsLambda);
+                // environment to live on. Dropped rather than emitted as a free static method. A
+                // skipped root's lambdas stay, un-lowered, for the backend's own path.
+                _module.Functions.RemoveAll(f => f != null && f.IsLambda && !IsSkipped(f));
 
                 AssertPostConditions();
 
@@ -873,54 +1084,29 @@ namespace BasicLang.Compiler.IR
             // Discovery
             // ---------------------------------------------------------------------------------
 
-            /// <summary>Every value a function's blocks reach, operand trees included.</summary>
-            private static IEnumerable<IRValue> ValuesIn(IRFunction f)
-            {
-                var seen = new HashSet<IRValue>(ReferenceEqualityComparer.Instance);
-                var stack = new Stack<IRValue>();
-                foreach (var b in f.Blocks)
-                {
-                    foreach (var inst in b.Instructions)
-                    {
-                        if (inst == null) continue;
-                        if (inst is IRValue self && seen.Add(self)) yield return self;
-                        foreach (var u in OptimizationPass.UsesOf(inst)) stack.Push(u);
-                        while (stack.Count > 0)
-                        {
-                            var v = stack.Pop();
-                            if (v == null || !seen.Add(v)) continue;
-                            yield return v;
-                            if (v is IRInstruction nested && !(v is IRVariable))
-                                foreach (var u in OptimizationPass.UsesOf(nested)) stack.Push(u);
-                        }
-                    }
-                }
-            }
-
-            private List<IRFunction> LambdasReferencedBy(IRFunction f)
-            {
-                var result = new List<IRFunction>();
-                if (f?.Blocks == null) return result;
-                var seen = new HashSet<IRFunction>(ReferenceEqualityComparer.Instance);
-                foreach (var v in ValuesIn(f))
-                    if (v is IRVariable variable && IsLambdaReferenceName(variable.Name)
-                        && _lambdas.TryGetValue(variable.Name, out var lambda) && !ReferenceEquals(lambda, f)
-                        && seen.Add(lambda))
-                        result.Add(lambda);
-                return result;
-            }
-
+            /// <summary>
+            /// A lambda in a field or module initializer has no creator to hold its environment. Under
+            /// Throw that refuses the module; under Skip the lambda is its own root, reported
+            /// un-lowered (<see cref="InitializerRoots"/>), and nothing else is affected.
+            /// </summary>
             private void RefuseLambdasOutsideFunctionBodies()
             {
                 static bool IsLambdaValue(IRValue v) => v is IRVariable variable && IsLambdaReferenceName(variable.Name);
+                void Refuse(IRValue lambdaValue, string message)
+                {
+                    var refusal = new ForeignFeatureException(message);
+                    if (_options.Policy == UnloweredRootPolicy.Throw) throw refusal;
+                    if (_lambdas.TryGetValue(((IRVariable)lambdaValue).Name, out var lambda) && _skip.Add(lambda))
+                        InitializerRoots.Add((lambda, refusal));
+                }
 
                 foreach (var cls in _module.Classes.Values)
                 {
                     if (cls == null) continue;
                     foreach (var field in cls.Fields)
                         if (IsLambdaValue(field?.Initializer))
-                            throw new ForeignFeatureException(
-                                $"MSIL: the lambda initialising field '{cls.Name}.{field.Name}' has no IL lowering. A "
+                            Refuse(field.Initializer,
+                                $"{_backend}: the lambda initialising field '{cls.Name}.{field.Name}' has no IL lowering. A "
                                 + "field initializer runs outside every function body, so the lambda has no creator "
                                 + "to hold its environment. Assign it in a constructor instead.");
                     // ⚠ A lambda in MyBase.New's arguments is NOT refused here any more (ADR-0016 D3):
@@ -931,8 +1117,8 @@ namespace BasicLang.Compiler.IR
                 }
                 foreach (var global in _module.GlobalVariables.Values)
                     if (IsLambdaValue(global?.InitialValue))
-                        throw new ForeignFeatureException(
-                            $"MSIL: the lambda initialising module variable '{global.Name}' has no IL lowering. A "
+                        Refuse(global.InitialValue,
+                            $"{_backend}: the lambda initialising module variable '{global.Name}' has no IL lowering. A "
                             + "module initializer runs outside every function body, so the lambda has no creator "
                             + "to hold its environment. Assign it inside Sub Main (or another procedure) instead.");
             }
@@ -1055,7 +1241,7 @@ namespace BasicLang.Compiler.IR
                 foreach (var lambda in inPrologue)
                     if (NeedsMeTransitive(lambda))
                         throw new ForeignFeatureException(
-                            $"MSIL: lambda '{lambda.Name}', passed to MyBase.New in '{g.Name}', reaches Me. The object "
+                            $"{_backend}: lambda '{lambda.Name}', passed to MyBase.New in '{g.Name}', reaches Me. The object "
                             + "under construction does not exist before the base constructor runs (VB refuses the "
                             + "shape: BC31095 / BC31096), so its environment's Me would still be Nothing.");
 
@@ -1213,12 +1399,10 @@ namespace BasicLang.Compiler.IR
                 return false;
             }
 
-            private IRFunction RootOf(IRFunction f)
-            {
-                var guard = 0;
-                while (_creatorOf.TryGetValue(f, out var creator) && guard++ < 1000) f = creator;
-                return f;
-            }
+            private IRFunction RootOf(IRFunction f) => ClosureLowering.RootOf(f, _creatorOf);
+
+            /// <summary>Whether <paramref name="f"/>'s root was left un-lowered (Skip).</summary>
+            private bool IsSkipped(IRFunction f) => _skip.Contains(RootOf(f));
 
             // ---------------------------------------------------------------------------------
             // Environments (D2 amended, D3, D4, D6, D9)
@@ -1230,7 +1414,7 @@ namespace BasicLang.Compiler.IR
 
                 if (g.IsIterator || g.IsAsync)
                     throw new ForeignFeatureException(
-                        $"MSIL: '{g.Name}' is an {(g.IsIterator ? "Iterator" : "Async")} function that creates a "
+                        $"{_backend}: '{g.Name}' is an {(g.IsIterator ? "Iterator" : "Async")} function that creates a "
                         + "lambda. The first cut of closure conversion does not decide how an environment "
                         + "interacts with a state-machine lowering (ADR-0010 D9), so this is refused rather "
                         + "than emitted.");
@@ -1240,14 +1424,14 @@ namespace BasicLang.Compiler.IR
                 {
                     if (lambda.IsIterator || lambda.IsAsync)
                         throw new ForeignFeatureException(
-                            $"MSIL: an {(lambda.IsIterator ? "Iterator" : "Async")} lambda ('{lambda.Name}' in "
+                            $"{_backend}: an {(lambda.IsIterator ? "Iterator" : "Async")} lambda ('{lambda.Name}' in "
                             + $"'{g.Name}') has no IL lowering in the first cut of closure conversion "
                             + "(ADR-0010 D9).");
 
                     var recomputed = OptimizationPass.LambdaCapturesOf(lambda);
                     if (recomputed == null || g.LambdaCaptureSources == null || !g.LambdaCaptureSources.Contains(lambda.Name))
                         throw new ForeignFeatureException(
-                            $"MSIL: the capture set of lambda '{lambda.Name}' in '{g.Name}' could not be enumerated "
+                            $"{_backend}: the capture set of lambda '{lambda.Name}' in '{g.Name}' could not be enumerated "
                             + "(it holds raw inline code, or a nested lambda whose captures were not recorded). "
                             + "Closure conversion hoists exactly the captured variables, so without the set it "
                             + "cannot know what to hoist; refused rather than guessed (ADR-0010 D3).");
@@ -1312,7 +1496,7 @@ namespace BasicLang.Compiler.IR
                         foreach (var p in lambda.Parameters)
                             if (p?.Name != null && !string.Equals(p.Name, name, StringComparison.Ordinal) && NameEquals(p.Name, name))
                                 throw new ForeignFeatureException(
-                                    $"MSIL: in lambda '{lambda.Name}', '{name}' differs from its parameter '{p.Name}' "
+                                    $"{_backend}: in lambda '{lambda.Name}', '{name}' differs from its parameter '{p.Name}' "
                                     + "only by case. VB binds it to the parameter; the IR binds it to a variable of "
                                     + "the creator (task #169). Closure conversion never re-resolves a name, so the "
                                     + "shape is refused until the front end binds it. Spell it like the parameter.");
@@ -1323,7 +1507,7 @@ namespace BasicLang.Compiler.IR
                 foreach (var p in g.Parameters)
                     if (p?.Name != null && p.IsByRef && capSet.Contains(p.Name))
                         throw new ForeignFeatureException(
-                            $"MSIL: ByRef parameter '{p.Name}' of '{g.Name}' is captured by a lambda. VB forbids it "
+                            $"{_backend}: ByRef parameter '{p.Name}' of '{g.Name}' is captured by a lambda. VB forbids it "
                             + "(BC36639), and IL cannot keep a managed pointer in a field, so it is refused "
                             + "(ADR-0010 D4). Copy it into a local first.");
 
@@ -1335,13 +1519,13 @@ namespace BasicLang.Compiler.IR
                 {
                     if (type != null && (type.Kind == TypeKind.TypeParameter || generics.Contains(type.Name)))
                         throw new ForeignFeatureException(
-                            $"MSIL: captured variable '{name}' of '{g.Name}' is typed by the generic parameter "
+                            $"{_backend}: captured variable '{name}' of '{g.Name}' is typed by the generic parameter "
                             + $"'{type.Name}'. Generic environment classes are out of scope for the first cut of "
                             + "closure conversion (ADR-0010 D9).");
                 }
                 if (ctx.Root.Class != null && ctx.Root.Class.GenericParameters.Count > 0)
                     throw new ForeignFeatureException(
-                        $"MSIL: '{g.Name}' creates a lambda inside the generic class '{ctx.Root.Class.Name}'. Its "
+                        $"{_backend}: '{g.Name}' creates a lambda inside the generic class '{ctx.Root.Class.Name}'. Its "
                         + "environment would be nested in a generic type and so would have to be generic too, "
                         + "which is out of scope for the first cut of closure conversion (ADR-0010 D9).");
 
@@ -1350,7 +1534,7 @@ namespace BasicLang.Compiler.IR
                     RefuseGeneric(name, type);
                     if (type?.Kind == TypeKind.Array && type.ArrayDimensionSizes.Count > 1)
                         throw new ForeignFeatureException(
-                            $"MSIL: captured variable '{name}' of '{g.Name}' is a {type.ArrayDimensionSizes.Count}-dimensional "
+                            $"{_backend}: captured variable '{name}' of '{g.Name}' is a {type.ArrayDimensionSizes.Count}-dimensional "
                             + "array, which this backend has no IL lowering for at all.");
                 }
 
@@ -1401,7 +1585,7 @@ namespace BasicLang.Compiler.IR
                     if (!capSet.Contains(name) || fl.Holds(name)) continue;
                     if (type == null)
                         throw new ForeignFeatureException(
-                            $"MSIL: Catch variable '{name}' of '{g.Name}' is captured by a lambda and declared by "
+                            $"{_backend}: Catch variable '{name}' of '{g.Name}' is captured by a lambda and declared by "
                             + "more than one Catch with different exception types. It is function-level in the "
                             + "closure environment (ADR-0010 D2), which needs one type; rename one of them.");
                     Hoist(name, type);
@@ -1418,7 +1602,7 @@ namespace BasicLang.Compiler.IR
                 {
                     if (ctx.Root.Class.IsStruct)
                         throw new ForeignFeatureException(
-                            $"MSIL: a lambda in '{ctx.Root.Class.Name}.{g.Name}' uses Me, and "
+                            $"{_backend}: a lambda in '{ctx.Root.Class.Name}.{g.Name}' uses Me, and "
                             + $"'{ctx.Root.Class.Name}' is a Structure. VB forbids it (BC36638) — the lambda would "
                             + "capture a copy of the value — so it is refused (ADR-0010 D6).");
                     fl.MeField = FreshField(fl, "__me");
@@ -1692,7 +1876,7 @@ namespace BasicLang.Compiler.IR
                         foreach (var declared in lambdaDecls)
                             if (chain.Any(level => level.Holds(declared)))
                                 throw new ForeignFeatureException(
-                                    $"MSIL: lambda '{lambda.Name}' in '{ctx.Function.Name}' declares its own '{declared}' "
+                                    $"{_backend}: lambda '{lambda.Name}' in '{ctx.Function.Name}' declares its own '{declared}' "
                                     + $"while an enclosing scope's '{declared}' is captured. The IR binds a mention "
                                     + "before the declaration to the enclosing variable (task #122 N9; VB refuses the "
                                     + "shape, BC30616), and closure conversion never re-resolves a name, so it is "
@@ -1759,14 +1943,14 @@ namespace BasicLang.Compiler.IR
             private void CheckSignature(TypeInfo delegateType, IReadOnlyList<IRVariable> parameters, TypeInfo returnType,
                 string what, string where)
             {
-                if (!TryInvokeSignature(_module, delegateType, out var invokeParams, out var invokeReturn, out var problem))
+                if (!TryInvokeSignature(_options, _module, delegateType, out var invokeParams, out var invokeReturn, out var problem))
                     throw new ForeignFeatureException(
-                        $"MSIL: {what} in '{where}' is bound to '{Show(delegateType)}', and {problem}. A lambda or "
+                        $"{_backend}: {what} in '{where}' is bound to '{Show(delegateType)}', and {problem}. A lambda or "
                         + "AddressOf is target-typed to the delegate of the slot it fills (ADR-0010 D7), so that "
                         + "slot must be an Action, a Func or a Delegate this program declares.");
 
                 string Relax(string detail) =>
-                    $"MSIL: {what} in '{where}' does not match '{Show(delegateType)}' exactly ({detail}). The first "
+                    $"{_backend}: {what} in '{where}' does not match '{Show(delegateType)}' exactly ({detail}). The first "
                     + "cut of closure conversion has no VB relaxed delegate conversion (ADR-0010 D7): the "
                     + "signature must match after generic substitution. Declare the lambda's parameter and "
                     + "return types to match the delegate.";
@@ -1854,7 +2038,7 @@ namespace BasicLang.Compiler.IR
             private TypeInfo CallParameterType(FunctionContext ctx, BasicBlock block, IRCall call, int index)
             {
                 if (call.CalleeValue != null)
-                    return TryInvokeSignature(_module, call.CalleeValue.Type, out var ps, out _, out _) && index < ps.Count ? ps[index] : null;
+                    return TryInvokeSignature(_options, _module, call.CalleeValue.Type, out var ps, out _, out _) && index < ps.Count ? ps[index] : null;
 
                 var name = call.FunctionName;
                 if (string.IsNullOrEmpty(name)) return null;
@@ -1863,7 +2047,7 @@ namespace BasicLang.Compiler.IR
                 {
                     var asVariable = VariableType(ctx, block, name);
                     if (asVariable != null)
-                        return TryInvokeSignature(_module, asVariable, out var ps, out _, out _) && index < ps.Count ? ps[index] : null;
+                        return TryInvokeSignature(_options, _module, asVariable, out var ps, out _, out _) && index < ps.Count ? ps[index] : null;
                     if (ctx.Root.Class != null && TryFindMethod(_module, ctx.Root.Class, name, out _, out var own))
                         return ParameterType(own.Implementation?.Parameters, index);
                     var fn = ModuleFunction(name);
@@ -1975,7 +2159,7 @@ namespace BasicLang.Compiler.IR
                                 {
                                     if (!ctx.Root.IsInstance)
                                         throw new ForeignFeatureException(
-                                            $"MSIL: 'AddressOf {m.Name}' in '{g.Name}' names an instance method from a "
+                                            $"{_backend}: 'AddressOf {m.Name}' in '{g.Name}' names an instance method from a "
                                             + "Shared context, where there is no Me to bind it to.");
                                     target = new IRVariable("Me", new TypeInfo(ctx.Root.Class.Name, TypeKind.Class));
                                     isVirtual = own.IsVirtual || own.IsOverride || own.IsAbstract;
@@ -2000,7 +2184,7 @@ namespace BasicLang.Compiler.IR
                                         .Any(x => x != null && !ReferenceEquals(x, u) && OptimizationPass.UsesOf(x).Any(v => ReferenceEquals(v, fa)));
                                     if (other)
                                         throw new ForeignFeatureException(
-                                            $"MSIL: 'AddressOf {shape}' in '{g.Name}' has a method reference that is also "
+                                            $"{_backend}: 'AddressOf {shape}' in '{g.Name}' has a method reference that is also "
                                             + "used as a value; that shape has no IL lowering.");
                                     phantoms.Add((g.Blocks.First(b => b.Instructions.Contains(fa)), fa));
                                 }
@@ -2008,7 +2192,7 @@ namespace BasicLang.Compiler.IR
 
                             default:
                                 throw new ForeignFeatureException(
-                                    $"MSIL: 'AddressOf' of {(u.Operand == null ? "nothing" : $"'{u.Operand.Name}' ({u.Operand.GetType().Name})")} "
+                                    $"{_backend}: 'AddressOf' of {(u.Operand == null ? "nothing" : $"'{u.Operand.Name}' ({u.Operand.GetType().Name})")} "
                                     + $"in '{g.Name}' has no IL lowering. Supported: a module procedure, a method of the "
                                     + "enclosing class, and obj.Method on an object of a class this program declares.");
                         }
@@ -2087,7 +2271,7 @@ namespace BasicLang.Compiler.IR
                             if (slot == null || !IsDelegateType(_module, slot) || !IsDelegateValue(value)) continue;
                             if (!TypesEqual(slot, value.Type))
                                 throw new ForeignFeatureException(
-                                    $"MSIL: in '{g.Name}', a '{Show(value.Type)}' value flows into a '{Show(slot)}' slot. "
+                                    $"{_backend}: in '{g.Name}', a '{Show(value.Type)}' value flows into a '{Show(slot)}' slot. "
                                     + "Converting a delegate value between delegate types needs VB's relaxation, which "
                                     + "the first cut of closure conversion does not have (ADR-0010 D7); VB itself "
                                     + "requires 'AddressOf value.Invoke'.");
@@ -2197,7 +2381,7 @@ namespace BasicLang.Compiler.IR
                 var g = ctx.Function;
                 if (ctx.IsLambda && inst is IRBaseMethodCall baseCall)
                     throw new ForeignFeatureException(
-                        $"MSIL: 'MyBase.{baseCall.MethodName}' inside a lambda has no IL lowering. The lambda runs as a "
+                        $"{_backend}: 'MyBase.{baseCall.MethodName}' inside a lambda has no IL lowering. The lambda runs as a "
                         + "method of its closure environment, which has no base to call non-virtually.");
 
                 // A captured variable passed ByRef: the write-back would land in a temporary.
@@ -2206,7 +2390,7 @@ namespace BasicLang.Compiler.IR
                     for (var i = 0; i < args.Count; i++)
                         if (args[i] is IRVariable v && isByRef(i) && IsStorageBinding(Resolve(ctx, block, v.Name)))
                             throw new ForeignFeatureException(
-                                $"MSIL: '{v.Name}' is captured by a lambda (or reached through Me inside one) and "
+                                $"{_backend}: '{v.Name}' is captured by a lambda (or reached through Me inside one) and "
                                 + $"passed ByRef to '{callee}' in '{g.Name}'. It lives in a closure environment's "
                                 + "field, and this backend passes no field of one by reference; assign it to a "
                                 + "local first.");
@@ -2218,7 +2402,7 @@ namespace BasicLang.Compiler.IR
                         // The backend reads a variable-addressed load as the variable itself; with the
                         // variable moved into a field the load would dereference the field's value.
                         throw new ForeignFeatureException(
-                            $"MSIL: an address load of '{loadAddress.Name}' in '{g.Name}', which a lambda captures, "
+                            $"{_backend}: an address load of '{loadAddress.Name}' in '{g.Name}', which a lambda captures, "
                             + "has no IL lowering in the first cut of closure conversion.");
 
                     case IRCall call when call.CalleeValue == null:
@@ -2245,7 +2429,7 @@ namespace BasicLang.Compiler.IR
                         foreach (var name in PatternBindings(sw.PatternCases))
                             if (IsStorageBinding(Resolve(ctx, block, name)))
                                 throw new ForeignFeatureException(
-                                    $"MSIL: Select Case pattern variable '{name}' in '{g.Name}' is captured by a lambda. "
+                                    $"{_backend}: Select Case pattern variable '{name}' in '{g.Name}' is captured by a lambda. "
                                     + "The pattern binds it by storing to a local slot, which a closure environment's "
                                     + "field is not; the first cut of closure conversion refuses the shape.");
                         break;
@@ -2308,7 +2492,7 @@ namespace BasicLang.Compiler.IR
                         // backend. Nothing can be inserted in front of it, so it must need nothing.
                         if (TreeNeedsRewrite(ctx, block, tree))
                             throw new ForeignFeatureException(
-                                $"MSIL: a Select Case 'When' guard in '{ctx.Function.Name}' reads a variable that a "
+                                $"{_backend}: a Select Case 'When' guard in '{ctx.Function.Name}' reads a variable that a "
                                 + "lambda captures (or a lambda itself). A guard is rendered inline, where no "
                                 + "closure-environment load can be placed; the first cut refuses the shape. Compute "
                                 + "the guard's value into a local before the Select Case.");
@@ -2614,7 +2798,7 @@ namespace BasicLang.Compiler.IR
 
             private void AssertPostConditions()
             {
-                var leftover = _module.Functions.FirstOrDefault(f => f != null && f.IsLambda);
+                var leftover = _module.Functions.FirstOrDefault(f => f != null && f.IsLambda && !IsSkipped(f));
                 if (leftover != null)
                     throw new InvalidOperationException(
                         $"ClosureLowering post-condition violated: lambda '{leftover.Name}' is still a lambda.");
