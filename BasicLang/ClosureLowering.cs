@@ -845,6 +845,11 @@ namespace BasicLang.Compiler.IR
                 foreach (var f in functions)
                 {
                     if (f.IsLambda || f.IsExternal || f.Blocks == null) continue;
+                    // A lambda processed as its creator's lambda has IsLambda cleared by then, so a
+                    // lambda that comes after its creator here would be processed a SECOND time as a
+                    // root: a second, unused function environment and a dead duplicate of every
+                    // lambda it creates, nested in its environment (#241 on MSIL; C++ type-checks it).
+                    if (_lowered.Any(c => ReferenceEquals(c.Function, f))) continue;
                     var ownerClass = OwnerClassOf(_module, f, out var isInstance);
                     var root = new Root { Function = f, Class = ownerClass, IsInstance = isInstance };
                     Process(new FunctionContext { Function = f, IsLambda = false, Root = root });
@@ -1366,14 +1371,10 @@ namespace BasicLang.Compiler.IR
                         .ToList();
                     foreach (var v in perIter) perIterNames.Add(v.Name);
 
-                    // ⚠ A creator lambda that comes after its own creator in module.Functions is
-                    // processed TWICE — once as that creator's lambda, then again as a root, because
-                    // the first pass has cleared its IsLambda (pre-existing; measured at 4500ee3b:
-                    // ADR-0010's L7 builds two function environments for its outer lambda). The first
-                    // pass has already given this loop its iteration environment and its try; its body
-                    // no longer names the variables, so the second leaves them alone rather than
-                    // wrapping the body in a second try (which is a "Duplicate label" to ilasm). They
-                    // stay in perIterNames, so the second pass does not hoist them either.
+                    // A loop body is wrapped in its iteration try at most once (a second try is a
+                    // "Duplicate label" to ilasm). Every function is processed once since the root
+                    // loop in Run skips a lambda already lowered under its creator, so this is a
+                    // guard; it stays because the cost of being wrong is a broken assembly.
                     if (_wrappedBodies.Contains(loop.Body)) perIter = new List<IRVariable>();
 
                     if (!forEachVariable && perIter.Count == 0) continue;
