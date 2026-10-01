@@ -719,14 +719,13 @@ public class DelegateMemberInvocationExecutionTests
     // ============================================================================================
 
     /// <summary>
-    /// ⭐ MOVED PIN (ADR-0016 D3/W2, task #170). t155edge/P8: a bare field call (<c>Click()</c>)
+    /// ⭐ MOVED PIN (#140). t155edge/P8: a bare field call (<c>Click()</c>)
     /// directly AND from inside a lambda (<c>Dim again = Sub() Click()</c>) in the SAME method.
-    /// #188 makes this COMPILE on C++ for the first time (it used to fail with the "assigning to
-    /// 'void *'" defect); once it compiled, it exposed #140 (a C++ lambda captures its enclosing
-    /// object BY COPY, not by reference) and USED TO silently print 0 for 2. #170's capability
-    /// check now REFUSES it by name (arm (a): the lambda assigned to <c>b.Click</c> writes
-    /// <c>Main</c>'s captured <c>n</c> directly) rather than compiling it wrong. If this ever
-    /// prints 2, #140 has been fixed — update this pin deliberately.
+    /// #188 made this COMPILE on C++ for the first time (it used to fail with the "assigning to
+    /// 'void *'" defect); once it compiled, it exposed #140 (a C++ lambda captured its enclosing
+    /// object BY COPY, not by reference) and USED TO silently print 0 for 2, then #170 refused it by
+    /// name (the lambda assigned to <c>b.Click</c> writes <c>Main</c>'s captured <c>n</c>). #140 lowers
+    /// it: <c>n</c> lives in <c>Main</c>'s environment, so C++ prints VB's 2.
     /// </summary>
     private const string P8 = """
         Class Btn
@@ -747,12 +746,10 @@ public class DelegateMemberInvocationExecutionTests
         """;
 
     [Test]
-    public void P8_FieldCalledDirectlyAndFromALambda_Cpp_RefusedByName_PinnedForTask140()
+    public void P8_FieldCalledDirectlyAndFromALambda_Cpp_RunsLowered_FormerlyPinnedForTask140()
     {
-        var ex = Assert.Throws<CppCapabilityException>(() => BclE2E.CompileToCppOptimized(P8));
-        Assert.That(ex!.Message, Does.Contain("captures 'n' of 'Main'").And.Contain("#140"),
-            "if this stops refusing, #140 (C++ captures the enclosing object by copy) has been " +
-            "fixed — update this pin deliberately.\n" + ex.Message);
+        Assert.That(CppClosures.Compile(P8).PathOf("Main"), Is.EqualTo(CppClosurePath.Lowered), "C++ root 'Main'");
+        CppClosures.RunsInAllModes(P8, "2");
     }
 
     /// <summary>

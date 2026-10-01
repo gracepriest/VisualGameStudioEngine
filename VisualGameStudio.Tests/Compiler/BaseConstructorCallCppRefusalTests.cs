@@ -5,33 +5,34 @@ using BasicLang.Compiler.CodeGen.CPlusPlus;
 namespace VisualGameStudio.Tests.Compiler;
 
 /// <summary>
-/// ADR-0016 D3 (AMENDED, "W2"): which lambdas C++ refuses, and which it must keep running.
+/// ADR-0016 D3 (AMENDED, "W2") and what #140 made of it: which lambdas C++ ran by copy, which it refused,
+/// and which it now runs lowered.
 ///
-/// <para>C++ lowers a lambda as <c>[=]</c> — a COPY taken where the lambda is created — so a
-/// write to a captured variable that the lambda's copy never sees is a SILENT WRONG ANSWER. The
-/// rule is ONE rule with two arms, in <c>CppCapabilityChecker.CheckLambdaCaptureWrites</c> over
-/// <c>ControlFlowGraph.ExecutionSuccessors</c>: (a) the lambda writes a variable it captures, or
-/// (b) the CREATOR writes a captured variable at a point reachable in the creator's CFG from the
-/// lambda-creation instruction (that instruction included). It is stated over ANY lambda, never
-/// keyed on "inside <c>MyBase.New</c>" (the ADR's Rejected table) — so this file's programs are
-/// not all base-constructor shapes.</para>
+/// <para>C++ used to lower a lambda as <c>[=]</c> — a COPY taken where the lambda is created — so a write to a
+/// captured variable that the lambda's copy never sees was a SILENT WRONG ANSWER. #170 refused those
+/// programs by name; the rule is ONE rule with two arms, in <c>CppCapabilityChecker.CheckLambdaCaptureWrites</c>
+/// over <c>ControlFlowGraph.ExecutionSuccessors</c>: (a) the lambda writes a variable it captures, or (b)
+/// the CREATOR writes a captured variable at a point reachable in the creator's CFG from the
+/// lambda-creation instruction. #140 (ADR-0019) sends every root through <c>ClosureLowering</c> first, so
+/// that rule is now only the soundness proof of a by-copy FALLBACK: it is evaluated for a root the lowering
+/// cannot lower, and a root both paths refuse is refused with its text first.</para>
 ///
-/// <para>Three groups, in the order the amendment's Falsifier 5 states them:
+/// <para>Groups, in the order the amendment's Falsifier 5 stated them:
 /// <list type="bullet">
-/// <item><b>5a — the must-refuse list</b>, refused BY NAME (variable, creator, #140) in ALL THREE
-/// modes (standard pipeline, aggressive pipeline, <c>CompileProjectFiles</c>; 5c: "the same set in
-/// all three modes"). Neither <c>CppCodeGenerator.Generate</c> nor the project entry point needs a
-/// native compiler to REFUSE, so these run everywhere.</item>
-/// <item><b>5b — #140's REGRESSION FENCE</b>: eleven programs that C++ runs today and that must keep
-/// running with VB's own output after #140 replaces <c>[=]</c> with by-reference capture. #140 must
-/// bind the per-iteration instance, not a hoisted local. These are named "#140 regression fence" so
-/// the task that lands #140 finds them by search.</item>
-/// <item><b>5d — the witnesses</b> for the two edge families no existing test covers: FE1 (the
-/// For Each back edge) and CR1 (the creation instruction itself).</item>
+/// <item><b>5a — the programs W2 refused</b>. Seventeen of the nineteen now RUN, lowered, with VB's own
+/// output in all three modes (standard pipeline, aggressive pipeline, <c>CompileProjectFiles</c>); the
+/// other two (E09, R12) are refused by BOTH paths and stay in
+/// <see cref="BaseConstructorCallCppBothRefusedTests"/>, by name, with the lowering's reason after W2's.</item>
+/// <item><b>5b — #140's REGRESSION FENCE</b>: eleven programs that C++ ran before #140 and must keep
+/// running with VB's own output. #140 binds the per-iteration instance, not a hoisted local. Each also
+/// asserts the PATH its root took, so a path shift is visible even when the output stays right: ten are
+/// lowered, E20 (the N9 shape) is the one by-copy fallback.</item>
+/// <item><b>5d — the witnesses</b> for the two edge families no other test covers: FE1 (the For Each back
+/// edge) and CF1 (Catch → Finally), CR1 (the creation instruction itself) — each now runs.</item>
 /// </list></para>
 ///
-/// <para>⚠ Every message expectation below was measured against a FRESH build of this worktree.
-/// Do not trust a scratchpad <c>m-final.txt</c>: several predate the amendment.</para>
+/// <para>⚠ Every expectation below is VB's own answer (the other backends' legs of the same tests, and
+/// vbc via the t140 oracle) — never what BasicLang happens to print, except the recorded divergences.</para>
 /// </summary>
 [TestFixture]
 [Category("Integration")]
@@ -41,7 +42,7 @@ public class BaseConstructorCallCppRefusalTests
     private static string Norm(string s) => FourBackends.Norm(s);
 
     // ============================================================================================
-    // 5a — the must-refuse list
+    // 5a — the programs W2 refused before #140 (17 now run; E09 and R12 are in the both-refused fixture)
     // ============================================================================================
 
     // t155 P1: a local captured by a Sub lambda, then overwritten by its creator.
@@ -72,7 +73,7 @@ public class BaseConstructorCallCppRefusalTests
 
     // t155 R12_byrefarg: the creator's write is a BYREF ARGUMENT (Bump(n)), not an assignment —
     // the hit vocabulary is "assignment, rename, store, ++/--, ByRef argument".
-    private const string R12_ByRefArg = """
+    internal const string R12_ByRefArg = """
         Sub Bump(ByRef n As Integer)
             n = n + 1
         End Sub
@@ -113,75 +114,82 @@ public class BaseConstructorCallCppRefusalTests
         End Sub
         """;
 
-    /// <summary>(name, source, captured variable, creator, arm).</summary>
-    private static IEnumerable<TestCaseData> MustRefuse()
+    /// <summary>(name, source, VB's output, the root that must take the LOWERED path).</summary>
+    private static IEnumerable<TestCaseData> FormerlyRefused()
     {
         // arm (a) — the lambda itself writes what it captures
-        yield return new TestCaseData(BaseConstructorCallLoweringExecutionTests.B1, "p", "D.New").SetName("5a_arm_a_B1");
-        yield return new TestCaseData(BaseConstructorCallLoweringExecutionTests.B3, "p", "D.New").SetName("5a_arm_a_B3");
-        yield return new TestCaseData(BaseConstructorCallLoweringExecutionTests.B4, "p", "D.New").SetName("5a_arm_a_B4");
-        yield return new TestCaseData(BaseConstructorCallLoweringExecutionTests.C1, "p", "D.New").SetName("5a_arm_a_C1_notMyBaseNew");
+        yield return new TestCaseData(BaseConstructorCallLoweringExecutionTests.B1, "11 12", "D.New").SetName("5a_arm_a_B1_nowRuns");
+        yield return new TestCaseData(BaseConstructorCallLoweringExecutionTests.B3, "6\n18", "D.New").SetName("5a_arm_a_B3_nowRuns");
+        yield return new TestCaseData(BaseConstructorCallLoweringExecutionTests.B4, "6", "D.New").SetName("5a_arm_a_B4_nowRuns");
+        yield return new TestCaseData(BaseConstructorCallLoweringExecutionTests.C1, "11 12", "D.New").SetName("5a_arm_a_C1_notMyBaseNew_nowRuns");
 
         // arm (b) — the CREATOR writes it, after the lambda exists
-        yield return new TestCaseData(BaseConstructorCallLoweringExecutionTests.B2, "p", "D.New").SetName("5a_arm_b_B2");
-        yield return new TestCaseData(BaseConstructorCallLoweringExecutionTests.E01_NestedLambda, "p", "D.New").SetName("5a_arm_b_E01_nested");
-        yield return new TestCaseData(BaseConstructorCallLoweringExecutionTests.E02_TwoParamsOneWritten, "b", "D.New").SetName("5a_arm_b_E02_twoParams");
-        yield return new TestCaseData(BaseConstructorCallLoweringExecutionTests.E08_ThreeLevels, "a", "L1.New").SetName("5a_arm_b_E08_threeLevels");
-        yield return new TestCaseData(BaseConstructorCallLoweringExecutionTests.E09_GenericDerived, "p", "GBox.New").SetName("5a_arm_b_E09_generic");
-        yield return new TestCaseData(PerIterationLoopBodyDimProbes.E03, "x", "Main").SetName("5a_arm_b_PerIteration_E03_finally");
-        yield return new TestCaseData(PerIterationLoopBodyDimProbes.E04, "x", "Main").SetName("5a_arm_b_PerIteration_E04_exitInTry");
-        yield return new TestCaseData(PerIterationLoopBodyDimProbes.E07f, "x", "Main").SetName("5a_arm_b_PerIteration_E07f_nestedTry");
-        yield return new TestCaseData(PerIterationLoopBodyDimProbes.E12, "i", "Main").SetName("5a_arm_b_PerIteration_E12_forControlVariable");
-        yield return new TestCaseData(PerIterationLoopBodyDimProbes.E18, "i", "Main").SetName("5a_arm_b_PerIteration_E18");
-        yield return new TestCaseData(P1, "k", "Main").SetName("5a_arm_b_t155_P1");
-        yield return new TestCaseData(P2, "k", "MakeAdder").SetName("5a_arm_b_t155_P2_parameter");
-        yield return new TestCaseData(R12_ByRefArg, "n", "Main").SetName("5a_arm_b_t155_R12_byRefArgument");
-        yield return new TestCaseData(T185_E3, "a", "Main").SetName("5a_arm_b_t185_E3");
-        yield return new TestCaseData(T185_E3b, "a", "Main").SetName("5a_arm_b_t185_E3b_noIsControl");
+        yield return new TestCaseData(BaseConstructorCallLoweringExecutionTests.B2, "12", "D.New").SetName("5a_arm_b_B2_nowRuns");
+        yield return new TestCaseData(BaseConstructorCallLoweringExecutionTests.E01_NestedLambda, "21", "D.New").SetName("5a_arm_b_E01_nested_nowRuns");
+        yield return new TestCaseData(BaseConstructorCallLoweringExecutionTests.E02_TwoParamsOneWritten, "107", "D.New").SetName("5a_arm_b_E02_twoParams_nowRuns");
+        yield return new TestCaseData(BaseConstructorCallLoweringExecutionTests.E08_ThreeLevels, "211 18", "L1.New").SetName("5a_arm_b_E08_threeLevels_nowRuns");
+        yield return new TestCaseData(PerIterationLoopBodyDimProbes.E03, PerIterationLoopBodyDimProbes.E03Expected, "Main").SetName("5a_arm_b_PerIteration_E03_finally_nowRuns");
+        yield return new TestCaseData(PerIterationLoopBodyDimProbes.E04, PerIterationLoopBodyDimProbes.E04Expected, "Main").SetName("5a_arm_b_PerIteration_E04_exitInTry_nowRuns");
+        yield return new TestCaseData(PerIterationLoopBodyDimProbes.E07f, PerIterationLoopBodyDimProbes.E07fExpected, "Main").SetName("5a_arm_b_PerIteration_E07f_nestedTry_nowRuns");
+        yield return new TestCaseData(PerIterationLoopBodyDimProbes.E12, PerIterationLoopBodyDimProbes.E12Expected, "Main").SetName("5a_arm_b_PerIteration_E12_forControlVariable_nowRuns");
+        yield return new TestCaseData(PerIterationLoopBodyDimProbes.E18, PerIterationLoopBodyDimProbes.E18Expected, "Main").SetName("5a_arm_b_PerIteration_E18_nowRuns");
+        yield return new TestCaseData(P1, "5\n8", "Main").SetName("5a_arm_b_t155_P1_nowRuns");
+        yield return new TestCaseData(P2, "16", "MakeAdder").SetName("5a_arm_b_t155_P2_parameter_nowRuns");
+        yield return new TestCaseData(T185_E3, "True\nFalse\nTrue\nFalse", "Main").SetName("5a_arm_b_t185_E3_nowRuns");
+        yield return new TestCaseData(T185_E3b, "True\nFalse", "Main").SetName("5a_arm_b_t185_E3b_noIsControl_nowRuns");
     }
 
     /// <summary>
-    /// Falsifier 5a: every program on the must-refuse list is refused BY NAME — the captured
-    /// variable, its creator, and #140 — in the standard pipeline, the aggressive pipeline AND the
-    /// project entry point. A refusal that named the wrong variable would send the user to fix the
-    /// wrong line, so the variable and creator are asserted, not just the code.
+    /// Falsifier 5a, moved (#140): every program W2 used to refuse BY NAME — except the two both-refused
+    /// ones — now compiles, takes the LOWERED path for the named root, and prints VB's own output in the
+    /// standard pipeline, the aggressive pipeline AND the project entry point. They all gave a wrong
+    /// answer on C++ before #170, so the ONLY thing that makes "refused" → "runs" safe is that the
+    /// output is right; the path assertion keeps a program that happens to run right on the by-copy
+    /// fallback from hiding a lowering regression.
     /// </summary>
-    [TestCaseSource(nameof(MustRefuse))]
-    public void MustRefuse_ByName_InAllThreeModes(string source, string variable, string creator)
-        => BaseConstructorCallLoweringExecutionTests.AssertCppRefusedByNameInAllThreeModes(source, variable, creator);
+    [TestCaseSource(nameof(FormerlyRefused))]
+    public void FormerlyRefused_NowRunsLoweredWithVbsOutput_InAllThreeModes(string source, string expected, string loweredRoot)
+    {
+        foreach (var entry in new[] { CppEntry.Standard, CppEntry.Aggressive, CppEntry.Project })
+            Assert.That(CppClosures.Compile(source, entry).PathOf(loweredRoot), Is.EqualTo(CppClosurePath.Lowered), $"root '{loweredRoot}', {entry}");
+        CppClosures.RunsInAllModes(source, expected);
+    }
 
     // ============================================================================================
     // 5b — #140's REGRESSION FENCE
     // ============================================================================================
 
-    /// <summary>(name, source, VB's expected output).</summary>
+    /// <summary>(name, source, VB's expected output, the root, the path it took — measured).</summary>
     private static IEnumerable<TestCaseData> Fence()
     {
-        yield return new TestCaseData(BaseConstructorCallLoweringExecutionTests.B5, "7").SetName("Cpp140RegressionFence_B5_readOnlyBaseArgsLambda");
-        yield return new TestCaseData(PerIterationLoopBodyDimProbes.L2, PerIterationLoopBodyDimProbes.L2Expected).SetName("Cpp140RegressionFence_t172_L2");
-        yield return new TestCaseData(PerIterationLoopBodyDimProbes.E05, PerIterationLoopBodyDimProbes.E05Expected).SetName("Cpp140RegressionFence_t172_E05");
-        yield return new TestCaseData(PerIterationLoopBodyDimProbes.E06, PerIterationLoopBodyDimProbes.E06Expected).SetName("Cpp140RegressionFence_t172_E06");
-        yield return new TestCaseData(PerIterationLoopBodyDimProbes.E07, PerIterationLoopBodyDimProbes.E07Expected).SetName("Cpp140RegressionFence_t172_E07");
-        yield return new TestCaseData(PerIterationLoopBodyDimProbes.E07e, PerIterationLoopBodyDimProbes.E07eExpected).SetName("Cpp140RegressionFence_t172_E07e");
-        yield return new TestCaseData(PerIterationLoopBodyDimProbes.E07w, PerIterationLoopBodyDimProbes.E07wExpected).SetName("Cpp140RegressionFence_t172_E07w");
-        yield return new TestCaseData(PerIterationLoopBodyDimProbes.E07x, PerIterationLoopBodyDimProbes.E07xExpected).SetName("Cpp140RegressionFence_t172_E07x");
-        yield return new TestCaseData(PerIterationLoopBodyDimProbes.E10, PerIterationLoopBodyDimProbes.E10Expected).SetName("Cpp140RegressionFence_t172_E10");
-        yield return new TestCaseData(PerIterationLoopBodyDimProbes.E13, PerIterationLoopBodyDimProbes.E13Expected).SetName("Cpp140RegressionFence_t172_E13");
-        yield return new TestCaseData(PerIterationLoopBodyDimProbes.E20, PerIterationLoopBodyDimProbes.E20Expected).SetName("Cpp140RegressionFence_t172_E20");
+        yield return new TestCaseData(BaseConstructorCallLoweringExecutionTests.B5, "7", "D.New", CppClosurePath.Lowered).SetName("Cpp140RegressionFence_B5_readOnlyBaseArgsLambda");
+        yield return new TestCaseData(PerIterationLoopBodyDimProbes.L2, PerIterationLoopBodyDimProbes.L2Expected, "Main", CppClosurePath.Lowered).SetName("Cpp140RegressionFence_t172_L2");
+        yield return new TestCaseData(PerIterationLoopBodyDimProbes.E05, PerIterationLoopBodyDimProbes.E05Expected, "Main", CppClosurePath.Lowered).SetName("Cpp140RegressionFence_t172_E05");
+        yield return new TestCaseData(PerIterationLoopBodyDimProbes.E06, PerIterationLoopBodyDimProbes.E06Expected, "Main", CppClosurePath.Lowered).SetName("Cpp140RegressionFence_t172_E06");
+        yield return new TestCaseData(PerIterationLoopBodyDimProbes.E07, PerIterationLoopBodyDimProbes.E07Expected, "Main", CppClosurePath.Lowered).SetName("Cpp140RegressionFence_t172_E07");
+        yield return new TestCaseData(PerIterationLoopBodyDimProbes.E07e, PerIterationLoopBodyDimProbes.E07eExpected, "Main", CppClosurePath.Lowered).SetName("Cpp140RegressionFence_t172_E07e");
+        yield return new TestCaseData(PerIterationLoopBodyDimProbes.E07w, PerIterationLoopBodyDimProbes.E07wExpected, "Main", CppClosurePath.Lowered).SetName("Cpp140RegressionFence_t172_E07w");
+        yield return new TestCaseData(PerIterationLoopBodyDimProbes.E07x, PerIterationLoopBodyDimProbes.E07xExpected, "Main", CppClosurePath.Lowered).SetName("Cpp140RegressionFence_t172_E07x");
+        yield return new TestCaseData(PerIterationLoopBodyDimProbes.E10, PerIterationLoopBodyDimProbes.E10Expected, "Main", CppClosurePath.Lowered).SetName("Cpp140RegressionFence_t172_E10");
+        yield return new TestCaseData(PerIterationLoopBodyDimProbes.E13, PerIterationLoopBodyDimProbes.E13Expected, "Main", CppClosurePath.Lowered).SetName("Cpp140RegressionFence_t172_E13");
+        // E20: a lambda declares a local spelled like a name its creator also captures (N9). The lowering
+        // refuses N9, and W2 admits the root (nothing writes what a lambda captures), so it is the ONE
+        // by-copy fallback in the fence — still running with VB's output, as it always did.
+        yield return new TestCaseData(PerIterationLoopBodyDimProbes.E20, PerIterationLoopBodyDimProbes.E20Expected, "Main", CppClosurePath.ByCopy).SetName("Cpp140RegressionFence_t172_E20");
     }
 
     /// <summary>
-    /// ⭐ #140 REGRESSION FENCE (ADR-0016 D3 amendment, Falsifier 5b and the Obligations). These
+    /// ⭐ #140 REGRESSION FENCE (ADR-0016 D3 amendment, Falsifier 5b and the Obligations; #140 ruling D3). These
     /// programs write a per-iteration <c>Dim</c> after (or around) a lambda that captures it, and
-    /// C++'s copy taken at creation EQUALS the per-iteration instance — so they run with VB's own
-    /// output today, and W1 (the syntactic "any write" rule) was rejected for refusing nine of
-    /// them. The per-iteration cut and the Dim-initializer rule exist to keep them running.
-    /// When #140 replaces <c>[=]</c> with by-reference capture it must bind the per-iteration
-    /// instance, not a hoisted local, or these go wrong; when it deletes W2 they must stay green.
+    /// C++'s copy taken at creation EQUALS the per-iteration instance — so they ran with VB's own
+    /// output before #140, and W1 (the syntactic "any write" rule) was rejected for refusing nine of
+    /// them. #140 replaced <c>[=]</c> with by-reference capture and had to bind the per-iteration
+    /// instance, not a hoisted local; they stay green, UNCHANGED, and now ALSO assert the path each root
+    /// took (ruling D3: "so a path shift is visible"): ten are lowered, E20 is the by-copy fallback.
     /// Run in the standard pipeline, the aggressive pipeline, and the project entry point.
     /// </summary>
     [TestCaseSource(nameof(Fence))]
-    public void Cpp140RegressionFence_RunsWithVbsOutput_InAllThreeModes(string source, string expected)
+    public void Cpp140RegressionFence_RunsWithVbsOutput_InAllThreeModes(string source, string expected, string root, CppClosurePath path)
     {
         Assert.Multiple(() =>
         {
@@ -191,24 +199,9 @@ public class BaseConstructorCallCppRefusalTests
                 "C++, aggressive pipeline");
             Assert.That(Norm(BaseConstructorCallLoweringExecutionTests.RunCppViaProjectEntryPoint(source)), Is.EqualTo(expected),
                 "C++, project entry point");
+            foreach (var entry in new[] { CppEntry.Standard, CppEntry.Aggressive, CppEntry.Project })
+                Assert.That(CppClosures.Compile(source, entry).PathOf(root), Is.EqualTo(path), $"the path root '{root}' took, {entry}");
         });
-    }
-
-    /// <summary>
-    /// E16 (two sibling loops each declaring <c>Dim x</c>) is neither refused nor run: W2 lets it
-    /// through — it is not a #170 finding — and the C++ compiler rejects the redefinition. It STAYS
-    /// a named clang failure (task #229). If W2 ever REFUSED it, the "W2 on BodyLocals alone"
-    /// rejected alternative would have crept back in (the amendment measured it: E16 was one of
-    /// that rule's collateral cases).
-    /// </summary>
-    [Test]
-    public void E16_StaysANamedClangFailure_NeitherRefusedNorRun()
-    {
-        string cpp = null;
-        Assert.That(() => cpp = BclE2E.CompileToCppOptimized(PerIterationLoopBodyDimProbes.E16), Throws.Nothing,
-            "W2 must NOT refuse E16 — it is task #229's clang redefinition, not a stale capture");
-        Assert.That(() => BclE2E.CompileRun(cpp), Throws.Exception,
-            "task #229 — two sibling `Dim x` loops are a C++ redefinition");
     }
 
     // ============================================================================================
@@ -248,22 +241,23 @@ public class BaseConstructorCallCppRefusalTests
     /// ⭐ FE1 — the witness for the For Each BACK EDGE. A function-level <c>x</c> written in a For
     /// Each body BEFORE the lambda is created is only reachable from the lambda-creation
     /// instruction through the end-of-body → body-entry edge (the next iteration's
-    /// <c>x = x + n</c>). VB prints 6 6 6 (one shared <c>x</c>); the C++ copy would print 1 3 6.
-    /// Without that edge in the shared successor function the search finds nothing after the
-    /// creation and the wrong answer escapes (mutant MF, killed by this test). C# and JavaScript
-    /// print VB's answer; MSIL does not ASSEMBLE this shape (<c>unbox.any Func`1&lt;int32&gt;</c> — a
-    /// For Each over a <c>List(Of Func(Of Integer))</c>, a pre-existing generic-delegate gap
-    /// unrelated to #170), which is why MSIL is not asserted here.
+    /// <c>x = x + n</c>). VB prints 6 6 6 (one shared <c>x</c>); the C++ copy would print 1 3 6, which is why
+    /// #170 refused it (mutant MF in the shared successor function, killed by this test then). #140 lowers
+    /// it — one environment holds the one shared <c>x</c> — so C#, JavaScript and C++ all print 6 6 6.
+    /// MSIL does not ASSEMBLE this shape (<c>unbox.any Func`1&lt;int32&gt;</c> — a For Each over a
+    /// <c>List(Of Func(Of Integer))</c>, a pre-existing generic-delegate gap unrelated to #170), which is
+    /// why MSIL is not asserted here.
     /// </summary>
     [Test]
-    public void FE1_ForEachBackEdge_IsRefused_AndTheOtherBackendsPrintVbsAnswer()
+    public void FE1_ForEachBackEdge_RunsOnCSharpJavaScriptAndCpp()
     {
         Assert.Multiple(() =>
         {
             Assert.That(Norm(FourBackends.RunEmittedCSharp(FE1_ForEachBackEdge)), Is.EqualTo("6\n6\n6"), "C#");
             Assert.That(Norm(JavaScriptExecutionTests.RunJs(FE1_ForEachBackEdge)), Is.EqualTo("6\n6\n6"), "JavaScript");
+            Assert.That(CppClosures.Compile(FE1_ForEachBackEdge).PathOf("Main"), Is.EqualTo(CppClosurePath.Lowered), "C++ root 'Main'");
+            CppClosures.RunsInAllModes(FE1_ForEachBackEdge, "6\n6\n6");
         });
-        BaseConstructorCallLoweringExecutionTests.AssertCppRefusedByNameInAllThreeModes(FE1_ForEachBackEdge, "x", "Main");
     }
 
     private const string CF1_CatchThenFinallyWrite = """
@@ -284,43 +278,77 @@ public class BaseConstructorCallCppRefusalTests
     /// <summary>
     /// ⭐ CF1 — the witness for the Catch → Finally EDGE. A lambda created in a CATCH block, whose
     /// captured <c>x</c> is written by the Finally: VB (and JavaScript) print 5 — the lambda sees the
-    /// Finally's write — but a C++ copy taken at creation would print 0. The write is reachable from
-    /// the creation instruction only through the Catch region's edge to the Finally, so it is refused
-    /// BY NAME (variable <c>x</c>, creator <c>Main</c>, arm (b): "'Main' writes it", #140) in all three
-    /// modes. This was a wrong answer that ESCAPED W2 until <c>ExecutionSuccessors</c>' <c>Region</c>
-    /// was fixed to always contain its own entry block — a Catch is a stop block for its own region, so
-    /// the region used to be empty and no Catch → Finally edge was ever added (mutant "Catch → Finally
-    /// edge dropped" restores that, and is killed by this test and by
-    /// <c>ControlFlowGraphExecutionSuccessorsTests.Catch_EveryBlockOfTheCatchRegion_ReachesTheFinally</c>).
+    /// Finally's write — but a C++ copy taken at creation would print 0. The write was reachable from
+    /// the creation instruction only through the Catch region's edge to the Finally; #170 refused it by name
+    /// (<c>ExecutionSuccessors</c>' <c>Region</c> fix; mutant "Catch → Finally edge dropped", killed by this
+    /// test and by <c>ControlFlowGraphExecutionSuccessorsTests.Catch_EveryBlockOfTheCatchRegion_ReachesTheFinally</c>,
+    /// which still pin the successor function). #140 lowers it — the environment's <c>x</c> is written by the
+    /// Finally and read by the lambda — so C++ prints 5 too, in all three modes.
     /// </summary>
     [Test]
-    public void CF1_ALambdaCreatedInACatch_WhoseFinallyWritesIt_IsRefusedByName()
+    public void CF1_ALambdaCreatedInACatch_WhoseFinallyWritesIt_RunsOnJavaScriptAndCpp()
     {
         Assert.That(Norm(JavaScriptExecutionTests.RunJs(CF1_CatchThenFinallyWrite)), Is.EqualTo("5"),
             "JavaScript — VB's answer");
-
-        var ex = Assert.Throws<CppCapabilityException>(() => BclE2E.CompileToCppOptimized(CF1_CatchThenFinallyWrite));
-        Assert.That(ex!.Message, Does.Contain("captures 'x' of 'Main'").And.Contain("'Main' writes it").And.Contain("#140"),
-            "arm (b): the creator's Finally writes the captured x.\n" + ex.Message);
-
-        BaseConstructorCallLoweringExecutionTests.AssertCppRefusedByNameInAllThreeModes(CF1_CatchThenFinallyWrite, "x", "Main");
+        Assert.That(CppClosures.Compile(CF1_CatchThenFinallyWrite).PathOf("Main"), Is.EqualTo(CppClosurePath.Lowered), "C++ root 'Main'");
+        CppClosures.RunsInAllModes(CF1_CatchThenFinallyWrite, "5");
     }
 
     /// <summary>
     /// ⭐ CR1 — the witness for the creation instruction ITSELF. <c>f = Function(n) … f(n - 1)</c>:
     /// the lambda captures <c>f</c> (it calls it as a delegate — an <c>IRCall</c> whose
     /// <c>FunctionName</c> is the variable, not an operand, so <c>LambdaCapturesOf</c> does not
-    /// list it) and the assignment that stores the lambda into <c>f</c> IS the creator's write. The
-    /// write sits on the creation instruction itself, so a search that starts AFTER it (mutant MC)
-    /// misses it and C++ throws <c>bad_function_call</c> at run time. VB prints 6.
+    /// list it) and the assignment that stores the lambda into <c>f</c> IS the creator's write. A copy of
+    /// <c>f</c> taken at creation is still empty, so C++ threw <c>bad_function_call</c> at run time and #170
+    /// refused it (mutant MC: a search that starts AFTER the creation instruction). Lowered, the lambda reads
+    /// <c>f</c> from the environment it shares with its creator, so it recurses: VB prints 6, JavaScript and
+    /// C++ both do.
     /// </summary>
     [Test]
-    public void CR1_SelfReference_IsRefused_AndJavaScriptPrintsVbsAnswer()
+    public void CR1_SelfReference_RunsOnJavaScriptAndCpp()
     {
         // C# and MSIL do not run this shape for UNRELATED, pre-existing reasons — C# empties a
         // multi-statement lambda body (`() => { ; }`, CS1643: #136) and MSIL emits a
         // BadImageFormatException — so only JavaScript is asserted as the oracle leg.
         Assert.That(Norm(JavaScriptExecutionTests.RunJs(CR1_SelfReference)), Is.EqualTo("6"), "JavaScript");
-        BaseConstructorCallLoweringExecutionTests.AssertCppRefusedByNameInAllThreeModes(CR1_SelfReference, "f", "Main");
+        Assert.That(CppClosures.Compile(CR1_SelfReference).PathOf("Main"), Is.EqualTo(CppClosurePath.Lowered), "C++ root 'Main'");
+        CppClosures.RunsInAllModes(CR1_SelfReference, "6");
+    }
+}
+
+/// <summary>
+/// The two programs of ADR-0016's 5a list that BOTH C++ closure paths refuse (#140 ruling D1, case 3): the
+/// lowering cannot lower them (E09: a lambda in a generic class's constructor — its environment would have to
+/// be generic; R12: a captured variable passed ByRef) and the by-copy fallback is unsound for them (the
+/// creator writes the capture after the lambda exists). Each is refused with W2's text FIRST — naming the
+/// captured variable and its creator, with #140 — then the lowering's reason ("closure lowering cannot lower
+/// '&lt;root&gt;' either (#140): C++: …"), in all three modes. Needs no native compiler, so it runs in the fast
+/// subset.
+/// </summary>
+[TestFixture]
+public class BaseConstructorCallCppBothRefusedTests
+{
+    /// <summary>(source, root, the captured variable W2 names, a fragment of the lowering's reason).</summary>
+    private static IEnumerable<TestCaseData> BothRefused()
+    {
+        yield return new TestCaseData(BaseConstructorCallLoweringExecutionTests.E09_GenericDerived, "GBox.New", "p", "generic").SetName("5a_arm_b_E09_generic_bothRefused");
+        yield return new TestCaseData(BaseConstructorCallCppRefusalTests.R12_ByRefArg, "Main", "n", "ByRef").SetName("5a_arm_b_t155_R12_byRefArgument_bothRefused");
+    }
+
+    [TestCaseSource(nameof(BothRefused))]
+    public void BothRefused_W2First_ThenTheLoweringsReason_InAllThreeModes(string source, string root, string variable, string loweringReason)
+    {
+        Assert.Multiple(() =>
+        {
+            AssertMode(source, root, variable, loweringReason, "standard", () => BclE2E.CompileToCppOptimized(source));
+            AssertMode(source, root, variable, loweringReason, "aggressive", () => BclE2E.CompileToCppAggressive(source));
+            AssertMode(source, root, variable, loweringReason, "project", () => BaseConstructorCallLoweringExecutionTests.RunCppViaProjectEntryPoint(source));
+        });
+    }
+
+    private static void AssertMode(string source, string root, string variable, string reason, string mode, System.Action compile)
+    {
+        var ex = Assert.Throws<CppCapabilityException>(() => compile());
+        CppClosures.AssertBothRefusedMessage(ex!.Message, root, reason, variable, mode);
     }
 }

@@ -39,10 +39,11 @@ namespace VisualGameStudio.Tests.Compiler;
 //  LicmKillVocabularyKnownGapsTask122Tests below, whose JavaScript pin is now promoted. Task
 //  #122 (the capture set narrowing D1's "every local" interim rule to just the captured ones)
 //  is DISCHARGED: L5's x is genuinely in bump's capture set, so this is now correct via the
-//  capture set itself, not the coarser fallback. C++ stays known-wrong, but for an UNRELATED
+//  capture set itself, not the coarser fallback. C++ was known-wrong, but for an UNRELATED
 //  reason settled in the ADR's implementation note: the C++ BACKEND's own capture-by-copy
 //  lowering (task #140), present even with NO optimizer pass at all — not a kill-vocabulary
-//  gap this file's passes could ever close.
+//  gap this file's passes could ever close. #140 (ADR-0019) closed it: C++ runs L5 through
+//  ClosureLowering and prints seed\n12 like the other backends.
 //  L6 is the pass's OWN control: a truly invariant product with no call in the loop at all,
 //  proving the fix does not disable LICM wholesale.
 //
@@ -576,10 +577,11 @@ public class LicmKillVocabularyExecutionTests
 /// #155/ADR-0010's ClosureLowering closed MSIL's OWN, unrelated gap (it used to be unable to
 /// build this shape at all: "no lowering for the delegate type a <c>Sub()</c> lambda gets typed
 /// as"), so its assertion is folded into the JavaScript pin below rather than kept separate. C++
-/// stays KNOWN-WRONG, for a reason ADR-0006 D1's implementation note
-/// settles as UNRELATED to the kill vocabulary or to LICM: task #140, a BACKEND lambda
+/// was KNOWN-WRONG, for a reason ADR-0006 D1's implementation note
+/// settled as UNRELATED to the kill vocabulary or to LICM: task #140, a BACKEND lambda
 /// lowering defect (capture BY COPY where BasicLang means capture by reference — MEASURED present
-/// even with NO optimizer pass at all, so no kill-vocabulary fix could ever have closed it).
+/// even with NO optimizer pass at all, so no kill-vocabulary fix could ever have closed it); #170 then
+/// refused it by name, and #140 closed it for good by lowering the lambda — C++ runs it too now.
 /// Correct is <c>seed\n12</c> everywhere; C# alone got it right
 /// before D1 too and is not pinned here for that reason.
 ///
@@ -601,7 +603,7 @@ public class LicmKillVocabularyKnownGapsTask122Tests
     /// "every local" interim rule; #122 does not move this VALUE, only narrows WHY it is correct.
     /// Promoted from a known-wrong pin (was <c>seed\n6</c>, task #122). D2's L5 NOTE said this
     /// attribution would move to JavaScript once C++'s failure was confirmed a backend defect —
-    /// see <see cref="L5_LambdaCapturedLocal_Cpp_StandardPipeline_PinnedForTask140"/>'s doc comment.
+    /// see <see cref="L5_LambdaCapturedLocal_Cpp_StandardPipeline_RunsLowered_FormerlyPinnedForTask140"/>'s doc comment.
     ///
     /// <para>MSIL's OWN identical pin here used to be
     /// <c>L5_LambdaCapturedLocal_Msil_CannotBuild_PinnedForTask122</c> — "MSIL has no lowering
@@ -627,33 +629,28 @@ public class LicmKillVocabularyKnownGapsTask122Tests
         });
 
     /// <summary>
-    /// ⭐ MOVED PIN (ADR-0016 D3/W2, task #170). STAYS attributed to #140, a C++ BACKEND
-    /// lambda-capture defect LICM (or any kill-vocabulary fix) could never have closed: the C++
-    /// backend itself emits <c>bump = [=]() { ...; t0 = x + 1; return; };</c> — a lambda captured
-    /// BY COPY (<c>[=]</c>), so the write inside never reaches the caller's <c>x</c>. This USED TO
-    /// silently print seed\n6 for seed\n12; #170's capability check now REFUSES it by name (arm
-    /// (a): bump writes x, which it captures) rather than compiling it wrong — a named refusal
-    /// beats a silent wrong answer (ADR-0016's rule one). MEASURED refused with NO optimizer pass
-    /// running too, so this remains, as before, NOT a kill-vocabulary or LICM defect.
+    /// ⭐ MOVED PIN (#140). Was attributed to #140 all along: a C++ BACKEND lambda-capture defect LICM (or
+    /// any kill-vocabulary fix) could never have closed — the backend emitted
+    /// <c>bump = [=]() { ...; t0 = x + 1; return; };</c>, a lambda captured BY COPY, so the write inside never
+    /// reached the caller's <c>x</c>. It printed seed\n6 for seed\n12, then (#170) was refused by name. #140
+    /// runs it through ClosureLowering: <c>x</c> lives in an environment <c>bump</c> and <c>Main</c> share, so
+    /// C++ prints seed\n12. Still NOT a kill-vocabulary or LICM matter, which is why the answer is the same
+    /// with no optimizer at all.
     /// </summary>
     [Test]
-    public void L5_LambdaCapturedLocal_Cpp_StandardPipeline_RefusedByName_PinnedForTask140()
+    public void L5_LambdaCapturedLocal_Cpp_StandardPipeline_RunsLowered_FormerlyPinnedForTask140()
     {
-        var ex = Assert.Throws<CppCapabilityException>(
-            () => BclE2E.CompileToCppOptimized(LicmKillVocabularyShapes.L5));
-        Assert.That(ex!.Message, Does.Contain("captures 'x' of 'Main'").And.Contain("#140"),
-            "task #140 (C++ BACKEND capture-by-copy) flips this to running — re-measure before "
-            + "touching it.\n" + ex.Message);
+        Assert.That(CppClosures.Compile(LicmKillVocabularyShapes.L5).PathOf("Main"), Is.EqualTo(CppClosurePath.Lowered));
+        Assert.That(FourBackends.Norm(BclE2E.CompileRun(BclE2E.CompileToCppOptimized(LicmKillVocabularyShapes.L5))),
+            Is.EqualTo("seed\n12"), "C++, standard pipeline");
     }
 
     [Test]
-    public void L5_LambdaCapturedLocal_Cpp_AggressivePipeline_RefusedByName_PinnedForTask140()
+    public void L5_LambdaCapturedLocal_Cpp_AggressivePipeline_RunsLowered_FormerlyPinnedForTask140()
     {
-        var ex = Assert.Throws<CppCapabilityException>(
-            () => BclE2E.CompileToCppAggressive(LicmKillVocabularyShapes.L5));
-        Assert.That(ex!.Message, Does.Contain("captures 'x' of 'Main'").And.Contain("#140"),
-            "aggressive pipeline — the capability check runs independent of which optimizer "
-            + "passes execute, so this agrees with the standard-pipeline pin above.\n" + ex.Message);
+        Assert.That(CppClosures.Compile(LicmKillVocabularyShapes.L5, CppEntry.Aggressive).PathOf("Main"), Is.EqualTo(CppClosurePath.Lowered));
+        Assert.That(FourBackends.Norm(BclE2E.CompileRun(BclE2E.CompileToCppAggressive(LicmKillVocabularyShapes.L5))),
+            Is.EqualTo("seed\n12"), "C++, aggressive pipeline — LICM must not hoist x * 2 out of the loop bump() writes x in");
     }
 
 }

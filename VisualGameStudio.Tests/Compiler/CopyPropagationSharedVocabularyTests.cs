@@ -322,18 +322,20 @@ internal static class CopyPropagationSharedVocabularyProbes
 [NonParallelizable]         // the C# leg redirects Console.Out (see FourBackends)
 public class CopyPropagationSharedVocabularyExecutionTests
 {
-    // ---- CP2: C# + JavaScript + MSIL agree; C++ KNOWN-WRONG (task #140) ---------------------
+    // ---- CP2: all four backends agree (C++ since task #140) ---------------------------------
     //
     //  MSIL used to have no lowering for the delegate type a Sub() lambda gets typed as
     //  ("Reference to undefined class 'Action'", task #155) — pinned below as
-    //  CP2_Msil_PinnedForTask155_* while it was red. #155/ADR-0010 (ClosureLowering) closes it:
-    //  MSIL now agrees with C# and JavaScript, so its assertion is FOLDED into this pair's own
+    //  CP2_Msil_PinnedForTask155_* while it was red. #155/ADR-0010 (ClosureLowering) closed it:
+    //  MSIL agrees with C# and JavaScript, so its assertion is FOLDED into this pair's own
     //  Assert.Multiple rather than kept as a separate pin, matching the fixture's "AllFour/
-    //  ThreeBackends" pattern elsewhere (see DynamicUseSPrimeTests' L1). C++ stays its own
-    //  separate pin below (task #140, unrelated, still wrong).
+    //  ThreeBackends" pattern elsewhere (see DynamicUseSPrimeTests' L1). C++ was the last holdout
+    //  (capture by copy, #140: it printed 3,3 for 103,3, then #170 refused it by name); #140 runs it
+    //  through ClosureLowering too, so it joins the same Assert.Multiple, and the two C++ pins
+    //  (CP2_Cpp_RefusedByName_PinnedForTask140_*) are gone.
 
     [Test]
-    public void CP2_StandardPipeline_CSharpAndJavaScriptAndMsilAgree()
+    public void CP2_StandardPipeline_AllFourBackendsAgree()
         => Assert.Multiple(() =>
         {
             Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharp(CopyPropagationSharedVocabularyProbes.CP2)),
@@ -342,10 +344,13 @@ public class CopyPropagationSharedVocabularyExecutionTests
                 Is.EqualTo(CopyPropagationSharedVocabularyProbes.CP2Expected), "JavaScript, standard");
             Assert.That(FourBackends.Norm(MsilHarness.RunExpectingSuccess(CopyPropagationSharedVocabularyProbes.CP2)),
                 Is.EqualTo(CopyPropagationSharedVocabularyProbes.CP2Expected), "MSIL, standard — was AssembleFailed/'Action' (task #155), now closed by ADR-0010");
+            Assert.That(FourBackends.Norm(BclE2E.CompileRun(BclE2E.CompileToCppOptimized(CopyPropagationSharedVocabularyProbes.CP2))),
+                Is.EqualTo(CopyPropagationSharedVocabularyProbes.CP2Expected), "C++, standard — was refused by name (#170), now lowered (#140)");
+            Assert.That(CppClosures.Compile(CopyPropagationSharedVocabularyProbes.CP2).PathOf("Main"), Is.EqualTo(CppClosurePath.Lowered), "C++ root 'Main'");
         });
 
     [Test]
-    public void CP2_AggressivePipeline_CSharpAndJavaScriptAndMsilAgree()
+    public void CP2_AggressivePipeline_AllFourBackendsAgree()
         => Assert.Multiple(() =>
         {
             Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharpAggressive(CopyPropagationSharedVocabularyProbes.CP2)),
@@ -354,38 +359,9 @@ public class CopyPropagationSharedVocabularyExecutionTests
                 Is.EqualTo(CopyPropagationSharedVocabularyProbes.CP2Expected), "JavaScript, aggressive");
             Assert.That(FourBackends.Norm(MsilHarness.RunAggressiveExpectingSuccess(CopyPropagationSharedVocabularyProbes.CP2)),
                 Is.EqualTo(CopyPropagationSharedVocabularyProbes.CP2Expected), "MSIL, aggressive — was AssembleFailed/'Action' (task #155), now closed by ADR-0010");
+            Assert.That(FourBackends.Norm(BclE2E.CompileRun(BclE2E.CompileToCppAggressive(CopyPropagationSharedVocabularyProbes.CP2))),
+                Is.EqualTo(CopyPropagationSharedVocabularyProbes.CP2Expected), "C++, aggressive — was refused by name (#170), now lowered (#140)");
         });
-
-    /// <summary>
-    /// ⭐ MOVED PIN (ADR-0016 D3/W2, task #170). C++'s own lambda lowering captures BY COPY
-    /// (<c>[=]</c>), not by reference — task #140, MEASURED present even with NO optimizer pass
-    /// running at all (matches LicmKillVocabularyTests' L5 pin for the identical backend defect).
-    /// This USED TO silently print 3,3 for 103,3 (the write inside <c>bump</c> never reached
-    /// <c>Main</c>'s own <c>p</c>). #170's <c>CppCapabilityChecker.CheckLambdaCaptureWrites</c>
-    /// now REFUSES it by name (arm (a): the lambda writes a variable it captures) rather than
-    /// compiling it wrong — a named refusal beats a silent wrong answer (ADR-0016's own rule
-    /// one). #140 deletes this refusal and flips CP2 to running; until then this is the correct
-    /// pin, not the value.
-    /// </summary>
-    [Test]
-    public void CP2_Cpp_RefusedByName_PinnedForTask140_StandardPipeline()
-    {
-        var ex = Assert.Throws<CppCapabilityException>(
-            () => BclE2E.CompileToCppOptimized(CopyPropagationSharedVocabularyProbes.CP2));
-        Assert.That(ex!.Message, Does.Contain("captures 'p' of 'Main'").And.Contain("#140"),
-            "if this stops refusing (or refuses for a different variable), #140 has changed the "
-            + "rule — re-measure before touching it.\n" + ex.Message);
-    }
-
-    [Test]
-    public void CP2_Cpp_RefusedByName_PinnedForTask140_AggressivePipeline()
-    {
-        var ex = Assert.Throws<CppCapabilityException>(
-            () => BclE2E.CompileToCppAggressive(CopyPropagationSharedVocabularyProbes.CP2));
-        Assert.That(ex!.Message, Does.Contain("captures 'p' of 'Main'").And.Contain("#140"),
-            "aggressive pipeline — the capability check runs before the optimizer, so the "
-            + "refusal is pipeline-independent; re-measure before touching it.\n" + ex.Message);
-    }
 
     // ---- CP5, CP6: all four backends agree, both pipelines --------------------------------------
 

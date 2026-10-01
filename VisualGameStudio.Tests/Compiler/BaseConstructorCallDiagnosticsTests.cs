@@ -342,14 +342,16 @@ public class BaseConstructorCallDiagnosticsTests
     }
 
     /// <summary>X22 / X25: a lambda NESTED in the base-args lambda that reads only the constructor's
-    /// own parameter (X22) or nothing at all (X25) — not refused. MSIL is excluded: a nested lambda in
-    /// a class member fails <c>ilasm</c> there (#241, pre-existing; see
-    /// <see cref="BaseConstructorCallLoweringExecutionTests.E01_NestedLambda_CSharpAndJavaScriptRun_CppRefusedByName_MsilPinnedForTask241"/>).</summary>
+    /// own parameter (X22) or nothing at all (X25) — not refused, and it RUNS on every backend. MSIL joined
+    /// the others when task #140's first commit fixed #241: a nested lambda in a class member used to fail
+    /// <c>ilasm</c> there (ClosureLowering lowered the creator lambda twice; see
+    /// <see cref="BaseConstructorCallLoweringExecutionTests.E01_NestedLambda_RunsOnEveryBackend_MsilNoLongerFailsIlasm_Task241"/>).
+    /// vbc prints 2 for X22 and 1 for X25.</summary>
     [TestCase("Function() Apply(Function(x As Integer) x + p0, 1)", "2", TestName = "X22_nestedLambdaOverTheOwnParameter")]
     [TestCase("Function() Apply(Function(x As Integer) x, 1)", "1", TestName = "X25_nestedLambdaOverNothing")]
     [Category("Integration")]
     [NonParallelizable]
-    public void ANestedLambda_OverTheOwnParameter_IsNotRefused_AndRunsOnCSharpJavaScriptAndCpp(string arg, string expected)
+    public void ANestedLambda_OverTheOwnParameter_IsNotRefused_AndRunsOnEveryBackend(string arg, string expected)
     {
         var source = Fn(arg);
         Assert.That(Analyze(source), Is.Empty);
@@ -358,6 +360,8 @@ public class BaseConstructorCallDiagnosticsTests
             Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharp(source)), Is.EqualTo(expected), "C#");
             Assert.That(FourBackends.Norm(JavaScriptExecutionTests.RunJs(source)), Is.EqualTo(expected), "JavaScript");
             Assert.That(FourBackends.Norm(BclE2E.CompileRun(BclE2E.CompileToCppOptimized(source))), Is.EqualTo(expected), "C++");
+            // Last: on a machine without ilasm this leg ends the block as Ignored.
+            Assert.That(FourBackends.Norm(Msil.MsilHarness.RunExpectingSuccess(source)), Is.EqualTo(expected), "MSIL (#241)");
         });
     }
 

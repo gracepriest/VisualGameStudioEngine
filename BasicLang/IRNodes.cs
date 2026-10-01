@@ -89,8 +89,8 @@ namespace BasicLang.Compiler.IR
         void Visit(IRIndexerStore indexerStore) { }
 
         // ⛔ THROWS by default, deliberately (ADR-0010 D1). IRDelegateCreate exists only in the
-        // output of ClosureLowering, which only the MSIL backend runs, on a CLONE of the module.
-        // A C#, JavaScript, C++ or LLVM visitor reaching one means the lowered form leaked into a
+        // output of ClosureLowering, which only the MSIL and C++ backends run, on a CLONE of the
+        // module. A C#, JavaScript or LLVM visitor reaching one means the lowered form leaked into a
         // backend that must never see it — a silent no-op here would drop the delegate value.
         void Visit(IRDelegateCreate delegateCreate) =>
             throw new InvalidOperationException(
@@ -928,9 +928,9 @@ namespace BasicLang.Compiler.IR
     /// (ADR-0010 D8). The one node a lambda value and <c>AddressOf</c> both lower to.
     ///
     /// <para><b>Produced ONLY by <see cref="ClosureLowering"/></b>, which runs only for a
-    /// backend that opts in (MSIL today), after the optimizer and the verifier, on a clone of
-    /// the module. The optimizer never sees one, and every visitor but MSIL's throws on it
-    /// (<see cref="IIRVisitor.Visit(IRDelegateCreate)"/>).</para>
+    /// backend that opts in (MSIL, and C++ since #140), after the optimizer and the verifier, on a
+    /// clone of the module. The optimizer never sees one, and every visitor but MSIL's and C++'s
+    /// throws on it (<see cref="IIRVisitor.Visit(IRDelegateCreate)"/>).</para>
     ///
     /// <list type="bullet">
     /// <item><see cref="DelegateType"/> is the delegate the value is TARGET-TYPED to (the

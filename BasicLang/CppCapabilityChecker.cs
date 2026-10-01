@@ -362,8 +362,9 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                             CheckType(prop.Type, $"interface property '{iface.Name}.{prop.Name}'", diags);
                 }
 
-            // ADR-0016 D3 (amended): a write that a by-copy capture loses (#140).
-            CheckLambdaCaptureWrites(module, diags);
+            // ⚠ No lambda rule here (#140, ADR-0016 D3 as amended by the #140 ruling): closures go
+            // through ClosureLowering, and CheckLambdaCaptureWrites is reached only from
+            // CppCodeGenerator.LowerClosures, for the roots the lowering left un-lowered.
 
             return diags.Distinct().ToList();
         }
@@ -402,34 +403,46 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         /// that spelling and ends the path — which also covers a name <c>BodyLocals</c> omits
         /// because it is declared twice (#242).</para>
         ///
-        /// <para>#140's obligation: delete this method (and <see cref="NamesAssignedBy"/>); B1–B4,
-        /// C1 and arm (b)'s fifteen flip to running, and the ten per-iteration programs ADR-0016
-        /// names stay running (#140's regression fence).</para>
+        /// <para><b>Since #140 (its ruling, D1/D3) this is not a refusal of lambdas: it is the
+        /// soundness proof of the by-copy path.</b> Every root goes through ClosureLowering first;
+        /// this rule is evaluated only for a root the lowering left un-lowered
+        /// (<see cref="ClosureLoweringResult.SkippedRoots"/>), never for a lowered one, and only its
+        /// verdict decides whether that root may be emitted as <c>[=]</c>. ONE rule, ONE function,
+        /// ONE call site (<c>CppCodeGenerator.LowerClosures</c>); it is deleted together with the
+        /// <c>[=]</c> path, when no program C++ accepts leaves a root un-lowered.</para>
+        ///
+        /// <para><b>Root identity</b> is the lowering's own: <see cref="ClosureLowering.CreatorsOf"/>
+        /// and <see cref="ClosureLowering.RootOf"/>, the one definition both sides read.</para>
         /// </summary>
-        private static void CheckLambdaCaptureWrites(IRModule module, List<string> diags)
+        /// <param name="rootInScope">Which roots to judge (the skipped ones); a lambda of any other
+        /// root is not looked at.</param>
+        /// <param name="unsoundRoots">Receives the root of every lambda the rule refuses.</param>
+        /// <returns>The refusals, one per variable per lambda and arm.</returns>
+        internal static List<string> CheckLambdaCaptureWrites(IRModule module, Func<IRFunction, bool> rootInScope,
+            ISet<IRFunction> unsoundRoots)
         {
-            if (module?.Functions == null || !module.Functions.Any(f => f != null && f.IsLambda)) return;
+            var diags = new List<string>();
+            if (module?.Functions == null || !module.Functions.Any(f => f != null && f.IsLambda)) return diags;
 
             var lambdas = new Dictionary<string, IRFunction>(StringComparer.Ordinal);
             foreach (var f in module.Functions)
                 if (f != null && f.IsLambda && f.Name != null) lambdas.TryAdd(f.Name, f);
-            var creatorOf = new Dictionary<IRFunction, IRFunction>(ReferenceEqualityComparer.Instance);
-            foreach (var f in module.Functions)
-            {
-                if (f?.Blocks == null) continue;
-                foreach (var name in BasicLang.Compiler.IR.Optimization.OptimizationPass.LambdaReferences(f))
-                    if (lambdas.TryGetValue(name, out var lambda) && !ReferenceEquals(lambda, f))
-                        creatorOf.TryAdd(lambda, f);
-            }
+            var creatorOf = ClosureLowering.CreatorsOf(module);
 
             string Line(IRInstruction inst) => inst?.SourceLine > 0 ? $" at line {inst.SourceLine}" : "";
-            void Refuse(string variable, string creatorName, IRInstruction creation, string writer, IRInstruction write) =>
+            IRFunction root = null;
+            void Refuse(string variable, string creatorName, IRInstruction creation, string writer, IRInstruction write)
+            {
+                unsoundRoots?.Add(root);
                 diags.Add($"the lambda created{Line(creation)} captures '{variable}' of '{DisplayName(creatorName)}', " +
                           $"and {writer} writes it{Line(write)} — not supported on C++ (#140): the C++ backend " +
                           "captures by copy, so that write and the lambda's copy never meet (ADR-0016 D3)");
+            }
 
             foreach (var lambda in lambdas.Values)
             {
+                root = ClosureLowering.RootOf(lambda, creatorOf);
+                if (!rootInScope(root)) continue;
                 if (!creatorOf.TryGetValue(lambda, out var creator)) continue;
                 var creations = CreationsOf(creator, lambda.Name);
                 var own = Declared(lambda);
@@ -485,6 +498,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                     }
                 }
             }
+            return diags;
         }
 
         /// <summary>ADR-0016 D3 arm (b)'s search: the first instruction that writes

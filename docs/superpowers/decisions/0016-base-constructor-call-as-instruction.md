@@ -2,6 +2,7 @@
 
 - **Date:** 2026-09-29
 - **Status:** Accepted
+- **Amended by:** ADR-0019 (#140) — D3's C++ arm only; see "Amendment A-140" at the end. D1, D2, D4, D5 and the C#, JavaScript and MSIL arms of D3 stand.
 - **Decided by:** the architect role, in one ruling (D1–D5), with the orchestrator's binding
   clarifications C1–C6, and a binding amendment to D3's C++ arm (adopting "W2", after the first
   landing measured the rule it replaces). Transcribed from all three; nothing under the Decision
@@ -361,3 +362,30 @@ C#, JavaScript, MSIL); V1–V4 (→ BC31095/BC31096); any C++ lambda that writes
   correctly on the CLR but is `UninitStack` under ILVerify; the run-time tests cannot see it.
 - **Language gaps met along the way:** `If(c, x, y)` does not parse, `IIf` is not a builtin, and
   `MyClass` is not supported in a base argument (it reports a type mismatch, not BC31095).
+
+## Amendment A-140 (ADR-0019, 2026-10-01): W2 is the fallback's soundness proof, deleted with `[=]`
+
+*Appended, not edited in place: the "D3, C++ arm (AMENDED)" text above is what #170 landed. #140 changed
+what that rule is FOR; the rule itself, its contract, its message text and its single deletion point are
+unchanged.*
+
+- **W2 is demoted** from "the refusal rule for lambdas" to "the soundness proof for the by-copy fallback".
+  Every C++ root goes through `ClosureLowering` first (ADR-0019 D1). A root the lowering refuses (ADR-0010 D9
+  and beyond) is emitted by today's `[=]` path ONLY if W2 holds for it, byte-identical to before #140;
+  otherwise the program is refused with W2's text first, then the lowering's reason. It is still ONE rule in
+  ONE function (`CppCapabilityChecker.CheckLambdaCaptureWrites`) with ONE call site
+  (`CppCodeGenerator.LowerClosures`), now reached only for the roots in `ClosureLoweringResult.SkippedRoots`.
+- **W2 is never evaluated for a lowered root, and its verdict never influences whether a root is lowered.**
+  Ownership does not move: it stays a C++ capability-checker rule over the shared CFG successor function, and
+  `ClosureLowering` never learns about it. A lowered root that needs W2 means the two-layer model has leaked.
+- **It is deleted together with the `[=]` path**, in one future task, when `SkippedRoots` is empty for every
+  program C++ accepts. Each D9 shape the lowering learns to lower shrinks the fallback set; the fallback set
+  is pinned by name (`CppClosurePathTests`) and may only shrink.
+- **The obligations above are met, not deleted.** "#140 deletes W2 as one rule and flips B1–B4, C1 and the 15
+  to running" became: B1–B4, C1 and the 15 (E09 and R12 excepted) run, lowered; E09 and R12 are refused by
+  BOTH paths. "#140 must keep the nine W1-shape programs and E20 running" holds, and the fence ALSO asserts the
+  path each root takes (ten lowered, E20 the one by-copy fallback), so a path shift is visible.
+- **The refusal text.** W2's text is unchanged. A both-refused program's message continues with
+  `closure lowering cannot lower '<root>' either (#140): C++: <reason>`.
+- **5b's "E16 stays a named clang failure" no longer holds:** E16 runs and prints the #229 output
+  (20|20|20|20) — ADR-0019 D4; the owner decided to admit it (2026-10-01).

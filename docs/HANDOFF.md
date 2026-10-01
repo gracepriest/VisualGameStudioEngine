@@ -17,6 +17,70 @@ facade (all five tasks of `2026-09-13-blnet-cpp-facade.md`).
 
 ---
 
+## 🚀 NEWEST — 2026-10-01: #140 DONE, C++ closures go through `ClosureLowering` (ADR-0019; fixes #241)
+
+Three commits on master `ffae62c6`: `61d52753` (ClosureLowering lowers each function once — **fixes #241**), `e57e60f1` (ClosureLowering takes a backend's options and can skip a root) and `a96430ae` (C++ closures
+go through ClosureLowering). The tests and this section are uncommitted work on top of them. Compiler (`ClosureLowering.cs`, `CppCodeGenerator.Closures.cs` (new), `CppCodeGenerator.cs`/`.Split.cs`,
+`CppCapabilityChecker.cs`, `MSILBackend.cs`); **no front-end change, no new IR node.** Before it C++ captured every lambda by copy (`[=]`) and #170's W2 refused the programs where that is a wrong answer.
+
+**The rule, per ROOT** (the outermost non-lambda function, with every lambda it creates): (1) `ClosureLowering` lowers it — environments, capture by reference → **`Lowered`**; (2) it refuses AND W2
+(`CppCapabilityChecker.CheckLambdaCaptureWrites`) holds for every lambda of the root → today's `[=]` lambdas, byte-identical to master → **`ByCopy`**; (3) both refuse → `CppCapabilityException` with W2's text first, then
+`closure lowering cannot lower '<root>' either (#140): C++: <reason>` (it is `CppCapabilityException`, not the ruling's `ForeignFeatureException`, because `CppProjectBuilder` catches only that one — ADR-0019 "Implementation").
+Both representations are `std::function`. **`CppCodeGenerator.ClosurePaths`** (`IReadOnlyList<CppClosureRootPath(Root, Lowered|ByCopy)>`, filled by `Generate` AND `GenerateSplit`) is the test seam: without it a lowering regression
+that pushes roots onto `[=]` is invisible whenever W2 accepts them. ⛔ **The by-copy fallback set may only shrink**: `CppClosurePathTests.NoOtherProgramInTheCorpus_LandsOnTheByCopyPath` sweeps every `const string` program
+of the fixtures it lists by REFLECTION and fails on a new `ByCopy` root; lifting a D9 shape in the lowering means deleting its row from `ExpectedByCopy` in the same commit. W2 is deleted together with `[=]`, when nothing falls back.
+
+**Measured** (C++, 460 lambda + AddressOf programs × {CLI, CLI `-O`}, against vbc): **286 run right (master 214), 0 regressions**; 64 refused programs now run; 8 clang failures now run (L13, L13b, L15, P6, P10, AddressOf of an
+instance method, E9e, E5); 4 stay refused with both reasons (K13, R12, R15, E09); L8/L8b print ADR-0014 D2's recorded 11|21|31 (as JavaScript and MSIL do — C# alone is the outlier, #136); E16 prints the #229 output;
+L6 is now a clang failure on `List.ForEach` (a runtime gap, not the lambda). Byte compare over the 1,141-program corpus × {CLI, `-O`, `.blproj`}: the 2,043 no-lambda cells and every `[=]` program identical; 267 programs
+master accepts change bytes, all lowered. MSIL: 3,423/3,423 cells identical against the previous commit. Verifier fires: none beyond D09's.
+
+**The fallback set (pinned by name, `CppClosurePrograms.Fallback()`):** R2/D01 and D13 (Iterator), R14/D06 (`MyBase.M()` in a lambda), D15 (generic class, Integer capture), D07b (a read-only `When` guard), E20 and E12_later_sibling
+(N9), E12_two_clauses_same_name (two Catch types), X1 and X3 (N9 — VB rejects both, BC30616). Fallback that ALSO fails clang, named for the real gap: D02/D17 (async: `Task.Result`), D04 (generic-typed capture),
+D09 (a module-initializer lambda: non-local `[=]`; also the ONE pre-existing verifier fire, Invariant P(d)); D16 and L6 are lowered and fail clang (generic parameter `T`; `List.ForEach`). **Both-refused:** D07/R15, D14, M07/R12, E09, K13,
+RI1, RI2 (root identity — W2 and the lowering share `ClosureLowering.CreatorsOf`/`RootOf`).
+
+⚠ **E16 (#229): the owner decided ADMIT (2026-10-01).** C++ prints 20|20|20|20 like the other three backends (VB: 1|2|10|20), pinned in ONE test over all four backends
+(`PerIterationLoopBodyDimExecutionTests.E16_SiblingLoopsSameName_KnownWrongOnAllFourBackends_PinnedForTask229`, one `[TestCase]` per backend); fixing #229 flips all four rows together. The rejected
+alternative (C++ refuses it by name until #229) and the implementer's estimate of it are in ADR-0019 D4.
+
+**#241 is fixed, not worked around.** A lambda nested in a lambda inside a class member (instance method, constructor, Shared method, property getter) failed `ilasm` — the root loop processed a creator lambda a second time.
+X22, X25 and E01_nested_lambda now run on MSIL (vbc: 2, 1, 21); N3-N6 print 403, 12, 203, 8 (`ClosureLoweringNestedCreatorExecutionTests`; the IR-level invariant is `ClosureLoweringOptionsContractTests`).
+
+**What the tests are** (all in `VisualGameStudio.Tests`): `Msil/ClosureLoweringOptionsContractTests.cs` (fast: options/result/policy, `BackendName`, atomicity AT1, the per-root skip, arity caps, `Run(module)` == MSIL options, a
+creator lambda lowered once); `Compiler/CppClosurePathTests.cs` (fast: the path of every root, the fallback and both-refused sets, the growth detector, the verifier running on the lowered clone, names, `GenerateSplit`);
+`Compiler/CppClosureRunTests.cs` (Integration: the same programs RUN against vbc through the standard, aggressive and project entry points and the real CLI; D07/RI1 write no `.cpp` under the CLI, `-O` and `build`; M01_L5 through the
+CLI and `CompileProjectFiles`/`GenerateSplit`); `Compiler/CppClosureHarness.cs` + `CppClosurePrograms.cs` (the shared harness and the named programs). The 70 pins that moved are listed in the commit message of `a96430ae`; the fence
+(`BaseConstructorCallCppRefusalTests.Cpp140RegressionFence_*`, 11 programs) passes unchanged and now also asserts each root's PATH (ten lowered, E20 the one fallback).
+⚠ `CppClosureRunTests` is deliberately NOT named `...ExecutionTests`: it never runs JavaScript, and that suffix is swept into `JsExecutionTierRosterTests.RosterCoversEveryJavaScriptIntegrationFixture` (roster stays at **101**).
+
+**Mutants measured** (each built from `a96430ae`, the suite re-run against it; the killer is the FAST test unless noted): revert patch 01 → `ACreatorLambdaPlacedAfterItsCreator_IsLoweredOnce` (N3-N6, R20, R21); C++ passes `Throw` → every `Fallback_*`/`BothRefused_*` row;
+fallback without W2 → `BothRefused_*` (RI1, RI2, D07, K13, E09, R12, D14); W2 also for lowered roots → `Lowered_*` (B1, E03, L7, AR1...); refusal order swapped → `BothRefused_*`; atomicity broken → `Skip_AT1_...`; arity option ignored → `Lowered_D10/D11/AR1`;
+`BackendName` ignored → `BackendName_PrefixesEveryRefusal`; `ClosurePaths` empty → 31 tests; verifier not run on the clone → `TheVerifier_RunsOnTheLoweredClone`; both-refused as `ForeignFeatureException` → `BothRefused_*`; reasons for every skipped root → `TheRefusalNamesOnlyTheRootsBothPathsRefuse_...`;
+paths all `Lowered` → `Fallback_*`; `Run(module)` options differ from MSIL's → `RunWithoutOptions_IsRunWithTheMsilOptions_...`; W2 judges by the immediate creator → `BothRefused_RI2_...`.
+⚠ **Three mutants the ruling expected a falsifier to kill SURVIVED the first suite, and the tests were changed, not the claim:** (1) *the #226 Exit rule removed from `ComputeInlineRegion`* is NOT killed by EX1, EX2 or the CX rows — the shape that discriminates is `Exit For` out of a COUNTED loop's
+per-iteration body (E06/E07: clang says "cannot jump from this goto statement to its label"); now killed fast by `NoGoto_EntersATryBlockOrACatchHandler` (`CppGotoLint`, a text lint of the emitted `goto`s — it needs no C++ compiler) and by `CppClosureRunTests` EX0a/EX0b/EX3 and the fence.
+(2) *a captured Catch variable stored as a sliced `std::runtime_error`* is NOT killed by CX2 (the one clause's fallback handler takes a `runtime_error` too) — CX2b (a two-clause ladder, vbc: `typed: original`) kills it; the fast text test `CapturedCatchVariable_LivesInTheEnvironmentAsAnExceptionPtr_...` also does.
+(3) *W2 reading `OptimizationPass.LambdaReferences` instead of `CreatorsOf`* is equivalent on every program the parser can produce (the two walks differ only for a creator outside `module.Functions`, i.e. an interface default body, and `ParseInterface` never gives a method a body) — killed by a hand-built-IR test, `RootIdentity_IsTheLoweringsOwnDefinition_EvenForACreatorOutsideModuleFunctions`, not by RI1/RI2.
+
+**Traps.** (1) ⛔ **A program that runs right on the by-copy fallback passes every output assertion** — assert the PATH (`CppClosures.Compile(src).PathOf(root)`), not only the output. (2) The verifier is in `Throw` mode in the suite
+(the test project sets `BasicLang.VerifyIR`), so D09 cannot be compiled by a plain `Compile` — `CppClosurePathTests.TheModuleInitializerLambda_IsTheOnlyPreExistingVerifierFire` switches it to `Log`. (3) An NUnit `Assert` that fails
+inside a `catch` is still recorded against the test: sweep with `CppClosures.TryCompile` (never asserts), not `Compile`. (4) ⚠ What remains of **#201** on C++ is reachable only on the FALLBACK path (byte-identical to before): AddressOf an instance method, a
+branch that returns an AddressOf result (`goto` crosses `auto t = Inc;`), `List(Of Action)`'s element lowering — pinned as `..._OnTheByCopyFallback_StillFailsClang_Against201`; they run wherever the root is lowered. C#'s `__lambda_0` on a `MyBase.New` lambda
+(E13) is untouched.
+
+**Follow-ups, filed not fixed.** (a) A delegate local named like a VB builtin function (`second`, `minute`, `hour`, `year`, `month`, `day`, `len`, `chr`), called with no arguments, crashes the compiler on **C# and C++**
+("Index was outside the bounds of the array") — pre-existing; JavaScript and MSIL emit. Repro: `Dim second As Func(Of Integer) = Function() 2 : Console.WriteLine(second() + 1)`. (b) A lambda that captures nothing still allocates an
+empty environment (C++, as on MSIL): performance only. (c) What remains of #201 (above). (d) The two ADR-0019 interpretations (both-refused as `CppCapabilityException`; atomicity by restarting on a fresh clone) are the implementer's, not the architect's.
+
+**Gates** (Linux, test DLL md5 `970fd412a6e9decd3282377e14e7988f`): ⭐ **full suite 14,580 passed / 0 failed / 348 skipped of 14,928 (1 h 21 m)**; fast subset (`TestCategory!=Integration`) **10,412 passed / 0 failed / 93 skipped of 10,505** (master base: 10,314 / 0 / 93 of 10,407 — the +98 are this ticket's fast tests). Integration, one fully
+qualified term per run over every fixture this ticket touched or added and the implementer's 50 terms: all pass (`BaseConstructorCallCppRefusal` 31, `BaseConstructorCallLowering` 33, `PerIterationLoopBodyDim` 99, `CppClosureRunTests` 43, `CppClosurePathTests` 75,
+`ClosureLoweringOptionsContractTests` 21, `ClosureLoweringNestedCreatorExecutionTests` 6, `UserDelegateConversion` 72, `NothingStringTextExecution` 34, `IsIsNotOperator` 91, ...), except two terms that never ran anything: `Msil.MsilClosure` matches no test (also on master) and
+`NetGeneratedShimConformance` is 20/20 skipped on Linux. ⚠ The Windows-only parts (MSVC builds, the .NET shim, the engine) were not run — a green Linux run is necessary, not sufficient. ⚠ The suite's path-dependent fixtures (the repo-scanning ones) fail when the test bin is COPIED out of
+`VisualGameStudio.Tests/bin` (174 "failures" in a copied snapshot, 0 in place) — run the gates in the worktree.
+
+---
+
 ## 🚀 NEWEST — 2026-09-30: #123 DONE, an untyped `Const`, VB's `If(cond, a, b)` and the repo's samples compile
 
 The fix is `e776dc64` and the sample edits `e611cd5d`, on master `78b00b85`; the tests and this section are uncommitted work on top of them. Compiler (`Parser`, `ASTNodes`, `ASTPrettyPrinter`,

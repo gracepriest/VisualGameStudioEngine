@@ -525,9 +525,10 @@ public class CseDestinationKnownGapsTask133Tests
     /// A1 — the destination is written inside a LAMBDA's body (<c>Dim clr = Sub() a = 0 : clr()</c>)
     /// rather than by a plain call. Correct is <c>seed\nseed\n3,0</c>.
     ///
-    /// <para>⛔ C++ is EXCLUDED — it fails to compile this program for a reason that has nothing to
+    /// <para>C++ was EXCLUDED — it failed to compile this program for a reason that had nothing to
     /// do with CSE ("cannot assign to a variable captured by copy in a non-mutable lambda", task
-    /// #140). MSIL used to be excluded too ("Reference to undefined class 'Action'"); task #155
+    /// #140). Task #140 closed that: C++ lowers the lambda and prints the right answer, asserted by
+    /// <see cref="A1_LambdaCapturedDestination_Cpp_CorrectSinceTask140"/>. MSIL used to be excluded too ("Reference to undefined class 'Action'"); task #155
     /// (ADR-0010's ClosureLowering) closed that, so MSIL is asserted below.</para>
     ///
     /// <para>C# stays task #136 — a SEPARATE, pre-existing defect (the emitted lambda body is
@@ -543,8 +544,17 @@ public class CseDestinationKnownGapsTask133Tests
         => Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharpAggressive(A1)), Is.EqualTo("seed\nseed\n3,3"),
             "task #136 (unrelated to ADR-0006 D1) — if this changed, C#'s handling of a destination "
             + "written inside a lambda capture may have changed (for better or worse); re-measure "
-            + "and update or delete this pin, do not just widen it. C++ is excluded — it fails to "
-            + "compile this shape for an unrelated, pre-existing reason (task #140).");
+            + "and update or delete this pin, do not just widen it.");
+
+    /// <summary>A1 on C++ (aggressive pipeline): <c>seed\nseed\n3,0</c>, VB's answer. It could not compile before
+    /// task #140 (capture by copy); the lambda is lowered now, so the write to <c>a</c> inside it is the creator's.</summary>
+    [Test]
+    public void A1_LambdaCapturedDestination_Cpp_CorrectSinceTask140()
+    {
+        Assert.That(CppClosures.Compile(A1, CppEntry.Aggressive).PathOf("Main"),
+            Is.EqualTo(BasicLang.Compiler.CodeGen.CPlusPlus.CppClosurePath.Lowered));
+        Assert.That(FourBackends.Norm(BclE2E.CompileRun(BclE2E.CompileToCppAggressive(A1))), Is.EqualTo("seed\nseed\n3,0"));
+    }
 
     [Test]
     public void A1_LambdaCapturedDestination_JavaScript_CorrectAfterAdr6D1()

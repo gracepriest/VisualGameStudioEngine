@@ -199,8 +199,8 @@ namespace BasicLang.Compiler.CodeGen
 
         /// <summary>
         /// Virtual that THROWS: an <see cref="IRDelegateCreate"/> exists only in ClosureLowering's
-        /// output, which only the MSIL backend runs, on a clone of the module (ADR-0010 D1). MSIL
-        /// overrides this; C++ and LLVM reaching it means the lowered form leaked.
+        /// output, which only the MSIL and C++ backends run, on a clone of the module (ADR-0010 D1;
+        /// C++ since #140). Both override this; LLVM reaching it means the lowered form leaked.
         /// </summary>
         public virtual void Visit(IRDelegateCreate delegateCreate) =>
             throw new InvalidOperationException(

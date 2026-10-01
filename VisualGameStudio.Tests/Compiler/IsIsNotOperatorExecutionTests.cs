@@ -1,3 +1,4 @@
+using System;
 using System.Linq;
 using BasicLang.Compiler.CodeGen.CPlusPlus;
 using NUnit.Framework;
@@ -557,15 +558,29 @@ public class IsIsNotOperatorExecutionTests
             "mutant target: the JS parentheses wrap removed.\n" + js);
     }
 
-    /// <summary>Mutant: "the ... C++ std::function wrap on a lambda literal removed" — the raw
-    /// closure expression has no `== nullptr`; it must be wrapped `std::function(...)` first.</summary>
+    /// <summary>
+    /// Mutant: "the lambda literal is not materialised as a <c>std::function</c> before the null test" — a raw
+    /// closure expression has no <c>== nullptr</c>. Before #140 the backend wrapped the literal itself,
+    /// <c>std::function(...)</c>; since #140 a lambda literal is an <c>IRDelegateCreate</c>, which C++ emits
+    /// as a <c>std::function</c>-typed temporary built from a forwarding closure
+    /// (<c>t1 = [blTarget = ...]() -&gt; int32_t { ... };</c>), and the null test compares THAT temporary. The
+    /// text is the contract here — a raw closure in a comparison is a C++ compile error the executing
+    /// <c>LambdaIdentity_RunsOnEveryBackend_BothPipelines</c> would only see on a machine with a compiler.
+    /// </summary>
     [Test]
-    public void E11_LambdaLiteral_Cpp_WrapsTheLambdaInStdFunctionBeforeTheNullTest()
+    public void E11_LambdaLiteral_Cpp_NullTestsAStdFunctionValue_NeverARawClosure()
     {
-        var cpp = BclE2E.CompileToCppOptimized(E11_LambdaLiteral);
-        Assert.That(cpp, Does.Contain("std::function("),
-            "the lambda literal must be wrapped in std::function(...) before the nullptr test — " +
-            "mutant target: the C++ std::function wrap removed.\n" + cpp);
+        var whole = BclE2E.CompileToCppOptimized(E11_LambdaLiteral);
+        // only the generated program: the spliced runtime has `== nullptr)` tests of its own
+        var cpp = whole.Substring(whole.IndexOf("// Function implementations", StringComparison.Ordinal));
+        var compared = System.Text.RegularExpressions.Regex.Matches(cpp, @"(\w+)\s*==\s*nullptr\s*\)")
+            .Select(m => m.Groups[1].Value).ToList();
+        Assert.That(compared, Has.Count.EqualTo(2), "Is Nothing and IsNot Nothing each test one value.\n" + cpp);
+        foreach (var name in compared)
+            Assert.That(cpp, Does.Match(@"std::function<[^;]*>\s+" + name + @"\b"),
+                $"'{name}' must be a std::function-typed value before it is compared with nullptr.\n" + cpp);
+        Assert.That(cpp, Does.Not.Match(@"\{[^;]*;\s*\}\s*\)?\s*==\s*nullptr"),
+            "a raw closure must never be compared with nullptr.\n" + cpp);
     }
 
     // ============================================================================================
@@ -666,26 +681,23 @@ public class IsIsNotOperatorExecutionTests
     }
 
     /// <summary>
-    /// ⭐ MOVED PIN (ADR-0016 D3/W2, task #170). E3 on C++ is a PRE-EXISTING lambda-capture
-    /// defect, task #140 — measured against E3b, the no-`Is`-at-all control (a captured Integer
-    /// mutated after the lambda is created), which USED TO fail IDENTICALLY: both silently printed
-    /// stale captures ("True | True" instead of "True | False"). Not caused by, or fixed by,
-    /// #185. #170's capability check now REFUSES BOTH by name instead (arm (b): <c>Main</c> writes
-    /// the captured variable — <c>a</c> in each — at a point reachable from the lambda-creation
-    /// instruction). Pinned so a #140 fix is a deliberate, noticed change here too.
+    /// ⭐ MOVED PIN (#140). E3 on C++ was a PRE-EXISTING lambda-capture defect, task #140 — measured against
+    /// E3b, the no-`Is`-at-all control (a captured Integer mutated after the lambda is created), which failed
+    /// IDENTICALLY: both silently printed stale captures ("True | True" instead of "True | False"), then #170
+    /// refused BOTH by name. Not caused by, or fixed by, #185. #140 lowers both — the lambda reads <c>a</c>
+    /// from the environment <c>Main</c> writes — so C++ prints VB's answer for E3 and for its control, and
+    /// the root takes the lowered path.
     /// </summary>
     [Test]
-    public void E3_LambdaCapturedIdentity_Cpp_RefusedByName_PinnedForTask140_WithItsControl()
+    public void E3_LambdaCapturedIdentity_Cpp_RunsLowered_WithItsControl_FormerlyPinnedForTask140()
     {
         Assert.Multiple(() =>
         {
-            var e3 = Assert.Throws<CppCapabilityException>(() => BclE2E.CompileToCppOptimized(E3_Lambda));
-            Assert.That(e3!.Message, Does.Contain("captures 'a' of 'Main'").And.Contain("#140"),
-                "E3 (task #140 flips this to running) — re-measure before touching.\n" + e3.Message);
-
-            var e3b = Assert.Throws<CppCapabilityException>(() => BclE2E.CompileToCppOptimized(E3b_LambdaControl));
-            Assert.That(e3b!.Message, Does.Contain("captures 'a' of 'Main'").And.Contain("#140"),
-                "E3b control — the SAME capture-write shape with no Is/IsNot at all.\n" + e3b.Message);
+            Assert.That(CppClosures.Compile(E3_Lambda).PathOf("Main"), Is.EqualTo(CppClosurePath.Lowered), "E3 root 'Main'");
+            Assert.That(CppClosures.Run(E3_Lambda), Is.EqualTo(E3_Exp), "E3, C++");
+            Assert.That(CppClosures.Compile(E3b_LambdaControl).PathOf("Main"), Is.EqualTo(CppClosurePath.Lowered), "E3b root 'Main'");
+            Assert.That(CppClosures.Run(E3b_LambdaControl), Is.EqualTo(E3b_Exp),
+                "E3b control — the SAME capture-write shape with no Is/IsNot at all.");
         });
     }
 
