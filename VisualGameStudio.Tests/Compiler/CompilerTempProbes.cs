@@ -56,7 +56,12 @@ public enum EntryPoint
 /// R6 and R10 on C# (the peephole's <c>x * 0</c> arm discards the operand, and C# never emitted
 /// the orphan), R10 on C++ and JavaScript (the same), R9 everywhere.</para>
 /// </summary>
-public sealed record TempProbe(string Id, string Source, string Vb, Bk Agrees = Bk.All)
+/// <param name="HangSafe">
+/// ⛔ #256: the program holds a loop that a bug could leave without an exit, so its C# run goes through
+/// <see cref="CSharpProcessRunner"/> (a child process with a time limit) and never through the in-process runner,
+/// which has no limit and freezes the whole test host on a hang. Every C# cell of a loop probe sets this.
+/// </param>
+public sealed record TempProbe(string Id, string Source, string Vb, Bk Agrees = Bk.All, bool HangSafe = false)
 {
     public override string ToString() => Id;
 }
@@ -954,16 +959,17 @@ internal static class TempExec
 
     /// <summary>Generated text → what it prints. Skips (outside a multiple-assertion block) when the tool
     /// the backend's execution tier needs is missing: a C++ compiler, Node, ilasm.</summary>
-    internal static string Run(Bk backend, string emitted) => backend switch
+    internal static string Run(Bk backend, string emitted, bool hangSafe = false) => backend switch
     {
-        Bk.CSharp => FourBackends.RunEmittedCSharpText(emitted),
+        // ⛔ #256: the in-process leg has NO timeout. A loop probe passes hangSafe and runs in a child process that is killed.
+        Bk.CSharp => hangSafe ? CSharpProcessRunner.RunExpectingSuccess(emitted) : FourBackends.RunEmittedCSharpText(emitted),
         Bk.Cpp => BclE2E.CompileRun(emitted),
         Bk.JavaScript => JavaScriptExecutionTests.RunNodeScript(emitted),
         Bk.Msil => MsilHarness.RunIlExpectingSuccess(emitted, "T"),
         _ => throw new ArgumentException(backend.ToString()),
     };
 
-    internal static string Run(Bk backend, EntryPoint entry, string source) => Run(backend, Emit(backend, entry, source));
+    internal static string Run(Bk backend, EntryPoint entry, string source, bool hangSafe = false) => Run(backend, Emit(backend, entry, source), hangSafe);
 
     /// <summary>Skips the calling test when <paramref name="backend"/>'s execution tool is not on this machine.
     /// Call it BEFORE any <c>Assert.Multiple</c>: NUnit fails an Ignore inside one.</summary>
@@ -1017,7 +1023,7 @@ internal static class TempExec
     /// outside any multiple-assertion block, because NUnit fails an Ignore inside one. A failed compile or run in one
     /// entry point is collected, not thrown, so the other two still report.
     /// </summary>
-    internal static void AssertMatchesInEveryEntryPoint(Bk backend, string source, string expected, string label)
+    internal static void AssertMatchesInEveryEntryPoint(Bk backend, string source, string expected, string label, bool hangSafe = false)
     {
         RequireTool(backend);
         var failures = new List<string>();
@@ -1025,7 +1031,7 @@ internal static class TempExec
         {
             try
             {
-                var got = Norm(Run(backend, entry, source));
+                var got = Norm(Run(backend, entry, source, hangSafe));
                 if (got != Norm(expected)) failures.Add($"{entry}: printed [{got.Replace("\n", " | ")}] where VB prints [{Norm(expected).Replace("\n", " | ")}]");
             }
             catch (AssertionException ex)

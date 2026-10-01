@@ -35,32 +35,16 @@ namespace VisualGameStudio.Tests.Compiler;
 /// changes which backends AGREE without making any of them correct, and nothing else asserts
 /// evaluation order, so it would ship green.</para>
 ///
-/// <para><b>⛔ STATUS: the four short-circuit cases are [Ignore]d because the bug is OPEN.</b>
-/// Remove the attribute to reproduce it in one command. Everything else here is ACTIVE and
-/// guarding: C# (which is correct), the <c>And</c>/<c>Or</c> non-short-circuit cases, and the
-/// value-when-both-run cases.</para>
+/// <para><b>✅ STATUS: FIXED (<c>f0d9ad80</c>). Nothing in this file is [Ignore]d; every case is ACTIVE.</b>
+/// <c>IRBuilder.BuildShortCircuit</c> lowers <c>AndAlso</c>/<c>OrElse</c> to control flow — evaluate the left operand, branch,
+/// evaluate the right one only on the live path, merge — writing a carrier local <c>__sc{N}</c>. Its blocks are named exactly
+/// as <c>Visit(IfStatementNode)</c> names an If's (<c>if{N}.then</c> / <c>.else</c> / <c>.end</c>), because the structured backends
+/// rebuild an If by NAME. That is what the three attempts measured and reverted before it got wrong (merge as the TRUE target,
+/// a negated condition, <c>.skip</c>/<c>.rhs</c> block names), and C#, C++ and JavaScript all short-circuit now.</para>
 ///
-/// <para><b>⛔ WHY THE OBVIOUS FIX FAILED — two measured attempts, both reverted.</b> Lowering
-/// <c>AndAlso</c>/<c>OrElse</c> to control flow in <c>IRBuilder</c> (evaluate left, branch,
-/// evaluate right only on the live path, merge) is the right IDEA, and <c>AndAlso</c> worked on
-/// all three backends immediately. <c>OrElse</c> did not, because it needs the opposite arm:</para>
-/// <list type="number">
-/// <item><description><b>Merge as the TRUE target</b> — the JavaScript backend reconstructs
-/// structured control flow and takes the true target to be the body, so it emitted the merge's
-/// contents INSIDE the then-arm and left the rhs arm falling off the end of the function:
-/// printed <c>L R</c> and stopped.</description></item>
-/// <item><description><b>Negate the condition instead</b> — the C# backend renders operand trees
-/// INLINE, so the <c>Not</c> node re-expanded the left operand at the <c>!</c> site and
-/// <c>L</c> ran TWICE.</description></item>
-/// <item><description><b>An empty skip block to keep the true target a real block</b> — then C#
-/// dropped the merge continuation entirely: <c>if (__sc0) { } else { __sc0 = R(true); }</c> and
-/// nothing after it.</description></item>
-/// </list>
-/// <para>So this is not a small IRBuilder change: two backends reconstruct structure from the
-/// CFG and neither accepts the shapes above. A real fix needs either that reconstruction taught
-/// to handle a conditional whose true target is the merge, or the right operand kept as an
-/// unevaluated subtree the backends render inline (which is exactly why C# is accidentally
-/// correct today). Both are bigger than a lowering tweak.</para>
+/// <para>⚠ What the carrier lowering left behind is not in this file: a <c>While</c>/<c>Do</c> condition holding it spans SEVERAL
+/// blocks that a backend must write inside the loop and run again each iteration. C# wrote them once, above the loop (#256, fixed:
+/// <c>LoopConditionReevaluationExecutionTests</c>); JavaScript still refuses such a loop header (#257). Every condition here is in an If.</para>
 /// </summary>
 [TestFixture]
 [Category("Integration")]

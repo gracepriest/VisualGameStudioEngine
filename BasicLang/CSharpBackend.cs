@@ -133,6 +133,14 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         private readonly Stack<(BasicBlock Cond, BasicBlock Body)> _openPeels = new();
 
         /// <summary>
+        /// #256: the bodies of the <c>While</c>/<c>Do</c> loops whose <c>while (true)</c> is open and
+        /// whose condition is being written INSIDE it, innermost on top — see
+        /// <see cref="OpensReentrantLoop"/>. <see cref="HandleConditionalBranch"/> pops one when it
+        /// reaches that loop's own branch and writes the exit test there instead of a <c>while</c>.
+        /// </summary>
+        private readonly Stack<BasicBlock> _reentrantLoopBodies = new();
+
+        /// <summary>
         /// ADR-0014 D1/A1, the top of a body with captured locals: <c>T x = __carry_x;</c> for each,
         /// then <c>try {</c>. Nothing for any other body.
         /// </summary>
@@ -2170,6 +2178,28 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
         private void GenerateStructuredBlockCore(BasicBlock block)
         {
+            // #256: a While/Do condition holding control flow is written INSIDE `while (true)`.
+            if (OpensReentrantLoop(block, out var reentrantBody))
+            {
+                if (block.Instructions.LastOrDefault() is IRInstruction head && head.SourceLine > 0)
+                    EmitLineDirective(head.SourceLine, _currentFunction?.SourceFilePath);
+                WriteLine("while (true)");
+                WriteLine("{");
+                Indent();
+                _reentrantLoopBodies.Push(reentrantBody);
+            }
+
+            GenerateStructuredBlockBody(block);
+
+            // The walk out of the condition ends at the loop's own branch, which closes the loop
+            // (HandleConditionalBranch → GenerateLoop). Anything else left `while (true) {` open.
+            if (reentrantBody != null && _reentrantLoopBodies.Contains(reentrantBody))
+                throw new InvalidOperationException(
+                    $"CSharpBackend: the condition of loop '{block.Name}' never reached the loop's own branch (#256).");
+        }
+
+        private void GenerateStructuredBlockBody(BasicBlock block)
+        {
             // Emit non-control-flow instructions
             EmitBlockInstructions(block);
 
@@ -2319,6 +2349,17 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             // Detect loop patterns
             if (IsLoopHeader(trueBlock, falseBlock, out var loopBody, out var loopEnd, out var loopInc, out var loopType, out var negateCondition))
             {
+                // #256: this loop's `while (true)` and its condition are already written (see
+                // OpensReentrantLoop) — the branch becomes the exit test. While leaves when the
+                // condition is false, Until when it is true.
+                if (_reentrantLoopBodies.Count > 0 && ReferenceEquals(_reentrantLoopBodies.Peek(), loopBody))
+                {
+                    _reentrantLoopBodies.Pop();
+                    var exitTest = negateCondition ? $"if ({condition}) break;" : $"if (!({condition})) break;";
+                    GenerateLoop(null, loopBody, loopEnd, loopInc, loopType, exitTest);
+                    return;
+                }
+
                 // For Until loops, negate the condition
                 var loopCondition = negateCondition ? $"!({condition})" : condition;
                 GenerateLoop(loopCondition, loopBody, loopEnd, loopInc, loopType);
@@ -2780,16 +2821,84 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             return null;
         }
 
-        private void GenerateLoop(string condition, BasicBlock bodyBlock, BasicBlock endBlock, BasicBlock incBlock, string loopType)
+        /// <summary>
+        /// #256 — whether <paramref name="block"/> is the first block of a <c>While</c>/<c>Do</c>
+        /// condition that holds CONTROL FLOW, and if so the loop's body. <c>AndAlso</c>,
+        /// <c>OrElse</c> and <c>If()</c> are lowered to if-shaped blocks writing a carrier
+        /// <c>__scN</c> (<c>IRBuilder.BuildShortCircuit</c>, <c>Visit(ConditionalExpressionNode)</c>),
+        /// and the loop's own branch, on that carrier, ends the LAST of them.
+        ///
+        /// <para>⛔ Such a condition cannot be the text of <c>while (…)</c>. The structured walk
+        /// wrote every one of its blocks BEFORE the <c>while</c> — once — so <c>while (__sc0)</c>
+        /// tested a carrier nothing wrote again. MEASURED on every loop form (While, Do While,
+        /// Do Until, Do … Loop While, Do … Loop Until) through the CLI, the optimizer and a project
+        /// build: <c>While P("a", i &lt; 3) AndAlso P("b", i &lt; 9)</c> never ended, where VB, C++ and
+        /// MSIL stop after three iterations; a loop left by <c>Exit</c> ended, having run its
+        /// condition once. The loop is written <c>while (true) { …condition…; if (!c) break; …body… }</c>
+        /// instead — the shape the JavaScript backend gives every loop — so every path back to the
+        /// condition re-runs all of it: the body's end, and a bottom-tested loop's test after its
+        /// peeled first iteration.</para>
+        ///
+        /// <para>A condition that is ONE block — a compare, a call, <c>Not</c>, <c>And</c>/<c>Or</c> —
+        /// keeps <c>while (cond)</c>, byte for byte. A counted <c>For</c> is not this shape and keeps
+        /// its emission: its <c>To</c> bound sits in its condition block, and an <c>If()</c> there is
+        /// computed once before the loop, as VB evaluates the bound.</para>
+        ///
+        /// <para>⚠ Not #227: a bottom-tested loop's body is still emitted twice (the peel, then the
+        /// loop's copy), and the copy drops every block the peel already wrote — an <c>If</c>'s
+        /// continuation, a nested loop. That is wrong with a plain condition too, and unchanged here.</para>
+        /// </summary>
+        private bool OpensReentrantLoop(BasicBlock block, out BasicBlock body)
+        {
+            body = null;
+            var name = block?.Name;
+            if (name == null || !name.EndsWith(".cond", StringComparison.Ordinal)
+                || !(name.StartsWith("while", StringComparison.Ordinal) || name.StartsWith("do", StringComparison.Ordinal)))
+                return false;
+
+            // A condition with no control flow ends in the loop's own branch: `while (cond)`.
+            if (block.Instructions.LastOrDefault() is not IRConditionalBranch first
+                || first.TrueTarget == null || first.FalseTarget == null
+                || IsLoopHeader(first.TrueTarget, first.FalseTarget, out _, out _, out _, out _, out _))
+                return false;
+
+            var prefix = name.Substring(0, name.Length - ".cond".Length);
+            var loopBody = _currentFunction?.Blocks.FirstOrDefault(b => b.Name == prefix + ".body");
+            var loopEnd = _currentFunction?.Blocks.FirstOrDefault(b => b.Name == prefix + ".end");
+            if (loopBody == null || loopEnd == null)
+                return false;
+
+            // The loop's own branch must be there, ending the condition's blocks; it closes the loop.
+            var ownBranch = _currentFunction.Blocks.Any(b => b.Instructions.LastOrDefault() is IRConditionalBranch cb
+                && ((cb.TrueTarget == loopBody && cb.FalseTarget == loopEnd)
+                    || (cb.TrueTarget == loopEnd && cb.FalseTarget == loopBody)));
+            if (!ownBranch)
+                return false;
+
+            body = loopBody;
+            return true;
+        }
+
+        /// <param name="exitTest">#256: null for <c>while (condition) {</c>. Otherwise the loop's
+        /// <c>while (true) {</c> and its condition are already written (<see cref="OpensReentrantLoop"/>)
+        /// and this is the <c>break</c> that ends it, written where the <c>while</c> would have been.</param>
+        private void GenerateLoop(string condition, BasicBlock bodyBlock, BasicBlock endBlock, BasicBlock incBlock, string loopType, string exitTest = null)
         {
             // Push the loop end block so inner code can emit 'break' when targeting it
             if (endBlock != null)
                 _loopEndBlocks.Push(endBlock);
             _loopSwitchDepths.Push(_switchDepth);
 
-            WriteLine($"while ({condition})");
-            WriteLine("{");
-            Indent();
+            if (exitTest != null)
+            {
+                WriteLine(exitTest);
+            }
+            else
+            {
+                WriteLine($"while ({condition})");
+                WriteLine("{");
+                Indent();
+            }
 
             // ADR-0014: this iteration's captured locals, copied forward from their carriers, and the
             // try the rest of the body runs in (A1).
@@ -3330,6 +3439,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             // variable itself would have had, and is never reset.
             _perIter = PerIterationPlan.Build(_currentModule, function);
             _openPeels.Clear();
+            _reentrantLoopBodies.Clear();
 
             foreach (var localVar in function.LocalVariables)
             {
