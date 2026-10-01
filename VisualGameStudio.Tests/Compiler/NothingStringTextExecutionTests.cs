@@ -463,15 +463,16 @@ public class NothingStringTextExecutionTests
 
     /// <summary>
     /// E5 — a lambda that captures a <c>Catch</c> variable, stored in a <c>List(Of Action)</c> and
-    /// invoked after the <c>Try</c>. C#/JS/MSIL run correctly. C++ still fails to COMPILE — a
-    /// PRE-EXISTING, unrelated gap: <c>List(Of Action)</c>'s element type lowers to a bare
-    /// <c>void*</c> rather than <c>std::function&lt;void()&gt;</c>, so invoking an element read
-    /// out of the list (<c>a()</c>) is "assigning to 'void *' from incompatible type 'void'"
-    /// (clang) / "void value not ignored as it ought to be" (g++) — a generic-collection-of-
-    /// delegate gap, not a catch-capture one (E5's own lambda capture, in ISOLATION — C1/C2 above
-    /// — now compiles fine). Filed under #201 (widened: #201's own entry already covers several
-    /// independent C++ gaps specific to a user-delegate VALUE; a delegate inside a generic
-    /// collection is a new one).
+    /// invoked after the <c>Try</c>. C#/JS/MSIL run correctly; C++ runs it since #140 lowered the
+    /// closures. It used to fail to COMPILE — a PRE-EXISTING, unrelated gap: <c>List(Of Action)</c>'s
+    /// element type lowered to a bare <c>void*</c> rather than <c>std::function&lt;void()&gt;</c>, so
+    /// invoking an element read out of the list (<c>a()</c>) was "assigning to 'void *' from incompatible
+    /// type 'void'" (clang) / "void value not ignored as it ought to be" (g++) — a generic-collection-of-
+    /// delegate gap, not a catch-capture one. Filed under #201 (widened: #201's own entry already covers
+    /// several independent C++ gaps specific to a user-delegate VALUE; a delegate inside a generic
+    /// collection is a new one). ⚠ The gap is still THERE on the by-copy FALLBACK path (a root the
+    /// lowering refuses and W2 admits, byte-identical to before #140): see
+    /// <see cref="E5_CatchLambdaStoredInListOfAction_OnTheByCopyFallback_StillFailsClang_Against201"/>.
     /// </summary>
     private const string E5 = """
         Sub Main()
@@ -490,20 +491,57 @@ public class NothingStringTextExecutionTests
     private const string E5Expected = "a:listed\nb:listed";
 
     [Test]
-    public void E5_CatchLambdaStoredInListOfAction_Cpp_PinsPreExistingCompileFailure_Against201()
+    public void E5_CatchLambdaStoredInListOfAction_RunsOnEveryBackend_Cpp_SinceTask140()
     {
         Assert.Multiple(() =>
         {
             Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharp(E5)), Is.EqualTo(E5Expected), "C#");
             Assert.That(FourBackends.Norm(JavaScriptExecutionTests.RunJs(E5)), Is.EqualTo(E5Expected), "JavaScript");
+            Assert.That(CppClosures.Compile(E5).PathOf("Main"), Is.EqualTo(BasicLang.Compiler.CodeGen.CPlusPlus.CppClosurePath.Lowered), "C++ root 'Main'");
+            Assert.That(CppClosures.Run(E5), Is.EqualTo(E5Expected), "C++, standard");
+            Assert.That(CppClosures.Run(E5, CppEntry.Aggressive), Is.EqualTo(E5Expected), "C++, aggressive");
             Assert.That(FourBackends.Norm(Msil.MsilHarness.RunExpectingSuccess(E5)), Is.EqualTo(E5Expected), "MSIL");
         });
+    }
 
-        var cpp = BclE2E.CompileToCppOptimized(E5);
-        var ex = Assert.Throws<AssertionException>(() => BclE2E.CompileRun(cpp));
-        Assert.That(ex!.Message, Does.Contain("void"),
+    /// <summary>E5 with a read-only Select Case 'When' guard in the root: a D9 refusal (the guard is rendered
+    /// inline) that W2 admits because nothing writes what a lambda captures, so the root takes the by-copy
+    /// FALLBACK, byte-identical to the emission before #140 — and #201's widened gap is still there.</summary>
+    private const string E5_OnTheFallback = """
+        Sub Main()
+            Dim lim As Integer = 5
+            Dim probe As Func(Of Integer) = Function() lim + 1
+            Dim v As Integer = probe()
+            Select Case v
+                Case Is > 0 When v > lim + 1
+                    Console.WriteLine("big")
+                Case Else
+                    Console.WriteLine("small")
+            End Select
+            Dim acts As New List(Of Action)()
+            Try
+                Throw New Exception("listed")
+            Catch ex As Exception
+                acts.Add(Sub() Console.WriteLine("a:" & ex.Message))
+                acts.Add(Sub() Console.WriteLine("b:" & ex.Message))
+            End Try
+            For Each a As Action In acts
+                a()
+            Next
+        End Sub
+        """;
+
+    [Test]
+    public void E5_CatchLambdaStoredInListOfAction_OnTheByCopyFallback_StillFailsClang_Against201()
+    {
+        var build = CppClosures.Compile(E5_OnTheFallback);
+        Assert.That(build.PathOf("Main"), Is.EqualTo(BasicLang.Compiler.CodeGen.CPlusPlus.CppClosurePath.ByCopy),
+            "the guard must force the by-copy fallback — otherwise this pins nothing about #201");
+        var (compiled, output) = CppClosures.TryClang(build.Cpp);
+        Assert.That(compiled, Is.False, "#201 (widened): List(Of Action)'s element lowering is fixed only where the root is lowered");
+        Assert.That(output, Does.Contain("void"),
             "the compile failure must still be List(Of Action)'s element lowering to a bare " +
-            "void* (#201, widened). A DIFFERENT failure here means this pin is stale.\n" + ex.Message);
+            "void* (#201, widened). A DIFFERENT failure here means this pin is stale.\n" + output);
     }
 
     /// <summary>

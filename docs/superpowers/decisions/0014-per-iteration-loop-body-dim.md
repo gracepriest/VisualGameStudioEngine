@@ -3,6 +3,7 @@
 - **Date:** 2026-09-28
 - **Status:** Accepted; amended the same day by A1 and A2 (below), which replace D2's Contract
   and add to D1's Obligations.
+- **Amended by:** ADR-0019 (#140) — D2's revisit-if only; see "Amendment A-140" at the end.
 - **Decided by:** the architect role, in a ruling (D1–D6) and an amendment (A1, A2) answering two
   findings the first implementation measured. Transcribed from both; nothing under the Decision
   headings is editorialised.
@@ -276,3 +277,21 @@ variable; that changes bytes but not behaviour.
     local where it declares it (function top), so `Dim a(2) As Integer` in a loop body is one array
     for the whole function with or without a lambda (VB re-creates it per iteration; probe E15). The
     carrier inherits that array; ADR-0014 changes nothing there. Tracked separately as **#228**.
+
+## Amendment A-140 (ADR-0019, 2026-10-01): L8 now prints the same on C++, JavaScript and MSIL
+
+*Appended, not edited in place: D2's text above (a recorded, deliberate, all-backend divergence from VB, with
+its revisit-if "probe L8 prints differently on any two backends") is unchanged.*
+
+- C++ used to print 10 20 30 for L8 (capture by copy), then was refused by name (#170). #140 runs it through
+  `ClosureLowering`: L8 and L8b print 11|21|31 on C++, which is **exactly D2's recorded output**, the one
+  JavaScript and MSIL already print. (VB prints 11 22 33; the divergence is D2's, unchanged.)
+- So D2's revisit-if is narrowed: C# (#136, its own multi-statement-lambda-body defect) remains the one backend
+  that prints differently on L8; C++, JavaScript and MSIL agree. The pin is ONE cross-backend assertion —
+  `PerIterationLoopBodyDimExecutionTests.L8_DoWhileConditionReassignsToALambdaThatWritesX_D2Divergence` pins
+  JavaScript, MSIL and C++ together (and L8b the same), so a fix of D2's divergence flips all three at once.
+- A1's "C++ under #140 gets the Exit and Return copies from its existing 'carry every Finally it leaves'
+  rule" holds, with one addition the first run of the C++ lowering measured: `ComputeInlineRegion` takes
+  MSIL's #226 rule (an `Exit` that leaves the region ends it), because the lowered per-iteration try's entry
+  block is created after the loop's end block and the creation-order test alone let the walk follow the `Exit`
+  into everything after the loop (a goto into the try).

@@ -748,15 +748,14 @@ public class NameBindingExecutionTests
     }
 
     /// <summary>
-    /// ⭐ MOVED PIN (ADR-0016 D3/W2, task #170). K9 on C++ USED TO print 0 for 7 -- #140: the C++
-    /// backend's lambda lowering captures its creator's locals BY COPY, not by reference, so
-    /// writes inside the lambda (<c>total = total + amount</c>) never reach the creator's own
-    /// storage. #170's capability check now REFUSES it by name (arm (a): <c>add</c> writes
-    /// <c>total</c>, which it captures) rather than compiling it wrong. C#/JavaScript/MSIL all
-    /// still print 7 correctly. Unrelated to #169 -- no case difference in this probe at all.
+    /// ⭐ MOVED PIN (#140). K9 on C++ USED TO print 0 for 7 -- #140: the C++
+    /// backend's lambda lowering captured its creator's locals BY COPY, not by reference, so
+    /// writes inside the lambda (<c>total = total + amount</c>) never reached the creator's own
+    /// storage (then #170 refused it by name). #140 lowers it: all four backends print 7.
+    /// Unrelated to #169 -- no case difference in this probe at all.
     /// </summary>
     [Test]
-    public void K9_Cpp_RefusedByName_PinnedForTask140()
+    public void K9_Cpp_RunsLowered_FormerlyPinnedForTask140()
     {
         const string k9 = """
             Sub Main()
@@ -772,12 +771,10 @@ public class NameBindingExecutionTests
             Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharp(k9)), Is.EqualTo("7"), "C#");
             Assert.That(FourBackends.Norm(JavaScriptExecutionTests.RunJs(k9)), Is.EqualTo("7"), "JavaScript");
             Assert.That(FourBackends.Norm(Msil.MsilHarness.RunExpectingSuccess(k9)), Is.EqualTo("7"), "MSIL");
+            Assert.That(CppClosures.Compile(k9).PathOf("Main"), Is.EqualTo(CppClosurePath.Lowered), "C++ root 'Main'");
+            Assert.That(CppClosures.Run(k9), Is.EqualTo("7"), "C++, standard");
+            Assert.That(CppClosures.Run(k9, CppEntry.Aggressive), Is.EqualTo("7"), "C++, aggressive");
         });
-
-        var ex = Assert.Throws<CppCapabilityException>(() => BclE2E.CompileToCppOptimized(k9));
-        Assert.That(ex!.Message, Does.Contain("captures 'total' of 'Main'").And.Contain("#140"),
-            "known gap #140 (C++ captures by copy) flips this to running — re-measure before "
-            + "touching.\n" + ex.Message);
     }
 
     /// <summary>

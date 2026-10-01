@@ -935,9 +935,9 @@ public class DynamicUseSPrimeAggressivePipelineStructuralTests
 /// (S/adr6-d2/probes/matrix-after.txt): L1/L2 are BL7002 on JavaScript (a ByRef parameter — JavaScript
 /// has no reference parameters, unrelated to D2 either way); L5 is correct on JavaScript AND
 /// (since task #155/ADR-0010 closed MSIL's lambda gap) MSIL (ADR-0006 D1's closure rule — x is
-/// genuinely in bump's capture set, task #122 DISCHARGED), with C++ STILL known-wrong for task
-/// #140 (backend lambda capture-by-copy, present even with no optimizer running) — a
-/// pre-existing gap this task neither caused nor closes.</para>
+/// genuinely in bump's capture set, task #122 DISCHARGED), and — since task #140 lowered C++
+/// closures — on C++ too (it was known-wrong for #140's backend lambda capture-by-copy, present even
+/// with no optimizer running, then refused by name by #170).</para>
 /// </summary>
 [TestFixture]
 [Category("Integration")]
@@ -1084,14 +1084,14 @@ public class DynamicUseSPrimeExecutionTests
     public void L7_AggressivePipeline_AllFourBackendsAgree()
         => FourBackends.RunsOnEveryBackendAggressive(DynamicUseSPrimeProbes.L7, DynamicUseSPrimeProbes.ExpectedL7);
 
-    // ---- L5: JavaScript AND MSIL CORRECT (ADR-0006 D1 / task #155's ADR-0010); C++ #140 known-wrong.
+    // ---- L5: JavaScript, MSIL AND C++ CORRECT (ADR-0006 D1 / task #155's ADR-0010 / task #140).
 
     /// <summary>CORRECT under ADR-0006 D1's closure rule: <c>x</c> is genuinely in bump's
     /// recorded capture set (task #122, DISCHARGED — not merely the coarser "every local"
     /// interim fallback), so <c>bump()</c> is call-visible over <c>x</c> and LICM does not hoist
     /// <c>x * 2</c>. Matches
     /// <c>LicmKillVocabularyKnownGapsTask122Tests.L5_LambdaCapturedLocal_JavaScriptAndMsil_AggressivePipeline_CorrectAfterAdr6D1AndTask155</c>'s
-    /// pin, repeated here so this file's own probe-by-probe matrix is self-contained.
+    /// pin, repeated here so this file's own probe-by-probe matrix is self-contained (C++ joined in #140).
     ///
     /// <para>MSIL's own pin here used to be <c>L5_Msil_CannotBuild_PinnedForTask155</c> — it
     /// could not even ASSEMBLE this shape ("Reference to undefined class 'Action'"). Task
@@ -1100,7 +1100,7 @@ public class DynamicUseSPrimeExecutionTests
     /// red-then-green pin.</para>
     /// </summary>
     [Test]
-    public void L5_JavaScriptAndMsil_AggressivePipeline_Correct()
+    public void L5_JavaScriptMsilAndCpp_AggressivePipeline_Correct()
         => Assert.Multiple(() =>
         {
             Assert.That(FourBackends.Norm(FourBackends.RunAggressiveJs(LicmKillVocabularyShapes.L5)),
@@ -1111,23 +1111,11 @@ public class DynamicUseSPrimeExecutionTests
                 Is.EqualTo("seed\n12"),
                 "MSIL — was AssembleFailed/'Action' (task #155), now closed by ADR-0010's "
                 + "ClosureLowering (x copied into bump's environment).");
+            Assert.That(CppClosures.Compile(LicmKillVocabularyShapes.L5, CppEntry.Aggressive).PathOf("Main"), Is.EqualTo(CppClosurePath.Lowered),
+                "C++ root 'Main'");
+            Assert.That(FourBackends.Norm(BclE2E.CompileRun(BclE2E.CompileToCppAggressive(LicmKillVocabularyShapes.L5))),
+                Is.EqualTo("seed\n12"),
+                "C++ — was a silent seed\\n6 (capture by copy), then refused by name (#170); #140's "
+                + "ClosureLowering shares x between bump and Main.");
         });
-
-    /// <summary>
-    /// ⭐ MOVED PIN (ADR-0016 D3/W2, task #140). The C++ backend's own lambda lowering captures BY
-    /// COPY (<c>[=]</c>) where BasicLang means by reference — MEASURED present even with NO
-    /// optimizer pass running, so unrelated to D2 or to LICM's kill vocabulary either way. This
-    /// USED TO silently print seed\n6 for seed\n12 (bump's write to x never reached the loop's
-    /// own x). #170's capability check now REFUSES it by name (arm (a): bump writes x, which it
-    /// captures) rather than compiling it wrong.
-    /// </summary>
-    [Test]
-    public void L5_Cpp_AggressivePipeline_RefusedByName_PinnedForTask140()
-    {
-        var ex = Assert.Throws<CppCapabilityException>(
-            () => BclE2E.CompileToCppAggressive(LicmKillVocabularyShapes.L5));
-        Assert.That(ex!.Message, Does.Contain("captures 'x' of 'Main'").And.Contain("#140"),
-            "task #140 (C++ BACKEND capture-by-copy) flips this to running — re-measure before "
-            + "touching it.\n" + ex.Message);
-    }
 }

@@ -30,11 +30,13 @@ namespace VisualGameStudio.Tests.Compiler;
 /// the scratchpad's own <c>m-final.txt</c> measurement files predate the D3 amendment and read
 /// stale for any arm-(b) shape; never trust one without a fresh compile.
 ///
-/// <para>C++ per the amended D3 (W2, this ADR's own amendment): B1, B3, B4 and C1 are refused by
-/// name (arm (a) — the lambda writes what it captures, directly); B2 is refused by name (arm (b)
-/// — the CREATOR writes the captured variable after the lambda is created); B5, W1 and W2 run,
-/// matching VB. See <see cref="BaseConstructorCallCppRefusalTests"/> for the amendment's must-
-/// refuse list (5a) and #140's regression fence (5b).</para>
+/// <para>C++ since #140: every program here runs on C++ too, with VB's own answer — the amended D3's
+/// refusal rule ("W2") is now the soundness proof of a by-copy FALLBACK only, because every root goes
+/// through <c>ClosureLowering</c> first (ADR-0019). B1-B4, C1, E02, E06, E08, E14, E16, E17 and the nested
+/// E01 used to be refused by name (arms (a) and (b)); they run, and <c>CppCodeGenerator.ClosurePaths</c> says
+/// each constructor's root took the LOWERED path. E09 (a generic derived class) is the one program here that
+/// both paths refuse. See <see cref="BaseConstructorCallCppRefusalTests"/> for the regression fence and the
+/// both-refused rows.</para>
 /// </summary>
 [TestFixture]
 [Category("Integration")]
@@ -56,12 +58,10 @@ public class BaseConstructorCallLoweringExecutionTests
     /// shared source once" rule not applying here: this is TEST plumbing, not production source
     /// shared across consumers.
     ///
-    /// <para>The "cpp" case needs no native compiler to detect a REFUSAL: <c>CppCodeGenerator.Generate</c>
-    /// runs <c>CppCapabilityChecker</c> itself, before any C++ text is written, so calling this
-    /// with <c>backend: "cpp"</c> on a refused program throws <see cref="CppCapabilityException"/>
-    /// straight out of this method — a pure in-process assertion, no MSVC/clang needed. Only a
-    /// program that is NOT refused reaches <see cref="BclE2E.CompileRun"/>, which DOES need one
-    /// (and <c>Assert.Ignore</c>s without it).</para>
+    /// <para>The "cpp" case needs a native compiler to RUN (<see cref="BclE2E.CompileRun"/>
+    /// <c>Assert.Ignore</c>s without one). A program C++ refuses on both closure paths throws
+    /// <see cref="CppCapabilityException"/> straight out of this method, before any C++ text is
+    /// written.</para>
     /// </summary>
     private static string RunViaProjectEntryPoint(string backend, string source)
     {
@@ -93,53 +93,22 @@ public class BaseConstructorCallLoweringExecutionTests
         finally { try { Directory.Delete(dir, recursive: true); } catch { /* temp */ } }
     }
 
-    /// <summary>The C++ leg of <see cref="RunViaProjectEntryPoint"/>, for the sibling refusal fixture.</summary>
+    /// <summary>The C++ leg of <see cref="RunViaProjectEntryPoint"/>, for the sibling fence fixture.</summary>
     internal static string RunCppViaProjectEntryPoint(string source) => RunViaProjectEntryPoint("cpp", source);
-
-    /// <summary>C#, JavaScript and MSIL agree with VB in ALL THREE modes; C++ REFUSES BY NAME in
-    /// all three too (arm (a) or (b) — the caller states which by the message it expects).</summary>
-    private static void AssertRunsEverywhereExceptCpp(string source, string expected, string cppVariable, string cppCreator)
-    {
-        Assert.Multiple(() =>
-        {
-            Assert.That(Norm(FourBackends.RunEmittedCSharp(source)), Is.EqualTo(expected), "C#, standard");
-            Assert.That(Norm(JavaScriptExecutionTests.RunJs(source)), Is.EqualTo(expected), "JavaScript");
-            Assert.That(Norm(MsilHarness.RunExpectingSuccess(source)), Is.EqualTo(expected), "MSIL, standard");
-            Assert.That(Norm(FourBackends.RunEmittedCSharpAggressive(source)), Is.EqualTo(expected), "C#, aggressive");
-            Assert.That(Norm(FourBackends.RunAggressiveJs(source)), Is.EqualTo(expected), "JavaScript, aggressive");
-            Assert.That(Norm(MsilHarness.RunAggressiveExpectingSuccess(source)), Is.EqualTo(expected), "MSIL, aggressive");
-            Assert.That(Norm(RunViaProjectEntryPoint("csharp", source)), Is.EqualTo(expected), "C#, project entry point");
-            Assert.That(Norm(RunViaProjectEntryPoint("javascript", source)), Is.EqualTo(expected), "JavaScript, project entry point");
-            Assert.That(Norm(RunViaProjectEntryPoint("msil", source)), Is.EqualTo(expected), "MSIL, project entry point");
-
-            AssertCppRefusedByNameInAllThreeModes(source, cppVariable, cppCreator);
-        });
-    }
-
-    /// <summary>The C++ leg alone, refused by name, checked in the standard pipeline, the
-    /// aggressive pipeline, and the project entry point (5a/5c's "same set in all three
-    /// modes").</summary>
-    internal static void AssertCppRefusedByNameInAllThreeModes(string source, string variable, string creator)
-    {
-        var standard = Assert.Throws<CppCapabilityException>(() => BclE2E.CompileToCppOptimized(source));
-        Assert.That(standard!.Message, Does.Contain($"captures '{variable}' of '{creator}'").And.Contain("#140"),
-            "C++, standard pipeline.\n" + standard.Message);
-
-        var aggressive = Assert.Throws<CppCapabilityException>(() => BclE2E.CompileToCppAggressive(source));
-        Assert.That(aggressive!.Message, Does.Contain($"captures '{variable}' of '{creator}'").And.Contain("#140"),
-            "C++, aggressive pipeline.\n" + aggressive.Message);
-
-        var proj = Assert.Throws<CppCapabilityException>(() => RunViaProjectEntryPoint("cpp", source));
-        Assert.That(proj!.Message, Does.Contain($"captures '{variable}' of '{creator}'").And.Contain("#140"),
-            "C++, project entry point.\n" + proj.Message);
-    }
 
     /// <summary>All four backends agree with VB in all three modes — the shape RUNS everywhere. The
     /// standard and aggressive legs are the suite's own shared four-backend runners
     /// (<see cref="FourBackends.RunsOnEveryBackend"/> / <see cref="FourBackends.RunsOnEveryBackendAggressive"/>,
-    /// which keep the MSIL/C++/JS skip gates); the project entry point is this fixture's own.</summary>
-    private static void AssertRunsEverywhereIncludingCpp(string source, string expected)
+    /// which keep the MSIL/C++/JS skip gates); the project entry point is this fixture's own.
+    ///
+    /// <para>⭐ #140: <paramref name="loweredRoots"/> names the roots (<c>D.New</c>, <c>Main</c>) that must
+    /// have taken the LOWERED path on C++ — a program that runs right on the by-copy fallback would pass
+    /// every output assertion, so the path is asserted too (ruling D3/D5.4).</para></summary>
+    private static void AssertRunsEverywhereIncludingCpp(string source, string expected, params string[] loweredRoots)
     {
+        foreach (var root in loweredRoots)
+            Assert.That(CppClosures.Compile(source, CppEntry.Standard).PathOf(root), Is.EqualTo(CppClosurePath.Lowered),
+                $"C++ root '{root}' must take the lowered path");
         Assert.Multiple(() =>
         {
             Assert.That(Norm(RunViaProjectEntryPoint("csharp", source)), Is.EqualTo(expected), "C#, project entry point");
@@ -188,11 +157,11 @@ public class BaseConstructorCallLoweringExecutionTests
     /// <summary>B1: the base-args lambda shares ITS captured parameter with the constructor
     /// BODY — VB's own semantics, and the fault ADR-0016 D1 fixes (the lambda creation used to be
     /// off-stream, so the capture scan never saw it: CS0103 `__lambda_0` on C#, a silent wrong
-    /// answer on C++, a JS TDZ ReferenceError, a named MSIL refusal). Arm (a) on C++: the lambda
-    /// writes `p` directly.</summary>
+    /// answer on C++, a JS TDZ ReferenceError, a named MSIL refusal). C++ used to refuse it by name
+    /// (arm (a): the lambda writes `p` directly); since #140 it runs, lowered.</summary>
     [Test]
     public void B1_LambdaWritesTheCapturedConstructorParameter()
-        => AssertRunsEverywhereExceptCpp(B1, "11 12", "p", "D.New");
+        => AssertRunsEverywhereIncludingCpp(B1, "11 12", "D.New");
 
     internal const string B2 = """
         Class Base
@@ -220,12 +189,11 @@ public class BaseConstructorCallLoweringExecutionTests
         """;
 
     /// <summary>B2: the lambda itself only READS `p` — the write (`p = p + 5`) is the CREATOR's
-    /// own, after the lambda is created. Arm (b) on C++, not arm (a): the amendment's whole
-    /// reason to exist (D3 as first ruled left this one a silent wrong answer, 2 instead of 12 —
-    /// see the amendment's own falsifier 5, "0 regressions / all 15 wrong answers caught").</summary>
+    /// own, after the lambda is created. Arm (b) of the old by-copy refusal (D3 as first ruled left this
+    /// one a silent wrong answer, 2 instead of 12); the lowered closure shares `p`, so it prints 12.</summary>
     [Test]
     public void B2_TheCreatorWritesWhatTheLambdaOnlyReads()
-        => AssertRunsEverywhereExceptCpp(B2, "12", "p", "D.New");
+        => AssertRunsEverywhereIncludingCpp(B2, "12", "D.New");
 
     internal const string B3 = """
         Class Base
@@ -257,10 +225,10 @@ public class BaseConstructorCallLoweringExecutionTests
 
     /// <summary>B3: the SAME lambda invoked three times (twice from the constructor body, once
     /// from <c>Main</c> after construction) — proves the shared closure is the SAME storage on
-    /// every call, not a fresh copy per invocation. Arm (a).</summary>
+    /// every call, not a fresh copy per invocation (C++: shared environment).</summary>
     [Test]
     public void B3_TheSameLambdaInvokedRepeatedlyMutatesOneSharedClosure()
-        => AssertRunsEverywhereExceptCpp(B3, "6\n18", "p", "D.New");
+        => AssertRunsEverywhereIncludingCpp(B3, "6\n18", "D.New");
 
     internal const string B4 = """
         Class Base
@@ -292,11 +260,10 @@ public class BaseConstructorCallLoweringExecutionTests
         End Sub
         """;
 
-    /// <summary>B4: the base-args lambda invoked from INSIDE a loop in the constructor body.
-    /// Arm (a).</summary>
+    /// <summary>B4: the base-args lambda invoked from INSIDE a loop in the constructor body.</summary>
     [Test]
     public void B4_TheBaseArgsLambdaIsInvokedFromALoopInTheConstructorBody()
-        => AssertRunsEverywhereExceptCpp(B4, "6", "p", "D.New");
+        => AssertRunsEverywhereIncludingCpp(B4, "6", "D.New");
 
     internal const string B5 = """
         Class Base
@@ -433,14 +400,14 @@ public class BaseConstructorCallLoweringExecutionTests
     /// C1: byte-identical to B1 in shape and answer, but the lambda is an argument to an ORDINARY
     /// <c>Sub</c> call (<c>SetIt</c>), not <c>MyBase.New</c> — this was never broken on C#,
     /// JavaScript or MSIL (the argument was always in the instruction stream; only the base-call
-    /// SITE was off-stream). Its ONLY divergence from B1 is the C++ refusal, which the ADR states
-    /// as a GENERAL rule over "any lambda that writes a captured variable" — never one keyed on
-    /// "inside MyBase.New's argument list" (the ADR's own Rejected table: "a second list #140 must
-    /// remember to delete"). C1 is the proof that rule is general, not position-scoped.
+    /// SITE was off-stream). Its ONLY divergence from B1 used to be the C++ refusal, which the ADR
+    /// stated as a GENERAL rule over "any lambda that writes a captured variable" — never one keyed on
+    /// "inside MyBase.New's argument list". It runs on C++ now (#140), lowered, exactly as B1 does: the
+    /// fix is general, not position-scoped.
     /// </summary>
     [Test]
-    public void C1_TheSameShapeThroughAnOrdinarySubCall_IsNeverBrokenExceptOnCpp()
-        => AssertRunsEverywhereExceptCpp(C1, "11 12", "p", "D.New");
+    public void C1_TheSameShapeThroughAnOrdinarySubCall_RunsEverywhere()
+        => AssertRunsEverywhereIncludingCpp(C1, "11 12", "D.New");
 
     // ============================================================================================
     // Edge probes (S/t170/edge), each pinned to its measured answer. Re-measured against a FRESH
@@ -479,30 +446,36 @@ public class BaseConstructorCallLoweringExecutionTests
     /// E01: a lambda nested INSIDE the base-args lambda — the outer lambda's own body calls
     /// <c>Apply</c>, which invokes an INNER lambda that reads (not writes) `p`. Neither lambda
     /// writes `p` itself; the CREATOR does, in the very next statement (<c>p = p * 10</c>), after
-    /// the outer lambda is created — arm (b). C#/JavaScript run 21. MSIL hits a PRE-EXISTING,
-    /// unrelated gap (#241): a lambda nested in a lambda inside a class member fails <c>ilasm</c>
-    /// ("undefined class ...&lt;&gt;c__Env0...&lt;&gt;c__Env2") — measured identically on a
-    /// constructor-BODY shape before #170; base-args nesting only makes it REACHABLE (it used to
-    /// stop at the old, position-independent MSIL refusal first). Filed, not fixed here.
+    /// the outer lambda is created — arm (b) of the old C++ refusal. VB prints 21 and so does every
+    /// backend now:
+    /// <list type="bullet">
+    /// <item>C#/JavaScript always did.</item>
+    /// <item>C++ ran it only since #140 (it was refused by name before): the constructor's root takes the
+    /// lowered path, one environment holding `p` shared by both lambdas.</item>
+    /// <item>MSIL ran it only since #241 was fixed (task #140's first commit): ClosureLowering used to
+    /// lower a creator lambda that sat AFTER its creator twice, so the second pass emitted a duplicate
+    /// method on a nested environment and <c>ilasm</c> failed with "undefined class ...&lt;&gt;c__Env0...
+    /// &lt;&gt;c__Env2". This test pinned that failure (<c>AssembleFailed</c>); it now pins vbc's 21.</item>
+    /// </list>
     /// </summary>
     [Test]
-    public void E01_NestedLambda_CSharpAndJavaScriptRun_CppRefusedByName_MsilPinnedForTask241()
+    public void E01_NestedLambda_RunsOnEveryBackend_MsilNoLongerFailsIlasm_Task241()
     {
+        Assert.That(CppClosures.Compile(E01_NestedLambda).PathOf("D.New"), Is.EqualTo(CppClosurePath.Lowered),
+            "C++: the constructor is one root; both lambdas share its environment");
         Assert.Multiple(() =>
         {
             Assert.That(Norm(FourBackends.RunEmittedCSharp(E01_NestedLambda)), Is.EqualTo("21"), "C#");
             Assert.That(Norm(JavaScriptExecutionTests.RunJs(E01_NestedLambda)), Is.EqualTo("21"), "JavaScript");
+            Assert.That(CppClosures.Run(E01_NestedLambda, CppEntry.Standard), Is.EqualTo("21"), "C++, standard");
+            Assert.That(CppClosures.Run(E01_NestedLambda, CppEntry.Aggressive), Is.EqualTo("21"), "C++, aggressive");
+            Assert.That(CppClosures.Run(E01_NestedLambda, CppEntry.Project), Is.EqualTo("21"), "C++, project entry point");
 
-            var cpp = Assert.Throws<CppCapabilityException>(() => BclE2E.CompileToCppOptimized(E01_NestedLambda));
-            Assert.That(cpp!.Message, Does.Contain("captures 'p' of 'D.New'").And.Contain("#140"),
-                "C++.\n" + cpp.Message);
-
+            // Last: on a machine with no ilasm this leg ends the block as Ignored (MsilHarness.RequireIlasm).
             var msil = Msil.MsilHarness.Run(E01_NestedLambda);
-            Assert.That(msil.Outcome, Is.EqualTo(Msil.MsilHarness.MsilOutcome.AssembleFailed),
-                "MSIL — pre-existing #241, unaffected by #170. On a machine with no ilasm this " +
-                "assertion is unreachable (Run skips first); written correctly for a Windows run.");
-            Assert.That(msil.Detail, Does.Contain("undefined class").And.Contain("<>c__Env"),
-                "MSIL.\n" + msil.Detail);
+            Assert.That(msil.Outcome, Is.EqualTo(Msil.MsilHarness.MsilOutcome.Ran),
+                "MSIL: #241 is fixed — the nested creator lambda is lowered once.\n" + msil.Detail);
+            Assert.That(Norm(msil.Output), Is.EqualTo("21"), "MSIL");
         });
     }
 
@@ -529,11 +502,11 @@ public class BaseConstructorCallLoweringExecutionTests
         """;
 
     /// <summary>E02: TWO parameters captured, only ONE written — and only after the lambda's
-    /// creation. The captured-but-untouched parameter (`a`) must not spuriously trip the refusal:
-    /// the message names `b`, never `a`. Arm (b).</summary>
+    /// creation. (The old C++ refusal named the written one only; the captured-but-untouched `a` never tripped it.)
+    /// only `b` is written (after the lambda exists), `a` never — and the lowered closure prints 107.</summary>
     [Test]
-    public void E02_TwoParametersCapturedOnlyOneWritten_RefusesNamingOnlyTheWrittenOne()
-        => AssertRunsEverywhereExceptCpp(E02_TwoParamsOneWritten, "107", "b", "D.New");
+    public void E02_TwoParametersCapturedOnlyOneWritten_RunsEverywhere()
+        => AssertRunsEverywhereIncludingCpp(E02_TwoParamsOneWritten, "107", "D.New");
 
     internal const string E06_Barrier = """
         Class Base
@@ -567,12 +540,12 @@ public class BaseConstructorCallLoweringExecutionTests
     /// constructor invokes the SECOND argument, a lambda that writes `p`), once again in the
     /// constructor body — and a CSE/CopyProp merge across the barrier would fold both to the SAME
     /// (stale) value. VB's answer keeps them apart: <c>4 34 7</c> (N=1*3+1=4 before the write;
-    /// A=(1+10)*3+1=34 after it; B=3*2+1=7, untouched by `p`). Arm (a) on C++: the lambda writes
-    /// `p` directly.
+    /// A=(1+10)*3+1=34 after it; B=3*2+1=7, untouched by `p`). C++ used to refuse it by name (arm (a):
+    /// the lambda writes `p` directly); it runs lowered now.
     /// </summary>
     [Test]
     public void E06_TheBaseCallIsAFullBarrierAcrossCSEAndCopyProp()
-        => AssertRunsEverywhereExceptCpp(E06_Barrier, "4 34 7", "p", "D.New");
+        => AssertRunsEverywhereIncludingCpp(E06_Barrier, "4 34 7", "D.New");
 
     internal const string E08_ThreeLevels = """
         Class L0
@@ -609,24 +582,13 @@ public class BaseConstructorCallLoweringExecutionTests
     /// <summary>
     /// E08: THREE levels of inheritance, each with its OWN base-args lambda and its OWN
     /// post-call write to the SAME name the lambda captured (<c>L1.New</c>'s `a`, <c>L2.New</c>'s
-    /// `b`) — a fix that only handled the leaf constructor would miss the middle one. TWO
-    /// independent arm-(b) violations fire together on C++, one per level.
+    /// `b`) — a fix that only handled the leaf constructor would miss the middle one. C++ used to
+    /// refuse it by name, twice (one violation per level); each constructor is its own root now and
+    /// both take the lowered path, so all four backends print 211 18.
     /// </summary>
     [Test]
     public void E08_ThreeLevelsOfInheritance_EachWithItsOwnPostCallWrite()
-    {
-        Assert.Multiple(() =>
-        {
-            Assert.That(Norm(FourBackends.RunEmittedCSharp(E08_ThreeLevels)), Is.EqualTo("211 18"), "C#");
-            Assert.That(Norm(JavaScriptExecutionTests.RunJs(E08_ThreeLevels)), Is.EqualTo("211 18"), "JavaScript");
-            Assert.That(Norm(MsilHarness.RunExpectingSuccess(E08_ThreeLevels)), Is.EqualTo("211 18"), "MSIL");
-
-            var ex = Assert.Throws<CppCapabilityException>(() => BclE2E.CompileToCppOptimized(E08_ThreeLevels));
-            Assert.That(ex!.Message, Does.Contain("captures 'a' of 'L1.New'")
-                .And.Contain("captures 'b' of 'L2.New'").And.Contain("#140"),
-                "C++ — TWO violations, one per level.\n" + ex.Message);
-        });
-    }
+        => AssertRunsEverywhereIncludingCpp(E08_ThreeLevels, "211 18", "L1.New", "L2.New");
 
     internal const string E09_GenericDerived = """
         Class Base
@@ -652,26 +614,26 @@ public class BaseConstructorCallLoweringExecutionTests
         """;
 
     /// <summary>E09: a GENERIC derived class. The capture/write analysis reads the class's own
-    /// name (`GBox`), not a closed generic instantiation — arm (b). MSIL hits a SEPARATE,
-    /// unrelated pre-existing gap: a lambda's environment nested inside a generic class would
-    /// itself need to be generic, out of scope for ClosureLowering's first cut.</summary>
+    /// name (`GBox`), not a closed generic instantiation. Both C++ closure paths refuse it (#140 ruling D1
+    /// case 3): ClosureLowering cannot nest an environment inside a generic class (D9), and the by-copy
+    /// fallback is unsound because the creator writes `p` after the lambda exists — so the message
+    /// carries W2's text first, then "closure lowering cannot lower 'GBox.New' either (#140)". MSIL hits
+    /// the SAME D9 refusal, now spelled "MSIL:"; C# and JavaScript run it (7).</summary>
     [Test]
-    public void E09_GenericDerivedClass_RefusesNamingTheOpenClassNotAClosedInstantiation()
+    public void E09_GenericDerivedClass_BothCppPathsRefuse_NamingTheOpenClassNotAClosedInstantiation()
     {
         Assert.Multiple(() =>
         {
             Assert.That(Norm(FourBackends.RunEmittedCSharp(E09_GenericDerived)), Is.EqualTo("7"), "C#");
             Assert.That(Norm(JavaScriptExecutionTests.RunJs(E09_GenericDerived)), Is.EqualTo("7"), "JavaScript");
 
-            var cpp = Assert.Throws<CppCapabilityException>(() => BclE2E.CompileToCppOptimized(E09_GenericDerived));
-            Assert.That(cpp!.Message, Does.Contain("captures 'p' of 'GBox.New'").And.Contain("#140"),
-                "C++.\n" + cpp.Message);
+            CppClosures.AssertBothRefused(E09_GenericDerived, "GBox.New", "generic", capturedVariable: "p");
 
             var msil = Msil.MsilHarness.Run(E09_GenericDerived);
             Assert.That(msil.Outcome, Is.EqualTo(Msil.MsilHarness.MsilOutcome.GenerateFailed),
-                "MSIL — a SEPARATE pre-existing gap (a lambda's environment inside a generic class " +
-                "would itself need to be generic); unaffected by #170.");
-            Assert.That(msil.Detail, Does.Contain("generic"), "MSIL.\n" + msil.Detail);
+                "MSIL — the same D9 refusal (a lambda's environment inside a generic class " +
+                "would itself need to be generic); unaffected by #140.");
+            Assert.That(msil.Detail, Does.Contain("MSIL:").And.Contain("generic"), "MSIL.\n" + msil.Detail);
         });
     }
 
@@ -1028,17 +990,18 @@ public class BaseConstructorCallLoweringExecutionTests
     /// that writes <c>p</c> has hoisted it into an environment that does not exist yet. `p * 2` is computed
     /// before the base call from the raw parameter (10), the body lambda then bumps `p` twice (7). If the
     /// prologue read `p` from the environment it would dereference a null environment: kills mutant M10.
-    /// C++ refuses by name (arm (a): `bump` writes `p`).
+    /// C++ used to refuse it by name (arm (a): `bump` writes `p`); since #140 it runs lowered.
     /// </summary>
     [Test]
     public void E16_AComputedArgument_ThenABodyLambdaWritesTheParameter_MsilPlacesTheEnvironmentAfterTheCall()
-        => AssertRunsEverywhereExceptCpp(E16_CaseAComputed, "10 7", "p", "D.New");
+        => AssertRunsEverywhereIncludingCpp(E16_CaseAComputed, "10 7", "D.New");
 
     /// <summary>E17: the same "case a" with a parameter-only argument — byte-identical to pre-#170 on every
-    /// backend (ADR-0016 byte identity for a `MyBase.New` whose arguments are parameters and literals).</summary>
+    /// backend but C++ (ADR-0016 byte identity for a `MyBase.New` whose arguments are parameters and literals);
+    /// C++ used to refuse it and runs it lowered since #140.</summary>
     [Test]
-    public void E17_AParameterArgument_ThenABodyLambdaWritesTheParameter_RunsAndRefusesLikeE16()
-        => AssertRunsEverywhereExceptCpp(E17_CaseASimple, "5 6", "p", "D.New");
+    public void E17_AParameterArgument_ThenABodyLambdaWritesTheParameter_RunsEverywhere()
+        => AssertRunsEverywhereIncludingCpp(E17_CaseASimple, "5 6", "D.New");
 
     // ---- E14/E15: a BODY lambda after the base call still sees a non-null Me (ADR-0010 D6) -----
 
@@ -1049,11 +1012,11 @@ public class BaseConstructorCallLoweringExecutionTests
     /// for ("a body lambda created after the base call still sees a non-null Me"): on MSIL the
     /// environment's <c>__me</c> is stored immediately AFTER the base call
     /// (<see cref="VisualGameStudio.Tests.Msil.MsilBaseConstructorOrderingTests"/> reads the IL); here
-    /// it must actually WORK. C++ refuses by name (arm (a): the base-args lambda writes `p`).
+    /// it must actually WORK — on C++ too since #140 (it used to be refused by name: the base-args lambda writes `p`).
     /// </summary>
     [Test]
     public void E14_ABodyLambdaAfterTheBaseCall_SeesANonNullMe()
-        => AssertRunsEverywhereExceptCpp(Msil.MsilBaseConstructorOrderingTests.E14_BodyLambdaUsesMe, "17", "p", "D.New");
+        => AssertRunsEverywhereIncludingCpp(Msil.MsilBaseConstructorOrderingTests.E14_BodyLambdaUsesMe, "17", "D.New");
 
     /// <summary>E15: the READ-ONLY sibling — a base-args lambda that only reads <c>p</c> — so nothing
     /// is refused anywhere: all four backends print <c>20 5</c>, including C++.</summary>
@@ -1100,27 +1063,25 @@ public class BaseConstructorCallLoweringExecutionTests
         };
     }
 
-    /// <summary>(name, source, VB's answer, the captured variable C++ must refuse by name — or null
-    /// when C++ runs it too).</summary>
+    /// <summary>(name, source, VB's answer).</summary>
     private static IEnumerable<TestCaseData> CliProbes()
     {
-        yield return new TestCaseData(B1, "11 12", "p").SetName("Cli_B1");
-        yield return new TestCaseData(B2, "12", "p").SetName("Cli_B2");
-        yield return new TestCaseData(B3, "6\n18", "p").SetName("Cli_B3");
-        yield return new TestCaseData(B4, "6", "p").SetName("Cli_B4");
-        yield return new TestCaseData(B5, "7", null).SetName("Cli_B5");
-        yield return new TestCaseData(W1, "2", null).SetName("Cli_W1");
-        yield return new TestCaseData(W2, "2", null).SetName("Cli_W2");
-        yield return new TestCaseData(C1, "11 12", "p").SetName("Cli_C1");
+        yield return new TestCaseData(B1, "11 12").SetName("Cli_B1");
+        yield return new TestCaseData(B2, "12").SetName("Cli_B2");
+        yield return new TestCaseData(B3, "6\n18").SetName("Cli_B3");
+        yield return new TestCaseData(B4, "6").SetName("Cli_B4");
+        yield return new TestCaseData(B5, "7").SetName("Cli_B5");
+        yield return new TestCaseData(W1, "2").SetName("Cli_W1");
+        yield return new TestCaseData(W2, "2").SetName("Cli_W2");
+        yield return new TestCaseData(C1, "11 12").SetName("Cli_C1");
     }
 
     /// <summary>
-    /// Plain AND <c>--optimize</c>, C#, JavaScript and MSIL through the real CLI print VB's answer;
-    /// C++ through the real CLI either runs it (B5, W1, W2) or exits 1 naming the variable, its
-    /// creator and #140 (arm (a) for B1/B3/B4/C1, arm (b) for B2).
+    /// Plain AND <c>--optimize</c>, C#, JavaScript, MSIL and (since #140) C++ through the real CLI all print
+    /// VB's answer. B1-B4 and C1 used to exit 1 on C++ naming the variable, its creator and #140.
     /// </summary>
     [TestCaseSource(nameof(CliProbes))]
-    public void TheRealCli_PlainAndOptimized_MatchesTheInProcessPaths(string source, string expected, string cppVariable)
+    public void TheRealCli_PlainAndOptimized_MatchesTheInProcessPaths(string source, string expected)
     {
         Assert.Multiple(() =>
         {
@@ -1130,15 +1091,7 @@ public class BaseConstructorCallLoweringExecutionTests
                 Assert.That(Norm(RunViaCli("csharp", source, optimize)), Is.EqualTo(expected), $"C# CLI {mode}");
                 Assert.That(Norm(RunViaCli("javascript", source, optimize)), Is.EqualTo(expected), $"JavaScript CLI {mode}");
                 Assert.That(Norm(RunViaCli("msil", source, optimize)), Is.EqualTo(expected), $"MSIL CLI {mode}");
-
-                if (cppVariable == null)
-                    Assert.That(Norm(RunViaCli("cpp", source, optimize)), Is.EqualTo(expected), $"C++ CLI {mode}");
-                else
-                {
-                    var (exit, _, console) = CliCompile(source, "cpp", optimize);
-                    Assert.That(exit, Is.Not.EqualTo(0), $"C++ CLI {mode} must refuse");
-                    Assert.That(console, Does.Contain($"captures '{cppVariable}' of 'D.New'").And.Contain("#140"), $"C++ CLI {mode}:\n{console}");
-                }
+                Assert.That(Norm(RunViaCli("cpp", source, optimize)), Is.EqualTo(expected), $"C++ CLI {mode}");
             }
         });
     }

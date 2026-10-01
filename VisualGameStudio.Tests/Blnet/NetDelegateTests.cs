@@ -502,19 +502,24 @@ public class NetDelegateTests
             .Generate(ir);
     }
 
-    // ⚠ SCOPE, measured rather than assumed. Two adjacent shapes are NOT reachable today, and
-    // neither is caused by this change:
+    // ⚠ SCOPE, measured rather than assumed. One adjacent shape is NOT reachable today, and it is
+    // not caused by this change:
     //
     //   • `Apply(AddressOf Compare)` against a user `Delegate` parameter — the ANALYZER refuses
     //     it: "cannot convert from 'Pointer To Pointer To Integer' to 'Comparer'". Note the
     //     DOUBLE pointer; the AddressOf arm appears to wrap an already-pointer type. A separate
     //     pre-existing defect, upstream of codegen.
-    //   • `Dim f = AddressOf Compare` — analyzes and reaches codegen, but the LOCALS pass
-    //     declares `Pointer To Integer f`, which is not a C++ type. Chipped as task_4392b185.
     //
-    // So these tests assert exactly what Step 5c owns: the operator mapping. The `auto` fusion
-    // is exercised only once a delegate argument reaches lowering through the resolved .NET
-    // path in Step 5d, which bypasses user-delegate type checking.
+    // The other one was a CODEGEN gap that #140 closed: `Dim f = AddressOf Compare` analyzed and
+    // reached codegen, but the LOCALS pass declared `Pointer To Integer f`, which is not a C++ type
+    // (chipped as task_4392b185). C++ sends every `AddressOf` through ClosureLowering now: the
+    // operator becomes an IRDelegateCreate, `f` is a `std::function<int32_t(int32_t, int32_t)>`, and
+    // the value is a stateless forwarding closure that calls the module procedure. (Before #140 the
+    // operator mapped to the bare function name, `f = Compare;`; the `?Compare` regression this test
+    // is named for — MapUnaryOperator's `_ => "?"` default — stays impossible either way.)
+    //
+    // The `auto` fusion is exercised only once a delegate argument reaches lowering through the
+    // resolved .NET path in Step 5d, which bypasses user-delegate type checking.
 
     [Test]
     public void AddressOfAFunction_NoLongerEmitsAQuestionMark()
@@ -531,8 +536,12 @@ End Sub");
         Assert.That(cpp, Does.Not.Contain("?Compare"),
             "MapUnaryOperator's `_ => \"?\"` default emitted a literal question mark INTO THE "
             + "GENERATED SOURCE — invalid C++, silently, with no capability refusal to catch it");
-        Assert.That(cpp, Does.Contain("= Compare;"),
-            "a method reference is just the function's name in C++");
+        // #140: the delegate value is a std::function over a stateless forwarding closure that calls
+        // the module procedure by its name — not the bare name (`f = Compare;`) it used to be.
+        Assert.That(cpp, Does.Contain("std::function<int32_t(int32_t, int32_t)> f"),
+            "the local is a std::function, never `Pointer To Integer`\n" + cpp);
+        Assert.That(cpp, Does.Match(@"f = \[\]\(int32_t (\w+), int32_t (\w+)\) -> int32_t \{ return Compare\(\1, \2\); \};"),
+            "a method reference is a forwarding closure over the function's name in C++\n" + cpp);
     }
 
     // ------------------------------------------------------------------------------------
@@ -630,7 +639,9 @@ Sub Main()
 End Sub");
 
         Assert.That(cpp, Does.Not.Contain("?Handler"));
-        Assert.That(cpp, Does.Contain("= Handler;"));
+        // #140: the value is a std::function<void()> over a forwarding closure, not the bare name.
+        Assert.That(cpp, Does.Contain("std::function<void()> h"), cpp);
+        Assert.That(cpp, Does.Match(@"h = \[\]\(\) \{ Handler\(\); \};"), cpp);
     }
 
     // ------------------------------------------------------------------------------------

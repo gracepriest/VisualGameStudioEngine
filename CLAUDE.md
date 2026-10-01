@@ -359,11 +359,12 @@ with the `Dim` path — see `docs/superpowers/specs/2026-09-19-menus-toolbars-st
   bare `make_shared` — two-phase construction (tag constructor, then `ctor_`), so `Me` is owned
   before any user code runs and is spelled `BasicLang::Self(this)` as a value everywhere but a
   member receiver / `Is` operand (ADR-0015).
-- **A lambda whose by-copy capture could go stale is refused by name (ADR-0016 D3/W2) until #140;
-  the refusal is ONE rule in `CppCapabilityChecker.CheckLambdaCaptureWrites` over
-  `ControlFlowGraph.ExecutionSuccessors`.** It is stated over ANY lambda, never keyed on
-  `MyBase.New` position; #140 deletes it and must keep `BaseConstructorCallCppRefusalTests`'s
-  regression fence running.
+- **Closures go through `ClosureLowering` by default (ADR-0019): environments, capture by reference.
+  A root it refuses runs the old by-copy `[=]` path ONLY if W2 holds for it, else the program is
+  refused with both reasons.** W2 is ONE rule, `CppCapabilityChecker.CheckLambdaCaptureWrites` over
+  `ControlFlowGraph.ExecutionSuccessors`, now just the fallback's soundness proof (deleted with
+  `[=]`). `CppCodeGenerator.ClosurePaths` is the seam that says which path each root took; the
+  fallback set is pinned by name in `CppClosurePathTests` and **may only shrink**.
 - Exceptions via the `IRThrow` node; a `Return` or `Exit` out of a `Try` carries its own copy
   of every `Finally` it leaves (a C++ `return`/`goto` runs no handler); iterators are real C++20 coroutines (`Generator<T>` /
   `co_yield`); async is synchronous `Task<T>` emulation (no scheduler).

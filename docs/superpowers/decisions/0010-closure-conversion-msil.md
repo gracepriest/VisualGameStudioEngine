@@ -2,6 +2,7 @@
 
 - **Date:** 2026-09-26
 - **Status:** Accepted
+- **Amended by:** ADR-0019 (#140) — D1 only; see "Amendment A-140" at the end. No other decision here changes.
 - **Decided by:** architect (Fable 5.1), in one ruling plus an AMENDMENT that replaced D2 after
   the orchestrator measured that the IR is flat (no block/declaration structure) and that C#
   and JavaScript print `6|6|6` for L15. Transcribed here; this file records the ruling as
@@ -277,3 +278,38 @@ instead of an assemble-time or run-time surprise.
 - The front end gains declaration-site scoping (the L15 fix): add the block-scope environment
   level through the existing chain; do not reopen the model.
 - C# and JavaScript disagree with each other on L14.
+
+## Amendment A-140 (ADR-0019, 2026-10-01): D1 gains a second consumer, a contract with options and a result
+
+*Appended, not edited in place: D1's text above is what was ruled for #155. What follows is what the #140
+ruling (D2) added; the environment model (D2–D9) is untouched.*
+
+- **C++ is the second backend that opts in** (`CppCodeGenerator.LowerClosures`, reached from both `Generate`
+  and `GenerateSplit`). D1's "C++ may for #140" is now "C++ does". C# and JavaScript still never call it.
+- **The entry point takes the backend's limits.**
+  ```
+  sealed record ClosureLoweringOptions(string BackendName, int? MaxActionArity, int? MaxFuncArity,
+                                       UnloweredRootPolicy Policy);          // Throw | Skip
+  sealed record ClosureLoweringResult(IRModule Module,
+      IReadOnlyList<(IRFunction Root, ForeignFeatureException Reason)> SkippedRoots);
+  static ClosureLoweringResult ClosureLowering.Run(IRModule module, ClosureLoweringOptions options);
+  ```
+  `BackendName` prefixes every refusal text ("MSIL:", "C++:"); the Action/Func arity caps are options
+  (`null` = unbounded: D7's "capped at what was measured" is a .NET delegate-facade fact, so it is MSIL's
+  option, 8 / 9, not the pass's); `UnloweredRootPolicy.Throw` is MSIL (the first refusal is thrown;
+  `SkippedRoots` is empty; D1's post-condition holds verbatim) and `Skip` is C++ (a root the pass cannot
+  lower is left un-lowered and reported, every other root is lowered).
+- **`ClosureLowering.Run(IRModule)` is kept and means `ClosureLoweringOptions.Msil`.** MSIL's IL is
+  byte-identical under it: 3,423 of 3,423 corpus cells.
+- **Per-root atomicity.** A ROOT — a non-lambda function with every lambda it creates, transitively — is
+  lowered entirely or not at all (D2's one environment per function makes a partial root unsound); a skipped
+  root's IR in the result is the input's. Root identity is `ClosureLowering.CreatorsOf` / `RootOf`, the one
+  definition the lowering and C++'s by-copy soundness rule (ADR-0019 D3) share.
+- **A function is lowered once (patch 01, fixes #241).** The root loop used to meet a creator lambda it had
+  already lowered under its creator and process it a second time as a root, adding a dead duplicate of every
+  lambda it creates as a method of a new environment nested inside the first. MSIL never looks at a dead
+  method, except that the nested class name it writes (`D/<>c__Env0/<>c__Env2`) is not a class `ilasm` knows:
+  a lambda nested in a lambda inside a class member failed `ilasm`. The root loop now skips a function that
+  has been lowered. The 16 programs whose IL changed (the "creator lambda placed after its creator" shape) run
+  identically (13) or went from the `ilasm` failure to vbc's output (X22, X25, E01_nested_lambda); N3-N6 print
+  vbc's answer.

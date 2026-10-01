@@ -120,8 +120,16 @@ End Function";
     // Task 5: lambdas -> C++ lambdas
     // ========================================================================
 
+    /// <summary>
+    /// #140: a lambda is a method on a closure environment, and the delegate VALUE is a
+    /// <c>std::function</c> built from a closure that holds the environment's <c>shared_ptr</c> and forwards to
+    /// that method (<c>[blTarget = env](int32_t blArg0) -&gt; int32_t { return blTarget-&gt;__lambda_0(blArg0); }</c>).
+    /// This pinned <c>[=](int32_t x)</c> — the by-copy lambda — and "no <c>__lambda_</c> anywhere" before; the
+    /// text contract now is the forwarding closure, a DEFINED method for it to forward to (no dangling
+    /// reference), and no by-copy capture list on a lowered root.
+    /// </summary>
     [Test]
-    public void Cpp_LambdaAssignedToVariable_EmitsCppLambda()
+    public void Cpp_LambdaAssignedToVariable_EmitsAForwardingClosureOverAnEnvironmentMethod()
     {
         var source = @"
 Sub Main()
@@ -133,8 +141,13 @@ End Sub";
 
         Assert.That(errors, Is.Empty, string.Join("; ", errors));
         Assert.That(output, Does.Contain("std::function<int32_t(int32_t)>"));
-        Assert.That(output, Does.Contain("[=](int32_t x)"));
-        Assert.That(output, Does.Not.Contain("__lambda_"), "no dangling lambda references:\n" + output);
+        var closure = System.Text.RegularExpressions.Regex.Match(output,
+            @"\[(\w+) = \w+\]\(int32_t (\w+)\) -> int32_t \{ return \1->(\w+)\(\2\); \}");
+        Assert.That(closure.Success, Is.True,
+            "a delegate value is a std::function built from a closure that holds the environment and forwards to the lambda's method:\n" + output);
+        Assert.That(output, Does.Match(@"int32_t " + closure.Groups[3].Value + @"\(int32_t x\)"),
+            "no dangling lambda references: the method the closure forwards to is defined on the environment:\n" + output);
+        Assert.That(output, Does.Not.Contain("[=]"), "a lowered root has no by-copy capture list:\n" + output);
         Assert.That(output, Does.Contain("f(5)"));
     }
 

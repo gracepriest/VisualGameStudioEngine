@@ -692,8 +692,9 @@ public class MultiLineFunctionLambdaTests
 ///
 /// <para>C++ is not exercised for E1-E11 here: per the implementer's byte compare and this
 /// file's own front-end coverage, the front-end fix is backend-agnostic and JS+MSIL already
-/// prove it; the C#/C++ backends' OWN pre-existing gaps (#136, #140, #165) are pinned only on
-/// the F-probes the implementer measured them against.</para>
+/// prove it; the C#/C++ backends' OWN pre-existing gaps (#136, #165) are pinned only on
+/// the F-probes the implementer measured them against. (C++'s capture-by-copy gap, #140, is closed:
+/// F1, F2 and F8 run on C++ with VB's answer.)</para>
 /// </summary>
 [TestFixture]
 [Category("Integration")]
@@ -773,15 +774,18 @@ public class MultiLineFunctionLambdaExecutionTests
     public void CSharp_RunsCorrectly(string source, string label, string expected)
         => Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharp(source)), Is.EqualTo(expected), label);
 
+    [TestCase(MultiLineFunctionLambdaProbes.F1, "F1", MultiLineFunctionLambdaProbes.F1Expected)]   // was refused by name (#170), #140
+    [TestCase(MultiLineFunctionLambdaProbes.F2, "F2", MultiLineFunctionLambdaProbes.F2Expected)]   // was refused by name (#170), #140
     [TestCase(MultiLineFunctionLambdaProbes.F3, "F3", MultiLineFunctionLambdaProbes.F3Expected)]
     [TestCase(MultiLineFunctionLambdaProbes.F4, "F4", MultiLineFunctionLambdaProbes.F4Expected)]
     [TestCase(MultiLineFunctionLambdaProbes.F5, "F5", MultiLineFunctionLambdaProbes.F5Expected)]
     [TestCase(MultiLineFunctionLambdaProbes.F6, "F6", MultiLineFunctionLambdaProbes.F6Expected)]
     [TestCase(MultiLineFunctionLambdaProbes.F7, "F7", MultiLineFunctionLambdaProbes.F7Expected)]
+    [TestCase(MultiLineFunctionLambdaProbes.F8, "F8", MultiLineFunctionLambdaProbes.F8Expected)]   // was refused by name (#170), #140
     public void Cpp_RunsCorrectly(string source, string label, string expected)
         => Assert.That(FourBackends.Norm(BclE2E.CompileRun(BclE2E.CompileToCppOptimized(source))), Is.EqualTo(expected), label);
 
-    // ---- Known-wrong cells, PINNED (never fixed by #164 — task #136/#140/#165) --------------
+    // ---- Known-wrong cells, PINNED (never fixed by #164 — task #136/#165) -------------------
 
     /// <summary>Task #136: the C# backend empties a multi-statement lambda body, dropping every
     /// statement but the last visible one — here, <c>n = n + 100</c> is dropped and only
@@ -843,48 +847,16 @@ public class MultiLineFunctionLambdaExecutionTests
     }
 
     /// <summary>
-    /// ⭐ MOVED PIN (ADR-0016 D3/W2, task #170). Task #140: the C++ backend's lambda lowering
-    /// captures BY COPY, not by reference — <c>bump()</c>'s write to <c>n</c> never reaches the
-    /// caller's <c>n</c>. This USED TO silently print 3,3,0 for 3,103,0; #170's capability check
-    /// now REFUSES it by name (arm (a): <c>bump</c> writes <c>n</c>, which it captures).
+    /// ⭐ MOVED PINS (#140): F1, F2 and F8 on C++. F1: <c>bump()</c>'s write to <c>n</c> never reached the
+    /// caller's <c>n</c> (silently 3,3,0 for 3,103,0); F2: <c>MakeCounter</c>'s closure captured <c>c</c> by
+    /// copy, so each call incremented its OWN copy (10\n10 for 11\n12); F8: the same defect one level of
+    /// nesting deeper (2\n1 for 32\n21). #170 refused all three by name; #140 lowers them — the closure's
+    /// environment is shared with its creator — and they run, via <see cref="Cpp_RunsCorrectly"/> above. This
+    /// test pins the PATH each creator took, which the output alone cannot show.
     /// </summary>
-    [Test]
-    public void F1_Cpp_RefusedByName_PinnedForTask140()
-    {
-        var ex = Assert.Throws<CppCapabilityException>(
-            () => BclE2E.CompileToCppOptimized(MultiLineFunctionLambdaProbes.F1));
-        Assert.That(ex!.Message, Does.Contain("captures 'n' of 'Main'").And.Contain("#140"),
-            "task #140 (C++ backend capture-by-copy) flips this to running — re-measure before "
-            + "touching.\n" + ex.Message);
-    }
-
-    /// <summary>
-    /// ⭐ MOVED PIN (ADR-0016 D3/W2, task #170). Task #140: <c>MakeCounter</c>'s closure captures
-    /// <c>c</c> by copy, so each call to the returned lambda USED TO increment its OWN copy from
-    /// the same starting value (silently printing 10\n10 for 11\n12). #170's capability check now
-    /// REFUSES it by name (arm (a): the returned lambda writes <c>c</c>, which it captures from
-    /// <c>MakeCounter</c>).
-    /// </summary>
-    [Test]
-    public void F2_Cpp_RefusedByName_PinnedForTask140()
-    {
-        var ex = Assert.Throws<CppCapabilityException>(
-            () => BclE2E.CompileToCppOptimized(MultiLineFunctionLambdaProbes.F2));
-        Assert.That(ex!.Message, Does.Contain("captures 'c' of 'MakeCounter'").And.Contain("#140"),
-            "task #140 flips this to running — re-measure before touching.\n" + ex.Message);
-    }
-
-    /// <summary>
-    /// ⭐ MOVED PIN (ADR-0016 D3/W2, task #170), the same capture-by-copy defect one level of
-    /// nesting deeper. USED TO silently print 2\n1 for 32\n21; now refused by name (arm (a):
-    /// <c>inner</c> writes <c>n</c>, which it captures from <c>Main</c>).
-    /// </summary>
-    [Test]
-    public void F8_Cpp_RefusedByName_PinnedForTask140()
-    {
-        var ex = Assert.Throws<CppCapabilityException>(
-            () => BclE2E.CompileToCppOptimized(MultiLineFunctionLambdaProbes.F8));
-        Assert.That(ex!.Message, Does.Contain("captures 'n' of 'Main'").And.Contain("#140"),
-            "task #140 flips this to running — re-measure before touching.\n" + ex.Message);
-    }
+    [TestCase(MultiLineFunctionLambdaProbes.F1, "Main", TestName = "F1_Cpp_TakesTheLoweredPath_FormerlyPinnedForTask140")]
+    [TestCase(MultiLineFunctionLambdaProbes.F2, "MakeCounter", TestName = "F2_Cpp_TakesTheLoweredPath_FormerlyPinnedForTask140")]
+    [TestCase(MultiLineFunctionLambdaProbes.F8, "Main", TestName = "F8_Cpp_TakesTheLoweredPath_FormerlyPinnedForTask140")]
+    public void Cpp_TakesTheLoweredPath(string source, string root)
+        => Assert.That(CppClosures.Compile(source).PathOf(root), Is.EqualTo(CppClosurePath.Lowered));
 }

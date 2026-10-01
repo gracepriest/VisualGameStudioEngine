@@ -22,3 +22,30 @@ wasted spend in this setup.
 ## Template
 
 See `0000-template.md`.
+
+## Index
+
+One line per ADR; the file is the decision. The `-brief` files are the architect's inputs, kept beside the
+ADR they produced. Amendments are appended to the ADR they amend ("Amended by" in its header).
+
+| ADR | Decision |
+|---|---|
+| 0001 | C# backend: temp materialisation |
+| 0002 | Interface property accessor flags |
+| 0003 | CFG loop representation |
+| 0004 | Family-111 rulings |
+| 0005 | Integer division, CSE destination, interface property type |
+| 0006 | Kill-vocabulary totality; dynamic-use call visibility |
+| 0007 | Bare-name property lowering fidelity |
+| 0008 | Guard semantics and call visibility of computed values |
+| 0009 | For Each control variable |
+| 0010 | Lambdas and closures on MSIL — closure conversion as an opt-in IR pass. **Amended by 0019** (D1: options/result contract, C++ as the second consumer, a function is lowered once) |
+| 0011 | `Is` / `IsNot` reference identity |
+| 0012 | Object comparison, late-bound |
+| 0013 | Case-insensitive name binding, front end to IR |
+| 0014 | Per-iteration loop-body `Dim` with copy-forward. **Amended by 0019** (D2's revisit-if: L8 agrees on C++, JavaScript and MSIL) |
+| 0015 | C++ `Me` as a value; two-phase construction |
+| 0016 | `MyBase.New(...)` is an instruction. **Amended by 0019** (D3's C++ arm: W2 is the by-copy fallback's soundness proof) |
+| 0017 | DCE removal licence: the compiler-temp marker |
+| 0018 | One reservation set per function; one door for an optimizer temp |
+| 0019 | C++ closures: ClosureLowering by default, with a W2-gated by-copy fallback (#140). E16 (#229) is an owner decision, PENDING |

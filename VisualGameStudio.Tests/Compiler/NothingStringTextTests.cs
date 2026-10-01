@@ -311,10 +311,11 @@ public class CSharpNullConstantCastTests
 
 /// <summary>
 /// C++ codegen text: a lambda written inside a <c>Catch</c> clause that reads its caught
-/// exception's <c>Message</c> renders the SAME <c>.what()</c> spelling the Catch clause's own
-/// body uses — never <c>ex-&gt;Message</c>, a shared_ptr field access against an exception
-/// representation C++ holds by VALUE. Text-only (no C++ compiler invoked) — behaviour is
-/// <c>NothingStringTextExecutionTests</c>.
+/// exception's <c>Message</c> takes it as the exception's <c>what()</c> — never <c>ex-&gt;Message</c>, a
+/// shared_ptr field access against an exception representation C++ holds by VALUE. Since #140 the
+/// caught exception is an environment field of type <c>std::exception_ptr</c>, so the read rethrows it and
+/// asks the caught object; a <c>Throw</c> of it rethrows the very same object. Text-only (no C++ compiler
+/// invoked) — behaviour is <c>NothingStringTextExecutionTests</c>.
 /// </summary>
 [TestFixture]
 public class CppCatchLambdaTextTests
@@ -332,24 +333,35 @@ public class CppCatchLambdaTextTests
         """;
 
     [Test]
-    public void CapturedCatchVariable_MessageRead_UsesWhatSpelling_NeverArrowMessage()
+    public void CapturedCatchVariable_MessageRead_RethrowsTheExceptionPtrAndTakesWhat_NeverArrowMessage()
     {
         var cpp = BclE2E.CompileToCppOptimized(LambdaAfterTry);
         Assert.Multiple(() =>
         {
-            Assert.That(cpp, Does.Contain("BasicLang::String(ex.what())"), cpp);
+            Assert.That(cpp, Does.Contain("std::rethrow_exception("), cpp);
+            Assert.That(cpp, Does.Contain("return e.what();"), cpp);
             Assert.That(cpp, Does.Not.Contain("ex->Message"), cpp);
+            Assert.That(cpp, Does.Not.Contain("->Message"), cpp);
         });
     }
 
-    /// <summary>The lambda's capture list init-captures the caught exception's MESSAGE into a
-    /// fresh <c>std::runtime_error</c> — never a plain <c>[=]</c> copy, which would copy the
-    /// binding's STATIC type and slice a by-value <c>const std::exception&amp;</c>.</summary>
+    /// <summary>The caught exception lives in the closure ENVIRONMENT as a <c>std::exception_ptr</c> set from
+    /// <c>std::current_exception()</c> in the handler — never copied into a fresh
+    /// <c>std::runtime_error</c> (the pre-#140 init-capture <c>[=, ex = std::runtime_error(ex.what())]</c>),
+    /// and never a plain <c>[=]</c> copy: either one copies or rebuilds the binding's STATIC type and slices a
+    /// by-value <c>const std::exception&amp;</c>, so a captured <c>Throw ex</c> would lose its dynamic type
+    /// (<c>NothingStringTextExecutionTests</c> and the CX2 pin run the behaviour).</summary>
     [Test]
-    public void LambdaCaptureList_InitCapturesCatchVariable_AsRuntimeError()
+    public void CapturedCatchVariable_LivesInTheEnvironmentAsAnExceptionPtr_NeverASlicedRuntimeError()
     {
         var cpp = BclE2E.CompileToCppOptimized(LambdaAfterTry);
-        Assert.That(cpp, Does.Contain("[=, ex = std::runtime_error(ex.what())]"), cpp);
+        Assert.Multiple(() =>
+        {
+            Assert.That(cpp, Does.Contain("std::exception_ptr ex;"), cpp);
+            Assert.That(cpp, Does.Contain("->ex = std::current_exception();"), cpp);
+            Assert.That(cpp, Does.Not.Contain("std::runtime_error(ex.what())"), cpp);
+            Assert.That(cpp, Does.Not.Contain("[=, ex"), cpp);
+        });
     }
 
     /// <summary>
