@@ -180,6 +180,28 @@ public sealed class FormDocument
     }
 
     /// <summary>
+    /// Removes <paramref name="control"/> (a control, a container with its subtree, or a tray component) from the list it
+    /// lives in — and, as VS does, every Form-level reference to it or to anything inside it goes WITH it
+    /// (<see cref="FormReferences.ForgetRemoved"/>: an <c>AcceptButton</c> naming a deleted Button is removed, never left
+    /// dangling for BL8034 to find at build).
+    ///
+    /// <para>⛔ The ONE model path for taking a control out of the document: the designer's Delete (canvas and tray) and
+    /// Cut both call it, so no route can remove the Button and keep the reference. Returns false — and changes nothing —
+    /// when the control is not in this document.</para>
+    /// </summary>
+    public bool RemoveControl(FormControl control)
+    {
+        var siblings = ListContaining(control);
+        if (siblings == null || !siblings.Remove(control))
+        {
+            return false;
+        }
+
+        FormReferences.ForgetRemoved(this, control.SelfAndDescendants().Select(c => c.Id));
+        return true;
+    }
+
+    /// <summary>
     /// True when <paramref name="id"/> is a legal control identifier: a BasicLang identifier, which
     /// permits underscores. Deliberately NOT the type-name rule — see <see cref="Name"/>.
     /// </summary>
@@ -531,14 +553,27 @@ public static class FormClipboard
             }
         }
 
+        var itemsRow = control.Definition?.Properties.FirstOrDefault(FormItems.IsCollection);
         foreach (var (name, value) in control.Properties)
         {
+            // ⛔ ADR 0020 (Part E): an item list travels as <Item> children, exactly as the document stores it — never as an
+            // attribute, where a one-item list containing a comma is indistinguishable from a legacy two-item one.
+            if (itemsRow != null && string.Equals(name, itemsRow.Name, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
             element.SetAttributeValue(name, value);
         }
 
         foreach (var (name, value) in control.UnknownAttributes)
         {
             element.SetAttributeValue(name, value);
+        }
+
+        if (itemsRow != null && control.Properties.TryGetValue(itemsRow.Name, out var items))
+        {
+            element.Add(FormItems.Elements(items));
         }
 
         foreach (var bind in control.Binds)
@@ -606,6 +641,10 @@ public static class FormClipboard
 
         control.Geometry = place == FormPlace.Positioned ? ReadGeometry(element, target, layout) : null;
 
+        var itemsRow = definition.Properties.FirstOrDefault(FormItems.IsCollection);
+        XAttribute? legacyItems = null;
+        var itemElements = new List<XElement>();
+
         foreach (var attribute in element.Attributes())
         {
             var name = attribute.Name.LocalName;
@@ -620,7 +659,17 @@ public static class FormClipboard
                 continue;
             }
 
-            if (definition.Property(name) != null)
+            var property = definition.Property(name);
+
+            // ADR 0020: an items attribute is a LEGACY payload, decided with the <Item> children below by the reader's own
+            // rule (FormItems.Read) — comma split, or Degraded beside children.
+            if (FormItems.IsCollection(property))
+            {
+                legacyItems = attribute;
+                continue;
+            }
+
+            if (property != null)
             {
                 control.Properties[name] = attribute.Value;
             }
@@ -643,6 +692,10 @@ public static class FormClipboard
                     Path = (string?)child.Attribute("Path")
                 });
             }
+            else if (itemsRow != null && child.Name.LocalName == FormItems.ElementName)
+            {
+                itemElements.Add(child);
+            }
             else if (place != FormPlace.Tray && FormControlCatalog.Find(child.Name.LocalName) != null)
             {
                 var nested = FromElement(child, target, layout);
@@ -655,6 +708,11 @@ public static class FormClipboard
             {
                 control.UnknownChildren.Add(new XElement(child));
             }
+        }
+
+        if (itemsRow != null)
+        {
+            _ = FormItems.Read(control, itemsRow, legacyItems, itemElements); // the reader's own rule; a paste has no Degraded list
         }
 
         return control;

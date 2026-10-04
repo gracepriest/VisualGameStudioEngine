@@ -342,6 +342,75 @@ public class FormAnchorDockPickerTests
         Assert.That(GeometryOf(control).Dock, Is.Null);
     }
 
+    // ==================================================================
+    // Slice 4 Task 2 — the pop-ups' one-line summaries
+    // ==================================================================
+
+    /// <summary>
+    /// Slice 4 D-4: the row shows VS's one-line summary beside a drop-down button; the box moved into the pop-up. The
+    /// summary reads the SAME parser the box does (<see cref="FormAnchor.Parse"/>), so an unset Anchor says "Top, Left"
+    /// (WinForms' default, never blank) and no edges says "None".
+    /// </summary>
+    [TestCase(null, "Top, Left")]
+    [TestCase("Top,Bottom,Left,Right", "Top, Bottom, Left, Right")]
+    [TestCase(" right , TOP", "Top, Right")]
+    [TestCase("None", "None")]
+    public void TheAnchorSummary_ReadsTheEdgesAsTheOneParserDoes(string? anchor, string expected)
+    {
+        var geometry = Pixel();
+        geometry.Anchor = anchor;
+        var (grid, _) = GridFor(geometry, FormTarget.WinForms);
+
+        Assert.That(Row(grid, "Anchor").AnchorSummary, Is.EqualTo(expected));
+    }
+
+    /// <summary>⛔ The summary follows an edge toggle: the box sits in a pop-up, and the row's text is what stays visible.</summary>
+    [Test]
+    public void TogglingAnEdge_RefreshesTheAnchorSummary()
+    {
+        var (grid, _) = GridFor(Pixel(), FormTarget.WinForms);
+        var row = Row(grid, "Anchor");
+        var raised = new List<string?>();
+        row.PropertyChanged += (_, e) => raised.Add(e.PropertyName);
+
+        row.AnchorBottom = true;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(row.AnchorSummary, Is.EqualTo("Top, Bottom, Left"));
+            Assert.That(raised, Does.Contain(nameof(FormPropertyRow.AnchorSummary)));
+        });
+    }
+
+    [TestCase(null, "None")]
+    [TestCase("Fill", "Fill")]
+    [TestCase("left", "Left")]
+    public void TheDockSummary_NamesTheRegion(string? dock, string expected)
+    {
+        var geometry = Pixel();
+        geometry.Dock = dock;
+        var (grid, _) = GridFor(geometry, FormTarget.WinForms);
+
+        Assert.That(Row(grid, "Dock").DockSummary, Is.EqualTo(expected));
+    }
+
+    [Test]
+    public void ChoosingARegion_RefreshesTheDockSummary()
+    {
+        var (grid, _) = GridFor(Pixel(), FormTarget.WinForms);
+        var row = Row(grid, "Dock");
+        var raised = new List<string?>();
+        row.PropertyChanged += (_, e) => raised.Add(e.PropertyName);
+
+        row.SetDock("Fill");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(row.DockSummary, Is.EqualTo("Fill"));
+            Assert.That(raised, Does.Contain(nameof(FormPropertyRow.DockSummary)));
+        });
+    }
+
     [Test]
     public void DockAndAnchorAreIndependent()
     {

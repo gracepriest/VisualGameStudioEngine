@@ -120,6 +120,31 @@ public class FormPropertyRowDefaultTests
     }
 
     /// <summary>
+    /// Slice 4 D-3: the Bool drop-down shows VS's <c>True</c>, and picking the item it already shows — what the combo
+    /// pushes back the moment it renders — is a NoOp. ⛔ <c>True</c> against a displayed <c>true</c> must compare as ONE
+    /// value, or every selection of a control would add <c>Enabled="true"</c> to the document.
+    /// </summary>
+    [Test]
+    public void AnAbsentEnabled_ShowsTrue_AndPickingTrue_IsANoOp()
+    {
+        var (file, grid) = Open("<Label Id=\"lbl\" X=\"0\" Y=\"0\" Width=\"10\" Height=\"10\" TabIndex=\"0\"/>", "lbl");
+        var edits = 0;
+        grid.Edited += (_, _) => edits++;
+        var enabled = Row(grid, "Enabled");
+
+        Assert.That(enabled.StringValue, Is.EqualTo("True"), "the combo's own item, exactly");
+
+        enabled.StringValue = "True";
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(edits, Is.Zero, "no Edited");
+            Assert.That(file.Model.FindById("lbl")!.Properties.ContainsKey("Enabled"), Is.False, "nothing written");
+            Assert.That(enabled.IsDefaultShown, Is.True, "still the greyed default");
+        });
+    }
+
+    /// <summary>
     /// Spec §7: "invalid typed value → refused in the editor, never written". Owned HERE (slice 2), because
     /// Commit is the one door every editor goes through. Before this a typed "maybe" in a Bool row's text
     /// was written and the row froze Degraded on the next open — the designer manufacturing its own D9 case.
@@ -421,9 +446,12 @@ public class FormPropertyRowDefaultTests
         var write = Record(enabled, () => enabled.BoolValue = false);
         var clear = Record(back, () => back.StringValue = "");
         var reset = Record(enabled, () => enabled.ResetCommand.Execute(null));
+        // Slice 4 D-3: the Bool drop-down writes through StringValue, and must still raise StringValue (what it reads).
+        var combo = Record(enabled, () => enabled.StringValue = "False");
 
         Assert.Multiple(() =>
         {
+            Assert.That(combo.Names, Is.SupersetOf(expected), "a Bool written by the drop-down");
             Assert.That(write.Names, Is.SupersetOf(expected), "a write");
             Assert.That(write.CanExecute, Is.GreaterThanOrEqualTo(1), "a write makes Reset available");
             Assert.That(clear.Names, Is.SupersetOf(expected), "a clear-reset");

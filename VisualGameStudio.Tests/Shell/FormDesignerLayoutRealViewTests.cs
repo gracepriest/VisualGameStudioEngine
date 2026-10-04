@@ -95,10 +95,14 @@ public class FormDesignerLayoutRealViewTests
 
         public void Select(string id)
         {
-            Selector.SelectedIndex = GridVm.Objects.ToList().FindIndex(o => o.Name == id);
+            var index = GridVm.Objects.ToList().FindIndex(o => o.Name == id);
+            Assert.That(index, Is.GreaterThanOrEqualTo(0), $"precondition: {id} is in the object selector");
+            var isRoot = GridVm.Objects[index].Control == null;
+            Selector.SelectedIndex = index;
             Dispatcher.UIThread.RunJobs();
             Window.UpdateLayout();
-            Assert.That(GridVm.SelectedControl?.Id, Is.EqualTo(id), $"precondition: {id} is selected");
+            // The form itself is the selector's control-less entry: selecting it leaves no control selected.
+            Assert.That(GridVm.SelectedControl?.Id, isRoot ? Is.Null : Is.EqualTo(id), $"precondition: {id} is selected");
         }
 
         public ListBoxItem Container(object item)
@@ -260,36 +264,71 @@ public class FormDesignerLayoutRealViewTests
     [AvaloniaTest]
     public void EveryRowsEditor_FitsBetweenTheDividerAndTheColumnsRightEdge()
     {
-        using var rig = Open(WinDoc, "WinForm", FormTarget.WinForms, 1200, 830);
-        rig.Select("btn");
+        // Part E: a ComboBox too, so the Items row's `…` and its "(Collection)" summary are swept as well. Part F: a
+        // PictureBox (its Image row) and the FORM itself (its Icon row), so the image picker's `…` is swept on both.
+        var doc = WinDoc.Replace("</Controls>",
+            "  <ComboBox Id=\"cmb\" X=\"16\" Y=\"96\" Width=\"121\" Height=\"23\" TabIndex=\"1\"/>\n" +
+            "    <PictureBox Id=\"pic\" X=\"16\" Y=\"136\" Width=\"50\" Height=\"50\" TabIndex=\"2\"/>\n  </Controls>");
+        Assert.That(doc, Does.Contain("Id=\"cmb\"").And.Contain("Id=\"pic\""),
+            "precondition: the sweep's form carries a ComboBox and a PictureBox");
+        using var rig = Open(doc, "WinForm", FormTarget.WinForms, 1200, 830);
         var checkedKinds = new Dictionary<string, int>();
+        var assetRows = new List<string>();
 
         Assert.Multiple(() =>
         {
-            foreach (var row in rig.GridVm.Rows.ToList())
+            foreach (var id in new[] { "btn", "cmb", "pic", "WinForm" })
             {
-                var container = rig.Container(row);
-                var divider = rig.InWindow(rig.Divider(container));
-                var cell = rig.ValuePanel(container);
-                var cellRect = rig.InWindow(cell);
-                var editors = cell.GetVisualDescendants().OfType<Control>()
-                    .Where(c => c is TextBox or ComboBox or NumericUpDown or ToggleSwitch)
-                    .Where(c => c.IsEffectivelyVisible && c.Bounds.Width > 0)
-                    .Where(c => c.FindAncestorOfType<NumericUpDown>() == null); // its inner box is its own business
-                foreach (var editor in editors)
+                rig.Select(id);
+                foreach (var row in rig.GridVm.Rows.ToList())
                 {
-                    var kind = editor.GetType().Name;
-                    checkedKinds[kind] = checkedKinds.GetValueOrDefault(kind) + 1;
-                    var r = rig.InWindow(editor);
-                    Assert.That(r.Left, Is.GreaterThanOrEqualTo(divider.Right), $"{row.Name}: {kind} starts left of the divider ({r})");
-                    Assert.That(r.Right, Is.LessThanOrEqualTo(cellRect.Right + 0.5), $"{row.Name}: {kind} overruns its column ({r})");
+                    var container = rig.Container(row);
+                    var divider = rig.InWindow(rig.Divider(container));
+                    var cell = rig.ValuePanel(container);
+                    var cellRect = rig.InWindow(cell);
+                    var editors = cell.GetVisualDescendants().OfType<Control>()
+                        .Where(c => c is TextBox or ComboBox or NumericUpDown or ToggleSwitch or FormColorDropDown
+                            or Button { Name: "FontEllipsis" or "ItemsEllipsis" or "AssetPicker" } or TextBlock { Text: "(Collection)" })
+                        .Where(c => c.IsEffectivelyVisible && c.Bounds.Width > 0)
+                        .Where(c => c.FindAncestorOfType<NumericUpDown>() == null) // its inner box is its own business
+                        .Where(c => c is not TextBlock || c.FindAncestorOfType<Button>() == null);
+                    foreach (var editor in editors)
+                    {
+                        var kind = editor switch
+                        {
+                            Button { Name: { } named } => named,
+                            TextBlock => "CollectionSummary",
+                            _ => editor.GetType().Name
+                        };
+                        checkedKinds[kind] = checkedKinds.GetValueOrDefault(kind) + 1;
+                        if (kind == "AssetPicker")
+                        {
+                            assetRows.Add($"{id}.{row.Name}");
+                        }
+
+                        var r = rig.InWindow(editor);
+                        Assert.That(r.Left, Is.GreaterThanOrEqualTo(divider.Right), $"{id}.{row.Name}: {kind} starts left of the divider ({r})");
+                        Assert.That(r.Right, Is.LessThanOrEqualTo(cellRect.Right + 0.5), $"{id}.{row.Name}: {kind} overruns its column ({r})");
+                    }
                 }
             }
         });
 
         TestContext.WriteLine($"[editors checked] {string.Join(", ", checkedKinds.Select(k => $"{k.Key}={k.Value}"))}");
-        Assert.That(checkedKinds.Keys, Is.SupersetOf(new[] { "TextBox", "ComboBox", "NumericUpDown" }),
+        // Slice 4 D-1 / D-2 / Task 7: the colour rows' swatch drop-down, the Font row's `…`, and the Items row's `…` with its
+        // "(Collection)" summary sit in the same cell.
+        Assert.That(checkedKinds.Keys, Is.SupersetOf(new[]
+            {
+                "TextBox", "ComboBox", "NumericUpDown", nameof(FormColorDropDown), "FontEllipsis", "ItemsEllipsis", "CollectionSummary",
+                "AssetPicker"
+            }),
             "precondition: the sweep saw every kind of editor that has a minimum width");
+        // Slice 4 D-5e: the picker's `…` on BOTH asset rows — the PictureBox's Image and the form's own Icon.
+        Assert.That(assetRows, Is.SupersetOf(new[] { "pic.Image", "WinForm.Icon" }),
+            "the image picker was swept on the Image row and the Icon row");
+        // Slice 4 D-3: a Bool row is the True/False drop-down (counted as a ComboBox above); the shared editor's switch is
+        // the Settings dialog's and never renders in the grid.
+        Assert.That(checkedKinds.ContainsKey(nameof(ToggleSwitch)), Is.False, "no Bool row renders as a switch");
     }
 
     // ==================================================================

@@ -130,7 +130,7 @@ async function makeDefaultTasks(): Promise<vscode.Task[]> {
             taskName === 'build' ? 'Build' : 'Run',
             'BasicLang',
             new vscode.ShellExecution(exePath, args),
-            '$basiclang'
+            ['$basiclang', '$basiclang-msbuild']
         );
         tasks.push(task);
     }
@@ -157,7 +157,7 @@ function makeTaskFromDefinition(
         definition.task,
         'BasicLang',
         new vscode.ShellExecution(exePath, args),
-        '$basiclang'
+        ['$basiclang', '$basiclang-msbuild']
     );
 }
 
@@ -361,7 +361,7 @@ async function buildProject() {
         'Build',
         'BasicLang',
         new vscode.ShellExecution(exePath, ['build', projectFile]),
-        '$basiclang'
+        ['$basiclang', '$basiclang-msbuild']
     );
 
     await vscode.tasks.executeTask(task);
@@ -401,7 +401,7 @@ async function runProject() {
         'Run',
         'BasicLang',
         new vscode.ShellExecution(exePath, ['run', projectFile]),
-        '$basiclang'
+        ['$basiclang', '$basiclang-msbuild']
     );
 
     await vscode.tasks.executeTask(task);

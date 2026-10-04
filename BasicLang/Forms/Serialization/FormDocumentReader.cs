@@ -541,6 +541,11 @@ public static class FormDocumentReader
                 filePath, Line(element), Column(element)));
         }
 
+        // ADR 0020 — the item list's two document forms, gathered here and decided once both loops have run.
+        var itemsRow = definition.Properties.FirstOrDefault(FormItems.IsCollection);
+        XAttribute? legacyItems = null;
+        var itemElements = new List<XElement>();
+
         foreach (var attribute in element.Attributes())
         {
             var name = attribute.Name.LocalName;
@@ -595,6 +600,13 @@ public static class FormDocumentReader
                 continue;
             }
 
+            // ADR 0020: a legacy Items="a, b" attribute — decided after the children are seen (below).
+            if (FormItems.IsCollection(property))
+            {
+                legacyItems = attribute;
+                continue;
+            }
+
             control.Properties[name] = attribute.Value;
 
             // D9 Degraded: the catalog knows the attribute but the value does not parse — or parses and
@@ -613,6 +625,12 @@ public static class FormDocumentReader
             if (child.Name.LocalName == "Bind")
             {
                 control.Binds.Add(ReadBind(child, control.Id, filePath, diagnostics));
+                continue;
+            }
+
+            if (itemsRow != null && child.Name.LocalName == FormItems.ElementName)
+            {
+                itemElements.Add(child);
                 continue;
             }
 
@@ -635,7 +653,30 @@ public static class FormDocumentReader
             control.UnknownChildren.Add(new XElement(child));
         }
 
+        if (itemsRow != null)
+        {
+            ReadItems(control, itemsRow, legacyItems, itemElements, degraded);
+        }
+
         return control;
+    }
+
+    /// <summary>
+    /// ADR 0020: the item list into the model's ONE encoding — <c>&lt;Item&gt;</c> text verbatim, in order, or a legacy
+    /// attribute through the OLD comma rule (<see cref="FormItems.FromLegacy"/>), so every existing file keeps its meaning.
+    ///
+    /// <para>⛔ Degraded, never coerced (<see cref="FormItems.Read"/> states the three cases): Items stays OUT of the model,
+    /// the raw content goes to <c>UnknownChildren</c> / <c>UnknownAttributes</c>.</para>
+    /// </summary>
+    private static void ReadItems(
+        FormControl control, FormPropertyDef row, XAttribute? legacy, List<XElement> items, List<DegradedProperty> degraded)
+    {
+        // ⛔ The ONE reading, shared with the clipboard (FormItems.Read); the reader adds the Degraded row.
+        if (FormItems.Read(control, row, legacy, items) is { } reason)
+        {
+            degraded.Add(new DegradedProperty(control.Id, row.Name,
+                legacy?.Value ?? string.Join(" | ", items.Select(i => i.Value)), reason));
+        }
     }
 
     /// <summary>

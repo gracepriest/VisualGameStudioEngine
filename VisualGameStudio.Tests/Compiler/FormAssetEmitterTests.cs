@@ -416,7 +416,7 @@ public class FormAssetEmitterTests
         // from the SAME document — a designer/runtime divergence across targets.
         var form = new FormDocument { Target = FormTarget.Web, Name = "F" };
         var combo = new FormControl { Kind = "ComboBox", Id = "cmb", TabIndex = 0 };
-        combo.Properties["Items"] = "Alpha, Beta, Gamma";
+        combo.Properties["Items"] = "Alpha\nBeta\nGamma"; // the MODEL's encoding (ADR 0020): one item per line
         combo.Properties["Text"] = "Pick one";
         form.Controls.Add(combo);
 
@@ -435,6 +435,22 @@ public class FormAssetEmitterTests
         });
     }
 
+    /// <summary>
+    /// Part E: the LEGACY document shape, loaded through the READER (not set on the model) — <c>Items="Alpha, Beta"</c>
+    /// still becomes one option per comma item on the page.
+    /// </summary>
+    [Test]
+    public void ALegacyItemsAttribute_LoadedThroughTheReader_BecomesOptionChildren()
+    {
+        var file = BasicLang.Forms.Serialization.FormDocumentReader.Read("F.blwebform",
+            "<WebForm Name=\"F\" Version=\"1\"><Controls><ComboBox Id=\"cmb\" Col=\"0\" Row=\"0\" TabIndex=\"0\" Items=\"Alpha, Beta\"/></Controls></WebForm>");
+        Assert.That(file.IsRefused, Is.False);
+
+        var html = FormAssetEmitter.Html(file.Model, "App.js");
+
+        Assert.That(html, Does.Contain("<option>Alpha</option>").And.Contain("<option>Beta</option>"));
+    }
+
     [Test]
     public void ASelectsSelectedIndex_MarksThatOption()
     {
@@ -443,7 +459,7 @@ public class FormAssetEmitterTests
         // desktop opened on Beta and the web opened on Alpha — from the same document.
         var form = new FormDocument { Target = FormTarget.Web, Name = "F" };
         var combo = new FormControl { Kind = "ComboBox", Id = "cmb", TabIndex = 0 };
-        combo.Properties["Items"] = "Alpha, Beta, Gamma";
+        combo.Properties["Items"] = "Alpha\nBeta\nGamma"; // the MODEL's encoding (ADR 0020): one item per line
         combo.Properties["SelectedIndex"] = "1";
         form.Controls.Add(combo);
 
@@ -464,7 +480,7 @@ public class FormAssetEmitterTests
         // user can produce by shortening Items. Neither may mark an arbitrary option.
         var form = new FormDocument { Target = FormTarget.Web, Name = "F" };
         var combo = new FormControl { Kind = "ComboBox", Id = "cmb", TabIndex = 0 };
-        combo.Properties["Items"] = "Alpha, Beta";
+        combo.Properties["Items"] = "Alpha\nBeta"; // the MODEL's encoding (ADR 0020)
         combo.Properties["SelectedIndex"] = "7";
         form.Controls.Add(combo);
 
@@ -484,7 +500,7 @@ public class FormAssetEmitterTests
     {
         var form = new FormDocument { Target = FormTarget.Web, Name = "F" };
         var combo = new FormControl { Kind = "ComboBox", Id = "cmb", TabIndex = 0 };
-        combo.Properties["Items"] = "Alpha, Beta";
+        combo.Properties["Items"] = "Alpha\nBeta"; // the MODEL's encoding (ADR 0020)
         combo.Properties["SelectedIndex"] = raw;
         form.Controls.Add(combo);
 
@@ -559,7 +575,7 @@ public class FormAssetEmitterTests
         // Space is what a person types beside a number; TryParseInt accepts it, so both targets do.
         var form = new FormDocument { Target = FormTarget.Web, Name = "F" };
         var combo = new FormControl { Kind = "ComboBox", Id = "cmb", TabIndex = 0 };
-        combo.Properties["Items"] = "Alpha, Beta";
+        combo.Properties["Items"] = "Alpha\nBeta"; // the MODEL's encoding (ADR 0020)
         combo.Properties["SelectedIndex"] = " 1 ";
         form.Controls.Add(combo);
 

@@ -532,17 +532,29 @@ public static class FormDocumentWriter
             }
         }
 
+        var definition = control.Definition;
         foreach (var (name, value) in control.Properties)
         {
+            // ⛔ An item list is never an attribute any more (ADR 0020): ApplyItems below owns it.
+            if (FormItems.IsCollection(definition?.Property(name)))
+            {
+                continue;
+            }
+
             SetAttributeIfChanged(element, name, value);
         }
 
         // A catalog property the model dropped must leave the document too.
-        var definition = control.Definition;
         if (definition != null)
         {
             foreach (var property in definition.Properties)
             {
+                if (FormItems.IsCollection(property))
+                {
+                    ApplyItems(element, control, property);
+                    continue;
+                }
+
                 if (!control.Properties.ContainsKey(property.Name) &&
                     element.Attribute(property.Name) != null)
                 {
@@ -557,6 +569,112 @@ public static class FormDocumentWriter
         if (place != FormPlace.Tray)
         {
             ApplyControlList(element, control.Children);
+        }
+    }
+
+    /// <summary>
+    /// The item list (ADR 0020), patched in place.
+    ///
+    /// <para>⛔ Left ALONE when the document already says what the model says — a legacy attribute whose comma split equals
+    /// the model's list, or <c>&lt;Item&gt;</c> children that READ (through <see cref="FormItems.Split"/>, blanks dropped)
+    /// as the model's list. The compare is list-as-read, never element counts, so a document holding <c>&lt;Item/&gt;</c>
+    /// stays byte-identical on a no-op save. Otherwise the attribute goes and the <c>&lt;Item&gt;</c> run is rewritten,
+    /// first among the element's children. Absent from the model removes both forms.</para>
+    ///
+    /// <para>⛔ A Degraded list (its raw content in UnknownChildren / UnknownAttributes) is never touched.</para>
+    /// </summary>
+    private static void ApplyItems(XElement element, FormControl control, FormPropertyDef row)
+    {
+        if (control.UnknownAttributes.ContainsKey(row.Name) ||
+            control.UnknownChildren.Any(e => e.Name.LocalName == FormItems.ElementName))
+        {
+            return;
+        }
+
+        var attribute = element.Attribute(row.Name);
+        var children = element.Elements(FormItems.ElementName).ToList();
+
+        if (!control.Properties.TryGetValue(row.Name, out var value))
+        {
+            attribute?.Remove();
+            children.ForEach(RemoveWithLeadingWhitespace);
+            DropWhitespaceOnlyBody(element);
+            return;
+        }
+
+        var wanted = FormItems.Split(value);
+        if (attribute != null && children.Count == 0 && FormItems.FromLegacy(attribute.Value).SequenceEqual(wanted))
+        {
+            return;
+        }
+
+        if (attribute == null && FormItems.Split(FormItems.Join(children.Select(c => c.Value))).SequenceEqual(wanted))
+        {
+            return;
+        }
+
+        attribute?.Remove();
+        children.ForEach(RemoveWithLeadingWhitespace);
+        DropWhitespaceOnlyBody(element);
+
+        // ⚠ The document's OWN indentation, never a hard-coded step: the element's line indent, and one step deeper — the
+        // step measured from the element to its parent (a tab-indented file stays tab-indented).
+        var indent = LineIndent(element);
+        var step = element.Parent is { } parent && indent.StartsWith(LineIndent(parent), StringComparison.Ordinal) &&
+                   indent.Length > LineIndent(parent).Length
+            ? indent[LineIndent(parent).Length..]
+            : "  ";
+
+        var first = element.Elements().FirstOrDefault();
+        if (first != null)
+        {
+            // Other children remain (a <Bind>, nested controls): the run goes before the first of them, each item on its
+            // own line at THAT child's indent, and the child keeps its own line and indent.
+            var onItsOwnLine = first.PreviousNode is XText { Value: var lead } && lead.Contains('\n');
+            var childIndent = onItsOwnLine ? LineIndent(first) : indent + step;
+            if (!onItsOwnLine && wanted.Count > 0)
+            {
+                first.AddBeforeSelf(new XText("\n" + childIndent)); // the run starts on its own line too
+            }
+
+            // The whitespace before `first` now leads the first ITEM; each item is followed by a fresh line at the child
+            // indent, so `first` ends up on its own line exactly as it was.
+            foreach (var item in wanted)
+            {
+                first.AddBeforeSelf(new XElement(FormItems.ElementName, item), new XText("\n" + childIndent));
+            }
+
+            return;
+        }
+
+        // No other children (the element is self-closing, or held only items): one item per line under it.
+        foreach (var item in wanted)
+        {
+            element.Add(new XText("\n" + indent + step), new XElement(FormItems.ElementName, item));
+        }
+
+        if (wanted.Count > 0)
+        {
+            element.Add(new XText("\n" + indent));
+        }
+    }
+
+    /// <summary>The whitespace an element's line starts with (what follows the last newline before it); "" when none.</summary>
+    private static string LineIndent(XElement element) =>
+        element.PreviousNode is XText { Value: var text } && text.LastIndexOf('\n') is var nl and >= 0
+            ? text[(nl + 1)..]
+            : "";
+
+    /// <summary>
+    /// An element left holding only whitespace (its items removed) is emptied, so no blank line is left behind — and a
+    /// re-edit cannot grow one per save.
+    /// </summary>
+    private static void DropWhitespaceOnlyBody(XElement element)
+    {
+        if (!element.HasElements && element.Nodes().All(n => n is XText t && string.IsNullOrWhiteSpace(t.Value)) &&
+            element.Nodes().Any())
+        {
+            element.RemoveNodes();
         }
     }
 
@@ -690,7 +808,8 @@ public static class FormDocumentWriter
         {
             foreach (var property in definition.Properties)
             {
-                if (control.Properties.TryGetValue(property.Name, out var value))
+                // ⛔ ADR 0020: an item list is written as <Item> children below, never as the attribute.
+                if (control.Properties.TryGetValue(property.Name, out var value) && !FormItems.IsCollection(property))
                 {
                     element.SetAttributeValue(property.Name, value);
                 }
@@ -700,6 +819,16 @@ public static class FormDocumentWriter
         foreach (var (name, value) in control.UnknownAttributes)
         {
             element.SetAttributeValue(name, value);
+        }
+
+        // Items first among the children, before <Bind> and nested controls (ADR 0020). Blank items are not written.
+        var itemsRow = definition?.Properties.FirstOrDefault(FormItems.IsCollection);
+        if (itemsRow != null && control.Properties.TryGetValue(itemsRow.Name, out var items))
+        {
+            foreach (var item in FormItems.Split(items))
+            {
+                element.Add(new XElement(FormItems.ElementName, item));
+            }
         }
 
         foreach (var bind in control.Binds)

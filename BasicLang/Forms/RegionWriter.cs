@@ -791,7 +791,7 @@ public static class RegionWriter
         // ⛔ A Degraded root value never reaches generated source — the control rule, at the root. DescribeRefusal is
         // reached only for a value truly refused (it throws otherwise). Reachable since slice 3's Properties-stored rows
         // (FormRootTests.ADegradedRootProperty_IsFrozen_Preserved_AndNeverEmitted).
-        if (!row.Accepts(value, FormTarget.WinForms) && !row.IsSourceForm(value))
+        if (!row.IsWritableOn(value, FormTarget.WinForms))
         {
             diagnostics.Add(new DesignDiagnostic(
                 DesignCodes.DegradedProperty,
@@ -806,7 +806,9 @@ public static class RegionWriter
 
         // ⛔ A reference must name a control of a kind the row allows (BL8034): csc rejects `Me.AcceptButton = lblTitle`
         // (CS0029) and `= btnGone` (CS0103), and BasicLang types both as Object and says nothing.
-        if (row.Type == FormPropertyType.Reference && !NamesAnAllowedControl(form, row, value))
+        // ⛔ FormReferences.IsAllowed is the SAME list the property grid's drop-down offers (slice 4 D-7) — one function,
+        // so the grid can never offer an Id this line then refuses.
+        if (row.Type == FormPropertyType.Reference && !FormReferences.IsAllowed(form, row, value))
         {
             var kinds = string.Join(" or ", row.ReferenceKinds ?? Array.Empty<string>());
             diagnostics.Add(new DesignDiagnostic(
@@ -820,11 +822,6 @@ public static class RegionWriter
 
         body.Append($"{inner}Me.{row.Name} = {Literal(row, value)}").Append(newline);
     }
-
-    /// <summary>Whether a reference names a control (or component) of this form whose kind its row allows.</summary>
-    private static bool NamesAnAllowedControl(FormDocument form, FormPropertyDef row, string id) =>
-        form.FindById(id) is { } target &&
-        (row.ReferenceKinds ?? Array.Empty<string>()).Contains(target.Kind, StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// Emits a run of siblings: each control's initialization in DOCUMENT order, then — on WinForms —
@@ -1065,7 +1062,9 @@ public static class RegionWriter
             // ⛔ DescribeRefusal is reached ONLY for a value that is truly Degraded: the
             // IsSourceForm test above short-circuits first, and DescribeRefusal throws for a value
             // the target accepts.
-            if (property != null && !property.Accepts(value, FormTarget.WinForms) && !property.IsSourceForm(value))
+            // ⛔ IsWritableOn, not "!Accepts && !IsSourceForm": a source form must obey the target's refusals too (Part E —
+            // Color.Transparent on a TextBox is a green build and an ArgumentException at run time).
+            if (property != null && !property.IsWritableOn(value, FormTarget.WinForms))
             {
                 diagnostics.Add(new DesignDiagnostic(
                     DesignCodes.DegradedProperty,
@@ -1316,6 +1315,9 @@ public static class RegionWriter
             // source. Both hide a broken invariant as a broken build, so this names the invariant.
             FormPropertyType.Int or FormPropertyType.Size or FormPropertyType.Font or FormPropertyType.Padding
                 or FormPropertyType.Cursor or FormPropertyType.Fraction or FormPropertyType.Reference
+                // ⛔ Slice 4 D-5: an Image/Icon falling through would be QUOTED — `pic.Image = "x.png"`, CS0029 for a
+                // System.Drawing.Image property, BasicLang silent.
+                or FormPropertyType.Image or FormPropertyType.Icon
                 => throw new InvalidOperationException(
                 $"'{property.Name}' = '{value}' is not a parsable {property.Type} and reached the region " +
                 "writer; a Degraded value must be skipped before Literal is called."),

@@ -41,10 +41,11 @@ The same executable provides the language server (`--lsp`), the debug adapter (`
 
 ## Tasks and Problem Matchers
 
-The extension contributes a `basiclang` task type (tasks `build` and `run`) and two problem matchers:
+The extension contributes a `basiclang` task type (tasks `build` and `run`) and three problem matchers:
 
 * `$basiclang` - matches errors from `BasicLang.exe build <project>` output. The source file is taken from the compiler's `Compiling <file>...` line, so errors are attributed to the right file with line and column.
 * `$basiclang-compile` - matches errors from compiling a single file directly (`BasicLang.exe <file> --target=...`), using the absolute path from the `Compiling: <path>` line.
+* `$basiclang-msbuild` - matches diagnostics printed in the MSBuild shape `path(line,col): warning BL8036: ...` (today the form designer's missing-image warning, which points at the form document rather than a `.bas` file). The built-in `build`/`run` tasks use it alongside `$basiclang`.
 
 Known limitation: the compiler does not print a file, line, or column for some semantic errors in `build` mode (e.g. `Error: Undefined identifier 'x'`); those errors appear in the terminal output but cannot be placed in the Problems panel.
 

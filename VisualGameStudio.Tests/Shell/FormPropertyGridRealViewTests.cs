@@ -38,7 +38,7 @@ namespace VisualGameStudio.Tests.Shell;
 /// a double-click to the headless pipeline.</para>
 /// </summary>
 [TestFixture]
-public class FormPropertyGridRealViewTests
+public partial class FormPropertyGridRealViewTests
 {
     private const string Dir = "/proj/";
 
@@ -174,19 +174,23 @@ public class FormPropertyGridRealViewTests
         public void Dispose() => Window.Close();
     }
 
-    /// <summary>Opens the real view on <see cref="Doc"/>, with the scaffolded GridForm.bas beside it.</summary>
-    private static Rig Open(double width = 1000, double height = 700)
+    /// <summary>
+    /// Opens the real view on <see cref="Doc"/> (or <paramref name="doc"/>, a GridForm of its own), with the scaffolded
+    /// GridForm.bas beside it.
+    /// </summary>
+    private static Rig Open(double width = 1000, double height = 700, string doc = Doc, FormTarget target = FormTarget.WinForms,
+        string dir = Dir)
     {
-        var scaffold = FormScaffolder.Create("GridForm", FormTarget.WinForms);
+        var scaffold = FormScaffolder.Create("GridForm", target);
         var files = new Files();
-        files.Contents[Dir + scaffold.DocumentFileName] = Doc;
-        files.Contents[Dir + scaffold.CodeFileName] = scaffold.CodeText;
+        files.Contents[dir + scaffold.DocumentFileName] = doc;
+        files.Contents[dir + scaffold.CodeFileName] = scaffold.CodeText;
 
         var vm = new CodeEditorDocumentViewModel(files.Service, new Mock<IEventAggregator>().Object)
         {
-            FilePath = Dir + scaffold.DocumentFileName
+            FilePath = dir + scaffold.DocumentFileName
         };
-        vm.SetContent(Doc);
+        vm.SetContent(doc);
         Assert.That(vm.EnterDesignModeForFormDocument(), Is.True, "precondition: the designer must open");
 
         var view = new CodeEditorDocumentView { DataContext = vm };
@@ -218,6 +222,50 @@ public class FormPropertyGridRealViewTests
         {
             window.Close(); // ⛔ never leave a window alive with its bindings live
             throw;
+        }
+    }
+
+    /// <summary>The row's one VISIBLE ComboBox — a Bool, Enum or Cursor row's typed editor.</summary>
+    private static ComboBox VisibleCombo(Rig rig, FormPropertyRow row) =>
+        rig.Container(row).GetVisualDescendants().OfType<ComboBox>().Single(c => c.IsEffectivelyVisible);
+
+    /// <summary>
+    /// Picks <paramref name="item"/> through the real ComboBox with real input: a real click opens it, and a real click
+    /// lands on the item in the drop-down's own top level, in ITS coordinates — the context-menu test's pattern.
+    ///
+    /// <para>⛔ This works for the SECOND drop-down in a window only because <c>FormPropertyGridView</c> refuses a
+    /// bring-into-view request that comes out of a popup (slice 4 Task 1 review). The chain it cuts, measured: opening a
+    /// ComboBox runs <c>PopupOpened → TryFocusSelectedItem → ComboBoxItem.BringIntoView()</c>; the request bubbles out of
+    /// the popup to the property list's <c>ScrollContentPresenter.BringDescendantIntoView</c>; headless popups are an
+    /// <c>OverlayPopupHost</c> in the SAME window, so the transform succeeds and the list scrolls (27→0, 209→0); the
+    /// <c>VirtualizingStackPanel</c> then recycles every container, which detaches the combo and closes it.</para>
+    /// </summary>
+    private static void PickInCombo(Rig rig, ComboBox combo, string item)
+    {
+        var row = (FormPropertyRow)combo.DataContext!;
+        rig.Click(combo);
+        rig.Window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+        // Re-read through the row: a recycled container would hold a different (closed) combo.
+        combo = VisibleCombo(rig, row);
+        try
+        {
+            Assert.That(combo.IsDropDownOpen, Is.True, $"{row.Name}: the real click opened the drop-down");
+            var index = combo.Items.Cast<object?>().ToList().IndexOf(item);
+            Assert.That(index, Is.GreaterThanOrEqualTo(0), $"'{item}' is one of the combo's items");
+            var container = combo.ContainerFromIndex(index) as ComboBoxItem
+                            ?? throw new InvalidOperationException($"'{item}' has no realised item in the open drop-down");
+            var popupTop = TopLevel.GetTopLevel(container) ?? throw new InvalidOperationException("the item has no top level");
+            var at = container.TranslatePoint(new Point(container.Bounds.Width / 2, container.Bounds.Height / 2), popupTop)!.Value;
+            popupTop.MouseDown(at, MouseButton.Left);
+            popupTop.MouseUp(at, MouseButton.Left);
+            Dispatcher.UIThread.RunJobs();
+            rig.Window.UpdateLayout();
+        }
+        finally
+        {
+            combo.IsDropDownOpen = false;
+            Dispatcher.UIThread.RunJobs();
         }
     }
 
@@ -587,7 +635,8 @@ public class FormPropertyGridRealViewTests
     // ==================================================================
 
     /// <summary>
-    /// A real click on a Font's +/- box expands it in the real list; a real click on the Bold part's switch writes the
+    /// A real click on a Font's +/- box expands it in the real list; picking True in the Bold part's drop-down — a real
+    /// click to open it and a real click on the item in its popup, the first drop-down after the expand — writes the
     /// WHOLE font into the file (one value — the fan-in rule), starting from the Form's default for an ambient Font; the
     /// box then collapses it again. At two window sizes (the grid is narrower in the first).
     /// </summary>
@@ -609,9 +658,10 @@ public class FormPropertyGridRealViewTests
             var textIndent = rig.NameCell(rig.Row("Text")).Margin.Left;
             Assert.That(rig.NameCell(bold).Margin.Left, Is.GreaterThan(textIndent), $"{w}x{h}: a part is indented under its parent");
 
-            // ⚠ Fetched right before the click: Container() scrolls the real list, which recycles containers.
-            var toggle = rig.Container(bold).GetVisualDescendants().OfType<ToggleSwitch>().Single(t => t.IsEffectivelyVisible);
-            rig.Click(toggle);
+            // ⚠ Fetched right before the pick: Container() scrolls the real list, which recycles containers.
+            // Slice 4 D-3: the Bold part is VS's True/False drop-down, picked by real clicks (PickInCombo: open, then the
+            // item in the popup). The first drop-down after a Font expand is one the popup bring-into-view guard rescues.
+            PickInCombo(rig, VisibleCombo(rig, bold), "True");
 
             Assert.Multiple(() =>
             {
@@ -690,16 +740,617 @@ public class FormPropertyGridRealViewTests
         using (rig.Window.CaptureRenderedFrame()) { }
 
         var enabled = rig.Row("Enabled");
-        var toggle = rig.Container(enabled).GetVisualDescendants().OfType<ToggleSwitch>().Single();
+        // Slice 4 D-3: a Bool row is the True/False drop-down, and no switch renders for it.
+        var combo = VisibleCombo(rig, enabled);
 
         Assert.Multiple(() =>
         {
-            Assert.That(toggle.IsChecked, Is.True, "an unset Enabled is enabled — it used to render off");
+            Assert.That(combo.SelectedItem, Is.EqualTo("True"), "an unset Enabled is enabled — it used to render off");
+            Assert.That(rig.Container(enabled).GetVisualDescendants().OfType<ToggleSwitch>().Any(t => t.IsEffectivelyVisible),
+                Is.False, "the Settings dialog's switch is not this row's editor");
             Assert.That(rig.ValuePanel(enabled).Opacity, Is.EqualTo(0.6).Within(0.01), "greyed: the default, not a value");
             Assert.That(rig.NameCell(enabled).FontWeight, Is.Not.EqualTo(FontWeight.Bold));
             Assert.That(rig.NameCell(rig.Row("Text")).FontWeight, Is.EqualTo(FontWeight.Bold), "Text=\"Hello\" differs from the default");
             Assert.That(rig.ValuePanel(rig.Row("Text")).Opacity, Is.EqualTo(1.0));
         });
+    }
+
+    /// <summary>
+    /// Slice 4 D-3: a real double-click on a Bool row's NAME cell toggles it, as in VS — <c>Enabled="false"</c> becomes
+    /// <c>true</c> (Judge's Write, in the document's word), and a second double-click makes it <c>false</c> again. At two
+    /// window sizes.
+    /// </summary>
+    [AvaloniaTest]
+    public void DoubleClickingABoolRow_TogglesIt_AtTwoSizes()
+    {
+        const string disabled = """
+            <Form Name="GridForm" Version="1" Width="640" Height="480" Text="GridForm">
+              <Controls>
+                <Label Id="lbl" X="16" Y="16" Width="100" Height="23" TabIndex="0" Text="Hello" Enabled="false"/>
+                <Button Id="btn" X="16" Y="56" Width="75" Height="23" TabIndex="1"/>
+              </Controls>
+              <Components>
+                <Timer Id="tmr"/>
+              </Components>
+              <Resources/>
+            </Form>
+            """;
+
+        foreach (var (w, h) in TwoZooms)
+        {
+            using var rig = Open(w, h, disabled);
+            SelectOnCanvas(rig, "lbl");
+            var edits = 0;
+            rig.GridVm.Edited += (_, _) => edits++;
+            var enabled = rig.Row("Enabled");
+
+            // Two presses at ONE point are a double-click to the headless pipeline.
+            void DoubleClick(double dx)
+            {
+                var at = rig.CentreInWindow(rig.NameCell(enabled), dx);
+                for (var i = 0; i < 2; i++)
+                {
+                    rig.Window.MouseDown(at, MouseButton.Left);
+                    rig.Window.MouseUp(at, MouseButton.Left);
+                }
+
+                Dispatcher.UIThread.RunJobs();
+                rig.Window.UpdateLayout();
+            }
+
+            DoubleClick(-10);
+            Assert.Multiple(() =>
+            {
+                Assert.That(rig.Control("lbl").Properties["Enabled"], Is.EqualTo("true"), $"{w}x{h}: false → true");
+                Assert.That(rig.Vm.Text, Does.Contain("Enabled=\"true\""), $"{w}x{h}: the .blform text");
+                Assert.That(VisibleCombo(rig, enabled).SelectedItem, Is.EqualTo("True"), $"{w}x{h}: the drop-down follows");
+                Assert.That(edits, Is.EqualTo(1), $"{w}x{h}: ONE edit for one double-click");
+            });
+
+            // ⚠ OFFSET: a third press at the same point would be a triple-click, not a new double-click.
+            DoubleClick(10);
+            Assert.Multiple(() =>
+            {
+                Assert.That(rig.Control("lbl").Properties["Enabled"], Is.EqualTo("false"), $"{w}x{h}: and back");
+                Assert.That(rig.Vm.Text, Does.Contain("Enabled=\"false\""), $"{w}x{h}: the .blform text");
+                Assert.That(edits, Is.EqualTo(2), $"{w}x{h}: one more edit");
+            });
+        }
+    }
+
+    /// <summary>
+    /// ⛔ Slice 4 Task 1 review: TWO drop-downs in one window, each picked by real clicks in its real popup — a Bool
+    /// (Enabled) and then the pre-existing Enum (TextAlign). Before the grid refused popup bring-into-view requests, the
+    /// SECOND one opened, scrolled the list from inside its popup, had its container recycled and closed again (see
+    /// <see cref="PickInCombo"/>). At two window sizes.
+    /// </summary>
+    [AvaloniaTest]
+    public void TwoDropDownsInOneWindow_BothPickThroughTheirRealPopups_AtTwoSizes()
+    {
+        foreach (var (w, h) in TwoZooms)
+        {
+            using var rig = Open(w, h);
+            SelectOnCanvas(rig, "lbl");
+
+            PickInCombo(rig, VisibleCombo(rig, rig.Row("Enabled")), "False");
+            PickInCombo(rig, VisibleCombo(rig, rig.Row("TextAlign")), "TopRight");
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(rig.Control("lbl").Properties["Enabled"], Is.EqualTo("false"), $"{w}x{h}: the first pick");
+                Assert.That(rig.Control("lbl").Properties["TextAlign"], Is.EqualTo("TopRight"), $"{w}x{h}: the SECOND pick");
+                Assert.That(rig.Vm.Text, Does.Contain("Enabled=\"false\"").And.Contain("TextAlign=\"TopRight\""),
+                    $"{w}x{h}: the .blform text");
+            });
+        }
+    }
+
+    // ==================================================================
+    // Slice 4 Task 2 — Anchor and Dock as drop-down pop-ups (D-4)
+    // ==================================================================
+
+    /// <summary>The row's drop-down button (by its x:Name), fetched through the row's container — never a stale one.</summary>
+    private static Button DropDownButton(Rig rig, FormPropertyRow row, string name) =>
+        rig.Container(row).GetVisualDescendants().OfType<Button>().Single(b => b.Name == name && b.IsEffectivelyVisible);
+
+    /// <summary>
+    /// Opens a row's pop-up with a REAL click on its drop-down button, then clicks the toggle whose tooltip is
+    /// <paramref name="tip"/> with a real click in the pop-up's own top level, in ITS coordinates (the context-menu
+    /// pattern). Returns the flyout, still open, for the caller to assert on and close.
+    /// </summary>
+    private static Flyout OpenAndClick(Rig rig, FormPropertyRow row, string dropDown, string tip)
+    {
+        var button = DropDownButton(rig, row, dropDown);
+        // ⛔ Measured: docked at the value cell's RIGHT edge, the button sat under the list's overlay scrollbar, and a
+        // real click hit PART_LineDownButton. Asserted, so a later layout cannot put it back there silently.
+        var hit = rig.Window.InputHitTest(rig.CentreInWindow(button)) as Visual;
+        Assert.That(hit?.GetSelfAndVisualAncestors().Contains(button), Is.True,
+            $"{row.Name}: a click at the drop-down's centre reaches it (hit {hit?.GetType().Name})");
+        rig.Click(button);
+        rig.Window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        var flyout = (Flyout?)button.Flyout ?? throw new InvalidOperationException($"{dropDown} has no Flyout");
+        Assert.That(flyout.IsOpen, Is.True, $"{row.Name}: the real click opened the pop-up");
+        var content = flyout.Content as Control ?? throw new InvalidOperationException("the flyout has no content");
+        var target = content.GetSelfAndVisualDescendants().OfType<Control>()
+            .Single(c => ToolTip.GetTip(c) as string == tip);
+        Assert.That(target.DataContext, Is.SameAs(row), $"{row.Name}: the pop-up's box is bound to its row");
+
+        var popupTop = TopLevel.GetTopLevel(target) ?? throw new InvalidOperationException("the edge has no top level");
+        var at = target.TranslatePoint(new Point(target.Bounds.Width / 2, target.Bounds.Height / 2), popupTop)!.Value;
+        popupTop.MouseDown(at, MouseButton.Left);
+        popupTop.MouseUp(at, MouseButton.Left);
+        Dispatcher.UIThread.RunJobs();
+        rig.Window.UpdateLayout();
+        return flyout;
+    }
+
+    /// <summary>
+    /// The row's one-line summary — the visible TextBlock showing <paramref name="text"/> in its value cell. ⚠ Never a
+    /// button's caption: before the pop-ups, Dock's inline <c>None</c> BUTTON showed the same word as the summary does.
+    /// </summary>
+    private static TextBlock? SummaryText(Rig rig, FormPropertyRow row, string text) =>
+        rig.ValuePanel(row).GetVisualDescendants().OfType<TextBlock>()
+            .FirstOrDefault(t => t.Text == text && t.IsEffectivelyVisible && t.FindAncestorOfType<Button>() == null);
+
+    /// <summary>
+    /// Slice 4 D-4: the Anchor row is a one-line summary (<c>Top, Left</c>) plus a drop-down button; a real click opens
+    /// the box in a pop-up, a real click on its bottom edge writes <c>Anchor="Top,Bottom,Left"</c> into the FILE, and the
+    /// row's summary follows. The row is no longer the box's 46px tall. At two window sizes.
+    /// </summary>
+    [AvaloniaTest]
+    public void OpeningTheAnchorPopUp_AndClickingTheBottomEdge_WritesAnchor_AtTwoSizes()
+    {
+        foreach (var (w, h) in TwoZooms)
+        {
+            using var rig = Open(w, h);
+            SelectOnCanvas(rig, "btn");
+            var anchor = rig.Row("Anchor");
+            Assert.That(SummaryText(rig, anchor, "Top, Left"), Is.Not.Null, $"{w}x{h}: the unset Anchor's summary");
+            Assert.That(rig.Container(anchor).Bounds.Height, Is.LessThan(40), $"{w}x{h}: the row is one line, not the box");
+
+            var flyout = OpenAndClick(rig, anchor, "AnchorDropDown", "Anchor to the bottom edge");
+            try
+            {
+                Assert.Multiple(() =>
+                {
+                    Assert.That(((PixelGeometry)rig.Control("btn").Geometry!).Anchor, Is.EqualTo("Top,Bottom,Left"), $"{w}x{h}: the model");
+                    Assert.That(rig.Vm.Text, Does.Contain("Anchor=\"Top,Bottom,Left\""), $"{w}x{h}: the .blform text");
+                    Assert.That(SummaryText(rig, anchor, "Top, Bottom, Left"), Is.Not.Null, $"{w}x{h}: the summary followed");
+                    // Anchor is a SET of edges (VS keeps its pop-up open for the next one); Dock is one region and closes.
+                    Assert.That(flyout.IsOpen, Is.True, $"{w}x{h}: the Anchor pop-up stays open for the next edge");
+                });
+            }
+            finally
+            {
+                flyout.Hide();
+                Dispatcher.UIThread.RunJobs();
+            }
+        }
+    }
+
+    /// <summary>The same for Dock: a real click on the pop-up's centre writes <c>Dock="Fill"</c>. At two window sizes.</summary>
+    [AvaloniaTest]
+    public void OpeningTheDockPopUp_AndClickingFill_WritesDock_AtTwoSizes()
+    {
+        foreach (var (w, h) in TwoZooms)
+        {
+            using var rig = Open(w, h);
+            SelectOnCanvas(rig, "btn");
+            var dock = rig.Row("Dock");
+            Assert.That(SummaryText(rig, dock, "None"), Is.Not.Null, $"{w}x{h}: the unset Dock's summary");
+            Assert.That(rig.Container(dock).Bounds.Height, Is.LessThan(40), $"{w}x{h}: the row is one line, not the box");
+
+            var flyout = OpenAndClick(rig, dock, "DockDropDown", "Fill the container");
+            try
+            {
+                Assert.Multiple(() =>
+                {
+                    Assert.That(((PixelGeometry)rig.Control("btn").Geometry!).Dock, Is.EqualTo("Fill"), $"{w}x{h}: the model");
+                    Assert.That(rig.Vm.Text, Does.Contain("Dock=\"Fill\""), $"{w}x{h}: the .blform text");
+                    Assert.That(SummaryText(rig, dock, "Fill"), Is.Not.Null, $"{w}x{h}: the summary followed");
+                    Assert.That(flyout.IsOpen, Is.False, $"{w}x{h}: a Dock pick closes the pop-up, as VS's does");
+                });
+            }
+            finally
+            {
+                flyout.Hide();
+                Dispatcher.UIThread.RunJobs();
+            }
+        }
+    }
+
+    /// <summary>A real key press and release through the window's own input pipeline (to whatever holds focus).</summary>
+    private static void Press(Rig rig, Key key)
+    {
+        rig.Window.KeyPress(key, RawInputModifiers.None);
+        rig.Window.KeyRelease(key, RawInputModifiers.None);
+        Dispatcher.UIThread.RunJobs();
+        rig.Window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+    }
+
+    private static IInputElement? Focused(Visual anyInWindow) =>
+        TopLevel.GetTopLevel(anyInWindow)?.FocusManager?.GetFocusedElement();
+
+    /// <summary>
+    /// Slice 4 review follow-up: the Anchor pop-up from the KEYBOARD alone. Focus on the drop-down button, Enter opens the
+    /// pop-up and focus moves INTO it, Space flips the focused edge (written into the file), Esc closes it, and focus is
+    /// back on the button — the round trip a keyboard user needs, since the box is no longer inline. Both sizes.
+    /// </summary>
+    [AvaloniaTest]
+    public void TheAnchorPopUp_WorksFromTheKeyboard_EnterSpaceEsc_AtTwoSizes()
+    {
+        foreach (var (w, h) in TwoZooms)
+        {
+            using var rig = Open(w, h);
+            SelectOnCanvas(rig, "btn");
+            var anchor = rig.Row("Anchor");
+            var button = DropDownButton(rig, anchor, "AnchorDropDown");
+            var flyout = (Flyout)button.Flyout!;
+            try
+            {
+                button.Focus(NavigationMethod.Tab);
+                Dispatcher.UIThread.RunJobs();
+                Assert.That(Focused(button), Is.SameAs(button), $"{w}x{h}: precondition: the drop-down has focus");
+
+                Press(rig, Key.Enter);
+                Assert.That(flyout.IsOpen, Is.True, $"{w}x{h}: Enter opened the pop-up");
+                var content = (Control)flyout.Content!;
+                var inside = Focused(button) as ToggleButton;
+                Assert.That(inside != null && content.GetSelfAndVisualDescendants().Contains(inside), Is.True,
+                    $"{w}x{h}: focus moved INTO the pop-up (focused: {Focused(button)?.GetType().Name})");
+
+                var before = rig.Vm.Text;
+                var wasChecked = inside!.IsChecked == true;
+                Press(rig, Key.Space);
+                Assert.Multiple(() =>
+                {
+                    Assert.That(inside.IsChecked == true, Is.Not.EqualTo(wasChecked), $"{w}x{h}: Space flipped the focused edge");
+                    Assert.That(rig.Vm.Text, Is.Not.EqualTo(before).And.Contain("Anchor=\""), $"{w}x{h}: and wrote the file");
+                    Assert.That(flyout.IsOpen, Is.True, $"{w}x{h}: Anchor stays open for the next edge");
+                });
+
+                Press(rig, Key.Escape);
+                Assert.Multiple(() =>
+                {
+                    Assert.That(flyout.IsOpen, Is.False, $"{w}x{h}: Esc closed the pop-up");
+                    Assert.That(Focused(button), Is.SameAs(button), $"{w}x{h}: focus is back on the drop-down button");
+                });
+            }
+            finally
+            {
+                flyout.Hide();
+                Dispatcher.UIThread.RunJobs();
+            }
+        }
+    }
+
+    /// <summary>
+    /// The Dock pop-up from the keyboard: Enter opens it with focus inside, Space picks the focused region (written), and
+    /// — Dock being ONE region — the pick closes the pop-up and returns focus to the button. Both sizes.
+    /// </summary>
+    [AvaloniaTest]
+    public void TheDockPopUp_WorksFromTheKeyboard_AndAPickClosesIt_AtTwoSizes()
+    {
+        foreach (var (w, h) in TwoZooms)
+        {
+            using var rig = Open(w, h);
+            SelectOnCanvas(rig, "btn");
+            var dock = rig.Row("Dock");
+            var button = DropDownButton(rig, dock, "DockDropDown");
+            var flyout = (Flyout)button.Flyout!;
+            try
+            {
+                button.Focus(NavigationMethod.Tab);
+                Dispatcher.UIThread.RunJobs();
+                Press(rig, Key.Enter);
+                Assert.That(flyout.IsOpen, Is.True, $"{w}x{h}: Enter opened the pop-up");
+                var inside = Focused(button) as ToggleButton;
+                Assert.That(inside, Is.Not.Null, $"{w}x{h}: focus moved onto a region in the pop-up");
+                var region = (string)inside!.CommandParameter!;
+
+                Press(rig, Key.Space);
+                Assert.Multiple(() =>
+                {
+                    Assert.That(((PixelGeometry)rig.Control("btn").Geometry!).Dock, Is.EqualTo(region), $"{w}x{h}: Space picked {region}");
+                    Assert.That(rig.Vm.Text, Does.Contain($"Dock=\"{region}\""), $"{w}x{h}: the .blform text");
+                    Assert.That(flyout.IsOpen, Is.False, $"{w}x{h}: the pick closed the pop-up");
+                    Assert.That(Focused(button), Is.SameAs(button), $"{w}x{h}: focus is back on the drop-down button");
+                });
+            }
+            finally
+            {
+                flyout.Hide();
+                Dispatcher.UIThread.RunJobs();
+            }
+        }
+    }
+
+    // ==================================================================
+    // Slice 4 review follow-up — a reference FOLLOWS its object: deleting the Button clears AcceptButton
+    // ==================================================================
+
+    private static readonly string AcceptsBtn =
+        Doc.Replace("Text=\"GridForm\">", "Text=\"GridForm\" AcceptButton=\"btn\" CancelButton=\"btn\">");
+
+    /// <summary>
+    /// VS behaviour: deleting the Button the Form's AcceptButton/CancelButton names removes the reference with it (a real
+    /// canvas click and a real Delete key). The file loses both the control and both attributes in ONE write, the Form's
+    /// row shows <c>(none)</c>, and ONE undo brings back the control AND the references, byte-identical.
+    /// </summary>
+    [AvaloniaTest]
+    public void DeletingTheAcceptButton_RemovesTheReference_AndOneUndoRestoresBoth()
+    {
+        Assert.That(AcceptsBtn, Does.Contain("AcceptButton=\"btn\""), "precondition: the fixture names btn");
+        using var rig = Open(doc: AcceptsBtn);
+        var original = rig.Vm.Text;
+        SelectOnCanvas(rig, "btn");
+
+        Press(rig, Key.Delete);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(rig.Doc.FindById("btn"), Is.Null, "precondition: the real Delete key removed btn");
+            Assert.That(rig.Doc.Properties.ContainsKey("AcceptButton"), Is.False, "AcceptButton followed its Button");
+            Assert.That(rig.Doc.Properties.ContainsKey("CancelButton"), Is.False, "CancelButton too");
+            Assert.That(rig.Vm.Text, Does.Not.Contain("AcceptButton").And.Not.Contain("CancelButton"), "the .blform text");
+            Assert.That(rig.Row("AcceptButton").StringValue, Is.EqualTo("(none)"), "the Form's row shows (none), never btn (missing)");
+        });
+
+        rig.Vm.UndoDesignerEditCommand.Execute(null);
+        Dispatcher.UIThread.RunJobs();
+        Assert.That(rig.Vm.Text, Is.EqualTo(original), "ONE undo restores the Button and both references");
+    }
+
+    /// <summary>The same through Cut (Ctrl+X's command): the reference goes with the cut Button; one undo restores both.</summary>
+    [AvaloniaTest]
+    public void CuttingTheAcceptButton_RemovesTheReference_AndOneUndoRestoresBoth()
+    {
+        using var rig = Open(doc: AcceptsBtn);
+        var original = rig.Vm.Text;
+        SelectOnCanvas(rig, "btn");
+
+        rig.Vm.CutControlsCommand.Execute(null);
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(rig.Doc.FindById("btn"), Is.Null, "precondition: the cut removed btn");
+            Assert.That(rig.Vm.Text, Does.Not.Contain("AcceptButton").And.Not.Contain("CancelButton"), "the .blform text");
+        });
+
+        rig.Vm.UndoDesignerEditCommand.Execute(null);
+        Dispatcher.UIThread.RunJobs();
+        Assert.That(rig.Vm.Text, Is.EqualTo(original), "ONE undo restores the Button and both references");
+    }
+
+    /// <summary>
+    /// Slice 4 review follow-up (§8 note on <c>UpdateTextFromEditor</c>): an edit typed in the CODE editor that adds a
+    /// Button must reach the grid's rows — they are rebuilt on the new parse, so the Form's AcceptButton offers it.
+    /// Before, the revision was bumped without re-syncing the grid, and the rows kept reading the OLD document.
+    /// </summary>
+    [AvaloniaTest]
+    public void AnEditorEdit_ThatAddsAButton_ReachesTheGridsRows()
+    {
+        using var rig = Open();
+        var edited = rig.Vm.Text.Replace(
+            "<Button Id=\"btn\"",
+            "<Button Id=\"btn2\" X=\"16\" Y=\"96\" Width=\"75\" Height=\"23\" TabIndex=\"2\"/>\n    <Button Id=\"btn\"");
+        Assert.That(edited, Does.Contain("btn2"), "precondition: the edit adds a Button");
+
+        rig.Vm.UpdateTextFromEditor(edited);
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(rig.Vm.DesignDocument!.FindById("btn2"), Is.Not.Null, "precondition: the new parse has it");
+            Assert.That(rig.GridVm.Rows.Single(r => r.Name == "AcceptButton").Choices, Does.Contain("btn2"),
+                "the grid's rows read the NEW document");
+        });
+    }
+
+    /// <summary>How many times the grid rebuilt its rows (one per <c>SyncDesignerPanels</c>: each Load rebuilds once).</summary>
+    private static Func<int> CountGridRebuilds(Rig rig)
+    {
+        var count = 0;
+        rig.GridVm.Rows.CollectionChanged += (_, e) =>
+        {
+            if (e.Action == System.Collections.Specialized.NotifyCollectionChangedAction.Reset)
+            {
+                count++;
+            }
+        };
+        return () => count;
+    }
+
+    /// <summary>
+    /// Part C review: a keystroke in CODE view must not rebuild the (hidden) designer panels — entering Design view
+    /// re-syncs them (ToggleDesignMode). After the switch back, the grid reads the edited document.
+    /// </summary>
+    [AvaloniaTest]
+    public void ACodeViewKeystroke_DoesNotRebuildTheHiddenGrid_AndDesignViewReadsTheEditOnEntry()
+    {
+        using var rig = Open();
+        rig.Vm.ToggleDesignModeCommand.Execute(null);
+        Assert.That(rig.Vm.IsDesignMode, Is.False, "precondition: Code view");
+        var rebuilds = CountGridRebuilds(rig);
+
+        rig.Vm.UpdateTextFromEditor(rig.Vm.Text.Replace("<Button Id=\"btn\"",
+            "<Button Id=\"btn2\" X=\"16\" Y=\"96\" Width=\"75\" Height=\"23\" TabIndex=\"2\"/>\n    <Button Id=\"btn\""));
+        Dispatcher.UIThread.RunJobs();
+        Assert.That(rebuilds(), Is.Zero, "no grid rebuild for a Code-view keystroke");
+
+        rig.Vm.ToggleDesignModeCommand.Execute(null);
+        Dispatcher.UIThread.RunJobs();
+        Assert.Multiple(() =>
+        {
+            Assert.That(rebuilds(), Is.EqualTo(1), "entering Design view syncs once");
+            Assert.That(rig.GridVm.Rows.Single(r => r.Name == "AcceptButton").Choices, Does.Contain("btn2"), "…on the new parse");
+        });
+    }
+
+    /// <summary>Part C review: a designer Undo re-syncs the panels ONCE (it did twice: the editor's text change, then the adopt).</summary>
+    [AvaloniaTest]
+    public void ADesignerUndo_SyncsThePanelsOnce()
+    {
+        using var rig = Open();
+        rig.Row("Text").StringValue = "Renamed"; // a real designer edit through the write-back
+        Dispatcher.UIThread.RunJobs();
+        var rebuilds = CountGridRebuilds(rig);
+
+        rig.Vm.UndoDesignerEditCommand.Execute(null);
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(rig.Vm.Text, Does.Not.Contain("Renamed"), "precondition: the undo happened");
+            Assert.That(rebuilds(), Is.EqualTo(1), "one sync for one undo");
+        });
+    }
+
+    // ==================================================================
+    // Slice 4 Task 3 — the Reference editor (D-7)
+    // ==================================================================
+
+    /// <summary>
+    /// With the Form selected, AcceptButton is a drop-down of <c>(none)</c> and the form's Buttons; picking <c>btn</c>
+    /// through the real ComboBox (real clicks: open, then the item in its popup) writes <c>AcceptButton="btn"</c> into the
+    /// FILE. At two window sizes.
+    /// </summary>
+    [AvaloniaTest]
+    public void PickingAButtonInTheAcceptButtonDropDown_WritesItIntoTheFile_AtTwoSizes()
+    {
+        foreach (var (w, h) in TwoZooms)
+        {
+            using var rig = Open(w, h);
+            Assert.That(rig.GridVm.SelectedControl, Is.Null, $"{w}x{h}: precondition: the Form is selected");
+            var accept = rig.Row("AcceptButton");
+            var combo = VisibleCombo(rig, accept);
+            Assert.That(combo.Items.Cast<object?>(), Is.EqualTo(new object?[] { "(none)", "btn" }),
+                $"{w}x{h}: (none), then the one Button — not lbl, not the tray's tmr");
+            Assert.That(combo.SelectedItem, Is.EqualTo("(none)"), $"{w}x{h}: an absent AcceptButton shows (none)");
+
+            var edits = 0;
+            rig.GridVm.Edited += (_, _) => edits++;
+
+            PickInCombo(rig, combo, "btn");
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(rig.Doc.Properties.GetValueOrDefault("AcceptButton"), Is.EqualTo("btn"), $"{w}x{h}: the model");
+                Assert.That(rig.Vm.Text, Does.Contain("AcceptButton=\"btn\""), $"{w}x{h}: the .blform text");
+                Assert.That(VisibleCombo(rig, accept).SelectedItem, Is.EqualTo("btn"), $"{w}x{h}: the drop-down follows");
+                Assert.That(edits, Is.EqualTo(1), $"{w}x{h}: ONE edit — never a write and a Reset for one click");
+            });
+        }
+    }
+
+    /// <summary>
+    /// A dangling <c>AcceptButton="btnGone"</c> shows <c>btnGone (missing)</c> selected in the real combo; picking
+    /// <c>btn</c> through it writes <c>btn</c> — the case where the list's items depend on the value, so a commit that
+    /// swapped the combo's list mid-push would push the old item straight back. At two window sizes.
+    /// </summary>
+    [AvaloniaTest]
+    public void ADanglingAcceptButton_ShowsMissing_AndPickingAButtonReplacesIt_AtTwoSizes()
+    {
+        var dangling = Doc.Replace("Text=\"GridForm\">", "Text=\"GridForm\" AcceptButton=\"btnGone\">");
+        Assert.That(dangling, Does.Contain("AcceptButton=\"btnGone\""), "precondition: the fixture carries the dangling Id");
+
+        foreach (var (w, h) in TwoZooms)
+        {
+            using var rig = Open(w, h, dangling);
+            var accept = rig.Row("AcceptButton");
+            var combo = VisibleCombo(rig, accept);
+            Assert.That(combo.SelectedItem, Is.EqualTo("btnGone (missing)"), $"{w}x{h}: shown, never hidden under (none)");
+            var edits = 0;
+            rig.GridVm.Edited += (_, _) => edits++;
+
+            PickInCombo(rig, combo, "btn");
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(rig.Doc.Properties.GetValueOrDefault("AcceptButton"), Is.EqualTo("btn"), $"{w}x{h}: the model");
+                Assert.That(rig.Vm.Text, Does.Contain("AcceptButton=\"btn\"").And.Not.Contain("btnGone"), $"{w}x{h}: the .blform text");
+                Assert.That(edits, Is.EqualTo(1), $"{w}x{h}: ONE edit");
+            });
+        }
+    }
+
+    /// <summary>
+    /// ⛔ The document-view-model half of the freshness rule: a Button that arrives in the model while the Form STAYS
+    /// selected appears in the same AcceptButton row's list once the document view model writes the next designer edit
+    /// (its model revision calls <see cref="FormPropertyGridViewModel.RefreshReferenceChoices"/>, as the tray follows the
+    /// same revision). ⚠ Measured: every shipping path that ADDS a control today also moves the selection (paste, drop)
+    /// or re-parses and rebuilds the rows (undo/redo, a Code-view edit), so nothing in the IDE reaches this state yet;
+    /// the model is changed directly here, and the edit that follows is a real grid edit of the Form's Text.
+    /// </summary>
+    [AvaloniaTest]
+    public void ACandidateAddedWhileTheFormStaysSelected_AppearsInTheList()
+    {
+        using var rig = Open();
+        var accept = rig.Row("AcceptButton");
+        var raised = new List<string?>();
+        accept.PropertyChanged += (_, e) => raised.Add(e.PropertyName);
+
+        rig.Doc.Controls.Add(new FormControl
+        {
+            Kind = "Button", Id = "btnNew", TabIndex = 2, Geometry = new PixelGeometry { X = 16, Y = 96, Width = 75, Height = 23 }
+        });
+        rig.Row("Text").StringValue = "Renamed"; // a real designer edit: Edited → the document view model's write-back
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(rig.GridVm.SelectedControl, Is.Null, "precondition: the Form stayed selected");
+            Assert.That(rig.GridVm.Rows.Single(r => r.Name == "AcceptButton"), Is.SameAs(accept), "precondition: no rebuild");
+            Assert.That(rig.Vm.Text, Does.Contain("btnNew"), "precondition: the write-back carried the new Button");
+            Assert.That(raised, Does.Contain(nameof(FormPropertyRow.Choices)), "the revision told the row to re-read");
+            Assert.That(accept.Choices, Does.Contain("btnNew"));
+            Assert.That(VisibleCombo(rig, accept).Items.Cast<object?>(), Does.Contain("btnNew"), "the REAL combo re-read it");
+        });
+    }
+
+    /// <summary>
+    /// ⛔ Slice 4 D-3: selecting a Label and expanding its (absent, ambient) Font realises the three Bool PART combos,
+    /// each bound to a catalog-less row whose no-op compare was ordinal — a combo pushing <c>False</c> over a part reading
+    /// <c>false</c> would write <c>Font="Segoe UI, 9pt"</c> for a selection click. The file must be byte-identical and no
+    /// Edited may fire. At two window sizes. ⚠ End to end only: measured, the real headless combo does not push its item
+    /// back on bind, so this test cannot see the ordinal-compare mutant — <c>FormCompositeRowTests.ABoldPart_PushedItsOwn
+    /// ShownItem_…</c> is its kill.
+    /// </summary>
+    [AvaloniaTest]
+    public void SelectingALabel_AndExpandingItsFont_ChangesNothing_AtTwoSizes()
+    {
+        foreach (var (w, h) in TwoZooms)
+        {
+            using var rig = Open(w, h);
+            var before = rig.Vm.Text;
+            var edits = 0;
+            rig.GridVm.Edited += (_, _) => edits++;
+
+            SelectOnCanvas(rig, "lbl");
+            var font = rig.Row("Font");
+            rig.Click(rig.Container(font).GetVisualDescendants().OfType<ToggleButton>()
+                .Single(t => t.Classes.Contains("edge") && t.IsEffectivelyVisible));
+            Assert.That(font.IsExpanded, Is.True, $"{w}x{h}: precondition: the real box expanded the Font");
+
+            foreach (var part in new[] { "Bold", "Italic", "Underline" })
+            {
+                var combo = VisibleCombo(rig, font.Children.Single(c => c.Name == part));
+                Assert.That(combo.SelectedItem, Is.EqualTo("False"), $"{w}x{h}: {part}'s combo realised and bound");
+            }
+
+            using (rig.Window.CaptureRenderedFrame()) { }
+            Dispatcher.UIThread.RunJobs();
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(rig.Vm.Text, Is.EqualTo(before), $"{w}x{h}: the .blform is byte-identical");
+                Assert.That(rig.Control("lbl").Properties.ContainsKey("Font"), Is.False, $"{w}x{h}: the Font stays absent");
+                Assert.That(edits, Is.Zero, $"{w}x{h}: no Edited for a selection");
+            });
+        }
     }
 
     /// <summary>

@@ -28,18 +28,30 @@ public static class FormDocumentLoader
     /// Saying so is what stops the missing page from being a silent one.</para>
     /// </summary>
     public static IReadOnlyList<FormDocument> LoadWebForms(
-        IEnumerable<string> sourcePaths, Action<string>? warn = null)
+        IEnumerable<string> sourcePaths, Action<string>? warn = null) =>
+        Load(sourcePaths, FormTarget.Web, "was not turned into a page", warn).Select(f => f.Model).ToList();
+
+    /// <summary>
+    /// The form documents of <paramref name="target"/> among <paramref name="sourcePaths"/>, in listed order, each with its
+    /// path (slice 4 D-5c: the build copy names the document a BL8036 belongs to).
+    /// </summary>
+    /// <param name="consequence">What a refused document costs on THIS route, finishing the warning
+    /// <c>'X' {consequence}: …</c> — "was not turned into a page" on the web route, "— its images and icons were not
+    /// copied into the output" on the C# route. ⛔ A parameter, never a literal here: one route's consequence is false on
+    /// the other.</param>
+    public static IReadOnlyList<LoadedForm> Load(
+        IEnumerable<string> sourcePaths, FormTarget target, string consequence, Action<string>? warn = null)
     {
         ArgumentNullException.ThrowIfNull(sourcePaths);
 
-        var forms = new List<FormDocument>();
+        var forms = new List<LoadedForm>();
 
         foreach (var path in sourcePaths)
         {
             // ⛔ TargetOfExtension, not a literal ".blwebform". BasicLang does not reference
             // VisualGameStudio.Core, so its extension list cannot be reached from here — and a
             // fresh literal would be the third copy of that decision in this assembly.
-            if (FormDocumentReader.TargetOfExtension(path) != FormTarget.Web)
+            if (FormDocumentReader.TargetOfExtension(path) != target)
             {
                 continue;
             }
@@ -59,14 +71,17 @@ public static class FormDocumentLoader
             if (file.IsRefused)
             {
                 warn?.Invoke(
-                    $"'{Path.GetFileName(path)}' was not turned into a page: " +
+                    $"'{Path.GetFileName(path)}' {consequence}: " +
                     string.Join("; ", file.Diagnostics.Where(d => !d.IsWarning).Select(d => d.Message)));
                 continue;
             }
 
-            forms.Add(file.Model);
+            forms.Add(new LoadedForm(file.Model, path));
         }
 
         return forms;
     }
 }
+
+/// <summary>A form document read for a build, with the path it was read from.</summary>
+public sealed record LoadedForm(FormDocument Model, string Path);

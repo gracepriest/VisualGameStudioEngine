@@ -10,6 +10,7 @@
         "dependencies": {
           "Avalonia": "11.3.13",
           "Avalonia.AvaloniaEdit": "11.3.0",
+          "Avalonia.Controls.ColorPicker": "11.3.13",
           "Avalonia.Controls.DataGrid": "11.3.13",
           "Avalonia.Desktop": "11.3.13",
           "Avalonia.Fonts.Inter": "11.3.13",
@@ -105,6 +106,18 @@
           "lib/net6.0/AvaloniaEdit.dll": {
             "assemblyVersion": "11.3.0.0",
             "fileVersion": "11.3.0.0"
+          }
+        }
+      },
+      "Avalonia.Controls.ColorPicker/11.3.13": {
+        "dependencies": {
+          "Avalonia": "11.3.13",
+          "Avalonia.Remote.Protocol": "11.3.13"
+        },
+        "runtime": {
+          "lib/net8.0/Avalonia.Controls.ColorPicker.dll": {
+            "assemblyVersion": "11.3.13.0",
+            "fileVersion": "11.3.13.0"
           }
         }
       },
@@ -1170,6 +1183,13 @@
       "sha512": "sha512-9M/jJb4DPqQmKtNMZn6+vpqlf+ZGMtK8vEBpPVP3De1xRCu1hv4ZAtoA8hY6bYj2hgv/luete3ixoOsEQ++YJQ==",
       "path": "avalonia.avaloniaedit/11.3.0",
       "hashPath": "avalonia.avaloniaedit.11.3.0.nupkg.sha512"
+    },
+    "Avalonia.Controls.ColorPicker/11.3.13": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-38M23f5H25kugMZg68QLfLgMTBMngvCkIu44yVtgOF3aTqoyRZr0vKmGJJYoEn+2Ixzd0+kB8qICLKX6N/nIjA==",
+      "path": "avalonia.controls.colorpicker/11.3.13",
+      "hashPath": "avalonia.controls.colorpicker.11.3.13.nupkg.sha512"
     },
     "Avalonia.Controls.DataGrid/11.3.13": {
       "type": "package",
