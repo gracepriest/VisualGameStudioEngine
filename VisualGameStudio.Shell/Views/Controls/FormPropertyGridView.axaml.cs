@@ -93,7 +93,8 @@ public partial class FormPropertyGridView : UserControl
                 DataContext = new FormFontDialogViewModel(FontFamilies(), start, row.Target)
             };
 
-            var result = await ShowDialogAsync(dialog, TopLevel.GetTopLevel(this));
+            var result = await ShowDialogAsync(dialog, TopLevel.GetTopLevel(this),
+                () => (dialog.DataContext as FormFontDialogViewModel)?.Result);
             if (result != null)
             {
                 row.ApplyFont(result);
@@ -106,11 +107,39 @@ public partial class FormPropertyGridView : UserControl
     }
 
     /// <summary>
+    /// An item collection's <c>…</c> (slice 4 Task 7): VS's String Collection Editor over the IDE window; OK commits the
+    /// list through the row (an empty list resets), Cancel and the close box write nothing. Caught and logged like the
+    /// Font dialog's handler.
+    /// </summary>
+    private async void OnItemsEllipsisClick(object? sender, RoutedEventArgs e)
+    {
+        if (sender is not Control { DataContext: FormPropertyRow row } || !row.IsCollectionEditor)
+        {
+            return;
+        }
+
+        try
+        {
+            var dialog = new Dialogs.FormItemsDialog { DataContext = new FormItemsDialogViewModel(row.RawValue) };
+            var result = await ShowDialogAsync(dialog, TopLevel.GetTopLevel(this),
+                () => (dialog.DataContext as FormItemsDialogViewModel)?.Result);
+            if (result != null)
+            {
+                row.ApplyItems(result);
+            }
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Trace.TraceError($"The String Collection Editor failed; {row.Name} is unchanged. {ex}");
+        }
+    }
+
+    /// <summary>
     /// Shows <paramref name="dialog"/> modally over its owner window. ⚠ A top level that is NOT a <see cref="Window"/> (an
     /// embedded host) cannot own a modal dialog: the dialog is then shown on its own and awaited until it closes, with the
-    /// same result rule — the canonical text on OK, null on any other close.
+    /// same result rule — <paramref name="resultOnClose"/> (the dialog's OK value, or null for any other close).
     /// </summary>
-    private static Task<string?> ShowDialogAsync(Dialogs.FormFontDialog dialog, TopLevel? top)
+    private static Task<string?> ShowDialogAsync(Window dialog, TopLevel? top, Func<string?> resultOnClose)
     {
         if (top is Window owner)
         {
@@ -118,7 +147,7 @@ public partial class FormPropertyGridView : UserControl
         }
 
         var closed = new TaskCompletionSource<string?>();
-        dialog.Closed += (_, _) => closed.TrySetResult((dialog.DataContext as FormFontDialogViewModel)?.Result);
+        dialog.Closed += (_, _) => closed.TrySetResult(resultOnClose());
         dialog.Show();
         return closed.Task;
     }

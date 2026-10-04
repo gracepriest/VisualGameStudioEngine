@@ -481,6 +481,105 @@ public partial class FormPropertyGridRealViewTests
         });
     }
 
+    // ==================================================================
+    // Slice 4 Task 7 — the Items editor (VS's String Collection Editor)
+    // ==================================================================
+
+    private static readonly string ComboDoc = Doc.Replace(
+        "<Button Id=\"btn\" X=\"16\" Y=\"56\" Width=\"75\" Height=\"23\" TabIndex=\"1\"/>",
+        "<Button Id=\"btn\" X=\"16\" Y=\"56\" Width=\"75\" Height=\"23\" TabIndex=\"1\"/>\n" +
+        "    <ComboBox Id=\"cmb\" X=\"16\" Y=\"96\" Width=\"121\" Height=\"23\" TabIndex=\"2\"/>");
+
+    /// <summary>
+    /// The Items row of a ComboBox shows <c>(Collection)</c>; a real click on its <c>…</c> opens the String Collection
+    /// Editor over the IDE window; <c>Smith, John⏎Beta</c> typed with REAL key input and OK writes two <c>&lt;Item&gt;</c>
+    /// children (one Edited); reopened, typing and Cancel writes nothing. At two window sizes.
+    /// </summary>
+    [AvaloniaTest]
+    public void TheItemsEditor_TypedThroughRealKeys_WritesOneItemEach_AndCancelWritesNothing_AtTwoSizes()
+    {
+        Assert.That(ComboDoc, Does.Contain("Id=\"cmb\""), "precondition: the fixture carries a ComboBox");
+        foreach (var (w, h) in TwoZooms)
+        {
+            using var rig = Open(w, h, ComboDoc);
+            SelectOnCanvas(rig, "cmb");
+            var items = rig.Row("Items");
+            var edits = 0;
+            rig.GridVm.Edited += (_, _) => edits++;
+
+            Assert.That(rig.ValuePanel(items).GetVisualDescendants().OfType<TextBlock>()
+                .Any(t => t.Text == "(Collection)" && t.IsEffectivelyVisible), Is.True, $"{w}x{h}: the row shows (Collection)");
+
+            var dialog = OpenItemsDialog(rig, items);
+            try
+            {
+                var box = Named<TextBox>(dialog, "ItemsBox");
+                ClickInItsTopLevel(rig, box);
+                box.Focus();
+                dialog.KeyTextInput("Smith, John");
+                dialog.KeyPress(Key.Enter, RawInputModifiers.None);
+                dialog.KeyRelease(Key.Enter, RawInputModifiers.None);
+                dialog.KeyTextInput("Beta");
+                Dispatcher.UIThread.RunJobs();
+                Assert.That(edits, Is.Zero, $"{w}x{h}: nothing written while the editor is open");
+
+                ClickInItsTopLevel(rig, Named<Button>(dialog, "OkButton"));
+                Dispatcher.UIThread.RunJobs();
+
+                Assert.Multiple(() =>
+                {
+                    Assert.That(dialog.IsVisible, Is.False, $"{w}x{h}: OK closed the editor");
+                    Assert.That(rig.Control("cmb").Properties.GetValueOrDefault("Items"), Is.EqualTo("Smith, John\nBeta"), $"{w}x{h}: the model");
+                    Assert.That(rig.Vm.Text, Does.Contain("<Item>Smith, John</Item>").And.Contain("<Item>Beta</Item>"), $"{w}x{h}: the file");
+                    Assert.That(edits, Is.EqualTo(1), $"{w}x{h}: ONE edit");
+                });
+            }
+            finally
+            {
+                if (dialog.IsVisible) dialog.Close();
+                Dispatcher.UIThread.RunJobs();
+            }
+
+            var before = rig.Vm.Text;
+            var cancelled = OpenItemsDialog(rig, items);
+            try
+            {
+                Assert.That(Named<TextBox>(cancelled, "ItemsBox").Text, Is.EqualTo("Smith, John" + Environment.NewLine + "Beta"),
+                    $"{w}x{h}: reopened on the stored items");
+                Named<TextBox>(cancelled, "ItemsBox").Focus();
+                cancelled.KeyTextInput("X");
+                ClickInItsTopLevel(rig, Named<Button>(cancelled, "CancelButton"));
+                Dispatcher.UIThread.RunJobs();
+                Assert.Multiple(() =>
+                {
+                    Assert.That(rig.Vm.Text, Is.EqualTo(before), $"{w}x{h}: Cancel leaves the file byte-identical");
+                    Assert.That(edits, Is.EqualTo(1), $"{w}x{h}: no edit for Cancel");
+                });
+            }
+            finally
+            {
+                if (cancelled.IsVisible) cancelled.Close();
+                Dispatcher.UIThread.RunJobs();
+            }
+        }
+    }
+
+    private static VisualGameStudio.Shell.Views.Dialogs.FormItemsDialog OpenItemsDialog(Rig rig, FormPropertyRow items)
+    {
+        var ellipsis = rig.Container(items).GetVisualDescendants().OfType<Button>()
+            .Single(b => b.Name == "ItemsEllipsis" && b.IsEffectivelyVisible);
+        var hit = rig.Window.InputHitTest(rig.CentreInWindow(ellipsis)) as Visual;
+        Assert.That(hit?.GetSelfAndVisualAncestors().Contains(ellipsis), Is.True,
+            $"a click at the Items row's … reaches it (hit {hit?.GetType().Name})");
+        rig.Click(ellipsis);
+        Dispatcher.UIThread.RunJobs();
+        var dialog = rig.Window.OwnedWindows.OfType<VisualGameStudio.Shell.Views.Dialogs.FormItemsDialog>().SingleOrDefault()
+                     ?? throw new InvalidOperationException("the … opened no String Collection Editor owned by the IDE window");
+        dialog.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+        return dialog;
+    }
+
     /// <summary>
     /// D-1c: the Custom colour is written ONCE, when the pop-up closes — never per <c>ColorChanged</c>. Opening and
     /// closing without moving it writes nothing; moving it three times and clicking OK writes the LAST colour once, as

@@ -195,6 +195,14 @@
                             FontSize="10" Padding="4,0" MinHeight="0" VerticalAlignment="Center"
                             Content="&#x2026;" IsVisible="{Binding HasEllipsis}" Click="OnFontEllipsisClick"
                             ToolTip.Tip="Choose a font" AutomationProperties.Name="Choose a font"/>
+                    <!-- Slice 4 Task 7: an item collection is VS's read-only "(Collection)" and a `…` that opens the String
+                         Collection Editor (OnItemsEllipsisClick). -->
+                    <Button x:Name="ItemsEllipsis" DockPanel.Dock="Left" Classes="dropDown" Margin="0,0,4,0"
+                            FontSize="10" Padding="4,0" MinHeight="0" VerticalAlignment="Center"
+                            Content="&#x2026;" IsVisible="{Binding IsCollectionEditor}" Click="OnItemsEllipsisClick"
+                            ToolTip.Tip="Edit the items" AutomationProperties.Name="Edit the items"/>
+                    <TextBlock DockPanel.Dock="Left" Text="{Binding CollectionSummary}" FontSize="11"
+                               VerticalAlignment="Center" IsVisible="{Binding IsCollectionEditor}"/>
                     <controls:TypedValueEditor Classes="compact" VerticalAlignment="Center"/>
                   </DockPanel>
 

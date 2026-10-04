@@ -993,3 +993,41 @@ WindowBackColor flag off → killed (run test + 6 VM); Transparent not transluce
 Esc handler off → killed; culture separator ignored → killed (sv-SE, de-DE); family order reverted → killed by the VM spelling
 test. ⚠ `AnUntouchedOk_OnALowerCaseFamily_…` stays green under that mutant (Judge treats the family case-insensitively) — an
 end-to-end pin, not a kill.
+
+### Task 6 — Items storage (base Part C's commit) — ADR 0020 first
+ADR `docs/superpowers/decisions/0020-form-items-as-child-elements.md` (index updated; ⚠ re-check the number at merge). New
+`BasicLang/Forms/FormItems.cs` (`IsCollection`, `Split`, `Join`, `FromLegacy`, `HoldsLineBreak`); `SplitItems` delegates to
+`FormItems.Split`. Reader: a legacy attribute through `FromLegacy`, `<Item>` text verbatim; Degraded (line break, or both
+forms) → nothing in `Properties`, raw elements to `UnknownChildren`, the attribute to `UnknownAttributes`, a reason in
+`Degraded`. Writer: the generic set loop and the dropped-property sweep skip the row; `ApplyItems` leaves an equal legacy
+attribute or equal-as-read children ALONE, else rewrites the run first among the children (a self-closing element gets one
+item per line at the document's indent); a Degraded control is never touched. Create writes `<Item>`s before `<Bind>`.
+⛔ **Found (fixed): the clipboard handed a Degraded list's raw comma attribute to the MODEL on paste** (it would have been
+emitted as one item). `FormClipboard.FromElement` now keeps an items attribute UNKNOWN when the fragment also carries raw
+`<Item>` children — the only shape a Degraded list travels in (the model's list travels as the LF attribute).
+Tests: `FormItemsStorageTests` (new, 17: legacy byte-identical on `.blform` AND `.blwebform`; comma, `&`, `<`, spaces, blank
+lines, `<Item/>` byte-identity, both Degraded shapes × {frozen/preserved/not emitted, the five paths}, removal, Create order,
+clipboard, retarget + `<option>`s, the region writer). RE-CHECK: `FormAssetEmitterTests` ×5 now set the MODEL as LF text;
+`FormPropertyGridTests.cs:291` (legacy XML) green. Red first: 18 red on the old reader/writer for the expected reasons
+(`TheClipboard_RoundTripsACommaItem` was green — a pin, not a kill).
+
+### Task 7 — the Items editor
+`FormItemsDialog` (VS's "String Collection Editor": a multi-line box, OK/Cancel; OK is NOT IsDefault, Enter is a new line)
+and `FormItemsDialogViewModel` (splits on CRLF/LF/CR; OK → the model value, "" for none). The row: `IsCollectionEditor`
+(and out of `IsTextBox`), `CollectionSummary` = `(Collection)`, `ApplyItems` (an empty list RESETS). The grid shows
+`(Collection)` and a `…` (`OnItemsEllipsisClick`, caught and logged, the shared `ShowDialogAsync`).
+⚠ Deviation: the editor's code was written before its tests ran; the red evidence for it is the mutation table below.
+⚠ **Emission stays `Items.Add` per item** — the pre-flight's "unchanged emitter". The coordinator's note said
+`Items.AddRange`; switching shape would add an array-literal emission through BasicLang for no behavioural gain, and the
+run test below proves the items reach the live control.
+Tests: `FormItemsDialogViewModelTests` (new, 8), the editor walker case, real view
+`TheItemsEditor_TypedThroughRealKeys_WritesOneItemEach_AndCancelWritesNothing_AtTwoSizes` (real `KeyTextInput`/Enter, ONE
+Edited, two `<Item>`s; Cancel byte-identical). **RUN** (`FormItemsAcceptanceTests`, Integration, real designer VM + SaveAsync +
+real CLI): WinForms window prints `COUNT 3` and each item (`Smith, John`, `A & B`, `x < y`); web: the CLI-built page has one
+`<option>` per item (decoded exactly) and its script runs under node. ⚠ The web half reads the page's `<option>`s — a static
+part of the page — rather than a browser's rendering; the node run proves the page's script loads.
+
+Mutations (Edit + REBUILD) — all killed: no-op save rewrites legacy; `FromLegacy` on `<Item>` text; the Degraded list
+modelled/emitted; stale attribute left beside new children; element-count compare instead of list-as-read (the `<Item/>`
+byte-identity test); the clipboard guard removed (red step of its own fix); the dialog splitting without the lone-CR rule;
+empty → "" written instead of Reset; the `…` click unwired (real view).

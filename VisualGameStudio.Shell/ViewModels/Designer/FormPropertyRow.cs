@@ -346,10 +346,36 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
     /// colour and font editors (slice 4) sit beside this text, which stays the parent's own editor. (A Reference is a
     /// drop-down since slice 4 D-7: <see cref="IsComboBox"/>.)
     /// </summary>
-    public bool IsTextBox => Typed &&
+    public bool IsTextBox => Typed && !IsCollectionEditor &&
         _type is FormPropertyType.String or FormPropertyType.Color or FormPropertyType.Size
             or FormPropertyType.Font or FormPropertyType.Padding or FormPropertyType.Fraction
             or FormPropertyType.CssClasses;
+
+    /// <summary>
+    /// An item collection (ComboBox / ListBox / CheckedListBox <c>Items</c>, slice 4 Task 7): VS's read-only
+    /// <c>(Collection)</c> text and a <c>…</c> that opens the String Collection Editor — never a one-line text box, which
+    /// cannot hold one item per line.
+    /// </summary>
+    public bool IsCollectionEditor => Typed && FormItems.IsCollection(_definition);
+
+    /// <summary>What an item-collection row shows in its value cell, as VS does.</summary>
+    public string CollectionSummary => "(Collection)";
+
+    /// <summary>
+    /// The String Collection Editor's OK (the model value, ADR 0020): an empty list is RESET — the property leaves the
+    /// document, never <c>Items=""</c> — and anything else goes through the row's own Commit (the same list again is a
+    /// no-op, per Judge).
+    /// </summary>
+    public void ApplyItems(string modelValue)
+    {
+        if (FormItems.Split(modelValue).Count == 0)
+        {
+            Reset(); // checks CanReset itself: an absent list stays absent
+            return;
+        }
+
+        Commit(modelValue);
+    }
 
     /// <summary>The four-edge Anchor box (Task 26).</summary>
     public bool IsAnchorPicker => IsEditable && _editor == FormRowEditor.AnchorPicker;
