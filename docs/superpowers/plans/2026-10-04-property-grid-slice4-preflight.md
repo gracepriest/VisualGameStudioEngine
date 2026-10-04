@@ -1093,3 +1093,30 @@ src, URL kept / rooted not emitted, the icon link after the title, every Image/I
 Mutations (Edit + REBUILD) — all killed: Icon accepts .png on WinForms; `AppContext.BaseDirectory` dropped; an unqualified
 `Image.FromFile`; URL accepted on WinForms; `..` not Degraded; the web src not encoded; Image removed from `IsTextBox`; Image
 removed from `Literal`'s unreachable arm.
+
+### Task 9 — the build copy + BL8036, BOTH entry points (base `69f3a72a`)
+Done as written: new `BasicLang/Forms/FormAssetCopy.cs` (`Copy(forms, projectDir, outputDir, report)`: every Image/Icon of the
+Form's applying rows, every control and every tray component; URL → nothing; rooted → BL8036 "absolute path…"; `..`/outside →
+BL8036 "outside the project", nothing written; a value the target refuses → skipped (BL8009 names it at generation); missing →
+BL8036 naming `'<Form>.<ctl>.<Prop>'` and the absolute path; each file once; containment by `FormAssetPaths` AND
+`SafeZip.IsWithin`; temp + rename). `FormDocumentLoader.Load(paths, target, consequence)` returns `LoadedForm(Model, Path)`;
+`LoadWebForms` wraps it with its old text. `DesignCodes.AssetNotCopied = "BL8036"` + the band table (next free BL8037; ⚠
+piece 2 may also claim 8036 — re-check at merge). CLI `Program.cs`: the JS branch copies after `JavaScriptEmitter.Emit`; the
+C# branch loads the `.blform` documents (consequence "— its images and icons were not copied into the output") and copies
+before `dotnet build` (the exe lands in `outputDir`). IDE `BuildService`: the same two points through `CopyFormAssets`, each
+BL8036 a `DiagnosticItem` (Warning, FilePath = the form document) AND an Output line.
+- ⚠ Found: the IDE's form documents come from the PROJECT ITEMS (the IDE writes them; `TryLoadCliProject` does not load the
+  IDE's `<Project>` format), the CLI's from its own glob. The IDE route tests list the documents as items, as the IDE does.
+
+Tests: `FormAssetCopyTests` (new, 12, fast): sub-path preserved on both targets, missing → BL8036 (owner, absolute path, form
+document, a warning), outside → BL8036 with nothing written, absolute → BL8036, URL → nothing, once per file, the Form's Icon,
+a rebuild replaces the copy with no temp left, a refused value not copied, the loader's consequence text per route.
+`FormAssetBuildRouteTests` (new, Integration, 4): CLI web (copy beside the page; delete → `Warning: BL8036:` and exit 0), CLI C#
+(beside `App.dll`), IDE web (copy in `config.OutputPath`; delete → a BL8036 Warning on `result.Diagnostics` naming
+`Pic.blwebform`), IDE C# (beside the exe). ⚠ The C# projects carry the form DOCUMENT with a console Main (no code-behind) — the
+copy step reads documents; the real window is Task 11's run.
+⚠ Deviation: implementation-first; the red evidence is the mutation table.
+
+Mutations (Edit + REBUILD) — all killed: the copy call removed from the IDE route only (both IDE tests red, both CLI tests
+GREEN — the "test both entry points" kill); the outside-the-project branch removed; the missing-file warning removed (CLI, IDE
+and unit). `SafeZip.IsWithin` alone removed: EQUIVALENT behind the `FormAssetPaths` check (kept as defence in depth).

@@ -80,9 +80,13 @@ public static class DesignCodes
     //   BL8035          a double-click opened a fallback event: the kind's default has no meaning on this
     //                   target (a web Panel's Paint → Click) — an INFO notice, never a refusal (here)
     //
-    // The ENUMERATED table above is now exhausted: the next claim starts at BL8036. That is not
-    // the band being full — BL8036..BL8999 are simply unclaimed, and "full" would wrongly send the
-    // next task looking for another band.
+    //   BL8036          a referenced image or icon the build did not copy into the output (FormAssetCopy;
+    //                   slice 4 D-5d) — a WARNING; the build never fails for it (here)
+    //
+    // The ENUMERATED table above is now exhausted: the next claim starts at BL8037. That is not
+    // the band being full — BL8037..BL8999 are simply unclaimed, and "full" would wrongly send the
+    // next task looking for another band. ⚠ feat/portable-controls (piece 2) was also eyeing BL8036 —
+    // re-check at merge.
     //
     // Nothing in this band lives in BasicLang.Compiler.ErrorCode as a string; the enum registration
     // there is for discoverability only, and adding a member there does not claim a number here.
@@ -328,6 +332,13 @@ public static class DesignCodes
     /// the handler is written and opened; the notice only says it is not the event VS would open.
     /// </summary>
     public const string DefaultEventNotOnTarget = "BL8035";
+
+    /// <summary>
+    /// A referenced image or icon the build did not copy into the output (slice 4 D-5d): the file is missing, resolves
+    /// outside the project, or is an absolute path the program will look for on the machine it runs on. A WARNING — the
+    /// build never fails for it (the <c>#JsImport</c> precedent).
+    /// </summary>
+    public const string AssetNotCopied = "BL8036";
 
     /// <summary>The form document itself is not well-formed XML, or its root/version is not one we know.</summary>
     public const string MalformedDocument = "BL8008";

@@ -804,6 +804,7 @@ namespace BasicLang.Compiler.Driver
             // ⚠ JavaScript only — reading every form document on a C++ or C# build costs nothing
             // useful and puts a page-emitter warning into a build that will never emit a page.
             IReadOnlyList<Forms.FormDocument> webForms = Array.Empty<Forms.FormDocument>();
+            IReadOnlyList<Forms.LoadedForm> loadedWebForms = Array.Empty<Forms.LoadedForm>();
 
             if (IsJavaScriptTarget(project.Backend?.ToLowerInvariant() ?? "csharp"))
             {
@@ -812,8 +813,9 @@ namespace BasicLang.Compiler.Driver
                 // is XML), so handing it to the page emitter meant a project with explicit
                 // <Compile> items got pages and a default one — same files on disk — got none,
                 // silently.
-                webForms = Forms.FormDocumentLoader.LoadWebForms(
-                    project.GetFormDocuments(), m => Console.Error.WriteLine($"  Warning: {m}"));
+                loadedWebForms = Forms.FormDocumentLoader.Load(project.GetFormDocuments(), Forms.FormTarget.Web,
+                    "was not turned into a page", m => Console.Error.WriteLine($"  Warning: {m}"));
+                webForms = loadedWebForms.Select(f => f.Model).ToList();
 
                 // ⛔⛔ D7's dispatch, as a real source file compiled with everything else. Without
                 // this the `data-form` attribute every generated page carries is read by NOTHING:
@@ -961,12 +963,23 @@ namespace BasicLang.Compiler.Driver
                         // `forms` is optional and nothing but the tests ever passed it.
                         forms: webForms,
                         warn: m => Console.Error.WriteLine($"  Warning: {m}"));
+
+                    // ⛔ Slice 4 D-5c: the pages' images and icons beside them (the IDE route does the same).
+                    Forms.FormAssetCopy.Copy(loadedWebForms, projectDir, outputDir,
+                        d => Console.Error.WriteLine($"  Warning: {d.Message}"));
                     Console.WriteLine($"  Site written to: {outputDir}");
                 }
 
                 // For C# backend, compile to .dll
                 if (backend == "csharp" || backend == "cs")
                 {
+                    // ⛔ Slice 4 D-5c: every WinForms form's images and icons beside the exe (the csproj's OutputPath is
+                    // outputDir), where System.AppContext.BaseDirectory points at run time. The IDE route does the same.
+                    var winForms = Forms.FormDocumentLoader.Load(project.GetFormDocuments(), Forms.FormTarget.WinForms,
+                        "— its images and icons were not copied into the output", m => Console.Error.WriteLine($"  Warning: {m}"));
+                    Forms.FormAssetCopy.Copy(winForms, projectDir, outputDir,
+                        d => Console.Error.WriteLine($"  Warning: {d.Message}"));
+
                     Console.WriteLine("  Compiling to .NET assembly...");
 
                     // Generate a temporary .csproj
