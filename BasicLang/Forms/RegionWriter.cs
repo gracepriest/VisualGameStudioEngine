@@ -124,7 +124,7 @@ public static class RegionWriter
         // own edits, the retarget, tests) — and the wrapper names below would collide.
         diagnostics.AddRange(form.ControlsNamedLikeTheForm()
             .Select(c => Error(DesignCodes.DuplicateControlId, form.NamedLikeTheFormMessage(c), filePath, 0)));
-        CheckHandlerOrdering(filePath, index, form, init, diagnostics);
+        CheckHandlerOrdering(filePath, source, index, form, init, diagnostics);
         if (diagnostics.Any(d => !d.IsWarning))
         {
             return new RegionWriteResult(Changed: false, source, diagnostics);
@@ -600,13 +600,16 @@ public static class RegionWriter
     /// block the D12 import route for every existing WinForms file.</para>
     /// </summary>
     private static void CheckHandlerOrdering(
-        string filePath, SourceIndex index, FormDocument form,
+        string filePath, string source, SourceIndex index, FormDocument form,
         FormRegion init, List<DesignDiagnostic> diagnostics)
     {
         if (form.Target != FormTarget.Web)
         {
             return;
         }
+
+        // ⛔ Slice 5 D-11: the ONE scanner (case-insensitive, declarations only, region Subs excluded), never a second copy.
+        var declared = FormCodeScan.DeclaredSubs(source);
 
         // Components too (Task 25). A Timer's parameterless callback is not bitten by the erasure
         // (measured), so for it this check is stricter than the compiler — the safe side.
@@ -628,7 +631,8 @@ public static class RegionWriter
 
         foreach (var handler in handlers)
         {
-            var declaration = FindHandlerDeclarationLine(index, handler);
+            var declaration = declared
+                .FirstOrDefault(s => string.Equals(s.Name, handler, StringComparison.OrdinalIgnoreCase))?.Line ?? 0;
             if (declaration == 0)
             {
                 // Not declared at all is Task 15's missing-handler check, not this one's business.
@@ -646,34 +650,6 @@ public static class RegionWriter
                     filePath, declaration));
             }
         }
-    }
-
-    /// <summary>The 1-based line declaring <c>Sub &lt;name&gt;</c>, or 0. Text scan: this must work on a file that does not compile.</summary>
-    private static int FindHandlerDeclarationLine(SourceIndex index, string handler)
-    {
-        for (var line = 1; line <= index.LineCount; line++)
-        {
-            var text = index.LineText(line).TrimStart();
-            if (text.StartsWith("'", StringComparison.Ordinal))
-            {
-                continue;
-            }
-
-            var sub = text.IndexOf("Sub ", StringComparison.OrdinalIgnoreCase);
-            if (sub < 0)
-            {
-                continue;
-            }
-
-            var after = text.Substring(sub + 4).TrimStart();
-            if (after.StartsWith(handler, StringComparison.Ordinal) &&
-                (after.Length == handler.Length || !char.IsLetterOrDigit(after[handler.Length]) && after[handler.Length] != '_'))
-            {
-                return line;
-            }
-        }
-
-        return 0;
     }
 
     private static string ReplaceRegion(

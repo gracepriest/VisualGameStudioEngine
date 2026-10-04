@@ -32,9 +32,30 @@ public sealed record FormHandlerPlan(
     string? Refusal,
     string? Notice = null);
 
+/// <summary>Which side of the designer's init region a handler stub goes on.</summary>
+public enum FormHandlerPlacement
+{
+    /// <summary>The page: an <c>AddressOf</c> naming a Sub declared later erases its parameter types (BL8013).</summary>
+    AboveInitRegion,
+
+    /// <summary>WinForms: VS's place, under the scaffold's "your event handlers go here".</summary>
+    BelowInitRegion
+}
+
+/// <summary>One parameter of a handler's signature.</summary>
+public sealed record FormHandlerParameter(string Name, string Type);
+
+/// <summary>A handler's signature and its side of the init region — what <see cref="FormHandlers.Shape"/> answers.</summary>
+public sealed record FormHandlerShape(IReadOnlyList<FormHandlerParameter> Parameters, FormHandlerPlacement Placement)
+{
+    /// <summary>The parameter list as BasicLang source, parentheses included — <c>sender</c>/<c>e</c> with their types.</summary>
+    public string ParameterList => "(" + string.Join(", ", Parameters.Select(p => $"{p.Name} As {p.Type}")) + ")";
+}
+
 /// <summary>
 /// Task 22 — the double-click gesture: create the control's default handler if it is absent, navigate
-/// to it if it is present.
+/// to it if it is present. Slice 5: any event of any owner (a control, or the Form — <see cref="FormBindOwner"/>),
+/// the handlers that FIT an event (the Events tab's drop-down), and the ONE signature rule (<see cref="Shape"/>).
 ///
 /// <para>Pure text in, pure text out, like <see cref="FormScaffolder"/> and <see cref="RegionWriter"/>
 /// — no file system and no IDE, so the designer, the CLI and the tests drive one implementation. The
@@ -71,6 +92,115 @@ public static class FormHandlers
     private static string Pascal(string name) =>
         string.IsNullOrEmpty(name) ? name : char.ToUpperInvariant(name[0]) + name.Substring(1);
 
+    // ==================================================================
+    // THE signature rule (D-4, ADR 0021 §4)
+    // ==================================================================
+
+    /// <summary>
+    /// ⛔⛔ THE one place a handler's signature and its side of the init region are decided. The stub writer
+    /// (<see cref="Insert"/>) and <see cref="Fits"/> both READ it and neither restates it, so the stub the designer writes
+    /// is exactly the handler the drop-down offers (<c>FormHandlerShapeTests</c>). Today's one style is
+    /// <see cref="FormCodeStyle.Classic"/>; piece 2 adds its Portable arm HERE, never a second signature site.
+    /// <list type="bullet">
+    /// <item>WinForms: <c>sender</c> typed Object and <c>e</c> typed as the event's args (or EventArgs), below the region.</item>
+    /// <item>Web: one <c>e</c> typed DomEvent for a listener — filtered or not; <c>()</c> for the Form's Load (a direct call at
+    /// the end of init) and for a row whose callback takes no event (a Timer: <c>Window.setInterval</c> takes an
+    /// <c>Action</c> and refuses <c>Action(Of DomEvent)</c>, measured). Above the region.</item>
+    /// </list>
+    /// </summary>
+    public static FormHandlerShape Shape(
+        FormBindOwner owner, FormEventDef evt, FormTarget target, FormCodeStyle style = FormCodeStyle.Classic)
+    {
+        if (style != FormCodeStyle.Classic)
+        {
+            throw new ArgumentOutOfRangeException(nameof(style), style, "only the Classic style exists yet");
+        }
+
+        if (target == FormTarget.Web)
+        {
+            var takesEvent = evt.WebWiring != FormWebWiring.AfterInit && owner.Definition?.WebHandlerTakesEvent != false;
+            return new FormHandlerShape(
+                takesEvent ? new[] { new FormHandlerParameter("e", "DomEvent") } : Array.Empty<FormHandlerParameter>(),
+                FormHandlerPlacement.AboveInitRegion);
+        }
+
+        return new FormHandlerShape(
+            new[] { new FormHandlerParameter("sender", "Object"), new FormHandlerParameter("e", evt.WinFormsArgs ?? "EventArgs") },
+            FormHandlerPlacement.BelowInitRegion);
+    }
+
+    /// <summary>
+    /// Whether <paramref name="sub"/> can be wired to <paramref name="evt"/> — read off <see cref="Shape"/>, parameter by
+    /// parameter, the same count and each type fitting (D-4): <c>Object</c> takes an untyped or <c>Object</c> parameter;
+    /// <c>DomEvent</c> only <c>DomEvent</c> (an untyped one is erased to <c>Object</c>, which <c>addEventListener</c>
+    /// refuses); a WinForms args type <c>A</c> takes <c>A</c>, a .NET BASE of <c>A</c> (<see cref="FormEvents.ArgsBases"/>),
+    /// <c>EventArgs</c>, <c>Object</c> or an untyped parameter — delegate parameter contravariance, falsified against
+    /// csc by <c>FormHandlerFitCscTests</c>. Types compare on their last segment, ignoring case.
+    /// </summary>
+    public static bool Fits(
+        FormBindOwner owner, FormEventDef evt, FormTarget target, FormDeclaredSub sub,
+        FormCodeStyle style = FormCodeStyle.Classic)
+    {
+        var shape = Shape(owner, evt, target, style);
+        if (sub.Parameters.Count != shape.Parameters.Count)
+        {
+            return false;
+        }
+
+        return shape.Parameters.Zip(sub.Parameters).All(pair => TypeFits(pair.First.Type, pair.Second.Type));
+    }
+
+    private static bool TypeFits(string wanted, string? declared)
+    {
+        var w = LastSegment(wanted);
+        var d = declared == null ? null : LastSegment(declared);
+
+        if (w.Equals("DomEvent", StringComparison.OrdinalIgnoreCase))
+        {
+            return string.Equals(d, "DomEvent", StringComparison.OrdinalIgnoreCase);
+        }
+
+        if (d == null || d.Equals("Object", StringComparison.OrdinalIgnoreCase) || d.Equals(w, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        if (w.Equals("Object", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        return d.Equals("EventArgs", StringComparison.OrdinalIgnoreCase) ||
+               (FormEvents.ArgsBases.TryGetValue(w, out var bases) &&
+                bases.Any(b => b.Equals(d, StringComparison.OrdinalIgnoreCase)));
+    }
+
+    private static string LastSegment(string type)
+    {
+        var t = type.Trim();
+        var dot = t.LastIndexOf('.');
+        return dot < 0 ? t : t[(dot + 1)..];
+    }
+
+    /// <summary>
+    /// The user's Subs that FIT <paramref name="evt"/> (<see cref="Fits"/>), in document order — the Events tab's handler
+    /// drop-down. Never a Function (the scanner reads Subs only), <c>New</c>, <c>InitializeComponent</c>, or anything
+    /// inside the designer regions (the scanner skips them).
+    /// </summary>
+    public static IReadOnlyList<string> FittingHandlers(
+        FormDocument form, FormBindOwner owner, FormEventDef evt, string codeText,
+        FormCodeStyle style = FormCodeStyle.Classic) =>
+        FormCodeScan.DeclaredSubs(codeText)
+            .Where(s => !s.Name.Equals("New", StringComparison.OrdinalIgnoreCase) &&
+                        !s.Name.Equals("InitializeComponent", StringComparison.OrdinalIgnoreCase))
+            .Where(s => Fits(owner, evt, form.Target, s, style))
+            .Select(s => s.Name)
+            .ToList();
+
+    // ==================================================================
+    // Binds
+    // ==================================================================
+
     /// <summary>
     /// Wires <paramref name="handler"/> to <paramref name="eventName"/> unless that event is already
     /// bound. Returns whether it added one.
@@ -79,16 +209,31 @@ public static class FormHandlers
     /// <c>addEventListener</c>/<c>AddHandler</c> only for a bind that exists, so creating the Sub
     /// without this leaves the user with a handler that never fires and nothing to see why.</para>
     /// </summary>
-    public static bool EnsureBind(FormControl control, string eventName, string handler)
+    public static bool EnsureBind(FormBindOwner owner, string eventName, string handler)
     {
-        if (control.Binds.Any(b => string.Equals(b.Event, eventName, StringComparison.OrdinalIgnoreCase)))
+        if (owner.Binds.Any(b => string.Equals(b.Event, eventName, StringComparison.OrdinalIgnoreCase)))
         {
             return false;
         }
 
-        control.Binds.Add(new FormBind { Event = eventName, Handler = handler });
+        owner.Binds.Add(new FormBind { Event = eventName, Handler = handler });
         return true;
     }
+
+    /// <summary>The control overload of <see cref="EnsureBind(FormBindOwner, string, string)"/>.</summary>
+    public static bool EnsureBind(FormControl control, string eventName, string handler) =>
+        EnsureBind(new FormBindOwner(new FormDocument(), control), eventName, handler);
+
+    /// <summary>
+    /// Removes every bind of <paramref name="eventName"/> from the owner — the Events tab's cleared cell. ⛔ The code is
+    /// never touched: VS leaves the handler in place when you clear the cell. Returns whether anything was removed.
+    /// </summary>
+    public static bool Unbind(FormBindOwner owner, string eventName) =>
+        owner.Binds.RemoveAll(b => string.Equals(b.Event, eventName, StringComparison.OrdinalIgnoreCase)) > 0;
+
+    // ==================================================================
+    // Plans
+    // ==================================================================
 
     /// <summary>
     /// Plans the double-click: which handler, and the code-behind with it present.
@@ -97,36 +242,56 @@ public static class FormHandlers
     /// <c>SignIn</c> by hand; opening <c>btnLogin_Click</c> instead would put them in a Sub the form
     /// never calls, and they would rightly conclude the designer was broken.</para>
     /// </summary>
-    public static FormHandlerPlan PlanDefault(FormDocument form, FormControl control, string codeText)
+    public static FormHandlerPlan PlanDefault(FormDocument form, FormControl control, string codeText) =>
+        PlanDefault(form, new FormBindOwner(form, control), codeText);
+
+    /// <summary>The owner overload: a control, or the Form (its Load — VS's double-click on the form).</summary>
+    public static FormHandlerPlan PlanDefault(FormDocument form, FormBindOwner owner, string codeText)
     {
-        var definition = control.Definition;
+        var definition = owner.Definition;
         var evt = definition?.DefaultEventDefOn(form.Target);
-        var eventName = evt == null ? null : FormEvents.NameOn(evt, form.Target);
-        if (evt == null || string.IsNullOrEmpty(eventName))
+        if (evt == null || string.IsNullOrEmpty(FormEvents.NameOn(evt, form.Target)))
         {
             return Refuse(codeText,
-                $"'{control.Kind}' has no default event for {Describe(form.Target)}, so there is " +
+                $"'{owner.KindName}' has no default event for {Describe(form.Target)}, so there is " +
                 "nothing for a double-click to open. Add one to the control catalog.");
         }
 
-        // An existing wiring names the handler — never renamed, whichever rule named it; otherwise the convention
-        // does, from the WinForms event name on BOTH targets (owner decision 2026-09-29).
-        var bind = control.Binds.FirstOrDefault(
-            b => string.Equals(b.Event, eventName, StringComparison.OrdinalIgnoreCase) &&
-                 !string.IsNullOrEmpty(b.Handler));
-        var handler = bind?.Handler ?? NameFor(control.Id, evt.Name);
-
-        var plan = Plan(form, codeText, eventName, handler, evt.WinFormsArgs, definition);
+        var plan = Plan(form, owner, evt, codeText);
 
         // A substitution is named (owner decision 2026-09-29): the kind's default has no meaning here, so the
         // gesture opened the row's declared fallback instead — and says so, rather than leaving the user waiting
         // for a Paint handler a page can never raise.
         var notice = definition?.DefaultEventDef is { } preferred && !ReferenceEquals(preferred, evt)
-            ? $"{DesignCodes.DefaultEventNotOnTarget}: a {control.Kind}'s default event, {preferred.Name}, has no " +
-              $"{Describe(form.Target)} equivalent, so the double-click opened {evt.Name} ('{eventName}') instead."
+            ? $"{DesignCodes.DefaultEventNotOnTarget}: a {owner.KindName}'s default event, {preferred.Name}, has no " +
+              $"{Describe(form.Target)} equivalent, so the double-click opened {evt.Name} ('{FormEvents.NameOn(evt, form.Target)}') instead."
             : null;
 
         return plan.Outcome == HandlerOutcome.Refused || notice == null ? plan : plan with { Notice = notice };
+    }
+
+    /// <summary>
+    /// Plans <paramref name="evt"/>'s handler on <paramref name="owner"/>: <paramref name="handlerName"/> when given (a
+    /// name the user typed in the Events tab), else the handler an existing bind on that event names (never renamed),
+    /// else the convention <c>&lt;Prefix&gt;_&lt;WinForms event&gt;</c> on BOTH targets (owner decision 2026-09-29).
+    /// Navigates to a Sub that already exists (found ignoring case); writes a stub in <see cref="Shape"/>'s signature
+    /// otherwise.
+    /// </summary>
+    public static FormHandlerPlan Plan(
+        FormDocument form, FormBindOwner owner, FormEventDef evt, string codeText, string? handlerName = null)
+    {
+        var eventName = FormEvents.NameOn(evt, form.Target);
+        if (string.IsNullOrEmpty(eventName))
+        {
+            return Refuse(codeText,
+                $"{owner.Label}'s {evt.Name} event has no meaning on {Describe(form.Target)}, so no handler was written for it.");
+        }
+
+        var bind = owner.Binds.FirstOrDefault(
+            b => string.Equals(b.Event, eventName, StringComparison.OrdinalIgnoreCase) && !string.IsNullOrEmpty(b.Handler));
+        var handler = handlerName ?? bind?.Handler ?? NameFor(owner.Prefix, evt.Name);
+
+        return PlanHandler(form, owner, evt, eventName, handler, codeText);
     }
 
     /// <summary>
@@ -137,38 +302,41 @@ public static class FormHandlers
     /// pair never declared, and the retargeted form stopped compiling on both targets.</para>
     /// </summary>
     /// <returns>A plan, or a refusal when the bind names no handler or no event of the kind.</returns>
-    public static FormHandlerPlan PlanBind(FormDocument form, FormControl control, FormBind bind, string codeText)
+    public static FormHandlerPlan PlanBind(FormDocument form, FormBindOwner owner, FormBind bind, string codeText)
     {
-        var definition = control.Definition;
-        var evt = definition == null ? null : EventOn(definition, bind.Event, form.Target);
+        var evt = owner.Definition == null ? null : EventOn(owner.Definition, bind.Event, form.Target);
         if (evt == null || string.IsNullOrEmpty(bind.Handler))
         {
             return Refuse(codeText,
-                $"'{control.Id}' has a bind on '{bind.Event}', which is not an event '{control.Kind}' has on " +
+                $"{owner.Label} has a bind on '{bind.Event}', which is not an event '{owner.KindName}' has on " +
                 $"{Describe(form.Target)}, so no handler was written for it.");
         }
 
-        return Plan(form, codeText, bind.Event, bind.Handler, evt.WinFormsArgs, definition);
+        return PlanHandler(form, owner, evt, bind.Event, bind.Handler, codeText);
     }
+
+    /// <summary>The control overload of <see cref="PlanBind(FormDocument, FormBindOwner, FormBind, string)"/>.</summary>
+    public static FormHandlerPlan PlanBind(FormDocument form, FormControl control, FormBind bind, string codeText) =>
+        PlanBind(form, new FormBindOwner(form, control), bind, codeText);
 
     /// <summary>The kind's event that <paramref name="name"/> names in <paramref name="target"/>'s vocabulary, or null.</summary>
     private static FormEventDef? EventOn(FormControlDef definition, string name, FormTarget target) =>
         definition.Events?.FirstOrDefault(e =>
             string.Equals(FormEvents.NameOn(e, target), name, StringComparison.OrdinalIgnoreCase));
 
-    private static FormHandlerPlan Plan(
-        FormDocument form, string codeText, string eventName, string handler, string? winFormsArgs,
-        FormControlDef? definition)
+    private static FormHandlerPlan PlanHandler(
+        FormDocument form, FormBindOwner owner, FormEventDef evt, string eventName, string handler, string codeText)
     {
         var index = new Recognizer.SourceIndex(codeText);
 
-        var existing = FindDeclarationLine(index, handler);
-        if (existing > 0)
+        // ⛔ Through the ONE scanner, ignoring case: a hand-written `btnlogin_click` is the same member in BasicLang, and
+        // writing a second `btnLogin_Click` beside it would be a duplicate declaration (D-11, M6).
+        if (FormCodeScan.FindSub(codeText, handler) is { } existing)
         {
             // Already there — land in the body, one line below the signature.
             return new FormHandlerPlan(
-                HandlerOutcome.Navigated, eventName, handler, codeText,
-                Math.Min(existing + 1, Math.Max(1, index.LineCount)), null);
+                HandlerOutcome.Navigated, eventName, existing.Name, codeText,
+                Math.Min(existing.Line + 1, Math.Max(1, index.LineCount)), null);
         }
 
         var init = RegionMarkers.Find(RegionMarkers.Scan(codeText), RegionMarkers.Init);
@@ -187,48 +355,30 @@ public static class FormHandlers
                 "not written. Fix the '<vgs:designer>' markers and try again.");
         }
 
-        return Insert(form, codeText, index, init, eventName, handler, winFormsArgs, definition);
+        return Insert(codeText, index, init, eventName, handler, Shape(owner, evt, form.Target));
     }
 
-    /// <param name="winFormsArgs">
-    /// The EVENT's <c>e</c> type on WinForms (Task 25; null means <c>EventArgs</c>): <c>DoWorkEventArgs</c> for a
-    /// BackgroundWorker — the <c>EventArgs</c> stub compiles by contravariance but cannot reach <c>e.Argument</c>.
-    /// ⚠ The event's, not the row's default event's: a non-default bind carries its own.
-    /// </param>
-    /// <param name="definition">
-    /// The control's catalog row, which says whether a web callback takes the event at all (a Timer's does not:
-    /// <c>Window.setInterval</c> takes an <c>Action</c> and refuses <c>Action(Of DomEvent)</c>, measured).
-    /// </param>
+    /// <summary>
+    /// Writes the stub — <paramref name="shape"/>'s signature, on <paramref name="shape"/>'s side of the region. ⛔ Never
+    /// its own signature or placement: <see cref="Shape"/> is the only place either is decided.
+    /// </summary>
     private static FormHandlerPlan Insert(
-        FormDocument form,
-        string codeText,
-        Recognizer.SourceIndex index,
-        FormRegion init,
-        string eventName,
-        string handler,
-        string? winFormsArgs,
-        FormControlDef? definition)
+        string codeText, Recognizer.SourceIndex index, FormRegion init, string eventName, string handler,
+        FormHandlerShape shape)
     {
         // ⚠ The file's own terminator, not the platform's. A stub inserted with the wrong one leaves
         // a file with both, which reads as a whole-file diff the next time anything touches it.
         var newline = codeText.Contains("\r\n", StringComparison.Ordinal) ? "\r\n" : "\n";
         var indent = IndentOf(index, init.Line);
 
-        var signature = form.Target == FormTarget.Web
-            ? definition?.WebHandlerTakesEvent == false
-                ? $"{indent}Private Sub {handler}()"
-                // ⛔ addEventListener will not accept anything but Action(Of DomEvent).
-                : $"{indent}Private Sub {handler}(e As DomEvent)"
-            : $"{indent}Private Sub {handler}(sender As Object, e As {winFormsArgs ?? "EventArgs"})";
-
         var stub = new StringBuilder()
-            .Append(signature).Append(newline)
+            .Append(indent).Append("Private Sub ").Append(handler).Append(shape.ParameterList).Append(newline)
             .Append(indent).Append(indent).Append(newline)
             .Append(indent).Append("End Sub").Append(newline)
             .Append(newline)
             .ToString();
 
-        // ⛔⛔ The two targets insert on OPPOSITE sides of the init region, and both are measured.
+        // ⛔⛔ The two targets insert on OPPOSITE sides of the init region, and both are measured (Shape says which).
         //
         // Web: ABOVE it, because D8's ordering rule bites — a handler below loses its parameter
         //   types and addEventListener rejects the erased Action(Of Object).
@@ -236,7 +386,7 @@ public static class FormHandlers
         //   .NET member typed Object, so there is no declared delegate to mismatch) and because the
         //   scaffold's own "your event handlers go here" comment sits below the region. A stub above
         //   it would land somewhere the file itself says handlers do not go.
-        var at = form.Target == FormTarget.Web
+        var at = shape.Placement == FormHandlerPlacement.AboveInitRegion
             ? StartOfLineAt(codeText, init.StartOffset)
             : AfterLine(codeText, init.EndOffset);
 
@@ -273,41 +423,6 @@ public static class FormHandlers
     {
         var next = text.IndexOf('\n', Math.Clamp(offset, 0, Math.Max(0, text.Length - 1)));
         return next < 0 ? text.Length : next + 1;
-    }
-
-    /// <summary>
-    /// The 1-based line declaring <c>Sub &lt;handler&gt;</c>, or 0.
-    ///
-    /// <para>⚠ A text scan, deliberately: this runs on a file the user is midway through editing, and
-    /// refusing to find a handler in a file that does not parse would make the gesture fail exactly
-    /// when someone is working.</para>
-    /// </summary>
-    private static int FindDeclarationLine(Recognizer.SourceIndex index, string handler)
-    {
-        for (var line = 1; line <= index.LineCount; line++)
-        {
-            var text = index.LineText(line).TrimStart();
-            if (text.StartsWith("'", StringComparison.Ordinal))
-            {
-                continue;
-            }
-
-            var sub = text.IndexOf("Sub ", StringComparison.OrdinalIgnoreCase);
-            if (sub < 0)
-            {
-                continue;
-            }
-
-            var after = text.Substring(sub + 4).TrimStart();
-            if (after.StartsWith(handler, StringComparison.Ordinal) &&
-                (after.Length == handler.Length ||
-                 !char.IsLetterOrDigit(after[handler.Length]) && after[handler.Length] != '_'))
-            {
-                return line;
-            }
-        }
-
-        return 0;
     }
 
     private static string Describe(FormTarget target) =>

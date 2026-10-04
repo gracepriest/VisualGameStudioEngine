@@ -823,6 +823,47 @@ reserved `VgsOn_` prefix, and M7's finding that an Extern class's undeclared mem
 | Region writer's named-like-the-form check removed | the three `AControlNamedLikeTheForm_…` rows |
 | Reader's check removed | both `TheReader_RefusesAControlNamedLikeTheForm` rows |
 
+  Gate on the fix (`--no-build` of the fix build): fast subset 11119 — 11095 passed, 5 failed, 19 skipped; failure names
+  ⊂ Task 0's (`Emit_ReplacingAnImportedModule_LeavesNoTempFileBehind`, the intermittent one, passed). Committed `3df80418`.
+
+### Task 3 — owners, the shared scanner, fitting (base `3df80418`)
+- New `FormBindOwner` (D-10: `Definition` = the control's row or `FormRoot`, `Binds`, `Prefix`, `Label`, `KindName`), new
+  `FormCodeScan` (D-11: modifiers, a parameter list continued over lines or with `_`, `'` ends a line outside a string,
+  OrdinalIgnoreCase, Subs inside ANY designer region skipped, Functions/`End Sub`/lambdas never declarations).
+  `FormHandlers`: `Shape(owner, evt, target, style)` → `FormHandlerShape(Parameters, Placement)` is the only signature and
+  placement site; `Insert` writes `shape.ParameterList` on `shape.Placement`'s side; `Fits` reads `Shape` parameter by
+  parameter; `FittingHandlers` (document order, never `New`/`InitializeComponent`/a Function/region Subs); `Plan(form, owner,
+  evt, code, handlerName?)`; `PlanDefault` (control overload delegates to a new owner overload — the Form's Load);
+  `PlanBind(form, owner, …)` (control overload delegates); `EnsureBind(owner, …)` (control overload delegates); `Unbind`.
+  Both `FindDeclarationLine` copies deleted — `RegionWriter`'s BL8013 asks `FormCodeScan`. `FormEvents.ArgsBases` filled (13
+  derived types).
+- **Decisions taken:** (a) an untyped or `Object` second parameter FITS a WinForms event — csc accepts `H(object, object)` by
+  parameter contravariance, and BasicLang emits an untyped parameter as `object`; D-4's text listed only `EventArgs`/`A`/bases
+  (no csc cell exercises `object`; the rule follows the language). (b) A navigated plan returns the user's own SPELLING as
+  `Handler` (`btn_click`), so a bind written from it names the real Sub. (c) `ArgsBases` lists only bases that are catalog
+  args types or `CancelEventArgs`.
+- **TDD shape — honest:** the production code was written BEFORE its tests (while the review-fix gate was running), so there
+  is no red-before run on `3df80418`; the evidence is the mutation table below, every row killed. The M6 case pin was shown
+  red by the scanner-`Ordinal` mutant.
+- `FormHandlerFitCscTests` (fast, in-process Roslyn): 35 kinds incl. the Form, one compile each, ~36 args types × every
+  WinForms event; `Fits` ⇔ csc in both directions on the FIRST run (the `ArgsBases` table was right as written). csc total
+  1.9 s (the first compile 1.6 s of it, warm-up) — no split needed.
+- **RE-CHECK:** `FormHandlerPlanTests`, `FormHandlerGestureTests`, `FormHandlerReachabilityTests`, `FormCanvasDoubleClickTests`,
+  `FormDesignerCommandTests`, `FormComponentEmissionTests`, the BL8013 rows of `FormRegionWriterTests` — all green;
+  `(Form|WinFormsCatalog) & !Integration` = 4194 passed, 1 failed (`EveryTextRoute_…`, the known machine row), 1 skipped.
+
+| Mutation (Edit + rebuild) | Killed by |
+|---|---|
+| `Insert` writes its own `(sender As Object, e As EventArgs)` literal | `ThePlanner_SpellsNoSignatureLiteral`, 183 shape-sweep cells, the web stub/gesture rows |
+| `FindSub` back to `Ordinal` | `AHandWrittenHandler_InAnotherCase_IsNavigatedTo_NeverDuplicated` |
+| `()` accepted for any web event | 181 `OnTheWeb_AListenerTakesExactlyADomEvent_…` cells |
+| `ArgsBases` loses `FormClosingEventArgs ⊃ CancelEventArgs` | `Fits_AgreesWithCsc_…(Form)` + `AKeyEventArgsHandler_…` |
+| `PlanDefault` plans with the args stripped (a second, args-blind signature site) | `AWinFormsPanel_OpensPaint_WithItsPaintEventArgs_AndNoNotice` |
+| The scanner no longer skips the designer regions | `TheScanner_ReadsModifiers_…` (InitializeComponent returned) |
+| Fit by exact name only (no `EventArgs`/bases) | 32 csc kinds, 165 WinForms fit cells, `FittingHandlers_…` |
+| The scanner keeps comments | ⚠ first SURVIVED `AMidLineComment_…` (the anchored declaration regex already refuses `Dim x … ' Sub btn_Click`) — VACUOUS for this mutant, so `ACommentInsideAContinuedParameterList_IsNotPartOfIt` was added; it kills it. The mid-line test stays: it pins the anchoring |
+| BL8013's lookup `Ordinal` | new `BL8013_FindsAHandlerDeclaredInAnotherCase` |
+
 ## 7. Tests to re-check (consolidated)
 
 | Test | Why | Task |

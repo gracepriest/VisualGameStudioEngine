@@ -186,9 +186,27 @@ public static class FormEvents
 
     /// <summary>
     /// The .NET base chains of the handler args types the catalog names, keyed by the DERIVED type's last segment —
-    /// what lets a <c>(sender As Object, e As CancelEventArgs)</c> handler fit FormClosing (ADR 0021 §4). ⚠ Filled in
-    /// slice 5 Task 3 and falsified there by in-process Roslyn; empty until then.
+    /// what lets a CancelEventArgs-typed handler fit FormClosing (ADR 0021 §4). Only the bases that are THEMSELVES args
+    /// types the catalog names (or <c>CancelEventArgs</c>, which a VS user writes); <c>EventArgs</c> and <c>Object</c>
+    /// fit every event and are not listed. ⛔ Falsified EXHAUSTIVELY by in-process Roslyn
+    /// (<c>FormHandlerFitCscTests</c>): for every event of every row and every args type the catalog names,
+    /// <c>FormHandlers.Fits</c> must equal csc's verdict on <c>ctl.E += H</c> — a missing entry and an invented one both fail.
     /// </summary>
     public static readonly IReadOnlyDictionary<string, IReadOnlyList<string>> ArgsBases =
-        new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase);
+        new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["FormClosingEventArgs"] = new[] { "CancelEventArgs" },
+            ["TreeViewCancelEventArgs"] = new[] { "CancelEventArgs" },
+            ["TabControlCancelEventArgs"] = new[] { "CancelEventArgs" },
+            ["DataGridViewCellCancelEventArgs"] = new[] { "CancelEventArgs" },
+            ["DataGridViewCellValidatingEventArgs"] = new[] { "CancelEventArgs" },
+            ["DataGridViewDataErrorEventArgs"] = new[] { "DataGridViewCellCancelEventArgs", "CancelEventArgs" },
+            ["SplitterCancelEventArgs"] = new[] { "CancelEventArgs" },
+            ["DoWorkEventArgs"] = new[] { "CancelEventArgs" },
+            ["PopupEventArgs"] = new[] { "CancelEventArgs" },
+            ["TreeNodeMouseClickEventArgs"] = new[] { "MouseEventArgs" },
+            ["DataGridViewCellMouseEventArgs"] = new[] { "MouseEventArgs" },
+            ["RunWorkerCompletedEventArgs"] = new[] { "AsyncCompletedEventArgs" },
+            ["TableLayoutCellPaintEventArgs"] = new[] { "PaintEventArgs" }
+        };
 }

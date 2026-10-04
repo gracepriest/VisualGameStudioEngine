@@ -349,6 +349,16 @@ public class FormEventEmissionTests
         });
     }
 
+    /// <summary>Task 3 (D-11): BL8013 finds the handler through the ONE case-insensitive scanner — another case is the same Sub.</summary>
+    [Test]
+    public void BL8013_FindsAHandlerDeclaredInAnotherCase()
+    {
+        var result = Write(WebForm(Web("TextBox", "txt", ("click", "txt_Click"))),
+            WithSubBelowTheRegion(Scaffold(FormTarget.Web), "Private Sub TXT_CLICK(e As DomEvent)"));
+
+        Assert.That(result.Diagnostics.Select(d => d.Code), Does.Contain(DesignCodes.HandlerDeclaredAfterWiring));
+    }
+
     [Test]
     public void TwoHandlersOnOneFilteredEvent_ShareOneWrapper_AndOneListener()
     {
