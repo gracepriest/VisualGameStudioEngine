@@ -23,6 +23,7 @@ Every file:line below was read on `2fa64789`. Line numbers drift: re-anchor by t
 | M3 | WinForms root wiring through BasicLang → C#: `AddHandler Me.Load, AddressOf LoginForm_Load`, `AddHandler Me.FormClosing, …` | ✅ `this.Load += LoginForm_Load;`, `this.FormClosing += LoginForm_FormClosing;`. ⚠ csc acceptance NOT measured here — Task 4's sweep is the gate | `scratchpad\m5w\LoginForm.bas`, `--target=csharp` |
 | M4 | A qualified args type outside the scaffold's imports: `e As System.ComponentModel.CancelEventArgs` (Validating) | ✅ emitted verbatim `System.ComponentModel.CancelEventArgs e`. (The single-file route printed the known BL6017 for `Me.Controls.Add` — the project route skips .NET resolution for `UseWindowsForms`; slice 4 M7) | same probe |
 | M5 | The oracle has EVERY browsable event per kind (name, `argsType`, `argsFullName`, category, description) and the Form's (`types[0]`, 80 events, `defaultEvent: Load`) | ✅ — the per-kind table in D-1 was built from it. Facts that constrain the lists: **Button, CheckBox, RadioButton, ComboBox have NO `DoubleClick`**; **Label, PictureBox, ProgressBar, LinkLabel have NO `KeyDown/KeyUp/KeyPress`**; **TrackBar and DateTimePicker have NO `Click`**; **GroupBox has no mouse events** except `MouseHover` (its Click is already exempt). Scratch dumps: `scratchpad\events-by-kind.txt`, `events-own.txt` | `[IO.File]::ReadAllText` + `ConvertFrom-Json` (read-only) on `VisualGameStudio.Tests/Data/winforms-metadata.json` |
+| M7 | **The filtered-listener shape (D-12), on the BRANCH CLI** (`wt-pg5\BasicLang\bin\Release\net8.0\BasicLang.exe`, built from `2fa64789`+`dabbdb90`): two generated wrapper Subs declared ABOVE `InitializeComponent` — `VgsOn_txt_KeyPress(e As DomEvent)` (`Dim k As String = e.key`; `If k.Length = 1 OrElse k = "Enter" OrElse k = "Backspace" OrElse k = "Escape" Then Me.txt_KeyPress(e)`) and `VgsOn_pnl_Enter(e As DomEvent)` (`If e.relatedTarget Is Nothing OrElse Not e.currentTarget.contains(e.relatedTarget) Then Me.pnl_Enter(e)`), wired `txt.addEventListener("keydown", AddressOf VgsOn_txt_KeyPress)` / `pnl.addEventListener("focusin", AddressOf VgsOn_pnl_Enter)` | ✅ Compiles; emits `k.length === 1`, `t0 === null \|\| t0 === undefined`, `t3.contains(t4)`, `this.txt_KeyPress(e)` (a NAMED method — no lambda, so neither the `Me.`-in-lambda hard error nor the unqualified-call `ReferenceError` can arise). Under node: keydown `a`/`Enter`/`Backspace`/`Escape` → the handler ran once each; `Shift`/`ArrowLeft`/`F1` → never. focusin with `relatedTarget` outside → ran; from a CHILD → did NOT run; `null` → ran. ⚠ Found: `DomEvent.relatedTarget` and `Element.contains` are NOT declared in `dom-core.bli`, and the compiler accepted them UNTYPED with no diagnostic — an Extern class's undeclared member passes silently (a typo would too). The node/Edge runs (Task 4) are therefore the gate for this text, not the compiler | `scratchpad\m6\KeyForm.bas` + `run.js` (node `EventTarget`s with a `contains` stub) |
 | M6 | BasicLang identifiers are case-INSENSITIVE | ✅ `SymbolTable.cs:141`, `:631`, `:776` (`StringComparer.OrdinalIgnoreCase`). So the two handler scanners' `Ordinal` match (§1) is a latent defect: a hand-written `btnlogin_click` is not found and the gesture writes a SECOND `btnLogin_Click` — a duplicate member | read |
 
 ## 1. Re-anchored facts (every claim the slice-5 plan text makes)
@@ -102,9 +103,9 @@ are written FULLY QUALIFIED (`System.ComponentModel.CancelEventArgs`, …) — t
 | ToolStripButton | Click · DoubleClick · MouseDown · MouseUp · MouseEnter · MouseLeave · CheckedChanged (W) · CheckStateChanged (W) · TextChanged (W) |
 | ToolStripStatusLabel | Click · DoubleClick · MouseDown · MouseUp · MouseEnter · MouseLeave · TextChanged (W) |
 
-Enter/Leave are left OFF Label, PictureBox, ProgressBar and LinkLabel: the snapshot lists them, but a `<label>`/`<img>`/
-`<progress>`/an `<a>` without `href` never receives focus, so a web bind would register and never run — and on WinForms
-those four are not selectable either.
+Enter/Leave are left OFF Label, PictureBox, ProgressBar and LinkLabel because **on WinForms those four are not
+selectable** (`ControlStyles.Selectable` is off; Enter never fires for them in practice), so a VS user does not wire them.
+(Not because the page cannot focus them: every positioned control gets a `tabindex`, `FormAssetEmitter.cs:315-318`.)
 
 **Lost — every browsable event** (VS shows 48–172 per kind). Each listed event costs a parity row, a csc sweep entry, a
 node run and (piece 2 Task 40) a library member; D1 says ~8–15. **Lost — the same list on every kind**: the snapshot
@@ -118,14 +119,29 @@ refuses it (M5), and a non-browsable event fails parity naming it.
 | MouseDown / MouseUp / MouseMove | `mousedown` / `mouseup` / `mousemove` | piece-2 §5.6 table, verbatim |
 | MouseEnter / MouseLeave | `mouseenter` / `mouseleave` | non-bubbling, as WinForms' are per-control |
 | KeyDown / KeyUp | `keydown` / `keyup` | piece-2 §5.6 |
-| KeyPress | `keypress` | the DOM's character-producing key event (deprecated in the spec text, supported by every engine). See D-8 for the reconciliation with piece 2's "a character-producing keydown" |
-| Enter / Leave | `focusin` / `focusout` | bubbling, so a container's Enter fires for its children as WinForms' does — the GroupBox rule (slice-3 O3) applied everywhere, never `focus` on some kinds and `focusin` on others |
+| KeyPress | stored `keypress`; **EMITTED as a filtered `keydown`** (D-12) | ✅ **COORDINATOR RULING (recorded verbatim in ADR 0021):** the bind's STORED identity stays `keypress` (so `NoRow_HasTwoEventsWithOneWebName` stays valid beside KeyDown's `keydown`); what is emitted is a `keydown` listener filtered to WinForms' KeyPress keys — `key.length === 1 \|\| key === "Enter" \|\| key === "Backspace" \|\| key === "Escape"` (WinForms raises KeyPress for `\b`, Esc, and Enter as `'\r'`). Mapping `e` to a `KeyChar` is piece 2's job; a classic handler receives the `DomEvent` |
+| Enter / Leave | stored `focusin` / `focusout`; **EMITTED filtered** to "`relatedTarget` outside the element" (D-12) | ✅ **COORDINATOR RULING:** WinForms semantics — focus moving BETWEEN two children of a Panel raises no Enter/Leave on the Panel. Matches piece 2's §5.6 Enter rule. The same wrapper on every kind (on a leaf element the filter is a no-op; observable on containers) |
 | existing defaults | unchanged (`input`, `change`, `click`, `tick`) | |
 | MouseClick, MouseDoubleClick, MouseHover, Validating/Validated, Paint, Resize (on a control), every `…Changed` that is not a default, every kind-specific event above marked (W) | none | `NoRow_HasTwoEventsWithOneWebName` (`FormEventsTests.cs:272-282`) forbids a second `click`/`dblclick`; the rest have no honest page event |
 
-**Lost — KeyPress WinForms-only.** Piece 2 implements KeyPress on the web, and game code wants it. **Lost —
-`beforeinput`** for KeyPress: it fires only on editable elements. **Lost — `focus`/`blur`** for Enter/Leave: they do not
-bubble, so a Panel's Enter would never fire for its children, and GroupBox already shipped `focusin`.
+**Lost — KeyPress WinForms-only.** Piece 2 implements KeyPress on the web, and game code wants it. **Lost — a real
+`keypress` listener** (the previous revision): deprecated, and it does not fire for Backspace/Escape, which WinForms
+raises. **Lost — `beforeinput`**: editable elements only. **Lost — `focus`/`blur`** for Enter/Leave: they do not bubble, so
+a Panel's Enter would never fire for its children; **lost — unfiltered `focusin`**: it fires on the Panel for every
+child-to-child move, which WinForms does not.
+
+**Divergence table — classic (DOM-style) emission vs WinForms.** Each row: *classic emission diverges; piece 2's library is
+responsible for WinForms parity.* Copied into `docs/form-designer-followups.md` in Task 9.
+
+| Behaviour | WinForms | Classic page |
+|---|---|---|
+| Mouse events on a DISABLED control | none raised | browser-dependent (disabled form elements swallow some, not all, mouse events) |
+| A double-click | Click once, then DoubleClick | `click`, `click`, `dblclick` → the Click handler runs TWICE |
+| RadioButton CheckedChanged when it becomes UNchecked | raised on both radios | `change` fires only on the newly checked radio |
+| TextChanged on a programmatic `Text` set | raised | `input` is not fired by setting `.value` |
+| MouseLeave on a container when the pointer enters a child | raised (the child is another window) | `mouseleave` does not fire (the child is inside the element) |
+| Form Click on a click that lands on a control | not raised | `body` receives the bubbled `click` (D-3) |
+| Form KeyDown/KeyUp/KeyPress while a control has focus | only with `KeyPreview=True` | always (bubbled to `body`) (D-3) |
 
 ### D-3 — The Form's events and the web wiring (plan 5.1/5.2, spec §2.3/§5)
 
@@ -138,13 +154,24 @@ bubble, so a Panel's Enter would never fire for its children, and GroupBox alrea
 | FormClosing / FormClosed | FormClosingEventArgs / FormClosedEventArgs | — | |
 | Resize | EventArgs | `resize` | **Window**: `w.addEventListener("resize", AddressOf …)` |
 | Click | EventArgs | `click` | **Element** = `doc.body` |
-| KeyDown / KeyUp / KeyPress | KeyEventArgs / KeyEventArgs / KeyPressEventArgs | `keydown` / `keyup` / `keypress` | **Element** = `doc.body` |
+| KeyDown / KeyUp / KeyPress | KeyEventArgs / KeyEventArgs / KeyPressEventArgs | `keydown` / `keyup` / stored `keypress` (emitted as the filtered `keydown`, D-12) | **Element** = `doc.body` |
 
-**The representation:** `FormEventDef` gains `FormWebWiring WebWiring = FormWebWiring.Element`, a new enum
-`{ Element, Window, AfterInit }` in `FormEvents.cs`. Element means "the control's element" for a control and
-`doc.body` for the Form (its `HtmlTag` is `body`, `FormControlCatalog.cs:2662`). `WiredOn`'s signature does not change.
-Invariants (Task 1 tests): `Window`/`AfterInit` only on `FormRoot` events; at most one `AfterInit` event, and it is the
-row's default; an `AfterInit` event's web handler takes no parameter.
+**The representation:** `FormEventDef` gains two fields with defaults —
+- `FormWebWiring WebWiring = FormWebWiring.Element`, enum `{ Element, Window, AfterInit }` in `FormEvents.cs`. Element is
+  "the control's element" for a control and `doc.body` for the Form (its `HtmlTag` is `body`, `FormControlCatalog.cs:2662`).
+- `FormWebFilter WebFilter = FormWebFilter.None`, enum `{ None, KeyPressKeys, FromOutside }` — the CATALOG states which
+  events need the D-12 wrapper (every KeyPress row → `KeyPressKeys`; every Enter/Leave row → `FromOutside`); the emitter
+  reads the field and never switches on an event name. `FormEvents.ListenType(evt)` is the ONE answer to "what DOM type is
+  `addEventListener`ed": `keydown` for `KeyPressKeys`, else `WebEvent`.
+
+`WiredOn`'s signature does not change. Invariants (Task 1 tests): `Window`/`AfterInit` only on `FormRoot` events; at most
+one `AfterInit` event, and it is the row's default; `KeyPressKeys` exactly on the events stored `keypress`; `FromOutside`
+exactly on `focusin`/`focusout`; a filter only on an event with a `WebEvent`.
+
+**Lost — the form's layout `<div class="vgs-form">` as the root's Element** instead of `body`: the Docked strips are page
+chrome OUTSIDE `.vgs-form` (`FormAssetEmitter.cs:175`), so a click or key on a MenuStrip/StatusStrip would never reach the
+Form's handler, and the div carries no id the region could `getElementById`; `body` is where `data-form` and the form's
+own CSS already live (`:156`).
 
 **Emission (Task 2):** WinForms — `AddHandler Me.<Event>, AddressOf <h>` for every root bind, AFTER the reference rows
 (`RegionWriter.cs:763-766`), immediately before `End Sub` — VS's place for `this.Load += …`. Web — the root listeners
@@ -157,10 +184,9 @@ scaffold beside `Me.InitializeComponent()` in `New()` (`FormScaffolder.cs:230`):
 end of InitializeComponent: code after this line runs after Load. On WinForms Load runs later, when the form is shown."*
 Plus an entry in `docs/form-designer-followups.md`. RE-CHECK: `FormScaffolderTests` goldens for the web scaffold.
 
-**Recorded divergences (not fixed here — same class as the shipped web Panel Click):** the page's `click` on `body`
-bubbles from every control, where WinForms' Form.Click excludes clicks on child controls; key events reach `body` from
-any focused control, as if `KeyPreview=True`. Both are piece 2's to match in the portable library if it chooses
-(`e.target == e.currentTarget`; `KeyPreview`).
+**Recorded divergences** (the last two rows of D-2's divergence table): the page's `click` on `body` bubbles from every
+control; key events reach `body` from any focused control, as if `KeyPreview=True`. Classic emission diverges; piece 2's
+library is responsible for WinForms parity.
 
 **Lost — Load as a `window` `load` listener:** the D7 dispatch constructs the form after the page is ready, so the
 window's `load` can already have fired — a handler that registers cleanly and silently never runs. **Lost — Shown on the
@@ -170,8 +196,17 @@ nothing. **Lost — Activated → window `focus`:** a page has no window activat
 
 ### D-4 — Handler fitting (plan 5.4)
 
-`FormHandlers.FittingHandlers(form, owner, evt, codeText)` returns the Subs of the code-behind that FIT, in document
-order, from ONE text scanner (`FormCodeScan`, D-11):
+✅ **COORDINATOR RULING — ONE parameterised rule.** `FormHandlers.Shape(owner, evt, target, style)` →
+`FormHandlerShape(Parameters, Placement)` is the ONLY place a handler's signature and its side of the init region are
+decided. The stub writer (`Insert`) and `Fits` both READ it; neither restates it. Today the only style is
+`FormCodeStyle.Classic`, and every rule below is a CLASSIC-style rule (the web's `(e As DomEvent)`/`()` and the AfterInit
+call included). Piece 2's Task 30 ADDS `FormCodeStyle.Portable` as one arm of `Shape` (`(sender As Object, e As
+<WinFormsArgs ?? EventArgs>)` on both targets, placement after the region) — never a second signature site. Pinned in ADR
+0021; `FormCodeStyle` is the type piece 2's plan names (`BasicLang/Forms/FormCodeStyle.cs`, its "ONE reader of a file's
+style") — created here with the single member `Classic`, so piece 2 extends it rather than inventing it.
+
+`FormHandlers.FittingHandlers(form, owner, evt, codeText)` returns the Subs of the code-behind that FIT `Shape(…)`, in
+document order, from ONE text scanner (`FormCodeScan`, D-11):
 - **WinForms:** exactly two parameters; the first `Object` (or untyped); the second's type `T` fits an event with args
   `A` iff `T` is `EventArgs`, or `A`, or a .NET BASE of `A` — compared on the last segment, ignoring case. The base
   chains live in ONE table, `FormEvents.ArgsBases` (e.g. `CancelEventArgs` ⊃ FormClosingEventArgs,
@@ -180,8 +215,8 @@ order, from ONE text scanner (`FormCodeScan`, D-11):
   TreeNodeMouseClickEventArgs, DataGridViewCellMouseEventArgs; `AsyncCompletedEventArgs` ⊃ RunWorkerCompletedEventArgs).
   ⛔ The table is falsified EXHAUSTIVELY by in-process Roslyn (Task 3): for every event of every row and every args type
   the catalog names, `Fits` must equal csc's verdict on `ctl.E += H` with `H(object, T)`.
-- **Web:** a listener event (Element/Window) fits exactly one parameter typed `DomEvent`; an AfterInit event, or an event
-  of a row with `WebHandlerTakesEvent: false` (Timer), fits exactly zero parameters.
+- **Web (classic):** a listener event (Element/Window, filtered or not) fits exactly one parameter typed `DomEvent`; an
+  AfterInit event, or an event of a row with `WebHandlerTakesEvent: false` (Timer), fits exactly zero parameters.
 - Never offered: Functions, `New`, `InitializeComponent`, anything inside the designer regions.
 
 **Lost — the plan's "MouseEventArgs only mouse events" (by category):** wrong — `MouseClick` is in the Action category and
@@ -213,7 +248,9 @@ rationale).
     during a pick undoes the pick).
 - **Freshness:** the document view model pushes the code-behind text into the grid (`PropertyGridViewModel.CodeBehindText`)
   on every `SyncDesignerPanels` and after each designer write of the `.bas`; the view asks for a refresh on the combo's
-  `DropDownOpened` (an async re-read: open tab first, then disk — `ReadCodeBehindAsync` `:827-828`).
+  `DropDownOpened` (an async re-read: open tab first, then disk — `ReadCodeBehindAsync` `:827-828`). ✅ Coordinator
+  ruling: pinned by a real-view test — a Sub TYPED into the open, UNSAVED code-behind tab appears in the handler
+  drop-down on the next open — with the mutation that removes the refresh (Task 6).
 - **Lost — a read-only handler column with double-click only** (VS lets you pick and type). **Lost — a separate Events
   window** (VS uses the same grid).
 
@@ -237,8 +274,9 @@ rationale).
 - A WEB root bind on an event the Form does not wire on the web (`Shown`, a typo) → **BL8032** (refused, owner `'form'`) —
   the controls' rule, through the same seam. It used to be a BL8028 warning; the stricter answer is consistent and no
   shipping path writes such a bind.
-- BL8013 extends to the root's LISTENER binds (body/window, via `AddressOf`); an AfterInit bind is a direct call and is
-  exempt (M2).
+- BL8013 extends to the root's LISTENER binds (body/window, via `AddressOf`); an AfterInit bind and the user's handler of a
+  WRAPPED bind (D-12) are reached by a direct call and are exempt (M2) — the `AddressOf` names the generated wrapper, which
+  is always above the region's `InitializeComponent`.
 - BL8028 is no longer raised for root binds (components keep it). BL8026 for retarget loss. BL8035 unchanged.
 - BL8032's message lists the declared events comma-separated.
 - **BL8037 stays free for piece 2.** **Lost — a "handler does not fit its event" code:** both failures are already LOUD
@@ -250,27 +288,76 @@ rationale).
 Piece 2 reads, per its plan Task 40 and spec §5.6/§10.1/§11.1: "every event slice 5 listed gets a library member … the
 coverage gate picks them up from the catalog". What it gets:
 1. `FormControlDef.Events` / `FormRoot.Events` — `FormEventDef(Name, WinFormsArgs, WebEvent, Category, Description,
-   IsDefault, OracleExemption, IsWebDefault, WebWiring)`. `WebEvent` stays THE one DOM list (its §10.1); null =
-   WinForms-only (its `WebUnavailableMember` in shared code).
+   IsDefault, OracleExemption, IsWebDefault, WebWiring, WebFilter)`. `WebEvent` stays THE one list of stored DOM
+   identities (its §10.1); null = WinForms-only (its `WebUnavailableMember` in shared code). The DOM type actually
+   listened to is `FormEvents.ListenType(evt)` (`keydown` for KeyPress) — its library listens to the same.
 2. `FormEvents.WiredOn(definition, target)` — unchanged signature.
-3. `FormEvents.DomInterfaceOf(evt)` — NEW, one table keyed by the DOM name: `click`/`dblclick`/`mouse*` → `MouseEvent`,
-   `key*` → `KeyboardEvent`, `focusin`/`focusout` → `FocusEvent`, else `Event`. Slice 5's node/Edge tiers and piece 2's
-   coverage gate both dispatch through it — no second table.
-4. `WebWiring` — where the DOM source is for the Form (body / window / a call at the end of init).
+3. `FormEvents.DomInterfaceOf(webEvent)` — a **GATES-ONLY** table (the emitter never reads it), keyed by the STORED name,
+   stated explicitly: `click`, `dblclick`, `mousedown`, `mouseup`, `mousemove`, `mouseenter`, `mouseleave` → `MouseEvent`;
+   `keydown`, `keyup`, `keypress` → `KeyboardEvent` (a KeyPress is DISPATCHED as a `keydown` carrying `key`, through
+   `ListenType`); `focusin`, `focusout` → `FocusEvent`; `input`, `change`, `resize`, `load` → `Event`. **`tick` is
+   excluded** — a Timer is a `setInterval` callback, never a dispatched DOM event. Slice 5's node/Edge tiers and piece 2's
+   coverage gate both read it; no second table.
+4. `WebWiring` — where the DOM source is for the Form (body / window / a call at the end of init); `WebFilter` — which key
+   set (the ruling's four) or focus rule (relatedTarget outside) a WinForms event means.
+5. `FormHandlers.Shape(owner, evt, target, style)` and `FormCodeStyle` (D-4) — the ONE signature/placement rule its Task 30
+   extends with `Portable`. ⚠ Its plan creates `FormCodeStyle.cs`; after this slice it EXTENDS it (an add/add conflict if it
+   is created on its branch first — re-check at its Task 30 pre-flight).
 
 What piece 2's Task 40 must add beyond its §5.6 table: **DoubleClick (`dblclick`), MouseEnter/MouseLeave, Leave
-(`focusout`, relatedTarget outside — the mirror of its Enter rule), Form Load (AfterInit), Resize (window),
-Form Click/KeyDown/KeyUp/KeyPress (body)**. ⚠ Its §5.6 says KeyPress is "a character-producing `keydown`"; the catalog
-says `keypress`. Both fire for the same real input (CDP `Input.dispatchKeyEvent` with text raises both), so its gate
-passes either way; its pre-flight must pick one and record it. Its Task 30 rewrites the stub signature site that Task 3
-here restructures (`FormHandlers.Insert`) — re-anchor on this slice's merge.
+(`focusout`, relatedTarget outside), Form Load (AfterInit), Resize (window), Form Click/KeyDown/KeyUp/KeyPress (body)**.
+KeyPress is ALREADY consistent with its §5.6 ("a character-producing `keydown`"): the ruling's key set is the definition of
+"character-producing" both sides use; mapping `e` to `KeyChar` (`'\r'` for Enter, `'\b'`, `ChrW(27)`) is its job. Its Task 30
+rewrites the stub signature arm that Task 3 here centralises — re-anchor on this slice's merge.
 
 ### D-9 — Double-clicking the form's background opens `<Form>_Load` (VS)
 
-`FormCanvasControl.OnCanvasDoubleTapped` (`:715-718`) runs a NEW `ActivateFormCommand` (a new StyledProperty, bound in
-`CodeEditorDocumentView.axaml` beside `ActivateControlCommand` `:247`) instead of returning. `ActivateControlCommand(null)`
-stays a no-op — no existing caller's meaning changes. Optional: dropping D-9 affects nothing else. **Lost — leaving the
-root reachable only through the Events tab** (VS users double-click the form for Load by habit).
+✅ **IN (coordinator ruling).** `FormCanvasControl.OnCanvasDoubleTapped` (`:715-718`) — when the hit test finds no
+control — runs a NEW `ActivateFormCommand` (a new StyledProperty, bound in `CodeEditorDocumentView.axaml` beside
+`ActivateControlCommand` `:247`) **only when the point is on the FORM SURFACE** (inside `FormCanvasTransform.SurfaceSize`,
+the one answer to "how big is the form", in canvas coordinates through the transform). ⚠ The canvas OUTSIDE the form also
+hit-tests null, and must still do nothing — both are tested. `ActivateControlCommand(null)` stays a no-op, so no existing
+caller's meaning changes. **Lost — leaving the root reachable only through the Events tab** (VS users double-click the
+form for Load by habit).
+
+### D-12 — The filtered listener: a GENERATED wrapper Sub (KeyPress, Enter, Leave)
+
+For an event whose `WebFilter` is not `None`, the web init region gets, ABOVE `Private Sub InitializeComponent()`, one
+generated Sub per such bind, and the listener names IT:
+```vb
+Private Sub VgsOn_txt_KeyPress(e As DomEvent)
+    Dim k As String = e.key
+    If k.Length = 1 OrElse k = "Enter" OrElse k = "Backspace" OrElse k = "Escape" Then
+        Me.txt_KeyPress(e)
+    End If
+End Sub
+Private Sub VgsOn_pnl_Enter(e As DomEvent)
+    If e.relatedTarget Is Nothing OrElse Not e.currentTarget.contains(e.relatedTarget) Then
+        Me.pnl_Enter(e)
+    End If
+End Sub
+' … inside InitializeComponent:
+txt.addEventListener("keydown", AddressOf VgsOn_txt_KeyPress)
+pnl.addEventListener("focusin", AddressOf VgsOn_pnl_Enter)
+```
+Measured exactly as written on the branch CLI (M7). Rules:
+- **Named Subs, never a lambda:** `Me.` inside a lambda hard-errors on the JS backend and an unqualified call is a
+  `ReferenceError`; a named wrapper calls `Me.<handler>(e)` outside any lambda (M7 emitted `this.txt_KeyPress(e)`).
+- **Above `InitializeComponent`:** `AddressOf` a Sub declared later erases its parameter types (BL8013's measured rule, and
+  piece 2's M25). The wrapper's own call to the user's handler is a direct call, which the erasure does not bite (M2) — so
+  BL8013 checks the WRAPPER's position (always above, by construction) and exempts the user's handler for a wrapped bind.
+- **Naming:** `VgsOn_<owner prefix>_<WinForms event>` (owner prefix = the control Id, or the form name for the root); the
+  `VgsOn_` prefix is reserved, documented in the region's generated comment; a user Sub of the same name is a duplicate
+  member BasicLang reports loudly.
+- **One rule:** the wrapper body is built from `WebFilter` in one function (`RegionWriter.Wrapper`), never from the
+  event's name. Web only — WinForms raises KeyPress/Enter/Leave itself and wires the handler directly.
+- `relatedTarget`/`contains` are NOT added to `dom-core.bli` (M7: accepted untyped; piece 2's Task 28 declares both — adding
+  them here would collide with that commit on the two load-bearing copies). The node and Edge runs gate the text.
+
+**Lost — a helper in `dom-core.bli`:** that file is `Extern Class` declarations only and EMITS NOTHING (its header, `:4-6`) —
+it cannot hold the filter's code; a new emitting library file would be a third load-bearing copy for the IDE drop.
+**Lost — an inline lambda** (`Sub(e) If … Then Me.h(e)`): the `Me.`-in-lambda hard error (CLAUDE.md). **Lost — filtering
+inside the user's handler** (a generated `If` in their Sub): the designer never writes inside a user's Sub.
 
 ### D-10 — Owners
 
@@ -307,10 +394,14 @@ skipped and the **sorted failure names** with the base SHA (expected: only the k
 on the BRANCH build through the PROJECT route (a scratch web project, `BasicLang.exe build`), since M1/M2 used the stale
 `IDE\` drop.
 
-### Task 1 — The event lists, `WebWiring`, `DomInterfaceOf`, ADR 0021 (plan 5.1)
-First: `docs/superpowers/decisions/0021-form-event-lists-and-web-wiring.md` (D-2, D-3, D-8) + the README index.
-Files: `FormEvents.cs` (`FormWebWiring`, the record field, `DomInterfaceOf`, `ArgsBases` stub — filled in Task 3, its
-doc comment `:53-66` updated); `FormControlCatalog.cs` (every row per D-1, `FormRoot.Events` per D-3; the stale `Ev`/
+### Task 1 — The event lists, `WebWiring`/`WebFilter`, `DomInterfaceOf`, ADR 0021 (plan 5.1)
+First: `docs/superpowers/decisions/0021-form-event-lists-and-web-wiring.md` + the README index. It records: D-2 (incl.
+the coordinator's KeyPress ruling — stored `keypress`, emitted filtered `keydown`, the four-key set, `e`→`KeyChar` is piece
+2's — and the Enter/Leave relatedTarget ruling), D-3, D-8, D-12, the divergence table, and D-4's ONE parameterised
+`Shape(owner, evt, target, style)` rule with `Fits` and AfterInit stated as CLASSIC-style rules piece 2 extends.
+Files: `FormEvents.cs` (`FormWebWiring`, `FormWebFilter`, the two record fields, `ListenType`, `DomInterfaceOf` — the
+explicit gates-only table of D-8 item 3 — and an `ArgsBases` stub filled in Task 3; its doc comment `:53-66` updated);
+new `FormCodeStyle.cs` (`Classic` only, D-4); `FormControlCatalog.cs` (every row per D-1, `FormRoot.Events` per D-3; the stale `Ev`/
 `Events` comments `:1396-1410`, `:1869-1873`); `DesignDiagnostic.cs` (BL8026/BL8032 doc text `:230-236`, `:314-318`).
 Procedure: names/args/web names first, then the parity run prints the category and description of each, pasted verbatim.
 Tests (`FormEventsTests`, fast):
@@ -318,14 +409,21 @@ Tests (`FormEventsTests`, fast):
   (web: Load, Resize, Click, KeyDown, KeyUp, KeyPress).
 - REWRITE the exact-list pins (`:125-136`, `:166-183`, `:189-203`, `:209-220`, `:259-270`) as catalog-derived or
   `Contains` assertions that keep their point (Enter is GroupBox's default; Paint is never on a web Panel; …).
+  ✅ `APanelKind_DefaultsToPaint_AndKeepsClick`'s hand-written `[TestCase("Panel")]`/`FlowLayoutPanel`/`TableLayoutPanel`
+  list (`:189-191`) becomes a `TestCaseSource` over the catalog — every row whose `DefaultEventDef.Name == "Paint"` — with a
+  floor assertion that the source is non-empty (never "a hand-written list beside the catalog").
 - `NoRow_HasTwoEventsWithOneWebName` extended to `FormRoot` (`All.Append(FormRoot)`).
 - NEW invariants, each over `All` + `FormRoot`: `Window`/`AfterInit` only on FormRoot; ≤ 1 AfterInit and it is the
-  default; every `WebEvent` is a key of `DomInterfaceOf`'s table (no DOM name the dispatch tiers cannot fire); every
-  `WinFormsArgs` whose snapshot namespace is not `System`/`System.Windows.Forms` is written qualified (reads the oracle's
-  `argsFullName`); every row that declares events has exactly one default (exists, `:14-24`).
+  default; `KeyPressKeys` exactly on the events stored `keypress` and `ListenType` = `keydown` for them; `FromOutside`
+  exactly on `focusin`/`focusout`; a filter only where `WebEvent` is set; **every `WebEvent` other than `tick` is a key of
+  `DomInterfaceOf`'s explicit table, and `tick` is not in it** (D-8 item 3 — a gates-only table, asserted never read by
+  `RegionWriter`: a grep-style test over `RegionWriter.cs` for `DomInterfaceOf`); every `WinFormsArgs` whose snapshot
+  namespace is not `System`/`System.Windows.Forms` is written qualified (reads the oracle's `argsFullName`); every row that
+  declares events has exactly one default (exists, `:14-24`).
 - Parity (automatic, fast): `WinFormsCatalogParityTests` per kind and `TheFormRoot_MatchesTheSnapshotsForm`.
 Mutations: FormRoot Load's `WebEvent` null (the root WiredOn test); MouseClick given `click` (NoRow…); an event's
-`WebWiring = Window` on a control (invariant); `System.ComponentModel.` dropped from Validating (qualification test, and
+`WebWiring = Window` on a control (invariant); a TextBox KeyPress with `WebFilter.None` (invariant); `tick` added to the
+interface table (invariant); `System.ComponentModel.` dropped from Validating (qualification test, and
 Task 4's csc sweep); a listed event that is not browsable (parity names it).
 RE-CHECK: the six `FormEventsTests` rows above; `FormRegionWriterTests.Write_Web_RefusesAnUnknownEvent_NotOnTheRow`
 (`:1040`, `mouseenter` is now ON the row → change the case to `mouseover`, still not on the row; `:1051` still finds
@@ -338,8 +436,10 @@ automatically larger — note its run time); `FormComponentEmissionTests` (`:204
 Files: `RegionWriter.cs` — `CheckRootBinds` becomes the web BL8032 refusal for the root through the seam; a root arm in
 `AppendBinds` (Element → `doc.body.addEventListener`, Window → `w.addEventListener`, the CATALOG's spelling);
 `GenerateInit` emits WinForms `AddHandler Me.<Event>` after the reference rows, web listeners after the controls and
-`Me.<h>()` last; the `Dim w` condition widened; `CheckHandlerOrdering` includes root LISTENER binds; the BL8032 message
-comma-joined. `FormDocument.cs:103-108` doc. `FormScaffolder.cs` web comment (D-3).
+`Me.<h>()` last; the `Dim w` condition widened; `CheckHandlerOrdering` includes root LISTENER binds and exempts the user's
+handler of a WRAPPED bind (D-12); the BL8032 message comma-joined; **D-12's wrappers** — `GenerateInit` emits one
+`VgsOn_…` Sub per filtered web bind (controls AND root) above `Private Sub InitializeComponent()`, built by ONE
+`RegionWriter.Wrapper(owner, evt, handler)`, and the listener is `addEventListener(ListenType(evt), AddressOf VgsOn_…)`. `FormDocument.cs:103-108` doc. `FormScaffolder.cs` web comment (D-3).
 Tests (`FormRootTests`, fast):
 - REWRITE `ARootBind_IsWarned_NotEmitted_UntilFormEventsExist` → `ARootBind_IsWired_AsTheLastStatement_OnWinForms`
   (`AddHandler Me.Load, AddressOf F_Load` is the line before `End Sub`, after `Me.AcceptButton = …`).
@@ -349,7 +449,15 @@ Tests (`FormRootTests`, fast):
 - `AWebRootBind_OnShown_IsRefusedAsBL8032_NamingTheForm` (refused, nothing written).
 - `AWebRootKeyHandler_DeclaredBelowTheRegion_IsBL8013` and `AWebLoadHandler_DeclaredBelow_IsNot` (M2).
 - `FormScaffolderTests`: the web scaffold carries the Load comment.
-Mutations: Load called before the controls; `Me.` dropped (the exact-text test, and Task 4's node run: `ReferenceError`);
+- `FormRegionWriterTests` (D-12): a web TextBox KeyPress bind emits exactly M7's `VgsOn_txt_KeyPress` text ABOVE
+  `InitializeComponent` and `txt.addEventListener("keydown", AddressOf VgsOn_txt_KeyPress)` — never `"keypress"`; a Panel
+  Enter/Leave emits the relatedTarget wrapper on `focusin`/`focusout`; a root KeyPress wraps on `doc.body`; a page with no
+  filtered bind emits NO `VgsOn_` (existing goldens byte-identical); the user's KeyPress handler declared BELOW the region is
+  not BL8013 (wrapped, a direct call), a Click handler declared below still is; a WinForms KeyPress is a plain
+  `AddHandler txt.KeyPress` (no wrapper).
+Mutations: Load called before the controls; the KeyPress listener emitted as `keypress` (exact text, and Task 4's
+Backspace/Escape dispatch); the wrapper placed BELOW `InitializeComponent` (exact text, and the JS build's delegate
+error); the relatedTarget test dropped (Task 4's child-to-child step); `Me.` dropped (the exact-text test, and Task 4's node run: `ReferenceError`);
 `w` not declared for a Resize bind (unit test, and Task 4's JS compile); the root BL8032 check removed; BL8013 skipping
 root listeners.
 RE-CHECK: `FormRootTests.cs:183`, `:249` (root-bind read/write fixtures); every `FormRegionWriterTests` golden;
@@ -359,8 +467,9 @@ RE-CHECK: `FormRootTests.cs:183`, `:249` (root-bind read/write fixtures); every 
 ### Task 3 — Owners, the shared scanner, fitting (plan 5.3/5.4)
 Files: new `FormBindOwner.cs`, new `FormCodeScan.cs`; `FormHandlers.cs` — `Plan(form, owner, evt, code, handlerName?)`,
 `PlanDefault` delegating (unchanged signature and behaviour), `PlanBind(form, owner, bind, code)` (the control overload
-kept, delegating), `EnsureBind(owner, …)`, `Unbind(owner, eventName)`, `FittingHandlers`, `Fits`; the signature site
-(`:217-222`) chooses `()` for AfterInit and `WebHandlerTakesEvent: false`; `FindDeclarationLine` deleted.
+kept, delegating), `EnsureBind(owner, …)`, `Unbind(owner, eventName)`, `FittingHandlers`, `Fits`; **`Shape(owner, evt, target, style)` →
+`FormHandlerShape`** (D-4) replaces the signature site (`:217-222`) and the placement choice (`:239-241`): `Insert` and
+`Fits` both read it; `()` for AfterInit and `WebHandlerTakesEvent: false` live there only; `FindDeclarationLine` deleted.
 `RegionWriter.FindHandlerDeclarationLine` deleted → `FormCodeScan`. `FormEvents.ArgsBases` filled.
 Tests:
 - `FormHandlerPlanTests`: root Load → `Private Sub LoginForm_Load(sender As Object, e As EventArgs)` BELOW the region
@@ -376,7 +485,11 @@ Tests:
   so it runs on Linux too): per WinForms kind + Form, ONE C# source with a line per (event, T) pair, T ∈ {EventArgs} ∪
   every args type the catalog names; each line's verdict read from the diagnostics' line numbers; `Fits` ⇔ csc, both
   directions. Measure the run time; if over ~10 s split by kind.
-Mutations: an `ArgsBases` entry removed (CancelEventArgs ⊃ FormClosingEventArgs) → the csc test; fit by exact name only
+- `FormHandlerShapeTests` (new, fast, `TestCaseSource` over every event × target, Classic style): the stub `Insert` writes
+  is exactly the one `Fits` accepts (a stub planned then scanned FITS its own event — the "one site" pin), and a structural
+  test that `FormHandlers.cs` builds a parameter list in `Shape` only (no `"(sender As Object"` / `"(e As DomEvent)"`
+  literal outside it).
+Mutations: `Insert` given its own signature literal again (the shape pin red); an `ArgsBases` entry removed (CancelEventArgs ⊃ FormClosingEventArgs) → the csc test; fit by exact name only
 → the csc test; the scanner back to `Ordinal` → the case test; `()` accepted for a web listener → the fit test;
 `PlanDefault` no longer delegating (a second signature site) → the existing gesture tests.
 RE-CHECK: `FormHandlerPlanTests` (26 call sites), `FormHandlerGestureTests`, `FormHandlerReachabilityTests`,
@@ -392,16 +505,25 @@ RE-CHECK: `FormHandlerPlanTests` (26 call sites), `FormHandlerGestureTests`, `Fo
   merge, read it): per web kind with a web event, and the Form: a `.blwebform` + code-behind made by `FormHandlers.Plan`
   + `EnsureBind` + `RegionWriter`, built by the real CLI on the PROJECT route (`dom-core.bli`, the D7 dispatch), each
   handler printing its own name; run under node with a stub DOM (`getElementById` → `EventTarget`s, `document.body`,
-  `window`); dispatch every wired event once (`new Event(type, { bubbles: true })` — node has no `MouseEvent`/
-  `KeyboardEvent`, so the node tier proves wiring BY NAME); assert each handler ran exactly once, and `Load` ran once at
-  construction BEFORE any dispatch.
-- Edge, where installed (SKIP otherwise, never fail): one page (Button with Click/MouseEnter/KeyDown, the Form's Load and
-  Resize) through the loopback-served CLI-built site (slice-4 Part F shape); a new `EdgeStep.Dispatch(label, target,
-  type)` dispatching `new (DomInterfaceOf)(type)` — the real interfaces; the page writes each handler's name into a label
-  read back by `HasText`. ⚠ Synthetic dispatch, not real input — real input (CDP `Input.*`) is piece 2 Task 35.
+  `window`, each element with a `contains` stub that knows its children); dispatch every wired event once with
+  `ListenType(evt)` as the type (`new Event(type, { bubbles: true })` — node has no `MouseEvent`/`KeyboardEvent`, so the
+  node tier proves wiring BY NAME). Key events carry `key`: a **KeyPress** is dispatched as `keydown` with `key` ∈ {`a`,
+  `Enter`, `Backspace`, `Escape`} → its handler ran FOUR times, and with `Shift`, `ArrowLeft`, `F1` → never (the ruling's
+  key set, M7); a KeyDown handler on the same control runs for all seven. Enter/Leave carry `relatedTarget`: from OUTSIDE
+  → the Panel's Enter ran once; **from one child of the Panel to another → the Panel's Enter and Leave did NOT run**
+  (coordinator ruling 2); `null` → ran. Assert each other handler ran exactly once, and `Load` ran once at construction
+  BEFORE any dispatch.
+- Edge, where installed (SKIP otherwise, never fail): one page (Button with Click/MouseEnter/KeyDown, a TextBox with
+  KeyPress, a Panel with two TextBoxes and Enter, the Form's Load and Resize) through the loopback-served CLI-built site
+  (slice-4 Part F shape); a new `EdgeStep.Dispatch(label, target, type, key?, relatedTarget?)` dispatching
+  `new (DomInterfaceOf(webEvent))(ListenType(evt), { bubbles, key, relatedTarget })` — the real interfaces; a KeyPress is
+  SENT as a `KeyboardEvent("keydown", { key })` (`DomInterfaceOf("keypress")` = `KeyboardEvent`); a real `.focus()` from
+  one Panel child to the other must not raise the Panel's Enter. The page writes each handler's name into a label read back
+  by `HasText`. ⚠ Synthetic dispatch, not real input — real input (CDP `Input.*`) is piece 2 Task 35.
 Mutations: the web emitter writes the WinForms spelling (`"Click"`) → node red; AfterInit unqualified → node
 `ReferenceError`; Load emitted as a `load` listener → "Load ran once at construction" red; Window bind on `doc.body` →
-the resize dispatch never runs.
+the resize dispatch never runs; `Backspace` dropped from the key set → the four-count red; the relatedTarget test dropped →
+the child-to-child step red; KeyPress listening on `keypress` → node red (the dispatch is a `keydown`).
 
 ### Task 5 — The grid's Events mode (VM; plan 5.5)
 Files: new `ViewModels/Designer/FormEventRow.cs` (`IFormDisplayRow`; `Handler` text; `Choices` same-instance; commit →
@@ -439,13 +561,19 @@ Tests:
   only the first; `PickInCombo` binds it; `.bas` byte-identical; (e) clearing unbinds, `.bas` byte-identical, ONE Ctrl+Z
   restores the Bind; (f) WEB fixture: a Panel shows no Paint; double-click Click → `Private Sub pnl_Click(e As DomEvent)`
   ABOVE the region and `<Bind Event="click" …>`; (g) the Form (selector's root entry): double-click Load →
-  `LoginForm_Load`; (h) typing `DoIt` + Enter → a `DoIt` stub, bound.
-- `FormCanvasDoubleClickTests`: REWRITE `DoubleClickingEmptyFormBackgroundOpensNothing` → `…AsksTheHostToOpenTheFormsLoad`
-  (`ActivateFormCommand` run, `ActivateControlCommand` not); an AXAML read that `CodeEditorDocumentView.axaml` BINDS
-  `ActivateFormCommand` (an unbound command is unreachable — CLAUDE.md).
+  `LoginForm_Load`; (h) typing `DoIt` + Enter → a `DoIt` stub, bound; **(i) freshness (coordinator ruling 5):** the
+  code-behind is OPEN in a second tab (`OpenDocumentLookup`), the user types `Private Sub Typed(sender As Object, e As
+  EventArgs)` into it WITHOUT saving, then opens `btn`'s Click drop-down with a real click → `Typed` is listed (the disk
+  never had it); picking it binds it, and the disk `.bas` is still untouched.
+- `FormCanvasDoubleClickTests`: REWRITE `DoubleClickingEmptyFormBackgroundOpensNothing` into TWO tests —
+  `DoubleClickingTheFormSurface_AsksTheHostToOpenTheFormsLoad` (`ActivateFormCommand` run, `ActivateControlCommand` not)
+  and `DoubleClickingTheCanvasOutsideTheForm_OpensNothing` (a point past `SurfaceSize`: neither command runs) — at more
+  than one zoom; plus an AXAML read that `CodeEditorDocumentView.axaml` BINDS `ActivateFormCommand` (an unbound command is
+  unreachable — CLAUDE.md).
 - `FormDesignerLayoutRealViewTests.EveryRowsEditor_Fits…`: in Events mode the handler combo is swept and REQUIRED seen.
 Mutations: the pair in the existing panel (the group test); `HandlerRequested` unwired ((b) red); the background
-double-click not routed ((g)/canvas test); the Bind written before a failed stub write (a refused gesture must write
+double-click not routed (the surface test); the surface bounds check removed (the outside-the-form test); **the
+`DropDownOpened` refresh removed / `CodeBehindText` not pushed from the open tab** ((i) red); the Bind written before a failed stub write (a refused gesture must write
 nothing — a read-only `.bas`); the guard not covering event rows (if it does not reproduce headless, record EQUIVALENT
 with the measurement).
 RE-CHECK: `TheDocumentView_NoLongerCarriesTheGridsOwnBindings`, `TheToolbar…AutomationName`, `FormTrayViewTests`
@@ -479,13 +607,19 @@ MouseDown; TextBox KeyPress; saved via `SaveAsync`; built by the real CLI **and*
   raises Click/MouseDown/KeyPress through the protected `On…` methods by reflection, and prints an ordered log: `Load`
   first, then each handler once, `lbl.Text` = `loaded`.
 - Web: node (and Edge where present): `load` first, `lbl` text `loaded` — which fails if Load runs before the controls
-  are fetched — then each dispatched handler once.
+  are fetched — then each dispatched handler once; the TextBox KeyPress is driven as `keydown` events carrying `key`
+  (`x` and `Enter` → two KeyPress runs, `Shift` → none), never a `keypress` event.
+- The KeyPress handler's `e` differs by target (a `KeyPressEventArgs` on WinForms, a `DomEvent` on the page); the shared
+  assertion is the COUNT and order, not the character — `KeyChar` mapping is piece 2's (ruling 1).
 Mutations: the WinForms `AddHandler Me.Load` dropped (the log); web Load moved before the controls (`lbl` is null);
 the IDE route alone skipping the region write (the IDE half red, the CLI half green — the "both entry points" kill).
 
 ### Task 9 — Records, mutation ledger, gate (§5), IDE drop, click-through
-Execution notes per task in §6 below (as slice 4's §8). `docs/form-designer-followups.md`: the two D-3 divergences, the
-"handler does not fit" code follow-up (D-7), and the piece-2 KeyPress reconciliation.
+Execution notes per task in §6 below (as slice 4's §8). `docs/form-designer-followups.md`: **D-2's divergence table,
+copied whole** (each row "classic emission diverges; piece 2's library is responsible for WinForms parity"), the
+"handler does not fit" code follow-up (D-7), the KeyPress key-set ruling and its `KeyChar` hand-off to piece 2, the
+reserved `VgsOn_` prefix, and M7's finding that an Extern class's undeclared member compiles untyped and silently
+(`relatedTarget`/`contains` until piece 2's Task 28 declares them).
 
 ## 5. Gate for the slice
 - **Fast subset** (`--filter "TestCategory!=Integration"`, Release, both streams captured): the **sorted failure NAMES**
@@ -516,7 +650,11 @@ Execution notes per task in §6 below (as slice 4's §8). `docs/form-designer-fo
      is offered; a `KeyEventArgs` Sub is not offered for Click but is for KeyDown. Pick it — the code is unchanged.
   5. Clear the cell: the wiring goes, the Sub stays. Ctrl+Z restores the wiring.
   6. Type `DoIt` in a cell and Enter: a `DoIt` handler is created and opened.
-  7. Double-click the form's background: `<Form>_Load` opens; F5 — Load runs before the window shows.
+  7. Double-click the form's background: `<Form>_Load` opens; F5 — Load runs before the window shows. Double-click the
+     grey canvas OUTSIDE the form: nothing happens.
+  7a. On a web form, wire a TextBox KeyPress that appends to a label: typing letters, Enter, Backspace, Esc each run it;
+     Shift and the arrow keys do not. Wire a Panel's Enter: tabbing between two TextBoxes inside the Panel does not run it;
+     tabbing in from outside does.
   8. On a WEB form: a Panel shows no Paint; Click creates `pnl_Click(e As DomEvent)` above the region. The Form's Events
      show Load/Resize/Click/KeyDown/KeyUp/KeyPress only. Load writes a label; open the page: the label shows it; resize
      the browser: Resize runs.
@@ -566,3 +704,19 @@ Execution notes per task in §6 below (as slice 4's §8). `docs/form-designer-fo
    mention (D-3).
 10. Stale doc comments: `Ev` (`FormControlCatalog.cs:1869-1873`), BL8026/BL8032 (`DesignDiagnostic.cs`),
     `FormDocument.Binds` (`:103-108`).
+
+## 9. Plan review of `dabbdb90` — dispositions (this revision; coordinator rulings, owner delegated)
+
+| # | Item | Disposition |
+|---|---|---|
+| 1 | KeyPress: stored `keypress`, emitted filtered `keydown`; where the filter lives; measure first | Ruling recorded in D-2 and ADR 0021 (Task 1). Generated wrapper Sub in the init region, above `InitializeComponent` (D-12); `dom-core.bli` rejected (declarations only, emits nothing). MEASURED on the branch CLI (M7). D-3, D-8, Tasks 2/4/8 updated; "passes either way" deleted |
+| 2 | Enter/Leave filtered to relatedTarget outside, same mechanism | D-2 + D-12 (`FromOutside`); Task 4 asserts child→child does NOT raise the Panel's Enter/Leave (node + a real `.focus()` in Edge); measured in M7 |
+| 3 | Divergence table | Added to D-2 (seven rows, each "classic diverges; piece 2 responsible"); copied to `docs/form-designer-followups.md` in Task 9 |
+| 4 | One parameterised signature rule | D-4: `FormHandlers.Shape(owner, evt, target, style)` + `FormCodeStyle.Classic`; `Fits`/AfterInit are CLASSIC rules; piece 2 adds `Portable` as an arm; ADR 0021; Task 3 `FormHandlerShapeTests` |
+| 5 | Freshness from the unsaved tab | D-5 note; Task 6 real-view (i) + the refresh-removed mutation |
+| 6 | D-1 reason | Rests on WinForms selectability; the tabindex fact (`FormAssetEmitter.cs:315-318`) recorded |
+| 7 | `.vgs-form` vs `body` | D-3's losing alternative (the Docked strips sit outside `.vgs-form`; no id) |
+| 8 | D-9 IN, surface only | "Optional" removed; `SurfaceSize` bounds; two canvas tests (surface / outside), more than one zoom |
+| 9 | Explicit DOM-interface table, no `tick`, gates-only | D-8 item 3 lists it; Task 1 invariant + a test that `RegionWriter` never reads it |
+| 10 | `APanelKind_…` list | Task 1: catalog-driven `TestCaseSource` (default event Paint) with a non-empty floor |
+| 11 | Record the key-set ruling | D-2 row, ADR 0021, Task 9's followups entry |
