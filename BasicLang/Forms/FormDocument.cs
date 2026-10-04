@@ -110,15 +110,17 @@ public sealed class FormDocument
     public List<FormBind> Binds { get; } = new();
 
     /// <summary>
-    /// Every control or component whose Id is the FORM's own name, ignoring case as BasicLang names do — refused with the
-    /// duplicate-id code (BL8017) by the reader and the region writer alike (slice 5 review fix 2). A field named like
-    /// its enclosing class is CS0542 on WinForms, and on the page the control's <c>VgsOn_&lt;Id&gt;_…</c> wrapper would
-    /// collide with the Form's own <c>VgsOn_&lt;Name&gt;_…</c>.
+    /// Every control or component whose Id is EXACTLY the FORM's own name — refused with the duplicate-id code (BL8017) by
+    /// the reader and the region writer alike (slice 5 review fix 2): a field named like its enclosing class is CS0542.
+    /// ⚠ Exact (Ordinal), measured against the existing suite: a form <c>Pic</c> holding a control <c>pic</c> builds and runs
+    /// on both targets (the image-copy acceptance fixtures), so refusing case variants refused working documents. The one
+    /// real case-variant collision — two generated <c>VgsOn_</c> wrappers whose names differ only in case — is refused by
+    /// the region writer where it actually arises (<c>RegionWriter.CheckWrapperNames</c>).
     /// </summary>
     public IEnumerable<FormControl> ControlsNamedLikeTheForm() =>
         string.IsNullOrEmpty(Name)
             ? Enumerable.Empty<FormControl>()
-            : AllControls().Concat(AllComponents()).Where(c => string.Equals(c.Id, Name, StringComparison.OrdinalIgnoreCase));
+            : AllControls().Concat(AllComponents()).Where(c => string.Equals(c.Id, Name, StringComparison.Ordinal));
 
     /// <summary>The ONE BL8017 text for <see cref="ControlsNamedLikeTheForm"/>, shared by the reader and the region writer.</summary>
     public string NamedLikeTheFormMessage(FormControl control) =>

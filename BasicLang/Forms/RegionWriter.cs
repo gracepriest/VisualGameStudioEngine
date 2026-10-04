@@ -124,6 +124,7 @@ public static class RegionWriter
         // own edits, the retarget, tests) — and the wrapper names below would collide.
         diagnostics.AddRange(form.ControlsNamedLikeTheForm()
             .Select(c => Error(DesignCodes.DuplicateControlId, form.NamedLikeTheFormMessage(c), filePath, 0)));
+        CheckWrapperNames(filePath, form, diagnostics);
         CheckHandlerOrdering(filePath, source, index, form, init, diagnostics);
         if (diagnostics.Any(d => !d.IsWarning))
         {
@@ -546,6 +547,49 @@ public static class RegionWriter
             diagnostics.Add(UnknownWebEvent(filePath, "form", FormControlCatalog.FormRoot, bind));
         }
     }
+
+    /// <summary>
+    /// Refuses (BL8017) two generated wrappers whose names differ only in CASE — a control <c>f</c> and the form <c>F</c>
+    /// both wrapping KeyPress get <c>VgsOn_f_KeyPress</c> and <c>VgsOn_F_KeyPress</c>, one member to BasicLang, which
+    /// ignores case. Asked of the wrappers the page will really get (D-12), so a case-variant Id with no colliding wrapper —
+    /// a form <c>Pic</c> holding a control <c>pic</c>, which builds and runs — is never refused for it.
+    /// </summary>
+    private static void CheckWrapperNames(string filePath, FormDocument form, List<DesignDiagnostic> diagnostics)
+    {
+        if (form.Target != FormTarget.Web)
+        {
+            return;
+        }
+
+        var collisions = WrapperOwners(form)
+            .SelectMany(o => o.Events.Select(e => (Owner: o.Prefix, Name: WrapperName(o.Prefix, e))))
+            .GroupBy(w => w.Name, StringComparer.OrdinalIgnoreCase)
+            .Where(g => g.Select(w => w.Owner).Distinct(StringComparer.Ordinal).Count() > 1);
+
+        foreach (var group in collisions)
+        {
+            diagnostics.Add(Error(DesignCodes.DuplicateControlId,
+                $"{string.Join(" and ", group.Select(w => $"'{w.Owner}'").Distinct())} would each get a generated wrapper named " +
+                $"'{group.First().Name}' — one name to BasicLang, which ignores case. Rename the control so it differs from " +
+                "the form's name by more than case.",
+                filePath, 0));
+        }
+    }
+
+    /// <summary>Every owner with filtered web binds, and its filtered events — what <see cref="AppendWrappers"/> emits.</summary>
+    private static IEnumerable<(string Prefix, IReadOnlyList<FormEventDef> Events)> WrapperOwners(FormDocument form) =>
+        form.AllControls()
+            .Select(c => (Prefix: c.Id, Definition: c.Definition, Binds: (IEnumerable<FormBind>)c.Binds))
+            .Append((Prefix: form.Name, Definition: (FormControlDef?)FormControlCatalog.FormRoot, Binds: EmittedRootBinds(form)))
+            .Where(o => o.Definition != null)
+            .Select(o => (o.Prefix, (IReadOnlyList<FormEventDef>)o.Binds
+                .Where(b => !string.IsNullOrEmpty(b.Handler))
+                .Select(b => WebEventOf(o.Definition!, b))
+                .Where(e => e is { WebFilter: not FormWebFilter.None })
+                .Select(e => e!)
+                .Distinct()
+                .ToList()))
+            .Where(o => o.Item2.Count > 0);
 
     /// <summary>The Form's binds the init region EMITS — every bind with a handler, minus reserved data binding.</summary>
     private static IEnumerable<FormBind> EmittedRootBinds(FormDocument form) =>

@@ -430,7 +430,7 @@ public class FormEventEmissionTests
     }
 
     [TestCase("F.blform", "<Form Name=\"F\" Version=\"1\"><Controls><Button Id=\"F\" X=\"8\" Y=\"8\" Width=\"75\" Height=\"23\" TabIndex=\"0\"/></Controls></Form>")]
-    [TestCase("F.blwebform", "<WebForm Name=\"F\" Version=\"1\"><Layout Kind=\"Grid\"/><Controls><Button Id=\"f\" Col=\"0\" Row=\"0\" TabIndex=\"0\"/></Controls></WebForm>")]
+    [TestCase("F.blwebform", "<WebForm Name=\"F\" Version=\"1\"><Layout Kind=\"Grid\"/><Controls><Button Id=\"F\" Col=\"0\" Row=\"0\" TabIndex=\"0\"/></Controls></WebForm>")]
     public void TheReader_RefusesAControlNamedLikeTheForm(string fileName, string xml)
     {
         var file = BasicLang.Forms.Serialization.FormDocumentReader.Read(fileName, xml);
@@ -441,6 +441,31 @@ public class FormEventEmissionTests
     [Test]
     public void AControlNamedOtherwise_IsNotRefused() =>
         Assert.That(Write(WebForm(Web("TextBox", "Form1"))).Refused, Is.False);
+
+    /// <summary>
+    /// ⚠ The regression the first version of fix 2 caused (found by the Task 4 gate — the image-copy acceptance fixtures
+    /// use a form <c>Pic</c> holding a control <c>pic</c>, which builds and runs on both targets): an Id that differs from
+    /// the form's name only in CASE is refused only when two generated wrappers would really collide.
+    /// </summary>
+    [TestCase(FormTarget.Web)]
+    [TestCase(FormTarget.WinForms)]
+    public void ACaseVariantId_WithNoCollidingWrapper_IsAccepted_ByTheReaderAndTheWriter(FormTarget target)
+    {
+        var form = target == FormTarget.Web
+            ? WebForm(Web("TextBox", "f", ("keypress", "f_KeyPress")))
+            : WinForm(Pixel("TextBox", "f", ("KeyPress", "f_KeyPress")));
+        var xml = target == FormTarget.Web
+            ? "<WebForm Name=\"F\" Version=\"1\"><Layout Kind=\"Grid\"/><Controls><Button Id=\"f\" Col=\"0\" Row=\"0\" TabIndex=\"0\"/></Controls></WebForm>"
+            : "<Form Name=\"F\" Version=\"1\"><Controls><Button Id=\"f\" X=\"8\" Y=\"8\" Width=\"75\" Height=\"23\" TabIndex=\"0\"/></Controls></Form>";
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Write(form).Refused, Is.False, "the control's wrapper is VgsOn_f_KeyPress and the form has none");
+            Assert.That(BasicLang.Forms.Serialization.FormDocumentReader
+                    .Read(target == FormTarget.Web ? "F.blwebform" : "F.blform", xml).Diagnostics.Where(d => !d.IsWarning),
+                Is.Empty);
+        });
+    }
 
     /// <summary>WinForms raises KeyPress itself: a plain AddHandler, no wrapper.</summary>
     [Test]
