@@ -664,6 +664,19 @@ reserved `VgsOn_` prefix, and M7's finding that an Extern class's undeclared mem
 ## 6. Execution notes
 (Filled per task as slice 4's §8: base SHA, deviations, red evidence, RE-CHECK results, the mutation table.)
 
+### Task 0 — baseline (base `158e1947`, code identical to `2fa64789`)
+- Fast subset (`TestCategory!=Integration`, Release, both streams to `scratchpad\pg5-fast-base.txt`): **Total 11083 —
+  Passed 11058, Failed 6, Skipped 19** (4 m 11 s). Sorted failure names, all known machine rows:
+  `Emit_ReplacesAnImportedModuleThatAnotherHandleHasMapped`, `Emit_ReplacesAScriptThatAnotherHandleHasMapped`,
+  `Emit_ReplacingAnImportedModule_LeavesNoTempFileBehind` (intermittent), `EveryTextRoute_UsesTheFormatter_NeverToStringOrABareCout`,
+  `SearchSnippets_EmptyQuery_ReturnsAll`, `SearchSnippets_WhitespaceQuery_ReturnsAll`. (`ReadingAnMvidTakesNoLockOnTheFile`
+  passed this run — it is in §5's list as a known intermittent.)
+- **M1/M2 re-measured on the BRANCH CLI through the PROJECT route** (`wt-pg5\BasicLang\bin\Release\net8.0\BasicLang.exe build
+  scratchpad\m5p\Site.blproj`, `<TargetBackend>JavaScript</TargetBackend>`, the M1 class verbatim): build succeeded; emitted
+  `t0.addEventListener("click", t1)`, `w.addEventListener("resize", t2)`, `this.LoginForm_Load();`, `this.Later();`. Under node
+  (`document.body`/`window` as `EventTarget`s): `load`, `later` printed at construction, then `click`, `resize` on dispatch —
+  each once. ✅ Both hold on the branch build.
+
 ## 7. Tests to re-check (consolidated)
 
 | Test | Why | Task |
