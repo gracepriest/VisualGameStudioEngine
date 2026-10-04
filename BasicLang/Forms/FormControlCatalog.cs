@@ -151,9 +151,10 @@ public enum FormEditVerdict
 /// CS0103.</para>
 /// </param>
 /// <param name="IsItemCollection">
-/// True when the value is a comma-separated list that must be ADDED to a read-only collection
-/// rather than assigned. <c>ComboBox.Items</c> and <c>ListBox.Items</c> are get-only, so assigning
-/// one is CS0200.
+/// True when the value is a list that must be ADDED to a read-only collection rather than assigned.
+/// <c>ComboBox.Items</c> and <c>ListBox.Items</c> are get-only, so assigning one is CS0200. ⛔ ADR 0020: the document
+/// stores one <c>&lt;Item&gt;</c> child per item (a legacy comma attribute is still read); the model holds the items
+/// joined by LF (<see cref="FormItems"/>).
 /// </param>
 /// <param name="HtmlAttribute">See <see cref="HtmlAttributeName"/>.</param>
 /// <param name="Category">
@@ -623,9 +624,8 @@ public sealed record FormPropertyDef(
     public static bool TryParseInt(string value, out int result) =>
         int.TryParse(value.Trim(' '), NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out result);
 
-    /// <summary>The individual items of an <see cref="IsItemCollection"/> value.</summary>
-    public static IEnumerable<string> SplitItems(string value) =>
-        value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+    /// <summary>The individual items of an <see cref="IsItemCollection"/> MODEL value — one per line (ADR 0020, <see cref="FormItems.Split"/>).</summary>
+    public static IEnumerable<string> SplitItems(string value) => FormItems.Split(value);
 
     /// <summary>
     /// A colour as WinForms source.

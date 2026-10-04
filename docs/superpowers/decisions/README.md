@@ -49,3 +49,4 @@ ADR they produced. Amendments are appended to the ADR they amend ("Amended by" i
 | 0017 | DCE removal licence: the compiler-temp marker |
 | 0018 | One reservation set per function; one door for an optimizer temp |
 | 0019 | C++ closures: ClosureLowering by default, with a W2-gated by-copy fallback (#140). E16 (#229): the owner decided to admit it |
+| 0020 | Form designer: a control's Items are `<Item>` child elements; LF-joined in the model; legacy `Items=` read with the old comma rule and left alone on a no-op save (coordinator, owner's delegation) |

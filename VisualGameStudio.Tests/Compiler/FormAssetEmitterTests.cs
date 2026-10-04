@@ -416,7 +416,7 @@ public class FormAssetEmitterTests
         // from the SAME document — a designer/runtime divergence across targets.
         var form = new FormDocument { Target = FormTarget.Web, Name = "F" };
         var combo = new FormControl { Kind = "ComboBox", Id = "cmb", TabIndex = 0 };
-        combo.Properties["Items"] = "Alpha, Beta, Gamma";
+        combo.Properties["Items"] = "Alpha\nBeta\nGamma"; // the MODEL's encoding (ADR 0020): one item per line
         combo.Properties["Text"] = "Pick one";
         form.Controls.Add(combo);
 
@@ -443,7 +443,7 @@ public class FormAssetEmitterTests
         // desktop opened on Beta and the web opened on Alpha — from the same document.
         var form = new FormDocument { Target = FormTarget.Web, Name = "F" };
         var combo = new FormControl { Kind = "ComboBox", Id = "cmb", TabIndex = 0 };
-        combo.Properties["Items"] = "Alpha, Beta, Gamma";
+        combo.Properties["Items"] = "Alpha\nBeta\nGamma"; // the MODEL's encoding (ADR 0020): one item per line
         combo.Properties["SelectedIndex"] = "1";
         form.Controls.Add(combo);
 
@@ -464,7 +464,7 @@ public class FormAssetEmitterTests
         // user can produce by shortening Items. Neither may mark an arbitrary option.
         var form = new FormDocument { Target = FormTarget.Web, Name = "F" };
         var combo = new FormControl { Kind = "ComboBox", Id = "cmb", TabIndex = 0 };
-        combo.Properties["Items"] = "Alpha, Beta";
+        combo.Properties["Items"] = "Alpha\nBeta"; // the MODEL's encoding (ADR 0020)
         combo.Properties["SelectedIndex"] = "7";
         form.Controls.Add(combo);
 
@@ -484,7 +484,7 @@ public class FormAssetEmitterTests
     {
         var form = new FormDocument { Target = FormTarget.Web, Name = "F" };
         var combo = new FormControl { Kind = "ComboBox", Id = "cmb", TabIndex = 0 };
-        combo.Properties["Items"] = "Alpha, Beta";
+        combo.Properties["Items"] = "Alpha\nBeta"; // the MODEL's encoding (ADR 0020)
         combo.Properties["SelectedIndex"] = raw;
         form.Controls.Add(combo);
 
@@ -559,7 +559,7 @@ public class FormAssetEmitterTests
         // Space is what a person types beside a number; TryParseInt accepts it, so both targets do.
         var form = new FormDocument { Target = FormTarget.Web, Name = "F" };
         var combo = new FormControl { Kind = "ComboBox", Id = "cmb", TabIndex = 0 };
-        combo.Properties["Items"] = "Alpha, Beta";
+        combo.Properties["Items"] = "Alpha\nBeta"; // the MODEL's encoding (ADR 0020)
         combo.Properties["SelectedIndex"] = " 1 ";
         form.Controls.Add(combo);
 

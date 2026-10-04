@@ -541,6 +541,11 @@ public static class FormDocumentReader
                 filePath, Line(element), Column(element)));
         }
 
+        // ADR 0020 — the item list's two document forms, gathered here and decided once both loops have run.
+        var itemsRow = definition.Properties.FirstOrDefault(FormItems.IsCollection);
+        XAttribute? legacyItems = null;
+        var itemElements = new List<XElement>();
+
         foreach (var attribute in element.Attributes())
         {
             var name = attribute.Name.LocalName;
@@ -595,6 +600,13 @@ public static class FormDocumentReader
                 continue;
             }
 
+            // ADR 0020: a legacy Items="a, b" attribute — decided after the children are seen (below).
+            if (FormItems.IsCollection(property))
+            {
+                legacyItems = attribute;
+                continue;
+            }
+
             control.Properties[name] = attribute.Value;
 
             // D9 Degraded: the catalog knows the attribute but the value does not parse — or parses and
@@ -613,6 +625,12 @@ public static class FormDocumentReader
             if (child.Name.LocalName == "Bind")
             {
                 control.Binds.Add(ReadBind(child, control.Id, filePath, diagnostics));
+                continue;
+            }
+
+            if (itemsRow != null && child.Name.LocalName == FormItems.ElementName)
+            {
+                itemElements.Add(child);
                 continue;
             }
 
@@ -635,7 +653,60 @@ public static class FormDocumentReader
             control.UnknownChildren.Add(new XElement(child));
         }
 
+        if (itemsRow != null)
+        {
+            ReadItems(control, itemsRow, legacyItems, itemElements, degraded);
+        }
+
         return control;
+    }
+
+    /// <summary>
+    /// ADR 0020: the item list into the model's ONE encoding — <c>&lt;Item&gt;</c> text verbatim, in order, or a legacy
+    /// attribute through the OLD comma rule (<see cref="FormItems.FromLegacy"/>), so every existing file keeps its meaning.
+    ///
+    /// <para>⛔ Degraded, never coerced: an item holding a line break (the model's separator), or BOTH forms on one control.
+    /// Items stays OUT of the model (nothing is emitted), the raw elements go to <c>UnknownChildren</c> and the attribute to
+    /// <c>UnknownAttributes</c> — so Apply, Create, clone, retarget and the clipboard all carry them as they carry any
+    /// unknown content.</para>
+    /// </summary>
+    private static void ReadItems(
+        FormControl control, FormPropertyDef row, XAttribute? legacy, List<XElement> items, List<DegradedProperty> degraded)
+    {
+        string? reason = null;
+        if (legacy != null && items.Count > 0)
+        {
+            reason = $"'{control.Id}' carries its {row.Name} twice — an {row.Name}=\"…\" attribute AND <{FormItems.ElementName}> " +
+                     "children — and which one is meant cannot be decided. The items are preserved exactly as written; remove " +
+                     "one of the two forms to edit them.";
+        }
+        else if (items.Any(i => FormItems.HoldsLineBreak(i.Value)))
+        {
+            reason = $"An <{FormItems.ElementName}> of '{control.Id}' contains a line break, which an item cannot hold. The " +
+                     "items are preserved exactly as written and not written into the generated code.";
+        }
+
+        if (reason != null)
+        {
+            if (legacy != null)
+            {
+                control.UnknownAttributes[legacy.Name.LocalName] = legacy.Value;
+            }
+
+            control.UnknownChildren.AddRange(items.Select(i => new XElement(i)));
+            degraded.Add(new DegradedProperty(control.Id, row.Name,
+                legacy?.Value ?? string.Join(" | ", items.Select(i => i.Value)), reason));
+            return;
+        }
+
+        if (legacy != null)
+        {
+            control.Properties[row.Name] = FormItems.Join(FormItems.FromLegacy(legacy.Value));
+        }
+        else if (items.Count > 0)
+        {
+            control.Properties[row.Name] = FormItems.Join(items.Select(i => i.Value));
+        }
     }
 
     /// <summary>

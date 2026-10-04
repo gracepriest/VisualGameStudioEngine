@@ -642,7 +642,14 @@ public static class FormClipboard
                 continue;
             }
 
-            if (definition.Property(name) != null)
+            var property = definition.Property(name);
+
+            // ADR 0020: between two models an item list travels as the MODEL string in an attribute (XML carries its LF).
+            // ⛔ Except a DEGRADED list, which travels as it was preserved — raw <Item> children (unknown content) beside the
+            // raw attribute — and must land back in UnknownAttributes, or the paste would hand its comma text to the model
+            // as one item and emit it.
+            if (property != null &&
+                !(FormItems.IsCollection(property) && element.Elements(FormItems.ElementName).Any()))
             {
                 control.Properties[name] = attribute.Value;
             }
