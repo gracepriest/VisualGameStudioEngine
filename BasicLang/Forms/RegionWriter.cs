@@ -562,34 +562,46 @@ public static class RegionWriter
         }
 
         var collisions = WrapperOwners(form)
-            .SelectMany(o => o.Events.Select(e => (Owner: o.Prefix, Name: WrapperName(o.Prefix, e))))
+            .SelectMany(o => o.Groups.Select(g => (Owner: o.Owner, Name: WrapperName(o.Owner.Prefix, g.Event))))
             .GroupBy(w => w.Name, StringComparer.OrdinalIgnoreCase)
-            .Where(g => g.Select(w => w.Owner).Distinct(StringComparer.Ordinal).Count() > 1);
+            .Where(g => g.Select(w => w.Owner.Prefix).Distinct(StringComparer.Ordinal).Count() > 1);
 
         foreach (var group in collisions)
         {
+            var owners = group.Select(w => w.Owner).DistinctBy(o => o.Prefix, StringComparer.Ordinal).ToList();
+            var involvesForm = owners.Any(o => o.Control == null);
             diagnostics.Add(Error(DesignCodes.DuplicateControlId,
-                $"{string.Join(" and ", group.Select(w => $"'{w.Owner}'").Distinct())} would each get a generated wrapper named " +
-                $"'{group.First().Name}' — one name to BasicLang, which ignores case. Rename the control so it differs from " +
-                "the form's name by more than case.",
+                $"{string.Join(" and ", owners.Select(o => o.Control == null ? $"the form '{o.Prefix}'" : $"'{o.Prefix}'"))} " +
+                $"would each get a generated wrapper named '{group.First().Name}' — one name to BasicLang, which ignores case. " +
+                (involvesForm
+                    ? "Rename the control so it differs from the form's name by more than case."
+                    : "Rename one so the two Ids differ by more than case."),
                 filePath, 0));
         }
     }
 
-    /// <summary>Every owner with filtered web binds, and its filtered events — what <see cref="AppendWrappers"/> emits.</summary>
-    private static IEnumerable<(string Prefix, IReadOnlyList<FormEventDef> Events)> WrapperOwners(FormDocument form) =>
-        form.AllControls()
-            .Select(c => (Prefix: c.Id, Definition: c.Definition, Binds: (IEnumerable<FormBind>)c.Binds))
-            .Append((Prefix: form.Name, Definition: (FormControlDef?)FormControlCatalog.FormRoot, Binds: EmittedRootBinds(form)))
+    /// <summary>
+    /// ⛔ THE one list of wrappers the page gets (D-12; review ruling 7 — <see cref="AppendWrappers"/> and
+    /// <see cref="CheckWrapperNames"/> both consume it, never a mirrored copy): every owner with filtered web binds, controls
+    /// first in tree order, then the Form; per owner each filtered event once, with every handler bound to it in document
+    /// order.
+    /// </summary>
+    private static IReadOnlyList<(FormBindOwner Owner, IReadOnlyList<(FormEventDef Event, IReadOnlyList<string> Handlers)> Groups)>
+        WrapperOwners(FormDocument form) =>
+        form.AllControls().Select(c => new FormBindOwner(form, c))
+            .Append(new FormBindOwner(form))
             .Where(o => o.Definition != null)
-            .Select(o => (o.Prefix, (IReadOnlyList<FormEventDef>)o.Binds
+            .Select(o => (Owner: o, Groups: (IReadOnlyList<(FormEventDef, IReadOnlyList<string>)>)
+                (o.Control == null ? EmittedRootBinds(form) : o.Binds)
                 .Where(b => !string.IsNullOrEmpty(b.Handler))
-                .Select(b => WebEventOf(o.Definition!, b))
-                .Where(e => e is { WebFilter: not FormWebFilter.None })
-                .Select(e => e!)
-                .Distinct()
+                .Select(b => (Bind: b, Event: WebEventOf(o.Definition!, b)))
+                .Where(x => x.Event is { WebFilter: not FormWebFilter.None })
+                .GroupBy(x => x.Event!)
+                .Select(g => (g.Key, (IReadOnlyList<string>)g.Select(x => x.Bind.Handler).ToList()))
                 .ToList()))
-            .Where(o => o.Item2.Count > 0);
+            .Where(o => o.Groups.Count > 0)
+            .Select(o => (o.Owner, (IReadOnlyList<(FormEventDef Event, IReadOnlyList<string> Handlers)>)o.Groups))
+            .ToList();
 
     /// <summary>The Form's binds the init region EMITS — every bind with a handler, minus reserved data binding.</summary>
     private static IEnumerable<FormBind> EmittedRootBinds(FormDocument form) =>
@@ -653,7 +665,7 @@ public static class RegionWriter
         }
 
         // ⛔ Slice 5 D-11: the ONE scanner (case-insensitive, declarations only, region Subs excluded), never a second copy.
-        var declared = FormCodeScan.DeclaredSubs(source);
+        var declared = FormCodeScan.DeclaredSubs(source, form.Name);
 
         // Components too (Task 25). A Timer's parameterless callback is not bitten by the erasure
         // (measured), so for it this check is stricter than the compiler — the safe side.
@@ -865,7 +877,7 @@ public static class RegionWriter
             switch (evt.WebWiring)
             {
                 case FormWebWiring.AfterInit:
-                    calls.Add($"{inner}Me.{bind.Handler}()");
+                    calls.Add($"{inner}{FormHandlers.Shape(new FormBindOwner(form), evt, FormTarget.Web).Call(bind.Handler)}");
                     break;
                 case FormWebWiring.Window:
                     AppendWebListener(body, "w", form.Name, root, binds, bind, evt, inner, newline);
@@ -934,51 +946,39 @@ public static class RegionWriter
     /// </summary>
     private static void AppendWrappers(StringBuilder body, FormDocument form, string indent, string newline)
     {
-        var owners = form.AllControls()
-            .Select(c => (Prefix: c.Id, Definition: c.Definition, Binds: (IReadOnlyList<FormBind>)c.Binds.ToList()))
-            .Append((Prefix: form.Name, Definition: (FormControlDef?)FormControlCatalog.FormRoot,
-                Binds: (IReadOnlyList<FormBind>)EmittedRootBinds(form).ToList()));
-
-        var wrote = false;
-        foreach (var (prefix, definition, binds) in owners)
+        var owners = WrapperOwners(form);
+        if (owners.Count == 0)
         {
-            if (definition == null)
+            return;
+        }
+
+        body.Append($"{indent}' VgsOn_ Subs are generated (a reserved prefix): each turns a page event into what WinForms " +
+                    "means by it, then calls your handler.").Append(newline);
+        foreach (var (owner, groups) in owners)
+        {
+            foreach (var (evt, handlers) in groups)
             {
-                continue;
-            }
-
-            var groups = binds
-                .Where(b => !string.IsNullOrEmpty(b.Handler))
-                .Select(b => (Bind: b, Event: WebEventOf(definition, b)))
-                .Where(x => x.Event is { WebFilter: not FormWebFilter.None })
-                .GroupBy(x => x.Event!);
-
-            foreach (var group in groups)
-            {
-                if (!wrote)
-                {
-                    body.Append($"{indent}' VgsOn_ Subs are generated (a reserved prefix): each turns a page event into what WinForms " +
-                                "means by it, then calls your handler.").Append(newline);
-                    wrote = true;
-                }
-
-                Wrapper(body, prefix, group.Key, group.Select(x => x.Bind.Handler).ToList(), indent, newline);
+                Wrapper(body, owner, evt, handlers, indent, newline);
             }
         }
     }
 
     /// <summary>
     /// ⛔ THE one place a wrapper's body is built (D-12), from <see cref="FormEventDef.WebFilter"/> — never from the event's
-    /// name. A NAMED Sub, never a lambda (<c>Me.</c> inside a lambda hard-errors on the JavaScript backend); it calls each
-    /// handler <c>Me.</c>-qualified, a direct call the AddressOf erasure does not bite (M2). Measured exactly as written
+    /// name. A NAMED Sub, never a lambda (ADR 0021 §3 — the pre-flight measured <c>Me.</c> inside a lambda hard-erroring
+    /// on the JavaScript backend; re-measured 2026-10-04 on this tree it compiles to <c>this.</c>, but the named Sub is the
+    /// shape every tier proves); it calls each handler through <see cref="FormHandlerShape.Call"/>, a direct call the
+    /// AddressOf erasure does not bite (M2). Measured exactly as written
     /// on the branch CLI (pre-flight M7). ⚠ <c>relatedTarget</c> and <c>contains</c> are not declared in
     /// <c>dom-core.bli</c> and compile untyped (M7): the node/Edge run tiers are the gate for this text.
     /// </summary>
     private static void Wrapper(
-        StringBuilder body, string prefix, FormEventDef evt, IReadOnlyList<string> handlers, string indent, string newline)
+        StringBuilder body, FormBindOwner owner, FormEventDef evt, IReadOnlyList<string> handlers, string indent, string newline)
     {
         var inner = indent + "    ";
-        body.Append($"{indent}Private Sub {WrapperName(prefix, evt)}(e As DomEvent)").Append(newline);
+        // The wrapper's OWN signature is the listener's (it is what addEventListener takes); the handler CALLS below come
+        // from the handler's shape — FormHandlers' one rule (review ruling 3).
+        body.Append($"{indent}Private Sub {WrapperName(owner.Prefix, evt)}(e As DomEvent)").Append(newline);
 
         switch (evt.WebFilter)
         {
@@ -986,11 +986,17 @@ public static class RegionWriter
                 // WinForms raises KeyPress for a character, Enter ('\r'), Backspace ('\b') and Escape — never for
                 // Shift, arrows or F-keys (coordinator ruling 1, ADR 0021).
                 // ⚠ CODE POINTS, not UTF-16 units (review fix 3): an emoji key (U+1F600) is one character and two
-                // units. `::Array.from(k).length` is the measured BasicLang spelling (branch CLI + node: 1 for U+1F600,
-                // 2 for "F1"); `k.Length` emits `k.length` and would count 2.
-                body.Append($"{inner}Dim k As String = e.key").Append(newline);
-                body.Append($"{inner}Dim n As Integer = ::Array.from(k).length").Append(newline);
-                body.Append($"{inner}If n = 1 OrElse k = \"Enter\" OrElse k = \"Backspace\" OrElse k = \"Escape\" Then")
+                // units. `::Array.from(vgsKey).length` is the measured BasicLang spelling (branch CLI + node: 1 for
+                // U+1F600, 2 for "F1"); `.Length` emits `.length` and would count 2.
+                // ⚠ Review ruling 6: the locals carry the reserved vgs prefix (a control named `k` is a field), and a
+                // keydown while an IME composes raises no KeyPress. `Not e.isComposing` is refused by BasicLang (an untyped
+                // member is Object) and `As Boolean = e.isComposing` too; `::Boolean(e.isComposing)` is the measured
+                // spelling (absent → false, true → skipped, branch CLI + node).
+                body.Append($"{inner}Dim vgsKey As String = e.key").Append(newline);
+                body.Append($"{inner}Dim vgsLen As Integer = ::Array.from(vgsKey).length").Append(newline);
+                body.Append($"{inner}Dim vgsComposing As Boolean = ::Boolean(e.isComposing)").Append(newline);
+                body.Append($"{inner}If Not vgsComposing AndAlso (vgsLen = 1 OrElse vgsKey = \"Enter\" OrElse " +
+                            "vgsKey = \"Backspace\" OrElse vgsKey = \"Escape\") Then")
                     .Append(newline);
                 break;
 
@@ -1004,9 +1010,10 @@ public static class RegionWriter
                 throw new InvalidOperationException($"'{evt.Name}' has no web filter, so it needs no wrapper");
         }
 
+        var shape = FormHandlers.Shape(owner, evt, FormTarget.Web);
         foreach (var handler in handlers)
         {
-            body.Append($"{inner}    Me.{handler}(e)").Append(newline);
+            body.Append($"{inner}    {shape.Call(handler)}").Append(newline);
         }
 
         body.Append($"{inner}End If").Append(newline);

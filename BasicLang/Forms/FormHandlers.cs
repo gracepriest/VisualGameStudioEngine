@@ -50,6 +50,13 @@ public sealed record FormHandlerShape(IReadOnlyList<FormHandlerParameter> Parame
 {
     /// <summary>The parameter list as BasicLang source, parentheses included — <c>sender</c>/<c>e</c> with their types.</summary>
     public string ParameterList => "(" + string.Join(", ", Parameters.Select(p => $"{p.Name} As {p.Type}")) + ")";
+
+    /// <summary>
+    /// ⛔ The CALL shape — how generated code calls a handler of this shape, passing its own parameters through: the web
+    /// wrapper's <c>Me.&lt;h&gt;(e)</c> and the Form Load's <c>Me.&lt;h&gt;()</c> (review ruling 3). <c>Me.</c>-qualified
+    /// always. Read by the region writer, so a second style changes ONE place.
+    /// </summary>
+    public string Call(string handler) => $"Me.{handler}(" + string.Join(", ", Parameters.Select(p => p.Name)) + ")";
 }
 
 /// <summary>
@@ -97,10 +104,19 @@ public static class FormHandlers
     // ==================================================================
 
     /// <summary>
+    /// ⛔ The ONE place a form's code style is read (review ruling 3) — <see cref="Shape"/> asks it, and everything that
+    /// writes, offers or calls a handler asks <see cref="Shape"/>, so the stub writer, <see cref="Fits"/> and the region
+    /// writer's calls can never disagree. Today every form is Classic; piece 2 replaces this
+    /// body with its reading of the file's style (its "ONE reader of a file's style").
+    /// </summary>
+    public static FormCodeStyle StyleOf(FormDocument form) => FormCodeStyle.Classic;
+
+    /// <summary>
     /// ⛔⛔ THE one place a handler's signature and its side of the init region are decided. The stub writer
     /// (<see cref="Insert"/>) and <see cref="Fits"/> both READ it and neither restates it, so the stub the designer writes
-    /// is exactly the handler the drop-down offers (<c>FormHandlerShapeTests</c>). Today's one style is
-    /// <see cref="FormCodeStyle.Classic"/>; piece 2 adds its Portable arm HERE, never a second signature site.
+    /// is exactly the handler the drop-down offers (<c>FormHandlerShapeTests</c>); the region writer takes its handler
+    /// CALLS from it too (<see cref="FormHandlerShape.Call"/>). The style comes from <see cref="StyleOf"/>, read here and
+    /// nowhere else. Today's one style is Classic; piece 2 adds its Portable arm HERE, never a second signature site.
     /// <list type="bullet">
     /// <item>WinForms: <c>sender</c> typed Object and <c>e</c> typed as the event's args (or EventArgs), below the region.</item>
     /// <item>Web: one <c>e</c> typed DomEvent for a listener — filtered or not; <c>()</c> for the Form's Load (a direct call at
@@ -108,12 +124,12 @@ public static class FormHandlers
     /// <c>Action</c> and refuses <c>Action(Of DomEvent)</c>, measured). Above the region.</item>
     /// </list>
     /// </summary>
-    public static FormHandlerShape Shape(
-        FormBindOwner owner, FormEventDef evt, FormTarget target, FormCodeStyle style = FormCodeStyle.Classic)
+    public static FormHandlerShape Shape(FormBindOwner owner, FormEventDef evt, FormTarget target)
     {
+        var style = StyleOf(owner.Form);
         if (style != FormCodeStyle.Classic)
         {
-            throw new ArgumentOutOfRangeException(nameof(style), style, "only the Classic style exists yet");
+            throw new ArgumentOutOfRangeException(nameof(owner), style, "only the Classic style exists yet");
         }
 
         if (target == FormTarget.Web)
@@ -135,14 +151,13 @@ public static class FormHandlers
     /// <c>DomEvent</c> only <c>DomEvent</c> (an untyped one is erased to <c>Object</c>, which <c>addEventListener</c>
     /// refuses); a WinForms args type <c>A</c> takes <c>A</c>, a .NET BASE of <c>A</c> (<see cref="FormEvents.ArgsBases"/>),
     /// <c>EventArgs</c>, <c>Object</c> or an untyped parameter — delegate parameter contravariance, falsified against
-    /// csc by <c>FormHandlerFitCscTests</c>. Types compare on their last segment, ignoring case.
+    /// csc by <c>FormHandlerFitCscTests</c>. Types compare on their last segment, ignoring case. ⛔ A <c>ByRef</c>
+    /// parameter never fits (csc CS0123: an event delegate's parameters are by value).
     /// </summary>
-    public static bool Fits(
-        FormBindOwner owner, FormEventDef evt, FormTarget target, FormDeclaredSub sub,
-        FormCodeStyle style = FormCodeStyle.Classic)
+    public static bool Fits(FormBindOwner owner, FormEventDef evt, FormTarget target, FormDeclaredSub sub)
     {
-        var shape = Shape(owner, evt, target, style);
-        if (sub.Parameters.Count != shape.Parameters.Count)
+        var shape = Shape(owner, evt, target);
+        if (sub.Parameters.Count != shape.Parameters.Count || sub.Parameters.Any(p => p.IsByRef))
         {
             return false;
         }
@@ -188,12 +203,11 @@ public static class FormHandlers
     /// inside the designer regions (the scanner skips them).
     /// </summary>
     public static IReadOnlyList<string> FittingHandlers(
-        FormDocument form, FormBindOwner owner, FormEventDef evt, string codeText,
-        FormCodeStyle style = FormCodeStyle.Classic) =>
-        FormCodeScan.DeclaredSubs(codeText)
+        FormDocument form, FormBindOwner owner, FormEventDef evt, string codeText) =>
+        FormCodeScan.DeclaredSubs(codeText, form.Name)
             .Where(s => !s.Name.Equals("New", StringComparison.OrdinalIgnoreCase) &&
                         !s.Name.Equals("InitializeComponent", StringComparison.OrdinalIgnoreCase))
-            .Where(s => Fits(owner, evt, form.Target, s, style))
+            .Where(s => Fits(owner, evt, form.Target, s))
             .Select(s => s.Name)
             .ToList();
 
@@ -211,7 +225,8 @@ public static class FormHandlers
     /// </summary>
     public static bool EnsureBind(FormBindOwner owner, string eventName, string handler)
     {
-        if (owner.Binds.Any(b => string.Equals(b.Event, eventName, StringComparison.OrdinalIgnoreCase)))
+        if (owner.Binds.Any(b => !b.UsesReservedDataBinding &&
+                                 string.Equals(b.Event, eventName, StringComparison.OrdinalIgnoreCase)))
         {
             return false;
         }
@@ -226,10 +241,13 @@ public static class FormHandlers
 
     /// <summary>
     /// Removes every bind of <paramref name="eventName"/> from the owner — the Events tab's cleared cell. ⛔ The code is
-    /// never touched: VS leaves the handler in place when you clear the cell. Returns whether anything was removed.
+    /// never touched: VS leaves the handler in place when you clear the cell. ⛔ A reserved data-binding bind
+    /// (<see cref="FormBind.UsesReservedDataBinding"/>) sharing the event name is not event wiring and is never removed.
+    /// Returns whether anything was removed.
     /// </summary>
     public static bool Unbind(FormBindOwner owner, string eventName) =>
-        owner.Binds.RemoveAll(b => string.Equals(b.Event, eventName, StringComparison.OrdinalIgnoreCase)) > 0;
+        owner.Binds.RemoveAll(b => !b.UsesReservedDataBinding &&
+                                   string.Equals(b.Event, eventName, StringComparison.OrdinalIgnoreCase)) > 0;
 
     // ==================================================================
     // Plans
@@ -319,6 +337,16 @@ public static class FormHandlers
     public static FormHandlerPlan PlanBind(FormDocument form, FormControl control, FormBind bind, string codeText) =>
         PlanBind(form, new FormBindOwner(form, control), bind, codeText);
 
+    /// <summary>Every handler a bind of ANOTHER owner names (the controls, the components, the Form — minus <paramref name="owner"/>).</summary>
+    private static HashSet<string> OtherOwnersHandlers(FormDocument form, FormBindOwner owner) =>
+        form.AllControls().Concat(form.AllComponents())
+            .Where(c => !ReferenceEquals(c, owner.Control))
+            .SelectMany(c => c.Binds)
+            .Concat(owner.Control == null ? Enumerable.Empty<FormBind>() : form.Binds)
+            .Where(b => !string.IsNullOrEmpty(b.Handler))
+            .Select(b => b.Handler)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
     /// <summary>The kind's event that <paramref name="name"/> names in <paramref name="target"/>'s vocabulary, or null.</summary>
     private static FormEventDef? EventOn(FormControlDef definition, string name, FormTarget target) =>
         definition.Events?.FirstOrDefault(e =>
@@ -328,10 +356,32 @@ public static class FormHandlers
         FormDocument form, FormBindOwner owner, FormEventDef evt, string eventName, string handler, string codeText)
     {
         var index = new Recognizer.SourceIndex(codeText);
+        var subs = FormCodeScan.DeclaredSubs(codeText, form.Name);
+
+        // ⛔ Review ruling 4: a Sub that matches only IGNORING CASE and is ANOTHER owner's handler is a conflict, not this
+        // owner's handler — a form `Pic` and a control `pic` compute `Pic_Click` and `pic_Click`, one member to BasicLang,
+        // and reusing it would bind the control to the form's Click. VS appends `_1`, `_2`, … until the name is free (no
+        // Sub of that name in any case, and no bind naming it). An EXACT match is navigated to as before (deliberate
+        // sharing), and so is a case-variant nobody else binds (the M6 hand-written `btnlogin_click`).
+        var match = subs.FirstOrDefault(s => string.Equals(s.Name, handler, StringComparison.OrdinalIgnoreCase));
+        if (match != null && !string.Equals(match.Name, handler, StringComparison.Ordinal) &&
+            OtherOwnersHandlers(form, owner).Contains(match.Name))
+        {
+            var taken = OtherOwnersHandlers(form, owner).Concat(owner.Binds.Select(b => b.Handler))
+                .Concat(subs.Select(s => s.Name)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var n = 1;
+            while (taken.Contains($"{handler}_{n}"))
+            {
+                n++;
+            }
+
+            handler = $"{handler}_{n}";
+            match = null;
+        }
 
         // ⛔ Through the ONE scanner, ignoring case: a hand-written `btnlogin_click` is the same member in BasicLang, and
         // writing a second `btnLogin_Click` beside it would be a duplicate declaration (D-11, M6).
-        if (FormCodeScan.FindSub(codeText, handler) is { } existing)
+        if (match is { } existing)
         {
             // Already there — land in the body, one line below the signature.
             return new FormHandlerPlan(

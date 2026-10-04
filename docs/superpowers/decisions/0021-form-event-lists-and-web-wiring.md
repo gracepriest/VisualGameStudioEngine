@@ -45,7 +45,7 @@ WinForms event mean on a page, and where is a handler's signature decided?
 | MouseDown / MouseUp / MouseMove | `mousedown` / `mouseup` / `mousemove` | the same |
 | MouseEnter / MouseLeave | `mouseenter` / `mouseleave` | the same (non-bubbling, per element as WinForms') |
 | KeyDown / KeyUp | `keydown` / `keyup` | the same |
-| **KeyPress** | `keypress` | a **`keydown`**, filtered to WinForms' KeyPress keys: ONE CODE POINT (`[...key].length === 1` — an emoji key is one character and two UTF-16 units; BasicLang `::Array.from(k).length = 1`) `\|\| key === "Enter" \|\| key === "Backspace" \|\| key === "Escape"` (WinForms raises KeyPress for `\b`, Esc, and Enter as `'\r'`). Its listener is added AFTER every plain `keydown` listener of the same owner, so KeyDown runs first as in WinForms, whatever order the binds are stored in (amendment, review of Task 2) |
+| **KeyPress** | `keypress` | a **`keydown`** that is not `isComposing` (an IME composing), filtered to WinForms' KeyPress keys: ONE CODE POINT (`[...key].length === 1` — an emoji key is one character and two UTF-16 units; BasicLang `::Array.from(k).length = 1`) `\|\| key === "Enter" \|\| key === "Backspace" \|\| key === "Escape"` (WinForms raises KeyPress for `\b`, Esc, and Enter as `'\r'`). Its listener is added AFTER every plain `keydown` listener of the same owner, so KeyDown runs first as in WinForms, whatever order the binds are stored in (amendment, review of Task 2) |
 | **Enter / Leave** | `focusin` / `focusout` | the same type, filtered to "`relatedTarget` is outside the element" — focus moving BETWEEN two children of a Panel raises no Enter/Leave on the Panel, as in WinForms. On a leaf element the filter is a no-op |
 | Form Load | `load` | **AfterInit**: `Me.<Form>_Load()` as the LAST statement of `InitializeComponent`; the handler is parameterless |
 | Form Resize | `resize` | **Window**: `w.addEventListener("resize", …)` |
@@ -59,25 +59,34 @@ the `DomEvent`. The key set above is the definition of "character-producing `key
 
 For web binds whose event has a `WebFilter`, the init region holds, ABOVE `Private Sub InitializeComponent()`, ONE
 generated `Private Sub VgsOn_<owner>_<WinForms event>(e As DomEvent)` per (owner, filtered event) that tests the filter and
-calls `Me.<handler>(e)` for each handler bound to that event, in document order; ONE listener names the wrapper. A control
-whose Id is the form's own name is refused (BL8017) — its wrappers would collide with the form's. Named (never a lambda: `Me.` inside a lambda hard-errors on the
-JavaScript backend, and an unqualified call is a runtime `ReferenceError`); above `InitializeComponent` (an `AddressOf` of
-a later Sub erases its parameter types — BL8013's measured rule). The `VgsOn_` prefix is reserved. The body is built from
-`WebFilter` by one function, never from the event's name. WinForms wires the handler directly.
+calls each handler bound to that event, in document order, through the handler shape's CALL (`FormHandlerShape.Call` —
+`Me.<handler>(e)`; Load's `Me.<handler>()` too); ONE listener names the wrapper. Its locals carry the reserved `vgs`
+prefix (`vgsKey`, `vgsLen`, `vgsComposing`), so a control named `k` is never shadowed. A control whose Id is EXACTLY the
+form's name is refused (BL8017, CS0542 on WinForms); a case-only difference is refused only where two generated wrapper
+names would differ only in case (one member to BasicLang) — a form `Pic` holding a control `pic` builds and runs (amended
+after the Task 4 gate). Named, never a lambda: the named Sub is the shape every run tier proves (the pre-flight measured
+`Me.` inside a lambda hard-erroring; re-measured 2026-10-04 on this tree it compiles to `this.`, and an UNQUALIFIED self-call
+emits `this.X()` too — the earlier "runtime ReferenceError" is fixed here, and the region still writes `Me.`). Above
+`InitializeComponent` (an `AddressOf` of a later Sub erases its parameter types — BL8013's measured rule). The `VgsOn_`
+prefix is reserved. The body is built from `WebFilter` by one function, never from the event's name. WinForms wires the
+handler directly.
 
 ### 4. ONE parameterised handler-shape rule
 
-`FormHandlers.Shape(owner, evt, target, style)` → `FormHandlerShape(Parameters, Placement)` is the ONLY place a handler's
-signature and its side of the init region are decided. The stub writer and `Fits` both read it. Today the one style is
-`FormCodeStyle.Classic` (`BasicLang/Forms/FormCodeStyle.cs`), and these are CLASSIC rules:
+`FormHandlers.Shape(owner, evt, target)` → `FormHandlerShape(Parameters, Placement)` is the ONLY place a handler's
+signature, its side of the init region, and how generated code CALLS it (`Call`) are decided. The stub writer, `Fits` and
+the region writer all read it. The style is read in ONE place, `FormHandlers.StyleOf(form)`, which only `Shape` asks
+(amendment, review of Task 3 — the parameter was dropped from every signature so no caller can pass a different one).
+Today the one style is `FormCodeStyle.Classic` (`BasicLang/Forms/FormCodeStyle.cs`), and these are CLASSIC rules:
 
 - WinForms: `(sender As Object, e As <WinFormsArgs ?? EventArgs>)`, placed BELOW the init region. A Sub fits iff it has
   two parameters, the first `Object` (or untyped), and the second `EventArgs`, the event's args, or a .NET base of them
-  (one table, `FormEvents.ArgsBases`, falsified by in-process Roslyn).
+  (one table, `FormEvents.ArgsBases`, falsified by in-process Roslyn). A `ByRef` parameter never fits (CS0123).
 - Web: a listener event (Element/Window, filtered or not) → `(e As DomEvent)`; an AfterInit event, or an event of a row
   with `WebHandlerTakesEvent: false` (Timer) → `()`. Placed ABOVE the init region.
 
-Piece 2's Task 30 adds `FormCodeStyle.Portable` as one arm of `Shape` — never a second signature site.
+Piece 2's Task 30 adds `FormCodeStyle.Portable` as one arm of `Shape` and replaces `StyleOf`'s body — never a second
+signature site.
 
 ## Because
 
@@ -103,6 +112,7 @@ Each row: classic emission diverges; piece 2's library is responsible for WinFor
 | Form Click on a click that lands on a control | not raised | `body` receives the bubbled `click` |
 | Form KeyDown/KeyUp/KeyPress while a control has focus | only with `KeyPreview=True` | always (bubbled to `body`) |
 | A Load handler that throws | routed to `Application.ThreadException`; the form is still shown | the exception escapes the form's constructor (Load is called at the end of `InitializeComponent`) and the page's dispatch dies — nothing on the page runs |
+| Text committed by an IME (composition) | KeyPress raised for each committed character | no KeyPress: keydowns during composition are skipped (`isComposing`), and the committed text arrives as `input`, not `keydown` |
 
 ## Rejected
 

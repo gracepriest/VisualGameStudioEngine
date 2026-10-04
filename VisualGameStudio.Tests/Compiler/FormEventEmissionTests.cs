@@ -273,9 +273,10 @@ public class FormEventEmissionTests
         // Review fix 3: the length is counted in CODE POINTS (an emoji key is one character, two UTF-16 units).
         const string wrapper =
             "    Private Sub VgsOn_txt_KeyPress(e As DomEvent)\n" +
-            "        Dim k As String = e.key\n" +
-            "        Dim n As Integer = ::Array.from(k).length\n" +
-            "        If n = 1 OrElse k = \"Enter\" OrElse k = \"Backspace\" OrElse k = \"Escape\" Then\n" +
+            "        Dim vgsKey As String = e.key\n" +
+            "        Dim vgsLen As Integer = ::Array.from(vgsKey).length\n" +
+            "        Dim vgsComposing As Boolean = ::Boolean(e.isComposing)\n" +
+            "        If Not vgsComposing AndAlso (vgsLen = 1 OrElse vgsKey = \"Enter\" OrElse vgsKey = \"Backspace\" OrElse vgsKey = \"Escape\") Then\n" +
             "            Me.txt_KeyPress(e)\n" +
             "        End If\n" +
             "    End Sub\n";

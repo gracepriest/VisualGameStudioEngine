@@ -925,6 +925,41 @@ reserved `VgsOn_` prefix, and M7's finding that an Extern class's undeclared mem
   vs `Infinity`, machine culture; caught by "Formatting" containing "Form"), as at the Task 2 gate. The Edge tier RAN (not
   skipped).
 
+### Review round 2 (of `3df80418`/`8997278e`/`e7662369`/`a6a7dcae`) — fixes (base `a6a7dcae`)
+1. `FormCodeScan` walks the block structure (`Class/Structure/Interface/Module/Enum/Namespace … End`) and returns only
+   Subs that are DIRECT members of the form class (named after the form, else the first top-level class; a namespace is
+   transparent); skips `#If False`/`#If 0` blocks (their `#Else` live; any other `#If` read as live on every branch — full
+   evaluation is a FOLLOW-UP for piece 2's `ProcessForEditor`); strips same-line attributes; skips `(Of T)`; follows a
+   `_` continuation after any whitespace (a tab too), before the list as well as inside it. Every caller passes `form.Name`.
+2. `FormCodeParameter.IsByRef`; a ByRef parameter never fits (CS0123).
+3. ONE style read: `FormHandlers.StyleOf(form)` (Classic today; piece 2 replaces its body), asked only by `Shape`; the
+   `style` parameter was REMOVED from `Shape`/`Fits`/`FittingHandlers`, so no caller can pass a different one (the plan
+   threads it nowhere because nothing can disagree). `FormHandlerShape.Call(handler)` is the call shape — the wrapper's
+   `Me.<h>(e)` and Load's `Me.<h>()` now come from it (`RegionWriter` spells no handler call; a structural test pins it).
+4. `PlanHandler`: a Sub matching only ignoring case and bound by ANOTHER owner is a conflict → `<name>_1`, `_2`… (VS); an
+   exact match, or a case variant no other owner binds, is navigated as before. The wrapper-collision message names
+   "the form 'X'" only when the form is involved; two controls `f`/`F` are told to "Rename one".
+5. `Unbind` (and `EnsureBind`'s "already bound" test) ignore reserved data-binding binds. Byte-exact Unbind test: the saved
+   document equals the original minus that `<Bind>` line; the code-behind loses exactly the wrapper comment, the wrapper's
+   unique lines and the listener, and changes only the region marker (its hash). ⚠ Found while writing it: ANY document
+   change re-serialises every empty element as ` />` (XmlWriter) — pre-existing, unrelated; the fixture is written canonically.
+6. Wrapper locals `vgsKey`/`vgsLen`/`vgsComposing`; KeyPress skips `isComposing`. MEASURED: `Not e.isComposing` is refused
+   ("Logical NOT requires Boolean operand" — an undeclared member is Object) and `As Boolean = e.isComposing` too;
+   `Dim vgsComposing As Boolean = ::Boolean(e.isComposing)` compiles to `Boolean(e.isComposing)` (absent → false). IME
+   committed-text gap added to ADR 0021's divergence table. Node test with a TextBox named `k` and one named `n`.
+7. `WrapperOwners` is the ONE list; `AppendWrappers` and `CheckWrapperNames` both consume it.
+8. ADR 0021 §3/§4 updated (exact-name rule + wrapper-collision rule; `Call`; `StyleOf`; ByRef; the unqualified-self-call
+   ReferenceError claim REMOVED). MEASURED on the branch CLI 2026-10-04: an unqualified self-call emits `this.X()` and runs;
+   `Me.` inside a lambda COMPILES (`f = () => { this.Check(null); }`). ⚠ CLAUDE.md was NOT edited: the instruction came
+   from an agent message, and a CLAUDE.md change needs the owner's own request — the measured text is handed to the owner.
+- **TDD shape — honest:** the implementation was written before the red run; evidence = mutations (11), all killed:
+  nested-class guard loosened → nested test; attributes not stripped → attribute test; ByRef ignored → ByRef test; Unbind
+  removes reserved → reserved test; `#If False` not dead → `#If` test; `(Of T)` not skipped → generic test; wrapper call
+  spelled `Me.{handler}(e)` in RegionWriter → `EveryCallSite_AsksTheOneRule`; collision suffix off → both-target collision
+  test; form wording always → the two-controls message test; `isComposing` guard dropped → node IME test + Unbind exact
+  text; continuation `" _"` only → ⚠ first SURVIVED (the test checked types only); the Tabbed assertion now checks names
+  and kills it.
+
 ## 7. Tests to re-check (consolidated)
 
 | Test | Why | Task |

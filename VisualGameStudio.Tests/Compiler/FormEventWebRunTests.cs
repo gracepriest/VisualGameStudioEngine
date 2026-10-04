@@ -251,6 +251,28 @@ public class FormEventWebRunTests
         });
     }
 
+    /// <summary>
+    /// Review ruling 6: a keydown fired while an IME composes (<c>isComposing</c>) raises no KeyPress — the composed text is
+    /// committed by the IME, not typed key by key; and a control named <c>vgsKey</c>… is not one — but one named <c>k</c> or
+    /// <c>n</c> (the old wrapper locals) must still work, so the page uses <c>k</c> here.
+    /// </summary>
+    [Test]
+    public void AComposingKeydown_RaisesNoKeyPress_AndAControlNamedK_IsNotShadowed()
+    {
+        var form = WebForm("ImeForm", Web("TextBox", "k", ("keypress", "k_KeyPress")), Web("TextBox", "n"));
+
+        var lines = BuildAndRun(form, PrintingHandler("k_KeyPress", true),
+            "dispatch(get(\"k\"), \"keydown\", { key: \"a\", isComposing: true });\nconsole.log(\"--- plain\");\n" +
+            "dispatch(get(\"k\"), \"keydown\", { key: \"a\", isComposing: false });\nkey(\"k\", \"b\");\n");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(After(lines).TakeWhile(l => l != "--- plain"), Is.Empty, "composing: no KeyPress");
+            Assert.That(After(lines, "--- plain"), Is.EqualTo(new[] { "k_KeyPress", "k_KeyPress" }),
+                "isComposing false, and absent (the harness's plain key), both raise it");
+        });
+    }
+
     // ==================================================================
     // Task 4 — every web event of every web kind, and the Form, RUN
     // ==================================================================
