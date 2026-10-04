@@ -56,6 +56,13 @@ public partial class FormPropertyGridViewModel : ObservableObject
     /// <summary>Every row for the current selection, in catalog order. Empty when there is no document.</summary>
     public ObservableCollection<FormPropertyRow> Rows { get; } = new();
 
+    /// <summary>
+    /// The form document's path on disk (slice 4 Task 10) — where the image picker finds the project
+    /// (<c>FormAssetPaths.ProjectRootFor</c>) to store a picked file relative to it, or copy one into its Resources.
+    /// Set by the document view model with every sync; null for a grid with no document (the picker then does nothing).
+    /// </summary>
+    public string? DocumentPath { get; set; }
+
     /// <summary>What the list SHOWS: <see cref="FormPropertyCategoryHeader"/>s and <see cref="FormPropertyRow"/>s.</summary>
     public ObservableCollection<object> DisplayItems => _display.Items;
 

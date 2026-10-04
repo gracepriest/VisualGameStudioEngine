@@ -447,6 +447,15 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
     /// <summary>A Font row carries VS's <c>…</c> button, which opens the Font dialog. Not while frozen (the typed-editor rule).</summary>
     public bool HasEllipsis => Typed && _type == FormPropertyType.Font;
 
+    /// <summary>
+    /// An Image/Icon row carries a <c>…</c> that opens a file picker (slice 4 Task 10); the typed path stays the row's own
+    /// editor beside it. Not while frozen.
+    /// </summary>
+    public bool HasAssetPicker => Typed && _type is FormPropertyType.Image or FormPropertyType.Icon;
+
+    /// <summary>The picker's result: ONE value through the row's own Commit (Judge decides; a refused value is said).</summary>
+    public void ApplyAsset(string value) => Commit(value);
+
     /// <summary>The font the dialog starts from: the row's value, or — absent — what its control inherits.</summary>
     public FormFontValue? EffectiveFont => FormCompositeRows.EffectiveFont(this);
 

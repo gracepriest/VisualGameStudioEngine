@@ -1120,3 +1120,23 @@ copy step reads documents; the real window is Task 11's run.
 Mutations (Edit + REBUILD) — all killed: the copy call removed from the IDE route only (both IDE tests red, both CLI tests
 GREEN — the "test both entry points" kill); the outside-the-project branch removed; the missing-file warning removed (CLI, IDE
 and unit). `SafeZip.IsWithin` alone removed: EQUIVALENT behind the `FormAssetPaths` check (kept as defence in depth).
+
+### Task 10 — the image picker + copy into Resources (base `dd42d261`)
+Done as written: new `ViewModels/Designer/FormAssetImport.cs` (`RelativeInsideProject`, `Import(picked, documentPath, target,
+choose)`; project root = `FormAssetPaths.ProjectRootFor`; outside → copy into `Resources/` — identical bytes reused, a different
+file of that name becomes `name (2).ext`, never overwritten — or the absolute path on WinForms only, or nothing).
+`FormPropertyRow.HasAssetPicker` / `ApplyAsset`; `FormPropertyGridViewModel.DocumentPath` (set by the document view model on
+every sync); the grid's `AssetPicker` `…` (`OnAssetPickClick`, caught and logged) with two seams, `PickFile` (default: the top
+level's `StorageProvider`, image or icon filters per target) and `ChooseImport` (default: a small modal "Copy into Resources /
+Use this path (WinForms) / Cancel" built in code). The rig's `Open` gained a `dir` parameter so a real project folder backs it.
+Choices under the delegation: the confirm is a three-way choice with Copy first (VS copies a picked resource into the project).
+⚠ The layout sweep has no PictureBox, so `AssetPicker` is not swept (follow-up). ⚠ Implementation-first; the mutation table
+is the red evidence.
+
+Tests: `FormAssetImportTests` (new, 9): inside → relative with forward slashes; a form in `Forms/` with the image in `Images/` →
+`Images/x.png`; outside + copy → `Resources/x.png`; identical bytes reused; a different file → `x (2).png` and the original
+untouched; decline on WinForms → the absolute path; on the web keeping the path is NOT offered and writes nothing; cancel;
+no `.blproj` → the document's folder. Real view `TheImagePicker_CopiesAnOutsideFileIntoResources_AndWritesTheRelativePath`
+(fake seams, a real click, the offer seen, ONE Edited, the copy on disk).
+
+Mutations (Edit + REBUILD) — all killed: the collision overwrites; backslashes stored; decline on the web stores the absolute path.

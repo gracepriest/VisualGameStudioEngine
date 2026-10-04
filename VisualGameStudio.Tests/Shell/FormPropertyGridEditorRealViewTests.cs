@@ -616,6 +616,63 @@ public partial class FormPropertyGridRealViewTests
         return dialog;
     }
 
+    // ==================================================================
+    // Slice 4 Task 10 — the image picker
+    // ==================================================================
+
+    /// <summary>
+    /// A PictureBox's Image <c>…</c>, with the two seams faked (the headless platform has no storage provider): a real
+    /// click; a file OUTSIDE the project is picked; "copy" is chosen (and keeping the path was offered — WinForms); the
+    /// document gains <c>Image="Resources/x.png"</c> through the row (ONE Edited), and the copy exists in the project.
+    /// </summary>
+    [AvaloniaTest]
+    public void TheImagePicker_CopiesAnOutsideFileIntoResources_AndWritesTheRelativePath()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "bl-picker-" + Guid.NewGuid().ToString("N"));
+        var project = Path.Combine(root, "App");
+        Directory.CreateDirectory(project);
+        File.WriteAllText(Path.Combine(project, "App.blproj"), "<BasicLangProject/>");
+        var outside = Path.Combine(root, "Downloads", "x.png");
+        Directory.CreateDirectory(Path.GetDirectoryName(outside)!);
+        File.WriteAllBytes(outside, new byte[] { 1, 2, 3 });
+
+        var doc = Doc.Replace("<Button Id=\"btn\" X=\"16\" Y=\"56\" Width=\"75\" Height=\"23\" TabIndex=\"1\"/>",
+            "<Button Id=\"btn\" X=\"16\" Y=\"56\" Width=\"75\" Height=\"23\" TabIndex=\"1\"/>\n" +
+            "    <PictureBox Id=\"pic\" X=\"16\" Y=\"96\" Width=\"100\" Height=\"50\" TabIndex=\"2\"/>");
+        try
+        {
+            using var rig = Open(doc: doc, dir: project + Path.DirectorySeparatorChar);
+            bool? offered = null;
+            rig.Grid.PickFile = _ => Task.FromResult<string?>(outside);
+            rig.Grid.ChooseImport = offer =>
+            {
+                offered = offer;
+                return Task.FromResult(FormAssetImportChoice.CopyIntoProject);
+            };
+            SelectOnCanvas(rig, "pic");
+            var image = rig.Row("Image");
+            var edits = 0;
+            rig.GridVm.Edited += (_, _) => edits++;
+
+            var picker = rig.Container(image).GetVisualDescendants().OfType<Button>()
+                .Single(b => b.Name == "AssetPicker" && b.IsEffectivelyVisible);
+            rig.Click(picker);
+            Dispatcher.UIThread.RunJobs();
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(offered, Is.True, "WinForms offers keeping the absolute path");
+                Assert.That(rig.Vm.Text, Does.Contain("Image=\"Resources/x.png\""), "the .blform text");
+                Assert.That(edits, Is.EqualTo(1));
+                Assert.That(File.ReadAllBytes(Path.Combine(project, "Resources", "x.png")), Is.EqualTo(new byte[] { 1, 2, 3 }));
+            });
+        }
+        finally
+        {
+            try { Directory.Delete(root, true); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+        }
+    }
+
     /// <summary>
     /// D-1c: the Custom colour is written ONCE, when the pop-up closes — never per <c>ColorChanged</c>. Opening and
     /// closing without moving it writes nothing; moving it three times and clicking OK writes the LAST colour once, as

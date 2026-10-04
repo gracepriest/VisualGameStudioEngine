@@ -178,16 +178,17 @@ public partial class FormPropertyGridRealViewTests
     /// Opens the real view on <see cref="Doc"/> (or <paramref name="doc"/>, a GridForm of its own), with the scaffolded
     /// GridForm.bas beside it.
     /// </summary>
-    private static Rig Open(double width = 1000, double height = 700, string doc = Doc, FormTarget target = FormTarget.WinForms)
+    private static Rig Open(double width = 1000, double height = 700, string doc = Doc, FormTarget target = FormTarget.WinForms,
+        string dir = Dir)
     {
         var scaffold = FormScaffolder.Create("GridForm", target);
         var files = new Files();
-        files.Contents[Dir + scaffold.DocumentFileName] = doc;
-        files.Contents[Dir + scaffold.CodeFileName] = scaffold.CodeText;
+        files.Contents[dir + scaffold.DocumentFileName] = doc;
+        files.Contents[dir + scaffold.CodeFileName] = scaffold.CodeText;
 
         var vm = new CodeEditorDocumentViewModel(files.Service, new Mock<IEventAggregator>().Object)
         {
-            FilePath = Dir + scaffold.DocumentFileName
+            FilePath = dir + scaffold.DocumentFileName
         };
         vm.SetContent(doc);
         Assert.That(vm.EnterDesignModeForFormDocument(), Is.True, "precondition: the designer must open");

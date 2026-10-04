@@ -211,6 +211,7 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
             _designerPanelsWired = true;
         }
 
+        PropertyGrid.DocumentPath = FilePath; // the image picker's project root (slice 4 Task 10)
         PropertyGrid.Load(file);
         if (file != null)
         {

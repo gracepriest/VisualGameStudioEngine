@@ -195,6 +195,11 @@
                             FontSize="10" Padding="4,0" MinHeight="0" VerticalAlignment="Center"
                             Content="&#x2026;" IsVisible="{Binding HasEllipsis}" Click="OnFontEllipsisClick"
                             ToolTip.Tip="Choose a font" AutomationProperties.Name="Choose a font"/>
+                    <!-- Slice 4 Task 10: an Image/Icon row's `…` opens a file picker (OnAssetPickClick); the typed path stays. -->
+                    <Button x:Name="AssetPicker" DockPanel.Dock="Left" Classes="dropDown" Margin="0,0,4,0"
+                            FontSize="10" Padding="4,0" MinHeight="0" VerticalAlignment="Center"
+                            Content="&#x2026;" IsVisible="{Binding HasAssetPicker}" Click="OnAssetPickClick"
+                            ToolTip.Tip="Choose a file" AutomationProperties.Name="Choose a file"/>
                     <!-- Slice 4 Task 7: an item collection is VS's read-only "(Collection)" and a `…` that opens the String
                          Collection Editor (OnItemsEllipsisClick). -->
                     <Button x:Name="ItemsEllipsis" DockPanel.Dock="Left" Classes="dropDown" Margin="0,0,4,0"

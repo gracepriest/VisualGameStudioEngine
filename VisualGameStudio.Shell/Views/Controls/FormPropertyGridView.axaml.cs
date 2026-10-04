@@ -24,6 +24,8 @@ public partial class FormPropertyGridView : UserControl
     public FormPropertyGridView()
     {
         InitializeComponent();
+        PickFile = DefaultPickFileAsync;
+        ChooseImport = DefaultChooseImportAsync;
 
         // ⚠ TUNNEL: the list's own KeyDown handling runs on the bubble, and a ToggleButton would take
         // Enter/Space for itself. The headers are not focusable, so a header key arrives from its CONTAINER.
@@ -104,6 +106,149 @@ public partial class FormPropertyGridView : UserControl
         {
             System.Diagnostics.Trace.TraceError($"The Font dialog failed; {row.Name} is unchanged. {ex}");
         }
+    }
+
+    /// <summary>
+    /// Where the image picker's file comes from (slice 4 Task 10): the platform's open-file picker, filtered to the row's
+    /// kind. ⚠ A SEAM — the headless platform has no storage provider — so a test supplies the picked path.
+    /// </summary>
+    public Func<FormPropertyRow, Task<string?>> PickFile { get; set; }
+
+    /// <summary>
+    /// What to do with a picked file OUTSIDE the project (D-5e): copy it into Resources (recommended), keep the absolute
+    /// path (only offered on WinForms — the argument says whether), or cancel. ⚠ A SEAM, for the same reason.
+    /// </summary>
+    public Func<bool, Task<FormAssetImportChoice>> ChooseImport { get; set; }
+
+    /// <summary>
+    /// An Image/Icon row's <c>…</c> (slice 4 Task 10, D-5e): pick a file; inside the project it is stored relative to it;
+    /// outside, the user chooses (copy into Resources / keep the path on WinForms / cancel); the value goes through the row.
+    /// Caught and logged like the dialogs' handlers.
+    /// </summary>
+    private async void OnAssetPickClick(object? sender, RoutedEventArgs e)
+    {
+        if (sender is not Control { DataContext: FormPropertyRow row } || !row.HasAssetPicker ||
+            DataContext is not FormPropertyGridViewModel { DocumentPath: { } document })
+        {
+            return;
+        }
+
+        try
+        {
+            if (await PickFile(row) is not { } picked)
+            {
+                return;
+            }
+
+            var choice = FormAssetImportChoice.Cancel;
+            if (FormAssetImport.RelativeInsideProject(picked, document) == null)
+            {
+                choice = await ChooseImport(row.Target == BasicLang.Forms.FormTarget.WinForms);
+            }
+
+            if (FormAssetImport.Import(picked, document, row.Target, _ => choice) is { } value)
+            {
+                row.ApplyAsset(value);
+            }
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Trace.TraceError($"The file picker failed; {row.Name} is unchanged. {ex}");
+        }
+    }
+
+    /// <summary>The default <see cref="PickFile"/>: the top level's storage provider, images (or icons) only.</summary>
+    private async Task<string?> DefaultPickFileAsync(FormPropertyRow row)
+    {
+        if (TopLevel.GetTopLevel(this)?.StorageProvider is not { CanOpen: true } storage)
+        {
+            return null;
+        }
+
+        var patterns = row.TypeName == nameof(BasicLang.Forms.FormPropertyType.Icon)
+            ? row.Target == BasicLang.Forms.FormTarget.WinForms
+                ? new[] { "*.ico" }
+                : new[] { "*.ico", "*.png", "*.svg", "*.gif" }
+            : row.Target == BasicLang.Forms.FormTarget.WinForms
+                ? new[] { "*.png", "*.jpg", "*.jpeg", "*.gif", "*.bmp", "*.ico" }
+                : new[] { "*.png", "*.jpg", "*.jpeg", "*.gif", "*.bmp", "*.ico", "*.svg", "*.webp" };
+        var files = await storage.OpenFilePickerAsync(new Avalonia.Platform.Storage.FilePickerOpenOptions
+        {
+            Title = $"Choose the {row.Name}",
+            AllowMultiple = false,
+            FileTypeFilter = new[] { new Avalonia.Platform.Storage.FilePickerFileType(row.Name) { Patterns = patterns } }
+        });
+        return files.Count == 1 ? Avalonia.Platform.Storage.StorageProviderExtensions.TryGetLocalPath(files[0]) : null;
+    }
+
+    /// <summary>
+    /// The default <see cref="ChooseImport"/>: a small modal question over the IDE window — Copy into Resources (default),
+    /// Use this path (WinForms only), Cancel.
+    /// </summary>
+    private async Task<FormAssetImportChoice> DefaultChooseImportAsync(bool offerKeepPath)
+    {
+        var choice = FormAssetImportChoice.Cancel;
+        var dialog = new Window
+        {
+            Title = "Copy the file into the project?",
+            Width = 440,
+            SizeToContent = SizeToContent.Height,
+            CanResize = false,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner
+        };
+
+        Button Make(string text, FormAssetImportChoice result)
+        {
+            var button = new Button { Content = text, Padding = new Thickness(12, 3) };
+            button.Click += (_, _) =>
+            {
+                choice = result;
+                dialog.Close();
+            };
+            return button;
+        }
+
+        var buttons = new StackPanel { Orientation = Avalonia.Layout.Orientation.Horizontal, Spacing = 8,
+            HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Right };
+        buttons.Children.Add(Make("Copy into Resources", FormAssetImportChoice.CopyIntoProject));
+        if (offerKeepPath)
+        {
+            buttons.Children.Add(Make("Use this path", FormAssetImportChoice.KeepAbsolutePath));
+        }
+
+        buttons.Children.Add(Make("Cancel", FormAssetImportChoice.Cancel));
+        dialog.Content = new StackPanel
+        {
+            Margin = new Thickness(12),
+            Spacing = 10,
+            Children =
+            {
+                new TextBlock
+                {
+                    TextWrapping = Avalonia.Media.TextWrapping.Wrap,
+                    Text = offerKeepPath
+                        ? "The file is outside the project. Copy it into the project's Resources folder (it then ships beside " +
+                          "the program), or use its path as it is (the program will look for it there on the machine it runs on)?"
+                        : "The file is outside the project, and a web page cannot reach your disk. Copy it into the project's " +
+                          "Resources folder (it is then copied beside the page)?"
+                },
+                buttons
+            }
+        };
+
+        if (TopLevel.GetTopLevel(this) is Window owner)
+        {
+            await dialog.ShowDialog(owner);
+        }
+        else
+        {
+            var closed = new TaskCompletionSource();
+            dialog.Closed += (_, _) => closed.TrySetResult();
+            dialog.Show();
+            await closed.Task;
+        }
+
+        return choice;
     }
 
     /// <summary>
