@@ -958,7 +958,41 @@ reserved `VgsOn_` prefix, and M7's finding that an Extern class's undeclared mem
   spelled `Me.{handler}(e)` in RegionWriter → `EveryCallSite_AsksTheOneRule`; collision suffix off → both-target collision
   test; form wording always → the two-controls message test; `isComposing` guard dropped → node IME test + Unbind exact
   text; continuation `" _"` only → ⚠ first SURVIVED (the test checked types only); the Tabbed assertion now checks names
-  and kills it.
+  and kills it. Committed `cfb94a29`.
+
+### Task 5 — the grid's Events mode, view model (base `cfb94a29`)
+- New `FormEventRow : IFormDisplayRow` (`Name` = the WinForms event, `Category` = its `FormEventCategory`, `Description`,
+  `EventName` in the target's vocabulary, `Handler`, `Choices` = `FormHandlers.FittingHandlers` — the SAME instance until its
+  items change — `Commit(text)`, `RequestHandler()`, `Refusal`) and `FormHandlerRequest(Owner, Event, Handler?)`.
+  `FormPropertyGridViewModel`: `[ObservableProperty] IsEventsMode` (+ `IsPropertiesMode`), `EventRows` rebuilt from
+  `FormEvents.WiredOn(definition, target)` with every selection (the Form's with nothing selected), a SECOND
+  `FormPropertyDisplayList` (own collapse memory) behind the mode-aware `DisplayItems`, `CodeBehindText` (pushed by the host;
+  setting it refreshes every row's choices), `HandlerRequested`, and an events-aware description pane.
+- Commit rules: empty → `Unbind` (never the code); a Sub that exists and FITS → bound (its own spelling) in the target's
+  vocabulary, ONE `Edited`, code untouched; a new legal name → `HandlerRequested` (the host writes the stub and binds — Task 6);
+  illegal / `VgsOn_` / an existing Sub that does not fit → `Refusal` shown in the description pane, nothing written.
+- **Scope note:** the coordinator's message described Task 5 as "the Events tab UI … real-view tests with real clicks at two
+  sizes, AXAML binding checks". In this pre-flight those are TASK 6 (view, gestures, the real-view rig); Task 5 is the view
+  model with fast tests. Task 5 was executed AS WRITTEN; nothing in the AXAML changed yet, so there was no `dotnet clean`.
+- **TDD shape — honest:** tests and implementation went into the same first build (no separate red run); evidence =
+  mutations below, every one killed.
+- RE-CHECK: `FormPropertyGrid*`, `FormObjectSelector*`, `FormDesigner*` fast + Integration (448) green.
+
+| Mutation (Edit + rebuild) | Killed by |
+|---|---|
+| Rows from `definition.Events` instead of the seam | 19 `TheEventRows_AreExactlyTheSeams_…` cells, `AWebPanel_ShowsNoPaint_…`, the Form rows |
+| The WinForms name stored on the web | `PickingAFittingHandler_…(Web)` |
+| A new `Choices` instance per read | `Choices_IsTheSameInstance_…` |
+| One display list for both modes | `CollapseMemory_IsPerMode` |
+| The mode reset by a rebuild | `TheMode_SurvivesASelectionChange_…` |
+| "Unbind also edits the code" | not applicable in the VM: the grid only READS `CodeBehindText` (no write path exists); Task 6's real-view (e) checks the disk |
+
+### Gate after Task 5 (fresh build: round-2 fixes + Task 5 on `cfb94a29`)
+- **Fast subset:** 12309 — 12285 passed, 5 failed, 19 skipped; names ⊂ Task 0's (`Emit_ReplacesAnImportedModuleThatAnotherHandleHasMapped`,
+  `Emit_ReplacesAScriptThatAnotherHandleHasMapped`, `EveryTextRoute_UsesTheFormatter_NeverToStringOrABareCout`,
+  `SearchSnippets_EmptyQuery_ReturnsAll`, `SearchSnippets_WhitespaceQuery_ReturnsAll`).
+- **Integration `(Form|WinFormsCatalog)`:** 345 — 344 passed, 1 failed (`CppDoubleFormattingTests.Expected_IsWhatDotNetPrints`,
+  the standing machine-culture row matched by "Formatting"), 0 skipped (Edge ran).
 
 ## 7. Tests to re-check (consolidated)
 

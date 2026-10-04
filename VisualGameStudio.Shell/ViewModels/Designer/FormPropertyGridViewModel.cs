@@ -63,8 +63,45 @@ public partial class FormPropertyGridViewModel : ObservableObject
     /// </summary>
     public string? DocumentPath { get; set; }
 
-    /// <summary>What the list SHOWS: <see cref="FormPropertyCategoryHeader"/>s and <see cref="FormPropertyRow"/>s.</summary>
-    public ObservableCollection<object> DisplayItems => _display.Items;
+    /// <summary>
+    /// What the list SHOWS: <see cref="FormPropertyCategoryHeader"/>s with <see cref="FormPropertyRow"/>s — or, in
+    /// <see cref="IsEventsMode"/>, with <see cref="FormEventRow"/>s. ⛔ Each mode has its OWN display list, so collapsing
+    /// "Behavior" among the events does not collapse it among the properties.
+    /// </summary>
+    public ObservableCollection<object> DisplayItems => IsEventsMode ? _eventDisplay.Items : _display.Items;
+
+    /// <summary>The Events tab's display projection (slice 5 D-5) — its own collapse memory.</summary>
+    private readonly FormPropertyDisplayList _eventDisplay = new();
+
+    /// <summary>The Events tab's rows for the current selection: <see cref="FormEvents.WiredOn"/>, never more.</summary>
+    public ObservableCollection<FormEventRow> EventRows { get; } = new();
+
+    /// <summary>
+    /// Properties or Events (VS's lightning bolt). ⛔ Survives a selection change, as VS's does.
+    /// </summary>
+    [ObservableProperty]
+    private bool _isEventsMode;
+
+    /// <summary>The Properties toggle — the other face of <see cref="IsEventsMode"/>.</summary>
+    public bool IsPropertiesMode
+    {
+        get => !IsEventsMode;
+        set => IsEventsMode = !value;
+    }
+
+    /// <summary>
+    /// The form's code-behind as the user sees it now — the open tab's text when it is open, else the file — PUSHED by
+    /// the document view model (D-5 freshness). The Events tab's handler drop-downs read it; setting it refreshes them.
+    /// ⛔ The grid never writes it.
+    /// </summary>
+    [ObservableProperty]
+    private string _codeBehindText = "";
+
+    /// <summary>
+    /// An Events-tab row wants a handler: a typed new name, or a double-click (D-5). ⛔ The host owns the code-behind:
+    /// it writes the stub through <see cref="FormHandlers.Plan"/>, binds it, and opens the code. The grid writes nothing.
+    /// </summary>
+    public event EventHandler<FormHandlerRequest>? HandlerRequested;
 
     public FormPropertyGridViewModel()
     {
@@ -77,6 +114,79 @@ public partial class FormPropertyGridViewModel : ObservableObject
                 SelectedRow = null;
             }
         };
+        _eventDisplay.RowsHidden += (_, _) =>
+        {
+            if (SelectedEventRow != null && !DisplayItems.Contains(SelectedEventRow))
+            {
+                SelectedItem = null;
+            }
+        };
+    }
+
+    /// <summary>The Events-tab row the description pane describes (the list's selected item when it is one).</summary>
+    public FormEventRow? SelectedEventRow => SelectedItem as FormEventRow;
+
+    /// <summary>The Events-tab row whose last typed value was refused, while that is the newest thing to say.</summary>
+    private FormEventRow? _refusedEventRow;
+
+    partial void OnIsEventsModeChanged(bool value)
+    {
+        OnPropertyChanged(nameof(IsPropertiesMode));
+        OnPropertyChanged(nameof(DisplayItems));
+        SelectedItem = null;
+        SelectedRow = null;
+        RefreshDisplay();
+        RaiseDescription();
+    }
+
+    partial void OnCodeBehindTextChanged(string value)
+    {
+        foreach (var row in EventRows)
+        {
+            row.RefreshChoices();
+        }
+    }
+
+    private void OnEventRowPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName != nameof(FormEventRow.Refusal) || sender is not FormEventRow row || !EventRows.Contains(row))
+        {
+            return;
+        }
+
+        _refusedEventRow = row.Refusal != null ? row : ReferenceEquals(_refusedEventRow, row) ? null : _refusedEventRow;
+        RaiseDescription();
+    }
+
+    /// <summary>Rebuilds the Events-tab rows for the selection: the control's row, or the Form's with nothing selected.</summary>
+    private void RebuildEventRows()
+    {
+        foreach (var old in EventRows)
+        {
+            old.PropertyChanged -= OnEventRowPropertyChanged;
+        }
+
+        EventRows.Clear();
+        _refusedEventRow = null;
+
+        if (_file?.Model is not { } form)
+        {
+            return;
+        }
+
+        var owner = new FormBindOwner(form, SelectedControl);
+        if (owner.Definition is not { } definition)
+        {
+            return;
+        }
+
+        foreach (var evt in FormEvents.WiredOn(definition, form.Target))
+        {
+            var row = new FormEventRow(form, owner, evt, () => CodeBehindText, RaiseEdited,
+                request => HandlerRequested?.Invoke(this, request));
+            row.PropertyChanged += OnEventRowPropertyChanged;
+            EventRows.Add(row);
+        }
     }
 
     /// <summary>The object selector's entries: the form, every control, every tray component.</summary>
@@ -157,8 +267,9 @@ public partial class FormPropertyGridViewModel : ObservableObject
     private string? _shownOwner;
 
     /// <summary>The description pane's title: the property's name, or a prompt when nothing is picked.</summary>
-    public string DescriptionTitle =>
-        _refusedRow?.Name ?? _carriedRefusal?.Title ?? SelectedRow?.Name ?? (IsEmpty ? string.Empty : "Properties");
+    public string DescriptionTitle => IsEventsMode
+        ? _refusedEventRow?.Name ?? SelectedEventRow?.Name ?? (EventRows.Count == 0 ? string.Empty : "Events")
+        : _refusedRow?.Name ?? _carriedRefusal?.Title ?? SelectedRow?.Name ?? (IsEmpty ? string.Empty : "Properties");
 
     /// <summary>
     /// The description pane's body (spec §3) — the property's Description (its type when it has none),
@@ -172,6 +283,16 @@ public partial class FormPropertyGridViewModel : ObservableObject
     {
         get
         {
+            // Slice 5 D-5: in the Events tab the pane describes the selected EVENT, and says why a typed handler was refused.
+            if (IsEventsMode)
+            {
+                return _refusedEventRow?.Refusal
+                       ?? SelectedEventRow?.Description
+                       ?? (EventRows.Count == 0
+                           ? "Select a control on the canvas to see its events."
+                           : "Select an event to see when it is raised. Double-click it to write its handler.");
+            }
+
             // ⛔ Spec §7: a refused value is not written, and the editor snaps back — so this pane is the
             // only place that says what was refused and why.
             if (_refusedRow?.Refusal is { } refusal)
@@ -199,7 +320,17 @@ public partial class FormPropertyGridViewModel : ObservableObject
     }
 
     /// <summary>A header selected in the list describes nothing: the pane falls back to its prompt.</summary>
-    partial void OnSelectedItemChanged(object? value) => SelectedRow = value as FormPropertyRow;
+    partial void OnSelectedItemChanged(object? value)
+    {
+        SelectedRow = value as FormPropertyRow;
+        if (value is FormEventRow picked && !ReferenceEquals(picked, _refusedEventRow))
+        {
+            _refusedEventRow = null;
+        }
+
+        OnPropertyChanged(nameof(SelectedEventRow));
+        RaiseDescription();
+    }
 
     partial void OnSelectedRowChanged(FormPropertyRow? value)
     {
@@ -711,6 +842,7 @@ public partial class FormPropertyGridViewModel : ObservableObject
             }
         }
 
+        RebuildEventRows();
         RefreshObjects();
         RefreshDisplay();
 
@@ -790,6 +922,13 @@ public partial class FormPropertyGridViewModel : ObservableObject
         // ⚠ Captured BEFORE the rebuild: clearing a bound list pushes a null selection back into us.
         // SelectedRow FIRST — the view binds SelectedItem (FormPropertyGridView), but a row set through
         // SelectedRow directly never reached SelectedItem, which may still hold an older header.
+        if (IsEventsMode)
+        {
+            // Slice 5: the Events tab's own projection — the same search and sort, its own collapse memory.
+            SelectedItem = _eventDisplay.Refresh(EventRows, SearchText, IsCategorized, SelectedItem);
+            return;
+        }
+
         var selected = (object?)SelectedRow ?? SelectedItem;
         var keep = _display.Refresh(Rows, SearchText, IsCategorized, selected);
 
