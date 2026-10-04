@@ -864,6 +864,67 @@ reserved `VgsOn_` prefix, and M7's finding that an Extern class's undeclared mem
 | The scanner keeps comments | ⚠ first SURVIVED `AMidLineComment_…` (the anchored declaration regex already refuses `Dim x … ' Sub btn_Click`) — VACUOUS for this mutant, so `ACommentInsideAContinuedParameterList_IsNotPartOfIt` was added; it kills it. The mid-line test stays: it pins the anchoring |
 | BL8013's lookup `Ordinal` | new `BL8013_FindsAHandlerDeclaredInAnotherCase` |
 
+### Task 4 — every event through csc and through a running page (base `e7662369`; Integration)
+- `WinFormsCatalogSweepTests.EveryEvent_OfEveryControl_WiresIntoCSharpThatCscAccepts` — every WinForms kind AND the Form
+  (`EveryWinFormsControlAndTheForm`): every WinForms event planned through `FormHandlers.Plan` (the stub `Shape` writes),
+  `EnsureBind`, the region writer, the real CLI to C#, csc. ONE compile per kind. `TheDefaultEvent_…` kept. All 35 green
+  first run.
+- `FormEventWebRunTests` (created by the review-fix commit) gains: `EveryWebEvent_OfTheKind_RunsItsHandlerOnce_AndTheFiltersHold`
+  (TestCaseSource over every web ELEMENT kind with a web event — 22; components excluded, a Timer's tick is no dispatched
+  event and an interval would keep node alive), `TheFormsWebEvents_Run_AndLoadRunsOnceAtConstruction`, and the Edge tier
+  `InEdge_TheRealInterfaces_RunTheHandlers_AndAChildToChildFocusMoveRaisesNoEnter`. Every page is planned through the
+  designer's own `Plan` + `EnsureBind` + `RegionWriter` (`PlannedCode` fills each stub body with a print), built by the CLI on
+  the project route, and run.
+  - node: each DOM type `ListenType` names dispatched once (with `key` and an outside `relatedTarget`) → every handler once;
+    KeyPress ×3 for Enter/Backspace/Escape and ×0 for Shift/ArrowLeft/F1 while KeyDown ×6; a child→child focus move → no
+    Enter/Leave; `null` relatedTarget → each once. Form: Load once BEFORE the first dispatch; Resize on `window`;
+    Click/KeyDown/KeyPress/KeyUp on `body`, KeyDown before KeyPress.
+  - Edge (ran on this machine — 0 skipped): one Canvas page; every dispatch is `new (DomInterfaceOf(webEvent))(ListenType(evt),
+    …)` — the gates-only table's first reader; KeyPress sent as `KeyboardEvent("keydown")` incl. U+1F600; focus moved with
+    REAL `.focus()`: outside → Panel child raises Enter once (the positive control — focus events do fire in headless Edge),
+    child → child raises none. Served from `WebPreviewServer`, throw-away profile (`EdgeLayoutHarness.WithThrowawayProfile`).
+  - ⚠ Deviation: the plan's `EdgeStep.Dispatch` on the layout harness was NOT added — the layout harness measures rectangles
+    per iframe case; an event log needs a console capture before the page's module and a driver after it, so the tier has
+    its own small `RunInEdge` reusing the harness's Edge path, profile and server.
+- `JsExecutionTierRosterTests` already counts the fixture (fix commit, pin 104).
+- **Red before:** none observable — the emitter was complete (Task 2 + fixes) before these tiers existed; all 62 passed on
+  their first run. Their value is shown by the mutations, each killed by a RUN, not a string.
+
+| Mutation (Edit + rebuild) | Killed by |
+|---|---|
+| The web emitter writes the WinForms spelling (`addEventListener("Click", …)`) | 26 of 27 `FormEventWebRunTests` (every run) |
+| `Me.` dropped from the Load call | ⚠ **EQUIVALENT at run time on this branch**: measured — the JS backend now emits `this.LoginForm_Load()` for an UNQUALIFIED self-call (the CLAUDE.md row "an unqualified call … is a runtime ReferenceError" is stale here; master #57). Still killed by the fast text pin `TheWebLoad_IsAMeQualifiedCall_…` (Task 2) |
+| Load emitted as a `load` listener on the body | `TheFormsWebEvents_Run_…` and the Edge test — the CLI build REFUSES it (a parameterless Sub cannot be an `Action(Of DomEvent)`) |
+| The Window bind emitted on `doc.body` | `TheFormsWebEvents_Run_…` (resize never runs) |
+| `Backspace` dropped from the key set | the 9 KeyPress kinds' key counts |
+| The relatedTarget test dropped | 11 kinds' child→child step AND the Edge real-focus step |
+| `System.ComponentModel.` dropped from TextBox Validating | `EveryEvent_OfEveryControl_…(TextBox)`: CS0246 + CS0123 |
+
+  Four node builds (2 + 2 + 2 + 1 mutants), the kills of each pair disjoint by test (and by message where a test was shared).
+
+### Correction to review fix 2, found by the Task 4 gate (base `e7662369` + Task 4)
+- The Task 4 Integration run failed FIVE image-copy acceptance rows (`Cli_/Ide_…CopiesTheImage…`, `Ide_WhenTheProjectFileCannotBeLoaded_…`):
+  their fixture is a form `Pic` holding a control `pic`, and fix 2's case-INSENSITIVE match refused it (BL8017) — a document
+  that builds and runs on both targets (C# is case-sensitive; BasicLang accepts a member named like its class in another
+  case). The ruling's stated basis is CS0542, which is exact-case.
+- Corrected (the recommended reading of the ruling, recorded as a deviation): `ControlsNamedLikeTheForm` matches EXACTLY
+  (Ordinal) — the CS0542 case — on both routes; the one real case-variant hazard, two generated wrappers whose names differ only
+  in case (`VgsOn_f_KeyPress` / `VgsOn_F_KeyPress` — one member to BasicLang), is refused (BL8017) by a new
+  `RegionWriter.CheckWrapperNames` over the wrappers the page will really get. Tests: `(Web,"f")` still refused (both wrap
+  KeyPress); new `ACaseVariantId_WithNoCollidingWrapper_IsAccepted_ByTheReaderAndTheWriter` (both targets); the reader row now
+  uses an exact `F`. Mutations: `CheckWrapperNames` removed → `(Web,"f")` red; the match back to OrdinalIgnoreCase → the new
+  case-variant rows red (and the five acceptance rows, measured). The five rows re-run by name: green. Committed `8997278e`.
+
+### Gate after Task 4 (fresh build of Task 4 on `e7662369`, before the correction above)
+- **Fast subset:** Total 12221 — Passed 12197, Failed 5, Skipped 19. Sorted names ⊂ Task 0's six:
+  `Emit_ReplacesAnImportedModuleThatAnotherHandleHasMapped`, `Emit_ReplacesAScriptThatAnotherHandleHasMapped`,
+  `EveryTextRoute_UsesTheFormatter_NeverToStringOrABareCout`, `SearchSnippets_EmptyQuery_ReturnsAll`,
+  `SearchSnippets_WhitespaceQuery_ReturnsAll` (the intermittent `Emit_ReplacingAnImportedModule_…` passed).
+- **Integration `(Form|WinFormsCatalog)`:** 344 — 338 passed, 6 failed, 0 skipped (25 m 50 s). Five were the image-copy rows
+  fixed by `8997278e` (re-run by name: green); the sixth is `CppDoubleFormattingTests.Expected_IsWhatDotNetPrints` (`∞`
+  vs `Infinity`, machine culture; caught by "Formatting" containing "Form"), as at the Task 2 gate. The Edge tier RAN (not
+  skipped).
+
 ## 7. Tests to re-check (consolidated)
 
 | Test | Why | Task |
