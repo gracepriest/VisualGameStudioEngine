@@ -652,3 +652,13 @@ slice-3 §5a.
 | `FormPropertyGridTests.cs:692-697` | frozen Bool: assert `IsComboBox` false too | 1 |
 | `FormPropertyRowDefaultTests.cs:417` | PropertyChanged list; a Bool edit must still raise `StringValue` | 1 |
 | `WinFormsCatalogParityTests.TheSnapshot_Covers…` | no new KIND in slice 4 (Icon is a row) | none |
+
+## 8. Execution notes
+
+### Task 0 — Baseline (base `e0fc5915` = `0f6d2ced` + this document; Windows, Release)
+`dotnet build VisualGameStudio.Tests` green. Fast subset (`TestCategory!=Integration`, both streams captured):
+**Total 10629 · Passed 10604 · Failed 6 · Skipped 19.** Sorted failure names — all known machine rows (§5):
+`Emit_ReplacesAScriptThatAnotherHandleHasMapped`, `Emit_ReplacesAnImportedModuleThatAnotherHandleHasMapped`,
+`Emit_ReplacingAnImportedModule_LeavesNoTempFileBehind`, `EveryTextRoute_UsesTheFormatter_NeverToStringOrABareCout`,
+`SearchSnippets_EmptyQuery_ReturnsAll`, `SearchSnippets_WhitespaceQuery_ReturnsAll`. (`ReadingAnMvidTakesNoLockOnTheFile`
+passed on this run.)
