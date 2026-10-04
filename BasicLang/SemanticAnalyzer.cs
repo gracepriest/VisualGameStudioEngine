@@ -791,7 +791,8 @@ namespace BasicLang.Compiler.SemanticAnalysis
                         {
                             ReturnType = returnType,
                             Parameters = BuildSiblingSignatureParameters(func.Parameters),
-                            Access = func.Access
+                            Access = func.Access,
+                            IsShared = func.IsStatic   // Task 7c: BC30469 reads it across files
                         };
                         break;
                     }
@@ -802,7 +803,8 @@ namespace BasicLang.Compiler.SemanticAnalysis
                         {
                             ReturnType = _typeManager.VoidType,
                             Parameters = BuildSiblingSignatureParameters(sub.Parameters),
-                            Access = sub.Access
+                            Access = sub.Access,
+                            IsShared = sub.IsStatic
                         };
                         break;
                     }
@@ -824,7 +826,8 @@ namespace BasicLang.Compiler.SemanticAnalysis
                         classType.Members[field.Name] = new Symbol(field.Name, SymbolKind.Variable,
                             ResolveSiblingSignatureType(field.Type) ?? _typeManager.ObjectType, 0, 0)
                         {
-                            Access = field.Access
+                            Access = field.Access,
+                            IsShared = field.IsStatic
                         };
                         break;
                     }
@@ -6565,6 +6568,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     }
                     if (_nodeSymbols.TryGetValue(func, out var funcSymbol))
                     {
+                        funcSymbol.IsShared = func.IsStatic;   // Task 7c: BC30469 reads it across files
                         classType.Members[func.Name] = funcSymbol;
                     }
                 }
@@ -6586,11 +6590,13 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     }
                     if (_nodeSymbols.TryGetValue(sub, out var subSymbol))
                     {
+                        subSymbol.IsShared = sub.IsStatic;
                         classType.Members[sub.Name] = subSymbol;
                     }
                 }
                 else if (member is VariableDeclarationNode varDecl && _nodeSymbols.TryGetValue(varDecl, out var varSymbol))
                 {
+                    varSymbol.IsShared = varDecl.IsStatic;
                     classType.Members[varDecl.Name] = varSymbol;
                 }
                 else if (member is PropertyNode prop && _nodeSymbols.TryGetValue(prop, out var propSymbol))
@@ -6907,6 +6913,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
             // that drops this survived the fixture because it probed PARAMETER types only; the
             // full suite found the return-type shape, and the fixture now has it.
             symbol.Access = node.Access;
+            symbol.IsShared = node.IsStatic;   // Task 7c: BC30469
             AttachOwningModule(symbol);
 
             // Enter function scope
@@ -6998,6 +7005,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
             
             symbol.ReturnType = _typeManager.VoidType;
             symbol.Access = node.Access;
+            symbol.IsShared = node.IsStatic;   // Task 7c: BC30469
             AttachOwningModule(symbol);
             SetNodeSymbol(node, symbol);
 
@@ -11840,10 +11848,10 @@ namespace BasicLang.Compiler.SemanticAnalysis
             _currentScope?.GetClassScope()?.ClassType?.ResolveMember(name);
 
         /// <summary>
-        /// ⭐ THE class-scope rule for a BARE procedure call, shared by the analyzer (which binds and
+        /// ⭐ THE class-scope rule for a BARE call, shared by the analyzer (which binds and
         /// type-checks the call by it, <see cref="ClassScopeCallee"/>) and the IR builder (which spells
         /// the call by it, <c>IRBuilder.IsCurrentClassProcedure</c>) so the two cannot disagree: the
-        /// Function or Sub named <paramref name="name"/> that <paramref name="classType"/> declares —
+        /// member named <paramref name="name"/> that <paramref name="classType"/> declares —
         /// whatever its access — or, failing that, the nearest base declares with an access other than
         /// <c>Private</c> (a base's Private member is inaccessible, and VB skips it). Null when none does.
         ///
@@ -11854,22 +11862,29 @@ namespace BasicLang.Compiler.SemanticAnalysis
         /// call against the Module's <c>Hello(x As Integer) As String</c> and said "Compilation successful!"
         /// while JavaScript ran Base's <c>Hello()</c> and put an Integer into a String (Task 7b).</para>
         ///
-        /// <para>⚠ The MEMBER NAME shadows, not a signature: user procedures are one symbol per name, so a
-        /// class's <c>Hello</c> hides every Module <c>Hello</c> outright, which is VB's rule for a name
-        /// declared in a nearer scope. A non-procedure member of the name is skipped and the walk goes on,
-        /// exactly as the IR builder's walk always did. Bases are re-resolved by NAME through the type table
-        /// (falling back to the chain's own object, a sibling file's shell) — the IR builder walks names.</para>
+        /// <para>⚠ The MEMBER NAME shadows, not a signature or a kind: user procedures are one symbol per
+        /// name, so a class's <c>Hello</c> hides every Module <c>Hello</c> outright, which is VB's rule for
+        /// a name declared in a nearer scope — and so does a FIELD, PROPERTY or constant of that name (Task
+        /// 7c: a base's <c>Property Value</c> beside a Module's <c>Function Value()</c> made a bare
+        /// <c>Value()</c> in the derived class <c>Util.Value()</c>). The nearest accessible member is the
+        /// answer whatever its kind. Bases are re-resolved by NAME through the type table (falling back to
+        /// the chain's own object, a sibling file's shell) — the IR builder walks names.</para>
         /// </summary>
-        internal Symbol ClassScopeProcedure(TypeInfo classType, string name)
+        /// <param name="declaringType">The type in the chain that declares the member.</param>
+        internal Symbol ClassScopeMember(TypeInfo classType, string name, out TypeInfo declaringType)
         {
+            declaringType = null;
             if (classType == null || string.IsNullOrEmpty(name)) return null;
 
             var guard = 0;
             for (var type = classType; type != null && guard++ < 64;)
             {
-                if (type.Members != null && type.Members.TryGetValue(name, out var member) && IsProcedure(member)
+                if (type.Members != null && type.Members.TryGetValue(name, out var member) && member != null
                     && (guard == 1 || member.Access != AccessModifier.Private))
+                {
+                    declaringType = type;
                     return member;
+                }
 
                 var baseType = type.BaseType;
                 type = baseType == null ? null : (LookupType(baseType.Name) ?? baseType);
@@ -11877,25 +11892,139 @@ namespace BasicLang.Compiler.SemanticAnalysis
             return null;
         }
 
+        /// <summary>What a bare call inside a class body binds to, by <see cref="ClassScopeCallee"/>.</summary>
+        /// <param name="Member">The class member (own, inherited, or of an enclosing class) — null when none.</param>
+        /// <param name="NetBaseMember">A member of a RESOLVED .NET base declares the name: no BasicLang symbol, and
+        /// no Module procedure may capture the call.</param>
+        /// <param name="SharedMisuse">BC30469 was reported: an instance member named from a Shared context or
+        /// from a nested class. The call is not checked further.</param>
+        private readonly record struct ClassScopeBinding(Symbol Member, bool NetBaseMember, bool SharedMisuse);
+
         /// <summary>
         /// The member a BARE call to <paramref name="name"/> inside a class body binds to, ahead of module
-        /// and global scope — or null, when the call is not in a class, a nearer declaration (a local, a
-        /// parameter, a lambda's parameter) holds the name, or the class chain has no such procedure; the
-        /// caller then goes on to <see cref="PreferModuleProcedure"/> as before. <paramref name="resolved"/>
+        /// and global scope — or an empty binding, when the call is not in a class, a nearer declaration (a
+        /// local, a parameter, a lambda's parameter) holds the name, or no class in scope has such a member;
+        /// the caller then goes on to <see cref="PreferModuleProcedure"/> as before. <paramref name="resolved"/>
         /// is what lexical scope found: when that is the class's OWN member (declared in the class scope,
         /// Private included, already defined in pass 2) it is the answer as it stands.
+        ///
+        /// <para>⛔ Task 7c, both VB's BC30469: an INSTANCE member named bare from a <c>Shared</c> method, and an
+        /// enclosing class's instance member named from a NESTED class. Both compiled clean and failed late or
+        /// wrong (CS0120 on C#; JavaScript ran the Module's procedure of that name). Reported here, where the
+        /// member's shared-ness and the context are both known, and the call is NOT handed to the Module.</para>
+        ///
+        /// <para>⛔ Task 7c: a member of a .NET base the resolver can SEE (<see cref="NetBaseDeclaresMember"/>)
+        /// shadows a Module procedure too — <c>Clear()</c> in a class over <c>ArrayList</c> is the list's. An
+        /// unresolvable base (WinForms: <c>EnableNetResolution</c> is not armed) stays permissive: what it
+        /// declares is unknown, so nothing is claimed for it.</para>
         /// </summary>
-        private Symbol ClassScopeCallee(string name, Symbol resolved)
+        private ClassScopeBinding ClassScopeCallee(string name, Symbol resolved, ASTNode at)
         {
             var classScope = _currentScope?.GetClassScope();
-            if (classScope == null || string.IsNullOrEmpty(name)) return null;
+            if (classScope == null || string.IsNullOrEmpty(name)) return default;
 
             for (var s = _currentScope; s != null && !ReferenceEquals(s, classScope); s = s.Parent)
-                if (s.ResolveLocal(name) != null) return null;
+                if (s.ResolveLocal(name) != null) return default;
 
-            if (resolved != null && ReferenceEquals(resolved.DeclaringScope, classScope)) return resolved;
+            Symbol member;
+            TypeInfo declaring;
+            if (resolved != null && ReferenceEquals(resolved.DeclaringScope, classScope))
+            {
+                member = resolved;
+                declaring = classScope.ClassType;
+            }
+            else
+            {
+                member = ClassScopeMember(classScope.ClassType, name, out declaring);
+            }
 
-            return ClassScopeProcedure(classScope.ClassType, name);
+            if (member != null)
+            {
+                if (_inStaticContext && IsKnownInstanceMember(member, declaring, name))
+                {
+                    ReportNonSharedReference(name, at);
+                    return new ClassScopeBinding(member, false, true);
+                }
+                return new ClassScopeBinding(member, false, false);
+            }
+
+            if (NetBaseDeclaresMember(classScope.ClassType, name))
+                return new ClassScopeBinding(null, true, false);
+
+            // An ENCLOSING class's member, from a nested class: VB has no implicit outer `Me`, so an instance
+            // member there is BC30469. A Shared one keeps the legacy path (it binds as it always did).
+            for (var outer = classScope.Parent?.GetClassScope(); outer != null; outer = outer.Parent?.GetClassScope())
+            {
+                var outerMember = ClassScopeMember(outer.ClassType, name, out var outerDeclaring);
+                if (outerMember == null) continue;
+                if (!IsKnownInstanceMember(outerMember, outerDeclaring, name)) return default;
+                ReportNonSharedReference(name, at);
+                return new ClassScopeBinding(outerMember, false, true);
+            }
+
+            return default;
+        }
+
+        /// <summary>
+        /// A type an argument list can never apply to (BC30471): a numeric, Boolean, Char or Date primitive,
+        /// or an Enum. Deliberately narrow — String (VB's default <c>Chars</c>), Object (late bound), classes
+        /// and structures (a <c>Default</c> property) and anything unresolved are left as they were.
+        /// </summary>
+        private static bool IsScalarValueType(TypeInfo type)
+        {
+            if (type == null || type.ArrayRank > 0 || type.IsPointer) return false;
+            if (type.Kind == TypeKind.Enum) return true;
+            if (type.Kind != TypeKind.Primitive) return false;
+            return !string.Equals(type.Name, "String", StringComparison.OrdinalIgnoreCase)
+                   && !string.Equals(type.Name, "Object", StringComparison.OrdinalIgnoreCase)
+                   && !string.Equals(type.Name, "Void", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private void ReportNonSharedReference(string name, ASTNode at) =>
+            VbCodedError("BC30469",
+                $"Reference to a non-shared member '{name}' requires an object reference.", at);
+
+        /// <summary>
+        /// Whether <paramref name="member"/>, declared by <paramref name="declaringType"/>, is an INSTANCE
+        /// member — a field, property, method or Sub not declared <c>Shared</c>. False for a constant
+        /// (implicitly Shared). Read from this unit's record of the declaring class when it has one, and
+        /// otherwise from the member symbol's own <see cref="Symbol.IsShared"/>, which every site that puts a
+        /// class member into a <see cref="TypeInfo.Members"/> table sets (pass 2, the sibling/pass-1
+        /// signature, the language server's project table) — a base in another file has no record here.
+        /// </summary>
+        private bool IsKnownInstanceMember(Symbol member, TypeInfo declaringType, string name)
+        {
+            if (member == null || member.IsConstant || member.IsShared) return false;
+            if (member.Kind is not (SymbolKind.Variable or SymbolKind.Property or SymbolKind.Function
+                    or SymbolKind.Subroutine))
+                return false;
+
+            if (declaringType != null && _sharedMemberNames.TryGetValue(declaringType, out var shared))
+                return !shared.Contains(name);
+            return true;
+        }
+
+        /// <summary>
+        /// Whether a .NET class in <paramref name="classType"/>'s base chain — one the reference closure can
+        /// RESOLVE — declares a member named <paramref name="name"/>. False when the resolver is not armed, the
+        /// chain has no .NET base, or the base does not resolve (unknown is never treated as "declares").
+        /// </summary>
+        private bool NetBaseDeclaresMember(TypeInfo classType, string name)
+        {
+            if (_netResolverFactory == null || classType == null || string.IsNullOrEmpty(name)) return false;
+
+            var guard = 0;
+            for (var type = classType.BaseType; type != null && guard++ < 64; type = type.BaseType)
+            {
+                // A BasicLang class declares its members in source; only a type with none recorded can be .NET.
+                if (type.DeclaredMemberNames != null || (type.Members != null && type.Members.Count > 0)) continue;
+                if (ResolveNetType(type.Name, type.GenericArguments?.Count ?? 0, out var fullName)
+                    != NetTypeLookupOutcome.Resolved)
+                    return false;
+                return NetResolver().GetMembers(fullName)
+                    .Any(m => string.Equals(m.Name, name, StringComparison.OrdinalIgnoreCase));
+            }
+            return false;
         }
 
         public void Visit(MemberAccessExpressionNode node)
@@ -12197,10 +12326,37 @@ namespace BasicLang.Compiler.SemanticAnalysis
             {
                 calleeSymbol = _currentScope.Resolve(idExpr.Name);
                 // Task 7b: inside a class, the class and its bases come BEFORE module scope — the rule
-                // the IR builder spells the call by (ClassScopeProcedure), so the call is type-checked
+                // the IR builder spells the call by (ClassScopeMember), so the call is type-checked
                 // against the declaration the backends actually call.
-                calleeSymbol = ClassScopeCallee(idExpr.Name, calleeSymbol)
+                var classBinding = ClassScopeCallee(idExpr.Name, calleeSymbol, node);
+                if (classBinding.SharedMisuse)
+                {
+                    // BC30469 reported: bound to the member (never handed to a Module), typed by it, and
+                    // checked no further — an argument-count message here would only mislead.
+                    SetNodeSymbol(idExpr, classBinding.Member);
+                    foreach (var arg in node.Arguments) arg.Accept(this);
+                    SetNodeType(node, classBinding.Member.ReturnType ?? classBinding.Member.Type ?? _typeManager.ObjectType);
+                    return;
+                }
+                if (classBinding.NetBaseMember)
+                {
+                    // A member of a resolved .NET base: no BasicLang symbol at all, so the backends emit the
+                    // bare call and the target compiler binds it to the base — as VB does.
+                    SetNodeSymbol(idExpr, null);
+                    foreach (var arg in node.Arguments) arg.Accept(this);
+                    SetNodeType(node, _typeManager.ObjectType);
+                    return;
+                }
+                calleeSymbol = classBinding.Member
                                ?? PreferModuleProcedure(idExpr.Name, calleeSymbol, node.Line, node.Column);
+                // The identifier visit typed the callee by what LEXICAL scope found — pass 1's flattened
+                // global copy, a Module's procedure when one shares the name. Retyped by the member, so
+                // the array / collection / delegate / value arms below judge the member, not the Module's.
+                if (classBinding.Member?.Type != null)
+                {
+                    calleeType = classBinding.Member.Type;
+                    SetNodeType(idExpr, calleeType);
+                }
                 // ⛔ Written back onto the callee node. The identifier visit above bound the node
                 // to what lexical scope found; the IR builder reads THAT, not this local. With
                 // only the local corrected, the call was typed against A's F and lowered to
@@ -12369,6 +12525,30 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 // Delegate Function's R through its shape (#187 — it was typed Void)
                 SetNodeType(node, DelegateInvocationResultType(calleeType));
                 return;
+            }
+
+            // Task 7c: a bare name bound to a VALUE (a field, property, constant, local or parameter) that is
+            // not an array, a collection or a delegate — all answered above. VB: `P()` on a parameterless
+            // PROPERTY is that property's read; any other argument list on such a value is BC30471. Both used
+            // to fall through to the Object-typed call below, which lowered a CALL to a function of that name —
+            // the Module's, when one existed (`Value()` beside a base's Property Value ran Util.Value()).
+            if (node.Callee is IdentifierExpressionNode valueCallee && calleeSymbol != null && !calleeIsCallable)
+            {
+                if (calleeSymbol.Kind == SymbolKind.Property && node.Arguments.Count == 0)
+                {
+                    SetNodeType(node, calleeSymbol.Type ?? calleeType ?? _typeManager.ObjectType);
+                    return;
+                }
+                if (calleeSymbol.Kind is SymbolKind.Variable or SymbolKind.Parameter or SymbolKind.Property
+                        or SymbolKind.Constant
+                    && IsScalarValueType(calleeType))
+                {
+                    foreach (var arg in node.Arguments) arg.Accept(this);
+                    VbCodedError("BC30471",
+                        $"'{valueCallee.Name}' is not an array or a method, and cannot have an argument list.", node);
+                    SetNodeType(node, calleeType ?? _typeManager.ObjectType);
+                    return;
+                }
             }
 
             if (calleeSymbol != null &&

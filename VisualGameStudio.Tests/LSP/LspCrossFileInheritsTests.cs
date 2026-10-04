@@ -99,6 +99,20 @@ public class LspCrossFileInheritsTests
                 ("Main.bas", "Sub Main()\n Dim d As New D()\n d.Greet()\nEnd Sub\n")),
             Does.Contain("Function 'Hello' expects 0 argument(s), got 1"));
 
+    /// <summary>
+    /// ⛔ Task 7c, the EDITOR route of BC30469: a Shared method naming an instance method of a base in ANOTHER file.
+    /// The base's shared-ness reaches the editor through the project symbol table's member symbols
+    /// (<c>LspProjectContext</c>), so the editor reports what the build reports.
+    /// </summary>
+    [Test]
+    public void ASharedMethodNamingAnInheritedInstanceMethod_IsReportedInTheEditor() =>
+        Assert.That(ErrorsIn("Derived.bas",
+                ("Base.bas", "Public Class Base\n Public Function Hello() As String\n  Return \"base\"\n End Function\nEnd Class\n"),
+                ("Util.bas", "Module Util\n Public Function Hello() As String\n  Return \"module\"\n End Function\nEnd Module\n"),
+                ("Derived.bas", "Public Class D\n Inherits Base\n Public Shared Sub S()\n  PrintLine(Hello())\n End Sub\nEnd Class\n"),
+                ("Main.bas", "Sub Main()\n D.S()\nEnd Sub\n")),
+            Does.Contain("BC30469"));
+
     /// <summary>The matching signature is clean in the editor: the call is typed Integer, by the base.</summary>
     [Test]
     public void ABareCallToAnInheritedFunction_IsTypedByTheBaseInTheEditor() =>

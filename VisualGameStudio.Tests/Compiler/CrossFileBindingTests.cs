@@ -696,24 +696,147 @@ public class CrossFileBindingTests
         ("Derived.bas", "Public Class D\n Inherits Base\n Public Sub Greet()\n  Dim s As String = Util.Hello(3)\n  PrintLine(s)\n End Sub\nEnd Class\n"),
         ("Main.bas", MainGreets));
 
+    // ---- Task 7c item 1/5: a delegate LOCAL, PARAMETER or LAMBDA PARAMETER is nearer than the class
+    // ⛔ Measured on 9740b03c: the analyzer bound each to the delegate, but the IR builder handed the call to
+    // EmitProcedureCall BY NAME with no CalleeValue, and JavaScript's CallTarget resolved the bare name against the
+    // class first — `this.Hello(3)`, Base's Hello, printing 5 where 30 is right. Now invoked as a VALUE (ADR-0010 D8).
+
+    /// <summary>A delegate PARAMETER named like an inherited method is the one invoked, on every backend.</summary>
+    [Test]
+    public void ADelegateParameter_NamedLikeAnInheritedMethod_IsTheOneInvoked() => RunsOnEveryBackend("30",
+        ("Base.bas", BaseHelloNoArgs),
+        ("Derived.bas", "Public Class D\n Inherits Base\n Public Sub Greet(Hello As Func(Of Integer, String))\n" +
+                        "  Dim s As String = Hello(3)\n  PrintLine(s)\n End Sub\nEnd Class\n"),
+        ("Main.bas", "Sub Main()\n Dim d As New D()\n d.Greet(Function(x As Integer) CStr(x * 10))\nEnd Sub\n"));
+
+    /// <summary>A delegate LOCAL named like an inherited method is the one invoked, on every backend.</summary>
+    [Test]
+    public void ADelegateLocal_NamedLikeAnInheritedMethod_IsTheOneInvoked() => RunsOnEveryBackend("60",
+        ("Base.bas", BaseHelloNoArgs),
+        ("Derived.bas", "Public Class D\n Inherits Base\n Public Sub Greet()\n" +
+                        "  Dim Hello As Func(Of Integer, String) = Function(x As Integer) CStr(x * 20)\n" +
+                        "  Dim s As String = Hello(3)\n  PrintLine(s)\n End Sub\nEnd Class\n"),
+        ("Main.bas", MainGreets));
+
+    /// <summary>A LAMBDA PARAMETER named like an inherited method (differently cased) is the one invoked.</summary>
+    [Test]
+    public void ALambdaParameter_NamedLikeAnInheritedMethod_IsTheOneInvoked() => RunsOnEveryBackend("40",
+        ("Base.bas", BaseHelloNoArgs),
+        ("Derived.bas", "Public Class D\n Inherits Base\n Public Sub Greet()\n" +
+                        "  Dim f As Func(Of Func(Of Integer, String), String) = Function(hello) hello(4)\n" +
+                        "  PrintLine(f(Function(x As Integer) CStr(x * 10)))\n End Sub\nEnd Class\n"),
+        ("Main.bas", MainGreets));
+
+    // ---- Task 7c item 3/5: ANY member shadows a Module procedure — a property, a field — not only a method
+
+    private const string UtilValueFunction =
+        "Module Util\n Public Function Value() As String\n  Return \"module\"\n End Function\nEnd Module\n";
+
     /// <summary>
-    /// A parameter is NEARER than the class: <c>Hello(3)</c> on a delegate parameter named <c>Hello</c> is typed by
-    /// the delegate, not refused against the inherited <c>Hello()</c>. Front end only — ⚠ JavaScript still EMITS
-    /// <c>this.Hello(3)</c> for it (its CallTarget resolves a bare name against the class before anything else), a
-    /// separate backend defect recorded in the plan's Task 7 follow-ups.
+    /// ⛔ A base's PROPERTY <c>Value</c> beside a Module's <c>Function Value()</c>: a bare <c>Value()</c> in the derived
+    /// class emitted <c>Util.Value()</c> (measured on 9740b03c). VB: <c>P()</c> on a parameterless property is its read,
+    /// so the Integer property is read and doubled — on every backend, base in another file.
     /// </summary>
     [Test]
-    public void AParameterIsNearerThanTheClass_InTheAnalyzer()
+    public void AnInheritedProperty_ShadowsAModuleFunction_AndValueParensReadsIt() => RunsOnEveryBackend("14",
+        ("Base.bas", "Public Class Base\n Private _v As Integer = 7\n Public Property Value As Integer\n  Get\n   Return _v\n  End Get\n" +
+                     "  Set(v As Integer)\n   _v = v\n  End Set\n End Property\nEnd Class\n"),
+        ("Util.bas", UtilValueFunction),
+        ("Derived.bas", "Public Class D\n Inherits Base\n Public Sub Greet()\n  Dim n As Integer = Value()\n  PrintLine(n * 2)\n End Sub\nEnd Class\n"),
+        ("Main.bas", MainGreets));
+
+    /// <summary>
+    /// The class's own Integer FIELD named <c>Hello</c> shadows the Module's <c>Hello()</c>, and an argument list on an
+    /// Integer is VB's BC30471 — it used to call the Module's function (JavaScript printed "module").
+    /// </summary>
+    [Test]
+    public void AnOwnScalarField_ShadowsAModuleFunction_AndAnArgumentListOnItIsBC30471() => RefusedInBothOrders(
+        (messages, label) => Assert.That(messages, Does.Contain("BC30471").And.Contain("'Hello'"), label),
+        ("Util.bas", "Module Util\n Public Function Hello() As String\n  Return \"module\"\n End Function\nEnd Module\n"),
+        ("D.bas", "Public Class D\n Public Hello As Integer = 4\n Public Sub Greet()\n  PrintLine(Hello())\n End Sub\nEnd Class\n"),
+        ("Main.bas", MainGreets));
+
+    // ---- Task 7c item 4: an INSTANCE member named bare from a Shared context, or from a nested class — BC30469
+
+    private const string BaseHelloString =
+        "Public Class Base\n Public Function Hello() As String\n  Return \"base\"\n End Function\nEnd Class\n";
+
+    private const string UtilHelloString =
+        "Module Util\n Public Function Hello() As String\n  Return \"module\"\n End Function\nEnd Module\n";
+
+    private static void NamesNonSharedHello(string messages, string label) => Assert.Multiple(() =>
+    {
+        Assert.That(messages, Does.Contain("BC30469").And.Contain("'Hello'"), label);
+        Assert.That(messages, Does.Not.Contain("argument(s)"), label);
+    });
+
+    /// <summary>⛔ A Shared method naming an INHERITED instance method: "Compilation successful!" on 9740b03c, CS0120
+    /// from csc, and JavaScript ran the Module's Hello. VB: BC30469.</summary>
+    [Test]
+    public void ASharedMethod_NamingAnInheritedInstanceMethod_IsBC30469() => RefusedInBothOrders(NamesNonSharedHello,
+        ("Base.bas", BaseHelloString), ("Util.bas", UtilHelloString),
+        ("Derived.bas", "Public Class D\n Inherits Base\n Public Shared Sub S()\n  PrintLine(Hello())\n End Sub\nEnd Class\n"),
+        ("Main.bas", "Sub Main()\n D.S()\nEnd Sub\n"));
+
+    /// <summary>The same with the instance method the class's OWN, base and module in one file.</summary>
+    [Test]
+    public void ASharedMethod_NamingItsOwnInstanceMethod_IsBC30469() => RefusedInBothOrders(NamesNonSharedHello,
+        ("Program.bas", UtilHelloString +
+            "Public Class D\n Public Function Hello() As String\n  Return \"own\"\n End Function\n" +
+            " Public Shared Sub S()\n  PrintLine(Hello())\n End Sub\nEnd Class\n" +
+            "Sub Main()\n D.S()\nEnd Sub\n"));
+
+    /// <summary>With the argument count ALSO wrong, the message is BC30469 — not a misleading argument count.</summary>
+    [Test]
+    public void ASharedMethod_NamingAnInstanceMethodWithTheWrongArity_IsBC30469_NotAnArgumentCount() => RefusedInBothOrders(
+        NamesNonSharedHello,
+        ("Base.bas", BaseHelloString),
+        ("Util.bas", "Module Util\n Public Function Hello(x As Integer) As String\n  Return \"module\"\n End Function\nEnd Module\n"),
+        ("Derived.bas", "Public Class D\n Inherits Base\n Public Shared Sub S()\n  PrintLine(Hello(3))\n End Sub\nEnd Class\n"),
+        ("Main.bas", "Sub Main()\n D.S()\nEnd Sub\n"));
+
+    /// <summary>A NESTED class naming its enclosing class's instance method: VB has no implicit outer Me — BC30469.</summary>
+    [Test]
+    public void ANestedClass_NamingAnEnclosingInstanceMethod_IsBC30469() => RefusedInBothOrders(NamesNonSharedHello,
+        ("Util.bas", UtilHelloString),
+        ("Outer.bas", "Public Class Outer\n Public Function Hello() As String\n  Return \"outer\"\n End Function\n" +
+                      " Public Class Inner\n  Public Sub Go()\n   PrintLine(Hello())\n  End Sub\n End Class\nEnd Class\n"),
+        ("Main.bas", "Sub Main()\n Dim i As New Outer.Inner()\n i.Go()\nEnd Sub\n"));
+
+    /// <summary>A Shared method naming an inherited SHARED method is legal and calls it, not the Module's.
+    /// ⚠ <c>D.S()</c> is called from D's own file: from another file, C# spells the receiver by the FILE
+    /// (<c>Derived.S()</c>, CS0103) — a separate, pre-existing defect.</summary>
+    [Test]
+    public void ASharedMethod_NamingAnInheritedSharedMethod_CallsIt() => RunsOnEveryBackend("base",
+        ("Base.bas", "Public Class Base\n Public Shared Function Hello() As String\n  Return \"base\"\n End Function\nEnd Class\n"),
+        ("Util.bas", UtilHelloString),
+        ("Program.bas", "Public Class D\n Inherits Base\n Public Shared Sub S()\n  PrintLine(Hello())\n End Sub\nEnd Class\n" +
+                        "Sub Main()\n D.S()\nEnd Sub\n"));
+
+    // ---- Task 7c item 2: a member of a RESOLVED .NET base shadows a Module procedure
+
+    /// <summary>
+    /// ⛔ <c>Clear()</c> in a class over <c>System.Collections.ArrayList</c>, with a Module <c>Clear</c> beside it: the
+    /// call was emitted <c>Util.Clear()</c>. VB calls ArrayList.Clear. Compiled with the .NET resolver ARMED (the CLI and
+    /// IDE arm it for a non-WinForms project), emitted as C# and RUN — csc binds the bare call to the base.
+    /// </summary>
+    [Test]
+    public void AMemberOfAResolvedNetBase_ShadowsAModuleSub()
     {
         var paths = Write(
-            ("Base.bas", BaseHelloNoArgs),
-            ("Derived.bas", "Public Class D\n Inherits Base\n Public Sub Greet(Hello As Func(Of Integer, String))\n" +
-                            "  Dim s As String = Hello(3)\n  PrintLine(s)\n End Sub\nEnd Class\n"),
-            ("Main.bas", "Sub Main()\n Dim d As New D()\n d.Greet(Function(x As Integer) CStr(x))\nEnd Sub\n"));
+            ("Bag.bas", "Using System.Collections\nPublic Class Bag\n Inherits ArrayList\n Public Sub Fill()\n" +
+                        "  Me.Add(1)\n  Me.Add(2)\n  Clear()\n  PrintLine(Me.Count)\n End Sub\nEnd Class\n"),
+            ("Util.bas", "Module Util\n Public Sub Clear()\n  PrintLine(\"module\")\n End Sub\nEnd Module\n"),
+            ("Main.bas", "Sub Main()\n Dim b As New Bag()\n b.Fill()\nEnd Sub\n"));
         foreach (var order in new[] { paths, paths.Reverse().ToArray() })
         {
-            var result = Compile(order);
-            Assert.That(result.HasErrors, Is.False, $"[{string.Join(",", order.Select(Path.GetFileName))}] {Messages(result)}");
+            var label = string.Join(",", order.Select(Path.GetFileName));
+            var options = new CompilerOptions();
+            options.EnableNetResolution();
+            var result = new BasicCompiler(options).CompileProjectFiles(order);
+            Assert.That(result.HasErrors, Is.False, $"[{label}] {Messages(result)}");
+            var cs = new CSharpCodeGenerator().Generate(Optimized(result.CombinedIR!));
+            Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharpText(cs)), Is.EqualTo("0"), $"C# [{label}]\n{cs}");
         }
     }
 

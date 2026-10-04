@@ -442,21 +442,16 @@ public class JavaScriptSharedMethodTests
     // -------------------------------------------------------- pins on what is STILL broken
 
     /// <summary>
-    /// ⛔ PINNED AS BROKEN, ON PURPOSE. An unqualified call to an INSTANCE sibling from inside a
-    /// <c>Shared</c> member is invalid VB — BC30469, "Reference to a non-shared member requires an
-    /// object reference" — and this front end WRONGLY ACCEPTS it. Measured: MSIL compiles it and
-    /// dies with <c>MissingMethodException</c>.
-    ///
-    /// <para>It is deliberately NOT rewritten to <c>this.Inst()</c>: inside a JS static <c>this</c>
-    /// is the class, so that would be a TypeError wearing the shape of working code. Leaving it
-    /// alone keeps the FRONT-END gap visible rather than papering it over in the backend. This
-    /// test pins the non-rewrite; it goes red the day the front end learns to refuse the program,
-    /// which is where the fix belongs.</para>
+    /// An unqualified call to an INSTANCE sibling from inside a <c>Shared</c> member is invalid VB —
+    /// BC30469, "Reference to a non-shared member requires an object reference". This used to pin the
+    /// backend's NON-rewrite (no <c>this.Inst()</c>, a TypeError inside a JS static) while the front end
+    /// wrongly accepted the program, and said it would go red the day the front end refused it — which
+    /// portable-controls Task 7c did (<c>SemanticAnalyzer.ClassScopeCallee</c>). It now pins the refusal.
     /// </summary>
     [Test]
-    public void AnUnqualifiedInstanceCall_FromASharedMember_IsNotRewrittenToThis()
+    public void AnUnqualifiedInstanceCall_FromASharedMember_IsRefusedAsBC30469()
     {
-        var js = JsTestSupport.Compile("""
+        var refused = Assert.Throws<System.InvalidOperationException>(() => JsTestSupport.Compile("""
             Class Box
              Public Function Inst() As Integer
               Return 5
@@ -471,10 +466,9 @@ public class JavaScriptSharedMethodTests
               PrintLine(CStr(Box.Read()))
              End Sub
             End Module
-            """);
+            """));
 
-        Assert.That(js, Does.Not.Contain("this.Inst"),
-            "`this` is the CLASS inside a static — a this.Inst() call would be a TypeError:\n" + js);
+        Assert.That(refused!.Message, Does.Contain("BC30469").And.Contain("'Inst'"));
     }
 
     /// <summary>

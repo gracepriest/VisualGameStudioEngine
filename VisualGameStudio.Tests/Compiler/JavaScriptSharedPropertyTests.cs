@@ -358,20 +358,20 @@ public class JavaScriptSharedPropertyTests
     }
 
     /// <summary>
-    /// ⚠ A <c>Shared</c> accessor body is emitted in STATIC CONTEXT, so an unqualified call to an
-    /// INSTANCE sibling is not rewritten to <c>this.Inst()</c> — inside a JS static <c>this</c> is
-    /// the class, and that call would be a TypeError wearing the shape of working code.
+    /// A <c>Shared</c> accessor naming an INSTANCE sibling bare is invalid VB — BC30469 — and the front end
+    /// now refuses it (portable-controls Task 7c), on the accessor path as on the method path: the
+    /// static context is set separately for properties, which is why this case exists.
     ///
-    /// <para>⛔ This is the same invalid-VB shape pinned for METHODS (BC30469, "Reference to a
-    /// non-shared member requires an object reference") that the front end wrongly accepts. The
-    /// accessor path needs its own case: the static-context flag is passed separately for
-    /// properties, and dropping it left every other test in this fixture GREEN — measured, which
-    /// is how this gap was found.</para>
+    /// <para>⚠ This used to pin the BACKEND's static-context flag for accessors (no <c>this.Inst()</c>
+    /// rewrite) through exactly this invalid program, while the front end wrongly accepted it. With the
+    /// program refused, that backend flag is no longer observable from valid source: a bare call in a
+    /// static accessor can only name a Shared member, which <c>this.M()</c> (this = the class) would
+    /// reach too.</para>
     /// </summary>
     [Test]
-    public void ASharedAccessorBody_IsEmittedInStaticContext()
+    public void ASharedAccessorBody_NamingAnInstanceSibling_IsRefusedAsBC30469()
     {
-        var js = JsTestSupport.Compile("""
+        var refused = Assert.Throws<System.InvalidOperationException>(() => JsTestSupport.Compile("""
             Class Box
              Public Function Inst() As Integer
               Return 5
@@ -388,10 +388,9 @@ public class JavaScriptSharedPropertyTests
               PrintLine(CStr(Box.P))
              End Sub
             End Module
-            """);
+            """));
 
-        Assert.That(js, Does.Not.Contain("this.Inst"),
-            "`this` is the CLASS inside a static accessor — this.Inst() would be a TypeError:\n" + js);
+        Assert.That(refused!.Message, Does.Contain("BC30469").And.Contain("'Inst'"));
     }
 
     // ------------------------------------------------------- pin on a SEPARATE, unfixed defect

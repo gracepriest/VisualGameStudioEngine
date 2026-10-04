@@ -881,7 +881,8 @@ namespace BasicLang.Compiler.LSP
                         {
                             ReturnType = ConvertTypeReference(func.ReturnType),
                             Parameters = ConvertParameters(func.Parameters),
-                            Access = func.Access
+                            Access = func.Access,
+                            IsShared = func.IsStatic   // Task 7c: the editor judges BC30469 as the CLI does
                         };
                         break;
 
@@ -891,7 +892,8 @@ namespace BasicLang.Compiler.LSP
                         {
                             ReturnType = new TypeInfo("Void", TypeKind.Void),
                             Parameters = ConvertParameters(sub.Parameters),
-                            Access = sub.Access
+                            Access = sub.Access,
+                            IsShared = sub.IsStatic
                         };
                         break;
 
@@ -899,7 +901,8 @@ namespace BasicLang.Compiler.LSP
                         memberSymbol = new Symbol(field.Name, SymbolKind.Variable,
                             ConvertTypeReference(field.Type), field.Line, field.Column)
                         {
-                            Access = field.Access
+                            Access = field.Access,
+                            IsShared = field.IsStatic
                         };
                         break;
 
@@ -908,6 +911,7 @@ namespace BasicLang.Compiler.LSP
                             ConvertTypeReference(prop.PropertyType), prop.Line, prop.Column)
                         {
                             Access = prop.Access,
+                            IsShared = prop.IsStatic,
                             // Task #178: the editor judges BC30526/BC30524 the way the CLI does.
                             IsReadOnly = prop.IsReadOnly,
                             IsWriteOnly = prop.IsWriteOnly,

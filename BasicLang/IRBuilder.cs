@@ -400,19 +400,20 @@ namespace BasicLang.Compiler.IR
         }
 
         /// <summary>
-        /// Whether the class whose member is being built, or one of its bases, declares a
-        /// method or Sub named <paramref name="name"/>. Read from the analyzer's class type,
+        /// Whether the class whose member is being built, or one of its bases, declares an
+        /// accessible member named <paramref name="name"/>. Read from the analyzer's class type,
         /// which is complete for every member once analysis has run — the IR class lists only
         /// the methods built so far, and a method declared below its caller is not among them.
         ///
         /// <para>⛔ The rule itself (own members whatever their access; a base's unless Private) is
-        /// the ANALYZER's <c>ClassScopeProcedure</c>, the one the call was bound and type-checked by
+        /// the ANALYZER's <c>ClassScopeMember</c>, the one the call was bound and type-checked by
         /// (Task 7b). A private copy here let the two disagree: the analyzer typed <c>Hello(3)</c>
-        /// against a Module's <c>Hello</c> while this spelled it as the base's.</para>
+        /// against a Module's <c>Hello</c> while this spelled it as the base's. ⚠ Any KIND of member
+        /// captures the name (Task 7c): a base's Property <c>Value</c> hides a Module's <c>Value()</c>.</para>
         /// </summary>
         private bool IsCurrentClassProcedure(string name) =>
             !string.IsNullOrEmpty(_currentClassName)
-            && _semanticAnalyzer.ClassScopeProcedure(_semanticAnalyzer.LookupType(_currentClassName), name) != null;
+            && _semanticAnalyzer.ClassScopeMember(_semanticAnalyzer.LookupType(_currentClassName), name, out _) != null;
 
         /// <summary>
         /// Whether a BARE call to <paramref name="name"/> inside the class being built names a member
@@ -6204,8 +6205,11 @@ namespace BasicLang.Compiler.IR
                 {
                     if (memberExpr.Object is IdentifierExpressionNode invokedName)
                     {
-                        EmitProcedureCall(node, _semanticAnalyzer.GetNodeSymbol(invokedName),
-                            invokedName.Name, tempName, returnType);
+                        var invokedSymbol = _semanticAnalyzer.GetNodeSymbol(invokedName);
+                        if (IsDelegateValueSymbol(invokedSymbol, _semanticAnalyzer.GetNodeType(invokedName)))
+                            EmitDelegateValueInvocation(invokedName, node.Arguments, tempName, returnType, invokedSymbol);
+                        else
+                            EmitProcedureCall(node, invokedSymbol, invokedName.Name, tempName, returnType);
                         return;
                     }
 
@@ -6598,6 +6602,25 @@ namespace BasicLang.Compiler.IR
                     return;
                 }
 
+                // ⛔ Task 7c: a delegate LOCAL or PARAMETER (a lambda's included) is invoked as the
+                // VALUE it holds — ADR-0010 D8's canonical delegate call, the shape #188 gives a
+                // delegate field. Called BY NAME, it reached JavaScript's CallTarget, which resolves a
+                // bare name against the class's methods first: `Hello(3)` on a parameter named Hello
+                // ran `this.Hello(3)` — the inherited method — and printed 5 where 30 is right.
+                if (IsDelegateValueSymbol(symbol, calleeType))
+                {
+                    EmitDelegateValueInvocation(idExpr, node.Arguments, tempName, returnType, symbol);
+                    return;
+                }
+
+                // Task 7c: `P()` on a parameterless PROPERTY is VB's read of it, as the analyzer typed it
+                // — lowered as the bare name is (ADR-0007's accessor rule included), never as a call.
+                if (symbol is { Kind: SymbolKind.Property } && node.Arguments.Count == 0)
+                {
+                    idExpr.Accept(this);
+                    return;
+                }
+
                 // A user procedure: same unit, another Module, or another file — one path.
                 // (The same-class guard for an imported name lives in ProcedureCallTarget.)
                 EmitProcedureCall(node, symbol, idExpr.Name, tempName, returnType);
@@ -6627,6 +6650,17 @@ namespace BasicLang.Compiler.IR
         /// <see cref="EmitProcedureCall"/> types it for a delegate LOCAL (#173). Null for an
         /// arbitrary callee, whose arguments were never coerced.</para>
         /// </summary>
+        /// <summary>
+        /// Whether a bare callee bound to <paramref name="symbol"/> is a delegate VALUE — a local, a
+        /// parameter or a lambda's parameter of delegate type — rather than a procedure. A delegate
+        /// FIELD or PROPERTY never gets here: <c>IsDelegateMemberInvocation</c> answers those first.
+        /// </summary>
+        private static bool IsDelegateValueSymbol(Symbol symbol, TypeInfo type) =>
+            symbol != null
+            && (symbol.Kind == SymbolKind.Variable || symbol.Kind == SymbolKind.Parameter)
+            && type != null
+            && (type.Kind == TypeKind.Delegate || type.DelegateSignature != null);
+
         private void EmitDelegateValueInvocation(ExpressionNode callee, List<ExpressionNode> arguments,
             string tempName, TypeInfo returnType, Symbol delegateSymbol)
         {
