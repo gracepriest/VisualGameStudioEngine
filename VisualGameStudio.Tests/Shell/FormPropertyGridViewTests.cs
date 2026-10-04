@@ -298,7 +298,8 @@ public class FormPropertyGridViewTests
         var edgeToggles = elements
             .Where(e => ((string?)e.Attribute("ToolTip.Tip"))?.StartsWith("Anchor to", StringComparison.Ordinal) == true
                         || ((string?)e.Attribute("ToolTip.Tip"))?.StartsWith("Dock to", StringComparison.Ordinal) == true
-                        || (string?)e.Attribute("ToolTip.Tip") == "Fill the container")
+                        || (string?)e.Attribute("ToolTip.Tip") == "Fill the container"
+                        || (string?)e.Attribute("ToolTip.Tip") == "Not docked")
             .ToList();
 
         Assert.Multiple(() =>
@@ -307,7 +308,8 @@ public class FormPropertyGridViewTests
             Assert.That(NameOf("CategorizedButton"), Is.EqualTo("Categorized"));
             Assert.That(NameOf("SearchBox"), Is.EqualTo("Search properties"));
             Assert.That(NameOf("ObjectSelector"), Is.Not.Null.And.Not.Empty);
-            Assert.That(edgeToggles, Has.Count.EqualTo(9), "four anchor edges, four dock edges and Fill");
+            // Dock's "None" carries its caption, but its name must match its tooltip like every other pop-up choice.
+            Assert.That(edgeToggles, Has.Count.EqualTo(10), "four anchor edges, four dock edges, Fill and Dock's None");
             foreach (var toggle in edgeToggles)
             {
                 Assert.That((string?)toggle.Attribute(Automation), Is.EqualTo((string?)toggle.Attribute("ToolTip.Tip")));

@@ -180,6 +180,28 @@ public sealed class FormDocument
     }
 
     /// <summary>
+    /// Removes <paramref name="control"/> (a control, a container with its subtree, or a tray component) from the list it
+    /// lives in — and, as VS does, every Form-level reference to it or to anything inside it goes WITH it
+    /// (<see cref="FormReferences.ForgetRemoved"/>: an <c>AcceptButton</c> naming a deleted Button is removed, never left
+    /// dangling for BL8034 to find at build).
+    ///
+    /// <para>⛔ The ONE model path for taking a control out of the document: the designer's Delete (canvas and tray) and
+    /// Cut both call it, so no route can remove the Button and keep the reference. Returns false — and changes nothing —
+    /// when the control is not in this document.</para>
+    /// </summary>
+    public bool RemoveControl(FormControl control)
+    {
+        var siblings = ListContaining(control);
+        if (siblings == null || !siblings.Remove(control))
+        {
+            return false;
+        }
+
+        FormReferences.ForgetRemoved(this, control.SelfAndDescendants().Select(c => c.Id));
+        return true;
+    }
+
+    /// <summary>
     /// True when <paramref name="id"/> is a legal control identifier: a BasicLang identifier, which
     /// permits underscores. Deliberately NOT the type-name rule — see <see cref="Name"/>.
     /// </summary>

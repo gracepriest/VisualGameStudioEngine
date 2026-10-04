@@ -425,8 +425,8 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
     /// </summary>
     private IReadOnlyList<string> ReferenceChoices()
     {
-        var candidates = ReferenceCandidates;
-        var stored = ReferenceDisplay();
+        var candidates = ReferenceCandidates; // asked ONCE per read: the display below uses the same list
+        var stored = ReferenceDisplay(candidates);
         if (stored.EndsWith(MissingReferenceSuffix, StringComparison.Ordinal))
         {
             var id = stored[..^MissingReferenceSuffix.Length];
@@ -451,7 +451,7 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
     }
 
     /// <summary>What a Reference row's drop-down selects: <c>(none)</c> when absent, the Id, or the Id marked missing.</summary>
-    private string ReferenceDisplay()
+    private string ReferenceDisplay(IReadOnlyList<string> candidates)
     {
         var text = EditorText;
         if (text.Length == 0)
@@ -460,8 +460,10 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
         }
 
         // ⚠ An editor echo (RaiseEditorRefresh) hands back what the combo pushed, which is already a display item.
+        // ⚠ Only an EDITABLE row reaches here: a hand-written "x (missing)" or "(none)" is not a legal Id, so it is Degraded
+        // and frozen, and never read through these marks (FormPropertyGridTests.AHandWrittenDisplayMark_…).
         if (text == NoReferenceItem || text.EndsWith(MissingReferenceSuffix, StringComparison.Ordinal) ||
-            ReferenceCandidates.Contains(text, StringComparer.Ordinal))
+            candidates.Contains(text, StringComparer.Ordinal))
         {
             return text;
         }
@@ -609,7 +611,7 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
     public string StringValue
     {
         get => IsEditableBool && bool.TryParse(EditorText, out var flag) ? (flag ? BoolChoices[0] : BoolChoices[1])
-            : IsEditableReference ? ReferenceDisplay()
+            : IsEditableReference ? ReferenceDisplay(ReferenceCandidates)
             : EditorText;
         set
         {

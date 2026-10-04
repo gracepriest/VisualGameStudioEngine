@@ -3,6 +3,7 @@ using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.Interactivity;
+using Avalonia.Threading;
 using Avalonia.VisualTree;
 using VisualGameStudio.Shell.ViewModels.Designer;
 
@@ -59,6 +60,36 @@ public partial class FormPropertyGridView : UserControl
         target.FindAncestorOfType<OverlayPopupHost>(includeSelf: true) != null ||
         target.FindAncestorOfType<PopupRoot>(includeSelf: true) != null ||
         !ReferenceEquals(TopLevel.GetTopLevel(target), TopLevel.GetTopLevel(PropertyList));
+
+    /// <summary>
+    /// A Dock region was picked in the Dock pop-up: close it, as VS does, and put focus back on the row's drop-down
+    /// button, so a keyboard user lands where they started (slice 4 review follow-up). Anchor does NOT close on a pick:
+    /// it is a SET of edges, and VS keeps its pop-up open for the next one.
+    ///
+    /// <para>⚠ POSTED: the Click event runs BEFORE the button executes its Command (Avalonia raises Click first), and
+    /// closing the pop-up synchronously detaches the region from its row — measured as a mutant: nothing was written. ⚠ The drop-down is found through the row's own
+    /// container (<see cref="ItemsControl.ContainerFromItem"/>), never by walking up from the popup content, whose parent
+    /// chain depends on the popup host.</para>
+    /// </summary>
+    private void OnDockRegionPicked(object? sender, RoutedEventArgs e)
+    {
+        if (sender is not Control { DataContext: FormPropertyRow row })
+        {
+            return;
+        }
+
+        Dispatcher.UIThread.Post(() =>
+        {
+            var dropDown = PropertyList.ContainerFromItem(row)?.GetVisualDescendants().OfType<Button>()
+                .FirstOrDefault(b => b.Name == "DockDropDown");
+            // ⚠ No explicit Focus after: the flyout hands focus back to its target on Hide (measured — an explicit
+            // dropDown.Focus here was an EQUIVALENT mutant; the keyboard test asserts focus lands on the button).
+            if (dropDown?.Flyout is { } flyout)
+            {
+                flyout.Hide();
+            }
+        });
+    }
 
     /// <summary>
     /// VS's double-click on a Bool row flips it (slice 4 D-3) — <see cref="FormPropertyRow.ToggleBool"/>, which decides

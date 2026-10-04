@@ -743,7 +743,7 @@ now all sit left. `OpenAndClick` asserts that a click at the button's centre rea
 back under the scrollbar silently.
 - The Flyout's content inherits the row as its DataContext (asserted in the real-view helper, not assumed).
 - Dock's pop-up stays open after a pick, as Anchor's does. Closing on a Dock pick (VS does) needs code-behind and is a
-  follow-up.
+  follow-up. → DONE in the review follow-ups below.
 
 Tests: red first with stub summaries (13 red: the 9 summary/refresh VM cases, the automation test, the new
 `TheAnchorAndDockBoxes_LiveInsideTheirDropDownsFlyouts`, both real-view tests — each for the expected reason). Then green.
@@ -829,3 +829,45 @@ Mutations (each applied with Edit and REBUILT):
 Post-task fast subset (base `124355cd` + Tasks 2–3, both streams captured): **Total 10828 · Passed 10803 · Failed 6 ·
 Skipped 19.** The failure names are identical to Task 0's six (`ReadingAnMvidTakesNoLockOnTheFile` passed again). +32
 tests over Task 1's run. Every `FormPropertyGrid*` fixture: 299/299 green.
+
+### Review follow-ups to Tasks 2–3 (base `e33239f1`; one commit)
+Decisions under the delegation (VS behaviour where in doubt):
+1. **Keyboard access to Anchor/Dock: no fix needed for the pop-up mechanics** — measured: Enter on the focused drop-down
+   opens the flyout, focus moves into it, Space flips the focused toggle, Esc closes it and the flyout hands focus back to
+   its button. `TheAnchorPopUp_WorksFromTheKeyboard_EnterSpaceEsc_AtTwoSizes` was GREEN on the red run: it pins Avalonia's
+   behaviour and is not a kill of anything written here.
+2. **Dock closes on a pick; Anchor stays open** (VS). Every Dock choice (five regions + None) carries
+   `Click="OnDockRegionPicked"`, which POSTS `Flyout.Hide()` — measured as a mutant: hiding synchronously inside Click runs
+   before the button's Command and nothing is written. An explicit `Focus()` on the drop-down after Hide was an EQUIVALENT
+   mutant (the flyout returns focus to its target itself) and was removed.
+3. Dock's `None` has `AutomationProperties.Name="Not docked"` = its tooltip; the automation test counts it (10 choices).
+4. **The reference follows its object on DELETE and CUT**: new `FormDocument.RemoveControl` (the one model path; `DeleteControl`
+   and `CutControls` both call it) removes the control, then `FormReferences.ForgetRemoved` drops every FormRoot Reference
+   row naming it or anything inside it (a Panel holding the AcceptButton). A reference that was already dangling is left
+   for BL8034. One `WriteDesignerEditBack` → one undo restores the Button and the references (byte-identical, asserted).
+   ⚠ **Rename is RECORDED, not fixed** (followups 35): no route renames an Id (Name is frozen; F2 edits a strip item's Text;
+   the clipboard renames only pasted copies), so a rename helper would have no caller.
+5. A hand-written `AcceptButton="x (missing)"` / `"btnOk (missing)"` / `"(none)"` is already Degraded (not a legal Id):
+   frozen, shown verbatim, never mapped by the display marks, byte-identical on save, not emitted. Pinned by
+   `AHandWrittenDisplayMark_IsDegraded_NeverMappedByTheDropDown` ×3 (green on the red run — a pin, not a kill).
+6. **`UpdateTextFromEditor` now calls `SyncDesignerPanels`** (unless the designer is writing its own edit back), as the
+   `OnTextChanged` Code-view route does, so the grid's rows read the new parse. `ReferenceChoices` asks the candidates once
+   per read (the display takes the same list).
+
+Tests: red first (7 red, each for the expected reason: `RemovingAControl_DropsTheReferences…`, both real-view delete/cut
+tests, `AnEditorEdit_ThatAddsAButton_ReachesTheGridsRows`, the Dock real-view test's new "closes" step, the Dock keyboard
+test's close/focus steps, the automation test). Then green: 22/22; every non-Integration `Form*`/`CodeEditor*` test
+2851/2853 (1 skipped; the one failure is the known `EveryTextRoute_…`).
+
+Mutations (Edit + REBUILD):
+| Mutant | Result |
+|---|---|
+| `ForgetRemoved` forgets nothing (the red-step stub) | killed (FormReferences, both real-view delete/cut) |
+| only the removed control's own Id forgotten, not its subtree | killed (`RemovingAControl_DropsTheReferences…`) |
+| `removed.Contains` dropped (forget every dangling reference) | killed (`…LeavesAnUnrelatedDanglingReference…`) |
+| `FindById == null` guard dropped | EQUIVALENT while Ids are unique (kept as the defensive half) |
+| Dock pick does not hide | killed (both Dock real-view tests) |
+| Dock hide synchronous, not posted | killed (both: nothing written) |
+| explicit focus-return after Hide | EQUIVALENT → removed |
+| `SyncDesignerPanels` absent from `UpdateTextFromEditor` | killed (red step) |
+| None's automation name absent | killed (red step) |

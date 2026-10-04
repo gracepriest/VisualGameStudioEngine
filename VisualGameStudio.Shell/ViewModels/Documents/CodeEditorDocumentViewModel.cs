@@ -284,8 +284,9 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
             return;
         }
 
-        var siblings = file.Model.ListContaining(control);
-        if (siblings == null || !siblings.Remove(control))
+        // ⛔ The ONE model path (FormDocument.RemoveControl): a Form reference naming the control (AcceptButton) goes with
+        // it, in the same write — so one undo restores both.
+        if (!file.Model.RemoveControl(control))
         {
             return;
         }
@@ -605,7 +606,7 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
         // iterating the collection it is emptying.
         foreach (var control in Selection.Controls.ToList())
         {
-            file.Model.ListContaining(control)?.Remove(control);
+            file.Model.RemoveControl(control); // the one model path: references to it go too (see DeleteControl)
         }
 
         // ⛔ The grid follows Selection.Changed (constructor) — never written here directly. The
@@ -1965,6 +1966,15 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
             _designFileText = null;
             OnPropertyChanged(nameof(DesignFile));
             OnPropertyChanged(nameof(DesignDocument));
+
+            // ⛔ The panels follow the new parse, exactly as OnTextChanged's Code-view route does: without this the grid
+            // kept the OLD FormFile, and its rows (the AcceptButton list among them) read a document the file no longer
+            // is (slice 4 review follow-up). Not while the designer writes its OWN edit back — that model is current.
+            if (!_applyingDesignerEdit)
+            {
+                SyncDesignerPanels();
+            }
+
             DesignModelRevision++;
         }
 

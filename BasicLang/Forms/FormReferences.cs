@@ -34,4 +34,23 @@ public static class FormReferences
     /// </summary>
     public static bool IsAllowed(FormDocument form, FormPropertyDef row, string id) =>
         Candidates(form, row).Contains(id, StringComparer.Ordinal);
+
+    /// <summary>
+    /// After <paramref name="removedIds"/> left the form (<see cref="FormDocument.RemoveControl"/>): removes every
+    /// <see cref="FormControlCatalog.FormRoot"/> Reference row that names one of them and that no control on the form
+    /// still answers to. Slice 4 review follow-up — VS clears <c>AcceptButton</c> when its Button is deleted.
+    ///
+    /// <para>⚠ Only what THIS removal took: a reference that was already dangling is left for the user (and BL8034).</para>
+    /// </summary>
+    public static void ForgetRemoved(FormDocument form, IEnumerable<string> removedIds)
+    {
+        var removed = removedIds.ToHashSet(StringComparer.Ordinal);
+        foreach (var row in FormControlCatalog.FormRoot.Properties.Where(p => p.Type == FormPropertyType.Reference))
+        {
+            if (form.Properties.TryGetValue(row.Name, out var id) && removed.Contains(id) && form.FindById(id) == null)
+            {
+                form.Properties.Remove(row.Name);
+            }
+        }
+    }
 }

@@ -76,6 +76,66 @@ public class FormReferencesTests
         });
     }
 
+    /// <summary>
+    /// Slice 4 review follow-up — VS behaviour, the reference FOLLOWS its object: removing a control through
+    /// <see cref="FormDocument.RemoveControl"/> (the ONE model path the designer's Delete and Cut both take) drops every
+    /// Reference row naming it — or naming any control inside it (a Panel holding the AcceptButton). A reference to a
+    /// control still on the form stays.
+    /// </summary>
+    [Test]
+    public void RemovingAControl_DropsTheReferencesToIt_AndToEverythingInsideIt()
+    {
+        var form = Form();
+        form.Properties["AcceptButton"] = "btnInner";
+        form.Properties["CancelButton"] = "btnCancel";
+
+        var removed = form.RemoveControl(form.FindById("pnl")!);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(removed, Is.True);
+            Assert.That(form.FindById("pnl"), Is.Null);
+            Assert.That(form.Properties.ContainsKey("AcceptButton"), Is.False, "it named a Button inside the removed Panel");
+            Assert.That(form.Properties["CancelButton"], Is.EqualTo("btnCancel"), "a reference to a control still here stays");
+        });
+    }
+
+    /// <summary>
+    /// Only what THIS removal took is forgotten: a reference already dangling (<c>btnGone</c>, BL8034) is the user's to
+    /// fix, and removing an unrelated control leaves it alone. A control that is not in the form removes nothing.
+    /// </summary>
+    [Test]
+    public void RemovingAControl_LeavesAnUnrelatedDanglingReference_AndAStrangerRemovesNothing()
+    {
+        var form = Form();
+        form.Properties["AcceptButton"] = "btnGone";
+        form.Properties["CancelButton"] = "btnOk";
+
+        var stranger = form.RemoveControl(Positioned("Button", "btnOk", 9));
+        var label = form.RemoveControl(form.FindById("lblTitle")!);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(stranger, Is.False, "a control that is not in the form");
+            Assert.That(form.FindById("btnOk"), Is.Not.Null, "…removed nothing, even sharing an Id");
+            Assert.That(form.Properties["CancelButton"], Is.EqualTo("btnOk"), "…and forgot nothing");
+            Assert.That(label, Is.True);
+            Assert.That(form.Properties["AcceptButton"], Is.EqualTo("btnGone"), "an unrelated dangling Id is left alone");
+        });
+    }
+
+    /// <summary>A tray component is removed through the same path (the tray's Delete).</summary>
+    [Test]
+    public void RemovingATrayComponent_GoesThroughTheSamePath()
+    {
+        var form = Form();
+        Assert.Multiple(() =>
+        {
+            Assert.That(form.RemoveControl(form.FindById("tmr")!), Is.True);
+            Assert.That(form.Components, Is.Empty);
+        });
+    }
+
     /// <summary>A row with no kinds allows nothing — never "anything".</summary>
     [Test]
     public void ARowWithNoKinds_AllowsNothing()

@@ -917,6 +917,8 @@ public class FormPropertyGridRealViewTests
                     Assert.That(((PixelGeometry)rig.Control("btn").Geometry!).Anchor, Is.EqualTo("Top,Bottom,Left"), $"{w}x{h}: the model");
                     Assert.That(rig.Vm.Text, Does.Contain("Anchor=\"Top,Bottom,Left\""), $"{w}x{h}: the .blform text");
                     Assert.That(SummaryText(rig, anchor, "Top, Bottom, Left"), Is.Not.Null, $"{w}x{h}: the summary followed");
+                    // Anchor is a SET of edges (VS keeps its pop-up open for the next one); Dock is one region and closes.
+                    Assert.That(flyout.IsOpen, Is.True, $"{w}x{h}: the Anchor pop-up stays open for the next edge");
                 });
             }
             finally
@@ -947,6 +949,7 @@ public class FormPropertyGridRealViewTests
                     Assert.That(((PixelGeometry)rig.Control("btn").Geometry!).Dock, Is.EqualTo("Fill"), $"{w}x{h}: the model");
                     Assert.That(rig.Vm.Text, Does.Contain("Dock=\"Fill\""), $"{w}x{h}: the .blform text");
                     Assert.That(SummaryText(rig, dock, "Fill"), Is.Not.Null, $"{w}x{h}: the summary followed");
+                    Assert.That(flyout.IsOpen, Is.False, $"{w}x{h}: a Dock pick closes the pop-up, as VS's does");
                 });
             }
             finally
@@ -955,6 +958,196 @@ public class FormPropertyGridRealViewTests
                 Dispatcher.UIThread.RunJobs();
             }
         }
+    }
+
+    /// <summary>A real key press and release through the window's own input pipeline (to whatever holds focus).</summary>
+    private static void Press(Rig rig, Key key)
+    {
+        rig.Window.KeyPress(key, RawInputModifiers.None);
+        rig.Window.KeyRelease(key, RawInputModifiers.None);
+        Dispatcher.UIThread.RunJobs();
+        rig.Window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+    }
+
+    private static IInputElement? Focused(Visual anyInWindow) =>
+        TopLevel.GetTopLevel(anyInWindow)?.FocusManager?.GetFocusedElement();
+
+    /// <summary>
+    /// Slice 4 review follow-up: the Anchor pop-up from the KEYBOARD alone. Focus on the drop-down button, Enter opens the
+    /// pop-up and focus moves INTO it, Space flips the focused edge (written into the file), Esc closes it, and focus is
+    /// back on the button — the round trip a keyboard user needs, since the box is no longer inline. Both sizes.
+    /// </summary>
+    [AvaloniaTest]
+    public void TheAnchorPopUp_WorksFromTheKeyboard_EnterSpaceEsc_AtTwoSizes()
+    {
+        foreach (var (w, h) in TwoZooms)
+        {
+            using var rig = Open(w, h);
+            SelectOnCanvas(rig, "btn");
+            var anchor = rig.Row("Anchor");
+            var button = DropDownButton(rig, anchor, "AnchorDropDown");
+            var flyout = (Flyout)button.Flyout!;
+            try
+            {
+                button.Focus(NavigationMethod.Tab);
+                Dispatcher.UIThread.RunJobs();
+                Assert.That(Focused(button), Is.SameAs(button), $"{w}x{h}: precondition: the drop-down has focus");
+
+                Press(rig, Key.Enter);
+                Assert.That(flyout.IsOpen, Is.True, $"{w}x{h}: Enter opened the pop-up");
+                var content = (Control)flyout.Content!;
+                var inside = Focused(button) as ToggleButton;
+                Assert.That(inside != null && content.GetSelfAndVisualDescendants().Contains(inside), Is.True,
+                    $"{w}x{h}: focus moved INTO the pop-up (focused: {Focused(button)?.GetType().Name})");
+
+                var before = rig.Vm.Text;
+                var wasChecked = inside!.IsChecked == true;
+                Press(rig, Key.Space);
+                Assert.Multiple(() =>
+                {
+                    Assert.That(inside.IsChecked == true, Is.Not.EqualTo(wasChecked), $"{w}x{h}: Space flipped the focused edge");
+                    Assert.That(rig.Vm.Text, Is.Not.EqualTo(before).And.Contain("Anchor=\""), $"{w}x{h}: and wrote the file");
+                    Assert.That(flyout.IsOpen, Is.True, $"{w}x{h}: Anchor stays open for the next edge");
+                });
+
+                Press(rig, Key.Escape);
+                Assert.Multiple(() =>
+                {
+                    Assert.That(flyout.IsOpen, Is.False, $"{w}x{h}: Esc closed the pop-up");
+                    Assert.That(Focused(button), Is.SameAs(button), $"{w}x{h}: focus is back on the drop-down button");
+                });
+            }
+            finally
+            {
+                flyout.Hide();
+                Dispatcher.UIThread.RunJobs();
+            }
+        }
+    }
+
+    /// <summary>
+    /// The Dock pop-up from the keyboard: Enter opens it with focus inside, Space picks the focused region (written), and
+    /// — Dock being ONE region — the pick closes the pop-up and returns focus to the button. Both sizes.
+    /// </summary>
+    [AvaloniaTest]
+    public void TheDockPopUp_WorksFromTheKeyboard_AndAPickClosesIt_AtTwoSizes()
+    {
+        foreach (var (w, h) in TwoZooms)
+        {
+            using var rig = Open(w, h);
+            SelectOnCanvas(rig, "btn");
+            var dock = rig.Row("Dock");
+            var button = DropDownButton(rig, dock, "DockDropDown");
+            var flyout = (Flyout)button.Flyout!;
+            try
+            {
+                button.Focus(NavigationMethod.Tab);
+                Dispatcher.UIThread.RunJobs();
+                Press(rig, Key.Enter);
+                Assert.That(flyout.IsOpen, Is.True, $"{w}x{h}: Enter opened the pop-up");
+                var inside = Focused(button) as ToggleButton;
+                Assert.That(inside, Is.Not.Null, $"{w}x{h}: focus moved onto a region in the pop-up");
+                var region = (string)inside!.CommandParameter!;
+
+                Press(rig, Key.Space);
+                Assert.Multiple(() =>
+                {
+                    Assert.That(((PixelGeometry)rig.Control("btn").Geometry!).Dock, Is.EqualTo(region), $"{w}x{h}: Space picked {region}");
+                    Assert.That(rig.Vm.Text, Does.Contain($"Dock=\"{region}\""), $"{w}x{h}: the .blform text");
+                    Assert.That(flyout.IsOpen, Is.False, $"{w}x{h}: the pick closed the pop-up");
+                    Assert.That(Focused(button), Is.SameAs(button), $"{w}x{h}: focus is back on the drop-down button");
+                });
+            }
+            finally
+            {
+                flyout.Hide();
+                Dispatcher.UIThread.RunJobs();
+            }
+        }
+    }
+
+    // ==================================================================
+    // Slice 4 review follow-up — a reference FOLLOWS its object: deleting the Button clears AcceptButton
+    // ==================================================================
+
+    private static readonly string AcceptsBtn =
+        Doc.Replace("Text=\"GridForm\">", "Text=\"GridForm\" AcceptButton=\"btn\" CancelButton=\"btn\">");
+
+    /// <summary>
+    /// VS behaviour: deleting the Button the Form's AcceptButton/CancelButton names removes the reference with it (a real
+    /// canvas click and a real Delete key). The file loses both the control and both attributes in ONE write, the Form's
+    /// row shows <c>(none)</c>, and ONE undo brings back the control AND the references, byte-identical.
+    /// </summary>
+    [AvaloniaTest]
+    public void DeletingTheAcceptButton_RemovesTheReference_AndOneUndoRestoresBoth()
+    {
+        Assert.That(AcceptsBtn, Does.Contain("AcceptButton=\"btn\""), "precondition: the fixture names btn");
+        using var rig = Open(doc: AcceptsBtn);
+        var original = rig.Vm.Text;
+        SelectOnCanvas(rig, "btn");
+
+        Press(rig, Key.Delete);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(rig.Doc.FindById("btn"), Is.Null, "precondition: the real Delete key removed btn");
+            Assert.That(rig.Doc.Properties.ContainsKey("AcceptButton"), Is.False, "AcceptButton followed its Button");
+            Assert.That(rig.Doc.Properties.ContainsKey("CancelButton"), Is.False, "CancelButton too");
+            Assert.That(rig.Vm.Text, Does.Not.Contain("AcceptButton").And.Not.Contain("CancelButton"), "the .blform text");
+            Assert.That(rig.Row("AcceptButton").StringValue, Is.EqualTo("(none)"), "the Form's row shows (none), never btn (missing)");
+        });
+
+        rig.Vm.UndoDesignerEditCommand.Execute(null);
+        Dispatcher.UIThread.RunJobs();
+        Assert.That(rig.Vm.Text, Is.EqualTo(original), "ONE undo restores the Button and both references");
+    }
+
+    /// <summary>The same through Cut (Ctrl+X's command): the reference goes with the cut Button; one undo restores both.</summary>
+    [AvaloniaTest]
+    public void CuttingTheAcceptButton_RemovesTheReference_AndOneUndoRestoresBoth()
+    {
+        using var rig = Open(doc: AcceptsBtn);
+        var original = rig.Vm.Text;
+        SelectOnCanvas(rig, "btn");
+
+        rig.Vm.CutControlsCommand.Execute(null);
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(rig.Doc.FindById("btn"), Is.Null, "precondition: the cut removed btn");
+            Assert.That(rig.Vm.Text, Does.Not.Contain("AcceptButton").And.Not.Contain("CancelButton"), "the .blform text");
+        });
+
+        rig.Vm.UndoDesignerEditCommand.Execute(null);
+        Dispatcher.UIThread.RunJobs();
+        Assert.That(rig.Vm.Text, Is.EqualTo(original), "ONE undo restores the Button and both references");
+    }
+
+    /// <summary>
+    /// Slice 4 review follow-up (§8 note on <c>UpdateTextFromEditor</c>): an edit typed in the CODE editor that adds a
+    /// Button must reach the grid's rows — they are rebuilt on the new parse, so the Form's AcceptButton offers it.
+    /// Before, the revision was bumped without re-syncing the grid, and the rows kept reading the OLD document.
+    /// </summary>
+    [AvaloniaTest]
+    public void AnEditorEdit_ThatAddsAButton_ReachesTheGridsRows()
+    {
+        using var rig = Open();
+        var edited = rig.Vm.Text.Replace(
+            "<Button Id=\"btn\"",
+            "<Button Id=\"btn2\" X=\"16\" Y=\"96\" Width=\"75\" Height=\"23\" TabIndex=\"2\"/>\n    <Button Id=\"btn\"");
+        Assert.That(edited, Does.Contain("btn2"), "precondition: the edit adds a Button");
+
+        rig.Vm.UpdateTextFromEditor(edited);
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(rig.Vm.DesignDocument!.FindById("btn2"), Is.Not.Null, "precondition: the new parse has it");
+            Assert.That(rig.GridVm.Rows.Single(r => r.Name == "AcceptButton").Choices, Does.Contain("btn2"),
+                "the grid's rows read the NEW document");
+        });
     }
 
     // ==================================================================

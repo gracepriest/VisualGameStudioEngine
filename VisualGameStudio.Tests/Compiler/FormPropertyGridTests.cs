@@ -840,6 +840,39 @@ public class FormPropertyGridTests
     }
 
     /// <summary>
+    /// ⛔ Slice 4 review follow-up: a HAND-WRITTEN value spelled like the drop-down's own display marks
+    /// (<c>AcceptButton="btnOk (missing)"</c>, <c>"(none)"</c>) is not an Id — it holds a space or parentheses — so it is
+    /// Degraded: the row is frozen and shows the text exactly, never mapped by the display rules (the mark stripped would
+    /// make it the real <c>btnOk</c>; <c>(none)</c> would read as Reset). The file round-trips byte-identical, and the region
+    /// writer emits nothing for it.
+    /// </summary>
+    [TestCase("btnOk (missing)")]
+    [TestCase("x (missing)")]
+    [TestCase("(none)")]
+    public void AHandWrittenDisplayMark_IsDegraded_NeverMappedByTheDropDown(string written)
+    {
+        var xml = ReferenceForm(written);
+        var (grid, file) = FormRowsOver(xml);
+        var row = grid.Rows.Single(r => r.Name == "AcceptButton");
+        var edits = 0;
+        grid.Edited += (_, _) => edits++;
+
+        row.StringValue = "btnOk"; // a frozen row takes no edit, whatever pushes it
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(row.IsFrozen, Is.True, "Degraded: not an Id");
+            Assert.That(row.IsComboBox, Is.False, "no drop-down renders over a frozen row");
+            Assert.That(row.RawValue, Is.EqualTo(written), "shown exactly as written");
+            Assert.That(file.Model.Properties.GetValueOrDefault("AcceptButton"), Is.Not.EqualTo("btnOk"), "never mapped to the real Id");
+            Assert.That(edits, Is.Zero);
+            Assert.That(FormDocumentWriter.Write(file), Is.EqualTo(xml), "byte-identical on a save");
+            Assert.That(RegionWriter.Write("F.bas", FormScaffolder.Create("F", FormTarget.WinForms).CodeText, file.Model, "F.blform").Text,
+                Does.Not.Contain("Me.AcceptButton"), "nothing emitted");
+        });
+    }
+
+    /// <summary>
     /// ⛔ The list follows the DOCUMENT, not the moment the row was built. <see cref="FormPropertyRow.Choices"/> is
     /// evaluated on read, and <see cref="FormPropertyGridViewModel.RefreshReferenceChoices"/> (which the document view
     /// model calls on every model revision) raises it — so a Button that arrives while the Form stays selected appears
