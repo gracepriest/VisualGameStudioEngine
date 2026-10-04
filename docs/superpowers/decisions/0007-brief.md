@@ -64,7 +64,7 @@ For the verifier: under A, V and S′ see the calls with no new mechanism; under
 
 Related, not part of this question:
 - CopyPropagation keeps its own kill rules with no call arm: `K = 5 : Inc() : K + 1` prints 6 where 16 is right, on all four backends (task #146). It is being fixed under the existing one-vocabulary rule.
-- C# drops a statement-level `MyBase.M()` (task #139).
+- C# drops a statement-level `MyBase.M()` (task #139). *(Fixed 2026-10-04.)*
 
 ---
 *Corrections by the orchestrator after review (2026-09-24), each re-measured:*

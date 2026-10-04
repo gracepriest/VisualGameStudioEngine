@@ -471,6 +471,14 @@ public class JsExecutionTierRosterTests
         // as controls on C++, JavaScript (Node: TempExec.Run -> JavaScriptExecutionTests.RunNodeScript) and MSIL, and `BasicLang build -c Release` for three. Named
         // "...ExecutionTests", so the widened match below would catch it on its own; listed explicitly anyway.
         typeof(LambdaBodyEmissionExecutionTests),
+
+        // Task #139 — a statement-level `MyBase.M(...)` call is written on C#: 33 programs (a Sub, a Function whose result is discarded, no arguments; a constructor, a property Get and Set,
+        // a Sub lambda and a Function lambda, If/Else, For/While/Do/For Each, Select Case, Try/Catch/Finally, a grandparent and a three-level chain, a generic derived class and a generic
+        // method, an Object parameter, Optional, ParamArray; the value forms that were right before: Dim, local, field, parameter, two calls, a Select selector, an If condition, Return, a
+        // nested call) against vbc through the CLI, the CLI with --optimize and CompileProjectFiles on C# (hang-safe), plus the same programs as controls on C++, JavaScript (Node:
+        // TempExec.Run -> JavaScriptExecutionTests.RunNodeScript) and MSIL, `BasicLang build -c Release` for three, and the ByRef rows (#265) pinned as refusals. Named "...ExecutionTests",
+        // so the widened match below would catch it on its own; listed explicitly anyway.
+        typeof(MyBaseMethodCallStatementExecutionTests),
     };
 
     /// <summary>
@@ -522,7 +530,7 @@ public class JsExecutionTierRosterTests
 
     [Test]
     public void RosterIsPinned()
-        => Assert.That(ExecutionTier, Has.Length.EqualTo(103), // + LambdaBodyEmissionExecutionTests (task #136, a lambda body on C#); + LoopConditionReevaluationExecutionTests (task #256, the loop condition re-evaluation); + MixedNumericCompareFoldExecutionTests (task #123, the compare fold); + UntypedConstAndConditionalExecutionTests (task #123, D1/D2); + TempMintingFacilityTests + NameReservationExecutionTests (task #121, ADR-0018); + CompilerTempExecutionTests + CompilerTempCollisionFenceTests (task #163, ADR-0017); + BaseConstructorCallLoweringExecutionTests + BaseConstructorCallCppRefusalTests (task #170, ADR-0016), MsilValueToStringExecutionTests (task #183), InterfaceMethodTypingExecutionTests, IsIsNotOperatorExecutionTests (task #185), MeReceiverTypingExecutionTests (task #176), UserDelegateConversionExecutionTests (task #187), DelegateMemberInvocationExecutionTests (task #188), NothingStringTextExecutionTests (task #189), MsilObjectBoxingExecutionTests (task #177), NotPrecedenceExecutionTests (#195), PropertyAccessExecutionTests (task #178), NameBindingExecutionTests (task #169/#199), PerIterationLoopBodyDimExecutionTests + PerIterationLoopBodyDimOptimizerExecutionTests (task #172, ADR-0014), LambdaBoundaryDiagnosticsExecutionTests (task #174); + WhenGuardCallRunTests, TypeOfExecutionTests (#197), ForwardDeclaredTypeExecutionTests; + NameBindingResolutionExecutionTests (task #124, ADR-0013 D3)
+        => Assert.That(ExecutionTier, Has.Length.EqualTo(104), // + MyBaseMethodCallStatementExecutionTests (task #139, a statement-level MyBase call on C#); + LambdaBodyEmissionExecutionTests (task #136, a lambda body on C#); + LoopConditionReevaluationExecutionTests (task #256, the loop condition re-evaluation); + MixedNumericCompareFoldExecutionTests (task #123, the compare fold); + UntypedConstAndConditionalExecutionTests (task #123, D1/D2); + TempMintingFacilityTests + NameReservationExecutionTests (task #121, ADR-0018); + CompilerTempExecutionTests + CompilerTempCollisionFenceTests (task #163, ADR-0017); + BaseConstructorCallLoweringExecutionTests + BaseConstructorCallCppRefusalTests (task #170, ADR-0016), MsilValueToStringExecutionTests (task #183), InterfaceMethodTypingExecutionTests, IsIsNotOperatorExecutionTests (task #185), MeReceiverTypingExecutionTests (task #176), UserDelegateConversionExecutionTests (task #187), DelegateMemberInvocationExecutionTests (task #188), NothingStringTextExecutionTests (task #189), MsilObjectBoxingExecutionTests (task #177), NotPrecedenceExecutionTests (#195), PropertyAccessExecutionTests (task #178), NameBindingExecutionTests (task #169/#199), PerIterationLoopBodyDimExecutionTests + PerIterationLoopBodyDimOptimizerExecutionTests (task #172, ADR-0014), LambdaBoundaryDiagnosticsExecutionTests (task #174); + WhenGuardCallRunTests, TypeOfExecutionTests (#197), ForwardDeclaredTypeExecutionTests; + NameBindingResolutionExecutionTests (task #124, ADR-0013 D3)
             "The execution-tier roster changed. That is fine — update the number — but it must " +
             "be a deliberate edit, not a silent shrink.");
 
