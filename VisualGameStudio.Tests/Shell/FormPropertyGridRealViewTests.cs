@@ -844,6 +844,119 @@ public class FormPropertyGridRealViewTests
         }
     }
 
+    // ==================================================================
+    // Slice 4 Task 2 — Anchor and Dock as drop-down pop-ups (D-4)
+    // ==================================================================
+
+    /// <summary>The row's drop-down button (by its x:Name), fetched through the row's container — never a stale one.</summary>
+    private static Button DropDownButton(Rig rig, FormPropertyRow row, string name) =>
+        rig.Container(row).GetVisualDescendants().OfType<Button>().Single(b => b.Name == name && b.IsEffectivelyVisible);
+
+    /// <summary>
+    /// Opens a row's pop-up with a REAL click on its drop-down button, then clicks the toggle whose tooltip is
+    /// <paramref name="tip"/> with a real click in the pop-up's own top level, in ITS coordinates (the context-menu
+    /// pattern). Returns the flyout, still open, for the caller to assert on and close.
+    /// </summary>
+    private static Flyout OpenAndClick(Rig rig, FormPropertyRow row, string dropDown, string tip)
+    {
+        var button = DropDownButton(rig, row, dropDown);
+        // ⛔ Measured: docked at the value cell's RIGHT edge, the button sat under the list's overlay scrollbar, and a
+        // real click hit PART_LineDownButton. Asserted, so a later layout cannot put it back there silently.
+        var hit = rig.Window.InputHitTest(rig.CentreInWindow(button)) as Visual;
+        Assert.That(hit?.GetSelfAndVisualAncestors().Contains(button), Is.True,
+            $"{row.Name}: a click at the drop-down's centre reaches it (hit {hit?.GetType().Name})");
+        rig.Click(button);
+        rig.Window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        var flyout = (Flyout?)button.Flyout ?? throw new InvalidOperationException($"{dropDown} has no Flyout");
+        Assert.That(flyout.IsOpen, Is.True, $"{row.Name}: the real click opened the pop-up");
+        var content = flyout.Content as Control ?? throw new InvalidOperationException("the flyout has no content");
+        var target = content.GetSelfAndVisualDescendants().OfType<Control>()
+            .Single(c => ToolTip.GetTip(c) as string == tip);
+        Assert.That(target.DataContext, Is.SameAs(row), $"{row.Name}: the pop-up's box is bound to its row");
+
+        var popupTop = TopLevel.GetTopLevel(target) ?? throw new InvalidOperationException("the edge has no top level");
+        var at = target.TranslatePoint(new Point(target.Bounds.Width / 2, target.Bounds.Height / 2), popupTop)!.Value;
+        popupTop.MouseDown(at, MouseButton.Left);
+        popupTop.MouseUp(at, MouseButton.Left);
+        Dispatcher.UIThread.RunJobs();
+        rig.Window.UpdateLayout();
+        return flyout;
+    }
+
+    /// <summary>
+    /// The row's one-line summary — the visible TextBlock showing <paramref name="text"/> in its value cell. ⚠ Never a
+    /// button's caption: before the pop-ups, Dock's inline <c>None</c> BUTTON showed the same word as the summary does.
+    /// </summary>
+    private static TextBlock? SummaryText(Rig rig, FormPropertyRow row, string text) =>
+        rig.ValuePanel(row).GetVisualDescendants().OfType<TextBlock>()
+            .FirstOrDefault(t => t.Text == text && t.IsEffectivelyVisible && t.FindAncestorOfType<Button>() == null);
+
+    /// <summary>
+    /// Slice 4 D-4: the Anchor row is a one-line summary (<c>Top, Left</c>) plus a drop-down button; a real click opens
+    /// the box in a pop-up, a real click on its bottom edge writes <c>Anchor="Top,Bottom,Left"</c> into the FILE, and the
+    /// row's summary follows. The row is no longer the box's 46px tall. At two window sizes.
+    /// </summary>
+    [AvaloniaTest]
+    public void OpeningTheAnchorPopUp_AndClickingTheBottomEdge_WritesAnchor_AtTwoSizes()
+    {
+        foreach (var (w, h) in TwoZooms)
+        {
+            using var rig = Open(w, h);
+            SelectOnCanvas(rig, "btn");
+            var anchor = rig.Row("Anchor");
+            Assert.That(SummaryText(rig, anchor, "Top, Left"), Is.Not.Null, $"{w}x{h}: the unset Anchor's summary");
+            Assert.That(rig.Container(anchor).Bounds.Height, Is.LessThan(40), $"{w}x{h}: the row is one line, not the box");
+
+            var flyout = OpenAndClick(rig, anchor, "AnchorDropDown", "Anchor to the bottom edge");
+            try
+            {
+                Assert.Multiple(() =>
+                {
+                    Assert.That(((PixelGeometry)rig.Control("btn").Geometry!).Anchor, Is.EqualTo("Top,Bottom,Left"), $"{w}x{h}: the model");
+                    Assert.That(rig.Vm.Text, Does.Contain("Anchor=\"Top,Bottom,Left\""), $"{w}x{h}: the .blform text");
+                    Assert.That(SummaryText(rig, anchor, "Top, Bottom, Left"), Is.Not.Null, $"{w}x{h}: the summary followed");
+                });
+            }
+            finally
+            {
+                flyout.Hide();
+                Dispatcher.UIThread.RunJobs();
+            }
+        }
+    }
+
+    /// <summary>The same for Dock: a real click on the pop-up's centre writes <c>Dock="Fill"</c>. At two window sizes.</summary>
+    [AvaloniaTest]
+    public void OpeningTheDockPopUp_AndClickingFill_WritesDock_AtTwoSizes()
+    {
+        foreach (var (w, h) in TwoZooms)
+        {
+            using var rig = Open(w, h);
+            SelectOnCanvas(rig, "btn");
+            var dock = rig.Row("Dock");
+            Assert.That(SummaryText(rig, dock, "None"), Is.Not.Null, $"{w}x{h}: the unset Dock's summary");
+            Assert.That(rig.Container(dock).Bounds.Height, Is.LessThan(40), $"{w}x{h}: the row is one line, not the box");
+
+            var flyout = OpenAndClick(rig, dock, "DockDropDown", "Fill the container");
+            try
+            {
+                Assert.Multiple(() =>
+                {
+                    Assert.That(((PixelGeometry)rig.Control("btn").Geometry!).Dock, Is.EqualTo("Fill"), $"{w}x{h}: the model");
+                    Assert.That(rig.Vm.Text, Does.Contain("Dock=\"Fill\""), $"{w}x{h}: the .blform text");
+                    Assert.That(SummaryText(rig, dock, "Fill"), Is.Not.Null, $"{w}x{h}: the summary followed");
+                });
+            }
+            finally
+            {
+                flyout.Hide();
+                Dispatcher.UIThread.RunJobs();
+            }
+        }
+    }
+
     /// <summary>
     /// ⛔ Slice 4 D-3: selecting a Label and expanding its (absent, ambient) Font realises the three Bool PART combos,
     /// each bound to a catalog-less row whose no-op compare was ordinal — a combo pushing <c>False</c> over a part reading

@@ -589,6 +589,21 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
     /// </summary>
     private bool HasEdge(FormAnchorEdges edge) => Edges.HasFlag(edge);
 
+    /// <summary>
+    /// VS's one-line Anchor text — <c>Top, Left</c>, edges in <see cref="EdgeOrder"/>, or <c>None</c> — shown beside the
+    /// drop-down whose pop-up holds the four-edge box (slice 4 D-4). Read through the same parser as the box
+    /// (<see cref="Edges"/>), so an unset Anchor says WinForms' default, never blank. Display only: never written.
+    /// </summary>
+    public string AnchorSummary
+    {
+        get
+        {
+            var edges = Edges;
+            var names = EdgeOrder.Where(e => edges.HasFlag(e)).Select(e => e.ToString()).ToList();
+            return names.Count == 0 ? "None" : string.Join(", ", names);
+        }
+    }
+
     private FormAnchorEdges Edges => FormAnchor.Parse(RawValue, out _);
 
     /// <summary>
@@ -616,6 +631,8 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
         OnPropertyChanged(nameof(AnchorBottom));
         OnPropertyChanged(nameof(AnchorLeft));
         OnPropertyChanged(nameof(AnchorRight));
+        // ⛔ The box is in a pop-up; this text is what stays on the row.
+        OnPropertyChanged(nameof(AnchorSummary));
     }
 
     // ==================================================================
@@ -636,6 +653,16 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
     public bool IsDockedRight => DockValue.Equals("Right", StringComparison.OrdinalIgnoreCase);
     public bool IsDockedFill => DockValue.Equals("Fill", StringComparison.OrdinalIgnoreCase);
 
+    private static readonly string[] DockRegions = { "None", "Top", "Bottom", "Left", "Right", "Fill" };
+
+    /// <summary>
+    /// The Dock row's one-line text beside its drop-down (slice 4 D-4): the region in <c>DockStyle</c>'s own spelling
+    /// (<c>left</c> shows as <c>Left</c>), <c>None</c> when unset; an unknown word is shown as the document holds it.
+    /// Display only: never written.
+    /// </summary>
+    public string DockSummary =>
+        DockRegions.FirstOrDefault(r => r.Equals(DockValue, StringComparison.OrdinalIgnoreCase)) ?? DockValue;
+
     /// <summary>
     /// Sets the dock region. ⚠ <c>None</c> writes the empty string rather than the word, so an
     /// undocked control carries no <c>Dock</c> attribute at all — the same "write only non-default
@@ -652,7 +679,7 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
                  {
                      nameof(DockValue), nameof(IsDockedNone), nameof(IsDockedTop),
                      nameof(IsDockedBottom), nameof(IsDockedLeft), nameof(IsDockedRight),
-                     nameof(IsDockedFill)
+                     nameof(IsDockedFill), nameof(DockSummary)
                  })
         {
             OnPropertyChanged(name);

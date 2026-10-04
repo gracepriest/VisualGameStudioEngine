@@ -727,3 +727,41 @@ Mutations (each applied with Edit and REBUILT):
 
 Post-task fast subset (base `a058f301` + Task 1): **Total 10796 · Passed 10771 · Failed 6 · Skipped 19.** The failure
 names are identical to Task 0's six. +167 tests.
+
+### Task 2 — Anchor/Dock as drop-down pop-ups (base `124355cd`)
+Done as written: each row is a one-line summary (`FormPropertyRow.AnchorSummary` — `Top, Left`, flag order, `None` for no
+edges, read through `FormAnchor.Parse`; `DockSummary` — the region in `DockStyle`'s spelling, `None` when unset) plus a
+drop-down `Button` (`AnchorDropDown` / `DockDropDown`, automation-named, class `dropDown`, never `edge`) whose
+`Button.Flyout` holds Task 26's box, moved with its bindings unchanged. The reflection walker already descends property
+elements, so the Flyout content is checked with no walker change (confirmed: `EveryBindingInTheGridView_…` green, and it
+counts the moved bindings).
+
+⚠ **Deviation (measured): the drop-down sits LEFT of the summary, not at the cell's right edge as in VS.** Docked right,
+the button lay under the property list's Fluent overlay scrollbar, and a real click at its centre hit
+`PART_LineDownButton` (800x560). The colour swatch (D-1a) is already planned on the left, so the grid's editor buttons
+now all sit left. `OpenAndClick` asserts that a click at the button's centre reaches it, so a later layout cannot move it
+back under the scrollbar silently.
+- The Flyout's content inherits the row as its DataContext (asserted in the real-view helper, not assumed).
+- Dock's pop-up stays open after a pick, as Anchor's does. Closing on a Dock pick (VS does) needs code-behind and is a
+  follow-up.
+
+Tests: red first with stub summaries (13 red: the 9 summary/refresh VM cases, the automation test, the new
+`TheAnchorAndDockBoxes_LiveInsideTheirDropDownsFlyouts`, both real-view tests — each for the expected reason). Then green.
+- `FormAnchorDockPickerTests`: `TheAnchorSummary_ReadsTheEdgesAsTheOneParserDoes` ×4, `TogglingAnEdge_RefreshesTheAnchorSummary`,
+  `TheDockSummary_NamesTheRegion` ×3, `ChoosingARegion_RefreshesTheDockSummary`.
+- `FormPropertyGridViewTests`: the automation test names both drop-downs; `TheAnchorAndDockBoxes_LiveInsideTheirDropDownsFlyouts`.
+- Real view: `OpeningTheAnchorPopUp_AndClickingTheBottomEdge_WritesAnchor_AtTwoSizes`, `OpeningTheDockPopUp_AndClickingFill_WritesDock_AtTwoSizes`.
+  Each also asserts the row is one line (< 40px). ⚠ The summary lookup excludes button captions: the old inline Dock
+  `None` BUTTON shows the same word as the summary, and the first red run found the Dock summary "present" through it.
+
+RE-CHECK: `EveryBindingInTheGridView_…`, `TheToolbar…AutomationName`, `TheDocumentView_NoLongerCarriesTheGridsOwnBindings`,
+`FormAnchorDockPickerTests`, `EveryRowsEditor_Fits…` — all green (370/370 over FormPropertyGrid*, FormAnchorDockPicker*,
+FormDesignerLayoutRealView*, FormCompositeRow*, FormPropertyRow*).
+
+Mutations (each applied with Edit and REBUILT; AXAML ones after `dotnet clean`):
+| Mutant | Result |
+|---|---|
+| `AnchorSummary` not raised in `SetEdge` | killed (`TogglingAnEdge_RefreshesTheAnchorSummary`, the Anchor real-view test) |
+| `DockSummary` not raised in `SetDock` | killed (`ChoosingARegion_…`, the Dock real-view test) |
+| Flyout not bound (`Button.Flyout` → `FlyoutBase.AttachedFlyout`) | killed (Anchor real-view test, `TheAnchorAndDockBoxes_…`) |
+| Anchor drop-down docked Right again | killed (the hit assertion: "hit ContentPresenter") |

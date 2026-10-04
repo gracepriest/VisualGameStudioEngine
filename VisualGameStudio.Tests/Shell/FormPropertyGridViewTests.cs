@@ -312,6 +312,43 @@ public class FormPropertyGridViewTests
             {
                 Assert.That((string?)toggle.Attribute(Automation), Is.EqualTo((string?)toggle.Attribute("ToolTip.Tip")));
             }
+
+            // Slice 4 Task 2: the drop-down buttons that open the Anchor and Dock pop-ups carry only a glyph.
+            Assert.That(NameOf("AnchorDropDown"), Is.Not.Null.And.Not.Empty, "the Anchor drop-down button");
+            Assert.That(NameOf("DockDropDown"), Is.Not.Null.And.Not.Empty, "the Dock drop-down button");
+        });
+    }
+
+    /// <summary>
+    /// Slice 4 D-4: the Anchor and Dock boxes moved INTO a pop-up — each a <c>Button.Flyout</c> on its row's drop-down
+    /// button — so a row is one line, not 46px. Every edge toggle sits inside a <c>Flyout</c>; no edge sits inline.
+    /// ⚠ The drop-down buttons are NOT <c>Classes="edge"</c>: the Font row's expander is, and the real-view tests find
+    /// the expander as the one visible edge-class toggle in its row.
+    /// </summary>
+    [Test]
+    public void TheAnchorAndDockBoxes_LiveInsideTheirDropDownsFlyouts()
+    {
+        var elements = GridView().Descendants().ToList();
+        XElement DropDown(string name) => elements.Single(e => (string?)e.Attribute(XName.Get("Name", Xaml)) == name);
+        bool InsideFlyout(XElement e) => e.Ancestors().Any(a => a.Name.LocalName == "Flyout");
+
+        var edgeToggles = elements
+            .Where(e => ((string?)e.Attribute("ToolTip.Tip")) is { } tip &&
+                        (tip.StartsWith("Anchor to", StringComparison.Ordinal) || tip.StartsWith("Dock to", StringComparison.Ordinal)
+                         || tip == "Fill the container" || tip == "Not docked"))
+            .ToList();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(edgeToggles, Has.Count.EqualTo(10), "nine edges and Dock's None");
+            Assert.That(edgeToggles.Where(e => !InsideFlyout(e)), Is.Empty, "every edge is inside a pop-up");
+            foreach (var name in new[] { "AnchorDropDown", "DockDropDown" })
+            {
+                var button = DropDown(name);
+                Assert.That(button.Name.LocalName, Is.EqualTo("Button"), name);
+                Assert.That(button.Elements().Any(c => c.Name.LocalName == "Button.Flyout"), Is.True, $"{name} owns its Flyout");
+                Assert.That(((string?)button.Attribute("Classes") ?? "").Split(' '), Has.No.Member("edge"), name);
+            }
         });
     }
 
