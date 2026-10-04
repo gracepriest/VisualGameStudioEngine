@@ -1254,6 +1254,10 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
     {
         Tray.Rebuild(DesignDocument);
 
+        // Slice 4 D-7: a Reference row (the Form's AcceptButton) lists the document's Buttons — re-read on every revision,
+        // so the list follows the document while the Form stays selected.
+        PropertyGrid.RefreshReferenceChoices();
+
         // ⚠ A rename's target is asked too: it is normally the Host as well, but EditTarget is the
         // one the commit writes to, so it is the one that must never outlive its document.
         bool Stale(BasicLang.Forms.FormControl? c) =>

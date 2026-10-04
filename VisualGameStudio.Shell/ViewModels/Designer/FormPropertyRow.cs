@@ -138,9 +138,11 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
         string? frozenReason,
         string? frozenText,
         Action onChanged,
-        Func<string, string?>? storeRefusal)
+        Func<string, string?>? storeRefusal,
+        Func<IReadOnlyList<string>>? referenceCandidates)
     {
         _onChanged = onChanged;
+        _referenceCandidates = referenceCandidates;
         Name = definition.Name;
         _type = definition.Type;
         _choices = definition.Choices;
@@ -182,6 +184,9 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
     /// <param name="onChanged">Raised after an edit that changed the model.</param>
     /// <param name="storeRefusal">Names a value the store refuses (shown in the description pane); null for a store
     /// that refuses nothing.</param>
+    /// <param name="referenceCandidates">For a <see cref="FormPropertyType.Reference"/> row: the Ids it may name, asked on
+    /// EVERY read of <see cref="Choices"/> (<c>FormReferences.Candidates</c>) — never captured here, so the list follows
+    /// the document (slice 4 D-7).</param>
     public static FormPropertyRow ForStoredValue(
         FormPropertyDef definition,
         FormTarget target,
@@ -191,8 +196,12 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
         Action onChanged,
         string? frozenReason = null,
         string? frozenText = null,
-        Func<string, string?>? storeRefusal = null) =>
-        new(definition, target, read, write, remove, frozenReason, frozenText, onChanged, storeRefusal);
+        Func<string, string?>? storeRefusal = null,
+        Func<IReadOnlyList<string>>? referenceCandidates = null) =>
+        new(definition, target, read, write, remove, frozenReason, frozenText, onChanged, storeRefusal, referenceCandidates);
+
+    /// <summary>A Reference row's candidate Ids, asked on every read; null for any other row. See <see cref="ForStoredValue"/>.</summary>
+    private readonly Func<IReadOnlyList<string>>? _referenceCandidates;
 
     private readonly FormRowEditor _editor = FormRowEditor.Default;
 
@@ -325,20 +334,21 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
     public bool IsNumericUpDown => Typed && _type == FormPropertyType.Int;
 
     /// <summary>
-    /// A drop-down: an Enum's members, a Cursor row's <c>Cursors</c> members (<see cref="FormPropertyDef.Choices"/>), or a
-    /// Bool's <c>True</c>/<c>False</c> (slice 4 D-3).
+    /// A drop-down: an Enum's members, a Cursor row's <c>Cursors</c> members (<see cref="FormPropertyDef.Choices"/>), a
+    /// Bool's <c>True</c>/<c>False</c> (slice 4 D-3), or a Reference's <c>(none)</c> and the controls it may name (D-7).
     /// </summary>
-    public bool IsComboBox => Typed && _type is FormPropertyType.Enum or FormPropertyType.Cursor or FormPropertyType.Bool;
+    public bool IsComboBox => Typed &&
+        _type is FormPropertyType.Enum or FormPropertyType.Cursor or FormPropertyType.Bool or FormPropertyType.Reference;
 
     /// <summary>
     /// Free text: a String, and the typed-text rows — a Color, a Size (<c>800, 450</c>), a Font (FontConverter text),
-    /// a Padding (<c>4</c> or <c>4, 2, 4, 2</c>), a Fraction (<c>0.85</c>) and a Reference (a control's Id). The composite
-    /// rows (slice 3 Task 6) and the colour, font and reference editors (slice 4) sit beside this text, which stays the
-    /// parent's own editor.
+    /// a Padding (<c>4</c> or <c>4, 2, 4, 2</c>) and a Fraction (<c>0.85</c>). The composite rows (slice 3 Task 6) and the
+    /// colour and font editors (slice 4) sit beside this text, which stays the parent's own editor. (A Reference is a
+    /// drop-down since slice 4 D-7: <see cref="IsComboBox"/>.)
     /// </summary>
     public bool IsTextBox => Typed &&
         _type is FormPropertyType.String or FormPropertyType.Color or FormPropertyType.Size
-            or FormPropertyType.Font or FormPropertyType.Padding or FormPropertyType.Fraction or FormPropertyType.Reference
+            or FormPropertyType.Font or FormPropertyType.Padding or FormPropertyType.Fraction
             or FormPropertyType.CssClasses;
 
     /// <summary>The four-edge Anchor box (Task 26).</summary>
@@ -360,8 +370,8 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
 
     /// <summary>
     /// The filtered <see cref="Choices"/>, computed once. ⚠ Assumes <see cref="_choices"/>, <see cref="_definition"/> and
-    /// <see cref="_target"/> never change for this row — all three are readonly today. Task 3's Reference row (a list
-    /// evaluated on read, following the document) must NOT go through this cache: revisit it there.
+    /// <see cref="_target"/> never change for this row — all three are readonly today. ⛔ A Reference row's list follows
+    /// the DOCUMENT and never goes through this cache (<see cref="ReferenceChoices"/>, asked on every read).
     /// </summary>
     private IReadOnlyList<string>? _offered;
 
@@ -373,8 +383,129 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
     /// </summary>
     public IReadOnlyList<string>? Choices =>
         _type == FormPropertyType.Bool ? BoolChoices
+        : _type == FormPropertyType.Reference ? ReferenceChoices()
         : _definition == null || _choices == null ? _choices
         : _offered ??= _choices.Where(choice => _definition.Accepts(choice, _target)).ToList();
+
+    // ==================================================================
+    // The Reference drop-down (slice 4 D-7): (none), then the controls the row may name
+    // ==================================================================
+
+    /// <summary>
+    /// The Reference drop-down's first item. ⛔ A DISPLAY item, never a value: picking it is Reset, mapped before Judge
+    /// is asked (<see cref="CommitReference"/>). No control can carry it as an Id — parentheses are not legal there.
+    /// </summary>
+    internal const string NoReferenceItem = "(none)";
+
+    /// <summary>
+    /// Marks a stored Id that names no candidate (BL8034 at build): <c>btnGone (missing)</c>. An Id holds no space, so
+    /// the marked text can never be a real Id either.
+    /// </summary>
+    internal const string MissingReferenceSuffix = " (missing)";
+
+    private IReadOnlyList<string> ReferenceCandidates => _referenceCandidates?.Invoke() ?? Array.Empty<string>();
+
+    /// <summary>The last list <see cref="ReferenceChoices"/> handed out — returned again while its items are unchanged.</summary>
+    private IReadOnlyList<string>? _referenceList;
+
+    /// <summary>Stored Ids this row has shown marked missing, in the order first shown — kept for the row's life.</summary>
+    private readonly List<string> _missingShown = new();
+
+    /// <summary>
+    /// <c>(none)</c>, the candidates in document order (<c>FormReferences.Candidates</c>, asked NOW — the list follows the
+    /// document), and — when the stored Id names none of them — that Id marked missing, so the row never shows
+    /// <c>(none)</c> over a value the document holds.
+    ///
+    /// <para>⛔⛔ The SAME list instance comes back while its items are unchanged, and a missing Id stays listed for the
+    /// row's life. Measured through the real ComboBox: a pick commits INSIDE the combo's own SelectedItem push, and the
+    /// commit raises <c>Choices</c> (here, and again through the document view model's revision). A NEW list there swaps
+    /// the combo's ItemsSource mid-push, and the combo pushed its PREVIOUS item back — <c>(none)</c>, i.e. Reset — so
+    /// picking <c>btn</c> wrote it and removed it in one click. An unchanged instance is no ItemsSource change at all; a
+    /// sticky missing entry means picking a real Button over a dangling Id does not shrink the list mid-push either.</para>
+    /// </summary>
+    private IReadOnlyList<string> ReferenceChoices()
+    {
+        var candidates = ReferenceCandidates;
+        var stored = ReferenceDisplay();
+        if (stored.EndsWith(MissingReferenceSuffix, StringComparison.Ordinal))
+        {
+            var id = stored[..^MissingReferenceSuffix.Length];
+            if (!_missingShown.Contains(id, StringComparer.Ordinal))
+            {
+                _missingShown.Add(id);
+            }
+        }
+
+        var list = new List<string> { NoReferenceItem };
+        list.AddRange(candidates);
+        list.AddRange(_missingShown
+            .Where(id => !candidates.Contains(id, StringComparer.Ordinal))
+            .Select(id => id + MissingReferenceSuffix));
+
+        if (_referenceList == null || !_referenceList.SequenceEqual(list, StringComparer.Ordinal))
+        {
+            _referenceList = list;
+        }
+
+        return _referenceList;
+    }
+
+    /// <summary>What a Reference row's drop-down selects: <c>(none)</c> when absent, the Id, or the Id marked missing.</summary>
+    private string ReferenceDisplay()
+    {
+        var text = EditorText;
+        if (text.Length == 0)
+        {
+            return NoReferenceItem;
+        }
+
+        // ⚠ An editor echo (RaiseEditorRefresh) hands back what the combo pushed, which is already a display item.
+        if (text == NoReferenceItem || text.EndsWith(MissingReferenceSuffix, StringComparison.Ordinal) ||
+            ReferenceCandidates.Contains(text, StringComparer.Ordinal))
+        {
+            return text;
+        }
+
+        return text + MissingReferenceSuffix;
+    }
+
+    /// <summary>
+    /// A pick in the Reference drop-down. ⛔ <c>(none)</c> is Reset (remove the property; a no-op when it is absent), and it
+    /// is mapped HERE, before <see cref="Commit"/> asks Judge — Judge would refuse the text <c>(none)</c> as an illegal Id,
+    /// and the stored Id would silently stay. A marked missing item is its Id without the mark: the value already stored
+    /// (a no-op, per Judge) or, after the user picked a real Button, the dangling Id they are putting back. Anything else
+    /// is an Id, committed as usual.
+    /// </summary>
+    private void CommitReference(string? value)
+    {
+        if (value == NoReferenceItem)
+        {
+            Reset(); // checks CanReset itself: absent or frozen → nothing
+            return;
+        }
+
+        if (value != null && value.EndsWith(MissingReferenceSuffix, StringComparison.Ordinal))
+        {
+            value = value[..^MissingReferenceSuffix.Length];
+        }
+
+        Commit(value);
+    }
+
+    /// <summary>
+    /// The document changed under this row (the grid's <c>RefreshReferenceChoices</c>): a Reference row's bound drop-down
+    /// re-reads its items, then its selection — in that order, so the selected item is one of the new items.
+    /// </summary>
+    internal void RefreshChoices()
+    {
+        if (_type != FormPropertyType.Reference)
+        {
+            return;
+        }
+
+        OnPropertyChanged(nameof(Choices));
+        OnPropertyChanged(nameof(StringValue));
+    }
 
     // The catalog does not carry per-property ranges, and inventing them would silently clamp a
     // value the document legitimately holds.
@@ -477,11 +608,27 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
     /// </summary>
     public string StringValue
     {
-        get => IsEditableBool && bool.TryParse(EditorText, out var flag)
-            ? (flag ? BoolChoices[0] : BoolChoices[1])
+        get => IsEditableBool && bool.TryParse(EditorText, out var flag) ? (flag ? BoolChoices[0] : BoolChoices[1])
+            : IsEditableReference ? ReferenceDisplay()
             : EditorText;
-        set => Commit(value);
+        set
+        {
+            if (IsEditableReference)
+            {
+                CommitReference(value);
+            }
+            else
+            {
+                Commit(value);
+            }
+        }
     }
+
+    /// <summary>
+    /// A Reference row the grid edits through its drop-down (slice 4 D-7). ⚠ <see cref="UsesTypedEditor"/>, as
+    /// <see cref="IsEditableBool"/>: a frozen row shows its raw text and is never mapped.
+    /// </summary>
+    private bool IsEditableReference => _type == FormPropertyType.Reference && UsesTypedEditor;
 
     /// <summary>
     /// VS's double-click on a Bool row: flips the value (slice 4 D-3). Through the same Commit as the drop-down, so Judge
@@ -892,6 +1039,13 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
 
     private void RaiseOwnValueChanged()
     {
+        // A Reference row's ITEMS depend on its value (a stored Id naming no candidate is listed, marked missing), so they
+        // re-read first — before StringValue, so the new selection is one of the new items.
+        if (_type == FormPropertyType.Reference)
+        {
+            OnPropertyChanged(nameof(Choices));
+        }
+
         foreach (var name in new[]
                  {
                      nameof(RawValue), nameof(DisplayValue), nameof(StringValue), nameof(BoolValue),

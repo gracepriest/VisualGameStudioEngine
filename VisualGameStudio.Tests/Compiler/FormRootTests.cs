@@ -645,6 +645,38 @@ public class FormRootTests
         });
     }
 
+    /// <summary>
+    /// Slice 4 D-7: the BL8034 check is <see cref="FormReferences.IsAllowed"/>, the same function the grid's drop-down
+    /// lists from — a Button inside a Panel is offered there, so it must be emitted here, and a case-different Id is
+    /// refused in both.
+    /// </summary>
+    [TestCase("btnInner", true)]
+    [TestCase("BTNINNER", false)]
+    public void TheReferenceCheck_IsTheSharedPredicate(string reference, bool emitted)
+    {
+        var form = new FormDocument { Target = FormTarget.WinForms, Name = "F", Width = 400, Height = 300 };
+        var panel = new FormControl
+        {
+            Kind = "Panel", Id = "pnl", TabIndex = 0, Geometry = new PixelGeometry { X = 8, Y = 8, Width = 200, Height = 100 }
+        };
+        panel.Children.Add(new FormControl
+        {
+            Kind = "Button", Id = "btnInner", TabIndex = 0, Geometry = new PixelGeometry { X = 8, Y = 8, Width = 75, Height = 23 }
+        });
+        form.Controls.Add(panel);
+        form.Properties["AcceptButton"] = reference;
+
+        var result = RegionWriter.Write("F.bas", FormScaffolder.Create("F", FormTarget.WinForms).CodeText, form, "F.blform");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Text.Contains($"Me.AcceptButton = {reference}"), Is.EqualTo(emitted));
+            Assert.That(result.Diagnostics.Any(d => d.Code == DesignCodes.ReferenceNotFound), Is.EqualTo(!emitted));
+            Assert.That(FormReferences.IsAllowed(form, FormControlCatalog.FormRoot.Properties.Single(p => p.Name == "AcceptButton"),
+                reference), Is.EqualTo(emitted), "the grid's list and the writer agree");
+        });
+    }
+
     [Test]
     public void TheReferenceCode_IsBL8034() =>
         Assert.That(DesignCodes.ReferenceNotFound, Is.EqualTo("BL8034"));

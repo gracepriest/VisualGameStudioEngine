@@ -690,6 +690,184 @@ public class FormPropertyGridTests
         Assert.That(frozen.RawValue, Is.EqualTo("maybe"), "a Degraded Bool is never coerced by a double-click");
     }
 
+    // ==================================================================
+    // Slice 4 Task 3 (D-7) — a Reference row is a drop-down of the controls it may name
+    // ==================================================================
+
+    private static string ReferenceForm(string? acceptButton = null) => $"""
+        <Form Name="F" Version="1" Width="400" Height="300" Text="F"{(acceptButton == null ? "" : $" AcceptButton=\"{acceptButton}\"")}>
+          <Controls>
+            <Button Id="btnOk" X="8" Y="8" Width="75" Height="23" TabIndex="0"/>
+            <Label Id="lblTitle" X="8" Y="40" Width="75" Height="23" TabIndex="1"/>
+            <Button Id="btnCancel" X="8" Y="72" Width="75" Height="23" TabIndex="2"/>
+          </Controls>
+          <Components><Timer Id="tmr"/></Components>
+        </Form>
+        """;
+
+    /// <summary>The FORM's rows (nothing selected) over <paramref name="xml"/>, and the file under them.</summary>
+    private static (FormPropertyGridViewModel Grid, FormFile File) FormRowsOver(string xml)
+    {
+        var file = Read(xml, "F.blform");
+        Assert.That(file.IsRefused, Is.False, string.Join("; ", file.Diagnostics.Select(d => d.Format())));
+        var grid = new FormPropertyGridViewModel();
+        grid.Load(file);
+        return (grid, file);
+    }
+
+    [Test]
+    public void AcceptButton_IsADropDownOfNoneThenTheButtons_InDocumentOrder()
+    {
+        var (grid, _) = FormRowsOver(ReferenceForm());
+        var row = grid.Rows.Single(r => r.Name == "AcceptButton");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(row.IsComboBox, Is.True, "the drop-down");
+            Assert.That(row.IsTextBox, Is.False, "no longer a free-text Id");
+            Assert.That(row.Choices, Is.EqualTo(new[] { "(none)", "btnOk", "btnCancel" }),
+                "(none) first, then the Buttons — never the Label, never the tray's Timer");
+            Assert.That(row.StringValue, Is.EqualTo("(none)"), "an absent AcceptButton shows (none)");
+            Assert.That(row.Choices, Does.Contain(row.StringValue), "the combo's SelectedItem matches an item exactly");
+        });
+    }
+
+    [Test]
+    public void PickingAButton_StoresItsId()
+    {
+        var (grid, file) = FormRowsOver(ReferenceForm());
+        var edits = 0;
+        grid.Edited += (_, _) => edits++;
+        var row = grid.Rows.Single(r => r.Name == "AcceptButton");
+
+        row.StringValue = "btnOk";
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(file.Model.Properties["AcceptButton"], Is.EqualTo("btnOk"));
+            Assert.That(row.StringValue, Is.EqualTo("btnOk"));
+            Assert.That(edits, Is.EqualTo(1));
+        });
+    }
+
+    /// <summary>
+    /// ⛔ <c>(none)</c> is a DISPLAY item, never a value: it maps to Reset BEFORE Judge is asked. Judge would refuse the
+    /// text <c>(none)</c> (not a legal Id), so without the mapping the pick did nothing and the stored Id stayed.
+    /// </summary>
+    [Test]
+    public void PickingNone_RemovesTheAttribute_AndNeverWritesTheTextNone()
+    {
+        var (grid, file) = FormRowsOver(ReferenceForm("btnOk"));
+        var edits = 0;
+        grid.Edited += (_, _) => edits++;
+        var row = grid.Rows.Single(r => r.Name == "AcceptButton");
+        Assert.That(row.StringValue, Is.EqualTo("btnOk"), "precondition");
+
+        row.StringValue = "(none)";
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(file.Model.Properties.ContainsKey("AcceptButton"), Is.False, "Reset removes it");
+            Assert.That(FormDocumentWriter.Write(file), Does.Not.Contain("AcceptButton").And.Not.Contain("(none)"));
+            Assert.That(row.StringValue, Is.EqualTo("(none)"));
+            Assert.That(row.Refusal, Is.Null, "the pick was not refused");
+            Assert.That(edits, Is.EqualTo(1));
+        });
+    }
+
+    [Test]
+    public void PickingNone_OnAnAbsentRow_IsANoOp()
+    {
+        var (grid, file) = FormRowsOver(ReferenceForm());
+        var before = FormDocumentWriter.Write(file);
+        var edits = 0;
+        grid.Edited += (_, _) => edits++;
+
+        grid.Rows.Single(r => r.Name == "AcceptButton").StringValue = "(none)";
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(edits, Is.Zero);
+            Assert.That(FormDocumentWriter.Write(file), Is.EqualTo(before));
+        });
+    }
+
+    /// <summary>
+    /// A stored Id that names no candidate (BL8034 at build) is still SHOWN, never hidden under <c>(none)</c>: the combo
+    /// gets it as an extra item marked "(missing)", selected — and the combo pushing that item back changes nothing.
+    /// </summary>
+    [Test]
+    public void ADanglingReference_ShowsAsMissing_Selected_AndPushingItBackChangesNothing()
+    {
+        var (grid, file) = FormRowsOver(ReferenceForm("btnGone"));
+        var edits = 0;
+        grid.Edited += (_, _) => edits++;
+        var row = grid.Rows.Single(r => r.Name == "AcceptButton");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(row.Choices, Is.EqualTo(new[] { "(none)", "btnOk", "btnCancel", "btnGone (missing)" }));
+            Assert.That(row.StringValue, Is.EqualTo("btnGone (missing)"));
+        });
+
+        row.StringValue = "btnGone (missing)";
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(file.Model.Properties["AcceptButton"], Is.EqualTo("btnGone"), "the document keeps its value");
+            Assert.That(edits, Is.Zero);
+            Assert.That(row.Refusal, Is.Null);
+        });
+
+        // ⛔ Picking a real Button does not shrink the list under the combo (see FormPropertyRow.ReferenceChoices: a new
+        // list mid-push made the real combo push its previous item back). The missing Id stays listed, and picking it
+        // puts the stored Id back.
+        var before = row.Choices;
+        row.StringValue = "btnOk";
+        Assert.Multiple(() =>
+        {
+            Assert.That(file.Model.Properties["AcceptButton"], Is.EqualTo("btnOk"));
+            Assert.That(row.Choices, Is.SameAs(before), "the SAME list instance: no ItemsSource change mid-push");
+            Assert.That(row.StringValue, Is.EqualTo("btnOk"));
+        });
+
+        row.StringValue = "btnGone (missing)";
+        Assert.Multiple(() =>
+        {
+            Assert.That(file.Model.Properties["AcceptButton"], Is.EqualTo("btnGone"), "the dangling Id, without the mark");
+            Assert.That(edits, Is.EqualTo(2));
+        });
+    }
+
+    /// <summary>
+    /// ⛔ The list follows the DOCUMENT, not the moment the row was built. <see cref="FormPropertyRow.Choices"/> is
+    /// evaluated on read, and <see cref="FormPropertyGridViewModel.RefreshReferenceChoices"/> (which the document view
+    /// model calls on every model revision) raises it — so a Button that arrives while the Form stays selected appears
+    /// in the SAME row's list. (The document-view-model half of this is the real-view test of the same name.)
+    /// </summary>
+    [Test]
+    public void ACandidateAddedWhileTheFormStaysSelected_AppearsInTheList()
+    {
+        var (grid, file) = FormRowsOver(ReferenceForm());
+        var row = grid.Rows.Single(r => r.Name == "AcceptButton");
+        var raised = new List<string?>();
+        row.PropertyChanged += (_, e) => raised.Add(e.PropertyName);
+        _ = row.Choices; // read once before the change, as the bound combo has
+
+        file.Model.Controls.Add(new FormControl
+        {
+            Kind = "Button", Id = "btnNew", TabIndex = 3, Geometry = new PixelGeometry { X = 8, Y = 104, Width = 75, Height = 23 }
+        });
+        grid.RefreshReferenceChoices();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(grid.Rows.Single(r => r.Name == "AcceptButton"), Is.SameAs(row), "precondition: the same row, not a rebuild");
+            Assert.That(row.Choices, Does.Contain("btnNew"));
+            Assert.That(raised, Does.Contain(nameof(FormPropertyRow.Choices)), "the bound combo is told to re-read");
+        });
+    }
+
     [Test]
     public void AnEnumRowOffersExactlyTheCatalogsAllowedValues()
     {

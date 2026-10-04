@@ -806,7 +806,9 @@ public static class RegionWriter
 
         // ⛔ A reference must name a control of a kind the row allows (BL8034): csc rejects `Me.AcceptButton = lblTitle`
         // (CS0029) and `= btnGone` (CS0103), and BasicLang types both as Object and says nothing.
-        if (row.Type == FormPropertyType.Reference && !NamesAnAllowedControl(form, row, value))
+        // ⛔ FormReferences.IsAllowed is the SAME list the property grid's drop-down offers (slice 4 D-7) — one function,
+        // so the grid can never offer an Id this line then refuses.
+        if (row.Type == FormPropertyType.Reference && !FormReferences.IsAllowed(form, row, value))
         {
             var kinds = string.Join(" or ", row.ReferenceKinds ?? Array.Empty<string>());
             diagnostics.Add(new DesignDiagnostic(
@@ -820,11 +822,6 @@ public static class RegionWriter
 
         body.Append($"{inner}Me.{row.Name} = {Literal(row, value)}").Append(newline);
     }
-
-    /// <summary>Whether a reference names a control (or component) of this form whose kind its row allows.</summary>
-    private static bool NamesAnAllowedControl(FormDocument form, FormPropertyDef row, string id) =>
-        form.FindById(id) is { } target &&
-        (row.ReferenceKinds ?? Array.Empty<string>()).Contains(target.Kind, StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// Emits a run of siblings: each control's initialization in DOCUMENT order, then — on WinForms —

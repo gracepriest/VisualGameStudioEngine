@@ -765,3 +765,67 @@ Mutations (each applied with Edit and REBUILT; AXAML ones after `dotnet clean`):
 | `DockSummary` not raised in `SetDock` | killed (`ChoosingARegion_…`, the Dock real-view test) |
 | Flyout not bound (`Button.Flyout` → `FlyoutBase.AttachedFlyout`) | killed (Anchor real-view test, `TheAnchorAndDockBoxes_…`) |
 | Anchor drop-down docked Right again | killed (the hit assertion: "hit ContentPresenter") |
+
+### Task 3 — Reference editor (base Task 2's commit)
+Done as written: new `BasicLang/Forms/FormReferences.cs` (`Candidates` = the Ids of `AllControls()` whose kind is in
+`ReferenceKinds`, document order; `IsAllowed` = ordinal membership of that list). `RegionWriter.AppendRootRow` asks
+`IsAllowed`; its private `NamesAnAllowedControl` is deleted. The grid passes `referenceCandidates: () =>
+FormReferences.Candidates(form, definition)` to `ForStoredValue`, so a Reference row is a combo (`IsComboBox`; it left
+`IsTextBox`) whose `Choices` are `(none)`, the candidates, and a dangling stored Id marked `btnGone (missing)`.
+`(none)` is mapped to Reset in `FormPropertyRow.CommitReference` before `Commit`/Judge.
+
+Choices taken under the delegation:
+- **Components are never candidates.** The old check used `FindById`, which includes the tray. No row's kinds name a
+  component, so nothing changes in practice; `FormReferencesTests` pins the rule with a Timer-kinded probe row.
+- **Freshness hook = the document view model's model revision** (`OnDesignModelRevisionChanged` →
+  `PropertyGrid.RefreshReferenceChoices()`), the same revision the tray follows. Every designer write-back and every
+  reload bumps it.
+- **Picking a `(missing)` item puts that Id back** (the mark is stripped; Judge no-ops it when it is already stored).
+
+⛔ **Finding (measured through the real ComboBox): a NEW `Choices` list during a pick undoes the pick.** The commit runs
+INSIDE the combo's SelectedItem push and raises `Choices` (the row's own value-changed, then the revision hook). A new
+list instance swaps the combo's ItemsSource mid-push, and the combo pushed its PREVIOUS item back. That was `(none)`, i.e.
+Reset, so one click wrote `btn` and removed it (two Edited). Fix: `ReferenceChoices` returns the SAME instance while
+its items are unchanged, and a missing Id stays listed for the row's life, so picking a real Button over a dangling Id
+does not shrink the list mid-push either. Both are mutation-pinned by the real-view tests below.
+
+⚠ **Deviation: the freshness test cannot add the Button "by paste, then undo/redo, without changing the selection".**
+Measured: every shipping path that adds a control moves the selection (paste → `Selection.SetRange(added)`, drop →
+`SelectInDesigner`) or re-parses and rebuilds the rows (undo/redo `AdoptDocumentText`, a Code-view edit). So no IDE path
+reaches "candidate added, same row" today, and the hook is defensive. Both freshness tests add the Button to the model
+directly. The VM test then calls `RefreshReferenceChoices`. The real-view test makes a real grid edit of the Form's Text,
+which goes through the document view model's write-back and revision.
+
+Tests: red first with stubs (`FormReferences` returning nothing, an empty `RefreshReferenceChoices`): 10 red, each for
+the expected reason. (`PickingAButton_StoresItsId` and `PickingNone_OnAnAbsentRow_IsANoOp` were green on the old text
+box too: a typed Id stored, and `(none)` was refused, which is no edit. Neither is a kill on its own.)
+- `FormReferencesTests` (new): Buttons only, nested included, document order; components never; `IsAllowed` ≡
+  membership, ordinal; a row with no kinds allows nothing.
+- `FormRootTests.TheReferenceCheck_IsTheSharedPredicate` ×2: the BL8034 tests live in `FormRootTests`, not
+  `FormRegionWriterTests` as the plan says. The existing `ADanglingReference_IsWarned_AndNotEmitted` cases pass unchanged.
+- `FormPropertyGridTests`: `AcceptButton_IsADropDownOfNoneThenTheButtons_InDocumentOrder`, `PickingAButton_StoresItsId`,
+  `PickingNone_RemovesTheAttribute_AndNeverWritesTheTextNone`, `PickingNone_OnAnAbsentRow_IsANoOp`,
+  `ADanglingReference_ShowsAsMissing_Selected_AndPushingItBackChangesNothing` (plus the same-instance and put-back
+  steps), `ACandidateAddedWhileTheFormStaysSelected_AppearsInTheList`.
+- Real view: `PickingAButtonInTheAcceptButtonDropDown_WritesItIntoTheFile_AtTwoSizes` (ONE Edited),
+  `ADanglingAcceptButton_ShowsMissing_AndPickingAButtonReplacesIt_AtTwoSizes`,
+  `ACandidateAddedWhileTheFormStaysSelected_AppearsInTheList` (the document-view-model half).
+
+RE-CHECK: 664/664 green over FormReferences*, FormRootTests, FormPropertyGrid*, FormRegionWriter*, FormPropertyRow*,
+FormValueType*, FormDesignerLayoutRealView*, FormAnchorDockPicker*, FormCompositeRow*, FormTrayView*, and the
+Integration `FormPropertyBatchAcceptanceTests` (it sets AcceptButton through the grid; 0 skipped).
+
+Mutations (each applied with Edit and REBUILT):
+| Mutant | Result |
+|---|---|
+| `Candidates` ignores `ReferenceKinds` | killed (8: FormReferences ×5, the grid's list and dangling tests, the BL8034 Label case, the real-view pick) |
+| `(none)` → Reset mapping removed (`(none)` reaches Judge) | killed (`PickingNone_RemovesTheAttribute_AndNeverWritesTheTextNone`) |
+| the missing value not shown (dangling displays `(none)`) | killed (the VM and real-view dangling tests) |
+| `Choices` captured at construction | killed (both `ACandidateAdded…` tests) |
+| the document view model's revision hook removed | killed (the real-view `ACandidateAdded…`) |
+| a new list instance on every read | killed (both real-view picks and the VM same-instance step). This is the finding above, confirmed |
+| the missing entry not sticky | killed (the VM and real-view dangling tests) |
+
+Post-task fast subset (base `124355cd` + Tasks 2–3, both streams captured): **Total 10828 · Passed 10803 · Failed 6 ·
+Skipped 19.** The failure names are identical to Task 0's six (`ReadingAnMvidTakesNoLockOnTheFile` passed again). +32
+tests over Task 1's run. Every `FormPropertyGrid*` fixture: 299/299 green.

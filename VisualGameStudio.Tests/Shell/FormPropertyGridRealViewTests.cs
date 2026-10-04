@@ -957,6 +957,107 @@ public class FormPropertyGridRealViewTests
         }
     }
 
+    // ==================================================================
+    // Slice 4 Task 3 — the Reference editor (D-7)
+    // ==================================================================
+
+    /// <summary>
+    /// With the Form selected, AcceptButton is a drop-down of <c>(none)</c> and the form's Buttons; picking <c>btn</c>
+    /// through the real ComboBox (real clicks: open, then the item in its popup) writes <c>AcceptButton="btn"</c> into the
+    /// FILE. At two window sizes.
+    /// </summary>
+    [AvaloniaTest]
+    public void PickingAButtonInTheAcceptButtonDropDown_WritesItIntoTheFile_AtTwoSizes()
+    {
+        foreach (var (w, h) in TwoZooms)
+        {
+            using var rig = Open(w, h);
+            Assert.That(rig.GridVm.SelectedControl, Is.Null, $"{w}x{h}: precondition: the Form is selected");
+            var accept = rig.Row("AcceptButton");
+            var combo = VisibleCombo(rig, accept);
+            Assert.That(combo.Items.Cast<object?>(), Is.EqualTo(new object?[] { "(none)", "btn" }),
+                $"{w}x{h}: (none), then the one Button — not lbl, not the tray's tmr");
+            Assert.That(combo.SelectedItem, Is.EqualTo("(none)"), $"{w}x{h}: an absent AcceptButton shows (none)");
+
+            var edits = 0;
+            rig.GridVm.Edited += (_, _) => edits++;
+
+            PickInCombo(rig, combo, "btn");
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(rig.Doc.Properties.GetValueOrDefault("AcceptButton"), Is.EqualTo("btn"), $"{w}x{h}: the model");
+                Assert.That(rig.Vm.Text, Does.Contain("AcceptButton=\"btn\""), $"{w}x{h}: the .blform text");
+                Assert.That(VisibleCombo(rig, accept).SelectedItem, Is.EqualTo("btn"), $"{w}x{h}: the drop-down follows");
+                Assert.That(edits, Is.EqualTo(1), $"{w}x{h}: ONE edit — never a write and a Reset for one click");
+            });
+        }
+    }
+
+    /// <summary>
+    /// A dangling <c>AcceptButton="btnGone"</c> shows <c>btnGone (missing)</c> selected in the real combo; picking
+    /// <c>btn</c> through it writes <c>btn</c> — the case where the list's items depend on the value, so a commit that
+    /// swapped the combo's list mid-push would push the old item straight back. At two window sizes.
+    /// </summary>
+    [AvaloniaTest]
+    public void ADanglingAcceptButton_ShowsMissing_AndPickingAButtonReplacesIt_AtTwoSizes()
+    {
+        var dangling = Doc.Replace("Text=\"GridForm\">", "Text=\"GridForm\" AcceptButton=\"btnGone\">");
+        Assert.That(dangling, Does.Contain("AcceptButton=\"btnGone\""), "precondition: the fixture carries the dangling Id");
+
+        foreach (var (w, h) in TwoZooms)
+        {
+            using var rig = Open(w, h, dangling);
+            var accept = rig.Row("AcceptButton");
+            var combo = VisibleCombo(rig, accept);
+            Assert.That(combo.SelectedItem, Is.EqualTo("btnGone (missing)"), $"{w}x{h}: shown, never hidden under (none)");
+            var edits = 0;
+            rig.GridVm.Edited += (_, _) => edits++;
+
+            PickInCombo(rig, combo, "btn");
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(rig.Doc.Properties.GetValueOrDefault("AcceptButton"), Is.EqualTo("btn"), $"{w}x{h}: the model");
+                Assert.That(rig.Vm.Text, Does.Contain("AcceptButton=\"btn\"").And.Not.Contain("btnGone"), $"{w}x{h}: the .blform text");
+                Assert.That(edits, Is.EqualTo(1), $"{w}x{h}: ONE edit");
+            });
+        }
+    }
+
+    /// <summary>
+    /// ⛔ The document-view-model half of the freshness rule: a Button that arrives in the model while the Form STAYS
+    /// selected appears in the same AcceptButton row's list once the document view model writes the next designer edit
+    /// (its model revision calls <see cref="FormPropertyGridViewModel.RefreshReferenceChoices"/>, as the tray follows the
+    /// same revision). ⚠ Measured: every shipping path that ADDS a control today also moves the selection (paste, drop)
+    /// or re-parses and rebuilds the rows (undo/redo, a Code-view edit), so nothing in the IDE reaches this state yet;
+    /// the model is changed directly here, and the edit that follows is a real grid edit of the Form's Text.
+    /// </summary>
+    [AvaloniaTest]
+    public void ACandidateAddedWhileTheFormStaysSelected_AppearsInTheList()
+    {
+        using var rig = Open();
+        var accept = rig.Row("AcceptButton");
+        var raised = new List<string?>();
+        accept.PropertyChanged += (_, e) => raised.Add(e.PropertyName);
+
+        rig.Doc.Controls.Add(new FormControl
+        {
+            Kind = "Button", Id = "btnNew", TabIndex = 2, Geometry = new PixelGeometry { X = 16, Y = 96, Width = 75, Height = 23 }
+        });
+        rig.Row("Text").StringValue = "Renamed"; // a real designer edit: Edited → the document view model's write-back
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(rig.GridVm.SelectedControl, Is.Null, "precondition: the Form stayed selected");
+            Assert.That(rig.GridVm.Rows.Single(r => r.Name == "AcceptButton"), Is.SameAs(accept), "precondition: no rebuild");
+            Assert.That(rig.Vm.Text, Does.Contain("btnNew"), "precondition: the write-back carried the new Button");
+            Assert.That(raised, Does.Contain(nameof(FormPropertyRow.Choices)), "the revision told the row to re-read");
+            Assert.That(accept.Choices, Does.Contain("btnNew"));
+            Assert.That(VisibleCombo(rig, accept).Items.Cast<object?>(), Does.Contain("btnNew"), "the REAL combo re-read it");
+        });
+    }
+
     /// <summary>
     /// ⛔ Slice 4 D-3: selecting a Label and expanding its (absent, ambient) Font realises the three Bool PART combos,
     /// each bound to a catalog-less row whose no-op compare was ordinal — a combo pushing <c>False</c> over a part reading

@@ -560,7 +560,26 @@ public partial class FormPropertyGridViewModel : ObservableObject
                 Changed,
                 frozenReason: degraded?.Reason,
                 frozenText: degraded?.Value,
-                storeRefusal: value => FormRootValues.RefusalOf(definition, value))));
+                storeRefusal: value => FormRootValues.RefusalOf(definition, value),
+                // ⛔ A Func, asked on every read of the row's Choices — never a list captured now (slice 4 D-7). The SAME
+                // function the region writer's BL8034 check is membership of.
+                referenceCandidates: definition.Type == FormPropertyType.Reference
+                    ? () => FormReferences.Candidates(form, definition)
+                    : null)));
+        }
+    }
+
+    /// <summary>
+    /// The document changed under the rows (slice 4 D-7): each Reference row's drop-down re-reads its candidates, which
+    /// its <see cref="FormPropertyRow.Choices"/> asks of the document on every read. ⛔ The document view model calls this
+    /// on every model revision — the tray follows the same revision — so a Button that arrives while the Form stays
+    /// selected is listed without reselecting. A rebuild (a selection change, a reload) builds fresh rows anyway.
+    /// </summary>
+    public void RefreshReferenceChoices()
+    {
+        foreach (var row in Rows)
+        {
+            row.RefreshChoices();
         }
     }
 
