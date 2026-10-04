@@ -273,7 +273,7 @@ public class FormDesignerLayoutRealViewTests
                 var cell = rig.ValuePanel(container);
                 var cellRect = rig.InWindow(cell);
                 var editors = cell.GetVisualDescendants().OfType<Control>()
-                    .Where(c => c is TextBox or ComboBox or NumericUpDown or ToggleSwitch)
+                    .Where(c => c is TextBox or ComboBox or NumericUpDown or ToggleSwitch or FormColorDropDown)
                     .Where(c => c.IsEffectivelyVisible && c.Bounds.Width > 0)
                     .Where(c => c.FindAncestorOfType<NumericUpDown>() == null); // its inner box is its own business
                 foreach (var editor in editors)
@@ -288,7 +288,8 @@ public class FormDesignerLayoutRealViewTests
         });
 
         TestContext.WriteLine($"[editors checked] {string.Join(", ", checkedKinds.Select(k => $"{k.Key}={k.Value}"))}");
-        Assert.That(checkedKinds.Keys, Is.SupersetOf(new[] { "TextBox", "ComboBox", "NumericUpDown" }),
+        // Slice 4 D-1: the colour rows' swatch drop-down sits in the same cell, beside the text box.
+        Assert.That(checkedKinds.Keys, Is.SupersetOf(new[] { "TextBox", "ComboBox", "NumericUpDown", nameof(FormColorDropDown) }),
             "precondition: the sweep saw every kind of editor that has a minimum width");
         // Slice 4 D-3: a Bool row is the True/False drop-down (counted as a ComboBox above); the shared editor's switch is
         // the Settings dialog's and never renders in the grid.

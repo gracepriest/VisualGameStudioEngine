@@ -871,3 +871,51 @@ Mutations (Edit + REBUILD):
 | explicit focus-return after Hide | EQUIVALENT → removed |
 | `SyncDesignerPanels` absent from `UpdateTextFromEditor` | killed (red step) |
 | None's automation name absent | killed (red step) |
+
+### Task 4 — Colour editor (base `47c31434`)
+Done as written: `Avalonia.Controls.ColorPicker` 11.3.13 in the Shell csproj; the theme `StyleInclude` in
+`FormPropertyGridView.axaml`'s Styles ONLY; new `Views/Controls/FormColorDropDown.axaml(.cs)` (swatch button + glyph, a
+`Flyout` with Custom `ColorView` + OK, Web, System); new `ViewModels/Designer/FormColorChoices.cs` (`Web`/`System` filtered by
+`Accepts`, `ToDocumentText`, `TryResolve` for the preview, `TabFor`); the row template wraps the shared editor in a
+`DockPanel` with the drop-down LEFT of it, visible on `IsColor`; `FormPropertyRow` gains `WebColorChoices`,
+`SystemColorChoices`, `SwatchColor`, `Swatch`, `HasUnknownSwatch`, `ApplyColor`, and `IsColor` now requires the typed editor
+(its "text for now" comment is gone; the flag finally has a caller).
+
+Choices taken under the delegation (VS where in doubt):
+- **The pop-up opens on the tab that holds the value** (VS): System for a system colour, Web for a named one, Custom
+  otherwise (`FormColorChoices.TabFor`). Found by the reopen step: a TabControl otherwise keeps the last tab.
+- **A Web/System pick closes the pop-up**; the Custom tab writes once on close (OK closes), only if the user moved it.
+- **"?" means "cannot preview", never "empty"**: a default-less Label BackColor draws an empty swatch; a CSS-only web name
+  (`RebeccaPurple`, which neither `System.Drawing` nor Avalonia's table knows) draws "?" — never a guessed colour.
+- ⚠ **Deviation: the real-view tests live in `FormPropertyGridEditorRealViewTests.cs` as a second file of the SAME partial
+  fixture** (`FormPropertyGridRealViewTests` is now `partial`), so the rig is shared rather than copied. The rig's `Open`
+  gained a `target` parameter for the web fixture.
+
+Tests: red first with stubbed logic (18 red, each for the expected reason: empty lists, `#FFFF0000` for opaque, no
+swatch, the Custom close not writing). Then green.
+- `FormColorChoicesTests` (new, 30): System = 33 on WinForms / the 8 with CSS on the web (derived from `CssFor`); Web = the
+  141 names on both; every WinForms entry previews; canonical hex ×4 (each accepted on both targets, already canonical);
+  preview resolution ×5 and refusals ×5; `TabFor` ×6; the row's lists per target; `ApplyColor` writes once and the same
+  colour again is a no-op; the "?" rule; a frozen colour has no drop-down.
+- `FormPropertyGridViewTests.EveryBindingInAnEditorView_ResolvesAgainstItsRootDataType` (`TestCaseSource`, the root's
+  `x:DataType`; FormColorDropDown now, the Font and Items dialogs join it).
+- Real view: `TheColourDropDown_HasATemplatedColorView_AndPickingRedOnTheWebTab_WritesItOnce_AtTwoSizes` (visual children >
+  0; open frame ≠ closed; real clicks on the Web tab and on Red; ONE Edited; closes; reopened on Web with the Custom view at
+  Red), `TheColourDropDown_OpensOnTheTabHoldingTheValue_AtTwoSizes`, `OnAWebForm_TheSystemTab_OffersOnlyCssColours_…`,
+  `TheCustomColour_IsWrittenOnceOnClose_NeverPerChange_AtTwoSizes` (open/close = no write; three moves + OK = one write of
+  `#0000FF`).
+- `FormDesignerLayoutRealViewTests.EveryRowsEditor_Fits…` sweeps `FormColorDropDown` and requires it was seen.
+
+RE-CHECK: `FormPropertyGridTests` (`IsColor`), `EveryRowsEditor_Fits…`, `EveryBindingInTheGridView_…`,
+`TheDocumentView_NoLongerCarriesTheGridsOwnBindings` — green; every non-Integration `Form*`/`CodeEditor*` test 2886/2888
+(1 skipped; the one failure is the known `EveryTextRoute_…`).
+
+Mutations (Edit + REBUILD; the AXAML one after `dotnet clean`):
+| Mutant | Result |
+|---|---|
+| Custom commits on every `ColorChanged` | killed (the Custom test, the Red test) |
+| System list unfiltered on the web (`Accepts(name)` without the target) | killed (2 VM, the web real-view test) |
+| the theme include removed from `FormPropertyGridView.axaml` | killed — "ColorView has a template: expected > 0, was 0" |
+| `#AARRGGBB` for alpha 255 | killed (the red-step stub: hex ×2) |
+| `TabFor` not applied on open | killed (`…OpensOnTheTabHoldingTheValue…`). ⚠ The reopen step alone was VACUOUS for it (the tab control keeps its last tab, which was Web), so the tab test was added |
+| a "seeding" guard around the Custom seed | EQUIVALENT (the reset after the seed covers it) → removed |

@@ -38,7 +38,7 @@ namespace VisualGameStudio.Tests.Shell;
 /// a double-click to the headless pipeline.</para>
 /// </summary>
 [TestFixture]
-public class FormPropertyGridRealViewTests
+public partial class FormPropertyGridRealViewTests
 {
     private const string Dir = "/proj/";
 
@@ -178,9 +178,9 @@ public class FormPropertyGridRealViewTests
     /// Opens the real view on <see cref="Doc"/> (or <paramref name="doc"/>, a GridForm of its own), with the scaffolded
     /// GridForm.bas beside it.
     /// </summary>
-    private static Rig Open(double width = 1000, double height = 700, string doc = Doc)
+    private static Rig Open(double width = 1000, double height = 700, string doc = Doc, FormTarget target = FormTarget.WinForms)
     {
-        var scaffold = FormScaffolder.Create("GridForm", FormTarget.WinForms);
+        var scaffold = FormScaffolder.Create("GridForm", target);
         var files = new Files();
         files.Contents[Dir + scaffold.DocumentFileName] = doc;
         files.Contents[Dir + scaffold.CodeFileName] = scaffold.CodeText;

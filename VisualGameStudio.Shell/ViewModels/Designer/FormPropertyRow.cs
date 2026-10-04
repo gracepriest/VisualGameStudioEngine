@@ -358,12 +358,43 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
     public bool IsDockPicker => IsEditable && _editor == FormRowEditor.DockPicker;
 
     /// <summary>
-    /// ⚠ Colour rows are TEXT for now, deliberately. Avalonia 11.3 base ships no colour picker, so
-    /// a real one is hand-built — and <c>SettingControlKind.ColorPicker</c> is a declared but never
-    /// rendered arm in the Settings dialog, so it is not a precedent to copy. A text row round-trips
-    /// the value correctly and says what it is; a half-built picker would not.
+    /// A colour row: its value cell carries VS's colour drop-down (<c>FormColorDropDown</c>: Custom / Web / System, slice 4
+    /// D-1) to the LEFT of the text box, which stays the row's own editor (typed <c>#hex</c> or a name, D-1a). ⚠ Requires
+    /// the default editor like every type-driven flag, and is false while frozen: a Degraded colour shows its raw text only.
     /// </summary>
-    public bool IsColor => IsEditable && _type == FormPropertyType.Color;
+    public bool IsColor => Typed && _type == FormPropertyType.Color;
+
+    private IReadOnlyList<FormColorChoice>? _webColors;
+    private IReadOnlyList<FormColorChoice>? _systemColors;
+
+    /// <summary>The drop-down's Web tab: the named colours this row's target accepts (<see cref="FormColorChoices.Web"/>).</summary>
+    public IReadOnlyList<FormColorChoice> WebColorChoices =>
+        _webColors ??= _definition == null ? Array.Empty<FormColorChoice>() : FormColorChoices.Web(_definition, _target);
+
+    /// <summary>The drop-down's System tab: all 33 on WinForms, the 8 with CSS on the web (<see cref="FormColorChoices.System"/>).</summary>
+    public IReadOnlyList<FormColorChoice> SystemColorChoices =>
+        _systemColors ??= _definition == null ? Array.Empty<FormColorChoice>() : FormColorChoices.System(_definition, _target);
+
+    /// <summary>The colour the row's value displays as — the drop-down's swatch and the Custom tab's start. Preview only.</summary>
+    public Avalonia.Media.Color? SwatchColor =>
+        IsColor && FormColorChoices.TryResolve(DisplayValue, out var color) ? color : null;
+
+    /// <summary>The swatch brush, or null (the swatch then shows "?") when the value names nothing this machine can draw.</summary>
+    public Avalonia.Media.IBrush? Swatch =>
+        SwatchColor is { } color ? new Avalonia.Media.Immutable.ImmutableSolidColorBrush(color) : null;
+
+    /// <summary>
+    /// True when a colour row SHOWS a value that cannot be previewed (a CSS name only the browser knows) — the swatch
+    /// shows "?" instead of a colour. An empty value (no default: a Label's BackColor inherits) is an empty swatch, not "?".
+    /// </summary>
+    public bool HasUnknownSwatch => IsColor && DisplayValue.Length > 0 && SwatchColor == null;
+
+    /// <summary>
+    /// A colour picked in the drop-down — a Web or System name (one pick, one write) or the Custom tab's colour when the
+    /// pop-up closes (D-1c: once, never per drag step). Through the same Commit as typed text, so Judge decides: the same
+    /// colour is a no-op, a refused one is said.
+    /// </summary>
+    public void ApplyColor(string value) => Commit(value);
 
     /// <summary>VS's two Bool items, in VS's order — the spelling <see cref="StringValue"/> shows a Bool in.</summary>
     private static readonly IReadOnlyList<string> BoolChoices = new[] { "True", "False" };
@@ -1051,7 +1082,8 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
         foreach (var name in new[]
                  {
                      nameof(RawValue), nameof(DisplayValue), nameof(StringValue), nameof(BoolValue),
-                     nameof(IntValue), nameof(IsPresent), nameof(IsBold), nameof(IsDefaultShown), nameof(CanReset)
+                     nameof(IntValue), nameof(IsPresent), nameof(IsBold), nameof(IsDefaultShown), nameof(CanReset),
+                     nameof(SwatchColor), nameof(Swatch), nameof(HasUnknownSwatch)
                  })
         {
             OnPropertyChanged(name);

@@ -194,6 +194,33 @@ public class FormPropertyGridViewTests
     }
 
     /// <summary>
+    /// Slice 4: every editor view the grid opens (each its own AXAML file) — walked against its ROOT's
+    /// <c>x:DataType</c>, and each DataTemplate inside against its own. A new editor file joins this list.
+    /// </summary>
+    private static IEnumerable<TestCaseData> EditorViews()
+    {
+        yield return new TestCaseData(new[] { "VisualGameStudio.Shell", "Views", "Controls", "FormColorDropDown.axaml" }, 8)
+            .SetName("EveryBindingInAnEditorView_ResolvesAgainstItsRootDataType(FormColorDropDown)");
+    }
+
+    [TestCaseSource(nameof(EditorViews))]
+    public void EveryBindingInAnEditorView_ResolvesAgainstItsRootDataType(string[] path, int atLeast)
+    {
+        var root = Load(path).Root!;
+        var declared = (string?)root.Attribute(XName.Get("DataType", Xaml));
+        Assert.That(declared, Is.Not.Null, "an editor view declares x:DataType on its root, so its bindings can be judged");
+        var scope = ResolveType(root, declared!);
+        Assert.That(scope, Is.Not.Null, $"x:DataType '{declared}' resolves to a type");
+
+        var failures = new List<string>();
+        var checkedBindings = 0;
+        Walk(root, scope!, failures, ref checkedBindings);
+
+        Assert.That(failures, Is.Empty, string.Join("\n", failures));
+        Assert.That(checkedBindings, Is.GreaterThanOrEqualTo(atLeast), "the walk checked too few bindings to be a gate");
+    }
+
+    /// <summary>
     /// The walker's own gate: each binding shape it cannot judge FAILS rather than passing unexamined.
     /// Snippets are scoped to <see cref="FormPropertyGridViewModel"/>, like the real view.
     /// </summary>

@@ -11,6 +11,12 @@
        binds to NOTHING with no build error. FormPropertyGridViewTests resolves each against the type
        in scope — this view model at the root, each DataTemplate's DataType inside it. -->
   <UserControl.Styles>
+    <!-- ⛔ Slice 4 D-1b: the ColorPicker theme's ONE home. Without it the colour drop-down's ColorView has no template
+         and draws NOTHING, with nothing throwing (pre-flight M2). Not App.axaml: no test app loads that, so a test would
+         pass over a blank control. Not per FormColorDropDown: once per colour row. This view hosts every row, the real-view
+         tests host this view, and the pop-up inherits it through the logical tree (its button is in the row). -->
+    <StyleInclude Source="avares://Avalonia.Controls.ColorPicker/Themes/Fluent/Fluent.xaml"/>
+
     <!-- Bold = present AND different from the target's default (spec §2.7). -->
     <Style Selector="TextBlock.bold">
       <Setter Property="FontWeight" Value="Bold"/>
@@ -180,8 +186,12 @@
                   <!-- ⛔ Classes="compact": the editors' Settings-dialog minimum widths (200/170) are
                        wider than this column, and an over-wide child is CENTRED over its slot — the
                        value's first characters vanished under the name cell. See TypedValueEditor. -->
-                  <controls:TypedValueEditor Classes="compact" VerticalAlignment="Center" Margin="4,1,4,1"
-                                             IsVisible="{Binding UsesTypedEditor}"/>
+                  <!-- Slice 4 D-1a: a colour row adds VS's swatch drop-down to the LEFT of its text box (left for the
+                       Anchor/Dock reason below: the list's overlay scrollbar covers the cell's right edge). -->
+                  <DockPanel VerticalAlignment="Center" Margin="4,1,4,1" IsVisible="{Binding UsesTypedEditor}">
+                    <controls:FormColorDropDown DockPanel.Dock="Left" Margin="0,0,4,0" IsVisible="{Binding IsColor}"/>
+                    <controls:TypedValueEditor Classes="compact" VerticalAlignment="Center"/>
+                  </DockPanel>
 
                   <!-- ⛔ Slice 4 D-4: Anchor and Dock are VS's drop-downs — a one-line summary and a drop-down
                        button whose Flyout holds the box (Task 26's, MOVED with its bindings unchanged). The rows
