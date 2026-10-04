@@ -1830,47 +1830,41 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         }
 
         /// <summary>
-        /// Emits a lambda inline, with its parameters' names meaning the PARAMETERS inside its
-        /// body (#169).
+        /// Emits a lambda inline: its parameter list, then either <c>=&gt; expr</c> or a block
+        /// <c>=&gt; { … }</c> whose body is written by the SAME statement emitter as every function
+        /// body (#136), with the lambda as the function being emitted (<see cref="EnterLambdaScope"/>).
         ///
-        /// <para>⛔ <see cref="_variableNameMap"/> folds names case-insensitively, and the
+        /// <para>⛔ #136: the block form used to be its own loop over the ENTRY BLOCK alone, which
+        /// knew one rule for statements — "an <see cref="IRValue"/> that is not a call is a temp,
+        /// skip it, unless it is named after a declared variable" — asked of the ENCLOSING
+        /// function's names. So a write to the lambda's own parameter (<c>x = x + 1</c>, an
+        /// IRBinaryOp renamed <c>x</c>) was skipped, a one-block Function lambda's
+        /// <c>n = n + 100</c> before its <c>Return</c> made it an EXPRESSION lambda (<c>() =&gt; 0</c>),
+        /// a method call through <c>Me</c> or an object (#237) was skipped as a "temp", a call
+        /// whose result was used was emitted once as a statement AND again inline (#179), a
+        /// lambda's own <c>Dim</c> was never declared (#165), and every block after the entry
+        /// block — an <c>If</c>, a loop, a <c>Select Case</c>, a <c>Try</c> — was never written at all
+        /// (<c>() =&gt; { ; }</c>, CS1643). C++, JavaScript and MSIL ran all of them.</para>
+        ///
+        /// <para>⚠ <see cref="_variableNameMap"/> folds names case-insensitively, and the
         /// enclosing function's locals and parameters are already in it. So a parameter spelled
         /// like one of them in another case — <c>Sub(N As Integer)</c> inside a function with a
-        /// local <c>n</c> — was declared <c>(int N)</c> while every use of it in the body was
-        /// looked up as <c>N</c>, found <c>n</c>, and emitted as the ENCLOSING variable: the
-        /// lambda wrote the caller's <c>n</c> (K1 printed 101, not 1) or read it (K6 printed 3,
-        /// not 7). The IR names the parameter exactly (IRBuilder binds every reference to its
-        /// declaration), so the backend only has to stop folding it onto something else.</para>
-        ///
-        /// <para>⚠ SCOPED both ways: whatever the map held for each parameter's name is put back
-        /// when the body is done, and an entry the lambda ADDED is removed. The second half
-        /// matters as much as the first — a parameter <c>G</c> read in the body used to leave
-        /// <c>G</c> in the map, and the module global <c>g</c> read after the lambda then
-        /// emitted as <c>G</c> (CS0103). A name spelled exactly like the parameter maps to the
-        /// same text either way, so a program with no case collision is emitted as before.</para>
+        /// local <c>n</c> — must map to its OWN spelling inside the body (#169: K1 printed 101, not
+        /// 1), and the map must come back exactly as it was afterwards — a parameter <c>G</c> left
+        /// in it made a later read of the module global <c>g</c> emit as <c>G</c> (CS0103). Both
+        /// are now part of the whole per-function state <see cref="EnterLambdaScope"/> saves and
+        /// <see cref="ExitLambdaScope"/> puts back.</para>
         /// </summary>
         private string GenerateLambdaExpression(IRFunction lambdaFunc)
         {
-            var saved = new List<(string Key, bool Had, string Value)>();
-            foreach (var param in lambdaFunc.Parameters)
-            {
-                if (string.IsNullOrEmpty(param?.Name)) continue;
-                var had = _variableNameMap.TryGetValue(param.Name, out var outer);
-                saved.Add((param.Name, had, outer));
-                _variableNameMap[param.Name] = SanitizeName(param.Name);
-            }
-
+            var outer = EnterLambdaScope(lambdaFunc);
             try
             {
                 return GenerateLambdaExpressionCore(lambdaFunc);
             }
             finally
             {
-                for (var i = saved.Count - 1; i >= 0; i--)
-                {
-                    if (saved[i].Had) _variableNameMap[saved[i].Key] = saved[i].Value;
-                    else _variableNameMap.Remove(saved[i].Key);
-                }
+                ExitLambdaScope(outer);
             }
         }
 
@@ -1916,85 +1910,15 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             // Generate body
             if (lambdaFunc.EntryBlock != null && lambdaFunc.EntryBlock.Instructions.Count > 0)
             {
-                // Check if it's a simple expression lambda: single block ending in a
-                // return whose value inlines all preceding pure value computations
-                var instructions = lambdaFunc.EntryBlock.Instructions;
-                bool isExpressionLambda = lambdaFunc.Blocks.Count == 1 &&
-                    instructions.Count > 0 &&
-                    instructions[instructions.Count - 1] is IRReturn lastRet &&
-                    lastRet.Value != null &&
-                    instructions.Take(instructions.Count - 1)
-                        .All(i => i is IRValue && !(i is IRCall) && !(i is IRStore) && !(i is IRAlloca));
-
-                if (isExpressionLambda)
+                if (IsExpressionLambda(lambdaFunc, out var result))
                 {
                     // Single expression lambda: x => x * 2
-                    sb.Append(EmitExpression(((IRReturn)instructions[instructions.Count - 1]).Value));
+                    sb.Append(EmitExpression(result));
                 }
                 else
                 {
                     // Statement lambda with block: x => { statements; }
-                    sb.Append("{\n");
-                    var oldIndent = _indentLevel;
-                    _indentLevel++;
-
-                    for (int i = 0; i < instructions.Count; i++)
-                    {
-                        var instr = instructions[i];
-
-                        // A CALL renamed after the variable it assigns — `Total = Add(Total, x)`
-                        // — is a store, not a statement call. Found by review: the branch below
-                        // excludes IRCall, so it fell to GenerateInlineStatement and only the
-                        // call was emitted; the accumulator never changed.
-                        if (instr is IRCall namedCall && IsNamedDestination(namedCall))
-                        {
-                            sb.Append($"{new string(' ', _indentLevel * 4)}{GetValueName(namedCall)} = {EmitExpression(namedCall)};\n");
-                            continue;
-                        }
-
-                        // Skip pure value computations (temps) - they get inlined
-                        // into the expressions that consume them.
-                        //
-                        // ⛔ Unless the result is NAMED AFTER A VARIABLE — IRBuilder lowers
-                        // `total = total + x` as an IRBinaryOp renamed to `total`, with no
-                        // IRAssignment. Skipping that "temp" emitted an EMPTY lambda body, and
-                        // a Sub lambda accumulating into a captured local (or a field) silently
-                        // did nothing. Measured: the same program summed to 6 on C++ and JS
-                        // and printed 0 here.
-                        if (instr is IRValue namedValue && !(instr is IRCall) && !(instr is IRStore) &&
-                            !(instr is IRAlloca) && !(instr is IRAssignment))
-                        {
-                            if (IsNamedDestination(namedValue))
-                            {
-                                sb.Append($"{new string(' ', _indentLevel * 4)}{GetValueName(namedValue)} = {EmitExpression(namedValue)};\n");
-                            }
-                            continue;
-                        }
-
-                        if (instr is IRReturn retStmt)
-                        {
-                            if (retStmt.Value != null)
-                            {
-                                sb.Append($"{new string(' ', _indentLevel * 4)}return {EmitExpression(retStmt.Value)};\n");
-                            }
-                            else if (i == instructions.Count - 1)
-                            {
-                                // Trailing "return;" is implicit in a statement lambda
-                            }
-                            else
-                            {
-                                sb.Append($"{new string(' ', _indentLevel * 4)}return;\n");
-                            }
-                        }
-                        else
-                        {
-                            // Handle other statements
-                            sb.Append($"{new string(' ', _indentLevel * 4)}{GenerateInlineStatement(instr)};\n");
-                        }
-                    }
-
-                    _indentLevel = oldIndent;
-                    sb.Append($"{new string(' ', _indentLevel * 4)}}}");
+                    sb.Append(GenerateLambdaBlockBody(lambdaFunc));
                 }
             }
             else
@@ -2006,19 +1930,268 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             return sb.ToString();
         }
 
-        private string GenerateInlineStatement(IRInstruction instr)
+        /// <summary>
+        /// Whether <paramref name="lambdaFunc"/> is ONE expression — <c>=&gt; expr</c> — and if so,
+        /// that expression. True only when the block form would hold nothing but
+        /// <c>return expr;</c>: one block, ending in a valued return, every instruction before it
+        /// a value the statement emitter would INLINE into that return rather than write
+        /// (<see cref="ShouldEmitInstruction"/>, the function emitter's own rule), no local to
+        /// declare and no temp materialised (ADR-0001: a value read twice is a declared local).
+        ///
+        /// <para>⛔ #136: the rule used to stop at "every instruction before the return is an
+        /// IRValue other than a call, a store or an alloca" — and a write to a variable IS such
+        /// a value (IRBuilder lowers <c>n = n + 100</c> as an IRBinaryOp renamed <c>n</c>), as is
+        /// an <see cref="IRAssignment"/> or a void method call. A Function lambda that wrote
+        /// before returning was emitted as <c>() =&gt; 0</c>, its writes gone. The kinds the old rule
+        /// refused stay refused, so a lambda that was a block lambda stays one.</para>
+        /// </summary>
+        private bool IsExpressionLambda(IRFunction lambdaFunc, out IRValue result)
         {
-            // Generate statement inline for lambda bodies
-            switch (instr)
+            result = null;
+            var instructions = lambdaFunc.EntryBlock.Instructions;
+            if (lambdaFunc.Blocks.Count != 1 || instructions.Count == 0) return false;
+            if (instructions[instructions.Count - 1] is not IRReturn { Value: not null } lastRet) return false;
+            if (lambdaFunc.LocalVariables.Count > 0 || _materialised.Count > 0) return false;
+
+            for (var i = 0; i < instructions.Count - 1; i++)
             {
-                case IRStore store:
-                    return $"{EmitExpression(store.Address)} = {EmitExpression(store.Value)}";
-                case IRCall call:
-                    // EmitExpression maps standard library calls (e.g. Print -> Console.Write)
-                    return EmitExpression(call);
-                default:
-                    return EmitExpression(instr as IRValue);
+                var instruction = instructions[i];
+                if (instruction is not IRValue || instruction is IRCall || instruction is IRStore || instruction is IRAlloca)
+                    return false;
+                if (ShouldEmitInstruction(instruction)) return false;
             }
+
+            result = lastRet.Value;
+            return true;
+        }
+
+        /// <summary>
+        /// A block lambda's body, <c>{ … }</c>, written by the function-body emitter
+        /// (<see cref="DeclareLocals"/>, then <see cref="GenerateStructuredBlock"/> from the
+        /// lambda's entry block) into the shared output and cut back out of it, so it can be
+        /// returned as the expression text it is.
+        ///
+        /// <para>Spelled as the old lambda emitter spelled it — <c>{</c>, the statements one level
+        /// deeper than the line the lambda is written on, <c>}</c> at that line's level, every line
+        /// ended by <c>\n</c> — so the shapes it already got right read as before. No
+        /// <c>#line</c> is written inside a lambda body (<see cref="_lambdaBodyDepth"/>), as before.</para>
+        ///
+        /// <para>⚠ <c>sizedArrays: true</c>: a lambda's <c>Dim a(3) As Integer</c> is allocated at
+        /// its declaration, as a module function's is; nothing else allocates it.</para>
+        /// </summary>
+        private string GenerateLambdaBlockBody(IRFunction lambdaFunc)
+        {
+            var start = _output.Length;
+            var lineIndent = _indentLevel;
+            _indentLevel = lineIndent + 1;
+            _lambdaBodyDepth++;
+            string body;
+            try
+            {
+                DeclareLocals(lambdaFunc, sizedArrays: true, blankLineAfter: false);
+                GenerateStructuredBlock(lambdaFunc.EntryBlock);
+                body = _output.ToString(start, _output.Length - start);
+            }
+            finally
+            {
+                _output.Length = start;
+                _lambdaBodyDepth--;
+                _indentLevel = lineIndent;
+            }
+
+            if (Environment.NewLine != "\n")
+                body = body.Replace(Environment.NewLine, "\n");
+
+            return "{\n" + body + new string(' ', lineIndent * _options.IndentSize) + "}";
+        }
+
+        /// <summary>How many lambda bodies are being written right now. No <c>#line</c> inside one.</summary>
+        private int _lambdaBodyDepth;
+
+        /// <summary>
+        /// The enclosing function's emission state, as <see cref="EnterLambdaScope"/> found it.
+        /// </summary>
+        private sealed class OuterEmitState
+        {
+            public IRFunction Function;
+            public KeyValuePair<IRValue, string>[] ValueNames;
+            public KeyValuePair<string, string>[] VariableNameMap;
+            public string[] DeclaredIdentifiers;
+            public KeyValuePair<string, IRValue>[] TempDefsByName;
+            public KeyValuePair<IRValue, int>[] UseCounts;
+            public IRValue[] Materialised;
+            public IRValue[] EmittingDefinition;
+            public HashSet<BasicBlock> ProcessedBlocks;
+            public BasicBlock[] PendingIfMerges;
+            public Stack<BasicBlock> LoopEndBlocks;
+            public HashSet<BasicBlock> ForEachEndBlocks;
+            public Stack<int> LoopSwitchDepths;
+            public HashSet<BasicBlock> LabelledLoopEnds;
+            public int SwitchDepth;
+            public KeyValuePair<string, string>[] ForEachRenames;
+            public string[] OpenForEachVariables;
+            public string[] IssuedForEachNames;
+            public IRFunction ForEachNamesOwner;
+            public PerIterationPlan PerIter;
+            public (BasicBlock Cond, BasicBlock Body)[] OpenPeels;
+            public BasicBlock[] ReentrantLoopBodies;
+            public int LastEmittedSourceLine;
+            public string LastEmittedSourceFile;
+            public int IndentLevel;
+        }
+
+        /// <summary>
+        /// ⭐ #136: makes <paramref name="lambdaFunc"/> the function being emitted, and returns the
+        /// enclosing function's state for <see cref="ExitLambdaScope"/> to put back — ALL of it,
+        /// so the text written after the lambda is exactly what it would have been without it.
+        ///
+        /// <para>What the body SEES of the enclosing function, and why:</para>
+        /// <list type="bullet">
+        /// <item>Its names — locals, parameters, globals (<see cref="_declaredIdentifiers"/>,
+        /// <see cref="_variableNameMap"/>, <see cref="_valueNames"/>) — plus the lambda's own
+        /// parameters and locals on top. A CAPTURED variable is the enclosing function's, and a
+        /// write to it is a value renamed after it; without the outer names that write is a
+        /// "temp". Without the lambda's own, so is a write to its parameter (#136, K4).</item>
+        /// <item>Its temp definitions, UNDER the lambda's own — the lambda's <c>t0</c> is its own.</item>
+        /// <item>Its open <c>For Each</c> renames and loop variables, and the fresh names already
+        /// issued: a lambda in a loop body reads that iteration's renamed variable, and a
+        /// <c>For Each</c> inside the lambda may not reuse a name the enclosing body still holds
+        /// (CS0136).</item>
+        /// </list>
+        /// <para>What starts FRESH: use counts, materialised temps, processed blocks, the
+        /// loop/switch/exit bookkeeping (a <c>break</c> in a lambda can never leave an enclosing
+        /// loop), the If-merge claims, ADR-0014's per-iteration plan and open peels, #256's
+        /// re-entrant loops. A lambda written inside an enclosing loop's body must not see that
+        /// loop's open state, and must not leave its own behind.</para>
+        /// </summary>
+        private OuterEmitState EnterLambdaScope(IRFunction lambdaFunc)
+        {
+            var outer = new OuterEmitState
+            {
+                Function = _currentFunction,
+                ValueNames = _valueNames.ToArray(),
+                VariableNameMap = _variableNameMap.ToArray(),
+                DeclaredIdentifiers = _declaredIdentifiers.ToArray(),
+                TempDefsByName = _tempDefsByName.ToArray(),
+                UseCounts = _useCounts.ToArray(),
+                Materialised = _materialised.ToArray(),
+                EmittingDefinition = _emittingDefinition.ToArray(),
+                ProcessedBlocks = _processedBlocks,
+                PendingIfMerges = _pendingIfMerges.ToArray(),
+                LoopEndBlocks = _loopEndBlocks,
+                ForEachEndBlocks = _forEachEndBlocks,
+                LoopSwitchDepths = _loopSwitchDepths,
+                LabelledLoopEnds = _labelledLoopEnds,
+                SwitchDepth = _switchDepth,
+                ForEachRenames = _forEachRenames.ToArray(),
+                OpenForEachVariables = _openForEachVariables.ToArray(),
+                IssuedForEachNames = _issuedForEachNames.ToArray(),
+                ForEachNamesOwner = _forEachNamesOwner,
+                PerIter = _perIter,
+                OpenPeels = _openPeels.ToArray(),
+                ReentrantLoopBodies = _reentrantLoopBodies.ToArray(),
+                LastEmittedSourceLine = _lastEmittedSourceLine,
+                LastEmittedSourceFile = _lastEmittedSourceFile,
+                IndentLevel = _indentLevel,
+            };
+
+            _currentFunction = lambdaFunc;
+
+            // The lambda's own names, over the enclosing function's (which stay: they are what
+            // the body captures).
+            foreach (var param in lambdaFunc.Parameters)
+            {
+                if (string.IsNullOrEmpty(param?.Name)) continue;
+                _declaredIdentifiers.Add(param.Name);
+                var sanitized = SanitizeName(param.Name);
+                _valueNames[param] = sanitized;
+                _variableNameMap[param.Name] = sanitized;
+            }
+            foreach (var local in lambdaFunc.LocalVariables)
+            {
+                if (string.IsNullOrEmpty(local?.Name)) continue;
+                _declaredIdentifiers.Add(local.Name);
+                var sanitized = SanitizeName(local.Name);
+                _valueNames[local] = sanitized;
+                _variableNameMap[local.Name] = sanitized;
+            }
+
+            // And the module's globals, as every function body has them: a lambda written OUTSIDE
+            // any function — a module global's initializer — has no enclosing function's names to
+            // inherit, and its write to a global was a "temp" (`Dim bump As Action = Sub() …
+            // counter = counter + 3 …` emitted without the write).
+            if (_currentModule?.GlobalVariables != null)
+            {
+                foreach (var global in _currentModule.GlobalVariables.Values)
+                    if (!string.IsNullOrEmpty(global?.Name)) _declaredIdentifiers.Add(global.Name);
+            }
+
+            _useCounts.Clear();
+            AnalyzeUseCounts(lambdaFunc);
+            _tempDefsByName.Clear();
+            BuildTempDefinitions(lambdaFunc);
+            foreach (var def in outer.TempDefsByName)
+                _tempDefsByName.TryAdd(def.Key, def.Value);
+            ComputeMaterialisedTemps(lambdaFunc);
+
+            _processedBlocks = new HashSet<BasicBlock>();
+            _pendingIfMerges.Clear();
+            _loopEndBlocks = new Stack<BasicBlock>();
+            ResetLoopExitState();
+            _forEachNamesOwner = lambdaFunc;
+            _perIter = PerIterationPlan.Empty;
+            _openPeels.Clear();
+            _reentrantLoopBodies.Clear();
+
+            return outer;
+        }
+
+        /// <summary>Puts back exactly the state <see cref="EnterLambdaScope"/> found.</summary>
+        private void ExitLambdaScope(OuterEmitState outer)
+        {
+            _currentFunction = outer.Function;
+
+            _valueNames.Clear();
+            foreach (var entry in outer.ValueNames) _valueNames[entry.Key] = entry.Value;
+            _variableNameMap.Clear();
+            foreach (var entry in outer.VariableNameMap) _variableNameMap[entry.Key] = entry.Value;
+            _declaredIdentifiers.Clear();
+            _declaredIdentifiers.UnionWith(outer.DeclaredIdentifiers);
+            _tempDefsByName.Clear();
+            foreach (var entry in outer.TempDefsByName) _tempDefsByName[entry.Key] = entry.Value;
+            _useCounts.Clear();
+            foreach (var entry in outer.UseCounts) _useCounts[entry.Key] = entry.Value;
+            _materialised.Clear();
+            _materialised.UnionWith(outer.Materialised);
+            _emittingDefinition.Clear();
+            _emittingDefinition.UnionWith(outer.EmittingDefinition);
+
+            _processedBlocks = outer.ProcessedBlocks;
+            _pendingIfMerges.Clear();
+            _pendingIfMerges.UnionWith(outer.PendingIfMerges);
+            _loopEndBlocks = outer.LoopEndBlocks;
+            _forEachEndBlocks = outer.ForEachEndBlocks;
+            _loopSwitchDepths = outer.LoopSwitchDepths;
+            _labelledLoopEnds = outer.LabelledLoopEnds;
+            _switchDepth = outer.SwitchDepth;
+
+            _forEachRenames.Clear();
+            foreach (var entry in outer.ForEachRenames) _forEachRenames[entry.Key] = entry.Value;
+            _openForEachVariables.Clear();
+            _openForEachVariables.AddRange(outer.OpenForEachVariables);
+            _issuedForEachNames.Clear();
+            _issuedForEachNames.UnionWith(outer.IssuedForEachNames);
+            _forEachNamesOwner = outer.ForEachNamesOwner;
+
+            _perIter = outer.PerIter;
+            _openPeels.Clear();
+            for (var i = outer.OpenPeels.Length - 1; i >= 0; i--) _openPeels.Push(outer.OpenPeels[i]);
+            _reentrantLoopBodies.Clear();
+            for (var i = outer.ReentrantLoopBodies.Length - 1; i >= 0; i--) _reentrantLoopBodies.Push(outer.ReentrantLoopBodies[i]);
+
+            _lastEmittedSourceLine = outer.LastEmittedSourceLine;
+            _lastEmittedSourceFile = outer.LastEmittedSourceFile;
+            _indentLevel = outer.IndentLevel;
         }
 
         private void AnalyzeUseCounts(IRFunction function)
@@ -2234,6 +2407,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         private void EmitLineDirective(int sourceLine, string sourceFile)
         {
             if (sourceLine <= 0 || string.IsNullOrEmpty(sourceFile)) return;
+            if (_lambdaBodyDepth > 0) return;   // never inside a lambda body (GenerateLambdaBlockBody)
             // Normalize the path to use consistent separators (backslash on Windows)
             sourceFile = sourceFile.Replace('/', Path.DirectorySeparatorChar);
             if (sourceLine == _lastEmittedSourceLine && string.Equals(sourceFile, _lastEmittedSourceFile, StringComparison.OrdinalIgnoreCase)) return;

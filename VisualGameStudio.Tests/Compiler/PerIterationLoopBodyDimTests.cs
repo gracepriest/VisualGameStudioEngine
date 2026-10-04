@@ -43,15 +43,17 @@ namespace VisualGameStudio.Tests.Compiler;
 //         its per-iteration environments (ADR-0014 D5 / ADR-0010), so they run on C++ and print what
 //         the other backends print: L7, E03, E04, E07f, E12, E17, E18 and cl print VB's answer, and
 //         L8 / L8b print D2's recorded divergence (11|21|31, as JavaScript and MSIL do).
-//    C#   L8(edge), cl(sc3)                                                     -> #136
-//         (the C# backend's own pre-existing multi-statement-lambda-body defect; the SAME task
-//         MultiLineFunctionLambdaTests.cs already pins for F1/F6/F7.)
+//    C#   (none since #136: L8(edge), cl(sc3) and E08 were pinned here as the C# backend's own
+//         pre-existing multi-statement-lambda-body defect; a lambda body is written by the
+//         function-body emitter now, cl and E08 print VB's answer and L8 prints D2's recorded
+//         divergence, 11|21|31, like the other three backends.)
 //    C#   E07w, P226b                                                          -> #227
 //    E15, E15n                                                                  -> #228
 //         (a sized array `Dim a(2)` in a loop body is not an IR instruction — every backend
 //         allocates it once, at function top, with or without a lambda; ADR-0014 changes nothing
 //         there. Recorded in the ADR's implementation notes as a known, separately-tracked gap.)
-//    E16, E20                                                                   -> #229 (E16 on all four backends since #140)
+//    E16, E20                                                                   -> #229 (E16 on all four backends since #140; E20 on C# prints
+//                                                                                  JavaScript's 50|2|2 since #136: the h() line is right, the loop's y is not)
 //         (the one-declaration rule: a name with two `Dim`s in one function — sibling loops for
 //         E16, a lambda's OWN local of the same name for E20 — stays function-level rather than
 //         per-iteration, by construction, so it keeps its pre-#172 behaviour instead of taking
@@ -60,10 +62,6 @@ namespace VisualGameStudio.Tests.Compiler;
 //         (pre-existing: the MSIL backend emits `newarr [mscorlib]System.Func`1<int32>` for an
 //         array of delegate type, and ilasm rejects the nested-generic syntax. Unrelated to
 //         #172 — neither K1 nor K2's array is captured differently by this fix.)
-//    C# E08                                                                     -> #136
-//         (CS1643 "not all code paths return a value" — a multi-line lambda whose body is a loop
-//         plus a `Return`; the SAME emptied-lambda-body defect MultiLineFunctionLambdaTests.cs's
-//         F6 already pins under #136, independently re-derived here from the CS1643 text alone.)
 //    MSIL E20                                                                   pre-existing, N9
 //         (ClosureLoweringRefusalTests' own D9 backstop: a lambda that declares its own local of
 //         a name an ENCLOSING scope also captures is refused by the front end today — #155/
@@ -465,10 +463,10 @@ internal static class PerIterationLoopBodyDimProbes
     internal const string E07xExpected = "caught\ncaught\n1\n2\n3\n4";
 
     /// <summary>A lambda inside a lambda's OWN loop — the lambda's `Dim` belongs to the LAMBDA's
-    /// loop, never the creator's (D3's last bullet). On C# alone, CS1643: the SAME pre-existing
-    /// multi-statement-lambda-body defect #136 already covers (a `Function(n)` body with a loop
-    /// and a trailing `Return` loses its `Return`, so Roslyn refuses "not all code paths return a
-    /// value").</summary>
+    /// loop, never the creator's (D3's last bullet). On C# alone it was CS1643 until #136: a
+    /// `Function(n)` body with a loop and a trailing `Return` lost every block after its entry
+    /// block, so Roslyn refused "not all code paths return a value". It prints VB's answer on every
+    /// backend now.</summary>
     internal const string E08 = """
         Sub Main()
             Dim outer As Func(Of Integer, Integer) = Function(n As Integer)
@@ -771,8 +769,9 @@ internal static class PerIterationLoopBodyDimProbes
         End Sub
         """;
     internal const string E20Expected = "50\n1\n2";
-    internal const string E20CSharpActual = "2\n2\n2";
-    internal const string E20JsActual = "50\n2\n2";
+    /// <summary>What C# and JavaScript print (known-wrong, #229). C# printed 2|2|2 until #136: `h()`'s 50 is right now, the loop's
+    /// per-iteration `y` (1, 2) is still one shared variable.</summary>
+    internal const string E20CSharpJsActual = "50\n2\n2";
     internal const string E20CppActual = "50\n1\n2";
 
     /// <summary>Required group 7 (D2's own recorded divergence, all backends): `f`, the loop's
@@ -781,8 +780,9 @@ internal static class PerIterationLoopBodyDimProbes
     /// exact-at-start) means the loop's OWN condition call sees last iteration's carrier before
     /// the write from `f`'s SECOND incarnation lands. VB (vbc) prints 11 22 33; JavaScript and
     /// MSIL agree on 11 21 31 (the deliberate, all-backend, D2 divergence: this is NEVER asserted
-    /// as VB-correct — it is documented as the divergence D2 itself records). C# does not even
-    /// reach the divergence: it is wrong from a different, pre-existing cause (#136).</summary>
+    /// as VB-correct — it is documented as the divergence D2 itself records). C# too, since #136:
+    /// it printed 10 20 30 before, the lambda `f`'s write to `x` being dropped from its body, and
+    /// reaches the divergence now.</summary>
     internal const string L8 = """
         Sub Main()
             Dim gets As New List(Of Func(Of Integer))()
@@ -805,8 +805,8 @@ internal static class PerIterationLoopBodyDimProbes
         End Sub
         """;
     internal const string L8VbExpected = "11\n22\n33";
-    internal const string L8JsMsilCppActual = "11\n21\n31";
-    internal const string L8CSharpActual = "10\n20\n30";
+    /// <summary>D2's recorded output, printed by C#, C++, JavaScript and MSIL alike (vbc prints <see cref="L8VbExpected"/>).</summary>
+    internal const string L8D2Actual = "11\n21\n31";
 
     // ---- t172/licm + t172/licm2: K1-K5 (A2's own optimizer probes) -------------------------
 
@@ -910,9 +910,9 @@ internal static class PerIterationLoopBodyDimProbes
 
     /// <summary>NOT a loop-body Dim at all — a plain function-top local captured and WRITTEN by
     /// a lambda with no loop anywhere in the program. Included as the non-loop control for #136's
-    /// C# pin on L8/E17/E18 above: the SAME write-capture defect reproduces on C# with no loop, no
-    /// per-iteration mechanism, and no ADR-0014 machinery involved at all. C++ printed the same wrong
-    /// answer until #140, then was refused by name (#170), and prints VB's 5 1 since #140.</summary>
+    /// C# pin on L8/E17/E18 above: the SAME write-capture defect reproduced on C# with no loop, no
+    /// per-iteration mechanism, and no ADR-0014 machinery involved at all (5 0 for 5 1). C++ printed the same wrong
+    /// answer until #140, then was refused by name (#170), and prints VB's 5 1 since #140; C# prints it since #136.</summary>
     internal const string Cl = """
         Sub Main()
             Dim x As Integer = 0
@@ -925,7 +925,6 @@ internal static class PerIterationLoopBodyDimProbes
         End Sub
         """;
     internal const string ClExpected = "5\n1";
-    internal const string ClCSharpActual = "5\n0";
 
     /// <summary>Required group 7's own second half: "L8b agrees across C#, JS and MSIL." Same
     /// shape as L8 but `f`'s SECOND incarnation also prints a blank line (`Console.Write("")`),
@@ -1186,25 +1185,27 @@ public class PerIterationLoopBodyDimExecutionTests
     public void E18_DelegateCalledByNameFromASecondLambda()
         => AssertAllFourAgree_CppLowered(PerIterationLoopBodyDimProbes.E18, PerIterationLoopBodyDimProbes.E18Expected);
 
-    /// <summary>Task #136: CS1643 — the SAME emptied-multi-statement-lambda-body defect
-    /// MultiLineFunctionLambdaTests.F6 already pins, reached here through a lambda-in-a-lambda's
-    /// own loop instead of an If/ElseIf chain. Every other backend runs and prints 100200.</summary>
+    /// <summary>
+    /// ⭐ MOVED PIN (#136). CS1643 on C# — the emptied-multi-statement-lambda-body defect <c>MultiLineFunctionLambdaExecutionTests</c> F6
+    /// used to pin, reached here through a lambda-in-a-lambda's own loop instead of an If/ElseIf chain (every block after the lambda's
+    /// entry block was never written). The lambda body is written by the function-body emitter now, and C# prints 100200 like the other
+    /// three backends. Hang-safe runner: the body holds two loops.
+    /// </summary>
     [Test]
-    public void E08_LambdaInLambdaLoop_CSharpKnownWrong_PinnedForTask136()
+    public void E08_LambdaInLambdaLoop_RunsOnEveryBackend()
     {
         Assert.Multiple(() =>
         {
+            Assert.That(FourBackends.Norm(CSharpProcessRunner.RunExpectingSuccess(ReturnCoercionTests.EmitCSharpForTest(PerIterationLoopBodyDimProbes.E08))),
+                Is.EqualTo(PerIterationLoopBodyDimProbes.E08Expected), "C#");
+            Assert.That(FourBackends.Norm(CSharpProcessRunner.RunExpectingSuccess(ReturnCoercionTests.EmitCSharpAggressiveForTest(PerIterationLoopBodyDimProbes.E08))),
+                Is.EqualTo(PerIterationLoopBodyDimProbes.E08Expected), "C#, aggressive");
             Assert.That(FourBackends.Norm(BclE2E.CompileRun(BclE2E.CompileToCppOptimized(PerIterationLoopBodyDimProbes.E08))),
                 Is.EqualTo(PerIterationLoopBodyDimProbes.E08Expected), "C++");
             Assert.That(FourBackends.Norm(JavaScriptExecutionTests.RunJs(PerIterationLoopBodyDimProbes.E08)),
                 Is.EqualTo(PerIterationLoopBodyDimProbes.E08Expected), "JavaScript");
             Assert.That(FourBackends.Norm(MsilHarness.RunExpectingSuccess(PerIterationLoopBodyDimProbes.E08)),
                 Is.EqualTo(PerIterationLoopBodyDimProbes.E08Expected), "MSIL");
-
-            var errors = ReturnCoercionTests.CompileEmittedCSharpForTest(PerIterationLoopBodyDimProbes.E08);
-            Assert.That(errors, Has.Length.EqualTo(1), string.Join(" | ", errors));
-            Assert.That(errors[0], Does.Contain("CS1643"), "task #136 — re-measure before touching");
-            Assert.That(errors[0], Does.Contain("Not all code paths return a value"));
         });
     }
 
@@ -1286,19 +1287,21 @@ public class PerIterationLoopBodyDimExecutionTests
 
     /// <summary>Task #229: C# and JavaScript print the loop's `y` as though it were never
     /// per-iteration (excluded because the unrelated lambda `h` declares its OWN `y`), where VB
-    /// prints 50|1|2. C++ runs it correctly: ClosureLowering refuses N9 (a lambda declares a name its creator
+    /// prints 50|1|2. ⭐ MOVED PIN (#136): C# printed 2|2|2 — `h()`'s own local `y = 50` was never declared, so
+    /// `h()` read the loop's `y` (2) — and now prints 50|2|2, JavaScript's pinned answer. The `h()` line is right
+    /// (vbc: 50); the loop's `y`, 2 for 1, is #229 and stays known-wrong. C++ runs it correctly: ClosureLowering refuses N9 (a lambda declares a name its creator
     /// also captures), so the root takes the by-copy FALLBACK, whose capture gives per-iteration behaviour
     /// for free — the fallback W2 admits it onto (#140 ruling D3; the regression fence runs it too, and
     /// asserts the path). MSIL refuses the program outright — a pre-existing #155/ADR-0010 front-end
     /// backstop (N9), unrelated to #172.</summary>
     [Test]
-    public void E20_LambdaOwnLocalSameNameAsCapturedBodyDim_KnownWrongOnCSharpJs()
+    public void E20_LambdaOwnLocalSameNameAsCapturedBodyDim_KnownWrongOnCSharpJs_PinnedForTask229()
         => Assert.Multiple(() =>
         {
-            Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharp(PerIterationLoopBodyDimProbes.E20)),
-                Is.EqualTo(PerIterationLoopBodyDimProbes.E20CSharpActual), "C# (PINNED known-wrong, task #229)");
+            Assert.That(FourBackends.Norm(CSharpProcessRunner.RunExpectingSuccess(ReturnCoercionTests.EmitCSharpForTest(PerIterationLoopBodyDimProbes.E20))),
+                Is.EqualTo(PerIterationLoopBodyDimProbes.E20CSharpJsActual), "C# (PINNED known-wrong, task #229)");
             Assert.That(FourBackends.Norm(JavaScriptExecutionTests.RunJs(PerIterationLoopBodyDimProbes.E20)),
-                Is.EqualTo(PerIterationLoopBodyDimProbes.E20JsActual), "JavaScript (PINNED known-wrong, task #229)");
+                Is.EqualTo(PerIterationLoopBodyDimProbes.E20CSharpJsActual), "JavaScript (PINNED known-wrong, task #229)");
             Assert.That(FourBackends.Norm(BclE2E.CompileRun(BclE2E.CompileToCppOptimized(PerIterationLoopBodyDimProbes.E20))),
                 Is.EqualTo(PerIterationLoopBodyDimProbes.E20CppActual), "C++ (correct here, by the by-copy fallback)");
             Assert.That(CppClosures.Compile(PerIterationLoopBodyDimProbes.E20).PathOf("Main"), Is.EqualTo(CppClosurePath.ByCopy),
@@ -1318,46 +1321,48 @@ public class PerIterationLoopBodyDimExecutionTests
 
     // ============================================================================================
     // Group 7: L8's own D2 divergence (documented, never asserted as VB-correct on any backend)
-    // and L8b (agrees across C#, JavaScript and MSIL). `cl` is the non-loop control for #136/#140.
+    // and L8b (same output). `cl` is the non-loop control for #136/#140.
     // ============================================================================================
 
     /// <summary>
-    /// ⭐ MOVED PIN (C++ leg, #140). D2's own recorded, deliberate, all-backend divergence. VB prints 11 22 33
+    /// ⭐ MOVED PIN (C++ leg #140, C# leg #136). D2's own recorded, deliberate, all-backend divergence. VB prints 11 22 33
     /// (<see cref="PerIterationLoopBodyDimProbes.L8VbExpected"/>, documented here — NEVER asserted as a
-    /// backend's actual output). JavaScript, MSIL and, since #140, C++ agree with EACH OTHER on 11 21 31 (the
-    /// divergence D2 records: the loop's own condition call observes the carrier's value at ITS
-    /// continue-target snapshot, before the reassigned `f`'s own write lands) — so D2's revisit-if is ONE
-    /// cross-backend assertion now (ruling D4); C# alone is the outlier, for the SEPARATE, pre-existing reason
-    /// #136 already tracks (its own multi-statement lambda body defect). C++ USED TO silently print 10 20 30
-    /// (task #140), then to be refused by name (#170).
+    /// backend's actual output). ALL FOUR backends agree with EACH OTHER on 11 21 31 (the divergence D2 records:
+    /// the loop's own condition call observes the carrier's value at ITS continue-target snapshot, before the
+    /// reassigned `f`'s own write lands) — so D2's revisit-if is ONE cross-backend assertion (ruling D4). C# was the
+    /// outlier for a SEPARATE, pre-existing reason, #136 (its multi-statement lambda body defect: `f`'s write to
+    /// `x` was dropped from its body, and it printed 10 20 30); it reaches the divergence now. C++ USED TO silently
+    /// print 10 20 30 (task #140), then to be refused by name (#170).
     /// </summary>
     [Test]
-    public void L8_DoWhileConditionReassignsToALambdaThatWritesX_D2Divergence()
+    public void L8_DoWhileConditionReassignsToALambdaThatWritesX_D2DivergenceOnAllFourBackends()
         => Assert.Multiple(() =>
         {
             Assert.That(FourBackends.Norm(JavaScriptExecutionTests.RunJs(PerIterationLoopBodyDimProbes.L8)),
-                Is.EqualTo(PerIterationLoopBodyDimProbes.L8JsMsilCppActual),
+                Is.EqualTo(PerIterationLoopBodyDimProbes.L8D2Actual),
                 "JavaScript — D2's recorded divergence from VB's 11 22 33, not VB-correct");
             Assert.That(FourBackends.Norm(MsilHarness.RunExpectingSuccess(PerIterationLoopBodyDimProbes.L8)),
-                Is.EqualTo(PerIterationLoopBodyDimProbes.L8JsMsilCppActual),
+                Is.EqualTo(PerIterationLoopBodyDimProbes.L8D2Actual),
                 "MSIL — D2's recorded divergence from VB's 11 22 33, not VB-correct");
             Assert.That(CppClosures.Compile(PerIterationLoopBodyDimProbes.L8).PathOf("Main"), Is.EqualTo(CppClosurePath.Lowered), "C++ root 'Main'");
-            CppClosures.RunsInAllModes(PerIterationLoopBodyDimProbes.L8, PerIterationLoopBodyDimProbes.L8JsMsilCppActual,
+            CppClosures.RunsInAllModes(PerIterationLoopBodyDimProbes.L8, PerIterationLoopBodyDimProbes.L8D2Actual,
                 "C++ — D2's recorded divergence from VB's 11 22 33, not VB-correct");
-            Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharp(PerIterationLoopBodyDimProbes.L8)),
-                Is.EqualTo(PerIterationLoopBodyDimProbes.L8CSharpActual), "C# (PINNED known-wrong, task #136)");
+            Assert.That(FourBackends.Norm(CSharpProcessRunner.RunExpectingSuccess(ReturnCoercionTests.EmitCSharpForTest(PerIterationLoopBodyDimProbes.L8))),
+                Is.EqualTo(PerIterationLoopBodyDimProbes.L8D2Actual), "C# — D2's recorded divergence from VB's 11 22 33, not VB-correct (since #136)");
+            Assert.That(FourBackends.Norm(CSharpProcessRunner.RunExpectingSuccess(ReturnCoercionTests.EmitCSharpAggressiveForTest(PerIterationLoopBodyDimProbes.L8))),
+                Is.EqualTo(PerIterationLoopBodyDimProbes.L8D2Actual), "C#, aggressive — the same");
         });
 
     /// <summary>
-    /// ⭐ MOVED PIN (C++ leg, #140). Group 7's other half: L8b agrees across C#, JavaScript, MSIL AND, since
-    /// #140, C++ (11 21 31, D2's recorded output) — unlike L8, C#'s own #136 defect does not reach this exact
-    /// shape. C++ USED TO silently print 10 20 30, then to be refused by name (#170).
+    /// ⭐ MOVED PIN (C++ leg only, #140). Group 7's other half: L8b agrees across C#, JavaScript, MSIL AND, since
+    /// #140, C++ (11 21 31, D2's recorded output). C# printed it before #136 too: its lambda body defect did not reach
+    /// this exact shape. C++ USED TO silently print 10 20 30, then to be refused by name (#170).
     /// </summary>
     [Test]
     public void L8b_AgreesAcrossCSharpJavaScriptMsilAndCpp()
         => Assert.Multiple(() =>
         {
-            Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharp(PerIterationLoopBodyDimProbes.L8b)),
+            Assert.That(FourBackends.Norm(CSharpProcessRunner.RunExpectingSuccess(ReturnCoercionTests.EmitCSharpForTest(PerIterationLoopBodyDimProbes.L8b))),
                 Is.EqualTo(PerIterationLoopBodyDimProbes.L8bExpected), "C#");
             Assert.That(FourBackends.Norm(JavaScriptExecutionTests.RunJs(PerIterationLoopBodyDimProbes.L8b)),
                 Is.EqualTo(PerIterationLoopBodyDimProbes.L8bExpected), "JavaScript");
@@ -1368,16 +1373,17 @@ public class PerIterationLoopBodyDimExecutionTests
         });
 
     /// <summary>
-    /// ⭐ MOVED PIN (C++ leg only, #140). The non-loop control for #136 (C#): a plain function-top local
-    /// captured and written by a lambda, no loop anywhere in the program. C# STAYS pinned known-wrong (#136,
-    /// 5\n0 for VB's 5\n1). C++ printed that same wrong answer until #140, was refused by name (#170), and
-    /// prints VB's 5\n1 now.
+    /// ⭐ MOVED PIN (C# leg #136, C++ leg #140). The non-loop control for #136 (C#): a plain function-top local
+    /// captured and written by a lambda, no loop anywhere in the program. C# printed 5\n0 for VB's 5\n1 until #136 wrote the lambda's
+    /// body; C++ printed that same wrong answer until #140, was refused by name (#170), and prints VB's 5\n1 now.
     /// </summary>
     [Test]
-    public void Cl_NonLoopClosureWrite_CSharpKnownWrong_CppRunsVbsAnswer_PinnedForTask136()
+    public void Cl_NonLoopClosureWrite_CSharpAndCppRunVbsAnswer()
     {
-        Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharp(PerIterationLoopBodyDimProbes.Cl)),
-            Is.EqualTo(PerIterationLoopBodyDimProbes.ClCSharpActual), "C# (PINNED known-wrong, task #136)");
+        Assert.That(FourBackends.Norm(CSharpProcessRunner.RunExpectingSuccess(ReturnCoercionTests.EmitCSharpForTest(PerIterationLoopBodyDimProbes.Cl))),
+            Is.EqualTo(PerIterationLoopBodyDimProbes.ClExpected), "C#");
+        Assert.That(FourBackends.Norm(CSharpProcessRunner.RunExpectingSuccess(ReturnCoercionTests.EmitCSharpAggressiveForTest(PerIterationLoopBodyDimProbes.Cl))),
+            Is.EqualTo(PerIterationLoopBodyDimProbes.ClExpected), "C#, aggressive");
 
         Assert.That(CppClosures.Compile(PerIterationLoopBodyDimProbes.Cl).PathOf("Main"), Is.EqualTo(CppClosurePath.Lowered));
         CppClosures.RunsInAllModes(PerIterationLoopBodyDimProbes.Cl, PerIterationLoopBodyDimProbes.ClExpected, "C++");

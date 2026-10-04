@@ -687,14 +687,13 @@ public class MultiLineFunctionLambdaTests
 
 /// <summary>
 /// Execution: JavaScript (Node) and MSIL (ilasm), both the standard and aggressive pipelines;
-/// C# and C++ where they run correctly; and the known-wrong C#/C++ cells, PINNED to today's
-/// exact output/diagnostics so a fix (or a regression) turns the pin red.
+/// C# and C++ on the F-probes, each with VB's answer.
 ///
 /// <para>C++ is not exercised for E1-E11 here: per the implementer's byte compare and this
 /// file's own front-end coverage, the front-end fix is backend-agnostic and JS+MSIL already
-/// prove it; the C#/C++ backends' OWN pre-existing gaps (#136, #165) are pinned only on
-/// the F-probes the implementer measured them against. (C++'s capture-by-copy gap, #140, is closed:
-/// F1, F2 and F8 run on C++ with VB's answer.)</para>
+/// prove it. (C++'s capture-by-copy gap, #140, is closed: F1, F2 and F8 run on C++ with VB's
+/// answer. So does the C# lambda body, since #136: F1, F3, F6, F7 and F8 used to be pinned as
+/// known-wrong C# cells and now run on C# with VB's answer, hang-safe, standard and aggressive.)</para>
 /// </summary>
 [TestFixture]
 [Category("Integration")]
@@ -767,12 +766,41 @@ public class MultiLineFunctionLambdaExecutionTests
                 Is.EqualTo(MultiLineFunctionLambdaProbes.E5Expected), "aggressive");
         });
 
-    // ---- C# and C++: the cells that run correctly (no existing gap touches them) -----------
+    // ---- C# and C++: every F-probe, with VB's answer ---------------------------------------
 
+    /// <summary>
+    /// ⭐ MOVED PINS (#136, #165, #179). F1 (<c>n = n + 100</c> before the Return was dropped: 3,3,0 for 3,103,0), F3 (the lambda's
+    /// <c>Dim t</c> was never declared: CS0103), F6 (an If/ElseIf/Return body came out as <c>() =&gt; { ; }</c>: CS1643), F7
+    /// (<c>_total = _total + v</c> dropped: 5 for 16) and F8 (the nested <c>Dim inner</c> never declared and its call written
+    /// twice: four CS0103) were pinned here as known-wrong C# cells. The C# backend now writes a lambda body with the function-body
+    /// emitter, so all five print VB's answer, with F2, F4 and F5. ⛔ Through the hang-safe runner
+    /// (<see cref="CSharpProcessRunner"/>), never the in-process one: a lambda body can hold a loop, and a loop that never ends
+    /// freezes the whole test host when it runs in process.
+    /// </summary>
+    [TestCase(MultiLineFunctionLambdaProbes.F1, "F1", MultiLineFunctionLambdaProbes.F1Expected)]
+    [TestCase(MultiLineFunctionLambdaProbes.F2, "F2", MultiLineFunctionLambdaProbes.F2Expected)]
+    [TestCase(MultiLineFunctionLambdaProbes.F3, "F3", MultiLineFunctionLambdaProbes.F3Expected)]
     [TestCase(MultiLineFunctionLambdaProbes.F4, "F4", MultiLineFunctionLambdaProbes.F4Expected)]
     [TestCase(MultiLineFunctionLambdaProbes.F5, "F5", MultiLineFunctionLambdaProbes.F5Expected)]
+    [TestCase(MultiLineFunctionLambdaProbes.F6, "F6", MultiLineFunctionLambdaProbes.F6Expected)]
+    [TestCase(MultiLineFunctionLambdaProbes.F7, "F7", MultiLineFunctionLambdaProbes.F7Expected)]
+    [TestCase(MultiLineFunctionLambdaProbes.F8, "F8", MultiLineFunctionLambdaProbes.F8Expected)]
     public void CSharp_RunsCorrectly(string source, string label, string expected)
-        => Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharp(source)), Is.EqualTo(expected), label);
+        => Assert.That(FourBackends.Norm(CSharpProcessRunner.RunExpectingSuccess(ReturnCoercionTests.EmitCSharpForTest(source))),
+            Is.EqualTo(expected), label);
+
+    /// <summary>The same eight through the aggressive pipeline (what <c>--optimize</c> and a Release project build run).</summary>
+    [TestCase(MultiLineFunctionLambdaProbes.F1, "F1", MultiLineFunctionLambdaProbes.F1Expected)]
+    [TestCase(MultiLineFunctionLambdaProbes.F2, "F2", MultiLineFunctionLambdaProbes.F2Expected)]
+    [TestCase(MultiLineFunctionLambdaProbes.F3, "F3", MultiLineFunctionLambdaProbes.F3Expected)]
+    [TestCase(MultiLineFunctionLambdaProbes.F4, "F4", MultiLineFunctionLambdaProbes.F4Expected)]
+    [TestCase(MultiLineFunctionLambdaProbes.F5, "F5", MultiLineFunctionLambdaProbes.F5Expected)]
+    [TestCase(MultiLineFunctionLambdaProbes.F6, "F6", MultiLineFunctionLambdaProbes.F6Expected)]
+    [TestCase(MultiLineFunctionLambdaProbes.F7, "F7", MultiLineFunctionLambdaProbes.F7Expected)]
+    [TestCase(MultiLineFunctionLambdaProbes.F8, "F8", MultiLineFunctionLambdaProbes.F8Expected)]
+    public void CSharp_RunsCorrectly_Aggressive(string source, string label, string expected)
+        => Assert.That(FourBackends.Norm(CSharpProcessRunner.RunExpectingSuccess(ReturnCoercionTests.EmitCSharpAggressiveForTest(source))),
+            Is.EqualTo(expected), label + " (aggressive)");
 
     [TestCase(MultiLineFunctionLambdaProbes.F1, "F1", MultiLineFunctionLambdaProbes.F1Expected)]   // was refused by name (#170), #140
     [TestCase(MultiLineFunctionLambdaProbes.F2, "F2", MultiLineFunctionLambdaProbes.F2Expected)]   // was refused by name (#170), #140
@@ -784,67 +812,6 @@ public class MultiLineFunctionLambdaExecutionTests
     [TestCase(MultiLineFunctionLambdaProbes.F8, "F8", MultiLineFunctionLambdaProbes.F8Expected)]   // was refused by name (#170), #140
     public void Cpp_RunsCorrectly(string source, string label, string expected)
         => Assert.That(FourBackends.Norm(BclE2E.CompileRun(BclE2E.CompileToCppOptimized(source))), Is.EqualTo(expected), label);
-
-    // ---- Known-wrong cells, PINNED (never fixed by #164 — task #136/#165) -------------------
-
-    /// <summary>Task #136: the C# backend empties a multi-statement lambda body, dropping every
-    /// statement but the last visible one — here, <c>n = n + 100</c> is dropped and only
-    /// <c>Return 0</c> survives, so <c>bump()</c> never mutates <c>n</c>.</summary>
-    [Test]
-    public void F1_CSharp_KnownWrong_PinnedForTask136()
-        => Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharp(MultiLineFunctionLambdaProbes.F1)),
-            Is.EqualTo("3,3,0"),
-            "task #136 (C# empties a multi-statement lambda body) — re-measure before touching.");
-
-    /// <summary>Task #136, same emptied-body defect: F6's If/ElseIf/Return branches collapse to a
-    /// single empty statement (<c>() =&gt; { ; }</c>), so Roslyn refuses it outright (not every
-    /// path returns), rather than running wrong.</summary>
-    [Test]
-    public void F6_CSharp_KnownWrong_PinnedForTask136()
-    {
-        var errors = ReturnCoercionTests.CompileEmittedCSharpForTest(MultiLineFunctionLambdaProbes.F6);
-        Assert.That(errors, Has.Length.EqualTo(1), string.Join(" | ", errors));
-        Assert.That(errors[0], Does.Contain("CS1643"));
-        Assert.That(errors[0], Does.Contain("Not all code paths return a value"));
-    }
-
-    /// <summary>Task #136: <c>_total = _total + v</c> is dropped, leaving only <c>Return _total</c>
-    /// — <c>add(10)</c> never mutates <c>_total</c>, so <c>add(1)</c> (and the whole program)
-    /// answers 5 instead of 16.</summary>
-    [Test]
-    public void F7_CSharp_KnownWrong_PinnedForTask136()
-        => Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharp(MultiLineFunctionLambdaProbes.F7)),
-            Is.EqualTo("5"),
-            "task #136 — re-measure before touching.");
-
-    /// <summary>Task #165: a lambda-LOCAL <c>Dim</c> (<c>Dim t As Integer = x * 2</c>) is dropped
-    /// by the same emptying, but the later USE of <c>t</c> survives, so Roslyn sees an undeclared
-    /// name.</summary>
-    [Test]
-    public void F3_CSharp_KnownWrong_PinnedForTask165()
-    {
-        var errors = ReturnCoercionTests.CompileEmittedCSharpForTest(MultiLineFunctionLambdaProbes.F3);
-        Assert.That(errors, Has.Length.EqualTo(1), string.Join(" | ", errors));
-        Assert.That(errors[0], Does.Contain("CS0103"));
-        Assert.That(errors[0], Does.Contain("'t'"));
-    }
-
-    /// <summary>
-    /// Task #165, the same lambda-local-Dim defect — here the dropped declaration is the whole
-    /// <c>Dim inner = Function() … End Function</c>. FOUR diagnostics, not one: HANDOFF's #179
-    /// ("C# emits a call statement inside a multi-line lambda body TWICE") compounds with #165
-    /// here — <c>outer</c>'s body emits <c>inner(); inner(); return inner() + inner();</c>, four
-    /// uses of the now-undeclared name. Measured directly against Roslyn's own diagnostics (not
-    /// <c>dotnet build</c>, which double-reports); re-measure both counts before touching either.
-    /// </summary>
-    [Test]
-    public void F8_CSharp_KnownWrong_PinnedForTask165()
-    {
-        var errors = ReturnCoercionTests.CompileEmittedCSharpForTest(MultiLineFunctionLambdaProbes.F8);
-        Assert.That(errors, Has.Length.EqualTo(4), string.Join(" | ", errors));
-        Assert.That(errors, Has.All.Contains("CS0103"));
-        Assert.That(errors, Has.All.Contains("'inner'"));
-    }
 
     /// <summary>
     /// ⭐ MOVED PINS (#140): F1, F2 and F8 on C++. F1: <c>bump()</c>'s write to <c>n</c> never reached the

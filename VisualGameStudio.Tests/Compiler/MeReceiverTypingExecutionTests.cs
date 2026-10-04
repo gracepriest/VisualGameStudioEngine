@@ -931,12 +931,12 @@ public class MeReceiverTypingExecutionTests
         _ => throw new ArgumentOutOfRangeException(nameof(which)),
     };
 
-    // ---- X3b: a Sub lambda WRITES a bare property, a Function lambda READS it. C# is EXCLUDED
-    //      and pinned instead — a pre-existing, unrelated closure-capture defect (task #136,
-    //      widened by this measurement to cover a Sub lambda's bare property WRITE, not only a
-    //      For-Each variable capture): C# prints 1021, not 31021 — the `g()` Sub lambda's write to
-    //      `V` is not observed by the later `f()` reads, on BOTH pipelines, unchanged before and
-    //      after #176's fix. ----
+    // ---- X3b: a Sub lambda WRITES a bare property, a Function lambda READS it. C# was EXCLUDED
+    //      and pinned (task #136, widened by this measurement to cover a Sub lambda's bare property
+    //      WRITE, not only a For-Each variable capture): it printed 1021, not 31021 — the `g()` Sub
+    //      lambda's write to `V` was not observed by the later `f()` reads, on BOTH pipelines,
+    //      unchanged before and after #176's fix. ⭐ MOVED PIN: #136 writes the lambda body, and C#
+    //      prints 31021 on both pipelines like the other three backends. ----
 
     private const string X3b = """
         Class Animal
@@ -978,32 +978,24 @@ public class MeReceiverTypingExecutionTests
     private const string X3bExpected = "31021";
 
     [Test]
-    public void X3b_StandardPipeline_CppJsAndMsilAgree()
+    public void X3b_StandardPipeline_AllFourBackendsAgree()
         => Assert.Multiple(() =>
         {
+            Assert.That(FourBackends.Norm(CSharpProcessRunner.RunExpectingSuccess(ReturnCoercionTests.EmitCSharpForTest(X3b))), Is.EqualTo(X3bExpected), "C# (#136: a Sub lambda's write to the property is written)");
             Assert.That(FourBackends.Norm(BclE2E.CompileRun(BclE2E.CompileToCppOptimized(X3b))), Is.EqualTo(X3bExpected), "C++");
             Assert.That(FourBackends.Norm(JavaScriptExecutionTests.RunJs(X3b)), Is.EqualTo(X3bExpected), "JavaScript");
             Assert.That(FourBackends.Norm(MsilHarness.RunExpectingSuccess(X3b)), Is.EqualTo(X3bExpected), "MSIL");
         });
 
     [Test]
-    public void X3b_AggressivePipeline_CppJsAndMsilAgree()
+    public void X3b_AggressivePipeline_AllFourBackendsAgree()
         => Assert.Multiple(() =>
         {
+            Assert.That(FourBackends.Norm(CSharpProcessRunner.RunExpectingSuccess(ReturnCoercionTests.EmitCSharpAggressiveForTest(X3b))), Is.EqualTo(X3bExpected), "C#");
             Assert.That(FourBackends.Norm(BclE2E.CompileRun(BclE2E.CompileToCppAggressive(X3b))), Is.EqualTo(X3bExpected), "C++");
             Assert.That(FourBackends.Norm(FourBackends.RunAggressiveJs(X3b)), Is.EqualTo(X3bExpected), "JavaScript");
             Assert.That(FourBackends.Norm(MsilHarness.RunAggressiveExpectingSuccess(X3b)), Is.EqualTo(X3bExpected), "MSIL");
         });
-
-    /// <summary>⛔ PINNED KNOWN GAP, task #136 (widened): C# never observes the Sub lambda's write
-    /// to the bare property before the Function lambda reads it. Delete this pin and fold C# into
-    /// <see cref="X3b_StandardPipeline_CppJsAndMsilAgree"/> the day #136 is fixed for this shape.
-    /// </summary>
-    [Test]
-    public void X3b_KnownGap_CSharp_Task136()
-        => Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharp(X3b)), Is.EqualTo("1021"),
-            "task #136 — if C# now observes the Sub lambda's write, delete this pin and assert " +
-            "C# in X3b_StandardPipeline_CppJsAndMsilAgree instead.");
 
     // ---- X12b: the SAME nested-class shape as X12, but Outer.Probe also CONSTRUCTS `New
     //      Inner()`. C++ excluded — a pre-existing, unrelated nested-class emission-order defect:

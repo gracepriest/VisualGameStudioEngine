@@ -586,9 +586,9 @@ public class LambdaCaptureSetIrLevelTests
 
     /// <summary>N9 (pin h) — the lambda writes the creator's n on its FIRST line, then declares
     /// its OWN local ALSO spelled n. Own locals are deliberately NOT subtracted from the capture
-    /// set (a lambda body can use the creator's n before its own Dim n takes effect, and the C#
-    /// backend never declares a lambda's locals at all -- a lambda-local n IS the creator's n in
-    /// emitted C#).
+    /// set (a lambda body can use the creator's n before its own Dim n takes effect). ⚠ The C#
+    /// backend used to never declare a lambda's locals at all, so a lambda-local n WAS the creator's n
+    /// in emitted C# (#165); since #136 a lambda's own Dim is declared inside the lambda body.
     /// <para>⛔ MUTANT Mh_own_locals_subtracted (also remove the lambda's OWN LocalVariables from
     /// its capture set, the same way parameters are removed) kills this test: bump.LocalVariables
     /// contains its own "n", so the subtraction would remove the very capture the first-line
@@ -837,13 +837,21 @@ public class LambdaCaptureSetExecutionTests
         => Assert.That(FourBackends.Norm(FourBackends.RunAggressiveJs(LambdaCaptureSetProbes.K1)),
             Is.EqualTo(LambdaCaptureSetProbes.K1Expected));
 
-    /// <summary>K8's C# leg fails to build for an UNRELATED, pre-existing reason (CS0103: "The
+    /// <summary>K8's C# leg failed to build for an UNRELATED, pre-existing reason (CS0103: "The
     /// name 'inner' does not exist in the current context" -- a multi-line nested-lambda-body
-    /// scoping gap the implementer's brief already named, not touched by #122) -- excluded,
-    /// matching this suite's convention of never asserting against a leg that cannot build.</summary>
+    /// scoping gap, #165, not touched by #122) and was excluded here. It builds and runs since #136
+    /// wrote a lambda body with the function-body emitter: see
+    /// <see cref="K8_CSharp_Aggressive_NestedCaptureTwoLevelsOut"/>.</summary>
     [Test]
     public void K8_JavaScript_Aggressive_NestedCaptureTwoLevelsOut()
         => Assert.That(FourBackends.Norm(FourBackends.RunAggressiveJs(LambdaCaptureSetProbes.K8)),
+            Is.EqualTo(LambdaCaptureSetProbes.K8Expected));
+
+    /// <summary>K8 on C#, aggressive pipeline, hang-safe: the nested lambda's `n = n + 100` reaches the creator's `n`,
+    /// so `b` is read as 103 after `outer()`. Excluded until #136 (CS0103 on 'inner').</summary>
+    [Test]
+    public void K8_CSharp_Aggressive_NestedCaptureTwoLevelsOut()
+        => Assert.That(FourBackends.Norm(CSharpProcessRunner.RunExpectingSuccess(ReturnCoercionTests.EmitCSharpAggressiveForTest(LambdaCaptureSetProbes.K8))),
             Is.EqualTo(LambdaCaptureSetProbes.K8Expected));
 
     [Test]

@@ -34,7 +34,8 @@ namespace VisualGameStudio.Tests.Compiler;
 //    i1side  MSIL        `If(Not t, …)` takes the wrong arm, same MSIL `Not`.                     #257     twin i1sideB
 //    i4loop  JavaScript  "a loop header whose branch does not target the loop's own .end block" — refused.   #257
 //    i4forB  JavaScript  the same refusal, for an If() in a For bound.                                        #257
-//    i5lambda C#         CS1643 — a lambda whose body has control flow is emitted without its return paths.  #136
+//    — (i5lambda on C# was here, CS1643: a lambda whose body has control flow was emitted without its return paths, #136. It runs now,
+//       hang-safe like every lambda-holding C# row, and prints vbc's answer.)
 //    i6arg   C#          arguments evaluated OUT OF ORDER once one has control flow (`Pair(Note("first"), If(…), Note("third"))`
 //                        prints second, first, third). Pre-existing; no task.                                  twin i6argB (no Pair)
 //    i6arg   MSIL        `If(Not t, 9, 2)`, the same MSIL `Not`.                                          #257     twin i6argB
@@ -562,7 +563,7 @@ internal static class UntypedConstAndConditionalProbes
         10
         odd
         even
-        """, Bk.Cpp | Bk.JavaScript | Bk.Msil);
+        """, Bk.CSharp | Bk.Cpp | Bk.JavaScript | Bk.Msil, HangSafe: true);
 
     internal static readonly TempProbe i6arg = new("i6arg", """
         ' D2: If() as an argument, in concatenation and interpolation, and as a receiver
@@ -1016,7 +1017,7 @@ public class UntypedConstAndConditionalExecutionTests
     /// <summary>
     /// The tables ARE the proof, so their shape is pinned: a row cannot vanish (or a backend be dropped from a row) without this
     /// test saying so. It is also the fixture's one plain <c>[Test]</c> — <c>JsExecutionTierRosterTests</c> counts attributes, and a
-    /// fixture whose tests are all <c>[TestCaseSource]</c> counts as empty. #256 landed and i4loop gained its C# cell (56 cells now); when
+    /// fixture whose tests are all <c>[TestCaseSource]</c> counts as empty. #256 landed and i4loop gained its C# cell, #136 landed and i5lambda gained its (57 cells now); when
     /// #257 lands the excluded cells gain their backend and this changes on purpose.
     /// </summary>
     [Test]
@@ -1031,7 +1032,7 @@ public class UntypedConstAndConditionalExecutionTests
             Assert.That(Ids(ConditionalCells()), Is.EqualTo("i1side,i1sideB,i2types,i3nest,i4loop,i4forB,i5lambda,i6arg,i6argB,i7guard,i8const,i9select,i10sc,i11cls,i12pong,i13obj,i13objB,i14pos"));
             Assert.That(Ids(ProjectConstCells()), Is.EqualTo("MC1,MC3,MC3r"));
             Assert.That(ConstCells().Count(), Is.EqualTo(23), "D1 cells (probe x backend)");
-            Assert.That(ConditionalCells().Count(), Is.EqualTo(56), "D2 cells (probe x backend)");
+            Assert.That(ConditionalCells().Count(), Is.EqualTo(57), "D2 cells (probe x backend); i5lambda gained its C# cell with #136");
             Assert.That(ProjectConstCells().Count(), Is.EqualTo(12), "MC1 x4, MC3 x4, MC3r x4");
 
             // The side-effect contract is held on all four backends: every backend has a row that prints which arm ran.

@@ -51,29 +51,6 @@ public class NameBindingExecutionTests
             + string.Join(" | ", analyzer.Errors.Select(e => e.Message)));
     }
 
-    /// <summary>Compile <paramref name="source"/> to C# text (standard pipeline) with Roslyn, and
-    /// report whether it FAILS to compile — the "C# pin" idiom for a known codegen defect
-    /// (#165's dropped nested-lambda declaration) that this task does not fix.</summary>
-    private static (bool Failed, string Diagnostics) CSharpFailsToCompile(string basicLangSource)
-    {
-        var csharp = ReturnCoercionTests.EmitCSharpForTest(basicLangSource);
-        var references = AppDomain.CurrentDomain.GetAssemblies()
-            .Where(a => !a.IsDynamic && !string.IsNullOrEmpty(a.Location))
-            .Select(a => MetadataReference.CreateFromFile(a.Location))
-            .Cast<MetadataReference>()
-            .ToImmutableArray();
-        var compilation = CSharpCompilation.Create(
-            "NameBindingPinProbe_" + Guid.NewGuid().ToString("N"),
-            new[] { CSharpSyntaxTree.ParseText(csharp) },
-            references,
-            new CSharpCompilationOptions(OutputKind.ConsoleApplication));
-        using var ms = new MemoryStream();
-        var emitted = compilation.Emit(ms);
-        var diagnostics = string.Join("\n", emitted.Diagnostics
-            .Where(d => d.Severity == DiagnosticSeverity.Error).Select(d => d.ToString()));
-        return (!emitted.Success, diagnostics + "\n--- emitted ---\n" + csharp);
-    }
-
     /// <summary>
     /// Task #169's own "Release <c>.blproj</c> leg" — <c>BasicCompiler.CompileProjectFiles</c>
     /// with <c>OptimizeAggressive</c> set (what the CLI's own <c>-c Release</c> maps to), the
@@ -713,20 +690,18 @@ public class NameBindingExecutionTests
     }
 
     // ============================================================================================
-    // Pins -- each a KNOWN, PRE-EXISTING backend defect #169 does not fix, named to its own task.
+    // Moved pins (K4, K5, K9) and the pins that stay -- each was a KNOWN, PRE-EXISTING backend defect #169 did not fix, named to its own task.
     // ============================================================================================
 
     /// <summary>
-    /// K4 on C# prints 1 for 2 -- widened #136: the C# backend's statement-lambda emitter DROPS
-    /// the body's self-assignment to its own parameter entirely. Measured directly: the emitted
-    /// C# for <c>Dim h = Sub(X As Integer) : x = x + 1 : Console.WriteLine(x) : End Sub</c>
-    /// contains NO assignment to <c>X</c> at all -- only the <c>Console.WriteLine(X)</c> survives
-    /// -- so <c>h(1)</c> prints the untouched parameter, 1. C++/JavaScript/MSIL all print 2
-    /// correctly (matrix-p2.txt). Unrelated to #169 -- a C# backend defect on the WRITTEN
-    /// spelling matching the parameter EXACTLY, no case difference involved.
+    /// ⭐ MOVED PIN (#136). K4 on C# USED TO print 1 for 2: the C# backend's statement-lambda emitter dropped the body's
+    /// self-assignment to its own parameter (<c>x = x + 1</c> is a value renamed <c>X</c>, which the old loop skipped as a temp), so
+    /// <c>h(1)</c> printed the untouched parameter. The lambda body is now written by the function-body emitter and C# prints 2 like
+    /// C++, JavaScript and MSIL. No case difference is involved: the written spelling matches the parameter EXACTLY (vbc: 2, as
+    /// <c>Sub(X As Integer)</c> with <c>x = x + 1</c>).
     /// </summary>
     [Test]
-    public void K4_CSharp_DropsTheLambdasWriteToItsOwnParameter_PinsTodaysWrongOne_Against136()
+    public void K4_ALambdaWritesItsOwnParameter_EveryBackendPrints2()
     {
         const string k4 = """
             Sub Main()
@@ -739,8 +714,8 @@ public class NameBindingExecutionTests
             """;
         Assert.Multiple(() =>
         {
-            Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharp(k4)), Is.EqualTo("1"),
-                "known gap #136 (widened): C# drops the write, so h(1) prints the untouched parameter");
+            Assert.That(FourBackends.Norm(CSharpProcessRunner.RunExpectingSuccess(ReturnCoercionTests.EmitCSharpForTest(k4))), Is.EqualTo("2"), "C#");
+            Assert.That(FourBackends.Norm(CSharpProcessRunner.RunExpectingSuccess(ReturnCoercionTests.EmitCSharpAggressiveForTest(k4))), Is.EqualTo("2"), "C#, aggressive");
             Assert.That(FourBackends.Norm(BclE2E.CompileRun(BclE2E.CompileToCppOptimized(k4))), Is.EqualTo("2"), "C++");
             Assert.That(FourBackends.Norm(JavaScriptExecutionTests.RunJs(k4)), Is.EqualTo("2"), "JavaScript");
             Assert.That(FourBackends.Norm(Msil.MsilHarness.RunExpectingSuccess(k4)), Is.EqualTo("2"), "MSIL");
@@ -768,7 +743,7 @@ public class NameBindingExecutionTests
             """;
         Assert.Multiple(() =>
         {
-            Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharp(k9)), Is.EqualTo("7"), "C#");
+            Assert.That(FourBackends.Norm(CSharpProcessRunner.RunExpectingSuccess(ReturnCoercionTests.EmitCSharpForTest(k9))), Is.EqualTo("7"), "C#");
             Assert.That(FourBackends.Norm(JavaScriptExecutionTests.RunJs(k9)), Is.EqualTo("7"), "JavaScript");
             Assert.That(FourBackends.Norm(Msil.MsilHarness.RunExpectingSuccess(k9)), Is.EqualTo("7"), "MSIL");
             Assert.That(CppClosures.Compile(k9).PathOf("Main"), Is.EqualTo(CppClosurePath.Lowered), "C++ root 'Main'");
@@ -778,14 +753,13 @@ public class NameBindingExecutionTests
     }
 
     /// <summary>
-    /// K5 on C# fails to compile with CS0103 on 'inner' -- #165: a multi-line
-    /// <c>Function(...) As Integer ... End Function</c> lambda that declares its OWN nested
-    /// lambda local is emitted with the nested declaration DROPPED (a bare <c>;</c>), so every
-    /// later reference to <c>inner</c> is undefined. C++/JavaScript/MSIL all print 3 correctly
-    /// (K5.exp). Unrelated to #169 -- a pre-existing C# multi-line-lambda-body scoping gap.
+    /// ⭐ MOVED PIN (#165, #136). K5 on C# USED TO fail to compile with CS0103 on 'inner': a multi-line
+    /// <c>Function(...) As Integer ... End Function</c> lambda that declares its OWN nested lambda local was emitted with the nested
+    /// declaration DROPPED (a bare <c>;</c>), so every later reference to <c>inner</c> was undefined. The lambda body is now written by
+    /// the function-body emitter, which declares it, and C# prints 3 like C++, JavaScript and MSIL (and vbc).
     /// </summary>
     [Test]
-    public void K5_CSharp_DropsTheNestedLambdaDeclaration_PinsTodaysCS0103_Against165()
+    public void K5_ANestedLambdaDeclaration_EveryBackendPrints3()
     {
         const string k5 = """
             Sub Main()
@@ -796,12 +770,10 @@ public class NameBindingExecutionTests
                 Console.WriteLine(outer(1))
             End Sub
             """;
-        var (failed, diagnostics) = CSharpFailsToCompile(k5);
-        Assert.That(failed, Is.True, "expected C# to fail to compile (known gap #165):\n" + diagnostics);
-        Assert.That(diagnostics, Does.Contain("CS0103").And.Contain("'inner'"), diagnostics);
-
         Assert.Multiple(() =>
         {
+            Assert.That(FourBackends.Norm(CSharpProcessRunner.RunExpectingSuccess(ReturnCoercionTests.EmitCSharpForTest(k5))), Is.EqualTo("3"), "C#");
+            Assert.That(FourBackends.Norm(CSharpProcessRunner.RunExpectingSuccess(ReturnCoercionTests.EmitCSharpAggressiveForTest(k5))), Is.EqualTo("3"), "C#, aggressive");
             Assert.That(FourBackends.Norm(BclE2E.CompileRun(BclE2E.CompileToCppOptimized(k5))), Is.EqualTo("3"), "C++");
             Assert.That(FourBackends.Norm(JavaScriptExecutionTests.RunJs(k5)), Is.EqualTo("3"), "JavaScript");
             Assert.That(FourBackends.Norm(Msil.MsilHarness.RunExpectingSuccess(k5)), Is.EqualTo("3"), "MSIL");

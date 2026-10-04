@@ -193,10 +193,10 @@ public class ClosureLoweringRefusalTests
     /// OWN N9 check is coarser than #174's lexical one — it looks at whether a name is BOTH
     /// captured and re-declared ANYWHERE in the same creator FUNCTION, not only along the
     /// lambda's own ancestor chain — so it still refuses this shape exactly as it did before
-    /// #174. Re-measured directly against this build: MSIL still throws, C++/JS still RUN
-    /// (returning 8, VB's own answer), and C# still silently returns the WRONG answer (10) —
-    /// task #165, the same pre-existing gap N8/N9 pin in
-    /// <c>LambdaBoundaryDiagnosticsExecutionTests</c>.
+    /// #174. Re-measured directly against this build: MSIL still throws, and C++, JS and C#
+    /// RUN, returning 8, VB's own answer. (C# silently returned the WRONG answer, 10, until
+    /// #136 wrote a lambda's own <c>Dim</c> — task #165, the gap N8/N9 used to pin in
+    /// <c>LambdaBoundaryDiagnosticsExecutionTests</c> and now run as <c>..._CSharpRuns8</c>.)
     /// </summary>
     [Test]
     public void R5_BackstopStillReached_ByASiblingBlockHiding_E12()

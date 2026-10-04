@@ -3,7 +3,7 @@
 - **Date:** 2026-09-28
 - **Status:** Accepted; amended the same day by A1 and A2 (below), which replace D2's Contract
   and add to D1's Obligations.
-- **Amended by:** ADR-0019 (#140) — D2's revisit-if only; see "Amendment A-140" at the end.
+- **Amended by:** ADR-0019 (#140) — D2's revisit-if only; see "Amendment A-140" at the end. #136 (C# writes a lambda body with the function-body emitter) — D2's revisit-if again; see "Amendment A-136" at the end.
 - **Decided by:** the architect role, in a ruling (D1–D6) and an amendment (A1, A2) answering two
   findings the first implementation measured. Transcribed from both; nothing under the Decision
   headings is editorialised.
@@ -295,3 +295,24 @@ its revisit-if "probe L8 prints differently on any two backends") is unchanged.*
   MSIL's #226 rule (an `Exit` that leaves the region ends it), because the lowered per-iteration try's entry
   block is created after the loop's end block and the creation-order test alone let the walk follow the `Exit`
   into everything after the loop (a goto into the try).
+
+## Amendment A-136 (#136, 2026-10-02): L8 now prints the same on ALL FOUR backends
+
+*Appended, not edited in place: D2's text above (a recorded, deliberate, all-backend divergence from VB, with its
+revisit-if "probe L8 prints differently on any two backends") is unchanged, and so is Amendment A-140.*
+
+- C# printed 10 20 30 for L8, and that was not D2's divergence: it wrote `f`'s second incarnation as the EXPRESSION lambda
+  `() => n < 3`. Its `x = x + 1` before the `Return` is an IRBinaryOp renamed `x`, which the old lambda emitter took for a temp
+  and skipped, so `f` never wrote the captured `x`. #136 writes a lambda body with the function-body emitter
+  (`CSharpBackend.EnterLambdaScope` / `GenerateLambdaBlockBody` / `ExitLambdaScope`; no IR change, no `ClosureLowering` on C#,
+  ADR-0010 D1 stands), and C# prints 11|21|31 — **exactly D2's recorded output**, the one JavaScript, MSIL and, since #140,
+  C++ print. (VB prints 11 22 33; the divergence is D2's, unchanged.)
+- So D2's revisit-if is back to its original wording: A-140's narrowing ("C# remains the one backend that prints differently
+  on L8") no longer holds. The pin is ONE cross-backend assertion over all four backends:
+  `PerIterationLoopBodyDimExecutionTests.L8_DoWhileConditionReassignsToALambdaThatWritesX_D2DivergenceOnAllFourBackends`
+  pins C# (standard and aggressive pipelines), JavaScript, MSIL and C++ together, so a fix of D2's divergence flips all four at once.
+  L8b (which C# already printed as 11|21|31) is in the same fixture, as is `cl`, the non-loop control.
+- The sentence under "A name with one declaration only" that says C# "does not declare a lambda's locals, so those bind to the
+  creator's spelling" is no longer true: since #136 C# declares a lambda's own locals inside the lambda. The recording rule it
+  gives is unchanged — a `Dim` is still recorded in `BodyLocals` only when it is not a local of a lambda the function creates.
+  E20 is still #229 (C# now prints JavaScript's 50|2|2: `h()` is right, the loop's `y` is not).
