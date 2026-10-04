@@ -455,7 +455,7 @@ internal static class LoopConditionProbes
         i=3 body=103 seen=
         """,
         Bk.Cpp | Bk.JavaScript | Bk.Msil, false);
-    // a short-circuit loop inside a Function lambda: ⛔ C# is #136 (CS1643, the lambda loses its return paths) — no C# expectation
+    // a short-circuit loop inside a Function lambda: C# printed nothing right until #136 (CS1643: the lambda lost its return paths); it runs now
     internal static readonly LoopProbe l_fn = new("l_fn", """
         Dim seen As String = ""
 
@@ -478,8 +478,8 @@ internal static class LoopConditionProbes
         """
         k=3 seen=abababa
         """,
-        Bk.Cpp | Bk.Msil, true);
-    // a short-circuit loop inside a Sub lambda: ⛔ C# is #136 (the lambda's writes are lost) — no C# expectation
+        Bk.CSharp | Bk.Cpp | Bk.Msil, true);
+    // a short-circuit loop inside a Sub lambda: C# lost the lambda's writes until #136; it runs now
     internal static readonly LoopProbe l_sub = new("l_sub", """
         Dim seen As String = ""
 
@@ -504,7 +504,7 @@ internal static class LoopConditionProbes
         """
         total=6 seen=abababa
         """,
-        Bk.Cpp | Bk.Msil, true);
+        Bk.CSharp | Bk.Cpp | Bk.Msil, true);
     // two nested While loops, each with an AndAlso condition
     internal static readonly LoopProbe n_WW = new("n_WW", """
         Dim seen As String = ""

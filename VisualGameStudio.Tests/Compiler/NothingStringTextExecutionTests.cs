@@ -409,18 +409,16 @@ public class NothingStringTextExecutionTests
     // ============================================================================================
     // 4. Pre-existing failures, pinned individually so a fix anywhere else is a DELIBERATE,
     //    noticed change to this file — never fixed here (that is the owning task's job).
+    //    (E6 stood here until #136; it runs on every backend now.)
     // ============================================================================================
 
     /// <summary>
     /// E6 — a nested <c>Try</c> written inside a lambda that itself lives in a <c>Catch</c>
-    /// clause. C++/JS/MSIL all print the correct "outer/inner\nafter:outer" (this IS #189's own
-    /// region-reset fix, on C++). C# is a DIFFERENT, PRE-EXISTING bug, unrelated to #189: measured
-    /// directly from the emitted C#, the lambda's body renders as <c>() =&gt; { ; };</c> — the
-    /// ENTIRE nested Try/Catch and the trailing WriteLine are silently dropped, not merely
-    /// mis-ordered — so the program prints NOTHING. Filed under #136 (widened: #136's original
-    /// shape was a Sub lambda's write to a bare property; this is a Sub lambda's multi-statement
-    /// BODY losing statements entirely, a broader instance of the same C# lambda-body-lowering
-    /// gap).
+    /// clause. C++/JS/MSIL print the correct "outer/inner\nafter:outer" (this IS #189's own
+    /// region-reset fix, on C++). ⭐ MOVED PIN (#136): C# was a DIFFERENT, PRE-EXISTING bug, unrelated to #189 — the lambda's body
+    /// rendered as <c>() =&gt; { ; };</c>, the ENTIRE nested Try/Catch and the trailing WriteLine silently dropped, so the program
+    /// printed NOTHING (every block after the lambda's entry block was never written). The lambda body is now written by the
+    /// function-body emitter, so C# prints vbc's answer too.
     /// </summary>
     private const string E6 = """
         Sub Main()
@@ -443,7 +441,7 @@ public class NothingStringTextExecutionTests
     private const string E6CorrectAnswer = "outer/inner\nafter:outer";
 
     [Test]
-    public void E6_NestedTryInsideCatchLambda_CSharp_PinsPreExistingBug_Against136()
+    public void E6_NestedTryInsideCatchLambda_RunsOnEveryBackend()
     {
         Assert.Multiple(() =>
         {
@@ -453,11 +451,10 @@ public class NothingStringTextExecutionTests
                 Is.EqualTo(E6CorrectAnswer), "JavaScript (this IS #189's own fix)");
             Assert.That(FourBackends.Norm(Msil.MsilHarness.RunExpectingSuccess(E6)),
                 Is.EqualTo(E6CorrectAnswer), "MSIL (unaffected by #189)");
-            Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharp(E6)), Is.EqualTo(""),
-                "C# — #136, widened: the WHOLE nested Try/Catch and the trailing WriteLine are " +
-                "dropped from the lambda body, which renders as `() => { ; };`. A different " +
-                "answer here (including the correct one) means #136 moved — update this pin, " +
-                "do not just delete it.");
+            Assert.That(FourBackends.Norm(CSharpProcessRunner.RunExpectingSuccess(ReturnCoercionTests.EmitCSharpForTest(E6))),
+                Is.EqualTo(E6CorrectAnswer), "C# (#136: the lambda's nested Try/Catch and trailing WriteLine are written)");
+            Assert.That(FourBackends.Norm(CSharpProcessRunner.RunExpectingSuccess(ReturnCoercionTests.EmitCSharpAggressiveForTest(E6))),
+                Is.EqualTo(E6CorrectAnswer), "C#, aggressive");
         });
     }
 

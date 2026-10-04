@@ -880,22 +880,22 @@ public class CppMeAsValueTests
     }
 
     /// <summary>
-    /// PINNED (#237): both E09a and E09b are a PRE-EXISTING, UNRELATED C# backend gap —
-    /// measured: the emitted lambda body renders EMPTY (<c>() => { }</c>), dropping
-    /// <c>k.Take(Me)</c> entirely, so <c>k.Last</c> is never set and
-    /// <c>Console.WriteLine(k.Last.N)</c> throws <see cref="NullReferenceException"/>. Nothing
-    /// about #200 touches C# lambda lowering; a DIFFERENT failure here means #237 moved.
+    /// ⭐ MOVED PIN (#237, fixed by #136). E09a and E09b on C# USED TO throw <see cref="NullReferenceException"/>: a PRE-EXISTING,
+    /// UNRELATED C# backend gap — the emitted lambda body rendered EMPTY (<c>() => { }</c>), dropping <c>k.Take(Me)</c> entirely
+    /// (a method call through an object was skipped as a "temp"), so <c>k.Last</c> was never set and <c>Console.WriteLine(k.Last.N)</c>
+    /// threw. The lambda body is now written by the function-body emitter, so C# prints what C++ prints: <c>5 / True</c> for a lambda
+    /// in an ordinary method and <c>2 / True</c> for one inside <c>Sub New</c> (the call runs, and <c>Me</c> reaches <c>k</c> as
+    /// the object itself: <c>k.Last Is c</c>). Hang-safe runner, both pipelines.
     /// </summary>
     [Test]
-    public void E09_OnCSharp_ThrowsNullReferenceException_PinnedAgainst237()
+    public void E09_ALambdaCapturingMe_CSharp_PrintsWhatCppPrints()
     {
         Assert.Multiple(() =>
         {
-            var exA = Assert.Throws<AssertionException>(() => FourBackends.RunEmittedCSharp(E09a));
-            Assert.That(exA!.Message, Does.Contain("NullReferenceException"), "E09a C#:\n" + exA.Message);
-
-            var exB = Assert.Throws<AssertionException>(() => FourBackends.RunEmittedCSharp(E09b));
-            Assert.That(exB!.Message, Does.Contain("NullReferenceException"), "E09b C#:\n" + exB.Message);
+            Assert.That(Norm(CSharpProcessRunner.RunExpectingSuccess(ReturnCoercionTests.EmitCSharpForTest(E09a))), Is.EqualTo("5\nTrue"), "E09a C#");
+            Assert.That(Norm(CSharpProcessRunner.RunExpectingSuccess(ReturnCoercionTests.EmitCSharpAggressiveForTest(E09a))), Is.EqualTo("5\nTrue"), "E09a C# (-O)");
+            Assert.That(Norm(CSharpProcessRunner.RunExpectingSuccess(ReturnCoercionTests.EmitCSharpForTest(E09b))), Is.EqualTo("2\nTrue"), "E09b C#");
+            Assert.That(Norm(CSharpProcessRunner.RunExpectingSuccess(ReturnCoercionTests.EmitCSharpAggressiveForTest(E09b))), Is.EqualTo("2\nTrue"), "E09b C# (-O)");
         });
     }
 

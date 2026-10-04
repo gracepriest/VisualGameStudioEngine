@@ -405,8 +405,9 @@ public class LoopConditionEmissionShapeTests
     /// <summary>
     /// <c>GenerateStructuredBlockCore</c> throws when it opens a `while (true)` and the walk out of the condition never reaches the loop's own branch
     /// (it would leave the loop open — broken C#). That must NEVER happen for a program the compiler accepts: every probe goes through all three
-    /// entry points here, and every emitted program is handed to Roslyn. The one that does not compile is l_fn (CS1643, #136 — a lambda's body
-    /// loses its return paths; before #256 too), and its diagnostics are not asserted: the guard that matters is that emission did not THROW.
+    /// entry points here, and every emitted program is handed to Roslyn. ALL of them compile: l_fn (a loop inside a Function lambda) was the
+    /// one that did not until #136 (CS1643: a lambda's body lost every block after its entry block, its return paths with them) and was
+    /// skipped here; it is compiled like the rest now.
     /// </summary>
     [Test]
     public void TheNeverReachedGuard_DoesNotFire_OnAnyProbe_AndTheEmittedCSharpCompiles()
@@ -430,7 +431,6 @@ public class LoopConditionEmissionShapeTests
                     continue;
                 }
 
-                if (id == "l_fn") continue; // CS1643, #136: not this fix's, and no expectation
                 var errors = RoslynErrorsOnce(csharp, compiled);
                 if (errors.Length > 0) failures.Add($"{id} ({name}): the emitted C# does not compile: {errors[0]}");
             }

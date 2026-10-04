@@ -299,7 +299,7 @@ public class LambdaBoundaryDiagnosticsExecutionTests
     [Test]
     public void N5_RunsOnEveryBackendAggressive() => FourBackends.RunsOnEveryBackendAggressive(N5, "8");
 
-    // N8 — hiding a class field. C++/JS/MSIL agree with VB (8); C# is pinned #165.
+    // N8 — hiding a class field. Every backend agrees with VB (8); C# printed 10 until #136 (#165) wrote a lambda's own Dim.
     private const string N8 = """
         Class C
             Public x As Integer = 5
@@ -329,18 +329,20 @@ public class LambdaBoundaryDiagnosticsExecutionTests
     public void N8_HidingAClassField_MsilRuns8() =>
         Assert.That(FourBackends.Norm(MsilHarness.RunExpectingSuccess(N8)), Is.EqualTo("8"));
 
-    /// <summary>Task #165 (pre-existing, unrelated to #174's own front-end fix): the C# backend
-    /// DROPS a lambda's own <c>Dim</c> when it shares a name with a field/global/sibling local —
-    /// the emitted lambda body reads the OUTER name straight through, so the field's value (5)
-    /// wins over the lambda's own local (3), giving 5 + 5 = 10 instead of VB's 8. A different
-    /// answer here (including 8) means #165 moved — update this pin, do not just delete it.</summary>
+    /// <summary>
+    /// ⭐ MOVED PIN (#165, fixed by #136). N8 on C# USED TO print 10 for VB's 8: the C# backend dropped a lambda's own <c>Dim</c> when it
+    /// shared a name with a field/global/sibling local, so the emitted lambda body read the OUTER name straight through and the
+    /// field's value (5) won over the lambda's own local (3), 5 + 5 for 3 + 5. The lambda body is now written by the function-body
+    /// emitter, which declares the lambda's own local, so the local hides the field and C# prints 8 (vbc: 8). Hang-safe runner, both pipelines.
+    /// </summary>
     [Test]
-    public void N8_HidingAClassField_CSharp_PinsThePreExistingDroppedLocal_Against165() =>
-        Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharp(N8)), Is.EqualTo("10"),
-            "task #165 (pre-existing, unrelated to #174): the C# backend must still drop this "
-            + "lambda's own Dim x and read the field instead.");
+    public void N8_HidingAClassField_CSharpRuns8()
+    {
+        Assert.That(FourBackends.Norm(CSharpProcessRunner.RunExpectingSuccess(ReturnCoercionTests.EmitCSharpForTest(N8))), Is.EqualTo("8"), "standard");
+        Assert.That(FourBackends.Norm(CSharpProcessRunner.RunExpectingSuccess(ReturnCoercionTests.EmitCSharpAggressiveForTest(N8))), Is.EqualTo("8"), "aggressive");
+    }
 
-    // N9 — hiding a module global. Same shape as N8, same C# gap.
+    // N9 — hiding a module global. Same shape as N8, same C# answer now.
     private const string N9 = """
         Dim x As Integer = 5
         Sub Main()
@@ -364,11 +366,13 @@ public class LambdaBoundaryDiagnosticsExecutionTests
     public void N9_HidingAModuleGlobal_MsilRuns8() =>
         Assert.That(FourBackends.Norm(MsilHarness.RunExpectingSuccess(N9)), Is.EqualTo("8"));
 
+    /// <summary>⭐ MOVED PIN (#165, fixed by #136): N9 on C# USED TO print 10 for 8, the same dropped lambda local as N8; now 8, like vbc.</summary>
     [Test]
-    public void N9_HidingAModuleGlobal_CSharp_PinsThePreExistingDroppedLocal_Against165() =>
-        Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharp(N9)), Is.EqualTo("10"),
-            "task #165 (pre-existing, unrelated to #174): a different answer here (including 8) "
-            + "means #165 moved — update this pin, do not just delete it.");
+    public void N9_HidingAModuleGlobal_CSharpRuns8()
+    {
+        Assert.That(FourBackends.Norm(CSharpProcessRunner.RunExpectingSuccess(ReturnCoercionTests.EmitCSharpForTest(N9))), Is.EqualTo("8"), "standard");
+        Assert.That(FourBackends.Norm(CSharpProcessRunner.RunExpectingSuccess(ReturnCoercionTests.EmitCSharpAggressiveForTest(N9))), Is.EqualTo("8"), "aggressive");
+    }
 
     // R3 — the ByRef parameter copied into a local first: VB accepts and runs (8) on every
     // backend that can even represent a ByRef parameter's declaration; C# and JS each hit their
