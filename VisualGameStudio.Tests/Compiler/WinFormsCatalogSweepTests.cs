@@ -622,6 +622,8 @@ public class WinFormsCatalogSweepTests
         FormPropertyType.Cursor => "Hand",
         FormPropertyType.Fraction => "0.5",
         FormPropertyType.Reference => "btnSample",
+        FormPropertyType.Image => "Resources/sample.png",
+        FormPropertyType.Icon => "Resources/app.ico",
         _ => "sample"
     };
 

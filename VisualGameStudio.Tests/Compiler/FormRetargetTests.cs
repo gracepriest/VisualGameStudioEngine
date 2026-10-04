@@ -1830,6 +1830,9 @@ public class FormRetargetTests
         FormPropertyType.Font => "Arial, 10pt",
         FormPropertyType.Padding => "4",
         FormPropertyType.Cursor => "Hand",
+        // Slice 4 Task 8: a project path, usable on both targets (an Icon must be .ico on WinForms).
+        FormPropertyType.Image => "Resources/sample.png",
+        FormPropertyType.Icon => "Resources/app.ico",
         _ => "x"
     };
 }

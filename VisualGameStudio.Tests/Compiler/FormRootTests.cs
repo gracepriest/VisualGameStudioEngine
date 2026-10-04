@@ -46,6 +46,8 @@ public class FormRootTests
             [FormPropertyType.Font] = "Arial, 10pt",
             [FormPropertyType.Fraction] = "0.5",
             [FormPropertyType.Reference] = "btnOk",
+            [FormPropertyType.Image] = "Resources/sample.png",
+            [FormPropertyType.Icon] = "Resources/app.ico",
         };
 
         Assert.Multiple(() =>

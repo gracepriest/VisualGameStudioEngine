@@ -27,6 +27,9 @@ public class FormWebVocabularyTests
         FormPropertyType.Cursor => "Hand",
         FormPropertyType.Fraction => "0.5",
         FormPropertyType.Reference => "btnOther",
+        // Slice 4 Task 8: a real value on both targets, never one an extension rule refuses.
+        FormPropertyType.Image => "Resources/sample.png",
+        FormPropertyType.Icon => "Resources/app.ico",
         _ => "sample"
     };
 

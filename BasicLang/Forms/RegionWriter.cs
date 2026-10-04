@@ -1315,6 +1315,9 @@ public static class RegionWriter
             // source. Both hide a broken invariant as a broken build, so this names the invariant.
             FormPropertyType.Int or FormPropertyType.Size or FormPropertyType.Font or FormPropertyType.Padding
                 or FormPropertyType.Cursor or FormPropertyType.Fraction or FormPropertyType.Reference
+                // ⛔ Slice 4 D-5: an Image/Icon falling through would be QUOTED — `pic.Image = "x.png"`, CS0029 for a
+                // System.Drawing.Image property, BasicLang silent.
+                or FormPropertyType.Image or FormPropertyType.Icon
                 => throw new InvalidOperationException(
                 $"'{property.Name}' = '{value}' is not a parsable {property.Type} and reached the region " +
                 "writer; a Degraded value must be skipped before Literal is called."),

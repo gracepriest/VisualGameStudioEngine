@@ -50,7 +50,22 @@ public enum FormPropertyType
     /// Space-separated CSS class names (D2's web-only <c>CssClass</c>): each token a letter, <c>_</c> or <c>-</c> then
     /// letters, digits, <c>_</c> and <c>-</c>. Anything else is Degraded — it lands inside the element's class attribute.
     /// </summary>
-    CssClasses
+    CssClasses,
+
+    /// <summary>
+    /// An image file (slice 4 D-5a, PictureBox.Image): a path relative to the PROJECT, forward slashes
+    /// (<see cref="FormAssetPaths"/>). WinForms: <c>System.Drawing.Image.FromFile(Path.Combine(AppContext.BaseDirectory, …))</c>
+    /// — never .svg/.webp (GDI+ cannot decode them), never a URL. Web: <c>&lt;img src&gt;</c> relative to the site, or a URL.
+    /// A rooted path is WinForms-only; <c>..</c> out of the project is Degraded on both.
+    /// </summary>
+    Image,
+
+    /// <summary>
+    /// A window or page icon (slice 4 D-5a, Form.Icon). The Image rules, except WinForms requires <c>.ico</c>
+    /// (<c>New Icon</c> throws on a png) and the web takes <c>.ico</c>/<c>.png</c>/<c>.svg</c>/<c>.gif</c>
+    /// (<c>&lt;link rel="icon"&gt;</c>).
+    /// </summary>
+    Icon
 }
 
 /// <summary>
@@ -346,6 +361,8 @@ public sealed record FormPropertyDef(
             FormPropertyType.Padding when FormPaddingValue.TryParse(value, out var padding) => padding.Canonical,
             FormPropertyType.Cursor when FormCursors.TryCanonical(value, out var cursor) => cursor,
             FormPropertyType.Fraction when TryParseFraction(value, out var fraction) => FractionText(fraction),
+            // A project path in its ONE stored spelling, forward slashes (D-5a); a URL and a rooted path unchanged.
+            FormPropertyType.Image or FormPropertyType.Icon => FormAssetPaths.Normalise(value),
             _ => value
         };
     }
@@ -549,8 +566,28 @@ public sealed record FormPropertyDef(
             FormPropertyType.Fraction => TryParseFraction(value, out var fraction) ? FractionText(fraction) : null,
             // The field the Id names. ⚠ Whether such a field EXISTS is a document question — the region writer's (BL8034).
             FormPropertyType.Reference => FormDocument.IsLegalControlId(value) ? value : null,
+            FormPropertyType.Image => AssetLiteral("System.Drawing.Image.FromFile", value),
+            FormPropertyType.Icon => AssetLiteral("New System.Drawing.Icon", value),
             _ => null
         };
+    }
+
+    /// <summary>
+    /// An image/icon as WinForms source (D-5b), FULLY QUALIFIED (a user's <c>Using</c> can make a bare <c>Image</c> or
+    /// <c>Icon</c> ambiguous — CS0104, BasicLang silent). A project path is anchored to the program's own folder,
+    /// <c>System.AppContext.BaseDirectory</c> — measured (pre-flight M8): a bare relative path resolves against the WORKING
+    /// directory and threw FileNotFoundException under both launch shapes. A rooted path is written as it stands (and is
+    /// not copied — BL8036 says so at build). Null for anything else.
+    /// </summary>
+    private static string? AssetLiteral(string call, string value)
+    {
+        if (FormAssetPaths.IsInsideProject(value))
+        {
+            return $"{call}(System.IO.Path.Combine(System.AppContext.BaseDirectory, " +
+                   $"{StringLiteral(FormAssetPaths.Normalise(value))}))";
+        }
+
+        return FormAssetPaths.IsRooted(value) ? $"{call}({StringLiteral(value)})" : null;
     }
 
     /// <summary>
@@ -794,6 +831,43 @@ public sealed record FormPropertyDef(
             FormPropertyType.Fraction => TryParseFraction(value, out _),
             FormPropertyType.Reference => FormDocument.IsLegalControlId(value),
             FormPropertyType.CssClasses => IsCssClassList(value),
+            FormPropertyType.Image or FormPropertyType.Icon => IsAssetPath(value),
+            _ => false
+        };
+    }
+
+    /// <summary>
+    /// An image/icon value usable on SOME target: a URL, a rooted path, or a relative path inside the project — no control
+    /// characters (it lands in a string literal and an HTML attribute). <c>..</c> out of the project is usable on neither
+    /// (Degraded): nothing would copy it, and the program would look for it beside itself.
+    /// </summary>
+    private static bool IsAssetPath(string value) =>
+        value.Length > 0 && !value.Any(char.IsControl) &&
+        (FormAssetPaths.IsUrl(value) || FormAssetPaths.IsRooted(value) || FormAssetPaths.IsInsideProject(value));
+
+    private static readonly string[] WebIconExtensions = { ".ico", ".png", ".svg", ".gif" };
+
+    /// <summary>
+    /// The target rules of an Image/Icon value (D-5a), each a run-time failure otherwise: WinForms reads FILES (a URL is
+    /// refused), GDI+ cannot decode .svg/.webp, <c>New Icon</c> throws on anything but .ico; the web cannot reach the
+    /// author's disk (a rooted path is refused) and a page icon is .ico/.png/.svg/.gif.
+    /// </summary>
+    private bool IsAssetRefusedOn(string value, FormTarget target)
+    {
+        if (Type is not (FormPropertyType.Image or FormPropertyType.Icon))
+        {
+            return false;
+        }
+
+        var extension = FormAssetPaths.Extension(value);
+        return target switch
+        {
+            FormTarget.WinForms => FormAssetPaths.IsUrl(value) ||
+                                   (Type == FormPropertyType.Image && extension is ".svg" or ".webp") ||
+                                   (Type == FormPropertyType.Icon && extension != ".ico"),
+            FormTarget.Web => FormAssetPaths.IsRooted(value) ||
+                              (Type == FormPropertyType.Icon && !FormAssetPaths.IsUrl(value) &&
+                               !WebIconExtensions.Contains(extension)),
             _ => false
         };
     }
@@ -877,6 +951,24 @@ public sealed record FormPropertyDef(
                   $"{Name} — it throws ArgumentException when the form is created. Use an opaque colour (alpha FF).";
         }
 
+        if (IsAssetRefusedOn(value, target))
+        {
+            var extension = FormAssetPaths.Extension(value);
+            return target == FormTarget.WinForms
+                ? FormAssetPaths.IsUrl(value)
+                    ? $"'{value}' is a web address; a WinForms program reads {Name} from a FILE (Image.FromFile and " +
+                      "New Icon take a path), so it cannot use a URL. Put the file in the project instead."
+                    : Type == FormPropertyType.Icon
+                        ? $"'{value}' is not an .ico file; a WinForms window icon requires .ico (New Icon throws " +
+                          "ArgumentException on anything else when the form is created)."
+                        : $"'{value}' is a {extension} file, which WinForms cannot decode (GDI+ has no {extension} codec; " +
+                          "Image.FromFile throws when the form is created). Use .png, .jpg, .gif, .bmp or .ico."
+                : FormAssetPaths.IsRooted(value)
+                    ? $"'{value}' is a path on the author's machine; a web page cannot reach it. Put the file in the " +
+                      "project (it is copied beside the page) or use a web address."
+                    : $"'{value}' is not an icon a browser shows for a page (expected .ico, .png, .svg or .gif).";
+        }
+
         if (IsCursorRefusedOn(value, target))
         {
             _ = FormCursors.TryCanonical(value, out var cursor);
@@ -900,6 +992,9 @@ public sealed record FormPropertyDef(
                    FormPropertyType.Fraction => " (expected a percentage from 0% to 100%, e.g. 85% — a bare number up " +
                                                 "to 1 is read as a fraction, as Visual Studio reads it, so 0.85 is also 85%)",
                    FormPropertyType.Reference => " (expected the Id of a control on this form)",
+                   FormPropertyType.Image or FormPropertyType.Icon =>
+                       " (expected a file inside the project, e.g. Resources/logo.png — a path that climbs out of the " +
+                       "project with '..' is never copied, and the program would not find it)",
                    _ => ""
                } +
                ".";
@@ -913,7 +1008,7 @@ public sealed record FormPropertyDef(
     /// </summary>
     private bool IsRefusedOn(string value, FormTarget target) =>
         IsSystemColourRefusedOn(value, target) || IsUnknownColourNameRefusedOn(value, target) ||
-        IsCursorRefusedOn(value, target) || IsTranslucentRefusedOn(value, target);
+        IsCursorRefusedOn(value, target) || IsTranslucentRefusedOn(value, target) || IsAssetRefusedOn(value, target);
 
     /// <summary>
     /// A translucent colour (<c>#AARRGGBB</c> with AA below FF, or the named <c>Transparent</c>) on a WinForms row marked
@@ -1974,9 +2069,8 @@ public static class FormControlCatalog
             }),
         new("PictureBox",  "PictureBox",  "img",      null,       false, ControlRows(
             null, BackColor, null, CursorRow,
-            // WinForms Image is a System.Drawing.Image, not a path string (CS0029).
-            new FormPropertyDef("Image", FormPropertyType.String,
-                WinFormsFactory: "Image.FromFile",
+            // WinForms Image is a System.Drawing.Image, not a path string (CS0029): the Image TYPE owns its literal (D-5b).
+            new FormPropertyDef("Image", FormPropertyType.Image,
                 Category: FormPropertyCategory.Appearance,
                 Description: "The image displayed in the PictureBox."),
             new FormPropertyDef("SizeMode", FormPropertyType.Enum, "Normal",
@@ -2613,9 +2707,12 @@ public static class FormControlCatalog
             // ==========================================================
             // Slice 3 — the Form's D1 set (spec §2.3), PROPERTIES-STORED: each lives in FormDocument.Properties as the
             // root attribute of its own name (FormRootValues' default arm). WinForms' own metadata (the snapshot);
-            // WinForms-only unless it maps cleanly onto the page's body (D2): BackColor, ForeColor, Font.
-            // ⚠ Icon waits for slice 4's image machinery.
+            // WinForms-only unless it maps cleanly onto the page's body (D2): BackColor, ForeColor, Font — and Icon
+            // (slice 4 D-5f), the window's icon and the page's <link rel="icon">.
             // ==========================================================
+            new("Icon", FormPropertyType.Icon,
+                Category: FormPropertyCategory.WindowStyle,
+                Description: "Indicates the icon for a form. This icon is displayed in the form's system menu box and when the form is minimized."),
             new("FormBorderStyle", FormPropertyType.Enum, "Sizable",
                 new[] { "None", "FixedSingle", "Fixed3D", "FixedDialog", "Sizable", "FixedToolWindow", "SizableToolWindow" },
                 WinFormsEnumType: "FormBorderStyle", Targets: new[] { FormTarget.WinForms },

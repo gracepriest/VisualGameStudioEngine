@@ -41,12 +41,14 @@ public class FormRootLayoutTests
     // Slice 3 (spec §2.3's D1 set): every Form row on WinForms; on the web only BackColor/ForeColor/Font, on every layout.
     private static readonly string[] WinFormsD1 =
     {
+        // Slice 4 Task 8: Icon — the window's icon, and the page's (a BOTH-targets row, D-5f).
+        "Icon",
         "FormBorderStyle", "StartPosition", "WindowState", "MinimumSize", "MaximumSize", "ControlBox", "MaximizeBox",
         "MinimizeBox", "ShowIcon", "ShowInTaskbar", "TopMost", "AcceptButton", "CancelButton", "KeyPreview",
         "BackColor", "ForeColor", "Font", "Opacity"
     };
 
-    private static readonly string[] WebD1 = { "BackColor", "ForeColor", "Font" };
+    private static readonly string[] WebD1 = { "Icon", "BackColor", "ForeColor", "Font" };
 
     private static IEnumerable<TestCaseData> Documents()
     {

@@ -139,6 +139,15 @@ public static class FormAssetEmitter
         sb.Append("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n");
         // Text ?? Name (spec §2.3): the page title follows the caption the user set, or the form's name.
         sb.Append($"<title>{Text(form.Text ?? form.Name)}</title>\n");
+
+        // Slice 4 D-5f: the Form's Icon is the page's icon — through the catalog's web tier, percent-encoded.
+        if (form.Properties.TryGetValue("Icon", out var icon) &&
+            FormControlCatalog.FormRoot.Property("Icon") is { } iconRow && iconRow.Accepts(icon, FormTarget.Web) &&
+            FormAssetPaths.PageUrl(icon) is { } href)
+        {
+            sb.Append($"<link rel=\"icon\" href=\"{Attr(href)}\">\n");
+        }
+
         sb.Append($"<link rel=\"stylesheet\" href=\"{Attr(form.Name)}.css\">\n");
         sb.Append("</head>\n");
 
@@ -390,10 +399,14 @@ public static class FormAssetEmitter
             sb.Append($" name=\"{Attr(group)}\"");
         }
 
+        // ⛔ Slice 4 D-5f: the src goes through the catalog's web tier (a rooted path — the author's disk — is refused and
+        // never emitted) and is percent-encoded per segment (FormAssetPaths.PageUrl); Attr alone let a space or # break it.
         if (string.Equals(tag, "img", StringComparison.Ordinal) &&
             control.Properties.TryGetValue("Image", out var image))
         {
-            sb.Append($" src=\"{Attr(image)}\" alt=\"{Attr(control.Id)}\"");
+            var row = control.Definition?.Property("Image");
+            var src = row != null && row.Accepts(image, FormTarget.Web) ? FormAssetPaths.PageUrl(image) : null;
+            sb.Append(src != null ? $" src=\"{Attr(src)}\" alt=\"{Attr(control.Id)}\"" : $" alt=\"{Attr(control.Id)}\"");
         }
 
         // Void elements take no closing tag and no children.

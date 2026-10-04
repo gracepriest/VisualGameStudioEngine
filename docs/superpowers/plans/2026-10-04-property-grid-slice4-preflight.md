@@ -1063,3 +1063,33 @@ written before their tests ran; their red evidence is the mutation table. Mutati
 (tab test); the old `InsertPreservingIndent` for the Bind case; whitespace-body drop off (two-edits test); the clipboard/reader
 legacy rule off; the attributes/markup check off. Not mutated: hiding `ItemsEllipsis` in AXAML (the sweep's required-kinds
 assertion covers it by construction).
+
+### Task 8 — Image and Icon types + emission (base `0baebd84`)
+Done as written: `FormPropertyType.Image`/`Icon`; new `BasicLang/Forms/FormAssetPaths.cs` (`Normalise`, `IsUrl`, `IsRooted`
+— by TEXT, any OS's spelling — `EscapesProject`, `IsInsideProject`, `Extension`, `PageUrl` percent-encoding per segment,
+`ProjectRootFor`); `Accepts` (URL, rooted, or inside the project; `..` out is Degraded on both), `IsAssetRefusedOn` + its reasons
+in `IsRefusedOn`/`RefusalReason` (WinForms: no URL, Image no .svg/.webp, Icon only .ico; web: no rooted path, Icon
+.ico/.png/.svg/.gif), `Canonical` (forward slashes), `WinFormsLiteral` → `AssetLiteral` (fully qualified, a project path anchored
+to `System.AppContext.BaseDirectory`, a rooted path as it stands). PictureBox `Image` is the Image type (its `WinFormsFactory`
+removed; `CatalogParity.TypeFits` gains the type arms). FormRoot `Icon` (both targets, Window Style, the snapshot's
+description, no default). The page: `<img src>` through the web tier + `PageUrl`; `<link rel="icon">` after `<title>`.
+`RegionWriter.Literal`'s unreachable arm gains Image/Icon. `IsTextBox` gains both. `WinFormsReferenceHarness.Measure` gained an
+`assets` overload (`CopyToOutputDirectory`), and `PixelPageLayoutTests` passes `pic.png` through it.
+- ⚠ M7's re-measure: `WinFormsCatalogSweepTests` now compiles every Image/Icon row through BasicLang → C# → csc (the root's
+  `Me.Icon = New System.Drawing.Icon(…)` included) — green. The project-route warning question stays for Task 11's run.
+- RE-CHECK (all green): `FormRootTests.EveryFormRootRow_HasStorage_OnBothTargets` (+Image/Icon samples),
+  `FormWebVocabularyTests.Sample` (+arms), `FormRetargetTests.Sample`, `FormRootRetargetTests.Sample`,
+  `WinFormsCatalogSweepTests.SampleValue`, `FormPropertyGridDisplayTests` (the Form's rows gain Icon, incl. the web list),
+  `FormRootLayoutTests` (Icon in the WinForms AND web D1 sets — it is a both-targets row), `FormAssetEmitterTests`
+  (`Image="logo.png"` still Canon). Integration: `WinFormsCatalogParityTests`, `WinFormsCatalogSweepTests`,
+  `PixelPageLayoutTests` (the Picture rows), `FormRetargetPairTests`, `FormBuildEmissionTests` — 265/265, 0 skipped.
+
+Tests: `FormImageIconTests` (new): the rules per target (Image ×10, Icon ×8), each refusal's reason, canonical slashes, the
+exact WinForms shapes (project path, rooted path, the Form's Icon), a png Icon warned and not emitted, refused images never
+emitted, the qualified call under a user `Using`, `Literal` forced by reflection throws for Image (never quotes), the encoded
+src, URL kept / rooted not emitted, the icon link after the title, every Image/Icon row a text box that writes its value.
+⚠ Deviation: written implementation-first; the red evidence is the mutation table.
+
+Mutations (Edit + REBUILD) — all killed: Icon accepts .png on WinForms; `AppContext.BaseDirectory` dropped; an unqualified
+`Image.FromFile`; URL accepted on WinForms; `..` not Degraded; the web src not encoded; Image removed from `IsTextBox`; Image
+removed from `Literal`'s unreachable arm.

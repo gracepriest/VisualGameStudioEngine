@@ -132,7 +132,17 @@ internal static class WinFormsReferenceHarness
     /// Measures every fixture in one WinForms build and run. Skips (never passes) off Windows or without dotnet.
     /// Writes <c>&lt;workDir&gt;/&lt;Form&gt;.reference.json</c> for each form.
     /// </summary>
-    public static IReadOnlyDictionary<string, WinFormsReference> Measure(string workDir, params ReferenceFixture[] fixtures)
+    public static IReadOnlyDictionary<string, WinFormsReference> Measure(string workDir, params ReferenceFixture[] fixtures) =>
+        Measure(workDir, new Dictionary<string, byte[]>(), fixtures);
+
+    /// <summary>
+    /// <see cref="Measure(string, ReferenceFixture[])"/> with files the forms reference (slice 4 Task 8): each is written into
+    /// the reference app and declared <c>CopyToOutputDirectory</c>, so it lands BESIDE the exe wherever <c>dotnet build</c>
+    /// puts it — where a designer image (anchored to <c>AppContext.BaseDirectory</c>) is looked for.
+    /// </summary>
+    /// <param name="assets">Project-relative path (forward slashes) → bytes.</param>
+    public static IReadOnlyDictionary<string, WinFormsReference> Measure(
+        string workDir, IReadOnlyDictionary<string, byte[]> assets, params ReferenceFixture[] fixtures)
     {
         if (!OperatingSystem.IsWindows())
         {
@@ -166,7 +176,16 @@ internal static class WinFormsReferenceHarness
             File.Copy(generated, Path.Combine(app, fixture.FormName + ".cs"), overwrite: true);
         }
 
-        File.WriteAllText(Path.Combine(app, "app.csproj"), """
+        foreach (var (relative, bytes) in assets)
+        {
+            var target = Path.Combine(app, relative.Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+            File.WriteAllBytes(target, bytes);
+        }
+
+        var copies = string.Concat(assets.Keys.Select(relative =>
+            $"    <None Include=\"{relative.Replace('/', '\\')}\" CopyToOutputDirectory=\"PreserveNewest\" />\n"));
+        File.WriteAllText(Path.Combine(app, "app.csproj"), $$"""
             <Project Sdk="Microsoft.NET.Sdk">
               <PropertyGroup>
                 <OutputType>Exe</OutputType>
@@ -176,6 +195,8 @@ internal static class WinFormsReferenceHarness
                 <AssemblyName>ReferenceDriver</AssemblyName>
                 <RootNamespace>ReferenceDriver</RootNamespace>
               </PropertyGroup>
+              <ItemGroup>
+            {{copies}}  </ItemGroup>
             </Project>
             """);
         File.WriteAllText(Path.Combine(app, "Driver.cs"), DriverSource(fixtures));

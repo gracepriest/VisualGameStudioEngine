@@ -98,12 +98,12 @@ public class PixelPageLayoutTests
         });
         var measured = DateTime.UtcNow;
 
-        // The WinForms side: the UNMODIFIED documents (the breakpoint and the Literal are web-only). pic.png goes
-        // where the driver runs: Image.FromFile is relative to its working directory (pre-flight B5).
+        // The WinForms side: the UNMODIFIED documents (the breakpoint and the Literal are web-only). pic.png goes BESIDE
+        // THE EXE (a harness asset copied to the output): slice 4 Task 8 anchors a designer image to AppContext.BaseDirectory,
+        // never the working directory (pre-flight M8).
         var winDir = Path.Combine(_dir, "winforms");
         Directory.CreateDirectory(Path.Combine(winDir, "reference-app"));
-        File.WriteAllBytes(Path.Combine(winDir, "reference-app", "pic.png"), png);
-        _winForms = WinFormsReferenceHarness.Measure(winDir,
+        _winForms = WinFormsReferenceHarness.Measure(winDir, new Dictionary<string, byte[]> { ["pic.png"] = png },
             new ReferenceFixture(PixelLayoutFixtures.SelfTest(), new ResizeStep("wide", 600, 300)),
             new ReferenceFixture(PixelLayoutFixtures.Anchors(), new ResizeStep("grow", 601, 401)),
             new ReferenceFixture(PixelLayoutFixtures.DockStrips(), new ResizeStep("grow", 600, 400)),
