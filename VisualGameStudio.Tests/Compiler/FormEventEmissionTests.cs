@@ -270,10 +270,12 @@ public class FormEventEmissionTests
     {
         var text = Clean(Write(WebForm(Web("TextBox", "txt", ("keypress", "txt_KeyPress"))))).Replace("\r\n", "\n");
 
+        // Review fix 3: the length is counted in CODE POINTS (an emoji key is one character, two UTF-16 units).
         const string wrapper =
             "    Private Sub VgsOn_txt_KeyPress(e As DomEvent)\n" +
             "        Dim k As String = e.key\n" +
-            "        If k.Length = 1 OrElse k = \"Enter\" OrElse k = \"Backspace\" OrElse k = \"Escape\" Then\n" +
+            "        Dim n As Integer = ::Array.from(k).length\n" +
+            "        If n = 1 OrElse k = \"Enter\" OrElse k = \"Backspace\" OrElse k = \"Escape\" Then\n" +
             "            Me.txt_KeyPress(e)\n" +
             "        End If\n" +
             "    End Sub\n";
@@ -359,6 +361,76 @@ public class FormEventEmissionTests
             Assert.That(InitLines(text).Count(l => l.Contains("AddressOf VgsOn_txt_KeyPress")), Is.EqualTo(1));
         });
     }
+
+    /// <summary>
+    /// Review fix 1: WinForms ALWAYS raises KeyDown before KeyPress (suppressing a KeyPress from KeyDown relies on it).
+    /// Both listen to the DOM's <c>keydown</c> on one target, so the DOM runs them in LISTENER order — which must not
+    /// be document order. Binds stored in REVERSE order still emit KeyDown's listener first, on a control and the Form.
+    /// </summary>
+    [Test]
+    public void KeyDownsListener_PrecedesTheKeyPressWrapper_EvenWhenTheBindsAreStoredInReverse()
+    {
+        var form = WebForm(Web("TextBox", "txt", ("keypress", "txt_KeyPress"), ("keydown", "txt_KeyDown")));
+        form.Binds.Add(new FormBind { Event = "keypress", Handler = "F_KeyPress" });
+        form.Binds.Add(new FormBind { Event = "keydown", Handler = "F_KeyDown" });
+
+        var init = InitLines(Clean(Write(form)));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(init.IndexOf("txt.addEventListener(\"keydown\", AddressOf txt_KeyDown)"),
+                Is.GreaterThan(0).And.LessThan(init.IndexOf("txt.addEventListener(\"keydown\", AddressOf VgsOn_txt_KeyPress)")));
+            Assert.That(init.IndexOf("doc.body.addEventListener(\"keydown\", AddressOf F_KeyDown)"),
+                Is.GreaterThan(0).And.LessThan(init.IndexOf("doc.body.addEventListener(\"keydown\", AddressOf VgsOn_F_KeyPress)")));
+        });
+    }
+
+    // ==================================================================
+    // Review fix 2 — a control named like the form
+    // ==================================================================
+
+    /// <summary>
+    /// A control whose Id equals the form's class name is refused (BL8017, the duplicate-id code): on WinForms it is a
+    /// member named like its enclosing type (CS0542), and on the page its wrapper name would collide with the Form's
+    /// (<c>VgsOn_F_KeyPress</c> twice). Case-insensitive, as BasicLang names are.
+    /// </summary>
+    [TestCase(FormTarget.Web, "F")]
+    [TestCase(FormTarget.Web, "f")]
+    [TestCase(FormTarget.WinForms, "F")]
+    public void AControlNamedLikeTheForm_IsRefused_BeforeAnythingIsWritten(FormTarget target, string id)
+    {
+        var form = target == FormTarget.Web
+            ? WebForm(Web("TextBox", id, ("keypress", "a_KeyPress")))
+            : WinForm(Pixel("TextBox", id));
+        if (target == FormTarget.Web)
+        {
+            form.Binds.Add(new FormBind { Event = "keypress", Handler = "b_KeyPress" });
+        }
+
+        var source = Scaffold(target);
+        var result = Write(form, source);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Refused, Is.True);
+            Assert.That(result.Diagnostics.Single(d => d.Code == DesignCodes.DuplicateControlId).Message,
+                Does.Contain($"'{id}'").And.Contain("form"));
+            Assert.That(result.Text, Is.EqualTo(source));
+        });
+    }
+
+    [TestCase("F.blform", "<Form Name=\"F\" Version=\"1\"><Controls><Button Id=\"F\" X=\"8\" Y=\"8\" Width=\"75\" Height=\"23\" TabIndex=\"0\"/></Controls></Form>")]
+    [TestCase("F.blwebform", "<WebForm Name=\"F\" Version=\"1\"><Layout Kind=\"Grid\"/><Controls><Button Id=\"f\" Col=\"0\" Row=\"0\" TabIndex=\"0\"/></Controls></WebForm>")]
+    public void TheReader_RefusesAControlNamedLikeTheForm(string fileName, string xml)
+    {
+        var file = BasicLang.Forms.Serialization.FormDocumentReader.Read(fileName, xml);
+
+        Assert.That(file.Diagnostics.Where(d => !d.IsWarning).Select(d => d.Code), Does.Contain(DesignCodes.DuplicateControlId));
+    }
+
+    [Test]
+    public void AControlNamedOtherwise_IsNotRefused() =>
+        Assert.That(Write(WebForm(Web("TextBox", "Form1"))).Refused, Is.False);
 
     /// <summary>WinForms raises KeyPress itself: a plain AddHandler, no wrapper.</summary>
     [Test]

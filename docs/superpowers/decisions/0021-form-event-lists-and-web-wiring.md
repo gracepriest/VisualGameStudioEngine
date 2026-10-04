@@ -45,7 +45,7 @@ WinForms event mean on a page, and where is a handler's signature decided?
 | MouseDown / MouseUp / MouseMove | `mousedown` / `mouseup` / `mousemove` | the same |
 | MouseEnter / MouseLeave | `mouseenter` / `mouseleave` | the same (non-bubbling, per element as WinForms') |
 | KeyDown / KeyUp | `keydown` / `keyup` | the same |
-| **KeyPress** | `keypress` | a **`keydown`**, filtered to WinForms' KeyPress keys: `key.length === 1 \|\| key === "Enter" \|\| key === "Backspace" \|\| key === "Escape"` (WinForms raises KeyPress for `\b`, Esc, and Enter as `'\r'`) |
+| **KeyPress** | `keypress` | a **`keydown`**, filtered to WinForms' KeyPress keys: ONE CODE POINT (`[...key].length === 1` — an emoji key is one character and two UTF-16 units; BasicLang `::Array.from(k).length = 1`) `\|\| key === "Enter" \|\| key === "Backspace" \|\| key === "Escape"` (WinForms raises KeyPress for `\b`, Esc, and Enter as `'\r'`). Its listener is added AFTER every plain `keydown` listener of the same owner, so KeyDown runs first as in WinForms, whatever order the binds are stored in (amendment, review of Task 2) |
 | **Enter / Leave** | `focusin` / `focusout` | the same type, filtered to "`relatedTarget` is outside the element" — focus moving BETWEEN two children of a Panel raises no Enter/Leave on the Panel, as in WinForms. On a leaf element the filter is a no-op |
 | Form Load | `load` | **AfterInit**: `Me.<Form>_Load()` as the LAST statement of `InitializeComponent`; the handler is parameterless |
 | Form Resize | `resize` | **Window**: `w.addEventListener("resize", …)` |
@@ -57,9 +57,10 @@ the `DomEvent`. The key set above is the definition of "character-producing `key
 
 ### 3. The filtered listener is a generated, NAMED wrapper Sub
 
-For a web bind whose event has a `WebFilter`, the init region holds, ABOVE `Private Sub InitializeComponent()`, one
-generated `Private Sub VgsOn_<owner>_<WinForms event>(e As DomEvent)` that tests the filter and calls
-`Me.<handler>(e)`; the listener names the wrapper. Named (never a lambda: `Me.` inside a lambda hard-errors on the
+For web binds whose event has a `WebFilter`, the init region holds, ABOVE `Private Sub InitializeComponent()`, ONE
+generated `Private Sub VgsOn_<owner>_<WinForms event>(e As DomEvent)` per (owner, filtered event) that tests the filter and
+calls `Me.<handler>(e)` for each handler bound to that event, in document order; ONE listener names the wrapper. A control
+whose Id is the form's own name is refused (BL8017) — its wrappers would collide with the form's. Named (never a lambda: `Me.` inside a lambda hard-errors on the
 JavaScript backend, and an unqualified call is a runtime `ReferenceError`); above `InitializeComponent` (an `AddressOf` of
 a later Sub erases its parameter types — BL8013's measured rule). The `VgsOn_` prefix is reserved. The body is built from
 `WebFilter` by one function, never from the event's name. WinForms wires the handler directly.
@@ -101,6 +102,7 @@ Each row: classic emission diverges; piece 2's library is responsible for WinFor
 | MouseLeave on a container when the pointer enters a child | raised | `mouseleave` does not fire |
 | Form Click on a click that lands on a control | not raised | `body` receives the bubbled `click` |
 | Form KeyDown/KeyUp/KeyPress while a control has focus | only with `KeyPreview=True` | always (bubbled to `body`) |
+| A Load handler that throws | routed to `Application.ThreadException`; the form is still shown | the exception escapes the form's constructor (Load is called at the end of `InitializeComponent`) and the page's dispatch dies — nothing on the page runs |
 
 ## Rejected
 

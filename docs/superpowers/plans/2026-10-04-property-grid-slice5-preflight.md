@@ -142,6 +142,7 @@ responsible for WinForms parity.* Copied into `docs/form-designer-followups.md` 
 | MouseLeave on a container when the pointer enters a child | raised (the child is another window) | `mouseleave` does not fire (the child is inside the element) |
 | Form Click on a click that lands on a control | not raised | `body` receives the bubbled `click` (D-3) |
 | Form KeyDown/KeyUp/KeyPress while a control has focus | only with `KeyPreview=True` | always (bubbled to `body`) (D-3) |
+| A Load handler that throws | routed to `Application.ThreadException`; the form still shows | escapes the constructor (Load runs at the end of `InitializeComponent`); the page's dispatch dies (Task 2 review) |
 
 ### D-3 — The Form's events and the web wiring (plan 5.1/5.2, spec §2.3/§5)
 
@@ -323,7 +324,10 @@ form for Load by habit).
 ### D-12 — The filtered listener: a GENERATED wrapper Sub (KeyPress, Enter, Leave)
 
 For an event whose `WebFilter` is not `None`, the web init region gets, ABOVE `Private Sub InitializeComponent()`, one
-generated Sub per such bind, and the listener names IT:
+generated Sub per (owner, filtered event) — calling every handler bound to that event — and the listener names IT
+(review of Task 2: "per bind" would emit two Subs of one name). ⚠ Amended by the Task 2 review: the KeyPress length is
+counted in CODE POINTS (`Dim n As Integer = ::Array.from(k).length`), and the listener order per owner puts every plain
+listener before every wrapper's (KeyDown before KeyPress). The text below is the original M7 measurement:
 ```vb
 Private Sub VgsOn_txt_KeyPress(e As DomEvent)
     Dim k As String = e.key
@@ -781,6 +785,43 @@ reserved `VgsOn_` prefix, and M7's finding that an Extern class's undeclared mem
   is caught by the filter only because "Formatting" contains "Form": the emitted C# printed `∞` where the test expects
   `Infinity` (a machine-culture symbol), in code this slice does not touch. Not A/B'd against master — recorded as
   unrelated by construction, to be confirmed at the slice gate.
+
+### Task 2 review fixes (base `0805ccfa`; coordinator rulings under the owner's delegation)
+1. **KeyDown before KeyPress.** Both listen to `keydown` on one target, and the DOM runs them in the order they were ADDED —
+   document order before this fix, so `keypress` stored first ran KeyPress first (reviewer reproduced under node). ONE rule,
+   `RegionWriter.WebRaiseOrder`: per owner, every plain listener before every wrapper's, each run in document order (a stable
+   sort); used by the control and the root emission. Different DOM types are ordered by the browser, so this is the only
+   ordering the emitter controls. Tests: `KeyDownsListener_PrecedesTheKeyPressWrapper_…` (text) and
+   `FormEventWebRunTests.KeyDown_RunsBeforeKeyPress_WhenTheBindsAreStoredInReverse` (CLI build + node: prints
+   `txt_KeyDown, txt_KeyPress, KeyForm_KeyDown, KeyForm_KeyPress`).
+2. **A control named like the form is refused — BL8017** (the duplicate-id code fits: an Id is a member of the form's class).
+   `FormDocument.ControlsNamedLikeTheForm()` (OrdinalIgnoreCase, as BasicLang names) + ONE message, asked by the READER's
+   duplicate-id check AND by the region writer (a model reaches the writer without a reader: designer edits, retarget, tests).
+   No new code claimed; BL8037 stays piece 2's. Tests on both targets, both routes. ⚠ RE-CHECK found one incidental fixture:
+   `FormDocumentRoundTripTests.Write_StillAddsAPropertyWhoseValueIsNotTheDefault` read a nameless form from `b.blwebform`
+   (the name defaults to the file's) with a control `b` — now refused; renamed the file to `Page.blwebform`, with a comment.
+3. **Code points.** Measured on the branch CLI + node: `::Array.from(k).length` emits `Array.from(k)` and gives 1 for
+   U+1F600 (built with `String.fromCodePoint`), 5 for `Enter`, 2 for `F1`; `Char.IsHighSurrogate` and `ChrW(…) & ChrW(…)` do
+   not type-check on this backend. The wrapper is now `Dim k As String = e.key` / `Dim n As Integer = ::Array.from(k).length`
+   / `If n = 1 OrElse …`. Test: `AnAstralCharacterKey_RunsKeyPressOnce_AndANamedKeyDoesNot` (U+1F600 from its code point →
+   KeyPress once; `F1` → never).
+4. ADR 0021: the Load-throws row added to the divergence table (also D-2's table here); §3 and D-12 say "one generated Sub per
+   (owner, filtered event)"; §2's KeyPress row states the code-point rule and the listener order.
+5. Catalog: `KeyEvents(web)` / `FocusEvents(web)` factories replace 27 pasted runs (9 web Key, 10 web Focus, 1 + 7 WinForms-
+   only); the event-list methods became collection expressions so the factories spread in place. Parity and every
+   `FormEventsTests` invariant green unchanged.
+- `FormEventWebRunTests` is created HERE (Task 4 extends it) and added to `JsExecutionTierRosterTests` (pin 103 → 104).
+- **Red before:** 9 failed for the right reasons (the reverse-order run printed KeyPress first; nothing refused the `F`
+  control on either route; the emoji never reached KeyPress; the old wrapper text).
+
+| Mutation | Killed by |
+|---|---|
+| `WebRaiseOrder` returns document order | the text test + the node run (print order) |
+| Name match `Ordinal` instead of ignoring case | `(Web,"f")` + the reader's `.blwebform` row |
+| KeyPress filter back to `k.Length = 1` (alone in its build) | the node emoji run + the exact wrapper text |
+| `KeyEvents(web)` KeyPress without its filter | `KeyPressKeys_IsExactlyOnTheEventsStoredKeypress_…` |
+| Region writer's named-like-the-form check removed | the three `AControlNamedLikeTheForm_…` rows |
+| Reader's check removed | both `TheReader_RefusesAControlNamedLikeTheForm` rows |
 
 ## 7. Tests to re-check (consolidated)
 

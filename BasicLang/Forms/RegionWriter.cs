@@ -120,6 +120,10 @@ public static class RegionWriter
         CheckComponentBinds(filePath, form, diagnostics);
         CheckControlBinds(filePath, form, diagnostics);
         CheckRootBinds(filePath, form, diagnostics);
+        // Slice 5 review fix 2: the reader refuses this too, but a model reaches here without a reader (the designer's
+        // own edits, the retarget, tests) — and the wrapper names below would collide.
+        diagnostics.AddRange(form.ControlsNamedLikeTheForm()
+            .Select(c => Error(DesignCodes.DuplicateControlId, form.NamedLikeTheFormMessage(c), filePath, 0)));
         CheckHandlerOrdering(filePath, index, form, init, diagnostics);
         if (diagnostics.Any(d => !d.IsWarning))
         {
@@ -831,7 +835,7 @@ public static class RegionWriter
         var binds = EmittedRootBinds(form).ToList();
         var calls = new List<string>();
 
-        foreach (var bind in binds)
+        foreach (var bind in WebRaiseOrder(root, binds))
         {
             if (WebEventOf(root, bind) is not { } evt)
             {
@@ -883,6 +887,18 @@ public static class RegionWriter
         body.Append($"{inner}{target}.addEventListener(\"{FormEvents.ListenType(evt)}\", AddressOf {handler})")
             .Append(newline);
     }
+
+    /// <summary>
+    /// ⛔ One owner's web binds in the order their LISTENERS must be added (review fix 1): every plain listener first,
+    /// then every wrapper's, each run in document order (a stable sort). Two events share a DOM type only when one is a
+    /// filtered event derived from the other's raw DOM event — KeyPress is a filtered <c>keydown</c> — and the DOM runs
+    /// one target's listeners for one type in the order they were ADDED. WinForms raises the raw event first (KeyDown
+    /// before KeyPress, always; suppressing a KeyPress from KeyDown depends on it), so its listener must come first
+    /// whatever order the document stores the binds in. Events of different DOM types are ordered by the browser, not
+    /// by this.
+    /// </summary>
+    private static IReadOnlyList<FormBind> WebRaiseOrder(FormControlDef? definition, IReadOnlyList<FormBind> binds) =>
+        binds.OrderBy(b => IsWrapped(definition, b) ? 1 : 0).ToList();
 
     /// <summary>The reserved name of a generated wrapper (D-12): <c>VgsOn_&lt;control Id or form name&gt;_&lt;WinForms event&gt;</c>.</summary>
     private static string WrapperName(string prefix, FormEventDef evt) => $"VgsOn_{prefix}_{evt.Name}";
@@ -949,8 +965,12 @@ public static class RegionWriter
             case FormWebFilter.KeyPressKeys:
                 // WinForms raises KeyPress for a character, Enter ('\r'), Backspace ('\b') and Escape — never for
                 // Shift, arrows or F-keys (coordinator ruling 1, ADR 0021).
+                // ⚠ CODE POINTS, not UTF-16 units (review fix 3): an emoji key (U+1F600) is one character and two
+                // units. `::Array.from(k).length` is the measured BasicLang spelling (branch CLI + node: 1 for U+1F600,
+                // 2 for "F1"); `k.Length` emits `k.length` and would count 2.
                 body.Append($"{inner}Dim k As String = e.key").Append(newline);
-                body.Append($"{inner}If k.Length = 1 OrElse k = \"Enter\" OrElse k = \"Backspace\" OrElse k = \"Escape\" Then")
+                body.Append($"{inner}Dim n As Integer = ::Array.from(k).length").Append(newline);
+                body.Append($"{inner}If n = 1 OrElse k = \"Enter\" OrElse k = \"Backspace\" OrElse k = \"Escape\" Then")
                     .Append(newline);
                 break;
 
@@ -1299,7 +1319,8 @@ public static class RegionWriter
     private static void AppendBinds(
         StringBuilder body, FormDocument form, FormControl control, string inner, string newline)
     {
-        foreach (var bind in control.Binds)
+        var binds = form.Target == FormTarget.Web ? WebRaiseOrder(control.Definition, control.Binds) : (IReadOnlyList<FormBind>)control.Binds;
+        foreach (var bind in binds)
         {
             if (string.IsNullOrEmpty(bind.Handler))
             {

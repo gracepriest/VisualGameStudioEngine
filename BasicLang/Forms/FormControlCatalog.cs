@@ -1871,8 +1871,34 @@ public static class FormControlCatalog
         "description is .NET Framework 4.8's own [Description] (owner decision O4). The args are " +
         "still WinForms'.";
 
-    private static IReadOnlyList<FormEventDef> LabelEvents() => new[]
-    {
+    /// <summary>
+    /// KeyDown, KeyUp, KeyPress — WinForms' own text, the same on every kind that browses them (review fix 5: one copy,
+    /// not one per kind). <paramref name="web"/>: the kind exists on the page, so they carry their DOM names, and
+    /// KeyPress its <see cref="FormWebFilter.KeyPressKeys"/> wrapper (ADR 0021). ⛔ Order matters only for reading;
+    /// the raise order on the page is RegionWriter's.
+    /// </summary>
+    private static FormEventDef[] KeyEvents(bool web) =>
+    [
+        new FormEventDef("KeyDown", "KeyEventArgs", web ? "keydown" : null, FormEventCategory.Key, "Occurs when a key is first pressed."),
+        new FormEventDef("KeyUp", "KeyEventArgs", web ? "keyup" : null, FormEventCategory.Key, "Occurs when a key is released."),
+        new FormEventDef("KeyPress", "KeyPressEventArgs", web ? "keypress" : null, FormEventCategory.Key,
+            "Occurs when the control has focus and the user presses and releases a key.",
+            WebFilter: web ? FormWebFilter.KeyPressKeys : FormWebFilter.None)
+    ];
+
+    /// <summary>Enter, Leave — on the page the <see cref="FormWebFilter.FromOutside"/> <c>focusin</c>/<c>focusout</c>.</summary>
+    private static FormEventDef[] FocusEvents(bool web) =>
+    [
+        new FormEventDef("Enter", null, web ? "focusin" : null, FormEventCategory.Focus,
+            "Occurs when the control becomes the active control of the form.",
+            WebFilter: web ? FormWebFilter.FromOutside : FormWebFilter.None),
+        new FormEventDef("Leave", null, web ? "focusout" : null, FormEventCategory.Focus,
+            "Occurs when the control is no longer the active control of the form.",
+            WebFilter: web ? FormWebFilter.FromOutside : FormWebFilter.None)
+    ];
+
+    private static IReadOnlyList<FormEventDef> LabelEvents() =>
+    [
         new FormEventDef("Click", null, "click", FormEventCategory.Action, "Occurs when the component is clicked.", IsDefault: true),
         new FormEventDef("DoubleClick", null, "dblclick", FormEventCategory.Action, "Occurs when the component is double-clicked."),
         new FormEventDef("MouseDown", "MouseEventArgs", "mousedown", FormEventCategory.Mouse, "Occurs when the mouse pointer is over the component and a mouse button is pressed."),
@@ -1882,10 +1908,10 @@ public static class FormControlCatalog
         new FormEventDef("MouseLeave", null, "mouseleave", FormEventCategory.Mouse, "Occurs when the mouse leaves the visible part of the control."),
         new FormEventDef("TextChanged", null, null, FormEventCategory.PropertyChanged, "Event raised when the value of the Text property is changed on Control."),
         new FormEventDef("Paint", "PaintEventArgs", null, FormEventCategory.Appearance, "Occurs when a control needs repainting.")
-    };
+    ];
 
-    private static IReadOnlyList<FormEventDef> TextBoxEvents() => new[]
-    {
+    private static IReadOnlyList<FormEventDef> TextBoxEvents() =>
+    [
         new FormEventDef("TextChanged", null, "input", FormEventCategory.PropertyChanged, "Event raised when the value of the Text property is changed on Control.", IsDefault: true),
         new FormEventDef("Click", null, "click", FormEventCategory.Action, "Occurs when the component is clicked."),
         new FormEventDef("DoubleClick", null, "dblclick", FormEventCategory.Action, "Occurs when the component is double-clicked."),
@@ -1894,34 +1920,28 @@ public static class FormControlCatalog
         new FormEventDef("MouseMove", "MouseEventArgs", "mousemove", FormEventCategory.Mouse, "Occurs when the mouse pointer is moved over the component."),
         new FormEventDef("MouseEnter", null, "mouseenter", FormEventCategory.Mouse, "Occurs when the mouse enters the visible part of the control."),
         new FormEventDef("MouseLeave", null, "mouseleave", FormEventCategory.Mouse, "Occurs when the mouse leaves the visible part of the control."),
-        new FormEventDef("KeyDown", "KeyEventArgs", "keydown", FormEventCategory.Key, "Occurs when a key is first pressed."),
-        new FormEventDef("KeyUp", "KeyEventArgs", "keyup", FormEventCategory.Key, "Occurs when a key is released."),
-        new FormEventDef("KeyPress", "KeyPressEventArgs", "keypress", FormEventCategory.Key, "Occurs when the control has focus and the user presses and releases a key.", WebFilter: FormWebFilter.KeyPressKeys),
-        new FormEventDef("Enter", null, "focusin", FormEventCategory.Focus, "Occurs when the control becomes the active control of the form.", WebFilter: FormWebFilter.FromOutside),
-        new FormEventDef("Leave", null, "focusout", FormEventCategory.Focus, "Occurs when the control is no longer the active control of the form.", WebFilter: FormWebFilter.FromOutside),
+        ..KeyEvents(web: true),
+        ..FocusEvents(web: true),
         new FormEventDef("Validating", "System.ComponentModel.CancelEventArgs", null, FormEventCategory.Focus, "Occurs when the control is validating."),
         new FormEventDef("Validated", null, null, FormEventCategory.Focus, "Occurs after a control has been successfully validated.")
-    };
+    ];
 
-    private static IReadOnlyList<FormEventDef> ButtonEvents() => new[]
-    {
+    private static IReadOnlyList<FormEventDef> ButtonEvents() =>
+    [
         new FormEventDef("Click", null, "click", FormEventCategory.Action, "Occurs when the component is clicked.", IsDefault: true),
         new FormEventDef("MouseDown", "MouseEventArgs", "mousedown", FormEventCategory.Mouse, "Occurs when the mouse pointer is over the component and a mouse button is pressed."),
         new FormEventDef("MouseUp", "MouseEventArgs", "mouseup", FormEventCategory.Mouse, "Occurs when the mouse pointer is over the component and a mouse button is released."),
         new FormEventDef("MouseMove", "MouseEventArgs", "mousemove", FormEventCategory.Mouse, "Occurs when the mouse pointer is moved over the component."),
         new FormEventDef("MouseEnter", null, "mouseenter", FormEventCategory.Mouse, "Occurs when the mouse enters the visible part of the control."),
         new FormEventDef("MouseLeave", null, "mouseleave", FormEventCategory.Mouse, "Occurs when the mouse leaves the visible part of the control."),
-        new FormEventDef("KeyDown", "KeyEventArgs", "keydown", FormEventCategory.Key, "Occurs when a key is first pressed."),
-        new FormEventDef("KeyUp", "KeyEventArgs", "keyup", FormEventCategory.Key, "Occurs when a key is released."),
-        new FormEventDef("KeyPress", "KeyPressEventArgs", "keypress", FormEventCategory.Key, "Occurs when the control has focus and the user presses and releases a key.", WebFilter: FormWebFilter.KeyPressKeys),
-        new FormEventDef("Enter", null, "focusin", FormEventCategory.Focus, "Occurs when the control becomes the active control of the form.", WebFilter: FormWebFilter.FromOutside),
-        new FormEventDef("Leave", null, "focusout", FormEventCategory.Focus, "Occurs when the control is no longer the active control of the form.", WebFilter: FormWebFilter.FromOutside),
+        ..KeyEvents(web: true),
+        ..FocusEvents(web: true),
         new FormEventDef("TextChanged", null, null, FormEventCategory.PropertyChanged, "Event raised when the value of the Text property is changed on Control."),
         new FormEventDef("Paint", "PaintEventArgs", null, FormEventCategory.Appearance, "Occurs when a control needs repainting.")
-    };
+    ];
 
-    private static IReadOnlyList<FormEventDef> CheckBoxEvents() => new[]
-    {
+    private static IReadOnlyList<FormEventDef> CheckBoxEvents() =>
+    [
         new FormEventDef("CheckedChanged", null, "change", FormEventCategory.Misc, "Occurs whenever the Check property is changed.", IsDefault: true),
         new FormEventDef("CheckStateChanged", null, null, FormEventCategory.Misc, "Occurs whenever the CheckState property is changed."),
         new FormEventDef("Click", null, "click", FormEventCategory.Action, "Occurs when the component is clicked."),
@@ -1930,30 +1950,24 @@ public static class FormControlCatalog
         new FormEventDef("MouseMove", "MouseEventArgs", "mousemove", FormEventCategory.Mouse, "Occurs when the mouse pointer is moved over the component."),
         new FormEventDef("MouseEnter", null, "mouseenter", FormEventCategory.Mouse, "Occurs when the mouse enters the visible part of the control."),
         new FormEventDef("MouseLeave", null, "mouseleave", FormEventCategory.Mouse, "Occurs when the mouse leaves the visible part of the control."),
-        new FormEventDef("KeyDown", "KeyEventArgs", "keydown", FormEventCategory.Key, "Occurs when a key is first pressed."),
-        new FormEventDef("KeyUp", "KeyEventArgs", "keyup", FormEventCategory.Key, "Occurs when a key is released."),
-        new FormEventDef("KeyPress", "KeyPressEventArgs", "keypress", FormEventCategory.Key, "Occurs when the control has focus and the user presses and releases a key.", WebFilter: FormWebFilter.KeyPressKeys),
-        new FormEventDef("Enter", null, "focusin", FormEventCategory.Focus, "Occurs when the control becomes the active control of the form.", WebFilter: FormWebFilter.FromOutside),
-        new FormEventDef("Leave", null, "focusout", FormEventCategory.Focus, "Occurs when the control is no longer the active control of the form.", WebFilter: FormWebFilter.FromOutside)
-    };
+        ..KeyEvents(web: true),
+        ..FocusEvents(web: true)
+    ];
 
-    private static IReadOnlyList<FormEventDef> RadioButtonEvents() => new[]
-    {
+    private static IReadOnlyList<FormEventDef> RadioButtonEvents() =>
+    [
         new FormEventDef("CheckedChanged", null, "change", FormEventCategory.Misc, "Occurs whenever the 'checked' property changes value.", IsDefault: true),
         new FormEventDef("Click", null, "click", FormEventCategory.Action, "Occurs when the component is clicked."),
         new FormEventDef("MouseDown", "MouseEventArgs", "mousedown", FormEventCategory.Mouse, "Occurs when the mouse pointer is over the component and a mouse button is pressed."),
         new FormEventDef("MouseUp", "MouseEventArgs", "mouseup", FormEventCategory.Mouse, "Occurs when the mouse pointer is over the component and a mouse button is released."),
         new FormEventDef("MouseEnter", null, "mouseenter", FormEventCategory.Mouse, "Occurs when the mouse enters the visible part of the control."),
         new FormEventDef("MouseLeave", null, "mouseleave", FormEventCategory.Mouse, "Occurs when the mouse leaves the visible part of the control."),
-        new FormEventDef("KeyDown", "KeyEventArgs", "keydown", FormEventCategory.Key, "Occurs when a key is first pressed."),
-        new FormEventDef("KeyUp", "KeyEventArgs", "keyup", FormEventCategory.Key, "Occurs when a key is released."),
-        new FormEventDef("KeyPress", "KeyPressEventArgs", "keypress", FormEventCategory.Key, "Occurs when the control has focus and the user presses and releases a key.", WebFilter: FormWebFilter.KeyPressKeys),
-        new FormEventDef("Enter", null, "focusin", FormEventCategory.Focus, "Occurs when the control becomes the active control of the form.", WebFilter: FormWebFilter.FromOutside),
-        new FormEventDef("Leave", null, "focusout", FormEventCategory.Focus, "Occurs when the control is no longer the active control of the form.", WebFilter: FormWebFilter.FromOutside)
-    };
+        ..KeyEvents(web: true),
+        ..FocusEvents(web: true)
+    ];
 
-    private static IReadOnlyList<FormEventDef> ComboBoxEvents() => new[]
-    {
+    private static IReadOnlyList<FormEventDef> ComboBoxEvents() =>
+    [
         new FormEventDef("SelectedIndexChanged", null, "change", FormEventCategory.Behavior, "Occurs when the value of the SelectedIndex property changes.", IsDefault: true),
         new FormEventDef("SelectedValueChanged", null, null, FormEventCategory.PropertyChanged, "Event raised when the value of the SelectedValue property is changed on ListControl."),
         new FormEventDef("DropDown", null, null, FormEventCategory.Behavior, "Occurs when the drop-down portion of the combo box is shown."),
@@ -1964,15 +1978,12 @@ public static class FormControlCatalog
         new FormEventDef("MouseUp", "MouseEventArgs", "mouseup", FormEventCategory.Mouse, "Occurs when the mouse pointer is over the component and a mouse button is released."),
         new FormEventDef("MouseEnter", null, "mouseenter", FormEventCategory.Mouse, "Occurs when the mouse enters the visible part of the control."),
         new FormEventDef("MouseLeave", null, "mouseleave", FormEventCategory.Mouse, "Occurs when the mouse leaves the visible part of the control."),
-        new FormEventDef("KeyDown", "KeyEventArgs", "keydown", FormEventCategory.Key, "Occurs when a key is first pressed."),
-        new FormEventDef("KeyUp", "KeyEventArgs", "keyup", FormEventCategory.Key, "Occurs when a key is released."),
-        new FormEventDef("KeyPress", "KeyPressEventArgs", "keypress", FormEventCategory.Key, "Occurs when the control has focus and the user presses and releases a key.", WebFilter: FormWebFilter.KeyPressKeys),
-        new FormEventDef("Enter", null, "focusin", FormEventCategory.Focus, "Occurs when the control becomes the active control of the form.", WebFilter: FormWebFilter.FromOutside),
-        new FormEventDef("Leave", null, "focusout", FormEventCategory.Focus, "Occurs when the control is no longer the active control of the form.", WebFilter: FormWebFilter.FromOutside)
-    };
+        ..KeyEvents(web: true),
+        ..FocusEvents(web: true)
+    ];
 
-    private static IReadOnlyList<FormEventDef> ListBoxEvents() => new[]
-    {
+    private static IReadOnlyList<FormEventDef> ListBoxEvents() =>
+    [
         new FormEventDef("SelectedIndexChanged", null, "change", FormEventCategory.Behavior, "Occurs when the value of the SelectedIndex property changes.", IsDefault: true),
         new FormEventDef("SelectedValueChanged", null, null, FormEventCategory.PropertyChanged, "Event raised when the value of the SelectedValue property is changed on ListControl."),
         new FormEventDef("Click", null, "click", FormEventCategory.Action, "Occurs when the component is clicked."),
@@ -1982,15 +1993,12 @@ public static class FormControlCatalog
         new FormEventDef("MouseMove", "MouseEventArgs", "mousemove", FormEventCategory.Mouse, "Occurs when the mouse pointer is moved over the component."),
         new FormEventDef("MouseEnter", null, "mouseenter", FormEventCategory.Mouse, "Occurs when the mouse enters the visible part of the control."),
         new FormEventDef("MouseLeave", null, "mouseleave", FormEventCategory.Mouse, "Occurs when the mouse leaves the visible part of the control."),
-        new FormEventDef("KeyDown", "KeyEventArgs", "keydown", FormEventCategory.Key, "Occurs when a key is first pressed."),
-        new FormEventDef("KeyUp", "KeyEventArgs", "keyup", FormEventCategory.Key, "Occurs when a key is released."),
-        new FormEventDef("KeyPress", "KeyPressEventArgs", "keypress", FormEventCategory.Key, "Occurs when the control has focus and the user presses and releases a key.", WebFilter: FormWebFilter.KeyPressKeys),
-        new FormEventDef("Enter", null, "focusin", FormEventCategory.Focus, "Occurs when the control becomes the active control of the form.", WebFilter: FormWebFilter.FromOutside),
-        new FormEventDef("Leave", null, "focusout", FormEventCategory.Focus, "Occurs when the control is no longer the active control of the form.", WebFilter: FormWebFilter.FromOutside)
-    };
+        ..KeyEvents(web: true),
+        ..FocusEvents(web: true)
+    ];
 
-    private static IReadOnlyList<FormEventDef> PanelEvents() => new[]
-    {
+    private static IReadOnlyList<FormEventDef> PanelEvents() =>
+    [
         new FormEventDef("Paint", "PaintEventArgs", null, FormEventCategory.Appearance, "Occurs when a control needs repainting.", IsDefault: true),
         new FormEventDef("Click", null, "click", FormEventCategory.Action, "Occurs when the component is clicked.", IsWebDefault: true),
         new FormEventDef("DoubleClick", null, "dblclick", FormEventCategory.Action, "Occurs when the component is double-clicked."),
@@ -1999,24 +2007,23 @@ public static class FormControlCatalog
         new FormEventDef("MouseMove", "MouseEventArgs", "mousemove", FormEventCategory.Mouse, "Occurs when the mouse pointer is moved over the component."),
         new FormEventDef("MouseEnter", null, "mouseenter", FormEventCategory.Mouse, "Occurs when the mouse enters the visible part of the control."),
         new FormEventDef("MouseLeave", null, "mouseleave", FormEventCategory.Mouse, "Occurs when the mouse leaves the visible part of the control."),
-        new FormEventDef("Enter", null, "focusin", FormEventCategory.Focus, "Occurs when the control becomes the active control of the form.", WebFilter: FormWebFilter.FromOutside),
-        new FormEventDef("Leave", null, "focusout", FormEventCategory.Focus, "Occurs when the control is no longer the active control of the form.", WebFilter: FormWebFilter.FromOutside),
+        ..FocusEvents(web: true),
         new FormEventDef("Resize", null, null, FormEventCategory.Layout, "Occurs when a control is resized."),
         new FormEventDef("Scroll", "ScrollEventArgs", null, FormEventCategory.Action, "Occurs when the user moves the scroll box.")
-    };
+    ];
 
-    private static IReadOnlyList<FormEventDef> GroupBoxEvents() => new[]
-    {
+    private static IReadOnlyList<FormEventDef> GroupBoxEvents() =>
+    [
         new FormEventDef("Enter", null, "focusin", FormEventCategory.Focus, "Occurs when the control becomes the active control of the form.", IsDefault: true, WebFilter: FormWebFilter.FromOutside),
         new FormEventDef("Leave", null, "focusout", FormEventCategory.Focus, "Occurs when the control is no longer the active control of the form.", WebFilter: FormWebFilter.FromOutside),
         GroupBoxClick(),
         new FormEventDef("TextChanged", null, null, FormEventCategory.PropertyChanged, "Event raised when the value of the Text property is changed on Control."),
         new FormEventDef("Paint", "PaintEventArgs", null, FormEventCategory.Appearance, "Occurs when a control needs repainting."),
         new FormEventDef("Resize", null, null, FormEventCategory.Layout, "Occurs when a control is resized.")
-    };
+    ];
 
-    private static IReadOnlyList<FormEventDef> PictureBoxEvents() => new[]
-    {
+    private static IReadOnlyList<FormEventDef> PictureBoxEvents() =>
+    [
         new FormEventDef("Click", null, "click", FormEventCategory.Action, "Occurs when the component is clicked.", IsDefault: true),
         new FormEventDef("DoubleClick", null, "dblclick", FormEventCategory.Action, "Occurs when the component is double-clicked."),
         new FormEventDef("MouseDown", "MouseEventArgs", "mousedown", FormEventCategory.Mouse, "Occurs when the mouse pointer is over the component and a mouse button is pressed."),
@@ -2027,10 +2034,10 @@ public static class FormControlCatalog
         new FormEventDef("Paint", "PaintEventArgs", null, FormEventCategory.Appearance, "Occurs when a control needs repainting."),
         new FormEventDef("Resize", null, null, FormEventCategory.Layout, "Occurs when a control is resized."),
         new FormEventDef("LoadCompleted", "System.ComponentModel.AsyncCompletedEventArgs", null, FormEventCategory.Asynchronous, "Event raised when loading into a PictureBox finishes.")
-    };
+    ];
 
-    private static IReadOnlyList<FormEventDef> LinkLabelEvents() => new[]
-    {
+    private static IReadOnlyList<FormEventDef> LinkLabelEvents() =>
+    [
         new FormEventDef("LinkClicked", "LinkLabelLinkClickedEventArgs", "click", FormEventCategory.Action, "Occurs when the link is clicked.", IsDefault: true),
         new FormEventDef("Click", null, null, FormEventCategory.Action, "Occurs when the component is clicked."),
         new FormEventDef("DoubleClick", null, "dblclick", FormEventCategory.Action, "Occurs when the component is double-clicked."),
@@ -2040,26 +2047,23 @@ public static class FormControlCatalog
         new FormEventDef("MouseEnter", null, "mouseenter", FormEventCategory.Mouse, "Occurs when the mouse enters the visible part of the control."),
         new FormEventDef("MouseLeave", null, "mouseleave", FormEventCategory.Mouse, "Occurs when the mouse leaves the visible part of the control."),
         new FormEventDef("TextChanged", null, null, FormEventCategory.PropertyChanged, "Event raised when the value of the Text property is changed on Control.")
-    };
+    ];
 
-    private static IReadOnlyList<FormEventDef> NumericUpDownEvents() => new[]
-    {
+    private static IReadOnlyList<FormEventDef> NumericUpDownEvents() =>
+    [
         new FormEventDef("ValueChanged", null, "input", FormEventCategory.Action, "Occurs when the value in the up-down control changes.", IsDefault: true),
         new FormEventDef("Click", null, "click", FormEventCategory.Action, "Occurs when the component is clicked."),
         new FormEventDef("DoubleClick", null, "dblclick", FormEventCategory.Action, "Occurs when the component is double-clicked."),
         new FormEventDef("MouseDown", "MouseEventArgs", "mousedown", FormEventCategory.Mouse, "Occurs when the mouse pointer is over the component and a mouse button is pressed."),
         new FormEventDef("MouseUp", "MouseEventArgs", "mouseup", FormEventCategory.Mouse, "Occurs when the mouse pointer is over the component and a mouse button is released."),
-        new FormEventDef("KeyDown", "KeyEventArgs", "keydown", FormEventCategory.Key, "Occurs when a key is first pressed."),
-        new FormEventDef("KeyUp", "KeyEventArgs", "keyup", FormEventCategory.Key, "Occurs when a key is released."),
-        new FormEventDef("KeyPress", "KeyPressEventArgs", "keypress", FormEventCategory.Key, "Occurs when the control has focus and the user presses and releases a key.", WebFilter: FormWebFilter.KeyPressKeys),
-        new FormEventDef("Enter", null, "focusin", FormEventCategory.Focus, "Occurs when the control becomes the active control of the form.", WebFilter: FormWebFilter.FromOutside),
-        new FormEventDef("Leave", null, "focusout", FormEventCategory.Focus, "Occurs when the control is no longer the active control of the form.", WebFilter: FormWebFilter.FromOutside),
+        ..KeyEvents(web: true),
+        ..FocusEvents(web: true),
         new FormEventDef("Validating", "System.ComponentModel.CancelEventArgs", null, FormEventCategory.Focus, "Occurs when the control is validating."),
         new FormEventDef("Validated", null, null, FormEventCategory.Focus, "Occurs after a control has been successfully validated.")
-    };
+    ];
 
-    private static IReadOnlyList<FormEventDef> DateTimePickerEvents() => new[]
-    {
+    private static IReadOnlyList<FormEventDef> DateTimePickerEvents() =>
+    [
         new FormEventDef("ValueChanged", null, "change", FormEventCategory.Action, "Occurs when the value of the control changes.", IsDefault: true),
         new FormEventDef("DropDown", null, null, FormEventCategory.Action, "Occurs when the drop-down calendar is about to drop."),
         new FormEventDef("CloseUp", null, null, FormEventCategory.Action, "Occurs when the user is finished selecting a date from the drop-down calendar."),
@@ -2067,16 +2071,13 @@ public static class FormControlCatalog
         new FormEventDef("MouseUp", "MouseEventArgs", "mouseup", FormEventCategory.Mouse, "Occurs when the mouse pointer is over the component and a mouse button is released."),
         new FormEventDef("MouseEnter", null, "mouseenter", FormEventCategory.Mouse, "Occurs when the mouse enters the visible part of the control."),
         new FormEventDef("MouseLeave", null, "mouseleave", FormEventCategory.Mouse, "Occurs when the mouse leaves the visible part of the control."),
-        new FormEventDef("KeyDown", "KeyEventArgs", "keydown", FormEventCategory.Key, "Occurs when a key is first pressed."),
-        new FormEventDef("KeyUp", "KeyEventArgs", "keyup", FormEventCategory.Key, "Occurs when a key is released."),
-        new FormEventDef("KeyPress", "KeyPressEventArgs", "keypress", FormEventCategory.Key, "Occurs when the control has focus and the user presses and releases a key.", WebFilter: FormWebFilter.KeyPressKeys),
-        new FormEventDef("Enter", null, "focusin", FormEventCategory.Focus, "Occurs when the control becomes the active control of the form.", WebFilter: FormWebFilter.FromOutside),
-        new FormEventDef("Leave", null, "focusout", FormEventCategory.Focus, "Occurs when the control is no longer the active control of the form.", WebFilter: FormWebFilter.FromOutside),
+        ..KeyEvents(web: true),
+        ..FocusEvents(web: true),
         new FormEventDef("Validating", "System.ComponentModel.CancelEventArgs", null, FormEventCategory.Focus, "Occurs when the control is validating.")
-    };
+    ];
 
-    private static IReadOnlyList<FormEventDef> TrackBarEvents() => new[]
-    {
+    private static IReadOnlyList<FormEventDef> TrackBarEvents() =>
+    [
         new FormEventDef("Scroll", null, "input", FormEventCategory.Behavior, "Occurs when the TrackBar slider moves.", IsDefault: true),
         new FormEventDef("ValueChanged", null, "change", FormEventCategory.Action, "Occurs when the value of the control changes."),
         new FormEventDef("MouseDown", "MouseEventArgs", "mousedown", FormEventCategory.Mouse, "Occurs when the mouse pointer is over the component and a mouse button is pressed."),
@@ -2084,15 +2085,12 @@ public static class FormControlCatalog
         new FormEventDef("MouseMove", "MouseEventArgs", "mousemove", FormEventCategory.Mouse, "Occurs when the mouse pointer is moved over the component."),
         new FormEventDef("MouseEnter", null, "mouseenter", FormEventCategory.Mouse, "Occurs when the mouse enters the visible part of the control."),
         new FormEventDef("MouseLeave", null, "mouseleave", FormEventCategory.Mouse, "Occurs when the mouse leaves the visible part of the control."),
-        new FormEventDef("KeyDown", "KeyEventArgs", "keydown", FormEventCategory.Key, "Occurs when a key is first pressed."),
-        new FormEventDef("KeyUp", "KeyEventArgs", "keyup", FormEventCategory.Key, "Occurs when a key is released."),
-        new FormEventDef("KeyPress", "KeyPressEventArgs", "keypress", FormEventCategory.Key, "Occurs when the control has focus and the user presses and releases a key.", WebFilter: FormWebFilter.KeyPressKeys),
-        new FormEventDef("Enter", null, "focusin", FormEventCategory.Focus, "Occurs when the control becomes the active control of the form.", WebFilter: FormWebFilter.FromOutside),
-        new FormEventDef("Leave", null, "focusout", FormEventCategory.Focus, "Occurs when the control is no longer the active control of the form.", WebFilter: FormWebFilter.FromOutside)
-    };
+        ..KeyEvents(web: true),
+        ..FocusEvents(web: true)
+    ];
 
-    private static IReadOnlyList<FormEventDef> ProgressBarEvents() => new[]
-    {
+    private static IReadOnlyList<FormEventDef> ProgressBarEvents() =>
+    [
         new FormEventDef("Click", null, "click", FormEventCategory.Action, "Occurs when the component is clicked.", IsDefault: true),
         new FormEventDef("MouseDown", "MouseEventArgs", "mousedown", FormEventCategory.Mouse, "Occurs when the mouse pointer is over the component and a mouse button is pressed."),
         new FormEventDef("MouseUp", "MouseEventArgs", "mouseup", FormEventCategory.Mouse, "Occurs when the mouse pointer is over the component and a mouse button is released."),
@@ -2100,10 +2098,10 @@ public static class FormControlCatalog
         new FormEventDef("MouseEnter", null, "mouseenter", FormEventCategory.Mouse, "Occurs when the mouse enters the visible part of the control."),
         new FormEventDef("MouseLeave", null, "mouseleave", FormEventCategory.Mouse, "Occurs when the mouse leaves the visible part of the control."),
         new FormEventDef("Resize", null, null, FormEventCategory.Layout, "Occurs when a control is resized.")
-    };
+    ];
 
-    private static IReadOnlyList<FormEventDef> CheckedListBoxEvents() => new[]
-    {
+    private static IReadOnlyList<FormEventDef> CheckedListBoxEvents() =>
+    [
         new FormEventDef("SelectedIndexChanged", null, null, FormEventCategory.Behavior, "Occurs when the value of the SelectedIndex property changes.", IsDefault: true),
         new FormEventDef("ItemCheck", "ItemCheckEventArgs", null, FormEventCategory.Behavior, "Indicates that an item is about to have its checked state changed. The value is not updated until after the event occurs."),
         new FormEventDef("SelectedValueChanged", null, null, FormEventCategory.PropertyChanged, "Event raised when the value of the SelectedValue property is changed on ListControl."),
@@ -2111,15 +2109,12 @@ public static class FormControlCatalog
         new FormEventDef("DoubleClick", null, null, FormEventCategory.Action, "Occurs when the component is double-clicked."),
         new FormEventDef("MouseDown", "MouseEventArgs", null, FormEventCategory.Mouse, "Occurs when the mouse pointer is over the component and a mouse button is pressed."),
         new FormEventDef("MouseUp", "MouseEventArgs", null, FormEventCategory.Mouse, "Occurs when the mouse pointer is over the component and a mouse button is released."),
-        new FormEventDef("KeyDown", "KeyEventArgs", null, FormEventCategory.Key, "Occurs when a key is first pressed."),
-        new FormEventDef("KeyUp", "KeyEventArgs", null, FormEventCategory.Key, "Occurs when a key is released."),
-        new FormEventDef("KeyPress", "KeyPressEventArgs", null, FormEventCategory.Key, "Occurs when the control has focus and the user presses and releases a key."),
-        new FormEventDef("Enter", null, null, FormEventCategory.Focus, "Occurs when the control becomes the active control of the form."),
-        new FormEventDef("Leave", null, null, FormEventCategory.Focus, "Occurs when the control is no longer the active control of the form.")
-    };
+        ..KeyEvents(web: false),
+        ..FocusEvents(web: false)
+    ];
 
-    private static IReadOnlyList<FormEventDef> ListViewEvents() => new[]
-    {
+    private static IReadOnlyList<FormEventDef> ListViewEvents() =>
+    [
         new FormEventDef("SelectedIndexChanged", null, null, FormEventCategory.Behavior, "Occurs whenever the 'SelectedIndex' property for this ListView changes.", IsDefault: true),
         new FormEventDef("ItemActivate", null, null, FormEventCategory.Action, "Occurs when an item is activated."),
         new FormEventDef("ItemSelectionChanged", "ListViewItemSelectionChangedEventArgs", null, FormEventCategory.Behavior, "Event raised when the selection state of an item has changed."),
@@ -2132,12 +2127,11 @@ public static class FormControlCatalog
         new FormEventDef("MouseUp", "MouseEventArgs", null, FormEventCategory.Mouse, "Occurs when the mouse pointer is over the component and a mouse button is released."),
         new FormEventDef("KeyDown", "KeyEventArgs", null, FormEventCategory.Key, "Occurs when a key is first pressed."),
         new FormEventDef("KeyUp", "KeyEventArgs", null, FormEventCategory.Key, "Occurs when a key is released."),
-        new FormEventDef("Enter", null, null, FormEventCategory.Focus, "Occurs when the control becomes the active control of the form."),
-        new FormEventDef("Leave", null, null, FormEventCategory.Focus, "Occurs when the control is no longer the active control of the form.")
-    };
+        ..FocusEvents(web: false)
+    ];
 
-    private static IReadOnlyList<FormEventDef> TreeViewEvents() => new[]
-    {
+    private static IReadOnlyList<FormEventDef> TreeViewEvents() =>
+    [
         new FormEventDef("AfterSelect", "TreeViewEventArgs", null, FormEventCategory.Behavior, "Occurs when the selection has been changed.", IsDefault: true),
         new FormEventDef("BeforeSelect", "TreeViewCancelEventArgs", null, FormEventCategory.Behavior, "Occurs when the selection is about to change."),
         new FormEventDef("AfterCheck", "TreeViewEventArgs", null, FormEventCategory.Behavior, "Occurs when a check box on a tree node has been checked or unchecked."),
@@ -2150,12 +2144,11 @@ public static class FormControlCatalog
         new FormEventDef("DoubleClick", null, null, FormEventCategory.Action, "Occurs when the component is double-clicked."),
         new FormEventDef("KeyDown", "KeyEventArgs", null, FormEventCategory.Key, "Occurs when a key is first pressed."),
         new FormEventDef("KeyUp", "KeyEventArgs", null, FormEventCategory.Key, "Occurs when a key is released."),
-        new FormEventDef("Enter", null, null, FormEventCategory.Focus, "Occurs when the control becomes the active control of the form."),
-        new FormEventDef("Leave", null, null, FormEventCategory.Focus, "Occurs when the control is no longer the active control of the form.")
-    };
+        ..FocusEvents(web: false)
+    ];
 
-    private static IReadOnlyList<FormEventDef> DataGridViewEvents() => new[]
-    {
+    private static IReadOnlyList<FormEventDef> DataGridViewEvents() =>
+    [
         new FormEventDef("CellContentClick", "DataGridViewCellEventArgs", null, FormEventCategory.Mouse, "Occurs when the content within a cell is clicked.", IsDefault: true),
         new FormEventDef("CellClick", "DataGridViewCellEventArgs", null, FormEventCategory.Mouse, "Occurs when any part of the cell is clicked."),
         new FormEventDef("CellDoubleClick", "DataGridViewCellEventArgs", null, FormEventCategory.Mouse, "Occurs when the user double-clicks anywhere in a cell."),
@@ -2170,10 +2163,10 @@ public static class FormControlCatalog
         new FormEventDef("RowEnter", "DataGridViewCellEventArgs", null, FormEventCategory.Focus, "Occurs when a row receives input focus and becomes the current row."),
         new FormEventDef("DataError", "DataGridViewDataErrorEventArgs", null, FormEventCategory.Behavior, "Occurs when an external data-parsing or validation operation throws an exception, or when an attempt to commit data to a data source does not succeed."),
         new FormEventDef("KeyDown", "KeyEventArgs", null, FormEventCategory.Key, "Occurs when a key is first pressed.")
-    };
+    ];
 
-    private static IReadOnlyList<FormEventDef> TabControlEvents() => new[]
-    {
+    private static IReadOnlyList<FormEventDef> TabControlEvents() =>
+    [
         new FormEventDef("SelectedIndexChanged", null, null, FormEventCategory.Behavior, "Occurs when the value of the SelectedIndex property changes.", IsDefault: true),
         new FormEventDef("Selected", "TabControlEventArgs", null, FormEventCategory.Action, "Occurs after a tab page is selected as the topmost tab page."),
         new FormEventDef("Selecting", "TabControlCancelEventArgs", null, FormEventCategory.Action, "Occurs when a tab page is being selected."),
@@ -2184,12 +2177,11 @@ public static class FormControlCatalog
         new FormEventDef("MouseUp", "MouseEventArgs", null, FormEventCategory.Mouse, "Occurs when the mouse pointer is over the component and a mouse button is released."),
         new FormEventDef("KeyDown", "KeyEventArgs", null, FormEventCategory.Key, "Occurs when a key is first pressed."),
         new FormEventDef("KeyUp", "KeyEventArgs", null, FormEventCategory.Key, "Occurs when a key is released."),
-        new FormEventDef("Enter", null, null, FormEventCategory.Focus, "Occurs when the control becomes the active control of the form."),
-        new FormEventDef("Leave", null, null, FormEventCategory.Focus, "Occurs when the control is no longer the active control of the form.")
-    };
+        ..FocusEvents(web: false)
+    ];
 
-    private static IReadOnlyList<FormEventDef> SplitContainerEvents() => new[]
-    {
+    private static IReadOnlyList<FormEventDef> SplitContainerEvents() =>
+    [
         new FormEventDef("SplitterMoved", "SplitterEventArgs", null, FormEventCategory.Behavior, "Occurs when the splitter is done being moved.", IsDefault: true),
         new FormEventDef("SplitterMoving", "SplitterCancelEventArgs", null, FormEventCategory.Behavior, "Occurs when the splitter is being moved."),
         new FormEventDef("Paint", "PaintEventArgs", null, FormEventCategory.Appearance, "Occurs when a control needs repainting."),
@@ -2199,12 +2191,11 @@ public static class FormControlCatalog
         new FormEventDef("MouseUp", "MouseEventArgs", null, FormEventCategory.Mouse, "Occurs when the mouse pointer is over the component and a mouse button is released."),
         new FormEventDef("MouseMove", "MouseEventArgs", null, FormEventCategory.Mouse, "Occurs when the mouse pointer is moved over the component."),
         new FormEventDef("Resize", null, null, FormEventCategory.Layout, "Occurs when a control is resized."),
-        new FormEventDef("Enter", null, null, FormEventCategory.Focus, "Occurs when the control becomes the active control of the form."),
-        new FormEventDef("Leave", null, null, FormEventCategory.Focus, "Occurs when the control is no longer the active control of the form.")
-    };
+        ..FocusEvents(web: false)
+    ];
 
-    private static IReadOnlyList<FormEventDef> FlowLayoutPanelEvents() => new[]
-    {
+    private static IReadOnlyList<FormEventDef> FlowLayoutPanelEvents() =>
+    [
         new FormEventDef("Paint", "PaintEventArgs", null, FormEventCategory.Appearance, "Occurs when a control needs repainting.", IsDefault: true),
         new FormEventDef("Click", null, null, FormEventCategory.Action, "Occurs when the component is clicked."),
         new FormEventDef("DoubleClick", null, null, FormEventCategory.Action, "Occurs when the component is double-clicked."),
@@ -2215,12 +2206,11 @@ public static class FormControlCatalog
         new FormEventDef("MouseLeave", null, null, FormEventCategory.Mouse, "Occurs when the mouse leaves the visible part of the control."),
         new FormEventDef("Resize", null, null, FormEventCategory.Layout, "Occurs when a control is resized."),
         new FormEventDef("Scroll", "ScrollEventArgs", null, FormEventCategory.Action, "Occurs when the user moves the scroll box."),
-        new FormEventDef("Enter", null, null, FormEventCategory.Focus, "Occurs when the control becomes the active control of the form."),
-        new FormEventDef("Leave", null, null, FormEventCategory.Focus, "Occurs when the control is no longer the active control of the form.")
-    };
+        ..FocusEvents(web: false)
+    ];
 
-    private static IReadOnlyList<FormEventDef> TableLayoutPanelEvents() => new[]
-    {
+    private static IReadOnlyList<FormEventDef> TableLayoutPanelEvents() =>
+    [
         new FormEventDef("Paint", "PaintEventArgs", null, FormEventCategory.Appearance, "Occurs when a control needs repainting.", IsDefault: true),
         new FormEventDef("Click", null, null, FormEventCategory.Action, "Occurs when the component is clicked."),
         new FormEventDef("DoubleClick", null, null, FormEventCategory.Action, "Occurs when the component is double-clicked."),
@@ -2231,26 +2221,25 @@ public static class FormControlCatalog
         new FormEventDef("MouseLeave", null, null, FormEventCategory.Mouse, "Occurs when the mouse leaves the visible part of the control."),
         new FormEventDef("Resize", null, null, FormEventCategory.Layout, "Occurs when a control is resized."),
         new FormEventDef("Scroll", "ScrollEventArgs", null, FormEventCategory.Action, "Occurs when the user moves the scroll box."),
-        new FormEventDef("Enter", null, null, FormEventCategory.Focus, "Occurs when the control becomes the active control of the form."),
-        new FormEventDef("Leave", null, null, FormEventCategory.Focus, "Occurs when the control is no longer the active control of the form."),
+        ..FocusEvents(web: false),
         new FormEventDef("CellPaint", "TableLayoutCellPaintEventArgs", null, FormEventCategory.Appearance, "Occurs when a cell needs repainting.")
-    };
+    ];
 
-    private static IReadOnlyList<FormEventDef> ToolTipEvents() => new[]
-    {
+    private static IReadOnlyList<FormEventDef> ToolTipEvents() =>
+    [
         new FormEventDef("Popup", "PopupEventArgs", null, FormEventCategory.Behavior, "Occurs whenever a ToolTip is about to be shown.", IsDefault: true),
         new FormEventDef("Draw", "DrawToolTipEventArgs", null, FormEventCategory.Behavior, "Occurs in OwnerDraw mode when the ToolTip needs to be drawn.")
-    };
+    ];
 
-    private static IReadOnlyList<FormEventDef> BackgroundWorkerEvents() => new[]
-    {
+    private static IReadOnlyList<FormEventDef> BackgroundWorkerEvents() =>
+    [
         new FormEventDef("DoWork", "System.ComponentModel.DoWorkEventArgs", null, FormEventCategory.Misc, "Event handler to be run on a different thread when the operation begins.", IsDefault: true, OracleExemption: BackgroundWorkerEventHasNoMetadata),
         new FormEventDef("ProgressChanged", "System.ComponentModel.ProgressChangedEventArgs", null, FormEventCategory.Misc, "Raised when the worker thread indicates that some progress has been made.", OracleExemption: BackgroundWorkerEventHasNoMetadata),
         new FormEventDef("RunWorkerCompleted", "System.ComponentModel.RunWorkerCompletedEventArgs", null, FormEventCategory.Misc, "Raised when the worker has completed (either through success, failure, or cancellation).", OracleExemption: BackgroundWorkerEventHasNoMetadata)
-    };
+    ];
 
-    private static IReadOnlyList<FormEventDef> MenuStripEvents() => new[]
-    {
+    private static IReadOnlyList<FormEventDef> MenuStripEvents() =>
+    [
         new FormEventDef("ItemClicked", "ToolStripItemClickedEventArgs", "click", FormEventCategory.Action, "Occurs when the item is clicked.", IsDefault: true),
         new FormEventDef("MenuActivate", null, null, FormEventCategory.Behavior, "Occurs when the user has started accessing the menu through the keyboard or mouse."),
         new FormEventDef("MenuDeactivate", null, null, FormEventCategory.Behavior, "Occurs when the user has finished accessing the menu through the keyboard or mouse."),
@@ -2260,10 +2249,10 @@ public static class FormControlCatalog
         new FormEventDef("MouseEnter", null, "mouseenter", FormEventCategory.Mouse, "Occurs when the mouse enters the visible part of the control."),
         new FormEventDef("MouseLeave", null, "mouseleave", FormEventCategory.Mouse, "Occurs when the mouse leaves the visible part of the control."),
         new FormEventDef("Paint", "PaintEventArgs", null, FormEventCategory.Appearance, "Occurs when a control needs repainting.")
-    };
+    ];
 
-    private static IReadOnlyList<FormEventDef> ToolStripEvents() => new[]
-    {
+    private static IReadOnlyList<FormEventDef> ToolStripEvents() =>
+    [
         new FormEventDef("ItemClicked", "ToolStripItemClickedEventArgs", "click", FormEventCategory.Action, "Occurs when the item is clicked.", IsDefault: true),
         new FormEventDef("Click", null, null, FormEventCategory.Action, "Occurs when the component is clicked."),
         new FormEventDef("MouseDown", "MouseEventArgs", "mousedown", FormEventCategory.Mouse, "Occurs when the mouse pointer is over the component and a mouse button is pressed."),
@@ -2271,10 +2260,10 @@ public static class FormControlCatalog
         new FormEventDef("MouseEnter", null, "mouseenter", FormEventCategory.Mouse, "Occurs when the mouse enters the visible part of the control."),
         new FormEventDef("MouseLeave", null, "mouseleave", FormEventCategory.Mouse, "Occurs when the mouse leaves the visible part of the control."),
         new FormEventDef("Paint", "PaintEventArgs", null, FormEventCategory.Appearance, "Occurs when a control needs repainting.")
-    };
+    ];
 
-    private static IReadOnlyList<FormEventDef> StatusStripEvents() => new[]
-    {
+    private static IReadOnlyList<FormEventDef> StatusStripEvents() =>
+    [
         new FormEventDef("ItemClicked", "ToolStripItemClickedEventArgs", "click", FormEventCategory.Action, "Occurs when the item is clicked.", IsDefault: true),
         new FormEventDef("Click", null, null, FormEventCategory.Action, "Occurs when the component is clicked."),
         new FormEventDef("MouseDown", "MouseEventArgs", "mousedown", FormEventCategory.Mouse, "Occurs when the mouse pointer is over the component and a mouse button is pressed."),
@@ -2282,10 +2271,10 @@ public static class FormControlCatalog
         new FormEventDef("MouseEnter", null, "mouseenter", FormEventCategory.Mouse, "Occurs when the mouse enters the visible part of the control."),
         new FormEventDef("MouseLeave", null, "mouseleave", FormEventCategory.Mouse, "Occurs when the mouse leaves the visible part of the control."),
         new FormEventDef("Paint", "PaintEventArgs", null, FormEventCategory.Appearance, "Occurs when a control needs repainting.")
-    };
+    ];
 
-    private static IReadOnlyList<FormEventDef> ToolStripMenuItemEvents() => new[]
-    {
+    private static IReadOnlyList<FormEventDef> ToolStripMenuItemEvents() =>
+    [
         new FormEventDef("Click", null, "click", FormEventCategory.Action, "Occurs when the item is clicked.", IsDefault: true),
         new FormEventDef("DoubleClick", null, "dblclick", FormEventCategory.Action, "Occurs when the component is double-clicked."),
         new FormEventDef("MouseDown", "MouseEventArgs", "mousedown", FormEventCategory.Mouse, "Occurs when a mouse button is pressed."),
@@ -2297,10 +2286,10 @@ public static class FormControlCatalog
         new FormEventDef("DropDownOpened", null, null, FormEventCategory.Action, "Occurs when the DropDown has opened."),
         new FormEventDef("DropDownClosed", null, null, FormEventCategory.Action, "Occurs when the DropDown has closed."),
         new FormEventDef("TextChanged", null, null, FormEventCategory.PropertyChanged, "Occurs when the Text property is changed on the item.")
-    };
+    ];
 
-    private static IReadOnlyList<FormEventDef> ToolStripButtonEvents() => new[]
-    {
+    private static IReadOnlyList<FormEventDef> ToolStripButtonEvents() =>
+    [
         new FormEventDef("Click", null, "click", FormEventCategory.Action, "Occurs when the item is clicked.", IsDefault: true),
         new FormEventDef("DoubleClick", null, "dblclick", FormEventCategory.Action, "Occurs when the component is double-clicked."),
         new FormEventDef("MouseDown", "MouseEventArgs", "mousedown", FormEventCategory.Mouse, "Occurs when a mouse button is pressed."),
@@ -2310,10 +2299,10 @@ public static class FormControlCatalog
         new FormEventDef("CheckedChanged", null, null, FormEventCategory.Misc, "Occurs whenever the Check property is changed."),
         new FormEventDef("CheckStateChanged", null, null, FormEventCategory.Misc, "Occurs whenever the CheckState property is changed."),
         new FormEventDef("TextChanged", null, null, FormEventCategory.PropertyChanged, "Occurs when the Text property is changed on the item.")
-    };
+    ];
 
-    private static IReadOnlyList<FormEventDef> ToolStripStatusLabelEvents() => new[]
-    {
+    private static IReadOnlyList<FormEventDef> ToolStripStatusLabelEvents() =>
+    [
         new FormEventDef("Click", null, "click", FormEventCategory.Action, "Occurs when the item is clicked.", IsDefault: true),
         new FormEventDef("DoubleClick", null, "dblclick", FormEventCategory.Action, "Occurs when the component is double-clicked."),
         new FormEventDef("MouseDown", "MouseEventArgs", "mousedown", FormEventCategory.Mouse, "Occurs when a mouse button is pressed."),
@@ -2321,7 +2310,7 @@ public static class FormControlCatalog
         new FormEventDef("MouseEnter", null, "mouseenter", FormEventCategory.Mouse, "Occurs when the mouse enters the visible part of the item."),
         new FormEventDef("MouseLeave", null, "mouseleave", FormEventCategory.Mouse, "Occurs when the mouse leaves the visible part of the item."),
         new FormEventDef("TextChanged", null, null, FormEventCategory.PropertyChanged, "Occurs when the Text property is changed on the item.")
-    };
+    ];
 
     /// <summary>
     /// The Form's events (slice 5 D-3). Default Load, as WinForms' <c>[DefaultEvent]</c>. On the page: Load is a call at the

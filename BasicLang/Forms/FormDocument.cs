@@ -110,6 +110,23 @@ public sealed class FormDocument
     public List<FormBind> Binds { get; } = new();
 
     /// <summary>
+    /// Every control or component whose Id is the FORM's own name, ignoring case as BasicLang names do — refused with the
+    /// duplicate-id code (BL8017) by the reader and the region writer alike (slice 5 review fix 2). A field named like
+    /// its enclosing class is CS0542 on WinForms, and on the page the control's <c>VgsOn_&lt;Id&gt;_…</c> wrapper would
+    /// collide with the Form's own <c>VgsOn_&lt;Name&gt;_…</c>.
+    /// </summary>
+    public IEnumerable<FormControl> ControlsNamedLikeTheForm() =>
+        string.IsNullOrEmpty(Name)
+            ? Enumerable.Empty<FormControl>()
+            : AllControls().Concat(AllComponents()).Where(c => string.Equals(c.Id, Name, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>The ONE BL8017 text for <see cref="ControlsNamedLikeTheForm"/>, shared by the reader and the region writer.</summary>
+    public string NamedLikeTheFormMessage(FormControl control) =>
+        $"the control Id '{control.Id}' is the form's own name '{Name}'. Ids become members of the form's class, and a " +
+        "member cannot share its class's name (CS0542 on WinForms); on a web page its generated VgsOn_ wrappers would " +
+        "collide with the form's. Rename the control.";
+
+    /// <summary>
     /// The FORM's catalog-only root attributes (spec §2.3, slice 3) — every <see cref="FormControlCatalog.FormRoot"/> row
     /// that is not one of the typed fields above (FormBorderStyle, StartPosition, BackColor, Font, AcceptButton…), keyed by
     /// the row's name, holding the DOCUMENT's text exactly as a control's <see cref="FormControl.Properties"/> does: a
