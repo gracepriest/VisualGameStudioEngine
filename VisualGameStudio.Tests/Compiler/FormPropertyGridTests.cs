@@ -560,11 +560,133 @@ public class FormPropertyGridTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(Row("Checked").IsCheckBox, Is.True, "Bool");
+            // Slice 4 D-3: a Bool is VS's True/False drop-down — the shared editor's ComboBox arm, never its switch.
+            Assert.That(Row("Checked").IsComboBox, Is.True, "Bool");
+            Assert.That(Row("Checked").IsCheckBox, Is.False, "Bool: not the Settings dialog's switch");
             Assert.That(Row("Text").IsTextBox, Is.True, "String");
             Assert.That(Row("ForeColor").IsColor, Is.True, "Color");
-            Assert.That(Row("Enabled").IsCheckBox, Is.True);
+            Assert.That(Row("Enabled").IsComboBox, Is.True);
         });
+    }
+
+    // ==================================================================
+    // Slice 4 Task 1 (D-3) — a Bool is a True/False drop-down; every drop-down offers what the CATALOG accepts
+    // ==================================================================
+
+    /// <summary>Every Bool row of every kind (and of the Form), on each target the row exists on.</summary>
+    private static IEnumerable<TestCaseData> EveryBoolRow() =>
+        FormControlCatalog.All.Append(FormControlCatalog.FormRoot)
+            .SelectMany(kind => kind.Properties
+                .Where(p => p.Type == FormPropertyType.Bool)
+                .SelectMany(p => new[] { FormTarget.WinForms, FormTarget.Web }
+                    .Where(t => p.AppliesTo(t) && (ReferenceEquals(kind, FormControlCatalog.FormRoot) || kind.SupportsTarget(t)))
+                    .Select(t => new TestCaseData(kind.Kind, p.Name, t).SetName($"BoolRow_{kind.Kind}_{p.Name}_{t}"))));
+
+    [TestCaseSource(nameof(EveryBoolRow))]
+    public void EveryBoolRow_IsADropDownOfExactlyTrueAndFalse(string kind, string property, FormTarget target)
+    {
+        var definition = (kind == FormControlCatalog.FormRoot.Kind ? FormControlCatalog.FormRoot : FormControlCatalog.Find(kind)!)
+            .Properties.Single(p => p.Name == property);
+        var control = new FormControl { Kind = kind, Id = "c" };
+        var row = new FormPropertyRow(control, definition, target, null, () => { });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(row.IsComboBox, Is.True, "the drop-down");
+            Assert.That(row.IsCheckBox, Is.False, "never the shared editor's switch (that is the Settings dialog's)");
+            Assert.That(row.IsTextBox, Is.False);
+            Assert.That(row.Choices, Is.EqualTo(new[] { "True", "False" }), "VS's two items, in VS's order");
+            Assert.That(row.Choices, Does.Contain(row.StringValue),
+                "the combo's SelectedItem must match an item exactly, or it shows nothing and pushes null");
+        });
+    }
+
+    [Test]
+    public void PickingFalse_InABoolDropDown_WritesTheDocumentsLowerCaseWord()
+    {
+        var file = Read("""
+            <WebForm Name="F" Version="1">
+              <Controls><CheckBox Id="chk" TabIndex="0" Text="Remember"/></Controls>
+            </WebForm>
+            """);
+        var grid = new FormPropertyGridViewModel();
+        grid.Load(file);
+        grid.SelectedControl = file.Model.FindById("chk");
+        var enabled = grid.Rows.Single(r => r.Name == "Enabled");
+
+        Assert.That(enabled.StringValue, Is.EqualTo("True"), "precondition: an absent Enabled shows True");
+
+        enabled.StringValue = "False"; // what the combo pushes for its "False" item
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(file.Model.FindById("chk")!.Properties["Enabled"], Is.EqualTo("false"),
+                "the document's own spelling, never the combo's \"False\"");
+            Assert.That(enabled.StringValue, Is.EqualTo("False"));
+        });
+    }
+
+    [Test]
+    public void AWebCursorRow_OffersOnlyTheMembersTheWebAccepts_AndAWinFormsOneOffersAll()
+    {
+        var web = GridOver("""
+            <WebForm Name="F" Version="1">
+              <Controls><Label Id="lbl" TabIndex="0" Text="Hi"/></Controls>
+            </WebForm>
+            """, "lbl").Rows.Single(r => r.Name == "Cursor");
+        var winFile = Read("""
+            <Form Name="F" Version="1" Width="400" Height="300">
+              <Controls><Label Id="lbl" X="0" Y="0" Width="10" Height="10" TabIndex="0" Text="Hi"/></Controls>
+            </Form>
+            """, "F.blform");
+        var winGrid = new FormPropertyGridViewModel();
+        winGrid.Load(winFile);
+        winGrid.SelectedControl = winFile.Model.FindById("lbl");
+        var winForms = winGrid.Rows.Single(r => r.Name == "Cursor");
+        var definition = FormControlCatalog.Find("Label")!.Properties.Single(p => p.Name == "Cursor");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(web.Choices, Is.EqualTo(FormCursors.Names.Where(n => definition.Accepts(n, FormTarget.Web))),
+                "the CATALOG's answer, filtered — never a hand list");
+            Assert.That(web.Choices, Has.Count.LessThan(FormCursors.Names.Count), "precondition: the web refuses some");
+            Assert.That(web.Choices, Does.Not.Contain("UpArrow"), "a member with no CSS is never offered on the web");
+            Assert.That(winForms.Choices, Is.EqualTo(FormCursors.Names), "WinForms offers every member");
+            Assert.That(winForms.Choices, Has.Count.EqualTo(28));
+        });
+    }
+
+    [Test]
+    public void ToggleBool_FlipsAnEditableBoolRow_AndDoesNothingElsewhere()
+    {
+        var file = Read("""
+            <WebForm Name="F" Version="1">
+              <Controls><CheckBox Id="chk" TabIndex="0" Text="Remember" Enabled="false"/></Controls>
+            </WebForm>
+            """);
+        var grid = new FormPropertyGridViewModel();
+        grid.Load(file);
+        grid.SelectedControl = file.Model.FindById("chk");
+        var edits = 0;
+        grid.Edited += (_, _) => edits++;
+        var chk = file.Model.FindById("chk")!;
+
+        grid.Rows.Single(r => r.Name == "Enabled").ToggleBool();
+        Assert.That(chk.Properties["Enabled"], Is.EqualTo("true"), "false → true, per Judge (a Write, in the document's word)");
+
+        grid.Rows.Single(r => r.Name == "Enabled").ToggleBool();
+        Assert.That(chk.Properties["Enabled"], Is.EqualTo("false"), "and back");
+
+        grid.Rows.Single(r => r.Name == "Text").ToggleBool();
+        Assert.Multiple(() =>
+        {
+            Assert.That(chk.Properties["Text"], Is.EqualTo("Remember"), "a String row is not a toggle");
+            Assert.That(edits, Is.EqualTo(2), "one Edited per toggle, none for the String row");
+        });
+
+        var frozen = GridOver(DegradedForm, "chk").Rows.Single(r => r.Name == "Checked");
+        frozen.ToggleBool();
+        Assert.That(frozen.RawValue, Is.EqualTo("maybe"), "a Degraded Bool is never coerced by a double-click");
     }
 
     [Test]
@@ -690,10 +812,13 @@ public class FormPropertyGridTests
     {
         // ⛔⛔ Every editor flag must be false. A disabled toggle is not enough — the binding still
         // reads BoolValue, and a control that renders is a control that can push a value back.
+        // ⚠ Slice 4: a Bool now renders as the COMBO, so IsComboBox below is the flag that matters for this BOOL row —
+        // a frozen "maybe" in a True/False combo would match no item and push null (or worse, an item) back.
         var row = GridOver(DegradedForm, "chk").Rows.Single(r => r.Name == "Checked");
 
         Assert.Multiple(() =>
         {
+            Assert.That(row.TypeName, Is.EqualTo(nameof(FormPropertyType.Bool)), "precondition: a frozen BOOL row");
             Assert.That(row.IsCheckBox, Is.False);
             Assert.That(row.IsNumericUpDown, Is.False);
             Assert.That(row.IsComboBox, Is.False);

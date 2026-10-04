@@ -662,3 +662,57 @@ slice-3 §5a.
 `Emit_ReplacingAnImportedModule_LeavesNoTempFileBehind`, `EveryTextRoute_UsesTheFormatter_NeverToStringOrABareCout`,
 `SearchSnippets_EmptyQuery_ReturnsAll`, `SearchSnippets_WhitespaceQuery_ReturnsAll`. (`ReadingAnMvidTakesNoLockOnTheFile`
 passed on this run.)
+
+### Task 1 — Bool drop-down + catalog-filtered choices
+Done as written. Choices taken under the delegation:
+- **One spelling helper**: `FormPropertyDef.BoolWord` (BasicLang), used by `Canonical`, `ToDocument` and the grid's
+  intrinsic arm (`FormPropertyRow.IsSameIntrinsicValue` / `IntrinsicDocumentText`). So D-3's "ONE helper used by
+  both arms" lives in the catalog, not in the Shell.
+- **`IsCheckBox` is the constant `false`** for the grid's row (not "Bool and something"): the switch never renders there.
+- **Choices are filtered once per row** (cached; the target and definition are fixed for a row's life). Task 3 makes the
+  Reference row's list a live `Func`, which is a separate arm.
+- **Double-click** is one `DoubleTapped` handler on the list. It ignores a double-click inside the row's
+  `TypedValueEditor` (that gesture belongs to the drop-down). It toggles on the name cell or the row's chrome.
+- From an explicit `Enabled="false"`, the first double-click writes `true` and the second writes `false` (Judge gives a
+  Write both times, never a Reset). The plan's "resets to absent or writes true" was read as "whatever Judge says". The
+  test pins what Judge says.
+
+Tests: red first (stub `ToggleBool`; 169 red in the Task 1 filter, each for the expected reason), then green.
+`FormPropertyGridTests` (`EveryBoolRow_IsADropDownOfExactlyTrueAndFalse` over every Bool row of every kind plus FormRoot,
+on each target, 159 cases; `PickingFalse_…`; `AWebCursorRow_…`; `ToggleBool_…`; `EachPropertyTypeGetsItsOwnEditor`
+rewritten; the frozen-Bool test asserts its type). `FormPropertyRowDefaultTests` (`AnAbsentEnabled_ShowsTrue_AndPickingTrue_
+IsANoOp`; the notification test gains a combo write). `FormCompositeRowTests` (`ABoldPart_PushedItsOwnShownItem_…_OnAnAbsentFont`,
+`ABoldPart_TrueOverTrue_…`). Real view (`DoubleClickingABoolRow_TogglesIt_AtTwoSizes`,
+`SelectingALabel_AndExpandingItsFont_ChangesNothing_AtTwoSizes`, the two ToggleSwitch tests rewritten).
+`FormDesignerLayoutRealViewTests` also asserts that no ToggleSwitch is swept (ComboBox count 4→6).
+
+⚠ **Deviation (the plan's own case is not discriminating).** "`True` over a part reading `true`" passes even with the
+ordinal mutant: the part composes the same font, and the PARENT's Judge then NoOps. The discriminating case is an ABSENT
+Font, where `False` over `false` composed the inherited font and the parent stored it. Both tests are kept. The absent one
+is the kill.
+
+⚠ **Finding (follow-up, not fixed): the real drop-down cannot be clicked twice in one headless window.** A real click opens
+a row's ComboBox the first time. The second drop-down opened in the same window (or the first one after a Font expand
+inserted rows) is torn down during the release's layout pass: `VirtualizingStackPanel.MeasureOverride →
+RecycleAllElements` recycles every property-list container, so the combo is detached with its popup and re-realises
+closed. No edit happens, and the rows and DisplayItems are unchanged. The pre-existing **TextAlign Enum** combo behaves the
+same, so this is not the Bool editor. Whether the IDE's real (non-overlay) popups do it is unverified, and should be checked
+in the owner click-through (§5 item 4). The real-view tests therefore pick by setting the real combo's `SelectedIndex`,
+the object selector's convention, with the reason stated on `PickInCombo`.
+
+RE-CHECK: `FormPropertyGridTests` frozen Bool (`IsComboBox` false holds for the frozen BOOL row, type asserted);
+`FormPropertyRowDefaultTests` PropertyChanged list (a combo write raises `StringValue`); `EveryRowsEditor_Fits…` (Bools now
+ComboBoxes, all fit); `FormCompositeRowTests` (via `BoolValue`), `FormCanvasFontRenderTests`, `FormPropertyBatchAcceptanceTests`,
+`SettingsEditorWiringTests`, `FormPropertyGridViewTests` — all green (774/774 in the filter).
+
+Mutations (each applied with Edit and REBUILT):
+| Mutant | Result |
+|---|---|
+| Bool not mapped to the combo | killed (164: the BoolRow cases, editor test, 4 real-view tests) |
+| `ToDocument` keeps `True` | killed (`PickingFalse_…`) |
+| `Choices` unfiltered | killed (`AWebCursorRow_…`) |
+| `DoubleTapped` not wired | killed (`DoubleClickingABoolRow_…`) |
+| intrinsic Bool compare ordinal again | killed by the VM test `ABoldPart_PushedItsOwnShownItem_…`. ⚠ The real-view `SelectingALabel_…` stays GREEN under it: measured, the headless ComboBox does not push its item back on bind. That test guards the end-to-end no-write only, and says so |
+
+Post-task fast subset (base `a058f301` + Task 1): **Total 10796 · Passed 10771 · Failed 6 · Skipped 19.** The failure
+names are identical to Task 0's six. +167 tests.

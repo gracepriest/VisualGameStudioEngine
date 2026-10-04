@@ -118,6 +118,71 @@ public class FormCompositeRowTests
     }
 
     /// <summary>
+    /// ⛔ Slice 4 D-3: the Font's Bold/Italic/Underline parts are catalog-LESS Bool rows, rendered as the True/False
+    /// drop-down, which speaks <c>"True"</c>/<c>"False"</c>. Their no-op is the INTRINSIC arm of Commit, which compared
+    /// ordinally — so a push of <c>"False"</c> over a part reading <c>"false"</c> was a write. On an ABSENT ambient Font
+    /// that write is real: the part composes the inherited font and the parent stores it, adding <c>Font="Segoe UI, 9pt"</c>
+    /// (and an undo entry) for a value nobody changed. ⚠ This is the mutant's KILL: the real headless ComboBox does not push
+    /// its item back on bind, so the real-view twin cannot see it (measured, slice 4 Task 1).
+    /// </summary>
+    [Test]
+    public void ABoldPart_PushedItsOwnShownItem_ChangesNothing_OnAnAbsentFont()
+    {
+        var (file, grid) = Open("btn");
+        var before = FormDocumentWriter.Write(file);
+        var edits = 0;
+        grid.Edited += (_, _) => edits++;
+        var font = Top(grid, "Font");
+
+        foreach (var part in new[] { "Bold", "Italic", "Underline" })
+        {
+            Assert.That(Part(font, part).StringValue, Is.EqualTo("False"), $"precondition: {part} shows the combo's item");
+            Part(font, part).StringValue = "False"; // what the bound combo pushes back
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(edits, Is.Zero, "no Edited for a selection");
+            Assert.That(file.Model.FindById("btn")!.Properties.ContainsKey("Font"), Is.False, "the Font stays absent");
+            Assert.That(FormDocumentWriter.Write(file), Is.EqualTo(before), "the document is byte-identical");
+        });
+    }
+
+    /// <summary>The plan's own case: <c>"True"</c> over a part reading <c>"true"</c> is nothing; <c>"False"</c> un-bolds.</summary>
+    [Test]
+    public void ABoldPart_TrueOverTrue_IsNothing_AndFalse_WritesTheFontWithoutBold()
+    {
+        var file = FormDocumentReader.Read("F.blform", """
+            <Form Name="F" Version="1" Width="400" Height="300">
+              <Controls>
+                <Label Id="lbl" X="16" Y="60" Width="100" Height="23" TabIndex="0" Font="Arial, 10pt, style=Bold"/>
+              </Controls>
+            </Form>
+            """);
+        var grid = new FormPropertyGridViewModel();
+        grid.Load(file);
+        grid.SelectedControl = file.Model.FindById("lbl");
+        var before = FormDocumentWriter.Write(file);
+        var edits = 0;
+        grid.Edited += (_, _) => edits++;
+        var bold = Part(Top(grid, "Font"), "Bold");
+
+        bold.StringValue = "True";
+        Assert.Multiple(() =>
+        {
+            Assert.That(edits, Is.Zero, "True over true: no Edited");
+            Assert.That(FormDocumentWriter.Write(file), Is.EqualTo(before), "and the document is identical");
+        });
+
+        bold.StringValue = "False";
+        Assert.Multiple(() =>
+        {
+            Assert.That(file.Model.FindById("lbl")!.Properties["Font"], Is.EqualTo("Arial, 10pt"), "style= without Bold");
+            Assert.That(edits, Is.EqualTo(1));
+        });
+    }
+
+    /// <summary>
     /// ⛔ Code review I1 (2026-09-29): an inherited font's parts start from the font the control ACTUALLY inherits — the
     /// nearest container's Font, else the Form's, else the catalog default — never the catalog default regardless. On a
     /// form with <c>Segoe UI, 10pt, style=Bold</c>, ticking a Label's Italic used to write <c>Segoe UI, 9pt,

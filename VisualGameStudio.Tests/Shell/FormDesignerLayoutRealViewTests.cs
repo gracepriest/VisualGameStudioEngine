@@ -290,6 +290,9 @@ public class FormDesignerLayoutRealViewTests
         TestContext.WriteLine($"[editors checked] {string.Join(", ", checkedKinds.Select(k => $"{k.Key}={k.Value}"))}");
         Assert.That(checkedKinds.Keys, Is.SupersetOf(new[] { "TextBox", "ComboBox", "NumericUpDown" }),
             "precondition: the sweep saw every kind of editor that has a minimum width");
+        // Slice 4 D-3: a Bool row is the True/False drop-down (counted as a ComboBox above); the shared editor's switch is
+        // the Settings dialog's and never renders in the grid.
+        Assert.That(checkedKinds.ContainsKey(nameof(ToggleSwitch)), Is.False, "no Bool row renders as a switch");
     }
 
     // ==================================================================

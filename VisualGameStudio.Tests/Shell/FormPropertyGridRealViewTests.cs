@@ -174,19 +174,22 @@ public class FormPropertyGridRealViewTests
         public void Dispose() => Window.Close();
     }
 
-    /// <summary>Opens the real view on <see cref="Doc"/>, with the scaffolded GridForm.bas beside it.</summary>
-    private static Rig Open(double width = 1000, double height = 700)
+    /// <summary>
+    /// Opens the real view on <see cref="Doc"/> (or <paramref name="doc"/>, a GridForm of its own), with the scaffolded
+    /// GridForm.bas beside it.
+    /// </summary>
+    private static Rig Open(double width = 1000, double height = 700, string doc = Doc)
     {
         var scaffold = FormScaffolder.Create("GridForm", FormTarget.WinForms);
         var files = new Files();
-        files.Contents[Dir + scaffold.DocumentFileName] = Doc;
+        files.Contents[Dir + scaffold.DocumentFileName] = doc;
         files.Contents[Dir + scaffold.CodeFileName] = scaffold.CodeText;
 
         var vm = new CodeEditorDocumentViewModel(files.Service, new Mock<IEventAggregator>().Object)
         {
             FilePath = Dir + scaffold.DocumentFileName
         };
-        vm.SetContent(Doc);
+        vm.SetContent(doc);
         Assert.That(vm.EnterDesignModeForFormDocument(), Is.True, "precondition: the designer must open");
 
         var view = new CodeEditorDocumentView { DataContext = vm };
@@ -219,6 +222,30 @@ public class FormPropertyGridRealViewTests
             window.Close(); // ⛔ never leave a window alive with its bindings live
             throw;
         }
+    }
+
+    /// <summary>The row's one VISIBLE ComboBox — a Bool, Enum or Cursor row's typed editor.</summary>
+    private static ComboBox VisibleCombo(Rig rig, FormPropertyRow row) =>
+        rig.Container(row).GetVisualDescendants().OfType<ComboBox>().Single(c => c.IsEffectivelyVisible);
+
+    /// <summary>
+    /// Picks <paramref name="item"/> in the real ComboBox by setting its <c>SelectedIndex</c> — the object selector's
+    /// pattern: the combo's <c>SelectedItem</c> binding to the row is what is under test.
+    ///
+    /// <para>⚠ Not a real click on the drop-down, MEASURED (slice 4 Task 1): a real click opens it once, but a second
+    /// drop-down opened in the same window — or the first after a Font expand inserted rows — is torn down during the
+    /// release's own layout pass: <c>VirtualizingStackPanel.MeasureOverride → RecycleAllElements</c> recycles every
+    /// container of the property list, the combo is detached with its popup, and it re-realises closed. The same happens
+    /// to the pre-existing TextAlign Enum combo, so it is not a Bool-editor defect; whether a real (non-overlay) popup
+    /// does it in the IDE is unverified — recorded as a follow-up in the slice-4 pre-flight's execution notes.</para>
+    /// </summary>
+    private static void PickInCombo(Rig rig, ComboBox combo, string item)
+    {
+        var index = combo.Items.Cast<object?>().ToList().IndexOf(item);
+        Assert.That(index, Is.GreaterThanOrEqualTo(0), $"'{item}' is one of the combo's items");
+        combo.SelectedIndex = index;
+        Dispatcher.UIThread.RunJobs();
+        rig.Window.UpdateLayout();
     }
 
     /// <summary>Selects through the real canvas: a click on the control's own rectangle.</summary>
@@ -609,9 +636,9 @@ public class FormPropertyGridRealViewTests
             var textIndent = rig.NameCell(rig.Row("Text")).Margin.Left;
             Assert.That(rig.NameCell(bold).Margin.Left, Is.GreaterThan(textIndent), $"{w}x{h}: a part is indented under its parent");
 
-            // ⚠ Fetched right before the click: Container() scrolls the real list, which recycles containers.
-            var toggle = rig.Container(bold).GetVisualDescendants().OfType<ToggleSwitch>().Single(t => t.IsEffectivelyVisible);
-            rig.Click(toggle);
+            // ⚠ Fetched right before the pick: Container() scrolls the real list, which recycles containers.
+            // Slice 4 D-3: the Bold part is VS's True/False drop-down, picked through its real popup.
+            PickInCombo(rig, VisibleCombo(rig, bold), "True");
 
             Assert.Multiple(() =>
             {
@@ -690,16 +717,124 @@ public class FormPropertyGridRealViewTests
         using (rig.Window.CaptureRenderedFrame()) { }
 
         var enabled = rig.Row("Enabled");
-        var toggle = rig.Container(enabled).GetVisualDescendants().OfType<ToggleSwitch>().Single();
+        // Slice 4 D-3: a Bool row is the True/False drop-down, and no switch renders for it.
+        var combo = VisibleCombo(rig, enabled);
 
         Assert.Multiple(() =>
         {
-            Assert.That(toggle.IsChecked, Is.True, "an unset Enabled is enabled — it used to render off");
+            Assert.That(combo.SelectedItem, Is.EqualTo("True"), "an unset Enabled is enabled — it used to render off");
+            Assert.That(rig.Container(enabled).GetVisualDescendants().OfType<ToggleSwitch>().Any(t => t.IsEffectivelyVisible),
+                Is.False, "the Settings dialog's switch is not this row's editor");
             Assert.That(rig.ValuePanel(enabled).Opacity, Is.EqualTo(0.6).Within(0.01), "greyed: the default, not a value");
             Assert.That(rig.NameCell(enabled).FontWeight, Is.Not.EqualTo(FontWeight.Bold));
             Assert.That(rig.NameCell(rig.Row("Text")).FontWeight, Is.EqualTo(FontWeight.Bold), "Text=\"Hello\" differs from the default");
             Assert.That(rig.ValuePanel(rig.Row("Text")).Opacity, Is.EqualTo(1.0));
         });
+    }
+
+    /// <summary>
+    /// Slice 4 D-3: a real double-click on a Bool row's NAME cell toggles it, as in VS — <c>Enabled="false"</c> becomes
+    /// <c>true</c> (Judge's Write, in the document's word), and a second double-click makes it <c>false</c> again. At two
+    /// window sizes.
+    /// </summary>
+    [AvaloniaTest]
+    public void DoubleClickingABoolRow_TogglesIt_AtTwoSizes()
+    {
+        const string disabled = """
+            <Form Name="GridForm" Version="1" Width="640" Height="480" Text="GridForm">
+              <Controls>
+                <Label Id="lbl" X="16" Y="16" Width="100" Height="23" TabIndex="0" Text="Hello" Enabled="false"/>
+                <Button Id="btn" X="16" Y="56" Width="75" Height="23" TabIndex="1"/>
+              </Controls>
+              <Components>
+                <Timer Id="tmr"/>
+              </Components>
+              <Resources/>
+            </Form>
+            """;
+
+        foreach (var (w, h) in TwoZooms)
+        {
+            using var rig = Open(w, h, disabled);
+            SelectOnCanvas(rig, "lbl");
+            var edits = 0;
+            rig.GridVm.Edited += (_, _) => edits++;
+            var enabled = rig.Row("Enabled");
+
+            // Two presses at ONE point are a double-click to the headless pipeline.
+            void DoubleClick(double dx)
+            {
+                var at = rig.CentreInWindow(rig.NameCell(enabled), dx);
+                for (var i = 0; i < 2; i++)
+                {
+                    rig.Window.MouseDown(at, MouseButton.Left);
+                    rig.Window.MouseUp(at, MouseButton.Left);
+                }
+
+                Dispatcher.UIThread.RunJobs();
+                rig.Window.UpdateLayout();
+            }
+
+            DoubleClick(-10);
+            Assert.Multiple(() =>
+            {
+                Assert.That(rig.Control("lbl").Properties["Enabled"], Is.EqualTo("true"), $"{w}x{h}: false → true");
+                Assert.That(rig.Vm.Text, Does.Contain("Enabled=\"true\""), $"{w}x{h}: the .blform text");
+                Assert.That(VisibleCombo(rig, enabled).SelectedItem, Is.EqualTo("True"), $"{w}x{h}: the drop-down follows");
+                Assert.That(edits, Is.EqualTo(1), $"{w}x{h}: ONE edit for one double-click");
+            });
+
+            // ⚠ OFFSET: a third press at the same point would be a triple-click, not a new double-click.
+            DoubleClick(10);
+            Assert.Multiple(() =>
+            {
+                Assert.That(rig.Control("lbl").Properties["Enabled"], Is.EqualTo("false"), $"{w}x{h}: and back");
+                Assert.That(rig.Vm.Text, Does.Contain("Enabled=\"false\""), $"{w}x{h}: the .blform text");
+                Assert.That(edits, Is.EqualTo(2), $"{w}x{h}: one more edit");
+            });
+        }
+    }
+
+    /// <summary>
+    /// ⛔ Slice 4 D-3: selecting a Label and expanding its (absent, ambient) Font realises the three Bool PART combos,
+    /// each bound to a catalog-less row whose no-op compare was ordinal — a combo pushing <c>False</c> over a part reading
+    /// <c>false</c> would write <c>Font="Segoe UI, 9pt"</c> for a selection click. The file must be byte-identical and no
+    /// Edited may fire. At two window sizes. ⚠ End to end only: measured, the real headless combo does not push its item
+    /// back on bind, so this test cannot see the ordinal-compare mutant — <c>FormCompositeRowTests.ABoldPart_PushedItsOwn
+    /// ShownItem_…</c> is its kill.
+    /// </summary>
+    [AvaloniaTest]
+    public void SelectingALabel_AndExpandingItsFont_ChangesNothing_AtTwoSizes()
+    {
+        foreach (var (w, h) in TwoZooms)
+        {
+            using var rig = Open(w, h);
+            var before = rig.Vm.Text;
+            var edits = 0;
+            rig.GridVm.Edited += (_, _) => edits++;
+
+            SelectOnCanvas(rig, "lbl");
+            var font = rig.Row("Font");
+            rig.Click(rig.Container(font).GetVisualDescendants().OfType<ToggleButton>()
+                .Single(t => t.Classes.Contains("edge") && t.IsEffectivelyVisible));
+            Assert.That(font.IsExpanded, Is.True, $"{w}x{h}: precondition: the real box expanded the Font");
+
+            foreach (var part in new[] { "Bold", "Italic", "Underline" })
+            {
+                var combo = VisibleCombo(rig, font.Children.Single(c => c.Name == part));
+                Assert.That(combo.SelectedItem, Is.EqualTo("False"), $"{w}x{h}: {part}'s combo realised and bound");
+            }
+
+            using (rig.Window.CaptureRenderedFrame()) { }
+            Dispatcher.UIThread.RunJobs();
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(rig.Vm.Text, Is.EqualTo(before), $"{w}x{h}: the .blform is byte-identical");
+                Assert.That(rig.Control("lbl").Properties.ContainsKey("Font"), Is.False, $"{w}x{h}: the Font stays absent");
+                Assert.That(edits, Is.Zero, $"{w}x{h}: no Edited for a selection");
+            });
+        }
     }
 
     /// <summary>

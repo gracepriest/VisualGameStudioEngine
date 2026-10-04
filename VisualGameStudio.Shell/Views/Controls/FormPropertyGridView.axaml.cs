@@ -26,7 +26,30 @@ public partial class FormPropertyGridView : UserControl
         // Enter/Space for itself. The headers are not focusable, so a header key arrives from its CONTAINER.
         PropertyList.AddHandler(KeyDownEvent, OnListKeyDown, RoutingStrategies.Tunnel);
         PropertyList.AddHandler(KeyUpEvent, OnListKeyUp, RoutingStrategies.Tunnel);
+        PropertyList.AddHandler(DoubleTappedEvent, OnListDoubleTapped);
         PropertyList.ContainerPrepared += OnContainerPrepared;
+    }
+
+    /// <summary>
+    /// VS's double-click on a Bool row flips it (slice 4 D-3) — <see cref="FormPropertyRow.ToggleBool"/>, which decides
+    /// whether the row is an editable Bool and does nothing otherwise.
+    ///
+    /// <para>⚠ One handler on the LIST, finding the row's container from the source: containers are recycled between
+    /// rows and headers, so a handler added per preparation would pile up. ⛔ Not from inside the row's EDITOR: a
+    /// double-click there belongs to the drop-down (it opens and picks), and flipping the value under it as well would be
+    /// two edits for one gesture.</para>
+    /// </summary>
+    private void OnListDoubleTapped(object? sender, TappedEventArgs e)
+    {
+        if (e.Source is not Visual source ||
+            source.FindAncestorOfType<TypedValueEditor>(includeSelf: true) != null ||
+            source.FindAncestorOfType<ListBoxItem>(includeSelf: true) is not { DataContext: FormPropertyRow row })
+        {
+            return;
+        }
+
+        row.ToggleBool();
+        e.Handled = true;
     }
 
     /// <summary>

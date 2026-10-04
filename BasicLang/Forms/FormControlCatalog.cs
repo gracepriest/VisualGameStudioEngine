@@ -291,9 +291,9 @@ public sealed record FormPropertyDef(
             return value;
         }
 
-        if (Type == FormPropertyType.Bool && bool.TryParse(value, out var flag))
+        if (Type == FormPropertyType.Bool)
         {
-            return flag ? "true" : "false";
+            return BoolWord(value);
         }
 
         // ⛔ An Int is its parsed number in invariant text, so "007", " 5 " and "+7" compare equal to
@@ -378,8 +378,22 @@ public sealed record FormPropertyDef(
     /// grid vocabulary is not its document's: a Fraction is typed and shown as a percentage (<c>80%</c>) and stored the way
     /// WinForms stores it, the 0–1 Double (<c>0.8</c>). Call only for a value the row accepts.
     /// </summary>
-    public string ToDocument(string value) =>
-        Type == FormPropertyType.Fraction && TryParseFraction(value, out var fraction) ? FractionText(fraction) : value;
+    public string ToDocument(string value) => Type switch
+    {
+        FormPropertyType.Fraction when TryParseFraction(value, out var fraction) => FractionText(fraction),
+        // ⛔ The grid's Bool drop-down offers "True"/"False" (VS's spelling); the document says "true"/"false" (slice 4 D-3).
+        FormPropertyType.Bool => BoolWord(value),
+        _ => value
+    };
+
+    /// <summary>
+    /// A Bool in the DOCUMENT's vocabulary — <c>true</c>/<c>false</c>, lower case — or the text unchanged when it is not a
+    /// Bool at all (a Degraded value is preserved, never coerced). ⛔ THE one spelling rule: <see cref="Canonical"/>,
+    /// <see cref="ToDocument"/> and the property grid's catalog-less Bool rows (the Font's Bold/Italic/Underline parts)
+    /// all ask it, so a drop-down pushing <c>True</c> over a stored <c>true</c> is the same value on every path.
+    /// </summary>
+    public static string BoolWord(string value) =>
+        bool.TryParse(value, out var flag) ? (flag ? "true" : "false") : value;
 
     /// <summary>
     /// What an editor OFFERS for this row: an Enum's <see cref="AllowedValues"/>, a Cursor row's

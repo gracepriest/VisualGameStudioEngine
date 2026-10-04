@@ -315,12 +315,20 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
 
     private bool Typed => UsesTypedEditor;
 
-    public bool IsCheckBox => Typed && _type == FormPropertyType.Bool;
+    /// <summary>
+    /// ⛔ Always false in the designer's grid (slice 4 D-3). The shared editor's switch is the SETTINGS dialog's Bool
+    /// editor; the grid shows a Bool as VS does, a True/False drop-down — the shared editor's existing ComboBox arm
+    /// (<see cref="IsComboBox"/>). Replacing the switch inside <c>TypedValueEditor</c> would have changed Settings too.
+    /// </summary>
+    public bool IsCheckBox => false;
 
     public bool IsNumericUpDown => Typed && _type == FormPropertyType.Int;
 
-    /// <summary>An Enum's members, or a Cursor row's <c>Cursors</c> members (<see cref="FormPropertyDef.Choices"/>).</summary>
-    public bool IsComboBox => Typed && _type is FormPropertyType.Enum or FormPropertyType.Cursor;
+    /// <summary>
+    /// A drop-down: an Enum's members, a Cursor row's <c>Cursors</c> members (<see cref="FormPropertyDef.Choices"/>), or a
+    /// Bool's <c>True</c>/<c>False</c> (slice 4 D-3).
+    /// </summary>
+    public bool IsComboBox => Typed && _type is FormPropertyType.Enum or FormPropertyType.Cursor or FormPropertyType.Bool;
 
     /// <summary>
     /// Free text: a String, and the typed-text rows — a Color, a Size (<c>800, 450</c>), a Font (FontConverter text),
@@ -347,7 +355,21 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
     /// </summary>
     public bool IsColor => IsEditable && _type == FormPropertyType.Color;
 
-    public IReadOnlyList<string>? Choices => _choices;
+    /// <summary>VS's two Bool items, in VS's order — the spelling <see cref="StringValue"/> shows a Bool in.</summary>
+    private static readonly IReadOnlyList<string> BoolChoices = new[] { "True", "False" };
+
+    private IReadOnlyList<string>? _offered;
+
+    /// <summary>
+    /// What the drop-down OFFERS. ⛔ The catalog's answer, filtered through <see cref="FormPropertyDef.Accepts(string?,
+    /// FormTarget)"/> on this row's target (slice 4 D-4): a web Cursor row drops the members with no CSS, generically —
+    /// there is no Cursor special case, and never a hand list. Offering a member Judge would then REFUSE is a drop-down
+    /// whose items do nothing.
+    /// </summary>
+    public IReadOnlyList<string>? Choices =>
+        _type == FormPropertyType.Bool ? BoolChoices
+        : _definition == null || _choices == null ? _choices
+        : _offered ??= _choices.Where(choice => _definition.Accepts(choice, _target)).ToList();
 
     // The catalog does not carry per-property ranges, and inventing them would silently clamp a
     // value the document legitimately holds.
@@ -442,11 +464,33 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
     /// <summary>Set only inside <see cref="RaiseEditorRefresh"/>'s posted step; null otherwise.</summary>
     private string? _editorEcho;
 
-    /// <summary>The editor's text: <see cref="DisplayValue"/> (frozen → raw; absent → the default).</summary>
+    /// <summary>
+    /// The editor's text: <see cref="DisplayValue"/> (frozen → raw; absent → the default). ⚠ An editable Bool shows VS's
+    /// <c>True</c>/<c>False</c>: the drop-down's SelectedItem must equal one of its items exactly, or it shows nothing and
+    /// pushes null. The document keeps <c>true</c>/<c>false</c> (<see cref="FormPropertyDef.ToDocument"/>), and the
+    /// no-op rule treats the two spellings as one value (<see cref="IsSameIntrinsicValue"/>, the catalog's Canonical).
+    /// </summary>
     public string StringValue
     {
-        get => EditorText;
+        get => _type == FormPropertyType.Bool && IsEditable && bool.TryParse(EditorText, out var flag)
+            ? (flag ? BoolChoices[0] : BoolChoices[1])
+            : EditorText;
         set => Commit(value);
+    }
+
+    /// <summary>
+    /// VS's double-click on a Bool row: flips the value (slice 4 D-3). Through the same Commit as the drop-down, so Judge
+    /// decides — an absent Enabled (shown True) writes <c>false</c>, a present <c>false</c> writes <c>true</c>. Nothing for
+    /// a row that is not an editable Bool: a frozen row is never coerced. (Cycling an Enum on double-click is a follow-up.)
+    /// </summary>
+    public void ToggleBool()
+    {
+        if (_type != FormPropertyType.Bool || !UsesTypedEditor)
+        {
+            return;
+        }
+
+        Commit(BoolValue ? "false" : "true");
     }
 
     public bool BoolValue
@@ -636,7 +680,7 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
         // DIFFERENT value. An intrinsic row (no definition) has only the exact no-op, and IntRow ignores
         // text it cannot parse.
         var verdict = _definition?.Judge(value, IsPresent ? RawValue : null, _target)
-                      ?? (string.Equals(value, DisplayValue, StringComparison.Ordinal)
+                      ?? (IsSameIntrinsicValue(value, DisplayValue)
                           ? FormEditVerdict.NoOp
                           : FormEditVerdict.Write);
 
@@ -677,7 +721,7 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
 
         // ⛔ Stored in the DOCUMENT's vocabulary: an Opacity typed as "80%" is written as WinForms' "0.8" (owner decision
         // 2026-09-29) — the catalog's one conversion, a no-op for every other type.
-        value = _definition?.ToDocument(value) ?? value;
+        value = _definition?.ToDocument(value) ?? IntrinsicDocumentText(value);
 
         if (_write != null)
         {
@@ -706,6 +750,25 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
         RaiseValueChanged();
         _onChanged();
     }
+
+    /// <summary>
+    /// The no-op rule for a row with NO catalog definition (the catalog's Judge covers every other row): the exact text —
+    /// except a Bool, compared in the document's word (<see cref="FormPropertyDef.BoolWord"/>, the catalog's own rule).
+    ///
+    /// <para>⛔ Slice 4 D-3. The Font's Bold/Italic/Underline parts are catalog-less Bools read as <c>true</c>/<c>false</c>,
+    /// and their drop-down speaks <c>True</c>/<c>False</c>. Ordinal, a push of the item the part already shows was a Write —
+    /// and on an ABSENT ambient Font the part composes the inherited font and the parent STORES it: <c>Font="Segoe UI,
+    /// 9pt"</c> and an undo entry for a value nobody changed (<c>FormCompositeRowTests.ABoldPart_PushedItsOwnShownItem_…</c>).
+    /// ⚠ Measured: the real headless ComboBox does NOT push its item back on bind, so the real-view twin
+    /// (<c>SelectingALabel_AndExpandingItsFont_ChangesNothing_…</c>) cannot see this mutant; the view-model test is the
+    /// kill.</para>
+    /// </summary>
+    private bool IsSameIntrinsicValue(string value, string shown) =>
+        string.Equals(IntrinsicDocumentText(value), IntrinsicDocumentText(shown), StringComparison.Ordinal);
+
+    /// <summary>What a catalog-less row stores: the value itself, a Bool in the document's lower-case word.</summary>
+    private string IntrinsicDocumentText(string value) =>
+        _type == FormPropertyType.Bool ? FormPropertyDef.BoolWord(value) : value;
 
     /// <summary>
     /// Why the last value typed into this row was REFUSED (spec §7 "refused in the editor, never
