@@ -138,9 +138,11 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
         string? frozenReason,
         string? frozenText,
         Action onChanged,
-        Func<string, string?>? storeRefusal)
+        Func<string, string?>? storeRefusal,
+        Func<IReadOnlyList<string>>? referenceCandidates)
     {
         _onChanged = onChanged;
+        _referenceCandidates = referenceCandidates;
         Name = definition.Name;
         _type = definition.Type;
         _choices = definition.Choices;
@@ -182,6 +184,9 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
     /// <param name="onChanged">Raised after an edit that changed the model.</param>
     /// <param name="storeRefusal">Names a value the store refuses (shown in the description pane); null for a store
     /// that refuses nothing.</param>
+    /// <param name="referenceCandidates">For a <see cref="FormPropertyType.Reference"/> row: the Ids it may name, asked on
+    /// EVERY read of <see cref="Choices"/> (<c>FormReferences.Candidates</c>) — never captured here, so the list follows
+    /// the document (slice 4 D-7).</param>
     public static FormPropertyRow ForStoredValue(
         FormPropertyDef definition,
         FormTarget target,
@@ -191,8 +196,12 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
         Action onChanged,
         string? frozenReason = null,
         string? frozenText = null,
-        Func<string, string?>? storeRefusal = null) =>
-        new(definition, target, read, write, remove, frozenReason, frozenText, onChanged, storeRefusal);
+        Func<string, string?>? storeRefusal = null,
+        Func<IReadOnlyList<string>>? referenceCandidates = null) =>
+        new(definition, target, read, write, remove, frozenReason, frozenText, onChanged, storeRefusal, referenceCandidates);
+
+    /// <summary>A Reference row's candidate Ids, asked on every read; null for any other row. See <see cref="ForStoredValue"/>.</summary>
+    private readonly Func<IReadOnlyList<string>>? _referenceCandidates;
 
     private readonly FormRowEditor _editor = FormRowEditor.Default;
 
@@ -315,23 +324,60 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
 
     private bool Typed => UsesTypedEditor;
 
-    public bool IsCheckBox => Typed && _type == FormPropertyType.Bool;
+    /// <summary>
+    /// ⛔ Always false in the designer's grid (slice 4 D-3). The shared editor's switch is the SETTINGS dialog's Bool
+    /// editor; the grid shows a Bool as VS does, a True/False drop-down — the shared editor's existing ComboBox arm
+    /// (<see cref="IsComboBox"/>). Replacing the switch inside <c>TypedValueEditor</c> would have changed Settings too.
+    /// </summary>
+    public bool IsCheckBox => false;
 
     public bool IsNumericUpDown => Typed && _type == FormPropertyType.Int;
 
-    /// <summary>An Enum's members, or a Cursor row's <c>Cursors</c> members (<see cref="FormPropertyDef.Choices"/>).</summary>
-    public bool IsComboBox => Typed && _type is FormPropertyType.Enum or FormPropertyType.Cursor;
+    /// <summary>
+    /// A drop-down: an Enum's members, a Cursor row's <c>Cursors</c> members (<see cref="FormPropertyDef.Choices"/>), a
+    /// Bool's <c>True</c>/<c>False</c> (slice 4 D-3), or a Reference's <c>(none)</c> and the controls it may name (D-7).
+    /// </summary>
+    public bool IsComboBox => Typed &&
+        _type is FormPropertyType.Enum or FormPropertyType.Cursor or FormPropertyType.Bool or FormPropertyType.Reference;
 
     /// <summary>
     /// Free text: a String, and the typed-text rows — a Color, a Size (<c>800, 450</c>), a Font (FontConverter text),
-    /// a Padding (<c>4</c> or <c>4, 2, 4, 2</c>), a Fraction (<c>0.85</c>) and a Reference (a control's Id). The composite
-    /// rows (slice 3 Task 6) and the colour, font and reference editors (slice 4) sit beside this text, which stays the
-    /// parent's own editor.
+    /// a Padding (<c>4</c> or <c>4, 2, 4, 2</c>) and a Fraction (<c>0.85</c>). The composite rows (slice 3 Task 6) and the
+    /// colour and font editors (slice 4) sit beside this text, which stays the parent's own editor. (A Reference is a
+    /// drop-down since slice 4 D-7: <see cref="IsComboBox"/>.)
     /// </summary>
-    public bool IsTextBox => Typed &&
+    public bool IsTextBox => Typed && !IsCollectionEditor &&
         _type is FormPropertyType.String or FormPropertyType.Color or FormPropertyType.Size
-            or FormPropertyType.Font or FormPropertyType.Padding or FormPropertyType.Fraction or FormPropertyType.Reference
-            or FormPropertyType.CssClasses;
+            or FormPropertyType.Font or FormPropertyType.Padding or FormPropertyType.Fraction
+            or FormPropertyType.CssClasses
+            // Slice 4 Task 8: an image/icon path is typed text (Resources/logo.png) — the picker (Task 10) sits beside it.
+            or FormPropertyType.Image or FormPropertyType.Icon;
+
+    /// <summary>
+    /// An item collection (ComboBox / ListBox / CheckedListBox <c>Items</c>, slice 4 Task 7): VS's read-only
+    /// <c>(Collection)</c> text and a <c>…</c> that opens the String Collection Editor — never a one-line text box, which
+    /// cannot hold one item per line.
+    /// </summary>
+    public bool IsCollectionEditor => Typed && FormItems.IsCollection(_definition);
+
+    /// <summary>What an item-collection row shows in its value cell, as VS does.</summary>
+    public string CollectionSummary => "(Collection)";
+
+    /// <summary>
+    /// The String Collection Editor's OK (the model value, ADR 0020): an empty list is RESET — the property leaves the
+    /// document, never <c>Items=""</c> — and anything else goes through the row's own Commit (the same list again is a
+    /// no-op, per Judge).
+    /// </summary>
+    public void ApplyItems(string modelValue)
+    {
+        if (FormItems.Split(modelValue).Count == 0)
+        {
+            Reset(); // checks CanReset itself: an absent list stays absent
+            return;
+        }
+
+        Commit(modelValue);
+    }
 
     /// <summary>The four-edge Anchor box (Task 26).</summary>
     public bool IsAnchorPicker => IsEditable && _editor == FormRowEditor.AnchorPicker;
@@ -340,14 +386,225 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
     public bool IsDockPicker => IsEditable && _editor == FormRowEditor.DockPicker;
 
     /// <summary>
-    /// ⚠ Colour rows are TEXT for now, deliberately. Avalonia 11.3 base ships no colour picker, so
-    /// a real one is hand-built — and <c>SettingControlKind.ColorPicker</c> is a declared but never
-    /// rendered arm in the Settings dialog, so it is not a precedent to copy. A text row round-trips
-    /// the value correctly and says what it is; a half-built picker would not.
+    /// A colour row: its value cell carries VS's colour drop-down (<c>FormColorDropDown</c>: Custom / Web / System, slice 4
+    /// D-1) to the LEFT of the text box, which stays the row's own editor (typed <c>#hex</c> or a name, D-1a). ⚠ Requires
+    /// the default editor like every type-driven flag, and is false while frozen: a Degraded colour shows its raw text only.
     /// </summary>
-    public bool IsColor => IsEditable && _type == FormPropertyType.Color;
+    public bool IsColor => Typed && _type == FormPropertyType.Color;
 
-    public IReadOnlyList<string>? Choices => _choices;
+    private IReadOnlyList<FormColorChoice>? _webColors;
+    private IReadOnlyList<FormColorChoice>? _systemColors;
+
+    /// <summary>The drop-down's Web tab: the named colours this row's target accepts (<see cref="FormColorChoices.Web"/>).</summary>
+    public IReadOnlyList<FormColorChoice> WebColorChoices =>
+        _webColors ??= _definition == null ? Array.Empty<FormColorChoice>() : FormColorChoices.Web(_definition, _target);
+
+    /// <summary>The drop-down's System tab: all 33 on WinForms, the 8 with CSS on the web (<see cref="FormColorChoices.System"/>).</summary>
+    public IReadOnlyList<FormColorChoice> SystemColorChoices =>
+        _systemColors ??= _definition == null ? Array.Empty<FormColorChoice>() : FormColorChoices.System(_definition, _target);
+
+    /// <summary>
+    /// Whether the Custom tab offers an alpha channel: false on a WinForms row whose control throws on a translucent colour
+    /// (a TextBox's BackColor — <see cref="FormPropertyDef.AcceptsTranslucentOn"/>, the catalog's answer).
+    /// </summary>
+    public bool AllowsAlpha => _definition?.AcceptsTranslucentOn(_target) ?? true;
+
+    /// <summary>The colour the row's value displays as — the drop-down's swatch and the Custom tab's start. Preview only.</summary>
+    public Avalonia.Media.Color? SwatchColor =>
+        IsColor && FormColorChoices.TryResolve(DisplayValue, out var color) ? color : null;
+
+    /// <summary>The swatch brush, or null (the swatch then shows "?") when the value names nothing this machine can draw.</summary>
+    public Avalonia.Media.IBrush? Swatch =>
+        SwatchColor is { } color ? new Avalonia.Media.Immutable.ImmutableSolidColorBrush(color) : null;
+
+    /// <summary>
+    /// True when a colour row SHOWS a value that cannot be previewed (a CSS name only the browser knows) — the swatch
+    /// shows "?" instead of a colour. An empty value (no default: a Label's BackColor inherits) is an empty swatch, not "?".
+    /// </summary>
+    public bool HasUnknownSwatch => IsColor && DisplayValue.Length > 0 && SwatchColor == null;
+
+    /// <summary>
+    /// A colour picked in the drop-down — a Web or System name (one pick, one write) or the Custom tab's colour when the
+    /// pop-up closes (D-1c: once, never per drag step). Through the same Commit as typed text, so Judge decides: the same
+    /// colour is a no-op, a refused one is said.
+    /// </summary>
+    public void ApplyColor(string value) => Commit(value);
+
+    // ==================================================================
+    // The Font dialog (slice 4 D-2): a `…` button on a Font row opens it; OK writes ONE canonical value
+    // ==================================================================
+
+    /// <summary>
+    /// What this row's control INHERITS for the property when it sets none (<c>FormAmbient.Inherited</c>), or null when
+    /// there is nothing to inherit from (the Form's own rows). Set once by <see cref="FormCompositeRows.Attach"/>; the Font
+    /// parts and the Font dialog both read it, through <see cref="EffectiveFont"/>.
+    /// </summary>
+    internal Func<string?>? Inherited { get; set; }
+
+    /// <summary>The target whose value rules this row applies — the Font dialog shows the web hint on <see cref="FormTarget.Web"/>.</summary>
+    public FormTarget Target => _target;
+
+    /// <summary>A Font row carries VS's <c>…</c> button, which opens the Font dialog. Not while frozen (the typed-editor rule).</summary>
+    public bool HasEllipsis => Typed && _type == FormPropertyType.Font;
+
+    /// <summary>
+    /// An Image/Icon row carries a <c>…</c> that opens a file picker (slice 4 Task 10); the typed path stays the row's own
+    /// editor beside it. Not while frozen.
+    /// </summary>
+    public bool HasAssetPicker => Typed && _type is FormPropertyType.Image or FormPropertyType.Icon;
+
+    /// <summary>The picker's result: ONE value through the row's own Commit (Judge decides; a refused value is said).</summary>
+    public void ApplyAsset(string value) => Commit(value);
+
+    /// <summary>The font the dialog starts from: the row's value, or — absent — what its control inherits.</summary>
+    public FormFontValue? EffectiveFont => FormCompositeRows.EffectiveFont(this);
+
+    /// <summary>The Font dialog's OK: ONE canonical value through the row's own Commit (fan-in; Judge decides).</summary>
+    public void ApplyFont(string canonical) => Commit(canonical);
+
+    /// <summary>VS's two Bool items, in VS's order — the spelling <see cref="StringValue"/> shows a Bool in.</summary>
+    private static readonly IReadOnlyList<string> BoolChoices = new[] { "True", "False" };
+
+    /// <summary>
+    /// The filtered <see cref="Choices"/>, computed once. ⚠ Assumes <see cref="_choices"/>, <see cref="_definition"/> and
+    /// <see cref="_target"/> never change for this row — all three are readonly today. ⛔ A Reference row's list follows
+    /// the DOCUMENT and never goes through this cache (<see cref="ReferenceChoices"/>, asked on every read).
+    /// </summary>
+    private IReadOnlyList<string>? _offered;
+
+    /// <summary>
+    /// What the drop-down OFFERS. ⛔ The catalog's answer, filtered through <see cref="FormPropertyDef.Accepts(string?,
+    /// FormTarget)"/> on this row's target (slice 4 D-4): a web Cursor row drops the members with no CSS, generically —
+    /// there is no Cursor special case, and never a hand list. Offering a member Judge would then REFUSE is a drop-down
+    /// whose items do nothing.
+    /// </summary>
+    public IReadOnlyList<string>? Choices =>
+        _type == FormPropertyType.Bool ? BoolChoices
+        : _type == FormPropertyType.Reference ? ReferenceChoices()
+        : _definition == null || _choices == null ? _choices
+        : _offered ??= _choices.Where(choice => _definition.Accepts(choice, _target)).ToList();
+
+    // ==================================================================
+    // The Reference drop-down (slice 4 D-7): (none), then the controls the row may name
+    // ==================================================================
+
+    /// <summary>
+    /// The Reference drop-down's first item. ⛔ A DISPLAY item, never a value: picking it is Reset, mapped before Judge
+    /// is asked (<see cref="CommitReference"/>). No control can carry it as an Id — parentheses are not legal there.
+    /// </summary>
+    internal const string NoReferenceItem = "(none)";
+
+    /// <summary>
+    /// Marks a stored Id that names no candidate (BL8034 at build): <c>btnGone (missing)</c>. An Id holds no space, so
+    /// the marked text can never be a real Id either.
+    /// </summary>
+    internal const string MissingReferenceSuffix = " (missing)";
+
+    private IReadOnlyList<string> ReferenceCandidates => _referenceCandidates?.Invoke() ?? Array.Empty<string>();
+
+    /// <summary>The last list <see cref="ReferenceChoices"/> handed out — returned again while its items are unchanged.</summary>
+    private IReadOnlyList<string>? _referenceList;
+
+    /// <summary>Stored Ids this row has shown marked missing, in the order first shown — kept for the row's life.</summary>
+    private readonly List<string> _missingShown = new();
+
+    /// <summary>
+    /// <c>(none)</c>, the candidates in document order (<c>FormReferences.Candidates</c>, asked NOW — the list follows the
+    /// document), and — when the stored Id names none of them — that Id marked missing, so the row never shows
+    /// <c>(none)</c> over a value the document holds.
+    ///
+    /// <para>⛔⛔ The SAME list instance comes back while its items are unchanged, and a missing Id stays listed for the
+    /// row's life. Measured through the real ComboBox: a pick commits INSIDE the combo's own SelectedItem push, and the
+    /// commit raises <c>Choices</c> (here, and again through the document view model's revision). A NEW list there swaps
+    /// the combo's ItemsSource mid-push, and the combo pushed its PREVIOUS item back — <c>(none)</c>, i.e. Reset — so
+    /// picking <c>btn</c> wrote it and removed it in one click. An unchanged instance is no ItemsSource change at all; a
+    /// sticky missing entry means picking a real Button over a dangling Id does not shrink the list mid-push either.</para>
+    /// </summary>
+    private IReadOnlyList<string> ReferenceChoices()
+    {
+        var candidates = ReferenceCandidates; // asked ONCE per read: the display below uses the same list
+        var stored = ReferenceDisplay(candidates);
+        if (stored.EndsWith(MissingReferenceSuffix, StringComparison.Ordinal))
+        {
+            var id = stored[..^MissingReferenceSuffix.Length];
+            if (!_missingShown.Contains(id, StringComparer.Ordinal))
+            {
+                _missingShown.Add(id);
+            }
+        }
+
+        var list = new List<string> { NoReferenceItem };
+        list.AddRange(candidates);
+        list.AddRange(_missingShown
+            .Where(id => !candidates.Contains(id, StringComparer.Ordinal))
+            .Select(id => id + MissingReferenceSuffix));
+
+        if (_referenceList == null || !_referenceList.SequenceEqual(list, StringComparer.Ordinal))
+        {
+            _referenceList = list;
+        }
+
+        return _referenceList;
+    }
+
+    /// <summary>What a Reference row's drop-down selects: <c>(none)</c> when absent, the Id, or the Id marked missing.</summary>
+    private string ReferenceDisplay(IReadOnlyList<string> candidates)
+    {
+        var text = EditorText;
+        if (text.Length == 0)
+        {
+            return NoReferenceItem;
+        }
+
+        // ⚠ An editor echo (RaiseEditorRefresh) hands back what the combo pushed, which is already a display item.
+        // ⚠ Only an EDITABLE row reaches here: a hand-written "x (missing)" or "(none)" is not a legal Id, so it is Degraded
+        // and frozen, and never read through these marks (FormPropertyGridTests.AHandWrittenDisplayMark_…).
+        if (text == NoReferenceItem || text.EndsWith(MissingReferenceSuffix, StringComparison.Ordinal) ||
+            candidates.Contains(text, StringComparer.Ordinal))
+        {
+            return text;
+        }
+
+        return text + MissingReferenceSuffix;
+    }
+
+    /// <summary>
+    /// A pick in the Reference drop-down. ⛔ <c>(none)</c> is Reset (remove the property; a no-op when it is absent), and it
+    /// is mapped HERE, before <see cref="Commit"/> asks Judge — Judge would refuse the text <c>(none)</c> as an illegal Id,
+    /// and the stored Id would silently stay. A marked missing item is its Id without the mark: the value already stored
+    /// (a no-op, per Judge) or, after the user picked a real Button, the dangling Id they are putting back. Anything else
+    /// is an Id, committed as usual.
+    /// </summary>
+    private void CommitReference(string? value)
+    {
+        if (value == NoReferenceItem)
+        {
+            Reset(); // checks CanReset itself: absent or frozen → nothing
+            return;
+        }
+
+        if (value != null && value.EndsWith(MissingReferenceSuffix, StringComparison.Ordinal))
+        {
+            value = value[..^MissingReferenceSuffix.Length];
+        }
+
+        Commit(value);
+    }
+
+    /// <summary>
+    /// The document changed under this row (the grid's <c>RefreshReferenceChoices</c>): a Reference row's bound drop-down
+    /// re-reads its items, then its selection — in that order, so the selected item is one of the new items.
+    /// </summary>
+    internal void RefreshChoices()
+    {
+        if (_type != FormPropertyType.Reference)
+        {
+            return;
+        }
+
+        OnPropertyChanged(nameof(Choices));
+        OnPropertyChanged(nameof(StringValue));
+    }
 
     // The catalog does not carry per-property ranges, and inventing them would silently clamp a
     // value the document legitimately holds.
@@ -442,12 +699,60 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
     /// <summary>Set only inside <see cref="RaiseEditorRefresh"/>'s posted step; null otherwise.</summary>
     private string? _editorEcho;
 
-    /// <summary>The editor's text: <see cref="DisplayValue"/> (frozen → raw; absent → the default).</summary>
+    /// <summary>
+    /// The editor's text: <see cref="DisplayValue"/> (frozen → raw; absent → the default). ⚠ An editable Bool shows VS's
+    /// <c>True</c>/<c>False</c>: the drop-down's SelectedItem must equal one of its items exactly, or it shows nothing and
+    /// pushes null. The document keeps <c>true</c>/<c>false</c> (<see cref="FormPropertyDef.ToDocument"/>), and the
+    /// no-op rule treats the two spellings as one value (<see cref="IsSameIntrinsicValue"/>, the catalog's Canonical).
+    /// </summary>
     public string StringValue
     {
-        get => EditorText;
-        set => Commit(value);
+        get => IsEditableBool && bool.TryParse(EditorText, out var flag) ? (flag ? BoolChoices[0] : BoolChoices[1])
+            : IsEditableReference ? ReferenceDisplay(ReferenceCandidates)
+            : EditorText;
+        set
+        {
+            if (IsEditableReference)
+            {
+                CommitReference(value);
+            }
+            else
+            {
+                Commit(value);
+            }
+        }
     }
+
+    /// <summary>
+    /// A Reference row the grid edits through its drop-down (slice 4 D-7). ⚠ <see cref="UsesTypedEditor"/>, as
+    /// <see cref="IsEditableBool"/>: a frozen row shows its raw text and is never mapped.
+    /// </summary>
+    private bool IsEditableReference => _type == FormPropertyType.Reference && UsesTypedEditor;
+
+    /// <summary>
+    /// VS's double-click on a Bool row: flips the value (slice 4 D-3). Through the same Commit as the drop-down, so Judge
+    /// decides — an absent Enabled (shown True) writes <c>false</c>, a present <c>false</c> writes <c>true</c>. Nothing for
+    /// a row that is not an editable Bool: a frozen row is never coerced. (Cycling an Enum on double-click is a follow-up.)
+    /// </summary>
+    /// <returns>Whether the value FLIPPED — the view marks the gesture handled only then.</returns>
+    public bool ToggleBool()
+    {
+        if (!IsEditableBool)
+        {
+            return false;
+        }
+
+        var before = DisplayValue;
+        Commit(BoolValue ? "false" : "true");
+        return !string.Equals(before, DisplayValue, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// ONE answer to "is this a Bool the grid edits?" — what <see cref="StringValue"/>'s True/False display and
+    /// <see cref="ToggleBool"/> both ask. ⚠ <see cref="UsesTypedEditor"/>, not <see cref="IsEditable"/>: it is the typed
+    /// editor (the drop-down) that speaks True/False, and only a row that renders it may be toggled.
+    /// </summary>
+    private bool IsEditableBool => _type == FormPropertyType.Bool && UsesTypedEditor;
 
     public bool BoolValue
     {
@@ -530,6 +835,21 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
     /// </summary>
     private bool HasEdge(FormAnchorEdges edge) => Edges.HasFlag(edge);
 
+    /// <summary>
+    /// VS's one-line Anchor text — <c>Top, Left</c>, edges in <see cref="EdgeOrder"/>, or <c>None</c> — shown beside the
+    /// drop-down whose pop-up holds the four-edge box (slice 4 D-4). Read through the same parser as the box
+    /// (<see cref="Edges"/>), so an unset Anchor says WinForms' default, never blank. Display only: never written.
+    /// </summary>
+    public string AnchorSummary
+    {
+        get
+        {
+            var edges = Edges;
+            var names = EdgeOrder.Where(e => edges.HasFlag(e)).Select(e => e.ToString()).ToList();
+            return names.Count == 0 ? "None" : string.Join(", ", names);
+        }
+    }
+
     private FormAnchorEdges Edges => FormAnchor.Parse(RawValue, out _);
 
     /// <summary>
@@ -557,6 +877,8 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
         OnPropertyChanged(nameof(AnchorBottom));
         OnPropertyChanged(nameof(AnchorLeft));
         OnPropertyChanged(nameof(AnchorRight));
+        // ⛔ The box is in a pop-up; this text is what stays on the row.
+        OnPropertyChanged(nameof(AnchorSummary));
     }
 
     // ==================================================================
@@ -577,6 +899,16 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
     public bool IsDockedRight => DockValue.Equals("Right", StringComparison.OrdinalIgnoreCase);
     public bool IsDockedFill => DockValue.Equals("Fill", StringComparison.OrdinalIgnoreCase);
 
+    private static readonly string[] DockRegions = { "None", "Top", "Bottom", "Left", "Right", "Fill" };
+
+    /// <summary>
+    /// The Dock row's one-line text beside its drop-down (slice 4 D-4): the region in <c>DockStyle</c>'s own spelling
+    /// (<c>left</c> shows as <c>Left</c>), <c>None</c> when unset; an unknown word is shown as the document holds it.
+    /// Display only: never written.
+    /// </summary>
+    public string DockSummary =>
+        DockRegions.FirstOrDefault(r => r.Equals(DockValue, StringComparison.OrdinalIgnoreCase)) ?? DockValue;
+
     /// <summary>
     /// Sets the dock region. ⚠ <c>None</c> writes the empty string rather than the word, so an
     /// undocked control carries no <c>Dock</c> attribute at all — the same "write only non-default
@@ -593,7 +925,7 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
                  {
                      nameof(DockValue), nameof(IsDockedNone), nameof(IsDockedTop),
                      nameof(IsDockedBottom), nameof(IsDockedLeft), nameof(IsDockedRight),
-                     nameof(IsDockedFill)
+                     nameof(IsDockedFill), nameof(DockSummary)
                  })
         {
             OnPropertyChanged(name);
@@ -636,7 +968,7 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
         // DIFFERENT value. An intrinsic row (no definition) has only the exact no-op, and IntRow ignores
         // text it cannot parse.
         var verdict = _definition?.Judge(value, IsPresent ? RawValue : null, _target)
-                      ?? (string.Equals(value, DisplayValue, StringComparison.Ordinal)
+                      ?? (IsSameIntrinsicValue(value, DisplayValue)
                           ? FormEditVerdict.NoOp
                           : FormEditVerdict.Write);
 
@@ -677,7 +1009,7 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
 
         // ⛔ Stored in the DOCUMENT's vocabulary: an Opacity typed as "80%" is written as WinForms' "0.8" (owner decision
         // 2026-09-29) — the catalog's one conversion, a no-op for every other type.
-        value = _definition?.ToDocument(value) ?? value;
+        value = _definition?.ToDocument(value) ?? IntrinsicDocumentText(value);
 
         if (_write != null)
         {
@@ -706,6 +1038,25 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
         RaiseValueChanged();
         _onChanged();
     }
+
+    /// <summary>
+    /// The no-op rule for a row with NO catalog definition (the catalog's Judge covers every other row): the exact text —
+    /// except a Bool, compared in the document's word (<see cref="FormPropertyDef.BoolWord"/>, the catalog's own rule).
+    ///
+    /// <para>⛔ Slice 4 D-3. The Font's Bold/Italic/Underline parts are catalog-less Bools read as <c>true</c>/<c>false</c>,
+    /// and their drop-down speaks <c>True</c>/<c>False</c>. Ordinal, a push of the item the part already shows was a Write —
+    /// and on an ABSENT ambient Font the part composes the inherited font and the parent STORES it: <c>Font="Segoe UI,
+    /// 9pt"</c> and an undo entry for a value nobody changed (<c>FormCompositeRowTests.ABoldPart_PushedItsOwnShownItem_…</c>).
+    /// ⚠ Measured: the real headless ComboBox does NOT push its item back on bind, so the real-view twin
+    /// (<c>SelectingALabel_AndExpandingItsFont_ChangesNothing_…</c>) cannot see this mutant; the view-model test is the
+    /// kill.</para>
+    /// </summary>
+    private bool IsSameIntrinsicValue(string value, string shown) =>
+        string.Equals(IntrinsicDocumentText(value), IntrinsicDocumentText(shown), StringComparison.Ordinal);
+
+    /// <summary>What a catalog-less row stores: the value itself, a Bool in the document's lower-case word.</summary>
+    private string IntrinsicDocumentText(string value) =>
+        _type == FormPropertyType.Bool ? FormPropertyDef.BoolWord(value) : value;
 
     /// <summary>
     /// Why the last value typed into this row was REFUSED (spec §7 "refused in the editor, never
@@ -787,10 +1138,18 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
 
     private void RaiseOwnValueChanged()
     {
+        // A Reference row's ITEMS depend on its value (a stored Id naming no candidate is listed, marked missing), so they
+        // re-read first — before StringValue, so the new selection is one of the new items.
+        if (_type == FormPropertyType.Reference)
+        {
+            OnPropertyChanged(nameof(Choices));
+        }
+
         foreach (var name in new[]
                  {
                      nameof(RawValue), nameof(DisplayValue), nameof(StringValue), nameof(BoolValue),
-                     nameof(IntValue), nameof(IsPresent), nameof(IsBold), nameof(IsDefaultShown), nameof(CanReset)
+                     nameof(IntValue), nameof(IsPresent), nameof(IsBold), nameof(IsDefaultShown), nameof(CanReset),
+                     nameof(SwatchColor), nameof(Swatch), nameof(HasUnknownSwatch)
                  })
         {
             OnPropertyChanged(name);

@@ -1,0 +1,86 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:designerVm="using:VisualGameStudio.Shell.ViewModels.Designer"
+             x:Class="VisualGameStudio.Shell.Views.Controls.FormColorDropDown"
+             x:DataType="designerVm:FormPropertyRow">
+
+  <!-- Slice 4 D-1: VS's colour drop-down, BESIDE the row's text box (which stays the row's own editor). A swatch button
+       opens a pop-up with three tabs: Custom (a ColorView), Web (the named colours) and System (the system colours).
+       ⛔ Every list is the catalog's, filtered through Accepts on the row's target (FormColorChoices) — a web form's
+       System tab holds 8 entries, not 33.
+       ⛔ NO theme include here. The ColorPicker theme has ONE home: FormPropertyGridView.axaml's Styles (D-1b). One copy
+       per row would load the theme once per colour row; without any copy the ColorView has no template and draws
+       NOTHING, with nothing throwing (measured, pre-flight M2) — the real-view test asserts it has visual children.
+       ⛔ Every {Binding} is a REFLECTION binding: FormPropertyGridViewTests walks this file against FormPropertyRow,
+       and each DataTemplate against its DataType. -->
+  <Button x:Name="SwatchButton" Classes="dropDown" Padding="2,0" MinHeight="0" VerticalAlignment="Center"
+          ToolTip.Tip="Choose a colour" AutomationProperties.Name="Choose a colour">
+    <StackPanel Orientation="Horizontal" Spacing="2">
+      <Border Width="16" Height="10" VerticalAlignment="Center"
+              BorderBrush="{DynamicResource IdeBorder}" BorderThickness="1"
+              Background="{Binding Swatch}">
+        <TextBlock Text="?" FontSize="8" HorizontalAlignment="Center" VerticalAlignment="Center"
+                   IsVisible="{Binding HasUnknownSwatch}"/>
+      </Border>
+      <TextBlock Text="&#x25BE;" FontSize="10" VerticalAlignment="Center"/>
+    </StackPanel>
+    <Button.Flyout>
+      <Flyout Placement="BottomEdgeAlignedLeft" Opened="OnFlyoutOpened" Closed="OnFlyoutClosed">
+        <TabControl x:Name="Tabs" Width="280" Height="320" Padding="0">
+          <TabItem Header="Custom" FontSize="12">
+            <!-- D-1c: the Custom colour is written ONCE, when the pop-up closes (or OK closes it) — never per
+                 ColorChanged, which a drag across the spectrum raises hundreds of times. -->
+            <DockPanel>
+              <Button DockPanel.Dock="Bottom" HorizontalAlignment="Right" Margin="4" Padding="12,2"
+                      Content="OK" Click="OnCustomOk"
+                      AutomationProperties.Name="Apply the custom colour"/>
+              <ColorView x:Name="CustomView" ColorChanged="OnCustomColorChanged"/>
+            </DockPanel>
+          </TabItem>
+          <TabItem Header="Web" FontSize="12">
+            <ScrollViewer>
+              <ItemsControl ItemsSource="{Binding WebColorChoices}">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate DataType="{x:Type designerVm:FormColorChoice}" x:DataType="designerVm:FormColorChoice">
+                    <Button Click="OnNamedColorPicked" Classes="colorChoice"
+                            HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
+                            Padding="4,1" MinHeight="0" Background="Transparent" BorderThickness="0"
+                            AutomationProperties.Name="{Binding Name}">
+                      <StackPanel Orientation="Horizontal" Spacing="6">
+                        <Border Width="18" Height="10" VerticalAlignment="Center"
+                                BorderBrush="{DynamicResource IdeBorder}" BorderThickness="1"
+                                Background="{Binding Swatch}"/>
+                        <TextBlock Text="{Binding Name}" FontSize="11"/>
+                      </StackPanel>
+                    </Button>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+            </ScrollViewer>
+          </TabItem>
+          <TabItem Header="System" FontSize="12">
+            <ScrollViewer>
+              <ItemsControl ItemsSource="{Binding SystemColorChoices}">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate DataType="{x:Type designerVm:FormColorChoice}" x:DataType="designerVm:FormColorChoice">
+                    <Button Click="OnNamedColorPicked" Classes="colorChoice"
+                            HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
+                            Padding="4,1" MinHeight="0" Background="Transparent" BorderThickness="0"
+                            AutomationProperties.Name="{Binding Name}">
+                      <StackPanel Orientation="Horizontal" Spacing="6">
+                        <Border Width="18" Height="10" VerticalAlignment="Center"
+                                BorderBrush="{DynamicResource IdeBorder}" BorderThickness="1"
+                                Background="{Binding Swatch}"/>
+                        <TextBlock Text="{Binding Name}" FontSize="11"/>
+                      </StackPanel>
+                    </Button>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+            </ScrollViewer>
+          </TabItem>
+        </TabControl>
+      </Flyout>
+    </Button.Flyout>
+  </Button>
+</UserControl>

@@ -11,6 +11,12 @@
        binds to NOTHING with no build error. FormPropertyGridViewTests resolves each against the type
        in scope — this view model at the root, each DataTemplate's DataType inside it. -->
   <UserControl.Styles>
+    <!-- ⛔ Slice 4 D-1b: the ColorPicker theme's ONE home. Without it the colour drop-down's ColorView has no template
+         and draws NOTHING, with nothing throwing (pre-flight M2). Not App.axaml: no test app loads that, so a test would
+         pass over a blank control. Not per FormColorDropDown: once per colour row. This view hosts every row, the real-view
+         tests host this view, and the pop-up inherits it through the logical tree (its button is in the row). -->
+    <StyleInclude Source="avares://Avalonia.Controls.ColorPicker/Themes/Fluent/Fluent.xaml"/>
+
     <!-- Bold = present AND different from the target's default (spec §2.7). -->
     <Style Selector="TextBlock.bold">
       <Setter Property="FontWeight" Value="Bold"/>
@@ -180,70 +186,132 @@
                   <!-- ⛔ Classes="compact": the editors' Settings-dialog minimum widths (200/170) are
                        wider than this column, and an over-wide child is CENTRED over its slot — the
                        value's first characters vanished under the name cell. See TypedValueEditor. -->
-                  <controls:TypedValueEditor Classes="compact" VerticalAlignment="Center" Margin="4,1,4,1"
-                                             IsVisible="{Binding UsesTypedEditor}"/>
+                  <!-- Slice 4 D-1a: a colour row adds VS's swatch drop-down to the LEFT of its text box (left for the
+                       Anchor/Dock reason below: the list's overlay scrollbar covers the cell's right edge). -->
+                  <DockPanel VerticalAlignment="Center" Margin="4,1,4,1" IsVisible="{Binding UsesTypedEditor}">
+                    <controls:FormColorDropDown DockPanel.Dock="Left" Margin="0,0,4,0" IsVisible="{Binding IsColor}"/>
+                    <!-- Slice 4 D-2: a Font row's `…` opens the Font dialog (OnFontEllipsisClick). Left, like the swatch. -->
+                    <Button x:Name="FontEllipsis" DockPanel.Dock="Left" Classes="dropDown" Margin="0,0,4,0"
+                            FontSize="10" Padding="4,0" MinHeight="0" VerticalAlignment="Center"
+                            Content="&#x2026;" IsVisible="{Binding HasEllipsis}" Click="OnFontEllipsisClick"
+                            ToolTip.Tip="Choose a font" AutomationProperties.Name="Choose a font"/>
+                    <!-- Slice 4 Task 10: an Image/Icon row's `…` opens a file picker (OnAssetPickClick); the typed path stays. -->
+                    <Button x:Name="AssetPicker" DockPanel.Dock="Left" Classes="dropDown" Margin="0,0,4,0"
+                            FontSize="10" Padding="4,0" MinHeight="0" VerticalAlignment="Center"
+                            Content="&#x2026;" IsVisible="{Binding HasAssetPicker}" Click="OnAssetPickClick"
+                            ToolTip.Tip="Choose a file" AutomationProperties.Name="Choose a file"/>
+                    <!-- Slice 4 Task 7: an item collection is VS's read-only "(Collection)" and a `…` that opens the String
+                         Collection Editor (OnItemsEllipsisClick). -->
+                    <Button x:Name="ItemsEllipsis" DockPanel.Dock="Left" Classes="dropDown" Margin="0,0,4,0"
+                            FontSize="10" Padding="4,0" MinHeight="0" VerticalAlignment="Center"
+                            Content="&#x2026;" IsVisible="{Binding IsCollectionEditor}" Click="OnItemsEllipsisClick"
+                            ToolTip.Tip="Edit the items" AutomationProperties.Name="Edit the items"/>
+                    <TextBlock DockPanel.Dock="Left" Text="{Binding CollectionSummary}" FontSize="11"
+                               VerticalAlignment="Center" IsVisible="{Binding IsCollectionEditor}"/>
+                    <controls:TypedValueEditor Classes="compact" VerticalAlignment="Center"/>
+                  </DockPanel>
+
+                  <!-- ⛔ Slice 4 D-4: Anchor and Dock are VS's drop-downs — a one-line summary and a drop-down
+                       button whose Flyout holds the box (Task 26's, MOVED with its bindings unchanged). The rows
+                       are one line again, not the box's 46px.
+                       ⛔ The button is docked LEFT of the summary, not at the cell's right edge as in VS: the
+                       list's Fluent scrollbar OVERLAYS the rightmost 16px of the value cell, and a real click
+                       there hit PART_LineDownButton instead of the drop-down (measured headless at 800x560;
+                       the colour swatch, D-1a, sits left for the same reason).
+                       ⚠ The drop-down buttons are NOT Classes="edge": the Font row's expander is, and tests find
+                       it as the one visible edge-class toggle in its row.
+                       ⚠ The flyout's content is a popup, logically parented to its button, so it inherits the
+                       row as its DataContext (asserted by the real-view tests, not assumed). -->
 
                   <!-- ⛔ Task 26: the Anchor box. Four edge bars around a centre — click an edge to
                        anchor to it. ⚠ Pixel geometry only: the grid never builds this row for a
                        .blwebform control, so there is no `hide on web` rule here to forget. -->
-                  <Border IsVisible="{Binding IsAnchorPicker}"
-                          Margin="4,2,4,2" HorizontalAlignment="Left" Width="46" Height="46"
-                          Background="{DynamicResource IdeBg}"
-                          BorderBrush="{DynamicResource IdeBorder}" BorderThickness="1">
-                    <Grid RowDefinitions="12,*,12" ColumnDefinitions="12,*,12" Margin="2">
-                      <!-- ⚠ Each edge has no content, so its AutomationProperties.Name mirrors its tooltip. -->
-                      <ToggleButton Grid.Row="0" Grid.Column="1" Classes="edge"
-                                    IsChecked="{Binding AnchorTop, Mode=TwoWay}"
-                                    ToolTip.Tip="Anchor to the top edge" AutomationProperties.Name="Anchor to the top edge"/>
-                      <ToggleButton Grid.Row="2" Grid.Column="1" Classes="edge"
-                                    IsChecked="{Binding AnchorBottom, Mode=TwoWay}"
-                                    ToolTip.Tip="Anchor to the bottom edge" AutomationProperties.Name="Anchor to the bottom edge"/>
-                      <ToggleButton Grid.Row="1" Grid.Column="0" Classes="edge"
-                                    IsChecked="{Binding AnchorLeft, Mode=TwoWay}"
-                                    ToolTip.Tip="Anchor to the left edge" AutomationProperties.Name="Anchor to the left edge"/>
-                      <ToggleButton Grid.Row="1" Grid.Column="2" Classes="edge"
-                                    IsChecked="{Binding AnchorRight, Mode=TwoWay}"
-                                    ToolTip.Tip="Anchor to the right edge" AutomationProperties.Name="Anchor to the right edge"/>
-                      <Border Grid.Row="1" Grid.Column="1" Margin="1"
-                              Background="{DynamicResource IdeBorder}" Opacity="0.5"/>
-                    </Grid>
-                  </Border>
+                  <DockPanel IsVisible="{Binding IsAnchorPicker}" Margin="4,1,4,1" VerticalAlignment="Center">
+                    <Button x:Name="AnchorDropDown" DockPanel.Dock="Left" Classes="dropDown" Margin="0,0,4,0"
+                            FontSize="10" Padding="4,0" MinHeight="0" VerticalAlignment="Center"
+                            Content="&#x25BE;"
+                            ToolTip.Tip="Choose the edges this control is anchored to"
+                            AutomationProperties.Name="Choose the edges this control is anchored to">
+                      <Button.Flyout>
+                        <Flyout Placement="BottomEdgeAlignedRight">
+                          <Border Width="46" Height="46"
+                                  Background="{DynamicResource IdeBg}"
+                                  BorderBrush="{DynamicResource IdeBorder}" BorderThickness="1">
+                            <Grid RowDefinitions="12,*,12" ColumnDefinitions="12,*,12" Margin="2">
+                              <!-- ⚠ Each edge has no content, so its AutomationProperties.Name mirrors its tooltip. -->
+                              <ToggleButton Grid.Row="0" Grid.Column="1" Classes="edge"
+                                            IsChecked="{Binding AnchorTop, Mode=TwoWay}"
+                                            ToolTip.Tip="Anchor to the top edge" AutomationProperties.Name="Anchor to the top edge"/>
+                              <ToggleButton Grid.Row="2" Grid.Column="1" Classes="edge"
+                                            IsChecked="{Binding AnchorBottom, Mode=TwoWay}"
+                                            ToolTip.Tip="Anchor to the bottom edge" AutomationProperties.Name="Anchor to the bottom edge"/>
+                              <ToggleButton Grid.Row="1" Grid.Column="0" Classes="edge"
+                                            IsChecked="{Binding AnchorLeft, Mode=TwoWay}"
+                                            ToolTip.Tip="Anchor to the left edge" AutomationProperties.Name="Anchor to the left edge"/>
+                              <ToggleButton Grid.Row="1" Grid.Column="2" Classes="edge"
+                                            IsChecked="{Binding AnchorRight, Mode=TwoWay}"
+                                            ToolTip.Tip="Anchor to the right edge" AutomationProperties.Name="Anchor to the right edge"/>
+                              <Border Grid.Row="1" Grid.Column="1" Margin="1"
+                                      Background="{DynamicResource IdeBorder}" Opacity="0.5"/>
+                            </Grid>
+                          </Border>
+                        </Flyout>
+                      </Button.Flyout>
+                    </Button>
+                    <TextBlock Text="{Binding AnchorSummary}" FontSize="11" VerticalAlignment="Center"
+                               TextTrimming="CharacterEllipsis"/>
+                  </DockPanel>
 
                   <!-- ⛔ Task 26: the Dock box. DockStyle is NOT flags — exactly one region at a time —
                        so these are commands rather than toggles, and "None" is its own button because
-                       un-docking is a thing the user has to be able to say. -->
-                  <StackPanel IsVisible="{Binding IsDockPicker}"
-                              Orientation="Horizontal" Spacing="6" Margin="4,2,4,2">
-                    <Border Width="46" Height="46"
-                            Background="{DynamicResource IdeBg}"
-                            BorderBrush="{DynamicResource IdeBorder}" BorderThickness="1">
-                      <Grid RowDefinitions="12,*,12" ColumnDefinitions="12,*,12" Margin="2">
-                        <ToggleButton Grid.Row="0" Grid.Column="1" Classes="edge"
-                                      IsChecked="{Binding IsDockedTop, Mode=OneWay}"
-                                      Command="{Binding SetDockRegionCommand}" CommandParameter="Top"
-                                      ToolTip.Tip="Dock to the top" AutomationProperties.Name="Dock to the top"/>
-                        <ToggleButton Grid.Row="2" Grid.Column="1" Classes="edge"
-                                      IsChecked="{Binding IsDockedBottom, Mode=OneWay}"
-                                      Command="{Binding SetDockRegionCommand}" CommandParameter="Bottom"
-                                      ToolTip.Tip="Dock to the bottom" AutomationProperties.Name="Dock to the bottom"/>
-                        <ToggleButton Grid.Row="1" Grid.Column="0" Classes="edge"
-                                      IsChecked="{Binding IsDockedLeft, Mode=OneWay}"
-                                      Command="{Binding SetDockRegionCommand}" CommandParameter="Left"
-                                      ToolTip.Tip="Dock to the left" AutomationProperties.Name="Dock to the left"/>
-                        <ToggleButton Grid.Row="1" Grid.Column="2" Classes="edge"
-                                      IsChecked="{Binding IsDockedRight, Mode=OneWay}"
-                                      Command="{Binding SetDockRegionCommand}" CommandParameter="Right"
-                                      ToolTip.Tip="Dock to the right" AutomationProperties.Name="Dock to the right"/>
-                        <ToggleButton Grid.Row="1" Grid.Column="1" Classes="edge" Margin="1"
-                                      IsChecked="{Binding IsDockedFill, Mode=OneWay}"
-                                      Command="{Binding SetDockRegionCommand}" CommandParameter="Fill"
-                                      ToolTip.Tip="Fill the container" AutomationProperties.Name="Fill the container"/>
-                      </Grid>
-                    </Border>
-                    <Button Content="None" FontSize="10" Padding="6,2" VerticalAlignment="Center"
-                            Command="{Binding SetDockRegionCommand}" CommandParameter="None"
-                            ToolTip.Tip="Not docked"/>
-                  </StackPanel>
+                       un-docking is a thing the user has to be able to say.
+                       ⚠ Every choice's Click closes the pop-up and returns focus to the drop-down (VS closes on a Dock
+                       pick; OnDockRegionPicked). Anchor's box has no such handler: it stays open for the next edge. -->
+                  <DockPanel IsVisible="{Binding IsDockPicker}" Margin="4,1,4,1" VerticalAlignment="Center">
+                    <Button x:Name="DockDropDown" DockPanel.Dock="Left" Classes="dropDown" Margin="0,0,4,0"
+                            FontSize="10" Padding="4,0" MinHeight="0" VerticalAlignment="Center"
+                            Content="&#x25BE;"
+                            ToolTip.Tip="Choose where this control docks"
+                            AutomationProperties.Name="Choose where this control docks">
+                      <Button.Flyout>
+                        <Flyout Placement="BottomEdgeAlignedRight">
+                          <StackPanel Orientation="Horizontal" Spacing="6">
+                            <Border Width="46" Height="46"
+                                    Background="{DynamicResource IdeBg}"
+                                    BorderBrush="{DynamicResource IdeBorder}" BorderThickness="1">
+                              <Grid RowDefinitions="12,*,12" ColumnDefinitions="12,*,12" Margin="2">
+                                <ToggleButton Grid.Row="0" Grid.Column="1" Classes="edge"
+                                              IsChecked="{Binding IsDockedTop, Mode=OneWay}"
+                                              Click="OnDockRegionPicked" Command="{Binding SetDockRegionCommand}" CommandParameter="Top"
+                                              ToolTip.Tip="Dock to the top" AutomationProperties.Name="Dock to the top"/>
+                                <ToggleButton Grid.Row="2" Grid.Column="1" Classes="edge"
+                                              IsChecked="{Binding IsDockedBottom, Mode=OneWay}"
+                                              Click="OnDockRegionPicked" Command="{Binding SetDockRegionCommand}" CommandParameter="Bottom"
+                                              ToolTip.Tip="Dock to the bottom" AutomationProperties.Name="Dock to the bottom"/>
+                                <ToggleButton Grid.Row="1" Grid.Column="0" Classes="edge"
+                                              IsChecked="{Binding IsDockedLeft, Mode=OneWay}"
+                                              Click="OnDockRegionPicked" Command="{Binding SetDockRegionCommand}" CommandParameter="Left"
+                                              ToolTip.Tip="Dock to the left" AutomationProperties.Name="Dock to the left"/>
+                                <ToggleButton Grid.Row="1" Grid.Column="2" Classes="edge"
+                                              IsChecked="{Binding IsDockedRight, Mode=OneWay}"
+                                              Click="OnDockRegionPicked" Command="{Binding SetDockRegionCommand}" CommandParameter="Right"
+                                              ToolTip.Tip="Dock to the right" AutomationProperties.Name="Dock to the right"/>
+                                <ToggleButton Grid.Row="1" Grid.Column="1" Classes="edge" Margin="1"
+                                              IsChecked="{Binding IsDockedFill, Mode=OneWay}"
+                                              Click="OnDockRegionPicked" Command="{Binding SetDockRegionCommand}" CommandParameter="Fill"
+                                              ToolTip.Tip="Fill the container" AutomationProperties.Name="Fill the container"/>
+                              </Grid>
+                            </Border>
+                            <Button Content="None" FontSize="10" Padding="6,2" VerticalAlignment="Center"
+                                    Click="OnDockRegionPicked" Command="{Binding SetDockRegionCommand}" CommandParameter="None"
+                                    ToolTip.Tip="Not docked" AutomationProperties.Name="Not docked"/>
+                          </StackPanel>
+                        </Flyout>
+                      </Button.Flyout>
+                    </Button>
+                    <TextBlock Text="{Binding DockSummary}" FontSize="11" VerticalAlignment="Center"
+                               TextTrimming="CharacterEllipsis"/>
+                  </DockPanel>
 
                   <!-- ⛔⛔ D9 Degraded: the raw value, read-only. A typed editor here would coerce the
                        value the moment it rendered. The REASON is in the description pane. -->

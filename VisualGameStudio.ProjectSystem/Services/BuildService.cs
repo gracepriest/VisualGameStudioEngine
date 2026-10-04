@@ -621,6 +621,14 @@ public class BuildService : IBuildService
             // out, while the CLI named it — the two routes must say the same thing about what they
             // compiled.
             IReadOnlyList<BasicLang.Forms.FormDocument> webForms = Array.Empty<BasicLang.Forms.FormDocument>();
+            IReadOnlyList<BasicLang.Forms.LoadedForm> loadedWebForms = Array.Empty<BasicLang.Forms.LoadedForm>();
+            // The CLI's own list (ProjectFile.GetFormDocuments) whenever the .blproj loads — the SAME call the CLI makes;
+            // the IDE's items are only the fallback when ProjectFile.Load throws, and a stored item path is MSBuild-style
+            // (`Forms\Pic.blwebform`), so it goes through ToLocalPath like every other path read from a .blproj.
+            var formDocumentPaths = (cliProject != null
+                ? cliProject.GetFormDocuments()
+                : sourceFiles.Select(item => Path.Combine(project.ProjectDirectory,
+                    BasicLang.Compiler.ProjectSystem.ProjectFile.ToLocalPath(item.Include)))).ToList();
 
             if (backend == "javascript")
             {
@@ -628,11 +636,9 @@ public class BuildService : IBuildService
                 // That glob cannot yield a .blwebform by design (it feeds the lexer, and a form
                 // document is XML), so a project with explicit <Compile> items got pages and a
                 // default one — same files on disk — got none, silently.
-                webForms = BasicLang.Forms.FormDocumentLoader.LoadWebForms(
-                    cliProject != null
-                        ? cliProject.GetFormDocuments()
-                        : sourceFiles.Select(item => Path.Combine(project.ProjectDirectory, item.Include)),
-                    m => _outputService.WriteLine($"Warning: {m}", OutputCategory.Build));
+                loadedWebForms = BasicLang.Forms.FormDocumentLoader.Load(formDocumentPaths, BasicLang.Forms.FormTarget.Web,
+                    "was not turned into a page", m => _outputService.WriteLine($"Warning: {m}", OutputCategory.Build));
+                webForms = loadedWebForms.Select(f => f.Model).ToList();
 
                 // ⛔⛔ D7's dispatch, as a real source file compiled with everything else — the
                 // CLI does exactly this, and the two routes must agree. Without it the `data-form`
@@ -808,6 +814,9 @@ public class BuildService : IBuildService
                 {
                     EmitJavaScriptSite(outputDir, result.GeneratedFileName, generatedCode,
                         project, jsGenerator, webForms, compilation.CombinedIR.JsImports);
+
+                    // ⛔ Slice 4 D-5c: the pages' images and icons beside them — the CLI does the same.
+                    CopyFormAssets(loadedWebForms, project.ProjectDirectory, outputDir, result);
                 }
 
                 var toolchainHint = backend switch
@@ -872,6 +881,14 @@ public class BuildService : IBuildService
 
             // Check for library/app type mismatches and warn
             CheckForMismatchWarnings(generatedCode, project);
+
+            // ⛔ Slice 4 D-5c: every WinForms form's images and icons beside the exe (outputDir), where
+            // System.AppContext.BaseDirectory points at run time — the CLI does the same.
+            CopyFormAssets(
+                BasicLang.Forms.FormDocumentLoader.Load(formDocumentPaths, BasicLang.Forms.FormTarget.WinForms,
+                    "— its images and icons were not copied into the output",
+                    m => _outputService.WriteLine($"Warning: {m}", OutputCategory.Build)),
+                project.ProjectDirectory, outputDir, result);
 
             BuildProgress?.Invoke(this, new BuildProgressEventArgs("Compiling C#...", 85));
 
@@ -1500,6 +1517,29 @@ public class BuildService : IBuildService
             yield return Path.Combine(baseDir, levelsUp, "x64", "Release");
             yield return Path.Combine(baseDir, levelsUp, "x64", "Debug");
         }
+    }
+
+    /// <summary>
+    /// Slice 4 D-5c: <see cref="BasicLang.Forms.FormAssetCopy.Copy"/> — the ONE copy helper the CLI calls too — with each
+    /// BL8036 sent to the Error List (a <see cref="DiagnosticItem"/> naming the form document) AND the Output pane. A
+    /// missing file never fails the build.
+    /// </summary>
+    private void CopyFormAssets(
+        IEnumerable<BasicLang.Forms.LoadedForm> forms, string projectDir, string outputDir, BuildResult result)
+    {
+        BasicLang.Forms.FormAssetCopy.Copy(forms, projectDir, outputDir, d =>
+        {
+            result.Diagnostics.Add(new DiagnosticItem
+            {
+                Id = d.Code,
+                Message = d.Message,
+                FilePath = d.FilePath,
+                Line = d.Line,
+                Column = d.Column,
+                Severity = DiagnosticSeverity.Warning
+            });
+            _outputService.WriteLine(d.Format(), OutputCategory.Build);
+        });
     }
 
     /// <summary>

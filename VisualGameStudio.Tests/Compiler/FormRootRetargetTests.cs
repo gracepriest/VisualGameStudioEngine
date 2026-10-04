@@ -26,6 +26,8 @@ public class FormRootRetargetTests
         FormPropertyType.Font => "Arial, 11pt, style=Bold",
         FormPropertyType.Fraction => "0.75",
         FormPropertyType.Reference => "btnSample",
+        FormPropertyType.Image => "Resources/sample.png",
+        FormPropertyType.Icon => "Resources/app.ico",
         _ => "sample" + row.Name
     };
 

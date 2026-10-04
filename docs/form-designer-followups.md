@@ -643,3 +643,14 @@ code — but it is caught on SAVE, with the canvas showing the control undocked 
 should go through `FormDock.Canonical` (store the member's own spelling) and snap back on null, the way a
 refused catalog value already snaps back in the real TextBox (the posted two-step echo, property-grid slice
 2). No code yet.
+
+### 35. Renaming a control's Id must rewrite the Form references that name it — found 2026-10-04, property-grid slice 4 review
+
+VS rewrites `AcceptButton`/`CancelButton` when the Button they name is renamed. Today NO route renames an
+Id: the grid's `Name` row is frozen (`FormPropertyGridViewModel.AddIntrinsicRows`), the canvas's F2 rename
+edits a strip item's `Text`, and `FormClipboard`'s rename mints ids for PASTED copies only (nothing refers to
+them yet). So there is nothing to fix and no caller to hang a helper on. The day `Name` becomes editable, the
+rename belongs beside `FormDocument.RemoveControl` in the MODEL (one place, every route), rewriting every
+`FormControlCatalog.FormRoot` Reference row whose value is the old Id, in the same write so one undo
+restores both — `FormReferences.ForgetRemoved` is the delete half and the shape to copy. Delete and Cut
+already follow VS (slice 4 review follow-up).

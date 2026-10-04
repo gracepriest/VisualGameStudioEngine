@@ -50,7 +50,22 @@ public enum FormPropertyType
     /// Space-separated CSS class names (D2's web-only <c>CssClass</c>): each token a letter, <c>_</c> or <c>-</c> then
     /// letters, digits, <c>_</c> and <c>-</c>. Anything else is Degraded — it lands inside the element's class attribute.
     /// </summary>
-    CssClasses
+    CssClasses,
+
+    /// <summary>
+    /// An image file (slice 4 D-5a, PictureBox.Image): a path relative to the PROJECT, forward slashes
+    /// (<see cref="FormAssetPaths"/>). WinForms: <c>System.Drawing.Image.FromFile(Path.Combine(AppContext.BaseDirectory, …))</c>
+    /// — never .svg/.webp (GDI+ cannot decode them), never a URL. Web: <c>&lt;img src&gt;</c> relative to the site, or a URL.
+    /// A rooted path is WinForms-only; <c>..</c> out of the project is Degraded on both.
+    /// </summary>
+    Image,
+
+    /// <summary>
+    /// A window or page icon (slice 4 D-5a, Form.Icon). The Image rules, except WinForms requires <c>.ico</c>
+    /// (<c>New Icon</c> throws on a png) and the web takes <c>.ico</c>/<c>.png</c>/<c>.svg</c>/<c>.gif</c>
+    /// (<c>&lt;link rel="icon"&gt;</c>).
+    /// </summary>
+    Icon
 }
 
 /// <summary>
@@ -118,6 +133,18 @@ public enum FormEditVerdict
     Write
 }
 
+/// <summary>
+/// Whether a Color row's WinForms setter takes a translucent colour (WinFormsTranslucentBackColorRunTests measures it per
+/// kind): <see cref="Allowed"/>, or it throws <c>ArgumentException</c> — on a control (<see cref="ThrowsOnControl"/>) or
+/// on the Form itself (<see cref="ThrowsOnForm"/>, whose refusal points at Opacity).
+/// </summary>
+public enum FormTranslucency
+{
+    Allowed,
+    ThrowsOnControl,
+    ThrowsOnForm
+}
+
 /// <summary>One editable property of one control kind.</summary>
 /// <param name="Name">The document attribute name, which is also the WinForms property name.</param>
 /// <param name="Type">Declared type; a value that does not parse to it drops out of the Canon tier.</param>
@@ -151,9 +178,10 @@ public enum FormEditVerdict
 /// CS0103.</para>
 /// </param>
 /// <param name="IsItemCollection">
-/// True when the value is a comma-separated list that must be ADDED to a read-only collection
-/// rather than assigned. <c>ComboBox.Items</c> and <c>ListBox.Items</c> are get-only, so assigning
-/// one is CS0200.
+/// True when the value is a list that must be ADDED to a read-only collection rather than assigned.
+/// <c>ComboBox.Items</c> and <c>ListBox.Items</c> are get-only, so assigning one is CS0200. ⛔ ADR 0020: the document
+/// stores one <c>&lt;Item&gt;</c> child per item (a legacy comma attribute is still read); the model holds the items
+/// joined by LF (<see cref="FormItems"/>).
 /// </param>
 /// <param name="HtmlAttribute">See <see cref="HtmlAttributeName"/>.</param>
 /// <param name="Category">
@@ -217,8 +245,19 @@ public sealed record FormPropertyDef(
     IReadOnlyDictionary<string, string>? Aliases = null,
     string? OracleExemption = null,
     IReadOnlyList<FormLayoutKind>? WebLayouts = null,
-    IReadOnlyList<string>? ReferenceKinds = null)
+    IReadOnlyList<string>? ReferenceKinds = null,
+    FormTranslucency WinFormsTranslucency = FormTranslucency.Allowed)
 {
+    // WinFormsTranslucency: for a Color row, whether the WinForms setter THROWS on a translucent colour (alpha < 255, or
+    // Transparent) — Control.BackColor on a control without ControlStyles.SupportsTransparentBackColor ("does not support
+    // transparent background colors"). Measured per kind, and pinned, by WinFormsTranslucentBackColorRunTests. Such a
+    // value is refused on WinForms (Degraded in a document, refused in the editor); the web keeps alpha (rgba).
+
+    /// <summary>True when the WinForms setter throws on a translucent colour — a control's, or the Form's own.</summary>
+    public bool OpaqueOnWinForms => WinFormsTranslucency != FormTranslucency.Allowed;
+
+    /// <summary>The Form's own row: its refusal points at Opacity, what a see-through window is for.</summary>
+    private bool OpaqueForm => WinFormsTranslucency == FormTranslucency.ThrowsOnForm;
     // ⛔ Normalised to OrdinalIgnoreCase whatever comparer the caller built the dictionary with —
     // Accepts and Canonical are case-insensitive for members, and an alias lookup that silently
     // used a different comparer would make `left` Degraded while `Left` is Canon. The init accessor
@@ -291,9 +330,9 @@ public sealed record FormPropertyDef(
             return value;
         }
 
-        if (Type == FormPropertyType.Bool && bool.TryParse(value, out var flag))
+        if (Type == FormPropertyType.Bool)
         {
-            return flag ? "true" : "false";
+            return BoolWord(value);
         }
 
         // ⛔ An Int is its parsed number in invariant text, so "007", " 5 " and "+7" compare equal to
@@ -322,6 +361,8 @@ public sealed record FormPropertyDef(
             FormPropertyType.Padding when FormPaddingValue.TryParse(value, out var padding) => padding.Canonical,
             FormPropertyType.Cursor when FormCursors.TryCanonical(value, out var cursor) => cursor,
             FormPropertyType.Fraction when TryParseFraction(value, out var fraction) => FractionText(fraction),
+            // A project path in its ONE stored spelling, forward slashes (D-5a); a URL and a rooted path unchanged.
+            FormPropertyType.Image or FormPropertyType.Icon => FormAssetPaths.Normalise(value),
             _ => value
         };
     }
@@ -378,8 +419,22 @@ public sealed record FormPropertyDef(
     /// grid vocabulary is not its document's: a Fraction is typed and shown as a percentage (<c>80%</c>) and stored the way
     /// WinForms stores it, the 0–1 Double (<c>0.8</c>). Call only for a value the row accepts.
     /// </summary>
-    public string ToDocument(string value) =>
-        Type == FormPropertyType.Fraction && TryParseFraction(value, out var fraction) ? FractionText(fraction) : value;
+    public string ToDocument(string value) => Type switch
+    {
+        FormPropertyType.Fraction when TryParseFraction(value, out var fraction) => FractionText(fraction),
+        // ⛔ The grid's Bool drop-down offers "True"/"False" (VS's spelling); the document says "true"/"false" (slice 4 D-3).
+        FormPropertyType.Bool => BoolWord(value),
+        _ => value
+    };
+
+    /// <summary>
+    /// A Bool in the DOCUMENT's vocabulary — <c>true</c>/<c>false</c>, lower case — or the text unchanged when it is not a
+    /// Bool at all (a Degraded value is preserved, never coerced). ⛔ THE one spelling rule: <see cref="Canonical"/>,
+    /// <see cref="ToDocument"/> and the property grid's catalog-less Bool rows (the Font's Bold/Italic/Underline parts)
+    /// all ask it, so a drop-down pushing <c>True</c> over a stored <c>true</c> is the same value on every path.
+    /// </summary>
+    public static string BoolWord(string value) =>
+        bool.TryParse(value, out var flag) ? (flag ? "true" : "false") : value;
 
     /// <summary>
     /// What an editor OFFERS for this row: an Enum's <see cref="AllowedValues"/>, a Cursor row's
@@ -511,8 +566,28 @@ public sealed record FormPropertyDef(
             FormPropertyType.Fraction => TryParseFraction(value, out var fraction) ? FractionText(fraction) : null,
             // The field the Id names. ⚠ Whether such a field EXISTS is a document question — the region writer's (BL8034).
             FormPropertyType.Reference => FormDocument.IsLegalControlId(value) ? value : null,
+            FormPropertyType.Image => AssetLiteral("System.Drawing.Image.FromFile", value),
+            FormPropertyType.Icon => AssetLiteral("New System.Drawing.Icon", value),
             _ => null
         };
+    }
+
+    /// <summary>
+    /// An image/icon as WinForms source (D-5b), FULLY QUALIFIED (a user's <c>Using</c> can make a bare <c>Image</c> or
+    /// <c>Icon</c> ambiguous — CS0104, BasicLang silent). A project path is anchored to the program's own folder,
+    /// <c>System.AppContext.BaseDirectory</c> — measured (pre-flight M8): a bare relative path resolves against the WORKING
+    /// directory and threw FileNotFoundException under both launch shapes. A rooted path is written as it stands (and is
+    /// not copied — BL8036 says so at build). Null for anything else.
+    /// </summary>
+    private static string? AssetLiteral(string call, string value)
+    {
+        if (FormAssetPaths.IsInsideProject(value))
+        {
+            return $"{call}(System.IO.Path.Combine(System.AppContext.BaseDirectory, " +
+                   $"{StringLiteral(FormAssetPaths.Normalise(value))}))";
+        }
+
+        return FormAssetPaths.IsRooted(value) ? $"{call}({StringLiteral(value)})" : null;
     }
 
     /// <summary>
@@ -604,9 +679,8 @@ public sealed record FormPropertyDef(
     public static bool TryParseInt(string value, out int result) =>
         int.TryParse(value.Trim(' '), NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out result);
 
-    /// <summary>The individual items of an <see cref="IsItemCollection"/> value.</summary>
-    public static IEnumerable<string> SplitItems(string value) =>
-        value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+    /// <summary>The individual items of an <see cref="IsItemCollection"/> MODEL value — one per line (ADR 0020, <see cref="FormItems.Split"/>).</summary>
+    public static IEnumerable<string> SplitItems(string value) => FormItems.Split(value);
 
     /// <summary>
     /// A colour as WinForms source.
@@ -757,6 +831,43 @@ public sealed record FormPropertyDef(
             FormPropertyType.Fraction => TryParseFraction(value, out _),
             FormPropertyType.Reference => FormDocument.IsLegalControlId(value),
             FormPropertyType.CssClasses => IsCssClassList(value),
+            FormPropertyType.Image or FormPropertyType.Icon => IsAssetPath(value),
+            _ => false
+        };
+    }
+
+    /// <summary>
+    /// An image/icon value usable on SOME target: a URL, a rooted path, or a relative path inside the project — no control
+    /// characters (it lands in a string literal and an HTML attribute). <c>..</c> out of the project is usable on neither
+    /// (Degraded): nothing would copy it, and the program would look for it beside itself.
+    /// </summary>
+    private static bool IsAssetPath(string value) =>
+        value.Length > 0 && !value.Any(char.IsControl) &&
+        (FormAssetPaths.IsUrl(value) || FormAssetPaths.IsRooted(value) || FormAssetPaths.IsInsideProject(value));
+
+    private static readonly string[] WebIconExtensions = { ".ico", ".png", ".svg", ".gif" };
+
+    /// <summary>
+    /// The target rules of an Image/Icon value (D-5a), each a run-time failure otherwise: WinForms reads FILES (a URL is
+    /// refused), GDI+ cannot decode .svg/.webp, <c>New Icon</c> throws on anything but .ico; the web cannot reach the
+    /// author's disk (a rooted path is refused) and a page icon is .ico/.png/.svg/.gif.
+    /// </summary>
+    private bool IsAssetRefusedOn(string value, FormTarget target)
+    {
+        if (Type is not (FormPropertyType.Image or FormPropertyType.Icon))
+        {
+            return false;
+        }
+
+        var extension = FormAssetPaths.Extension(value);
+        return target switch
+        {
+            FormTarget.WinForms => FormAssetPaths.IsUrl(value) ||
+                                   (Type == FormPropertyType.Image && extension is ".svg" or ".webp") ||
+                                   (Type == FormPropertyType.Icon && extension != ".ico"),
+            FormTarget.Web => FormAssetPaths.IsRooted(value) ||
+                              (Type == FormPropertyType.Icon && !FormAssetPaths.IsUrl(value) &&
+                               !WebIconExtensions.Contains(extension)),
             _ => false
         };
     }
@@ -829,6 +940,35 @@ public sealed record FormPropertyDef(
                    "member, and it is not a system colour), so a WinForms form cannot use it.";
         }
 
+        if (IsTranslucentRefusedOn(value, target))
+        {
+            // ⚠ The Form's own row says what a see-through WINDOW is for: Opacity (OpaqueForm marks the FormRoot rows).
+            return OpaqueForm
+                ? $"'{value}' is a transparent colour, and a WinForms Form does not support a transparent {Name} — it " +
+                  "throws ArgumentException when the form is created. For a see-through window set Opacity instead; " +
+                  "use an opaque colour (alpha FF) here."
+                : $"'{value}' is a transparent colour, and this WinForms control does not support a transparent " +
+                  $"{Name} — it throws ArgumentException when the form is created. Use an opaque colour (alpha FF).";
+        }
+
+        if (IsAssetRefusedOn(value, target))
+        {
+            var extension = FormAssetPaths.Extension(value);
+            return target == FormTarget.WinForms
+                ? FormAssetPaths.IsUrl(value)
+                    ? $"'{value}' is a web address; a WinForms program reads {Name} from a FILE (Image.FromFile and " +
+                      "New Icon take a path), so it cannot use a URL. Put the file in the project instead."
+                    : Type == FormPropertyType.Icon
+                        ? $"'{value}' is not an .ico file; a WinForms window icon requires .ico (New Icon throws " +
+                          "ArgumentException on anything else when the form is created)."
+                        : $"'{value}' is a {extension} file, which WinForms cannot decode (GDI+ has no {extension} codec; " +
+                          "Image.FromFile throws when the form is created). Use .png, .jpg, .gif, .bmp or .ico."
+                : FormAssetPaths.IsRooted(value)
+                    ? $"'{value}' is a path on the author's machine; a web page cannot reach it. Put the file in the " +
+                      "project (it is copied beside the page) or use a web address."
+                    : $"'{value}' is not an icon a browser shows for a page (expected .ico, .png, .svg or .gif).";
+        }
+
         if (IsCursorRefusedOn(value, target))
         {
             _ = FormCursors.TryCanonical(value, out var cursor);
@@ -852,6 +992,9 @@ public sealed record FormPropertyDef(
                    FormPropertyType.Fraction => " (expected a percentage from 0% to 100%, e.g. 85% — a bare number up " +
                                                 "to 1 is read as a fraction, as Visual Studio reads it, so 0.85 is also 85%)",
                    FormPropertyType.Reference => " (expected the Id of a control on this form)",
+                   FormPropertyType.Image or FormPropertyType.Icon =>
+                       " (expected a file inside the project, e.g. Resources/logo.png — a path that climbs out of the " +
+                       "project with '..' is never copied, and the program would not find it)",
                    _ => ""
                } +
                ".";
@@ -865,7 +1008,57 @@ public sealed record FormPropertyDef(
     /// </summary>
     private bool IsRefusedOn(string value, FormTarget target) =>
         IsSystemColourRefusedOn(value, target) || IsUnknownColourNameRefusedOn(value, target) ||
-        IsCursorRefusedOn(value, target);
+        IsCursorRefusedOn(value, target) || IsTranslucentRefusedOn(value, target) || IsAssetRefusedOn(value, target);
+
+    /// <summary>
+    /// A translucent colour (<c>#AARRGGBB</c> with AA below FF, or the named <c>Transparent</c>) on a WinForms row marked
+    /// <see cref="OpaqueOnWinForms"/>: the control's setter throws <c>ArgumentException</c> when the form is constructed —
+    /// a green build and a dead window. Measured by <c>WinFormsTranslucentBackColorRunTests</c>.
+    /// </summary>
+    private bool IsTranslucentRefusedOn(string value, FormTarget target) =>
+        !AcceptsTranslucentOn(target) && IsTranslucent(value);
+
+    /// <summary>
+    /// Whether this colour row takes a translucent value on <paramref name="target"/> — the colour editor turns its alpha
+    /// channel off where this is false (the same answer the refusal gives, never a second rule).
+    /// </summary>
+    public bool AcceptsTranslucentOn(FormTarget target) =>
+        !(Type == FormPropertyType.Color && target == FormTarget.WinForms && OpaqueOnWinForms);
+
+    /// <summary>
+    /// True for a colour whose alpha is below 255, in every spelling the writer would EMIT: an 8-digit hex with AA ≠ FF,
+    /// the name <c>Transparent</c>, and the SOURCE forms <c>Color.Transparent</c> and <c>Color.FromArgb(a, r, g, b)</c> with
+    /// a &lt; 255 (Part C review: a source form skipped the Accepts gate and reached the generated code). An unparseable
+    /// <c>Color.FromArgb(…)</c> is no source form at all, so it is Degraded and never emitted already.
+    /// </summary>
+    internal static bool IsTranslucent(string value)
+    {
+        if (value.Length == 9 && value[0] == '#' && value[1..].All(Uri.IsHexDigit))
+        {
+            return !string.Equals(value.Substring(1, 2), "FF", StringComparison.OrdinalIgnoreCase);
+        }
+
+        if (string.Equals(value, "Color.Transparent", StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        if (TryParseFromArgb(value, out var argb))
+        {
+            return argb[0] < 255;
+        }
+
+        return FormKnownColors.TryCanonical(value, out var name) && name == "Transparent";
+    }
+
+    /// <summary>
+    /// Whether the region writer may write <paramref name="value"/> on <paramref name="target"/>: a value the target
+    /// accepts, or a SOURCE form (<see cref="IsSourceForm"/>) the target does not refuse. ⛔ The ONE gate both of the
+    /// writer's property paths (controls and the Form's own rows) ask — a source form used to bypass the target's refusals
+    /// (<c>Color.Transparent</c> on a TextBox: green build, ArgumentException at run time).
+    /// </summary>
+    public bool IsWritableOn(string value, FormTarget target) =>
+        Accepts(value, target) || (IsSourceForm(value) && !IsRefusedOn(value, target));
 
     /// <summary>
     /// A Cursors member with no CSS equivalent (<see cref="FormCursors.CssFor"/> null — the up arrow, the pan cursors) on
@@ -920,31 +1113,35 @@ public sealed record FormPropertyDef(
     /// multi-line statement into the user's file. The three-argument overload is refused because nothing
     /// here writes it.
     /// </summary>
-    private static string? FromArgbSource(string value)
+    private static string? FromArgbSource(string value) =>
+        TryParseFromArgb(value, out var argb) ? FromArgbLiteral(argb[0], argb[1], argb[2], argb[3]) : null;
+
+    /// <summary>The four numbers of a <see cref="FromArgbSource"/> value — the ONE parser, for the literal and the alpha test.</summary>
+    private static bool TryParseFromArgb(string value, out int[] argb)
     {
+        argb = new int[4];
         const string prefix = "Color.FromArgb(";
         if (!value.StartsWith(prefix, StringComparison.Ordinal) || !value.EndsWith(")", StringComparison.Ordinal))
         {
-            return null;
+            return false;
         }
 
         var parts = value.Substring(prefix.Length, value.Length - prefix.Length - 1).Split(',');
         if (parts.Length != 4)
         {
-            return null;
+            return false;
         }
 
-        var argb = new int[4];
         for (var i = 0; i < 4; i++)
         {
             if (!int.TryParse(parts[i].Trim(' '), NumberStyles.None, CultureInfo.InvariantCulture, out argb[i]) ||
                 argb[i] > 255)
             {
-                return null;
+                return false;
             }
         }
 
-        return FromArgbLiteral(argb[0], argb[1], argb[2], argb[3]);
+        return true;
     }
 
     // The ONE spelling of the call, shared by ColorLiteral and FromArgbSource so what is written and what
@@ -1410,7 +1607,13 @@ public static class FormControlCatalog
     // ==================================================================
     private static readonly FormPropertyDef WindowTextForeColor = ForeColor with { Default = "WindowText", WebDefault = "" };
 
-    private static readonly FormPropertyDef WindowBackColor = BackColor with { Default = "Window", WebDefault = "" };
+    // ⛔ Every kind that uses WindowBackColor (TextBox, ComboBox, ListBox, NumericUpDown, CheckedListBox, ListView, TreeView)
+    // THROWS on a translucent BackColor — measured (WinFormsTranslucentBackColorRunTests), so the row says so.
+    private static readonly FormPropertyDef WindowBackColor =
+        BackColor with { Default = "Window", WebDefault = "", WinFormsTranslucency = FormTranslucency.ThrowsOnControl };
+
+    /// <summary>The plain BackColor of a kind whose WinForms control refuses a translucent one (TrackBar, ProgressBar — measured).</summary>
+    private static readonly FormPropertyDef OpaqueBackColor = BackColor with { WinFormsTranslucency = FormTranslucency.ThrowsOnControl };
 
     private static readonly FormPropertyDef HighlightForeColor = ForeColor with { Default = "Highlight", WebDefault = "" };
 
@@ -1866,9 +2069,8 @@ public static class FormControlCatalog
             }),
         new("PictureBox",  "PictureBox",  "img",      null,       false, ControlRows(
             null, BackColor, null, CursorRow,
-            // WinForms Image is a System.Drawing.Image, not a path string (CS0029).
-            new FormPropertyDef("Image", FormPropertyType.String,
-                WinFormsFactory: "Image.FromFile",
+            // WinForms Image is a System.Drawing.Image, not a path string (CS0029): the Image TYPE owns its literal (D-5b).
+            new FormPropertyDef("Image", FormPropertyType.Image,
                 Category: FormPropertyCategory.Appearance,
                 Description: "The image displayed in the PictureBox."),
             new FormPropertyDef("SizeMode", FormPropertyType.Enum, "Normal",
@@ -1970,7 +2172,7 @@ public static class FormControlCatalog
                 description: ControlValueChangedDescription)),
 
         new("TrackBar",    "TrackBar",    "input",    "range",    false, ControlRows(
-            null, BackColor, null, CursorRow,
+            null, OpaqueBackColor, null, CursorRow,
             new FormPropertyDef("Minimum", FormPropertyType.Int, "0", HtmlAttribute: "min",
                 Category: FormPropertyCategory.Behavior,
                 Description: "The minimum value for the position of the slider on the TrackBar."),
@@ -2013,7 +2215,7 @@ public static class FormControlCatalog
                     Description: ControlValueChangedDescription)
             }),
 
-        new("ProgressBar", "ProgressBar", "progress", null,       false, ControlRows(HighlightForeColor, BackColor, null, CursorRow,
+        new("ProgressBar", "ProgressBar", "progress", null,       false, ControlRows(HighlightForeColor, OpaqueBackColor, null, CursorRow,
             new FormPropertyDef("Minimum", FormPropertyType.Int, "0",
                 Targets: new[] { FormTarget.WinForms },
                 Category: FormPropertyCategory.Behavior,
@@ -2505,9 +2707,12 @@ public static class FormControlCatalog
             // ==========================================================
             // Slice 3 — the Form's D1 set (spec §2.3), PROPERTIES-STORED: each lives in FormDocument.Properties as the
             // root attribute of its own name (FormRootValues' default arm). WinForms' own metadata (the snapshot);
-            // WinForms-only unless it maps cleanly onto the page's body (D2): BackColor, ForeColor, Font.
-            // ⚠ Icon waits for slice 4's image machinery.
+            // WinForms-only unless it maps cleanly onto the page's body (D2): BackColor, ForeColor, Font — and Icon
+            // (slice 4 D-5f), the window's icon and the page's <link rel="icon">.
             // ==========================================================
+            new("Icon", FormPropertyType.Icon,
+                Category: FormPropertyCategory.WindowStyle,
+                Description: "Indicates the icon for a form. This icon is displayed in the form's system menu box and when the form is minimized."),
             new("FormBorderStyle", FormPropertyType.Enum, "Sizable",
                 new[] { "None", "FixedSingle", "Fixed3D", "FixedDialog", "Sizable", "FixedToolWindow", "SizableToolWindow" },
                 WinFormsEnumType: "FormBorderStyle", Targets: new[] { FormTarget.WinForms },
@@ -2561,9 +2766,11 @@ public static class FormControlCatalog
             // ⛔ Both targets (D2): the page's BODY, so every control inherits them as WinForms' ambient properties
             // inherit from the Form — the Docked strips included. WebDefault empty: with nothing written the browser's
             // own body colours and font stand, not WinForms' Control/ControlText/Segoe UI.
+            // A Form throws on a translucent BackColor (measured; use Opacity for a see-through window).
             new("BackColor", FormPropertyType.Color, "Control", WebDefault: "",
                 Category: FormPropertyCategory.Appearance, Description: "The background color of the component.",
-                CssProperty: "background-color", CssConverter: FormCssConverter.Color),
+                CssProperty: "background-color", CssConverter: FormCssConverter.Color,
+                WinFormsTranslucency: FormTranslucency.ThrowsOnForm),
             new("ForeColor", FormPropertyType.Color, "ControlText", WebDefault: "",
                 Category: FormPropertyCategory.Appearance,
                 Description: "The foreground color of this component, which is used to display text.",

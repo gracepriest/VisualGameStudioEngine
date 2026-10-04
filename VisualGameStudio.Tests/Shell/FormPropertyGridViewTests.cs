@@ -194,6 +194,37 @@ public class FormPropertyGridViewTests
     }
 
     /// <summary>
+    /// Slice 4: every editor view the grid opens (each its own AXAML file) — walked against its ROOT's
+    /// <c>x:DataType</c>, and each DataTemplate inside against its own. A new editor file joins this list.
+    /// </summary>
+    private static IEnumerable<TestCaseData> EditorViews()
+    {
+        yield return new TestCaseData(new[] { "VisualGameStudio.Shell", "Views", "Controls", "FormColorDropDown.axaml" }, 8)
+            .SetName("EveryBindingInAnEditorView_ResolvesAgainstItsRootDataType(FormColorDropDown)");
+        yield return new TestCaseData(new[] { "VisualGameStudio.Shell", "Views", "Dialogs", "FormFontDialog.axaml" }, 15)
+            .SetName("EveryBindingInAnEditorView_ResolvesAgainstItsRootDataType(FormFontDialog)");
+        yield return new TestCaseData(new[] { "VisualGameStudio.Shell", "Views", "Dialogs", "FormItemsDialog.axaml" }, 1)
+            .SetName("EveryBindingInAnEditorView_ResolvesAgainstItsRootDataType(FormItemsDialog)");
+    }
+
+    [TestCaseSource(nameof(EditorViews))]
+    public void EveryBindingInAnEditorView_ResolvesAgainstItsRootDataType(string[] path, int atLeast)
+    {
+        var root = Load(path).Root!;
+        var declared = (string?)root.Attribute(XName.Get("DataType", Xaml));
+        Assert.That(declared, Is.Not.Null, "an editor view declares x:DataType on its root, so its bindings can be judged");
+        var scope = ResolveType(root, declared!);
+        Assert.That(scope, Is.Not.Null, $"x:DataType '{declared}' resolves to a type");
+
+        var failures = new List<string>();
+        var checkedBindings = 0;
+        Walk(root, scope!, failures, ref checkedBindings);
+
+        Assert.That(failures, Is.Empty, string.Join("\n", failures));
+        Assert.That(checkedBindings, Is.GreaterThanOrEqualTo(atLeast), "the walk checked too few bindings to be a gate");
+    }
+
+    /// <summary>
     /// The walker's own gate: each binding shape it cannot judge FAILS rather than passing unexamined.
     /// Snippets are scoped to <see cref="FormPropertyGridViewModel"/>, like the real view.
     /// </summary>
@@ -298,7 +329,8 @@ public class FormPropertyGridViewTests
         var edgeToggles = elements
             .Where(e => ((string?)e.Attribute("ToolTip.Tip"))?.StartsWith("Anchor to", StringComparison.Ordinal) == true
                         || ((string?)e.Attribute("ToolTip.Tip"))?.StartsWith("Dock to", StringComparison.Ordinal) == true
-                        || (string?)e.Attribute("ToolTip.Tip") == "Fill the container")
+                        || (string?)e.Attribute("ToolTip.Tip") == "Fill the container"
+                        || (string?)e.Attribute("ToolTip.Tip") == "Not docked")
             .ToList();
 
         Assert.Multiple(() =>
@@ -307,10 +339,48 @@ public class FormPropertyGridViewTests
             Assert.That(NameOf("CategorizedButton"), Is.EqualTo("Categorized"));
             Assert.That(NameOf("SearchBox"), Is.EqualTo("Search properties"));
             Assert.That(NameOf("ObjectSelector"), Is.Not.Null.And.Not.Empty);
-            Assert.That(edgeToggles, Has.Count.EqualTo(9), "four anchor edges, four dock edges and Fill");
+            // Dock's "None" carries its caption, but its name must match its tooltip like every other pop-up choice.
+            Assert.That(edgeToggles, Has.Count.EqualTo(10), "four anchor edges, four dock edges, Fill and Dock's None");
             foreach (var toggle in edgeToggles)
             {
                 Assert.That((string?)toggle.Attribute(Automation), Is.EqualTo((string?)toggle.Attribute("ToolTip.Tip")));
+            }
+
+            // Slice 4 Task 2: the drop-down buttons that open the Anchor and Dock pop-ups carry only a glyph.
+            Assert.That(NameOf("AnchorDropDown"), Is.Not.Null.And.Not.Empty, "the Anchor drop-down button");
+            Assert.That(NameOf("DockDropDown"), Is.Not.Null.And.Not.Empty, "the Dock drop-down button");
+        });
+    }
+
+    /// <summary>
+    /// Slice 4 D-4: the Anchor and Dock boxes moved INTO a pop-up — each a <c>Button.Flyout</c> on its row's drop-down
+    /// button — so a row is one line, not 46px. Every edge toggle sits inside a <c>Flyout</c>; no edge sits inline.
+    /// ⚠ The drop-down buttons are NOT <c>Classes="edge"</c>: the Font row's expander is, and the real-view tests find
+    /// the expander as the one visible edge-class toggle in its row.
+    /// </summary>
+    [Test]
+    public void TheAnchorAndDockBoxes_LiveInsideTheirDropDownsFlyouts()
+    {
+        var elements = GridView().Descendants().ToList();
+        XElement DropDown(string name) => elements.Single(e => (string?)e.Attribute(XName.Get("Name", Xaml)) == name);
+        bool InsideFlyout(XElement e) => e.Ancestors().Any(a => a.Name.LocalName == "Flyout");
+
+        var edgeToggles = elements
+            .Where(e => ((string?)e.Attribute("ToolTip.Tip")) is { } tip &&
+                        (tip.StartsWith("Anchor to", StringComparison.Ordinal) || tip.StartsWith("Dock to", StringComparison.Ordinal)
+                         || tip == "Fill the container" || tip == "Not docked"))
+            .ToList();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(edgeToggles, Has.Count.EqualTo(10), "nine edges and Dock's None");
+            Assert.That(edgeToggles.Where(e => !InsideFlyout(e)), Is.Empty, "every edge is inside a pop-up");
+            foreach (var name in new[] { "AnchorDropDown", "DockDropDown" })
+            {
+                var button = DropDown(name);
+                Assert.That(button.Name.LocalName, Is.EqualTo("Button"), name);
+                Assert.That(button.Elements().Any(c => c.Name.LocalName == "Button.Flyout"), Is.True, $"{name} owns its Flyout");
+                Assert.That(((string?)button.Attribute("Classes") ?? "").Split(' '), Has.No.Member("edge"), name);
             }
         });
     }

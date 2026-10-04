@@ -23,6 +23,10 @@ public static class FormCompositeRows
     /// </param>
     public static void Attach(FormPropertyRow parent, Func<string?>? inherited = null)
     {
+        // ⛔ ONE home for "what this row inherits" (slice 4 D-2): the Font parts below AND the Font dialog's start value
+        // read it through EffectiveFont, so the two can never start from different fonts.
+        parent.Inherited = inherited;
+
         var parts = parent.Definition?.Type switch
         {
             FormPropertyType.Font => FontParts(parent, inherited),
@@ -68,6 +72,13 @@ public static class FormCompositeRows
         FormFontValue.TryParse(parent.DisplayValue, out var font) ? font
         : parent.DisplayValue.Length == 0 && FormFontValue.TryParse(BaseFont(inherited), out var fallback) ? fallback
         : null;
+
+    /// <summary>
+    /// The font a Font row SHOWS: its own value, or — absent — what its control inherits (<see cref="FormPropertyRow.Inherited"/>,
+    /// set by <see cref="Attach"/>); null for a value that does not parse. The Font dialog starts here (slice 4 D-2), from
+    /// the same rule the parts read.
+    /// </summary>
+    public static FormFontValue? EffectiveFont(FormPropertyRow row) => Font(row, row.Inherited);
 
     private static IReadOnlyList<FormPropertyRow> FontParts(FormPropertyRow parent, Func<string?>? inherited)
     {

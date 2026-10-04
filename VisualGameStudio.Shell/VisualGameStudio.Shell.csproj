@@ -24,6 +24,8 @@
     <PackageReference Include="Dock.Model.Mvvm" Version="11.3.12.1" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="8.0.0" />
     <PackageReference Include="Avalonia.Controls.DataGrid" Version="11.3.13" />
+    <!-- The property grid's colour editor (slice 4 D-1). Its theme include lives in FormPropertyGridView.axaml ONLY. -->
+    <PackageReference Include="Avalonia.Controls.ColorPicker" Version="11.3.13" />
     <PackageReference Include="Avalonia.Diagnostics" Version="11.3.13" Condition="'$(Configuration)' == 'Debug'" />
   </ItemGroup>
 

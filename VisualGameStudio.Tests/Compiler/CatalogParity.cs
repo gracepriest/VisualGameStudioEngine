@@ -129,8 +129,10 @@ internal static class CatalogParity
     {
         FormPropertyType.String when row.IsItemCollection => s.IsCollection,
         FormPropertyType.String when row.WinFormsFactory == "Convert.ToChar" => s.Type == "Char",
-        FormPropertyType.String when row.WinFormsFactory == "Image.FromFile" => s.Type == "Image",
         FormPropertyType.String => s.Type == "String",
+        // Slice 4 D-5a: the image/icon TYPES own their literal (the old Image.FromFile factory arm is gone).
+        FormPropertyType.Image => s.Type == "Image",
+        FormPropertyType.Icon => s.Type == "Icon",
         // ⚠ Decimal ONLY for NumericUpDown's Minimum/Maximum/Value/Increment — the deliberate Int-over-Decimal
         // rows (see their comment in FormControlCatalog). Anywhere else it would be a shape error csc
         // cannot see, because an int literal widens to decimal.
