@@ -110,13 +110,13 @@ public class FormImageAcceptanceTests
     // ==================================================================
 
     /// <summary>A new form, a PictureBox, its Image and the Form's Icon set through the real grid rows, saved. Returns the picture's id.</summary>
-    private async Task<string> DesignAsync(FormTarget target)
+    private async Task<string> DesignAsync(FormTarget target, string image = "Resources/logo.png")
     {
         var scaffold = FormScaffolder.Create("ImageForm", target, FormLayoutKind.Grid);
         File.WriteAllText(P(scaffold.DocumentFileName), scaffold.DocumentText);
         File.WriteAllText(P(scaffold.CodeFileName), scaffold.CodeText);
         Directory.CreateDirectory(P("Resources"));
-        File.WriteAllBytes(P("Resources/logo.png"), Png(3, 2));
+        File.WriteAllBytes(P(image), Png(3, 2));
         File.WriteAllBytes(P("Resources/app.ico"), Ico16());
 
         var vm = new CodeEditorDocumentViewModel(new FormDesignerAcceptanceTests.DiskFiles(), new Mock<IEventAggregator>().Object)
@@ -128,13 +128,13 @@ public class FormImageAcceptanceTests
         var pic = vm.DesignDocument!.Controls.Single();
 
         vm.Selection.Set(pic);
-        vm.PropertyGrid.Rows.Single(r => r.Name == "Image").ApplyAsset("Resources/logo.png");
+        vm.PropertyGrid.Rows.Single(r => r.Name == "Image").ApplyAsset(image);
         vm.Selection.Clear(); // the Form's own rows
         vm.PropertyGrid.Rows.Single(r => r.Name == "Icon").ApplyAsset("Resources/app.ico");
         Assert.That(await vm.SaveAsync(), Is.True, "the save failed");
 
         var document = File.ReadAllText(P(scaffold.DocumentFileName));
-        Assert.That(document, Does.Contain("Image=\"Resources/logo.png\"").And.Contain("Icon=\"Resources/app.ico\""),
+        Assert.That(document, Does.Contain($"Image=\"{image}\"").And.Contain("Icon=\"Resources/app.ico\""),
             "precondition: the designer wrote both");
         return pic.Id;
     }
@@ -217,10 +217,17 @@ public class FormImageAcceptanceTests
         });
     }
 
+    /// <summary>
+    /// The web half. ⚠ The image's file name carries a SPACE and a <c>#</c> (Part F): the page must percent-encode both,
+    /// or the browser reads <c>#1.png</c> as a fragment and requests a file that does not exist. Every assertion that
+    /// needs no external tool runs FIRST; node (the page's script) and Edge (the decoded image, the resolved icon) each
+    /// run where installed, and only after all of that is a missing tool reported as a skip.
+    /// </summary>
     [Test]
     public async Task Web_TheFilesSitWhereThePageNamesThem_AndThePageRuns()
     {
-        await DesignAsync(FormTarget.Web);
+        const string image = "Resources/my logo #1.png";
+        var picId = await DesignAsync(FormTarget.Web, image);
         File.WriteAllText(P("Main.bas"), "Sub Main()\n    Console.WriteLine(\"App loaded\")\nEnd Sub\n");
         File.WriteAllText(P("ImgApp.blproj"), """
             <BasicLangProject Version="1.0">
@@ -243,19 +250,61 @@ public class FormImageAcceptanceTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(src, Is.EqualTo("Resources/logo.png"), html);
+            Assert.That(output, Does.Not.Contain("BL8036"), "both files exist, so nothing was left uncopied");
+            Assert.That(src, Is.EqualTo("Resources/my%20logo%20%231.png"), html);
             Assert.That(icon, Is.EqualTo("Resources/app.ico"), html);
             Assert.That(File.ReadAllBytes(Path.Combine(site, Uri.UnescapeDataString(src))), Is.EqualTo(Png(3, 2)),
                 "the image sits where the page names it");
             Assert.That(File.Exists(Path.Combine(site, Uri.UnescapeDataString(icon))), Is.True, "…and the icon");
         });
 
+        var skipped = new List<string>();
+
+        // node: the page's script runs. Before Edge, which writes its own files into the site.
         var ran = FormDesignerAcceptanceTests.RunPageUnderNode(site, formName: "ImageForm");
         if (ran == null)
         {
-            Assert.Ignore("node is not on PATH, so the emitted page cannot be executed here");
+            skipped.Add("node is not on PATH, so the emitted page's script was not executed");
+        }
+        else
+        {
+            Assert.That(ran, Does.Not.Contain("ReferenceError").And.Not.Contain("LOAD ERROR").And.Contain("App loaded"), ran);
         }
 
-        Assert.That(ran, Does.Not.Contain("ReferenceError").And.Not.Contain("LOAD ERROR").And.Contain("App loaded"), ran);
+        // Edge (piece 1's headless-over-localhost harness): the BROWSER decoded the image the page names, and the icon
+        // link resolves to an image — what no file-exists check can see (a src that names the right file but is read
+        // as a fragment, a wrong content type, an undecodable file).
+        if (PixelLayout.EdgeLayoutHarness.EdgePath() == null)
+        {
+            skipped.Add("Microsoft Edge is not installed, so the page's image and icon were not decoded in a browser");
+        }
+        else
+        {
+            var saved = BasicLang.Forms.Serialization.FormDocumentReader.Read(P("ImageForm.blwebform"),
+                File.ReadAllText(P("ImageForm.blwebform"))).Model;
+            var edge = PixelLayout.EdgeLayoutHarness.Measure(site, new[]
+            {
+                PixelLayout.EdgeCase.Of(saved, 800, 450, PixelLayout.EdgeStep.Icon("icon"))
+            });
+            var page = edge.Results["ImageForm@800x450"];
+            TestContext.WriteLine($"[edge] images {string.Join(", ", page.Images.Select(i => $"{i.Key}={i.Value}"))}; " +
+                                  $"icon {page.Probes["icon"]}; errors {string.Join("; ", page.Errors)}");
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(page.Images.ContainsKey(picId), Is.True, $"the page has an <img id=\"{picId}\">");
+                Assert.That(page.Images.GetValueOrDefault(picId).Complete, Is.True, "the image finished loading");
+                Assert.That(page.Images.GetValueOrDefault(picId).NaturalWidth, Is.EqualTo(3), "the browser DECODED the 3×2 PNG");
+                Assert.That(page.Images.GetValueOrDefault(picId).NaturalHeight, Is.EqualTo(2));
+                Assert.That(page.Probes["icon"], Does.Contain("\"status\":200").And.Contain("\"nw\":16"),
+                    "the icon link resolves, and the browser decodes the 16×16 .ico");
+                Assert.That(page.Errors, Is.Empty, "the page ran without errors");
+            });
+        }
+
+        if (skipped.Count > 0)
+        {
+            Assert.Ignore(string.Join("; ", skipped));
+        }
     }
 }

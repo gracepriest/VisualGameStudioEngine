@@ -1105,8 +1105,11 @@ piece 2 may also claim 8036 — re-check at merge). CLI `Program.cs`: the JS bra
 C# branch loads the `.blform` documents (consequence "— its images and icons were not copied into the output") and copies
 before `dotnet build` (the exe lands in `outputDir`). IDE `BuildService`: the same two points through `CopyFormAssets`, each
 BL8036 a `DiagnosticItem` (Warning, FilePath = the form document) AND an Output line.
-- ⚠ Found: the IDE's form documents come from the PROJECT ITEMS (the IDE writes them; `TryLoadCliProject` does not load the
-  IDE's `<Project>` format), the CLI's from its own glob. The IDE route tests list the documents as items, as the IDE does.
+- ⚠ ~~Found: the IDE's form documents come from the PROJECT ITEMS … the CLI's from its own glob.~~ **Corrected (Part F,
+  review):** that was wrong. BOTH routes read the form documents through the SAME call, `cliProject.GetFormDocuments()` —
+  `BuildService.TryLoadCliProject` loads the `.blproj` with `ProjectFile.Load` exactly as the CLI does, and that loader reads
+  the IDE's `<Project>` root too. The IDE project's items are only the FALLBACK, taken when `ProjectFile.Load` throws; that
+  branch now routes each stored item through `ProjectFile.ToLocalPath` (it was a raw `Path.Combine`) and has its own test.
 
 Tests: `FormAssetCopyTests` (new, 12, fast): sub-path preserved on both targets, missing → BL8036 (owner, absolute path, form
 document, a warning), outside → BL8036 with nothing written, absolute → BL8036, URL → nothing, once per file, the Form's Icon,
@@ -1130,7 +1133,7 @@ every sync); the grid's `AssetPicker` `…` (`OnAssetPickClick`, caught and logg
 level's `StorageProvider`, image or icon filters per target) and `ChooseImport` (default: a small modal "Copy into Resources /
 Use this path (WinForms) / Cancel" built in code). The rig's `Open` gained a `dir` parameter so a real project folder backs it.
 Choices under the delegation: the confirm is a three-way choice with Copy first (VS copies a picked resource into the project).
-⚠ The layout sweep has no PictureBox, so `AssetPicker` is not swept (follow-up). ⚠ Implementation-first; the mutation table
+⚠ The layout sweep has no PictureBox, so `AssetPicker` is not swept (follow-up — closed in Part F). ⚠ Implementation-first; the mutation table
 is the red evidence.
 
 Tests: `FormAssetImportTests` (new, 9): inside → relative with forward slashes; a form in `Forms/` with the image in `Images/` →
@@ -1155,7 +1158,41 @@ copy runs) builds `ImgApp.blproj` (`UseWindowsForms`, `net8.0-windows`).
 - ⚠ M7's last open question answered on the project route: the `run` shape's rebuild (its whole output is logged) printed no
   warning at all — no BL6016/BL6017 for the image/icon statements.
 - ⚠ Deviation: the Edge `naturalWidth` probe (`EdgeStep.ImageSize` in `EdgeLayoutHarness`) is NOT added — the web half proves
-  the files are where the page names them and the page runs, not that a browser decoded the image. Recorded as a follow-up.
+  the files are where the page names them and the page runs, not that a browser decoded the image. Recorded as a follow-up
+  — closed in Part F.
 
 Mutations (Edit + REBUILD) — both killed: `System.AppContext.BaseDirectory` dropped (all three shapes then fail with
 `FileNotFoundException`, exactly as pre-flight M8 measured); the web copy skipped (the file is missing where the page names it).
+
+### Part F — review follow-ups to Tasks 8–11
+- **Doc comments:** `FormTranslucency` moved ABOVE `FormPropertyDef`'s doc block (the record's docs had attached to the enum);
+  `CopyFormAssets` and `DeployNativeEngine` each have their own summary again.
+- **`FormAssetCopy`, the catalog FIRST:** `row.Accepts` is asked before anything else, so a value BL8009 already names — a rooted
+  path on a WEB form, `../x.png` (Degraded on both targets), an `.svg` on WinForms — gets no second BL8036 (the rooted one said
+  "the program will look for it at that path", false on the web). The explicit escapes branch was then unreachable and is
+  gone; the `SafeZip` containment check stays as defence in depth. New messages: a value naming a FOLDER says so (not "missing");
+  a write that fails (a locked output copy — a running program, a viewer) is a BL8036 warning naming the file, never a failed
+  build. Dedup key normalised (`./x.png` = `Resources/./x.png` = `x.png`, `.` and empty segments dropped); a second spelling
+  differing only in CASE is copied once and warned (a case-sensitive server would not find it).
+- **BL8036 location:** the attribute's line and column in the form DOCUMENT (re-read with `LoadOptions.SetLineInfo`: the
+  root for the Form's rows, the element whose `Id` matches for a control); (0,0) — rendered as the document path alone, never
+  "(0,0)" — when the document cannot be read. Both routes now print `DesignDiagnostic.Format()` (`path(l,c): warning BL8036: …`,
+  the clickable shape); the IDE's `DiagnosticItem` carries Line/Column. ⚠ The CLI's old `Warning: BL8036:` text is gone.
+- **`FormAssetPaths.IsRooted`:** a drive-relative `C:logo.png` and a bare `C:` are rooted (judged by text). `FormAssetImport`
+  compares the first SEGMENT to `..` (a project-root `..logo.png` is inside).
+- **Fallback branch:** see the corrected Task 9 note; `Ide_WhenTheProjectFileCannotBeLoaded_…` loads the IDE project, deletes the
+  `.blproj` (so `ProjectFile.Load` cannot run) and builds an item-listed `Forms\Pic.blwebform` — its image is copied.
+- **Layout sweep:** a PictureBox and the FORM ROOT joined it; it requires `AssetPicker` seen and fitting on `pic.Image` AND
+  `WinForm.Icon`. The rig's `Select` accepts the selector's control-less root entry.
+- **Edge:** `EdgeStep.Icon` added to piece 1's harness (fetch status + decoded `naturalWidth` of `link[rel~=icon]`); the web
+  acceptance test measures, over the loopback server, `<img>` complete with naturalWidth×Height **3×2** and the icon
+  **status 200, naturalWidth 16** — with the image named `Resources/my logo #1.png` (src `Resources/my%20logo%20%231.png`).
+  Every tool-free assertion runs first; node and Edge each run where present; a missing tool is ONE `Assert.Ignore` at the end.
+- **Minors:** the IDE route test's `warning!` inside `Assert.Multiple` is `warning?.`; copy and acceptance tests with a space
+  and `#` in the file name; a byte-exact test for the Items writer before an INLINE first child.
+
+Mutations (Edit + REBUILD) — all killed: Accepts moved back after the rooted check (web+rooted); the folder branch; the write
+catch; the locator returning (0,0) (both location tests); the unnormalised key; the case warning; `StartsWith("..")` in the
+import; `HasAssetPicker` Image-only (the sweep); the CLI printing without the location; the IDE item without Line; the fallback
+emptied. `IsRooted` was red before the change (4 cases). ⚠ `ToLocalPath` → raw `Path.Combine` in the fallback is EQUIVALENT on
+Windows (`ToLocalPath` is the identity there); it is killable only by the Linux run of the fallback test.

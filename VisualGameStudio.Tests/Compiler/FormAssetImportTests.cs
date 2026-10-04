@@ -46,6 +46,20 @@ public class FormAssetImportTests
         Assert.That(FormAssetImport.Import(picked, doc, FormTarget.WinForms, NeverAsked), Is.EqualTo("Images/sub/x.png"));
     }
 
+    /// <summary>Part F: "outside" is a first SEGMENT of <c>..</c>; a project-root file whose NAME starts with two dots is inside.</summary>
+    [Test]
+    public void AProjectRootFileNamedDotDotSomething_IsInside_NotAskedAbout()
+    {
+        var doc = Path.Combine(_project, "LoginForm.blform");
+        var picked = Write(Path.Combine(_project, "..logo.png"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(FormAssetImport.RelativeInsideProject(picked, doc), Is.EqualTo("..logo.png"));
+            Assert.That(FormAssetImport.Import(picked, doc, FormTarget.WinForms, NeverAsked), Is.EqualTo("..logo.png"));
+        });
+    }
+
     /// <summary>A form in a subfolder still stores paths relative to the PROJECT (the .blproj's folder), as the build reads them.</summary>
     [Test]
     public void AFormInASubfolder_StoresThePathRelativeToTheProject()

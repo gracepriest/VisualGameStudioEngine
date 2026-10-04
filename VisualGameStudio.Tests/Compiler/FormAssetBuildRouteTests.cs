@@ -145,7 +145,9 @@ public class FormAssetBuildRouteTests
         Assert.Multiple(() =>
         {
             Assert.That(exit, Is.Zero, "a missing image never fails the build");
-            Assert.That(output, Does.Contain("Warning: BL8036:").And.Contain("'Pic.pic.Image'"));
+            Assert.That(output, Does.Contain("warning BL8036:").And.Contain("'Pic.pic.Image'"));
+            Assert.That(output, Does.Match(@"Pic\.blwebform\(\d+,\d+\): warning BL8036"),
+                "the clickable path(line,col) shape, at the attribute");
         });
     }
 
@@ -170,8 +172,9 @@ public class FormAssetBuildRouteTests
     }
 
     // ==================================================================
-    // IDE (BuildService) — ⚠ the IDE's project lists its form documents as items (the IDE writes them), and its build reads
-    // them from that list; the CLI reads them from its own glob.
+    // IDE (BuildService) — both routes read the form documents through the SAME call, cliProject.GetFormDocuments():
+    // BuildService loads the .blproj with ProjectFile.Load exactly as the CLI does. The IDE project's own items are only
+    // the FALLBACK, taken when ProjectFile.Load throws (Ide_WhenTheProjectFileCannotBeLoaded_… covers that branch).
     // ==================================================================
 
     private async Task<BuildResult> IdeBuild()
@@ -199,8 +202,53 @@ public class FormAssetBuildRouteTests
         {
             Assert.That(result.Success, Is.True, "a missing image never fails the build");
             Assert.That(warning, Is.Not.Null, string.Join("\n", result.Diagnostics.Select(d => d.Id + " " + d.Message)));
-            Assert.That(warning!.Severity, Is.EqualTo(DiagnosticSeverity.Warning));
-            Assert.That(warning.FilePath, Does.EndWith("Pic.blwebform"), "names the form document");
+            Assert.That(warning?.Severity, Is.EqualTo(DiagnosticSeverity.Warning));
+            Assert.That(warning?.FilePath, Does.EndWith("Pic.blwebform"), "names the form document");
+            Assert.That(warning?.Line, Is.GreaterThan(0), "at the attribute, for click-through from the Error List");
+        });
+    }
+
+    /// <summary>
+    /// The fallback branch: when <c>ProjectFile.Load</c> cannot read the .blproj, BuildService reads the form documents
+    /// from the IDE project's own items — stored MSBuild-style (<c>Forms\Pic.blwebform</c>), so each goes through
+    /// <c>ProjectFile.ToLocalPath</c> (a raw backslash is a file-name character off Windows).
+    /// </summary>
+    [Test]
+    public async Task Ide_WhenTheProjectFileCannotBeLoaded_TheItemsAreTheFallback_AndTheImageIsStillCopied()
+    {
+        var scaffold = FormScaffolder.Create("Pic", FormTarget.Web, FormLayoutKind.Grid);
+        Directory.CreateDirectory(P("Forms"));
+        File.WriteAllText(P(Path.Combine("Forms", scaffold.DocumentFileName)), scaffold.DocumentText
+            .Replace("<Controls />", "<Controls>\n    <PictureBox Id=\"pic\" Col=\"0\" Row=\"0\" TabIndex=\"0\" Image=\"Resources/logo.png\" />\n  </Controls>")
+            .Replace("<Controls/>", "<Controls>\n    <PictureBox Id=\"pic\" Col=\"0\" Row=\"0\" TabIndex=\"0\" Image=\"Resources/logo.png\" />\n  </Controls>"));
+        File.WriteAllText(P(Path.Combine("Forms", scaffold.CodeFileName)), scaffold.CodeText);
+        File.WriteAllText(P("Main.bas"), "Sub Main()\n    Console.WriteLine(\"App loaded\")\nEnd Sub\n");
+        Directory.CreateDirectory(P("Resources"));
+        File.WriteAllBytes(P(Path.Combine("Resources", "logo.png")), new byte[] { 0x89, 0x50, 0x4E, 0x47 });
+        File.WriteAllText(P("App.blproj"), """
+            <Project>
+              <PropertyGroup>
+                <ProjectName>App</ProjectName>
+                <TargetBackend>JavaScript</TargetBackend>
+              </PropertyGroup>
+              <ItemGroup>
+                <Compile Include="Main.bas" />
+                <Compile Include="Forms\Pic.bas" />
+                <Compile Include="Forms\Pic.blwebform" />
+              </ItemGroup>
+            </Project>
+            """);
+        var project = await new ProjectSerializer().LoadAsync(P("App.blproj"));
+        // ProjectFile.Load now has nothing to read (FileNotFoundException → TryLoadCliProject null): the fallback branch.
+        File.Delete(P("App.blproj"));
+
+        var result = await new BuildService(new SilentOutput()).BuildProjectAsync(project);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Success, Is.True, string.Join("\n", result.Diagnostics.Select(d => d.Id + " " + d.Message)));
+            Assert.That(File.Exists(Path.Combine(result.OutputPath ?? "", "Resources", "logo.png")), Is.True,
+                $"the item-listed form's image was copied — the fallback read Forms\\Pic.blwebform. {result.OutputPath}");
         });
     }
 

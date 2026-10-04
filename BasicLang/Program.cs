@@ -966,7 +966,7 @@ namespace BasicLang.Compiler.Driver
 
                     // ⛔ Slice 4 D-5c: the pages' images and icons beside them (the IDE route does the same).
                     Forms.FormAssetCopy.Copy(loadedWebForms, projectDir, outputDir,
-                        d => Console.Error.WriteLine($"  Warning: {d.Message}"));
+                        d => Console.Error.WriteLine($"  {d.Format()}"));
                     Console.WriteLine($"  Site written to: {outputDir}");
                 }
 
@@ -978,7 +978,7 @@ namespace BasicLang.Compiler.Driver
                     var winForms = Forms.FormDocumentLoader.Load(project.GetFormDocuments(), Forms.FormTarget.WinForms,
                         "— its images and icons were not copied into the output", m => Console.Error.WriteLine($"  Warning: {m}"));
                     Forms.FormAssetCopy.Copy(winForms, projectDir, outputDir,
-                        d => Console.Error.WriteLine($"  Warning: {d.Message}"));
+                        d => Console.Error.WriteLine($"  {d.Format()}"));
 
                     Console.WriteLine("  Compiling to .NET assembly...");
 

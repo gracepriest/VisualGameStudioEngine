@@ -25,12 +25,38 @@ public class FormImageIconTests
     [TestCase("../outside.png", false, false)]
     [TestCase("a/../../outside.png", false, false)]
     [TestCase("", false, false)]
+    [TestCase("C:logo.png", true, false)]
+    [TestCase("..logo.png", true, true)]
     public void TheImageRules_PerTarget(string value, bool winForms, bool web)
     {
         Assert.Multiple(() =>
         {
             Assert.That(Image.Accepts(value, FormTarget.WinForms), Is.EqualTo(winForms), "WinForms");
             Assert.That(Image.Accepts(value, FormTarget.Web), Is.EqualTo(web), "web");
+        });
+    }
+
+    /// <summary>
+    /// Part F: a DRIVE-RELATIVE path (<c>C:logo.png</c> — the current folder of drive C) and a bare drive (<c>C:</c>) are
+    /// rooted: neither is inside the project, and a page cannot reach either. Judged by text, so it holds on Linux too.
+    /// </summary>
+    [TestCase(@"C:\pics\a.png", true)]
+    [TestCase("C:/pics/a.png", true)]
+    [TestCase("C:logo.png", true)]
+    [TestCase("c:", true)]
+    [TestCase(@"\\server\share\a.png", true)]
+    [TestCase("/usr/a.png", true)]
+    [TestCase("Resources/a.png", false)]
+    [TestCase("..logo.png", false)]
+    [TestCase("C", false)]
+    [TestCase("1:a.png", false)]
+    public void IsRooted_ByText(string value, bool rooted)
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(FormAssetPaths.IsRooted(value), Is.EqualTo(rooted));
+            Assert.That(FormAssetPaths.IsInsideProject(value), Is.EqualTo(!rooted), "inside is never rooted");
+            Assert.That(FormAssetPaths.PageUrl(value) == null, Is.EqualTo(rooted), "a page cannot reach a rooted path");
         });
     }
 
@@ -42,6 +68,7 @@ public class FormImageIconTests
     [TestCase(@"C:\icons\app.ico", true, false)]
     [TestCase("https://example.com/favicon", false, true)]
     [TestCase("../app.ico", false, false)]
+    [TestCase("C:app.ico", true, false)]
     public void TheIconRules_PerTarget(string value, bool winForms, bool web)
     {
         Assert.Multiple(() =>

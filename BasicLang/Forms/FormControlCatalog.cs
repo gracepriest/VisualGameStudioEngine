@@ -133,6 +133,18 @@ public enum FormEditVerdict
     Write
 }
 
+/// <summary>
+/// Whether a Color row's WinForms setter takes a translucent colour (WinFormsTranslucentBackColorRunTests measures it per
+/// kind): <see cref="Allowed"/>, or it throws <c>ArgumentException</c> — on a control (<see cref="ThrowsOnControl"/>) or
+/// on the Form itself (<see cref="ThrowsOnForm"/>, whose refusal points at Opacity).
+/// </summary>
+public enum FormTranslucency
+{
+    Allowed,
+    ThrowsOnControl,
+    ThrowsOnForm
+}
+
 /// <summary>One editable property of one control kind.</summary>
 /// <param name="Name">The document attribute name, which is also the WinForms property name.</param>
 /// <param name="Type">Declared type; a value that does not parse to it drops out of the Canon tier.</param>
@@ -215,18 +227,6 @@ public enum FormEditVerdict
 /// For a <see cref="FormPropertyType.Reference"/> row: the control kinds it may name (<c>AcceptButton</c> → Button, the
 /// catalog's one <c>IButtonControl</c>). Null on every other row.
 /// </param>
-/// <summary>
-/// Whether a Color row's WinForms setter takes a translucent colour (WinFormsTranslucentBackColorRunTests measures it per
-/// kind): <see cref="Allowed"/>, or it throws <c>ArgumentException</c> — on a control (<see cref="ThrowsOnControl"/>) or
-/// on the Form itself (<see cref="ThrowsOnForm"/>, whose refusal points at Opacity).
-/// </summary>
-public enum FormTranslucency
-{
-    Allowed,
-    ThrowsOnControl,
-    ThrowsOnForm
-}
-
 public sealed record FormPropertyDef(
     string Name,
     FormPropertyType Type,

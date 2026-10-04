@@ -44,6 +44,12 @@ internal sealed record EdgeStep(string Label, string Kind, string Id = "", strin
     /// actually resolved, not what the stylesheet says.
     /// </summary>
     public static EdgeStep Style(string label, string id, string cssProperty) => new(label, "style", id, cssProperty);
+
+    /// <summary>
+    /// Slice 4: the page's <c>&lt;link rel="icon"&gt;</c> — fetched (HTTP status) and decoded as an image (its natural
+    /// width). Probe: <c>{"href":…,"status":…,"nw":…}</c>, or <c>(none)</c> when the page has no icon link.
+    /// </summary>
+    public static EdgeStep Icon(string label) => new(label, "icon");
 }
 
 /// <summary>One page loaded into an iframe of exactly <see cref="Width"/>×<see cref="Height"/> CSS px.</summary>
@@ -589,6 +595,19 @@ internal static class EdgeLayoutHarness
                   await turn();
                 }
                 probes[step.label] = String((styleCalls - before) / writes);
+                break;
+              case "icon":
+                var link = document.querySelector('link[rel~="icon"]');
+                if (!link) { probes[step.label] = "(none)"; break; }
+                var status = await fetch(link.href).then(function (r) { return r.status; },
+                                                          function (e) { return "fetch failed: " + e; });
+                var nw = await new Promise(function (resolve) {
+                  var im = new Image();
+                  im.onload = function () { resolve(im.naturalWidth); };
+                  im.onerror = function () { resolve(0); };
+                  im.src = link.href;
+                });
+                probes[step.label] = JSON.stringify({ href: link.getAttribute("href"), status: status, nw: nw });
                 break;
               default: throw new Error("unknown step " + step.kind);
             }

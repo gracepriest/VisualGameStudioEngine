@@ -18,11 +18,12 @@ public static class FormAssetPaths
         Uri.TryCreate(value, UriKind.Absolute, out var uri) && uri.Host.Length > 0;
 
     /// <summary>
-    /// A rooted path on ANY machine's spelling — a drive (<c>C:\…</c>, <c>C:/…</c>), a UNC share (<c>\\server\…</c>) or a
-    /// POSIX root (<c>/…</c>). Judged by text, never by this OS: a Windows document read on Linux is still rooted.
+    /// A rooted path on ANY machine's spelling — a drive (<c>C:\…</c>, <c>C:/…</c>, and the DRIVE-RELATIVE <c>C:logo.png</c>
+    /// or a bare <c>C:</c>, which name the current folder of drive C — never the project), a UNC share (<c>\\server\…</c>)
+    /// or a POSIX root (<c>/…</c>). Judged by text, never by this OS: a Windows document read on Linux is still rooted.
     /// </summary>
     public static bool IsRooted(string value) =>
-        value.Length >= 3 && char.IsAsciiLetter(value[0]) && value[1] == ':' && value[2] is '\\' or '/' ||
+        value.Length >= 2 && char.IsAsciiLetter(value[0]) && value[1] == ':' ||
         value.StartsWith(@"\\", StringComparison.Ordinal) || value.StartsWith("/", StringComparison.Ordinal);
 
     /// <summary>True when a RELATIVE path climbs above the project directory (<c>../x.png</c>, <c>a/../../x.png</c>).</summary>

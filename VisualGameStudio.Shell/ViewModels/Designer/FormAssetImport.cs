@@ -85,7 +85,8 @@ public static class FormAssetImport
     public static string? RelativeInsideProject(string pickedPath, string documentPath)
     {
         var relative = Path.GetRelativePath(FormAssetPaths.ProjectRootFor(documentPath), Path.GetFullPath(pickedPath));
-        return !relative.StartsWith("..", StringComparison.Ordinal) && !Path.IsPathRooted(relative)
+        // ⚠ The first SEGMENT is "..", not the first two characters: a project-root file named `..logo.png` is inside.
+        return relative.Split('\\', '/')[0] != ".." && !Path.IsPathRooted(relative)
             ? relative.Replace('\\', '/')
             : null;
     }

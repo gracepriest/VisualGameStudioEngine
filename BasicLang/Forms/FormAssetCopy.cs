@@ -28,20 +28,30 @@ public static class FormAssetCopy
 
         var project = Path.GetFullPath(projectDir);
         var output = Path.GetFullPath(outputDir);
-        var copied = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        // Keyed case-INsensitively to the first spelling seen: on Windows two spellings are one file (copied once), and a
+        // second spelling that differs only in case is warned — a case-sensitive server or disk would not find it.
+        var copied = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var written = new List<string>();
 
         foreach (var (form, documentPath) in forms)
         {
-            foreach (var (owner, row, value) in References(form))
+            var locate = AttributeLocator(documentPath);
+            foreach (var (controlId, owner, row, value) in References(form))
             {
-                void Warn(string why) => report(new DesignDiagnostic(DesignCodes.AssetNotCopied,
-                    $"{DesignCodes.AssetNotCopied}: '{form.Name}.{owner}' = \"{value}\" was not copied into the output: {why}",
-                    documentPath, 0, 0, IsWarning: true));
-
-                if (FormAssetPaths.IsUrl(value))
+                void Warn(string why)
                 {
-                    continue; // a web address is fetched, never copied
+                    var (line, column) = locate(controlId, row.Name);
+                    report(new DesignDiagnostic(DesignCodes.AssetNotCopied,
+                        $"{DesignCodes.AssetNotCopied}: '{form.Name}.{owner}' = \"{value}\" was not copied into the output: {why}",
+                        documentPath, line, column, IsWarning: true));
+                }
+
+                // ⛔ The catalog FIRST: a value it refuses on this target (a rooted path on the web, an .svg on WinForms) or
+                // cannot read at all (Degraded — `../x.png`) is named by BL8009 at generation, and nothing emitted references
+                // it. A BL8036 for it too would be a second, and possibly false, account of the same value.
+                if (!row.Accepts(value, form.Target) || FormAssetPaths.IsUrl(value))
+                {
+                    continue; // ... and a web address is fetched, never copied
                 }
 
                 if (FormAssetPaths.IsRooted(value))
@@ -51,22 +61,19 @@ public static class FormAssetCopy
                     continue;
                 }
 
-                if (FormAssetPaths.EscapesProject(value) || !FormAssetPaths.IsInsideProject(value))
+                var relative = Key(value);
+                var source = Path.GetFullPath(Path.Combine(project, relative.Replace('/', Path.DirectorySeparatorChar)));
+                // Defensive: Accepts already admits only paths inside the project; this is the containment rule restated
+                // at the point of reading, so no future catalog change can make the copy read outside the project.
+                if (!SafeZip.IsWithin(project, relative) || !source.StartsWith(project, StringComparison.OrdinalIgnoreCase))
                 {
                     Warn("it resolves outside the project, and nothing outside the project is copied.");
                     continue;
                 }
 
-                if (!row.Accepts(value, form.Target))
+                if (Directory.Exists(source))
                 {
-                    continue; // refused on this target (BL8009 names it at generation); nothing emitted references it
-                }
-
-                var relative = FormAssetPaths.Normalise(value);
-                var source = Path.GetFullPath(Path.Combine(project, relative.Replace('/', Path.DirectorySeparatorChar)));
-                if (!SafeZip.IsWithin(project, relative) || !source.StartsWith(project, StringComparison.OrdinalIgnoreCase))
-                {
-                    Warn("it resolves outside the project, and nothing outside the project is copied.");
+                    Warn($"it names a folder ({source}), not a file. Name the image file inside it.");
                     continue;
                 }
 
@@ -76,14 +83,32 @@ public static class FormAssetCopy
                     continue;
                 }
 
-                if (!copied.Add(relative))
+                if (copied.TryGetValue(relative, out var first))
                 {
+                    if (!string.Equals(first, relative, StringComparison.Ordinal))
+                    {
+                        Warn($"it differs only in letter case from '{first}', which was copied under that spelling. Windows " +
+                             "treats them as one file, but a case-sensitive web server or disk will not find this one. " +
+                             "Use one spelling.");
+                    }
+
                     continue; // the same file, referenced again
                 }
 
+                copied.Add(relative, relative);
                 var target = Path.GetFullPath(Path.Combine(output, relative.Replace('/', Path.DirectorySeparatorChar)));
-                Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-                ReplaceFile(target, source);
+                try
+                {
+                    Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+                    ReplaceFile(target, source);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    Warn($"writing {target} failed ({ex.Message}). Close whatever holds it open — a running copy of the " +
+                         "program, a viewer — and build again.");
+                    continue;
+                }
+
                 written.Add(target);
             }
         }
@@ -92,16 +117,61 @@ public static class FormAssetCopy
     }
 
     /// <summary>
+    /// The one spelling of a relative path, for the copy and for "is this the same file": forward slashes, with <c>.</c>
+    /// and empty segments dropped (<c>./Resources//logo.png</c> is <c>Resources/logo.png</c>).
+    /// </summary>
+    private static string Key(string value) =>
+        string.Join("/", FormAssetPaths.Normalise(value).Split('/').Where(s => s.Length > 0 && s != "."));
+
+    /// <summary>
+    /// Where a property's attribute sits in the form DOCUMENT (1-based line and column), so BL8036 can take the user to
+    /// it: the root element for the Form's own rows, else the element whose <c>Id</c> is the control's. (0, 0) when the
+    /// document cannot be read or the attribute is not there — the diagnostic then names the document path alone.
+    /// </summary>
+    private static Func<string?, string, (int Line, int Column)> AttributeLocator(string documentPath)
+    {
+        System.Xml.Linq.XDocument? document = null;
+        var loaded = false;
+        return (controlId, property) =>
+        {
+            if (!loaded)
+            {
+                loaded = true;
+                try
+                {
+                    document = System.Xml.Linq.XDocument.Load(documentPath, System.Xml.Linq.LoadOptions.SetLineInfo);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Xml.XmlException
+                                               or ArgumentException or NotSupportedException)
+                {
+                    document = null;
+                }
+            }
+
+            var root = document?.Root;
+            var element = root == null ? null
+                : controlId == null ? root
+                : root.Descendants().FirstOrDefault(e => string.Equals(Attribute(e, "Id")?.Value, controlId, StringComparison.Ordinal));
+            return element != null && Attribute(element, property) is System.Xml.IXmlLineInfo info && info.HasLineInfo()
+                ? (info.LineNumber, info.LinePosition)
+                : (0, 0);
+        };
+
+        static System.Xml.Linq.XAttribute? Attribute(System.Xml.Linq.XElement element, string name) =>
+            element.Attributes().FirstOrDefault(a => string.Equals(a.Name.LocalName, name, StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
     /// Every Image/Icon value the form references: the Form's own rows that apply to its document, then every control
     /// (the visual tree) and every tray component — each walker chosen explicitly, as the CLAUDE.md tray rule requires.
     /// </summary>
-    private static IEnumerable<(string Owner, FormPropertyDef Row, string Value)> References(FormDocument form)
+    private static IEnumerable<(string? ControlId, string Owner, FormPropertyDef Row, string Value)> References(FormDocument form)
     {
         foreach (var row in FormControlCatalog.FormRoot.Properties.Where(IsAsset))
         {
             if (FormRootValues.Applies(row, form) && form.Properties.TryGetValue(row.Name, out var value))
             {
-                yield return (row.Name, row, value);
+                yield return (null, row.Name, row, value);
             }
         }
 
@@ -111,7 +181,7 @@ public static class FormAssetCopy
             {
                 if (row.AppliesTo(form.Target) && control.Properties.TryGetValue(row.Name, out var value))
                 {
-                    yield return ($"{control.Id}.{row.Name}", row, value);
+                    yield return (control.Id, $"{control.Id}.{row.Name}", row, value);
                 }
             }
         }

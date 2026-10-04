@@ -273,6 +273,30 @@ public class FormItemsStorageTests
             "    </ComboBox>\n" + Tail));
     }
 
+    /// <summary>
+    /// Part F: the first remaining child sits INLINE, on the start tag's own line. The run still starts on a line of its
+    /// own, one step deeper than the element, each item on its own line — and the child follows on a fresh line at that
+    /// indent rather than being glued to the last item.
+    /// </summary>
+    [Test]
+    public void AnEdit_BeforeAnInlineFirstChild_StartsTheRunOnItsOwnLine_AndTheChildFollowsOnItsOwn()
+    {
+        const string inlineOpen = "    <ComboBox Id=\"cmb\" X=\"16\" Y=\"16\" Width=\"121\" Height=\"23\" TabIndex=\"0\">";
+        const string bind = "<Bind Event=\"SelectedIndexChanged\" Handler=\"h\" />";
+        var form = Read(Head + inlineOpen + bind + "</ComboBox>\n" + Tail);
+        Combo(form).Properties["Items"] = "A\nB";
+
+        var written = FormDocumentWriter.Write(form);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(written, Is.EqualTo(
+                Head + inlineOpen + "\n      <Item>A</Item>\n      <Item>B</Item>\n      " + bind + "</ComboBox>\n" + Tail));
+            Assert.That(FormItems.Split(Combo(Read(written)).Properties["Items"]), Is.EqualTo(new[] { "A", "B" }),
+                "and it reads back the same");
+        });
+    }
+
     /// <summary>Two consecutive edits: the second has exactly the first's shape — no blank line grows per save.</summary>
     [TestCase("")]
     [TestCase("      <Bind Event=\"SelectedIndexChanged\" Handler=\"h\" />\n")]

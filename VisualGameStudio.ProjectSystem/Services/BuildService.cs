@@ -622,9 +622,13 @@ public class BuildService : IBuildService
             // compiled.
             IReadOnlyList<BasicLang.Forms.FormDocument> webForms = Array.Empty<BasicLang.Forms.FormDocument>();
             IReadOnlyList<BasicLang.Forms.LoadedForm> loadedWebForms = Array.Empty<BasicLang.Forms.LoadedForm>();
+            // The CLI's own list (ProjectFile.GetFormDocuments) whenever the .blproj loads — the SAME call the CLI makes;
+            // the IDE's items are only the fallback when ProjectFile.Load throws, and a stored item path is MSBuild-style
+            // (`Forms\Pic.blwebform`), so it goes through ToLocalPath like every other path read from a .blproj.
             var formDocumentPaths = (cliProject != null
                 ? cliProject.GetFormDocuments()
-                : sourceFiles.Select(item => Path.Combine(project.ProjectDirectory, item.Include))).ToList();
+                : sourceFiles.Select(item => Path.Combine(project.ProjectDirectory,
+                    BasicLang.Compiler.ProjectSystem.ProjectFile.ToLocalPath(item.Include)))).ToList();
 
             if (backend == "javascript")
             {
@@ -1516,10 +1520,6 @@ public class BuildService : IBuildService
     }
 
     /// <summary>
-    /// Copies the native engine DLL(s) next to the built game (CLI parity —
-    /// managed references are copied by msbuild, the native P/Invoke target is not).
-    /// </summary>
-    /// <summary>
     /// Slice 4 D-5c: <see cref="BasicLang.Forms.FormAssetCopy.Copy"/> — the ONE copy helper the CLI calls too — with each
     /// BL8036 sent to the Error List (a <see cref="DiagnosticItem"/> naming the form document) AND the Output pane. A
     /// missing file never fails the build.
@@ -1534,12 +1534,18 @@ public class BuildService : IBuildService
                 Id = d.Code,
                 Message = d.Message,
                 FilePath = d.FilePath,
+                Line = d.Line,
+                Column = d.Column,
                 Severity = DiagnosticSeverity.Warning
             });
-            _outputService.WriteLine($"Warning: {d.Message}", OutputCategory.Build);
+            _outputService.WriteLine(d.Format(), OutputCategory.Build);
         });
     }
 
+    /// <summary>
+    /// Copies the native engine DLL(s) next to the built game (CLI parity —
+    /// managed references are copied by msbuild, the native P/Invoke target is not).
+    /// </summary>
     private void DeployNativeEngine(string outputDir)
     {
         var deployedAny = false;

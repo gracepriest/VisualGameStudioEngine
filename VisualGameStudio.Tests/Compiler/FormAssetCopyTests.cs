@@ -98,8 +98,12 @@ public class FormAssetCopyTests
         });
     }
 
+    /// <summary>
+    /// A path climbing out of the project is Degraded (the catalog accepts it on neither target), so BL8009 names it at
+    /// generation; the copy reads nothing outside the project, writes nothing outside the output, and adds no second warning.
+    /// </summary>
     [Test]
-    public void APathOutsideTheProject_IsBL8036_AndNothingIsWrittenOutsideTheOutput()
+    public void APathOutsideTheProject_IsNotCopied_AndNothingIsWrittenOutsideTheOutput()
     {
         File.WriteAllText(Path.Combine(Path.GetDirectoryName(_project)!, "x.png"), "outside");
 
@@ -108,9 +112,188 @@ public class FormAssetCopyTests
         Assert.Multiple(() =>
         {
             Assert.That(written, Is.Empty);
-            Assert.That(reported.Single().Message, Does.Contain("outside the project"));
+            Assert.That(reported, Is.Empty, "Degraded — BL8009 names it, not BL8036");
             Assert.That(File.Exists(Path.Combine(Path.GetDirectoryName(_output)!, "x.png")), Is.False);
             Assert.That(Directory.GetFiles(_output, "*", SearchOption.AllDirectories), Is.Empty);
+        });
+    }
+
+    /// <summary>
+    /// Part F: the catalog is asked FIRST. A rooted path on a WEB form is refused (BL8009 says the page cannot reach the
+    /// author's disk); BL8036's "the program will look for it at that path" would be false there.
+    /// </summary>
+    [Test]
+    public void ARootedPath_OnAWebForm_IsNotBL8036_TheRefusalAlreadyNamesIt()
+    {
+        var absolute = Path.Combine(Path.GetDirectoryName(_project)!, "abs.png");
+        File.WriteAllText(absolute, "abs");
+
+        var (written, reported) = Copy(Form(FormTarget.Web, Doc, ("pic", absolute)));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(written, Is.Empty);
+            Assert.That(reported, Is.Empty);
+        });
+    }
+
+    [Test]
+    public void AValueNamingAFolder_IsBL8036_SayingItIsAFolder_NotThatTheFileIsMissing()
+    {
+        Directory.CreateDirectory(Path.Combine(_project, "Resources"));
+
+        var (written, reported) = Copy(Form(FormTarget.WinForms, Doc, ("pic", "Resources")));
+        var message = reported.Single().Message;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(written, Is.Empty);
+            Assert.That(message, Does.Contain("folder").And.Not.Contain("missing"));
+            Assert.That(message, Does.Contain(Path.Combine(_project, "Resources")));
+        });
+    }
+
+    /// <summary>
+    /// Part F: an output copy another process holds open (the previous run of the program, a viewer) cannot be replaced.
+    /// The plan: that is a BL8036 warning naming the file, never a failed build.
+    /// </summary>
+    [Test]
+    [Platform(Include = "Win", Reason = "Windows file locking: an open FileShare.None handle blocks the rename")]
+    public void ALockedOutputCopy_IsBL8036_AndNeverFailsTheBuild()
+    {
+        WriteProjectFile("Resources/logo.png", "new");
+        var target = Path.Combine(_output, "Resources", "logo.png");
+        Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+        File.WriteAllText(target, "old");
+
+        IReadOnlyList<string> written;
+        List<DesignDiagnostic> reported;
+        using (new FileStream(target, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+        {
+            (written, reported) = Copy(Form(FormTarget.WinForms, Doc, ("pic", "Resources/logo.png")));
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(written, Is.Empty);
+            Assert.That(reported, Has.Count.EqualTo(1));
+            Assert.That(reported[0].Code, Is.EqualTo(DesignCodes.AssetNotCopied));
+            Assert.That(reported[0].IsWarning, Is.True);
+            Assert.That(reported[0].Message, Does.Contain(target));
+            Assert.That(File.ReadAllText(target), Is.EqualTo("old"));
+            Assert.That(Directory.GetFiles(_output, "*.tmp", SearchOption.AllDirectories), Is.Empty, "no temp left behind");
+        });
+    }
+
+    /// <summary>Part F: BL8036 points at the attribute in the form document, so the Error List can take the user there.</summary>
+    [Test]
+    public void BL8036_CarriesTheLineAndColumnOfTheAttribute_InTheFormDocument()
+    {
+        var form = Form(FormTarget.WinForms, Doc, ("pic", "Resources/gone.png"));
+        var text = Forms_Create(form.Model);
+        File.WriteAllText(Doc, text);
+        var lines = text.Replace("\r\n", "\n").Split('\n');
+        var line = Array.FindIndex(lines, l => l.Contains("Image=\"Resources/gone.png\"")) + 1;
+        var column = lines[line - 1].IndexOf("Image=", StringComparison.Ordinal) + 1;
+
+        var (_, reported) = Copy(form);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(line, Is.GreaterThan(1), "fixture: the attribute is in the document");
+            Assert.That(reported.Single().Line, Is.EqualTo(line));
+            Assert.That(reported.Single().Column, Is.EqualTo(column));
+            Assert.That(reported.Single().Format(), Does.StartWith($"{Doc}({line},{column}): warning BL8036"));
+        });
+    }
+
+    [Test]
+    public void BL8036_OnTheFormsOwnIcon_CarriesTheRootAttributesLine()
+    {
+        var form = Form(FormTarget.WinForms, Doc);
+        form.Model.Properties["Icon"] = "Resources/gone.ico";
+        var text = Forms_Create(form.Model);
+        File.WriteAllText(Doc, text);
+        var lines = text.Replace("\r\n", "\n").Split('\n');
+        var line = Array.FindIndex(lines, l => l.Contains("Icon=\"Resources/gone.ico\"")) + 1;
+
+        var (_, reported) = Copy(form);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(line, Is.GreaterThan(0));
+            Assert.That(reported.Single().Line, Is.EqualTo(line));
+        });
+    }
+
+    /// <summary>No document on disk to point into: the location is the document path alone — never "(0,0)".</summary>
+    [Test]
+    public void BL8036_WithNoReadableDocument_IsLocatedAtTheDocumentPath()
+    {
+        var (_, reported) = Copy(Form(FormTarget.WinForms, Doc, ("pic", "Resources/gone.png")));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(reported.Single().Line, Is.EqualTo(0));
+            Assert.That(reported.Single().Format(), Does.StartWith($"{Doc}: warning BL8036"));
+        });
+    }
+
+    private static string Forms_Create(FormDocument model) => BasicLang.Forms.Serialization.FormDocumentWriter.Create(model);
+
+    [Test]
+    public void DotSlashAndThePlainSpelling_AreOneFile_CopiedOnce_WithNoWarning()
+    {
+        WriteProjectFile("Resources/logo.png");
+
+        var (written, reported) = Copy(Form(FormTarget.WinForms, Doc,
+            ("a", "./Resources/logo.png"), ("b", "Resources/./logo.png"), ("c", "Resources/logo.png")));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(written, Is.EqualTo(new[] { Path.Combine(_output, "Resources", "logo.png") }));
+            Assert.That(reported, Is.Empty);
+        });
+    }
+
+    /// <summary>
+    /// Two spellings differing only in case are one file on Windows, so it is copied once — under the FIRST spelling — and
+    /// the second is warned: a case-sensitive web server (or Linux) will not find it.
+    /// </summary>
+    [Test]
+    public void TwoSpellingsDifferingOnlyInCase_AreWarned()
+    {
+        WriteProjectFile("Resources/Logo.png");
+        if (!File.Exists(Path.Combine(_project, "Resources", "logo.png")))
+        {
+            Assert.Ignore("a case-sensitive file system: the two spellings are two files here, and the second is missing");
+        }
+
+        var (written, reported) = Copy(Form(FormTarget.Web, Doc, ("a", "Resources/Logo.png"), ("b", "Resources/logo.png")));
+        var warning = reported.Single();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(written, Has.Count.EqualTo(1));
+            Assert.That(warning.Code, Is.EqualTo(DesignCodes.AssetNotCopied));
+            Assert.That(warning.Message, Does.Contain("'LoginForm.b.Image'").And.Contain("Resources/Logo.png")
+                .And.Contain("case"));
+        });
+    }
+
+    [TestCase(FormTarget.WinForms)]
+    [TestCase(FormTarget.Web)]
+    public void AFileNameWithASpaceAndAHash_IsCopied(FormTarget target)
+    {
+        WriteProjectFile("Resources/my logo #1.png", "bytes");
+
+        var (written, reported) = Copy(Form(target, Doc, ("pic", "Resources/my logo #1.png")));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(reported, Is.Empty);
+            Assert.That(File.ReadAllText(Path.Combine(_output, "Resources", "my logo #1.png")), Is.EqualTo("bytes"));
+            Assert.That(written, Has.Count.EqualTo(1));
         });
     }
 
