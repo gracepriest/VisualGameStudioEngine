@@ -592,6 +592,131 @@ public class CrossFileBindingTests
         Assert.That(FourBackends.Norm(ran.Item2), Is.EqualTo("base"), ran.Item3);
     }
 
+    // ---- the ANALYZER binds a bare call by the same class-first rule (Task 7b)
+    // ⛔ Task 7 taught the IR builder and the backends VB's rule — a class member, own or inherited and
+    // accessible, shadows a Module's procedure — but the analyzer still bound and TYPE-CHECKED a bare call by
+    // module/global scope first. With the two signatures different, "Compilation successful!" on C# and JS:
+    // JavaScript ran `this.Hello(3)` against Base's `Hello()` and printed 5 into a String (the extra argument
+    // dropped silently); csc refused the C# late. VB binds `Hello(3)` to Base.Hello and reports the count.
+
+    private const string UtilModuleHelloOfInteger =
+        "Module Util\n Public Function Hello(x As Integer) As String\n  Return \"module\"\n End Function\nEnd Module\n";
+
+    private const string BaseHelloNoArgs =
+        "Public Class Base\n Public Function Hello() As Integer\n  Return 5\n End Function\nEnd Class\n";
+
+    private const string DerivedCallsHello3 =
+        "Public Class D\n Inherits Base\n Public Sub Greet()\n  Dim s As String = Hello(3)\n  PrintLine(s)\n End Sub\nEnd Class\n";
+
+    /// <summary>Compiles the files in both orders and returns each order's messages, asserting it FAILED.</summary>
+    private void RefusedInBothOrders(Action<string, string> check, params (string Name, string Text)[] files)
+    {
+        var paths = Write(files);
+        foreach (var order in new[] { paths, paths.Reverse().ToArray() })
+        {
+            var label = string.Join(",", order.Select(Path.GetFileName));
+            var result = Compile(order);
+            Assert.That(result.HasErrors, Is.True, $"[{label}] a green build of a call VB refuses");
+            check(Messages(result), label);
+        }
+    }
+
+    private static void NamesHelloArgumentCount(string messages, string label) => Assert.That(messages,
+        Does.Contain("Function 'Hello' expects 0 argument(s), got 1"), label);
+
+    /// <summary>⛔ The reviewer's repro (scratchpad t7probe\sig.bas), every declaration in ONE file.</summary>
+    [Test]
+    public void AnInheritedMemberWithAnotherSignature_IsTheOneTypeChecked_OneFile() => RefusedInBothOrders(
+        NamesHelloArgumentCount,
+        ("Program.bas", UtilModuleHelloOfInteger + BaseHelloNoArgs + DerivedCallsHello3 +
+                        "Sub Main()\n Dim d As New D()\n d.Greet()\nEnd Sub\n"));
+
+    /// <summary>⛔ The same with the base, the derived class and the Module each in a file of its own.</summary>
+    [Test]
+    public void AnInheritedMemberWithAnotherSignature_IsTheOneTypeChecked_AcrossFiles() => RefusedInBothOrders(
+        NamesHelloArgumentCount,
+        ("Base.bas", BaseHelloNoArgs), ("Util.bas", UtilModuleHelloOfInteger), ("Derived.bas", DerivedCallsHello3),
+        ("Main.bas", MainGreets));
+
+    /// <summary>⛔ The class's OWN member is nearer too — declared below its caller, where lexical scope has not met
+    /// it yet and pass 1's flattened global copy is the Module's.</summary>
+    [Test]
+    public void AnOwnMemberWithAnotherSignature_IsTheOneTypeChecked_EvenDeclaredBelowTheCall() => RefusedInBothOrders(
+        NamesHelloArgumentCount,
+        ("Util.bas", UtilModuleHelloOfInteger),
+        ("D.bas", "Public Class D\n Public Sub Greet()\n  Dim s As String = Hello(3)\n  PrintLine(s)\n End Sub\n" +
+                  " Public Function Hello() As Integer\n  Return 5\n End Function\nEnd Class\n"),
+        ("Main.bas", MainGreets));
+
+    /// <summary>The matching signature binds the INHERITED member and is typed by its return — Integer, not the
+    /// Module's String — so the arithmetic compiles and runs it on every backend.</summary>
+    [Test]
+    public void AnInheritedFunction_IsTypedByItsOwnReturn_AndRuns() => RunsOnEveryBackend("8",
+        ("Base.bas", "Public Class Base\n Public Function Hello(x As Integer) As Integer\n  Return x + 1\n End Function\nEnd Class\n"),
+        ("Util.bas", UtilModuleHelloOfInteger),
+        ("Derived.bas", "Public Class D\n Inherits Base\n Public Sub Greet()\n  Dim n As Integer = Hello(3)\n  PrintLine(n * 2)\n End Sub\nEnd Class\n"),
+        ("Main.bas", MainGreets));
+
+    /// <summary>The same, base and derived in one file.</summary>
+    [Test]
+    public void AnInheritedFunction_IsTypedByItsOwnReturn_AndRuns_OneFile() => RunsOnEveryBackend("8",
+        ("Classes.bas",
+            "Public Class Base\n Public Function Hello(x As Integer) As Integer\n  Return x + 1\n End Function\nEnd Class\n" +
+            "Public Class D\n Inherits Base\n Public Sub Greet()\n  Dim n As Integer = Hello(3)\n  PrintLine(n * 2)\n End Sub\nEnd Class\n"),
+        ("Util.bas", UtilModuleHelloOfInteger), ("Main.bas", MainGreets));
+
+    /// <summary>A base's PRIVATE <c>Hello()</c> is inaccessible from D, so it shadows nothing: <c>Hello(3)</c> is the
+    /// Module's, type-checks against it, and runs it.</summary>
+    [Test]
+    public void APrivateBaseMember_DoesNotShadow_TheModuleOverloadIsCheckedAndRuns() => RunsOnEveryBackend("module",
+        ("Base.bas", "Public Class Base\n Private Function Hello() As Integer\n  Return 5\n End Function\nEnd Class\n"),
+        ("Util.bas", UtilModuleHelloOfInteger), ("Derived.bas", DerivedCallsHello3), ("Main.bas", MainGreets));
+
+    /// <summary>The class's OWN Private member does shadow the Module's, and is the one typed and run.</summary>
+    [Test]
+    public void AnOwnPrivateMember_Shadows_AndIsTheOneTypedAndRun() => RunsOnEveryBackend("8",
+        ("Util.bas", UtilModuleHelloOfInteger),
+        ("D.bas", "Public Class D\n Private Function Hello(x As Integer) As Integer\n  Return x + 1\n End Function\n" +
+                  " Public Sub Greet()\n  Dim n As Integer = Hello(3)\n  PrintLine(n * 2)\n End Sub\nEnd Class\n"),
+        ("Main.bas", MainGreets));
+
+    /// <summary>...and an own Private member with another signature is refused, like an inherited one.</summary>
+    [Test]
+    public void AnOwnPrivateMemberWithAnotherSignature_IsTheOneTypeChecked() => RefusedInBothOrders(
+        NamesHelloArgumentCount,
+        ("Util.bas", UtilModuleHelloOfInteger),
+        ("D.bas", "Public Class D\n Private Function Hello() As Integer\n  Return 5\n End Function\n" +
+                  " Public Sub Greet()\n  Dim s As String = Hello(3)\n  PrintLine(s)\n End Sub\nEnd Class\n"),
+        ("Main.bas", MainGreets));
+
+    /// <summary>A QUALIFIED <c>Util.Hello(3)</c> in D names the Module whatever the base declares.</summary>
+    [Test]
+    public void AQualifiedModuleCall_ReachesTheModule_PastAnInheritedMemberWithAnotherSignature() => RunsOnEveryBackend("module",
+        ("Base.bas", BaseHelloNoArgs), ("Util.bas", UtilModuleHelloOfInteger),
+        ("Derived.bas", "Public Class D\n Inherits Base\n Public Sub Greet()\n  Dim s As String = Util.Hello(3)\n  PrintLine(s)\n End Sub\nEnd Class\n"),
+        ("Main.bas", MainGreets));
+
+    /// <summary>
+    /// A parameter is NEARER than the class: <c>Hello(3)</c> on a delegate parameter named <c>Hello</c> is typed by
+    /// the delegate, not refused against the inherited <c>Hello()</c>. Front end only — ⚠ JavaScript still EMITS
+    /// <c>this.Hello(3)</c> for it (its CallTarget resolves a bare name against the class before anything else), a
+    /// separate backend defect recorded in the plan's Task 7 follow-ups.
+    /// </summary>
+    [Test]
+    public void AParameterIsNearerThanTheClass_InTheAnalyzer()
+    {
+        var paths = Write(
+            ("Base.bas", BaseHelloNoArgs),
+            ("Derived.bas", "Public Class D\n Inherits Base\n Public Sub Greet(Hello As Func(Of Integer, String))\n" +
+                            "  Dim s As String = Hello(3)\n  PrintLine(s)\n End Sub\nEnd Class\n"),
+            ("Main.bas", "Sub Main()\n Dim d As New D()\n d.Greet(Function(x As Integer) CStr(x))\nEnd Sub\n"));
+        foreach (var order in new[] { paths, paths.Reverse().ToArray() })
+        {
+            var result = Compile(order);
+            Assert.That(result.HasErrors, Is.False, $"[{string.Join(",", order.Select(Path.GetFileName))}] {Messages(result)}");
+        }
+    }
+
     // ---- an inheritance cycle across files
 
     /// <summary>

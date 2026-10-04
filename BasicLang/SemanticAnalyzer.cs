@@ -5999,17 +5999,6 @@ namespace BasicLang.Compiler.SemanticAnalysis
         }
 
         /// <summary>
-        /// True when making <paramref name="baseType"/> the base of <paramref name="classType"/>
-        /// would put <paramref name="classType"/> among its own ancestors. Guarded, so it
-        /// terminates even on a chain that already loops.
-        ///
-        /// <para>⛔ Matched by NAME as well as by reference. A class from another file reaches this unit
-        /// as a sibling SHELL or an imported TypeInfo — a different object for the same class — so
-        /// `A Inherits B` (A.bas) / `B Inherits A` (B.bas) passed a reference-only check in both files
-        /// and compiled clean (csc refused it; the JavaScript run failed). Class names are unique
-        /// across a project, which is what makes the name a sound identity here (Task 7 review).</para>
-        /// </summary>
-        /// <summary>
         /// The type an <c>Inherits</c> clause names, for both base lookups (<see cref="RegisterClassBases"/>
         /// and <see cref="Visit(ClassNode)"/>), or null. In order: a TYPE symbol in scope — a class of
         /// this unit, a sibling file's shell or a completed sibling's import, all in GlobalScope
@@ -6019,6 +6008,22 @@ namespace BasicLang.Compiler.SemanticAnalysis
         private TypeInfo ResolveClassBaseType(string name) =>
             ResolveTypeSymbol(name)?.Type ?? _typeManager.GetType(name) ?? ResolveProjectSymbolType(name);
 
+        /// <summary>
+        /// True when making <paramref name="baseType"/> the base of <paramref name="classType"/>
+        /// would put <paramref name="classType"/> among its own ancestors. Guarded, so it
+        /// terminates even on a chain that already loops.
+        ///
+        /// <para>⛔ Matched by NAME as well as by reference. A class from another file reaches this unit
+        /// as a sibling SHELL or an imported TypeInfo — a different object for the same class — so
+        /// `A Inherits B` (A.bas) / `B Inherits A` (B.bas) passed a reference-only check in both files
+        /// and compiled clean (csc refused it; the JavaScript run failed). Class names are unique
+        /// across a project, which is what makes the name a sound identity here (Task 7 review).</para>
+        ///
+        /// <para>⚠ That uniqueness ends with piece 2: once the library's BasicLang
+        /// <c>System.Windows.Forms</c> classes exist, a user <c>Class Button Inherits Button</c> is a
+        /// legal chain this name match calls a cycle. Identity must be namespace-qualified before 2a
+        /// (plan, Task 7 follow-ups).</para>
+        /// </summary>
         private static bool InheritanceWouldCycle(TypeInfo classType, TypeInfo baseType)
         {
             var guard = 0;
@@ -11834,6 +11839,65 @@ namespace BasicLang.Compiler.SemanticAnalysis
         private Symbol ResolveClassMember(string name) =>
             _currentScope?.GetClassScope()?.ClassType?.ResolveMember(name);
 
+        /// <summary>
+        /// ⭐ THE class-scope rule for a BARE procedure call, shared by the analyzer (which binds and
+        /// type-checks the call by it, <see cref="ClassScopeCallee"/>) and the IR builder (which spells
+        /// the call by it, <c>IRBuilder.IsCurrentClassProcedure</c>) so the two cannot disagree: the
+        /// Function or Sub named <paramref name="name"/> that <paramref name="classType"/> declares —
+        /// whatever its access — or, failing that, the nearest base declares with an access other than
+        /// <c>Private</c> (a base's Private member is inaccessible, and VB skips it). Null when none does.
+        ///
+        /// <para>⛔ VB: class scope, inherited members included, is NEARER than module scope, so in
+        /// <c>D Inherits Base</c> a bare <c>Hello(3)</c> is Base's <c>Hello</c> even when <c>Module Util</c>
+        /// has one. Portable-controls Task 7 taught the IR builder and the backends this; the analyzer still
+        /// bound the call by module scope first, so with the two signatures different it type-checked the
+        /// call against the Module's <c>Hello(x As Integer) As String</c> and said "Compilation successful!"
+        /// while JavaScript ran Base's <c>Hello()</c> and put an Integer into a String (Task 7b).</para>
+        ///
+        /// <para>⚠ The MEMBER NAME shadows, not a signature: user procedures are one symbol per name, so a
+        /// class's <c>Hello</c> hides every Module <c>Hello</c> outright, which is VB's rule for a name
+        /// declared in a nearer scope. A non-procedure member of the name is skipped and the walk goes on,
+        /// exactly as the IR builder's walk always did. Bases are re-resolved by NAME through the type table
+        /// (falling back to the chain's own object, a sibling file's shell) — the IR builder walks names.</para>
+        /// </summary>
+        internal Symbol ClassScopeProcedure(TypeInfo classType, string name)
+        {
+            if (classType == null || string.IsNullOrEmpty(name)) return null;
+
+            var guard = 0;
+            for (var type = classType; type != null && guard++ < 64;)
+            {
+                if (type.Members != null && type.Members.TryGetValue(name, out var member) && IsProcedure(member)
+                    && (guard == 1 || member.Access != AccessModifier.Private))
+                    return member;
+
+                var baseType = type.BaseType;
+                type = baseType == null ? null : (LookupType(baseType.Name) ?? baseType);
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// The member a BARE call to <paramref name="name"/> inside a class body binds to, ahead of module
+        /// and global scope — or null, when the call is not in a class, a nearer declaration (a local, a
+        /// parameter, a lambda's parameter) holds the name, or the class chain has no such procedure; the
+        /// caller then goes on to <see cref="PreferModuleProcedure"/> as before. <paramref name="resolved"/>
+        /// is what lexical scope found: when that is the class's OWN member (declared in the class scope,
+        /// Private included, already defined in pass 2) it is the answer as it stands.
+        /// </summary>
+        private Symbol ClassScopeCallee(string name, Symbol resolved)
+        {
+            var classScope = _currentScope?.GetClassScope();
+            if (classScope == null || string.IsNullOrEmpty(name)) return null;
+
+            for (var s = _currentScope; s != null && !ReferenceEquals(s, classScope); s = s.Parent)
+                if (s.ResolveLocal(name) != null) return null;
+
+            if (resolved != null && ReferenceEquals(resolved.DeclaringScope, classScope)) return resolved;
+
+            return ClassScopeProcedure(classScope.ClassType, name);
+        }
+
         public void Visit(MemberAccessExpressionNode node)
         {
             BindMemberAccess(node);
@@ -12132,7 +12196,11 @@ namespace BasicLang.Compiler.SemanticAnalysis
             if (node.Callee is IdentifierExpressionNode idExpr)
             {
                 calleeSymbol = _currentScope.Resolve(idExpr.Name);
-                calleeSymbol = PreferModuleProcedure(idExpr.Name, calleeSymbol, node.Line, node.Column);
+                // Task 7b: inside a class, the class and its bases come BEFORE module scope — the rule
+                // the IR builder spells the call by (ClassScopeProcedure), so the call is type-checked
+                // against the declaration the backends actually call.
+                calleeSymbol = ClassScopeCallee(idExpr.Name, calleeSymbol)
+                               ?? PreferModuleProcedure(idExpr.Name, calleeSymbol, node.Line, node.Column);
                 // ⛔ Written back onto the callee node. The identifier visit above bound the node
                 // to what lexical scope found; the IR builder reads THAT, not this local. With
                 // only the local corrected, the call was typed against A's F and lowered to

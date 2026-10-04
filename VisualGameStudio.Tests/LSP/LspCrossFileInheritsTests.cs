@@ -64,4 +64,48 @@ public class LspCrossFileInheritsTests
     [TestCase("JavaScript")]
     public void AFileUsingTheDerivedClass_HasNoErrors(string backend) =>
         Assert.That(Errors("Main.bas", backend), Is.Empty);
+
+    /// <summary>The errors the editor reports for <paramref name="openedFile"/> in a project of the given files.</summary>
+    private string ErrorsIn(string openedFile, params (string Name, string Text)[] files)
+    {
+        File.WriteAllText(Path.Combine(_dir, "App.blproj"),
+            "<Project>\n  <PropertyGroup>\n    <ProjectName>App</ProjectName>\n    <TargetBackend>CSharp</TargetBackend>\n" +
+            "  </PropertyGroup>\n  <ItemGroup>\n" +
+            string.Concat(files.Select(f => $"    <Compile Include=\"{f.Name}\" />\n")) +
+            "  </ItemGroup>\n</Project>\n");
+        foreach (var f in files) File.WriteAllText(Path.Combine(_dir, f.Name), f.Text);
+
+        var path = Path.Combine(_dir, openedFile);
+        var state = new DocumentManager().UpdateDocument(DocumentUri.FromFileSystemPath(path), File.ReadAllText(path));
+        Assert.That(state.ProjectContext, Is.Not.Null, "the document must be opened inside its project");
+        return string.Join(" | ", state.Diagnostics.Where(d => d.Severity == DiagnosticSeverity.Error)
+            .Select(d => $"({d.Line},{d.Column}): {d.Message}"));
+    }
+
+    private const string UtilWithHelloOfInteger =
+        "Module Util\n Public Function Hello(x As Integer) As String\n  Return \"module\"\n End Function\nEnd Module\n";
+
+    /// <summary>
+    /// ⛔ Task 7b, the EDITOR route: a bare <c>Hello(3)</c> in D binds to the base's <c>Hello()</c> (VB: a member,
+    /// inherited included, shadows a Module's), so the editor reports the argument count the build reports — it
+    /// used to type-check the call against the Module's <c>Hello(x As Integer)</c> and show nothing.
+    /// </summary>
+    [Test]
+    public void ABareCallToAnInheritedMemberWithAnotherSignature_IsReportedInTheEditor() =>
+        Assert.That(ErrorsIn("Derived.bas",
+                ("Base.bas", "Public Class Base\n Public Function Hello() As Integer\n  Return 5\n End Function\nEnd Class\n"),
+                ("Util.bas", UtilWithHelloOfInteger),
+                ("Derived.bas", "Public Class D\n Inherits Base\n Public Sub Greet()\n  Dim s As String = Hello(3)\n  PrintLine(s)\n End Sub\nEnd Class\n"),
+                ("Main.bas", "Sub Main()\n Dim d As New D()\n d.Greet()\nEnd Sub\n")),
+            Does.Contain("Function 'Hello' expects 0 argument(s), got 1"));
+
+    /// <summary>The matching signature is clean in the editor: the call is typed Integer, by the base.</summary>
+    [Test]
+    public void ABareCallToAnInheritedFunction_IsTypedByTheBaseInTheEditor() =>
+        Assert.That(ErrorsIn("Derived.bas",
+                ("Base.bas", "Public Class Base\n Public Function Hello(x As Integer) As Integer\n  Return x + 1\n End Function\nEnd Class\n"),
+                ("Util.bas", UtilWithHelloOfInteger),
+                ("Derived.bas", "Public Class D\n Inherits Base\n Public Sub Greet()\n  Dim n As Integer = Hello(3)\n  PrintLine(n * 2)\n End Sub\nEnd Class\n"),
+                ("Main.bas", "Sub Main()\n Dim d As New D()\n d.Greet()\nEnd Sub\n")),
+            Is.Empty);
 }

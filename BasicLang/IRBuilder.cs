@@ -404,27 +404,15 @@ namespace BasicLang.Compiler.IR
         /// method or Sub named <paramref name="name"/>. Read from the analyzer's class type,
         /// which is complete for every member once analysis has run — the IR class lists only
         /// the methods built so far, and a method declared below its caller is not among them.
+        ///
+        /// <para>⛔ The rule itself (own members whatever their access; a base's unless Private) is
+        /// the ANALYZER's <c>ClassScopeProcedure</c>, the one the call was bound and type-checked by
+        /// (Task 7b). A private copy here let the two disagree: the analyzer typed <c>Hello(3)</c>
+        /// against a Module's <c>Hello</c> while this spelled it as the base's.</para>
         /// </summary>
-        private bool IsCurrentClassProcedure(string name)
-        {
-            if (string.IsNullOrEmpty(_currentClassName) || string.IsNullOrEmpty(name)) return false;
-
-            var guard = 0;
-            for (var type = _semanticAnalyzer.LookupType(_currentClassName); type != null && guard++ < 64;)
-            {
-                // ⚠ A BASE's Private method is inaccessible from the derived class, and VB skips an
-                // inaccessible member, so it captures nothing (a same-named Module procedure wins).
-                // The class's OWN Private methods still count (guard == 1 is the class itself).
-                if (type.Members != null && type.Members.TryGetValue(name, out var member) && member != null
-                    && (member.Kind == SymbolKind.Function || member.Kind == SymbolKind.Subroutine)
-                    && (guard == 1 || member.Access != BasicLang.Compiler.AST.AccessModifier.Private))
-                    return true;
-
-                var baseType = type.BaseType;
-                type = baseType == null ? null : (_semanticAnalyzer.LookupType(baseType.Name) ?? baseType);
-            }
-            return false;
-        }
+        private bool IsCurrentClassProcedure(string name) =>
+            !string.IsNullOrEmpty(_currentClassName)
+            && _semanticAnalyzer.ClassScopeProcedure(_semanticAnalyzer.LookupType(_currentClassName), name) != null;
 
         /// <summary>
         /// Whether a BARE call to <paramref name="name"/> inside the class being built names a member
@@ -6672,6 +6660,11 @@ namespace BasicLang.Compiler.IR
         private void EmitProcedureCall(CallExpressionNode node, Symbol funcSymbol, string writtenName,
             string tempName, TypeInfo returnType)
         {
+            // ⚠ `qualified` is true for ANY written `X.M()` callee — the `d.Invoke(args)` arm above
+            // included, where X is a delegate value, not a Module. Harmless: ProcedureCallTarget reads
+            // it only to stop a class procedure capturing the call on its Module-procedure arm (a
+            // delegate is not a procedure, so never there) and its import arm (an imported delegate
+            // variable), and `d.Invoke(...)` names the value `d` — never a class procedure called d.
             var (functionName, calleeModule) = ProcedureCallTarget(funcSymbol, funcSymbol?.Name ?? writtenName,
                 qualified: node.Callee is MemberAccessExpressionNode);
             var call = new IRCall(tempName, functionName, returnType) { CalleeModule = calleeModule };
