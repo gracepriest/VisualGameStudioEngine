@@ -1140,3 +1140,22 @@ no `.blproj` → the document's folder. Real view `TheImagePicker_CopiesAnOutsid
 (fake seams, a real click, the offer seen, ONE Edited, the copy on disk).
 
 Mutations (Edit + REBUILD) — all killed: the collision overwrites; backslashes stored; decline on the web stores the absolute path.
+
+### Task 11 — RUN, not compile (base `6ed2c3a9`)
+New Integration fixture `FormImageAcceptanceTests`. The image files are REAL and built byte by byte (no imaging library in the
+test project): a 3×2 RGB PNG with real CRCs and zlib, and a classic BMP-based 16×16 32-bit `.ico`. The form is built through
+the real designer (document view model, the grid's Image and Icon rows via `ApplyAsset`, `SaveAsync`), the user's code adds a
+`Report()` that prints `pic.Image.Width,Height` and `Me.Icon.Width`, and the real CLI `build` (the PROJECT route, so the build
+copy runs) builds `ImgApp.blproj` (`UseWindowsForms`, `net8.0-windows`).
+- **WinForms, RUN in all three shapes from a working directory that is NOT the output folder:** the exe directly (the IDE's
+  `ExecutablePath`), `dotnet ImgApp.dll`, and `BasicLang.exe run ImgApp.blproj` — each prints **`IMAGE 3,2 ICON 16`**, exit 0, and
+  the build printed no BL8036 (both files copied beside the exe).
+- **Web:** the CLI-built page names `src="Resources/logo.png"` and `<link rel="icon" href="Resources/app.ico">`, both files sit at
+  exactly those paths under the site folder (the PNG byte-identical), and the page's script runs under node.
+- ⚠ M7's last open question answered on the project route: the `run` shape's rebuild (its whole output is logged) printed no
+  warning at all — no BL6016/BL6017 for the image/icon statements.
+- ⚠ Deviation: the Edge `naturalWidth` probe (`EdgeStep.ImageSize` in `EdgeLayoutHarness`) is NOT added — the web half proves
+  the files are where the page names them and the page runs, not that a browser decoded the image. Recorded as a follow-up.
+
+Mutations (Edit + REBUILD) — both killed: `System.AppContext.BaseDirectory` dropped (all three shapes then fail with
+`FileNotFoundException`, exactly as pre-flight M8 measured); the web copy skipped (the file is missing where the page names it).
