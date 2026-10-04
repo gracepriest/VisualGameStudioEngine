@@ -17,6 +17,38 @@ facade (all five tasks of `2026-09-13-blnet-cpp-facade.md`).
 
 ---
 
+## 🎨 NEWEST — 2026-10-04: property grid slice 4 GATED, branch `feat/property-grid-slice4` (NOT pushed, NOT merged)
+
+Slice 4 of the property grid: the colour drop-down (Custom / Web / System, alpha refused where WinForms throws —
+measured per kind), the Font `…` dialog, Bool as True/False, catalog-filtered choices, Anchor/Dock pop-ups, AcceptButton
+references, Items as `<Item>` children (ADR 0020) with a collection editor, and the Image/Icon types — a picker that copies
+an outside file into `Resources/`, a build copy beside the output on BOTH routes (`FormAssetCopy`), and BL8036 for what was
+not copied (located at the attribute in the form document; next free code BL8037). Record, decisions, mutation ledger:
+`docs/superpowers/plans/2026-10-04-property-grid-slice4-preflight.md` §8.
+
+**Gate** (Windows, Release, base `381fe7bc`): fast subset 11041 / 11016 passed / 6 failed / 19 skipped — the six failure
+NAMES identical to Task 0's machine rows (`Emit_Replaces…Mapped` ×2, `Emit_ReplacingAnImportedModule_…`,
+`EveryTextRoute_UsesTheFormatter_…`, `SearchSnippets_*` ×2). Named Integration set 341 / 340 / 0 failed / 1 skipped (the
+inverse-gated `Build_CppLanguageProject_NoToolchain_…`). Trial merge of `origin/master` `2957c74c`: clean. IDE drop refreshed.
+⚠ The CLI's BL8036 line is now `path(line,col): warning BL8036: …` (was `Warning: BL8036:`).
+
+**Owner click-through** (`VisualGameStudio.Shell\bin\Release\net8.0\VisualGameStudio.exe`):
+1. WinForms Button.BackColor: Custom / Web / System; System→Control, Web→Red, a Custom colour — each one undo step; Esc on
+   Custom cancels.
+2. A WinForms TextBox's Custom colour offers no transparency; a Label's does.
+3. On a web form the System tab shows only 8 entries.
+4. Label Font `…`: family, size, Bold; the preview follows; OK, then one Ctrl+Z restores it.
+5. Enabled shows True/False; double-click toggles it.
+6. A web form's Cursor offers no UpArrow.
+7. Anchor and Dock open as pop-ups; Esc closes them.
+8. Form AcceptButton lists the Buttons and `(none)`.
+9. ComboBox Items → `(Collection)`; `…`; enter `Smith, John` and `Beta`; F5: two items on WinForms AND on the web.
+10. PictureBox Image `…`: a png outside the project, accept the copy into Resources, F5: the picture on both targets.
+11. Form Icon `.ico`: F5 — the title bar; on the web, the browser tab.
+12. Delete the png and build: BL8036 on the Error List at the `Image=` line (double-click goes there); the build succeeds.
+
+---
+
 ## 🚀 NEWEST — 2026-10-01: #256 DONE, C# runs a While/Do condition once per iteration (it used to HANG)
 
 One compiler change (`BasicLang/CSharpBackend.cs` only: `OpensReentrantLoop`, `_reentrantLoopBodies`, `GenerateLoop(…, exitTest)`), on master `1ba6af20`; the tests and this section are uncommitted work on top of it. `IRBuilder` lowers `AndAlso`, `OrElse` and `If()` to if-shaped

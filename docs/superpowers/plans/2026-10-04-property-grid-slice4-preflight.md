@@ -1196,3 +1196,37 @@ catch; the locator returning (0,0) (both location tests); the unnormalised key; 
 import; `HasAssetPicker` Image-only (the sweep); the CLI printing without the location; the IDE item without Line; the fallback
 emptied. `IsRooted` was red before the change (4 cases). ⚠ `ToLocalPath` → raw `Path.Combine` in the fallback is EQUIVALENT on
 Windows (`ToLocalPath` is the identity there); it is killable only by the Linux run of the fallback test.
+
+### Task 12 — the slice gate (base `381fe7bc`; Windows, Release)
+- `dotnet clean` (Shell), then `dotnet build` Shell and Tests: 0 errors.
+- **Fast subset** (`TestCategory!=Integration`, both streams captured): **Total 11041 · Passed 11016 · Failed 6 ·
+  Skipped 19** (Task 0, base `e0fc5915`: 10629 / 10604 / 6 / 19). Sorted failure NAMES are IDENTICAL to Task 0's, all
+  known machine rows: `Emit_ReplacesAScriptThatAnotherHandleHasMapped`, `Emit_ReplacesAnImportedModuleThatAnotherHandleHasMapped`,
+  `Emit_ReplacingAnImportedModule_LeavesNoTempFileBehind`, `EveryTextRoute_UsesTheFormatter_NeverToStringOrABareCout`,
+  `SearchSnippets_EmptyQuery_ReturnsAll`, `SearchSnippets_WhitespaceQuery_ReturnsAll`.
+- **Named Integration set** (§5's list + `FormItemsAcceptanceTests`, `WinFormsTranslucentBackColorRunTests`,
+  `FormAssetBuildRouteTests`): **341 · 340 passed · 0 failed · 1 skipped** (8 m 9 s). The skip is
+  `BuildServicePipelineTests.Build_CppLanguageProject_NoToolchain_…`, which is gated the OTHER way ("Toolchain installed — the
+  no-toolchain contract is only assertable without one"): expected on this machine, not a missing prerequisite.
+- **Merge check:** `origin/master` `2957c74c` (3 commits ahead, #136) trial-merged in a detached worktree: clean, no conflicts;
+  master claims no BL8036 yet (piece 2 still holds its own branch — re-check at its merge). Worktree removed. Nothing merged.
+- **IDE drop:** `robocopy VisualGameStudio.Shell\bin\Release\net8.0 IDE /E` (rc 3, never `/MIR`); `IDE\lib\js\dom-core.bli`
+  still present. Changed: the BasicLang/VisualGameStudio binaries, `VisualGameStudio.deps.json` and
+  `Avalonia.Controls.ColorPicker.dll` (the colour editor's theme).
+
+**Owner click-through** (run `VisualGameStudio.Shell\bin\Release\net8.0\VisualGameStudio.exe`, or the refreshed `IDE\`):
+1. WinForms form, Button.BackColor: the drop-down shows Custom / Web / System. Pick System→Control, Web→Red and a Custom
+   colour — each ONE undo step. Esc on the Custom tab cancels.
+2. On a WinForms TextBox, Custom offers no transparency (its setter throws on one); a Label's does.
+3. On a web form the System tab shows only 8 entries.
+4. Label Font `…`: pick a family, size and Bold; the preview follows; OK, then Ctrl+Z once restores it.
+5. Enabled shows True/False; double-click toggles it.
+6. A Cursor on a web form offers no UpArrow.
+7. Anchor and Dock open as pop-ups; Esc closes them.
+8. Form AcceptButton lists the Buttons and `(none)`.
+9. ComboBox Items shows `(Collection)`; `…` opens the editor; enter `Smith, John` and `Beta`, F5: two items on WinForms AND
+   on the web.
+10. PictureBox Image `…`: pick a png OUTSIDE the project, accept the copy into Resources, F5: the picture shows on both targets.
+11. Form Icon `.ico`: F5 — the title bar shows it; on the web, the browser tab.
+12. Delete the png and build: the Error List shows BL8036 at the form document's `Image=` line (double-click goes there) and
+    the build still succeeds.
