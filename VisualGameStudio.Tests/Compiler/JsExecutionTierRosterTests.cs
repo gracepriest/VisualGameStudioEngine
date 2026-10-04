@@ -140,7 +140,7 @@ public class JsExecutionTierRosterTests
         // are four-backend fixtures (FourBackends.RunsOnEveryBackend[Aggressive]); their JS legs
         // run under JavaScriptExecutionTests.RunJs / FourBackends.RunAggressiveJs like any other
         // row here. CseDestinationKnownGapsTask133Tests (six of its eight pins are now CORRECT
-        // under ADR-0006 D1; A1's C# leg alone stays known-wrong, task #136) is NOT caught by the
+        // under ADR-0006 D1; A1's C# leg alone stayed known-wrong until task #136) is NOT caught by the
         // widened name match below — it neither starts with "JavaScript"/"Js" nor ends with
         // "ExecutionTests" — but its A1/A6 legs DO spawn Node (FourBackends.RunAggressiveJs), so
         // it belongs here for the same reason BooleanOperatorExecutionTests/MemberCasingExecutionTests
@@ -329,8 +329,8 @@ public class JsExecutionTierRosterTests
         // the widened match below WOULD catch it on its own; listed explicitly anyway, matching
         // every row above. Its JS legs run through FourBackends.RunsOnEveryBackend[Aggressive]
         // (the V6 family and most edge probes) and JavaScriptExecutionTests.RunJs /
-        // FourBackends.RunAggressiveJs directly (X1/X2, which exclude C++, and X3b's JS leg,
-        // which the C#-only #136 pin does not touch).
+        // FourBackends.RunAggressiveJs directly (X1/X2, which exclude C++, and X3b's JS leg;
+        // X3b's C# leg went through a #136 pin until that was fixed).
         typeof(MeReceiverTypingExecutionTests),
 
         // Task #187 — a lambda or AddressOf into a user Delegate type; invoking a user delegate
@@ -463,6 +463,14 @@ public class JsExecutionTierRosterTests
         // JavaScriptExecutionTests.RunNodeScript); every other JavaScript row is a pinned refusal (#257) that spawns nothing. Its C# cells run in a
         // child process with a time limit (CSharpProcessRunner). Named "...ExecutionTests", so the widened match below would catch it on its own.
         typeof(LoopConditionReevaluationExecutionTests),
+
+        // Task #136 — a lambda body is written by the function-body emitter on C#: 74 programs (a Sub lambda writing a capture / parameter / field /
+        // global, a multi-line Function lambda with an assignment, call, If, loop, Dim, Select Case and Try before its Return, nested lambdas, lambdas in a
+        // constructor, MyBase.New(...) arguments and a module global's initialiser, #165's own Dims, #179's counters, #237's Me capture, #166's statement-form
+        // ByRef call, the name-leak shapes) against vbc through the CLI, the CLI with --optimize and CompileProjectFiles on C# (hang-safe), plus the same programs
+        // as controls on C++, JavaScript (Node: TempExec.Run -> JavaScriptExecutionTests.RunNodeScript) and MSIL, and `BasicLang build -c Release` for three. Named
+        // "...ExecutionTests", so the widened match below would catch it on its own; listed explicitly anyway.
+        typeof(LambdaBodyEmissionExecutionTests),
     };
 
     /// <summary>
@@ -514,7 +522,7 @@ public class JsExecutionTierRosterTests
 
     [Test]
     public void RosterIsPinned()
-        => Assert.That(ExecutionTier, Has.Length.EqualTo(102), // + LoopConditionReevaluationExecutionTests (task #256, the loop condition re-evaluation); + MixedNumericCompareFoldExecutionTests (task #123, the compare fold); + UntypedConstAndConditionalExecutionTests (task #123, D1/D2); + TempMintingFacilityTests + NameReservationExecutionTests (task #121, ADR-0018); + CompilerTempExecutionTests + CompilerTempCollisionFenceTests (task #163, ADR-0017); + BaseConstructorCallLoweringExecutionTests + BaseConstructorCallCppRefusalTests (task #170, ADR-0016), MsilValueToStringExecutionTests (task #183), InterfaceMethodTypingExecutionTests, IsIsNotOperatorExecutionTests (task #185), MeReceiverTypingExecutionTests (task #176), UserDelegateConversionExecutionTests (task #187), DelegateMemberInvocationExecutionTests (task #188), NothingStringTextExecutionTests (task #189), MsilObjectBoxingExecutionTests (task #177), NotPrecedenceExecutionTests (#195), PropertyAccessExecutionTests (task #178), NameBindingExecutionTests (task #169/#199), PerIterationLoopBodyDimExecutionTests + PerIterationLoopBodyDimOptimizerExecutionTests (task #172, ADR-0014), LambdaBoundaryDiagnosticsExecutionTests (task #174); + WhenGuardCallRunTests, TypeOfExecutionTests (#197), ForwardDeclaredTypeExecutionTests; + NameBindingResolutionExecutionTests (task #124, ADR-0013 D3)
+        => Assert.That(ExecutionTier, Has.Length.EqualTo(103), // + LambdaBodyEmissionExecutionTests (task #136, a lambda body on C#); + LoopConditionReevaluationExecutionTests (task #256, the loop condition re-evaluation); + MixedNumericCompareFoldExecutionTests (task #123, the compare fold); + UntypedConstAndConditionalExecutionTests (task #123, D1/D2); + TempMintingFacilityTests + NameReservationExecutionTests (task #121, ADR-0018); + CompilerTempExecutionTests + CompilerTempCollisionFenceTests (task #163, ADR-0017); + BaseConstructorCallLoweringExecutionTests + BaseConstructorCallCppRefusalTests (task #170, ADR-0016), MsilValueToStringExecutionTests (task #183), InterfaceMethodTypingExecutionTests, IsIsNotOperatorExecutionTests (task #185), MeReceiverTypingExecutionTests (task #176), UserDelegateConversionExecutionTests (task #187), DelegateMemberInvocationExecutionTests (task #188), NothingStringTextExecutionTests (task #189), MsilObjectBoxingExecutionTests (task #177), NotPrecedenceExecutionTests (#195), PropertyAccessExecutionTests (task #178), NameBindingExecutionTests (task #169/#199), PerIterationLoopBodyDimExecutionTests + PerIterationLoopBodyDimOptimizerExecutionTests (task #172, ADR-0014), LambdaBoundaryDiagnosticsExecutionTests (task #174); + WhenGuardCallRunTests, TypeOfExecutionTests (#197), ForwardDeclaredTypeExecutionTests; + NameBindingResolutionExecutionTests (task #124, ADR-0013 D3)
             "The execution-tier roster changed. That is fine — update the number — but it must " +
             "be a deliberate edit, not a silent shrink.");
 

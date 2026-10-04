@@ -501,8 +501,9 @@ public class CseDestinationDecisionTests
 //  naming its member and acting as a call; the ByRef aliasing rule and its converse; the interim
 //  closure rule) closes SIX of them — the "CorrectAfterAdr6D1" methods below, promoted from
 //  known-wrong pins and re-measured against S/adr6-d1/probes/matrix-final.txt. The A1 C# leg
-//  alone stays known-wrong — a SEPARATE, pre-existing defect (task #136: the emitted lambda body
-//  is `() => { ; }`) that D1 does not touch and does not claim to fix.
+//  alone stayed known-wrong — a SEPARATE, pre-existing defect (task #136: the emitted lambda body
+//  was `() => { ; }`) that D1 did not touch. #136 is fixed: C# writes the lambda's body, and A1 prints
+//  vbc's answer on it too (A1_LambdaCapturedDestination_CSharp_CorrectSinceTask136).
 //
 //  Per this repo's pinned-broken convention (LoopPassesDisabledTests / InductionVariableDisabledTests /
 //  StatementOperandUndeclaredTempFixTests' task-125 pins): a genuinely still-wrong pin fails
@@ -531,20 +532,23 @@ public class CseDestinationKnownGapsTask133Tests
     /// <see cref="A1_LambdaCapturedDestination_Cpp_CorrectSinceTask140"/>. MSIL used to be excluded too ("Reference to undefined class 'Action'"); task #155
     /// (ADR-0010's ClosureLowering) closed that, so MSIL is asserted below.</para>
     ///
-    /// <para>C# stays task #136 — a SEPARATE, pre-existing defect (the emitted lambda body is
-    /// <c>() => { ; }</c>, so <c>a</c> is never actually zeroed) that ADR-0006 D1 does not touch.
-    /// JavaScript is now CORRECT: <c>a</c> is genuinely in <c>clr</c>'s recorded capture set (it
+    /// <para>C# was task #136 — a SEPARATE, pre-existing defect (the emitted lambda body was
+    /// <c>() => { ; }</c>, so <c>a</c> was never actually zeroed) that ADR-0006 D1 did not touch, and the pin below read
+    /// <c>3,3</c>. ⭐ MOVED PIN: #136 writes the lambda body, <c>a = 0</c> is in it, and C# prints <c>3,0</c> on the aggressive
+    /// pipeline (where CSE runs) like every other backend. JavaScript is CORRECT: <c>a</c> is genuinely in <c>clr</c>'s recorded capture set (it
     /// is the only name <c>clr</c>'s body writes) — <c>IsCallVisible</c>'s closure rule (task
     /// #122, DISCHARGED) makes <c>a</c> call-visible on that basis, not merely D1's coarser
     /// "every local" interim fallback — so <c>clr()</c> kills CSE's record the same way any
     /// other call would.</para>
     /// </summary>
     [Test]
-    public void A1_LambdaCapturedDestination_CSharp_PinnedForTask136()
-        => Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharpAggressive(A1)), Is.EqualTo("seed\nseed\n3,3"),
-            "task #136 (unrelated to ADR-0006 D1) — if this changed, C#'s handling of a destination "
-            + "written inside a lambda capture may have changed (for better or worse); re-measure "
-            + "and update or delete this pin, do not just widen it.");
+    public void A1_LambdaCapturedDestination_CSharp_CorrectSinceTask136()
+    {
+        Assert.That(FourBackends.Norm(CSharpProcessRunner.RunExpectingSuccess(ReturnCoercionTests.EmitCSharpAggressiveForTest(A1))), Is.EqualTo("seed\nseed\n3,0"),
+            "the lambda's `a = 0` is written (task #136) and the call `clr()` kills CSE's record of `p + q` (ADR-0006 D1's closure "
+            + "rule), so the second read is recomputed: 3,0, vbc's answer.");
+        Assert.That(FourBackends.Norm(CSharpProcessRunner.RunExpectingSuccess(ReturnCoercionTests.EmitCSharpForTest(A1))), Is.EqualTo("seed\nseed\n3,0"), "standard pipeline");
+    }
 
     /// <summary>A1 on C++ (aggressive pipeline): <c>seed\nseed\n3,0</c>, VB's answer. It could not compile before
     /// task #140 (capture by copy); the lambda is lowered now, so the write to <c>a</c> inside it is the creator's.</summary>

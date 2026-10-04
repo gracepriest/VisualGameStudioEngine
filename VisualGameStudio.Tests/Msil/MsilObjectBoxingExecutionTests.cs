@@ -463,8 +463,7 @@ public class MsilObjectBoxingExecutionTests
     [Test]
     public void E07_LambdaBoxing_JsAndMsilAgree()
     {
-        // Pinned separately below: C# loses the Sub lambda's captured write (#136), unrelated to
-        // #177's own boxing fix.
+        // C# is asserted separately below (hang-safe runner); Cpp refuses the program.
         Assert.Multiple(() =>
         {
             Assert.That(Norm(JavaScriptExecutionTests.RunJs(E07)), Is.EqualTo(E07Expected), "JavaScript");
@@ -473,14 +472,17 @@ public class MsilObjectBoxingExecutionTests
         AssertMsilAllEntryPoints(E07, E07Expected);
     }
 
+    /// <summary>
+    /// ⭐ MOVED PIN (#136). E07 on C# USED TO print <c>42\n7!\n1.5!\n50</c>, vbc's answer without its first line: a Sub lambda's write
+    /// to a captured Object variable (<c>o = 99</c> — a value renamed <c>o</c>, which the old lambda loop skipped as a temp) was lost,
+    /// so the '99' line never printed. The lambda body is written by the function-body emitter now and C# prints
+    /// <see cref="E07Expected"/>, like JavaScript and MSIL. Hang-safe runner, both pipelines.
+    /// </summary>
     [Test]
-    public void E07_LambdaBoxing_CSharp_PinsPreExistingLostCapture_Against136()
+    public void E07_LambdaBoxing_CSharpAgrees()
     {
-        Assert.That(Norm(FourBackends.RunEmittedCSharp(E07)), Is.EqualTo("42\n7!\n1.5!\n50"),
-            "C# — task #136 (pre-existing, unrelated to #177): a Sub lambda's write to a "
-            + "captured Object variable is lost, so the '99' line never prints. A different "
-            + "answer here (including the correct '99\\n42\\n7!\\n1.5!\\n50') means #136 moved — "
-            + "update this pin, do not just delete it.");
+        Assert.That(Norm(CSharpProcessRunner.RunExpectingSuccess(ReturnCoercionTests.EmitCSharpForTest(E07))), Is.EqualTo(E07Expected), "C#");
+        Assert.That(Norm(CSharpProcessRunner.RunExpectingSuccess(ReturnCoercionTests.EmitCSharpAggressiveForTest(E07))), Is.EqualTo(E07Expected), "C#, aggressive");
     }
 
     private const string E08 = """

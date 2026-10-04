@@ -302,14 +302,16 @@ public class BaseConstructorCallCppRefusalTests
     /// <c>f</c> taken at creation is still empty, so C++ threw <c>bad_function_call</c> at run time and #170
     /// refused it (mutant MC: a search that starts AFTER the creation instruction). Lowered, the lambda reads
     /// <c>f</c> from the environment it shares with its creator, so it recurses: VB prints 6, JavaScript and
-    /// C++ both do.
+    /// C++ both do, and C# does since #136 (it did not compile before: CS1643, the lambda's body lost every block
+    /// after its entry block, its return paths with them).
     /// </summary>
     [Test]
-    public void CR1_SelfReference_RunsOnJavaScriptAndCpp()
+    public void CR1_SelfReference_RunsOnCSharpJavaScriptAndCpp()
     {
-        // C# and MSIL do not run this shape for UNRELATED, pre-existing reasons — C# empties a
-        // multi-statement lambda body (`() => { ; }`, CS1643: #136) and MSIL emits a
-        // BadImageFormatException — so only JavaScript is asserted as the oracle leg.
+        // MSIL does not run this shape for an UNRELATED, pre-existing reason — it emits a
+        // BadImageFormatException — so it is not asserted.
+        Assert.That(Norm(CSharpProcessRunner.RunExpectingSuccess(ReturnCoercionTests.EmitCSharpForTest(CR1_SelfReference))), Is.EqualTo("6"), "C#");
+        Assert.That(Norm(CSharpProcessRunner.RunExpectingSuccess(ReturnCoercionTests.EmitCSharpAggressiveForTest(CR1_SelfReference))), Is.EqualTo("6"), "C#, aggressive");
         Assert.That(Norm(JavaScriptExecutionTests.RunJs(CR1_SelfReference)), Is.EqualTo("6"), "JavaScript");
         Assert.That(CppClosures.Compile(CR1_SelfReference).PathOf("Main"), Is.EqualTo(CppClosurePath.Lowered), "C++ root 'Main'");
         CppClosures.RunsInAllModes(CR1_SelfReference, "6");

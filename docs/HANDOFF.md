@@ -17,7 +17,7 @@ facade (all five tasks of `2026-09-13-blnet-cpp-facade.md`).
 
 ---
 
-## 🎨 NEWEST — 2026-10-04: property grid slice 4 GATED, branch `feat/property-grid-slice4` (NOT pushed, NOT merged)
+## 🎨 NEWEST — 2026-10-04: property grid slice 4 GATED and merged to master (PR #155, branch `feat/property-grid-slice4`)
 
 Slice 4 of the property grid: the colour drop-down (Custom / Web / System, alpha refused where WinForms throws —
 measured per kind), the Font `…` dialog, Bool as True/False, catalog-filtered choices, Anchor/Dock pop-ups, AcceptButton
@@ -49,6 +49,29 @@ inverse-gated `Build_CppLanguageProject_NoToolchain_…`). Trial merge of `origi
 
 ---
 
+## 🚀 NEWEST — 2026-10-02: #136 DONE, a C# lambda body is written by the function-body emitter (fixes #165, #179 and #237; #166's statement form)
+
+One compiler change (`BasicLang/CSharpBackend.cs` only: `GenerateLambdaExpression`, `IsExpressionLambda`, `GenerateLambdaBlockBody`, `EnterLambdaScope` / `ExitLambdaScope`, `_lambdaBodyDepth`), commit `292627fc` on master `0f6d2ced`; the tests and this section are uncommitted work on top of it. No IR change, no `ClosureLowering` on C# (ADR-0010 D1 stands). The old backend wrote a block lambda with its own loop over the lambda's ENTRY BLOCK, and that loop had one rule — "an IR value that is not a call is a temp, skip it, unless it is named after a variable the ENCLOSING function declares". So a write to the lambda's own parameter, a write before a Function lambda's `Return` (the lambda became `() => 0`), every block after the entry block (an If, a loop, a Select Case, a Try: `() => { ; }`, CS1643), a lambda's own `Dim` (#165: CS0103, or the field/global of the same name read instead), a method call through `Me` or an object (#237), a ByRef argument's `ref` (#166, statement form) and a lambda in a module global's initializer writing a global were all lost, and a call whose result was used was written twice (#179). **C# lambdas no longer drop writes.** The lambda is the function being emitted; `ExitLambdaScope` puts all of the enclosing function's state back; a lambda stays an expression lambda only when the block form would hold nothing but `return expr;`. C++, JavaScript and MSIL did not change (byte compare, 16,728 cells: only C# differs). Every sentence elsewhere in this file that says a C# lambda drops writes is history and now carries a ⚠ FIXED note.
+
+**Tests.** `LambdaBodyEmissionExecutionTests` (Integration, 293, **in `JsExecutionTierRosterTests`, now pinned at 103**): 74 programs, each vbc's answer — a Sub lambda writing a captured local, a parameter, a field and a global; a lambda writing its own parameter; a multi-line Function lambda with an assignment, call, If, loop, Dim, Select Case, Try or Exit before its Return; nested lambdas; lambdas in a method, a constructor, `MyBase.New(...)` arguments, a property Get and a module global's initializer; passed to a Sub, stored in a `List(Of Func(Of Integer))`, returned; #165's own Dims (N8/N9's hiding of a field and a global); #179's counters (`calls` must read 3, not 5); #237's `Me` capture (E09a/E09b); #166's statement-form ByRef call; the name-leak shapes; ADR-0014's per-iteration Dim with two lambdas in the body; an ElseIf chain with a lambda in its middle arm. C# (hang-safe) through the CLI, the CLI `--optimize` and `CompileProjectFiles`: 74 cells; 210 control cells on C++, JavaScript (Node) and MSIL, which #136 did not change; `BasicLang build -c Release` for three; 5 comparisons of the CLI's lambda blocks with `CompileProjectFiles`'s. `LambdaBodyEmissionShapeTests` (FAST, 42, runs nothing): a pure expression lambda keeps its bytes; a lambda that writes before its Return is a block holding the write; the exact text and indentation of representatives at every nesting depth; no `#line` inside a lambda body and the `#line`s around it where they were; a lambda's own Dim declared inside it; `Inc(ref n);`; each used call written once; the text of the ENCLOSING function after a lambda is what it would be without the lambda's body; every program of the table compiles under Roslyn (compiled, never run); a source guard that the run fixture never runs C# in the test host.
+**18 pins moved** (each C# cell now prints vbc's answer, or D2's 11|21|31, or JavaScript's, and the test says so): F1 F3 F6 F7 F8 (`CSharp_RunsCorrectly`, standard and aggressive), K4 K5, N8 N9, E6, E09 (#237), A1, X3b, Cl, E08, E07; **L8** stays a pin on ADR-0014 D2's recorded divergence, now on all four backends (`…_D2DivergenceOnAllFourBackends`; the ADR gained Amendment A-136); **E20** stays a known-wrong pin for #229 with its new value (C# prints 50|2|2 = JavaScript's, vbc 50|1|2). Three more cells gained their C# expectation: `i5lambda`, `CR1_SelfReference` and `LambdaCaptureSet` K8; `l_fn` / `l_sub` have their C# cells (the #256 table: 59 extra cells, was 57; `i5lambda` makes the D2 table 57 cells, was 56).
+
+**Cells with NO expectation** (not #136's; each is named in the run fixture's header): C# **#227** (E07w), **#228** (E15, E15n), **#229** (E16, E20), **#232** (R3 and `m3/h166_inline`), **#182** (`Dim out`, CS1001), `e_meth` and `k_generic` (front-end BL-FAIL on every backend), a class method's `Dim a(3)` (`int[] a = default!`).
+
+**Traps this work found.**
+- ⚠ **#232's title names the wrong shape.** "A ByRef parameter plus a lambda" is not it: `Console.WriteLine(Twice(a))` with `Function Twice(ByRef n As Integer)` and NO lambda anywhere fails with CS1620 identically on `0f6d2ced` and now, while `Dim r = Twice(a)` runs. The defect is **a ByRef argument INSIDE AN EXPRESSION loses `ref`**, in any function (`m3/h166_inline`: `Dim r = Bump(n) + 1`). #166's statement form (`Inc(n)` as a statement, in a lambda or not) IS fixed.
+- ⛔ **A lambda in a MODULE GLOBAL's initializer** (`Dim bump As Action = Sub() …`) is an orphan to `IRVerifier` Invariant P(d) ("every IR lambda is created exactly once") — pre-existing, "the ONE pre-existing verifier fire" of the #140 section — and the test host has the verifier ON, so an in-process pipeline run throws `IRVerificationException`. The shipping CLI runs with it off (Release), so a user never sees it; a DEBUG build of the compiler would. `k_global` and `k_global2` therefore skip the in-process `CompileProjectFiles` entry (the CLI, the CLI `--optimize` and `BasicLang build -c Release` run them), and the shape tests turn the verifier off around them.
+- ⚠ **A mutant of `CSharpBackend` is measured against a COPY of the test output with `BasicLang.dll` swapped** (as in the #140 section), and the copy needs a `VisualGameStudioEngine.sln` (and `VisualGameStudio.Tests`) above it, or `SampleSources.RepoRoot()` — which the source guards read — throws and every mutant looks killed by that one test.
+- ⚠ A mutant that overflows the stack takes the test host down ("Test host process crashed: Stack overflow", M20) — a kill, but with no per-test attribution.
+- ⚠ **`IsExpressionLambda` asks `ShouldEmitInstruction` about every instruction before the return**, and `ShouldEmitInstruction` answers true first for a materialised value (ADR-0001), so the rule's `_materialised.Count > 0` check never decides: M7 is equivalent, and no lambda on this build gets a materialised temp at all (tried: a value read twice, a CSE'd expression under `--optimize`, `If()`, `2 * Tag()`). Left in as a guard — without it the failure would be a CS0103, not a silent wrong answer.
+- ⚠ **Windows is owed one run.** `GenerateLambdaBlockBody` normalises `Environment.NewLine` to `\n` inside a lambda body — a no-op on Linux, unmeasured on Windows (the shape tests normalise `\r\n`, so they do not see it). Everything else here ran on Linux with g++/clang++/node/ilasm, no MSVC.
+
+**Mutants** (each = the fix + one change in a detached worktree, `S/t136/mut`; killed by the FAST shape tests unless noted): M1 the old "values before the return" rule 12 · M2 params not tracked 2 · M3 locals not tracked 4 · M4 nothing restored 8 · M4b only the name tables not restored 5 · M5 globals not added 1 · M6 `#line` inside a lambda 11 (text only; no run sees it) · M8 no local check 3 · M9 no ShouldEmit check 5 · M10 body one level too deep 3 (text only) · M11 per-iteration plan not restored 1 (CS1524 on the table sweep) · M13 sized arrays not allocated 1 · M16 enclosing use counts 4 · M18 enclosing names invisible 7 · M20 processed blocks not restored: host crash · M21 pending If-merge claims not restored 1 (the loop's `i = i + 1;` lands inside the last else; the run fixture sees `hung`). **Not killed:** M7 (equivalent: see the trap above), M12 (the For Each rename table is balanced by each loop's own restore), M14 (a lambda's blocks never branch to the enclosing function's blocks), M17 and M19 (no lambda IR holds a materialised temp or an enclosing temp; M12, M14, M17, M19 change not one byte of the C# of 126 probes). Against the unfixed compiler (0f6d2ced): 33 of the 42 shape tests and 56 of the 79 C# cells and CLI comparisons fail; the 20 C# cells that were right before pass (a_loc, a_loc_c, a_par, a_fld, a_fld_c, a_glob, b_fnpar_c, c_call, j_afterlambda, d_nest_c, e_ctor, e_mybase_c, k_prop, f_pass, f_ret, n_leakparam, p_loopdim_read, p_elseif_lambda, j_tempafter, n_mat).
+
+**Gates** (Linux; test DLL md5 `b94c2a3634b852984e26a3c96f8c5bb3`; `BasicLang.dll` of the fix commit `d5e470f160bb3e6f64d9cedf2a5bac2f`): the fast subset (`TestCategory!=Integration`) **0 failed / 10,529 passed / 93 skipped of 10,622** (2 m 15 s; the base was 10,487 / 0 / 93 of 10,580 — the +42 are `LambdaBodyEmissionShapeTests`). Integration, ONE fully qualified term per run, all 0 failed: `LoopConditionReevaluationExecutionTests` 343 (8 m 14 s; was 341: `l_fn` and `l_sub` have their C# cells), `LambdaBodyEmissionExecutionTests` 293 (9 m 13 s), `LambdaBodyEmissionShapeTests` 42, `PerIterationLoopBodyDim` 108, `UntypedConstAndConditionalExecutionTests` 93, `MultiLineFunctionLambda` 55, `NameBindingExecutionTests` 36, `LambdaBoundaryDiagnostics` 82, `LambdaCapture` 37, `CseDestinationKnownGapsTask133Tests` 9, `CseDestinationInvalidation` 24, `CppMeAsValue` 36 (+1 skipped, `E01_ThroughTheReleaseBlprojPath_TheIdeUses`: MSVC, as before), `NothingStringTextExecution` 34, `MeReceiverTypingExecution` 44, `MsilObjectBoxingExecution` 58, `BaseConstructorCallLowering` 33, `BaseConstructorCallCppRefusal` 31, `ClosureLowering` 100, `CppClosureRunTests` 43, `CppClosurePath` 75, `DelegateMemberInvocationExecution` 33, `UserDelegateConversionExecution` 29, `SubLambdaStatement` 8, `IsIsNotOperatorExecution` 31, `CSharpLoopExit` 36, `LineDirective` 27, `JsExecutionTierRosterTests` 5, `LoopConditionEmissionShapeTests` 75. ⚠ The FULL suite was NOT run for this task. ⚠ A term that matches nothing PASSES with rc 0 — read the Total.
+
+---
+
 ## 🚀 NEWEST — 2026-10-01: #256 DONE, C# runs a While/Do condition once per iteration (it used to HANG)
 
 One compiler change (`BasicLang/CSharpBackend.cs` only: `OpensReentrantLoop`, `_reentrantLoopBodies`, `GenerateLoop(…, exitTest)`), on master `1ba6af20`; the tests and this section are uncommitted work on top of it. `IRBuilder` lowers `AndAlso`, `OrElse` and `If()` to if-shaped
@@ -63,7 +86,7 @@ that no loop test calls the in-process runner. `CSharpProcessRunnerTests` (11, I
 Every expectation is vbc's, and every program carries a side-effect COUNTER (`seen`): `abababa` says "a, b, a, b, a, b, a", so a condition run once, twice, or without short-circuiting prints something else.
 
 **Cells with NO expectation** (not #256's; each is named in the fixture header and pinned by name in `TheTables_HaveTheirRows`): **C# #227** — a bottom-tested loop is emitted twice (the peel, then the loop's copy) and the copy drops every block the peel wrote (`f_LW_aa`, `f_LW_ctl`, `x_LW`, `n_LD`; `n_LDctl`, the same nesting with PLAIN conditions,
-HANGS before and after #256); **C# #136** (`l_fn`, `l_sub`: a loop inside a lambda); **MSIL #257** (`Not (a AndAlso b)`, the five `*_nt` cells); **C++/MSIL #261** (`o_for`: a counted For's `To If(…)` bound is re-evaluated every iteration; C# and VB compute it once); **JavaScript #257** (refused: "a loop header whose branch does not target the loop's own .end block").
+HANGS before and after #256); **C# #136** (`l_fn`, `l_sub`: a loop inside a lambda — ⚠ FIXED 2026-10-02, both rows have their C# cell now: see the #136 section above); **MSIL #257** (`Not (a AndAlso b)`, the five `*_nt` cells); **C++/MSIL #261** (`o_for`: a counted For's `To If(…)` bound is re-evaluated every iteration; C# and VB compute it once); **JavaScript #257** (refused: "a loop header whose branch does not target the loop's own .end block").
 There is no `Continue` statement in BasicLang (#262), so `Continue While`/`Continue Do` have no row.
 
 **Traps this work found.**
@@ -101,7 +124,7 @@ that pushes roots onto `[=]` is invisible whenever W2 accepts them. ⛔ **The by
 of the fixtures it lists by REFLECTION and fails on a new `ByCopy` root; lifting a D9 shape in the lowering means deleting its row from `ExpectedByCopy` in the same commit. W2 is deleted together with `[=]`, when nothing falls back.
 
 **Measured** (C++, 460 lambda + AddressOf programs × {CLI, CLI `-O`}, against vbc): **286 run right (master 214), 0 regressions**; 64 refused programs now run; 8 clang failures now run (L13, L13b, L15, P6, P10, AddressOf of an
-instance method, E9e, E5); 4 stay refused with both reasons (K13, R12, R15, E09); L8/L8b print ADR-0014 D2's recorded 11|21|31 (as JavaScript and MSIL do — C# alone is the outlier, #136); E16 prints the #229 output;
+instance method, E9e, E5); 4 stay refused with both reasons (K13, R12, R15, E09); L8/L8b print ADR-0014 D2's recorded 11|21|31 (as JavaScript and MSIL do — C# alone was the outlier, #136; ⚠ FIXED 2026-10-02: C# prints 11|21|31 too, on all four backends); E16 prints the #229 output;
 L6 is now a clang failure on `List.ForEach` (a runtime gap, not the lambda). Byte compare over the 1,141-program corpus × {CLI, `-O`, `.blproj`}: the 2,043 no-lambda cells and every `[=]` program identical; 267 programs
 master accepts change bytes, all lowered. MSIL: 3,423/3,423 cells identical against the previous commit. Verifier fires: none beyond D09's.
 
@@ -193,7 +216,7 @@ Pong had no row (IRBuilder threw); it has one now. "The 11 merges in shipping co
 **Known and inherited, NOT introduced by #123** (the carrier lowering shares them with `AndAlso`/`OrElse`; none has an expectation anywhere):
 - **#256 — FIXED** (C# only; `CSharpBackend.OpensReentrantLoop`, see the 2026-10-01 #256 section above): a `While`/`Do While`/`Do Until`/`Do … Loop While`/`Loop Until` whose condition holds control flow (`AndAlso`, `OrElse`, `If()`) used to compute that condition ONCE, before the loop, so the loop never ended; it is now `while (true) { …condition…; if (!(c)) break; …body… }`. ⛔ **The timeout rule STAYS for every C# loop test**: **#227** (a bottom-tested loop's second copy of its body drops blocks) still HANGS C# — `Do … Loop Until` around a `Do While`, both plain conditions, never ends — and a regression of the #256 fix hangs every short-circuit loop. Run such a loop through `CSharpProcessRunner` (`TempProbe.HangSafe`), never in process.
 - **#257** MSIL: `Not` of a non-constant Boolean is bitwise (`If(Not t, …)` takes the wrong arm; `Not E` over a Boolean Const prints True), and JavaScript refuses a loop header with control flow ("a loop header whose branch does not target the loop's own .end block").
-- C#: arguments are evaluated OUT OF ORDER once one has control flow (`Pair(Note("first"), If(…), Note("third"))` prints second first); a lambda whose body has control flow loses its return paths (CS1643; #136). No task for the first.
+- C#: arguments are evaluated OUT OF ORDER once one has control flow (`Pair(Note("first"), If(…), Note("third"))` prints second first); a lambda whose body has control flow loses its return paths (CS1643; #136 — ⚠ FIXED 2026-10-02: a lambda body is written by the function-body emitter). No task for the first.
 - JavaScript refuses a `Char` (BL7004) and a `Long` (BL7003) constant, and C++ has no `Object`, by design.
 - A user variable named `__sc0` collides with the carrier (`AndAlso` and `If()` alike): silent wrong value on C# and JavaScript, redefinition on C++, a type conflict on MSIL (`Dim __sc0 As Integer = 99` beside any `If()` or `AndAlso`; measured). The carriers are not minted through `IRFunction.DeclareTemp` (ADR-0018).
 
@@ -787,7 +810,7 @@ corpus refusal set is unchanged (66 programs).
 - **D4 gap 2** `Me` as a bare value (X23) could not be probed because `If(c, x, y)` did not parse — **CLOSED by #123**: it parses, and X23 is a row of `BaseConstructorCallDiagnosticsTests.Refused()`
   (BC31095, as vbc). `Inherits Box(Of Integer)` (a generic base) does not parse either (E09a).
 - The FE1 / CR1 witnesses can only be checked against JS (and C# for FE1): C# empties a multi-statement
-  lambda body (#136) and MSIL emits a bad image / cannot assemble a `For Each` over `List(Of Func(Of Integer))`.
+  lambda body (#136 — ⚠ FIXED 2026-10-02: CR1 prints 6 on C# now and is asserted) and MSIL emits a bad image / cannot assemble a `For Each` over `List(Of Func(Of Integer))`.
 
 **Mutation-proven** (detached worktree, real NUnit, `S/t170/mutants.py` M1-M12 and `mutants2.py` 5d):
 
@@ -914,7 +937,9 @@ the Release `.blproj` C++ path, and MSIL are all Linux-skips here (`NativeBuildS
   (`Action f = () => { };`), so the call silently never happens and a later read of the
   never-set field throws `NullReferenceException`. Repro:
   `CppMeAsValueTests.E09_OnCSharp_ThrowsNullReferenceException_PinnedAgainst237` (both the
-  ordinary-method and the `Sub New` shape hit it identically).
+  ordinary-method and the `Sub New` shape hit it identically). ⚠ **FIXED 2026-10-02 by #136**: the lambda body is written by the
+  function-body emitter, E09a/E09b print `5|True` and `2|True` on C#; the pin became
+  `CppMeAsValueTests.E09_ALambdaCapturingMe_CSharp_PrintsWhatCppPrints`, and `LambdaBodyEmissionExecutionTests` runs both through every entry point.
 - **#201, still open** — the C++ leg of the `MyBase.New` lambda-argument gap is now fixed (see
   above); C#'s undeclared-`__lambda_0` compile error on the same shape is untouched.
 
@@ -3605,7 +3630,8 @@ single new failure against the 170-name baseline.
       — the ENTIRE nested Try/Catch and the trailing `WriteLine` are dropped, not merely reordered,
       so the program prints NOTHING (measured: empty string). #136's original shape was narrower
       (a Sub lambda's write to a bare property not observed later); this is a broader instance of
-      the same C# lambda-body-lowering gap.
+      the same C# lambda-body-lowering gap. ⚠ **FIXED 2026-10-02 by #136**: E6 prints `outer/inner|after:outer` on C#
+      (`NothingStringTextExecutionTests.E6_NestedTryInsideCatchLambda_RunsOnEveryBackend`).
     - **#201, WIDENED.** A lambda capturing a Catch variable, stored in a `List(Of Action)` (E5):
       compiles on C#/JS/MSIL, fails to COMPILE on C++ — `List(Of Action)`'s element type lowers to
       a bare `void*` rather than `std::function<void()>`, so invoking an element read back out
@@ -6382,7 +6408,9 @@ single new failure against the 170-name baseline.
     as a standalone statement first. Compounds with #165 (a lambda-local `Dim` dropped) on the
     SAME probe: `inner`'s own `Dim` is dropped too, so all four `inner()` occurrences become
     `CS0103`, not one — measured directly against Roslyn's own diagnostics (`dotnet build` reports
-    each twice, which is a build-system artifact, not four further errors).
+    each twice, which is a build-system artifact, not four further errors). ⚠ **#179 and #165 FIXED 2026-10-02 by #136**: a lambda's
+    own `Dim` is declared inside it and a call whose result is used is written once; F8 prints `32|21` on C#
+    (`MultiLineFunctionLambdaExecutionTests.CSharp_RunsCorrectly`, and the `g_once*` counters of `LambdaBodyEmissionExecutionTests`).
   - **#180 — an MSIL `Function … As Short` from a Byte/Short expression is `InvalidProgram`.**
     `E8_byte_short` (`S/t164/edge/E8_byte_short.bas`) has a lambda with no `As` clause returning a
     `Byte` on one path and a `Short` on the other; `DominantReturnType` correctly infers `Short`
@@ -6452,7 +6480,7 @@ single new failure against the 170-name baseline.
     shape holds Invariant F. Execution (`[Category("Integration")]`):
     `MeReceiverTypingExecutionTests.cs` — the V6 family and every edge probe above, four backends
     × both pipelines where they apply (X1/X2 exclude C++ — task #200 below; X3b excludes C# —
-    task #136, widened; X6d excludes JavaScript — a pre-existing, UNRELATED refusal of any
+    task #136, widened — ⚠ FIXED 2026-10-02, X3b has its C# cell; X6d excludes JavaScript — a pre-existing, UNRELATED refusal of any
     `Structure` declaration on that backend, BL7005; X12b, which also CONSTRUCTS the nested class,
     excludes C++ — a pre-existing, unrelated nested-class emission-order defect), plus a Release
     `.blproj` MSIL leg. `PropertyAccessorExecutionTests`' three-backend split (task #175's own fix)
@@ -6488,7 +6516,8 @@ single new failure against the 170-name baseline.
       Function lambda's read, on C# only.** Previously scoped to a `For Each` variable capture;
       `S/t176/edge/X3b_sub_lambda_store.bas` (`Dim f = Function() V + 1 : Dim g = Sub() V = 3`)
       prints `1021` where C++/JavaScript/MSIL all print the correct `31021`. Same closure-capture
-      family as #136's original shape, not investigated further here.
+      family as #136's original shape, not investigated further here. ⚠ **FIXED 2026-10-02 by #136**: C# prints `31021` on both pipelines
+      (`MeReceiverTypingExecutionTests.X3b_StandardPipeline_AllFourBackendsAgree` / `X3b_AggressivePipeline_AllFourBackendsAgree`).
   `ExtensionHostRequestCoverageTests.KnownUnimplemented` (a second test fails once an entry is
   implemented, so the list must shrink). A missing `sendNotification` handler is a silent
   no-op; a missing `sendRequest` handler rejects inside `activate()` and kills the extension.
@@ -6699,7 +6728,7 @@ single new failure against the 170-name baseline.
     every cell; K1/K6/K7 shadow (1/7/1) with NO diagnostic (D2's interim — BC36641 stays an owner
     decision, #217); K4/K9/K5 are right except pre-existing, UNRELATED backend defects (C#'s own
     dropped lambda-parameter write, widened #136; C++'s capture-by-copy, #140; C#'s dropped
-    nested-lambda declaration, #165). Byte compare of 646 programs: only the 11 CASE-DIFFERING
+    nested-lambda declaration, #165 — ⚠ the two C# defects FIXED 2026-10-02 by #136: K4 prints 2, K5 prints 3 on C#). Byte compare of 646 programs: only the 11 CASE-DIFFERING
     programs change at all. No internal compiler error anywhere in the corpus or the full suite.
     #199 alone: leak probes K1-K6 72/72 pass; byte compare of 646 programs/8,825 files: 24 differ,
     all in the three probes the leak itself touched; no program that worked on every backend
@@ -6776,7 +6805,7 @@ single new failure against the 170-name baseline.
     capture-by-copy lambda lowering — every write/re-read-after-Exit loss on that backend is this
     pre-existing gap, not a new one); **#136** (C#'s pre-existing multi-statement-lambda-body
     defect — reaches a `Do While f()` whose condition is reassigned to a lambda that writes the
-    loop's own captured local, and CS1643 on a lambda-in-a-lambda's own loop); **#227** (C# alone,
+    loop's own captured local, and CS1643 on a lambda-in-a-lambda's own loop — ⚠ FIXED 2026-10-02: L8 prints D2's 11|21|31 on C# too, E08 prints 100200); **#227** (C# alone,
     `Exit Do` inside a `While`, the outer loop re-enters — re-measure before touching); **#228** (a
     SIZED array `Dim a(2)` in a loop body is never an IR instruction, so it stays one
     function-level allocation on every backend regardless of capture — VB re-creates it per
@@ -6838,7 +6867,7 @@ single new failure against the 170-name baseline.
     `LambdaBoundaryDiagnosticsExecutionTests.cs` (Integration — every `--target`, `--optimize`,
     and a Release `.blproj` build refuse identically; every accepted shape RUNS, pinning the
     pre-existing backend gaps this task's own probes surfaced but does not fix: the C# backend
-    drops a lambda `Dim` that shares a name with a field/global/sibling local, task #165 (N8, N9);
+    drops a lambda `Dim` that shares a name with a field/global/sibling local, task #165 (N8, N9 — ⚠ FIXED 2026-10-02 by #136: both print 8);
     the C# backend's own ByRef-parameter-plus-lambda mishandling, task #232 (R3 directly; R5
     through the same unchecked-IR seam the MSIL backstop test uses, now that the front end refuses
     R5 itself); JavaScript refuses ANY ByRef parameter by DESIGN (BL7002), regardless of whether a
