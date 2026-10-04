@@ -245,6 +245,123 @@ public class FormItemsStorageTests
     }
 
     // ==================================================================
+    // Part E — the layout of a rewritten run, byte-exact
+    // ==================================================================
+
+    private const string Open = "    <ComboBox Id=\"cmb\" X=\"16\" Y=\"16\" Width=\"121\" Height=\"23\" TabIndex=\"0\">\n";
+    private const string Head = "<Form Name=\"F\" Version=\"1\" Width=\"400\" Height=\"300\">\n  <Controls>\n";
+    private const string Tail = "  </Controls>\n</Form>";
+
+    [Test]
+    public void AnEdit_OfASelfClosingCombo_LaysTheItemsOutOnePerLine_AtTheDocumentsIndent()
+    {
+        var form = Read(Win());
+        Combo(form).Properties["Items"] = "A\nB";
+
+        Assert.That(FormDocumentWriter.Write(form), Is.EqualTo(
+            Head + Open + "      <Item>A</Item>\n      <Item>B</Item>\n    </ComboBox>\n" + Tail));
+    }
+
+    [Test]
+    public void AnEdit_BeforeABind_PutsEachItemOnItsOwnLine_AndTheBindKeepsItsIndent()
+    {
+        var form = Read(Win(comboChildren: "      <Bind Event=\"SelectedIndexChanged\" Handler=\"h\" />\n"));
+        Combo(form).Properties["Items"] = "A\nB";
+
+        Assert.That(FormDocumentWriter.Write(form), Is.EqualTo(
+            Head + Open + "      <Item>A</Item>\n      <Item>B</Item>\n      <Bind Event=\"SelectedIndexChanged\" Handler=\"h\" />\n" +
+            "    </ComboBox>\n" + Tail));
+    }
+
+    /// <summary>Two consecutive edits: the second has exactly the first's shape — no blank line grows per save.</summary>
+    [TestCase("")]
+    [TestCase("      <Bind Event=\"SelectedIndexChanged\" Handler=\"h\" />\n")]
+    public void TwoConsecutiveEdits_KeepTheSameShape(string bind)
+    {
+        var form = Read(Win(comboChildren: bind));
+        Combo(form).Properties["Items"] = "A\nB";
+        FormDocumentWriter.Write(form);
+        Combo(form).Properties["Items"] = "C\nD\nE";
+
+        Assert.That(FormDocumentWriter.Write(form), Is.EqualTo(
+            Head + Open + "      <Item>C</Item>\n      <Item>D</Item>\n      <Item>E</Item>\n" + bind + "    </ComboBox>\n" + Tail));
+    }
+
+    [Test]
+    public void RemovingEveryItem_LeavesNoBlankLine()
+    {
+        var form = Read(Win(comboChildren: "      <Item>A</Item>\n"));
+        Combo(form).Properties.Remove("Items");
+
+        var written = FormDocumentWriter.Write(form);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(written, Does.Not.Contain("<Item"));
+            Assert.That(System.Text.RegularExpressions.Regex.IsMatch(written, "\n[ \t]*\n"), Is.False, $"a whitespace-only line:\n{written}");
+        });
+    }
+
+    [Test]
+    public void ATabIndentedFile_StaysTabIndented()
+    {
+        var xml = "<Form Name=\"F\" Version=\"1\" Width=\"400\" Height=\"300\">\n\t<Controls>\n" +
+                  "\t\t<ComboBox Id=\"cmb\" X=\"16\" Y=\"16\" Width=\"121\" Height=\"23\" TabIndex=\"0\" />\n\t</Controls>\n</Form>";
+        var form = Read(xml);
+        Combo(form).Properties["Items"] = "A\nB";
+
+        Assert.That(FormDocumentWriter.Write(form), Is.EqualTo(
+            "<Form Name=\"F\" Version=\"1\" Width=\"400\" Height=\"300\">\n\t<Controls>\n" +
+            "\t\t<ComboBox Id=\"cmb\" X=\"16\" Y=\"16\" Width=\"121\" Height=\"23\" TabIndex=\"0\">\n" +
+            "\t\t\t<Item>A</Item>\n\t\t\t<Item>B</Item>\n\t\t</ComboBox>\n\t</Controls>\n</Form>"));
+    }
+
+    [Test]
+    public void ACrlfFile_StaysCrlf()
+    {
+        var form = Read(Win().Replace("\n", "\r\n"));
+        Combo(form).Properties["Items"] = "A\nB";
+
+        Assert.That(FormDocumentWriter.Write(form), Is.EqualTo(
+            (Head + Open + "      <Item>A</Item>\n      <Item>B</Item>\n    </ComboBox>\n" + Tail).Replace("\n", "\r\n")));
+    }
+
+    // ==================================================================
+    // Part E — an <Item> with attributes or markup is Degraded, never flattened
+    // ==================================================================
+
+    [TestCase("      <Item Value=\"1\">A</Item>\n")]
+    [TestCase("      <Item>A<b>bold</b></Item>\n")]
+    public void AnItemWithAttributesOrMarkup_IsDegraded_AndPreservedByteForByte(string children)
+    {
+        var xml = Win(comboChildren: children);
+        var form = Read(xml);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(form.DegradedReason("cmb", "Items"), Does.Contain("attributes or markup"));
+            Assert.That(Combo(form).Properties.ContainsKey("Items"), Is.False);
+            Assert.That(FormDocumentWriter.Write(form), Is.EqualTo(xml));
+            Assert.That(Code(form.Model), Does.Not.Contain("Items.Add"));
+        });
+    }
+
+    /// <summary>Part E: a clipboard fragment with a LEGACY comma attribute reads with the old rule, as a document does.</summary>
+    [Test]
+    public void TheClipboard_ReadsALegacyCommaPayloadWithTheOldRule()
+    {
+        const string fragment = """
+            <FormSubtree Target="WinForms" Version="1">
+              <ComboBox Id="cmb" X="0" Y="0" Width="10" Height="10" TabIndex="0" Items="Alpha, Beta" />
+            </FormSubtree>
+            """;
+
+        var pasted = FormClipboard.DeserializeSubtree(fragment, FormTarget.WinForms, _ => false).Single();
+
+        Assert.That(pasted.Properties["Items"], Is.EqualTo("Alpha\nBeta"));
+    }
+
+    // ==================================================================
     // Clipboard, retarget, emission
     // ==================================================================
 

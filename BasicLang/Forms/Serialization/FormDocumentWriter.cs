@@ -598,6 +598,7 @@ public static class FormDocumentWriter
         {
             attribute?.Remove();
             children.ForEach(RemoveWithLeadingWhitespace);
+            DropWhitespaceOnlyBody(element);
             return;
         }
 
@@ -614,30 +615,66 @@ public static class FormDocumentWriter
 
         attribute?.Remove();
         children.ForEach(RemoveWithLeadingWhitespace);
+        DropWhitespaceOnlyBody(element);
+
+        // ⚠ The document's OWN indentation, never a hard-coded step: the element's line indent, and one step deeper — the
+        // step measured from the element to its parent (a tab-indented file stays tab-indented).
+        var indent = LineIndent(element);
+        var step = element.Parent is { } parent && indent.StartsWith(LineIndent(parent), StringComparison.Ordinal) &&
+                   indent.Length > LineIndent(parent).Length
+            ? indent[LineIndent(parent).Length..]
+            : "  ";
 
         var first = element.Elements().FirstOrDefault();
         if (first != null)
         {
+            // Other children remain (a <Bind>, nested controls): the run goes before the first of them, each item on its
+            // own line at THAT child's indent, and the child keeps its own line and indent.
+            var onItsOwnLine = first.PreviousNode is XText { Value: var lead } && lead.Contains('\n');
+            var childIndent = onItsOwnLine ? LineIndent(first) : indent + step;
+            if (!onItsOwnLine && wanted.Count > 0)
+            {
+                first.AddBeforeSelf(new XText("\n" + childIndent)); // the run starts on its own line too
+            }
+
+            // The whitespace before `first` now leads the first ITEM; each item is followed by a fresh line at the child
+            // indent, so `first` ends up on its own line exactly as it was.
             foreach (var item in wanted)
             {
-                InsertPreservingIndent(element, new XElement(FormItems.ElementName, item), before: first);
+                first.AddBeforeSelf(new XElement(FormItems.ElementName, item), new XText("\n" + childIndent));
             }
 
             return;
         }
 
-        // A self-closing element: lay the run out one item per line under it, at the document's own indent.
-        var indent = (element.PreviousNode as XText)?.Value is { } before && before.LastIndexOf('\n') is var nl and >= 0
-            ? before[(nl + 1)..]
-            : "";
+        // No other children (the element is self-closing, or held only items): one item per line under it.
         foreach (var item in wanted)
         {
-            element.Add(new XText("\n" + indent + "  "), new XElement(FormItems.ElementName, item));
+            element.Add(new XText("\n" + indent + step), new XElement(FormItems.ElementName, item));
         }
 
         if (wanted.Count > 0)
         {
             element.Add(new XText("\n" + indent));
+        }
+    }
+
+    /// <summary>The whitespace an element's line starts with (what follows the last newline before it); "" when none.</summary>
+    private static string LineIndent(XElement element) =>
+        element.PreviousNode is XText { Value: var text } && text.LastIndexOf('\n') is var nl and >= 0
+            ? text[(nl + 1)..]
+            : "";
+
+    /// <summary>
+    /// An element left holding only whitespace (its items removed) is emptied, so no blank line is left behind — and a
+    /// re-edit cannot grow one per save.
+    /// </summary>
+    private static void DropWhitespaceOnlyBody(XElement element)
+    {
+        if (!element.HasElements && element.Nodes().All(n => n is XText t && string.IsNullOrWhiteSpace(t.Value)) &&
+            element.Nodes().Any())
+        {
+            element.RemoveNodes();
         }
     }
 

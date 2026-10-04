@@ -564,6 +564,42 @@ public partial class FormPropertyGridRealViewTests
         }
     }
 
+    /// <summary>
+    /// Part E: the MODELESS path of <see cref="FormPropertyGridView.ShowDialogAsync"/> — a host whose top level is not a
+    /// Window cannot own a modal dialog, so the dialog is shown on its own and awaited until it closes: OK yields the
+    /// dialog's result, the close box yields null.
+    /// </summary>
+    [AvaloniaTest]
+    public void TheModelessDialogPath_YieldsOkResult_AndNullForTheCloseBox()
+    {
+        var okDialog = new VisualGameStudio.Shell.Views.Dialogs.FormItemsDialog { DataContext = new FormItemsDialogViewModel("A") };
+        var ok = FormPropertyGridView.ShowDialogAsync(okDialog, top: null,
+            () => (okDialog.DataContext as FormItemsDialogViewModel)?.Result);
+        Dispatcher.UIThread.RunJobs();
+        Assert.That(okDialog.IsVisible, Is.True, "shown on its own, with no owner");
+        ((FormItemsDialogViewModel)okDialog.DataContext!).Text = "A\nB";
+        var okButton = okDialog.GetVisualDescendants().OfType<Button>().Single(b => b.Name == "OkButton");
+        var at = okButton.TranslatePoint(new Point(okButton.Bounds.Width / 2, okButton.Bounds.Height / 2), okDialog)!.Value;
+        okDialog.MouseDown(at, MouseButton.Left);
+        okDialog.MouseUp(at, MouseButton.Left);
+        Dispatcher.UIThread.RunJobs();
+
+        var boxed = new VisualGameStudio.Shell.Views.Dialogs.FormItemsDialog { DataContext = new FormItemsDialogViewModel("A") };
+        var closed = FormPropertyGridView.ShowDialogAsync(boxed, top: null,
+            () => (boxed.DataContext as FormItemsDialogViewModel)?.Result);
+        Dispatcher.UIThread.RunJobs();
+        boxed.Close();
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ok.IsCompletedSuccessfully, Is.True, "OK closed the modeless dialog");
+            Assert.That(ok.Result, Is.EqualTo("A\nB"));
+            Assert.That(closed.IsCompletedSuccessfully, Is.True);
+            Assert.That(closed.Result, Is.Null, "the close box yields nothing");
+        });
+    }
+
     private static VisualGameStudio.Shell.Views.Dialogs.FormItemsDialog OpenItemsDialog(Rig rig, FormPropertyRow items)
     {
         var ellipsis = rig.Container(items).GetVisualDescendants().OfType<Button>()

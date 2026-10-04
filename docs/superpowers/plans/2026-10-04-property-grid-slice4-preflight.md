@@ -1031,3 +1031,35 @@ Mutations (Edit + REBUILD) — all killed: no-op save rewrites legacy; `FromLega
 modelled/emitted; stale attribute left beside new children; element-count compare instead of list-as-read (the `<Item/>`
 byte-identity test); the clipboard guard removed (red step of its own fix); the dialog splitting without the lone-CR rule;
 empty → "" written instead of Reset; the `…` click unwired (real view).
+
+⚠ The pre-flight's Integration "csc compile of a ComboBox whose sample Items holds a comma item" is REPLACED by Task 7's run
+test (`FormItemsAcceptanceTests`): it compiles AND runs the comma item on WinForms, which proves more than a compile.
+
+### Part E — review of `2bcde328` / `cde546fa` (base `08c374da`; one commit)
+1. **Source-form colours obey the translucent refusal.** New `FormPropertyDef.IsWritableOn(value, target)` = Accepts, or a
+   source form the target does not refuse; BOTH region-writer property paths (controls, Form rows) ask it instead of
+   `!Accepts && !IsSourceForm`. `IsTranslucent` recognises `Color.Transparent` and `Color.FromArgb(a, r, g, b)` with a < 255
+   (one parser, `TryParseFromArgb`, shared with the literal); an unparseable `FromArgb` was never a source form (Degraded,
+   never emitted — pinned). The run test asserts, per kind, `IsWritableOn` of both source spellings ⇔ WinForms accepts.
+2. **The Form's refusal points at Opacity**: `OpaqueOnWinForms` became `FormTranslucency { Allowed, ThrowsOnControl,
+   ThrowsOnForm }`. Web→WinForms retarget of a translucent TextBox colour: BL8024 names it with the catalog's reason; by the
+   retarget's rule the value crosses preserved (Degraded) and is never emitted (pinned).
+3. **Items layout** (byte-exact tests): items before an existing `<Bind>` go one per line at the child indent and the Bind
+   keeps its line; a whitespace-only body is emptied (no blank line grows per save); the step is the document's own
+   (element indent − parent indent: tabs stay tabs); CRLF stays CRLF; the misleading "self-closing" comment is gone.
+4. `<Item>` with attributes or markup → Degraded. **The clipboard now carries `<Item>` children** and reads an attribute as a
+   LEGACY payload (old comma rule), through the reader's own `FormItems.Read` — ADR 0020 amended. A legacy XML file through
+   the reader → `<option>`s (`FormAssetEmitterTests`).
+5. `EveryRowsEditor_Fits…` also selects a ComboBox and requires `ItemsEllipsis` and the `(Collection)` summary seen and fitting.
+6. `FormItemsAcceptanceTests`: the `<option>` assertions run before the node-missing ignore; new items `Say "hi"` and
+   `a<U+2028>b` (built from its code point) — both run clean on WinForms (5 live items) and the web. A Degraded Items row has
+   no `…` (VM). The modeless `ShowDialogAsync` path is tested headless (OK → result, close box → null).
+   ⚠ The Edit tool DID store a raw U+2028 for a ` ` escape inside a raw string (CS8999), exactly the MEMORY trap; the file
+   was rewritten with the character built from its code point.
+
+Red first: 5 red (the source-form and Opacity tests) before the writer gate and message. The layout and clipboard fixes were
+written before their tests ran; their red evidence is the mutation table. Mutations (Edit + REBUILD) — all killed:
+`Color.Transparent` arm off; `FromArgb` arm off; the control-site gate reverted; `OpaqueForm` false; step hard-coded "  "
+(tab test); the old `InsertPreservingIndent` for the Bind case; whitespace-body drop off (two-edits test); the clipboard/reader
+legacy rule off; the attributes/markup check off. Not mutated: hiding `ItemsEllipsis` in AXAML (the sweep's required-kinds
+assertion covers it by construction).

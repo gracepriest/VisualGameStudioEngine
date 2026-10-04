@@ -59,6 +59,26 @@ public class FormItemsDialogViewModelTests
         });
     }
 
+    /// <summary>Part E: a Degraded item list is frozen — no "…" editor over a value it would coerce.</summary>
+    [Test]
+    public void ADegradedItemsRow_HasNoEditor()
+    {
+        var file = FormDocumentReader.Read("F.blform",
+            "<Form Name=\"F\" Version=\"1\" Width=\"400\" Height=\"300\"><Controls>" +
+            "<ComboBox Id=\"cmb\" X=\"0\" Y=\"0\" Width=\"10\" Height=\"10\" TabIndex=\"0\" Items=\"x\"><Item>c</Item></ComboBox></Controls></Form>");
+        var grid = new FormPropertyGridViewModel();
+        grid.Load(file);
+        grid.SelectedControl = file.Model.FindById("cmb");
+        var items = grid.Rows.Single(r => r.Name == "Items");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(items.IsFrozen, Is.True, "precondition: Degraded (both forms)");
+            Assert.That(items.IsCollectionEditor, Is.False, "no … over a frozen list");
+            Assert.That(items.IsTextBox, Is.False);
+        });
+    }
+
     [Test]
     public void AnEmptyResult_Resets_NeverWritesAnEmptyList()
     {

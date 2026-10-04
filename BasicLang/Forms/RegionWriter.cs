@@ -791,7 +791,7 @@ public static class RegionWriter
         // ⛔ A Degraded root value never reaches generated source — the control rule, at the root. DescribeRefusal is
         // reached only for a value truly refused (it throws otherwise). Reachable since slice 3's Properties-stored rows
         // (FormRootTests.ADegradedRootProperty_IsFrozen_Preserved_AndNeverEmitted).
-        if (!row.Accepts(value, FormTarget.WinForms) && !row.IsSourceForm(value))
+        if (!row.IsWritableOn(value, FormTarget.WinForms))
         {
             diagnostics.Add(new DesignDiagnostic(
                 DesignCodes.DegradedProperty,
@@ -1062,7 +1062,9 @@ public static class RegionWriter
             // ⛔ DescribeRefusal is reached ONLY for a value that is truly Degraded: the
             // IsSourceForm test above short-circuits first, and DescribeRefusal throws for a value
             // the target accepts.
-            if (property != null && !property.Accepts(value, FormTarget.WinForms) && !property.IsSourceForm(value))
+            // ⛔ IsWritableOn, not "!Accepts && !IsSourceForm": a source form must obey the target's refusals too (Part E —
+            // Color.Transparent on a TextBox is a green build and an ArgumentException at run time).
+            if (property != null && !property.IsWritableOn(value, FormTarget.WinForms))
             {
                 diagnostics.Add(new DesignDiagnostic(
                     DesignCodes.DegradedProperty,

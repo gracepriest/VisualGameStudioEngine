@@ -665,47 +665,17 @@ public static class FormDocumentReader
     /// ADR 0020: the item list into the model's ONE encoding — <c>&lt;Item&gt;</c> text verbatim, in order, or a legacy
     /// attribute through the OLD comma rule (<see cref="FormItems.FromLegacy"/>), so every existing file keeps its meaning.
     ///
-    /// <para>⛔ Degraded, never coerced: an item holding a line break (the model's separator), or BOTH forms on one control.
-    /// Items stays OUT of the model (nothing is emitted), the raw elements go to <c>UnknownChildren</c> and the attribute to
-    /// <c>UnknownAttributes</c> — so Apply, Create, clone, retarget and the clipboard all carry them as they carry any
-    /// unknown content.</para>
+    /// <para>⛔ Degraded, never coerced (<see cref="FormItems.Read"/> states the three cases): Items stays OUT of the model,
+    /// the raw content goes to <c>UnknownChildren</c> / <c>UnknownAttributes</c>.</para>
     /// </summary>
     private static void ReadItems(
         FormControl control, FormPropertyDef row, XAttribute? legacy, List<XElement> items, List<DegradedProperty> degraded)
     {
-        string? reason = null;
-        if (legacy != null && items.Count > 0)
+        // ⛔ The ONE reading, shared with the clipboard (FormItems.Read); the reader adds the Degraded row.
+        if (FormItems.Read(control, row, legacy, items) is { } reason)
         {
-            reason = $"'{control.Id}' carries its {row.Name} twice — an {row.Name}=\"…\" attribute AND <{FormItems.ElementName}> " +
-                     "children — and which one is meant cannot be decided. The items are preserved exactly as written; remove " +
-                     "one of the two forms to edit them.";
-        }
-        else if (items.Any(i => FormItems.HoldsLineBreak(i.Value)))
-        {
-            reason = $"An <{FormItems.ElementName}> of '{control.Id}' contains a line break, which an item cannot hold. The " +
-                     "items are preserved exactly as written and not written into the generated code.";
-        }
-
-        if (reason != null)
-        {
-            if (legacy != null)
-            {
-                control.UnknownAttributes[legacy.Name.LocalName] = legacy.Value;
-            }
-
-            control.UnknownChildren.AddRange(items.Select(i => new XElement(i)));
             degraded.Add(new DegradedProperty(control.Id, row.Name,
                 legacy?.Value ?? string.Join(" | ", items.Select(i => i.Value)), reason));
-            return;
-        }
-
-        if (legacy != null)
-        {
-            control.Properties[row.Name] = FormItems.Join(FormItems.FromLegacy(legacy.Value));
-        }
-        else if (items.Count > 0)
-        {
-            control.Properties[row.Name] = FormItems.Join(items.Select(i => i.Value));
         }
     }
 

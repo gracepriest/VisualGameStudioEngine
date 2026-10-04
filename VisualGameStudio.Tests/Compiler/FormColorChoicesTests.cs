@@ -231,6 +231,92 @@ public class FormColorChoicesTests
         });
     }
 
+    private static string EmitFor(string kind, string backColor)
+    {
+        var form = new FormDocument { Target = FormTarget.WinForms, Name = "F", Width = 400, Height = 300, Text = "F" };
+        var control = new FormControl
+        {
+            Kind = kind, Id = "ctl", TabIndex = 0, Geometry = new PixelGeometry { X = 0, Y = 0, Width = 10, Height = 10 }
+        };
+        control.Properties["BackColor"] = backColor;
+        form.Controls.Add(control);
+        var result = RegionWriter.Write("F.bas", FormScaffolder.Create("F", FormTarget.WinForms).CodeText, form, "F.blform");
+        return result.Text + "\n" + string.Join("\n", result.Diagnostics.Select(d => d.Message));
+    }
+
+    /// <summary>
+    /// Part E: a SOURCE-form colour (written as WinForms source) obeys the same refusal — it used to skip the Accepts gate,
+    /// so <c>Color.Transparent</c> on a TextBox was emitted and threw when the form was created.
+    /// </summary>
+    [TestCase("Color.Transparent")]
+    [TestCase("Color.FromArgb(128, 255, 0, 0)")]
+    [TestCase("Color.FromArgb(0, 0, 0, 0)")]
+    public void ATranslucentSourceForm_IsNotEmittedOnATextBox_ButIsOnALabel(string source)
+    {
+        var textBox = EmitFor("TextBox", source);
+        var label = EmitFor("Label", source);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(textBox, Does.Not.Contain("ctl.BackColor ="), "never emitted where WinForms throws");
+            Assert.That(textBox, Does.Contain("transparent"), "and the warning says why");
+            Assert.That(label, Does.Contain("ctl.BackColor = " + source), "a Label supports it (measured)");
+        });
+    }
+
+    [Test]
+    public void AnOpaqueFromArgb_IsStillEmittedOnATextBox_AndAnUnparseableOneNever()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(EmitFor("TextBox", "Color.FromArgb(255, 1, 2, 3)"), Does.Contain("ctl.BackColor = Color.FromArgb(255, 1, 2, 3)"));
+            Assert.That(EmitFor("TextBox", "Color.FromArgb(x, 1, 2, 3)"), Does.Not.Contain("ctl.BackColor ="));
+            Assert.That(EmitFor("Label", "Color.FromArgb(300, 1, 2, 3)"), Does.Not.Contain("ctl.BackColor ="));
+        });
+    }
+
+    /// <summary>Part E: the Form's refusal points at Opacity — a Form has no transparent background, it has see-through.</summary>
+    [TestCase("#80FF0000")]
+    [TestCase("Color.Transparent")]
+    public void TheFormsTranslucentBackColor_IsRefused_PointingToOpacity(string value)
+    {
+        var form = new FormDocument { Target = FormTarget.WinForms, Name = "F", Width = 400, Height = 300, Text = "F" };
+        form.Properties["BackColor"] = value;
+        var result = RegionWriter.Write("F.bas", FormScaffolder.Create("F", FormTarget.WinForms).CodeText, form, "F.blform");
+        var row = FormControlCatalog.FormRoot.Properties.Single(p => p.Name == "BackColor");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Text, Does.Not.Contain("Me.BackColor ="));
+            Assert.That(row.DescribeRefusedEdit("#80FF0000", FormTarget.WinForms), Does.Contain("Opacity"));
+            Assert.That(string.Join("\n", result.Diagnostics.Select(d => d.Message)), Does.Contain("Opacity"));
+        });
+    }
+
+    /// <summary>
+    /// Part E: a WEB form's translucent colour retargeted to WinForms, on a kind that throws on one, is NAMED with the
+    /// catalog's reason (BL8024 RetargetPropertyLost). By the retarget's rule a value the destination refuses crosses
+    /// PRESERVED (Degraded there) — and therefore never reaches the window's generated code.
+    /// </summary>
+    [Test]
+    public void AWebTranslucentColour_RetargetedToATextBox_IsNamedWithTheCatalogsReason_AndNeverEmitted()
+    {
+        var web = FormDocumentReader.Read("F.blwebform",
+            "<WebForm Name=\"F\" Version=\"1\"><Controls><TextBox Id=\"txt\" Col=\"0\" Row=\"0\" TabIndex=\"0\" BackColor=\"#80FF0000\"/></Controls></WebForm>");
+        Assert.That(web.IsRefused, Is.False);
+
+        var converted = FormRetarget.Convert(web.Model, FormTarget.WinForms);
+        var lost = converted.Diagnostics.Where(d => d.Code == DesignCodes.RetargetPropertyLost).Select(d => d.Message).ToList();
+        var code = RegionWriter.Write("F.bas", FormScaffolder.Create("F", FormTarget.WinForms).CodeText, converted.Document, "F.blform").Text;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(lost, Has.Some.Contains("txt.BackColor"));
+            Assert.That(lost.Single(m => m.Contains("txt.BackColor")), Does.Contain("transparent").And.Contain("ArgumentException"));
+            Assert.That(code, Does.Not.Contain("txt.BackColor ="), "never emitted into the window");
+        });
+    }
+
     /// <summary>An existing document carrying one is Degraded — shown, preserved, never reaching source.</summary>
     [Test]
     public void ADocumentsTranslucentTextBoxBackColor_IsDegraded_AndNeverEmitted()

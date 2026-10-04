@@ -260,37 +260,54 @@ public class FormDesignerLayoutRealViewTests
     [AvaloniaTest]
     public void EveryRowsEditor_FitsBetweenTheDividerAndTheColumnsRightEdge()
     {
-        using var rig = Open(WinDoc, "WinForm", FormTarget.WinForms, 1200, 830);
-        rig.Select("btn");
+        // Part E: a ComboBox too, so the Items row's `…` and its "(Collection)" summary are swept as well.
+        var doc = WinDoc.Replace("</Controls>",
+            "  <ComboBox Id=\"cmb\" X=\"16\" Y=\"96\" Width=\"121\" Height=\"23\" TabIndex=\"1\"/>\n  </Controls>");
+        Assert.That(doc, Does.Contain("Id=\"cmb\""), "precondition: the sweep's form carries a ComboBox");
+        using var rig = Open(doc, "WinForm", FormTarget.WinForms, 1200, 830);
         var checkedKinds = new Dictionary<string, int>();
 
         Assert.Multiple(() =>
         {
-            foreach (var row in rig.GridVm.Rows.ToList())
+            foreach (var id in new[] { "btn", "cmb" })
             {
-                var container = rig.Container(row);
-                var divider = rig.InWindow(rig.Divider(container));
-                var cell = rig.ValuePanel(container);
-                var cellRect = rig.InWindow(cell);
-                var editors = cell.GetVisualDescendants().OfType<Control>()
-                    .Where(c => c is TextBox or ComboBox or NumericUpDown or ToggleSwitch or FormColorDropDown
-                        or Button { Name: "FontEllipsis" })
-                    .Where(c => c.IsEffectivelyVisible && c.Bounds.Width > 0)
-                    .Where(c => c.FindAncestorOfType<NumericUpDown>() == null); // its inner box is its own business
-                foreach (var editor in editors)
+                rig.Select(id);
+                foreach (var row in rig.GridVm.Rows.ToList())
                 {
-                    var kind = editor is Button { Name: { } named } ? named : editor.GetType().Name;
-                    checkedKinds[kind] = checkedKinds.GetValueOrDefault(kind) + 1;
-                    var r = rig.InWindow(editor);
-                    Assert.That(r.Left, Is.GreaterThanOrEqualTo(divider.Right), $"{row.Name}: {kind} starts left of the divider ({r})");
-                    Assert.That(r.Right, Is.LessThanOrEqualTo(cellRect.Right + 0.5), $"{row.Name}: {kind} overruns its column ({r})");
+                    var container = rig.Container(row);
+                    var divider = rig.InWindow(rig.Divider(container));
+                    var cell = rig.ValuePanel(container);
+                    var cellRect = rig.InWindow(cell);
+                    var editors = cell.GetVisualDescendants().OfType<Control>()
+                        .Where(c => c is TextBox or ComboBox or NumericUpDown or ToggleSwitch or FormColorDropDown
+                            or Button { Name: "FontEllipsis" or "ItemsEllipsis" } or TextBlock { Text: "(Collection)" })
+                        .Where(c => c.IsEffectivelyVisible && c.Bounds.Width > 0)
+                        .Where(c => c.FindAncestorOfType<NumericUpDown>() == null) // its inner box is its own business
+                        .Where(c => c is not TextBlock || c.FindAncestorOfType<Button>() == null);
+                    foreach (var editor in editors)
+                    {
+                        var kind = editor switch
+                        {
+                            Button { Name: { } named } => named,
+                            TextBlock => "CollectionSummary",
+                            _ => editor.GetType().Name
+                        };
+                        checkedKinds[kind] = checkedKinds.GetValueOrDefault(kind) + 1;
+                        var r = rig.InWindow(editor);
+                        Assert.That(r.Left, Is.GreaterThanOrEqualTo(divider.Right), $"{id}.{row.Name}: {kind} starts left of the divider ({r})");
+                        Assert.That(r.Right, Is.LessThanOrEqualTo(cellRect.Right + 0.5), $"{id}.{row.Name}: {kind} overruns its column ({r})");
+                    }
                 }
             }
         });
 
         TestContext.WriteLine($"[editors checked] {string.Join(", ", checkedKinds.Select(k => $"{k.Key}={k.Value}"))}");
-        // Slice 4 D-1 / D-2: the colour rows' swatch drop-down and the Font row's `…` sit in the same cell, beside the text box.
-        Assert.That(checkedKinds.Keys, Is.SupersetOf(new[] { "TextBox", "ComboBox", "NumericUpDown", nameof(FormColorDropDown), "FontEllipsis" }),
+        // Slice 4 D-1 / D-2 / Task 7: the colour rows' swatch drop-down, the Font row's `…`, and the Items row's `…` with its
+        // "(Collection)" summary sit in the same cell.
+        Assert.That(checkedKinds.Keys, Is.SupersetOf(new[]
+            {
+                "TextBox", "ComboBox", "NumericUpDown", nameof(FormColorDropDown), "FontEllipsis", "ItemsEllipsis", "CollectionSummary"
+            }),
             "precondition: the sweep saw every kind of editor that has a minimum width");
         // Slice 4 D-3: a Bool row is the True/False drop-down (counted as a ComboBox above); the shared editor's switch is
         // the Settings dialog's and never renders in the grid.

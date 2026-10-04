@@ -9,17 +9,26 @@ namespace VisualGameStudio.Tests.Compiler;
 
 /// <summary>
 /// ⛔ Slice 4 Task 6 / ADR 0020, RUN on both targets — "it compiles" was the ceiling here once and hid two defects
-/// (CLAUDE.md). A ComboBox whose items contain a comma, an ampersand and a less-than is built through the REAL designer
-/// (the document view model, the grid's Items row, SaveAsync writing the document and the regions), compiled by the real
-/// CLI, and run: WinForms as a real window that prints its live <c>Items</c>; the web as the CLI-built page, its script
-/// executed under node and its <c>&lt;option&gt;</c>s read from the page the browser would load.
+/// (CLAUDE.md). A ComboBox whose items contain a comma, an ampersand, a less-than, a double quote and U+2028 is built
+/// through the REAL designer (the document view model, the grid's Items row, SaveAsync writing the document and the
+/// regions), compiled by the real CLI, and run: WinForms as a real window that prints its live <c>Items</c>; the web as the
+/// CLI-built page, its <c>&lt;option&gt;</c>s read from the page the browser would load and its script executed under node.
+/// (This replaces the pre-flight's Integration csc compile of a comma item: a compile proves less than a run.)
 /// </summary>
 [TestFixture]
 [Category("Integration")]
 [NonParallelizable]
 public class FormItemsAcceptanceTests
 {
-    private static readonly string[] Expected = { "Smith, John", "A & B", "x < y" };
+    /// <summary>
+    /// A comma, an ampersand, a less-than, a double quote (BasicLang's one escape), and U+2028 LINE SEPARATOR — built from
+    /// its code point (CLAUDE.md: Edit/Write can store the raw character), and a line terminator to C#, where a raw one in
+    /// a string literal is CS1010.
+    /// </summary>
+    private static readonly string[] Expected =
+        { "Smith, John", "A & B", "x < y", "Say \"hi\"", "a" + (char)0x2028 + "b" };
+
+    private static string Shown(string item) => item.Replace(((char)0x2028).ToString(), "<U+2028>");
 
     private string _dir = "";
 
@@ -102,12 +111,14 @@ public class FormItemsAcceptanceTests
                     var form = new ItemsForm();
                     form.Show();
                     Application.DoEvents();
+                    var separator = ((char)0x2028).ToString();
                     foreach (Control c in form.Controls)
                     {
                         if (c is ComboBox combo)
                         {
                             Console.WriteLine("COUNT " + combo.Items.Count);
-                            foreach (var item in combo.Items) Console.WriteLine("ITEM [" + item + "]");
+                            foreach (var item in combo.Items)
+                                Console.WriteLine("ITEM [" + item.ToString().Replace(separator, "<U+2028>") + "]");
                         }
                     }
                     form.Close();
@@ -127,11 +138,12 @@ public class FormItemsAcceptanceTests
         Assert.Multiple(() =>
         {
             Assert.That(runExit, Is.Zero, $"the form crashed at run time.\n{runOut}\n{runErr}");
-            Assert.That(runOut, Does.Contain("COUNT 3"), "three items in the live ComboBox — a comma never splits one");
+            Assert.That(runOut, Does.Contain("COUNT " + Expected.Length), "one live item each — a comma never splits one");
             foreach (var item in Expected)
             {
-                Assert.That(runOut, Does.Contain("ITEM [" + item + "]"));
+                Assert.That(runOut, Does.Contain("ITEM [" + Shown(item) + "]"));
             }
+
             Assert.That(runOut, Does.Contain("DONE"));
         });
     }
@@ -158,7 +170,15 @@ public class FormItemsAcceptanceTests
 
         var outDir = Path.Combine(_dir, "bin", "Debug", "net8.0");
         var html = File.ReadAllText(Path.Combine(outDir, "ItemsForm.html"));
-        var options = Regex.Matches(html, "<option[^>]*>(.*?)</option>").Select(m => System.Net.WebUtility.HtmlDecode(m.Groups[1].Value)).ToList();
+        var options = Regex.Matches(html, "<option[^>]*>(.*?)</option>")
+            .Select(m => System.Net.WebUtility.HtmlDecode(m.Groups[1].Value)).ToList();
+
+        // ⚠ The page's markup is asserted BEFORE the node check: a machine without node must still prove the options.
+        Assert.Multiple(() =>
+        {
+            Assert.That(options.Select(Shown), Is.EqualTo(Expected.Select(Shown)), "one <option> per item, decoded back exactly");
+            Assert.That(html, Does.Contain("<option>A &amp; B</option>").And.Contain("<option>x &lt; y</option>"), "escaped in the page");
+        });
 
         var ran = FormDesignerAcceptanceTests.RunPageUnderNode(outDir, formName: "ItemsForm");
         if (ran == null)
@@ -168,8 +188,6 @@ public class FormItemsAcceptanceTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(options, Is.EqualTo(Expected), "one <option> per item, decoded back to the item exactly");
-            Assert.That(html, Does.Contain("<option>A &amp; B</option>").And.Contain("<option>x &lt; y</option>"), "escaped in the page");
             Assert.That(ran, Does.Not.Contain("ReferenceError").And.Not.Contain("LOAD ERROR"), "the page's script runs");
             Assert.That(ran, Does.Contain("App loaded"));
         });

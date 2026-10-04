@@ -67,3 +67,11 @@ joined by LF).
 ## Revisit if
 
 A real form needs an empty-string item or an item with a line break.
+
+## Amendment (2026-10-04, Part E review, coordinator under the owner's delegation)
+
+- **The clipboard carries `<Item>` children too**, not the model string in an attribute: an attribute payload is a LEGACY
+  payload, read with the old comma rule (a one-item list containing a comma was otherwise indistinguishable from a legacy
+  two-item one — this ADR's own rejected-alternative argument). The reader and the clipboard share ONE reading,
+  `FormItems.Read`.
+- **An `<Item>` carrying attributes or markup is Degraded** (third case), never flattened to its text.

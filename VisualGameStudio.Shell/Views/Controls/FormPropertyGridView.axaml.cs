@@ -139,7 +139,8 @@ public partial class FormPropertyGridView : UserControl
     /// embedded host) cannot own a modal dialog: the dialog is then shown on its own and awaited until it closes, with the
     /// same result rule — <paramref name="resultOnClose"/> (the dialog's OK value, or null for any other close).
     /// </summary>
-    private static Task<string?> ShowDialogAsync(Window dialog, TopLevel? top, Func<string?> resultOnClose)
+    /// <remarks>Public for the modeless-path test (the Shell grants the tests no internals access).</remarks>
+    public static Task<string?> ShowDialogAsync(Window dialog, TopLevel? top, Func<string?> resultOnClose)
     {
         if (top is Window owner)
         {

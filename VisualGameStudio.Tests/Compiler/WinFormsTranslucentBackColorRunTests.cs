@@ -127,6 +127,14 @@ public class WinFormsTranslucentBackColorRunTests
                     Assert.That(row.Accepts("Transparent", FormTarget.WinForms), Is.EqualTo(!throws),
                         $"{kind}: the named Transparent follows the same rule");
                     Assert.That(row.Accepts(Translucent, FormTarget.Web), Is.True, $"{kind}: the web keeps alpha (rgba)");
+
+                    // Part E: the SOURCE forms the region writer emits as written — the probe set the very values these
+                    // spell (Color.FromArgb(128, 255, 0, 0) and Color.Transparent).
+                    foreach (var source in new[] { "Color.FromArgb(128, 255, 0, 0)", "Color.Transparent" })
+                    {
+                        Assert.That(row.IsWritableOn(source, FormTarget.WinForms), Is.EqualTo(!throws),
+                            $"{kind}: the writer {(throws ? "must not emit" : "emits")} {source}");
+                    }
                 }
             });
         }

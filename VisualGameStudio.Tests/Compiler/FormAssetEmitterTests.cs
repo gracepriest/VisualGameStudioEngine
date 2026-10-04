@@ -435,6 +435,22 @@ public class FormAssetEmitterTests
         });
     }
 
+    /// <summary>
+    /// Part E: the LEGACY document shape, loaded through the READER (not set on the model) — <c>Items="Alpha, Beta"</c>
+    /// still becomes one option per comma item on the page.
+    /// </summary>
+    [Test]
+    public void ALegacyItemsAttribute_LoadedThroughTheReader_BecomesOptionChildren()
+    {
+        var file = BasicLang.Forms.Serialization.FormDocumentReader.Read("F.blwebform",
+            "<WebForm Name=\"F\" Version=\"1\"><Controls><ComboBox Id=\"cmb\" Col=\"0\" Row=\"0\" TabIndex=\"0\" Items=\"Alpha, Beta\"/></Controls></WebForm>");
+        Assert.That(file.IsRefused, Is.False);
+
+        var html = FormAssetEmitter.Html(file.Model, "App.js");
+
+        Assert.That(html, Does.Contain("<option>Alpha</option>").And.Contain("<option>Beta</option>"));
+    }
+
     [Test]
     public void ASelectsSelectedIndex_MarksThatOption()
     {
