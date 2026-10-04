@@ -363,23 +363,8 @@ public class FormRootTests
             Is.GreaterThan(0).And.LessThan(text.IndexOf("Me.ClientSize = New Size(400, 300)", StringComparison.Ordinal)));
     }
 
-    /// <summary>⚠ RE-CHECK IN SLICE 5: form events are wired then, and this warning is REPLACED by emission.</summary>
-    [Test]
-    public void ARootBind_IsWarned_NotEmitted_UntilFormEventsExist()
-    {
-        var form = new FormDocument { Target = FormTarget.WinForms, Name = "F", Width = 400, Height = 300 };
-        form.Binds.Add(new FormBind { Event = "Load", Handler = "F_Load" });
-
-        var result = RegionWriter.Write("F.bas", FormScaffolder.Create("F", FormTarget.WinForms).CodeText, form, "F.blform");
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(result.Refused, Is.False);
-            Assert.That(result.Text, Does.Not.Contain("AddHandler Me.Load"));
-            Assert.That(result.Diagnostics.Single(d => d.Code == DesignCodes.BindNotOnTarget).Message,
-                Does.Contain("'form'").And.Contain("F_Load"));
-        });
-    }
+    // Slice 5: the root-bind EMISSION tests (which replaced ARootBind_IsWarned_NotEmitted_UntilFormEventsExist) live in
+    // FormEventEmissionTests, beside the web wrappers they share the init region with.
 
     [TestCase("0, 300", true)]
     [TestCase("640, -1", true)]

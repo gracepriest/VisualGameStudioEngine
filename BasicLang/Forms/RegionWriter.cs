@@ -440,8 +440,19 @@ public static class RegionWriter
     /// shared: a bind must not be canonicalised one way while being judged another.</para>
     /// </summary>
     private static string? CanonicalWebEvent(FormControlDef definition, FormBind bind) =>
-        DeclaredEvents(definition, FormTarget.Web)
-            .FirstOrDefault(e => string.Equals(e, bind.Event, StringComparison.OrdinalIgnoreCase));
+        WebEventOf(definition, bind)?.WebEvent;
+
+    /// <summary>
+    /// The catalog EVENT a web bind names (matched ignoring case, through <see cref="FormEvents.WiredOn"/>), or null when
+    /// the row does not wire it on the page. What the emitter reads <see cref="FormEventDef.WebWiring"/> and
+    /// <see cref="FormEventDef.WebFilter"/> from — never the event's name.
+    /// </summary>
+    private static FormEventDef? WebEventOf(FormControlDef definition, FormBind bind) =>
+        FormEvents.WiredOn(definition, FormTarget.Web)
+            .FirstOrDefault(e => string.Equals(e.WebEvent, bind.Event, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>"'a', 'b', 'c'" — a declared-event list a person can read at twelve events (BL8032).</summary>
+    private static string QuotedList(IEnumerable<string> names) => string.Join(", ", names.Select(e => $"'{e}'"));
 
     /// <summary>
     /// Refuses a CONTROL's web bind on an event its catalog row does not declare (BL8032).
@@ -487,45 +498,54 @@ public static class RegionWriter
                     continue;
                 }
 
-                var declared = DeclaredEvents(definition, FormTarget.Web).ToList();
-
-                diagnostics.Add(Error(DesignCodes.UnknownWebEvent,
-                    $"'{control.Id}' wires its '{bind.Event}' event to {bind.Handler}, but a web " +
-                    $"{definition.Kind} does not have that event — it has " +
-                    (declared.Count > 0
-                        ? $"{string.Join(" and ", declared.Select(e => $"'{e}'"))}. "
-                        : "no web event at all. ") +
-                    "DOM event names are case-sensitive and addEventListener takes a string, so " +
-                    "emitting this would register a listener that is never called: the build would " +
-                    "succeed, the page would load, and the handler would simply never run.",
-                    filePath, 0));
+                diagnostics.Add(UnknownWebEvent(filePath, control.Id, definition, bind));
             }
         }
     }
 
+    /// <summary>The ONE BL8032 text, for a control and for the Form (<paramref name="owner"/> is its Id, or <c>form</c>).</summary>
+    private static DesignDiagnostic UnknownWebEvent(string filePath, string owner, FormControlDef definition, FormBind bind)
+    {
+        var declared = DeclaredEvents(definition, FormTarget.Web).ToList();
+
+        return Error(DesignCodes.UnknownWebEvent,
+            $"'{owner}' wires its '{bind.Event}' event to {bind.Handler}, but a web " +
+            $"{definition.Kind} does not have that event — it has " +
+            (declared.Count > 0 ? $"{QuotedList(declared)}. " : "no web event at all. ") +
+            "DOM event names are case-sensitive and addEventListener takes a string, so " +
+            "emitting this would register a listener that is never called: the build would " +
+            "succeed, the page would load, and the handler would simply never run.",
+            filePath, 0);
+    }
+
     /// <summary>
-    /// Warns about the FORM's own binds (spec §2.3): they are read and written from slice 1, but the
-    /// Form has no catalog events until slice 5, so nothing is generated for them yet. A warning, never
-    /// a refusal — the document is not wrong, and before slice 1 the same bind was an unknown child that
-    /// nothing reported at all. ⚠ Slice 5 REPLACES this with emission.
+    /// Refuses a FORM bind on the web that names an event the Form does not wire there (slice 5 D-7) — BL8032, the
+    /// controls' rule through the same seam (<c>Shown</c>, <c>FormClosing</c>, a typo). It replaced slice 1's
+    /// "not generated yet" BL8028 warning when root binds started being emitted. WinForms is not checked, for the
+    /// reason <see cref="CheckControlBinds"/> gives: a wrong name there is csc's CS1061, loud on its own.
     /// </summary>
     private static void CheckRootBinds(string filePath, FormDocument form, List<DesignDiagnostic> diagnostics)
     {
+        if (form.Target != FormTarget.Web)
+        {
+            return;
+        }
+
         foreach (var bind in form.Binds)
         {
-            if (bind.UsesReservedDataBinding || string.IsNullOrEmpty(bind.Handler))
+            if (bind.UsesReservedDataBinding || string.IsNullOrEmpty(bind.Handler) ||
+                WebEventOf(FormControlCatalog.FormRoot, bind) != null)
             {
                 continue;
             }
 
-            diagnostics.Add(new DesignDiagnostic(
-                DesignCodes.BindNotOnTarget,
-                $"{DesignCodes.BindNotOnTarget}: 'form' wires its '{bind.Event}' event to {bind.Handler}, but " +
-                "the designer does not generate form-event wiring yet, so nothing is written for it. The " +
-                "document keeps the bind.",
-                filePath, 0, 0, IsWarning: true));
+            diagnostics.Add(UnknownWebEvent(filePath, "form", FormControlCatalog.FormRoot, bind));
         }
     }
+
+    /// <summary>The Form's binds the init region EMITS — every bind with a handler, minus reserved data binding.</summary>
+    private static IEnumerable<FormBind> EmittedRootBinds(FormDocument form) =>
+        form.Binds.Where(b => !b.UsesReservedDataBinding && !string.IsNullOrEmpty(b.Handler));
 
     /// <summary>
     /// Whether the init region will actually wire this bind — the ONE answer the emitter, the
@@ -588,8 +608,16 @@ public static class RegionWriter
         // (measured), so for it this check is stricter than the compiler — the safe side.
         // ⛔ Only binds the region EMITS: refusing over a wiring that is never written told the user
         // to move a handler above a region that did not reference it (review, 2026-09-19).
-        var handlers = form.AllControls().Concat(form.AllComponents())
-            .SelectMany(c => c.Binds.Where(b => IsEmittedBind(form, c, b)))
+        // ⛔ Slice 5 (D-7, D-12): only handlers an AddressOf NAMES. A WRAPPED bind's AddressOf names the generated
+        // VgsOn_ Sub (always above InitializeComponent, by construction), which reaches the user's handler by a
+        // DIRECT call — not bitten (M2); so is the Form's Load (AfterInit). The Form's LISTENER binds (body, window)
+        // are AddressOf like any control's, so they are checked.
+        var controlHandlers = form.AllControls().Concat(form.AllComponents())
+            .SelectMany(c => c.Binds.Where(b => IsEmittedBind(form, c, b) && !IsWrapped(c.Definition, b)));
+        var rootHandlers = EmittedRootBinds(form)
+            .Where(b => WebEventOf(FormControlCatalog.FormRoot, b) is { } evt &&
+                        evt.WebWiring != FormWebWiring.AfterInit && evt.WebFilter == FormWebFilter.None);
+        var handlers = controlHandlers.Concat(rootHandlers)
             .Select(b => b.Handler)
             .Distinct(StringComparer.Ordinal)
             .ToList();
@@ -703,6 +731,14 @@ public static class RegionWriter
         var body = new StringBuilder();
         var inner = indent + "    ";
 
+        // ⛔ Slice 5 D-12: the generated wrapper Subs for FILTERED web events go ABOVE InitializeComponent — an AddressOf
+        // naming a Sub declared later erases its parameter types (BL8013's measured rule). Nothing at all is emitted on a
+        // page with no filtered bind, so every existing region stays byte-identical.
+        if (form.Target == FormTarget.Web)
+        {
+            AppendWrappers(body, form, indent, newline);
+        }
+
         body.Append($"{indent}Private Sub InitializeComponent()").Append(newline);
 
         if (form.Target == FormTarget.Web)
@@ -711,12 +747,13 @@ public static class RegionWriter
             // user could rename or remove.
             body.Append($"{inner}Dim doc As Document = ::document").Append(newline);
 
-            // ⛔ The TYPED Window, and only when a script component exists (Task 25). Typed rather
-            // than the ::window hatch so that the compiler — not a runtime TypeError — rejects a
-            // wrong callback: Window.setInterval takes an Action and refuses Action(Of DomEvent),
-            // which the hatch would have let through (measured 2026-09-19). Keyed on a script
-            // component EXISTING, not on one being wired — an unused local is the cheaper wrong.
-            if (form.Components.Any(c => c.Definition?.WebScript != null))
+            // ⛔ The TYPED Window, and only when a script component exists (Task 25) or a Form bind listens on the window
+            // (slice 5: Resize). Typed rather than the ::window hatch so that the compiler — not a runtime TypeError —
+            // rejects a wrong callback: Window.setInterval takes an Action and refuses Action(Of DomEvent), which the
+            // hatch would have let through (measured 2026-09-19). Keyed on a script component EXISTING, not on one being
+            // wired — an unused local is the cheaper wrong. A page with neither declares no `w` (byte-identical).
+            if (form.Components.Any(c => c.Definition?.WebScript != null) ||
+                EmittedRootBinds(form).Any(b => WebEventOf(FormControlCatalog.FormRoot, b)?.WebWiring == FormWebWiring.Window))
             {
                 body.Append($"{inner}Dim w As Window = ::window").Append(newline);
             }
@@ -764,10 +801,176 @@ public static class RegionWriter
             {
                 AppendRootRow(body, form, row, inner, newline, filePath, diagnostics);
             }
+
+            // Slice 5 D-3: the Form's own binds, LAST — VS's place for `this.Load += …`. The document's spelling, as a
+            // control's: a wrong name is csc's CS1061. ⛔ NEVER `Handles` (lexed, never parsed).
+            foreach (var bind in EmittedRootBinds(form))
+            {
+                body.Append($"{inner}AddHandler Me.{bind.Event}, AddressOf {bind.Handler}").Append(newline);
+            }
+        }
+        else
+        {
+            AppendRootWebBinds(body, form, inner, newline);
         }
 
         body.Append($"{indent}End Sub").Append(newline);
         return body.ToString();
+    }
+
+    /// <summary>
+    /// The Form's web binds (slice 5 D-3), after the controls so every element exists: a listener on
+    /// <c>document.body</c> (Element) or <c>window</c> (Window) — through its wrapper when filtered (D-12) — and then,
+    /// as the VERY LAST statement, <c>Me.&lt;handler&gt;()</c> for the AfterInit event (Load). ⛔ <c>Me.</c>-qualified: an
+    /// unqualified self-call is a runtime ReferenceError on the JavaScript backend (CLAUDE.md). A bind on an event the
+    /// Form does not wire is <see cref="CheckRootBinds"/>' BL8032, and this body is then thrown away.
+    /// </summary>
+    private static void AppendRootWebBinds(StringBuilder body, FormDocument form, string inner, string newline)
+    {
+        var root = FormControlCatalog.FormRoot;
+        var binds = EmittedRootBinds(form).ToList();
+        var calls = new List<string>();
+
+        foreach (var bind in binds)
+        {
+            if (WebEventOf(root, bind) is not { } evt)
+            {
+                continue;
+            }
+
+            switch (evt.WebWiring)
+            {
+                case FormWebWiring.AfterInit:
+                    calls.Add($"{inner}Me.{bind.Handler}()");
+                    break;
+                case FormWebWiring.Window:
+                    AppendWebListener(body, "w", form.Name, root, binds, bind, evt, inner, newline);
+                    break;
+                default:
+                    AppendWebListener(body, "doc.body", form.Name, root, binds, bind, evt, inner, newline);
+                    break;
+            }
+        }
+
+        foreach (var call in calls)
+        {
+            body.Append(call).Append(newline);
+        }
+    }
+
+    /// <summary>
+    /// One web listener — <c>&lt;target&gt;.addEventListener("&lt;type&gt;", AddressOf &lt;handler&gt;)</c> — with the
+    /// CATALOG's type (<see cref="FormEvents.ListenType"/>: a KeyPress listens to <c>keydown</c>). For a FILTERED event
+    /// (D-12) the AddressOf names the generated wrapper instead of the handler, and only the FIRST bind of that event on
+    /// this owner emits it: one wrapper calls every handler bound to the event, so a second listener would run them twice.
+    /// </summary>
+    private static void AppendWebListener(
+        StringBuilder body, string target, string prefix, FormControlDef definition, IReadOnlyList<FormBind> binds,
+        FormBind bind, FormEventDef evt, string inner, string newline)
+    {
+        var handler = bind.Handler;
+        if (evt.WebFilter != FormWebFilter.None)
+        {
+            var first = binds.First(b => !string.IsNullOrEmpty(b.Handler) && Equals(WebEventOf(definition, b), evt));
+            if (!ReferenceEquals(first, bind))
+            {
+                return;
+            }
+
+            handler = WrapperName(prefix, evt);
+        }
+
+        body.Append($"{inner}{target}.addEventListener(\"{FormEvents.ListenType(evt)}\", AddressOf {handler})")
+            .Append(newline);
+    }
+
+    /// <summary>The reserved name of a generated wrapper (D-12): <c>VgsOn_&lt;control Id or form name&gt;_&lt;WinForms event&gt;</c>.</summary>
+    private static string WrapperName(string prefix, FormEventDef evt) => $"VgsOn_{prefix}_{evt.Name}";
+
+    /// <summary>Whether a web bind reaches its handler through a generated wrapper (D-12) — its event carries a filter.</summary>
+    private static bool IsWrapped(FormControlDef? definition, FormBind bind) =>
+        definition != null && WebEventOf(definition, bind) is { WebFilter: not FormWebFilter.None };
+
+    /// <summary>
+    /// Every generated wrapper the page needs (D-12), controls first in tree order, then the Form — one per owner and
+    /// filtered event, calling each handler bound to it in document order. Preceded by one comment line saying the
+    /// <c>VgsOn_</c> prefix is reserved; nothing at all when there is none.
+    /// </summary>
+    private static void AppendWrappers(StringBuilder body, FormDocument form, string indent, string newline)
+    {
+        var owners = form.AllControls()
+            .Select(c => (Prefix: c.Id, Definition: c.Definition, Binds: (IReadOnlyList<FormBind>)c.Binds.ToList()))
+            .Append((Prefix: form.Name, Definition: (FormControlDef?)FormControlCatalog.FormRoot,
+                Binds: (IReadOnlyList<FormBind>)EmittedRootBinds(form).ToList()));
+
+        var wrote = false;
+        foreach (var (prefix, definition, binds) in owners)
+        {
+            if (definition == null)
+            {
+                continue;
+            }
+
+            var groups = binds
+                .Where(b => !string.IsNullOrEmpty(b.Handler))
+                .Select(b => (Bind: b, Event: WebEventOf(definition, b)))
+                .Where(x => x.Event is { WebFilter: not FormWebFilter.None })
+                .GroupBy(x => x.Event!);
+
+            foreach (var group in groups)
+            {
+                if (!wrote)
+                {
+                    body.Append($"{indent}' VgsOn_ Subs are generated (a reserved prefix): each turns a page event into what WinForms " +
+                                "means by it, then calls your handler.").Append(newline);
+                    wrote = true;
+                }
+
+                Wrapper(body, prefix, group.Key, group.Select(x => x.Bind.Handler).ToList(), indent, newline);
+            }
+        }
+    }
+
+    /// <summary>
+    /// ⛔ THE one place a wrapper's body is built (D-12), from <see cref="FormEventDef.WebFilter"/> — never from the event's
+    /// name. A NAMED Sub, never a lambda (<c>Me.</c> inside a lambda hard-errors on the JavaScript backend); it calls each
+    /// handler <c>Me.</c>-qualified, a direct call the AddressOf erasure does not bite (M2). Measured exactly as written
+    /// on the branch CLI (pre-flight M7). ⚠ <c>relatedTarget</c> and <c>contains</c> are not declared in
+    /// <c>dom-core.bli</c> and compile untyped (M7): the node/Edge run tiers are the gate for this text.
+    /// </summary>
+    private static void Wrapper(
+        StringBuilder body, string prefix, FormEventDef evt, IReadOnlyList<string> handlers, string indent, string newline)
+    {
+        var inner = indent + "    ";
+        body.Append($"{indent}Private Sub {WrapperName(prefix, evt)}(e As DomEvent)").Append(newline);
+
+        switch (evt.WebFilter)
+        {
+            case FormWebFilter.KeyPressKeys:
+                // WinForms raises KeyPress for a character, Enter ('\r'), Backspace ('\b') and Escape — never for
+                // Shift, arrows or F-keys (coordinator ruling 1, ADR 0021).
+                body.Append($"{inner}Dim k As String = e.key").Append(newline);
+                body.Append($"{inner}If k.Length = 1 OrElse k = \"Enter\" OrElse k = \"Backspace\" OrElse k = \"Escape\" Then")
+                    .Append(newline);
+                break;
+
+            case FormWebFilter.FromOutside:
+                // Focus moving BETWEEN two children of the element raises no Enter/Leave on it (coordinator ruling 2).
+                body.Append($"{inner}If e.relatedTarget Is Nothing OrElse Not e.currentTarget.contains(e.relatedTarget) Then")
+                    .Append(newline);
+                break;
+
+            default:
+                throw new InvalidOperationException($"'{evt.Name}' has no web filter, so it needs no wrapper");
+        }
+
+        foreach (var handler in handlers)
+        {
+            body.Append($"{inner}    Me.{handler}(e)").Append(newline);
+        }
+
+        body.Append($"{inner}End If").Append(newline);
+        body.Append($"{indent}End Sub").Append(newline);
     }
 
     /// <summary>The FormRoot rows that exist on a WinForms form — the ones its InitializeComponent sets on <c>Me</c>.</summary>
@@ -1122,9 +1325,16 @@ public static class RegionWriter
                 // An event the row does not declare never gets this far: `CheckControlBinds`
                 // refuses the write with BL8032 first. The fallback keeps this honest anyway,
                 // because the body is built BEFORE the checks run and thrown away when one refuses.
-                var eventName = control.Definition is { } definition
-                    ? CanonicalWebEvent(definition, bind) ?? bind.Event
-                    : bind.Event;
+                //
+                // Slice 5: the catalog EVENT decides what is listened to (ListenType — a KeyPress is a keydown) and
+                // whether the AddressOf names a generated wrapper (WebFilter, D-12).
+                if (control.Definition is { } known && WebEventOf(known, bind) is { } evt)
+                {
+                    AppendWebListener(body, control.Id, control.Id, known, control.Binds, bind, evt, inner, newline);
+                    continue;
+                }
+
+                var eventName = bind.Event;
 
                 body.Append($"{inner}{control.Id}.addEventListener(\"{eventName}\", AddressOf {bind.Handler})")
                     .Append(newline);

@@ -228,6 +228,15 @@ public static class FormScaffolder
         // Every scaffolded web form had this shape, so every one of them was dead on arrival.
         // The backend defect is unfixed and filed separately; this is not generating the trigger.
         sb.Append($"{indent}{indent}Me.InitializeComponent()\n");
+        if (target == FormTarget.Web)
+        {
+            // Slice 5 D-3, where the user meets it: on the page Load is a call at the END of the generated
+            // InitializeComponent (a window `load` listener can register after the event fired), so it runs before
+            // anything the user writes below this line — unlike WinForms, where Load waits for Show().
+            sb.Append($"{indent}{indent}' On a web page, Form Load runs at the end of InitializeComponent: code after this line runs after Load.\n");
+            sb.Append($"{indent}{indent}' On WinForms Load runs later, when the form is shown.\n");
+        }
+
         sb.Append($"{indent}End Sub\n");
         sb.Append('\n');
 

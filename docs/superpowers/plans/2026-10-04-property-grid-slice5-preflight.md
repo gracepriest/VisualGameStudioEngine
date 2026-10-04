@@ -721,6 +721,67 @@ reserved `VgsOn_` prefix, and M7's finding that an Extern class's undeclared mem
   The first five ran as one build and the last two as another; each mutant is killed by a DIFFERENT test, and each failing
   test's message names its own mutant.
 
+### Task 2 — root bind emission and the D-12 wrappers (base `83304779`)
+- `RegionWriter`: `CheckRootBinds` is now the web BL8032 refusal for the Form through the seam (`WebEventOf(FormRoot, bind)`),
+  sharing ONE message builder with the controls (`UnknownWebEvent`) — comma-joined (`QuotedList`). WinForms root binds are
+  emitted `AddHandler Me.<Event>, AddressOf <h>` after the reference rows, immediately before `End Sub`. Web root binds
+  (`AppendRootWebBinds`) after the controls: Element → `doc.body.addEventListener`, Window → `w.addEventListener`, AfterInit
+  → `Me.<h>()` as the very last line. `Dim w` widened to "script component OR a Window-wired root bind". Every web listener
+  (controls and root) goes through ONE `AppendWebListener` that writes `FormEvents.ListenType(evt)` and, for a filtered event,
+  `AddressOf VgsOn_<prefix>_<Event>`. The wrappers are built by ONE `Wrapper(...)` switch on `WebFilter`, emitted by
+  `AppendWrappers` ABOVE `Private Sub InitializeComponent()` with one comment line naming the reserved `VgsOn_` prefix.
+  `CheckHandlerOrdering` adds the root's LISTENER binds and exempts AfterInit and every WRAPPED bind's user handler.
+  `FormDocument.Binds` doc updated; the web scaffold carries the D-3 Load comment under `Me.InitializeComponent()`.
+- **Decision taken (not in the plan):** two binds on ONE filtered event of one owner share ONE wrapper (it calls each handler
+  in document order) and ONE listener — two wrappers of the same name would be a duplicate member, two listeners would run the
+  handlers twice. Pinned by `TwoHandlersOnOneFilteredEvent_ShareOneWrapper_AndOneListener`.
+- **Deviation:** the tests live in a new fixture `FormEventEmissionTests` (root + D-12 + scaffold comment together) rather
+  than split across `FormRootTests`/`FormRegionWriterTests`/`FormScaffolderTests`; `FormRootTests.ARootBind_IsWarned_…` is
+  deleted there with a pointer comment (its rewrite is `ARootBind_IsWired_AsTheLastStatement_OnWinForms`).
+- **Red before:** 15 of the 18 new tests failed on `83304779` for the right reasons (no emission, BL8028 warning instead of
+  BL8032, " and "-joined message, no wrappers, no scaffold comment). The three already green are guards that the change must
+  keep true (`APageWithoutWindowBinds_DeclaresNoW_AndNoWrapper`, `AWinFormsKeyPress_IsAPlainAddHandler`,
+  `AWebLoadHandler_DeclaredBelow_IsNot` — the last is made non-vacuous by the AfterInit-exemption mutation below).
+- **Run, not just compile (scratch probe, nothing committed):** a page written by `RegionWriter` with TextBox KeyPress +
+  KeyDown, Panel Enter, Form Load/Resize/KeyPress, built by the branch CLI on the PROJECT route, under node with
+  `EventTarget` stubs (`contains` knows the Panel's children): `F_Load` at construction; `a`/`Enter`/`Backspace`/`Escape` →
+  KeyPress ×4 and KeyDown for all 7 keys (`Shift`/`ArrowLeft`/`F1` → no KeyPress); Panel `focusin` from outside → Enter ran,
+  from a child (relatedTarget inside) → did NOT, `null` → ran; body `keydown` `x` → `F_KeyPress`, `Shift` → nothing; `resize` →
+  `F_Resize`. Task 4 turns this into the committed node tier.
+- **RE-CHECK:** every `FormRegionWriterTests` golden, `FormComponentEmissionTests` (the Timer `w` line), `FormScaffolderTests`
+  web goldens, `FormRootTests` `:183`/`:249` — all green in the `(Form|WinFormsCatalog) & !Integration` run (3085 passed, 1
+  failed = `EveryTextRoute_…`, the known machine row). `FormBuildEmissionTests`: see the gate below.
+
+| Mutation (Edit + rebuild) | Killed by |
+|---|---|
+| A listener emits `evt.WebEvent` instead of `ListenType` (KeyPress listens to `keypress`) | `AWebKeyPressBind_…`, `AWebRootKeyPress_WrapsOnTheBody` |
+| `FromOutside` wrapper's test replaced by `If True` (relatedTarget dropped) | `AWebPanelEnterAndLeave_…` |
+| `Dim w` condition back to script components only | `AWebRootResizeBind_ListensOnTheWindow_AndDeclaresW` |
+| Root BL8032 check disabled on the web (guard inverted) | `AWebRootBind_OnShown_IsRefusedAsBL8032_NamingTheForm` (+ the WinForms FormClosing row, refused) |
+| AfterInit no longer exempt from BL8013 | `AWebLoadHandler_DeclaredBelow_IsNot` |
+| Root web binds (Load included) emitted BEFORE the controls | `TheWebLoad_IsAMeQualifiedCall_…`, `AWebRootKeyBind_ListensOnTheBody` |
+| Wrappers emitted BELOW `InitializeComponent` | `AWebKeyPressBind_…` (position) |
+| BL8013 skips root listeners | `AWebRootKeyHandler_DeclaredBelowTheRegion_IsBL8013` |
+| A second bind on a filtered event emits its own listener | `TwoHandlersOnOneFilteredEvent_…` |
+| WinForms `AddHandler Me.…` before the reference rows | `ARootBind_IsWired_AsTheLastStatement_OnWinForms` |
+| `Me.` dropped from the Load call | `TheWebLoad_IsAMeQualifiedCall_…` |
+| Wrapped handlers no longer exempt from BL8013 | `AWrappedHandlerBelowTheRegion_IsNotBL8013_…` |
+
+  Three builds (5 + 5 + 2 mutants); each mutant's expected test failed, and no test was claimed by two mutants of one build
+  except where listed together on one row.
+
+### Gate after Task 2 (working tree = Task 2 on `83304779`)
+- **Fast subset:** Total 11112 — Passed 11087, Failed 6, Skipped 19. Sorted failure NAMES identical to Task 0's six
+  (`Emit_ReplacesAnImportedModuleThatAnotherHandleHasMapped`, `Emit_ReplacesAScriptThatAnotherHandleHasMapped`,
+  `Emit_ReplacingAnImportedModule_LeavesNoTempFileBehind`, `EveryTextRoute_UsesTheFormatter_NeverToStringOrABareCout`,
+  `SearchSnippets_EmptyQuery_ReturnsAll`, `SearchSnippets_WhitespaceQuery_ReturnsAll`); +29 tests are the new ones.
+- **Integration `(Form|WinFormsCatalog)`:** 282 — 281 passed, 1 failed, 0 skipped (23 m 29 s), including
+  `WinFormsCatalogSweepTests` (csc), `FormBuildEmissionTests`, `FormDesignerAcceptanceTests`, `FormComponentAcceptanceTests`,
+  `FormMenuAcceptanceTests`, `FormRetargetPairTests`. The one failure, `CppDoubleFormattingTests.Expected_IsWhatDotNetPrints`,
+  is caught by the filter only because "Formatting" contains "Form": the emitted C# printed `∞` where the test expects
+  `Infinity` (a machine-culture symbol), in code this slice does not touch. Not A/B'd against master — recorded as
+  unrelated by construction, to be confirmed at the slice gate.
+
 ## 7. Tests to re-check (consolidated)
 
 | Test | Why | Task |

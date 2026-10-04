@@ -102,8 +102,10 @@ public sealed class FormDocument
 
     /// <summary>
     /// The FORM's own event wiring (spec §2.3) — the same <c>&lt;Bind&gt;</c> shape a control uses,
-    /// written directly under the root element. ⚠ Read and written in slice 1; the region writer WARNS
-    /// rather than emitting until slice 5 gives the Form its events.
+    /// written directly under the root element. Since slice 5 the region writer EMITS them against
+    /// <c>FormControlCatalog.FormRoot</c>'s events: <c>AddHandler Me.Load, …</c> last on WinForms; on the page a
+    /// <c>document.body</c>/<c>window</c> listener, or Load as <c>Me.&lt;handler&gt;()</c> at the end of
+    /// <c>InitializeComponent</c> (ADR 0021). A web bind the Form does not wire there is refused (BL8032).
     /// </summary>
     public List<FormBind> Binds { get; } = new();
 
