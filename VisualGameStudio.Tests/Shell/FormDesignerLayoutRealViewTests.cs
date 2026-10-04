@@ -273,12 +273,13 @@ public class FormDesignerLayoutRealViewTests
                 var cell = rig.ValuePanel(container);
                 var cellRect = rig.InWindow(cell);
                 var editors = cell.GetVisualDescendants().OfType<Control>()
-                    .Where(c => c is TextBox or ComboBox or NumericUpDown or ToggleSwitch or FormColorDropDown)
+                    .Where(c => c is TextBox or ComboBox or NumericUpDown or ToggleSwitch or FormColorDropDown
+                        or Button { Name: "FontEllipsis" })
                     .Where(c => c.IsEffectivelyVisible && c.Bounds.Width > 0)
                     .Where(c => c.FindAncestorOfType<NumericUpDown>() == null); // its inner box is its own business
                 foreach (var editor in editors)
                 {
-                    var kind = editor.GetType().Name;
+                    var kind = editor is Button { Name: { } named } ? named : editor.GetType().Name;
                     checkedKinds[kind] = checkedKinds.GetValueOrDefault(kind) + 1;
                     var r = rig.InWindow(editor);
                     Assert.That(r.Left, Is.GreaterThanOrEqualTo(divider.Right), $"{row.Name}: {kind} starts left of the divider ({r})");
@@ -288,8 +289,8 @@ public class FormDesignerLayoutRealViewTests
         });
 
         TestContext.WriteLine($"[editors checked] {string.Join(", ", checkedKinds.Select(k => $"{k.Key}={k.Value}"))}");
-        // Slice 4 D-1: the colour rows' swatch drop-down sits in the same cell, beside the text box.
-        Assert.That(checkedKinds.Keys, Is.SupersetOf(new[] { "TextBox", "ComboBox", "NumericUpDown", nameof(FormColorDropDown) }),
+        // Slice 4 D-1 / D-2: the colour rows' swatch drop-down and the Font row's `…` sit in the same cell, beside the text box.
+        Assert.That(checkedKinds.Keys, Is.SupersetOf(new[] { "TextBox", "ComboBox", "NumericUpDown", nameof(FormColorDropDown), "FontEllipsis" }),
             "precondition: the sweep saw every kind of editor that has a minimum width");
         // Slice 4 D-3: a Bool row is the True/False drop-down (counted as a ComboBox above); the shared editor's switch is
         // the Settings dialog's and never renders in the grid.

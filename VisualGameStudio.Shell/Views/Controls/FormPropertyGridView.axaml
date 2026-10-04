@@ -190,6 +190,11 @@
                        Anchor/Dock reason below: the list's overlay scrollbar covers the cell's right edge). -->
                   <DockPanel VerticalAlignment="Center" Margin="4,1,4,1" IsVisible="{Binding UsesTypedEditor}">
                     <controls:FormColorDropDown DockPanel.Dock="Left" Margin="0,0,4,0" IsVisible="{Binding IsColor}"/>
+                    <!-- Slice 4 D-2: a Font row's `…` opens the Font dialog (OnFontEllipsisClick). Left, like the swatch. -->
+                    <Button x:Name="FontEllipsis" DockPanel.Dock="Left" Classes="dropDown" Margin="0,0,4,0"
+                            FontSize="10" Padding="4,0" MinHeight="0" VerticalAlignment="Center"
+                            Content="&#x2026;" IsVisible="{Binding HasEllipsis}" Click="OnFontEllipsisClick"
+                            ToolTip.Tip="Choose a font" AutomationProperties.Name="Choose a font"/>
                     <controls:TypedValueEditor Classes="compact" VerticalAlignment="Center"/>
                   </DockPanel>
 

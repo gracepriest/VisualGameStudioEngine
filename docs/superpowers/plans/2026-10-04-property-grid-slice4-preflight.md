@@ -919,3 +919,48 @@ Mutations (Edit + REBUILD; the AXAML one after `dotnet clean`):
 | `#AARRGGBB` for alpha 255 | killed (the red-step stub: hex ×2) |
 | `TabFor` not applied on open | killed (`…OpensOnTheTabHoldingTheValue…`). ⚠ The reopen step alone was VACUOUS for it (the tab control keeps its last tab, which was Web), so the tab test was added |
 | a "seeding" guard around the Custom seed | EQUIVALENT (the reset after the seed covers it) → removed |
+
+### Task 5 — Font dialog (base `b97ac2bc`)
+Done as written: new `Views/Dialogs/FormFontDialog.axaml(.cs)` (filter box + family list, size box + VS's size list,
+Bold/Italic/Underline/Strikeout, a live preview, the web hint, OK/Cancel) and `ViewModels/Designer/FormFontDialogViewModel.cs`
+(families from the seam, filtered by `FormFontValue.TryParse`, plus the current family and `Segoe UI`; `Preview` /
+`CanAccept` through the parser; `Accept()` = canonical text, `Cancel()` = null). `FormPropertyRow` gains `HasEllipsis`,
+`EffectiveFont`, `Target`, `ApplyFont` and an internal `Inherited`; `FormCompositeRows.Attach` stores the inherited function
+on the row, and the parts and the dialog both read it through `FormCompositeRows.EffectiveFont` (ONE rule). The grid
+view's code-behind opens the dialog with `ShowDialog<string?>(owner)` and commits a non-null result; its `FontFamilies`
+seam defaults to `FontManager.Current.SystemFonts`.
+
+Choices taken under the delegation:
+- ⚠ **Deviation: the `…` sits LEFT of the text box**, not docked right as the plan says (VS puts it right): the list's
+  overlay scrollbar covers the cell's right edge — Task 2's measured reason, which the swatch follows too. The real-view
+  test asserts a click at its centre reaches it.
+- The family and size lists bind their selection ONE way and write back only a real pick: a typed `9.5` is in no list and
+  a filter can hide the chosen family, and a TwoWay `SelectedItem` would push null over the value in both cases.
+- OK is disabled while the choices make no font (a size the parser refuses: 0, three decimals, text) — OK never produces a
+  value the catalog would refuse.
+
+Tests: red first with stubs (unfiltered families, `Accept` → null, the start ignoring the inherited font): 6 red for the
+expected reasons. ⚠ The ambient test was ALSO red for a wrong reason on that run — its fixture wrapped the GroupBox's child in
+`<Controls>`, which the reader does not nest; fixed (children sit directly in the container element), then the inherited-start
+mutant was re-run against the corrected fixture (below). Then green.
+- `FormFontDialogViewModelTests` (new, 16): refused families never offered (`Font & Co`, `Semi;Colon`); the current family
+  offered and selected when not installed; Bold+Italic → `Arial, 10pt, style=Bold, Italic`; Cancel → null; size acceptance
+  ×5; the filter; the web hint; an absent ambient Font inside a bold GroupBox starts at `Tahoma, 10pt, style=Bold`; only the
+  Font row has the ellipsis.
+- `EveryBindingInAnEditorView_…(FormFontDialog)` joins the walker list.
+- Real view: `TheFontDialog_PicksAFamilyAndBold_AndOkWritesOneCanonicalFont_CancelWritesNothing_AtTwoSizes` — the dialog is in
+  `OwnedWindows`, offers the seam's families minus the refused one, starts at the inherited `Segoe UI`; real clicks on Arial,
+  Bold, OK → `Font="Arial, 9pt, style=Bold"`, ONE Edited, nothing written while open; reopened Bold, Italic + Cancel →
+  byte-identical, no edit.
+- `EveryRowsEditor_Fits…` sweeps the `FontEllipsis` button and requires it was seen.
+
+RE-CHECK: every non-Integration `Form*`/`CodeEditor*` test 2901/2903 (1 skipped; the one failure is the known
+`EveryTextRoute_…`), including `FormCompositeRowTests` (the parts now read the row's stored inherited function).
+
+Mutations (Edit + REBUILD):
+| Mutant | Result |
+|---|---|
+| the family filter removed | killed (red step: VM + real view) |
+| OK writes per toggle (a commit on every dialog change) | killed (real view: "nothing written while open", 2 edits) |
+| Cancel writes (`Close(Accept())`) | killed (real view: Italic written, 2 edits) |
+| the start value ignores the inherited font | killed (`AnAbsentAmbientFont_…`, on the corrected fixture) |

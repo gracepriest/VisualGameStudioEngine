@@ -3,6 +3,7 @@ using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.Interactivity;
+using Avalonia.Media;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using VisualGameStudio.Shell.ViewModels.Designer;
@@ -60,6 +61,40 @@ public partial class FormPropertyGridView : UserControl
         target.FindAncestorOfType<OverlayPopupHost>(includeSelf: true) != null ||
         target.FindAncestorOfType<PopupRoot>(includeSelf: true) != null ||
         !ReferenceEquals(TopLevel.GetTopLevel(target), TopLevel.GetTopLevel(PropertyList));
+
+    /// <summary>
+    /// Where the Font dialog's families come from (slice 4 D-2): the installed fonts — Avalonia's own list, Windows and
+    /// Linux fontconfig alike. ⚠ A SEAM: the list differs per machine (pre-flight M6), so a test supplies its own.
+    /// </summary>
+    public Func<IEnumerable<string>> FontFamilies { get; set; } =
+        () => FontManager.Current.SystemFonts.Select(family => family.Name);
+
+    /// <summary>
+    /// A Font row's <c>…</c>: opens the Font dialog over the IDE window, starting from the row's font (or, absent, the one
+    /// its control inherits — <see cref="FormPropertyRow.EffectiveFont"/>), and commits ONE canonical value on OK. Cancel
+    /// writes nothing.
+    /// </summary>
+    private async void OnFontEllipsisClick(object? sender, RoutedEventArgs e)
+    {
+        if (sender is not Control { DataContext: FormPropertyRow row } || !row.HasEllipsis ||
+            TopLevel.GetTopLevel(this) is not Window owner)
+        {
+            return;
+        }
+
+        var start = row.EffectiveFont ?? new BasicLang.Forms.FormFontValue(
+            FormFontDialogViewModel.DefaultFamily, 9m, false, false, false, false);
+        var dialog = new Dialogs.FormFontDialog
+        {
+            DataContext = new FormFontDialogViewModel(FontFamilies(), start, row.Target)
+        };
+
+        var result = await dialog.ShowDialog<string?>(owner);
+        if (result != null)
+        {
+            row.ApplyFont(result);
+        }
+    }
 
     /// <summary>
     /// A Dock region was picked in the Dock pop-up: close it, as VS does, and put focus back on the row's drop-down

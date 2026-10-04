@@ -396,6 +396,29 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
     /// </summary>
     public void ApplyColor(string value) => Commit(value);
 
+    // ==================================================================
+    // The Font dialog (slice 4 D-2): a `…` button on a Font row opens it; OK writes ONE canonical value
+    // ==================================================================
+
+    /// <summary>
+    /// What this row's control INHERITS for the property when it sets none (<c>FormAmbient.Inherited</c>), or null when
+    /// there is nothing to inherit from (the Form's own rows). Set once by <see cref="FormCompositeRows.Attach"/>; the Font
+    /// parts and the Font dialog both read it, through <see cref="EffectiveFont"/>.
+    /// </summary>
+    internal Func<string?>? Inherited { get; set; }
+
+    /// <summary>The target whose value rules this row applies — the Font dialog shows the web hint on <see cref="FormTarget.Web"/>.</summary>
+    public FormTarget Target => _target;
+
+    /// <summary>A Font row carries VS's <c>…</c> button, which opens the Font dialog. Not while frozen (the typed-editor rule).</summary>
+    public bool HasEllipsis => Typed && _type == FormPropertyType.Font;
+
+    /// <summary>The font the dialog starts from: the row's value, or — absent — what its control inherits.</summary>
+    public FormFontValue? EffectiveFont => FormCompositeRows.EffectiveFont(this);
+
+    /// <summary>The Font dialog's OK: ONE canonical value through the row's own Commit (fan-in; Judge decides).</summary>
+    public void ApplyFont(string canonical) => Commit(canonical);
+
     /// <summary>VS's two Bool items, in VS's order — the spelling <see cref="StringValue"/> shows a Bool in.</summary>
     private static readonly IReadOnlyList<string> BoolChoices = new[] { "True", "False" };
 

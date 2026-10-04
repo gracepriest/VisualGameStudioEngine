@@ -201,6 +201,8 @@ public class FormPropertyGridViewTests
     {
         yield return new TestCaseData(new[] { "VisualGameStudio.Shell", "Views", "Controls", "FormColorDropDown.axaml" }, 8)
             .SetName("EveryBindingInAnEditorView_ResolvesAgainstItsRootDataType(FormColorDropDown)");
+        yield return new TestCaseData(new[] { "VisualGameStudio.Shell", "Views", "Dialogs", "FormFontDialog.axaml" }, 15)
+            .SetName("EveryBindingInAnEditorView_ResolvesAgainstItsRootDataType(FormFontDialog)");
     }
 
     [TestCaseSource(nameof(EditorViews))]

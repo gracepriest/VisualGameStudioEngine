@@ -245,6 +245,108 @@ public partial class FormPropertyGridRealViewTests
         }
     }
 
+    // ==================================================================
+    // Slice 4 Task 5 — the Font dialog (D-2)
+    // ==================================================================
+
+    /// <summary>The seam's families — never this machine's (pre-flight M6). "Font &amp; Co" is one the catalog refuses.</summary>
+    private static readonly string[] FakeFamilies = { "Arial", "Font & Co", "Verdana" };
+
+    /// <summary>Clicks a Font row's <c>…</c> (real click) and returns the modal dialog it opened over the rig's window.</summary>
+    private static VisualGameStudio.Shell.Views.Dialogs.FormFontDialog OpenFontDialog(Rig rig, FormPropertyRow font)
+    {
+        rig.Grid.FontFamilies = () => FakeFamilies;
+        var ellipsis = rig.Container(font).GetVisualDescendants().OfType<Button>()
+            .Single(b => b.Name == "FontEllipsis" && b.IsEffectivelyVisible);
+        var hit = rig.Window.InputHitTest(rig.CentreInWindow(ellipsis)) as Visual;
+        Assert.That(hit?.GetSelfAndVisualAncestors().Contains(ellipsis), Is.True,
+            $"a click at the Font row's … reaches it (hit {hit?.GetType().Name})");
+
+        rig.Click(ellipsis);
+        Dispatcher.UIThread.RunJobs();
+        var dialog = rig.Window.OwnedWindows.OfType<VisualGameStudio.Shell.Views.Dialogs.FormFontDialog>().SingleOrDefault()
+                     ?? throw new InvalidOperationException("the … opened no Font dialog owned by the IDE window");
+        dialog.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+        return dialog;
+    }
+
+    private static T Named<T>(Window dialog, string name) where T : Control =>
+        dialog.GetVisualDescendants().OfType<T>().Single(c => c.Name == name);
+
+    /// <summary>
+    /// The Font dialog through the real grid: a real click on <c>lbl</c>'s Font <c>…</c> opens a modal dialog owned by the
+    /// IDE window (M4), offering the seam's families minus the one the catalog refuses; a real click on Arial, on Bold and
+    /// on OK writes ONE canonical Font into the FILE with ONE Edited. Then the same with Cancel writes nothing. At two sizes.
+    /// </summary>
+    [AvaloniaTest]
+    public void TheFontDialog_PicksAFamilyAndBold_AndOkWritesOneCanonicalFont_CancelWritesNothing_AtTwoSizes()
+    {
+        foreach (var (w, h) in TwoZooms)
+        {
+            using var rig = Open(w, h);
+            SelectOnCanvas(rig, "lbl");
+            var font = rig.Row("Font");
+            var edits = 0;
+            rig.GridVm.Edited += (_, _) => edits++;
+
+            var dialog = OpenFontDialog(rig, font);
+            try
+            {
+                var families = Named<ListBox>(dialog, "FamilyList").Items.Cast<object?>().ToList();
+                Assert.Multiple(() =>
+                {
+                    Assert.That(families, Is.EqualTo(new object[] { "Arial", "Segoe UI", "Verdana" }),
+                        $"{w}x{h}: the seam's families, minus 'Font & Co', plus WinForms' default");
+                    Assert.That(Named<ListBox>(dialog, "FamilyList").SelectedItem, Is.EqualTo("Segoe UI"),
+                        $"{w}x{h}: it starts at the font the Label inherits");
+                });
+
+                var arial = Named<ListBox>(dialog, "FamilyList").ContainerFromIndex(0)!;
+                ClickInItsTopLevel(rig, arial);
+                ClickInItsTopLevel(rig, Named<CheckBox>(dialog, "BoldBox"));
+                Assert.That(edits, Is.Zero, $"{w}x{h}: nothing written while the dialog is open");
+                ClickInItsTopLevel(rig, Named<Button>(dialog, "OkButton"));
+                Dispatcher.UIThread.RunJobs();
+
+                Assert.Multiple(() =>
+                {
+                    Assert.That(dialog.IsVisible, Is.False, $"{w}x{h}: OK closed the dialog");
+                    Assert.That(rig.Control("lbl").Properties.GetValueOrDefault("Font"), Is.EqualTo("Arial, 9pt, style=Bold"), $"{w}x{h}: the model");
+                    Assert.That(rig.Vm.Text, Does.Contain("Font=\"Arial, 9pt, style=Bold\""), $"{w}x{h}: the .blform text");
+                    Assert.That(edits, Is.EqualTo(1), $"{w}x{h}: ONE edit for the whole dialog");
+                });
+            }
+            finally
+            {
+                if (dialog.IsVisible) dialog.Close();
+                Dispatcher.UIThread.RunJobs();
+            }
+
+            var before = rig.Vm.Text;
+            var cancelled = OpenFontDialog(rig, font);
+            try
+            {
+                Assert.That(Named<CheckBox>(cancelled, "BoldBox").IsChecked, Is.True, $"{w}x{h}: reopened at the stored Bold font");
+                ClickInItsTopLevel(rig, Named<CheckBox>(cancelled, "ItalicBox"));
+                ClickInItsTopLevel(rig, Named<Button>(cancelled, "CancelButton"));
+                Dispatcher.UIThread.RunJobs();
+
+                Assert.Multiple(() =>
+                {
+                    Assert.That(cancelled.IsVisible, Is.False, $"{w}x{h}: Cancel closed the dialog");
+                    Assert.That(rig.Vm.Text, Is.EqualTo(before), $"{w}x{h}: Cancel leaves the file byte-identical");
+                    Assert.That(edits, Is.EqualTo(1), $"{w}x{h}: no edit for Cancel");
+                });
+            }
+            finally
+            {
+                if (cancelled.IsVisible) cancelled.Close();
+                Dispatcher.UIThread.RunJobs();
+            }
+        }
+    }
+
     /// <summary>
     /// D-1c: the Custom colour is written ONCE, when the pop-up closes — never per <c>ColorChanged</c>. Opening and
     /// closing without moving it writes nothing; moving it three times and clicking OK writes the LAST colour once, as

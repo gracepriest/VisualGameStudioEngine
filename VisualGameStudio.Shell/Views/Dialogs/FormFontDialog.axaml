@@ -1,0 +1,74 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:designerVm="using:VisualGameStudio.Shell.ViewModels.Designer"
+        x:Class="VisualGameStudio.Shell.Views.Dialogs.FormFontDialog"
+        x:DataType="designerVm:FormFontDialogViewModel"
+        Title="Font"
+        Width="460" Height="430"
+        WindowStartupLocation="CenterOwner"
+        CanResize="False"
+        Background="{DynamicResource IdeBg}">
+
+  <!-- Slice 4 D-2: VS's Font dialog, opened from a Font row's `…` button. OK closes with ONE canonical Font value; Cancel
+       (or closing the window) with none — the row commits the result, never this dialog.
+       ⛔ Every {Binding} is a REFLECTION binding: FormPropertyGridViewTests walks this file against FormFontDialogViewModel.
+       ⚠ The two lists bind their selection ONE way and write back only a real pick (OnFamilyPicked / OnSizePicked): a
+       typed 9.5pt is in no list, and a filter can hide the chosen family — a TwoWay SelectedItem would push null over
+       the value in both cases. -->
+
+  <DockPanel Margin="12">
+    <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8" Margin="0,10,0,0">
+      <Button x:Name="OkButton" Content="OK" Padding="16,3" IsDefault="True"
+              IsEnabled="{Binding CanAccept}" Click="OnOk"/>
+      <Button x:Name="CancelButton" Content="Cancel" Padding="16,3" IsCancel="True" Click="OnCancel"/>
+    </StackPanel>
+
+    <!-- The live preview, and the web hint under it. -->
+    <StackPanel DockPanel.Dock="Bottom" Spacing="4" Margin="0,10,0,0">
+      <TextBlock Text="Sample" FontSize="11" Opacity="0.7"/>
+      <Border BorderBrush="{DynamicResource IdeBorder}" BorderThickness="1" Height="56" ClipToBounds="True">
+        <TextBlock x:Name="PreviewText" Text="AaBbYyZz" VerticalAlignment="Center" HorizontalAlignment="Center"
+                   FontFamily="{Binding PreviewFamily}" FontSize="{Binding PreviewSize}"
+                   FontWeight="{Binding PreviewWeight}" FontStyle="{Binding PreviewStyle}"
+                   TextDecorations="{Binding PreviewDecorations}"/>
+      </Border>
+      <TextBlock Text="{Binding WebHint}" IsVisible="{Binding IsWeb}" FontSize="11" TextWrapping="Wrap" Opacity="0.8"/>
+    </StackPanel>
+
+    <Grid ColumnDefinitions="*,12,90,12,110">
+      <!-- Family: a filter box over the offered families. -->
+      <DockPanel Grid.Column="0">
+        <TextBlock DockPanel.Dock="Top" Text="Font" FontSize="11" Margin="0,0,0,2"/>
+        <TextBox x:Name="FamilyFilter" DockPanel.Dock="Top" FontSize="11" Watermark="Filter"
+                 AutomationProperties.Name="Filter the font families"
+                 Text="{Binding FilterText, Mode=TwoWay}"/>
+        <ListBox x:Name="FamilyList" Margin="0,2,0,0"
+                 AutomationProperties.Name="Font family"
+                 ItemsSource="{Binding Families}"
+                 SelectedItem="{Binding SelectedFamily, Mode=OneWay}"
+                 SelectionChanged="OnFamilyPicked"/>
+      </DockPanel>
+
+      <!-- Size: VS's list, plus any decimal size typed into the box. -->
+      <DockPanel Grid.Column="2">
+        <TextBlock DockPanel.Dock="Top" Text="Size" FontSize="11" Margin="0,0,0,2"/>
+        <TextBox x:Name="SizeBox" DockPanel.Dock="Top" FontSize="11"
+                 AutomationProperties.Name="Font size in points"
+                 Text="{Binding SizeText, Mode=TwoWay}"/>
+        <ListBox x:Name="SizeList" Margin="0,2,0,0"
+                 AutomationProperties.Name="Standard font sizes"
+                 ItemsSource="{Binding Sizes}"
+                 SelectedItem="{Binding SizeText, Mode=OneWay}"
+                 SelectionChanged="OnSizePicked"/>
+      </DockPanel>
+
+      <StackPanel Grid.Column="4" Spacing="4">
+        <TextBlock Text="Style" FontSize="11"/>
+        <CheckBox x:Name="BoldBox" Content="Bold" IsChecked="{Binding Bold, Mode=TwoWay}"/>
+        <CheckBox x:Name="ItalicBox" Content="Italic" IsChecked="{Binding Italic, Mode=TwoWay}"/>
+        <CheckBox x:Name="UnderlineBox" Content="Underline" IsChecked="{Binding Underline, Mode=TwoWay}"/>
+        <CheckBox x:Name="StrikeoutBox" Content="Strikeout" IsChecked="{Binding Strikeout, Mode=TwoWay}"/>
+      </StackPanel>
+    </Grid>
+  </DockPanel>
+</Window>
