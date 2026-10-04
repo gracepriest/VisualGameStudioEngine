@@ -217,8 +217,13 @@ public sealed record FormPropertyDef(
     IReadOnlyDictionary<string, string>? Aliases = null,
     string? OracleExemption = null,
     IReadOnlyList<FormLayoutKind>? WebLayouts = null,
-    IReadOnlyList<string>? ReferenceKinds = null)
+    IReadOnlyList<string>? ReferenceKinds = null,
+    bool OpaqueOnWinForms = false)
 {
+    // OpaqueOnWinForms: for a Color row, the WinForms control's setter THROWS on a translucent colour (alpha < 255, or
+    // Transparent) — Control.BackColor on a control without ControlStyles.SupportsTransparentBackColor ("does not support
+    // transparent background colors"). Measured per kind, and pinned, by WinFormsTranslucentBackColorRunTests. Such a
+    // value is refused on WinForms (Degraded in a document, refused in the editor); the web keeps alpha (rgba).
     // ⛔ Normalised to OrdinalIgnoreCase whatever comparer the caller built the dictionary with —
     // Accepts and Canonical are case-insensitive for members, and an alias lookup that silently
     // used a different comparer would make `left` Degraded while `Left` is Canon. The init accessor
@@ -843,6 +848,12 @@ public sealed record FormPropertyDef(
                    "member, and it is not a system colour), so a WinForms form cannot use it.";
         }
 
+        if (IsTranslucentRefusedOn(value, target))
+        {
+            return $"'{value}' is a transparent colour, and this WinForms control does not support a transparent " +
+                   $"{Name} — it throws ArgumentException when the form is created. Use an opaque colour (alpha FF).";
+        }
+
         if (IsCursorRefusedOn(value, target))
         {
             _ = FormCursors.TryCanonical(value, out var cursor);
@@ -879,7 +890,28 @@ public sealed record FormPropertyDef(
     /// </summary>
     private bool IsRefusedOn(string value, FormTarget target) =>
         IsSystemColourRefusedOn(value, target) || IsUnknownColourNameRefusedOn(value, target) ||
-        IsCursorRefusedOn(value, target);
+        IsCursorRefusedOn(value, target) || IsTranslucentRefusedOn(value, target);
+
+    /// <summary>
+    /// A translucent colour (<c>#AARRGGBB</c> with AA below FF, or the named <c>Transparent</c>) on a WinForms row marked
+    /// <see cref="OpaqueOnWinForms"/>: the control's setter throws <c>ArgumentException</c> when the form is constructed —
+    /// a green build and a dead window. Measured by <c>WinFormsTranslucentBackColorRunTests</c>.
+    /// </summary>
+    private bool IsTranslucentRefusedOn(string value, FormTarget target) =>
+        !AcceptsTranslucentOn(target) && IsTranslucent(value);
+
+    /// <summary>
+    /// Whether this colour row takes a translucent value on <paramref name="target"/> — the colour editor turns its alpha
+    /// channel off where this is false (the same answer the refusal gives, never a second rule).
+    /// </summary>
+    public bool AcceptsTranslucentOn(FormTarget target) =>
+        !(Type == FormPropertyType.Color && target == FormTarget.WinForms && OpaqueOnWinForms);
+
+    /// <summary>True for a colour whose alpha is below 255: an 8-digit hex with AA ≠ FF, or <c>Transparent</c>.</summary>
+    internal static bool IsTranslucent(string value) =>
+        value.Length == 9 && value[0] == '#' && value[1..].All(Uri.IsHexDigit)
+            ? !string.Equals(value.Substring(1, 2), "FF", StringComparison.OrdinalIgnoreCase)
+            : FormKnownColors.TryCanonical(value, out var name) && name == "Transparent";
 
     /// <summary>
     /// A Cursors member with no CSS equivalent (<see cref="FormCursors.CssFor"/> null — the up arrow, the pan cursors) on
@@ -1424,7 +1456,13 @@ public static class FormControlCatalog
     // ==================================================================
     private static readonly FormPropertyDef WindowTextForeColor = ForeColor with { Default = "WindowText", WebDefault = "" };
 
-    private static readonly FormPropertyDef WindowBackColor = BackColor with { Default = "Window", WebDefault = "" };
+    // ⛔ Every kind that uses WindowBackColor (TextBox, ComboBox, ListBox, NumericUpDown, CheckedListBox, ListView, TreeView)
+    // THROWS on a translucent BackColor — measured (WinFormsTranslucentBackColorRunTests), so the row says so.
+    private static readonly FormPropertyDef WindowBackColor =
+        BackColor with { Default = "Window", WebDefault = "", OpaqueOnWinForms = true };
+
+    /// <summary>The plain BackColor of a kind whose WinForms control refuses a translucent one (TrackBar, ProgressBar — measured).</summary>
+    private static readonly FormPropertyDef OpaqueBackColor = BackColor with { OpaqueOnWinForms = true };
 
     private static readonly FormPropertyDef HighlightForeColor = ForeColor with { Default = "Highlight", WebDefault = "" };
 
@@ -1984,7 +2022,7 @@ public static class FormControlCatalog
                 description: ControlValueChangedDescription)),
 
         new("TrackBar",    "TrackBar",    "input",    "range",    false, ControlRows(
-            null, BackColor, null, CursorRow,
+            null, OpaqueBackColor, null, CursorRow,
             new FormPropertyDef("Minimum", FormPropertyType.Int, "0", HtmlAttribute: "min",
                 Category: FormPropertyCategory.Behavior,
                 Description: "The minimum value for the position of the slider on the TrackBar."),
@@ -2027,7 +2065,7 @@ public static class FormControlCatalog
                     Description: ControlValueChangedDescription)
             }),
 
-        new("ProgressBar", "ProgressBar", "progress", null,       false, ControlRows(HighlightForeColor, BackColor, null, CursorRow,
+        new("ProgressBar", "ProgressBar", "progress", null,       false, ControlRows(HighlightForeColor, OpaqueBackColor, null, CursorRow,
             new FormPropertyDef("Minimum", FormPropertyType.Int, "0",
                 Targets: new[] { FormTarget.WinForms },
                 Category: FormPropertyCategory.Behavior,
@@ -2575,9 +2613,10 @@ public static class FormControlCatalog
             // ⛔ Both targets (D2): the page's BODY, so every control inherits them as WinForms' ambient properties
             // inherit from the Form — the Docked strips included. WebDefault empty: with nothing written the browser's
             // own body colours and font stand, not WinForms' Control/ControlText/Segoe UI.
+            // A Form throws on a translucent BackColor (measured; use Opacity for a see-through window).
             new("BackColor", FormPropertyType.Color, "Control", WebDefault: "",
                 Category: FormPropertyCategory.Appearance, Description: "The background color of the component.",
-                CssProperty: "background-color", CssConverter: FormCssConverter.Color),
+                CssProperty: "background-color", CssConverter: FormCssConverter.Color, OpaqueOnWinForms: true),
             new("ForeColor", FormPropertyType.Color, "ControlText", WebDefault: "",
                 Category: FormPropertyCategory.Appearance,
                 Description: "The foreground color of this component, which is used to display text.",

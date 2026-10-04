@@ -1,4 +1,5 @@
 using Avalonia.Controls;
+using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Media;
 using VisualGameStudio.Shell.ViewModels.Designer;
@@ -11,8 +12,9 @@ namespace VisualGameStudio.Shell.Views.Controls;
 /// typed text.
 ///
 /// <para>⛔ D-1c — how often it writes. A Web or System pick is ONE write. The Custom tab writes ONCE, when the pop-up
-/// closes (OK closes it), and only if the user moved the colour: <see cref="ColorView.ColorChanged"/> fires for every step
-/// of a drag across the spectrum, and a write per step would be hundreds of document rewrites and undo entries.</para>
+/// closes by OK or a click away, and only if the user moved the colour: <see cref="ColorView.ColorChanged"/> fires for every
+/// step of a drag across the spectrum, and a write per step would be hundreds of document rewrites and undo entries.
+/// ⛔ Esc CANCELS the Custom move (no write), as VS's drop-down does.</para>
 /// </summary>
 public partial class FormColorDropDown : UserControl
 {
@@ -22,17 +24,35 @@ public partial class FormColorDropDown : UserControl
     public FormColorDropDown()
     {
         InitializeComponent();
+
+        // ⚠ TUNNEL, on both the pop-up's content and this control: Esc reaches whichever holds focus (the pop-up's content,
+        // or the swatch button that opened it), and the flyout closes itself on the key afterwards — so the pending
+        // Custom move must be dropped BEFORE Closed runs.
+        AddHandler(KeyDownEvent, OnKeyDownTunnel, RoutingStrategies.Tunnel);
+        Tabs.AddHandler(KeyDownEvent, OnKeyDownTunnel, RoutingStrategies.Tunnel);
     }
 
     private FormPropertyRow? Row => DataContext as FormPropertyRow;
 
+    private void OnKeyDownTunnel(object? sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Escape)
+        {
+            _customChanged = false;
+        }
+    }
+
     /// <summary>
     /// The pop-up opened: it shows the tab holding the row's value (VS's behaviour), the Custom tab starts at the row's
-    /// colour (D-1), and nothing is pending.
+    /// colour (D-1) with an alpha channel only where the row takes one, and nothing is pending.
     /// </summary>
     private void OnFlyoutOpened(object? sender, EventArgs e)
     {
         Tabs.SelectedIndex = (int)FormColorChoices.TabFor(Row?.DisplayValue);
+
+        // ⛔ WinForms run-time truth: a TextBox's (or a Form's) BackColor THROWS on a translucent colour, so the catalog
+        // refuses one there and the editor does not offer the channel (FormPropertyDef.AcceptsTranslucentOn).
+        CustomView.IsAlphaEnabled = Row?.AllowsAlpha ?? true;
         CustomView.Color = Row?.SwatchColor ?? Colors.White;
 
         // ⚠ AFTER the seed: setting Color raises ColorChanged synchronously, and the seed is not the user's move. (A
@@ -45,7 +65,7 @@ public partial class FormColorDropDown : UserControl
         _customChanged = true; // written once, on close — never here (D-1c)
     }
 
-    /// <summary>The pop-up closed (OK, a click away, Esc): the Custom colour is written once — if the user moved it.</summary>
+    /// <summary>The pop-up closed (OK, a click away): the Custom colour is written once — if the user moved it and did not press Esc.</summary>
     private void OnFlyoutClosed(object? sender, EventArgs e)
     {
         if (!_customChanged)
@@ -54,7 +74,13 @@ public partial class FormColorDropDown : UserControl
         }
 
         _customChanged = false;
-        Row?.ApplyColor(FormColorChoices.ToDocumentText(CustomView.Color));
+        var color = CustomView.Color;
+        if (Row is { AllowsAlpha: false })
+        {
+            color = Color.FromRgb(color.R, color.G, color.B); // the channel is off: never write a translucent value here
+        }
+
+        Row?.ApplyColor(FormColorChoices.ToDocumentText(color));
     }
 
     private void OnCustomOk(object? sender, RoutedEventArgs e) => SwatchButton.Flyout?.Hide();

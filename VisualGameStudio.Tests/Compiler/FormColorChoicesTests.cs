@@ -179,6 +179,74 @@ public class FormColorChoicesTests
         });
     }
 
+    // ==================================================================
+    // Part C review — a translucent BackColor where WinForms throws on one (pinned by WinFormsTranslucentBackColorRunTests)
+    // ==================================================================
+
+    private static FormPropertyDef BackColorOf(string kind) =>
+        FormControlCatalog.Find(kind)!.Properties.Single(p => p.Name == "BackColor");
+
+    [TestCase("#80FF0000")]
+    [TestCase("#00FFFFFF")]
+    [TestCase("Transparent")]
+    [TestCase("transparent")]
+    public void ATranslucentBackColor_IsRefusedOnAWinFormsTextBox_WithTheReason(string value)
+    {
+        var textBox = BackColorOf("TextBox");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(textBox.Judge(value, null, FormTarget.WinForms), Is.EqualTo(FormEditVerdict.Refuse));
+            Assert.That(textBox.DescribeRefusedEdit(value, FormTarget.WinForms),
+                Does.Contain("transparent").And.Contain("ArgumentException"));
+            Assert.That(textBox.Accepts(value, FormTarget.Web), Is.True, "the web keeps alpha (rgba)");
+            Assert.That(BackColorOf("Label").Accepts(value, FormTarget.WinForms), Is.True, "a Label supports it (measured)");
+        });
+    }
+
+    [TestCase("#FFFF0000")]
+    [TestCase("#ff0000")]
+    [TestCase("Red")]
+    [TestCase("Window")]
+    public void AnOpaqueBackColor_StaysAcceptedOnAWinFormsTextBox(string value)
+    {
+        Assert.That(BackColorOf("TextBox").Accepts(value, FormTarget.WinForms), Is.True);
+    }
+
+    [Test]
+    public void TheCustomTabsAlpha_AndTheWebTabsTransparent_FollowTheCatalog()
+    {
+        var (_, textBox) = Open("<TextBox Id=\"lbl\" X=\"0\" Y=\"0\" Width=\"10\" Height=\"10\" TabIndex=\"0\"/>");
+        var (_, label) = Open("<Label Id=\"lbl\" X=\"0\" Y=\"0\" Width=\"10\" Height=\"10\" TabIndex=\"0\"/>");
+        var (_, webTextBox) = Open("<TextBox Id=\"lbl\" TabIndex=\"0\"/>", "F.blwebform");
+        FormPropertyRow Back(FormPropertyGridViewModel g) => g.Rows.Single(r => r.Name == "BackColor");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Back(textBox).AllowsAlpha, Is.False, "a WinForms TextBox throws on alpha: no alpha channel");
+            Assert.That(Back(label).AllowsAlpha, Is.True);
+            Assert.That(Back(webTextBox).AllowsAlpha, Is.True, "the web keeps alpha");
+            Assert.That(Back(textBox).WebColorChoices.Select(c => c.Name), Does.Not.Contain("Transparent"));
+            Assert.That(Back(label).WebColorChoices.Select(c => c.Name), Does.Contain("Transparent"));
+        });
+    }
+
+    /// <summary>An existing document carrying one is Degraded — shown, preserved, never reaching source.</summary>
+    [Test]
+    public void ADocumentsTranslucentTextBoxBackColor_IsDegraded_AndNeverEmitted()
+    {
+        var (file, grid) = Open("<TextBox Id=\"lbl\" X=\"0\" Y=\"0\" Width=\"10\" Height=\"10\" TabIndex=\"0\" BackColor=\"#80FF0000\"/>");
+        var row = grid.Rows.Single(r => r.Name == "BackColor");
+        var code = RegionWriter.Write("F.bas", FormScaffolder.Create("F", FormTarget.WinForms).CodeText, file.Model, "F.blform").Text;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(row.IsFrozen, Is.True);
+            Assert.That(row.RawValue, Is.EqualTo("#80FF0000"));
+            Assert.That(code, Does.Not.Contain("BackColor"), "never reaches the generated source");
+        });
+    }
+
     [Test]
     public void AFrozenColour_HasNoDropDown()
     {

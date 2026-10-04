@@ -1150,6 +1150,65 @@ public partial class FormPropertyGridRealViewTests
         });
     }
 
+    /// <summary>How many times the grid rebuilt its rows (one per <c>SyncDesignerPanels</c>: each Load rebuilds once).</summary>
+    private static Func<int> CountGridRebuilds(Rig rig)
+    {
+        var count = 0;
+        rig.GridVm.Rows.CollectionChanged += (_, e) =>
+        {
+            if (e.Action == System.Collections.Specialized.NotifyCollectionChangedAction.Reset)
+            {
+                count++;
+            }
+        };
+        return () => count;
+    }
+
+    /// <summary>
+    /// Part C review: a keystroke in CODE view must not rebuild the (hidden) designer panels — entering Design view
+    /// re-syncs them (ToggleDesignMode). After the switch back, the grid reads the edited document.
+    /// </summary>
+    [AvaloniaTest]
+    public void ACodeViewKeystroke_DoesNotRebuildTheHiddenGrid_AndDesignViewReadsTheEditOnEntry()
+    {
+        using var rig = Open();
+        rig.Vm.ToggleDesignModeCommand.Execute(null);
+        Assert.That(rig.Vm.IsDesignMode, Is.False, "precondition: Code view");
+        var rebuilds = CountGridRebuilds(rig);
+
+        rig.Vm.UpdateTextFromEditor(rig.Vm.Text.Replace("<Button Id=\"btn\"",
+            "<Button Id=\"btn2\" X=\"16\" Y=\"96\" Width=\"75\" Height=\"23\" TabIndex=\"2\"/>\n    <Button Id=\"btn\""));
+        Dispatcher.UIThread.RunJobs();
+        Assert.That(rebuilds(), Is.Zero, "no grid rebuild for a Code-view keystroke");
+
+        rig.Vm.ToggleDesignModeCommand.Execute(null);
+        Dispatcher.UIThread.RunJobs();
+        Assert.Multiple(() =>
+        {
+            Assert.That(rebuilds(), Is.EqualTo(1), "entering Design view syncs once");
+            Assert.That(rig.GridVm.Rows.Single(r => r.Name == "AcceptButton").Choices, Does.Contain("btn2"), "…on the new parse");
+        });
+    }
+
+    /// <summary>Part C review: a designer Undo re-syncs the panels ONCE (it did twice: the editor's text change, then the adopt).</summary>
+    [AvaloniaTest]
+    public void ADesignerUndo_SyncsThePanelsOnce()
+    {
+        using var rig = Open();
+        rig.Row("Text").StringValue = "Renamed"; // a real designer edit through the write-back
+        Dispatcher.UIThread.RunJobs();
+        var rebuilds = CountGridRebuilds(rig);
+
+        rig.Vm.UndoDesignerEditCommand.Execute(null);
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(rig.Vm.Text, Does.Not.Contain("Renamed"), "precondition: the undo happened");
+            Assert.That(rebuilds(), Is.EqualTo(1), "one sync for one undo");
+        });
+    }
+
     // ==================================================================
     // Slice 4 Task 3 — the Reference editor (D-7)
     // ==================================================================

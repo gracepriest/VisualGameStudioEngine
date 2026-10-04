@@ -27,10 +27,19 @@ public sealed partial class FormFontDialogViewModel : ObservableObject
 
     private readonly IReadOnlyList<string> _families;
 
-    public FormFontDialogViewModel(IEnumerable<string> installedFamilies, FormFontValue start, FormTarget target)
+    private readonly CultureInfo _culture;
+
+    /// <param name="culture">The culture the size box speaks (the UI culture by default): sv-SE types <c>9,75</c>. The
+    /// document is always written invariant (<c>9.75pt</c>).</param>
+    public FormFontDialogViewModel(IEnumerable<string> installedFamilies, FormFontValue start, FormTarget target,
+        CultureInfo? culture = null)
     {
-        _families = installedFamilies
-            .Append(start.Family)
+        _culture = culture ?? CultureInfo.CurrentCulture;
+
+        // ⛔ The document's family FIRST: Distinct keeps the first spelling, so a document's "arial" beats an installed
+        // "Arial" — an untouched OK writes back exactly what the document holds (Part C review).
+        _families = new[] { start.Family }
+            .Concat(installedFamilies)
             .Append(DefaultFamily)
             .Select(f => f.Trim())
             .Where(IsOfferable)
@@ -39,7 +48,7 @@ public sealed partial class FormFontDialogViewModel : ObservableObject
             .ToList();
 
         _selectedFamily = _families.FirstOrDefault(f => string.Equals(f, start.Family, StringComparison.OrdinalIgnoreCase));
-        _sizeText = start.Size.ToString("0.##", CultureInfo.InvariantCulture);
+        _sizeText = start.Size.ToString("0.##", _culture);
         _bold = start.Bold;
         _italic = start.Italic;
         _underline = start.Underline;
@@ -103,9 +112,36 @@ public sealed partial class FormFontDialogViewModel : ObservableObject
 
             var styles = new[] { (Bold, "Bold"), (Italic, "Italic"), (Underline, "Underline"), (Strikeout, "Strikeout") }
                 .Where(s => s.Item1).Select(s => s.Item2).ToList();
-            var text = $"{SelectedFamily}, {SizeText?.Trim()}pt" + (styles.Count > 0 ? ", style=" + string.Join(", ", styles) : "");
+            if (InvariantSize(SizeText) is not { } size)
+            {
+                return null;
+            }
+
+            var text = $"{SelectedFamily}, {size}pt" + (styles.Count > 0 ? ", style=" + string.Join(", ", styles) : "");
             return FormFontValue.TryParse(text, out var font) ? font : null;
         }
+    }
+
+    /// <summary>
+    /// The typed size in the document's invariant spelling, or null: the culture's decimal separator is read as the
+    /// decimal point (sv-SE <c>9,75</c>), and so is <c>.</c> (the document's own spelling, never a group separator in a
+    /// font size). The parser then judges the number.
+    /// </summary>
+    private string? InvariantSize(string? typed)
+    {
+        var text = typed?.Trim() ?? "";
+        var separator = _culture.NumberFormat.NumberDecimalSeparator;
+        if (separator != "." && text.Contains(separator, StringComparison.Ordinal))
+        {
+            if (text.Contains('.'))
+            {
+                return null; // both marks: ambiguous, refused rather than guessed
+            }
+
+            text = text.Replace(separator, ".", StringComparison.Ordinal);
+        }
+
+        return text.Length == 0 ? null : text;
     }
 
     /// <summary>OK is offered only while the choices make a font.</summary>

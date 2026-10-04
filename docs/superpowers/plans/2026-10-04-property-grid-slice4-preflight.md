@@ -964,3 +964,32 @@ Mutations (Edit + REBUILD):
 | OK writes per toggle (a commit on every dialog change) | killed (real view: "nothing written while open", 2 edits) |
 | Cancel writes (`Close(Accept())`) | killed (real view: Italic written, 2 edits) |
 | the start value ignores the inherited font | killed (`AnAbsentAmbientFont_…`, on the corrected fixture) |
+
+### Part C — review of `47c31434` / `b97ac2bc` / `8eb882be` (base `8eb882be`; one commit)
+1. **Panel syncs.** `UpdateTextFromEditor` syncs only in Design view (Code view: hidden panels; `ToggleDesignMode` re-syncs on
+   entry). Undo/redo run INSIDE `AdoptDocumentText(rewind)` under `_adoptingDocumentText`, which stands down the editor route
+   and `OnTextChanged`, so one undo syncs exactly once (was twice). Tests count grid rebuilds (one `Rows` Reset per Load).
+2. **Translucent BackColor — MEASURED.** `WinFormsTranslucentBackColorRunTests` (Integration; dotnet build + run) constructs
+   every catalog kind with a WinForms BackColor row, plus the Form, and sets `Color.FromArgb(128, …)` and `Color.Transparent`
+   by reflection. Throw (both values): **TextBox, ComboBox, ListBox, NumericUpDown, TrackBar, ProgressBar, CheckedListBox,
+   ListView, TreeView, Form**. Accept: Label, Button, CheckBox, RadioButton, Panel, GroupBox, PictureBox, LinkLabel,
+   SplitContainer, FlowLayoutPanel, TableLayoutPanel. New `FormPropertyDef.OpaqueOnWinForms` (on `WindowBackColor` — all seven
+   users throw — a new `OpaqueBackColor` for TrackBar/ProgressBar, and the FormRoot row); `IsTranslucentRefusedOn` joins
+   `IsRefusedOn` with its reason ("… throws ArgumentException when the form is created"), so the editor refuses, a document
+   value is Degraded and never emitted, the Web tab drops `Transparent`, and `FormPropertyRow.AllowsAlpha`
+   (`AcceptsTranslucentOn`) turns the Custom tab's `IsAlphaEnabled` off. The web keeps alpha. The run test asserts, per kind,
+   throws ⇔ the catalog refuses, so the table cannot drift. Red before: the run test failed for the 10 throwing kinds.
+3. **Custom tab: Esc cancels** (a tunnel KeyDown on the control and the pop-up content drops the pending move before
+   `Closed`); a click away (light dismiss) or OK commits once. The alpha channel is forced off on close where the row refuses it.
+4. **Font dialog:** the `async void` handler catches and logs (`Trace.TraceError`); a non-`Window` top level shows the dialog
+   modeless and awaits its close (same result rule). The size box reads the CULTURE's decimal separator (sv-SE `9,75` →
+   `9.75pt`; `.` always accepted; both marks refused); the start size shows in the culture. The document's family spelling
+   wins over an installed family differing in case (it is listed first). Tests: Esc and the close box write nothing; OK on an
+   inherited font stores it explicitly (VS) — pinned.
+5. The posted Dock Hide's stale-row case is documented (ContainerFromItem → null).
+
+Mutations (Edit + REBUILD): IsDesignMode guard removed → killed (keystroke test); undo flag not set → killed (2 rebuilds);
+WindowBackColor flag off → killed (run test + 6 VM); Transparent not translucent → killed; IsAlphaEnabled not set → killed;
+Esc handler off → killed; culture separator ignored → killed (sv-SE, de-DE); family order reverted → killed by the VM spelling
+test. ⚠ `AnUntouchedOk_OnALowerCaseFamily_…` stays green under that mutant (Judge treats the family case-insensitively) — an
+end-to-end pin, not a kill.

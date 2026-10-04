@@ -84,6 +84,69 @@ public class FormFontDialogViewModelTests
         });
     }
 
+    /// <summary>Part C review: the size box speaks the user's culture (sv-SE types <c>9,75</c>); the document stays invariant.</summary>
+    [TestCase("sv-SE", "9,75", "Arial, 9.75pt")]
+    [TestCase("sv-SE", "9.75", "Arial, 9.75pt")]
+    [TestCase("de-DE", "10,5", "Arial, 10.5pt")]
+    [TestCase("en-US", "9.75", "Arial, 9.75pt")]
+    [TestCase("en-US", "9,75", null)]
+    public void TheSizeBox_AcceptsTheCulturesDecimalSeparator(string culture, string typed, string? expected)
+    {
+        var vm = new FormFontDialogViewModel(new[] { "Arial" }, SegoeUi9 with { Family = "Arial" }, FormTarget.WinForms,
+            new System.Globalization.CultureInfo(culture)) { SizeText = typed };
+
+        Assert.That(vm.Accept(), Is.EqualTo(expected));
+    }
+
+    [Test]
+    public void TheSizeBox_ShowsTheStartSizeInTheCulture()
+    {
+        var vm = new FormFontDialogViewModel(Array.Empty<string>(), SegoeUi9 with { Size = 9.75m }, FormTarget.WinForms,
+            new System.Globalization.CultureInfo("sv-SE"));
+
+        Assert.That(vm.SizeText, Is.EqualTo("9,75"));
+    }
+
+    /// <summary>
+    /// Part C review: the document's family spelling wins over an installed family that differs only in case — so an
+    /// untouched OK writes back exactly what the document holds (<c>arial</c>), never a rewrite to <c>Arial</c>.
+    /// </summary>
+    [Test]
+    public void TheDocumentsFamilySpelling_IsKept_OverAnInstalledFamilyDifferingInCase()
+    {
+        var vm = new FormFontDialogViewModel(new[] { "Arial", "Verdana" }, SegoeUi9 with { Family = "arial" }, FormTarget.WinForms);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(vm.AllFamilies, Does.Contain("arial").And.Not.Contain("Arial"));
+            Assert.That(vm.SelectedFamily, Is.EqualTo("arial"));
+            Assert.That(vm.Accept(), Is.EqualTo("arial, 9pt"));
+        });
+    }
+
+    [Test]
+    public void AnUntouchedOk_OnALowerCaseFamily_ChangesNothingInTheDocument()
+    {
+        var text = BoldGroupBox.Replace("<Label Id=\"lbl\" X=\"8\" Y=\"20\" Width=\"80\" Height=\"20\" TabIndex=\"0\"/>",
+            "<Label Id=\"lbl\" X=\"8\" Y=\"20\" Width=\"80\" Height=\"20\" TabIndex=\"0\" Font=\"arial, 9pt\"/>");
+        var file = FormDocumentReader.Read("F.blform", text);
+        var grid = new FormPropertyGridViewModel();
+        grid.Load(file);
+        grid.SelectedControl = file.Model.FindById("lbl");
+        var font = grid.Rows.Single(r => r.Name == "Font");
+        var edits = 0;
+        grid.Edited += (_, _) => edits++;
+
+        var vm = new FormFontDialogViewModel(new[] { "Arial" }, font.EffectiveFont!, font.Target);
+        font.ApplyFont(vm.Accept()!);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(edits, Is.Zero);
+            Assert.That(FormDocumentWriter.Write(file), Is.EqualTo(text), "byte-identical");
+        });
+    }
+
     [Test]
     public void TheFilter_NarrowsTheFamilies()
     {

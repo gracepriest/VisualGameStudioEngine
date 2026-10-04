@@ -375,6 +375,12 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
     public IReadOnlyList<FormColorChoice> SystemColorChoices =>
         _systemColors ??= _definition == null ? Array.Empty<FormColorChoice>() : FormColorChoices.System(_definition, _target);
 
+    /// <summary>
+    /// Whether the Custom tab offers an alpha channel: false on a WinForms row whose control throws on a translucent colour
+    /// (a TextBox's BackColor — <see cref="FormPropertyDef.AcceptsTranslucentOn"/>, the catalog's answer).
+    /// </summary>
+    public bool AllowsAlpha => _definition?.AcceptsTranslucentOn(_target) ?? true;
+
     /// <summary>The colour the row's value displays as — the drop-down's swatch and the Custom tab's start. Preview only.</summary>
     public Avalonia.Media.Color? SwatchColor =>
         IsColor && FormColorChoices.TryResolve(DisplayValue, out var color) ? color : null;

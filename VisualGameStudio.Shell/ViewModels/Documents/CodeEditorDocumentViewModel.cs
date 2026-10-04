@@ -1070,8 +1070,7 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
             return;
         }
 
-        TextDocument.UndoStack.Undo();
-        AdoptDocumentText();
+        AdoptDocumentText(() => TextDocument.UndoStack.Undo());
     }
 
     /// <summary>Redoes what <see cref="UndoDesignerEdit"/> took away.</summary>
@@ -1083,8 +1082,7 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
             return;
         }
 
-        TextDocument.UndoStack.Redo();
-        AdoptDocumentText();
+        AdoptDocumentText(() => TextDocument.UndoStack.Redo());
     }
 
     /// <summary>
@@ -1097,9 +1095,21 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
     /// on the next save — the file and the picture disagreeing, which is the failure a designer
     /// cannot have.</para>
     /// </summary>
-    private void AdoptDocumentText()
+    /// <param name="rewind">The undo or redo itself. ⛔ Run INSIDE the flag: it changes the editor's text, and the view's
+    /// TextChanged → <see cref="UpdateTextFromEditor"/> (and the Text setter → <c>OnTextChanged</c>) would each sync the
+    /// panels — so one undo rebuilt the grid twice. Here it is synced exactly once (Part C review).</param>
+    private void AdoptDocumentText(Action rewind)
     {
-        Text = TextDocument.Text;
+        _adoptingDocumentText = true;
+        try
+        {
+            rewind();
+            Text = TextDocument.Text;
+        }
+        finally
+        {
+            _adoptingDocumentText = false;
+        }
 
         _designFile = null;
         _designFileText = null;
@@ -1108,6 +1118,9 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
         SyncDesignerPanels();
         DesignModelRevision++;
     }
+
+    /// <summary>True while <see cref="AdoptDocumentText"/> rewinds the text: the other sync routes stand down.</summary>
+    private bool _adoptingDocumentText;
     public new string Title => GetTitle();
     public new bool CanClose => true;
 
@@ -1294,7 +1307,7 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
         // the property changed. Without this, an edit in Code view leaves a stale canvas.
         // ⛔ Not while the designer is writing its OWN edit back — see OnDesignerEdited. The
         // cached model is what produced this text, so discarding it would drop the selection.
-        if (IsFormDocument && !_applyingDesignerEdit)
+        if (IsFormDocument && !_applyingDesignerEdit && !_adoptingDocumentText)
         {
             _designFile = null;
             _designFileText = null;
@@ -1970,7 +1983,9 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
             // ⛔ The panels follow the new parse, exactly as OnTextChanged's Code-view route does: without this the grid
             // kept the OLD FormFile, and its rows (the AcceptButton list among them) read a document the file no longer
             // is (slice 4 review follow-up). Not while the designer writes its OWN edit back — that model is current.
-            if (!_applyingDesignerEdit)
+            // ⚠ Only in DESIGN view: in Code view the panels are hidden and every keystroke lands here, and entering Design
+            // view re-syncs them anyway (ToggleDesignMode). Not during an undo/redo either: AdoptDocumentText syncs once.
+            if (!_applyingDesignerEdit && !_adoptingDocumentText && IsDesignMode)
             {
                 SyncDesignerPanels();
             }

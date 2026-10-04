@@ -245,6 +245,80 @@ public partial class FormPropertyGridRealViewTests
         }
     }
 
+    /// <summary>
+    /// Part C review (VS): Esc CANCELS a Custom move — the pop-up closes and nothing is written; a click AWAY commits it
+    /// once. Both close routes through real input. At two window sizes.
+    /// </summary>
+    [AvaloniaTest]
+    public void TheCustomColour_EscCancels_AndAClickAwayCommitsOnce_AtTwoSizes()
+    {
+        foreach (var (w, h) in TwoZooms)
+        {
+            using var rig = Open(w, h);
+            SelectOnCanvas(rig, "lbl");
+            var back = rig.Row("BackColor");
+            var before = rig.Vm.Text;
+            var edits = 0;
+            rig.GridVm.Edited += (_, _) => edits++;
+
+            var (flyout, tabs) = OpenColorDropDown(rig, back);
+            try
+            {
+                CustomView(tabs).Color = Colors.Red;
+                Press(rig, Key.Escape);
+                Assert.Multiple(() =>
+                {
+                    Assert.That(flyout.IsOpen, Is.False, $"{w}x{h}: Esc closed the pop-up");
+                    Assert.That(edits, Is.Zero, $"{w}x{h}: Esc wrote nothing");
+                    Assert.That(rig.Vm.Text, Is.EqualTo(before), $"{w}x{h}: byte-identical");
+                });
+
+                (flyout, tabs) = OpenColorDropDown(rig, back);
+                CustomView(tabs).Color = Color.FromRgb(0, 0, 255);
+                rig.Click(rig.Canvas); // a real click elsewhere in the window: light dismiss
+                rig.Window.UpdateLayout();
+                Dispatcher.UIThread.RunJobs();
+                Assert.Multiple(() =>
+                {
+                    Assert.That(flyout.IsOpen, Is.False, $"{w}x{h}: the click away closed the pop-up");
+                    Assert.That(edits, Is.EqualTo(1), $"{w}x{h}: ONE write");
+                    Assert.That(rig.Vm.Text, Does.Contain("BackColor=\"#0000FF\""), $"{w}x{h}: the moved colour");
+                });
+            }
+            finally
+            {
+                flyout.Hide();
+                Dispatcher.UIThread.RunJobs();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Part C review (WinForms run-time truth): the FORM's BackColor throws on a translucent colour, so its Custom tab has
+    /// no alpha channel; a Label's (which supports one, measured) keeps it.
+    /// </summary>
+    [AvaloniaTest]
+    public void TheCustomTabsAlphaChannel_IsOffWhereWinFormsThrowsOnAlpha()
+    {
+        using var rig = Open();
+        var (flyout, tabs) = OpenColorDropDown(rig, rig.Row("BackColor"));
+        var formAlpha = CustomView(tabs).IsAlphaEnabled;
+        flyout.Hide();
+        Dispatcher.UIThread.RunJobs();
+
+        SelectOnCanvas(rig, "lbl");
+        (flyout, tabs) = OpenColorDropDown(rig, rig.Row("BackColor"));
+        var labelAlpha = CustomView(tabs).IsAlphaEnabled;
+        flyout.Hide();
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(formAlpha, Is.False, "the Form's BackColor: no alpha");
+            Assert.That(labelAlpha, Is.True, "a Label's BackColor: alpha");
+        });
+    }
+
     // ==================================================================
     // Slice 4 Task 5 — the Font dialog (D-2)
     // ==================================================================
@@ -345,6 +419,66 @@ public partial class FormPropertyGridRealViewTests
                 Dispatcher.UIThread.RunJobs();
             }
         }
+    }
+
+    /// <summary>
+    /// Part C review: the dialog's other two ways out write nothing either — Esc (Cancel is the dialog's IsCancel button)
+    /// and the window's close box (<c>Close()</c> with no result).
+    /// </summary>
+    [AvaloniaTest]
+    public void TheFontDialog_EscAndTheCloseBox_WriteNothing()
+    {
+        using var rig = Open();
+        SelectOnCanvas(rig, "lbl");
+        var font = rig.Row("Font");
+        var before = rig.Vm.Text;
+        var edits = 0;
+        rig.GridVm.Edited += (_, _) => edits++;
+
+        var escaped = OpenFontDialog(rig, font);
+        ClickInItsTopLevel(rig, Named<CheckBox>(escaped, "BoldBox"));
+        Named<CheckBox>(escaped, "BoldBox").Focus();
+        escaped.KeyPress(Key.Escape, RawInputModifiers.None); // no release: the press already closed the window
+        Dispatcher.UIThread.RunJobs();
+        Assert.That(escaped.IsVisible, Is.False, "Esc closed the dialog");
+        if (escaped.IsVisible) escaped.Close();
+
+        var boxed = OpenFontDialog(rig, font);
+        ClickInItsTopLevel(rig, Named<CheckBox>(boxed, "ItalicBox"));
+        boxed.Close(); // the close box: no result
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(edits, Is.Zero, "neither wrote");
+            Assert.That(rig.Vm.Text, Is.EqualTo(before), "byte-identical");
+        });
+    }
+
+    /// <summary>
+    /// Part C review — VS behaviour, pinned: OK on an INHERITED font (the Label sets none) stores it explicitly, so the row
+    /// turns bold and the control no longer follows its container's font.
+    /// </summary>
+    [AvaloniaTest]
+    public void TheFontDialog_OkOnAnInheritedFont_StoresItExplicitly()
+    {
+        using var rig = Open();
+        SelectOnCanvas(rig, "lbl");
+        var font = rig.Row("Font");
+        Assert.That(font.IsPresent, Is.False, "precondition: the Label inherits its font");
+        var edits = 0;
+        rig.GridVm.Edited += (_, _) => edits++;
+
+        var dialog = OpenFontDialog(rig, font);
+        ClickInItsTopLevel(rig, Named<Button>(dialog, "OkButton"));
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(rig.Vm.Text, Does.Contain("Font=\"Segoe UI, 9pt\""), "the inherited font, now explicit");
+            Assert.That(edits, Is.EqualTo(1));
+            Assert.That(font.IsPresent, Is.True);
+        });
     }
 
     /// <summary>

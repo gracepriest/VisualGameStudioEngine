@@ -73,27 +73,54 @@ public partial class FormPropertyGridView : UserControl
     /// A Font row's <c>…</c>: opens the Font dialog over the IDE window, starting from the row's font (or, absent, the one
     /// its control inherits — <see cref="FormPropertyRow.EffectiveFont"/>), and commits ONE canonical value on OK. Cancel
     /// writes nothing.
+    ///
+    /// <para>⛔ <c>async void</c> (an event handler): an exception escaping it would reach the dispatcher and take the IDE
+    /// down, so it is caught and logged — the font is simply not changed.</para>
     /// </summary>
     private async void OnFontEllipsisClick(object? sender, RoutedEventArgs e)
     {
-        if (sender is not Control { DataContext: FormPropertyRow row } || !row.HasEllipsis ||
-            TopLevel.GetTopLevel(this) is not Window owner)
+        if (sender is not Control { DataContext: FormPropertyRow row } || !row.HasEllipsis)
         {
             return;
         }
 
-        var start = row.EffectiveFont ?? new BasicLang.Forms.FormFontValue(
-            FormFontDialogViewModel.DefaultFamily, 9m, false, false, false, false);
-        var dialog = new Dialogs.FormFontDialog
+        try
         {
-            DataContext = new FormFontDialogViewModel(FontFamilies(), start, row.Target)
-        };
+            var start = row.EffectiveFont ?? new BasicLang.Forms.FormFontValue(
+                FormFontDialogViewModel.DefaultFamily, 9m, false, false, false, false);
+            var dialog = new Dialogs.FormFontDialog
+            {
+                DataContext = new FormFontDialogViewModel(FontFamilies(), start, row.Target)
+            };
 
-        var result = await dialog.ShowDialog<string?>(owner);
-        if (result != null)
-        {
-            row.ApplyFont(result);
+            var result = await ShowDialogAsync(dialog, TopLevel.GetTopLevel(this));
+            if (result != null)
+            {
+                row.ApplyFont(result);
+            }
         }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Trace.TraceError($"The Font dialog failed; {row.Name} is unchanged. {ex}");
+        }
+    }
+
+    /// <summary>
+    /// Shows <paramref name="dialog"/> modally over its owner window. ⚠ A top level that is NOT a <see cref="Window"/> (an
+    /// embedded host) cannot own a modal dialog: the dialog is then shown on its own and awaited until it closes, with the
+    /// same result rule — the canonical text on OK, null on any other close.
+    /// </summary>
+    private static Task<string?> ShowDialogAsync(Dialogs.FormFontDialog dialog, TopLevel? top)
+    {
+        if (top is Window owner)
+        {
+            return dialog.ShowDialog<string?>(owner);
+        }
+
+        var closed = new TaskCompletionSource<string?>();
+        dialog.Closed += (_, _) => closed.TrySetResult((dialog.DataContext as FormFontDialogViewModel)?.Result);
+        dialog.Show();
+        return closed.Task;
     }
 
     /// <summary>
@@ -119,6 +146,8 @@ public partial class FormPropertyGridView : UserControl
                 .FirstOrDefault(b => b.Name == "DockDropDown");
             // ⚠ No explicit Focus after: the flyout hands focus back to its target on Hide (measured — an explicit
             // dropDown.Focus here was an EQUIVALENT mutant; the keyboard test asserts focus lands on the button).
+            // ⚠ A STALE row is harmless: if the grid rebuilt (or recycled the container) between the click and this post,
+            // ContainerFromItem returns null for the old row and nothing is hidden — the pop-up went with its container.
             if (dropDown?.Flyout is { } flyout)
             {
                 flyout.Hide();
