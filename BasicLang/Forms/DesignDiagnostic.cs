@@ -228,10 +228,10 @@ public static class DesignCodes
     public const string RetargetLayoutCrossed = "BL8025";
 
     /// <summary>
-    /// A <c>&lt;Bind&gt;</c> on an event the catalog cannot name on the destination. Only a kind's
-    /// default event has a measured name on both sides (D8); anything else is dropped and named,
-    /// because carrying <c>MouseEnter</c> into <c>addEventListener</c> registers cleanly and never
-    /// fires.
+    /// A <c>&lt;Bind&gt;</c> on an event the catalog cannot name on the destination. A bind crosses iff its
+    /// event is wired on BOTH targets (<c>FormEvents.WiredOn</c>, slice 5's per-kind lists); anything else —
+    /// Paint, Validating, FormClosing on the way to the web — is dropped and named, because carrying a
+    /// WinForms-only name into <c>addEventListener</c> registers cleanly and never fires.
     /// </summary>
     public const string RetargetBindLost = "BL8026";
 
@@ -311,11 +311,10 @@ public static class DesignCodes
     /// silent dead handler for another. The catalog is the source of truth; the shape of the string
     /// is not.</para>
     ///
-    /// <para>⚠ The vocabulary is currently one event per kind per target — the row's
-    /// <c>WebEvent</c> — so this also refuses a real DOM event the row simply does not name
-    /// (<c>mouseenter</c> on a Button). That is the same edge <c>BL8026</c> already drops on the
-    /// retarget route, and widening it is followup 18's per-kind event table, which this refusal is
-    /// written to widen with rather than around.</para>
+    /// <para>⚠ The vocabulary is the row's event LIST on the target (slice 5 D-1, through
+    /// <c>FormEvents.WiredOn</c>) — so this still refuses a real DOM event the row simply does not name
+    /// (<c>mouseover</c> on a Button). That is the same edge <c>BL8026</c> drops on the retarget route; the
+    /// list widens by adding a catalog event, never by relaxing this check.</para>
     /// </summary>
     public const string UnknownWebEvent = "BL8032";
 

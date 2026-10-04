@@ -677,6 +677,50 @@ reserved `VgsOn_` prefix, and M7's finding that an Extern class's undeclared mem
   (`document.body`/`window` as `EventTarget`s): `load`, `later` printed at construction, then `click`, `resize` on dispatch —
   each once. ✅ Both hold on the branch build.
 
+### Task 1 — event lists, `WebWiring`/`WebFilter`, `DomInterfaceOf`, ADR 0021
+- ADR `0021-form-event-lists-and-web-wiring.md` written first (+ README index row). ADR number 0021 was free on this branch.
+- **Procedure:** the D-1 names/args/web names were written into a scratch generator (`scratchpad\m5gen\gen.js`) that READS the
+  oracle for each event's category, description and `argsFullName` (qualifying any namespace other than `System` /
+  `System.Windows.Forms`) and emits one `private static IReadOnlyList<FormEventDef> <Kind>Events()` per kind; the parity run then
+  judged every pasted event (green first time). Rows point at their method (`Events: LabelEvents()`); `Ev` stays for the three
+  single-event kinds (Timer, ErrorProvider, ToolStripSeparator). Dead `StripItemClicked`, `PanelEvents(web)`,
+  `SelectedIndexChangedDescription`, `ControlValueChangedDescription` removed.
+- **Deviations (each the recommended / VS-matching option, owner-delegated):**
+  1. `FormEventCategory.Display` added — the snapshot files DataGridView `CellFormatting` under "Display" (the parity comparer
+     says "add one").
+  2. **ToolStripMenuItem `DropDownItemClicked` dropped from D-1.** WinForms carries NO description for it — empty on .NET 8 (the
+     snapshot) AND on .NET Framework 4.8 (measured: `TypeDescriptor.GetEvents` in Windows PowerShell 5.1) — and
+     `EveryRowAndEvent_DeclaresACategoryAndADescription` refuses an empty one; inventing text is what O4 forbids.
+  3. BackgroundWorker `ProgressChanged`/`RunWorkerCompleted` descriptions are .NET Framework 4.8's own, MEASURED the same way
+     (`Raised when the worker thread indicates that some progress has been made.` / `Raised when the worker has completed
+     (either through success, failure, or cancellation).`); one shared exemption text `BackgroundWorkerEventHasNoMetadata`.
+  4. GroupBox `Enter`/`Leave` carry `FromOutside` (the invariant: every `focusin`/`focusout`) — previously Enter had no filter.
+  5. **`FormRootRetargetTests` `:185-200`/`:202-217` rewritten HERE, not in Task 7:** they went red the moment the Form had
+     events (Load crosses through the existing `ConvertRootBinds`). Rewritten on `FormClosing` (WinForms → web) and
+     `beforeunload` (web → WinForms), as Task 7 specifies. Task 7 still owns `ARootLoadBind_Crosses_BothWays_…`.
+- **Red before:** with the types added and the catalog untouched, `FormEventsTests` = 3 failed / 27 passed:
+  `WiredOn_TheFormRoot_IsItsTenEvents_…` (root empty), `KeyPressKeys_…` (no KeyPress anywhere — the non-vacuity floor),
+  `FromOutside_…` (GroupBox Enter `focusin` unfiltered). The remaining new invariants are vacuously green on the old catalog and
+  are proven by the mutations below.
+- **Green:** `(Form|WinFormsCatalog) & !Integration` = 3069 passed, 1 failed (`EveryTextRoute_…`, the known machine row whose
+  name contains "Form"), 1 skipped. `WinFormsCatalogParityTests` judged every new event — green. `EveryEventWiredOnBothTargets_…`
+  is in the fast set and stayed green (now ~20 events per web kind).
+- **RE-CHECK:** `Write_Web_RefusesAnUnknownEvent_NotOnTheRow` → `mouseover` (still finds `'click'`); `ToWeb_ABindOnAnEventTheCatalogCannotName_…`
+  → Button `Paint`; `FormComponentEmissionTests`, `FormHandlerPlanTests`, `TheDefaultEvent_IsWinFormsOwn_…` green unchanged.
+
+| Mutation (Edit + rebuild) | Killed by |
+|---|---|
+| FormRoot Load `WebEvent` null | `WiredOn_TheFormRoot_IsItsTenEvents_…` |
+| Label MouseLeave `WebWiring = Window` | `WindowAndAfterInitWiring_AreOnTheFormRootOnly` |
+| TextBox KeyPress `WebFilter.None` | `KeyPressKeys_IsExactlyOnTheEventsStoredKeypress_…` |
+| `tick` added to the DOM-interface table | `EveryWebEventButTick_IsInTheDomInterfaceTable_AndTickIsNot` |
+| `System.ComponentModel.` dropped from TextBox Validating | `EveryArgsTypeOutsideSystemAndWinForms_IsWrittenQualified` (parity alone stays green — last segment) |
+| Button MouseDown given `click` (the plan's "MouseClick given click": a second `click` on one row) | `NoRow_HasTwoEventsWithOneWebName` |
+| Non-browsable `DoubleClick` added to Button | `EveryWinFormsRowAndEvent_MatchesTheSnapshot(Button)` names it |
+
+  The first five ran as one build and the last two as another; each mutant is killed by a DIFFERENT test, and each failing
+  test's message names its own mutant.
+
 ## 7. Tests to re-check (consolidated)
 
 | Test | Why | Task |

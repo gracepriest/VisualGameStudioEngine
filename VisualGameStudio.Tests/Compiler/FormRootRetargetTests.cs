@@ -182,12 +182,17 @@ public class FormRootRetargetTests
         });
     }
 
-    [Test]
-    public void ARootBind_WithNoFormEventOnTheDestination_IsDroppedAndNamed(
-        [Values(FormTarget.WinForms, FormTarget.Web)] FormTarget from)
+    /// <summary>
+    /// Slice 5: Load now crosses (the Form has events), so the LOST arm is pinned on an event with no destination name —
+    /// FormClosing (WinForms-only) on the way to the web; on the way back every web root event exists on WinForms, so an
+    /// event the Form does not declare at all (<c>beforeunload</c>).
+    /// </summary>
+    [TestCase(FormTarget.WinForms, "FormClosing", TestName = "{m}(WinForms)")]
+    [TestCase(FormTarget.Web, "beforeunload", TestName = "{m}(Web)")]
+    public void ARootBind_WithNoFormEventOnTheDestination_IsDroppedAndNamed(FormTarget from, string evt)
     {
         var source = new FormDocument { Target = from, Name = "Login" };
-        source.Binds.Add(new FormBind { Event = "Load", Handler = "Login_Load" });
+        source.Binds.Add(new FormBind { Event = evt, Handler = "Login_Closing" });
 
         var result = FormRetarget.Convert(source, Other(from));
 
@@ -195,7 +200,7 @@ public class FormRootRetargetTests
         {
             Assert.That(result.Document.Binds, Is.Empty, "never carried silently");
             Assert.That(result.Diagnostics.Single(d => d.Code == DesignCodes.RetargetBindLost).Message,
-                Does.Contain("'form'").And.Contain("Login_Load"));
+                Does.Contain("'form'").And.Contain("Login_Closing").And.Contain(evt));
         });
     }
 
@@ -203,7 +208,7 @@ public class FormRootRetargetTests
     public void ARootBind_ReadFromTheFile_IsDroppedAndNamed_NotCarriedAsAnUnknownChild()
     {
         var source = BasicLang.Forms.Serialization.FormDocumentReader.Read("Login.blform", """
-            <Form Name="Login" Version="1"><Bind Event="Load" Handler="Login_Load"/><Controls/></Form>
+            <Form Name="Login" Version="1"><Bind Event="FormClosing" Handler="Login_Closing"/><Controls/></Form>
             """).Model;
 
         var result = FormRetarget.Convert(source, FormTarget.Web);

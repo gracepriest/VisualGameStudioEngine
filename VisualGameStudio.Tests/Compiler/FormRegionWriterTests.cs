@@ -1037,7 +1037,8 @@ public class FormRegionWriterTests
     /// </summary>
     [TestCase("clik", TestName = "Write_Web_RefusesAnUnknownEvent_Typo")]
     [TestCase("onclick", TestName = "Write_Web_RefusesAnUnknownEvent_OnPrefixed")]
-    [TestCase("mouseenter", TestName = "Write_Web_RefusesAnUnknownEvent_NotOnTheRow")]
+    // Slice 5: mouseenter is ON the Button's row now; mouseover is a real DOM event it still does not declare.
+    [TestCase("mouseover", TestName = "Write_Web_RefusesAnUnknownEvent_NotOnTheRow")]
     public void Write_Web_RefusesABindOnAnEventTheRowDoesNotDeclare(string spelling)
     {
         var source = ScaffoldedFile();

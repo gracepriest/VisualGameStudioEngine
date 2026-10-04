@@ -484,14 +484,15 @@ public class FormRetargetTests
     [Test]
     public void ToWeb_ABindOnAnEventTheCatalogCannotName_IsDroppedAndReported()
     {
-        // Carrying "MouseEnter" into a web document would emit addEventListener("MouseEnter", …),
-        // which registers cleanly and never fires — the silent failure this task forbids.
+        // Carrying "Paint" into a web document would emit addEventListener("Paint", …), which registers
+        // cleanly and never fires — the silent failure this task forbids. (Slice 5: MouseEnter crosses now;
+        // Paint is WinForms-only on every kind.)
         var source = WinForms("""
             <Form Name="LoginForm" Version="1">
               <Controls>
                 <Button Id="btn" Text="Go" X="8" Y="8" Width="75" Height="23" TabIndex="0">
                   <Bind Event="Click" Handler="btn_Click"/>
-                  <Bind Event="MouseEnter" Handler="btn_Hover"/>
+                  <Bind Event="Paint" Handler="btn_Hover"/>
                 </Button>
               </Controls>
             </Form>
@@ -506,7 +507,7 @@ public class FormRetargetTests
 
             var lost = Of(result, DesignCodes.RetargetBindLost).Single();
             Assert.That(lost.IsWarning, Is.True);
-            Assert.That(lost.Message, Does.Contain("'btn'").And.Contain("MouseEnter").And.Contain("btn_Hover"),
+            Assert.That(lost.Message, Does.Contain("'btn'").And.Contain("Paint").And.Contain("btn_Hover"),
                 "the finding names the handler so the user can wire it by hand on the other side");
         });
     }
