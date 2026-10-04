@@ -229,23 +229,43 @@ public class FormPropertyGridRealViewTests
         rig.Container(row).GetVisualDescendants().OfType<ComboBox>().Single(c => c.IsEffectivelyVisible);
 
     /// <summary>
-    /// Picks <paramref name="item"/> in the real ComboBox by setting its <c>SelectedIndex</c> — the object selector's
-    /// pattern: the combo's <c>SelectedItem</c> binding to the row is what is under test.
+    /// Picks <paramref name="item"/> through the real ComboBox with real input: a real click opens it, and a real click
+    /// lands on the item in the drop-down's own top level, in ITS coordinates — the context-menu test's pattern.
     ///
-    /// <para>⚠ Not a real click on the drop-down, MEASURED (slice 4 Task 1): a real click opens it once, but a second
-    /// drop-down opened in the same window — or the first after a Font expand inserted rows — is torn down during the
-    /// release's own layout pass: <c>VirtualizingStackPanel.MeasureOverride → RecycleAllElements</c> recycles every
-    /// container of the property list, the combo is detached with its popup, and it re-realises closed. The same happens
-    /// to the pre-existing TextAlign Enum combo, so it is not a Bool-editor defect; whether a real (non-overlay) popup
-    /// does it in the IDE is unverified — recorded as a follow-up in the slice-4 pre-flight's execution notes.</para>
+    /// <para>⛔ This works for the SECOND drop-down in a window only because <c>FormPropertyGridView</c> refuses a
+    /// bring-into-view request that comes out of a popup (slice 4 Task 1 review). The chain it cuts, measured: opening a
+    /// ComboBox runs <c>PopupOpened → TryFocusSelectedItem → ComboBoxItem.BringIntoView()</c>; the request bubbles out of
+    /// the popup to the property list's <c>ScrollContentPresenter.BringDescendantIntoView</c>; headless popups are an
+    /// <c>OverlayPopupHost</c> in the SAME window, so the transform succeeds and the list scrolls (27→0, 209→0); the
+    /// <c>VirtualizingStackPanel</c> then recycles every container, which detaches the combo and closes it.</para>
     /// </summary>
     private static void PickInCombo(Rig rig, ComboBox combo, string item)
     {
-        var index = combo.Items.Cast<object?>().ToList().IndexOf(item);
-        Assert.That(index, Is.GreaterThanOrEqualTo(0), $"'{item}' is one of the combo's items");
-        combo.SelectedIndex = index;
-        Dispatcher.UIThread.RunJobs();
+        var row = (FormPropertyRow)combo.DataContext!;
+        rig.Click(combo);
         rig.Window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+        // Re-read through the row: a recycled container would hold a different (closed) combo.
+        combo = VisibleCombo(rig, row);
+        try
+        {
+            Assert.That(combo.IsDropDownOpen, Is.True, $"{row.Name}: the real click opened the drop-down");
+            var index = combo.Items.Cast<object?>().ToList().IndexOf(item);
+            Assert.That(index, Is.GreaterThanOrEqualTo(0), $"'{item}' is one of the combo's items");
+            var container = combo.ContainerFromIndex(index) as ComboBoxItem
+                            ?? throw new InvalidOperationException($"'{item}' has no realised item in the open drop-down");
+            var popupTop = TopLevel.GetTopLevel(container) ?? throw new InvalidOperationException("the item has no top level");
+            var at = container.TranslatePoint(new Point(container.Bounds.Width / 2, container.Bounds.Height / 2), popupTop)!.Value;
+            popupTop.MouseDown(at, MouseButton.Left);
+            popupTop.MouseUp(at, MouseButton.Left);
+            Dispatcher.UIThread.RunJobs();
+            rig.Window.UpdateLayout();
+        }
+        finally
+        {
+            combo.IsDropDownOpen = false;
+            Dispatcher.UIThread.RunJobs();
+        }
     }
 
     /// <summary>Selects through the real canvas: a click on the control's own rectangle.</summary>
@@ -614,7 +634,8 @@ public class FormPropertyGridRealViewTests
     // ==================================================================
 
     /// <summary>
-    /// A real click on a Font's +/- box expands it in the real list; a real click on the Bold part's switch writes the
+    /// A real click on a Font's +/- box expands it in the real list; picking True in the Bold part's drop-down — a real
+    /// click to open it and a real click on the item in its popup, the first drop-down after the expand — writes the
     /// WHOLE font into the file (one value — the fan-in rule), starting from the Form's default for an ambient Font; the
     /// box then collapses it again. At two window sizes (the grid is narrower in the first).
     /// </summary>
@@ -637,7 +658,8 @@ public class FormPropertyGridRealViewTests
             Assert.That(rig.NameCell(bold).Margin.Left, Is.GreaterThan(textIndent), $"{w}x{h}: a part is indented under its parent");
 
             // ⚠ Fetched right before the pick: Container() scrolls the real list, which recycles containers.
-            // Slice 4 D-3: the Bold part is VS's True/False drop-down, picked through its real popup.
+            // Slice 4 D-3: the Bold part is VS's True/False drop-down, picked by real clicks (PickInCombo: open, then the
+            // item in the popup). The first drop-down after a Font expand is one the popup bring-into-view guard rescues.
             PickInCombo(rig, VisibleCombo(rig, bold), "True");
 
             Assert.Multiple(() =>
@@ -791,6 +813,33 @@ public class FormPropertyGridRealViewTests
                 Assert.That(rig.Control("lbl").Properties["Enabled"], Is.EqualTo("false"), $"{w}x{h}: and back");
                 Assert.That(rig.Vm.Text, Does.Contain("Enabled=\"false\""), $"{w}x{h}: the .blform text");
                 Assert.That(edits, Is.EqualTo(2), $"{w}x{h}: one more edit");
+            });
+        }
+    }
+
+    /// <summary>
+    /// ⛔ Slice 4 Task 1 review: TWO drop-downs in one window, each picked by real clicks in its real popup — a Bool
+    /// (Enabled) and then the pre-existing Enum (TextAlign). Before the grid refused popup bring-into-view requests, the
+    /// SECOND one opened, scrolled the list from inside its popup, had its container recycled and closed again (see
+    /// <see cref="PickInCombo"/>). At two window sizes.
+    /// </summary>
+    [AvaloniaTest]
+    public void TwoDropDownsInOneWindow_BothPickThroughTheirRealPopups_AtTwoSizes()
+    {
+        foreach (var (w, h) in TwoZooms)
+        {
+            using var rig = Open(w, h);
+            SelectOnCanvas(rig, "lbl");
+
+            PickInCombo(rig, VisibleCombo(rig, rig.Row("Enabled")), "False");
+            PickInCombo(rig, VisibleCombo(rig, rig.Row("TextAlign")), "TopRight");
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(rig.Control("lbl").Properties["Enabled"], Is.EqualTo("false"), $"{w}x{h}: the first pick");
+                Assert.That(rig.Control("lbl").Properties["TextAlign"], Is.EqualTo("TopRight"), $"{w}x{h}: the SECOND pick");
+                Assert.That(rig.Vm.Text, Does.Contain("Enabled=\"false\"").And.Contain("TextAlign=\"TopRight\""),
+                    $"{w}x{h}: the .blform text");
             });
         }
     }

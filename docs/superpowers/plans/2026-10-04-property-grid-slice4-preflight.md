@@ -691,14 +691,25 @@ ordinal mutant: the part composes the same font, and the PARENT's Judge then NoO
 Font, where `False` over `false` composed the inherited font and the parent stored it. Both tests are kept. The absent one
 is the kill.
 
-⚠ **Finding (follow-up, not fixed): the real drop-down cannot be clicked twice in one headless window.** A real click opens
-a row's ComboBox the first time. The second drop-down opened in the same window (or the first one after a Font expand
-inserted rows) is torn down during the release's layout pass: `VirtualizingStackPanel.MeasureOverride →
-RecycleAllElements` recycles every property-list container, so the combo is detached with its popup and re-realises
-closed. No edit happens, and the rows and DisplayItems are unchanged. The pre-existing **TextAlign Enum** combo behaves the
-same, so this is not the Bool editor. Whether the IDE's real (non-overlay) popups do it is unverified, and should be checked
-in the owner click-through (§5 item 4). The real-view tests therefore pick by setting the real combo's `SelectedIndex`,
-the object selector's convention, with the reason stated on `PickInCombo`.
+⚠ **Finding, then FIXED in the review follow-up commit: a drop-down opened inside the grid could scroll the grid and close
+itself.** The second drop-down opened in a window (or the first one after a Font expand) closed as it opened. The
+pre-existing TextAlign Enum combo did the same. The reviewer measured the root cause:
+1. Opening a ComboBox runs `PopupOpened → TryFocusSelectedItem → ComboBoxItem.BringIntoView()`.
+2. The request bubbles out of the popup to the property list's `ScrollContentPresenter.BringDescendantIntoView`.
+3. Headless popups use an `OverlayPopupHost` in the SAME window, so `TransformToVisual` succeeds and the list scrolls
+   (27→0, 209→0).
+4. `VirtualizingStackPanel` then runs `RecycleAllElements`, which detaches the combo, and the combo closes.
+
+Real Win32 popups are separate roots, so the IDE is likely unaffected.
+
+Fix (coordinator decision): `FormPropertyGridView` marks a bring-into-view request Handled when its target is inside a
+popup (an `OverlayPopupHost`/`PopupRoot` ancestor, or a different top level).
+- ⚠ The guard sits on each ROW CONTAINER, not on the ListBox. The event is bubble-only, and the presenter lives inside the
+  ListBox's template. A ListBox-level guard was measured to change nothing.
+- `PickInCombo` and the Task 1 real-view tests now pick with REAL clicks: open the drop-down, then click the item in its
+  popup. The new `TwoDropDownsInOneWindow_BothPickThroughTheirRealPopups_AtTwoSizes` covers Enabled, then TextAlign.
+- Red before the guard: that test, plus `ExpandingAFont_…` (its first pick follows an expand). Mutation: guard removed →
+  both red again.
 
 RE-CHECK: `FormPropertyGridTests` frozen Bool (`IsComboBox` false holds for the frozen BOOL row, type asserted);
 `FormPropertyRowDefaultTests` PropertyChanged list (a combo write raises `StringValue`); `EveryRowsEditor_Fits…` (Bools now

@@ -358,6 +358,11 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
     /// <summary>VS's two Bool items, in VS's order — the spelling <see cref="StringValue"/> shows a Bool in.</summary>
     private static readonly IReadOnlyList<string> BoolChoices = new[] { "True", "False" };
 
+    /// <summary>
+    /// The filtered <see cref="Choices"/>, computed once. ⚠ Assumes <see cref="_choices"/>, <see cref="_definition"/> and
+    /// <see cref="_target"/> never change for this row — all three are readonly today. Task 3's Reference row (a list
+    /// evaluated on read, following the document) must NOT go through this cache: revisit it there.
+    /// </summary>
     private IReadOnlyList<string>? _offered;
 
     /// <summary>
@@ -472,7 +477,7 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
     /// </summary>
     public string StringValue
     {
-        get => _type == FormPropertyType.Bool && IsEditable && bool.TryParse(EditorText, out var flag)
+        get => IsEditableBool && bool.TryParse(EditorText, out var flag)
             ? (flag ? BoolChoices[0] : BoolChoices[1])
             : EditorText;
         set => Commit(value);
@@ -483,15 +488,25 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
     /// decides — an absent Enabled (shown True) writes <c>false</c>, a present <c>false</c> writes <c>true</c>. Nothing for
     /// a row that is not an editable Bool: a frozen row is never coerced. (Cycling an Enum on double-click is a follow-up.)
     /// </summary>
-    public void ToggleBool()
+    /// <returns>Whether the value FLIPPED — the view marks the gesture handled only then.</returns>
+    public bool ToggleBool()
     {
-        if (_type != FormPropertyType.Bool || !UsesTypedEditor)
+        if (!IsEditableBool)
         {
-            return;
+            return false;
         }
 
+        var before = DisplayValue;
         Commit(BoolValue ? "false" : "true");
+        return !string.Equals(before, DisplayValue, StringComparison.Ordinal);
     }
+
+    /// <summary>
+    /// ONE answer to "is this a Bool the grid edits?" — what <see cref="StringValue"/>'s True/False display and
+    /// <see cref="ToggleBool"/> both ask. ⚠ <see cref="UsesTypedEditor"/>, not <see cref="IsEditable"/>: it is the typed
+    /// editor (the drop-down) that speaks True/False, and only a row that renders it may be toggled.
+    /// </summary>
+    private bool IsEditableBool => _type == FormPropertyType.Bool && UsesTypedEditor;
 
     public bool BoolValue
     {

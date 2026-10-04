@@ -671,21 +671,22 @@ public class FormPropertyGridTests
         grid.Edited += (_, _) => edits++;
         var chk = file.Model.FindById("chk")!;
 
-        grid.Rows.Single(r => r.Name == "Enabled").ToggleBool();
+        Assert.That(grid.Rows.Single(r => r.Name == "Enabled").ToggleBool(), Is.True, "flipped");
         Assert.That(chk.Properties["Enabled"], Is.EqualTo("true"), "false → true, per Judge (a Write, in the document's word)");
 
-        grid.Rows.Single(r => r.Name == "Enabled").ToggleBool();
+        Assert.That(grid.Rows.Single(r => r.Name == "Enabled").ToggleBool(), Is.True, "flipped back");
         Assert.That(chk.Properties["Enabled"], Is.EqualTo("false"), "and back");
 
-        grid.Rows.Single(r => r.Name == "Text").ToggleBool();
+        var flippedText = grid.Rows.Single(r => r.Name == "Text").ToggleBool();
         Assert.Multiple(() =>
         {
+            Assert.That(flippedText, Is.False, "a String row reports no flip (the view leaves the gesture unhandled)");
             Assert.That(chk.Properties["Text"], Is.EqualTo("Remember"), "a String row is not a toggle");
             Assert.That(edits, Is.EqualTo(2), "one Edited per toggle, none for the String row");
         });
 
         var frozen = GridOver(DegradedForm, "chk").Rows.Single(r => r.Name == "Checked");
-        frozen.ToggleBool();
+        Assert.That(frozen.ToggleBool(), Is.False, "a frozen row reports no flip");
         Assert.That(frozen.RawValue, Is.EqualTo("maybe"), "a Degraded Bool is never coerced by a double-click");
     }
 

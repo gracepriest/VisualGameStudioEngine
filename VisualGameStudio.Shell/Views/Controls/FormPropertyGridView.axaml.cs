@@ -1,5 +1,6 @@
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.VisualTree;
@@ -31,6 +32,35 @@ public partial class FormPropertyGridView : UserControl
     }
 
     /// <summary>
+    /// ⛔ A bring-into-view request that comes out of a POPUP is not the list's to honour (slice 4 Task 1 review).
+    ///
+    /// <para>Measured chain: opening a row's ComboBox runs <c>PopupOpened → TryFocusSelectedItem →
+    /// ComboBoxItem.BringIntoView()</c>, and the request bubbles out of the popup (its logical parent is the combo) to this
+    /// list's <c>ScrollContentPresenter.BringDescendantIntoView</c>. Where the popup is an <c>OverlayPopupHost</c> in the
+    /// same window (the headless platform, and any overlay-popup host), the transform succeeds, the list scrolls to the
+    /// popup's item (27→0, 209→0), the <c>VirtualizingStackPanel</c> recycles every container — and the combo that just
+    /// opened is detached and closes. A Win32 popup is a separate root, so the IDE is likely unaffected; the guard costs
+    /// nothing there. The popup's own ScrollViewer has already handled its item before the request reaches here.</para>
+    ///
+    /// <para>⛔ Handled on each ROW CONTAINER (<see cref="OnContainerPrepared"/>), not on the ListBox: the request is
+    /// bubble-only, and the list's ScrollContentPresenter is INSIDE the ListBox's template — a handler on the ListBox runs
+    /// after the presenter has already scrolled (measured: the guard there changed nothing). The container is the last
+    /// element between the popup's combo and the presenter.</para>
+    /// </summary>
+    private void OnContainerRequestBringIntoView(object? sender, RequestBringIntoViewEventArgs e)
+    {
+        if (e.TargetObject is Visual target && IsInsidePopup(target))
+        {
+            e.Handled = true;
+        }
+    }
+
+    private bool IsInsidePopup(Visual target) =>
+        target.FindAncestorOfType<OverlayPopupHost>(includeSelf: true) != null ||
+        target.FindAncestorOfType<PopupRoot>(includeSelf: true) != null ||
+        !ReferenceEquals(TopLevel.GetTopLevel(target), TopLevel.GetTopLevel(PropertyList));
+
+    /// <summary>
     /// VS's double-click on a Bool row flips it (slice 4 D-3) — <see cref="FormPropertyRow.ToggleBool"/>, which decides
     /// whether the row is an editable Bool and does nothing otherwise.
     ///
@@ -48,8 +78,11 @@ public partial class FormPropertyGridView : UserControl
             return;
         }
 
-        row.ToggleBool();
-        e.Handled = true;
+        // Handled only when the value flipped: a double-click on any other row stays available to whoever else listens.
+        if (row.ToggleBool())
+        {
+            e.Handled = true;
+        }
     }
 
     /// <summary>
@@ -140,6 +173,10 @@ public partial class FormPropertyGridView : UserControl
     /// </summary>
     private void OnContainerPrepared(object? sender, ContainerPreparedEventArgs e)
     {
+        // ⚠ Containers are RECYCLED and prepared again: remove first, so a container never carries the guard twice.
+        e.Container.RemoveHandler(RequestBringIntoViewEvent, OnContainerRequestBringIntoView);
+        e.Container.AddHandler(RequestBringIntoViewEvent, OnContainerRequestBringIntoView);
+
         var item = e.Index >= 0 && e.Index < PropertyList.ItemCount ? PropertyList.Items[e.Index] : null;
         e.Container.ContextMenu = item is FormPropertyRow row
             ? new ContextMenu { Items = { new MenuItem { Header = "Reset", Command = row.ResetCommand } } }
