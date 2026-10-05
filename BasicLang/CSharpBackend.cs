@@ -2407,6 +2407,8 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         private void HandleSwitchStatement(IRSwitch switchInst)
         {
             var value = EmitExpression(switchInst.Value);
+            var outerSwitchValue = _currentSwitchValue;
+            _currentSwitchValue = value;
 
             WriteLine($"switch ({value})");
             WriteLine("{");
@@ -2438,8 +2440,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 // Emit value case labels
                 foreach (var caseValue in caseValues)
                 {
-                    var caseExpr = EmitExpression(caseValue);
-                    WriteLine($"case {caseExpr}:");
+                    WriteLine(CaseLabel(caseValue, value));
                 }
 
                 // Also emit pattern cases for this block
@@ -2464,6 +2465,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 }
                 EmitCaseBody(block);
             }
+            _currentSwitchValue = outerSwitchValue;
 
             // Emit default case
             var defaultBlock = switchInst.DefaultTarget;
@@ -2485,6 +2487,97 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 GenerateStructuredBlock(endBlock);
             }
         }
+
+        /// <summary>
+        /// The handler of an <c>AddHandler</c>/<c>RemoveHandler</c> as C# can attach it (portable-controls review of Task 10).
+        /// <list type="bullet">
+        /// <item>A MODULE procedure is qualified by its container, as a call to it is (<see cref="ModuleClassName"/>) —
+        /// bare inside a class it was CS0103. A member of the class being emitted keeps the bare spelling.</item>
+        /// <item>VB's RELAXED delegates: a handler with NO parameters, or whose parameter types differ from the event's
+        /// (wider — <c>(Object, Object)</c> for <c>(Object, Integer)</c>), is legal VB and C#'s CS0123. It is wrapped in a
+        /// lambda of the event's arity that calls it — with no arguments, or forwarding them (each converts implicitly
+        /// to the wider parameter). The analyzer has already refused a shape that is not a widening
+        /// (HandlerSignatureMismatch). ⚠ As in VB, a relaxed handler cannot be REMOVED by a second <c>AddressOf</c>:
+        /// the wrapper is a new delegate (VB warns BC42326 for this).</item>
+        /// </list>
+        /// </summary>
+        private string HandlerText(IRValue handler, TypeInfo eventType)
+        {
+            var text = EmitExpression(handler);
+            if (handler is not IRUnaryOp { Operation: UnaryOpKind.AddressOf } addressOf) return text;
+
+            if (addressOf.Operand is IRVariable { IsParameter: false } target
+                && (_currentClassMemberNames == null || !_currentClassMemberNames.Contains(target.Name))
+                && ModuleProcedureOwner(target.Name) is { } owner
+                && !EmittedInsideModuleClass(owner))
+            {
+                text = $"{ModuleClassName(owner)}.{SanitizeName(target.Name)}";
+            }
+
+            var eventParameters = DelegateParameterCount(eventType);
+            var handlerParameters = addressOf.Type?.Kind == TypeKind.Delegate ? addressOf.Type.GenericArguments : null;
+            if (eventParameters < 0 || handlerParameters == null) return text;
+            if (string.Equals(addressOf.Type.Name, "Func", StringComparison.OrdinalIgnoreCase)) return text;
+
+            var relaxedToNothing = handlerParameters.Count == 0 && eventParameters > 0;
+            var widened = handlerParameters.Count == eventParameters && eventType.GenericArguments.Count == eventParameters
+                && handlerParameters.Where((p, i) => !string.Equals(p?.Name, eventType.GenericArguments[i]?.Name,
+                    StringComparison.OrdinalIgnoreCase)).Any();
+            if (!relaxedToNothing && !widened) return text;
+
+            var lambdaParameters = Enumerable.Range(0, eventParameters).Select(i => $"__h{i}").ToList();
+            var forwarded = relaxedToNothing ? "" : string.Join(", ", lambdaParameters);
+            return $"(({string.Join(", ", lambdaParameters)}) => {text}({forwarded}))";
+        }
+
+        /// <summary>The parameter count of an event's delegate type, or -1 when it cannot be read.</summary>
+        private static int DelegateParameterCount(TypeInfo eventType)
+        {
+            if (eventType == null) return -1;
+            if (string.Equals(eventType.Name, "Action", StringComparison.OrdinalIgnoreCase))
+                return eventType.GenericArguments?.Count ?? 0;
+            if (string.Equals(eventType.Name, "EventHandler", StringComparison.OrdinalIgnoreCase)
+                && (eventType.GenericArguments == null || eventType.GenericArguments.Count == 0))
+                return 2;
+            return -1;
+        }
+
+        /// <summary>The Module / file container that declares the free procedure <paramref name="name"/>, or null.</summary>
+        private string ModuleProcedureOwner(string name)
+        {
+            var module = _currentModule;
+            if (module == null || string.IsNullOrEmpty(name)) return null;
+            var function = module.Functions.FirstOrDefault(f => !f.IsLambda && !f.IsExternal && !IsClassMethod(f, module)
+                && string.Equals(f.Name, name, StringComparison.OrdinalIgnoreCase));
+            return function == null ? null : function.ModuleName ?? _options.ClassName;
+        }
+
+        /// <summary>
+        /// One value <c>Case</c>'s C# label. A C# <c>case</c> needs a CONSTANT; VB's <c>Case</c> takes any expression,
+        /// so a value that is not one here — <c>Case Lim.Max</c> on a Shared field (a class <c>Const</c> lowers to a
+        /// static field too), a local, a call's result — is a run-time compare through a discard pattern:
+        /// <c>case var _ when switchValue == x:</c>. Before, it was <c>case Lim.Max:</c>, CS9135 from a build the
+        /// front end accepted (portable-controls review of Task 9, once a dotted Case value parsed at all).
+        /// </summary>
+        private string CaseLabel(IRValue caseValue, string switchValue)
+        {
+            var caseExpr = EmitExpression(caseValue);
+            return IsCSharpConstantCase(caseValue)
+                ? $"case {caseExpr}:"
+                : $"case var _ when ({switchValue}) == ({caseExpr}):";
+        }
+
+        /// <summary>The switch value being labelled — what a non-constant pattern case compares against (nested switches save it).</summary>
+        private string _currentSwitchValue;
+
+        /// <summary>A literal, a user Enum's member, or a module <c>Const</c> (emitted as a C# <c>const</c>).</summary>
+        private static bool IsCSharpConstantCase(IRValue value) => value switch
+        {
+            IRConstant => true,
+            IRFieldAccess { Object.Type.Kind: TypeKind.Enum } => true,
+            IRVariable { IsConst: true } => true,
+            _ => false
+        };
 
         private void EmitPatternCase(IRPatternCase pattern)
         {
@@ -2544,7 +2637,17 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
                 case IRConstantPatternCase constPattern:
                     var constValue = EmitExpression(constPattern.Value);
-                    WriteLine($"case {constValue}{whenClause}:");
+                    if (IsCSharpConstantCase(constPattern.Value) || _currentSwitchValue == null)
+                    {
+                        WriteLine($"case {constValue}{whenClause}:");
+                    }
+                    else
+                    {
+                        // A dotted Case value parses as a constant PATTERN (`Case Lim.Max`) — the same rule as
+                        // CaseLabel: not a C# constant, so a run-time compare (CS9135 before).
+                        var guard = pattern.WhenGuard != null ? $" && ({EmitExpression(pattern.WhenGuard)})" : "";
+                        WriteLine($"case var _ when ({_currentSwitchValue}) == ({constValue}){guard}:");
+                    }
                     break;
 
                 case IRNothingPatternCase:
@@ -3472,9 +3575,12 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         private string ModuleClassName(string moduleName)
         {
             if (_containerNames.TryGetValue(moduleName, out var cached)) return cached;
-            var first = moduleName.Equals("Main", StringComparison.OrdinalIgnoreCase) ? "Program" : SanitizeName(moduleName);
+            var renamedMain = moduleName.Equals("Main", StringComparison.OrdinalIgnoreCase);
+            var first = renamedMain ? "Program" : SanitizeName(moduleName);
             var spelled = first;
-            if (ContainerNameTaken(first, moduleName, includeOtherContainers: false))
+            // "Program" is already a RENAME, so it is judged against every other container as well — Main.bas's
+            // file-level procedures beside a `Module Program` elsewhere were two `static class Program`s (CS0101).
+            if (ContainerNameTaken(first, moduleName, includeOtherContainers: renamedMain))
             {
                 var stem = first + "Module";
                 spelled = stem;
@@ -4234,7 +4340,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             if (functionName == "Delegate.Combine" && call.Arguments.Count >= 2)
             {
                 var eventExpr = EmitExpression(call.Arguments[0]);
-                var handlerExpr = EmitExpression(call.Arguments[1]);
+                var handlerExpr = HandlerText(call.Arguments[1], call.Arguments[0].Type);
                 WriteLine($"{eventExpr} += {handlerExpr};");
                 return;
             }
@@ -4243,7 +4349,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             if (functionName == "Delegate.Remove" && call.Arguments.Count >= 2)
             {
                 var eventExpr = EmitExpression(call.Arguments[0]);
-                var handlerExpr = EmitExpression(call.Arguments[1]);
+                var handlerExpr = HandlerText(call.Arguments[1], call.Arguments[0].Type);
                 WriteLine($"{eventExpr} -= {handlerExpr};");
                 return;
             }
@@ -4459,9 +4565,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
             foreach (var (caseValue, target) in switchInst.Cases)
             {
-                // Case labels must be compile-time constants in C#. We still stringify defensively.
-                var caseExpr = EmitExpression(caseValue);
-                WriteLine($"case {caseExpr}: goto {target.Name};");
+                WriteLine($"{CaseLabel(caseValue, value)} goto {target.Name};");
             }
 
             WriteLine($"default: goto {switchInst.DefaultTarget.Name};");
@@ -5056,6 +5160,9 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         {
             if (constant.Value == null)
                 return "null";
+
+            if (constant.Value is IREnumMemberValue enumMember)
+                return $"{SanitizeName(enumMember.EnumName)}.{SanitizeName(enumMember.MemberName)}";
 
             if (constant.Value is string str)
                 return $"\"{EscapeString(str)}\"";

@@ -584,7 +584,27 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
 
             Unindent();
             WriteLine("};");
+
+            // An `enum class` has no text and no bitwise operators (portable-controls review of Task 9). VB prints an
+            // Enum value as its member NAME — `Console.WriteLine(k)`, `"v=" & k`, `k.ToString()` — and a value no
+            // member has as its number; `And`/`Or` over one Enum are its FLAGS operators (the analyzer admits only
+            // that shape; IRBuilder lowers it to BitwiseAnd/BitwiseOr). An if-chain, not a switch: two members may
+            // share a value, and the FIRST declared answers (.NET's order).
+            WriteLine($"inline std::string {CppEnumNameFunction}({enumName} v)");
+            WriteLine("{");
+            Indent();
+            foreach (var member in irEnum.Members)
+                WriteLine($"if (v == {enumName}::{SanitizeName(member.Name)}) return \"{member.Name}\";");
+            WriteLine("return std::to_string(static_cast<int64_t>(v));");
+            Unindent();
+            WriteLine("}");
+            WriteLine($"inline std::ostream& operator<<(std::ostream& os, {enumName} v) {{ return os << {CppEnumNameFunction}(v); }}");
+            WriteLine($"inline {enumName} operator|({enumName} a, {enumName} b) {{ return static_cast<{enumName}>(static_cast<int64_t>(a) | static_cast<int64_t>(b)); }}");
+            WriteLine($"inline {enumName} operator&({enumName} a, {enumName} b) {{ return static_cast<{enumName}>(static_cast<int64_t>(a) & static_cast<int64_t>(b)); }}");
         }
+
+        /// <summary>The overloaded function <see cref="GenerateEnum"/> writes for every Enum: a value's member name.</summary>
+        internal const string CppEnumNameFunction = "BlEnumName";
 
         private void GenerateDelegate(IRDelegate irDelegate)
         {
@@ -3099,6 +3119,10 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             if (string.Equals(name, "Char", StringComparison.OrdinalIgnoreCase))
                 return $"std::string(1, {rendered})";
 
+            // A user Enum's text is its member name (GenerateEnum writes the overload).
+            if (value.Type.Kind == TypeKind.Enum)
+                return $"{CppEnumNameFunction}({rendered})";
+
             // Decimal and the P1 native BCL types carry their own .NET-faithful ToString().
             if (IsNativeOwnedBclType(name))
                 return $"({rendered}).ToString()";
@@ -5571,6 +5595,10 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                     : $"{obj}{bclOp}ToString()";
             }
 
+            // A user Enum: its member name, as `&` and CStr spell it (GenerateEnum writes the overload).
+            if (methodCall.Arguments.Count == 0 && methodCall.Object?.Type?.Kind == TypeKind.Enum)
+                return $"{CppEnumNameFunction}({obj})";
+
             var receiverTypeName = methodCall.Object?.Type?.Name?.ToLowerInvariant();
 
             switch (receiverTypeName)
@@ -6563,6 +6591,10 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             BinaryOpKind.Mod => "%",
             BinaryOpKind.And => "&",
             BinaryOpKind.Or => "|",
+            // An Enum's FLAGS operators (IRBuilder: `And`/`Or` over one Enum); GenerateEnum writes the overloads
+            // for the `enum class`.
+            BinaryOpKind.BitwiseAnd => "&",
+            BinaryOpKind.BitwiseOr => "|",
             // ⚠ `&&`/`||` here only short-circuits where the operand tree is rendered INLINE —
             // i.e. RenderInline, which is the `When`-guard position. In the statement position
             // Visit(IRBinaryOp) receives operands IRBuilder has already emitted as separate
@@ -6721,6 +6753,9 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         {
             if (constant.Value == null)
                 return NothingOf(constant.Type);
+
+            if (constant.Value is IREnumMemberValue enumMember)
+                return $"{SanitizeName(enumMember.EnumName)}::{SanitizeName(enumMember.MemberName)}";
 
             if (constant.Value is string str)
                 return $"\"{EscapeString(str)}\"";

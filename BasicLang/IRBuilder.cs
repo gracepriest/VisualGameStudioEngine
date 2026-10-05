@@ -2192,10 +2192,29 @@ namespace BasicLang.Compiler.IR
         /// name but found Assignment"), which keeps the structure call site unreachable for
         /// initializers. PRE-EXISTING and measured.</para>
         /// </summary>
+        /// <summary>
+        /// <c>Shade.Keyed</c> — a user Enum's member — as an initializer constant (<see cref="IREnumMemberValue"/>), or null.
+        /// ⛔ The fold substitutes no named constants, so <c>Public K As Shade = Shade.Keyed</c> was refused "cannot be
+        /// computed at compile time" (portable-controls review of Task 9; the library's every Enum-typed default).
+        /// </summary>
+        private IRConstant TryEnumMemberConstant(ExpressionNode initializer)
+        {
+            if (initializer is not MemberAccessExpressionNode { Object: IdentifierExpressionNode receiver } access) return null;
+            if (_semanticAnalyzer.GetNodeType(initializer) is not { Kind: TypeKind.Enum } enumType) return null;
+            if (!string.Equals(receiver.Name, enumType.Name, StringComparison.OrdinalIgnoreCase)) return null;
+            if (enumType.Members == null || !enumType.Members.ContainsKey(access.MemberName)) return null;
+            return new IRConstant(new IREnumMemberValue(enumType.Name, access.MemberName), enumType);
+        }
+
         private IRConstant BuildConstantFieldInitializer(
             ExpressionNode initializer, TypeInfo fieldType, string fieldName)
         {
             if (initializer == null) return null;
+
+            if (TryEnumMemberConstant(initializer) is IRConstant enumMember)
+            {
+                return enumMember;
+            }
 
             if (TryFoldInitializerToConstant(initializer, fieldName, fieldType) is IRConstant folded)
             {
@@ -4669,6 +4688,17 @@ namespace BasicLang.Compiler.IR
             // safer for them — it would change the emission of shapes that already work
             // (`Dim b As Byte = 65` is a plain literal today) to buy a case nothing measured as
             // broken. String, Object, class and generic targets fall out here too.
+            // VB's implicit Enum → numeric WIDENING (`Dim n As Integer = Shade.Keyed`; the analyzer admits it,
+            // TypeInfo.IsAssignableFrom). C# has no implicit conversion from an enum (CS0266) and C++'s `enum class`
+            // has none either, so the store gets an explicit cast (portable-controls review of Task 9).
+            if (actual is { Kind: TypeKind.Enum } && IsFoldableNumeric(declared))
+            {
+                var enumCast = new IRCast(_currentFunction.GetNextTempName(), value, actual, declared,
+                                          DetermineCastKind(actual, declared));
+                EmitInstruction(enumCast);
+                return enumCast;
+            }
+
             if (!IsFoldableNumeric(declared) || !IsFoldableNumeric(actual)) return value;
             if (string.Equals(declared.Name, actual.Name, StringComparison.Ordinal)) return value;
 
@@ -5577,6 +5607,15 @@ namespace BasicLang.Compiler.IR
             else
             {
                 var opKind = MapBinaryOperator(node.Operator);
+
+                // VB's FLAGS operators: `And`/`Or` over an Enum (the analyzer admits only two values of one Enum and
+                // types the result as it) are BITWISE — JavaScript renders the logical kinds as `&&`/`||`, which on
+                // numbers answer an operand, not the bits (portable-controls review of Task 9; `AnchorStyles`).
+                if (resultType?.Kind == TypeKind.Enum)
+                {
+                    if (opKind == BinaryOpKind.And) opKind = BinaryOpKind.BitwiseAnd;
+                    else if (opKind == BinaryOpKind.Or) opKind = BinaryOpKind.BitwiseOr;
+                }
 
                 // ⛔ NEITHER BACKEND READS IRBinaryOp.Type. Both render `{left} {op} {right}`
                 // and let the TARGET language pick the operator semantics, so a Double-typed

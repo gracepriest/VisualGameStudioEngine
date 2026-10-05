@@ -189,6 +189,11 @@ public class TypeInfo
             if (Kind == TypeKind.Foreign && other != null && other.Kind == TypeKind.Foreign)
                 return true;
 
+            // VB widens an Enum to any numeric type implicitly (`Dim n As Integer = Shade.Keyed`). The IR builder
+            // casts at the store (IRBuilder.CoerceToDeclaredType): neither C# nor C++ converts an enum implicitly.
+            if (other != null && other.Kind == TypeKind.Enum && IsNumeric())
+                return true;
+
             // Numeric conversions
             if (IsNumeric() && other.IsNumeric())
             {

@@ -5790,6 +5790,17 @@ namespace BasicLang.Compiler.SemanticAnalysis
         }
 
         /// <summary>
+        /// <c>Shade.Dark</c> where <c>Shade</c> is an Enum declaring <c>Dark</c> — bound as the Enum's member, never through
+        /// the module channel. ⛔ Portable-controls Task 9: an Enum in a file of its own name (<c>Shade.bas</c>, the
+        /// library's one-type-per-file shape) is ALSO the file module <c>Shade</c>, and the module channel answered
+        /// "Module 'Shade' does not have a public member 'Dark'". Only a member the Enum DECLARES takes this path, so a
+        /// file-level name qualified by the file still reaches the module channel.
+        /// </summary>
+        private bool NamesAnEnumMember(string qualifier, string memberName) =>
+            (ResolveTypeSymbol(qualifier)?.Type ?? _typeManager.GetType(qualifier)) is { Kind: TypeKind.Enum } enumType
+            && enumType.Members != null && enumType.Members.ContainsKey(memberName ?? string.Empty);
+
+        /// <summary>
         /// <c>Game.Version</c> where <c>Game</c> is BOTH a class and the file <c>Game.bas</c>, and
         /// <c>Version</c> is declared at FILE level there, not in the class. Refused, naming the real
         /// problem. Returns false (nothing reported) for every other shape.
@@ -5801,17 +5812,6 @@ namespace BasicLang.Compiler.SemanticAnalysis
         /// the message was "Type 'Game' does not have a member 'Version'", true but no help. (C# also
         /// refuses the pair outright: the file becomes <c>static class Game</c> beside the class, CS0101.)</para>
         /// </summary>
-        /// <summary>
-        /// <c>Shade.Dark</c> where <c>Shade</c> is an Enum declaring <c>Dark</c> — bound as the Enum's member, never through
-        /// the module channel. ⛔ Portable-controls Task 9: an Enum in a file of its own name (<c>Shade.bas</c>, the
-        /// library's one-type-per-file shape) is ALSO the file module <c>Shade</c>, and the module channel answered
-        /// "Module 'Shade' does not have a public member 'Dark'". Only a member the Enum DECLARES takes this path, so a
-        /// file-level name qualified by the file still reaches the module channel.
-        /// </summary>
-        private bool NamesAnEnumMember(string qualifier, string memberName) =>
-            (ResolveTypeSymbol(qualifier)?.Type ?? _typeManager.GetType(qualifier)) is { Kind: TypeKind.Enum } enumType
-            && enumType.Members != null && enumType.Members.ContainsKey(memberName ?? string.Empty);
-
         private bool RefuseFileMemberQualifiedByAClassName(string qualifier, MemberAccessExpressionNode node)
         {
             if (_moduleRegistry == null) return false;
@@ -6612,6 +6612,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
         public void Visit(ModuleNode node)
         {
+            ReportEnumModuleNameClash(node.Name, declaresEnum: false, node.Line, node.Column);
             EnterScope(node.Name, ScopeKind.Module);
 
             var symbol = new Symbol(node.Name, SymbolKind.Module, null, node.Line, node.Column);
@@ -6835,10 +6836,9 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 {
                     classType.Members[prop.Name] = propSymbol;
                 }
-                else if (member is EventDeclarationNode evt && _nodeSymbols.TryGetValue(evt, out var evtSymbol))
-                {
-                    classType.Members[evt.Name] = evtSymbol;   // Task 10: an event is a class member
-                }
+                // ⚠ An EVENT is not re-recorded here: pass 1 (PopulateClassMemberSignatures) records every event, of
+                // every access, from the same EventDelegateType — a second write was the same shape and its removal
+                // killed nothing (review of Task 10).
             }
 
             // Task 10: the AddHandler/RemoveHandler checks this class deferred because the handler was declared BELOW
@@ -6993,6 +6993,55 @@ namespace BasicLang.Compiler.SemanticAnalysis
             }
         }
 
+        /// <summary>
+        /// ⛔ An <c>Enum X</c> and a <c>Module X</c> BLOCK in two files of one project share one name — VB's duplicate type name
+        /// in a namespace — and are refused at whichever declaration this unit holds, so the answer cannot depend on
+        /// compile order (review of Task 9: before, "Symbol 'Shade' is already defined" in some orders, and in
+        /// [Main, Colors, Shade] a clean build that died with <c>TypeError: Shade.Pick is not a function</c>). Read from
+        /// each sibling's PARSED declarations, which every order has. A file module (Shade.bas's own) is not a Module
+        /// block: an Enum in a file of its own name is the library's shape and stays legal.
+        /// </summary>
+        private void ReportEnumModuleNameClash(string name, bool declaresEnum, int line, int column)
+        {
+            if (string.IsNullOrEmpty(name)) return;
+            foreach (var unit in _implicitImportUnits)
+            {
+                if (unit == null || unit == _currentUnit || unit.AST?.Declarations == null) continue;
+                var clash = declaresEnum
+                    ? FindModuleBlock(unit.AST.Declarations, name) != null
+                    : DeclaresEnum(unit.AST.Declarations, name);
+                if (!clash) continue;
+                var other = Path.GetFileName(unit.FilePath);
+                Error(declaresEnum
+                        ? $"Enum '{name}' has the same name as Module '{name}' in {other}. An Enum and a Module are both types; rename one of them"
+                        : $"Module '{name}' has the same name as Enum '{name}' in {other}. An Enum and a Module are both types; rename one of them",
+                    line, column);
+                return;
+            }
+        }
+
+        private static bool DeclaresEnum(IEnumerable<ASTNode> declarations, string name)
+        {
+            foreach (var declaration in declarations)
+            {
+                switch (declaration)
+                {
+                    case EnumNode en when string.Equals(en.Name, name, StringComparison.OrdinalIgnoreCase):
+                        return true;
+                    case ModuleNode module when DeclaresEnum(module.Members, name):
+                        return true;
+                    case NamespaceNode ns when DeclaresEnum(ns.Members, name):
+                        return true;
+                }
+            }
+            return false;
+        }
+
+        /// <summary>Both types are the SAME user Enum (by name — a sibling's shell and the declaration are one Enum).</summary>
+        private static bool IsSameEnum(TypeInfo left, TypeInfo right) =>
+            left is { Kind: TypeKind.Enum } && right is { Kind: TypeKind.Enum }
+            && string.Equals(left.Name, right.Name, StringComparison.OrdinalIgnoreCase);
+
         /// <summary>The Enum twin of <see cref="_preRegisteredClasses"/>, consumed by <see cref="Visit(EnumNode)"/>.</summary>
         private readonly HashSet<string> _preRegisteredEnums = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
@@ -7015,6 +7064,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 }
             }
             RecordEnumMembers(node, enumType);
+            ReportEnumModuleNameClash(node.Name, declaresEnum: true, node.Line, node.Column);
 
             var symbol = new Symbol(node.Name, SymbolKind.Type, enumType, node.Line, node.Column);
             if (!_currentScope.Define(symbol))
@@ -9264,8 +9314,8 @@ namespace BasicLang.Compiler.SemanticAnalysis
             // only a name, which dropped `Action(Of Integer)` to `Action` on C#.
             SetNodeType(node, eventType);
 
-            // Register the event as a symbol — and on the node, so Visit(ClassNode) makes it a MEMBER of its class
-            // (Task 10: `b.Click` through a field of the class must find it).
+            // Register the event as a symbol (and on its node). Its class MEMBER is pass 1's
+            // (PopulateClassMemberSignatures — Task 10).
             var eventSymbol = new Symbol(node.Name, SymbolKind.Event, eventType, node.Line, node.Column)
             {
                 Access = node.Access
@@ -11405,6 +11455,10 @@ namespace BasicLang.Compiler.SemanticAnalysis
                         Error($"The comparison operator '{node.Operator}' is not defined for operand types '{leftType.Name}' and '{rightType.Name}'",
                               node.Line, node.Column);
                     }
+                    // Two values of one Enum ORDER by value, as in VB (review of Task 9).
+                    else if (IsSameEnum(leftType, rightType))
+                    {
+                    }
                     // Comparison operators - allow type parameters (generics)
                     else if (!leftType.IsNumeric() && !rightType.IsNumeric() &&
                         leftType.Kind != TypeKind.TypeParameter && rightType.Kind != TypeKind.TypeParameter)
@@ -11480,6 +11534,17 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     // error here. Admitting it would be a language change, not a codegen fix.
                     // This gate is what lets every backend lower And unconditionally as a
                     // LOGICAL operator without inspecting operand types.
+                    //
+                    // ⛔ ONE exception, portable-controls review of Task 9: `And`/`Or` over two values of ONE
+                    // Enum are VB's FLAGS operators and type as that Enum — the library's
+                    // `AnchorStyles.Top Or AnchorStyles.Left`. The IR builder lowers exactly this shape to
+                    // BitwiseAnd/BitwiseOr (IRBuilder.MapBinaryOperator's enum arm), so the backends'
+                    // LOGICAL lowering of every other And/Or is untouched. Integral operands stay refused.
+                    if (node.Operator is "And" or "Or" && IsSameEnum(leftType, rightType))
+                    {
+                        resultType = leftType;
+                        break;
+                    }
                     if (!leftType.Equals(_typeManager.BooleanType) ||
                         !rightType.Equals(_typeManager.BooleanType))
                     {

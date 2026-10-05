@@ -169,6 +169,14 @@ namespace BasicLang.Compiler.IR
     }
     
     /// <summary>
+    /// An <see cref="IRConstant"/>'s value when it is a user Enum's MEMBER (<c>Public K As Shade = Shade.Keyed</c>): each
+    /// backend spells the member itself — C# <c>Shade.Keyed</c>, C++ <c>Shade::Keyed</c>, JavaScript <c>Shade.Keyed</c> —
+    /// because neither C# nor C++ stores a bare number into an enum. Produced only for a field / module-level
+    /// initializer (IRBuilder.TryEnumMemberConstant); portable-controls review of Task 9.
+    /// </summary>
+    public sealed record IREnumMemberValue(string EnumName, string MemberName);
+
+    /// <summary>
     /// Constant value
     /// </summary>
     public class IRConstant : IRValue

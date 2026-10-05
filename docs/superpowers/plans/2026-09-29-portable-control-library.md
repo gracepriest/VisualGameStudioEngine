@@ -1840,6 +1840,25 @@ public class HandlerSignatureRouteTests
 
 ---
 
+### Tasks 9–10 review follow-up (2026-10-05) — done, and recorded
+
+- ✅ Fixed (`EnumAndHandlerReviewTests`, run on C#/JS/C++): an Enum value PRINTS as its member name (`k.ToString()`,
+  `Console.WriteLine(k)`, `"v=" & k` — JS `__blEnumName`, C++ `BlEnumName` + `operator<<`); an Enum-member FIELD
+  initializer (`IREnumMemberValue`); VB's Enum → numeric widening (`Dim n As Integer = Shade.Keyed`, cast at the store);
+  `And`/`Or`/ordering over ONE Enum (flags — `AnchorStyles.Top Or AnchorStyles.Left`; IR BitwiseAnd/BitwiseOr, C++
+  operator overloads); a non-constant Case value (`Case Lim.Max`) is a C# `case var _ when` compare; `Enum X` + `Module X`
+  in two files refused in every order; Main.bas's "Program" checked against other containers; relaxed handlers (no
+  parameters / wider parameters) wrapped in a lambda on C#; a Module procedure as a handler qualified on C#.
+- ⚠ Recorded, not fixed (pre-existing):
+  - `Xor` is not a BasicLang binary operator at all (`a Xor b` is "End of statement expected").
+  - Enum `+`/`-` (VB: Enum + Integer → Integer) stays refused.
+  - Overlapping `Case` ranges/values reach C# as CS8120 (subsumed case) from a clean BasicLang build.
+  - Two classes each nesting an `Enum Mode` (probe `rv10p\e2.bas`): the nested enums share one name space in the IR
+    (`_module.Enums[node.Name]` is keyed by the bare name), so the second wins.
+  - C++: an event WITH parameters does not compile (`raise_X()` takes none — open chip), and `Object` has no C++ mapping
+    (capability refusal), so the handler rows run on C# and JavaScript only.
+  - JavaScript (seen in Task 11): `Math.Max(3, 7)` under `Using System` on the project route is "no lowering for 'Math.Max'".
+
 ## Task 11: JavaScript — `Me` (or any value) is never a .NET static receiver
 
 M7, spec-claims #9.
@@ -3362,6 +3381,7 @@ Spec §5.3–§5.6, O10–O12.
 Spec §6, review C2/C3/I1/I5, O5.
 **Files and responsibilities:**
 - `BasicLang/Forms/RegionMarkers.cs`: the open marker accepts `style="portable"` in ONE position (`region=… form=… style=… hash=…`); `FormatOpen` writes it; an unknown value or the two regions disagreeing → `RegionMarkersMalformed` (BL8012). ⚠ A pre-2a IDE reads the new marker as BL8012 (strict order, `:60-62`) — release note.
+  - ⛔ **Contract requested by piece 3** (2026-10-05; spec `docs/superpowers/specs/2026-10-05-target-switch-design.md` on `origin/feat/target-switch`): the marker reader must ACCEPT `style="dual"` on a **`.blform`** region (piece 3 writes it for wrapped desktop/web regions), and an UNKNOWN style value is BL8012 on BOTH `.blform` and `.blwebform` — with a test for each. This AMENDS spec §6.1's "WinForms files carry no style": a `.blform` region may carry `style="dual"` (and nothing else). Task 30 implements it.
 - `BasicLang/Forms/FormCodeStyle.cs` (new): the ONE reader of a file's style from its markers.
 - `BasicLang/Forms/RegionWriter.cs`: for a portable file, the init is the WinForms walk (`GenerateInit` `:600-688`, `AppendSiblings` `:721-757`, `AppendControlInit` `:769-791`) with geometry lines, property lines, FormRoot rows and `Me.<FormProperty>`/reference lines DELETED — each generated line TAGGED (geometry/property/other) so the subset relation is testable (the seam for piece 3); tray components keep their property lines (I5); `x.Name = "x"` right after `New` on BOTH targets (closes chip `task_fa51e644`); field types = WinForms types; wiring = `AddHandler`. BL8013 (`CheckHandlerOrdering` `:478-517`) skips portable files.
 - `BasicLang/Forms/FormHandlers.cs` — **anchor on property-grid slice 3's rework, which lands first** (not master's `:157-162`): slice 3 names a handler after the WinForms event on BOTH targets (`e90a24bb` — `FormHandlers.DefaultEventDef(definition, target)` `:60-61` [S3] via `FormControlDef.DefaultEventDefOn(target)` `FormControlCatalog.cs:1280` [S3] and `FormEvents.NameOn` `:1272` [S3]), plans every crossed bind (`995ca04c` — `PlanDefault` `:100`, `PlanBind` `:140` [S3]), and writes the stub signature in one place (`:219-222` [S3]: `()` for a parameterless web component, `(e As DomEvent)` on the web, `(sender As Object, e As {winFormsArgs ?? "EventArgs"})` on WinForms). This task makes that ONE signature site choose by STYLE (portable → the WinForms form on the web too) and the placement by style (after the init region). ⚠ The slice-3 rename is what makes spec §11.2's byte-identical NON-REGION text achievable — the same handler name on both targets — so the twin (Task 35) depends on it.

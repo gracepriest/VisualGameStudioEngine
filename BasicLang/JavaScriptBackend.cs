@@ -359,6 +359,11 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 return $"({rendered} ? \"True\" : \"False\")";
             }
 
+            // A user Enum's text is its member NAME, as in VB and C# (`Console.WriteLine(k)` prints "Dark"); a value
+            // no member has prints its number. JavaScript holds the number, so the name is looked up.
+            if (UserEnumOf(value) is { } irEnum)
+                return $"{EnumNameHelper}({SanitizeName(irEnum.Name)}, {rendered})";
+
             if (NeedsRuntimeTextCheck(value))
             {
                 // Scanned into the prelude by UsesTextHelper with this same predicate; a miss
@@ -395,8 +400,8 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         }
 
         /// <summary>Whether <see cref="ConcatText"/>'s spelling of an operand is certainly a JS string.</summary>
-        private static bool ConcatSpellsString(IRValue value) =>
-            value is IRConstant { Value: null or string }
+        private bool ConcatSpellsString(IRValue value) =>
+            value is IRConstant { Value: null or string } || UserEnumOf(value) != null
             || IsBooleanValue(value) || NeedsRuntimeTextCheck(value) || IsStringValue(value)
             || string.Equals(value?.Type?.Name, "Char", StringComparison.OrdinalIgnoreCase);
 
@@ -651,6 +656,42 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         }
 
         /// <summary>
+        /// Each user <c>Enum</c> as a frozen object of its member values: <c>const Shade = Object.freeze({ Light: 0, … })</c>,
+        /// and — when any exists — <see cref="EnumNameHelper"/>, which spells a value as its member name.
+        ///
+        /// <para>⛔ Portable-controls Task 9 (M12). This backend emitted NO Enum declaration at all. It was invisible
+        /// while the front end refused <c>Shade.Dark</c> (typed Object); once the member types as the Enum, the access
+        /// is emitted as <c>Shade.Dark</c> and died at load with <c>ReferenceError: Shade is not defined</c> from a
+        /// green build. A member is its NUMBER, as on every other backend (<c>CInt(k)</c>, <c>=</c>, <c>Select Case</c>);
+        /// only its TEXT is the name (<see cref="TextOf"/>).</para>
+        /// </summary>
+        private void EmitEnums(IRModule module)
+        {
+            var any = false;
+            foreach (var irEnum in module.Enums?.Values ?? Enumerable.Empty<IREnum>())
+            {
+                if (irEnum == null || string.IsNullOrEmpty(irEnum.Name)) continue;
+                var members = string.Join(", ", (irEnum.Members ?? new List<IREnumMember>())
+                    .Select(m => $"{SanitizeName(m.Name)}: {Convert.ToString(m.Value ?? 0L, System.Globalization.CultureInfo.InvariantCulture)}"));
+                Line($"const {SanitizeName(irEnum.Name)} = Object.freeze({{ {members} }});");
+                any = true;
+            }
+            if (!any) return;
+            // The FIRST member with the value, as .NET's Enum.ToString answers for a duplicated value's name in
+            // declaration order; a value no member has is its number.
+            Line($"function {EnumNameHelper}(e, v) {{ for (const k in e) if (e[k] === v) return k; return String(v); }}");
+            Line();
+        }
+
+        /// <summary>The prelude function <see cref="EmitEnums"/> writes: an Enum value's member name.</summary>
+        private const string EnumNameHelper = "__blEnumName";
+
+        /// <summary>The user Enum <paramref name="value"/> is typed as, or null.</summary>
+        private IREnum UserEnumOf(IRValue value) =>
+            value?.Type is { Kind: TypeKind.Enum } t && _module?.Enums != null
+            && _module.Enums.TryGetValue(t.Name, out var irEnum) ? irEnum : null;
+
+        /// <summary>
         /// Module-level <c>Dim</c>s as top-level <c>let</c>s.
         ///
         /// <para>MEASURED before this: <c>module.GlobalVariables</c> was never emitted, and a
@@ -665,28 +706,6 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// instructions (EmitInstruction drops them when there is no block) — a call or a
         /// <c>New</c> here would be a silently defaulted global. Refuse instead.</para>
         /// </summary>
-        /// <summary>
-        /// Each user <c>Enum</c> as a frozen object of its member values: <c>const Shade = Object.freeze({ Light: 0, … })</c>.
-        ///
-        /// <para>⛔ Portable-controls Task 9 (M12). This backend emitted NO Enum declaration at all. It was invisible
-        /// while the front end refused <c>Shade.Dark</c> (typed Object); once the member types as the Enum, the access
-        /// is emitted as <c>Shade.Dark</c> and died at load with <c>ReferenceError: Shade is not defined</c> from a
-        /// green build. A member is its NUMBER, as on every other backend (<c>CInt(k)</c>, <c>=</c>, <c>Select Case</c>).</para>
-        /// </summary>
-        private void EmitEnums(IRModule module)
-        {
-            var any = false;
-            foreach (var irEnum in module.Enums?.Values ?? Enumerable.Empty<IREnum>())
-            {
-                if (irEnum == null || string.IsNullOrEmpty(irEnum.Name)) continue;
-                var members = string.Join(", ", (irEnum.Members ?? new List<IREnumMember>())
-                    .Select(m => $"{SanitizeName(m.Name)}: {Convert.ToString(m.Value ?? 0L, System.Globalization.CultureInfo.InvariantCulture)}"));
-                Line($"const {SanitizeName(irEnum.Name)} = Object.freeze({{ {members} }});");
-                any = true;
-            }
-            if (any) Line();
-        }
-
         private void EmitGlobals(IRModule module)
         {
             var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -1742,6 +1761,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             switch (v)
             {
                 case null: return "null";
+                case IREnumMemberValue enumMember: return $"{SanitizeName(enumMember.EnumName)}.{SanitizeName(enumMember.MemberName)}";
                 case bool b: return b ? "true" : "false";
                 case string s: return "\"" + EscapeJsString(s) + "\"";
                 // InvariantCulture is load-bearing: a comma decimal separator from the host
@@ -3514,6 +3534,13 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             var target = cast.Type;
             if (source == null || target == null) return false;
 
+            // An Enum widened to a number (VB's implicit `Dim n As Integer = Shade.Keyed`): the member IS its number here.
+            if (source.Kind == TypeKind.Enum && target.IsNumeric())
+            {
+                rendered = Expr(cast.Value);
+                return true;
+            }
+
             // Widening to floating point, and Single↔Double: the double already holds it.
             if (target.IsFloatingPoint() && (source.IsIntegral() || source.IsFloatingPoint()))
             {
@@ -3851,7 +3878,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             // string has no such method: a TypeError at run time. (A class's own ToString is
             // untouched: its receiver is not one of these types.)
             if (args.Count == 0 && string.Equals(mc.MethodName, "ToString", StringComparison.OrdinalIgnoreCase)
-                && IsPrimitiveTextType(mc.Object))
+                && (IsPrimitiveTextType(mc.Object) || UserEnumOf(mc.Object) != null))
                 return TextOf(mc.Object, receiver, mustBeString: true);
 
             var kind = ReceiverKind(mc.Object);
