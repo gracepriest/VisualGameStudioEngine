@@ -1,7 +1,7 @@
 # BRIEF: User code behind a classified IR kind — a property used by its bare name
 
 Date: 2026-09-24; HEAD `96cd93f` plus the uncommitted ADR-0006 D1 patches (the state this question is about).
-Every table was compiled AND run on 4 backends × 3 entry points: CLI, CLI `--optimize`, Release `.blproj`. Each table gives one verdict per backend because the three entry points agreed in every cell. ⚠ A C++ Release `.blproj` runs the STANDARD pipeline (task #134); CSE is a standard pass, so all three entry points exercise it here.
+Every table was compiled AND run on 4 backends × 3 entry points: CLI, CLI `--optimize`, Release `.blproj`. Each table gives one verdict per backend because the three entry points agreed in every cell. ⚠ A C++ Release `.blproj` runs the STANDARD pipeline (task #134). *(Fixed by #134, 2026-10-05: a C++ Release `.blproj` now runs the aggressive pipeline; the tables below were measured before that.)* CSE is a standard pass, so all three entry points exercise it here.
 
 ## The question
 

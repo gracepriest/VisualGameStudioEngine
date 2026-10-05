@@ -215,9 +215,10 @@ public class FloatingIntegerDivisionExecutionTests
     /// The REAL CLI binary, spawned, building a genuine Release .blproj — not the in-process
     /// simulation above. Mirrors <c>MsilBinaryOperandCoercionTests.BuildReleaseMsilAndRun</c>
     /// exactly (confirmed working on this machine: that fixture's own Release/MSIL case already
-    /// passes here). ⚠ C++ is deliberately NOT exercised this way: task #134 records that a C++
-    /// Release .blproj runs the STANDARD pipeline, not aggressive, so it would not be an
-    /// aggressive leg here even though `-c Release` is used — out of this test's scope, which is
+    /// passes here). ⚠ C++ is deliberately NOT exercised this way: a BasicLang native build always
+    /// needs MSVC (BL6015 on Linux), and task #134 records that a C++ Release .blproj used to run
+    /// the STANDARD pipeline, not aggressive. FIXED by #134 — it now takes the aggressive one
+    /// (CppProjectOptimizerPipelineTests) — but it stays out of this test's scope, which is
     /// "at least C# and MSIL".
     /// </summary>
     [Test]

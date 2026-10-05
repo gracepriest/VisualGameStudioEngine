@@ -175,12 +175,13 @@ public class NothingStringTextExecutionTests
     //    matching MsilBinaryOperandCoercionTests.BuildReleaseMsilAndRun /
     //    MsilValueToStringExecutionTests.BuildReleaseMsilAndRun /
     //    LicmKillVocabularyTests.L1_ReleaseBlprojBuild_Msil_PrintsTheCorrectValue exactly, and for
-    //    the same reason those three picked MSIL: task #134 records a C++ Release .blproj as the
-    //    STANDARD pipeline (no aggressive-only pass to miss), and a native C++ project build on
-    //    THIS machine always uses MSVC (CLAUDE.md), which is not installed here — confirmed by
-    //    hand: `build -c Release` on a Cpp-backend .blproj fails BL6015 on this Linux box. MSIL's
-    //    Release build DOES take the aggressive pipeline AND runs on Linux (ilasm/mono), so it is
-    //    the one backend that actually exercises CompileProjectFiles' real Release code path here.
+    //    the same reason those three picked MSIL: task #134 recorded a C++ Release .blproj as the
+    //    STANDARD pipeline (no aggressive-only pass to miss) — FIXED by #134, it now takes the
+    //    aggressive one — and a native C++ project build on THIS machine always uses MSVC
+    //    (CLAUDE.md), which is not installed here — confirmed by hand: `build -c Release` on a
+    //    Cpp-backend .blproj fails BL6015 on this Linux box. MSIL's Release build takes the
+    //    aggressive pipeline AND runs on Linux (ilasm/mono), so it is the one backend that
+    //    actually exercises CompileProjectFiles' real Release code path here.
     // ============================================================================================
 
     private string _projectDir = null!;
