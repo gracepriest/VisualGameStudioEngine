@@ -272,16 +272,33 @@ public class DeadCodeRemovalOnRealIrTests
         Assert.That(TempIr.Instructions(Run(module)).OfType<IRBinaryOp>().Any(b => b.Operation == BinaryOpKind.Mul), Is.False, "and the orphaned multiply went");
     }
 
-    /// <summary>R9 `(++a) * 0`: `++` writes `a`. The unary is unused, flagged and stays. (On real IR the kill vocabulary
-    /// refuses it too — that is why M9 changes no output; the hand-built isolation test kills M9.)</summary>
+    /// <summary>R9 `(++a) * 0`: `++` writes `a`. Since #141 the operator is no longer an <c>IRUnaryOp</c> Inc over the value
+    /// (no such node is built for a local any more): IRBuilder lowers it to what `a += 1` is — an add of 1, then the STORE
+    /// into `a` — so the write is an <c>IRAssignment</c> to `a`, which the dead-code pass never removes. The orphaned
+    /// multiply goes (the `* 0` is the peephole's), the add feeds the store and stays, and the store survives. This test
+    /// used to look for the unary; it keeps the same intent — the write survives the multiply that discards the value.
+    /// (<c>DeadCodeRemovalLicenceTests</c> still kills M9 on a hand-built <c>IRUnaryOp</c> Inc — the node a With block's `.P++`
+    /// and a literal operand still build.)</summary>
     [TestCase(false)]
     [TestCase(true)]
     public void R9_TheIncrementSurvives_BecauseItWritesItsOperand(bool aggressive)
     {
         var module = TempIr.Optimized(TempProbes.R9Source, aggressive);
-        var increment = OnlyUnusedFlagged<IRUnaryOp>(module, Run(module), u => u.Operation == UnaryOpKind.Inc);
+        var run = Run(module);
+        var instructions = TempIr.Instructions(run).ToList();
 
-        Assert.That(DeadCodeEliminationPass.IsRemovableWhenUnused(increment, Run(module)), Is.False);
+        Assert.Multiple(() =>
+        {
+            Assert.That(instructions.OfType<IRUnaryOp>().Where(u => u.Operation is UnaryOpKind.Inc or UnaryOpKind.Dec), Is.Empty,
+                "a `++` on a local is lowered to an add and a store now, not built as an IRUnaryOp Inc");
+
+            var stores = instructions.OfType<IRAssignment>().Where(s => s.Target.Name == "a").ToList();
+            Assert.That(stores, Has.Count.EqualTo(1), "the write to `a` survived the multiply that discards the value: Show(a) must read a + 1");
+            Assert.That(stores[0].Value, Is.Not.Null);
+
+            Assert.That(instructions.OfType<IRBinaryOp>().Any(b => b.Operation == BinaryOpKind.Mul), Is.False, "and the orphaned multiply went");
+            Assert.That(instructions.OfType<IRBinaryOp>().Count(b => b.Operation == BinaryOpKind.Add), Is.GreaterThanOrEqualTo(1), "the add of 1 that feeds the store stays");
+        });
     }
 
     /// <summary>R10 `arr(i) * 0`, `i` out of range: the element read can trap (MSIL keeps it: `caught`). The load is
