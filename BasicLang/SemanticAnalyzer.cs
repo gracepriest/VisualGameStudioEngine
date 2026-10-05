@@ -885,6 +885,19 @@ namespace BasicLang.Compiler.SemanticAnalysis
                         };
                         break;
                     }
+
+                    // Spec §4.8 (portable-controls Task 10): an event is a MEMBER, so `AddHandler b.Click` on a field of
+                    // this class's type — declared below the wiring, or in a sibling file — sees the event's shape. Every
+                    // access level: an event raised and wired inside its own class is still its member.
+                    case EventDeclarationNode ev when !string.IsNullOrEmpty(ev.Name):
+                    {
+                        classType.Members[ev.Name] = new Symbol(ev.Name, SymbolKind.Event,
+                            EventDelegateType(ev, ResolveSiblingSignatureType) ?? _typeManager.ObjectType, 0, 0)
+                        {
+                            Access = ev.Access
+                        };
+                        break;
+                    }
                 }
             }
         }
@@ -6746,6 +6759,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
             var classScope = EnterScope(node.Name, ScopeKind.Class);
             classScope.ClassType = classType;
             RecordSharedMembers(node, classType);   // ADR-0016 D4
+            _deferredHandlerChecks.Push(new List<PendingHandlerCheck>());   // Task 10 — run by RunDeferredHandlerChecks
 
             // Register generic type parameters in the class scope
             foreach (var genericParam in node.GenericParameters)
@@ -6821,7 +6835,15 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 {
                     classType.Members[prop.Name] = propSymbol;
                 }
+                else if (member is EventDeclarationNode evt && _nodeSymbols.TryGetValue(evt, out var evtSymbol))
+                {
+                    classType.Members[evt.Name] = evtSymbol;   // Task 10: an event is a class member
+                }
             }
+
+            // Task 10: the AddHandler/RemoveHandler checks this class deferred because the handler was declared BELOW
+            // its wiring — every member is bound now. Judged against THIS class's own members.
+            RunDeferredHandlerChecks(classType);
 
             // Validate: abstract classes should have at least one abstract member (warning, not error)
             // This is not enforced in VB.NET, but it's a good practice
@@ -9212,36 +9234,44 @@ namespace BasicLang.Compiler.SemanticAnalysis
             ExitScope();
         }
 
+        /// <summary>
+        /// An event's delegate type:
+        ///   <c>Event X As T</c> → T; <c>Event X(p As P, …)</c> → <c>Action(Of P, …)</c>, built structurally like a lambda's
+        ///   type; bare <c>Event X</c> → EventHandler (the .NET default).
+        /// <para>Shared by <see cref="Visit(EventDeclarationNode)"/> and the pass-1 member signatures
+        /// (<see cref="PopulateClassMemberSignatures"/>), which resolve a type through <paramref name="resolve"/> —
+        /// <see cref="ResolveSiblingSignatureType"/> there, for a type from a sibling file (portable-controls Task 10).</para>
+        /// </summary>
+        private TypeInfo EventDelegateType(EventDeclarationNode node, Func<TypeReference, TypeInfo> resolve)
+        {
+            if (node.EventType != null)
+                return resolve(node.EventType);
+            if (node.HasParameterList)
+            {
+                var action = new TypeInfo("Action", TypeKind.Delegate);
+                foreach (var p in node.Parameters)
+                    action.GenericArguments.Add((p.Type != null ? resolve(p.Type) : null) ?? _typeManager.ObjectType);
+                return action;
+            }
+            return _typeManager.GetType("EventHandler");
+        }
+
         public void Visit(EventDeclarationNode node)
         {
-            // Resolve the event type (delegate type):
-            //   Event X As T            → T
-            //   Event X(p As P, …)      → Action(Of P, …), built structurally like a lambda's type
-            //   Event X                 → EventHandler (the .NET default)
-            TypeInfo eventType;
-            if (node.EventType != null)
-            {
-                eventType = ResolveTypeReference(node.EventType);
-            }
-            else if (node.HasParameterList)
-            {
-                eventType = new TypeInfo("Action", TypeKind.Delegate);
-                foreach (var p in node.Parameters)
-                    eventType.GenericArguments.Add(
-                        (p.Type != null ? ResolveTypeReference(p.Type) : null) ?? _typeManager.ObjectType);
-            }
-            else
-            {
-                eventType = _typeManager.GetType("EventHandler");
-            }
+            var eventType = EventDelegateType(node, ResolveTypeReference);
 
             // Recorded on the node so IRBuilder can carry the REAL type — the IR used to keep
             // only a name, which dropped `Action(Of Integer)` to `Action` on C#.
             SetNodeType(node, eventType);
 
-            // Register the event as a symbol
-            var eventSymbol = new Symbol(node.Name, SymbolKind.Event, eventType, node.Line, node.Column);
+            // Register the event as a symbol — and on the node, so Visit(ClassNode) makes it a MEMBER of its class
+            // (Task 10: `b.Click` through a field of the class must find it).
+            var eventSymbol = new Symbol(node.Name, SymbolKind.Event, eventType, node.Line, node.Column)
+            {
+                Access = node.Access
+            };
             _currentScope.Define(eventSymbol);
+            _nodeSymbols[node] = eventSymbol;
         }
 
         public void Visit(RaiseEventStatementNode node)
@@ -9338,8 +9368,72 @@ namespace BasicLang.Compiler.SemanticAnalysis
             // returns null for anything it cannot read, and a null on either side means "no
             // evidence", never "mismatch".
             var expected = GetDelegateParameterTypes(eventType);
+            if (expected == null)
+            {
+                return;
+            }
+
             var actual = GetDelegateParameterTypes(GetNodeType(handlerExpression));
 
+            // ⛔ Task 10: inside a class, `AddressOf H` / `AddressOf Me.H` is judged at the END of the wiring class,
+            // against THAT class's own member. Now is too early twice over: a handler declared below its wiring is
+            // not a class member yet, and the name may already bind — pass 1 flattens every class's procedures into
+            // the global scope, first one wins — to ANOTHER class's same-named handler (every form has its own
+            // `Button1_Click`), so its shape would answer for this one.
+            if (_deferredHandlerChecks.Count > 0 && AddressOfMethodName(handlerExpression) is { } handlerName)
+            {
+                _deferredHandlerChecks.Peek().Add(new PendingHandlerCheck(expected, handlerName, actual, keyword, line, column));
+                return;
+            }
+
+            CompareHandlerShapes(expected, actual, keyword, line, column);
+        }
+
+        /// <summary>One AddHandler/RemoveHandler shape check waiting for its class's members (Task 10).</summary>
+        private sealed record PendingHandlerCheck(
+            List<TypeInfo> Expected, string HandlerName, List<TypeInfo> ActualWhenWired, string Keyword, int Line, int Column);
+
+        /// <summary>A frame per class being visited — nested classes each judge their own wirings.</summary>
+        private readonly Stack<List<PendingHandlerCheck>> _deferredHandlerChecks = new();
+
+        /// <summary>The method named by <c>AddressOf Name</c> or <c>AddressOf Me.Name</c>; null for any other handler.</summary>
+        private static string AddressOfMethodName(ExpressionNode handlerExpression)
+        {
+            if (handlerExpression is not UnaryExpressionNode { Operator: "AddressOf" } addressOf) return null;
+            return addressOf.Operand switch
+            {
+                IdentifierExpressionNode { IsForeignQualified: false } id => id.Name,
+                MemberAccessExpressionNode { Object: IdentifierExpressionNode me } access
+                    when string.Equals(me.Name, "Me", StringComparison.OrdinalIgnoreCase) => access.MemberName,
+                _ => null
+            };
+        }
+
+        /// <summary>
+        /// The end of <see cref="Visit(ClassNode)"/>: each deferred wiring judged against the class's OWN member of that
+        /// name (its base chain included). A name the class does not declare — a module procedure, an enclosing
+        /// class's — keeps the shape it bound to when it was wired.
+        /// </summary>
+        private void RunDeferredHandlerChecks(TypeInfo classType)
+        {
+            if (_deferredHandlerChecks.Count == 0) return;
+            foreach (var check in _deferredHandlerChecks.Pop())
+            {
+                var member = classType?.ResolveMember(check.HandlerName);
+                var actual = member is { Kind: SymbolKind.Function or SymbolKind.Subroutine }
+                    ? GetDelegateParameterTypes(DelegateTypeOf(member))
+                    : check.ActualWhenWired;
+                CompareHandlerShapes(check.Expected, actual, check.Keyword, check.Line, check.Column);
+            }
+        }
+
+        /// <summary>
+        /// The shape comparison itself — count, then each parameter where the two CANNOT be the same type. A null side
+        /// is "no evidence", never a mismatch. Both messages end with the diagnostic's name, <c>HandlerSignatureMismatch</c>
+        /// (spec §11.7: assertable by name).
+        /// </summary>
+        private void CompareHandlerShapes(List<TypeInfo> expected, List<TypeInfo> actual, string keyword, int line, int column)
+        {
             if (expected == null || actual == null)
             {
                 return;
@@ -9348,7 +9442,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
             if (expected.Count != actual.Count)
             {
                 Error($"the handler passed to {keyword} takes {actual.Count} parameter(s) but the " +
-                      $"event supplies {expected.Count}.", line, column);
+                      $"event supplies {expected.Count}. (HandlerSignatureMismatch)", line, column);
                 return;
             }
 
@@ -9357,7 +9451,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 if (IsDefiniteParameterMismatch(expected[i], actual[i]))
                 {
                     Error($"the handler passed to {keyword} takes '{actual[i].Name}' as parameter " +
-                          $"{i + 1}, but the event supplies '{expected[i].Name}'.", line, column);
+                          $"{i + 1}, but the event supplies '{expected[i].Name}'. (HandlerSignatureMismatch)", line, column);
                     return;
                 }
             }
@@ -9383,6 +9477,16 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 return false;
             }
 
+            // Task 10: a primitive against a class or structure THIS PROGRAM declares can never be the same type either
+            // — `H(sender As Object, e As Integer)` for an event supplying `EventArgs2`. Interfaces and enums stay
+            // out (Integer widens to IComparable, an Enum to Integer), and so does any class the program does not
+            // declare (a .NET class's relation to a primitive is not ours to judge).
+            if (expected.Kind == TypeKind.Primitive && IsDeclaredClassOrStructure(actual)
+                || actual.Kind == TypeKind.Primitive && IsDeclaredClassOrStructure(expected))
+            {
+                return true;
+            }
+
             if (expected.Kind != TypeKind.Primitive || actual.Kind != TypeKind.Primitive)
             {
                 return false;
@@ -9390,6 +9494,12 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
             return !expected.Name.Equals(actual.Name, StringComparison.OrdinalIgnoreCase);
         }
+
+        /// <summary>A class or structure declared in BasicLang source — this unit's, or a sibling's shell / import.</summary>
+        private bool IsDeclaredClassOrStructure(TypeInfo type) =>
+            type is { Kind: TypeKind.Class or TypeKind.Structure }
+            && !type.IsExtern
+            && (type.DeclaredMemberNames != null || ReferenceEquals(_typeManager.GetType(type.Name), type));
 
         /// <summary>
         /// True when the type is the resolver's stand-in for "I could not work this out" rather
