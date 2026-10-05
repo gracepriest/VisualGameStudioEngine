@@ -17,6 +17,13 @@ facade (all five tasks of `2026-09-13-blnet-cpp-facade.md`).
 
 ---
 
+## ⚡ NEWEST — 2026-10-05: #190 TESTED — `&` converts both operands to String, the VB way, on every backend (`SemanticAnalyzer` + `IRBuilder.ConcatOperandAsString`)
+- **Fixed:** `i & j`, `True & 1`, `c & c`, `o & 1` and `1 & 2 & 3` were refused everywhere. With no String side each operand goes through `CStr`, the Nothing literal is `""`, and `&` is no longer a Decimal context (`m & 1.50` prints `1.51.5`). A class or structure, a foreign `::` value, and an Enum / array / type-parameter / DateTime operand with no String side stay refused.
+- **Tests (11):** `AmpersandConcatExecutionTests` (Integration, 5: 12 vbc-answered probes in 3 groups on every backend each runs on x CLI / `-O` / `CompileProjectFiles`, a table pin, the class refusal; roster now 115) and `AmpersandConcatCompileTests` (fast, 6). Mutants m1-m3 killed. **Gates (Linux):** fast 0 failed / 12,664 passed / 94 skipped; Integration, one filter each, 0 failed: the fixture 5, `CppForeignConcat` 5, `Concat` 63, `CStr` 20, `VbConversionIntrinsic` 14, `CharWidensToString` 13, `JsExecutionTierRoster` 5. Full suite NOT run; Windows owes the MSIL/MSVC legs.
+- ⛔ **Gaps, NO test pins them** (fixture header): a C# concat used as a receiver is not parenthesised (`(i & j).Length`, `Len(i & j)`, #275); JS `CStr(1E+20)` prints all 21 digits (#280); the C# `CStr` of an enum would give the member NAME. #181's `Char & Char` gap is closed.
+
+---
+
 ## ⚡ NEWEST — 2026-10-05: #186 DONE, `Nothing` into a value type is its DEFAULT, the VB way, on every backend (owner decision "fix #186"; `git log --grep '#186'`)
 - **Fixed:** `Dim n As Integer = Nothing` (0), a Boolean, Char, Structure, Enum, `T` or DateTime, at every #173 site, in a typed array literal and an `If()`, was refused ("Nothing has no value of type …; write 0"); `n = Nothing` and `Case Nothing` ran wrong (False for 0 on C#/JS/MSIL, no C++ build). `TypeInfo.NothingIsDefaultValue` is the one list; `IRBuilder.NothingAs` lowers it (a primitive: the zero literal; else a typed null = "default of T": C# `default(T)`, C++ `T{}`). `n Is Nothing` and `Case Is Nothing` on a value type stay refused (BC30020).
 - **Tests (11 new, 25 moved):** `NothingIntoValueTypeExecutionTests` (Integration, 9: 8 groups of 28 vbc-answered probes x CLI / `-O` / `CompileProjectFiles`, groups 1-5 on all four backends; a table pin; roster now 115) and `NothingIntoValueTypeCompileTests` (fast, 2: the kept BC30020 refusals, JS BL7003/4/7). MOVED: `NothingConversionTests` 16, `TypedArrayLiteralTests` 6, `ConditionalExpressionTests` 3 (refusal pins to "admitted, lowers to the default"). Mutants m1-m3 killed. CLAUDE.md's `New T() { … }` sentence now says Nothing is admitted into any `T`.

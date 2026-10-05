@@ -10847,6 +10847,16 @@ namespace BasicLang.Compiler.SemanticAnalysis
         // ====================================================================
 
         /// <summary>
+        /// #190: whether a non-String operand of <c>&amp;</c> converts to String the VB way — a
+        /// scalar number, Boolean, Char or Object (the Nothing literal is Object-typed). The front
+        /// end's half of the rule <c>IRBuilder.ConcatOperandAsString</c> lowers through <c>CStr</c>,
+        /// and the one test both read, so the two cannot disagree about which pairs are converted.
+        /// </summary>
+        internal static bool ConvertsToStringForConcat(TypeInfo type) =>
+            type != null && type.Kind != TypeKind.Array && type.ArrayRank == 0 && !type.IsPointer &&
+            (type.IsNumeric() || type.Name is "Boolean" or "Char" or "Object");
+
+        /// <summary>
         /// Canonical casing for BasicLang's WORD operators.
         ///
         /// <para>BasicLang is case-insensitive — the lexer's keyword table is
@@ -10913,9 +10923,12 @@ namespace BasicLang.Compiler.SemanticAnalysis
             // operand is Decimal — 'd * 1.08' converts the literal from its
             // source text; 'd * x' (non-literal Double) stays the CType-hinted
             // error below. Two literals never trigger this (neither is Decimal).
-            if (leftType.Name == "Decimal" && TryRetypeLiteralToDecimal(node.Right, leftType))
+            // #190: `&` is never a Decimal context — each operand is converted to String on its
+            // own, so `m & 1.50` is "…1.5" in VB, never the retyped Decimal's "…1.50".
+            var isConcat = NormalizeOperator(node.Operator) == "&";
+            if (!isConcat && leftType.Name == "Decimal" && TryRetypeLiteralToDecimal(node.Right, leftType))
                 rightType = GetNodeType(node.Right);
-            else if (rightType.Name == "Decimal" && TryRetypeLiteralToDecimal(node.Left, rightType))
+            else if (!isConcat && rightType.Name == "Decimal" && TryRetypeLiteralToDecimal(node.Left, rightType))
                 leftType = GetNodeType(node.Left);
 
             TypeInfo resultType;
@@ -11029,14 +11042,29 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     break;
 
                 case "&":
-                    // String concatenation
-                    if (leftType.Name == "String" || rightType.Name == "String")
+                    // String concatenation. #190: VB's rule — `&` converts EACH operand to String
+                    // (as CStr does) and is String whatever its operands, so `1 & 2` is "12" and
+                    // `True & 1` is "True1". IRBuilder.ConcatOperandAsString makes the conversion
+                    // explicit when neither side is a String; with one String side every backend
+                    // already stringifies the other.
+                    //
+                    // ⛔ Only operands CStr converts the VB way are admitted with no String side: a
+                    // number, Boolean, Char or Object (the Nothing literal included). A class or
+                    // structure stays refused as vbc refuses it (BC30452); a foreign `::` value
+                    // stays refused because foreign & foreign would reach the C++ emitter's
+                    // unwrappable fall-through (CppForeignConcatTests). An enum, array, type
+                    // parameter or DateTime stays refused too although vbc admits some of them —
+                    // the refusal predates #190, and CStr has no VB spelling for them on every
+                    // backend (C#'s Convert.ToString of an enum is the member NAME, VB's the number).
+                    if (leftType.Name == "String" || rightType.Name == "String" ||
+                        (ConvertsToStringForConcat(leftType) && ConvertsToStringForConcat(rightType)))
                     {
                         resultType = _typeManager.StringType;
                     }
                     else
                     {
-                        Error($"Operator '&' requires at least one string operand", node.Line, node.Column);
+                        Error($"Operator '&' is not defined for '{leftType.Name}' and '{rightType.Name}': it needs at least one string operand, or operands that convert to String (a number, Boolean, Char or Object)",
+                              node.Line, node.Column);
                         resultType = _typeManager.StringType;
                     }
                     break;
