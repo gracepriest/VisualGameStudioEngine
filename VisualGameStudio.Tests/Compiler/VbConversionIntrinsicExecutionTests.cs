@@ -28,7 +28,7 @@ namespace VisualGameStudio.Tests.Compiler;
 //  ⭐ WHICH CELLS EXIST. A probe's `Agrees` flags are the backends where it now runs; the others are the KNOWN GAPS below, each a pre-existing rule that is not #181's.
 //
 //  ⛔ KNOWN GAPS — each a defect or a decision that is NOT #181's, listed with NO test (asserting one would pin the defect):
-//    FRONT  `Char & Char` is refused ("Operator '&' requires at least one string operand") and so is `Char < Char` ("requires numeric operands"): `ChrW(72) & ChrW(105)` does not compile.
+//    FRONT  `Char < Char` is refused ("requires numeric operands"). (`Char & Char` was refused too until #190, which made `&` convert both operands to String: `ChrW(72) & ChrW(105)` compiles now.)
 //    JS     bans Char locals and literals (BL7004), so every probe that holds one is not a JavaScript row (`AscW("A"c)`, `Dim c = Chr(66)`, `Dim c As Char = Chr(67)`).
 //    FRONT  `s.Chars(i)` passes the front end and fails on EVERY backend (CS1061 / TypeError / MissingMethod / a C++ error). The probes read a character with `Mid(s, i, 1)` instead.
 //    FRONT  a Char is not assignable to a String (`Dim s As String = Chr(65)`, `Return Chr(65)` from a String Function, a Char argument for a String parameter): refused, exactly as it was on master
