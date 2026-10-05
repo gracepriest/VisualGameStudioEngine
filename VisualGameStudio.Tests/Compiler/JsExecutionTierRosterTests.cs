@@ -581,6 +581,8 @@ public class JsExecutionTierRosterTests
         "CSharpInlinedOperandExecutionTests",
         // Task #182: a reserved C# keyword used as a name (`@out`, `@lock`) — C# only, so it runs the emitted C# through CSharpProcessRunner and never Node.
         "CSharpKeywordIdentifierExecutionTests",
+        // Task #191: an MSIL-only fixture. A class / interface / array reference through `&` and Console.Write, run through the CLI, --optimize and CompileProjectFiles, assembled with ilasm — no Node.
+        "MsilObjectConcatAndWriteExecutionTests",
         // Runs user operators on C# and C++ only — JavaScript refuses them (BL7006), which
         // UserOperatorTests asserts without spawning Node.
         "UserOperatorExecutionTests",
