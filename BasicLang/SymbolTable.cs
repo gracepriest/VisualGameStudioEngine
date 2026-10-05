@@ -93,6 +93,18 @@ public class TypeInfo
         public string NetHandleTypeFullName { get; set; }
 
         /// <summary>
+        /// #194: set on a type the analyzer minted for a .NET NAME (the synthetic fallback of type
+        /// resolution) when .NET resolution is armed. It answers, from the resolver and lazily,
+        /// whether a value of this type WIDENS to a target: a class to its base classes and the
+        /// interfaces it implements (<c>SemanticAnalyzer.NetWidens</c>). Such a type carries no
+        /// <see cref="BaseType"/> chain and no <see cref="Interfaces"/>, so without this
+        /// <see cref="IsAssignableFrom"/> refused <c>Dim s As Stream = New MemoryStream()</c>, which
+        /// VB widens under Option Strict On. Null for every other type, and with no resolver (the
+        /// LSP, a WinForms/WPF project): the refusal then stands.
+        /// </summary>
+        internal Func<TypeInfo, bool> NetWidensTo { get; set; }
+
+        /// <summary>
         /// For a user <c>Delegate Sub</c>/<c>Delegate Function</c> declaration: its signature —
         /// the declaration's symbol, whose <see cref="Symbol.Parameters"/> and
         /// <see cref="Symbol.ReturnType"/> (<c>Void</c> for a <c>Delegate Sub</c>) are what a
@@ -242,6 +254,12 @@ public class TypeInfo
                 current = current.BaseType;
             }
             
+            // #194: a .NET-named source widens by the .NET facts — its base classes and the
+            // interfaces it implements — which the arms around this one cannot see (NetWidensTo).
+            // A narrowing (Stream → MemoryStream, BC30512) and an unrelated pair stay refused.
+            if (other.NetWidensTo != null && other.NetWidensTo(this))
+                return true;
+
             // Check interfaces
             if (Kind == TypeKind.Interface)
             {

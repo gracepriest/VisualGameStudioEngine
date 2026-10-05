@@ -583,6 +583,8 @@ public class JsExecutionTierRosterTests
         "CSharpKeywordIdentifierExecutionTests",
         // Task #191: an MSIL-only fixture. A class / interface / array reference through `&` and Console.Write, run through the CLI, --optimize and CompileProjectFiles, assembled with ilasm — no Node.
         "MsilObjectConcatAndWriteExecutionTests",
+        // Task #194: a .NET class widens to its base class and interfaces. C# (and one MSIL row, the Exception base) through the CLI, --optimize and CompileProjectFiles — no Node.
+        "NetSubtypeWideningExecutionTests",
         // Runs user operators on C# and C++ only — JavaScript refuses them (BL7006), which
         // UserOperatorTests asserts without spawning Node.
         "UserOperatorExecutionTests",
