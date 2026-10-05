@@ -17,6 +17,15 @@ facade (all five tasks of `2026-09-13-blnet-cpp-facade.md`).
 
 ---
 
+## 🧪 NEWEST — 2026-10-05: #150 DONE, an Overridable auto-property's override dispatches on JavaScript (fix `bced37a2`)
+
+JavaScript emitted such a property as a class field (own data property, shadows the derived accessor: P16 printed `3,3`, vbc `12,3`); it is now a get/set pair over a `$Class$Prop` slot, and C++'s ReadOnly constructor write stores the data member (was `no member named 'set_P'`).
+- **Tests (13):** `OverridableAutoPropertyExecutionTests` (Integration: 9 JS rows P16/P16q/V1var/V2inside/V3ro/V5bchain/V7ctor/V8order/V9iface + 2 C++ rows V3ro/E24, each through CLI, `-O` and `CompileProjectFiles` against vbc; in `JsExecutionTierRosterTests`, now pinned at 108) + `OverridableAutoPropertyEmissionTests` (fast, 2 JS-text shape tests). Mutants M1 (slot off), M2 (unguarded derived init), M3 (C++ carve-out off) each killed.
+- **Gates (Linux):** fast subset 0 failed / 12,530 passed / 94 skipped; integration, each alone: the new fixture 11, `OverridableProperty` 19, `PropertyAccess` 74, `JavaScriptClass` 13, `BarePropertyLowering` 38, `JsExecutionTierRosterTests` 5 - 0 failed, 0 skipped. The full suite was NOT run. Windows owes the MSVC/MSIL legs.
+- **Follow-ups (not fixed, listed in the fixture header):** `MyBase.P` on a property dispatches to the override on all four backends (V4autoboth `5,5` for `5,0`; V5grand recurses) — #271; C++ drops a bare store to a plain auto-property (V6shared, #254/PRa); an auto-property initializer (`= 4`) does not parse (#210).
+
+---
+
 ## 🧪 NEWEST — 2026-10-05: #145 TESTED — a JavaScript Iterator Function returns a re-iterable generator (fix `1905e1fc`, JavaScriptBackend only)
 
 - **Tests** (10 cases): `JavaScriptIteratorExecutionTests` (Integration, 8 `[TestCase]` rows of vbc-answered probes, each through the CLI, `--optimize` and `CompileProjectFiles`; in `JsExecutionTierRosterTests`, now 107) and `JavaScriptIteratorShapeTests` (fast, 2). Mutants killed: parameters closed over (I4, I6), the one-shot generator object (FE1L, I4, I6), `super.` kept (I7). Gates (Linux): fast subset 0 failed / 12,530 passed / 94 skipped; integration `JavaScript`+`Iterator`+roster 0 failed / 1,309 passed / 2 skipped. The full suite was NOT run.

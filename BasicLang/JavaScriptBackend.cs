@@ -740,8 +740,12 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         private Dictionary<string, string> _staticMemberOwners =
             new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
+        /// <summary>The class whose body is being emitted, else null — see <see cref="ReadOnlyAutoPropertySlot"/>.</summary>
+        private IRClass _emittingClass;
+
         private void EmitClass(IRClass irClass, IRModule module)
         {
+            _emittingClass = irClass;
             _currentClassEvents = new Dictionary<string, IREvent>(StringComparer.OrdinalIgnoreCase);
             foreach (var evt in irClass.Events ?? new List<IREvent>())
                 if (evt?.Name != null) _currentClassEvents[evt.Name] = evt;
@@ -809,7 +813,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 Line($"{(evt.IsStatic ? "static " : "")}{SanitizeName(evt.Name)} = new Set();");
 
             foreach (var prop in irClass.Properties ?? new List<IRProperty>())
-                EmitProperty(prop, members);
+                EmitProperty(irClass, prop, members);
 
             foreach (var ctor in irClass.Constructors ?? new List<IRConstructor>())
                 EmitConstructor(irClass, ctor, members);
@@ -825,6 +829,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             _currentClassMethods = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             _staticMemberOwners = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             _staticMethodOwners = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            _emittingClass = null;
         }
 
         /// <summary>
@@ -905,12 +910,54 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 ? $"{SanitizeName(owner)}.{jsName}"
                 : $"this.{jsName}";
 
-        private void EmitProperty(IRProperty prop, HashSet<string> members)
+        /// <summary>
+        /// ⭐ #150: the storage slot behind an Overridable / Overrides AUTO-property, or null for
+        /// any other property. Such a property is ACCESSOR-BACKED (a derived class's accessor may
+        /// run in its place), so it cannot be a plain class field: a field is an OWN data property
+        /// of the instance, and an own property shadows every accessor on the prototype chain.
+        /// Measured: `V = 10` inside the base, or `x.V = 5` through a base-typed variable, wrote
+        /// the base's field and never ran the derived Set — every other backend runs it.
+        ///
+        /// <para>The slot is named by its DECLARING class, so a derived auto-override keeps its
+        /// own storage apart from the base's, as .NET's two backing fields are. ⚠ A `$` cannot
+        /// occur in a BasicLang identifier (the lexer has no such character), so the name cannot
+        /// collide with a user member.</para>
+        /// </summary>
+        private static string AutoPropertySlot(IRClass owner, IRProperty prop) =>
+            owner != null && prop != null && prop.Getter == null && prop.Setter == null
+            && !prop.IsStatic && (prop.IsVirtual || prop.IsOverride)
+                ? $"${SanitizeName(owner.Name)}${SanitizeName(prop.Name)}"
+                : null;
+
+        private void EmitProperty(IRClass owner, IRProperty prop, HashSet<string> members)
         {
             // Both accessors null is an AUTO-PROPERTY: a plain class field, which makes the
             // same `obj.X` spelling work for reads and writes.
             if (prop.Getter == null && prop.Setter == null)
             {
+                // An Overridable one is a get/set pair over its slot instead (AutoPropertySlot):
+                // prototype accessors, which a derived class's accessors override.
+                if (AutoPropertySlot(owner, prop) is string slot)
+                {
+                    var name = SanitizeName(prop.Name);
+                    var init = TypeMapper.GetDefaultValue(prop.Type);
+
+                    // ⚠ A DERIVED class's fields are installed only after `super()` returns, and
+                    // the base's constructor may already have written this slot through the
+                    // dispatching setter (`V = 4` in Sub New, overridden here). .NET's backing
+                    // field exists from allocation and keeps that write, so the initializer keeps
+                    // it too rather than resetting it. A `#private` slot is not an option for the
+                    // same reason: writing one before it is installed is a TypeError.
+                    Line(string.IsNullOrEmpty(owner.BaseClass)
+                        ? $"{slot} = {init};"
+                        : $"{slot} = \"{slot}\" in this ? this.{slot} : {init};");
+                    if (!prop.IsWriteOnly)
+                        Line($"get {name}() {{ return this.{slot}; }}");
+                    if (!prop.IsReadOnly)
+                        Line($"set {name}(value) {{ this.{slot} = value; }}");
+                    return;
+                }
+
                 Line($"{(prop.IsStatic ? "static " : "")}{SanitizeName(prop.Name)} = {TypeMapper.GetDefaultValue(prop.Type)};");
                 return;
             }
@@ -4173,6 +4220,26 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
             return $"{receiver}.{SanitizeName(fa.FieldName)}";
         }
+        /// <summary>
+        /// The slot a WRITE to an Overridable ReadOnly auto-property lands in, else null. VB's one
+        /// such write — bare or <c>Me.</c>, in a constructor of the DECLARING class, the front
+        /// end's carve-out — stores the backing field, never a setter: the property has none, and
+        /// a derived class's get-only override makes <c>this.P = v</c> a TypeError in a class body
+        /// (strict mode). Matched against the class being emitted only, which is where the front
+        /// end admits the write.
+        /// </summary>
+        private string ReadOnlyAutoPropertySlot(IRFieldStore store)
+        {
+            if (_emittingClass == null
+                || store.Object is not IRVariable { Name: var self }
+                || !(string.Equals(self, "Me", StringComparison.OrdinalIgnoreCase) || self == "this"))
+                return null;
+
+            var prop = (_emittingClass.Properties ?? new List<IRProperty>())
+                .FirstOrDefault(p => string.Equals(p?.Name, store.FieldName, StringComparison.OrdinalIgnoreCase));
+            return prop != null && prop.IsReadOnly ? AutoPropertySlot(_emittingClass, prop) : null;
+        }
+
         // Statement-only: it has no Name and can never be an operand.
         //
         // A member of a FOREIGN object is raw JavaScript, spelled by the user — the same rule
@@ -4180,6 +4247,12 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         // Reachable since plan 2 Task 7 let a `::` member be assigned at all.
         public void Visit(IRFieldStore fieldStore)
         {
+            if (ReadOnlyAutoPropertySlot(fieldStore) is string slot)
+            {
+                Line($"{Expr(fieldStore.Object)}.{slot} = {Expr(fieldStore.Value)};");
+                return;
+            }
+
             var member = IsForeignValue(fieldStore.Object)
                 ? (ForeignName(fieldStore.FieldName, out var foreign) ? foreign : fieldStore.FieldName)
                 : SanitizeName(fieldStore.FieldName);
