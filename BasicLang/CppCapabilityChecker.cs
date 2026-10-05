@@ -644,7 +644,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         {
             var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             void Add(string name) { if (!string.IsNullOrEmpty(name)) names.Add(name); }
-            void AddByRef(List<IRValue> args, List<bool> flags)
+            void AddByRef(IReadOnlyList<IRValue> args, IReadOnlyList<bool> flags)
             {
                 if (args == null || flags == null) return;
                 for (var i = 0; i < args.Count && i < flags.Count; i++)
@@ -661,6 +661,8 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 case IRCall call: AddByRef(call.Arguments, call.ByRefArguments); break;
                 case IRInstanceMethodCall methodCall: AddByRef(methodCall.Arguments, methodCall.ByRefArguments); break;
                 case IRBaseMethodCall baseCall: AddByRef(baseCall.Arguments, baseCall.ByRefArguments); break;   // #265
+                case IRNewObject construction: AddByRef(construction.Arguments, construction.ByRefArguments); break;   // #144
+                case IRBaseConstructorCall baseCtor: AddByRef(baseCtor.Args, baseCtor.ByRefArguments); break;        // #144
             }
             if (inst is IRUnaryOp { Operation: UnaryOpKind.Inc or UnaryOpKind.Dec, Operand: IRVariable incremented })
                 Add(incremented.Name);

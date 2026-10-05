@@ -1969,8 +1969,10 @@ namespace BasicLang.Compiler.IR
             _currentBlock = _currentFunction.CreateBlock("entry");
 
             var baseArgs = new List<IRValue>();
-            AppendOmittedOptionalArguments(baseArgs, null, implicitBase);
-            EmitBaseConstructorCall(baseArgs);
+            var baseByRef = new List<bool>();
+            AppendOmittedOptionalArguments(baseArgs, baseByRef, implicitBase);
+            CopyInByRefArguments(baseArgs, baseByRef, implicitBase);
+            EmitBaseConstructorCall(baseArgs, baseByRef);
 
             if (!_currentBlock.IsTerminated())
             {
@@ -2013,11 +2015,85 @@ namespace BasicLang.Compiler.IR
         /// emitted by each backend on its own, exactly as before, which keeps every program with no
         /// base arguments byte-identical by construction.</para>
         /// </summary>
-        private void EmitBaseConstructorCall(List<IRValue> baseArgs)
+        private void EmitBaseConstructorCall(List<IRValue> baseArgs, List<bool> baseByRef = null)
         {
             if (baseArgs == null || baseArgs.Count == 0) return;
-            EmitInstruction(new IRBaseConstructorCall(baseArgs));
+            EmitInstruction(new IRBaseConstructorCall(baseArgs, baseByRef));
         }
+
+        /// <summary>
+        /// Whether parameter <paramref name="index"/> of <paramref name="callee"/> — the symbol the
+        /// analyzer bound the call to — is ByRef: the flag every call arm records in its
+        /// <c>ByRefArguments</c>, indexed in lockstep with the arguments. False past the parameter
+        /// list and for an unbound callee.
+        /// </summary>
+        private static bool IsByRefParameter(Symbol callee, int index)
+        {
+            var parameters = callee?.Parameters;
+            return parameters != null && index >= 0 && index < parameters.Count && parameters[index].IsByRef;
+        }
+
+        /// <summary>Numbers the <c>__copyin{n}</c> carriers of <see cref="CopyInByRefArguments"/>.</summary>
+        private int _copyInCounter;
+
+        /// <summary>
+        /// #144 — VB's rule for a ByRef parameter given a value with NO STORAGE of its own (a
+        /// literal, an expression, a call result, a <c>Const</c>, an omitted Optional's default):
+        /// the value is evaluated into a TEMPORARY, the temporary is passed by reference, and the
+        /// callee's write back is discarded. Each such argument of a CONSTRUCTOR call is replaced
+        /// here by a carrier local, <c>__copyin{n}</c>, declared exactly as the <c>AndAlso</c> /
+        /// <c>++</c> carriers are, typed as the parameter and flagged
+        /// <see cref="IRVariable.IsByRefCopyIn"/>; its flag in <paramref name="byRefFlags"/> is set.
+        /// Every backend then sees a variable — C# <c>ref</c>, MSIL <c>ldloca</c>, a C++ lvalue —
+        /// and JavaScript, which has no references, passes it by value, which is the same program.
+        ///
+        /// <para>⛔ Without it the ByRef constructor declaration made <c>New Box(5)</c> CS1510 on C#
+        /// and a named refusal on MSIL — a program that ran (by accident, through the by-value
+        /// lowering this task removed) stopped building.</para>
+        ///
+        /// <para>⚠ CONSTRUCTORS ONLY (<c>New</c>, <c>MyBase.New</c>). An ordinary method call with a
+        /// literal ByRef argument (<c>Bump(41)</c>) is still CS1510 on C# and refused on MSIL —
+        /// a separate decision (docs/HANDOFF.md), not taken here.</para>
+        ///
+        /// <para>An argument WITH storage — a variable, a field, an array element or a collection
+        /// element — is left as it is, so the write reaches it; so is anything outside a function
+        /// body or inside a <c>When</c> guard, where no carrier can be declared.</para>
+        /// </summary>
+        private void CopyInByRefArguments(List<IRValue> arguments, List<bool> byRefFlags, Symbol callee)
+        {
+            if (_currentFunction == null || _currentBlock == null || _suppressEmit) return;
+
+            for (var i = 0; i < arguments.Count; i++)
+            {
+                if (!IsByRefParameter(callee, i) || HasStorage(arguments[i])) continue;
+
+                // Typed as the PARAMETER (a ByRef `T` of a generic class is refused by the analyzer
+                // before it gets here — "Argument 1 of type 'Integer' is not compatible with
+                // parameter 'x' of type 'T'", measured — so the declared type is a call-site type).
+                var carrierType = callee.Parameters[i].Type ?? arguments[i]?.Type;
+                var carrier = CreateVariable($"__copyin{_copyInCounter++}", carrierType, _nextVersion++);
+                carrier.IsByRefCopyIn = true;
+                PushVariableVersion(carrier.Name, carrier);
+                _currentFunction.LocalVariables.Add(carrier);
+                EmitInstruction(new IRAssignment(carrier, CoerceToDeclaredType(arguments[i], carrierType)));
+
+                arguments[i] = carrier;
+                while (byRefFlags.Count <= i) byRefFlags.Add(false);
+                byRefFlags[i] = true;
+            }
+        }
+
+        /// <summary>Whether a lowered argument names STORAGE a ByRef parameter can write back
+        /// into: a (non-<c>Const</c>) variable, a field, an array element or an indexer element.
+        /// Anything else is a value — see <see cref="CopyInByRefArguments"/>.</summary>
+        private static bool HasStorage(IRValue argument) => argument switch
+        {
+            IRVariable variable => !variable.IsConst,
+            IRFieldAccess => true,
+            IRLoad { Address: IRGetElementPtr } => true,
+            IRIndexerAccess => true,
+            _ => false,
+        };
 
         /// <summary>
         /// The IRFunction a class member's visit DECLARED: the one <c>CreateFunction</c>
@@ -2436,11 +2512,14 @@ namespace BasicLang.Compiler.IR
             _currentFunction.SourceFilePath = _sourceFilePath;
             _currentBlock = _currentFunction.CreateBlock("entry");
 
-            // Add parameters
+            // Add parameters. ⛔ IsByRef is the DECLARATION half of #144: without it every backend
+            // spelled `Sub New(ByRef n As Integer)` as a by-value parameter (C# `int n`, C++
+            // `int32_t n`, MSIL `int32`), and JavaScript's BL7002 walk never saw it. The call half
+            // is IRNewObject/IRBaseConstructorCall.ByRefArguments, below and in Visit(NewExpressionNode).
             foreach (var param in node.Parameters)
             {
                 var paramType = _semanticAnalyzer.GetNodeType(param);
-                var irParam = new IRVariable(param.Name, paramType) { IsParameter = true };
+                var irParam = new IRVariable(param.Name, paramType) { IsParameter = true, IsByRef = param.IsByRef };
                 _currentFunction.Parameters.Add(irParam);
                 PushVariableVersion(param.Name, irParam);
             }
@@ -2449,6 +2528,7 @@ namespace BasicLang.Compiler.IR
             // AndAlso / OrElse argument, the blocks its control flow makes), then consumed by ONE
             // IRBaseConstructorCall before any of the body (ADR-0016 D1).
             var baseArgs = new List<IRValue>();
+            var baseByRef = new List<bool>();
             if (node.BaseConstructorArgs.Count > 0)
             {
                 // The base constructor the analyzer bound this `MyBase.New(…)` to — the third
@@ -2460,6 +2540,9 @@ namespace BasicLang.Compiler.IR
                     ? boundBase
                     : null;
 
+                // ⚠ Not LowerMethodCallArguments, though it records ByRef the same way: this arm
+                // skips an argument that lowered to nothing and has never packed a ParamArray, and
+                // the helper does neither — routing it there would change both (#144).
                 foreach (var arg in node.BaseConstructorArgs)
                 {
                     arg.Accept(this);
@@ -2467,10 +2550,12 @@ namespace BasicLang.Compiler.IR
                     {
                         baseArgs.Add(CoerceToParameterType(
                             _expressionResult, baseCtor, baseArgs.Count));
+                        baseByRef.Add(IsByRefParameter(baseCtor, baseArgs.Count - 1));
                     }
                 }
 
-                AppendOmittedOptionalArguments(baseArgs, null, baseCtor);
+                AppendOmittedOptionalArguments(baseArgs, baseByRef, baseCtor);
+                CopyInByRefArguments(baseArgs, baseByRef, baseCtor);
             }
             else if (_semanticAnalyzer.ConstructorBindings.TryGetValue(node, out var implicitBase))
             {
@@ -2478,9 +2563,10 @@ namespace BasicLang.Compiler.IR
                 // still take OPTIONAL parameters — the implicit call has to fill them exactly as an
                 // explicit one would. The analyzer records a binding here only when the base IS
                 // callable with no arguments, so reaching this means filling is all that is left.
-                AppendOmittedOptionalArguments(baseArgs, null, implicitBase);
+                AppendOmittedOptionalArguments(baseArgs, baseByRef, implicitBase);
+                CopyInByRefArguments(baseArgs, baseByRef, implicitBase);
             }
-            EmitBaseConstructorCall(baseArgs);
+            EmitBaseConstructorCall(baseArgs, baseByRef);
 
             // Generate body
             if (node.Body != null)
@@ -4839,10 +4925,10 @@ namespace BasicLang.Compiler.IR
 
                 // ⚠ Always by VALUE. A filled default is a fresh temporary, so there is nothing
                 // for a callee to write back into — and IRCall documents ByRefArguments as indexed
-                // in lockstep with Arguments, so the entry has to exist either way.
-                //
-                // ⚠ NULL for a construction: IRNewObject and IRBaseConstructorCall (ADR-0016)
-                // carry no by-ref list at all, so there is no lockstep to keep.
+                // in lockstep with Arguments, so the entry has to exist either way. A construction
+                // keeps the same lockstep since #144 (IRNewObject / IRBaseConstructorCall
+                // .ByRefArguments). ⚠ A ByRef Optional of a CONSTRUCTOR does not stay by value:
+                // CopyInByRefArguments then gives the default a copy-in carrier and sets its flag.
                 byRefFlags?.Add(false);
             }
         }
@@ -6926,17 +7012,14 @@ namespace BasicLang.Compiler.IR
                 ? bound
                 : null;
 
-            // Evaluate arguments
-            foreach (var arg in node.Arguments)
-            {
-                arg.Accept(this);
-                newObj.Arguments.Add(CoerceToParameterType(
-                    _expressionResult, ctorSymbol, newObj.Arguments.Count));
-            }
-
+            // Evaluate arguments through the method-call arms' own path (#144): fitted to the
+            // constructor's parameters, ByRef recorded, a ParamArray packed (not for a .NET
+            // constructor — csc's to pack) and omitted Optionals filled. Without the ByRef flags
+            // `New Box(p)` into `Sub New(ByRef n)` was passed by value on every backend.
+            LowerMethodCallArguments(node.Arguments, ctorSymbol, newObj.Arguments, newObj.ByRefArguments,
+                packParamArray: newObj.ResolvedNetTarget == null);
             if (newObj.ResolvedNetTarget == null)
-                PackParamArrayArguments(newObj.Arguments, null, ctorSymbol, node.Arguments);
-            AppendOmittedOptionalArguments(newObj.Arguments, null, ctorSymbol);
+                CopyInByRefArguments(newObj.Arguments, newObj.ByRefArguments, ctorSymbol);
 
             EmitInstruction(newObj);
             _expressionResult = newObj;

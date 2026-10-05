@@ -212,6 +212,17 @@ namespace BasicLang.Compiler.IR
         public IRValue InitialValue { get; set; }
 
         /// <summary>
+        /// #144 — VB's COPY-IN TEMPORARY: a local IRBuilder declares when a constructor call
+        /// (<c>New C(…)</c> or <c>MyBase.New(…)</c>) passes a value with no storage of its own — a
+        /// literal, an expression, a call result — to a ByRef parameter. VB evaluates such an
+        /// argument into a temporary, passes the temporary by reference and discards the write
+        /// back. The carrier IS ordinary storage (C# <c>ref</c>, MSIL <c>ldloca</c>, a C++ lvalue);
+        /// the flag is for a backend that has no references at all: JavaScript passes it by value,
+        /// which is exactly VB's semantics for it, instead of refusing it as BL7002.
+        /// </summary>
+        public bool IsByRefCopyIn { get; set; }
+
+        /// <summary>
         /// Source module name for multi-file compilation
         /// </summary>
         public string ModuleName { get; set; }
@@ -2408,15 +2419,26 @@ namespace BasicLang.Compiler.IR
     public sealed class IRBaseConstructorCall : IRInstruction
     {
         private List<IRValue> _args;
+        private readonly List<bool> _byRef;
 
-        public IRBaseConstructorCall(IEnumerable<IRValue> args)
+        public IRBaseConstructorCall(IEnumerable<IRValue> args, IEnumerable<bool> byRefArguments = null)
         {
             _args = new List<IRValue>(args ?? Enumerable.Empty<IRValue>());
+            _byRef = new List<bool>(byRefArguments ?? Enumerable.Empty<bool>());
         }
 
         /// <summary>The arguments, in the base constructor's parameter order (Optional
         /// defaults already filled).</summary>
         public IReadOnlyList<IRValue> Args => _args;
+
+        /// <summary>
+        /// Which arguments the base constructor takes BY REFERENCE — the twin of
+        /// <see cref="IRNewObject.ByRefArguments"/>, indexed in lockstep with <see cref="Args"/>
+        /// and consulted only where an entry exists (#144: <c>MyBase.New(m)</c> into a ByRef
+        /// parameter passed <c>m</c> by value on every backend). Never rewritten, so a shallow
+        /// clone may share it.
+        /// </summary>
+        public IReadOnlyList<bool> ByRefArguments => _byRef;
 
         /// <summary>The operand slots, for the one use walker (<c>OptimizationPass.MapUses</c>)
         /// and the module cloner — the only writers.</summary>
@@ -2454,6 +2476,18 @@ namespace BasicLang.Compiler.IR
         public List<IRValue> Arguments { get; set; }
 
         /// <summary>
+        /// Which arguments the constructor takes BY REFERENCE — the construction twin of
+        /// <see cref="IRInstanceMethodCall.ByRefArguments"/>, indexed in lockstep with
+        /// <see cref="Arguments"/>, filled by IRBuilder from the constructor the analyzer bound
+        /// the site to, and consulted only where an entry exists.
+        ///
+        /// <para>⛔ Its absence was #144: <c>New Box(p)</c> against <c>Sub New(ByRef n As
+        /// Integer)</c> passed <c>p</c> BY VALUE on every backend, so the constructor's write
+        /// never reached the caller (vbc prints the written value).</para>
+        /// </summary>
+        public List<bool> ByRefArguments { get; set; }
+
+        /// <summary>
         /// P2a-2 Task 7a CARRIAGE — the .NET CONSTRUCTOR this construction resolved to, or
         /// null for every non-.NET construction (user classes, collections, P1 BCL values —
         /// i.e. every construction in every pre-P2a program). Written by <see cref="IRBuilder"/>
@@ -2484,6 +2518,7 @@ namespace BasicLang.Compiler.IR
         {
             ClassName = className;
             Arguments = new List<IRValue>();
+            ByRefArguments = new List<bool>();
         }
 
         public override void Accept(IIRVisitor visitor) => visitor.Visit(this);

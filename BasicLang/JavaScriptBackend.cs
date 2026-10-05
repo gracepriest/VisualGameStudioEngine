@@ -1033,8 +1033,15 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// constructor's own context (<see cref="EmitMemberBody"/>), so a lambda argument that assigns
         /// a parameter assigns it — rendered before that context existed, the arrow function saw no
         /// declared <c>p</c> and emitted <c>const p = …</c>, a TDZ ReferenceError (#170, B1).</summary>
-        private string SuperCall(IRBaseConstructorCall baseCall) =>
-            $"super({string.Join(", ", baseCall.Args.Select(Expr))});";
+        private string SuperCall(IRBaseConstructorCall baseCall)
+        {
+            // ByRef re-checked from the call's own flags (#144), as InstanceCall does — defence in
+            // depth behind JsCapabilityChecker's constructor-call walk. A copy-in temporary
+            // (IRVariable.IsByRefCopyIn) is passed by value: VB discards its write-back anyway.
+            if (JsCapabilityChecker.PassesStorageByRef(baseCall.Args, baseCall.ByRefArguments))
+                throw JsCapabilityChecker.ByRefArgumentRejection("MyBase.New");
+            return $"super({string.Join(", ", baseCall.Args.Select(Expr))});";
+        }
 
         /// <summary>The base call a constructor emits FIRST (nothing precedes it in the IR); skipped
         /// by the walk, which would otherwise write it twice.</summary>
@@ -3637,6 +3644,12 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
         private string NewObject(IRNewObject n)
         {
+            // ByRef re-checked from the construction's own flags (#144), as InstanceCall does —
+            // defence in depth behind JsCapabilityChecker's constructor-call walk. A copy-in
+            // temporary (IRVariable.IsByRefCopyIn) is passed by value, which is VB's meaning for it.
+            if (JsCapabilityChecker.PassesStorageByRef(n.Arguments, n.ByRefArguments))
+                throw JsCapabilityChecker.ByRefArgumentRejection("New " + n.ClassName);
+
             // ⛔ THE FOURTH `::` SITE, and the one it is easiest to forget. ForeignFeatureChecker's
             // IRNewObject arm used to refuse every `::` class name; it now steps aside for this
             // backend, so this is what stops `New std::mutex()` emitting `new stdmutex()` — a

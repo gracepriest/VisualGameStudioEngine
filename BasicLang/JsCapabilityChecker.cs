@@ -617,12 +617,37 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// </summary>
         private static void CheckByRef(IRModule module)
         {
+            // ⚠ A CONSTRUCTOR's ByRef parameter is judged at its CALLS, not its declaration (#144).
+            // A constructor is reached only through `New` and `MyBase.New`, and an argument with no
+            // storage arrives there as VB's copy-in temporary (IRVariable.IsByRefCopyIn), whose
+            // write-back VB discards — by value is the same program, so `New Box(5)` keeps running.
+            // An argument WITH storage (`New Box(p)`) is refused below, as BL7002 always refused.
+            var constructors = new HashSet<IRFunction>(
+                (module.Classes?.Values ?? Enumerable.Empty<IRClass>())
+                    .SelectMany(c => c?.Constructors ?? new List<IRConstructor>())
+                    .Select(c => c?.Implementation)
+                    .Where(f => f != null),
+                ReferenceEqualityComparer.Instance);
+
             foreach (var function in module.Functions ?? Enumerable.Empty<IRFunction>())
             {
-                if (function.Parameters == null) continue;
+                if (function.Parameters == null || constructors.Contains(function)) continue;
                 foreach (var p in function.Parameters)
                     if (p != null && p.IsByRef)
                         throw ByRefRejection(p.Name, DescribeFunction(function));
+            }
+
+            foreach (var function in module.Functions ?? Enumerable.Empty<IRFunction>())
+            foreach (var block in function.Blocks ?? new List<BasicBlock>())
+            foreach (var inst in block.Instructions)
+            {
+                switch (inst)
+                {
+                    case IRNewObject n when PassesStorageByRef(n.Arguments, n.ByRefArguments):
+                        throw ByRefArgumentRejection("New " + n.ClassName);
+                    case IRBaseConstructorCall b when PassesStorageByRef(b.Args, b.ByRefArguments):
+                        throw ByRefArgumentRejection("MyBase.New");
+                }
             }
 
             foreach (var iface in module.Interfaces?.Values ?? Enumerable.Empty<IRInterface>())
@@ -640,6 +665,20 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             foreach (var p in ext.Parameters ?? Enumerable.Empty<IRParameter>())
                 if (p != null && p.IsByRef)
                     throw ByRefRejection(p.Name, $"extern declaration '{ext.Name}'");
+        }
+
+        /// <summary>
+        /// Whether a constructor call passes some argument BY REFERENCE that is real storage —
+        /// anything but VB's copy-in temporary (<see cref="IRVariable.IsByRefCopyIn"/>), which
+        /// JavaScript passes by value with VB's own meaning (#144).
+        /// </summary>
+        public static bool PassesStorageByRef(IReadOnlyList<IRValue> arguments, IReadOnlyList<bool> byRefFlags)
+        {
+            if (arguments == null || byRefFlags == null) return false;
+            for (var i = 0; i < arguments.Count && i < byRefFlags.Count; i++)
+                if (byRefFlags[i] && arguments[i] is not IRVariable { IsByRefCopyIn: true })
+                    return true;
+            return false;
         }
 
         private static string DescribeFunction(IRFunction f) =>
