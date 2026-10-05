@@ -6456,7 +6456,15 @@ namespace BasicLang.Compiler.IR
                     // (Fixing `_locals`, or deleting it, is separate work. The lambda
                     // capture-detection loop it used to feed is gone: a lambda's capture set is
                     // read off its IR — OptimizationPass.LambdaCapturesOf, task #122.)
-                    isStaticCall = (exactClassMatch || isNetType) && !isLocalOrParam;
+                    // ⛔ A VALUE is never a type (M7, portable-controls Task 11). `Me`/`MyClass` — and any receiver
+                    // the analyzer bound to a value symbol (a field, property, parameter, local or constant) — is an
+                    // instance receiver however it is spelled. IsKnownNetStaticType's PascalCase-under-a-.NET-Using
+                    // heuristic claimed `Me` itself: with any Using in the file, `Me.Init()` was "no lowering for
+                    // 'Me.Init'" on JavaScript — every WinForms-scaffolded form's shape.
+                    bool isValueReceiver = IsSelfExpression(memberExpr.Object)
+                        || IsValueSymbol(_semanticAnalyzer.GetNodeSymbol(memberExpr.Object));
+
+                    isStaticCall = (exactClassMatch || isNetType) && !isLocalOrParam && !isValueReceiver;
                 }
 
                 // P2a-2 Task 7a: the ANALYZER'S DESCRIPTOR IS AUTHORITATIVE about static-ness —
@@ -7231,6 +7239,16 @@ namespace BasicLang.Compiler.IR
         /// </summary>
         internal static bool IsKnownNetStaticTypeName(string name) =>
             !string.IsNullOrEmpty(name) && KnownNetStaticTypes.Contains(name);
+
+        /// <summary><c>Me</c> / <c>MyClass</c> as a receiver — always the current instance, never a type (M7).</summary>
+        private static bool IsSelfExpression(ExpressionNode expression) =>
+            expression is IdentifierExpressionNode { IsForeignQualified: false } id
+            && (string.Equals(id.Name, "Me", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(id.Name, "MyClass", StringComparison.OrdinalIgnoreCase));
+
+        /// <summary>A symbol that names a VALUE — so a receiver bound to it is an instance, whatever its spelling (M7).</summary>
+        private static bool IsValueSymbol(Symbol symbol) =>
+            symbol is { Kind: SymbolKind.Variable or SymbolKind.Parameter or SymbolKind.Property or SymbolKind.Constant };
 
         private bool IsKnownNetStaticType(string name)
         {

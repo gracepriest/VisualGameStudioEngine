@@ -448,14 +448,14 @@ public class CrossFileBindingTests
     /// <summary>
     /// ⛔ The Using shape: the analyzer's "unresolved base + a .NET Using = an opaque .NET class" must not win
     /// over a sibling's real class. The WinForms scaffold always has Using lines (FormScaffolder).
-    /// ⚠ <c>Greet</c> calls the inherited Sub UNQUALIFIED here: <c>Me.Hello()</c> under a .NET Using is M7 (the IR
-    /// builder takes <c>Me</c> for a .NET static type — JavaScript "no lowering for 'Me.Hello'"), a separate defect
-    /// owned by portable-controls Task 11, which switches this row back to <c>Me.Hello()</c>.
+    /// <c>Greet</c> calls the inherited Sub as <c>Me.Hello()</c> — under a .NET Using that was M7 until
+    /// portable-controls Task 11 (the IR builder took <c>Me</c> for a .NET static type: JavaScript "no lowering for
+    /// 'Me.Hello'"), so this row called it unqualified until then.
     /// </summary>
     [Test]
     public void AClassInheritsAClassFromAnotherFile_UnderAUsing() => RunsOnEveryBackend(CrossFileBaseOutput,
         ("Base.bas", BaseFile),
-        ("Derived.bas", "Using System\n" + DerivedFile.Replace("  Me.Hello()\n", "  Hello()\n")),
+        ("Derived.bas", "Using System\n" + DerivedFile),
         ("Main.bas", UseBaseAndDerived));
 
     /// <summary>
