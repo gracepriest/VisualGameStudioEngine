@@ -5884,11 +5884,50 @@ namespace BasicLang.Compiler.IR
                     right = convertedRight;
                 }
 
+                // #190: VB's `&` converts EACH operand to String. With one String side every
+                // backend already stringifies the other, so only the pair the analyzer admitted
+                // with NO String side goes through CStr here — both operands — and every backend
+                // then sees a String concat of Strings. Read from the ANALYZER's types, so an
+                // unanalyzed `When` guard (no node types) keeps the shape it had. The Nothing
+                // literal is "" on either side (ConcatOperandAsString).
+                if (opKind == BinaryOpKind.Concat)
+                {
+                    var convert = SemanticAnalyzer.ConvertsToStringForConcat(_semanticAnalyzer.GetNodeType(node.Left))
+                                  && SemanticAnalyzer.ConvertsToStringForConcat(_semanticAnalyzer.GetNodeType(node.Right));
+                    left = ConcatOperandAsString(left, convert);
+                    right = ConcatOperandAsString(right, convert);
+                }
+
                 result = new IRBinaryOp(tempName, opKind, left, right, resultType);
             }
 
             EmitInstruction(result);
             _expressionResult = result;
+        }
+
+        /// <summary>
+        /// #190: one operand of <c>&amp;</c> as the String VB converts it to. With
+        /// <paramref name="convert"/> (no String side) it is <c>CStr(value)</c>, the conversion an
+        /// interpolated string's hole already uses, so a Boolean is "True"/"False" and a Double its
+        /// shortest round-trip text on every backend whose CStr already says so.
+        ///
+        /// <para>The <c>Nothing</c> literal is re-typed in place to <c>""</c> (VB's
+        /// <c>CStr(Nothing)</c>) on EITHER side, String partner or not: there is nothing to convert
+        /// at run time, and C++ had no spelling for it — <c>nullptr + std::string("x")</c> and
+        /// <c>to_string(nullptr)</c> both fail to build (measured: <c>Nothing &amp; "x"</c> never
+        /// compiled on C++).</para>
+        /// </summary>
+        private IRValue ConcatOperandAsString(IRValue value, bool convert)
+        {
+            var stringType = new TypeInfo("String", TypeKind.Primitive);
+            if (value is IRConstant { Value: null })
+                return new IRConstant("", stringType);
+            if (!convert) return value;
+
+            var conversion = new IRCall(_currentFunction.GetNextTempName(), "CStr", stringType);
+            conversion.Arguments.Add(value);
+            EmitInstruction(conversion);
+            return conversion;
         }
 
         /// <summary>
