@@ -180,12 +180,12 @@ public class JsExecutionTierRosterTests
         // "...ExecutionTests", so the widened match below WOULD catch both on its own; listed
         // explicitly anyway, matching every row above. CallVisibilityQ3ExecutionTests' JS legs run
         // through FourBackends.RunsOnEveryBackend[Aggressive] (Q3/Q3m); CallVisibilityQ3n
-        // ExecutionTests' C#/C++/MSIL row spawns no Node, but its known-gap pin
-        // (Q3n_JavaScript_KnownGap_ReferenceErrorOnMeK) does, via a local Node runner — it belongs
-        // here for the same reason CseDestinationKnownGapsTask133Tests and
-        // LicmKillVocabularyKnownGapsTask122Tests do (see their own notes above).
-        // CallVisibilityHandBuiltIRTests and CallVisibilityDecisionTests are NOT here: pure
-        // in-process IR/front-end fixtures, spawn nothing, carry no [Category("Integration")].
+        // ExecutionTests' C#/C++/MSIL row spawns no Node, but its JavaScript rows do (#143: Q3n and
+        // the Q3b/Q3d/Q3e/Q3h/Q3i field-named-value read-back rows, through TempExec — the CLI, the
+        // CLI with --optimize and CompileProjectFiles, run under Node).
+        // CallVisibilityHandBuiltIRTests, CallVisibilityDecisionTests and CallVisibilityQ3nJavaScriptTextTests
+        // are NOT here: pure in-process IR/front-end/codegen-text fixtures, spawn nothing, carry no
+        // [Category("Integration")].
         typeof(CallVisibilityQ3ExecutionTests),
         typeof(CallVisibilityQ3nExecutionTests),
 
