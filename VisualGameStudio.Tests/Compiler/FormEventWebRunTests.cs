@@ -163,7 +163,7 @@ public class FormEventWebRunTests
     /// tree), <c>document.body</c> carries <c>data-form</c> for the D7 dispatch, <c>window</c> is an EventTarget. The
     /// dispatch helpers emulate bubbling to <c>body</c> after the target.
     /// </summary>
-    private static string Harness(FormDocument form)
+    internal static string Harness(FormDocument form)
     {
         var tree = new StringBuilder();
         foreach (var parent in form.AllControls().Where(c => c.Children.Count > 0))
@@ -498,7 +498,7 @@ public class FormEventWebRunTests
     /// console-capturing script before the page's module and <paramref name="driver"/> after it, and returns the captured
     /// console lines (and any page error as <c>ERROR …</c>) from Edge's <c>--dump-dom</c>.
     /// </summary>
-    private static List<string> RunInEdge(string edge, string output, string formName, string driver)
+    internal static List<string> RunInEdge(string edge, string output, string formName, string driver)
     {
         var html = File.ReadAllText(Path.Combine(output, formName + ".html"));
         var head = html.IndexOf("<head>", StringComparison.OrdinalIgnoreCase);

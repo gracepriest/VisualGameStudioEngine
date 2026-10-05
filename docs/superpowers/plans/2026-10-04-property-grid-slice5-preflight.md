@@ -1221,6 +1221,36 @@ The per-line truncation (versus dropping the whole line) is not separately discr
 Gates: the Form fast set is 4383 total, 1 failure (the known `EveryTextRoute_…`); `FullyQualifiedName~Retarget` 144/144;
 the round-5 filter 1260/1260. `dotnet clean` was run on the Shell after the AXAML change.
 
+### Task 8 — RUN, not compile, on both targets and both build entry points (base `9fd5b58e`)
+⚠ The production code existed before this task, so the test was written last; the evidence is the mutations below.
+- New Integration `FormEventAcceptanceTests`:
+  - **Design.** The form is made through the real document view model over the real disk. Three placed controls; the four
+    handlers are asked for through the grid's Events rows (`RequestHandler`, the `HandlerRequested` route the view's
+    double-click raises — never a constructed plan): Form Load, Button1 Click and MouseDown, TextBox1 KeyPress. One user
+    line per stub; Load also writes the Label. Then `SaveAsync`.
+  - **Build.** Each target is copied into a CLI route (`BasicLang.exe build`) and an IDE route
+    (`BuildService.BuildProjectAsync`).
+  - **Web run.** node runs with the shared `FormEventWebRunTests.Harness` (now internal): Load first, then Click,
+    MouseDown, and KeyPress driven as `keydown` with `x`/`Enter`/`Shift` → exactly two runs. The Label reads `loaded`, and
+    the page itself is emitted on BOTH routes. Edge too, where present, on the CLI build (`RunInEdge`, now internal). It
+    ran here.
+  - **WinForms run.** A reflection driver (`Assembly.LoadFrom` App.dll) SHOWS the form, raises `OnClick`, `OnMouseDown`,
+    and `OnKeyPress('x')`, `OnKeyPress('\r')`, then prints the Label. Load once before `--- shown`, each handler in order,
+    `LBL loaded` — through both routes. `[Platform(Include="Win")]`, and it skips without dotnet.
+- The shared assertion is order + count + Label text. Never the KeyPress character (`KeyChar` is piece 2's).
+- ⚠ **Pre-flight correction:** the third mutation ("the IDE route alone skipping the region write") has nothing to mutate.
+  Measured: no build route writes regions; they are written only by `SaveAsync` (`FormCodeBehind.Regenerate`). The
+  both-entry-points kill uses the IDE's own form step instead: `BuildService` passing no forms to the emitter. That kill
+  needed the page-exists assertion; without it the node run (`App.js`) passed regardless.
+
+| Mutation | Killed by |
+|---|---|
+| WinForms `AddHandler Me.Load` dropped | WinForms/CLI "Load once, first" |
+| Web Load call moved to the TOP of InitializeComponent | web/CLI: node `TypeError: Cannot set properties of null (setting 'textContent')` — Load before the controls. The first spelling of this mutant landed outside the Sub and failed the build instead; re-made inside the Sub |
+| IDE route alone: `BuildService` passes no forms | web/IDE "no EvForm.html" while web/CLI ran green — the both-entry-points kill |
+
+Green: `FormEventAcceptanceTests` 2/2 and `FormEventWebRunTests` 28/28, Edge rows included.
+
 ## 7. Tests to re-check (consolidated)
 
 | Test | Why | Task |
