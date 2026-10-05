@@ -4702,6 +4702,44 @@ namespace BasicLang.Compiler.IR
         }
 
         /// <summary>
+        /// Lowers the WRITTEN arguments of a method call — <c>obj.M(args)</c> and
+        /// <c>MyBase.M(args)</c> alike — against <paramref name="methodSymbol"/>, the member the
+        /// analyzer bound to the call's member access: each argument fitted to its declared
+        /// parameter type (<see cref="CoerceToParameterType"/>), its ByRef flag recorded, a
+        /// ParamArray tail packed when <paramref name="packParamArray"/>, and every omitted trailing
+        /// Optional filled with its default.
+        ///
+        /// <para>Which parameters the method takes ByRef: the symbol's Parameters carry IsByRef
+        /// straight from the ParameterNode. Without it a call is IR that lies about its own
+        /// effects exactly the way the static arm used to: the C# backend dropped the `ref` at the
+        /// call site (CS1620) and the optimizer kept copy facts across a call that writes
+        /// them.</para>
+        ///
+        /// <para>⛔ ONE path for both arms. The base-call arm used to add the bare argument values
+        /// and nothing else, so <c>MyBase.M</c> lost all four facts an instance call carries
+        /// (#142/#265/#213).</para>
+        /// </summary>
+        private void LowerMethodCallArguments(
+            IList<ExpressionNode> written, Symbol methodSymbol,
+            List<IRValue> arguments, List<bool> byRefFlags, bool packParamArray)
+        {
+            foreach (var arg in written)
+            {
+                arg.Accept(this);
+                arguments.Add(CoerceToParameterType(_expressionResult, methodSymbol, arguments.Count));
+
+                var methodParams = methodSymbol?.Parameters;
+                byRefFlags.Add(
+                    methodParams != null && arguments.Count - 1 < methodParams.Count
+                    && methodParams[arguments.Count - 1].IsByRef);
+            }
+
+            if (packParamArray)
+                PackParamArrayArguments(arguments, byRefFlags, methodSymbol, written);
+            AppendOmittedOptionalArguments(arguments, byRefFlags, methodSymbol);
+        }
+
+        /// <summary>
         /// Appends the declared defaults for any trailing <c>Optional</c> parameters the call did
         /// not supply.
         ///
@@ -6342,14 +6380,19 @@ namespace BasicLang.Compiler.IR
                 // Check if this is a MyBase call
                 if (memberExpr.Object is MyBaseExpressionNode)
                 {
-                    // Base class method call: MyBase.Method(args)
+                    // Base class method call: MyBase.Method(args). Its arguments are lowered
+                    // EXACTLY as an instance call's (#142/#265), against the symbol the analyzer
+                    // bound to this same member access — the base class's method, since MyBase is
+                    // typed as the base. Before, they were the bare argument values: no ByRef
+                    // flags (CS1620 on C#, MissingMethodException on MSIL), no omitted Optional
+                    // (too few arguments on C++, `undefined` on JavaScript), no ParamArray packing
+                    // and no fit to the declared parameter type (`MyBase.Show(5)` into an Object
+                    // named `Show(int32)` on MSIL, #213). A base call has no .NET target by
+                    // construction (see IRBaseMethodCall), so a ParamArray tail is always packed.
                     var baseCall = new IRBaseMethodCall(tempName, DeclaredMemberSpelling(memberExpr), returnType);
 
-                    foreach (var arg in node.Arguments)
-                    {
-                        arg.Accept(this);
-                        baseCall.Arguments.Add(_expressionResult);
-                    }
+                    LowerMethodCallArguments(node.Arguments, _semanticAnalyzer.GetNodeSymbol(memberExpr),
+                        baseCall.Arguments, baseCall.ByRefArguments, packParamArray: true);
 
                     EmitInstruction(baseCall);
                     _expressionResult = baseCall;
@@ -6620,30 +6663,10 @@ namespace BasicLang.Compiler.IR
                             : BoundaryTypeCategory.Unknown;
                     }
 
-                    // Which parameters the method takes ByRef. The analyzer recorded the member
-                    // symbol on this SAME MemberAccessExpressionNode, and its Parameters carry
-                    // IsByRef straight from the ParameterNode. Without this an instance call is
-                    // IR that lies about its own effects exactly the way the static arm used to:
-                    // the C# backend dropped the `ref` at the call site (CS1620) and the
-                    // optimizer kept copy facts across a call that writes them.
-                    var methodSymbol = _semanticAnalyzer.GetNodeSymbol(memberExpr);
-                    foreach (var arg in node.Arguments)
-                    {
-                        arg.Accept(this);
-                        methodCall.Arguments.Add(CoerceToParameterType(
-                            _expressionResult, methodSymbol, methodCall.Arguments.Count));
-
-                        var methodParams = methodSymbol?.Parameters;
-                        methodCall.ByRefArguments.Add(
-                            methodParams != null && methodCall.Arguments.Count - 1 < methodParams.Count
-                            && methodParams[methodCall.Arguments.Count - 1].IsByRef);
-                    }
-
                     // A .NET method's `params` is csc's to pack; only a user callee is packed here.
-                    if (methodCall.ResolvedNetTarget == null)
-                        PackParamArrayArguments(methodCall.Arguments, methodCall.ByRefArguments, methodSymbol, node.Arguments);
-                    AppendOmittedOptionalArguments(
-                        methodCall.Arguments, methodCall.ByRefArguments, methodSymbol);
+                    LowerMethodCallArguments(node.Arguments, _semanticAnalyzer.GetNodeSymbol(memberExpr),
+                        methodCall.Arguments, methodCall.ByRefArguments,
+                        packParamArray: methodCall.ResolvedNetTarget == null);
 
                     EmitInstruction(methodCall);
                     _expressionResult = methodCall;

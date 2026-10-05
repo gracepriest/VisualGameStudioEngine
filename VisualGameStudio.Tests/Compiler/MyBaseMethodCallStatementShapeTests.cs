@@ -31,7 +31,7 @@ namespace VisualGameStudio.Tests.Compiler;
 //    - a lambda holding a statement-level base call is a BLOCK lambda, and one holding only a used base result stays an EXPRESSION lambda;
 //    - a program with no base method call writes the C# it wrote before (three representatives: the Derived class of each, line for line);
 //    - ADR-0001 is still answered first: a base call with two uses is written once, into a temp (a hand-edited-IR witness — no source shape gives a base call two uses);
-//    - every row compiles (Roslyn, not run); a ByRef argument to a base method is refused as CS1620 — the known gap named for #265;
+//    - every row compiles (Roslyn, not run); a ByRef argument to a base method is written with `ref` (#265) and compiles;
 //    - the run fixture never runs emitted C# in the test host.
 //
 //  ⭐ MUTANTS (S/t139/mut and S/t139/tw/mut: each is the fix plus ONE change, built in a detached worktree and run against a copy of the test output with its BasicLang.dll swapped;
@@ -143,8 +143,8 @@ public class MyBaseMethodCallStatementShapeTests
         new("c9c_genmethod", new[] { ("{", "base.Put(5);", "base.Put(\"s\");"), ("base.Put(5);", "base.Put(\"s\");", "Console.WriteLine(") }, NoInline),
         new("n1_tempname", new[] { ("t3 = 400;", "base.F(x);", "g = () => {"), ("g = () => {", "base.F(x);", "return t0 + t1;") }, NoInline),
         new("p2_object", new[] { ("{", "base.Show(5);", "Console.WriteLine(") }, NoInline),
-        new("p3_optional", new[] { ("{", "base.Show(1);", "base.Show(1, 2);"), ("base.Show(1);", "base.Show(1, 2);", "}") }, NoInline),
-        new("p4_paramarray", new[] { ("{", "base.Sum(1, 2, 3);", "Console.WriteLine(") }, NoInline),
+        new("p3_optional", new[] { ("{", "base.Show(1, 7);", "base.Show(1, 2);"), ("base.Show(1, 7);", "base.Show(1, 2);", "}") }, NoInline), // the Optional left out is filled with its default (#265)
+        new("p4_paramarray", new[] { ("t0[2] = 3;", "base.Sum(t0);", "Console.WriteLine(") }, NoInline), // the three loose arguments are packed into an array first (#265)
         new("v1_dim", None, new[] { "r = base.F(x);" }),
         new("v2_local", None, new[] { "r = base.F(x);" }),
         new("v3_field", None, new[] { "Total = base.F(x);", "this.Total = base.F(x + 1);" }),
@@ -611,20 +611,20 @@ public class MyBaseMethodCallStatementShapeTests
     }
 
     /// <summary>
-    /// ⛔ KNOWN GAP, named for #265: a ByRef argument to a base method is refused by Roslyn as CS1620 ("Argument 1 must be passed with the 'ref' keyword") — IRBaseMethodCall carries
-    /// no ByRef flags, so the call has no `ref`. It printed the UNCHANGED variable (a silent wrong answer, `5` for vbc's `105`) before the fix wrote the call; now it does not compile.
-    /// Pinned so it flips when #265 lands: a different diagnostic set, including none, means #265 moved — update this pin, do not delete it. (C++ prints vbc's answer; JavaScript
-    /// refuses ByRef, BL7002; MSIL throws MissingMethodException — the run fixture pins those.)
+    /// A ByRef argument to a base method is written with `ref` (#265): `base.SetIt(ref p);`, the call's own ByRef flag read the way an instance call's is, and Roslyn finds nothing wrong. It was
+    /// CS1620 ("Argument 1 must be passed with the 'ref' keyword") before the fix, and before #139 wrote the call at all a silent wrong answer (`5` for vbc's `105`). The run fixture
+    /// runs it (C#, C++ and MSIL print vbc's `105`; JavaScript refuses ByRef, BL7002).
     /// </summary>
-    [TestCase("p1_byref", TestName = "AByRefArgument_ToAnOverriddenBaseMethod")]
-    [TestCase("p1b_byrefinh", TestName = "AByRefArgument_ToAnInheritedBaseMethod")]
-    public void AByRefArgumentToABaseMethod_IsRefusedByRoslyn_KnownGap_Task265(string id)
+    [TestCase("p1_byref", "base.SetIt(ref p);", TestName = "AByRefArgument_ToAnOverriddenBaseMethod")]
+    [TestCase("p1b_byrefinh", "base.SetIt(ref q);", TestName = "AByRefArgument_ToAnInheritedBaseMethod")]
+    public void AByRefArgumentToABaseMethod_IsWrittenWithRef_AndCompiles(string id, string call)
     {
         foreach (var (name, emit) in EntryPoints())
         {
-            var errors = RoslynErrors(emit(Probe(id)));
-            Assert.That(errors.Length, Is.EqualTo(1), $"{id} {name}: {string.Join(" | ", errors)}");
-            Assert.That(errors[0], Does.Contain("error CS1620"), $"{id} {name}: #265 moved? {errors[0]}");
+            var csharp = emit(Probe(id));
+            Assert.That(BaseLines(csharp), Is.EqualTo(new[] { call }), $"{id} {name}: the one base call, with `ref`:\n{csharp}");
+            var errors = RoslynErrors(csharp);
+            Assert.That(errors, Is.Empty, $"{id} {name}: {string.Join(" | ", errors)}");
         }
     }
 
@@ -648,19 +648,29 @@ public class MyBaseMethodCallStatementShapeTests
     [Test]
     public void TheRunFixture_NeverRunsEmittedCSharpInTheTestHost()
     {
-        var path = Path.Combine(SampleSources.RepoRoot(), "VisualGameStudio.Tests", "Compiler", "MyBaseMethodCallStatementExecutionTests.cs");
-        var code = string.Join("\n", File.ReadAllLines(path).Where(l => !l.TrimStart().StartsWith("//", StringComparison.Ordinal)));
-
         var problems = new List<string>();
-        foreach (var call in new[] { "RunEmittedCSharp(", "RunEmittedCSharpText(", "RunEmittedCSharpAggressive(", "RunsOnEveryBackend(", "RunsOnEveryBackendAggressive(" })
-            if (code.Contains(call, StringComparison.Ordinal)) problems.Add($"a call of the in-process runner {call}");
 
-        var csharpRuns = Regex.Matches(code, @"TempExec\.(?:Run|AssertMatchesInEveryEntryPoint)\(\s*Bk\.CSharp(?<args>[^;]*);");
-        Assert.That(csharpRuns.Count, Is.GreaterThanOrEqualTo(1), "the guard must have found the fixture's C# run");
-        foreach (Match m in csharpRuns)
-            if (!m.Groups["args"].Value.Contains("hangSafe: true", StringComparison.Ordinal))
-                problems.Add($"a C# run that is not hang-safe: {m.Value}");
+        // #139's fixture runs C# through TempExec with the literal `Bk.CSharp`; its controls take a backend VARIABLE (TheTable_HasItsRows pins that they never hold C#).
+        CheckNeverRunsInProcess("MyBaseMethodCallStatementExecutionTests.cs", @"TempExec\.(?:Run|AssertMatchesInEveryEntryPoint)\(\s*Bk\.CSharp(?<args>[^;]*);", problems);
+
+        // #142/#265/#213's fixture runs every row's backends in a loop over a VARIABLE, so EVERY run call of it must be hang-safe.
+        CheckNeverRunsInProcess("MyBaseCallArgumentsExecutionTests.cs", @"TempExec\.(?:Run|AssertMatchesInEveryEntryPoint)\((?<args>[^;]*);", problems);
 
         Assert.That(problems, Is.Empty, string.Join("\n", problems));
+    }
+
+    private static void CheckNeverRunsInProcess(string fileName, string runPattern, List<string> problems)
+    {
+        var path = Path.Combine(SampleSources.RepoRoot(), "VisualGameStudio.Tests", "Compiler", fileName);
+        var code = string.Join("\n", File.ReadAllLines(path).Where(l => !l.TrimStart().StartsWith("//", StringComparison.Ordinal)));
+
+        foreach (var call in new[] { "RunEmittedCSharp(", "RunEmittedCSharpText(", "RunEmittedCSharpAggressive(", "RunsOnEveryBackend(", "RunsOnEveryBackendAggressive(" })
+            if (code.Contains(call, StringComparison.Ordinal)) problems.Add($"{fileName}: a call of the in-process runner {call}");
+
+        var csharpRuns = Regex.Matches(code, runPattern);
+        if (csharpRuns.Count < 1) problems.Add($"{fileName}: the guard must have found the fixture's C# run");
+        foreach (Match m in csharpRuns)
+            if (!m.Groups["args"].Value.Contains("hangSafe: true", StringComparison.Ordinal))
+                problems.Add($"{fileName}: a C# run that is not hang-safe: {m.Value}");
     }
 }

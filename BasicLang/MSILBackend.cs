@@ -7905,15 +7905,21 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             WriteLine("    ldarg.0");
             _currentStack++;
 
-            // Load arguments
-            foreach (var arg in baseCall.Arguments)
-            {
-                EmitLoadValue(arg);
-            }
+            // The DECLARATION decides the signature and each argument's slot, exactly as for an
+            // instance call (#142/#265/#213): looked up from the base class, up its chain. It used
+            // to be spelled from the ARGUMENTS — `MyBase.SetIt(p)` named `SetIt(int32)` for a
+            // ByRef `int32&`, and `MyBase.Show(5)` named `Show(int32)` for `Show(object)`: both
+            // MissingMethodException at run time.
+            var declared = _currentClass != null && TryFindClass(_currentClass.BaseClass, out var baseOwner)
+                ? DeclaredMethodParams(baseOwner, baseCall.MethodName)
+                : null;
+
+            // Load arguments — an ADDRESS for each one the declaration takes ByRef.
+            EmitCallArguments(baseCall.Arguments, declared, baseCall.MethodName);
 
             // Build method signature
             var returnType = IlTypeSpec(baseCall.Type);
-            var paramTypes = DeclaredParamList(null, baseCall.Arguments);
+            var paramTypes = DeclaredParamList(declared, baseCall.Arguments);
             var methodName = SanitizeName(baseCall.MethodName);
 
             // For base calls, we need to know the base class name from the current class context

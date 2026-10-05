@@ -2589,6 +2589,21 @@ namespace BasicLang.Compiler.IR
         public string MethodName { get; set; }
         public List<IRValue> Arguments { get; set; }
 
+        /// <summary>
+        /// Which arguments the base method takes BY REFERENCE — the base-call twin of
+        /// <see cref="IRInstanceMethodCall.ByRefArguments"/>, indexed in lockstep with
+        /// <see cref="Arguments"/> and filled by the same IRBuilder helper from the same resolved
+        /// symbol.
+        ///
+        /// <para>⛔ Its absence was #142/#265: the base call carried none of its target's
+        /// parameter facts, so <c>MyBase.SetIt(p)</c> against a ByRef parameter was CS1620 on C#
+        /// (no <c>ref</c>) and a MissingMethodException on MSIL (the call named
+        /// <c>SetIt(int32)</c>). The other facts — an omitted Optional, a ParamArray tail, the
+        /// declared parameter type — reach the node as ARGUMENTS, exactly as for an instance
+        /// call.</para>
+        /// </summary>
+        public List<bool> ByRefArguments { get; set; }
+
         // NO .NET CARRIAGE HERE, DELIBERATELY (P2a-2 Task 7a removed the Task-2 fields).
         //
         // A base call exists for exactly one source shape — `MyBase.Method(args)`
@@ -2611,6 +2626,7 @@ namespace BasicLang.Compiler.IR
         {
             MethodName = methodName;
             Arguments = new List<IRValue>();
+            ByRefArguments = new List<bool>();
         }
 
         public override void Accept(IIRVisitor visitor) => visitor.Visit(this);

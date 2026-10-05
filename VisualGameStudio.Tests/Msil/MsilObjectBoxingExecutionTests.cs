@@ -1482,8 +1482,9 @@ public class MsilObjectBoxingExecutionTests
             + string.Join("\n", diagnostics.Where(d => d.Severity == DiagnosticSeverity.Error)));
     }
 
-    // #213 — MyBase.Show(5) into a Base method typed `o As Object` throws MissingMethodException
-    // on MSIL. No probe for this existed before this fix; written here as the brief asked.
+    // #213 — MyBase.Show(5) into a Base method typed `o As Object` once threw MissingMethodException
+    // on MSIL: the call site named the signature from the ARGUMENT's type (`Show(int32)`), not from the
+    // declared parameter (`Show(object)`). A MyBase call now carries its target's parameter facts.
     private const string MyBaseIntoObjectParameter = """
         Class Base
             Public Sub Show(o As Object)
@@ -1503,31 +1504,16 @@ public class MsilObjectBoxingExecutionTests
         """;
 
     [Test]
-    public void MyBaseCallIntoAnObjectParameter_Msil_PinsPreExistingMissingMethod_Against213()
+    public void MyBaseCallIntoAnObjectParameter_Msil_PrintsVbcsAnswer_Task213()
     {
-        // ⭐ C# IS a usable oracle here since task #139. Until then it was not — measured while
-        // writing this probe: the C# backend dropped a `MyBase.Method(args)` call to a
-        // non-constructor method ENTIRELY (Derived's method body came out empty), for ANY
-        // parameter type, not only Object. #139 fixed that: C# now writes `base.Show(5);` and
-        // prints vbc's `5` (asserted, with JavaScript's, by MyBaseMethodCallStatementExecutionTests
-        // row `p2_object`). C++ refuses the program (`'Object' has no C++ mapping`). This test
-        // stays an MSIL-only pin on #213.
+        // vbc prints `5`. C# prints it too (MyBaseMethodCallStatementExecutionTests row `p2_object`, with JavaScript's);
+        // C++ refuses the program (`'Object' has no C++ mapping`, the parameter itself).
         //
-        // MSIL does NOT drop the call — it emits one, but names the wrong signature:
-        // `call instance void 'Base'::'Show'(int32)` where `Show` is declared `(object 'o')`,
-        // because the boxing coercion this fix adds does not reach a MyBase method-call's
-        // arguments (a call site distinct from the ordinary user-procedure/method/constructor/
-        // MyBase.New sites #177's own contract lists). No method with that int32 signature
-        // exists, so the CLR throws MissingMethodException at run time.
+        // The MSIL call site names the method from its DECLARATION (`Show(object)`), where it used to name it from
+        // the ARGUMENT (`Show(int32)`) — a method that does not exist, so the CLR threw MissingMethodException (#213).
         var run = Run(MyBaseIntoObjectParameter);
-        Assert.That(run.Outcome, Is.EqualTo(MsilOutcome.RunFailed),
-            "task #213 (pre-existing, unrelated to #177's own contract): MyBase.Show(5) into an "
-            + "Object parameter must still throw at run time on MSIL. A different outcome "
-            + "(including Ran) means #213 moved — update this pin, do not just delete it.\n"
-            + run.Report);
-        Assert.That(run.Output, Does.Contain("MissingMethodException"),
-            "the specific exception this shape throws today; a different exception is also a "
-            + "sign #213 moved.\n" + run.Report);
+        Assert.That(run.Outcome, Is.EqualTo(MsilOutcome.Ran), run.Report);
+        Assert.That(run.Output.Replace("\r\n", "\n").Trim(), Is.EqualTo("5"), run.Report);
     }
 
     // #212 — CInt of a boxed True prints 1 on C# and MSIL where VB prints -1 (True widens to

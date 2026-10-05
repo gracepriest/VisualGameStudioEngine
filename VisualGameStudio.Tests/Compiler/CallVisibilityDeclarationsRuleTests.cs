@@ -1,7 +1,7 @@
 using System;
-using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Text.RegularExpressions;
 using NUnit.Framework;
 using BasicLang.Compiler;
 using BasicLang.Compiler.CodeGen.MSIL;
@@ -159,6 +159,180 @@ internal static class CallVisibilityShapes
 
     internal const string Expected13_3 = "seed\nseed\n13,3";
     internal const string ExpectedQ3n = "seed\nseed\n26,6";
+    internal const string ExpectedQ3b = "seed\nseed\n26,6";
+    internal const string ExpectedQ3d = "seed\nseed\n26,6\n46,6\n66,6";
+    internal const string ExpectedQ3e = "seed\nseed\n26,306,6,6";
+    internal const string ExpectedQ3h = "seed\nseed\n6,6,10";
+    internal const string ExpectedQ3i = "seed\nseed\n26,6,99,-2";
+
+    /// <summary>#143 — Q3n with the field <c>Shared</c>: the value renamed <c>K</c> is written <c>Box.K = …</c> and must be read back <c>Box.K</c>, not a bare <c>K</c>.</summary>
+    internal const string Q3b = """
+        Function Seed(v As Integer) As Integer
+            Console.WriteLine("seed")
+            Return v
+        End Function
+
+        Class Box
+            Public Shared K As Integer
+
+            Shared Sub Inc()
+                K = K + 10
+            End Sub
+
+            Sub Work(p As Integer, q As Integer)
+                Dim l As New List(Of Integer)()
+                l.Add(0)
+                K = p + q
+                Dim a As Integer = (p + q) * 2
+                Inc()
+                l(0) = K * 2
+                Console.WriteLine(CStr(l(0)) & "," & CStr(a))
+            End Sub
+        End Class
+
+        Sub Main()
+            Dim b As New Box()
+            b.Work(Seed(1), Seed(2))
+        End Sub
+        """;
+
+    /// <summary>#143 — Q3n with the field-named value read inside a loop: the second and third iterations re-enter <c>Inc()</c>, so the read-back runs on every pass, not once.</summary>
+    internal const string Q3d = """
+        Function Seed(v As Integer) As Integer
+            Console.WriteLine("seed")
+            Return v
+        End Function
+
+        Class Box
+            Public K As Integer
+
+            Sub Inc()
+                K = K + 10
+            End Sub
+
+            Sub Work(p As Integer, q As Integer)
+                Dim l As New List(Of Integer)()
+                l.Add(0)
+                K = p + q
+                Dim a As Integer = (p + q) * 2
+                For i As Integer = 1 To 3
+                    Inc()
+                    l(0) = K * 2
+                    Console.WriteLine(CStr(l(0)) & "," & CStr(a))
+                Next
+            End Sub
+        End Class
+
+        Sub Main()
+            Dim b As New Box()
+            b.Work(Seed(1), Seed(2))
+        End Sub
+        """;
+
+    /// <summary>#143 — two fields (<c>K</c> and <c>J</c>) each renamed after, so each read-back needs its OWN member; a read that picked one name for both would swap them.</summary>
+    internal const string Q3e = """
+        Function Seed(v As Integer) As Integer
+            Console.WriteLine("seed")
+            Return v
+        End Function
+
+        Class Box
+            Public K As Integer
+            Public J As Integer
+
+            Sub Inc()
+                K = K + 10
+                J = J + 100
+            End Sub
+
+            Sub Work(p As Integer, q As Integer)
+                Dim l As New List(Of Integer)()
+                l.Add(0)
+                l.Add(0)
+                K = p + q
+                J = p * q
+                Dim a As Integer = (p + q) * 2
+                Dim c As Integer = (p * q) * 3
+                Inc()
+                l(0) = K * 2
+                l(1) = J * 3
+                Console.WriteLine(CStr(l(0)) & "," & CStr(l(1)) & "," & CStr(a) & "," & CStr(c))
+            End Sub
+        End Class
+
+        Sub Main()
+            Dim b As New Box()
+            b.Work(Seed(1), Seed(2))
+        End Sub
+        """;
+
+    /// <summary>#143 — the control that must NOT change: a LOCAL <c>K</c> shadows the field <c>K</c>, so the renamed value is the local and its read stays bare. A read-back that ignored the shadowing prints the field instead.</summary>
+    internal const string Q3h = """
+        Function Seed(v As Integer) As Integer
+            Console.WriteLine("seed")
+            Return v
+        End Function
+
+        Class Box
+            Public K As Integer
+
+            Sub Inc()
+                K = K + 10
+            End Sub
+
+            Sub Work(p As Integer, q As Integer)
+                Dim K As Integer
+                K = p + q
+                Dim a As Integer = (p + q) * 2
+                Inc()
+                Console.WriteLine(CStr(K * 2) & "," & CStr(a) & "," & CStr(Me.K))
+            End Sub
+        End Class
+
+        Sub Main()
+            Dim b As New Box()
+            b.Work(Seed(1), Seed(2))
+        End Sub
+        """;
+
+    /// <summary>#143 — the fields are declared on a BASE class (one instance, one <c>Shared</c>) and written from the derived one: the member test must see inherited members.</summary>
+    internal const string Q3i = """
+        Function Seed(v As Integer) As Integer
+            Console.WriteLine("seed")
+            Return v
+        End Function
+
+        Class BaseBox
+            Public K As Integer
+            Public Shared S As Integer
+        End Class
+
+        Class Box
+            Inherits BaseBox
+
+            Sub Inc()
+                K = K + 10
+                S = S + 100
+            End Sub
+
+            Sub Work(p As Integer, q As Integer)
+                Dim l As New List(Of Integer)()
+                l.Add(0)
+                K = p + q
+                S = p - q
+                Dim a As Integer = (p + q) * 2
+                Dim c As Integer = (p - q) * 2
+                Inc()
+                l(0) = K * 2
+                Console.WriteLine(CStr(l(0)) & "," & CStr(a) & "," & CStr(S) & "," & CStr(c))
+            End Sub
+        End Class
+
+        Sub Main()
+            Dim b As New Box()
+            b.Work(Seed(1), Seed(2))
+        End Sub
+        """;
 }
 
 /// <summary>
@@ -238,10 +412,15 @@ public class CallVisibilityQ3ExecutionTests
 }
 
 /// <summary>
-/// Q3n — the NAMED-OPERAND arm of <c>ReadsCallVisible</c>. C#, C++ and MSIL must print
-/// <c>26,6</c>; JavaScript is a KNOWN, SEPARATE gap (ADR-0006 D1's Obligations list the
-/// <c>Me.K</c>/JavaScript <c>ReferenceError</c> as one of three follow-up briefs D3 does not
-/// cover) and is pinned as a crash, not silently accepted.
+/// Q3n — the NAMED-OPERAND arm of <c>ReadsCallVisible</c>. C#, C++, MSIL and JavaScript must all
+/// print <c>26,6</c>.
+///
+/// <para>JavaScript was a <c>ReferenceError: K is not defined</c> here until #143. The cause was
+/// not the kill vocabulary: <c>K = p + q</c> makes an <c>IRBinaryOp</c> renamed after the field,
+/// the backend WROTE it as <c>this.K = …</c> and READ it back as a bare <c>K</c>, and once CSE
+/// forwarded that value into <c>Dim a = (p + q) * 2</c> the bare read was emitted. The rows below
+/// the Q3n leg are the other shapes that reach the same read-back (a <c>Shared</c> field, a loop,
+/// two fields, an inherited field) and the one that must not (a local shadowing the field).</para>
 /// </summary>
 [TestFixture]
 [Category("Integration")]
@@ -249,7 +428,7 @@ public class CallVisibilityQ3ExecutionTests
 public class CallVisibilityQ3nExecutionTests
 {
     /// <summary>
-    /// ⛔ JavaScript EXCLUDED — see <see cref="Q3n_JavaScript_KnownGap_ReferenceErrorOnMeK"/>.
+    /// JavaScript has its own leg — see <see cref="Q3n_JavaScript_PrintsVbcsAnswer_InEveryEntryPoint"/>.
     /// MEASURED, standard pipeline, all three entry points (CLI, CLI <c>--optimize</c>, Release
     /// <c>.blproj</c>): C#/C++/MSIL all print <c>26,6</c> — the implementer's evidence
     /// (<c>scratchpad/adr6/probes/matrix-final.txt</c>) plus an independent re-measurement against
@@ -270,75 +449,76 @@ public class CallVisibilityQ3nExecutionTests
         });
 
     /// <summary>
-    /// ⛔ KNOWN, SEPARATE GAP — ADR-0006 D1's Obligations name it explicitly: "JavaScript
-    /// <c>Me.K</c> ReferenceError ... three separate briefs, not this one." <c>Me.K</c> (an
-    /// <c>IRFieldStore</c>-shaped write the shared kill vocabulary does not yet name — D1's
-    /// concern, not D3's) lowers to a bare <c>K</c> reference the emitted JS never declares, so
-    /// Node throws before printing anything past the two "seed" lines. MEASURED against this exact
-    /// working tree: <c>ReferenceError: K is not defined</c>, on the CLI's default JS target.
-    /// Pinned as a CRASH — not "wrong value", not silently skipped — so a future fix to the gap
-    /// this cites changes this test loudly instead of leaving it accidentally green.
+    /// Q3n on JavaScript prints vbc's <c>26,6</c> — #143. This was the pin
+    /// <c>Q3n_JavaScript_KnownGap_ReferenceErrorOnMeK</c>, which asserted the crash
+    /// (<c>ReferenceError: K is not defined</c>); the defect was the backend reading a field-named
+    /// value back as a bare <c>K</c> after writing it as <c>this.K</c>, not ADR-0006 D1's
+    /// <c>Me.K</c> gap that pin's name blamed. Run in-process through the STANDARD passes (the IR
+    /// that ships; <c>JavaScriptExecutionTests.RunJs</c> runs no optimizer and never reached it)
+    /// and through every entry point: the real CLI, the CLI with <c>--optimize</c>, and
+    /// <c>CompileProjectFiles</c>.
     /// </summary>
     [Test]
-    public void Q3n_JavaScript_KnownGap_ReferenceErrorOnMeK()
+    public void Q3n_JavaScript_PrintsVbcsAnswer_InEveryEntryPoint()
     {
-        var js = JsTestSupport.CompileOptimized(CallVisibilityShapes.Q3n);
-        var (exitCode, _, stderr) = RunNodeAllowingFailure(js);
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(exitCode, Is.Not.Zero,
-                "Q3n was expected to CRASH on JavaScript (ADR-0006 D1's Me.K gap). If this now "
-                + "exits 0, the gap may be closed — re-measure and update CallVisibilityShapes."
-                + "ExpectedQ3n's JS leg, or delete this pin, rather than widening it.");
-            Assert.That(stderr, Does.Contain("ReferenceError: K is not defined"),
-                "expected the specific, MEASURED failure mode — a different error means the gap "
-                + "moved, not that this pin is still describing it correctly");
-        });
+        TempExec.RequireTool(Bk.JavaScript);   // an Ignore inside an Assert.Multiple is a failure
+        Assert.That(FourBackends.Norm(JavaScriptOptimizedExecutionTests.RunOptimized(CallVisibilityShapes.Q3n)),
+            Is.EqualTo(CallVisibilityShapes.ExpectedQ3n), "in process, standard passes");
+        TempExec.AssertMatchesInEveryEntryPoint(Bk.JavaScript, CallVisibilityShapes.Q3n,
+            CallVisibilityShapes.ExpectedQ3n, "Q3n");
     }
 
     /// <summary>
-    /// Runs already-generated JS under Node and returns (exit code, stdout, stderr) instead of
-    /// hard-asserting success — <c>JavaScriptExecutionTests.RunNodeScript</c> asserts exit code
-    /// ZERO unconditionally, which is exactly wrong for pinning a KNOWN crash. Otherwise mirrors
-    /// its process handling verbatim (async reads before <c>WaitForExit</c>, then a 30s kill) for
-    /// the same wedged-Node reason documented there.
+    /// #143 — the other shapes that read a field-named value back, each against vbc's output
+    /// (<c>probes/m/*.exp</c>, measured with vbc) through the CLI, the CLI with <c>--optimize</c>
+    /// and <c>CompileProjectFiles</c>: a <c>Shared</c> field (<c>Box.K</c>, not <c>this.K</c>), a
+    /// loop, two fields, fields inherited from a base class, and a LOCAL named like the field,
+    /// whose read must stay bare — the row that fails if the read-back ignores shadowing.
     /// </summary>
-    private static (int ExitCode, string Stdout, string Stderr) RunNodeAllowingFailure(string js)
+    [TestCase(CallVisibilityShapes.Q3b, CallVisibilityShapes.ExpectedQ3b, "Q3b", TestName = "Q3b_SharedField")]
+    [TestCase(CallVisibilityShapes.Q3d, CallVisibilityShapes.ExpectedQ3d, "Q3d", TestName = "Q3d_ReadBackInALoop")]
+    [TestCase(CallVisibilityShapes.Q3e, CallVisibilityShapes.ExpectedQ3e, "Q3e", TestName = "Q3e_TwoFields")]
+    [TestCase(CallVisibilityShapes.Q3i, CallVisibilityShapes.ExpectedQ3i, "Q3i", TestName = "Q3i_InheritedFields")]
+    [TestCase(CallVisibilityShapes.Q3h, CallVisibilityShapes.ExpectedQ3h, "Q3h", TestName = "Q3h_LocalShadowsTheField")]
+    public void AFieldNamedValue_IsReadBackThroughTheField_OnJavaScript(string source, string expected, string label)
+        => TempExec.AssertMatchesInEveryEntryPoint(Bk.JavaScript, source, expected, label);
+}
+
+/// <summary>
+/// #143's read-back as TEXT — fast, no Node, no process, so it runs in the gate that gets used
+/// (the execution rows above are Integration). The value renamed after the field is read as
+/// <c>this.K</c> (instance) or <c>Box.K</c> (<c>Shared</c>): never a bare <c>K</c> — a ReferenceError,
+/// a class member body is not a scope that holds the field — and never the instance spelling on a
+/// Shared member. Compiled through the STANDARD passes, the IR that ships; the non-optimizing
+/// helper never forwards the value, so it cannot reach the read.
+/// </summary>
+[TestFixture]
+public class CallVisibilityQ3nJavaScriptTextTests
+{
+    // `K = 0;` / `static K = 0;` is the field's own declaration — the only place a bare K belongs.
+    private static readonly Regex BareK = new(@"(?<![\w$.])K(?![\w$])(?!\s*=\s*0;)");
+
+    [Test]
+    public void Q3n_InstanceField_IsReadBackAsThisK()
     {
-        var node = BasicLang.Runtime.NodeLocator.Find();
-        if (node == null)
-            Assert.Ignore("Node.js not found — the JS execution tier cannot run on this machine.");
-
-        var dir = Path.Combine(Path.GetTempPath(), "BasicLang_Q3nJsCrash_" + Path.GetRandomFileName());
-        Directory.CreateDirectory(dir);
-        try
+        var js = JsTestSupport.CompileOptimized(CallVisibilityShapes.Q3n);
+        Assert.Multiple(() =>
         {
-            var file = Path.Combine(dir, "program.mjs");
-            File.WriteAllText(file, js);
+            Assert.That(js, Does.Match(@"\ba = \(?this\.K\b"), "the value forwarded into `a` reads the field through `this`\n" + js);
+            Assert.That(BareK.Matches(js).Select(m => m.Value), Is.Empty, "a bare K in an expression\n" + js);
+        });
+    }
 
-            var psi = new ProcessStartInfo(node!)
-            {
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true
-            };
-            psi.ArgumentList.Add(file);
-
-            using var p = Process.Start(psi)!;
-            var stdoutTask = p.StandardOutput.ReadToEndAsync();
-            var stderrTask = p.StandardError.ReadToEndAsync();
-
-            if (!p.WaitForExit(30000))
-            {
-                try { p.Kill(entireProcessTree: true); } catch { /* best effort */ }
-                Assert.Fail($"node did not exit within 30s.\n--- generated JS ---\n{js}");
-            }
-
-            return (p.ExitCode, stdoutTask.GetAwaiter().GetResult().Trim(), stderrTask.GetAwaiter().GetResult());
-        }
-        finally { try { Directory.Delete(dir, true); } catch { /* best effort */ } }
+    [Test]
+    public void Q3b_SharedField_IsReadBackAsBoxK()
+    {
+        var js = JsTestSupport.CompileOptimized(CallVisibilityShapes.Q3b);
+        Assert.Multiple(() =>
+        {
+            Assert.That(js, Does.Match(@"\ba = \(?Box\.K\b"), "the value forwarded into `a` reads the Shared field through its class\n" + js);
+            Assert.That(js, Does.Not.Contain("this.K"), "a Shared field is not an instance member\n" + js);
+            Assert.That(BareK.Matches(js).Select(m => m.Value), Is.Empty, "a bare K in an expression\n" + js);
+        });
     }
 }
 
