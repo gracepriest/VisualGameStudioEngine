@@ -939,6 +939,29 @@ No decision changed, so no commit of its own; recorded here with Task 1.
   | ★ Edited raised per member (member callback = `Mark` + `RaiseEdited`) | KILLED: 20 tests incl. every Edited-once case and `AMultiEdit_IsOneUndoStep_…` (the real document view model) |
   | ★ pre-judge skipped (partial apply) | KILLED: `AValueOneMemberRefuses_…`, `TheRevisionRefreshInsideAMergedEdit_…` |
 
+### Task 4 — the real view (base `9fe0d153`)
+
+- No AXAML change (the mixed text-box switch rides on the existing `IsTextBox`/`IsNumericUpDown` bindings), so no
+  `dotnet clean`. Tests only: (a)–(j) in `FormPropertyGridMultiSelectRealViewTests.cs` (real clicks, Ctrl+click,
+  `PickInCombo`, the colour pop-up's Web tab, a REAL Ctrl+Z on the canvas, both sizes), the layout sweep
+  `FormDesignerLayoutRealViewTests.EveryMergedRowsEditor_OfAButtonAndALabel_…` (a {Button, Label} selection, every
+  composite expanded: TextBox 12, ComboBox 7, NumericUpDown 6, colour 2, Font `…` 1 per size, the mixed Width a text
+  box), and one VM test, `AStaleEmptyPushIntoAnUnMixedIntRow_WritesNothing`.
+- **Measured (j):** after Arrange "same width" under the focus, the dying text box was hidden and unfocused with its
+  text ALREADY repainted to `100` by the revision refresh (both sizes) — so its LostFocus pushes `100` (a no-op), never
+  the stale `""`. The real view cannot show the guard; the VM test pins it on a catalog Int (MaxLength), where a stale
+  `""` would be Judge's Reset on both members.
+- **Red before:** these are acceptance tests of Task 3's code (written after it, in the same session); their red is
+  the mutation table — the Task-3 ★ mutant turns (b) red at the real Ctrl+Z.
+- Green: the 12 new real-view/layout tests; RE-CHECK `FormPropertyGridRealViewTests` (all partials, incl. the editor
+  and Events real-view files), `FormPropertyGridMultiSelectTests`, `FormPropertyGridViewTests` (binding gates),
+  `FormDesignerLayoutRealViewTests.Every*` — **159/159**.
+- Mutations:
+  | Mutant | Result |
+  |---|---|
+  | ★ Task 3's Edited-per-member mutant | KILLED by (b): after one real Ctrl+Z the text still differs (539 vs 534 chars — one member's write remained) |
+  | ★ the "" guard keyed on today's mixedness | KILLED by `AStaleEmptyPushIntoAnUnMixedIntRow_WritesNothing`; (j) is EQUIVALENT for it (measured above) |
+
 ## 7. Tests to re-check (consolidated)
 
 | Test | Why | Task |

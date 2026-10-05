@@ -394,6 +394,39 @@ public partial class FormPropertyGridMultiSelectTests
         });
     }
 
+    /// <summary>
+    /// D-4 "keyed on the EDITOR, not on today's mixedness": an Int row's StringValue is pushed ONLY by the text box it gets
+    /// while mixed. When the members became equal under that box's focus, its LostFocus still pushes the stale "" — into
+    /// a row that is no longer mixed. On a catalog Int (MaxLength) that "" is Judge's RESET verdict, so a guard keyed on
+    /// today's mixedness would strip the attribute from every member. (Measured in the real view, test (j): Avalonia
+    /// repainted the dying box with the new value before its LostFocus, so this VM test is where the rule is pinned.)
+    /// </summary>
+    [Test]
+    public void AStaleEmptyPushIntoAnUnMixedIntRow_WritesNothing()
+    {
+        var doc = MultiDoc
+            .Replace("""<TextBox Id="txt" X="120" Y="56" Width="100" Height="23" TabIndex="3"/>""",
+                """<TextBox Id="txt" X="120" Y="56" Width="100" Height="23" TabIndex="3" MaxLength="10"/>""" +
+                """<TextBox Id="txt2" X="120" Y="96" Width="100" Height="23" TabIndex="4" MaxLength="10"/>""");
+        var (file, grid) = OpenDoc(doc, "txt", "txt2");
+        var edits = Edits(grid);
+        var maxLength = Row(grid, "MaxLength");
+        Assert.Multiple(() =>
+        {
+            Assert.That(maxLength.IsMixed, Is.False, "precondition: both 10");
+            Assert.That(maxLength.CanReset, Is.True, "precondition: a Reset would act");
+        });
+
+        maxLength.StringValue = ""; // the dying mixed text box's LostFocus
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(edits(), Is.Zero);
+            Assert.That(file.Model.FindById("txt")!.Properties.GetValueOrDefault("MaxLength"), Is.EqualTo("10"));
+            Assert.That(file.Model.FindById("txt2")!.Properties.GetValueOrDefault("MaxLength"), Is.EqualTo("10"));
+        });
+    }
+
     /// <summary>D-4 / M4: a mixed Bool or Enum combo shows nothing; a "" or null push from it writes nothing.</summary>
     [Test]
     public void AMixedComboPushOfEmptyOrNull_WritesNothing()
