@@ -1120,6 +1120,26 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             return null;
         }
 
+        /// <summary>
+        /// True when <c>receiver.member</c> is <c>Me.P</c> for a ReadOnly AUTO-property DECLARED
+        /// by the class being emitted — the front end's one writable shape of it (a constructor of
+        /// the declaring class). Its storage is the data member <see cref="GenerateProperty"/>
+        /// keeps, and inside the declaring class <c>this-&gt;P</c> names that class's own member
+        /// even when a derived class re-declares one.
+        /// </summary>
+        private bool IsReadOnlyAutoPropertyOfEmittingClass(IRValue receiver, string member)
+        {
+            if (_emittingClass == null || string.IsNullOrEmpty(member)
+                || receiver is not IRVariable { Name: var self }
+                || !(string.Equals(self, "Me", StringComparison.OrdinalIgnoreCase) || self == "this"))
+                return false;
+
+            var prop = (_emittingClass.Properties ?? new List<IRProperty>())
+                .FirstOrDefault(p => string.Equals(p?.Name, member, StringComparison.OrdinalIgnoreCase));
+            return prop != null && prop.IsReadOnly && !prop.IsStatic
+                   && prop.Getter == null && prop.Setter == null;
+        }
+
         /// <summary>The property <paramref name="member"/> reachable from class <paramref name="typeName"/>, walking bases.</summary>
         private (IRClass owner, IRProperty prop)? FindClassProperty(string typeName, string member)
         {
@@ -5899,7 +5919,13 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
 
             // The write half of AccessorPropertyOf: a property with a Set body has no member to
             // assign — call its setter.
-            if (AccessorPropertyOf(fieldStore.Object, fieldStore.FieldName) is { } setter)
+            //
+            // ⭐ #150: except an Overridable ReadOnly AUTO-property, which has no setter to call
+            // (GenerateProperty emits none) — "no member named 'set_P'". VB's one write to it, in
+            // a constructor of the declaring class, stores the backing field; here that is the
+            // data member every auto-property keeps, written by the member store below.
+            if (AccessorPropertyOf(fieldStore.Object, fieldStore.FieldName) is { } setter
+                && !IsReadOnlyAutoPropertyOfEmittingClass(fieldStore.Object, fieldStore.FieldName))
             {
                 WriteLine($"{setter.Accessor}set_{setter.Name}({value});");
                 return;
