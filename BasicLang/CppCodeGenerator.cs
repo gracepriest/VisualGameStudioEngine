@@ -6912,6 +6912,14 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 return mapped + "{}";
             }
 
+            // #186: a VALUE type's Nothing is its default (IRBuilder.NothingAs) — a Structure, an
+            // enum, a P1 native struct, and `T{}` for a type parameter, which is also nullptr / ""
+            // when T is a reference type, as above.
+            if (TypeInfo.NothingIsDefaultValue(type))
+            {
+                return mapped + "{}";
+            }
+
             return "nullptr";
         }
 
@@ -7118,6 +7126,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
 
         protected new string EscapeChar(char ch)
         {
+            if (ch == '\0') return "\\0";   // #186: Nothing into a Char is ChrW(0)
             if (ch == '\'') return "\\'";
             if (ch == '\\') return "\\\\";
             if (ch == '\n') return "\\n";

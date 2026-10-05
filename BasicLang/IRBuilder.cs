@@ -3826,9 +3826,13 @@ namespace BasicLang.Compiler.IR
         /// #184: a Case value as the Select compares it — a Char value in a String Select widens to
         /// String, as VB converts each Case expression to the subject's type. Before, the char
         /// reached the String comparison as it stood: CS0029 on C#, a C++ string/char compare that
-        /// does not build, and an InvalidProgramException on MSIL. Any other value is unchanged.
+        /// does not build, and an InvalidProgramException on MSIL. #186: a <c>Nothing</c> Case value
+        /// in a value-type Select (<c>Case Is &gt; Nothing</c>, a range bound) is that type's default
+        /// (<see cref="NothingAsValueType"/>); a bare <c>Case Nothing</c> is a pattern of its own,
+        /// lowered the same way in <see cref="ConvertPatternToIR"/>. Any other value is unchanged.
         /// </summary>
-        private IRValue CaseValueFor(IRValue value) => WidenCharToString(value, _selectSubjectType);
+        private IRValue CaseValueFor(IRValue value) =>
+            WidenCharToString(NothingAsValueType(value, _selectSubjectType), _selectSubjectType);
 
         /// <param name="bindings">Receives every pattern variable this pattern declares, each
         /// already pushed onto <see cref="_variableVersions"/> so its When guard (and, re-pushed
@@ -3873,6 +3877,16 @@ namespace BasicLang.Compiler.IR
                     break;
 
                 case NothingPatternNode nothingPattern:
+                    // #186: `Case Nothing` (no Is) is VB's `subject = Nothing`, so on a VALUE-type
+                    // subject it is `Case <the default>`, built as `Case 0` would be. Left as a null
+                    // test it was CS0037 on C#, did not build on C++ and never matched on
+                    // JavaScript. `Case Is Nothing` (identity) and a reference or Object subject
+                    // keep the Nothing test, including MSIL's late-bound one for Object (#177).
+                    if (!nothingPattern.WrittenWithIs && TypeInfo.NothingIsDefaultValue(_selectSubjectType))
+                    {
+                        result = new IRConstantPatternCase(NothingAs(_selectSubjectType), target);
+                        break;
+                    }
                     result = new IRNothingPatternCase(target) { WrittenWithIs = nothingPattern.WrittenWithIs };
                     break;
 
@@ -4716,16 +4730,17 @@ namespace BasicLang.Compiler.IR
             var actual = value?.Type;
 
             // #173: the Nothing literal is an Object-typed null constant (the analyzer types it
-            // Object and then admits it into any reference type), so it is re-typed in place to the
+            // Object and then admits it into any type), so it is re-typed in place to the
             // type it is stored into — the same in-place re-typing a numeric literal gets below.
             // A null is a null to C#, JavaScript and MSIL; the type is for a backend that holds a
             // reference type as a VALUE with no null state, which cannot spell it untyped: C++'s
             // `std::string s = nullptr` is undefined behaviour, and `BasicLang::Array<T> a =
             // nullptr` does not compile (see CppCodeGenerator.EmitConstant).
-            if (value is IRConstant { Value: null } && IsObjectTyped(actual)
+            // #186: into a VALUE type it is that type's default instead (NothingAs).
+            if (IsUntypedNothing(value)
                 && declared != null && declared.Kind != TypeKind.Void && !IsObjectTyped(declared))
             {
-                return new IRConstant(null, declared);
+                return NothingAs(declared);
             }
 
             // #184: Char → String, the one widening into a non-numeric type that needs a value
@@ -4804,6 +4819,67 @@ namespace BasicLang.Compiler.IR
             type != null && type.Kind != TypeKind.Array &&
             string.Equals(type.Name, "Object", StringComparison.OrdinalIgnoreCase);
 
+        /// <summary>The <c>Nothing</c> literal as lowering produces it: an Object-typed null constant
+        /// that no conversion site has typed yet.</summary>
+        private static bool IsUntypedNothing(IRValue value) =>
+            value is IRConstant { Value: null } && IsObjectTyped(value.Type);
+
+        /// <summary>
+        /// #186: <c>Nothing</c> converted to <paramref name="type"/>, VB's way. For a reference type
+        /// it is a null constant typed <paramref name="type"/> (#173). For a value type
+        /// (<see cref="TypeInfo.NothingIsDefaultValue"/>, the list the front end shares) it is that
+        /// type's DEFAULT VALUE: <c>Dim n As Integer = Nothing</c> is 0, where the front end used to
+        /// refuse it ("write 0") and vbc gives 0.
+        ///
+        /// <para>A primitive gets the zero LITERAL: false, ChrW(0), 0D, and for a number exactly
+        /// the constant a written <c>0</c> lowers to (<see cref="CoerceToDeclaredType"/> re-types it
+        /// to Long, Single or Double, and leaves it alone for the narrow types, as it does for a
+        /// literal). Every backend already emits that literal at every site, the optimizer folds it,
+        /// and a module-level or field initializer needs a constant anyway.</para>
+        ///
+        /// <para>Any other value type (a Structure, an Enum, a type parameter, a tuple, a P1 native
+        /// struct) has no literal. It stays a null constant typed with it, and a null IRConstant of a
+        /// value type MEANS that type's default. C# spells it <c>default(T)</c>, C++ <c>T{}</c>.
+        /// JavaScript and MSIL emit it as before, i.e. as their own default for an uninitialized
+        /// <c>Dim x As T</c>, which is a gap there for these types with or without Nothing:
+        /// JavaScript refuses a Structure (BL7005), and its uninitialized enum or <c>T</c> is
+        /// <c>null</c>; MSIL spells a Structure and an Enum as a class (#192) and has no generics.</para>
+        /// </summary>
+        private IRValue NothingAs(TypeInfo type)
+        {
+            if (!TypeInfo.NothingIsDefaultValue(type)) return new IRConstant(null, type);
+
+            switch (type.Name)
+            {
+                case "Boolean": return new IRConstant(false, type);
+                case "Char": return new IRConstant('\0', type);
+                case "Decimal": return new IRConstant(0m, type);
+            }
+
+            return type.IsNumeric()
+                ? CoerceToDeclaredType(new IRConstant(0, new TypeInfo("Integer", TypeKind.Primitive)), type)
+                : new IRConstant(null, type);
+        }
+
+        /// <summary>
+        /// #186: <paramref name="value"/> converted to the VALUE type <paramref name="type"/> when it
+        /// is the untyped <c>Nothing</c> (<see cref="NothingAs"/>), and unchanged otherwise —
+        /// against a reference type too, where these sites keep the untyped null every backend
+        /// already writes. For the sites that do not go through
+        /// <see cref="CoerceToDeclaredType"/>:
+        /// <list type="bullet">
+        /// <item>a comparison operand (<c>n = Nothing</c>, <c>Nothing &lt; d</c>), which compares
+        /// with the default as VB converts the Nothing. Before, <c>n = Nothing</c> was False for
+        /// n = 0 on C#, JavaScript and MSIL, and did not build on C++;</item>
+        /// <item>a Case value (<see cref="CaseValueFor"/>);</item>
+        /// <item>an Optional default (<see cref="BuildParameterDefault"/>);</item>
+        /// <item>a ByRef argument (<see cref="CoerceToParameterType"/>), which VB passes as a
+        /// temporary holding the default, as it passes <c>0</c>.</item>
+        /// </list>
+        /// </summary>
+        private IRValue NothingAsValueType(IRValue value, TypeInfo type) =>
+            IsUntypedNothing(value) && TypeInfo.NothingIsDefaultValue(type) ? NothingAs(type) : value;
+
         /// <summary>
         /// Coerces one ARGUMENT to the declared type of the parameter it fills.
         ///
@@ -4815,7 +4891,9 @@ namespace BasicLang.Compiler.IR
         /// <para>⚠ <b>ByRef is skipped.</b> A coerced argument is a NEW value, so a
         /// <c>ByRef</c> parameter would write back into a temporary and the caller's variable
         /// would never change — trading a build error for a silently dropped mutation. An index
-        /// past the parameter list (an omitted Optional) has no declared type to read at all.</para>
+        /// past the parameter list (an omitted Optional) has no declared type to read at all.
+        /// The one exception is a <c>Nothing</c> into a value type (#186), which has no variable
+        /// to write back to: it becomes the default, exactly as a written <c>0</c> is passed.</para>
         ///
         /// <para>⛔ There is deliberately NO ParamArray clause, though one was written here first.
         /// <c>ParamArray</c> does not parse in either spelling — <c>ParamArray xs() As Integer</c>
@@ -4853,7 +4931,7 @@ namespace BasicLang.Compiler.IR
             if (parameters == null || index < 0 || index >= parameters.Count) return value;
 
             var parameter = parameters[index];
-            if (parameter.IsByRef) return value;
+            if (parameter.IsByRef) return NothingAsValueType(value, parameter.Type);   // #186: S(Nothing) passes 0, as S(0) does
 
             return CoerceToDeclaredType(value, parameter.Type);
         }
@@ -5492,9 +5570,12 @@ namespace BasicLang.Compiler.IR
         {
             var value = BuildExpressionValue(param.DefaultValue);
             var paramType = _semanticAnalyzer.GetNodeType(param);
-            return value is IRConstant { Value: char ch } && TypeInfo.IsCharToStringWidening(value.Type, paramType)
-                ? new IRConstant(ch.ToString(), paramType)
-                : value;
+            if (value is IRConstant { Value: char ch } && TypeInfo.IsCharToStringWidening(value.Type, paramType))
+                return new IRConstant(ch.ToString(), paramType);
+
+            // #186: `Optional n As Integer = Nothing` defaults to 0, as VB gives. Only a value type:
+            // a reference-type default keeps the untyped null every backend already writes.
+            return NothingAsValueType(value, paramType);
         }
 
         /// <summary>
@@ -5748,6 +5829,10 @@ namespace BasicLang.Compiler.IR
                 // does not build, and an int16 compared with a string reference on MSIL.
                 left = WidenCharToString(left, right?.Type);
                 right = WidenCharToString(right, left?.Type);
+
+                // #186: `n = Nothing` compares n with its type's default, as VB converts the Nothing.
+                left = NothingAsValueType(left, right?.Type);
+                right = NothingAsValueType(right, left?.Type);
 
                 var cmpKind = MapComparisonOperator(node.Operator);
                 result = new IRCompare(tempName, cmpKind, left, right, resultType);

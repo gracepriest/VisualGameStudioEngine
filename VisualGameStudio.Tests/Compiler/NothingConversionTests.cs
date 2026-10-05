@@ -2,6 +2,7 @@ using BasicLang.Compiler;                  // Lexer, Parser
 using BasicLang.Compiler.AST;              // the node types
 using BasicLang.Compiler.SemanticAnalysis; // SemanticAnalyzer, TypeInfo, ErrorSeverity
 using BasicLang.Compiler.IR;               // IRBuilder etc.
+using BasicLang.Compiler.CodeGen;          // ForeignFeatureException
 using NUnit.Framework;
 
 namespace VisualGameStudio.Tests.Compiler;
@@ -23,12 +24,20 @@ namespace VisualGameStudio.Tests.Compiler;
 /// <see cref="TypedArrayLiteralTests.TypedLiteral_Nothing"/> and its sibling rows; the last test
 /// below re-pins the ONE-answer invariant between that site and this fixture's).</para>
 ///
-/// <para>It is built on <c>NothingAdviceFor</c>: null for a reference (or unresolvable .NET)
-/// target, which admits <c>Nothing</c>; a value-type-specific message otherwise. #173 added four
-/// new arms — the P1 native structs (DateTime/TimeSpan/Guid, NativeOwned reference-typed structs
-/// StringBuilder excepted), a type parameter, a tuple, and <c>Union</c> — each measured wrong
-/// once admitted (CS0037 on C#, a clang error on C++, a silent <c>null</c> on JavaScript for the
-/// P1 structs; CS0403 for a type parameter).</para>
+/// <para>⭐ #186 (the owner's decision, "fix #186") widened the rule to VB's: <c>Nothing</c> converts to
+/// EVERY type. A reference type gets a null reference and a VALUE type gets its default
+/// (<c>Dim n As Integer = Nothing</c> is 0, a Boolean False, a Char <c>ChrW(0)</c>, a Structure every field
+/// at its default, a type parameter <c>default(T)</c>). <c>JudgeNothingConversion</c> admits it at all nine
+/// sites, and the front end's per-kind advice (<c>NothingAdviceFor</c>, "write 0") is gone. The list of value
+/// types is <c>TypeInfo.NothingIsDefaultValue</c>, shared with the IR and two backends. What stays refused is
+/// IDENTITY on a value type (<c>n Is Nothing</c>, <c>Case Is Nothing</c>: BC30020, IsIsNotOperatorTests).
+/// Section 2 below is the moved pin of the old refusal: each row now says what the value type's Nothing LOWERS
+/// to. The RUN is <see cref="NothingIntoValueTypeExecutionTests"/>.</para>
+///
+/// <para>The reference-type sections are #173's, unchanged: the P1 native structs (DateTime/TimeSpan/Guid,
+/// NativeOwned reference-typed StringBuilder excepted), a type parameter, a tuple and <c>Union</c> were each
+/// measured wrong once admitted before #186 (CS0037 on C#, a clang error on C++, a silent <c>null</c> on
+/// JavaScript for the P1 structs; CS0403 for a type parameter) — #186 gives them their default instead.</para>
 /// </summary>
 [TestFixture]
 public class NothingConversionTests
@@ -222,82 +231,139 @@ public class NothingConversionTests
     }
 
     // ============================================================================================
-    // 2. Value types stay refused, with the exact advice message (NothingAdviceFor's arms).
+    // 2. ⭐ #186: Nothing into a VALUE type is that type's default, the VB way (the moved pin of #173's
+    //    "Value types stay refused, with the exact advice message").
     // ============================================================================================
 
-    [TestCase("Sub Main()\nDim n As Integer = Nothing\nEnd Sub", "Nothing has no value of type 'Integer'; write 0")]
-    [TestCase("Sub Main()\nDim n As Double = Nothing\nEnd Sub", "Nothing has no value of type 'Double'; write 0")]
-    [TestCase("Sub Main()\nDim n As Decimal = Nothing\nEnd Sub", "Nothing has no value of type 'Decimal'; write 0")]
-    [TestCase("Sub Main()\nDim b As Boolean = Nothing\nEnd Sub", "Nothing has no value of type 'Boolean'; write False")]
-    [TestCase("Sub Main()\nDim c As Char = Nothing\nEnd Sub", "Nothing has no value of type 'Char'; write a character literal")]
-    [TestCase("Enum E\nA\nEnd Enum\nSub Main()\nDim e1 As E = Nothing\nEnd Sub",
-        "Nothing has no value of type 'E'; write a member of 'E'")]
-    [TestCase("Structure P\nPublic X As Integer\nEnd Structure\nSub Main()\nDim p As P = Nothing\nEnd Sub",
-        "Nothing has no value of type 'P'; write New P()")]
-    [TestCase("Sub Main()\nDim d As DateTime = Nothing\nEnd Sub",
-        "Nothing has no value of type 'DateTime'; 'DateTime' is a value type; write a DateTime value")]
-    [TestCase("Sub Main()\nDim t As TimeSpan = Nothing\nEnd Sub",
-        "Nothing has no value of type 'TimeSpan'; 'TimeSpan' is a value type; write a TimeSpan value")]
-    [TestCase("Sub Main()\nDim g As Guid = Nothing\nEnd Sub",
-        "Nothing has no value of type 'Guid'; 'Guid' is a value type; write a Guid value")]
-    public void ValueType_StaysRefused_WithExactAdvice(string body, string expectedMessage)
+    /// <summary>What a lowered constant is, as text a [TestCase] can carry: null, a bool, the NUL character, or a number.</summary>
+    private static string Describe(object? value) => value switch
     {
-        var (ok, errors) = Analyze(body);
-        Assert.That(ok, Is.False, "expected a refusal");
-        Assert.That(errors, Has.Some.Contains(expectedMessage));
+        null => "null",
+        bool b => b ? "True" : "False",
+        char c => c == '\0' ? "NUL" : c.ToString(),
+        IFormattable f => f.ToString(null, System.Globalization.CultureInfo.InvariantCulture),
+        _ => value.ToString() ?? "",
+    };
+
+    /// <summary>The constant a <c>Nothing</c> was lowered to where it was stored into <paramref name="target"/>: the ONE assignment to that local.</summary>
+    private static IRConstant StoredConstant(string body, string target, string prelude = "")
+    {
+        var module = BuildIr(body, prelude);   // BuildIr asserts the front end ADMITTED the program
+        var main = module.Functions.Single(f => f.Name == "Main");
+        var assignment = main.Blocks.SelectMany(b => b.Instructions).OfType<IRAssignment>().Single(a => a.Target.Name == target);
+        Assert.That(assignment.Value, Is.TypeOf<IRConstant>(), "a Nothing converted to a value type is still a constant");
+        return (IRConstant)assignment.Value;
     }
 
     /// <summary>
-    /// A type parameter may be instantiated with a value type (VB gives <c>default(T)</c>, the
-    /// value-type default #186 owns); #173's new arm. <c>Pick(Of T)()</c> reaches the analyzer's
-    /// Dim-site refusal INSIDE the generic function body, before any instantiation happens.
+    /// Every value type the old refusal named is ADMITTED, and lowers to its default: a primitive to the zero LITERAL (exactly the constant a written
+    /// <c>0</c> / <c>False</c> lowers to, so a field or module initializer stays a constant), any other value type to a null constant TYPED with it (which
+    /// now means "default of T": C# <c>default(T)</c>, C++ <c>T{}</c>). The last column is where JavaScript still refuses the TYPE, with or without Nothing:
+    /// Decimal BL7007, Char BL7004, Structure BL7005 — a capability decision of that backend, not a Nothing rule. (The other JavaScript, C++ and MSIL limits of
+    /// an Enum, DateTime, TimeSpan or Guid are in the fixture header of <see cref="NothingIntoValueTypeExecutionTests"/>, with no test: asserting one pins a defect.)
     /// </summary>
-    [Test]
-    public void TypeParameter_StaysRefused_WithExactAdvice()
+    [TestCase("Sub Main()\nDim n As Integer = Nothing\nEnd Sub", "n", "Integer", "0", "")]
+    [TestCase("Sub Main()\nDim n As Double = Nothing\nEnd Sub", "n", "Double", "0", "")]
+    [TestCase("Sub Main()\nDim n As Decimal = Nothing\nEnd Sub", "n", "Decimal", "0", "BL7007")]
+    [TestCase("Sub Main()\nDim b As Boolean = Nothing\nEnd Sub", "b", "Boolean", "False", "")]
+    [TestCase("Sub Main()\nDim c As Char = Nothing\nEnd Sub", "c", "Char", "NUL", "BL7004")]
+    [TestCase("Enum E\nA\nEnd Enum\nSub Main()\nDim e1 As E = Nothing\nEnd Sub", "e1", "E", "null", "")]
+    [TestCase("Structure P\nPublic X As Integer\nEnd Structure\nSub Main()\nDim p As P = Nothing\nEnd Sub", "p", "P", "null", "BL7005")]
+    [TestCase("Sub Main()\nDim d As DateTime = Nothing\nEnd Sub", "d", "DateTime", "null", "")]
+    [TestCase("Sub Main()\nDim t As TimeSpan = Nothing\nEnd Sub", "t", "TimeSpan", "null", "")]
+    [TestCase("Sub Main()\nDim g As Guid = Nothing\nEnd Sub", "g", "Guid", "null", "")]
+    public void ValueType_AdmitsNothing_AsItsDefault(string body, string target, string typeName, string expectedDefault, string javaScriptRefusal)
     {
-        var (ok, errors) = Analyze(
-            "Function Pick(Of T)() As T\nDim x As T = Nothing\nReturn x\nEnd Function\nSub Main()\nEnd Sub");
-        Assert.That(ok, Is.False, "expected a refusal");
-        Assert.That(errors, Has.Some.Contains("Nothing has no value of type 'T'; 'T' is a type parameter and may be a value type"));
+        var (ok, errors) = Analyze(body);
+        Assert.That(ok, Is.True, "Nothing into a value type is its default, as in VB: " + string.Join("; ", errors));
+
+        var constant = StoredConstant(body, target);
+        Assert.Multiple(() =>
+        {
+            Assert.That(constant.Type?.Name, Is.EqualTo(typeName), "the constant is typed with the declared type, not left Object");
+            Assert.That(Describe(constant.Value), Is.EqualTo(expectedDefault), $"{typeName}'s default");
+        });
+
+        if (javaScriptRefusal.Length > 0)
+        {
+            var refusal = Assert.Throws<ForeignFeatureException>(() => JsTestSupport.Compile(body));
+            Assert.That(refusal!.Message, Does.StartWith(javaScriptRefusal), $"JavaScript refuses {typeName} by name, with or without a Nothing");
+        }
     }
 
-    /// <summary>A tuple is a value type the Structure arm never named; #173's new arm.</summary>
+    /// <summary>
+    /// A type parameter may be instantiated with a value type, and <c>default(T)</c> is right for a reference one too, so it is ADMITTED and lowers to a null
+    /// constant typed <c>T</c> (C# spells it <c>default(T)</c>; a bare <c>null</c> was CS0403). <c>Pick(Of T)()</c> reaches the analyzer's Dim site INSIDE the
+    /// generic function body, before any instantiation. Backend limit, pre-existing and with a Nothing-free control that fails alike: C# only (C++ and MSIL do
+    /// not build a generic function; on JavaScript an uninitialized T is null).
+    /// </summary>
     [Test]
-    public void Tuple_StaysRefused_WithExactAdvice()
+    public void TypeParameter_AdmitsNothing_AsDefaultOfT()
+    {
+        const string source = "Function Pick(Of T)() As T\nDim x As T = Nothing\nReturn x\nEnd Function\nSub Main()\nEnd Sub";
+        var (ok, errors) = Analyze(source);
+        Assert.That(ok, Is.True, string.Join("; ", errors));
+
+        var module = BuildIr(source);
+        var pick = module.Functions.Single(f => f.Name == "Pick");
+        var store = pick.Blocks.SelectMany(b => b.Instructions).OfType<IRAssignment>().Single(a => a.Target.Name == "x");
+        Assert.That(store.Value, Is.TypeOf<IRConstant>());
+        Assert.Multiple(() =>
+        {
+            Assert.That(((IRConstant)store.Value).Value, Is.Null, "a typed null constant of a value type means that type's default");
+            Assert.That(store.Value.Type?.Name, Is.EqualTo("T"));
+        });
+    }
+
+    /// <summary>
+    /// A tuple is a value type; admitted, and lowered to a null constant typed with the tuple. Backend limit, pre-existing: tuple runs on C# only, so the
+    /// Nothing-free control <c>Dim t As (Integer, String) = (0, "a")</c> fails alike elsewhere — what Nothing adds is no refusal of its own.
+    /// </summary>
+    [Test]
+    public void Tuple_AdmitsNothing_AsItsDefault()
     {
         var (ok, errors) = Analyze("Sub Main()\nDim t As (Integer, String) = Nothing\nEnd Sub");
-        Assert.That(ok, Is.False, "expected a refusal");
-        Assert.That(errors, Has.Some.Contains("Nothing has no value of type '(Integer, String)'; write a tuple literal"));
+        Assert.That(ok, Is.True, string.Join("; ", errors));
+        Assert.That(errors, Has.None.Contains("Nothing has no value"));
     }
 
     /// <summary>
-    /// A <c>Union</c> is a value type folded into the SAME arm as Structure/UserDefinedType
-    /// (<c>"write New {target.Name}()"</c>) — #173's new arm widens that TestCase, it does not add
-    /// a distinct message shape.
+    /// A <c>Union</c> is a value type that runs on NO backend, Nothing or not (a Nothing-free declaration fails the same way on every one). So the pin is that
+    /// the Nothing form adds NOTHING to the front end's verdict: its diagnostics are exactly those of <c>Dim u1 As U</c>.
     /// </summary>
     [Test]
-    public void Union_StaysRefused_WithExactAdvice()
+    public void Union_AdmitsNothing_ExactlyAsMuchAsADeclarationWithoutIt()
     {
-        var (ok, errors) = Analyze(
-            "Union U\nA As Integer\nB As Single\nEnd Union\nSub Main()\nDim u1 As U = Nothing\nEnd Sub");
-        Assert.That(ok, Is.False, "expected a refusal");
-        Assert.That(errors, Has.Some.Contains("Nothing has no value of type 'U'; write New U()"));
+        const string union = "Union U\nA As Integer\nB As Single\nEnd Union\n";
+        var (okNothing, errorsNothing) = Analyze(union + "Sub Main()\nDim u1 As U = Nothing\nEnd Sub");
+        var (okControl, errorsControl) = Analyze(union + "Sub Main()\nDim u1 As U\nEnd Sub");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(okNothing, Is.True, string.Join("; ", errorsNothing));
+            Assert.That(okControl, Is.True, string.Join("; ", errorsControl));
+            Assert.That(errorsNothing, Is.EqualTo(errorsControl), "Nothing into a Union adds no diagnostic of its own");
+        });
     }
 
     /// <summary>
-    /// The NativeOwned P1 structs, refused via the Dim site AND via Return / a user-call argument —
-    /// proving the advice is not special-cased to one site (mutant (b2): dropping the NativeOwned
-    /// arm would admit all three of these silently at every site alike).
+    /// The NativeOwned P1 structs, admitted via Return and a user-call argument as well as the Dim site — the rule is not special-cased to one site (the
+    /// refusal this replaces was proven the same way: dropping the NativeOwned arm of <c>TypeInfo.NothingIsDefaultValue</c> turns these two back into a
+    /// null reference that C# cannot build, CS0037). Backend limit, pre-existing: DateTime and TimeSpan run on C# and C++ only.
     /// </summary>
-    [TestCase("Function F() As DateTime\nReturn Nothing\nEnd Function\nSub Main()\nEnd Sub",
-        "Nothing has no value of type 'DateTime'; 'DateTime' is a value type; write a DateTime value")]
-    [TestCase("Sub Take(t As TimeSpan)\nEnd Sub\nSub Main()\nTake(Nothing)\nEnd Sub",
-        "Nothing has no value of type 'TimeSpan'; 'TimeSpan' is a value type; write a TimeSpan value")]
-    public void NativeOwnedStruct_StaysRefused_AtOtherSitesToo(string body, string expectedMessage)
+    [TestCase("Function F() As DateTime\nReturn Nothing\nEnd Function\nSub Main()\nEnd Sub", "DateTime")]
+    [TestCase("Sub Take(t As TimeSpan)\nEnd Sub\nSub Main()\nTake(Nothing)\nEnd Sub", "TimeSpan")]
+    public void NativeOwnedStruct_AdmitsNothing_AtOtherSitesToo(string body, string typeName)
     {
         var (ok, errors) = Analyze(body);
-        Assert.That(ok, Is.False, "expected a refusal");
-        Assert.That(errors, Has.Some.Contains(expectedMessage));
+        Assert.That(ok, Is.True, string.Join("; ", errors));
+        Assert.That(errors, Has.None.Contains("Nothing has no value"));
+
+        var module = BuildIr(body);
+        var constants = module.Functions.SelectMany(f => f.Blocks).SelectMany(b => b.Instructions)
+            .SelectMany(i => i switch { IRReturn r when r.Value != null => new[] { r.Value }, IRCall c => c.Arguments.ToArray(), _ => Array.Empty<IRValue>() })
+            .OfType<IRConstant>().Where(c => c.Value is null).ToList();
+        Assert.That(constants, Has.Some.Matches<IRConstant>(c => c.Type?.Name == typeName), $"a null constant typed {typeName}, not an untyped Object null");
     }
 
     /// <summary>
@@ -314,7 +380,7 @@ public class NothingConversionTests
     }
 
     // ============================================================================================
-    // 3. Integer? is admitted (the one value type VB itself admits Nothing into).
+    // 3. Integer? is admitted (a nullable holds Nothing itself; #186's default rule is for the types that cannot).
     // ============================================================================================
 
     [Test]
@@ -353,27 +419,34 @@ public class NothingConversionTests
     // ============================================================================================
 
     /// <summary>
-    /// <c>New String() {Nothing}</c> is admitted, and <c>New Integer() {Nothing}</c> is refused
-    /// with the SAME advice a plain <c>Dim n As Integer = Nothing</c> gets — because both go
-    /// through <c>JudgeNothingConversion</c> → <c>NothingAdviceFor</c>, one method, not two lists.
-    /// A mutation that forked the literal's rule from the Dim site's would pass
-    /// <see cref="TypedArrayLiteralTests.TypedLiteral_Nothing"/> alone but fail this cross-check.
+    /// <c>New String() {Nothing}</c> and <c>New Integer() {Nothing}</c> are BOTH admitted, and each lowers to the SAME constant a plain <c>Dim</c> of that
+    /// type gets — the String's null reference, the Integer's 0 — because the literal and the Dim site go through <c>JudgeNothingConversion</c> (the front end)
+    /// and <c>CoerceToDeclaredType</c> (the IR), one method each, not two lists. A mutation that forked the literal's rule from the Dim site's would pass
+    /// <see cref="TypedArrayLiteralTests.TypedLiteral_Nothing_IsAdmitted_IntoAReferenceAndAValueElement"/> alone but fail this cross-check.
     /// </summary>
     [Test]
-    public void TypedArrayLiteral_AndDimSite_AgreeOnNothing()
+    public void TypedArrayLiteral_AndDimSite_AgreeOnWhatNothingBecomes()
     {
-        var (okLiteralS, _) = Analyze("Sub Main()\nDim a() As String = New String() {\"a\", Nothing}\nEnd Sub");
-        var (okDimS, _) = Analyze("Sub Main()\nDim s As String = Nothing\nEnd Sub");
-        Assert.That(okLiteralS, Is.True, "New String() {Nothing} must be admitted");
-        Assert.That(okDimS, Is.True, "Dim s As String = Nothing must be admitted");
+        foreach (var (typeName, expected) in new[] { ("String", "null"), ("Integer", "0") })
+        {
+            var (okLiteral, errorsLiteral) = Analyze($"Sub Main()\nDim a() As {typeName} = New {typeName}() {{Nothing}}\nEnd Sub");
+            var (okDim, errorsDim) = Analyze($"Sub Main()\nDim n As {typeName} = Nothing\nEnd Sub");
+            Assert.That(okLiteral, Is.True, $"New {typeName}() {{Nothing}} must be admitted: " + string.Join("; ", errorsLiteral));
+            Assert.That(okDim, Is.True, $"Dim n As {typeName} = Nothing must be admitted: " + string.Join("; ", errorsDim));
 
-        var (okLiteralI, errorsLiteralI) = Analyze("Sub Main()\nDim a() As Integer = New Integer() {Nothing}\nEnd Sub");
-        var (okDimI, errorsDimI) = Analyze("Sub Main()\nDim n As Integer = Nothing\nEnd Sub");
-        Assert.That(okLiteralI, Is.False, "New Integer() {Nothing} must stay refused");
-        Assert.That(okDimI, Is.False, "Dim n As Integer = Nothing must stay refused");
-        const string advice = "Nothing has no value of type 'Integer'; write 0";
-        Assert.That(errorsLiteralI, Has.Some.Contains(advice), "the literal site's advice");
-        Assert.That(errorsDimI, Has.Some.Contains(advice), "the Dim site's advice — SAME text as the literal site's");
+            var dim = StoredConstant($"Sub Main()\nDim n As {typeName} = Nothing\nEnd Sub", "n");
+            var module = BuildIr($"Sub Main()\nDim a() As {typeName} = New {typeName}() {{Nothing}}\nEnd Sub");
+            var element = module.Functions.Single(f => f.Name == "Main").Blocks.SelectMany(b => b.Instructions).OfType<IRArrayStore>().Single().Value;
+
+            Assert.That(element, Is.TypeOf<IRConstant>(), $"{typeName}: the element is a constant");
+            var literal = (IRConstant)element;
+            Assert.Multiple(() =>
+            {
+                Assert.That(Describe(dim.Value), Is.EqualTo(expected), $"{typeName}: the Dim site");
+                Assert.That(Describe(literal.Value), Is.EqualTo(Describe(dim.Value)), $"{typeName}: the literal gives the SAME value as the Dim site");
+                Assert.That(literal.Type?.Name, Is.EqualTo(dim.Type?.Name), $"{typeName}: and the SAME type");
+            });
+        }
     }
 
     // ============================================================================================

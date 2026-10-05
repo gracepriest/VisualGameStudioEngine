@@ -169,7 +169,13 @@ namespace BasicLang.Compiler.IR
     }
     
     /// <summary>
-    /// Constant value
+    /// Constant value.
+    ///
+    /// <para>A null <see cref="Value"/> is VB's <c>Nothing</c> of the constant's type. For a
+    /// reference type that is a null reference. For a VALUE type
+    /// (<c>TypeInfo.NothingIsDefaultValue</c>: a Structure, an Enum, a type parameter…) it is the
+    /// type's DEFAULT value (#186, <c>IRBuilder.NothingAs</c>). A Nothing converted to a primitive
+    /// gets its zero literal instead.</para>
     /// </summary>
     public class IRConstant : IRValue
     {
