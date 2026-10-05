@@ -2324,6 +2324,10 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             var foreignLocalFirstWriteSeen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var entryBlock = function.EntryBlock;
 
+            // #201: the by-copy AddressOf nodes rendered through their target, and the method reads
+            // they make into non-values — before the temporaries, so a method read is never one.
+            CollectFallbackAddressOf(function);
+
             // Collect temporaries (values that aren't named destinations)
             _inlinedForeignCalls.Clear();
             foreach (var block in function.Blocks)
@@ -2367,7 +2371,8 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
 
                     if (instruction is IRValue value && !(value is IRConstant))
                     {
-                        if (!IsNamedDestination(value))
+                        if (!IsNamedDestination(value)
+                            && !(value is IRFieldAccess methodRead && _fallbackMethodReads.Contains(methodRead)))
                         {
                             _allTemporaries.Add(value);
                         }
@@ -2680,6 +2685,13 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                     WriteLine($"{cppType} {tempName} = {{}};");
                 }
             }
+
+            // #201: a by-copy AddressOf whose target the resolver names has a type to declare after
+            // all (see CppCodeGenerator.Closures.cs), so it is declared here with the rest and never
+            // at its assignment, where a goto past it would cross its initialization.
+            foreach (var temp in _allTemporaries)
+                if (temp is IRUnaryOp addressOf && _fallbackAddressOf.TryGetValue(addressOf, out var resolved))
+                    WriteLine($"{FallbackAddressOfType(addressOf, resolved)} {GetValueName(addressOf)} = {{}};");
 
             if (function.LocalVariables.Count > 0 || _allTemporaries.Count > 0)
                 WriteLine();
@@ -3342,6 +3354,13 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
 
         public override void Visit(IRUnaryOp unaryOp)
         {
+            // #201: a by-copy root's AddressOf of a target the resolver names (CppCodeGenerator.Closures.cs).
+            if (unaryOp.Operation == UnaryOpKind.AddressOf && _fallbackAddressOf.TryGetValue(unaryOp, out var resolved))
+            {
+                VisitFallbackAddressOf(unaryOp, resolved);
+                return;
+            }
+
             var operand = GetValueName(unaryOp.Operand);
             var op = MapUnaryOperator(unaryOp.Operation);
             var result = GetValueName(unaryOp);
@@ -5870,6 +5889,10 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // emitting a standalone `t = c.field;` here would assign an undeclared temp. A
             // discarded read is a side-effect-free no-op, so suppressing the statement is safe.
             if (fieldAccess.Type?.Kind == TypeKind.Foreign)
+                return;
+
+            // #201: the method "read" of a by-copy `AddressOf obj.M` is not a read (CollectFallbackAddressOf).
+            if (_fallbackMethodReads.Contains(fieldAccess))
                 return;
 
             // Result temps are pre-declared by DeclareLocalsAndTemporaries: assign, don't redeclare.

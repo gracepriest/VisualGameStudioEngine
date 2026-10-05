@@ -590,6 +590,8 @@ public class JsExecutionTierRosterTests
         "UserOperatorExecutionTests",
         // Task #196: a C++-only fixture. A C++ array is Nothing (unsized Dim, a field, a Function result) and an empty one is not, run through the CLI, --optimize and CompileProjectFiles with a C++ compiler - no Node.
         "CppArrayNothingExecutionTests",
+        // Task #201: a C++-only fixture. AddressOf on the by-copy FALLBACK path (an instance / Shared / bare method, a Return on both arms, a Select arm, an Iterator root) through the CLI, --optimize and CompileProjectFiles with a C++ compiler - no Node.
+        "CppAddressOfFallbackExecutionTests",
     };
 
     /// <summary>Counts NUnit cases: a [TestCase]-driven method contributes one per attribute.</summary>
