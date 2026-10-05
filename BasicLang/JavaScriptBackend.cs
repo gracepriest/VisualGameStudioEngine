@@ -276,8 +276,10 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             return false;
         }
 
+        /// <summary>A call <see cref="CallTarget"/> lowers to the rounding helper: CInt, and the
+        /// narrow integral conversions that round the same way (#181).</summary>
         private static bool IsCIntCall(IRCall call) =>
-            string.Equals(call.FunctionName, "CInt", StringComparison.OrdinalIgnoreCase);
+            call.FunctionName?.ToLowerInvariant() is "cint" or "cbyte" or "cshort" or "csbyte" or "cushort" or "cuint";
 
         private static bool IsRoundingCast(IRCast cast) =>
             cast.SourceType?.IsFloatingPoint() == true && cast.Type?.IsIntegral() == true;
@@ -2033,9 +2035,11 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 case "replace" when args.Count == 3:
                     result = $"{Recv()}.split({args[1]}).join({args[2]})"; return true;
 
-                case "chr" when args.Count == 1:
+                // A Char is a one-character string on this backend, so the same two forms serve
+                // the Char overloads AscW(ch) and ChrW(n) (#181).
+                case "chr" or "chrw" when args.Count == 1:
                     result = $"String.fromCharCode({args[0]})"; return true;
-                case "asc" when args.Count == 1:
+                case "asc" or "ascw" when args.Count == 1:
                     result = $"{Recv()}.charCodeAt(0)"; return true;
 
                 default:
@@ -2121,6 +2125,15 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 // 9; 2.5 -> 2, not 3). JavaScript has no built-in for it: Math.round is
                 // half-up-toward-+Infinity, so it answers -7 for -7.5. Hence the emitted helper.
                 case "CInt": return CIntHelperName;
+
+                // #181: the narrow integral conversions round exactly as CInt does. Unchecked,
+                // as CInt is here — no wrap to the target's width, no OverflowException.
+                // CULng deliberately absent, for CLng's reason: ULong is BL7003's too.
+                // ⚠ A program's own Function of the same name wins: before #181 these names were
+                // not builtins at all, so a user `Function CByte` was the only one there was.
+                case "CByte" or "CShort" or "CSByte" or "CUShort" or "CUInt"
+                    when !_userFunctionNames.Contains(functionName):
+                    return CIntHelperName;
 
                 // Identity under erasure — Integer/Single/Double are all one JS number.
                 // Number() is the identity rename rather than a no-op, so the call shape
@@ -3453,9 +3466,20 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             var source = call.Arguments[0].Type?.Name;
             var name = call.FunctionName;
             if (string.Equals(source, "Boolean", StringComparison.OrdinalIgnoreCase)
-                && (name is "CInt" or "CDbl" or "CSng"))
+                && (name is "CInt" or "CDbl" or "CSng" or "CShort" or "CSByte"))
             {
                 result = $"({rendered[0]} ? -1 : 0)";
+                return true;
+            }
+
+            // An UNSIGNED target reads True's all-bits-set at its own width (#181): VB's
+            // CByte(True) is 255.
+            var allBits = string.Equals(source, "Boolean", StringComparison.OrdinalIgnoreCase)
+                ? name switch { "CByte" => "255", "CUShort" => "65535", "CUInt" => "4294967295", _ => null }
+                : null;
+            if (allBits != null)
+            {
+                result = $"({rendered[0]} ? {allBits} : 0)";
                 return true;
             }
 

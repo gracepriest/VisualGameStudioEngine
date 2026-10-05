@@ -60,8 +60,10 @@ namespace BasicLang.Compiler.StdLib.CSharp
             ["Replace"] = new StdLibFunction { Name = "Replace", Category = StdLibCategory.String, ParameterTypes = new[] { "String", "String", "String" }, ReturnType = "String" },
             ["Split"] = new StdLibFunction { Name = "Split", Category = StdLibCategory.String, ParameterTypes = new[] { "String", "String" }, ReturnType = "String[]" },
             ["Join"] = new StdLibFunction { Name = "Join", Category = StdLibCategory.String, ParameterTypes = new[] { "String[]", "String" }, ReturnType = "String" },
-            ["Chr"] = new StdLibFunction { Name = "Chr", Category = StdLibCategory.String, ParameterTypes = new[] { "Integer" }, ReturnType = "String" },
+            ["Chr"] = new StdLibFunction { Name = "Chr", Category = StdLibCategory.String, ParameterTypes = new[] { "Integer" }, ReturnType = "Char" },
+            ["ChrW"] = new StdLibFunction { Name = "ChrW", Category = StdLibCategory.String, ParameterTypes = new[] { "Integer" }, ReturnType = "Char" },
             ["Asc"] = new StdLibFunction { Name = "Asc", Category = StdLibCategory.String, ParameterTypes = new[] { "String" }, ReturnType = "Integer" },
+            ["AscW"] = new StdLibFunction { Name = "AscW", Category = StdLibCategory.String, ParameterTypes = new[] { "String" }, ReturnType = "Integer" },
 
             // Math
             ["Abs"] = new StdLibFunction { Name = "Abs", Category = StdLibCategory.Math, ParameterTypes = new[] { "Double" }, ReturnType = "Double" },
@@ -91,6 +93,12 @@ namespace BasicLang.Compiler.StdLib.CSharp
             ["CSng"] = new StdLibFunction { Name = "CSng", Category = StdLibCategory.Conversion, ParameterTypes = new[] { "Object" }, ReturnType = "Single" },
             ["CStr"] = new StdLibFunction { Name = "CStr", Category = StdLibCategory.Conversion, ParameterTypes = new[] { "Object" }, ReturnType = "String" },
             ["CBool"] = new StdLibFunction { Name = "CBool", Category = StdLibCategory.Conversion, ParameterTypes = new[] { "Object" }, ReturnType = "Boolean" },
+            ["CByte"] = new StdLibFunction { Name = "CByte", Category = StdLibCategory.Conversion, ParameterTypes = new[] { "Object" }, ReturnType = "Byte" },
+            ["CShort"] = new StdLibFunction { Name = "CShort", Category = StdLibCategory.Conversion, ParameterTypes = new[] { "Object" }, ReturnType = "Short" },
+            ["CSByte"] = new StdLibFunction { Name = "CSByte", Category = StdLibCategory.Conversion, ParameterTypes = new[] { "Object" }, ReturnType = "SByte" },
+            ["CUShort"] = new StdLibFunction { Name = "CUShort", Category = StdLibCategory.Conversion, ParameterTypes = new[] { "Object" }, ReturnType = "UShort" },
+            ["CUInt"] = new StdLibFunction { Name = "CUInt", Category = StdLibCategory.Conversion, ParameterTypes = new[] { "Object" }, ReturnType = "UInteger" },
+            ["CULng"] = new StdLibFunction { Name = "CULng", Category = StdLibCategory.Conversion, ParameterTypes = new[] { "Object" }, ReturnType = "ULong" },
 
             // DateTime
             ["Now"] = new StdLibFunction { Name = "Now", Category = StdLibCategory.DateTime, ParameterTypes = Array.Empty<string>(), ReturnType = "DateTime" },
@@ -343,8 +351,8 @@ namespace BasicLang.Compiler.StdLib.CSharp
                 "replace" => EmitReplace(args[0], args[1], args[2]),
                 "split" => EmitSplit(args[0], args[1]),
                 "join" => EmitJoin(args[0], args[1]),
-                "chr" => EmitChr(args[0]),
-                "asc" => EmitAsc(args[0]),
+                "chr" or "chrw" => EmitChr(args[0]),
+                "asc" or "ascw" => EmitAsc(args[0]),
                 _ => null
             };
         }
@@ -377,7 +385,11 @@ namespace BasicLang.Compiler.StdLib.CSharp
         public string EmitReplace(string str, string find, string replaceWith) => $"{str}.Replace({find}, {replaceWith})";
         public string EmitSplit(string str, string delimiter) => $"{str}.Split({delimiter})";
         public string EmitJoin(string array, string delimiter) => $"string.Join({delimiter}, {array})";
-        public string EmitChr(string code) => $"((char){code}).ToString()";
+        /// <summary>A Char, as the front end types Chr/ChrW (#181) — it was a one-character String,
+        /// which only worked while the call was typed Object.</summary>
+        public string EmitChr(string code) => $"((char)({code}))";
+        /// <summary>The String form. A Char argument is cast directly instead — the C# backend's
+        /// <c>VbConversionText</c> answers it before this table is asked.</summary>
         public string EmitAsc(string str) => $"(int){str}[0]";
 
         #endregion
@@ -464,6 +476,12 @@ namespace BasicLang.Compiler.StdLib.CSharp
                 "cstr" => EmitCStr(args[0]),
                 "cbool" => EmitCBool(args[0]),
                 "cchar" => EmitCChar(args[0]),
+                "cbyte" => $"Convert.ToByte({args[0]})",
+                "cshort" => $"Convert.ToInt16({args[0]})",
+                "csbyte" => $"Convert.ToSByte({args[0]})",
+                "cushort" => $"Convert.ToUInt16({args[0]})",
+                "cuint" => $"Convert.ToUInt32({args[0]})",
+                "culng" => $"Convert.ToUInt64({args[0]})",
                 _ => null
             };
         }

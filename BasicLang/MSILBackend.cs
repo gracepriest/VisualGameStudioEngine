@@ -5824,21 +5824,13 @@ namespace BasicLang.Compiler.CodeGen.MSIL
         /// <summary>
         /// The IL spec an arm of <see cref="TryEmitStdLibCall"/> really left on the stack, for the
         /// arms where the IR's type for the call does not say. Null means "the IR type is right",
-        /// which is every arm but one. Set by the arm, consumed immediately by its caller.
+        /// which today is every arm. Set by the arm, consumed immediately by its caller.
         ///
-        /// <para>⛔ <c>Asc</c> and <c>Chr</c> are the two string intrinsics
-        /// <c>SemanticAnalyzer.RegisterStdLibFunctions</c> never registered, so the front end types
-        /// them <c>Object</c> and the destination slot is declared <c>object</c>. <c>Chr</c> is
-        /// unaffected — it yields a <c>string</c>, already a reference. <c>Asc</c> yields an
-        /// <c>int32</c>, and storing a raw integer into an object slot hands the runtime a number
-        /// as a reference: the same gap the .NET-static arm boxes across, and the same fix.</para>
-        ///
-        /// <para>⚠ Deliberately NOT fixed by registering the two names in the front end. That
-        /// table is read by all five backends, and re-typing a call that currently comes out
-        /// <c>Object</c> would change what C#, C++, JavaScript and LLVM emit for a shape that
-        /// works on three of them today. Bridging it in the one backend that spells IL types keeps
-        /// the blast radius here. Registering them is the better fix and belongs with whoever owns
-        /// the cross-backend stdlib table.</para>
+        /// <para>Its one user was <c>Asc</c>, while the front end typed that call <c>Object</c> and
+        /// the int32 it yields had to be boxed into an object slot. #181 registered <c>Asc</c>,
+        /// <c>AscW</c>, <c>Chr</c> and <c>ChrW</c> in <c>SemanticAnalyzer.RegisterStdLibFunctions</c>
+        /// (Integer and Char), so the IR type is right for them too; the bridge stays for the
+        /// next arm whose IR type cannot say.</para>
         /// </summary>
         private string _stdLibResultSpec;
 
@@ -5856,11 +5848,12 @@ namespace BasicLang.Compiler.CodeGen.MSIL
         };
 
         /// <summary>
-        /// ⛔ <c>Chr</c> and <c>Asc</c> are the two string intrinsics
-        /// <c>SemanticAnalyzer.RegisterStdLibFunctions</c> never registered, so — unlike Mid, Left,
+        /// ⛔ <c>Chr</c> and <c>Asc</c> take an <c>Object</c> parameter in
+        /// <c>SemanticAnalyzer.RegisterStdLibFunctions</c> (as CInt does), so — unlike Mid, Left,
         /// Right, UCase, LCase, Trim, Replace, InStr and Len — <b>the front end type-checks nothing
         /// about their arguments</b>. Every other arm can trust that arg 0 is a String because
-        /// semantic analysis already said so; these two cannot.
+        /// semantic analysis already said so; these two cannot. (Until #181 they were not
+        /// registered at all, and their RESULT typed Object too.)
         ///
         /// <para>Measured on the CLI, compiled, assembled and run, with the guards removed:</para>
         /// <list type="bullet">
@@ -5884,35 +5877,81 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             if (ChrArgumentSpecs.Contains(spec)) return;
 
             throw new ForeignFeatureException(
-                $"MSIL: 'Chr' needs a numeric argument; this one is '{spec}'. Chr is not registered "
-                + "in SemanticAnalyzer.RegisterStdLibFunctions, so the front end does not check its "
-                + "argument and nothing upstream rejects Chr(\"x\"). Emitting it anyway means "
-                + "conv.u2 narrowing a REFERENCE to a character: measured, Chr(\"x\") ran clean and "
-                + "printed a Cyrillic glyph, and Chr(Asc(\"A\")) — whose argument is boxed because "
-                + "Asc is typed Object — printed a CJK one. The C# backend refuses the same program "
-                + "(CS0030). Register Chr in the front end to fix this properly for all five "
-                + "backends.");
+                $"MSIL: 'Chr' needs a numeric argument; this one is '{spec}'. Chr takes an Object "
+                + "parameter in SemanticAnalyzer.RegisterStdLibFunctions, so the front end does not "
+                + "check its argument and nothing upstream rejects Chr(\"x\"). Emitting it anyway "
+                + "means conv.u2 narrowing a REFERENCE to a character: measured, Chr(\"x\") ran "
+                + "clean and printed a Cyrillic glyph. The C# backend refuses the same program "
+                + "(CS0030).");
         }
 
         /// <summary>
-        /// The companion guard for <c>Asc</c>. <c>string</c> is the intended argument; <c>object</c>
-        /// is allowed because it is how the IR types any unregistered intrinsic's result and the
-        /// <c>callvirt</c> dispatches correctly when the object really is a string — measured,
-        /// <c>Asc(Chr(66))</c> answers 66. A VALUE-typed argument can never be a string, so it is
-        /// refused rather than emitted as the NullReferenceException it would become.
+        /// The companion guard for <c>Asc</c>/<c>AscW</c>. <c>string</c> and <c>char</c> are the
+        /// intended arguments (a char is its own code, #181); <c>object</c> is allowed because it is
+        /// how the IR types any unregistered intrinsic's result and the <c>callvirt</c> dispatches
+        /// correctly when the object really is a string. Any other VALUE-typed argument can never be
+        /// a string, so it is refused rather than emitted as the NullReferenceException it would
+        /// become.
         /// </summary>
         private void RequireAscArgument(IRValue argument)
         {
             var spec = IlTypeSpec(argument?.Type);
-            if (spec == "string" || spec == "object") return;
+            if (spec == "string" || spec == "object" || spec == "char") return;
 
             throw new ForeignFeatureException(
-                $"MSIL: 'Asc' needs a String argument; this one is '{spec}'. Asc is not registered "
-                + "in SemanticAnalyzer.RegisterStdLibFunctions, so the front end does not check its "
-                + "argument and nothing upstream rejects Asc(5). Emitting it anyway calls "
-                + "String::get_Chars on a value type: measured, Asc(5) assembled and died with "
-                + "NullReferenceException. Register Asc in the front end to fix this properly for "
-                + "all five backends.");
+                $"MSIL: 'Asc' needs a String or Char argument; this one is '{spec}'. Asc takes an "
+                + "Object parameter in SemanticAnalyzer.RegisterStdLibFunctions, so the front end "
+                + "does not check its argument and nothing upstream rejects Asc(5). Emitting it "
+                + "anyway calls String::get_Chars on a value type: measured, Asc(5) assembled and "
+                + "died with NullReferenceException.");
+        }
+
+        /// <summary>The IL spec, Convert method and integral conv opcode of each narrow
+        /// conversion intrinsic (#181).</summary>
+        private static readonly Dictionary<string, (string Spec, string Convert, string Conv)> NarrowConversions =
+            new(StringComparer.Ordinal)
+            {
+                ["cbyte"] = ("uint8", "ToByte", "conv.u1"),
+                ["cshort"] = ("int16", "ToInt16", "conv.i2"),
+                ["csbyte"] = ("int8", "ToSByte", "conv.i1"),
+                ["cushort"] = ("uint16", "ToUInt16", "conv.u2"),
+                ["cuint"] = ("uint32", "ToUInt32", "conv.u4"),
+                ["culng"] = ("uint64", "ToUInt64", "conv.u8"),
+            };
+
+        /// <summary>
+        /// One narrow conversion intrinsic over <paramref name="argument"/>. An Object or Decimal
+        /// argument goes through the same helpers as <c>cint</c>'s; a String through
+        /// <c>Convert.ToX(string)</c> (a conv opcode on a string REFERENCE would narrow the
+        /// pointer); a Boolean is True = all bits set, as VB's CByte(True) is 255 — negated to
+        /// -1 and SIGN-extended for the 64-bit target, since conv.u8 would zero-extend it.
+        /// </summary>
+        private void EmitNarrowConversion(string arm, IRValue argument)
+        {
+            var (spec, convert, conv) = NarrowConversions[arm];
+            EmitLoadValue(argument);
+            if (EmitConvertFromObject(argument, convert, spec)) return;
+            if (EmitConvertFromDecimal(argument, spec)) return;
+
+            var source = IlTypeSpec(argument?.Type);
+            if (IsFloatingArgument(argument))
+            {
+                WriteLine("    conv.r8");
+                WriteLine($"    call {spec} [mscorlib]System.Convert::{convert}(float64)");
+            }
+            else if (source == "string")
+            {
+                WriteLine($"    call {spec} [mscorlib]System.Convert::{convert}(string)");
+            }
+            else if (source == "bool")
+            {
+                WriteLine("    neg");
+                WriteLine(spec == "uint64" ? "    conv.i8" : $"    {conv}");
+            }
+            else
+            {
+                WriteLine($"    {conv}");
+            }
         }
 
         private bool TryEmitStdLibCall(string funcName, List<IRValue> args, bool hasReturn)
@@ -6158,26 +6197,44 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                     _currentStack--;
                     return true;
 
-                // C#: ((char)code).ToString(). `Char::ToString(char)` is the static one-argument
-                // overload, so no box/callvirt pair is needed. `conv.u2` performs the (char) cast:
-                // without it the int32 on the stack does not match the char parameter.
+                // C#: (char)(code) — a Char, as the front end types Chr/ChrW (#181). `conv.u2`
+                // performs the (char) cast: without it a non-int32 argument (a Double, a Long) does
+                // not match the char the slot holds.
                 case "chr":
+                case "chrw":
+                    if (IsDeclaredModuleProcedure(funcName)) return false;
                     RequireChrArgument(args[0]);
                     EmitLoadValue(args[0]);
                     WriteLine("    conv.u2");
-                    WriteLine("    call string [mscorlib]System.Char::ToString(char)");
                     return true;
 
-                // C#: (int)str[0], i.e. the Chars indexer at 0. A char on the evaluation stack IS
-                // an int32, so the cast needs no opcode — but the IR types this call Object (Asc
-                // and Chr are the two intrinsics SemanticAnalyzer never registered), so the value
-                // has to be bridged into a reference slot. See _stdLibResultSpec.
+                // C#: (int)str[0], i.e. the Chars indexer at 0 — or, for a Char argument, the
+                // character itself: a char on the evaluation stack IS an int32, so neither form
+                // needs a conversion opcode, and the IR types the call Integer (#181).
                 case "asc":
+                case "ascw":
+                    if (IsDeclaredModuleProcedure(funcName)) return false;
                     RequireAscArgument(args[0]);
                     EmitLoadValue(args[0]);
+                    if (IlTypeSpec(args[0]?.Type) == "char") return true;
                     WriteLine("    ldc.i4.0");
                     WriteLine("    callvirt instance char [mscorlib]System.String::get_Chars(int32)");
-                    _stdLibResultSpec = "int32";
+                    return true;
+
+                // #181: CByte/CShort/CSByte/CUShort/CUInt/CULng, arm for arm what `cint` does — a
+                // floating argument rounds HALF-TO-EVEN through Convert (2.5 -> 2, 3.5 -> 4), an
+                // integral one is the unchecked conv, exactly as cint's conv.i4 is unchecked.
+                // ⚠ These six, Asc/AscW and Chr/ChrW yield to a procedure the program declares
+                // under the same name: before #181 none of them was typed, and a user's own
+                // `Function AscW` was the only one there was. (The older arms here do not ask.)
+                case "cbyte":
+                case "cshort":
+                case "csbyte":
+                case "cushort":
+                case "cuint":
+                case "culng":
+                    if (IsDeclaredModuleProcedure(funcName)) return false;
+                    EmitNarrowConversion(lower, args[0]);
                     return true;
 
                 // ⛔ ROUNDS HALF-TO-EVEN, and `conv.i4` alone does NOT — it truncates, which is

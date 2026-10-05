@@ -1628,6 +1628,33 @@ namespace BasicLang.Compiler.SemanticAnalysis
             RegisterStdLibFunction("CStr", SymbolKind.Function, _typeManager.GetType("String"),
                 new[] { ("value", _typeManager.GetType("Object")) });
 
+            // #181: the narrow integral conversions and the character intrinsics, typed as VB
+            // types them. Unregistered, each call typed Object, so `CByte(x) * 2` and
+            // `total + AscW(ch)` were refused ("requires numeric operands") on every backend.
+            // The parameter is Object, as CInt's is: the argument keeps its own type in the IR,
+            // which is what each backend's arm reads (a floating argument rounds half-to-even,
+            // a Char needs no indexing). SByte is not a built-in of the type manager — a
+            // declared SByte resolves through the .NET fallback as a Class-kind type of that
+            // name — so CSByte gets the same.
+            var sbyteType = _typeManager.GetType("SByte") ?? new TypeInfo("SByte", TypeKind.Class);
+            foreach (var (name, target) in new[]
+            {
+                ("CByte", _typeManager.GetType("Byte")),
+                ("CShort", _typeManager.GetType("Short")),
+                ("CSByte", sbyteType),
+                ("CUShort", _typeManager.GetType("UShort")),
+                ("CUInt", _typeManager.GetType("UInteger")),
+                ("CULng", _typeManager.GetType("ULong")),
+                ("Asc", _typeManager.GetType("Integer")),
+                ("AscW", _typeManager.GetType("Integer")),
+                ("Chr", _typeManager.GetType("Char")),
+                ("ChrW", _typeManager.GetType("Char")),
+            })
+            {
+                RegisterStdLibFunction(name, SymbolKind.Function, target,
+                    new[] { ("value", _typeManager.GetType("Object")) });
+            }
+
             // Date/time functions (P1 Task 5, spec §7): TYPING ONLY — the C#
             // emissions already exist (CSharpStdLibProvider); the C++ backend
             // emissions arrive with Task 12. Signatures mirror the repo's
