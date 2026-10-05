@@ -15,8 +15,8 @@ namespace VisualGameStudio.Tests.Shell;
 ///
 /// <para>⛔ The gesture that is easy to get wrong is clicking a control that is ALREADY part of a
 /// group. Collapsing the selection on PRESS makes a multi-selection impossible to drag, because the
-/// press that begins the drag destroys it — so the collapse waits for release, and only happens if
-/// the pointer never moved.</para>
+/// press that begins the drag destroys it. Since property-grid slice 6 (D-13) the click PROMOTES the
+/// control to primary and keeps the group, as VS does — there is no collapse on release either.</para>
 /// </summary>
 [TestFixture]
 public class FormCanvasMultiSelectTests
@@ -139,16 +139,22 @@ public class FormCanvasMultiSelectTests
         });
     }
 
+    /// <summary>
+    /// ⚠ Slice 6 Task 4b: this test used to click A — a MEMBER of {A, B} — and pass only through the collapse-on-release
+    /// that D-13 removed (the pre-flight's "no test pins the collapse" was wrong: this one did, under a name that says
+    /// "unselected"). It now clicks a control that really is unselected; a click on a member is
+    /// <see cref="APlainClickOnAMember_PromotesItToPrimary_AndKeepsTheGroup"/>.
+    /// </summary>
     [AvaloniaTest]
     public void APlainClickOnAnUnselectedControlReplacesTheSelection()
     {
-        var rig = Surface();
+        var (rig, c) = SurfaceOfThree();
         rig.Click(rig.Centre(rig.A));
         rig.Click(rig.Centre(rig.B), RawInputModifiers.Shift);
 
-        rig.Click(rig.Centre(rig.A));
+        rig.Click(rig.Centre(c));
 
-        Assert.That(rig.Selection.Controls, Is.EqualTo(new[] { rig.A }));
+        Assert.That(rig.Selection.Controls, Is.EqualTo(new[] { c }));
     }
 
     [AvaloniaTest]
@@ -191,6 +197,70 @@ public class FormCanvasMultiSelectTests
             Assert.That(G(rig.B).X, Is.EqualTo(72), "40 + 32");
             Assert.That(G(rig.A).X, Is.EqualTo(72), "moved by the same delta");
             Assert.That(G(rig.A).Y, Is.EqualTo(40), "and not vertically");
+        });
+    }
+
+    // ==================================================================
+    // Slice 6 D-13: a plain click on a MEMBER promotes it to primary and keeps the group (VS)
+    // ==================================================================
+
+    /// <summary>The two-button surface plus a third Button <c>c</c>, well to the right.</summary>
+    private static (Rig Rig, FormControl C) SurfaceOfThree()
+    {
+        var rig = Surface();
+        var c = new FormControl
+        {
+            Kind = "Button", Id = "c",
+            Geometry = new PixelGeometry { X = 200, Y = 70, Width = 80, Height = 24 }
+        };
+        rig.Doc.Controls.Add(c);
+        rig.Canvas.InvalidateVisual();
+        return (rig, c);
+    }
+
+    /// <summary>
+    /// ⛔ D-13: select A, B, C with Ctrl+clicks, then a PLAIN click on A — the group stays {B, C, A} with A the primary
+    /// (the old collapse-on-release picked A out of the group: VS does not, and the first click of a double-click on a
+    /// member would have collapsed the group before the double-tap arrived). Align-lefts then lines up on A.
+    /// </summary>
+    [AvaloniaTest]
+    public void APlainClickOnAMember_PromotesItToPrimary_AndKeepsTheGroup()
+    {
+        var (rig, c) = SurfaceOfThree();
+        rig.Click(rig.Centre(rig.A));
+        rig.Click(rig.Centre(rig.B), RawInputModifiers.Control);
+        rig.Click(rig.Centre(c), RawInputModifiers.Control);
+        Assert.That(rig.Selection.Controls, Is.EqualTo(new[] { rig.A, rig.B, c }), "precondition");
+
+        rig.Click(rig.Centre(rig.A) + new Point(5, 0)); // offset: not a double-click with the first press
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(rig.Selection.Controls, Is.EqualTo(new[] { rig.B, c, rig.A }), "still all three, A promoted");
+            Assert.That(rig.Canvas.SelectedControl, Is.SameAs(rig.A), "the primary is what the property grid shows");
+        });
+
+        FormArrange.Apply(rig.Doc, FormArrangeKind.AlignLeft, rig.Selection.Controls, rig.Selection.Primary);
+
+        Assert.That(new[] { G(rig.B).X, G(c).X, G(rig.A).X }, Is.All.EqualTo(40), "aligned to A's left (40), not C's (200)");
+    }
+
+    /// <summary>D-13: a drag that starts on a member (promoting it) still moves the WHOLE group.</summary>
+    [AvaloniaTest]
+    public void DraggingFromANonPrimaryMember_MovesTheWholeGroup()
+    {
+        var (rig, c) = SurfaceOfThree();
+        rig.Click(rig.Centre(rig.A));
+        rig.Click(rig.Centre(rig.B), RawInputModifiers.Control);
+        rig.Click(rig.Centre(c), RawInputModifiers.Control);
+
+        var from = rig.Centre(rig.A) + new Point(3, 0);
+        rig.Drag(from, from + new Point(32, 0));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(new[] { G(rig.A).X, G(rig.B).X, G(c).X }, Is.EqualTo(new[] { 72, 72, 232 }), "every member by +32");
+            Assert.That(rig.Selection.Controls, Has.Count.EqualTo(3), "the group survives the drag");
         });
     }
 

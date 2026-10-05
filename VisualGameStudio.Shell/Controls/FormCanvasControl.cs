@@ -510,16 +510,6 @@ public class FormCanvasControl : Control
     private Point _marqueeCurrent;
 
     /// <summary>
-    /// A control clicked while it was already part of a multi-selection.
-    ///
-    /// <para>⚠ The selection collapses to it on RELEASE, and only if the pointer never moved — so
-    /// clicking one control of a group and dragging moves the GROUP, while clicking and letting go
-    /// picks that one out of it. Collapsing on press instead makes a multi-selection impossible to
-    /// drag, because the press that begins the drag destroys it.</para>
-    /// </summary>
-    private FormControl? _collapseTo;
-
-    /// <summary>
     /// Every selected control's geometry as the drag began, keyed by control.
     ///
     /// <para>⛔ Re-derived from these and the TOTAL delta on every move, never nudged frame by
@@ -800,8 +790,8 @@ public class FormCanvasControl : Control
     ///
     /// <para>⛔ Clicking a control that is ALREADY part of a multi-selection must not collapse the
     /// selection to it — that is how a drag of three controls becomes a drag of one, and the user
-    /// cannot move a group at all. The selection collapses on RELEASE instead, and only if the
-    /// pointer never moved.</para>
+    /// cannot move a group at all. It PROMOTES the control to primary instead and keeps the group
+    /// (slice 6 D-13, VS).</para>
     /// </summary>
     private void ApplyClickSelection(FormControl? hit, bool extend)
     {
@@ -828,9 +818,12 @@ public class FormCanvasControl : Control
         }
         else
         {
-            // Already selected: keep the group, but make this the primary so align and size use the
-            // control the user just pointed at — which is what VS does.
-            _collapseTo = selection.Controls.Count > 1 ? hit : null;
+            // Already selected: keep the group, and make this the primary so align and size use the
+            // control the user just pointed at — which is what VS does (slice 6 D-13). ⛔ No collapse on
+            // release any more: VS keeps the group (click empty canvas or an unselected control to start
+            // over), and a collapse would destroy the group between the two clicks of a double-click on a
+            // member, before the double-tap could wire every member (D-8).
+            selection.Promote(hit);
         }
 
         SelectedControl = selection.Primary;
@@ -1265,18 +1258,6 @@ public class FormCanvasControl : Control
         _dragHandle = FormResizeHandle.None;
         _formGrip = FormResizeHandle.None;
         e.Pointer.Capture(null);
-
-        // Clicking one control of a multi-selection WITHOUT dragging picks it out of the group.
-        // Deferred to here precisely so the same click could have started a group drag instead.
-        if (_collapseTo is { } single)
-        {
-            _collapseTo = null;
-            if (!_dragChanged)
-            {
-                Selection?.Set(single);
-                SelectedControl = single;
-            }
-        }
 
         if (!wasDragging || !_dragChanged)
         {

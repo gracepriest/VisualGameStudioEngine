@@ -962,6 +962,30 @@ No decision changed, so no commit of its own; recorded here with Task 1.
   | ★ Task 3's Edited-per-member mutant | KILLED by (b): after one real Ctrl+Z the text still differs (539 vs 534 chars — one member's write remained) |
   | ★ the "" guard keyed on today's mixedness | KILLED by `AStaleEmptyPushIntoAnUnMixedIntRow_WritesNothing`; (j) is EQUIVALENT for it (measured above) |
 
+### Task 4b — primary promotion (base `af4db0f2`)
+
+- `FormSelection.Promote(control)`: a selected non-primary control moves LAST, one `Changed`; a no-op raising nothing
+  for the primary or an unselected control. `FormCanvasControl.ApplyClickSelection`'s already-selected branch calls it;
+  `_collapseTo` and its release arm are DELETED (a click on a member keeps the group, as VS does).
+- ⚠ **Pre-flight fact corrected:** D-13 said "no existing test pins the collapse". One did:
+  `FormCanvasMultiSelectTests.APlainClickOnAnUnselectedControlReplacesTheSelection` clicked A — a MEMBER of {A, B} —
+  and passed only through the collapse-on-release (it went red: `[B, A]`, expected `[A]`). D-13 is the delegated VS
+  ruling, so the TEST was corrected, not the code: it now clicks a genuinely unselected third control (its doc comment
+  says why), and the member click is the new promotion test.
+- Tests: `FormSelectionTests` +2 (promote moves/raises once; no-op cases); `FormCanvasMultiSelectTests` +2 (plain click
+  on a member of {A, B, C} → {B, C, A}, A primary, and `FormArrange.Apply` align-lefts lines up on A's 40, not C's 200;
+  a drag starting on a non-primary member moves all three by +32); the one-store invariant gained its promotion row.
+- **Red** (`Promote` a no-op stub, collapse still in place): the promote test (order unchanged) and the canvas test
+  (the group collapsed to 1). The invariant sweep stayed green on the stub — expected: store and grid agree either way.
+- Green: `FormSelectionTests` + `FormCanvasMultiSelectTests` + the invariant — **30/30**; RE-CHECK
+  (`TestCategory!=Integration` over `FormCanvas*` (incl. `FormCanvasPixelPageTests`), `FormDesignerRealView*`,
+  `FormPixelPageRealView*`, `FormStripCanvasTests`) — **136/136**.
+- Mutations:
+  | Mutant | Result |
+  |---|---|
+  | ★ the branch left as `_collapseTo` (the pre-change code) | KILLED — that is the red run above: `APlainClickOnAMember_…` got a selection of 1 |
+  | ★ `Promote` as `Toggle` + `Add` | KILLED by `Promote_MovesAMemberToThePrimary_…_AndRaisesChangedOnce` (two Changed) |
+
 ## 7. Tests to re-check (consolidated)
 
 | Test | Why | Task |

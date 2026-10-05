@@ -41,7 +41,7 @@ public partial class FormPropertyGridRealViewTests
 
     /// <summary>
     /// ⛔ The gesture list of the one-store invariant (pre-flight Task 2, review m6). A new canvas gesture is ONE row here.
-    /// (D-13's promotion row lands with Task 4b and the Delete row with Task 6 — both change those gestures.)
+    /// (D-13's promotion row landed with Task 4b; the Delete row lands with Task 6, which changes that gesture.)
     /// </summary>
     private static IReadOnlyList<CanvasGesture> CanvasGestures() => new CanvasGesture[]
     {
@@ -49,6 +49,7 @@ public partial class FormPropertyGridRealViewTests
         new("a Ctrl+click adding btn2", r => PressOn(r, "btn2", modifiers: RawInputModifiers.Control)),
         new("a Ctrl+click adding lbl", r => PressOn(r, "lbl", modifiers: RawInputModifiers.Control)),
         new("a Ctrl+click REMOVING the primary lbl", r => PressOn(r, "lbl", modifiers: RawInputModifiers.Control, dx: 3)),
+        new("a plain click on the member btn (D-13: promoted, the group kept)", r => PressOn(r, "btn", dx: 6)),
         new("a Shift+click adding txt", r => PressOn(r, "txt", modifiers: RawInputModifiers.Shift)),
         new("a click on empty canvas", r =>
         {
