@@ -1777,8 +1777,9 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
         private string RenderCompare(IRCompare op, Func<IRValue, string> render)
         {
-            var l = render(op.Left);
-            var r = render(op.Right);
+            var isEquality = op.Comparison is CompareKind.Eq or CompareKind.Ne;
+            var l = isEquality ? NothingAsEmpty(op.Left, op.Right, render(op.Left)) : render(op.Left);
+            var r = isEquality ? NothingAsEmpty(op.Right, op.Left, render(op.Right)) : render(op.Right);
             switch (op.Comparison)
             {
                 // === and !==, never == : JS's loose equality would make 0 == "" true, which
@@ -1792,6 +1793,20 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 default:
                     throw NotYet($"CompareKind.{op.Comparison}");
             }
+        }
+
+        /// <summary>
+        /// One operand of a String <c>=</c>/<c>&lt;&gt;</c> (#206), already rendered as
+        /// <paramref name="rendered"/>. VB's String equality reads Nothing as <c>""</c>
+        /// (<see cref="IRCompare.ReadsNothingAsEmpty"/>): the Nothing literal is written <c>""</c>
+        /// and any other operand <c>(x ?? "")</c>, which also covers <c>undefined</c>. JavaScript's
+        /// <c>===</c> on two strings is already ordinal. Every other operand is returned as it is.
+        /// Shared by comparisons and Select Case, so the two cannot disagree.
+        /// </summary>
+        private static string NothingAsEmpty(IRValue operand, IRValue other, string rendered)
+        {
+            if (!IRCompare.ReadsNothingAsEmpty(operand, other)) return rendered;
+            return IRIdentityCompare.IsNothing(operand) ? "\"\"" : $"({rendered} ?? \"\")";
         }
 
         private static string Constant(IRConstant constant)
@@ -3014,10 +3029,10 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             }
 
             foreach (var (caseValue, target) in sw.Cases ?? new List<(IRValue, BasicBlock)>())
-                AddTest(target, $"{subject} === {ExprInline(caseValue)}");
+                AddTest(target, CaseEqualityTest(subject, sw.Value, caseValue));
 
             foreach (var pattern in sw.PatternCases ?? new List<IRPatternCase>())
-                AddTest(pattern.Target, PatternTest(subject, pattern));
+                AddTest(pattern.Target, PatternTest(subject, sw.Value, pattern));
 
             var first = true;
             foreach (var (target, tests) in arms)
@@ -3075,13 +3090,13 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// <see cref="ExprInline"/>: a <c>When</c> guard's tree was built with emission
         /// suppressed and exists in no block, so a by-name reference would be undefined.
         /// </summary>
-        private string PatternTest(string subject, IRPatternCase pattern)
+        private string PatternTest(string subject, IRValue subjectValue, IRPatternCase pattern)
         {
             string test;
             switch (pattern)
             {
                 case IRConstantPatternCase c:
-                    test = $"{subject} === {ExprInline(c.Value)}";
+                    test = CaseEqualityTest(subject, subjectValue, c.Value);
                     break;
 
                 // Inclusive at both ends, matching `Case 1 To 10`.
@@ -3090,8 +3105,22 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                     break;
 
                 // Operator is a raw STRING from the parser, not an enum.
+                // `Case Is = x` / `Case Is <> x` on a String is VB's String equality (#206).
+                case IRComparisonPatternCase cmp when cmp.Operator is "=" or "<>":
+                    test = $"{NothingAsEmpty(subjectValue, cmp.CompareValue, subject)} {ComparisonPatternOperator(cmp.Operator)} "
+                        + NothingAsEmpty(cmp.CompareValue, subjectValue, ExprInline(cmp.CompareValue));
+                    break;
+
                 case IRComparisonPatternCase cmp:
                     test = $"{subject} {ComparisonPatternOperator(cmp.Operator)} {ExprInline(cmp.CompareValue)}";
+                    break;
+
+                // `Case Nothing` is VB's `subject = Nothing`, so on a String it is the String
+                // equality with Nothing (#206), which "" meets too. `Case Is Nothing` is reference
+                // identity (ADR-0011) and stays the null test.
+                case IRNothingPatternCase n when !n.WrittenWithIs
+                        && IRCompare.IsStringEquality(subjectValue, new IRConstant(null, null)):
+                    test = CaseEqualityTest(subject, subjectValue, new IRConstant(null, null));
                     break;
 
                 case IRNothingPatternCase:
@@ -3100,7 +3129,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
                 case IROrPatternCase or:
                     test = "(" + string.Join(" || ",
-                        or.Alternatives.ConvertAll(a => PatternTest(subject, a))) + ")";
+                        or.Alternatives.ConvertAll(a => PatternTest(subject, subjectValue, a))) + ")";
                     break;
 
                 // A bare binding matches anything and binds the subject to a name.
@@ -3122,6 +3151,14 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
             return test;
         }
+
+        /// <summary>
+        /// <c>Case value</c>: the subject (bound to <paramref name="subject"/>) <c>===</c> the
+        /// value, each side through <see cref="NothingAsEmpty"/> so a String Select Case answers
+        /// what a String <c>=</c> answers.
+        /// </summary>
+        private string CaseEqualityTest(string subject, IRValue subjectValue, IRValue caseValue) =>
+            $"{NothingAsEmpty(subjectValue, caseValue, subject)} === {NothingAsEmpty(caseValue, subjectValue, ExprInline(caseValue))}";
 
         private static string ComparisonPatternOperator(string op)
         {

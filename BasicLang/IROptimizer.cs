@@ -1827,6 +1827,15 @@ namespace BasicLang.Compiler.IR.Optimization
             if (left.Value is decimal || right.Value is decimal)
                 return null;
 
+            // #206: VB's String `=`/`<>` is ordinal with Nothing as "" (IRCompare.IsStringEquality).
+            // CompareEq's Equals answered `Nothing = ""` False, and constant propagation hands this
+            // fold an unassigned String's Nothing, so `s = ""` printed False on every backend.
+            if (cmp.Comparison is CompareKind.Eq or CompareKind.Ne && IRCompare.IsStringEquality(left, right))
+            {
+                var equal = string.Equals(left.Value as string ?? "", right.Value as string ?? "", StringComparison.Ordinal);
+                return new IRConstant(cmp.Comparison == CompareKind.Eq ? equal : !equal, cmp.Type);
+            }
+
             // #123: two numeric constants of DIFFERENT widths are compared in the wider one, as VB
             // converts them (Double beats Single beats the integral types; two integral types meet
             // in Long). The switch below only knows same-type pairs, and answered a mixed pair
