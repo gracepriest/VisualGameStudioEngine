@@ -2677,7 +2677,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 foreach (var caseValue in caseValues)
                 {
                     var caseExpr = EmitExpression(caseValue);
-                    WriteLine($"case {caseExpr}:");
+                    WriteLine($"case {StringCaseLabel(switchInst, caseValue, caseExpr)}:");
                 }
 
                 // Also emit pattern cases for this block
@@ -2685,7 +2685,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 {
                     foreach (var pattern in patterns)
                     {
-                        EmitPatternCase(pattern);
+                        EmitPatternCase(pattern, switchInst);
                     }
                     patternsByBlock.Remove(block);
                 }
@@ -2698,7 +2698,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             {
                 foreach (var pattern in patterns)
                 {
-                    EmitPatternCase(pattern);
+                    EmitPatternCase(pattern, switchInst);
                 }
                 EmitCaseBody(block);
             }
@@ -2724,8 +2724,10 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             }
         }
 
-        private void EmitPatternCase(IRPatternCase pattern)
+        /// <param name="switchInst">The Select Case: a String subject widens a <c>""</c> / Nothing label (<see cref="StringCaseLabel"/>).</param>
+        private void EmitPatternCase(IRPatternCase pattern, IRSwitch switchInst)
         {
+            var subject = switchInst?.Value;
             var whenClause = pattern.WhenGuard != null ? $" when {EmitExpression(pattern.WhenGuard)}" : "";
 
             switch (pattern)
@@ -2764,14 +2766,17 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                     // C# 9+ relational pattern
                     if (op == "==" || op == "!=")
                     {
-                        // For equality, use when clause
+                        // For equality, use when clause. A String one is VB's (#206): Nothing is "".
+                        var tested = NothingAsEmpty(subject, compPattern.CompareValue, _ => "_temp");
+                        var renderedValue = compValue;
+                        compValue = NothingAsEmpty(compPattern.CompareValue, subject, _ => renderedValue);
                         if (string.IsNullOrEmpty(whenClause))
                         {
-                            WriteLine($"case var _temp when _temp {op} {compValue}:");
+                            WriteLine($"case var _temp when {tested} {op} {compValue}:");
                         }
                         else
                         {
-                            WriteLine($"case var _temp when _temp {op} {compValue} && {EmitExpression(pattern.WhenGuard)}:");
+                            WriteLine($"case var _temp when {tested} {op} {compValue} && {EmitExpression(pattern.WhenGuard)}:");
                         }
                     }
                     else
@@ -2781,13 +2786,14 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                     break;
 
                 case IRConstantPatternCase constPattern:
-                    var constValue = EmitExpression(constPattern.Value);
+                    var constValue = StringCaseLabel(switchInst, constPattern.Value, EmitExpression(constPattern.Value));
                     WriteLine($"case {constValue}{whenClause}:");
                     break;
 
-                case IRNothingPatternCase:
-                    // Null pattern
-                    WriteLine($"case null{whenClause}:");
+                case IRNothingPatternCase nothingPattern:
+                    // Null pattern. `Case Nothing` on a String is VB's `subject = Nothing`, which ""
+                    // meets too (#206); `Case Is Nothing` stays the null test (ADR-0011).
+                    WriteLine($"case {NothingCaseLabel(nothingPattern, switchInst)}{whenClause}:");
                     break;
 
                 case IROrPatternCase orPattern:
@@ -2795,7 +2801,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                     var alternatives = new List<string>();
                     foreach (var alt in orPattern.Alternatives)
                     {
-                        alternatives.Add(GetPatternExpression(alt));
+                        alternatives.Add(GetPatternExpression(alt, switchInst));
                     }
                     WriteLine($"case {string.Join(" or ", alternatives)}{whenClause}:");
                     break;
@@ -2805,7 +2811,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                     var elements = new List<string>();
                     foreach (var elem in tuplePattern.Elements)
                     {
-                        elements.Add(GetPatternExpression(elem));
+                        elements.Add(GetPatternExpression(elem, switchInst: null));
                     }
                     WriteLine($"case ({string.Join(", ", elements)}){whenClause}:");
                     break;
@@ -2829,7 +2835,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         /// <summary>
         /// Get the C# pattern expression for an IR pattern (used for or/tuple patterns)
         /// </summary>
-        private string GetPatternExpression(IRPatternCase pattern)
+        private string GetPatternExpression(IRPatternCase pattern, IRSwitch switchInst)
         {
             switch (pattern)
             {
@@ -2857,17 +2863,17 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                     return $"{op} {compValue}";
 
                 case IRConstantPatternCase constPattern:
-                    return EmitExpression(constPattern.Value);
+                    return StringCaseLabel(switchInst, constPattern.Value, EmitExpression(constPattern.Value));
 
-                case IRNothingPatternCase:
-                    return "null";
+                case IRNothingPatternCase nothingPattern:
+                    return NothingCaseLabel(nothingPattern, switchInst);
 
                 case IROrPatternCase orPattern:
-                    var alternatives = orPattern.Alternatives.Select(GetPatternExpression);
+                    var alternatives = orPattern.Alternatives.Select(alt => GetPatternExpression(alt, switchInst));
                     return string.Join(" or ", alternatives);
 
                 case IRTuplePatternCase tuplePattern:
-                    var elements = tuplePattern.Elements.Select(GetPatternExpression);
+                    var elements = tuplePattern.Elements.Select(elem => GetPatternExpression(elem, switchInst: null));
                     return $"({string.Join(", ", elements)})";
 
                 case IRBindingPatternCase bindingPattern:
@@ -3994,10 +4000,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
                     case IRCompare cmp:
                     {
-                        var left = EmitExpression(cmp.Left, stack, true);
-                        var right = EmitExpression(cmp.Right, stack, true);
-                        var op = MapCompareOperator(cmp.Comparison);
-                        var expr = $"{left} {op} {right}";
+                        var expr = CompareText(cmp, v => EmitExpression(v, stack, true));
                         return needsParens ? $"({expr})" : expr;
                     }
 
@@ -4385,12 +4388,81 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 return;
 
             // Use needsParens=true for sub-expressions to preserve operator precedence
-            var left = EmitExpression(compare.Left, new HashSet<IRValue>(), needsParens: true);
-            var right = EmitExpression(compare.Right, new HashSet<IRValue>(), needsParens: true);
-            var op = MapCompareOperator(compare.Comparison);
-
             var target = GetValueName(compare);
-            WriteLine($"{target} = {left} {op} {right};");
+            WriteLine($"{target} = {CompareText(compare, v => EmitExpression(v, new HashSet<IRValue>(), needsParens: true))};");
+        }
+
+        /// <summary>
+        /// <c>left op right</c> for <paramref name="compare"/>, the ONE spelling the statement form
+        /// (<see cref="Visit(IRCompare)"/>) and the inlined form share.
+        /// <para>#206: a String <c>=</c>/<c>&lt;&gt;</c> is VB's, where Nothing is <c>""</c>
+        /// (<see cref="IRCompare.IsStringEquality"/>). C#'s <c>string ==</c> is already ordinal
+        /// value equality, so only Nothing needs handling: <c>null == ""</c> is False in C#.</para>
+        /// </summary>
+        private static string CompareText(IRCompare compare, Func<IRValue, string> render)
+        {
+            var op = MapCompareOperator(compare.Comparison);
+            if (compare.Comparison is not (CompareKind.Eq or CompareKind.Ne))
+                return $"{render(compare.Left)} {op} {render(compare.Right)}";
+
+            var left = NothingAsEmpty(compare.Left, compare.Right, render);
+            var right = NothingAsEmpty(compare.Right, compare.Left, render);
+            return $"{left} {op} {right}";
+        }
+
+        /// <summary>
+        /// One operand of a String equality, reading Nothing as <c>""</c> when
+        /// <see cref="IRCompare.ReadsNothingAsEmpty"/> says it must: the Nothing literal is written
+        /// <c>""</c>, any other operand <c>(x ?? "")</c>. Every other operand renders as it is.
+        /// </summary>
+        private static string NothingAsEmpty(IRValue operand, IRValue other, Func<IRValue, string> render)
+        {
+            if (!IRCompare.ReadsNothingAsEmpty(operand, other)) return render(operand);
+            return IRIdentityCompare.IsNothing(operand) ? "\"\"" : $"({render(operand)} ?? \"\")";
+        }
+
+        /// <summary>
+        /// A Case label of <paramref name="switchInst"/> on a String subject (#206). Under VB's
+        /// String equality <c>""</c> and Nothing are one value, so a label that meets one of them
+        /// (<see cref="IRCompare.ReadsNothingAsEmpty"/>) matches the other as well:
+        /// <c>case "" or null</c>. Every other label is returned as it is.
+        /// <para>⚠ Only when <see cref="WidensEmptyLabels"/>: C# refuses a case an earlier one
+        /// already covers (CS8120), and VB does not.</para>
+        /// </summary>
+        private static string StringCaseLabel(IRSwitch switchInst, IRValue caseValue, string label) =>
+            switchInst != null && IRCompare.ReadsNothingAsEmpty(switchInst.Value, caseValue) && WidensEmptyLabels(switchInst)
+                ? $"{label} or {(IRIdentityCompare.IsNothing(caseValue) ? "\"\"" : "null")}"
+                : label;
+
+        /// <summary>
+        /// <c>Case Nothing</c> is the value comparison <c>subject = Nothing</c>, so on a String
+        /// subject it is <see cref="StringCaseLabel"/>'s <c>null or ""</c>. <c>Case Is Nothing</c>
+        /// is reference identity (ADR-0011) and stays <c>null</c>.
+        /// </summary>
+        private static string NothingCaseLabel(IRNothingPatternCase pattern, IRSwitch switchInst) =>
+            pattern.WrittenWithIs ? "null" : StringCaseLabel(switchInst, new IRConstant(null, null), "null");
+
+        /// <summary>
+        /// Whether a String Select Case may widen its <c>""</c> / Nothing labels: at most ONE of its
+        /// labels meets <c>""</c> or Nothing. Two such labels (<c>Case ""</c> then
+        /// <c>Case Is Nothing</c>) make the later one dead under VB's rule, and C# refuses a dead
+        /// case outright (CS8120, measured), so that switch keeps its labels as they were.
+        /// The later label then keeps its old answer for a Nothing subject. It does not fail to compile.
+        /// </summary>
+        private static bool WidensEmptyLabels(IRSwitch switchInst)
+        {
+            var subject = switchInst.Value;
+            int Meets(IRPatternCase pattern) => pattern switch
+            {
+                IRNothingPatternCase => 1,
+                IRConstantPatternCase constant => IRCompare.ReadsNothingAsEmpty(subject, constant.Value) ? 1 : 0,
+                IROrPatternCase or => or.Alternatives?.Sum(Meets) ?? 0,
+                _ => 0,
+            };
+
+            var meeting = (switchInst.Cases?.Count(c => IRCompare.ReadsNothingAsEmpty(subject, c.CaseValue)) ?? 0)
+                + (switchInst.PatternCases?.Sum(Meets) ?? 0);
+            return meeting <= 1;
         }
 
         public void Visit(IRIdentityCompare identity)
@@ -4761,7 +4833,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             {
                 // Case labels must be compile-time constants in C#. We still stringify defensively.
                 var caseExpr = EmitExpression(caseValue);
-                WriteLine($"case {caseExpr}: goto {target.Name};");
+                WriteLine($"case {StringCaseLabel(switchInst, caseValue, caseExpr)}: goto {target.Name};");
             }
 
             WriteLine($"default: goto {switchInst.DefaultTarget.Name};");
@@ -5809,7 +5881,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             _ => "?"
         };
 
-        private string MapCompareOperator(CompareKind cmp) => cmp switch
+        private static string MapCompareOperator(CompareKind cmp) => cmp switch
         {
             CompareKind.Eq => "==",
             CompareKind.Ne => "!=",

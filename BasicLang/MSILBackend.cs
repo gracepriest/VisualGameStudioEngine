@@ -6896,6 +6896,15 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 return;
             }
 
+            // #206: a String case is VB's String equality, so Nothing meets "" (one rule with `=`).
+            if (IRCompare.IsStringEquality(subject, value))
+            {
+                EmitStringEquality(subject, value, EmitLoadValue);
+                WriteLine($"    {(branchWhenEqual ? "brtrue" : "brfalse")} {branchTo}");
+                _currentStack--;
+                return;
+            }
+
             EmitLoadValue(subject);
             EmitLoadValue(value);
 
@@ -7046,6 +7055,16 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             {
                 EmitLateBoundCaseTest(subject, new IRConstant(null, subject.Type), CompareKind.Eq,
                     noMatch, branchWhenTrue: false);
+                return;
+            }
+
+            // A String subject (#206): `Case Nothing` is VB's `subject = Nothing`, the String
+            // equality, which "" meets too. `brtrue` below tests the reference, so "" answered
+            // Case Else. `Case Is Nothing` stays that reference test (ADR-0011).
+            var nothing = new IRConstant(null, null);
+            if (!pattern.WrittenWithIs && IRCompare.IsStringEquality(subject, nothing))
+            {
+                EmitCaseEqualityTest(subject, nothing, noMatch);
                 return;
             }
 
@@ -7790,12 +7809,75 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 return;
             }
 
+            if (kind is CompareKind.Eq or CompareKind.Ne && IRCompare.IsStringEquality(left, right))
+            {
+                EmitStringEquality(left, right, load);
+                if (kind == CompareKind.Ne)
+                {
+                    WriteLine("    ldc.i4.0");
+                    WriteLine("    ceq");
+                }
+                return;
+            }
+
             var operandKind = WiderNumericKind(left, right);
             load(left);
             EmitNumericCoercion(left, operandKind);
             load(right);
             EmitNumericCoercion(right, operandKind);
             EmitCompareOperator(kind, operandKind);
+        }
+
+        /// <summary>
+        /// ⭐ <b>VB's String equality (#206, #205)</b>: loads <paramref name="left"/> and
+        /// <paramref name="right"/> with <paramref name="load"/> and leaves the int32 (0/1) of
+        /// <c>left = right</c>, where both are Strings or one is the Nothing literal
+        /// (<see cref="IRCompare.IsStringEquality"/>). That is
+        /// <c>Operators.CompareString(left, right, TextCompare:=False) = 0</c>: ordinal, with Nothing
+        /// read as <c>""</c> (<see cref="EmitStringEqualityOperand"/>), then
+        /// <c>String::Equals(string, string)</c>, which compares the characters.
+        ///
+        /// <para>⛔ Never <c>ceq</c>. On two strings it compares the REFERENCES, so two equal
+        /// strings built separately compared unequal (#205), and Nothing never equalled
+        /// <c>""</c> (#206). Every String equality comes through here: <c>=</c>, <c>&lt;&gt;</c>,
+        /// a <c>When</c> guard, and Select Case (<see cref="EmitCaseEqualityTest"/>).</para>
+        /// </summary>
+        private void EmitStringEquality(IRValue left, IRValue right, Action<IRValue> load)
+        {
+            EmitStringEqualityOperand(left, right, load);
+            EmitStringEqualityOperand(right, left, load);
+            WriteLine("    call bool [mscorlib]System.String::Equals(string, string)");
+            _currentStack--; // two in, one out
+        }
+
+        /// <summary>
+        /// One operand of <see cref="EmitStringEquality"/>, reading Nothing as <c>""</c> when
+        /// <see cref="IRCompare.ReadsNothingAsEmpty"/> says it must: the Nothing literal is
+        /// <c>ldstr ""</c>, and any other operand is replaced by <c>""</c> when it is null
+        /// (<c>dup; brtrue</c> past <c>pop; ldstr ""</c>). Net stack effect +1 on both paths.
+        /// </summary>
+        private void EmitStringEqualityOperand(IRValue operand, IRValue other, Action<IRValue> load)
+        {
+            if (!IRCompare.ReadsNothingAsEmpty(operand, other))
+            {
+                load(operand);
+                return;
+            }
+
+            if (IRIdentityCompare.IsNothing(operand))
+            {
+                WriteLine("    ldstr \"\"");
+                _currentStack++;
+                return;
+            }
+
+            var notNothing = $"str_set_{_labelCounter++}";
+            load(operand);
+            WriteLine("    dup");
+            WriteLine($"    brtrue {notNothing}");
+            WriteLine("    pop");
+            WriteLine("    ldstr \"\"");
+            WriteLine($"  {notNothing}:");
         }
 
         /// <summary>

@@ -3398,13 +3398,27 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         
         public override void Visit(IRCompare compare)
         {
-            var left = GetValueName(compare.Left);
-            var right = GetValueName(compare.Right);
+            var left = CompareOperandText(compare, compare.Left, compare.Right, GetValueName);
+            var right = CompareOperandText(compare, compare.Right, compare.Left, GetValueName);
             var op = MapCompareOperator(compare.Comparison);
             var result = GetValueName(compare);
             
             WriteLine($"{result} = {left} {op} {right};");
         }
+
+        /// <summary>
+        /// One operand of <paramref name="compare"/>. #206: in a String <c>=</c>/<c>&lt;&gt;</c>
+        /// (<see cref="IRCompare.IsStringEquality"/>) the Nothing literal is the empty
+        /// <c>std::string</c> — VB's String equality reads Nothing as <c>""</c>, and a C++ String
+        /// has no null state (#173), so every other operand is already right. <c>nullptr</c>
+        /// against a <c>std::string</c> did not compile. Shared by the statement and the inline
+        /// (When guard) forms.
+        /// </summary>
+        private static string CompareOperandText(IRCompare compare, IRValue operand, IRValue other, Func<IRValue, string> render) =>
+            compare.Comparison is CompareKind.Eq or CompareKind.Ne
+            && IRIdentityCompare.IsNothing(operand) && IRCompare.IsStringEquality(operand, other)
+                ? "std::string{}"
+                : render(operand);
 
         public override void Visit(IRIdentityCompare identity)
         {
@@ -5092,7 +5106,8 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 case IRBinaryOp b when _guardNodes != null:
                     return $"({BinaryOpExpression(b)})";
                 case IRCompare cmp:
-                    return $"({RenderInline(cmp.Left)} {MapCompareOperator(cmp.Comparison)} {RenderInline(cmp.Right)})";
+                    return $"({CompareOperandText(cmp, cmp.Left, cmp.Right, RenderInline)} {MapCompareOperator(cmp.Comparison)} "
+                        + $"{CompareOperandText(cmp, cmp.Right, cmp.Left, RenderInline)})";
                 case IRIdentityCompare identity:
                     return IdentityText(identity, RenderInline);
                 case IRUnaryOp u:

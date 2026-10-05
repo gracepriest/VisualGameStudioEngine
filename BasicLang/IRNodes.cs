@@ -365,6 +365,45 @@ namespace BasicLang.Compiler.IR
         
         public override string ToString() => 
             $"{Name} = cmp {Comparison.ToString().ToLower()} {Left}, {Right}";
+
+        // ================================================================================
+        // ⭐ VB's STRING EQUALITY (#206). THE ONE RULE every backend and the optimizer's fold
+        // read for `=` / `<>` on Strings, and for a Select Case over a String.
+        // ================================================================================
+
+        /// <summary>
+        /// True when <c>left = right</c> is VB's String equality: both operands are Strings, or one
+        /// is a String and the other the <c>Nothing</c> literal. VB answers it with
+        /// <c>Operators.CompareString(left, right, TextCompare:=False)</c>: an ORDINAL comparison in
+        /// which <c>Nothing</c> is <c>""</c>. So <c>Nothing = ""</c> is True, and an unassigned
+        /// String equals <c>""</c>.
+        ///
+        /// <para>⛔ Not <c>Is</c> / <c>IsNot</c>. Those are <see cref="IRIdentityCompare"/>,
+        /// reference identity (ADR-0011): <c>s Is Nothing</c> stays False for <c>""</c>. An
+        /// <c>Object</c> operand is not this either; it is the late-bound comparison (ADR-0012).</para>
+        /// </summary>
+        public static bool IsStringEquality(IRValue left, IRValue right) =>
+            (IsScalarString(left) && (IsScalarString(right) || IRIdentityCompare.IsNothing(right)))
+            || (IsScalarString(right) && IRIdentityCompare.IsNothing(left));
+
+        /// <summary>
+        /// Under <see cref="IsStringEquality"/>, whether <paramref name="operand"/> has to read
+        /// <c>Nothing</c> as <c>""</c> at run time: it is not a string literal (a literal is never
+        /// Nothing), and <paramref name="other"/> could be <c>""</c>. Against a NON-EMPTY string
+        /// literal, Nothing and <c>""</c> are both unequal, so the operand is left as it is.
+        /// A backend that answers True writes the <c>Nothing</c> literal as <c>""</c> and any other
+        /// operand as "the value, or <c>""</c> when it is Nothing".
+        /// </summary>
+        public static bool ReadsNothingAsEmpty(IRValue operand, IRValue other) =>
+            IsStringEquality(operand, other)
+            && operand is not IRConstant { Value: string }
+            && other is not IRConstant { Value: string { Length: > 0 } };
+
+        /// <summary>A scalar String operand (not an array of them).</summary>
+        private static bool IsScalarString(IRValue value) =>
+            value?.Type is { } type && type.Kind != TypeKind.Array && type.ArrayRank == 0
+            && (string.Equals(type.Name, "String", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(type.Name, "System.String", StringComparison.OrdinalIgnoreCase));
     }
     
     public enum CompareKind
@@ -679,7 +718,10 @@ namespace BasicLang.Compiler.IR
         /// value that equals its type's default: an Object holding 0 is <c>= Nothing</c> but is not
         /// <c>Is Nothing</c>. The MSIL backend reads this flag to give an Object subject VB's
         /// late-bound comparison for <c>Case Nothing</c> and keep the null test for
-        /// <c>Case Is Nothing</c> (task #177). No other backend reads it. A pattern clone copies it
+        /// <c>Case Is Nothing</c> (task #177). On a String subject the two differ for <c>""</c>,
+        /// which is <c>= Nothing</c> (VB's String equality, #206) but is not <c>Is Nothing</c>, so
+        /// the C#, JavaScript and MSIL backends read it there too (<see cref="IRCompare.IsStringEquality"/>).
+        /// C++ needs no flag: its String has no null state, so both are emptiness. A pattern clone copies it
         /// with the rest of the node (<c>ClosureLowering</c>'s memberwise <c>Shallow</c>).</para>
         /// </summary>
         public bool WrittenWithIs { get; set; }
