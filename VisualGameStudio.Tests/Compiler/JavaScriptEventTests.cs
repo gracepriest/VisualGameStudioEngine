@@ -20,13 +20,14 @@ namespace VisualGameStudio.Tests.Compiler;
 /// calls; the C# backend already rendered the latter two as <c>+=</c>/<c>-=</c>. What was
 /// missing: the event's real TYPE on the IR (so <c>Action(Of Integer)</c> survives), the raise
 /// itself (<c>X?.Invoke(args)</c> on C#), the canonical parameter-list declaration syntax, and
-/// any JavaScript lowering at all. On JavaScript an event is a <c>Set</c> of handlers on the
-/// instance: subscribe is <c>add</c>, unsubscribe is <c>delete</c>, raise iterates.</para>
+/// any JavaScript lowering at all. On JavaScript an event is an invocation LIST (an array) on the
+/// instance: subscribe is <c>push</c>, unsubscribe is <c>__blRemoveHandler</c> (the LAST equal
+/// delegate), and a raise iterates a COPY of the list.</para>
 ///
-/// <para>⚠ <c>RemoveHandler</c> with a lambda or a bound instance method removes nothing on
-/// JavaScript — each <c>AddressOf obj.Method</c> would be a fresh function object — exactly as
-/// an anonymous handler cannot be removed in .NET either. A free function is the same object
-/// every time, so the ordinary <c>AddressOf FreeSub</c> case works.</para>
+/// <para>Since portable-controls Task 12 a bound instance method REMEMBERS its (instance, method)
+/// (<c>__blBind</c>), so <c>RemoveHandler … AddressOf obj.Method</c> removes it — .NET's delegate
+/// equality; a lambda is removed only by the same delegate value, as in .NET.
+/// <see cref="JavaScriptDelegateIdentityTests"/> pins the rules against C#.</para>
 /// </summary>
 [TestFixture]
 [Category("Integration")]   // spawns node; the C# legs build with dotnet
@@ -186,12 +187,13 @@ public class EventCodeGenTests
     {
         var js = JsTestSupport.Compile(Program);
 
-        Assert.That(js, Does.Contain("Clicked = new Set();"));
-        // The subscribe: `.add(…)` on the event's set, with the handler REFERENCE (an SSA temp
-        // bound to the function, never a call to it).
-        Assert.That(js, Does.Contain(".add("));
+        Assert.That(js, Does.Contain("Clicked = [];"));
+        // The subscribe: `.push(…)` on the event's invocation list, with the handler REFERENCE (an
+        // SSA temp bound to the function, never a call to it).
+        Assert.That(js, Does.Contain(".push("));
         Assert.That(js, Does.Contain("= OnClicked;"));
-        Assert.That(js, Does.Contain("for (const h of this.Clicked) h(1);"));
+        // A raise iterates a COPY (Task 12): a handler added mid-raise runs from the next one.
+        Assert.That(js, Does.Contain("for (const h of [...this.Clicked]) h(1);"));
         Assert.That(js, Does.Not.Contain("raise_"), "the IR's raise_X convention must not leak as a call to nothing");
         Assert.That(js, Does.Not.Contain("Delegate.Combine"));
     }

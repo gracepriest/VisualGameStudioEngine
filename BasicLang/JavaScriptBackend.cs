@@ -185,6 +185,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             EmitConversionPrelude(module);
             EmitIntegerDivisionPrelude(module);
             EmitPrimitiveStaticsPrelude(module);
+            EmitDelegatePrelude(module);
 
             // Enums before globals and classes — an initialiser may read one.
             EmitEnums(module);
@@ -278,6 +279,61 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
             return false;
         }
+
+        /// <summary>
+        /// The delegate helpers (spec §4.4, M2; portable-controls Task 12) — .NET's delegate rules on the page:
+        /// <c>__blBind</c> makes a bound method that REMEMBERS its (instance, method), so a second <c>AddressOf Me.H</c>
+        /// is EQUAL to the first (<c>__blSameDelegate</c>); an event is an invocation LIST (an array — the same handler
+        /// twice fires twice) and <c>__blRemoveHandler</c> removes the LAST equal entry, as <c>Delegate.Remove</c> does. A
+        /// lambda value is equal only to itself (<c>===</c>), as in .NET.
+        /// </summary>
+        private const string DelegatePrelude = """
+            function __blBind(target, method) {
+              const f = method.bind(target);
+              f.__blTarget = target;
+              f.__blMethod = method;
+              return f;
+            }
+            function __blSameDelegate(a, b) {
+              return a === b || (a.__blMethod !== undefined && a.__blMethod === b.__blMethod && a.__blTarget === b.__blTarget);
+            }
+            function __blRemoveHandler(list, handler) {
+              for (let i = list.length - 1; i >= 0; i--) {
+                if (__blSameDelegate(list[i], handler)) { list.splice(i, 1); return; }
+              }
+            }
+            """;
+
+        /// <summary>
+        /// The prelude goes in when the module could reach a helper: any class declares an event, or any body takes an
+        /// <c>AddressOf</c>. A scan rather than a flag set during emission, because the prelude is written FIRST —
+        /// the same reason as <see cref="UsesRoundingHelper"/>.
+        /// </summary>
+        private static bool UsesDelegateHelpers(IRModule module)
+        {
+            if (module?.Classes?.Values.Any(c => c?.Events?.Count > 0) == true) return true;
+            foreach (var function in module?.Functions ?? Enumerable.Empty<IRFunction>())
+                foreach (var block in function.Blocks ?? Enumerable.Empty<BasicBlock>())
+                    foreach (var instruction in block.Instructions ?? Enumerable.Empty<IRInstruction>())
+                        if (instruction is IRUnaryOp { Operation: UnaryOpKind.AddressOf })
+                            return true;
+            return false;
+        }
+
+        private void EmitDelegatePrelude(IRModule module)
+        {
+            _delegateHelpersEmitted = UsesDelegateHelpers(module);
+            if (!_delegateHelpersEmitted) return;
+            foreach (var line in DelegatePrelude.Split('\n'))
+                Line(line.TrimEnd('\r'));
+        }
+
+        /// <summary>Whether <see cref="EmitDelegatePrelude"/> wrote the helpers; a bind with none would be a ReferenceError.</summary>
+        private bool _delegateHelpersEmitted;
+
+        /// <summary>A bound method that remembers its (instance, method) — or a plain bind if the scan saw no need.</summary>
+        private string BoundMethod(string target, string method) =>
+            _delegateHelpersEmitted ? $"__blBind({target}, {method})" : $"{method}.bind({target})";
 
         private static bool IsCIntCall(IRCall call) =>
             string.Equals(call.FunctionName, "CInt", StringComparison.OrdinalIgnoreCase);
@@ -849,7 +905,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             // the class have separate subscribers, and a Set so a handler added twice fires once
             // — the closest JS reading of a multicast delegate.
             foreach (var evt in irClass.Events ?? new List<IREvent>())
-                Line($"{(evt.IsStatic ? "static " : "")}{SanitizeName(evt.Name)} = new Set();");
+                Line($"{(evt.IsStatic ? "static " : "")}{SanitizeName(evt.Name)} = [];");
 
             foreach (var prop in irClass.Properties ?? new List<IRProperty>())
                 EmitProperty(prop, members);
@@ -1581,7 +1637,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
             if (op.Operand is IRVariable v && v.Name != null &&
                 _currentClassMethods.TryGetValue(v.Name, out var declared))
-                return $"this.{SanitizeName(declared)}.bind(this)";
+                return BoundMethod("this", $"this.{SanitizeName(declared)}");
 
             // `AddressOf obj.Method` (obj may be Me) is an IRFieldAccess whose field is a METHOD
             // of the receiver's class. A .NET delegate to an instance method captures the
@@ -1592,11 +1648,11 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 DeclaredInstanceMethod(fa.Object?.Type?.Name, fa.FieldName) is string viaReceiver)
             {
                 var receiver = Expr(fa.Object);
-                return $"{receiver}.{SanitizeName(viaReceiver)}.bind({receiver})";
+                return BoundMethod(receiver, $"{receiver}.{SanitizeName(viaReceiver)}");
             }
 
             if (operand.StartsWith("this.", StringComparison.Ordinal))
-                return $"{operand}.bind(this)";
+                return BoundMethod("this", operand);
 
             return operand;
         }
@@ -3202,15 +3258,19 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             var name = call.FunctionName ?? string.Empty;
             var args = call.Arguments ?? new List<IRValue>();
 
+            // Spec §4.4 (Task 12): an event is an invocation LIST. AddHandler appends; RemoveHandler takes the LAST equal
+            // delegate (__blSameDelegate: the same function, or the same instance + method); a raise iterates a COPY,
+            // so a handler added or removed during the raise takes effect from the next one — .NET's rules. (Before: a
+            // Set, `delete` of a fresh `.bind` found nothing, and the live Set ran a handler added mid-raise.)
             if (name == "Delegate.Combine" && args.Count == 2)
             {
-                statement = $"{Expr(args[0])}.add({Expr(args[1])});";
+                statement = $"{Expr(args[0])}.push({Expr(args[1])});";
                 return true;
             }
 
             if (name == "Delegate.Remove" && args.Count == 2)
             {
-                statement = $"{Expr(args[0])}.delete({Expr(args[1])});";
+                statement = $"__blRemoveHandler({Expr(args[0])}, {Expr(args[1])});";
                 return true;
             }
 
@@ -3219,7 +3279,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 _currentClassEvents.TryGetValue(name.Substring(raisePrefix.Length), out var evt))
             {
                 var rendered = string.Join(", ", args.ConvertAll(Expr));
-                statement = $"for (const h of this.{SanitizeName(evt.Name)}) h({rendered});";
+                statement = $"for (const h of [...this.{SanitizeName(evt.Name)}]) h({rendered});";
                 return true;
             }
 

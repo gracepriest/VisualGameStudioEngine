@@ -240,8 +240,8 @@ public class FormRegionWriterTests
     [Test]
     public void Write_Web_NeverEmitsAddHandlerAgainstADomReceiver()
     {
-        // ⛔ TryEventCall emits `{recv}.add(handler)` unconditionally, so `AddHandler el.click, …`
-        // becomes `el.click.add(H)` → a runtime TypeError. It compiles green; only the browser
+        // ⛔ TryEventCall emits `{recv}.push(handler)` unconditionally, so `AddHandler el.click, …`
+        // becomes `el.click.push(H)` → a runtime TypeError. It compiles green; only the browser
         // complains.
         var result = RegionWriter.Write("LoginForm.bas", ScaffoldedFile(), WebLoginForm(), "LoginForm.blwebform");
 
