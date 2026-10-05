@@ -1139,7 +1139,7 @@ namespace BasicLang.Compiler.IR
                     IsOptional = param.IsOptional,
                     IsParamArray = param.IsParamArray,
                     IsByRef = param.IsByRef,
-                    DefaultValue = BuildExpressionValue(param.DefaultValue)
+                    DefaultValue = BuildParameterDefault(param)
                 };
                 _currentFunction.Parameters.Add(irParam);
                 PushVariableVersion(param.Name, irParam);
@@ -1220,7 +1220,7 @@ namespace BasicLang.Compiler.IR
                     IsOptional = param.IsOptional,
                     IsParamArray = param.IsParamArray,
                     IsByRef = param.IsByRef,
-                    DefaultValue = BuildExpressionValue(param.DefaultValue)
+                    DefaultValue = BuildParameterDefault(param)
                 };
                 _currentFunction.Parameters.Add(irParam);
                 PushVariableVersion(param.Name, irParam);
@@ -2248,7 +2248,7 @@ namespace BasicLang.Compiler.IR
                         IsOptional = param.IsOptional,
                         IsParamArray = param.IsParamArray,
                         IsByRef = param.IsByRef,
-                        DefaultValue = BuildExpressionValue(param.DefaultValue)
+                        DefaultValue = BuildParameterDefault(param)
                     });
                 }
 
@@ -2445,7 +2445,7 @@ namespace BasicLang.Compiler.IR
                     IsOptional = param.IsOptional,
                     IsParamArray = param.IsParamArray,
                     IsByRef = param.IsByRef,
-                    DefaultValue = BuildExpressionValue(param.DefaultValue)
+                    DefaultValue = BuildParameterDefault(param)
                 });
             }
 
@@ -2491,7 +2491,7 @@ namespace BasicLang.Compiler.IR
                     IsOptional = param.IsOptional,
                     IsParamArray = param.IsParamArray,
                     IsByRef = param.IsByRef,
-                    DefaultValue = BuildExpressionValue(param.DefaultValue)
+                    DefaultValue = BuildParameterDefault(param)
                 });
             }
 
@@ -3592,7 +3592,7 @@ namespace BasicLang.Compiler.IR
                     IsOptional = param.IsOptional,
                     IsParamArray = param.IsParamArray,
                     IsByRef = param.IsByRef,
-                    DefaultValue = BuildExpressionValue(param.DefaultValue)
+                    DefaultValue = BuildParameterDefault(param)
                 });
             }
 
@@ -3723,43 +3723,54 @@ namespace BasicLang.Compiler.IR
             // body so a body sees its OWN clause's binding, never a sibling's same-named one.
             var clauseBindings = new Dictionary<CaseClauseNode, List<IRVariable>>();
             int caseIndex = 0;
-            foreach (var caseClause in node.Cases)
+            // #184: a Case value is compared AS the subject's type, so a Char value in a String
+            // Select widens to String (CaseValueFor). Saved and restored: Selects nest.
+            var outerSelectSubjectType = _selectSubjectType;
+            _selectSubjectType = switchValue?.Type;
+            try
             {
-                if (caseClause.IsElse)
+                foreach (var caseClause in node.Cases)
                 {
-                    // Default case
-                    continue;
-                }
-
-                var caseBlock = _currentFunction.CreateBlock($"switch{switchId}_case_{caseIndex++}");
-                caseBlocks.Add(caseBlock);
-
-                // Add case values (simple constant matching)
-                foreach (var caseValue in caseClause.Values)
-                {
-                    caseValue.Accept(this);
-                    var value = _expressionResult;
-                    switchInst.Cases.Add((value, caseBlock));
-                }
-
-                // Add pattern cases
-                var bindings = new List<IRVariable>();
-                clauseBindings[caseClause] = bindings;
-                try
-                {
-                    foreach (var pattern in caseClause.Patterns)
+                    if (caseClause.IsElse)
                     {
-                        var patternCase = ConvertPatternToIR(pattern, caseBlock, bindings);
-                        if (patternCase != null)
+                        // Default case
+                        continue;
+                    }
+
+                    var caseBlock = _currentFunction.CreateBlock($"switch{switchId}_case_{caseIndex++}");
+                    caseBlocks.Add(caseBlock);
+
+                    // Add case values (simple constant matching)
+                    foreach (var caseValue in caseClause.Values)
+                    {
+                        caseValue.Accept(this);
+                        var value = CaseValueFor(_expressionResult);
+                        switchInst.Cases.Add((value, caseBlock));
+                    }
+
+                    // Add pattern cases
+                    var bindings = new List<IRVariable>();
+                    clauseBindings[caseClause] = bindings;
+                    try
+                    {
+                        foreach (var pattern in caseClause.Patterns)
                         {
-                            switchInst.PatternCases.Add(patternCase);
+                            var patternCase = ConvertPatternToIR(pattern, caseBlock, bindings);
+                            if (patternCase != null)
+                            {
+                                switchInst.PatternCases.Add(patternCase);
+                            }
                         }
                     }
+                    finally
+                    {
+                        foreach (var bound in bindings) PopVariableVersion(bound.Name);
+                    }
                 }
-                finally
-                {
-                    foreach (var bound in bindings) PopVariableVersion(bound.Name);
-                }
+            }
+            finally
+            {
+                _selectSubjectType = outerSelectSubjectType;
             }
 
             EmitInstruction(switchInst);
@@ -3807,6 +3818,18 @@ namespace BasicLang.Compiler.IR
             _currentBlock = endBlock;
         }
 
+        /// <summary>The IR type of the innermost Select Case subject while its Case values are built
+        /// (#184, <see cref="CaseValueFor"/>); null outside one.</summary>
+        private TypeInfo _selectSubjectType;
+
+        /// <summary>
+        /// #184: a Case value as the Select compares it — a Char value in a String Select widens to
+        /// String, as VB converts each Case expression to the subject's type. Before, the char
+        /// reached the String comparison as it stood: CS0029 on C#, a C++ string/char compare that
+        /// does not build, and an InvalidProgramException on MSIL. Any other value is unchanged.
+        /// </summary>
+        private IRValue CaseValueFor(IRValue value) => WidenCharToString(value, _selectSubjectType);
+
         /// <param name="bindings">Receives every pattern variable this pattern declares, each
         /// already pushed onto <see cref="_variableVersions"/> so its When guard (and, re-pushed
         /// by the caller, the clause body) resolves it. The caller pops them. ⛔ A declaration
@@ -3831,21 +3854,21 @@ namespace BasicLang.Compiler.IR
 
                 case RangePatternNode rangePattern:
                     rangePattern.LowerBound.Accept(this);
-                    var lower = _expressionResult;
+                    var lower = CaseValueFor(_expressionResult);
                     rangePattern.UpperBound.Accept(this);
-                    var upper = _expressionResult;
+                    var upper = CaseValueFor(_expressionResult);
                     result = new IRRangePatternCase(lower, upper, target);
                     break;
 
                 case ComparisonPatternNode compPattern:
                     compPattern.Value.Accept(this);
-                    var compValue = _expressionResult;
+                    var compValue = CaseValueFor(_expressionResult);
                     result = new IRComparisonPatternCase(compPattern.Operator, compValue, target);
                     break;
 
                 case ConstantPatternNode constPattern:
                     constPattern.Value.Accept(this);
-                    var constValue = _expressionResult;
+                    var constValue = CaseValueFor(_expressionResult);
                     result = new IRConstantPatternCase(constValue, target);
                     break;
 
@@ -4320,7 +4343,8 @@ namespace BasicLang.Compiler.IR
             // leave the iteration — so an `Exit For` leaves `x` holding the element being
             // processed, as VB does. Lowered by the ordinary assignment path, so a field, a module
             // global, a ByRef parameter and the assignment coercion are all its business.
-            reusedControl?.Assignment.Accept(this);
+            // #184: or `Dim s As String = hidden`, a Char element widened to the declared String.
+            reusedControl?.Prologue.Accept(this);
 
             node.Body.Accept(this);
             _loopStack.Pop();
@@ -4704,6 +4728,13 @@ namespace BasicLang.Compiler.IR
                 return new IRConstant(null, declared);
             }
 
+            // #184: Char → String, the one widening into a non-numeric type that needs a value
+            // conversion. Before the numeric guard, which a String target falls out of.
+            if (TypeInfo.IsCharToStringWidening(actual, declared))
+            {
+                return WidenCharToString(value, declared);
+            }
+
             // ⚠ ONE guard, not two. An earlier version also tested a broad
             // `IsNumericPrimitive` (any integral or floating type) before this; it is redundant,
             // because every type this admits is one that would admit — and a mutation removing it
@@ -4733,6 +4764,39 @@ namespace BasicLang.Compiler.IR
                                   DetermineCastKind(actual, declared));
             EmitInstruction(cast);
             return cast;
+        }
+
+        /// <summary>
+        /// #184: converts a Char <paramref name="value"/> to the one-character String VB widens it
+        /// to (<see cref="TypeInfo.IsCharToStringWidening"/>); anything else is returned unchanged.
+        ///
+        /// <para>No backend has an implicit char → string conversion to lean on — C# has none
+        /// (CS0029/CS1503), C++ cannot build a <c>std::string</c> from a <c>char</c>, and MSIL
+        /// stores the int16 where a string reference belongs (InvalidProgramException) — so the
+        /// conversion is made explicit here, once, for every store, return and argument that
+        /// <see cref="CoerceToDeclaredType"/> serves.</para>
+        ///
+        /// <para>A literal is re-typed in place (<c>"q"c</c> → <c>"q"</c>), as a numeric literal
+        /// is: there is nothing to convert at run time. Anything else becomes <c>CStr(value)</c> —
+        /// the conversion an interpolated string's hole already uses, which every backend lowers
+        /// for a Char (C# <c>Convert.ToString</c>, C++ the shared stringifier, MSIL box +
+        /// <c>Object::ToString</c>; measured: <c>CStr(c)</c> prints the character on all three).
+        /// JavaScript refuses a Char-typed value before this matters (BL7004), and its chars are
+        /// one-character strings anyway.</para>
+        /// </summary>
+        private IRValue WidenCharToString(IRValue value, TypeInfo declared)
+        {
+            if (!TypeInfo.IsCharToStringWidening(value?.Type, declared)) return value;
+
+            if (value is IRConstant { Value: char ch })
+            {
+                return new IRConstant(ch.ToString(), declared);
+            }
+
+            var conversion = new IRCall(_currentFunction.GetNextTempName(), "CStr", declared);
+            conversion.Arguments.Add(value);
+            EmitInstruction(conversion);
+            return conversion;
         }
 
         /// <summary>The scalar <c>Object</c> type — what the analyzer types the Nothing literal as.</summary>
@@ -4770,12 +4834,19 @@ namespace BasicLang.Compiler.IR
             // symbol — the types live in the delegate's generic arguments. Only the Nothing
             // literal is typed from them: a numeric argument to a delegate was never coerced, and
             // coercing it now would change what every such call already emits.
-            if (value is IRConstant { Value: null } && callee != null
+            if (callee != null
                 && callee.Kind != SymbolKind.Function && callee.Kind != SymbolKind.Subroutine
                 && SemanticAnalyzer.GetDelegateParameterTypes(callee.Type) is { } delegateParameters
                 && index >= 0 && index < delegateParameters.Count)
             {
-                return CoerceToDeclaredType(value, delegateParameters[index]);
+                if (value is IRConstant { Value: null })
+                    return CoerceToDeclaredType(value, delegateParameters[index]);
+
+                // #184: a Char into a delegate's String parameter (`f(c)`, f As Action(Of String))
+                // is admitted by the analyzer like any argument, so it is converted like one. Only
+                // this widening: a numeric argument stays as every such call already emits it.
+                if (TypeInfo.IsCharToStringWidening(value?.Type, delegateParameters[index]))
+                    return WidenCharToString(value, delegateParameters[index]);
             }
 
             var parameters = callee?.Parameters;
@@ -5411,6 +5482,22 @@ namespace BasicLang.Compiler.IR
         private IRValue _expressionResult;
 
         /// <summary>
+        /// A parameter's <c>Optional</c> default, as the signature spells it. #184: a Char literal
+        /// default of a String parameter (<c>Optional s As String = "d"c</c>) is re-typed to the
+        /// String literal, as <see cref="WidenCharToString"/> re-types one at a store — C# writes
+        /// the default into the signature, and <c>string s = 'd'</c> is CS1750. Only a constant: a
+        /// default is never computed at the declaration, so there is no block to convert in.
+        /// </summary>
+        private IRValue BuildParameterDefault(ParameterNode param)
+        {
+            var value = BuildExpressionValue(param.DefaultValue);
+            var paramType = _semanticAnalyzer.GetNodeType(param);
+            return value is IRConstant { Value: char ch } && TypeInfo.IsCharToStringWidening(value.Type, paramType)
+                ? new IRConstant(ch.ToString(), paramType)
+                : value;
+        }
+
+        /// <summary>
         /// Build an expression and return the result. Used for default parameter values.
         /// </summary>
         private IRValue BuildExpressionValue(ExpressionNode expr)
@@ -5656,6 +5743,12 @@ namespace BasicLang.Compiler.IR
 
             if (IsComparisonOperator(node.Operator))
             {
+                // #184: `c = "a"` compares STRINGS in VB — the Char operand widens to String. Left
+                // as a char against a string it was CS0019 on C#, a C++ pointer/char compare that
+                // does not build, and an int16 compared with a string reference on MSIL.
+                left = WidenCharToString(left, right?.Type);
+                right = WidenCharToString(right, left?.Type);
+
                 var cmpKind = MapComparisonOperator(node.Operator);
                 result = new IRCompare(tempName, cmpKind, left, right, resultType);
             }

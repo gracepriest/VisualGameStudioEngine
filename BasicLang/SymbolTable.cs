@@ -189,6 +189,13 @@ public class TypeInfo
             if (Kind == TypeKind.Foreign && other != null && other.Kind == TypeKind.Foreign)
                 return true;
 
+            // #184: Char WIDENS to String (VB's rule, legal under Option Strict On) — a one-character
+            // string. Scalars only: a Char() is not a String here. The value is converted where it
+            // is stored, returned or passed (IRBuilder.WidenCharToString), so every backend sees a
+            // String; the reverse, String → Char, stays refused (BC30512).
+            if (IsCharToStringWidening(other, this))
+                return true;
+
             // Numeric conversions
             if (IsNumeric() && other.IsNumeric())
             {
@@ -243,6 +250,19 @@ public class TypeInfo
 
             return false;
         }
+
+        /// <summary>
+        /// #184: whether storing a <paramref name="source"/> into a <paramref name="target"/> is
+        /// VB's Char → String widening — both SCALAR (never an array, a handle <c>String[]</c>
+        /// included, nor a pointer). The one test the front end's widening table and the IR's
+        /// conversion share, so the two cannot disagree about which stores need a conversion.
+        /// </summary>
+        public static bool IsCharToStringWidening(TypeInfo source, TypeInfo target) =>
+            IsScalarNamed(source, "Char") && IsScalarNamed(target, "String");
+
+        private static bool IsScalarNamed(TypeInfo type, string name) =>
+            type != null && type.Kind != TypeKind.Array && type.ArrayRank == 0 && !type.IsPointer
+            && string.Equals(type.Name, name, StringComparison.Ordinal);
 
         /// <summary>
         /// The member named <paramref name="name"/> on this type, or — failing that — on the
