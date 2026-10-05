@@ -245,6 +245,7 @@
                                       CommitGeometryCommand="{Binding CommitGeometryCommand}"
                                       DeleteCommand="{Binding DeleteControlCommand}"
                                       ActivateControlCommand="{Binding ActivateControlCommand}"
+                                      ActivateFormCommand="{Binding ActivateFormCommand}"
                                       Selection="{Binding Selection}"
                                       CopyCommand="{Binding CopyControlsCommand}"
                                       CutCommand="{Binding CutControlsCommand}"

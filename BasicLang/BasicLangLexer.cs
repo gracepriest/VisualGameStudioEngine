@@ -379,7 +379,13 @@ namespace BasicLang.Compiler
         private int _line;
         private int _column;
         private readonly List<Token> _tokens;
-        
+
+        /// <summary>
+        /// Whether <paramref name="word"/> is one of the lexer's keywords (case-insensitive) — the form designer refuses a
+        /// handler name that is one (property-grid slice 5), from THIS table rather than a copy of it.
+        /// </summary>
+        public static bool IsKeyword(string word) => _keywords.ContainsKey(word);
+
         private static readonly Dictionary<string, TokenType> _keywords = new Dictionary<string, TokenType>(StringComparer.OrdinalIgnoreCase)
         {
             // Variable Declaration

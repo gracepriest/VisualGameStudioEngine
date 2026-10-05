@@ -102,10 +102,31 @@ public sealed class FormDocument
 
     /// <summary>
     /// The FORM's own event wiring (spec §2.3) — the same <c>&lt;Bind&gt;</c> shape a control uses,
-    /// written directly under the root element. ⚠ Read and written in slice 1; the region writer WARNS
-    /// rather than emitting until slice 5 gives the Form its events.
+    /// written directly under the root element. Since slice 5 the region writer EMITS them against
+    /// <c>FormControlCatalog.FormRoot</c>'s events: <c>AddHandler Me.Load, …</c> last on WinForms; on the page a
+    /// <c>document.body</c>/<c>window</c> listener, or Load as <c>Me.&lt;handler&gt;()</c> at the end of
+    /// <c>InitializeComponent</c> (ADR 0021). A web bind the Form does not wire there is refused (BL8032).
     /// </summary>
     public List<FormBind> Binds { get; } = new();
+
+    /// <summary>
+    /// Every control or component whose Id is EXACTLY the FORM's own name — refused with the duplicate-id code (BL8017) by
+    /// the reader and the region writer alike (slice 5 review fix 2): a field named like its enclosing class is CS0542.
+    /// ⚠ Exact (Ordinal), measured against the existing suite: a form <c>Pic</c> holding a control <c>pic</c> builds and runs
+    /// on both targets (the image-copy acceptance fixtures), so refusing case variants refused working documents. The one
+    /// real case-variant collision — two generated <c>VgsOn_</c> wrappers whose names differ only in case — is refused by
+    /// the region writer where it actually arises (<c>RegionWriter.CheckWrapperNames</c>).
+    /// </summary>
+    public IEnumerable<FormControl> ControlsNamedLikeTheForm() =>
+        string.IsNullOrEmpty(Name)
+            ? Enumerable.Empty<FormControl>()
+            : AllControls().Concat(AllComponents()).Where(c => string.Equals(c.Id, Name, StringComparison.Ordinal));
+
+    /// <summary>The ONE BL8017 text for <see cref="ControlsNamedLikeTheForm"/>, shared by the reader and the region writer.</summary>
+    public string NamedLikeTheFormMessage(FormControl control) =>
+        $"the control Id '{control.Id}' is the form's own name '{Name}'. Ids become members of the form's class, and a " +
+        "member cannot share its class's name (CS0542 on WinForms); on a web page its generated VgsOn_ wrappers would " +
+        "collide with the form's. Rename the control.";
 
     /// <summary>
     /// The FORM's catalog-only root attributes (spec §2.3, slice 3) — every <see cref="FormControlCatalog.FormRoot"/> row

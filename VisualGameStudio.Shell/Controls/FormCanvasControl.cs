@@ -169,6 +169,21 @@ public class FormCanvasControl : Control
     }
 
     /// <summary>
+    /// Slice 5 D-9: invoked (no parameter) when the FORM's own surface is double-clicked — no control under the point, the
+    /// point inside <see cref="FormCanvasTransform.SurfaceRect"/> — VS's "open the form's Load". ⛔ The grey canvas OUTSIDE
+    /// the form also hit-tests no control and must still do nothing. <see cref="ActivateControlCommand"/> keeps its
+    /// meaning (a control, never null).
+    /// </summary>
+    public static readonly StyledProperty<ICommand?> ActivateFormCommandProperty =
+        AvaloniaProperty.Register<FormCanvasControl, ICommand?>(nameof(ActivateFormCommand));
+
+    public ICommand? ActivateFormCommand
+    {
+        get => GetValue(ActivateFormCommandProperty);
+        set => SetValue(ActivateFormCommandProperty, value);
+    }
+
+    /// <summary>
     /// The multi-selection (Task 20). <see cref="SelectedControl"/> remains its PRIMARY.
     ///
     /// <para>⚠ Owned by the HOST, not by the canvas, because the align, size, z-order and clipboard
@@ -711,9 +726,18 @@ public class FormCanvasControl : Control
         // exists in the layout only for the selection that opened it, and the first click of the
         // pair is what opened it. Without it this can never find a nested item and "double-click a
         // menu item to reach its handler" is dead for everything except a top-level one.
-        var control = _transform.HitTest(document, e.GetPosition(this), SelectedControl);
+        var point = e.GetPosition(this);
+        var control = _transform.HitTest(document, point, SelectedControl);
         if (control == null)
         {
+            // Slice 5 D-9: the form's surface opens the form's Load; the canvas outside it does nothing.
+            if (FormCanvasTransform.SurfaceRect(document).Contains(_transform.ToForm(point)) &&
+                ActivateFormCommand is { } formCommand && formCommand.CanExecute(null))
+            {
+                formCommand.Execute(null);
+                e.Handled = true;
+            }
+
             return;
         }
 

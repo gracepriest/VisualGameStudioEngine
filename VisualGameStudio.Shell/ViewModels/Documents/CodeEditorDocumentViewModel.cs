@@ -220,6 +220,9 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
 
         Tray.Rebuild(file?.Model);
 
+        // Slice 5 D-5: the Events tab's drop-downs read the code-behind as the user sees it.
+        _ = PushCodeBehindTextAsync();
+
         // ⛔⛔ The ONE selection store resets WITH the panels. Load above empties the grid — a reload
         // is "start from nothing selected", the same rule as a Code-view edit, an undo and entering
         // Design view — and every one of those routes can hand us a FRESH parse whose objects are
@@ -745,15 +748,104 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
     /// a control that is already wired does not mark the form dirty.</para>
     /// </summary>
     [RelayCommand]
-    private async Task ActivateControlAsync(BasicLang.Forms.FormControl? control)
+    private Task ActivateControlAsync(BasicLang.Forms.FormControl? control) =>
+        control == null || DesignFile is not { } file
+            ? Task.CompletedTask
+            : ActivateHandlerAsync(new BasicLang.Forms.FormBindOwner(file.Model, control), null, null);
+
+    /// <summary>
+    /// Slice 5 D-9: a double-click on the FORM's surface (not a control) opens the form's default handler — Load — as VS
+    /// does. ⛔ The canvas runs this only for a point ON the form surface; the canvas outside it does nothing.
+    /// </summary>
+    [RelayCommand]
+    private Task ActivateFormAsync() =>
+        DesignFile is not { } file
+            ? Task.CompletedTask
+            : ActivateHandlerAsync(new BasicLang.Forms.FormBindOwner(file.Model), null, null);
+
+    /// <summary>
+    /// ⛔ THE one host route into a handler (slice 5 Task 6): the canvas double-click on a control
+    /// (<see cref="ActivateControlCommand"/>) or on the form (<see cref="ActivateFormCommand"/>), and the grid's Events tab
+    /// (<c>HandlerRequested</c>: a double-clicked row, or a typed new name) all land here. <paramref name="evt"/> null means
+    /// the owner's default event; <paramref name="handlerName"/> is a name the user TYPED (never renamed), refused through
+    /// <see cref="BasicLang.Forms.FormHandlers.DescribeUnusableHandler"/> before anything is written.
+    /// </summary>
+    private async Task ActivateHandlerAsync(
+        BasicLang.Forms.FormBindOwner owner, BasicLang.Forms.FormEventDef? evt, string? handlerName)
     {
-        var file = DesignFile;
-        if (control == null || file == null || FilePath == null)
+        if (DesignFile == null || FilePath == null)
         {
             return;
         }
 
+        // ⛔ One gesture at a time, IN ORDER (round 5 fix 2): each waits for the one before it, so a second gesture reads
+        // the code-behind the first one wrote. A request IDENTICAL to one already waiting or running is dropped (round 6
+        // fix 3): Enter and the LostFocus right behind it asking for the same typed name. A different request (another
+        // control, another event) is queued, never lost. The queue is a chain of completions: each gesture awaits the
+        // previous one's task, then completes its own whatever happened.
+        var key = (owner.Control, owner.Form, evt, handlerName);
+        if (!_handlerGesturesPending.Add(key))
+        {
+            return;
+        }
+
+        var previous = _handlerGestureTail;
+        var done = new TaskCompletionSource();
+        _handlerGestureTail = done.Task;
+        try
+        {
+            await previous;
+            await RunHandlerGestureAsync(owner, evt, handlerName);
+        }
+        catch (Exception ex)
+        {
+            // ⛔ Never a faulted task (round 6 fix 3): the grid starts this fire-and-forget, so a throw here (even from
+            // reporting a failure) would go unobserved. Traced, and the queue moves on.
+            System.Diagnostics.Trace.TraceError($"A designer handler gesture failed: {ex}");
+        }
+        finally
+        {
+            _handlerGesturesPending.Remove(key);
+            done.SetResult();
+        }
+    }
+
+    /// <summary>
+    /// The tab closed (the shell's <c>CleanupDocumentState</c> calls this): a handler gesture still queued writes and opens
+    /// nothing (round 6 fix 3); <see cref="RunHandlerGestureAsync"/> checks it before touching the code-behind.
+    /// </summary>
+    public void MarkClosed() => _closed = true;
+
+    private bool _closed;
+
+    /// <summary>The last handler gesture queued: the next one waits for it (<see cref="ActivateHandlerAsync"/>).</summary>
+    private Task _handlerGestureTail = Task.CompletedTask;
+
+    /// <summary>Every gesture waiting or running: a request identical to one of them is dropped.</summary>
+    private readonly HashSet<(BasicLang.Forms.FormControl?, BasicLang.Forms.FormDocument, BasicLang.Forms.FormEventDef?, string?)>
+        _handlerGesturesPending = new();
+
+    private async Task RunHandlerGestureAsync(
+        BasicLang.Forms.FormBindOwner owner, BasicLang.Forms.FormEventDef? evt, string? handlerName)
+    {
+        var file = DesignFile;
+        if (file == null || FilePath == null || _closed)
+        {
+            return;   // ⛔ a gesture still queued when the tab closed writes and opens nothing (round 6 fix 3)
+        }
+
         var codePath = BasicLang.Forms.FormCodeBehind.PathFor(FilePath);
+
+        // ⛔ A TYPED name's failure — refused, not plannable, not writable — is said where it was typed (the row's
+        // description, the cell reverting if it still shows that name), never as an Error List entry (round 5 fix 2). Any
+        // other gesture's failure, or a typed one with no row showing, is reported as before.
+        void Fail(string message)
+        {
+            if (handlerName == null || evt == null || !PropertyGrid.RefuseHandler(owner, evt, message, handlerName))
+            {
+                ReportDesignerRefusal(codePath, BasicLang.Forms.DesignCodes.RegionAbsent, message);
+            }
+        }
 
         try
         {
@@ -770,27 +862,53 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
 
             // D2: the OPEN tab's text when the .bas is open (its unsaved edits included), else the disk.
             var before = await ReadCodeBehindAsync(codePath, CancellationToken.None);
-            var plan = BasicLang.Forms.FormHandlers.PlanDefault(file.Model, control, before);
 
-            if (plan.Outcome == BasicLang.Forms.HandlerOutcome.Refused)
+            // ⛔ A typed name is refused BEFORE anything is written (review round 3 ruling 3): the grid checked it too, but
+            // the host is the one about to write the file, so it asks the same ONE rule again.
+            // Said where the name was typed — the row's description, the cell reverting (round 4 ruling 5) — never as BL8014
+            // "no code-behind" in the Error List, which is not what went wrong.
+            if (handlerName != null && evt != null &&
+                BasicLang.Forms.FormHandlers.DescribeUnusableHandler(file.Model, owner, evt, handlerName,
+                    BasicLang.Forms.FormCodeScan.Scan(before, file.Model.Name)) is { } unusable)
             {
-                ReportDesignerRefusal(
-                    codePath, BasicLang.Forms.DesignCodes.RegionAbsent,
-                    plan.Refusal ?? "the handler could not be created.");
+                Fail(unusable);
                 return;
             }
 
+            var plan = evt == null
+                ? BasicLang.Forms.FormHandlers.PlanDefault(file.Model, owner, before)
+                : BasicLang.Forms.FormHandlers.Plan(file.Model, owner, evt, before, handlerName);
+
+            if (plan.Outcome == BasicLang.Forms.HandlerOutcome.Refused)
+            {
+                Fail(plan.Refusal ?? "the handler could not be created.");
+                return;
+            }
+
+            // ⛔ The Bind is written only AFTER the stub is on disk (or in the open tab): a failed write throws before it,
+            // so a refused gesture leaves the document untouched.
             if (plan.Outcome == BasicLang.Forms.HandlerOutcome.Created)
             {
                 await WriteCodeBehindAsync(codePath, plan.CodeText, CancellationToken.None);
             }
 
-            if (BasicLang.Forms.FormHandlers.EnsureBind(control, plan.EventName, plan.Handler))
+            // ⛔ The tab may have closed WHILE the write was in flight (round 7): the stub is on disk and cannot be recalled,
+            // but a closed document is not bound and nothing is opened for it.
+            if (_closed)
+            {
+                return;
+            }
+
+            if (BindHandler(owner, plan.EventName, plan.Handler))
             {
                 WriteDesignerEditBack();
             }
 
-            SelectInDesigner(control);
+            // ⛔ CRITICAL (round 4 ruling 1): the bind was edited behind the Events tab's rows — they re-read it NOW, before
+            // focus can leave a cell still showing the old value (SelectInDesigner is a no-op for the control already shown).
+            PropertyGrid.RefreshHandlers();
+            SelectInDesigner(owner.Control);
+            await PushCodeBehindTextAsync();
             _eventAggregator.Publish(new NavigateToFileEvent(codePath, plan.CaretLine));
 
             // ⛔ A substituted default (a web Panel: Paint has no page equivalent → Click) is SAID, as information —
@@ -803,11 +921,15 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
         }
         catch (Exception ex)
         {
-            ReportDesignerRefusal(
-                codePath, BasicLang.Forms.DesignCodes.RegionAbsent,
-                $"the designer could not open a handler in '{Path.GetFileName(codePath)}': {ex.Message}");
+            Fail($"the designer could not open a handler in '{Path.GetFileName(codePath)}': {ex.Message}");
         }
     }
+
+    /// <summary>
+    /// Bumped by every write of the grid's code-behind text: a read that started under an older number lands on nothing
+    /// (round 4 ruling 6 — a slow read begun before a designer write must not put the old text back).
+    /// </summary>
+    private int _codeBehindVersion;
 
     /// <summary>
     /// The IDE's OPEN document for a path, or null — set by the shell's file-open route
@@ -822,6 +944,59 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
 
     private CodeEditorDocumentViewModel? OpenCodeBehind(string codePath) =>
         OpenDocumentLookup?.Invoke(codePath) is { } open && !ReferenceEquals(open, this) ? open : null;
+
+    /// <summary>
+    /// Wires <paramref name="handler"/> to the owner's event: replaces the handler of an existing bind of that event (a
+    /// typed new name in the Events tab), else adds the bind. Returns whether the document changed.
+    /// </summary>
+    private static bool BindHandler(BasicLang.Forms.FormBindOwner owner, string eventName, string handler)
+    {
+        var bound = owner.Binds.FirstOrDefault(b => !b.UsesReservedDataBinding &&
+                                                    string.Equals(b.Event, eventName, StringComparison.OrdinalIgnoreCase));
+        if (bound == null)
+        {
+            return BasicLang.Forms.FormHandlers.EnsureBind(owner, eventName, handler);
+        }
+
+        if (string.Equals(bound.Handler, handler, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        bound.Handler = handler;
+        return true;
+    }
+
+    /// <summary>
+    /// Slice 5 D-5 freshness: pushes the code-behind AS THE USER SEES IT (the open tab's unsaved text, else the disk) into
+    /// the grid, whose Events tab offers the Subs that fit. Called on every panel sync, after every handler gesture, and
+    /// when a handler drop-down opens (the grid's <c>CodeBehindRefreshRequested</c>). A missing file is empty. ⚠ A read that
+    /// finishes after a NEWER write (<see cref="_codeBehindVersion"/>) is dropped.
+    /// </summary>
+    private async Task PushCodeBehindTextAsync()
+    {
+        if (FilePath == null)
+        {
+            return;
+        }
+
+        try
+        {
+            var version = ++_codeBehindVersion;
+            var codePath = BasicLang.Forms.FormCodeBehind.PathFor(FilePath);
+            var text = await CodeBehindExistsAsync(codePath)
+                ? await ReadCodeBehindAsync(codePath, CancellationToken.None)
+                : "";
+            if (version == _codeBehindVersion)
+            {
+                PropertyGrid.CodeBehindText = text;
+            }
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Trace.TraceError($"The code-behind could not be read for the Events tab: {ex.Message}");
+        }
+    }
 
     /// <summary>The code-behind as the user sees it: the open tab's buffer (unsaved edits included), else the disk.</summary>
     private async Task<string> ReadCodeBehindAsync(string codePath, CancellationToken cancellationToken) =>
@@ -844,13 +1019,20 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
     private async Task WriteCodeBehindAsync(string codePath, string text, CancellationToken cancellationToken)
     {
         var open = OpenCodeBehind(codePath);
+
+        // Slice 5 D-5: what was just written IS the code-behind the user now sees — the Events tab follows it. ⚠ Only
+        // once it IS written: a write that throws must not leave the grid offering a Sub that exists nowhere.
         if (open is { IsDirty: true })
         {
             open.ApplyDesignerWrite(text, savedToDisk: false);
+            _codeBehindVersion++;
+            PropertyGrid.CodeBehindText = text;
             return;
         }
 
         await _fileService.WriteFileAsync(codePath, text, cancellationToken);
+        _codeBehindVersion++;   // any read still in flight began before this write: it must not land after it
+        PropertyGrid.CodeBehindText = text;
         open?.ApplyDesignerWrite(text, savedToDisk: true);
         _eventAggregator.Publish(new FileSavedEvent(codePath));
     }
@@ -1252,6 +1434,11 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
         // and the ONE selection store answers, so the canvas, the tray and the grid cannot disagree.
         // Choosing the form is SelectInDesigner(null).
         PropertyGrid.SelectionRequested += (_, control) => SelectInDesigner(control);
+
+        // Slice 5 Task 6: the Events tab asks for a handler (a double-clicked row, a typed new name) — the ONE host route,
+        // the same as the canvas double-click; and a handler drop-down that opens asks for the code-behind as it is NOW.
+        PropertyGrid.HandlerRequested += (_, request) => _ = ActivateHandlerAsync(request.Owner, request.Event, request.Handler);
+        PropertyGrid.CodeBehindRefreshRequested += (_, _) => _ = PushCodeBehindTextAsync();
     }
 
     /// <summary>The component tray under the canvas (Task 25): a view of <c>DesignDocument.Components</c>.</summary>

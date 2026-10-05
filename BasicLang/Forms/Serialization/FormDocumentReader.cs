@@ -302,6 +302,15 @@ public static class FormDocumentReader
                     filePath, Line(at), Column(at)));
             }
         }
+
+        // Slice 5 review fix 2: an Id equal to the form's own name is the same kind of collision — a member against its
+        // class (CS0542), and on the page two wrappers of one name.
+        foreach (var control in model.ControlsNamedLikeTheForm())
+        {
+            var at = positions.GetValueOrDefault(control);
+            diagnostics.Add(Error(DesignCodes.DuplicateControlId, model.NamedLikeTheFormMessage(control),
+                filePath, Line(at), Column(at)));
+        }
     }
 
     // ==================================================================

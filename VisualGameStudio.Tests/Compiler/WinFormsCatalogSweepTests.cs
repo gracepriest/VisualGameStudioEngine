@@ -247,6 +247,60 @@ public class WinFormsCatalogSweepTests
             "event name is invisible everywhere else.");
     }
 
+    /// <summary>Every WinForms kind, plus the Form itself (slice 5: its Load, FormClosing, …).</summary>
+    private static IEnumerable<TestCaseData> EveryWinFormsControlAndTheForm() =>
+        EveryWinFormsControl().Append(
+            new TestCaseData(FormControlCatalog.FormRoot.Kind).SetName("{m}(" + FormControlCatalog.FormRoot.Kind + ")"));
+
+    /// <summary>
+    /// Slice 5 Task 4: the default-event sweep above, for EVERY event the catalog lists — each planned through
+    /// <see cref="FormHandlers.Plan"/> (the stub the designer really writes, <see cref="FormHandlers.Shape"/>'s signature),
+    /// bound, written by the region writer, built by the real CLI to C#, and accepted by csc. ONE compile per kind: a
+    /// misspelled event, a wrong args type or an unqualified <c>System.ComponentModel</c> type fails it naming the line.
+    /// </summary>
+    [TestCaseSource(nameof(EveryWinFormsControlAndTheForm))]
+    [Category("Integration")]
+    public void EveryEvent_OfEveryControl_WiresIntoCSharpThatCscAccepts(string kind)
+    {
+        var form = new FormDocument
+        {
+            Target = FormTarget.WinForms, Name = "SweepForm", Width = 800, Height = 450, Text = "Sweep"
+        };
+
+        FormBindOwner owner;
+        FormControlDef definition;
+        if (kind == FormControlCatalog.FormRoot.Kind)
+        {
+            definition = FormControlCatalog.FormRoot;
+            owner = new FormBindOwner(form);
+        }
+        else
+        {
+            definition = FormControlCatalog.Find(kind)!;
+            owner = new FormBindOwner(form, FormCatalogShapes.Canonical(form, definition, "ctl"));
+        }
+
+        var events = FormEvents.WiredOn(definition, FormTarget.WinForms);
+        Assert.That(events, Is.Not.Empty, $"'{kind}' lists no WinForms event");
+
+        var code = FormScaffolder.Create("SweepForm", FormTarget.WinForms).CodeText;
+        foreach (var evt in events)
+        {
+            var plan = FormHandlers.Plan(form, owner, evt, code);
+            Assert.That(plan.Outcome, Is.EqualTo(HandlerOutcome.Created), $"{kind}.{evt.Name}: {plan.Refusal}");
+            FormHandlers.EnsureBind(owner, plan.EventName, plan.Handler);
+            code = plan.CodeText;
+        }
+
+        var written = RegionWriter.Write("SweepForm.bas", code, form, "SweepForm.blform");
+        Assert.That(written.Refused, Is.False,
+            "the region writer refused: " + string.Join("; ", written.Diagnostics.Select(d => d.Format())));
+
+        WinFormsCompile.AssertCompiles(
+            CompileToCSharp(written.Text),
+            $"a '{kind}' wired to all {events.Count} of its events ({string.Join(", ", events.Select(e => e.Name))}) must compile.");
+    }
+
     [Test]
     [Category("Integration")]
     public void AHexColour_Compiles_EvenThoughItCannotBeEmittedVerbatim()

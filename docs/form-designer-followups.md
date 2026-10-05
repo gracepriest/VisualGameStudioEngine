@@ -654,3 +654,78 @@ rename belongs beside `FormDocument.RemoveControl` in the MODEL (one place, ever
 `FormControlCatalog.FormRoot` Reference row whose value is the old Id, in the same write so one undo
 restores both — `FormReferences.ForgetRemoved` is the delete half and the shape to copy. Delete and Cut
 already follow VS (slice 4 review follow-up).
+
+## Property-grid slice 5 (events) — filed 2026-10-05
+
+### 36. Classic (DOM-style) web emission diverges from WinForms — piece 2's library owns parity
+
+Copied whole from the slice-5 pre-flight's D-2 (`docs/superpowers/plans/2026-10-04-property-grid-slice5-preflight.md`).
+Each row: **classic emission diverges; piece 2's library is responsible for WinForms parity.**
+
+| Behaviour | WinForms | Classic page |
+|---|---|---|
+| Mouse events on a DISABLED control | none raised | browser-dependent (disabled form elements swallow some, not all, mouse events) |
+| A double-click | Click once, then DoubleClick | `click`, `click`, `dblclick` → the Click handler runs TWICE |
+| RadioButton CheckedChanged when it becomes UNchecked | raised on both radios | `change` fires only on the newly checked radio |
+| TextChanged on a programmatic `Text` set | raised | `input` is not fired by setting `.value` |
+| MouseLeave on a container when the pointer enters a child | raised (the child is another window) | `mouseleave` does not fire (the child is inside the element) |
+| Form Click on a click that lands on a control | not raised | `body` receives the bubbled `click` (D-3) |
+| Form KeyDown/KeyUp/KeyPress while a control has focus | only with `KeyPreview=True` | always (bubbled to `body`) (D-3) |
+| A Load handler that throws | routed to `Application.ThreadException`; the form still shows | escapes the constructor (Load runs at the end of `InitializeComponent`); the page's dispatch dies |
+
+Also user-facing (D-3): on a web page Form Load runs at the END of `InitializeComponent`, so code after
+`Me.InitializeComponent()` in `New()` runs AFTER Load; on WinForms Load runs later, when the form is shown. The web
+scaffold carries that comment beside the call.
+
+### 37. `FormCodeScan` reads every `#If` as active except a literal `False`/`0`
+
+The scanner (rebuilt on BasicLang's lexer in slice 5 review round 5) skips `#If False`/`#If 0` and reads every other
+branch — `#If DEBUG`, `#IfDef`, `#IfNDef`, `#ElseIf` — as live, so a Sub in an inactive branch can be offered in the
+handler drop-down and counted as a taken name. Full evaluation needs the project's `#Define` set and constants: the
+follow-up is piece 2's `ProcessForEditor` (the preprocessor run for editor features), which `FormCodeScan` should call
+instead of its own literal-false rule.
+
+### 38. No "handler does not fit its event" diagnostic code (D-7)
+
+A Sub whose signature does not fit the event it is bound to is LOUD on both targets already — csc CS0123 on WinForms,
+BasicLang's delegate-conversion/arity error on the web — and the designer never writes a misfit (the drop-down offers only
+fitting Subs, a typed misfit is refused in the row). So no BL code was claimed. File one if those compiler messages prove
+unreadable to users ("Argument 2: cannot convert from 'Action' to 'Action<DomEvent>'" is the web one, measured).
+
+### 39. KeyPress on the page: the key set, and `KeyChar` is piece 2's
+
+Coordinator ruling (ADR 0021): a KeyPress bind is STORED `keypress` and EMITTED as a `keydown` listener filtered to
+WinForms' KeyPress keys — one code point (`::Array.from(e.key).length = 1`), `Enter`, `Backspace`, `Escape` — and never
+while `isComposing` (IME). A classic handler receives the `DomEvent`; mapping it to a `KeyChar` (`'\r'` for Enter, `\b`,
+Esc) is piece 2's library job. The divergence: an IME commit raises no KeyPress on the page.
+
+### 40. `VgsOn_` is a reserved handler prefix
+
+The D-12 wrapper Subs the region writer generates (`VgsOn_<owner>_<Event>`, for the filtered KeyPress/Enter/Leave
+listeners) live inside the designer region. A user handler named `VgsOn_…` is refused in the Events tab
+(`FormHandlers.DescribeUnusableHandler`) and a control whose Id would collide is refused by the reader (BL8017). Keep the
+prefix reserved if piece 2 generates code of its own.
+
+### 41. An Extern class's undeclared member compiles untyped and silently (M7)
+
+`dom-core.bli`'s `Event` has no `relatedTarget` and `Element` no `contains`; the FromOutside filter uses both, and the
+compiler accepts the member access untyped with no diagnostic — it works because JavaScript has them. Until piece 2's
+Task 28 declares them, a misspelled member on an Extern type is a green build and a runtime `undefined`.
+
+### 42. The lexer throws a raw `OverflowException` for a literal too big for a Long — compiler-level
+
+Measured in slice 5 review round 6: `x = 99999999999999999999L` (`long.Parse`, `BasicLangLexer.cs:1109`) and
+`x = &HFFFFFFFFFFFFFFFFFFFF` (`Convert.ToInt64`, `:1218`) throw `OverflowException`, not the `LexerException` (BL1004)
+its other number errors throw. `FormCodeScan` now survives any non-fatal lexer exception; the compiler's own paths
+(build, LSP) were not checked and may surface it as a crash instead of a BL1004 diagnostic.
+
+### 43. Small things found in slice 5, recorded rather than fixed
+
+- `Private Sub End(...)` compiles (bare `End` is not a lexer keyword), so the Events tab accepts `End` as a handler name.
+- The lexer turns `End Event`/`End AddHandler`/`End RemoveHandler`/`End RaiseEvent` into a bare `End` identifier,
+  swallowing the second word (the scanner reads it from the line). A parser that ever handles Custom Events will need
+  real tokens.
+- `FormCodeScan` degrades to its line-by-line reading for VB14 multi-line strings and multi-line `csharp{…}` blocks.
+- `MainWindowViewModel.CleanupDocumentState` → `MarkClosed()` is not driven by a test (the closed behaviour is, through
+  the view model).
+- An editable Avalonia ComboBox (11.3.13) opens only from its 12px glyph, not from a click on its right-hand padding.

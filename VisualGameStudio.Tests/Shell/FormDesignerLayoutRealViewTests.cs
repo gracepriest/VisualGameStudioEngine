@@ -331,6 +331,49 @@ public class FormDesignerLayoutRealViewTests
         Assert.That(checkedKinds.ContainsKey(nameof(ToggleSwitch)), Is.False, "no Bool row renders as a switch");
     }
 
+    /// <summary>
+    /// Slice 5: the Events tab's handler cell obeys the same rule — every event row's editable combo (and the text box
+    /// inside it) starts right of the divider and ends inside the row, for a control's events and the form's, at two sizes.
+    /// </summary>
+    [AvaloniaTest]
+    public void EveryEventRowsHandlerCombo_FitsBetweenTheDividerAndTheRowsRightEdge_AtTwoSizes()
+    {
+        foreach (var (w, h) in TwoSizes)
+        {
+            using var rig = Open(WinDoc, "WinForm", FormTarget.WinForms, w, h);
+            rig.GridVm.IsEventsMode = true; // the bolt's real click is FormPropertyGridEventsRealViewTests'; this sweeps layout
+            var swept = 0;
+
+            Assert.Multiple(() =>
+            {
+                foreach (var id in new[] { "btn", "WinForm" })
+                {
+                    rig.Select(id);
+                    Assert.That(rig.GridVm.EventRows, Is.Not.Empty, $"{w}x{h} {id}: precondition: event rows");
+                    foreach (var row in rig.GridVm.EventRows.ToList())
+                    {
+                        var container = rig.Container(row);
+                        var divider = rig.InWindow(rig.Divider(container));
+                        var combo = container.GetVisualDescendants().OfType<ComboBox>().Single();
+                        var rowGrid = rig.InWindow((Visual)combo.Parent!);
+                        foreach (var editor in new Control[] { combo, combo.GetVisualDescendants().OfType<TextBox>().First() })
+                        {
+                            var r = rig.InWindow(editor);
+                            Assert.That(r.Left, Is.GreaterThanOrEqualTo(divider.Right),
+                                $"{w}x{h} {id}.{row.Name}: {editor.GetType().Name} starts left of the divider ({r})");
+                            Assert.That(r.Right, Is.LessThanOrEqualTo(rowGrid.Right + 0.5),
+                                $"{w}x{h} {id}.{row.Name}: {editor.GetType().Name} overruns the row ({r})");
+                        }
+
+                        swept++;
+                    }
+                }
+            });
+
+            Assert.That(swept, Is.GreaterThan(20), $"{w}x{h}: the sweep reached the Button's and the form's events");
+        }
+    }
+
     // ==================================================================
     // 3. The code editor never shows through the design surface
     // ==================================================================
