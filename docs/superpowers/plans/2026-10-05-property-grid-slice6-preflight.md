@@ -1074,6 +1074,29 @@ No decision changed, so no commit of its own; recorded here with Task 1.
   | ★ nudge without the top-level filter | KILLED by `ANudge_OfAPanelAndItsOwnChild_…` (the child's relative X moved too) |
   | ★ Delete primary-only | KILLED by `DeleteWithThreeSelected_…` and the invariant's Delete row |
 
+### Task 7 — RUN, not compile (base `14f93c20`)
+
+- New Integration `FormMultiSelectAcceptanceTests` (`Compiler/`), modelled on `FormEventAcceptanceTests`: a scaffold on a
+  real temp folder, the REAL document view model; Label1 + Button1 + Button2 placed; the Buttons selected together through
+  `Selection.SetRange`; through the MERGED rows Text `Go`, BackColor Red (`ApplyColor`), the Font's Bold PART, the Size's
+  Width PART `90` — exactly 4 `Edited` (one per merged edit); the merged Click row's double-click → `Button2_Click`
+  (the primary's name) bound on both, the selection kept; one user line (Label `clicked` + a console line); `SaveAsync`;
+  the saved document carries the bind twice. The web form is a Canvas page (the scaffold default), so Width exists there.
+- Built by the real CLI AND `BuildService.BuildProjectAsync` on each target, then RUN:
+  - WinForms (Windows): a reflection driver SHOWS the form, prints each Button's `Text|BackColor|Font.Bold|Width` —
+    both `Go|Red|True|90` — then raises `OnClick` on each: the handler runs TWICE and the Label reads `clicked`.
+  - Web: the page's CSS gives both `#Button1` and `#Button2` `width: 90px`, `background-color: Red`, `font-weight: bold`
+    (logged), the HTML both texts `Go`; under node a `click` on each runs the handler twice, the Label `clicked`.
+- Run: this fixture alone — **2/2** (web 2 s, WinForms 11 s). No other Integration fixture (cadence rule).
+- Roster: NOT added to `JsExecutionTierRosterTests` — its guard sweeps `*ExecutionTests`, and the precedent
+  `FormEventAcceptanceTests` (also node in-fixture) is not rostered either; the pin is unchanged (105).
+- Red before: written after the code (Tasks 3/5) as their acceptance; red is the mutation table.
+- Mutations:
+  | Mutant | Result |
+  |---|---|
+  | ★ bind on the primary only (host) | KILLED on both targets — already at the design step (the merged Click row stays blank: only one member bound) |
+  | ★ the IDE route passes no forms (`BuildService` `forms: null`) | KILLED: web/CLI green, web/IDE "no MultiForm.css" — the both-entry-points kill |
+
 ## 7. Tests to re-check (consolidated)
 
 | Test | Why | Task |
