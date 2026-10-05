@@ -805,6 +805,63 @@ There is no separate slice gate and no full suite: Task 9 step 3 is the one gate
 (Filled per task as slices 4/5 did: base SHA, M1–M5 results, deviations, red evidence, RE-CHECK results, the mutation
 table. A decision a measurement re-decided is recorded here with the measurement.)
 
+### Task 0 — measurements (base `74059bad`, Windows, WindowsDesktop 8.0.23 — the runtime the committed oracle names)
+
+No decision changed, so no commit of its own; recorded here with Task 1.
+
+- **M1** (the tool itself, extended as Task 1 extends it, run to a scratch file): `AllowMerge=false` on exactly
+  `TabIndex` (every positioned kind and the strips), `Items` (ComboBox, ListBox, CheckedListBox, ListView, MenuStrip,
+  ToolStrip, StatusStrip), `Columns` (ListView, DataGridView), `DataSource` (ComboBox, ListBox, DataGridView,
+  ErrorProvider), `FormatString` (ComboBox, ListBox, CheckedListBox), `Groups` (ListView), `Lines` (TextBox),
+  `MdiWindowListItem` (MenuStrip), `Nodes` (TreeView), `TabPages` (TabControl). Everything else true — **`Location`,
+  `Size`, `Anchor`, `Dock` true** (Button measured; the test pins every positioned kind). The Form has none. Of these,
+  the catalog carries only the three `Items` rows (ComboBox, ListBox, CheckedListBox) — the strips' items are children,
+  not a row — so exactly those three are `Mergeable: false`. D-2 rules 2–4 stand as written (TabIndex not offered,
+  Location offered).
+- **M2** (real view, both zooms): single selection IS stale today. After a real drag the model's X went 16→88 (800×560)
+  / 16→56 (1400×900) and the X row's `DisplayValue` followed, but the real NumericUpDown still showed **16**, and no
+  PropertyChanged reached the row; the same after an arrow nudge (89 / 57, editor 16). So D-9's `RefreshValues` fixes a
+  pre-existing single-select defect too.
+- **M3** (real view, both zooms): a real Ctrl+click on `btn` with `lbl` selected → `Selection.Controls` = [lbl, btn],
+  `PropertyGrid.SelectedControl` = btn, the canvas's `SelectedControl` = btn, the grid's `Rows` reset **once**. D-1's
+  ordering argument holds.
+- **M4** (the real `TypedValueEditor` hosted alone over a logging `ITypedValueRow`, Bool and Enum items, value `""`):
+  nothing pushed on bind (SelectedIndex −1); nothing on focus + click away; nothing on a real click that opens the
+  drop-down and a click far outside it (or Esc); a value going from a member back to `""` pushes **null**, never `""`.
+  (A first probe that "clicked away" onto the control under the combo landed on the open overlay's first item and pushed
+  it — a probe artefact, re-measured with a far click.) D-4's `""` guard stays as a cheap defence; the null guard
+  (`Commit`'s first line) is the one that fires.
+- **M5** (same rig, `IsNumericUpDown`, value `""`): the NumericUpDown shows **`0`** (Value 0, text "0") — the false
+  value D-4 predicted — and a focus + click away pushes nothing. D-4 (a mixed Int row renders the TEXT editor) stands:
+  the push risk is low, the display is wrong.
+- Baseline: no fast-subset run (cadence rule); slice 5's gate list in §5 is the known list.
+
+### Task 1 — the oracle measures mergeability (base `74059bad`)
+
+- `tools/WinFormsMetadataDump` records `mergeable` (the attribute, true when absent), placed after `isCollection` so the
+  regeneration only ADDS lines. Regenerated at WindowsDesktop **8.0.23** (the committed header's runtime): `git diff
+  --stat` = 1308 insertions, **0 deletions**; every added line is `"mergeable": true|false,` (checked by script: 0
+  other added lines, 0 removed). Stop rule satisfied.
+- `WinFormsPropertyEntry.Mergeable` is `bool?`: a snapshot without the key reads "not measured — regenerate", never
+  true. `CatalogParity.CompareProperty` reports a disagreement or a missing measurement, after the exemption check (an
+  exemption covers it as it covers the default).
+- `FormPropertyDef.Mergeable = true` (new last parameter); `false` on the three `Items` rows. `SharesShapeWith` = same
+  name, type, `WinFormsEnumType`, `AllowedValues` sequence. The sweep found the plan's TextAlign pair AND
+  `CheckBox.Appearance` × `TabControl.Appearance` (different enums) — both now different rows.
+- **Red** (before the regeneration and with `SharesShapeWith` = name + type): every parity cell "the snapshot carries
+  no 'mergeable'"; the Items test; the five intrinsic cases (`Location=` null…); TextAlign/Appearance pairs
+  `SharesShapeWith=True, expected False`.
+- ⚠ **Deviation — the pair sweep is ONE test over a loop, not a TestCaseSource.** The first version yielded ~15k cases;
+  with it, `--filter "FullyQualifiedName~FormMultiSelectCatalogTests"` started running the unrelated
+  `NetGeneratedShimConformanceTests` (MSVC + AOT builds, >10 min) — the filter stopped selecting. As a loop the filter is
+  exact again (the run takes ~100 ms). Lesson for the next sweep author: keep TestCaseSources small.
+- Green: `FormMultiSelectCatalogTests` + `WinFormsCatalogParityTests` (RE-CHECK names included) **74/74**.
+- Mutations (each applied with Edit, project rebuilt):
+  | Mutant | Result |
+  |---|---|
+  | ★ `SharesShapeWith` ignores `WinFormsEnumType` | KILLED by `TwoEnumRows_WithTheSameMembers_ButDifferentEnumTypes_…`. ⚠ The catalog sweep alone does NOT kill it: every same-named enum pair in today's catalog also differs in members — so the synthetic case is the pin |
+  | ★ Mergeable dropped from the comparer | KILLED by `TheInstrument_CatchesAMergeableDisagreement_AndAnExemptionCoversIt` |
+
 ## 7. Tests to re-check (consolidated)
 
 | Test | Why | Task |

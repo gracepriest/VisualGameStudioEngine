@@ -14,7 +14,8 @@ namespace VisualGameStudio.Tests.Compiler;
 ///
 /// An OracleExemption (its reason is printed by the caller) covers exactly what a snapshot can get
 /// WRONG for a row: a missing entry (a [Browsable(false)] property), the Default (a parent-dependent or
-/// unmeasurable read) and the Description (a type with no metadata). It never covers the Type or the
+/// unmeasurable read), the Description (a type with no metadata) and — as it covers the Default — the
+/// Mergeable measurement (slice 6 D-2). It never covers the Type or the
 /// Category — when the snapshot HAS the property those are facts about the real type, a wrong one is a
 /// row defect no reason excuses, and csc cannot see a Category at all. An exemption that suppresses
 /// nothing is stale (WinFormsCatalogParityTests.EveryOracleExemption_StillSuppressesAFinding).
@@ -65,6 +66,18 @@ internal static class CatalogParity
         if (CompareDefault(row, snap) is { } defaultFinding)
         {
             yield return $"{kind}.{row.Name}: {defaultFinding}";
+        }
+
+        // Slice 6 D-2 rule 2: VS hides a [MergableProperty(false)] property for a multi-selection. A snapshot with no
+        // measurement is a finding too — never read as "mergeable".
+        if (snap.Mergeable == null)
+        {
+            yield return $"{kind}.{row.Name}: the snapshot carries no 'mergeable' — regenerate it with tools/WinFormsMetadataDump";
+        }
+        else if (snap.Mergeable != row.Mergeable)
+        {
+            yield return $"{kind}.{row.Name}: Mergeable is {row.Mergeable}, WinForms' [MergableProperty] says " +
+                         $"{snap.Mergeable} → Mergeable: {snap.Mergeable.Value.ToString().ToLowerInvariant()}";
         }
 
         if (!string.Equals((row.Description ?? "").Trim(), snap.Description.Trim(), StringComparison.Ordinal))

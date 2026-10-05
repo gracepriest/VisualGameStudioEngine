@@ -23,8 +23,12 @@ Then run the parity fixture:
 - A catalog row is added for a KIND not yet in `Program.cs`'s `Types` table (the parity fixture's
   completeness test fails and names it). Add the kind there first.
 - The WindowsDesktop runtime version changes.
+- The tool starts recording something new (as `mergeable` was added, property-grid slice 6).
 
 The JSON records `framework` and `windowsForms` so a diff shows which runtime produced it.
+⛔ Regenerate at the SAME runtime the committed file names unless the runtime change is the point:
+a regeneration that only adds a field must diff as nothing but that field's added lines. Any other
+changed line means the runtime or the tool differs — stop and find out which before committing.
 
 ## Culture
 
@@ -53,6 +57,17 @@ parent to inherit from — its values are its own and classify as `attribute`/`r
 | serialized | no attribute and a fresh instance would be written | null |
 | collection | a collection | null |
 | unreadable | the getter or `ShouldSerializeValue` threw on a fresh instance: nothing was measured | not judged — the row needs an `OracleExemption` or a look |
+
+## What `mergeable` means
+
+WinForms' `[MergableProperty]` attribute (.NET spells it "Mergable") on the property, `true` when
+the attribute is absent — its own default. Visual Studio's Properties window HIDES a property whose
+`AllowMerge` is false when several objects are selected: `TabIndex`, and the collections (`Items`,
+`Columns`, `Nodes`, `TabPages`, `DataSource`, …). The catalog carries it as
+`FormPropertyDef.Mergeable`, which decides what the designer's grid offers for a multi-selection,
+and the parity test holds every WinForms row to this measurement (an `OracleExemption` covers it as
+it covers the default). The intrinsic rows (`Location`, `Size`, `Anchor`, `Dock` mergeable;
+`TabIndex` not) are pinned by `FormMultiSelectCatalogTests`.
 
 A value the tool has no text form for (a complex object such as `FlatAppearance`) is recorded as
 `null`, never as its type name.

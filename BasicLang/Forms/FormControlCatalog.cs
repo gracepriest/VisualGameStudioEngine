@@ -246,8 +246,29 @@ public sealed record FormPropertyDef(
     string? OracleExemption = null,
     IReadOnlyList<FormLayoutKind>? WebLayouts = null,
     IReadOnlyList<string>? ReferenceKinds = null,
-    FormTranslucency WinFormsTranslucency = FormTranslucency.Allowed)
+    FormTranslucency WinFormsTranslucency = FormTranslucency.Allowed,
+    bool Mergeable = true)
 {
+    // Mergeable: whether Visual Studio's Properties window offers this row when SEVERAL controls are selected — WinForms'
+    // [MergableProperty] (.NET spells it "Mergable"), absent = true. MEASURED, not chosen: tools/WinFormsMetadataDump records
+    // the attribute and the parity test (CatalogParity.CompareProperty) holds every WinForms row to it. Property-grid
+    // slice 6, pre-flight 2026-10-05 D-2 rule 2: false on the item collections (Items), which VS hides for a multi-selection.
+
+    /// <summary>
+    /// ⛔ THE one answer to "is this the same row as <paramref name="other"/>?" for a multi-selection (slice 6 D-2 rule 1):
+    /// the same name, the same <see cref="FormPropertyType"/>, the same <see cref="WinFormsEnumType"/> and the same
+    /// <see cref="AllowedValues"/> in the same order. Visual Studio merges a property across objects only when its name AND
+    /// its property TYPE agree — and an Enum's type is its enum: TextAlign is <c>ContentAlignment</c> on a Button and
+    /// <c>HorizontalAlignment</c> on a TextBox, so the two are different rows and a Button + TextBox selection offers no
+    /// TextAlign (writing <c>MiddleCenter</c> into a TextBox would be refused at best). Symmetric and reflexive. Whether
+    /// the row applies on the document's target (<see cref="AppliesTo"/>) is asked separately, per member.
+    /// </summary>
+    public bool SharesShapeWith(FormPropertyDef other) =>
+        string.Equals(Name, other.Name, StringComparison.Ordinal) &&
+        Type == other.Type &&
+        string.Equals(WinFormsEnumType, other.WinFormsEnumType, StringComparison.Ordinal) &&
+        (AllowedValues ?? Array.Empty<string>()).SequenceEqual(other.AllowedValues ?? Array.Empty<string>(), StringComparer.Ordinal);
+
     // WinFormsTranslucency: for a Color row, whether the WinForms setter THROWS on a translucent colour (alpha < 255, or
     // Transparent) — Control.BackColor on a control without ControlStyles.SupportsTransparentBackColor ("does not support
     // transparent background colors"). Measured per kind, and pinned, by WinFormsTranslucentBackColorRunTests. Such a
@@ -2453,7 +2474,7 @@ public static class FormControlCatalog
             Text,
             // Items is a get-only collection on WinForms — assigning it is CS0200.
             new FormPropertyDef("Items", FormPropertyType.String, IsItemCollection: true,
-                Category: FormPropertyCategory.Data, Description: "The items in the combo box."),
+                Category: FormPropertyCategory.Data, Description: "The items in the combo box.", Mergeable: false),
             SelectedIndex(SelectedIndexForTheWeb),
             // ⚠ WinForms only: a <select> is always a drop-down list — it has no editable text box to style.
             new FormPropertyDef("DropDownStyle", FormPropertyType.Enum, "DropDown", new[] { "Simple", "DropDown", "DropDownList" },
@@ -2471,7 +2492,7 @@ public static class FormControlCatalog
             StretchesWhenStacked: true),
         new("ListBox",     "ListBox",     "select",   null,       false, CommonColoured(WindowTextForeColor, WindowBackColor,
             new FormPropertyDef("Items", FormPropertyType.String, IsItemCollection: true,
-                Category: FormPropertyCategory.Data, Description: ListBoxItemsDescription),
+                Category: FormPropertyCategory.Data, Description: ListBoxItemsDescription, Mergeable: false),
             SelectedIndex(SelectedIndexForTheWeb),
             // ⛔ WEB ONLY. WinForms ListBox has no MultiSelect — it has SelectionMode, an enum.
             // Mapping a Bool onto it is a design decision v1 has not made, so the property stays
@@ -2689,7 +2710,7 @@ public static class FormControlCatalog
 
         new("CheckedListBox", "CheckedListBox", null, null,       false, CommonColoured(WindowTextForeColor, WindowBackColor,
             new FormPropertyDef("Items", FormPropertyType.String, IsItemCollection: true,
-                Category: FormPropertyCategory.Data, Description: ListBoxItemsDescription),
+                Category: FormPropertyCategory.Data, Description: ListBoxItemsDescription, Mergeable: false),
             SelectedIndex(SelectedIndexWinFormsOnly),
             new FormPropertyDef("CheckOnClick", FormPropertyType.Bool, "false",
                 Category: FormPropertyCategory.Behavior,
