@@ -250,6 +250,87 @@ public partial class FormPropertyGridMultiSelectTests
         });
     }
 
+    /// <summary>Review of 9fe0d153 (5): a successful Reset retracts the refusal standing on the merged row.</summary>
+    [Test]
+    public void ASuccessfulReset_RetractsTheMergedRowsRefusal()
+    {
+        var (_, grid) = Open("btn", "btn2");
+        var backColor = Row(grid, "BackColor");
+        backColor.ApplyColor("Bogus");
+        Assert.That(backColor.Refusal, Is.Not.Null, "precondition: refused");
+
+        backColor.ResetCommand.Execute(null);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(backColor.Refusal, Is.Null);
+            Assert.That(grid.DescriptionBody, Does.Not.Contain("'Bogus'"), "the pane no longer says it");
+        });
+    }
+
+    /// <summary>
+    /// Review of 9fe0d153 (2): all-or-nothing covers the STORE, not only the catalog. Two stored-value members over one
+    /// catalog row (the Form's ClientSize, whose value the catalog accepts), the second member's store refusing: the FIRST
+    /// member must not be written, no Edited, and the refusing member's reason is said on the merged row.
+    /// </summary>
+    [Test]
+    public void AValueOneMembersStoreRefuses_WritesNoMember_AndTheMergedRowSaysWhy()
+    {
+        var definition = FormControlCatalog.FormRoot.Property("ClientSize")!;
+        var tally = new FormEditTally();
+        string? storeA = null;
+        var a = FormPropertyRow.ForStoredValue(definition, FormTarget.WinForms,
+            read: () => storeA, write: v => { storeA = v; return true; }, remove: () => storeA = null, onChanged: tally.Mark,
+            storeRefusal: _ => null);
+        var b = FormPropertyRow.ForStoredValue(definition, FormTarget.WinForms,
+            read: () => null, write: _ => false, remove: null, onChanged: tally.Mark,
+            storeRefusal: v => $"'{v}' does not fit this store.");
+        var edits = 0;
+        var merged = FormPropertyRow.Merged(new[] { a, b },
+            new[] { new FormControl { Kind = "Panel", Id = "pa" }, new FormControl { Kind = "Panel", Id = "pb" } }, tally, () => edits++);
+        Assert.That(definition.Judge("300, 200", null, FormTarget.WinForms), Is.EqualTo(FormEditVerdict.Write),
+            "precondition: the catalog accepts the value — only the store refuses");
+
+        merged.StringValue = "300, 200";
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(storeA, Is.Null, "the accepting member is NOT written (all-or-nothing)");
+            Assert.That(edits, Is.Zero);
+            Assert.That(merged.Refusal, Is.EqualTo("'pb' (Panel): '300, 200' does not fit this store."));
+        });
+    }
+
+    /// <summary>
+    /// Review of 9fe0d153 (3): a revision refresh raises each row ONCE — a merged part's member part was raised twice
+    /// (through the merged part and again through its member parent). Cost stays ∝ the selection.
+    /// </summary>
+    [Test]
+    public void RefreshValues_RaisesEachMemberPartOnce()
+    {
+        var (_, grid) = Open("btn", "btn2", "lbl");
+        var memberPart = Part(grid, "Bold").Members[0];
+        var memberParent = Row(grid, "Font").Members[0];
+        var partRaises = 0;
+        var parentRaises = 0;
+        memberPart.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(FormPropertyRow.DisplayValue)) partRaises++;
+        };
+        memberParent.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(FormPropertyRow.DisplayValue)) parentRaises++;
+        };
+
+        grid.RefreshValues();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(partRaises, Is.EqualTo(1), "a member's part: once");
+            Assert.That(parentRaises, Is.EqualTo(1), "a member: once");
+        });
+    }
+
     /// <summary>D-3/D-5: one member set and one absent is bold with no Reset — and clearing the editor writes nothing.</summary>
     [Test]
     public void ResetIsNotOffered_WhenAMemberIsAbsent_AndAClearedEditorWritesNothing()

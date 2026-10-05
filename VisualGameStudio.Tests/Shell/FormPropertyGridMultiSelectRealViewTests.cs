@@ -19,7 +19,9 @@ namespace VisualGameStudio.Tests.Shell;
 public partial class FormPropertyGridRealViewTests
 {
     /// <summary>One canvas gesture of the one-store sweep: a name, and what it does to the real rig.</summary>
-    private sealed record CanvasGesture(string Name, Action<Rig> Do);
+    /// <param name="Expect">When given, the store's ids in ORDER after the gesture — so the sweep also pins WHAT the gesture
+    /// does, not only that the grid agrees with the store (review of 7159c2dc: a missing promotion kept the two agreeing).</param>
+    private sealed record CanvasGesture(string Name, Action<Rig> Do, string[]? Expect = null);
 
     /// <summary>A real press-and-release on a control's centre (offset by <paramref name="dx"/>, so a repeat is not a double-click).</summary>
     private static void PressOn(Rig rig, string id, MouseButton button = MouseButton.Left,
@@ -48,8 +50,10 @@ public partial class FormPropertyGridRealViewTests
         new("a plain click on btn", r => PressOn(r, "btn")),
         new("a Ctrl+click adding btn2", r => PressOn(r, "btn2", modifiers: RawInputModifiers.Control)),
         new("a Ctrl+click adding lbl", r => PressOn(r, "lbl", modifiers: RawInputModifiers.Control)),
-        new("a Ctrl+click REMOVING the primary lbl", r => PressOn(r, "lbl", modifiers: RawInputModifiers.Control, dx: 3)),
-        new("a plain click on the member btn (D-13: promoted, the group kept)", r => PressOn(r, "btn", dx: 6)),
+        new("a Ctrl+click REMOVING the primary lbl", r => PressOn(r, "lbl", modifiers: RawInputModifiers.Control, dx: 3),
+            new[] { "btn", "btn2" }),
+        new("a plain click on the member btn (D-13: promoted, the group kept)", r => PressOn(r, "btn", dx: 6),
+            new[] { "btn2", "btn" }),
         new("a Shift+click adding txt", r => PressOn(r, "txt", modifiers: RawInputModifiers.Shift)),
         new("a click on empty canvas", r =>
         {
@@ -104,6 +108,11 @@ public partial class FormPropertyGridRealViewTests
                 multiSeen += store.Count > 1 ? 1 : 0;
                 Assert.Multiple(() =>
                 {
+                    if (gesture.Expect != null)
+                    {
+                        Assert.That(store, Is.EqualTo(gesture.Expect), $"{w}x{h} after {gesture.Name}: the store's order");
+                    }
+
                     Assert.That(grid, Is.EqualTo(store), $"{w}x{h} after {gesture.Name}: the grid's set is the store's, in order");
                     Assert.That(rig.GridVm.SelectedControl, Is.SameAs(rig.Vm.Selection.Primary),
                         $"{w}x{h} after {gesture.Name}: the grid's primary is the store's");
@@ -473,6 +482,42 @@ public partial class FormPropertyGridRealViewTests
             {
                 Assert.That(rig.Vm.Text, Is.EqualTo(before), $"{w}x{h}: one undo is the Arrange");
                 Assert.That(rig.Vm.TextDocument.UndoStack.CanUndo, Is.False, $"{w}x{h}: and it was the only step");
+            });
+        }
+    }
+
+    /// <summary>
+    /// Review of 9fe0d153 (4): D-9's refresh re-raises EVERY Events row's Handler on every document revision. A revision
+    /// made elsewhere — here an Events-tab bind on ANOTHER row, a designer write — while the user is typing into the Click
+    /// row's handler combo (whose Text is a one-way binding) must not wipe the typed text. At two zooms.
+    /// </summary>
+    [AvaloniaTest]
+    public void AnUnrelatedRevision_DoesNotWipeTextTypedIntoAnotherEventsCombo_AtTwoZooms()
+    {
+        foreach (var (w, h) in TwoZooms)
+        {
+            using var rig = Open(w, h);
+            SelectOnCanvas(rig, "btn");
+            ShowEvents(rig);
+            AddSubs(rig, "    Private Sub Downs(sender As Object, e As MouseEventArgs)\n    End Sub\n");
+            rig.GridVm.CodeBehindText = rig.Code;
+            var click = EventRow(rig, "Click");
+            var before = rig.Vm.Text;
+
+            rig.Click(HandlerCombo(rig, click).GetVisualDescendants().OfType<TextBox>().First(t => t.IsEffectivelyVisible));
+            rig.Window.KeyTextInput("Typ");
+            Dispatcher.UIThread.RunJobs();
+            Assume.That(HandlerCombo(rig, click).Text, Is.EqualTo("Typ"), "precondition: the typing landed");
+
+            EventRow(rig, "MouseDown").Commit("Downs"); // another row's bind: a designer write, a model revision
+            Dispatcher.UIThread.RunJobs();
+            rig.Window.UpdateLayout();
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(rig.Vm.Text, Is.Not.EqualTo(before).And.Contain("Downs"), $"{w}x{h}: precondition: the revision happened");
+                Assert.That(HandlerCombo(rig, click).Text, Is.EqualTo("Typ"), $"{w}x{h}: the typed text survives the refresh");
+                Assert.That(click.Handler, Is.Empty, $"{w}x{h}: and nothing was committed for Click");
             });
         }
     }

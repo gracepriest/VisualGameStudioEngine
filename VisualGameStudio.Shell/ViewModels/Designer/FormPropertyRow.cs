@@ -268,7 +268,20 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
         if (_definition != null)
         {
             var verdict = _definition.Judge(value, IsPresent ? RawValue : null, _target);
-            return (verdict, verdict == FormEditVerdict.Refuse ? _definition.DescribeRefusedEdit(value, _target) : null);
+            if (verdict == FormEditVerdict.Refuse)
+            {
+                return (verdict, _definition.DescribeRefusedEdit(value, _target));
+            }
+
+            // ⛔ The STORE too (review of 9fe0d153): a value the catalog accepts can still be refused where it is stored
+            // (FormRootValues: a ClientSize of "0, 300"). Its refusal function is the store's own pure rule — the one Set
+            // asks — so asking it here writes nothing and predicts the write exactly.
+            if (verdict == FormEditVerdict.Write && _storeRefusal?.Invoke(_definition.ToDocument(value)) is { } refused)
+            {
+                return (FormEditVerdict.Refuse, refused);
+            }
+
+            return (verdict, null);
         }
 
         return (IsSameIntrinsicValue(value, DisplayValue) ? FormEditVerdict.NoOp : FormEditVerdict.Write, null);
@@ -318,6 +331,15 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
             member.Commit(value);
         }
 
+        // Belt and braces: a member refusal the pre-judgement did not predict is never LOST — it is said on the merged row
+        // (the pane reads this row, never the members). Every store here predicts through its own pure rule, so this
+        // should stay empty; if it ever is not, the pane says which member refused.
+        var unpredicted = verdicts.Where(v => v.Member.Refusal != null).ToList();
+        if (unpredicted.Count > 0)
+        {
+            Refusal = string.Join(" ", unpredicted.Select(r => $"'{r.Owner.Id}' ({r.Owner.Kind}): {r.Member.Refusal}"));
+        }
+
         if (_tally.Count == 0)
         {
             // Nothing moved (every member already showed it, or the store declined it everywhere — unparseable Int text):
@@ -333,6 +355,9 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
     /// <summary>Reset over a merged row (offered only when every member can, D-3): every member resets, ONE Edited.</summary>
     private void ResetMerged()
     {
+        // A Reset is the newest thing the user did: a refusal standing on this row is retracted (as a single row's
+        // successful commit retracts its own).
+        Refusal = null;
         _tally!.Reset();
         foreach (var member in _members!)
         {
@@ -347,18 +372,21 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
     }
 
     /// <summary>
-    /// D-9: the document changed under the rows while the selection stood (an Arrange, a drag, an undo-less refresh) —
-    /// every view of this row re-reads, parts and members included. ⛔ Notifications ONLY: never a commit, never the editor
-    /// echo; a row inside its refused value's posted two-step echo (<see cref="_editorEcho"/> set) is skipped, its posted
-    /// step owns the refresh (pre-flight D-9 re-entrancy rule).
+    /// D-9: the document changed under the rows while the selection stood (an Arrange, a drag, a paste) — every view of
+    /// this row re-reads: the row itself, its parts (recursively), and a merged row's members. EACH row is raised exactly
+    /// once: a member is raised alone (<see cref="RaiseOwnValueChanged"/>, never recursively), because a merged part
+    /// already raises the members' parts — recursing through the members too raised every part twice. Cost ∝ rows ×
+    /// selection.
+    ///
+    /// <para>⛔ Notifications ONLY: never a commit, never the editor echo. It cannot meet a refused value's echo:
+    /// <see cref="_editorEcho"/> is set only INSIDE the posted step of <see cref="RaiseEditorRefresh"/>, around a
+    /// synchronous try/finally that only raises properties, and anything those raises push back into the row is dropped by
+    /// <see cref="Commit"/>'s echo guard before it can write — so no edit, hence no model revision and no call here, can
+    /// happen while it is set. (Review of 9fe0d153: the skip this used to carry was unreachable; a mutant deleting it
+    /// survived the whole fixture.)</para>
     /// </summary>
     internal void RefreshValue()
     {
-        if (_editorEcho != null)
-        {
-            return;
-        }
-
         RaiseOwnValueChanged();
         foreach (var child in _children)
         {
@@ -367,7 +395,7 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
 
         foreach (var member in Members)
         {
-            member.RefreshValue();
+            member.RaiseOwnValueChanged();
         }
     }
 

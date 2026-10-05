@@ -986,6 +986,31 @@ No decision changed, so no commit of its own; recorded here with Task 1.
   | ★ the branch left as `_collapseTo` (the pre-change code) | KILLED — that is the red run above: `APlainClickOnAMember_…` got a selection of 1 |
   | ★ `Promote` as `Toggle` + `Add` | KILLED by `Promote_MovesAMemberToThePrimary_…_AndRaisesChangedOnce` (two Changed) |
 
+### Review fixes for 9fe0d153 / af4db0f2 / 7159c2dc (changes requested, no Critical; base `7159c2dc`)
+
+1. **The `_editorEcho` skip in `RefreshValue` was dead** (the reviewer's deletion mutant survived): removed. The doc
+   (row and grid) now says WHY re-entry cannot happen — the echo is set only inside the posted step's synchronous
+   try/finally, which only raises properties, and anything pushed back during it is dropped by `Commit`'s echo guard, so
+   no edit, revision or refresh can occur while it is set. No real case found.
+2. **All-or-nothing now covers the STORE.** `Preview` asks a stored-value row's store refusal (`FormRootValues.RefusalOf`,
+   the pure rule `Set` itself asks) for a value the catalog accepts, so a store refusal on one member refuses the set
+   before anything is written, and the reason is said on the merged row. Belt and braces: a member refusal the
+   pre-judgement did not predict is copied onto the merged row, never lost. (No multi-selection row is store-backed
+   today — FormRoot rows are the Form's — so the test builds two `ForStoredValue` members over ClientSize directly.)
+3. **`RefreshValue` raised merged parts' members twice:** members are now raised alone (`RaiseOwnValueChanged`), the
+   parts recurse once — each row once, cost ∝ rows × selection.
+4. **An unrelated revision vs. typing in an Events combo:** pinned by `AnUnrelatedRevision_DoesNotWipeTextTypedInto…`
+   (real view, two zooms: an Events-tab bind on MouseDown while `Typ` sits in the Click combo). It passed first time —
+   re-raising an unchanged `Handler` does not replace typed text (slice 5's measurement holds) — so it is a pin, with no
+   code change.
+5. **`ResetMerged` clears `Refusal`.**
+6. **The invariant sweep asserts the ORDER** where a gesture's result is the point (`[btn, btn2]` after removing the
+   primary, `[btn2, btn]` after the promotion click).
+- Red, each by restoring the old behaviour (one build, three at once for 2/3/5): the store test (`storeA` written), the
+  refresh-once test (2 raises), the Reset-retracts test; and (6) with `Promote` removed: "the store's order" failed.
+- Green: the touched fixtures 52/52; RE-CHECK (`TestCategory!=Integration` over `FormPropertyGrid*`,
+  `FormCompositeRowTests`, `FormCanvasMultiSelectTests`, `FormSelectionTests`) — **451/451**.
+
 ## 7. Tests to re-check (consolidated)
 
 | Test | Why | Task |

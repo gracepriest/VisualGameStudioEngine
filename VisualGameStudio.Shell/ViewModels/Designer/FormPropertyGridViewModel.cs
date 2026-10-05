@@ -973,9 +973,12 @@ public partial class FormPropertyGridViewModel : ObservableObject
     /// a SINGLE selection, whose X row kept showing the pre-drag number (measured, pre-flight M2).
     ///
     /// <para>⚠ Called on EVERY model revision — including the one the grid's own edit makes, i.e. INSIDE a row's
-    /// Commit → Edited → write chain. It therefore only notifies: no commit, no echo, and a row in its refusal's posted echo
-    /// is skipped (<see cref="FormPropertyRow"/>.<c>RefreshValue</c>). Never a rebuild: that would drop the focus and the
-    /// expanded parts mid-edit and re-run slice 5's stale-LostFocus hazard.</para>
+    /// Commit → Edited → write chain. It therefore only notifies: no commit and no echo. It never runs during a refused
+    /// value's posted echo — that step only raises properties and nothing it triggers can write, so no revision happens
+    /// inside it (<see cref="FormPropertyRow"/>.<c>RefreshValue</c> says why). An Events row's re-raise of an UNCHANGED
+    /// handler does not replace text typed into its combo (measured, slice 5; pinned for slice 6 by
+    /// <c>AnUnrelatedRevision_DoesNotWipeTextTypedIntoAnotherEventsCombo</c>). Never a rebuild: that would drop the focus and
+    /// the expanded parts mid-edit and re-run slice 5's stale-LostFocus hazard.</para>
     /// </summary>
     public void RefreshValues()
     {
