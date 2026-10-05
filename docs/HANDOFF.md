@@ -17,6 +17,17 @@ facade (all five tasks of `2026-09-13-blnet-cpp-facade.md`).
 
 ---
 
+## ⚡ NEWEST — 2026-10-05: #141 DONE, `++` / `--` write their operand on every backend (fix `19fed595`)
+
+- **The bug:** BasicLang's own `++`/`--` (VB has neither) reached the backends as an `IRUnaryOp` Inc/Dec over the operand's VALUE. Measured on master, no cell ran right: a statement `x++` was DROPPED everywhere; C++ incremented the temp; JS and MSIL refused it; C# wrote `t = ++x`, so `y = x++` got the NEW value.
+- **The fix:** `IRBuilder.BuildIncrementDecrement` lowers it ONCE to what `x += 1` is (read, add 1, coerce, `EmitStoreToTarget`); a used value goes through a carrier local `__inc{n}` (postfix = the value read BEFORE the store, prefix = the stored value). Locals, fields, `Me.`, module members, elements, ByRef parameters and properties take it. A With block's `.P++`, a literal, a call result, a When guard and a module-scope initializer keep the old `IRUnaryOp`.
+- ⛔ **C# needed one more change:** a one-block While/Do condition that STORES (`Do While j-- > 0`) was `while (cond)` with its stores hoisted above the loop, so it HUNG. `CSharpBackend.OpensReentrantLoop` + `WritesStorage` give it the #256 `while (true) { …; if (!c) break; }` shape.
+- **Tests:** `IncrementDecrementExecutionTests` (15 `[TestCase]` cells: values, targets, ByRef, loops x C#/C++/JS/MSIL, each through the CLI, `--optimize` and `CompileProjectFiles`; C# hang-safe; in `JsExecutionTierRosterTests`, 106) and `IncrementDecrementLoweringTests` (3 fast text tests). The expected values are C's, worked by hand: VB has no `++`, so there is no vbc oracle. ⚠ `DeadCodeRemovalOnRealIrTests.R9_…` now asserts the STORE survives (no `IRUnaryOp` Inc is built for a local); the hand-built `IRUnaryOp` Inc is still `DeadCodeRemovalLicenceTests`' (M9).
+- **Mutants:** M1 postfix yields the new value: 17 of 18 kill (all but the statement test); M2 `--` adds: 18 of 18; M3 C# hoists the condition: the fast loop-shape test and the `loops`/C# cell (`hung`).
+- **Known gaps, NO test written** (pinning one would pin a defect): JS ByRef (BL7002), Long/ULong (BL7003); MSIL Decimal (`m += 1` fails the same way); `With` (`.P++` stays on the old path; With is broken everywhere); `5++` is accepted; `a(f()) += 1` and `a(f())++` evaluate `f` twice.
+
+---
+
 ## ⚡ NEWEST — 2026-10-05: property grid slice 5 (EVENTS) GATED and merged to master (branch `feat/property-grid-slice5`)
 
 Slice 5 of the property grid: the Events tab. VS's lightning bolt lists the seam's events (`FormEvents.WiredOn`; a web
