@@ -204,12 +204,100 @@ public static class FormHandlers
     /// </summary>
     public static IReadOnlyList<string> FittingHandlers(
         FormDocument form, FormBindOwner owner, FormEventDef evt, string codeText) =>
-        FormCodeScan.DeclaredSubs(codeText, form.Name)
-            .Where(s => !s.Name.Equals("New", StringComparison.OrdinalIgnoreCase) &&
-                        !s.Name.Equals("InitializeComponent", StringComparison.OrdinalIgnoreCase))
+        FittingHandlers(form, owner, evt, FormCodeScan.Scan(codeText, form.Name));
+
+    /// <summary>
+    /// The scanned overload — the Events tab scans ONCE per refresh and hands every row the result (review ruling 5).
+    /// Never <c>New</c> (the constructor), <c>InitializeComponent</c>, or a <c>Shared</c> Sub (measured: an
+    /// <c>AddressOf</c> of one emits a bare, undefined name on the JavaScript backend; the designer's wiring is
+    /// instance-shaped on both targets); each name ONCE (a Sub in both an <c>#If</c> and its <c>#Else</c>).
+    /// </summary>
+    public static IReadOnlyList<string> FittingHandlers(
+        FormDocument form, FormBindOwner owner, FormEventDef evt, FormCodeScanResult scan) =>
+        scan.Subs
+            .Where(s => !IsReservedMember(s.Name) && !s.IsShared)
             .Where(s => Fits(owner, evt, form.Target, s))
             .Select(s => s.Name)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
+
+    private static bool IsReservedMember(string name) =>
+        name.Equals("New", StringComparison.OrdinalIgnoreCase) ||
+        name.Equals("InitializeComponent", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// ⛔ Why <paramref name="name"/> cannot be <paramref name="evt"/>'s handler — or null when it can (review ruling 3). ONE
+    /// answer for the Events tab's typed name and the host that would write its stub: not a BasicLang identifier; a
+    /// keyword (the lexer's own table); the reserved <c>VgsOn_</c> prefix; the constructor (<c>New</c>) or the designer's
+    /// <c>InitializeComponent</c>; a control Id or the form's own name; another member of the form (a Function, Property,
+    /// Event, field or Const); or an existing Sub that is <c>Shared</c>, takes a <c>ByRef</c> parameter, or does not fit
+    /// the event. Each would leave a duplicate or broken member behind.
+    /// </summary>
+    public static string? DescribeUnusableHandler(
+        FormDocument form, FormBindOwner owner, FormEventDef evt, string name, FormCodeScanResult scan)
+    {
+        if (!FormDocument.IsLegalControlId(name))
+        {
+            return $"'{name}' is not a legal handler name: start with a letter or '_', then letters, digits or '_'.";
+        }
+
+        // Before the keyword check: `New` IS a keyword, and "it is the constructor" is the reason a user can act on.
+        if (name.Equals("New", StringComparison.OrdinalIgnoreCase))
+        {
+            return $"'{name}' is the form's constructor, not an event handler.";
+        }
+
+        if (BasicLang.Compiler.Lexer.IsKeyword(name))
+        {
+            return $"'{name}' is a BasicLang keyword and cannot name a handler.";
+        }
+
+        if (name.StartsWith("VgsOn_", StringComparison.OrdinalIgnoreCase))
+        {
+            return $"'{name}' starts with VgsOn_, which is reserved for the Subs the designer generates.";
+        }
+
+        if (name.Equals("InitializeComponent", StringComparison.OrdinalIgnoreCase))
+        {
+            return $"'{name}' is the designer's own InitializeComponent, not an event handler.";
+        }
+
+        if (form.AllControls().Concat(form.AllComponents()).Any(c => c.Id.Equals(name, StringComparison.OrdinalIgnoreCase)))
+        {
+            return $"'{name}' is the name of a control on this form; a handler needs a name of its own.";
+        }
+
+        if (name.Equals(form.Name, StringComparison.OrdinalIgnoreCase))
+        {
+            return $"'{name}' is the form's own name; a handler needs a name of its own.";
+        }
+
+        if (scan.OtherMembers.Contains(name))
+        {
+            return $"'{name}' already names a Function, Property, field or other member of the form; a handler needs a name of its own.";
+        }
+
+        if (scan.Find(name) is { } existing)
+        {
+            if (existing.IsShared)
+            {
+                return $"'{existing.Name}' is a Shared Sub; the designer wires instance handlers (a Shared one does not run on the page).";
+            }
+
+            if (existing.Parameters.Any(p => p.IsByRef))
+            {
+                return $"'{existing.Name}' takes a ByRef parameter, which no event can pass; declare it ByVal.";
+            }
+
+            if (!Fits(owner, evt, form.Target, existing))
+            {
+                return $"'{existing.Name}' does not fit the {evt.Name} event: a handler for it is " +
+                       $"Sub {existing.Name}{Shape(owner, evt, form.Target).ParameterList}.";
+            }
+        }
+
+        return null;
+    }
 
     // ==================================================================
     // Binds
@@ -309,7 +397,8 @@ public static class FormHandlers
             b => string.Equals(b.Event, eventName, StringComparison.OrdinalIgnoreCase) && !string.IsNullOrEmpty(b.Handler));
         var handler = handlerName ?? bind?.Handler ?? NameFor(owner.Prefix, evt.Name);
 
-        return PlanHandler(form, owner, evt, eventName, handler, codeText);
+        return PlanHandler(form, owner, evt, eventName, handler, codeText,
+            computed: handlerName == null && bind == null);
     }
 
     /// <summary>
@@ -353,31 +442,36 @@ public static class FormHandlers
             string.Equals(FormEvents.NameOn(e, target), name, StringComparison.OrdinalIgnoreCase));
 
     private static FormHandlerPlan PlanHandler(
-        FormDocument form, FormBindOwner owner, FormEventDef evt, string eventName, string handler, string codeText)
+        FormDocument form, FormBindOwner owner, FormEventDef evt, string eventName, string handler, string codeText,
+        bool computed = false)
     {
         var index = new Recognizer.SourceIndex(codeText);
-        var subs = FormCodeScan.DeclaredSubs(codeText, form.Name);
+        var scan = FormCodeScan.Scan(codeText, form.Name);
 
-        // ⛔ Review ruling 4: a Sub that matches only IGNORING CASE and is ANOTHER owner's handler is a conflict, not this
-        // owner's handler — a form `Pic` and a control `pic` compute `Pic_Click` and `pic_Click`, one member to BasicLang,
-        // and reusing it would bind the control to the form's Click. VS appends `_1`, `_2`, … until the name is free (no
-        // Sub of that name in any case, and no bind naming it). An EXACT match is navigated to as before (deliberate
-        // sharing), and so is a case-variant nobody else binds (the M6 hand-written `btnlogin_click`).
-        var match = subs.FirstOrDefault(s => string.Equals(s.Name, handler, StringComparison.OrdinalIgnoreCase));
-        if (match != null && !string.Equals(match.Name, handler, StringComparison.Ordinal) &&
-            OtherOwnersHandlers(form, owner).Contains(match.Name))
+        // ⛔ Review rulings 4 (round 2) and 2 (round 3): a COMPUTED name (`<Prefix>_<Event>`, nothing named it) that ANOTHER
+        // owner's bind already names — ignoring case, whether or not its Sub has been written — is taken: a form `Pic` and a
+        // control `pic` compute `Pic_Click` and `pic_Click`, one member to BasicLang, and reusing it would bind the control
+        // to the form's Click. VS appends `_1`, `_2`, … until the name is free (no Sub or other member of that name in any
+        // case, and no bind naming it). ⛔ A name that came from a BIND or was TYPED is never renamed: renaming it would write
+        // an orphan stub, put the caret in it, and leave the bind naming the old member.
+        if (computed)
         {
-            var taken = OtherOwnersHandlers(form, owner).Concat(owner.Binds.Select(b => b.Handler))
-                .Concat(subs.Select(s => s.Name)).ToHashSet(StringComparer.OrdinalIgnoreCase);
-            var n = 1;
-            while (taken.Contains($"{handler}_{n}"))
+            var others = OtherOwnersHandlers(form, owner);
+            if (others.Contains(handler))
             {
-                n++;
-            }
+                var taken = others.Concat(owner.Binds.Select(b => b.Handler)).Concat(scan.Subs.Select(s => s.Name))
+                    .Concat(scan.OtherMembers).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                var n = 1;
+                while (taken.Contains($"{handler}_{n}"))
+                {
+                    n++;
+                }
 
-            handler = $"{handler}_{n}";
-            match = null;
+                handler = $"{handler}_{n}";
+            }
         }
+
+        var match = scan.Find(handler);
 
         // ⛔ Through the ONE scanner, ignoring case: a hand-written `btnlogin_click` is the same member in BasicLang, and
         // writing a second `btnLogin_Click` beside it would be a duplicate declaration (D-11, M6).

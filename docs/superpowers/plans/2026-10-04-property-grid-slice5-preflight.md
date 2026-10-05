@@ -992,7 +992,51 @@ reserved `VgsOn_` prefix, and M7's finding that an Extern class's undeclared mem
   `Emit_ReplacesAScriptThatAnotherHandleHasMapped`, `EveryTextRoute_UsesTheFormatter_NeverToStringOrABareCout`,
   `SearchSnippets_EmptyQuery_ReturnsAll`, `SearchSnippets_WhitespaceQuery_ReturnsAll`).
 - **Integration `(Form|WinFormsCatalog)`:** 345 — 344 passed, 1 failed (`CppDoubleFormattingTests.Expected_IsWhatDotNetPrints`,
-  the standing machine-culture row matched by "Formatting"), 0 skipped (Edge ran).
+  the standing machine-culture row matched by "Formatting"), 0 skipped (Edge ran). Committed `b5a5022d`.
+
+### Review round 3 (of `cfb94a29`/`b5a5022d`) — fixes (base `b5a5022d`)
+- **Red FIRST this time:** `FormHandlerReview3Tests` (23) written and run on `b5a5022d` + a `ScanCount` stub: **20 failed** for
+  the right reasons; the 3 already green are pins (`#End If` two-word, which the old regex matched; `_2` after a taken
+  `_1`; EnsureBind's reserved-binding guard — the spec reviewer's surviving mutant, now pinned).
+1. **CRITICAL — BasicLang's directive table, read from the compiler:** `BasicLangLexer.ScanDirective` (#If, #ElseIf, #Else,
+   **#EndIf** one word, #Define, #Undef/#Undefine, #Include, #Const, #Region, #End Region) and `Preprocessor.Process`
+   (#IfDef, #IfNDef, #Else, #EndIf). `#EndIf` and VB's `#End If` both close; `#IfDef`/`#IfNDef` are pushed LIVE so their
+   own `#Else`/`#EndIf` never pop an enclosing `#If False`; `#End Region` is not an `#EndIf`.
+2. Only a COMPUTED name (`<Prefix>_<Event>`, no bind, nothing typed) is suffixed; a name from a bind (`Plan`) or `PlanBind`
+   (the retarget) is navigated (ignoring case) and never renamed. A computed name another owner binds is taken even when
+   its Sub is not written yet. `OtherOwnersHandlers` is computed once per plan.
+3. `FormHandlers.DescribeUnusableHandler` — ONE answer for the Events tab and (Task 6) the host: illegal identifier; the
+   constructor (`New`, checked before the keyword test — it IS a keyword); a keyword (new `Lexer.IsKeyword`, the lexer's own
+   table); `VgsOn_`; `InitializeComponent`; a control Id or the form name; another member (`FormCodeScanResult.OtherMembers`:
+   Function/Property/Event/Dim/Const); an existing Sub that is Shared ("Shared"), takes a ByRef parameter ("ByRef") or does
+   not fit. `New`/`InitializeComponent`/Shared Subs never appear in the drop-down. ⚠ A Task-5 test used a handler named
+   `Shared` — a keyword; renamed `Common`.
+   - **Shared — measured, decided:** `Me.H(e)` on a Shared Sub emits `P.H(e)` and RUNS on JavaScript, but `AddressOf H` (a
+     listener) emits a bare `H` → `ReferenceError` (node, branch CLI). Shared Subs are therefore never offered and are
+     refused, on both targets (one rule; the designer's wiring is instance-shaped).
+4. Tests: `_2` when `_1` exists; a colliding bind whose Sub is missing; EnsureBind ignoring a reserved data binding.
+5. ONE scan per refresh: `FormCodeScan.Scan` → `FormCodeScanResult(Subs, OtherMembers)`; the grid caches it per
+   (text, form) and every row reads it; `FormCodeScan.ScanCount` lets a test pin "pushing the code-behind scans once".
+6. Minors: `Distinct` in `FittingHandlers`; logical lines — a trailing ` _` (any whitespace) joins the next line before
+   matching, so `Sub G(Of T) _` and a split `Partial Public Class _ / LoginForm` header read; retyping the bound name in another
+   case is a no-op (no Edited); `EventName` throws instead of falling back to the WinForms name; ByRef/Shared reasons named;
+   a selection with no events says so.
+
+| Mutation | Killed by |
+|---|---|
+| `#EndIf` not recognised | both `#EndIf`/`#endif` rows (+ the nested test) |
+| `#IfDef` not pushed (alone in its build) | `AnIfDefNestedInIfFalse_DoesNotCloseIt` |
+| Every name treated as computed | both bind-named rows + the retarget pair row |
+| EnsureBind counts reserved binds | `EnsureBind_IgnoresAReservedDataBindingOnTheSameEvent` |
+| `Distinct` removed | `ASubInBothBranches_IsOfferedOnce` |
+| Logical-line joining removed | `AGenericSubContinuedAfterOfT_AndAClassHeaderSplitWithUnderscore_AreRead` |
+| Keyword check removed | the `Class` row |
+| A scan per row read (cache bypassed) | `PushingTheCodeBehind_ScansItOnce_ForAllRows` |
+| Retype compared Ordinal | `RetypingTheBoundNameInAnotherCase_ChangesNothing` |
+| Shared not excluded/refused | the `Stat` row |
+| No-events text removed | `ASelectionWithNoEvents_SaysSo` |
+| Collision only when the Sub exists | `AComputedName_BoundByAnotherOwner_WhoseSubIsMissing_…` |
+| Suffix ignores existing Subs | `TheSuffix_SkipsATaken_1` |
 
 ## 7. Tests to re-check (consolidated)
 

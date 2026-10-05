@@ -139,8 +139,24 @@ public partial class FormPropertyGridViewModel : ObservableObject
         RaiseDescription();
     }
 
+    /// <summary>The ONE scan of <see cref="CodeBehindText"/> every Events-tab row reads (review ruling 5), and what it was of.</summary>
+    private (string Text, string? FormName, FormCodeScanResult Result)? _codeScan;
+
+    /// <summary>The current scan of the code-behind — made once per (text, form) and shared by every row.</summary>
+    private FormCodeScanResult CodeScan()
+    {
+        var formName = _file?.Model.Name;
+        if (_codeScan is not { } cached || !ReferenceEquals(cached.Text, CodeBehindText) || cached.FormName != formName)
+        {
+            _codeScan = (CodeBehindText, formName, FormCodeScan.Scan(CodeBehindText, formName));
+        }
+
+        return _codeScan.Value.Result;
+    }
+
     partial void OnCodeBehindTextChanged(string value)
     {
+        CodeScan();
         foreach (var row in EventRows)
         {
             row.RefreshChoices();
@@ -182,7 +198,7 @@ public partial class FormPropertyGridViewModel : ObservableObject
 
         foreach (var evt in FormEvents.WiredOn(definition, form.Target))
         {
-            var row = new FormEventRow(form, owner, evt, () => CodeBehindText, RaiseEdited,
+            var row = new FormEventRow(form, owner, evt, CodeScan, RaiseEdited,
                 request => HandlerRequested?.Invoke(this, request));
             row.PropertyChanged += OnEventRowPropertyChanged;
             EventRows.Add(row);
@@ -288,9 +304,12 @@ public partial class FormPropertyGridViewModel : ObservableObject
             {
                 return _refusedEventRow?.Refusal
                        ?? SelectedEventRow?.Description
-                       ?? (EventRows.Count == 0
-                           ? "Select a control on the canvas to see its events."
-                           : "Select an event to see when it is raised. Double-click it to write its handler.");
+                       ?? (EventRows.Count > 0
+                           ? "Select an event to see when it is raised. Double-click it to write its handler."
+                           : SelectedControl != null
+                               ? $"'{SelectedControl.Id}' ({SelectedControl.Kind}) has no events on " +
+                                 $"{(_file?.Model.Target == FormTarget.Web ? "the web" : "WinForms")}."
+                               : "Select a control on the canvas to see its events.");
             }
 
             // ⛔ Spec §7: a refused value is not written, and the editor snaps back — so this pane is the

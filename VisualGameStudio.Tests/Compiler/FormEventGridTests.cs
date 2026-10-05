@@ -107,8 +107,8 @@ public class FormEventGridTests
     // Pick / clear / type
     // ==================================================================
 
-    [TestCase(FormTarget.WinForms, "Private Sub Shared(sender As Object, e As EventArgs)", "Click")]
-    [TestCase(FormTarget.Web, "Private Sub Shared(e As DomEvent)", "click")]
+    [TestCase(FormTarget.WinForms, "Private Sub Common(sender As Object, e As EventArgs)", "Click")]
+    [TestCase(FormTarget.Web, "Private Sub Common(e As DomEvent)", "click")]
     public void PickingAFittingHandler_BindsIt_InTheTargetsVocabulary_OnceEdited_CodeUntouched(
         FormTarget target, string sub, string stored)
     {
@@ -119,15 +119,15 @@ public class FormEventGridTests
         grid.Edited += (_, _) => edits++;
         var click = Row(grid, "Click");
 
-        Assert.That(click.Choices, Does.Contain("Shared"));
-        click.Commit("Shared");
+        Assert.That(click.Choices, Does.Contain("Common"));
+        click.Commit("Common");
 
         Assert.Multiple(() =>
         {
             Assert.That(edits, Is.EqualTo(1));
             Assert.That(file.Model.FindById("ctl")!.Binds.Single().Event, Is.EqualTo(stored));
-            Assert.That(file.Model.FindById("ctl")!.Binds.Single().Handler, Is.EqualTo("Shared"));
-            Assert.That(click.Handler, Is.EqualTo("Shared"));
+            Assert.That(file.Model.FindById("ctl")!.Binds.Single().Handler, Is.EqualTo("Common"));
+            Assert.That(click.Handler, Is.EqualTo("Common"));
             Assert.That(grid.CodeBehindText, Is.EqualTo(code));
         });
     }

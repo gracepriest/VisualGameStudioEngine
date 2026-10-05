@@ -18,25 +18,29 @@ public sealed record FormHandlerRequest(FormBindOwner Owner, FormEventDef Event,
 ///
 /// <para>The value cell's commit rules (VS): pick a handler that FITS → bind it (the target's own vocabulary, the DOM name
 /// on the web), the code untouched; clear the text → unbind, the code never deleted; type a NEW legal name → ask the host
-/// for that stub (<see cref="FormHandlerRequest"/>); an illegal name, a reserved <c>VgsOn_</c> one, or an existing Sub that
-/// does not fit → REFUSED, said in the description pane (spec §7), nothing written.</para>
+/// for that stub (<see cref="FormHandlerRequest"/>); a name <see cref="FormHandlers.DescribeUnusableHandler"/> refuses
+/// (illegal, a keyword, reserved, the constructor, a control or the form, another member, a Shared/ByRef/non-fitting Sub)
+/// → REFUSED, said in the description pane (spec §7), nothing written.</para>
+///
+/// <para>⚠ The row never scans the code-behind itself: the grid scans it ONCE per refresh and every row reads that scan
+/// (review ruling 5).</para>
 /// </summary>
 public sealed partial class FormEventRow : ObservableObject, IFormDisplayRow
 {
     private readonly FormDocument _form;
-    private readonly Func<string> _codeText;
+    private readonly Func<FormCodeScanResult> _scan;
     private readonly Action _edited;
     private readonly Action<FormHandlerRequest> _requested;
     private IReadOnlyList<string> _choices = Array.Empty<string>();
 
     public FormEventRow(
-        FormDocument form, FormBindOwner owner, FormEventDef evt, Func<string> codeText, Action edited,
+        FormDocument form, FormBindOwner owner, FormEventDef evt, Func<FormCodeScanResult> scan, Action edited,
         Action<FormHandlerRequest> requested)
     {
         _form = form;
         Owner = owner;
         Event = evt;
-        _codeText = codeText;
+        _scan = scan;
         _edited = edited;
         _requested = requested;
         RefreshChoices();
@@ -55,8 +59,13 @@ public sealed partial class FormEventRow : ObservableObject, IFormDisplayRow
     /// <summary>WinForms' own description, for the pane.</summary>
     public string Description => Event.Description ?? "";
 
-    /// <summary>The name a bind stores on this target: <c>Click</c> on WinForms, <c>click</c> on the web.</summary>
-    public string EventName => FormEvents.NameOn(Event, _form.Target) ?? Event.Name;
+    /// <summary>
+    /// The name a bind stores on this target: <c>Click</c> on WinForms, <c>click</c> on the web. ⛔ Never falls back to the
+    /// WinForms name: a row exists only for an event <see cref="FormEvents.WiredOn"/> wires here, so a missing name is a
+    /// defect, and storing <c>Click</c> on a page would register a listener that never fires.
+    /// </summary>
+    public string EventName => FormEvents.NameOn(Event, _form.Target)
+        ?? throw new InvalidOperationException($"'{Event.Name}' has no name on {_form.Target}, so it cannot be an Events-tab row");
 
     /// <summary>The handler bound to this event, or empty.</summary>
     public string Handler => Bind?.Handler ?? "";
@@ -70,15 +79,16 @@ public sealed partial class FormEventRow : ObservableObject, IFormDisplayRow
         string.Equals(b.Event, EventName, StringComparison.OrdinalIgnoreCase));
 
     /// <summary>
-    /// The handlers that fit this event (<see cref="FormHandlers.FittingHandlers"/>), document order. ⛔ The SAME instance
-    /// while its items are unchanged — a new list during a pick undoes the pick (slice 4 Task 3).
+    /// The handlers that fit this event (<see cref="FormHandlers.FittingHandlers(FormDocument, FormBindOwner, FormEventDef, FormCodeScanResult)"/>),
+    /// document order. ⛔ The SAME instance while its items are unchanged — a new list during a pick undoes the pick
+    /// (slice 4 Task 3).
     /// </summary>
     public IReadOnlyList<string> Choices => _choices;
 
-    /// <summary>Re-reads the fitting handlers from the code-behind; a new list only when its items changed.</summary>
+    /// <summary>Re-reads the fitting handlers from the grid's current scan; a new list only when its items changed.</summary>
     public void RefreshChoices()
     {
-        var fresh = FormHandlers.FittingHandlers(_form, Owner, Event, _codeText());
+        var fresh = FormHandlers.FittingHandlers(_form, Owner, Event, _scan());
         if (!fresh.SequenceEqual(_choices, StringComparer.Ordinal))
         {
             _choices = fresh;
@@ -102,33 +112,21 @@ public sealed partial class FormEventRow : ObservableObject, IFormDisplayRow
             return;
         }
 
-        if (string.Equals(typed, Handler, StringComparison.Ordinal))
+        // The bound name again, in any case, is the same member to BasicLang: nothing to do (no Edited, no undo step).
+        if (string.Equals(typed, Handler, StringComparison.OrdinalIgnoreCase))
         {
             return;
         }
 
-        if (!FormDocument.IsLegalControlId(typed))
+        var scan = _scan();
+        if (FormHandlers.DescribeUnusableHandler(_form, Owner, Event, typed, scan) is { } refusal)
         {
-            Refusal = $"'{typed}' is not a legal handler name: start with a letter or '_', then letters, digits or '_'.";
+            Refusal = refusal;
             return;
         }
 
-        if (typed.StartsWith("VgsOn_", StringComparison.OrdinalIgnoreCase))
+        if (scan.Find(typed) is { } existing)
         {
-            Refusal = $"'{typed}' starts with VgsOn_, which is reserved for the Subs the designer generates.";
-            return;
-        }
-
-        var existing = FormCodeScan.FindSub(_codeText(), typed, _form.Name);
-        if (existing != null)
-        {
-            if (!FormHandlers.Fits(Owner, Event, _form.Target, existing))
-            {
-                Refusal = $"'{existing.Name}' does not fit the {Event.Name} event: a handler for it is " +
-                          $"Sub {existing.Name}{FormHandlers.Shape(Owner, Event, _form.Target).ParameterList}.";
-                return;
-            }
-
             if (Bind is { } bound)
             {
                 bound.Handler = existing.Name;

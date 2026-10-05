@@ -8,7 +8,20 @@ public sealed record FormCodeParameter(string Name, string? Type, bool IsByRef =
 
 /// <summary>A <c>Sub</c> the user declared in a code-behind's FORM class, outside the designer's regions.</summary>
 /// <param name="Line">The 1-based line of its <c>Sub</c> keyword.</param>
-public sealed record FormDeclaredSub(string Name, int Line, IReadOnlyList<FormCodeParameter> Parameters);
+/// <param name="IsShared">Declared <c>Shared</c>: never a handler (an <c>AddressOf</c> of a Shared Sub emits a bare,
+/// undefined name on the JavaScript backend — measured; the designer's wiring is instance-shaped on both targets).</param>
+public sealed record FormDeclaredSub(string Name, int Line, IReadOnlyList<FormCodeParameter> Parameters, bool IsShared = false);
+
+/// <summary>
+/// One scan of a code-behind's FORM class: its Subs, and the names of its OTHER members (Functions, Properties, Events,
+/// fields, Consts) — what a new handler name must not collide with.
+/// </summary>
+public sealed record FormCodeScanResult(IReadOnlyList<FormDeclaredSub> Subs, IReadOnlyCollection<string> OtherMembers)
+{
+    /// <summary>The Sub named <paramref name="name"/>, ignoring case as BasicLang binds names, or null.</summary>
+    public FormDeclaredSub? Find(string name) =>
+        Subs.FirstOrDefault(s => string.Equals(s.Name, name, StringComparison.OrdinalIgnoreCase));
+}
 
 /// <summary>
 /// ⛔ THE one reader of "which Subs does this code-behind's form declare" (slice 5 D-11) — the gesture's navigate-or-create
@@ -50,9 +63,23 @@ public static class FormCodeScan
         @"^\s*End\s+(?<kind>Class|Structure|Interface|Module|Enum|Namespace)\b",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
-    private static readonly Regex DirectiveIf = new(@"^\s*#\s*If\s+(?<cond>.*?)\s*(?:Then)?\s*$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-    private static readonly Regex DirectiveElse = new(@"^\s*#\s*(?:Else\b|ElseIf\b)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-    private static readonly Regex DirectiveEnd = new(@"^\s*#\s*End\s+If\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    // ⛔ BasicLang's OWN directive table (review ruling 1, CRITICAL), read from the compiler rather than guessed:
+    //   BasicLangLexer.ScanDirective — #If, #ElseIf, #Else, #EndIf (ONE word), #Define, #Undef/#Undefine, #Include, #Const,
+    //   #Region, #End Region; Preprocessor.Process — #IfDef, #IfNDef, #Else, #EndIf (StartsWith, so #ElseIf too).
+    //   VB's two-word `#End If` is marked Unknown by the lexer; accepted here too, so a VB habit cannot leave a block open.
+    // Only the conditional ones matter to a scanner: #If (dead when literally False/0), #IfDef/#IfNDef (pushed LIVE so
+    // their own #Else/#EndIf never pop the enclosing entry), #Else/#ElseIf, #EndIf/#End If. #End Region is not an #EndIf.
+    private static readonly Regex DirectiveIf = new(@"^\s*#\s*If(?![A-Za-z0-9_])\s*(?<cond>.*?)\s*(?:Then)?\s*$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex DirectiveIfDef = new(@"^\s*#\s*IfN?Def\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex DirectiveElse = new(@"^\s*#\s*Else(?:If)?\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex DirectiveEnd = new(@"^\s*#\s*(?:EndIf|End\s+If)\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    private static readonly Regex OtherMember = new(
+        @"^\s*" + "(?:(?:Public|Private|Protected|Friend|Shared|Overrides|Overridable|NotOverridable|MustOverride|Overloads|Shadows|Async|Partial|Iterator|ReadOnly|WriteOnly|Default|Static)\\s+)*" +
+        @"(?:Function|Property|Event|Dim|Const)\s+(?<name>[A-Za-z_][A-Za-z0-9_]*)",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    private static readonly Regex SharedModifier = new(@"^\s*(?:\w+\s+)*?Shared\s", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     private static readonly Regex ParameterModifiers = new(
         @"^(?<mods>(?:(?:ByVal|ByRef|Optional|ParamArray)\s+)*)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
@@ -61,9 +88,23 @@ public static class FormCodeScan
 
     private sealed record Block(string Kind, string Name);
 
+    private static int _scanCount;
+
+    /// <summary>
+    /// How many times <see cref="DeclaredSubs"/> has scanned a file in this process — a diagnostic counter, so a test can
+    /// pin that a refresh of N rows scans ONCE, not N times (review ruling 5).
+    /// </summary>
+    public static int ScanCount => Volatile.Read(ref _scanCount);
+
     /// <summary>Every Sub the FORM class declares, in document order. <paramref name="formName"/>: the form's class name.</summary>
-    public static IReadOnlyList<FormDeclaredSub> DeclaredSubs(string codeText, string? formName = null)
+    public static IReadOnlyList<FormDeclaredSub> DeclaredSubs(string codeText, string? formName = null) =>
+        Scan(codeText, formName).Subs;
+
+    /// <summary>ONE scan of the form class: its Subs and its other members' names (see <see cref="FormCodeScanResult"/>).</summary>
+    public static FormCodeScanResult Scan(string codeText, string? formName = null)
     {
+        Interlocked.Increment(ref _scanCount);
+        var others = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var index = new Recognizer.SourceIndex(codeText);
         var regions = RegionMarkers.Scan(codeText)
             .Where(r => r.EndOffset > r.StartOffset)
@@ -97,15 +138,22 @@ public static class FormCodeScan
                 return;
             }
 
-            var match = Declaration.Match(WithoutAttributes(code));
+            var declaration = WithoutAttributes(code);
+            var match = Declaration.Match(declaration);
             if (!match.Success)
             {
+                if (OtherMember.Match(declaration) is { Success: true } other)
+                {
+                    others.Add(other.Groups["name"].Value);
+                }
+
                 return;
             }
 
             var rest = match.Groups["rest"].Value;
             var parameters = ParameterList(index, line, rest);
-            subs.Add(new FormDeclaredSub(match.Groups["name"].Value, line, parameters));
+            var isShared = SharedModifier.IsMatch(declaration[..match.Groups["name"].Index]);
+            subs.Add(new FormDeclaredSub(match.Groups["name"].Value, line, parameters, isShared));
         }, (block, depthOutsideNamespaces) =>
         {
             if (depthOutsideNamespaces == 0 && block.Kind.Equals("Class", StringComparison.OrdinalIgnoreCase))
@@ -114,12 +162,12 @@ public static class FormCodeScan
             }
         });
 
-        return subs;
+        return new FormCodeScanResult(subs, others);
     }
 
     /// <summary>The form class's Sub named <paramref name="name"/>, matched IGNORING CASE as BasicLang binds names, or null.</summary>
     public static FormDeclaredSub? FindSub(string codeText, string name, string? formName = null) =>
-        DeclaredSubs(codeText, formName).FirstOrDefault(s => string.Equals(s.Name, name, StringComparison.OrdinalIgnoreCase));
+        Scan(codeText, formName).Find(name);
 
     /// <summary>
     /// Walks the code lines outside the designer regions and outside <c>#If False</c>/<c>#If 0</c>, tracking the block
@@ -137,6 +185,13 @@ public static class FormCodeScan
         {
             var code = Code(index.LineText(line));
             var deadNow = conditions.Count > 0 && conditions.Peek().Dead;
+
+            if (DirectiveIfDef.IsMatch(code))
+            {
+                // Unevaluated (it needs the #Define set): live, unless it sits inside a dead block.
+                conditions.Push((deadNow, deadNow));
+                continue;
+            }
 
             if (DirectiveIf.Match(code) is { Success: true } ifMatch)
             {
@@ -166,6 +221,15 @@ public static class FormCodeScan
                 continue;
             }
 
+            // A logical line: a trailing ` _` (after any whitespace) continues onto the next physical line — a split class
+            // header, `Sub G(Of T) _`, a parameter list. Reported at its FIRST line.
+            var first = line;
+            while (Continuation.Match(code) is { Success: true } more && line < index.LineCount)
+            {
+                line++;
+                code = code[..more.Index] + " " + Code(index.LineText(line)).Trim();
+            }
+
             if (BlockEnd.Match(code) is { Success: true } end)
             {
                 var at = blocks.FindLastIndex(b => b.Kind.Equals(end.Groups["kind"].Value, StringComparison.OrdinalIgnoreCase));
@@ -185,7 +249,7 @@ public static class FormCodeScan
                 continue;
             }
 
-            onLine(line, code, blocks);
+            onLine(first, code, blocks);
         }
     }
 
