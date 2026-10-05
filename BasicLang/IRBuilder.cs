@@ -5054,7 +5054,19 @@ namespace BasicLang.Compiler.IR
             value = CoerceToDeclaredType(value, _semanticAnalyzer.GetNodeType(node.Target));
 
             // Store to target
-            if (node.Target is IdentifierExpressionNode idExpr && idExpr.IsForeignQualified)
+            EmitStoreToTarget(node.Target, value);
+        }
+
+        /// <summary>
+        /// The store half of an assignment: writes <paramref name="value"/> (already coerced to the
+        /// target's declared type) into <paramref name="target"/> — an identifier, a member, an array
+        /// element or an indexer. Shared by <see cref="Visit(AssignmentStatementNode)"/> and the
+        /// <c>++</c>/<c>--</c> lowering (<see cref="BuildIncrementDecrement"/>), so the two cannot
+        /// disagree about where a target lives.
+        /// </summary>
+        private void EmitStoreToTarget(ExpressionNode target, IRValue value)
+        {
+            if (target is IdentifierExpressionNode idExpr && idExpr.IsForeignQualified)
             {
                 // A `::`-qualified foreign GLOBAL is an opaque target: no local is created for
                 // it, it is typed Foreign so every backend renders the name verbatim, and the
@@ -5065,7 +5077,7 @@ namespace BasicLang.Compiler.IR
                 var foreignTarget = new IRVariable(idExpr.Name, new TypeInfo(idExpr.Name, TypeKind.Foreign));
                 EmitInstruction(new IRAssignment(foreignTarget, value));
             }
-            else if (node.Target is IdentifierExpressionNode accessorTarget
+            else if (target is IdentifierExpressionNode accessorTarget
                      && AccessorMemberOf(accessorTarget) is { } accessor)
             {
                 // ⭐ ADR-0007: a bare accessor-backed property WRITE runs its Set accessor — the
@@ -5074,7 +5086,7 @@ namespace BasicLang.Compiler.IR
                 // a variable write to every consumer). See AccessorMemberOf.
                 EmitInstruction(new IRFieldStore(AccessorMemberReceiver(accessor), accessor.MemberName, value));
             }
-            else if (node.Target is IdentifierExpressionNode idExpr2)
+            else if (target is IdentifierExpressionNode idExpr2)
             {
                 // Check if this identifier is an imported symbol from another module
                 var symbol = _semanticAnalyzer.GetNodeSymbol(idExpr2);
@@ -5103,7 +5115,7 @@ namespace BasicLang.Compiler.IR
                     EmitInstruction(new IRAssignment(targetVar, value));
                 }
             }
-            else if (node.Target is MemberAccessExpressionNode moduleMemberExpr
+            else if (target is MemberAccessExpressionNode moduleMemberExpr
                      && ModuleMemberSymbolOf(moduleMemberExpr) is Symbol moduleMemberTarget)
             {
                 // `Helpers.Value = 13`: a write to a Module's variable is an assignment to that
@@ -5116,7 +5128,7 @@ namespace BasicLang.Compiler.IR
                     EmitInstruction(new IRAssignment(targetVar, value));
                 }
             }
-            else if (node.Target is MemberAccessExpressionNode memberExpr)
+            else if (target is MemberAccessExpressionNode memberExpr)
             {
                 // Handle member assignment (both properties and fields use field store syntax in C#)
                 memberExpr.Object.Accept(this);
@@ -5149,7 +5161,7 @@ namespace BasicLang.Compiler.IR
 
                 EmitInstruction(fieldStore);
             }
-            else if (node.Target is ArrayAccessExpressionNode arrayExpr)
+            else if (target is ArrayAccessExpressionNode arrayExpr)
             {
                 // Bracket-indexed write: `x[i] = v`. If the receiver is an indexable generic
                 // collection (List/Dictionary), lower to IRIndexerStore so backends can honor
@@ -5195,7 +5207,7 @@ namespace BasicLang.Compiler.IR
                     EmitInstruction(new IRStore(value, gep));
                 }
             }
-            else if (node.Target is CallExpressionNode itemCallTarget
+            else if (target is CallExpressionNode itemCallTarget
                      && itemCallTarget.Callee is MemberAccessExpressionNode itemTarget
                      && itemCallTarget.Arguments.Count > 0
                      && string.Equals(itemTarget.MemberName, "Item", StringComparison.OrdinalIgnoreCase)
@@ -5214,7 +5226,7 @@ namespace BasicLang.Compiler.IR
                 }
                 EmitInstruction(indexerStore);
             }
-            else if (node.Target is CallExpressionNode callTarget && callTarget.Arguments.Count > 0)
+            else if (target is CallExpressionNode callTarget && callTarget.Arguments.Count > 0)
             {
                 // VB-style paren-indexed write: `coll(i) = v` / `dict(k) = v`. Because VB uses
                 // PARENS for indexing, the parser produces a CallExpressionNode on the LHS.
@@ -5259,6 +5271,12 @@ namespace BasicLang.Compiler.IR
         public void Visit(ExpressionStatementNode node)
         {
             TrackSourceLine(node);
+            // #141: `x++` on a line of its own discards its value, so it needs no carrier.
+            if (node.Expression is UnaryExpressionNode { Operator: "++" or "--" } step && CanLowerIncrement(step))
+            {
+                BuildIncrementDecrement(step, resultUsed: false);
+                return;
+            }
             node.Expression.Accept(this);
         }
 
@@ -5630,6 +5648,12 @@ namespace BasicLang.Compiler.IR
 
         public void Visit(UnaryExpressionNode node)
         {
+            if (node.Operator is "++" or "--" && CanLowerIncrement(node))
+            {
+                BuildIncrementDecrement(node, resultUsed: true);
+                return;
+            }
+
             node.Operand.Accept(this);
             var operand = _expressionResult;
 
@@ -5681,6 +5705,90 @@ namespace BasicLang.Compiler.IR
 
             EmitInstruction(unaryResult);
             _expressionResult = unaryResult;
+        }
+
+        /// <summary>Numbers the <c>__inc{n}</c> carriers of <see cref="BuildIncrementDecrement"/>.</summary>
+        private int _incDecCounter;
+
+        /// <summary>
+        /// Whether <see cref="BuildIncrementDecrement"/> can lower this <c>++</c>/<c>--</c>: inside a
+        /// function, with emission on (a <c>When</c> guard is built as a tree, as
+        /// <see cref="BuildShortCircuit"/> also requires), over an operand
+        /// <see cref="EmitStoreToTarget"/> has an arm for. Anything else keeps the old
+        /// <see cref="IRUnaryOp"/> (a <c>With</c> block's <c>.P</c> — the store chain has no arm for
+        /// it, which is why <c>.P = v</c> is dropped there; a literal; a call result).
+        /// </summary>
+        private bool CanLowerIncrement(UnaryExpressionNode node) =>
+            _currentFunction != null && !_suppressEmit && node.Operand switch
+            {
+                IdentifierExpressionNode => true,
+                MemberAccessExpressionNode => true,
+                ArrayAccessExpressionNode => true,
+                CallExpressionNode call => call.Arguments.Count > 0,
+                _ => false,
+            };
+
+        /// <summary>
+        /// #141 — BasicLang's own <c>++</c>/<c>--</c> (VB has neither), with C's meaning: the operator
+        /// WRITES its operand, and its value is the NEW value for the prefix form (<c>++x</c>) and
+        /// the OLD value for the postfix form (<c>x++</c>).
+        ///
+        /// <para>Lowered once, here, to what <c>x += 1</c> / <c>x -= 1</c> lowers to — a read of the
+        /// target, an add of 1 typed as the target, the declared-type coercion and the SAME store
+        /// (<see cref="EmitStoreToTarget"/>) — so every backend gets IR it already handles. It used
+        /// to be an <see cref="IRUnaryOp"/> Inc/Dec over the operand's VALUE, which each backend read
+        /// its own way. MEASURED on master: C++ wrote <c>t++;</c> and incremented the temp, so the
+        /// variable never changed; JavaScript and MSIL refused the program; C# wrote
+        /// <c>t = ++x</c>, so <c>y = x++</c> got the NEW value, and once the optimizer folded the
+        /// operand (<c>++10</c> → <c>11</c>) the write to <c>x</c> was gone too.</para>
+        ///
+        /// <para>A used value goes through a carrier local, <c>__inc{n}</c>, declared exactly as the
+        /// <c>AndAlso</c> carrier is: the postfix value must be the one from BEFORE the store, and
+        /// neither may be re-read from the target after a later write in the same expression
+        /// (<c>x++ + x++</c>). A statement (<c>x++</c> on its own line) has no carrier and lowers
+        /// exactly as <c>x += 1</c> does.</para>
+        ///
+        /// <para>⚠ As with <c>+=</c>, a member's receiver and an element's indices are evaluated
+        /// once for the read and again for the store.</para>
+        /// </summary>
+        private void BuildIncrementDecrement(UnaryExpressionNode node, bool resultUsed)
+        {
+            var target = node.Operand;
+            var targetType = _semanticAnalyzer.GetNodeType(target);
+
+            target.Accept(this);
+            var current = _expressionResult;
+
+            IRVariable carrier = null;
+            if (resultUsed)
+            {
+                // ⛔ REGISTERED with the function, as BuildShortCircuit's carrier is — LocalVariables
+                // is what a backend reads to DECLARE a local.
+                carrier = CreateVariable($"__inc{_incDecCounter++}", targetType ?? current.Type, _nextVersion++);
+                PushVariableVersion(carrier.Name, carrier);
+                _currentFunction.LocalVariables.Add(carrier);
+                if (node.IsPostfix)
+                    EmitInstruction(new IRAssignment(carrier, current));
+            }
+
+            // The operand `x += 1` would carry: the analyzer types the literal Integer, and Decimal
+            // only in a Decimal context (spec 6.1, Visit(LiteralExpressionNode)).
+            var one = targetType?.Name == "Decimal"
+                ? new IRConstant(1m, targetType)
+                : new IRConstant(1, new TypeInfo("Integer", TypeKind.Primitive));
+            var step = new IRBinaryOp(_currentFunction.GetNextTempName(),
+                node.Operator == "++" ? BinaryOpKind.Add : BinaryOpKind.Sub, current, one, current.Type);
+            EmitInstruction(step);
+            var value = CoerceToDeclaredType(step, targetType);
+
+            if (carrier != null && !node.IsPostfix)
+            {
+                EmitInstruction(new IRAssignment(carrier, value));
+                value = carrier;
+            }
+
+            EmitStoreToTarget(target, value);
+            _expressionResult = carrier ?? value;
         }
 
         public void Visit(LiteralExpressionNode node)
