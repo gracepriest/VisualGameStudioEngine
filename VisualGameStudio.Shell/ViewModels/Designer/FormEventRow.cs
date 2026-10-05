@@ -8,7 +8,20 @@ namespace VisualGameStudio.Shell.ViewModels.Designer;
 /// null for a double-click (the host computes <c>&lt;Id&gt;_&lt;Event&gt;</c>, or navigates to the handler already bound).
 /// The host writes the stub (<see cref="FormHandlers.Plan"/>), binds it, and opens the code.
 /// </summary>
-public sealed record FormHandlerRequest(FormBindOwner Owner, FormEventDef Event, string? Handler);
+public sealed record FormHandlerRequest(FormBindOwner Owner, FormEventDef Event, string? Handler)
+{
+    private readonly IReadOnlyList<FormBindOwner>? _owners;
+
+    /// <summary>
+    /// Property-grid slice 6 D-8: EVERY owner the handler is for, in selection order with the PRIMARY (<see cref="Owner"/>)
+    /// last — one owner for a single selection. The host plans for the primary and binds every owner (one write).
+    /// </summary>
+    public IReadOnlyList<FormBindOwner> Owners
+    {
+        get => _owners ?? new[] { Owner };
+        init => _owners = value;
+    }
+}
 
 /// <summary>An Events-tab cell to put back to its bound handler — only while it still shows <paramref name="RefusedText"/> (null: always).</summary>
 public sealed record FormHandlerCellRevert(FormEventRow Row, string? RefusedText);
@@ -39,9 +52,26 @@ public sealed partial class FormEventRow : ObservableObject, IFormDisplayRow
     public FormEventRow(
         FormDocument form, FormBindOwner owner, FormEventDef evt, Func<FormCodeScanResult> scan, Action edited,
         Action<FormHandlerRequest> requested)
+        : this(form, new[] { owner }, evt, scan, edited, requested)
     {
+    }
+
+    /// <summary>
+    /// Slice 6 D-8: one row over the SAME event (WinForms name, args, name on the target) of several owners — selection order,
+    /// the primary LAST. <paramref name="evt"/> is the primary's definition.
+    /// </summary>
+    public FormEventRow(
+        FormDocument form, IReadOnlyList<FormBindOwner> owners, FormEventDef evt, Func<FormCodeScanResult> scan, Action edited,
+        Action<FormHandlerRequest> requested)
+    {
+        if (owners.Count == 0)
+        {
+            throw new ArgumentException("an Events row has at least one owner", nameof(owners));
+        }
+
         _form = form;
-        Owner = owner;
+        Owners = owners;
+        Owner = owners[^1];
         Event = evt;
         // ⛔ Decided HERE, not in a getter (round 4 ruling 8): a row exists only for an event FormEvents.WiredOn wires on
         // this target, so a missing name is a defect — and a throw inside a binding's getter is swallowed by the binding,
@@ -54,7 +84,11 @@ public sealed partial class FormEventRow : ObservableObject, IFormDisplayRow
         RefreshChoices();
     }
 
+    /// <summary>The PRIMARY owner — the only one for a single selection, so every single-owner caller keeps its meaning.</summary>
     public FormBindOwner Owner { get; }
+
+    /// <summary>Every owner (slice 6 D-8), selection order, <see cref="Owner"/> last.</summary>
+    public IReadOnlyList<FormBindOwner> Owners { get; }
 
     public FormEventDef Event { get; }
 
@@ -73,14 +107,24 @@ public sealed partial class FormEventRow : ObservableObject, IFormDisplayRow
     /// </summary>
     public string EventName { get; }
 
-    /// <summary>The handler bound to this event, or empty.</summary>
-    public string Handler => Bind?.Handler ?? "";
+    /// <summary>
+    /// The handler bound to this event, or empty. Slice 6 D-8: for several owners, the handler they ALL have bound — blank
+    /// when they differ (one unbound, or two different names), as VS shows it.
+    /// </summary>
+    public string Handler
+    {
+        get
+        {
+            var first = BindOf(Owners[0])?.Handler ?? "";
+            return Owners.All(o => string.Equals(BindOf(o)?.Handler ?? "", first, StringComparison.Ordinal)) ? first : "";
+        }
+    }
 
     /// <summary>Why the last typed value was refused, while it is the newest thing to say; null otherwise.</summary>
     [ObservableProperty]
     private string? _refusal;
 
-    private FormBind? Bind => Owner.Binds.FirstOrDefault(b =>
+    private FormBind? BindOf(FormBindOwner owner) => owner.Binds.FirstOrDefault(b =>
         !b.UsesReservedDataBinding && !string.IsNullOrEmpty(b.Handler) &&
         string.Equals(b.Event, EventName, StringComparison.OrdinalIgnoreCase));
 
@@ -94,7 +138,15 @@ public sealed partial class FormEventRow : ObservableObject, IFormDisplayRow
     /// <summary>Re-reads the fitting handlers from the grid's current scan; a new list only when its items changed.</summary>
     public void RefreshChoices()
     {
-        var fresh = FormHandlers.FittingHandlers(_form, Owner, Event, _scan());
+        // Slice 6 D-8: the handlers that fit EVERY owner, in the primary's order.
+        var scan = _scan();
+        var fresh = FormHandlers.FittingHandlers(_form, Owner, Event, scan);
+        foreach (var other in Owners.Take(Owners.Count - 1))
+        {
+            var fits = FormHandlers.FittingHandlers(_form, other, Event, scan);
+            fresh = fresh.Where(h => fits.Contains(h, StringComparer.Ordinal)).ToList();
+        }
+
         if (!fresh.SequenceEqual(_choices, StringComparer.Ordinal))
         {
             _choices = fresh;
@@ -108,9 +160,16 @@ public sealed partial class FormEventRow : ObservableObject, IFormDisplayRow
         var typed = (text ?? "").Trim();
         Refusal = null;
 
+        // Slice 6 D-8: every rule below acts on EVERY owner, and raises ONE Edited (one write, one undo step).
         if (typed.Length == 0)
         {
-            if (FormHandlers.Unbind(Owner, EventName))
+            var unbound = false;
+            foreach (var owner in Owners)
+            {
+                unbound |= FormHandlers.Unbind(owner, EventName);
+            }
+
+            if (unbound)
             {
                 Changed();
             }
@@ -118,40 +177,57 @@ public sealed partial class FormEventRow : ObservableObject, IFormDisplayRow
             return;
         }
 
-        // The bound name again, in any case, is the same member to BasicLang: nothing to do (no Edited, no undo step).
-        if (string.Equals(typed, Handler, StringComparison.OrdinalIgnoreCase))
+        // The bound name again, in any case, is the same member to BasicLang: nothing to do (no Edited, no undo step). For
+        // several owners only when they ALL have it (Handler is blank otherwise).
+        if (string.Equals(typed, Handler, StringComparison.OrdinalIgnoreCase) && Handler.Length > 0)
         {
             return;
         }
 
         var scan = _scan();
-        if (FormHandlers.DescribeUnusableHandler(_form, Owner, Event, typed, scan) is { } refusal)
+        // ⛔ Asked for EVERY owner: a name one member cannot take (its id, a Sub that does not fit its event) refuses the set.
+        foreach (var owner in Owners)
         {
-            Refuse(refusal, typed);
-            return;
+            if (FormHandlers.DescribeUnusableHandler(_form, owner, Event, typed, scan) is { } refusal)
+            {
+                Refuse(refusal, typed);
+                return;
+            }
         }
 
         if (scan.Find(typed) is { } existing)
         {
-            if (Bind is { } bound)
+            var changed = false;
+            foreach (var owner in Owners)
             {
-                bound.Handler = existing.Name;
-            }
-            else
-            {
-                FormHandlers.EnsureBind(Owner, EventName, existing.Name);
+                if (BindOf(owner) is { } bound)
+                {
+                    if (!string.Equals(bound.Handler, existing.Name, StringComparison.Ordinal))
+                    {
+                        bound.Handler = existing.Name;
+                        changed = true;
+                    }
+                }
+                else
+                {
+                    changed |= FormHandlers.EnsureBind(owner, EventName, existing.Name);
+                }
             }
 
-            Changed();
+            if (changed)
+            {
+                Changed();
+            }
+
             return;
         }
 
-        // A new, legal name: the host writes the stub and binds it (it owns the code-behind).
-        _requested(new FormHandlerRequest(Owner, Event, typed));
+        // A new, legal name: the host writes the stub and binds it on every owner (it owns the code-behind).
+        _requested(new FormHandlerRequest(Owner, Event, typed) { Owners = Owners });
     }
 
-    /// <summary>A double-click on the row: create-or-navigate its handler (the host decides which).</summary>
-    public void RequestHandler() => _requested(new FormHandlerRequest(Owner, Event, null));
+    /// <summary>A double-click on the row: create-or-navigate its handler (the host decides which) — for every owner.</summary>
+    public void RequestHandler() => _requested(new FormHandlerRequest(Owner, Event, null) { Owners = Owners });
 
     /// <summary>
     /// Refuses the value just committed: says why (the description pane), and makes the cell re-read its handler, so the

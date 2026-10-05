@@ -747,12 +747,26 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
     ///
     /// <para>⚠ The document is written back only when something actually changed, so double-clicking
     /// a control that is already wired does not mark the form dirty.</para>
+    ///
+    /// <para>Slice 6 D-8: a double-click on a MEMBER of a multi-selection wires every selected control that has the clicked
+    /// control's default event — ONE stub named after the clicked control (planned for it, so it goes LAST: the primary),
+    /// bound on all of them, ONE write; the selection is kept. A member whose kind lacks the event is left unbound
+    /// (<see cref="RunHandlerGestureAsync"/> filters by the planned event).</para>
     /// </summary>
     [RelayCommand]
-    private Task ActivateControlAsync(BasicLang.Forms.FormControl? control) =>
-        control == null || DesignFile is not { } file
-            ? Task.CompletedTask
-            : ActivateHandlerAsync(new BasicLang.Forms.FormBindOwner(file.Model, control), null, null);
+    private Task ActivateControlAsync(BasicLang.Forms.FormControl? control)
+    {
+        if (control == null || DesignFile is not { } file)
+        {
+            return Task.CompletedTask;
+        }
+
+        var owners = Selection.Controls.Count > 1 && Selection.Contains(control)
+            ? Selection.Controls.Where(c => !ReferenceEquals(c, control)).Append(control)
+                .Select(c => new BasicLang.Forms.FormBindOwner(file.Model, c)).ToList()
+            : new List<BasicLang.Forms.FormBindOwner> { new(file.Model, control) };
+        return ActivateHandlerAsync(owners, null, null);
+    }
 
     /// <summary>
     /// Slice 5 D-9: a double-click on the FORM's surface (not a control) opens the form's default handler — Load — as VS
@@ -762,7 +776,7 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
     private Task ActivateFormAsync() =>
         DesignFile is not { } file
             ? Task.CompletedTask
-            : ActivateHandlerAsync(new BasicLang.Forms.FormBindOwner(file.Model), null, null);
+            : ActivateHandlerAsync(new[] { new BasicLang.Forms.FormBindOwner(file.Model) }, null, null);
 
     /// <summary>
     /// ⛔ THE one host route into a handler (slice 5 Task 6): the canvas double-click on a control
@@ -772,9 +786,9 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
     /// <see cref="BasicLang.Forms.FormHandlers.DescribeUnusableHandler"/> before anything is written.
     /// </summary>
     private async Task ActivateHandlerAsync(
-        BasicLang.Forms.FormBindOwner owner, BasicLang.Forms.FormEventDef? evt, string? handlerName)
+        IReadOnlyList<BasicLang.Forms.FormBindOwner> owners, BasicLang.Forms.FormEventDef? evt, string? handlerName)
     {
-        if (DesignFile == null || FilePath == null)
+        if (DesignFile == null || FilePath == null || owners.Count == 0)
         {
             return;
         }
@@ -784,7 +798,8 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
         // fix 3): Enter and the LostFocus right behind it asking for the same typed name. A different request (another
         // control, another event) is queued, never lost. The queue is a chain of completions: each gesture awaits the
         // previous one's task, then completes its own whatever happened.
-        var key = (owner.Control, owner.Form, evt, handlerName);
+        // Slice 6 D-8: the key covers EVERY owner — two multi requests differing only in a non-primary owner are two.
+        var key = new HandlerGestureKey(owners, evt, handlerName);
         if (!_handlerGesturesPending.Add(key))
         {
             return;
@@ -796,7 +811,7 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
         try
         {
             await previous;
-            await RunHandlerGestureAsync(owner, evt, handlerName);
+            await RunHandlerGestureAsync(owners, evt, handlerName);
         }
         catch (Exception ex)
         {
@@ -823,12 +838,54 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
     private Task _handlerGestureTail = Task.CompletedTask;
 
     /// <summary>Every gesture waiting or running: a request identical to one of them is dropped.</summary>
-    private readonly HashSet<(BasicLang.Forms.FormControl?, BasicLang.Forms.FormDocument, BasicLang.Forms.FormEventDef?, string?)>
-        _handlerGesturesPending = new();
+    private readonly HashSet<HandlerGestureKey> _handlerGesturesPending = new();
+
+    /// <summary>
+    /// A handler gesture's identity: every owner (by reference — control and form, in order), the event and the typed name.
+    /// </summary>
+    private sealed class HandlerGestureKey : IEquatable<HandlerGestureKey>
+    {
+        private readonly (BasicLang.Forms.FormControl? Control, BasicLang.Forms.FormDocument Form)[] _owners;
+        private readonly BasicLang.Forms.FormEventDef? _event;
+        private readonly string? _handler;
+
+        public HandlerGestureKey(
+            IReadOnlyList<BasicLang.Forms.FormBindOwner> owners, BasicLang.Forms.FormEventDef? evt, string? handler)
+        {
+            _owners = owners.Select(o => (o.Control, o.Form)).ToArray();
+            _event = evt;
+            _handler = handler;
+        }
+
+        public bool Equals(HandlerGestureKey? other) =>
+            other != null && ReferenceEquals(_event, other._event) &&
+            string.Equals(_handler, other._handler, StringComparison.Ordinal) &&
+            _owners.Length == other._owners.Length &&
+            _owners.Zip(other._owners).All(p => ReferenceEquals(p.First.Control, p.Second.Control) &&
+                                                ReferenceEquals(p.First.Form, p.Second.Form));
+
+        public override bool Equals(object? obj) => Equals(obj as HandlerGestureKey);
+
+        public override int GetHashCode()
+        {
+            var hash = new HashCode();
+            hash.Add(_event);
+            hash.Add(_handler);
+            foreach (var (control, form) in _owners)
+            {
+                hash.Add(control == null ? 0 : System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(control));
+                hash.Add(System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(form));
+            }
+
+            return hash.ToHashCode();
+        }
+    }
 
     private async Task RunHandlerGestureAsync(
-        BasicLang.Forms.FormBindOwner owner, BasicLang.Forms.FormEventDef? evt, string? handlerName)
+        IReadOnlyList<BasicLang.Forms.FormBindOwner> owners, BasicLang.Forms.FormEventDef? evt, string? handlerName)
     {
+        // Slice 6 D-8: planned for the PRIMARY (last) exactly as a single selection; bound on every owner sharing the event.
+        var owner = owners[^1];
         var file = DesignFile;
         if (file == null || FilePath == null || _closed)
         {
@@ -868,12 +925,19 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
             // the host is the one about to write the file, so it asks the same ONE rule again.
             // Said where the name was typed — the row's description, the cell reverting (round 4 ruling 5) — never as BL8014
             // "no code-behind" in the Error List, which is not what went wrong.
-            if (handlerName != null && evt != null &&
-                BasicLang.Forms.FormHandlers.DescribeUnusableHandler(file.Model, owner, evt, handlerName,
-                    BasicLang.Forms.FormCodeScan.Scan(before, file.Model.Name)) is { } unusable)
+            if (handlerName != null && evt != null)
             {
-                Fail(unusable);
-                return;
+                // Slice 6 D-8: asked for EVERY owner — a name any member cannot take refuses the gesture.
+                var scanned = BasicLang.Forms.FormCodeScan.Scan(before, file.Model.Name);
+                foreach (var each in owners)
+                {
+                    if (BasicLang.Forms.FormHandlers.DescribeUnusableHandler(file.Model, each, evt, handlerName, scanned) is
+                        { } unusable)
+                    {
+                        Fail(unusable);
+                        return;
+                    }
+                }
             }
 
             var plan = evt == null
@@ -900,7 +964,16 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
                 return;
             }
 
-            if (BindHandler(owner, plan.EventName, plan.Handler))
+            // Slice 6 D-8: ONE stub (the primary's plan), bound on the primary and on every other owner that wires the SAME
+            // event on this target — a member whose kind lacks it (a TrackBar has no Click) is left unbound, as VS does.
+            // ONE write, so ONE undo step.
+            var changed = false;
+            foreach (var each in owners.Where(o => ReferenceEquals(o, owner) || SharesPlannedEvent(o, owner, plan.EventName, file.Model.Target)))
+            {
+                changed |= BindHandler(each, plan.EventName, plan.Handler);
+            }
+
+            if (changed)
             {
                 WriteDesignerEditBack();
             }
@@ -908,7 +981,11 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
             // ⛔ CRITICAL (round 4 ruling 1): the bind was edited behind the Events tab's rows — they re-read it NOW, before
             // focus can leave a cell still showing the old value (SelectInDesigner is a no-op for the control already shown).
             PropertyGrid.RefreshHandlers();
-            SelectInDesigner(owner.Control);
+            // ⛔ Slice 6 D-8: a gesture never collapses a multi-selection — an owner already selected keeps the selection.
+            if (owner.Control == null || !Selection.Contains(owner.Control))
+            {
+                SelectInDesigner(owner.Control);
+            }
             await PushCodeBehindTextAsync();
             _eventAggregator.Publish(new NavigateToFileEvent(codePath, plan.CaretLine));
 
@@ -950,6 +1027,25 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
     /// Wires <paramref name="handler"/> to the owner's event: replaces the handler of an existing bind of that event (a
     /// typed new name in the Events tab), else adds the bind. Returns whether the document changed.
     /// </summary>
+    /// <summary>
+    /// Slice 6 D-8: whether <paramref name="other"/> wires the event the primary's plan binds (<paramref name="eventName"/>,
+    /// the name on <paramref name="target"/>) as the SAME event — WinForms name, args, name on the target
+    /// (<c>FormPropertyGridViewModel.SameEvent</c>, the Events tab's own rule).
+    /// </summary>
+    private static bool SharesPlannedEvent(
+        BasicLang.Forms.FormBindOwner other, BasicLang.Forms.FormBindOwner primary, string eventName, BasicLang.Forms.FormTarget target)
+    {
+        if (other.Definition is not { } otherDef || primary.Definition is not { } primaryDef)
+        {
+            return false;
+        }
+
+        var planned = BasicLang.Forms.FormEvents.WiredOn(primaryDef, target).FirstOrDefault(e =>
+            string.Equals(BasicLang.Forms.FormEvents.NameOn(e, target), eventName, StringComparison.OrdinalIgnoreCase));
+        return planned != null && BasicLang.Forms.FormEvents.WiredOn(otherDef, target)
+            .Any(e => ViewModels.Designer.FormPropertyGridViewModel.SameEvent(e, planned, target));
+    }
+
     private static bool BindHandler(BasicLang.Forms.FormBindOwner owner, string eventName, string handler)
     {
         var bound = owner.Binds.FirstOrDefault(b => !b.UsesReservedDataBinding &&
@@ -1440,7 +1536,7 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
 
         // Slice 5 Task 6: the Events tab asks for a handler (a double-clicked row, a typed new name) — the ONE host route,
         // the same as the canvas double-click; and a handler drop-down that opens asks for the code-behind as it is NOW.
-        PropertyGrid.HandlerRequested += (_, request) => _ = ActivateHandlerAsync(request.Owner, request.Event, request.Handler);
+        PropertyGrid.HandlerRequested += (_, request) => _ = ActivateHandlerAsync(request.Owners, request.Event, request.Handler);
         PropertyGrid.CodeBehindRefreshRequested += (_, _) => _ = PushCodeBehindTextAsync();
     }
 

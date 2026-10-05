@@ -241,7 +241,9 @@ public partial class FormPropertyGridViewModel : ObservableObject
     /// </summary>
     public bool RefuseHandler(FormBindOwner owner, FormEventDef evt, string why, string? refusedText = null)
     {
-        var row = EventRows.FirstOrDefault(r => ReferenceEquals(r.Owner.Control, owner.Control) && ReferenceEquals(r.Event, evt));
+        // Slice 6 D-8: the row whose owners CONTAIN the refused one — a multi-selection's merged row says it too.
+        var row = EventRows.FirstOrDefault(r => r.Owners.Any(o => ReferenceEquals(o.Control, owner.Control)) &&
+                                                ReferenceEquals(r.Event, evt));
         row?.Refuse(why, refusedText);
         return row != null;
     }
@@ -292,10 +294,20 @@ public partial class FormPropertyGridViewModel : ObservableObject
         EventRows.Clear();
         _refusedEventRow = null;
 
-        // ⚠ Slice 6 Task 2: a multi-selection shows no event rows until Task 5 brings the intersection (D-8); the pane says
-        // so (DescriptionBody). Never the primary's rows alone — a bind there would wire one control of several.
-        if (_file?.Model is not { } form || IsMultiSelection)
+        if (_file?.Model is not { } form)
         {
+            return;
+        }
+
+        if (IsMultiSelection)
+        {
+            // Slice 6 D-8: the events EVERY member has — never the primary's alone, which would wire one control of several.
+            foreach (var (evt, owners) in SharedEvents(form, _selectedControls))
+            {
+                AddEventRow(new FormEventRow(form, owners, evt, CodeScan, RaiseEdited,
+                    request => HandlerRequested?.Invoke(this, request)));
+            }
+
             return;
         }
 
@@ -307,13 +319,48 @@ public partial class FormPropertyGridViewModel : ObservableObject
 
         foreach (var evt in FormEvents.WiredOn(definition, form.Target))
         {
-            var row = new FormEventRow(form, owner, evt, CodeScan, RaiseEdited,
-                request => HandlerRequested?.Invoke(this, request));
-            row.PropertyChanged += OnEventRowPropertyChanged;
-            row.Reverted += OnEventRowReverted;
-            EventRows.Add(row);
+            AddEventRow(new FormEventRow(form, owner, evt, CodeScan, RaiseEdited,
+                request => HandlerRequested?.Invoke(this, request)));
         }
     }
+
+    private void AddEventRow(FormEventRow row)
+    {
+        row.PropertyChanged += OnEventRowPropertyChanged;
+        row.Reverted += OnEventRowReverted;
+        EventRows.Add(row);
+    }
+
+    /// <summary>
+    /// ⛔ Slice 6 D-8: the events a MULTI-selection shares — the primary's wired events (its order, its category) that EVERY
+    /// member wires on the target (<see cref="FormEvents.WiredOn"/> per member, never <c>definition.Events</c>) with the same
+    /// WinForms name, the same handler args, and the same name on the target (the bind each member would store). The owners
+    /// come back in selection order, the primary last.
+    /// </summary>
+    public static IEnumerable<(FormEventDef Event, IReadOnlyList<FormBindOwner> Owners)> SharedEvents(
+        FormDocument form, IReadOnlyList<FormControl> controls)
+    {
+        var owners = controls.Select(c => new FormBindOwner(form, c)).ToList();
+        if (owners.Any(o => o.Definition == null))
+        {
+            yield break;
+        }
+
+        var wired = owners.Select(o => FormEvents.WiredOn(o.Definition!, form.Target).ToList()).ToList();
+        foreach (var evt in wired[^1])
+        {
+            if (wired.All(list => list.Any(e => SameEvent(e, evt, form.Target))))
+            {
+                yield return (evt, owners);
+            }
+        }
+    }
+
+    /// <summary>The same event on <paramref name="target"/>: WinForms name, handler args, and the name a bind stores.</summary>
+    public static bool SameEvent(FormEventDef a, FormEventDef b, FormTarget target) =>
+        string.Equals(a.Name, b.Name, StringComparison.Ordinal) &&
+        string.Equals(a.WinFormsArgs ?? "EventArgs", b.WinFormsArgs ?? "EventArgs", StringComparison.Ordinal) &&
+        string.Equals(FormEvents.NameOn(a, target), FormEvents.NameOn(b, target), StringComparison.Ordinal);
 
     /// <summary>The object selector's entries: the form, every control, every tray component.</summary>
     public ObservableCollection<FormObjectItem> Objects { get; } = new();

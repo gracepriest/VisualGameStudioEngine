@@ -1011,6 +1011,47 @@ No decision changed, so no commit of its own; recorded here with Task 1.
 - Green: the touched fixtures 52/52; RE-CHECK (`TestCategory!=Integration` over `FormPropertyGrid*`,
   `FormCompositeRowTests`, `FormCanvasMultiSelectTests`, `FormSelectionTests`) — **451/451**.
 
+### Task 5 — the Events tab and the canvas double-click for a multi-selection (base `a438688f`)
+
+- `FormEventRow`: `Owners` (selection order, primary last; `Owner` stays the primary, the old constructor wraps one owner).
+  `Handler` = the handler every owner has bound, else blank. `Choices` = the intersection of each owner's
+  `FittingHandlers`, primary's order, the same instance while unchanged. `Commit`: clear unbinds every owner; a pick binds
+  (or rebinds) every owner — ONE `Edited` each; a typed name is refused when `DescribeUnusableHandler` refuses it for ANY
+  owner; a new legal name and a double-click raise ONE `FormHandlerRequest` carrying every owner (`Owners`, init-only;
+  `Owner` = the primary).
+- `FormPropertyGridViewModel`: `SharedEvents` (the primary's `WiredOn` events every member wires as the SAME event) and
+  `SameEvent`; `RefuseHandler` finds the row whose `Owners` contain the refused owner.
+- Host: `ActivateHandlerAsync`/`RunHandlerGestureAsync` take the owner list — plan for the primary exactly as before
+  (one stub, or navigation), refuse a typed name if any owner refuses it, bind every owner that shares the PLANNED event
+  (`SharesPlannedEvent`, the same `SameEvent` rule) with ONE `WriteDesignerEditBack`, and never collapse the selection
+  (an owner already selected keeps it; the Form owner still selects nothing). The gesture queue's de-dupe key covers every
+  owner (`HandlerGestureKey`). `ActivateControlAsync` (the canvas double-click): a control in a multi-selection passes
+  every selected owner with the clicked one LAST, so the stub is named after it and members without the event are
+  filtered out at bind time.
+- ⚠ **Deviation (stricter than D-8):** "the same event" also requires the same NAME ON THE TARGET (the bind each member
+  would store), not only the WinForms name and args — on the web two kinds could map one WinForms event to different DOM
+  events, and a shared row would then store the wrong one for a member.
+- ⚠ Deviation: the VM and host tests live in `FormPropertyGridMultiSelectTests.Events.cs` (the shared `MultiDoc` fixture),
+  not in `FormEventGridTests`/`FormHandlerGestureTests` — both of those are in the RE-CHECK run, unchanged. Task 2's
+  "no events until Task 5" test now uses {Button, Timer}, a genuinely empty intersection.
+- ⚠ TDD deviation: the implementation was written before these tests; their red is the mutation table (both ★ mutants
+  turn the host and real-view tests red).
+- Tests: a catalog sweep over every pair of kinds on both targets (rows + owners); TrackBar/Click and web Panel/Paint;
+  mixed handler blank; intersected choices, same instance; pick and clear with one Edited each, code untouched; a member's
+  id refused; one request for both owners; host: ONE `btn2_Click`, both bound, ONE undo step, selection kept; a primary
+  already bound → navigated, the other member gets `AnyClick`; a host refusal for a non-primary owner reaches the row; a
+  web pair `btn2_Click(e As DomEvent)`, both `click`; the canvas route with a TrackBar selected (not wired) and an
+  unselected control (wired alone). Real view, two zooms: the bolt's double-click (ONE stub, both bound, the cell keeps
+  it, ONE real Ctrl+Z unbinds both) and a REAL canvas double-click on a member (ONE `btn_Click`, both bound, group kept).
+- Green: `FormPropertyGridMultiSelectTests` 60 + the 2 real-view tests; RE-CHECK (`TestCategory!=Integration` over
+  `FormEventGrid*`, `FormHandlerGestureTests`, `FormHandlerPlanTests`, `FormPropertyGrid*` incl. the slice-5 Events
+  real-view rows, `FormCanvasDoubleClickTests`) — **557/557**.
+- Mutations:
+  | Mutant | Result |
+  |---|---|
+  | ★ bind on the primary only | KILLED: the host tests (both bound, AnyClick, web pair), the canvas route, both real-view tests |
+  | ★ the selection collapses after the gesture (`SelectInDesigner` unconditional) | KILLED: 4 (host, canvas route, both real-view) |
+
 ## 7. Tests to re-check (consolidated)
 
 | Test | Why | Task |

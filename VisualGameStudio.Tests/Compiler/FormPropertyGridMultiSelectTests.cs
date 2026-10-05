@@ -377,10 +377,11 @@ public partial class FormPropertyGridMultiSelectTests
         });
     }
 
+    /// <summary>D-6: an EMPTY Events intersection (a Button and a Timer share no event) is said in the pane.</summary>
     [Test]
-    public void TheEventsTab_SaysTheSelectionSharesNoEvents_UntilTask5()
+    public void TheEventsTab_SaysWhenTheSelectionSharesNoEvents()
     {
-        var (_, grid) = Open("btn", "btn2");
+        var (_, grid) = Open("btn", "tmr");
 
         grid.IsEventsMode = true;
 

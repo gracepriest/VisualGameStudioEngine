@@ -486,6 +486,83 @@ public partial class FormPropertyGridRealViewTests
         }
     }
 
+    // ==================================================================
+    // Task 5 — the Events tab and the canvas double-click for a multi-selection (D-8), real input, two zooms
+    // ==================================================================
+
+    /// <summary>
+    /// Ctrl+select two Buttons, click the bolt, real double-click on the empty Click value: the .bas on disk gains ONE
+    /// <c>btn2_Click</c> (the primary's name), both Buttons are bound, the cell shows it after a click on the canvas (slice
+    /// 5's CRITICAL, re-run in multi), and ONE real Ctrl+Z removes both binds.
+    /// </summary>
+    [AvaloniaTest]
+    public void DoubleClickingTheMergedClickValue_WritesOneStub_BindsBoth_AndOneCtrlZUnbindsBoth_AtTwoZooms()
+    {
+        foreach (var (w, h) in TwoZooms)
+        {
+            using var rig = Open(w, h, FormPropertyGridMultiSelectTests.MultiDoc);
+            SelectWithCtrl(rig, "btn", "btn2");
+            ShowEvents(rig);
+            var before = rig.Vm.Text;
+
+            DoubleClick(rig, HandlerCombo(rig, EventRow(rig, "Click")));
+            Dispatcher.UIThread.RunJobs();
+
+            var stub = "Private Sub btn2_Click(sender As Object, e As EventArgs)";
+            Assert.Multiple(() =>
+            {
+                Assert.That(rig.Code.Split(stub).Length - 1, Is.EqualTo(1), $"{w}x{h}: ONE stub, after the primary");
+                Assert.That(new[] { "btn", "btn2" }.Select(id => rig.Control(id).Binds.SingleOrDefault()?.Handler),
+                    Is.All.EqualTo("btn2_Click"), $"{w}x{h}: both bound");
+                Assert.That(rig.Vm.Selection.Controls.Select(c => c.Id), Is.EqualTo(new[] { "btn", "btn2" }), $"{w}x{h}: kept");
+            });
+
+            // Focus leaves the cell by a real Ctrl-press on a member (keeps the group): the cell still shows the handler.
+            PressOn(rig, "btn2", modifiers: RawInputModifiers.Control); // removes btn2…
+            PressOn(rig, "btn2", modifiers: RawInputModifiers.Control, dx: 4); // …and adds it back: the same set, focus on the canvas
+            Assert.That(EventRow(rig, "Click").Handler, Is.EqualTo("btn2_Click"), $"{w}x{h}: the cell still shows it");
+
+            CtrlZOnTheCanvas(rig);
+            Assert.Multiple(() =>
+            {
+                Assert.That(rig.Vm.Text, Is.EqualTo(before), $"{w}x{h}: ONE Ctrl+Z removes both binds");
+                Assert.That(rig.Vm.TextDocument.UndoStack.CanUndo, Is.False, $"{w}x{h}: ONE step");
+            });
+        }
+    }
+
+    /// <summary>
+    /// The canvas route (D-8 + D-13): Ctrl+select btn2 and btn, then a REAL double-click on btn2's twin member btn — the
+    /// first press promotes it — gives ONE <c>btn_Click</c> bound on BOTH, the selection still {btn2, btn}.
+    /// </summary>
+    [AvaloniaTest]
+    public void ARealDoubleClickOnAMemberOnTheCanvas_WiresBoth_AndKeepsTheGroup_AtTwoZooms()
+    {
+        foreach (var (w, h) in TwoZooms)
+        {
+            using var rig = Open(w, h, FormPropertyGridMultiSelectTests.MultiDoc);
+            SelectWithCtrl(rig, "btn", "btn2"); // primary btn2
+            var at = rig.Canvas.TranslatePoint(rig.CanvasCentreOf(rig.Control("btn")) + new Point(-5, 0), rig.Window)!.Value;
+
+            rig.Window.MouseDown(at, MouseButton.Left);
+            rig.Window.MouseUp(at, MouseButton.Left);
+            rig.Window.MouseDown(at, MouseButton.Left);
+            rig.Window.MouseUp(at, MouseButton.Left);
+            Dispatcher.UIThread.RunJobs();
+            rig.Window.UpdateLayout();
+            Dispatcher.UIThread.RunJobs();
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(rig.Code.Split("Private Sub btn_Click(").Length - 1, Is.EqualTo(1), $"{w}x{h}: ONE btn_Click");
+                Assert.That(new[] { "btn", "btn2" }.Select(id => rig.Control(id).Binds.SingleOrDefault()?.Handler),
+                    Is.All.EqualTo("btn_Click"), $"{w}x{h}: bound on both");
+                Assert.That(rig.Vm.Selection.Controls.Select(c => c.Id), Is.EqualTo(new[] { "btn2", "btn" }),
+                    $"{w}x{h}: the group kept, btn promoted");
+            });
+        }
+    }
+
     /// <summary>
     /// Review of 9fe0d153 (4): D-9's refresh re-raises EVERY Events row's Handler on every document revision. A revision
     /// made elsewhere — here an Events-tab bind on ANOTHER row, a designer write — while the user is typing into the Click
