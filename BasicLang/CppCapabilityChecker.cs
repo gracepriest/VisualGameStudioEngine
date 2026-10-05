@@ -660,6 +660,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                     Add(slot.Name.Substring(0, slot.Name.Length - "_addr".Length)); break;
                 case IRCall call: AddByRef(call.Arguments, call.ByRefArguments); break;
                 case IRInstanceMethodCall methodCall: AddByRef(methodCall.Arguments, methodCall.ByRefArguments); break;
+                case IRBaseMethodCall baseCall: AddByRef(baseCall.Arguments, baseCall.ByRefArguments); break;   // #265
             }
             if (inst is IRUnaryOp { Operation: UnaryOpKind.Inc or UnaryOpKind.Dec, Operand: IRVariable incremented })
                 Add(incremented.Name);
