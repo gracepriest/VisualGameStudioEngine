@@ -17,6 +17,13 @@ facade (all five tasks of `2026-09-13-blnet-cpp-facade.md`).
 
 ---
 
+## 🧪 NEWEST — 2026-10-05: #145 TESTED — a JavaScript Iterator Function returns a re-iterable generator (fix `34040c85`, JavaScriptBackend only)
+
+- **Tests** (10 cases): `JavaScriptIteratorExecutionTests` (Integration, 8 `[TestCase]` rows of vbc-answered probes, each through the CLI, `--optimize` and `CompileProjectFiles`; in `JsExecutionTierRosterTests`, now 107) and `JavaScriptIteratorShapeTests` (fast, 2). Mutants killed: parameters closed over (I4, I6), the one-shot generator object (FE1L, I4, I6), `super.` kept (I7). Gates (Linux): fast subset 0 failed / 12,530 passed / 94 skipped; integration `JavaScript`+`Iterator`+roster 0 failed / 1,309 passed / 2 skipped. The full suite was NOT run.
+- **Follow-ups, NO test written** (a test would pin the defect): JS `.ToList()`/`.Count()` on an iterator result (the LINQ lowering treats `IEnumerable` as an Array; I5); C# drops `Do` and `Exit Function` in an iterator (I3); C++ iterators cannot be walked twice; the front end refuses a bare `Return` in an Iterator (BL3001); MSIL has no `IEnumerable`.
+
+---
+
 ## ⚡ NEWEST — 2026-10-05: #143 DONE, JavaScript reads a field-named value back through the field (fix `d42d63cf`, JS only)
 
 - **The bug:** `K = p + q` renames the binop after the field; JS WROTE it `this.K`/`Owner.K` and READ it back as a bare `K` — a ReferenceError once CSE forwarded it into `Dim a = (p + q) * 2`. `JavaScriptBackend.BindsToMember` is now the ONE predicate for the write (`Bind`) and the read (`BoundRef`); the field-access, indexer and cast arms bind by name and stay bare. C#/C++/MSIL were right.
