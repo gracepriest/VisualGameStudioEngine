@@ -17,6 +17,17 @@ facade (all five tasks of `2026-09-13-blnet-cpp-facade.md`).
 
 ---
 
+## 🧪 NEWEST — 2026-10-05: #129 TESTED — MSIL compiles and runs Decimal (MSILBackend only)
+
+- **Tests** (19 cases): `MsilDecimalExecutionTests` (Integration) — 14 `[TestCase]` rows of 51 vbc-answered probes (`S/t129/probes`), each through the real CLI plain AND `--optimize`, plus one Release `.blproj` (`CompileProjectFiles`) test; `MsilDecimalIlShapeTests` (fast, no ilasm, 4 cases): one `valuetype [mscorlib]System.Decimal`, `op_Addition`/`op_LessThan`/`Convert.ToInt32` not `add`/`clt`/`conv.i4`, a literal rebuilt from its exact bits (the 5-arg ctor for `1.5`).
+- **Gates (Linux):** fast subset 0 failed / 11,173 passed / 94 skipped; integration `Msil` 1,179 / `Decimal` 109 / the fixture 19, 0 failed. The full suite was NOT run.
+- **Mutants** (fix + one change): typespec spelling 17 killed, opcodes instead of operator calls 11, literal via Double 3, `CInt` truncating 4, `ceq` for compare 7 — each killed by the RUNNING rows, not only the IL text. Control passes 19.
+- **Not tested, listed in the fixture header:** `d /= x` (IRBuilder types `/=` Double; MSIL refuses), literal scale (`1.50` prints 1.50, vbc 1.5; the lexer has no `D` suffix), the front-end refusals (no `CDec`, `^`, Decimal with Double/Single). Every probe is scale-independent.
+- **Follow-ups (not MSIL):** C# prints 3.75 for `7.5 \ 2` and `return null;` after a Try in a Decimal Function is CS0037; C++ fails `\` on Decimal and `Decimal + Long`; on MSIL a method on an Integer/Double receiver still `callvirt`s the raw value.
+- **Windows owes** the MSIL runs through the Windows `ilasm`; `[mscorlib]System.Decimal` is measured here only on .NET 8 under the CoreCLR `ilasm`.
+
+---
+
 ## ⚡ NEWEST — 2026-10-05: #141 DONE, `++` / `--` write their operand on every backend (fix `19fed595`)
 
 - **The bug:** BasicLang's own `++`/`--` (VB has neither) reached the backends as an `IRUnaryOp` Inc/Dec over the operand's VALUE. Measured on master, no cell ran right: a statement `x++` was DROPPED everywhere; C++ incremented the temp; JS and MSIL refused it; C# wrote `t = ++x`, so `y = x++` got the NEW value.
@@ -3698,9 +3709,8 @@ single new failure against the 170-name baseline.
     initialized — NullReferenceException; `Date`/`DateTime` do not resolve as a type at all on
     MSIL). `MsilValueToStringTests` pins the enum/Structure fallback's IL shape only (`box
     'Shade'`/`box 'Pt'`, verified directly against the harness before writing the assertion),
-    never a run. **#129** (Decimal cannot be declared as an MSIL local at all — `MSILBackend`'s
-    type-spec sanitizes `valuetype [System.Runtime]System.Decimal` into an undefined class name;
-    every use fails to assemble, mixing or `&` or not).
+    never a run. **#129** — DONE (fix commit `3799f3dd`): MSIL declares and runs Decimal
+    (`MsilDecimalExecutionTests`; the section at the top of this file).
 - ⭐ **Newest — #189 DONE (fix commit 381b95ff).** A `Nothing` String in `&`/`Console.Write`/
   `WriteLine` (JavaScript, C#); a `Catch` variable captured by a lambda (C++). What remained of
   #189 after #185 closed its C++ `Case Is Nothing` rows (see that entry's correction above).

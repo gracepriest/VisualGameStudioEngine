@@ -553,17 +553,11 @@ public class MsilBinaryOperandCoercionTests
             """), Is.EqualTo("7,2.5\n"));
     }
 
-    // ⛔ NOT WRITABLE: Decimal is already completely non-functional on MSIL, before and after
-    // this fix, unrelated to it. Measured directly: even a vanilla same-type
-    // `Dim a As Decimal = 2 : Dim b As Decimal = 3 : Dim s As Decimal = a + b` (no mixing, no
-    // CStr, no comparison) fails to assemble — `MSILBackend`'s Decimal type-spec
-    // ("valuetype [System.Runtime]System.Decimal") is being run through whatever sanitizes an
-    // IL label/identifier, which strips the spaces and brackets and then prefixes it with
-    // `class`, so ilasm sees `class 'valuetypeSystemRuntimeSystemDecimal'` and rejects it as an
-    // undefined class on every single use of the type — the return type, the locals, the
-    // parameters. `NumericKind(Decimal)` returning null confirms this diff never touches
-    // Decimal at all (it cannot be what broke this), but there is no "still works" shape to pin
-    // it against, because it never worked. Reported, not fixed here (see the handback message).
+    // Decimal is not pinned here. It used to be unwritable: MSIL could not declare a Decimal
+    // local at all (the type-spec was sanitized into an undefined class name), so there was no
+    // "still works" shape to pin. #129 (fix commit 3799f3dd) made it work; mixed Integer/Long/Byte/
+    // Short with Decimal (the VB widening order) is covered, run against vbc's answers, by
+    // MsilDecimalExecutionTests.
 
     // ====================================================================================
     // Select Case `When` guard — EmitInlineValue's own copy of the coercion (mutation e).

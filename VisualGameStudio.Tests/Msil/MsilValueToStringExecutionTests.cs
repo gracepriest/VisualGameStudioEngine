@@ -28,16 +28,16 @@ namespace VisualGameStudio.Tests.Msil;
 /// printing JS's own <c>null</c> spelling instead of VB's ""), and #189 fixed it: JS now agrees
 /// with C#/C++/MSIL on E8, so E8 is folded into a 4-way comparison below like C2/C3/E7/W2.</para>
 ///
-/// <para><b>What is deliberately NOT here</b> (see docs/HANDOFF.md): Decimal on MSIL is a
-/// pre-existing, total gap (#129 — <c>MSILBackend</c> cannot even declare a Decimal local; every
-/// use of the type, mixed or not, fails to assemble). Date, an Enum LOCAL, and a default
+/// <para><b>What is deliberately NOT here</b> (see docs/HANDOFF.md): Decimal is not run here — #129
+/// (fix commit 3799f3dd) made MSIL declare and run it, and <see cref="MsilDecimalExecutionTests"/> owns
+/// that. Date, an Enum LOCAL, and a default
 /// (never-<c>New</c>'d) Structure local are a pre-existing MSIL gap (#192 — an enum local is
 /// declared <c>class</c> where the type itself is a value type, a TypeLoadException; a default
 /// Structure local is never initialized, a NullReferenceException) — <see cref="MsilValueToStringTests"/>
 /// pins their IL shape only, never a run. A user-class operand of <c>&amp;</c> and
 /// <c>Console.Write</c> of a class are pre-existing, unrelated gaps (#191). None of these are
 /// pinned as passing here — pinning a known failure as "still fails the same way" is not this
-/// fixture's job, and a fix for any of #129/#191/#192 should not have to touch this file.</para>
+/// fixture's job, and a fix for either of #191/#192 should not have to touch this file.</para>
 ///
 /// <para>⚠ <c>[NonParallelizable]</c>: the C# leg (<see cref="FourBackends.RunEmittedCSharp"/>)
 /// redirects <c>Console.Out</c>, matching every other fixture that calls it.</para>
@@ -355,8 +355,9 @@ public class MsilValueToStringExecutionTests
         FourBackends.RunsOnEveryBackend(E8, E8Expected);
 
     // E9b — SByte, UShort, UInteger, ULong, Single, Byte, Short, Char, Boolean, Double, Long
-    // through both WriteLine and Write, plus two compound &= assignments. No Decimal (that leg is
-    // E9, left out — #129, MSIL cannot declare a Decimal local at all). ULong excludes JavaScript.
+    // through both WriteLine and Write, plus two compound &= assignments. No Decimal (that leg was
+    // E9, left out for #129; MSIL runs Decimal since 3799f3dd, see MsilDecimalExecutionTests).
+    // ULong excludes JavaScript.
     private const string E9b = """
         Sub Main()
             Dim sb As SByte = -5
