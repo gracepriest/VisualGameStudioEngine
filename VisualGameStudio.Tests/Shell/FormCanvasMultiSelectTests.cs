@@ -265,6 +265,128 @@ public class FormCanvasMultiSelectTests
     }
 
     // ==================================================================
+    // Slice 6 D-11: arrow keys over the WHOLE selection — top-level members only, docked members skipped, one commit
+    // ==================================================================
+
+    private sealed class Counter : System.Windows.Input.ICommand
+    {
+        public int Executions { get; private set; }
+
+        public event EventHandler? CanExecuteChanged { add { } remove { } }
+
+        public bool CanExecute(object? parameter) => true;
+
+        public void Execute(object? parameter) => Executions++;
+    }
+
+    private static void PressKey(Rig rig, Avalonia.Input.Key key, RawInputModifiers modifiers = RawInputModifiers.None)
+    {
+        rig.Canvas.Focus();
+        rig.Window.KeyPress(key, modifiers);
+        rig.Window.KeyRelease(key, modifiers);
+    }
+
+    [AvaloniaTest]
+    public void AnArrow_NudgesEveryMember_WithOneCommit_AndCtrlCoarsens_AndShiftResizesThemAll()
+    {
+        var rig = Surface();
+        var commits = new Counter();
+        rig.Canvas.CommitGeometryCommand = commits;
+        rig.Selection.SetRange(new[] { rig.A, rig.B });
+
+        PressKey(rig, Avalonia.Input.Key.Right);
+        Assert.Multiple(() =>
+        {
+            Assert.That(new[] { G(rig.A).X, G(rig.B).X }, Is.All.EqualTo(41), "both by 1");
+            Assert.That(commits.Executions, Is.EqualTo(1), "ONE commit for the press (one undo step)");
+        });
+
+        PressKey(rig, Avalonia.Input.Key.Right, RawInputModifiers.Control);
+        PressKey(rig, Avalonia.Input.Key.Right, RawInputModifiers.Shift);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(new[] { G(rig.A).X, G(rig.B).X }, Is.All.EqualTo(49), "Ctrl: one grid step (8) for both");
+            Assert.That(new[] { G(rig.A).Width, G(rig.B).Width }, Is.All.EqualTo(81), "Shift: both grow by 1");
+            Assert.That(commits.Executions, Is.EqualTo(3));
+        });
+    }
+
+    [AvaloniaTest]
+    public void OnAWebGridPage_AnArrow_MovesEveryMemberOneCell()
+    {
+        var doc = new FormDocument
+        {
+            Target = FormTarget.Web, Name = "T",
+            Layout = new FormLayout { Kind = FormLayoutKind.Grid, Cols = "1fr,1fr,1fr", Rows = "auto,auto" }
+        };
+        var a = new FormControl { Kind = "Button", Id = "a", Geometry = new GridGeometry { Col = 0, Row = 0 } };
+        var b = new FormControl { Kind = "Button", Id = "b", Geometry = new GridGeometry { Col = 0, Row = 1 } };
+        doc.Controls.Add(a);
+        doc.Controls.Add(b);
+        var selection = new FormSelection();
+        var canvas = new FormCanvasControl { Document = doc, Selection = selection };
+        var window = new Window { Width = 600, Height = 500, Content = canvas };
+        window.Show();
+        selection.SetRange(new[] { a, b });
+        canvas.Focus();
+
+        window.KeyPress(Avalonia.Input.Key.Right, RawInputModifiers.None);
+
+        Assert.That(new[] { ((GridGeometry)a.Geometry!).Col, ((GridGeometry)b.Geometry!).Col }, Is.All.EqualTo(1));
+        window.Close();
+    }
+
+    /// <summary>
+    /// ⛔ D-11 ancestor/descendant: a Panel and its own child Button both selected (Ctrl+click can) — one Right arrow moves
+    /// the Panel by 1 and leaves the Button's CONTAINER-RELATIVE X alone: it moved once, with its container.
+    /// </summary>
+    [AvaloniaTest]
+    public void ANudge_OfAPanelAndItsOwnChild_MovesTheChildOnlyWithItsContainer()
+    {
+        var rig = Surface();
+        var panel = new FormControl
+        {
+            Kind = "Panel", Id = "pnl", Geometry = new PixelGeometry { X = 200, Y = 150, Width = 150, Height = 100 }
+        };
+        var child = new FormControl
+        {
+            Kind = "Button", Id = "kid", Geometry = new PixelGeometry { X = 10, Y = 10, Width = 60, Height = 24 }
+        };
+        panel.Children.Add(child);
+        rig.Doc.Controls.Add(panel);
+        rig.Selection.SetRange(new[] { panel, child });
+
+        PressKey(rig, Avalonia.Input.Key.Right);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(G(panel).X, Is.EqualTo(201), "the Panel moved");
+            Assert.That(G(child).X, Is.EqualTo(10), "the child is container-relative: it rode along, never moved twice");
+        });
+    }
+
+    /// <summary>D-11: a docked member (a MenuStrip) is skipped by a nudge — its edge is a Dock property, not a rect.</summary>
+    [AvaloniaTest]
+    public void ANudge_SkipsADockedMember_AndMovesTheRest()
+    {
+        var rig = Surface();
+        var strip = new FormControl { Kind = "MenuStrip", Id = "ms" };
+        strip.Properties["Dock"] = "Top";
+        rig.Doc.Controls.Add(strip);
+        rig.Selection.SetRange(new[] { rig.A, strip }); // the STRIP is the primary
+
+        PressKey(rig, Avalonia.Input.Key.Down);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(G(rig.A).Y, Is.EqualTo(41), "the Button moved down");
+            Assert.That(strip.Geometry, Is.Null, "the strip gained no geometry");
+            Assert.That(strip.Properties["Dock"], Is.EqualTo("Top"), "and keeps its Dock");
+        });
+    }
+
+    // ==================================================================
     // The rubber band
     // ==================================================================
 

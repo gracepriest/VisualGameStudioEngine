@@ -648,34 +648,42 @@ public class FormCanvasControl : Control
         var coarse = e.KeyModifiers.HasFlag(KeyModifiers.Control);
         var step = coarse ? (int)GridStep : 1;
 
-        bool changed;
-        switch (control.Geometry)
+        // ⛔ Slice 6 D-11 (VS): every TOP-LEVEL member of the selection moves (a child whose container is also selected
+        // rides along with it — FormSelectionTopLevel, the helper Delete uses too), each parent-relative; a DOCKED member
+        // (its edge is a Dock property, not a rect — the drag's own test) and a member with no geometry are skipped. ONE
+        // commit for the press, so one undo step.
+        var changed = false;
+        foreach (var member in FormSelectionTopLevel.Of(document, SelectedSet))
         {
-            // One CELL per press; Shift does nothing, because a cell has no size of its own to grow.
-            case GridGeometry grid when !resize:
+            if (FormDockLayout.EdgeOf(member) != null)
             {
-                var col = Math.Max(0, grid.Col + dx);
-                var row = Math.Max(0, grid.Row + dy);
-                changed = col != grid.Col || row != grid.Row;
-                grid.Col = col;
-                grid.Row = row;
-                break;
+                continue;
             }
 
-            // ⚠ MoveTo, not MoveToForm. A nudge is parent-relative and must NOT re-parent: arrowing
-            // a control one pixel past a Panel's edge should move it one pixel, not move it into
-            // the Panel — a drag says where the pointer is, a keypress says how far.
-            case PixelGeometry pixel:
-                changed = resize
-                    ? FormGeometryEdit.Resize(
-                        document, control, FormResizeHandle.BottomRight, dx * step, dy * step)
-                    : FormGeometryEdit.MoveTo(
-                        document, control, pixel.X + (dx * step), pixel.Y + (dy * step));
-                break;
+            switch (member.Geometry)
+            {
+                // One CELL per press; Shift does nothing, because a cell has no size of its own to grow.
+                case GridGeometry grid when !resize:
+                {
+                    var col = Math.Max(0, grid.Col + dx);
+                    var row = Math.Max(0, grid.Row + dy);
+                    changed |= col != grid.Col || row != grid.Row;
+                    grid.Col = col;
+                    grid.Row = row;
+                    break;
+                }
 
-            default:
-                changed = false;
-                break;
+                // ⚠ MoveTo, not MoveToForm. A nudge is parent-relative and must NOT re-parent: arrowing
+                // a control one pixel past a Panel's edge should move it one pixel, not move it into
+                // the Panel — a drag says where the pointer is, a keypress says how far.
+                case PixelGeometry pixel:
+                    changed |= resize
+                        ? FormGeometryEdit.Resize(
+                            document, member, FormResizeHandle.BottomRight, dx * step, dy * step)
+                        : FormGeometryEdit.MoveTo(
+                            document, member, pixel.X + (dx * step), pixel.Y + (dy * step));
+                    break;
+            }
         }
 
         if (changed)

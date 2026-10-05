@@ -288,9 +288,22 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
             return;
         }
 
+        // Slice 6 D-11 (VS): a control that is part of a MULTI-selection deletes the whole selection — its top-level
+        // members only (a child whose container is also selected goes with the container) — in ONE write, so one undo.
+        // The tray's Delete is always a single selection and takes the one-control path.
+        var targets = Selection.Controls.Count > 1 && Selection.Contains(control)
+            ? ViewModels.Designer.FormSelectionTopLevel.Of(file.Model, Selection.Controls)
+            : new[] { control };
+
         // ⛔ The ONE model path (FormDocument.RemoveControl): a Form reference naming the control (AcceptButton) goes with
         // it, in the same write — so one undo restores both.
-        if (!file.Model.RemoveControl(control))
+        var removed = false;
+        foreach (var target in targets.ToList())
+        {
+            removed |= file.Model.RemoveControl(target);
+        }
+
+        if (!removed)
         {
             return;
         }

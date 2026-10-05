@@ -1052,6 +1052,28 @@ No decision changed, so no commit of its own; recorded here with Task 1.
   | ★ bind on the primary only | KILLED: the host tests (both bound, AnyClick, web pair), the canvas route, both real-view tests |
   | ★ the selection collapses after the gesture (`SelectInDesigner` unconditional) | KILLED: 4 (host, canvas route, both real-view) |
 
+### Task 6 — canvas gestures over the whole selection (base `f4d8007d`)
+
+- New `FormSelectionTopLevel.Of(document, controls)`: the members none of whose ancestors (`FormGeometryEdit.ParentOf`)
+  is selected, in order — the ONE helper both gestures use.
+- `DeleteControl`: a control that is part of a multi-selection deletes every top-level member (`RemoveControl` each),
+  then ONE `WriteDesignerEditBack` (one undo step). The tray's Delete (always a single selection) keeps the one-control
+  path, so `TheDocumentView_KeepsTheCanvasAndTrayBindings` is unchanged.
+- Canvas arrow keys: every top-level member of `SelectedSet` is nudged/resized/moved a cell, parent-relative (`MoveTo`),
+  a docked member (`FormDockLayout.EdgeOf != null`, the drag's test) and a geometry-less one skipped; ONE commit per press.
+- Tests first (TDD held this time). **Red** with the helper a pass-through stub: delete-three (two remained), the helper
+  test, both-move/Ctrl/Shift, the web cell move (`[0, 1]`), the Panel+child nudge (only the primary child moved), the
+  docked-primary nudge (the strip was the primary: nothing moved), and the invariant's new Delete row. Green: those 19;
+  RE-CHECK (`TestCategory!=Integration` over `FormCanvas*` incl. `FormCanvasKeyboardTests`, `FormTrayViewTests`,
+  `FormTrayTests`, `FormStripCanvasTests`, `FormPropertyGridMultiSelect*`, `FormDesignerCommandTests`) — **238/238**.
+- Note: the Panel+child DELETE test was green on the stub (its primary was the Panel, whose removal takes the child) —
+  it pins the undo restoring the child INSIDE the Panel; the nudge test is the one the top-level rule needs.
+- Mutations:
+  | Mutant | Result |
+  |---|---|
+  | ★ nudge without the top-level filter | KILLED by `ANudge_OfAPanelAndItsOwnChild_…` (the child's relative X moved too) |
+  | ★ Delete primary-only | KILLED by `DeleteWithThreeSelected_…` and the invariant's Delete row |
+
 ## 7. Tests to re-check (consolidated)
 
 | Test | Why | Task |

@@ -84,6 +84,18 @@ public partial class FormPropertyGridRealViewTests
         new("a Ctrl+click adding btn", r => PressOn(r, "btn", modifiers: RawInputModifiers.Control, dx: -3)),
         new("a right-click on a member (btn)", r => PressOn(r, "btn", MouseButton.Right, dx: 3)),
         new("a right-click on a non-member (lbl)", r => PressOn(r, "lbl", MouseButton.Right, dx: -3)),
+        new("a Ctrl+click adding btn2", r => PressOn(r, "btn2", modifiers: RawInputModifiers.Control, dx: -4),
+            new[] { "lbl", "btn2" }),
+        // Task 6 (D-11): Delete removes the WHOLE selection, and the store and the grid are left empty together.
+        new("Delete with lbl and btn2 selected", r =>
+        {
+            r.Canvas.Focus();
+            r.Window.KeyPress(Key.Delete, RawInputModifiers.None);
+            r.Window.KeyRelease(Key.Delete, RawInputModifiers.None);
+            Dispatcher.UIThread.RunJobs();
+            r.Window.UpdateLayout();
+            Assert.That(r.Doc.FindById("lbl") ?? r.Doc.FindById("btn2"), Is.Null, "both deleted");
+        }, Array.Empty<string>()),
     };
 
     /// <summary>
