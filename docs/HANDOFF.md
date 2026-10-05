@@ -17,6 +17,13 @@ facade (all five tasks of `2026-09-13-blnet-cpp-facade.md`).
 
 ---
 
+## ⚡ NEWEST — 2026-10-05: #192 TESTED — MSIL spells a Structure, an Enum and Date/DateTime as the value types they are (`MSILBackend.IsUserValueType`; `git log --grep '#192'`)
+- **Tests (11 new, 4 moved):** `MsilValueTypeExecutionTests` (Integration, 7: 17 vbc-answered probes in 6 groups on MSIL x CLI / `-O` / `CompileProjectFiles`; MSIL only, in the Msil namespace, so in neither the JS roster nor `NotJavaScriptExecution`) + `MsilValueTypeCodegenTests` (fast, 4: IL text, DateTime and Structure-write refusals). MOVED to the right answer: `MsilObjectBoxing` E05 (7) / E17 (Green), `DelegateMemberInvocation` G5 (inc 42), `InterfaceAccessorBatch` Q1 (7). Mutants m1-m3 killed.
+- **Gates (Linux):** fast 0 failed / 12,672 passed / 94 skipped; Integration, one filter each, 0 failed: the fixture 7 + 4, `MsilObjectBoxing` 99, `DelegateMemberInvocation` 52, `InterfaceAccessorBatch` 44, `MsilClassType` 33, `NothingIntoValueType` 11, `Enum` 102, `Structure` 37, `JsExecutionTierRoster` 5. Full suite NOT run; Windows owes the MSIL legs.
+- ⛔ **Gaps, NO test pins them** (fixture header, #282): a `#1/2/2003#` literal does not parse; `Color.Green` types as Object (#277); `Console.WriteLine(enumVar)` prints the name; C++ drops `h.P.X = 3`; C# `Select Case enumVar` / `Case 1` is CS0266; the parser rejects `Case Color.Red`. ⚠ STALE, not moved: `NothingIntoValueTypeExecutionTests`' Structure / Enum / DateTime groups still skip MSIL ("MSIL spells a Structure as a class").
+
+---
+
 ## ⚡ NEWEST — 2026-10-05: #191 TESTED — MSIL converts a class / interface / array reference through `&` and binds `Console.Write(object)` (`MSILBackend.cs` `IsNonStringReference`; MSIL only)
 - **Tests (6):** `MsilObjectConcatAndWriteExecutionTests` (Integration, 3: VB rows `Write`/`WriteLine` of a class, interface, array, Structure = vbc's answer; PARITY rows `"k=" & obj`, interface, array, Nothing = the C# backend's answer, each also run on C#; all x CLI / `-O` / `CompileProjectFiles`; in `NotJavaScriptExecution`) and `MsilObjectConcatAndWriteTextTests` (fast, 3: IL text, `Write(char[])`, Decimal never via `Convert.ToString(object)`). Mutants M1-M3 (+ the first-cut `TypeKind` predicate) killed.
 - ⛔ **Owner decision #281 is OPEN:** vbc REFUSES a typed class / interface / array as an `&` operand (BC30452); MSIL now matches C#, and the parity rows pin that, NOT a VB rule. **Gates (Linux):** fast 0 failed / 12,671 passed / 94 skipped; Integration, one filter each, 0 failed: fixture 3, `MsilObject` 105, `MsilString` 75, `MsilClass` 33, `MsilValueToString` 44, `NothingStringText` 34, `AmpersandConcat` 11, `JsExecutionTierRoster` 5. Full suite NOT run.

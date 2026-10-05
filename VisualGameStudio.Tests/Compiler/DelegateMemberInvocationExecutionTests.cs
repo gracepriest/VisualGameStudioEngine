@@ -810,9 +810,10 @@ public class DelegateMemberInvocationExecutionTests
     /// after a member-access write (<c>s.F = ...; s.F(41)</c>). C++ RUNS it correctly (structures
     /// are plain C++ structs, no boxing involved). JavaScript refuses at COMPILE time by DESIGN —
     /// BL7005, a Structure cannot be lowered to JavaScript at all (value semantics a JS object
-    /// cannot preserve), unrelated to #188. MSIL throws a NullReferenceException where C# returns
+    /// cannot preserve), unrelated to #188. MSIL threw a NullReferenceException where C# returns
     /// "inc 42" — filed as #192, not #188: #188 only taught MSIL to ADMIT a delegate-member call
-    /// under ADR-0010 D8, not to handle one whose owner is a value-type Structure correctly.
+    /// under ADR-0010 D8, not to handle one whose owner is a value-type Structure correctly. #192
+    /// spelled a Structure `valuetype`, and MSIL now prints "inc 42" too.
     /// </summary>
     private const string G5 = """
         Structure Slot
@@ -840,16 +841,17 @@ public class DelegateMemberInvocationExecutionTests
     }
 
     [Test]
-    public void G5_StructureDelegateField_Msil_PinsTodaysNullReferenceException_Against192()
+    public void G5_StructureDelegateField_Msil_PrintsInc42()
     {
-        // Skip OUTSIDE Assert.Throws: without ilasm the harness throws its IgnoreException, and
-        // inside the lambda that is caught as the wrong exception type — a FAIL on every Linux
-        // run instead of a skip.
+        // C#'s "inc 42", at the CLI and the CLI with --optimize: the field is written and read through the
+        // Structure's own storage (its address), not through a null reference (#192).
+        // Skip OUTSIDE the multiple block: without ilasm there is nothing to compare.
         Msil.MsilHarness.RequireIlasm();
-        var ex = Assert.Throws<AssertionException>(() => Msil.MsilHarness.RunExpectingSuccess(G5));
-        Assert.That(ex!.Message, Does.Contain("NullReferenceException"),
-            "the failure must still be a NullReferenceException reading a delegate field off a " +
-            "value-type Structure (#192). A DIFFERENT failure here means this pin is stale.\n" + ex.Message);
+        Assert.Multiple(() =>
+        {
+            Assert.That(Norm(Msil.MsilHarness.RunExpectingSuccess(G5)), Is.EqualTo("inc 42"), "MSIL CLI");
+            Assert.That(Norm(Msil.MsilHarness.RunAggressiveExpectingSuccess(G5)), Is.EqualTo("inc 42"), "MSIL CLI --optimize");
+        });
     }
 
     /// <summary>

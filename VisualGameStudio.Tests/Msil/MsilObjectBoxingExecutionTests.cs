@@ -1536,9 +1536,10 @@ public class MsilObjectBoxingExecutionTests
     }
 
     // ====================================================================================
-    // 5. E05 (Structure in Object) and E17 (enum in Object) — MSIL cannot run these today;
-    //    both are #192, pre-existing and unrelated to #177's own boxing/unboxing/comparison
-    //    work (a Structure and an Enum are not yet real value types on this backend).
+    // 5. E05 (Structure in Object) and E17 (enum in Object) — MSIL could not run these until
+    //    #192, which made a Structure and an Enum real value types on this backend (`valuetype`,
+    //    not `class`). Each now prints C#'s answer, at all three entry points; they were pinned
+    //    as failures here (a NullReferenceException; an ilasm syntax error) while #192 was open.
     // ====================================================================================
 
     private const string E05 = """
@@ -1557,16 +1558,13 @@ public class MsilObjectBoxingExecutionTests
         """;
 
     [Test]
-    public void E05_StructureInObject_Msil_PinsPreExistingFailure_Against192()
+    public void E05_StructureInObject_Msil_RoundTripsAndPrints7()
     {
+        // A Structure boxed into an Object and unboxed back to a Structure copies its fields: C#'s 7, and
+        // MSIL's at the CLI, the CLI with --optimize and a Release .blproj build (#192 — it was a
+        // NullReferenceException while a Structure was spelled `class`).
         Assert.That(Norm(FourBackends.RunEmittedCSharp(E05)), Is.EqualTo("7"), "C# is the oracle");
-
-        var run = Run(E05);
-        Assert.That(run.Outcome, Is.EqualTo(MsilOutcome.RunFailed),
-            "task #192 (pre-existing, unrelated to #177): a Structure boxed into an Object slot "
-            + "must still fail at run time on MSIL. A different outcome (including Ran, with the "
-            + "correct '7') means #192 moved — update this pin, do not just delete it.\n" + run.Report);
-        Assert.That(run.Output, Does.Contain("NullReferenceException"), run.Report);
+        AssertMsilAllEntryPoints(E05, "7");
     }
 
     private const string E17 = """
@@ -1581,16 +1579,12 @@ public class MsilObjectBoxingExecutionTests
         """;
 
     [Test]
-    public void E17_EnumInObject_Msil_PinsPreExistingAssembleFailure_Against192()
+    public void E17_EnumInObject_Msil_BoxesToTheEnumAndPrintsGreen()
     {
+        // `Color.Green` is the integer 1 on the stack, and a store into an Object slot boxes it to the ENUM, so
+        // Console.WriteLine prints its name, as C# does: "Green" at all three entry points (#192 — the Enum's own
+        // declaration was `Int32 value__`, an ilasm syntax error, so no Enum program assembled).
         Assert.That(Norm(FourBackends.RunEmittedCSharp(E17)), Is.EqualTo("Green"), "C# is the oracle");
-
-        var run = Run(E17);
-        Assert.That(run.Outcome, Is.EqualTo(MsilOutcome.AssembleFailed),
-            "task #192 (pre-existing, unrelated to #177): an Enum's own declaration "
-            + "(`.field public specialname rtspecialname int32 value__`) must still fail to "
-            + "assemble on this backend, independent of anything boxing an Object touches. A "
-            + "different outcome (including assembling) means #192 moved — update this pin, do "
-            + "not just delete it.\n" + run.Report);
+        AssertMsilAllEntryPoints(E17, "Green");
     }
 }
