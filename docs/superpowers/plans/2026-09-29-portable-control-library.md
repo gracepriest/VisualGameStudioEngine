@@ -1426,6 +1426,12 @@ Spec §4.2, M6, chip `task_e7af351e` items 1–2 (S12). Built ON `fix/js-cross-f
 
 Chip `task_e7af351e` items 3–4 (S12). A form class lives in a file of its own name, so this shape is the shared code-behind's.
 
+- ✅ Done in 5a927bde + review follow-up: "Main" → "Program" runs the same collision check (Main.bas beside a user
+  `Class Program` → `ProgramModule`), and the `{Name}Module` spelling is itself checked against types, the container's
+  members and every other container, taking a numeric suffix (`ToolsModule2`) until free.
+- ⚠ Cosmetic, recorded not fixed: a renamed container shows in the debugger's frames as `GreetModule.Greet`
+  (`SourceMapper` maps C# frame names back by the container's spelling).
+
 **Files:**
 - Modify: `BasicLang/CSharpBackend.cs` — `standaloneFunctions` (`:414-416`, quote `.Where(f => !f.IsExternal && !IsClassMethod(f, module))`); the per-module class name (`:494-500`, quote `if (className.Equals("Main", StringComparison.OrdinalIgnoreCase))`); `ModuleClassName` (`:3450-3452`)
 - Create: `VisualGameStudio.Tests/Compiler/CsFileNamedContainerTests.cs`
@@ -2115,6 +2121,12 @@ public class MyBasePropertyExecutionTests
 ## Task 14: `Char` on JavaScript
 
 O13, spec §4.10, M18.
+
+- ⚠ **Carried in from Task 7e (review of e2502c0b) — this task must fix it:** VB's Chars (`s(i)`, `p.Name(i)`) is typed
+  **String** today (`SemanticAnalyzer.TryStringChars`, the `"Chars"` intrinsic), because JavaScript has no Char. So
+  `Dim c As Char = s(1)` is REJECTED as a String → Char narrowing on every backend. Once Char exists here, type the Chars
+  intrinsic as `Char` (C#: drop the `.ToString()` in the `chars` arm; JS: a one-character string IS this task's Char;
+  C++: `.at()` without the `std::string(1, …)` wrap) and add the `Dim c As Char = s(1)` row to `RuntimeGapsTask7eTests`.
 
 **Files:**
 - Modify: `BasicLang/JsCapabilityChecker.cs` — `BannedTypes` (`:297-306`): remove the `["Char"] = ("BL7004", …)` row; keep BL7004 in the remarks as retired (never reuse)

@@ -427,7 +427,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 // A lambda is emitted inline at its use (GenerateFunction returns early for it), so grouping it
                 // here only ever produced an EMPTY static class named after its file — CS0101 beside a user
                 // class of the file's own name (chip task_e7af351e item 3).
-                .Where(f => !f.IsExternal && !f.IsLambda &&!IsClassMethod(f, module))
+                .Where(f => !f.IsExternal && !f.IsLambda && !IsClassMethod(f, module))
                 .ToList();
 
             // Generate each namespace block
@@ -3462,17 +3462,25 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         /// ⛔ THE container name for a Module / file's procedures — the declaration (the per-module loop in
         /// <see cref="Generate"/>) and every qualified use (<see cref="QualifyCrossModuleGlobal"/>,
         /// <see cref="UserCallTarget"/>) read it, so they cannot disagree. "Main" is "Program" (a method may not be
-        /// named like its class); any other name that collides with a TYPE this compilation declares (CS0101) or
-        /// with a PROCEDURE/GLOBAL of the container itself (CS0542) is spelled "{Name}Module" (chip task_e7af351e
-        /// items 3–4: a form class lives in a file of its own name). A name that collides with nothing is unchanged,
+        /// named like its class); a name — "Program" included — that collides with a TYPE this compilation declares
+        /// (CS0101) or with a PROCEDURE/GLOBAL of the container itself (CS0542) is spelled "{Name}Module" (chip
+        /// task_e7af351e items 3–4: a form class lives in a file of its own name), and that spelling is itself checked
+        /// — against the same two and every other container — with a numeric suffix until it is free
+        /// (<c>ToolsModule2</c> beside a user <c>Class ToolsModule</c>). A name that collides with nothing is unchanged,
         /// so no program that compiled before is spelled differently now.
         /// </summary>
         private string ModuleClassName(string moduleName)
         {
-            if (moduleName.Equals("Main", StringComparison.OrdinalIgnoreCase)) return "Program";
             if (_containerNames.TryGetValue(moduleName, out var cached)) return cached;
-            var name = SanitizeName(moduleName);
-            var spelled = ContainerCollides(moduleName) ? name + "Module" : name;
+            var first = moduleName.Equals("Main", StringComparison.OrdinalIgnoreCase) ? "Program" : SanitizeName(moduleName);
+            var spelled = first;
+            if (ContainerNameTaken(first, moduleName, includeOtherContainers: false))
+            {
+                var stem = first + "Module";
+                spelled = stem;
+                for (var n = 2; n < 1000 && ContainerNameTaken(spelled, moduleName, includeOtherContainers: true); n++)
+                    spelled = stem + n.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            }
             if (_currentModule != null) _containerNames[moduleName] = spelled;
             return spelled;
         }
@@ -3480,19 +3488,33 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         /// <summary>Per-<see cref="Generate"/> memo of <see cref="ModuleClassName"/> (read at every qualified use).</summary>
         private readonly Dictionary<string, string> _containerNames = new(StringComparer.OrdinalIgnoreCase);
 
-        private bool ContainerCollides(string moduleName)
+        /// <summary>
+        /// Whether <paramref name="candidate"/> cannot be the static class for <paramref name="moduleName"/>: a declared
+        /// type has that name, or a procedure/global of the container does. A RENAMED spelling must also differ from
+        /// every other container's own name (<paramref name="includeOtherContainers"/>); an original name is not judged
+        /// by that, so an existing program keeps its spelling.
+        /// </summary>
+        private bool ContainerNameTaken(string candidate, string moduleName, bool includeOtherContainers)
         {
             var module = _currentModule;
             if (module == null) return false;
-            bool Same(string n) => string.Equals(n, moduleName, StringComparison.OrdinalIgnoreCase);
-            bool SameType(string n) => n != null && Same(n.Split('.').Last());
-            return module.Classes.Values.Any(c => SameType(c.Name))
+            bool Same(string a, string b) => string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
+            bool SameType(string n) => n != null && Same(n.Split('.').Last(), candidate);
+            bool InContainer(string owner) => Same(owner ?? _options.ClassName, moduleName);
+            if (module.Classes.Values.Any(c => SameType(c.Name))
                 || module.Interfaces.Values.Any(i => SameType(i.Name))
                 || module.Enums.Values.Any(e => SameType(e.Name))
                 || module.Delegates.Values.Any(d => SameType(d.Name))
                 || module.Functions.Any(f => !f.IsLambda && !f.IsExternal && !IsClassMethod(f, module)
-                        && Same(f.ModuleName ?? _options.ClassName) && Same(f.Name))
-                || module.GlobalVariables.Values.Any(g => Same(g.ModuleName ?? _options.ClassName) && Same(g.Name));
+                        && InContainer(f.ModuleName) && Same(f.Name, candidate))
+                || module.GlobalVariables.Values.Any(g => InContainer(g.ModuleName) && Same(g.Name, candidate)))
+                return true;
+            if (!includeOtherContainers) return false;
+            var others = module.Functions.Where(f => !f.IsLambda && !f.IsExternal && !IsClassMethod(f, module))
+                .Select(f => f.ModuleName ?? _options.ClassName)
+                .Concat(module.GlobalVariables.Values.Select(g => g.ModuleName ?? _options.ClassName));
+            return others.Any(o => !Same(o, moduleName)
+                && Same(o.Equals("Main", StringComparison.OrdinalIgnoreCase) ? "Program" : SanitizeName(o), candidate));
         }
 
         /// <summary>

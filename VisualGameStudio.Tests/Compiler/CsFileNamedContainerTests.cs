@@ -87,6 +87,25 @@ public class CsFileNamedContainerTests
         Is.EqualTo("7"));
 
     /// <summary>
+    /// "Main" → "Program" is a RENAME too, and was the one that skipped the collision check: Main.bas with
+    /// file-level procedures beside a user <c>Class Program</c> emitted two <c>Program</c>s (CS0101/CS0712).
+    /// </summary>
+    [Test]
+    public void MainBas_BesideAUserClassNamedProgram() => Assert.That(RunCSharp(
+        ("Main.bas", "Sub Main()\n PrintLine(New Program().Name())\n Helper()\nEnd Sub\nSub Helper()\n PrintLine(\"helped\")\nEnd Sub\n"),
+        ("Program.bas", "Public Class Program\n Public Function Name() As String\n  Return \"user\"\n End Function\nEnd Class\n")),
+        Is.EqualTo("user\nhelped"));
+
+    /// <summary>The "{Name}Module" spelling is itself checked: a user class already named so moves it on to a suffix.</summary>
+    [Test]
+    public void TheRenamedSpelling_IsItselfCheckedForACollision() => Assert.That(RunCSharp(
+        ("Tools.bas", "Public Class Tools\n Public Function N() As Integer\n  Return 7\n End Function\nEnd Class\n" +
+                      "Public Class ToolsModule\n Public Function M() As Integer\n  Return 1\n End Function\nEnd Class\n" +
+                      "Sub Helper()\n PrintLine(New Tools().N() + New ToolsModule().M())\nEnd Sub\n"),
+        ("Main.bas", "Module Program\n Sub Main()\n  Helper()\n End Sub\nEnd Module\n")),
+        Is.EqualTo("8"));
+
+    /// <summary>
     /// The renamed container is spelled the same way by its DECLARATION and by every qualified use from another file —
     /// a global read and a call, each qualified by the backend — so the three cannot disagree.
     /// </summary>

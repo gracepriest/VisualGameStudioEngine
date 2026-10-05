@@ -180,6 +180,36 @@ public class RuntimeGapsTask7eTests
         Assert.That(outcome.ExitCode, Is.Not.Zero, "an out-of-range Chars index must throw, not print an empty line");
     }
 
+    /// <summary>
+    /// The same out-of-range index throws on EVERY backend, and the throw is an ordinary catchable exception — C#'s
+    /// string indexer, JavaScript's checked index, C++'s <c>.at()</c> (review of e2502c0b: only JavaScript was tested).
+    /// A plain member read past the end too, through a receiver.
+    /// </summary>
+    [Test]
+    public void IndexingAStringPastItsEnd_ThrowsACatchableException_OnEveryBackend() => RunsOnCsJsCpp("""
+        Class P
+            Public Name As String = "ab"
+        End Class
+        Module Program
+            Sub Main()
+                Dim s As String = "ab"
+                Try
+                    Console.WriteLine(s(5))
+                    Console.WriteLine("no throw")
+                Catch ex As Exception
+                    Console.WriteLine("threw")
+                End Try
+                Dim p As New P()
+                Try
+                    Console.WriteLine(p.Name(-1))
+                    Console.WriteLine("no throw")
+                Catch ex As Exception
+                    Console.WriteLine("threw")
+                End Try
+            End Sub
+        End Module
+        """, "threw\nthrew");
+
     /// <summary>⛔ C++ emitted bare <c>Beep()</c> / <c>FileCopy(…)</c> / <c>FileLen(…)</c> calls to names nothing defines — a late
     /// native-compile failure. Run on C++ and C# (JavaScript has no file system: those are refused there by design).</summary>
     [Test]
