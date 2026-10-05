@@ -1155,6 +1155,33 @@ No decision changed, so no commit of its own; recorded here with Task 1.
   lives, the 20-step click-through); the parent plan's slice-6 "EXPANDED AND EXECUTED" banner; the IDE drop — `dotnet
   clean` + Release build of the Shell, `robocopy … IDE /E` (never `/MIR`); 8 binaries changed; `IDE\lib\js\dom-core.bli`
   hash `7B8E4E95…87FE` before and after (byte-identical). HANDOFF is not edited again: the gate numbers land below.
+  Commit `b89c9e88`.
+- **Step 2 — the real merge, after that commit:** `git fetch origin` (master `857eea16..9c373021`: #129 MSIL Decimal, #141
+  `++`/`--`, #131 interface forwarding), `git merge origin/master` INTO the branch → merge commit `0ecb41b3`. One
+  conflict, `docs/HANDOFF.md`'s NEWEST sections: all kept, newest on top (slice 6, then master's #129 and #141, then
+  slice 5 un-marked as NEWEST). The JS roster pin auto-merged to master's **106** (#141 rostered
+  `IncrementDecrementExecutionTests`; this branch rosters nothing — read, not trusted). No other file conflicted.
+- **Step 3 — the gate ON THE MERGED TREE** (base `0ecb41b3`, Windows, Release, clean test-project build, both streams
+  captured to files):
+  - **Fast subset** (`TestCategory!=Integration`): **12776 total, 12674 passed, 83 failed, 19 skipped** (5 m 27 s).
+    Failure NAMES:
+    - the machine rows: `Emit_ReplacesAnImportedModuleThatAnotherHandleHasMapped`,
+      `Emit_ReplacesAScriptThatAnotherHandleHasMapped`, `Emit_ReplacingAnImportedModule_LeavesNoTempFileBehind`,
+      `EveryTextRoute_UsesTheFormatter_NeverToStringOrABareCout`, `SearchSnippets_EmptyQuery_ReturnsAll`,
+      `SearchSnippets_WhitespaceQuery_ReturnsAll` (`ReadingAnMvidTakesNoLockOnTheFile` passed this run);
+    - 77 rows of `CppProjectOptimizerPipelineTests` (#134: `BuildRoute_/IntelliSenseRoute_ConfigurationShape_…` ×13
+      each, `Debug_RunsTheStandardPipeline_…` ×24, `Release_RunsTheAggressivePipeline_…` ×24,
+      `TheProjectWideOptimize_IsNotConsulted` ×3). **A/B on a detached `origin/master` (`9c373021`) worktree: the same
+      77 NAMES fail there (sorted-name diff empty) — INHERITED**, the known #134 Windows rows.
+  - **Property-grid Integration set** (`TestCategory=Integration&(.Form | WinFormsCatalog | WebMainStartupTests |
+    JavaScriptProjectBuildTests | BuildServicePipelineTests | JsExecutionTierRosterTests)`): **300 total, 298 passed,
+    1 failed, 1 skipped** (20 m 14 s). Skipped: the inverse-gated `Build_CppLanguageProject_NoToolchain_…` (expected).
+    Failed: `FormEventWebRunTests.InEdge_TheRealInterfaces_RunTheHandlers_AndAChildToChildFocusMoveRaisesNoEnter`
+    (slice 5's real-Edge focus test: "focus moving INTO the Panel raises its Enter once" saw nothing). Re-run alone on the
+    merged tree: **passed**; A/B on `origin/master`: **passed**. Verdict: INTERMITTENT under load (real browser focus while
+    the machine ran the whole set), not a regression — slice 6 changes nothing on the web emission or the page.
+    `FormMultiSelectAcceptanceTests` 2/2 inside the set. (The culture row `Expected_IsWhatDotNetPrints` did not appear.)
+  - No full suite (owner instruction). Both worktree-side runs cleaned up (`git worktree prune`).
 
 ## 7. Tests to re-check (consolidated)
 
